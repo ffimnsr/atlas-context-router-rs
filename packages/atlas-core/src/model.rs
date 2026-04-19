@@ -139,6 +139,12 @@ pub struct SearchQuery {
     pub graph_expand: bool,
     /// Maximum edge hops when `graph_expand` is true (default: 1).
     pub graph_max_hops: u32,
+    /// Reference file path for same-directory boost. When set, results in the
+    /// same directory as this file receive a ranking bonus.
+    pub reference_file: Option<String>,
+    /// Reference language for same-language boost. When set, results in the
+    /// same language receive a ranking bonus.
+    pub reference_language: Option<String>,
 }
 
 impl Default for SearchQuery {
@@ -153,6 +159,8 @@ impl Default for SearchQuery {
             limit: 20,
             graph_expand: false,
             graph_max_hops: 1,
+            reference_file: None,
+            reference_language: None,
         }
     }
 }

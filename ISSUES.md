@@ -735,42 +735,42 @@ The upstream system already uses a recursive SQLite CTE seeded from nodes in cha
 
 ### 10.1 Seed selection
 
-- [ ] map changed files to node qualified names
-- [ ] load seed nodes into temp table
-- [ ] preserve changed node set separately from impacted node set
+- [x] map changed files to node qualified names
+- [x] load seed nodes into temp table
+- [x] preserve changed node set separately from impacted node set
 
 ### 10.2 Recursive traversal
 
-- [ ] forward through source -> target edges
-- [ ] backward through target -> source edges
-- [ ] depth-limited recursion
-- [ ] node-count cap
-- [ ] dedupe visited nodes
+- [x] forward through source -> target edges
+- [x] backward through target -> source edges
+- [x] depth-limited recursion
+- [x] node-count cap
+- [x] dedupe visited nodes
 
 ### 10.3 Impact result shape
 
-- [ ] changed nodes
-- [ ] impacted nodes
-- [ ] impacted files
-- [ ] relevant edges among those nodes
+- [x] changed nodes
+- [x] impacted nodes
+- [x] impacted files
+- [x] relevant edges among those nodes
 
 ### 10.4 CLI
 
-- [ ] `atlas impact --base origin/main`
-- [ ] `atlas impact --files ...`
-- [ ] `atlas impact --max-depth 3`
-- [ ] `atlas impact --max-nodes 200`
-- [ ] `atlas impact --json`
+- [x] `atlas impact --base origin/main`
+- [x] `atlas impact --files ...`
+- [x] `atlas impact --max-depth 3`
+- [x] `atlas impact --max-nodes 200`
+- [x] `atlas impact --json`
 
 ### 10.5 Tests
 
-- [ ] one-hop graph
-- [ ] cyclic graph
-- [ ] disconnected graph
-- [ ] depth cap behavior
-- [ ] max node cap behavior
-- [ ] deleted seed files
-- [ ] seed file with no nodes
+- [x] one-hop graph
+- [x] cyclic graph
+- [x] disconnected graph
+- [x] depth cap behavior
+- [x] max node cap behavior
+- [x] deleted seed files
+- [x] seed file with no nodes
 
 ---
 
@@ -780,35 +780,35 @@ The upstream search layer uses FTS5 and ranking heuristics; embeddings are expli
 
 ### 11.1 Basic FTS search
 
-- [ ] search `nodes_fts`
-- [ ] join back to `nodes`
-- [ ] order by BM25
-- [ ] limit results
-- [ ] return scored nodes
+- [x] search `nodes_fts`
+- [x] join back to `nodes`
+- [x] order by BM25
+- [x] limit results
+- [x] return scored nodes
 
 ### 11.2 Search filters
 
-- [ ] by kind
-- [ ] by language
-- [ ] by file path
-- [ ] by test status
-- [ ] by repo subpath
+- [x] by kind
+- [x] by language
+- [x] by file path
+- [x] by test status
+- [x] by repo subpath
 
 ### 11.3 Ranking heuristics
 
-- [ ] exact name boost
-- [ ] exact qualified-name boost
-- [ ] function/method/class boost
-- [ ] same-directory boost
-- [ ] same-language boost
-- [ ] changed-file boost later
+- [x] exact name boost
+- [x] exact qualified-name boost
+- [x] function/method/class boost
+- [x] same-directory boost
+- [x] same-language boost
+- [ ] changed-file boost
 
 ### 11.4 CLI
 
-- [ ] `atlas query "ReplaceFileGraph"`
-- [ ] `atlas query "impact radius" --kind function`
-- [ ] `atlas query "parser" --language rust`
-- [ ] `atlas query "foo" --json`
+- [x] `atlas query "ReplaceFileGraph"`
+- [x] `atlas query "impact radius" --kind function`
+- [x] `atlas query "parser" --language rust`
+- [x] `atlas query "foo" --json`
 
 ---
 

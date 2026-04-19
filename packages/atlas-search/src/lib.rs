@@ -77,13 +77,32 @@ pub fn build_fts_query(text: &str) -> String {
 /// FTS5 query.
 ///
 /// Priorities (highest first):
-///   1. Exact `name` match          (+20)
-///   2. `name` prefix match          (+5)
+///   1. Exact `name` match           (+20)
+///   2. `name` prefix match           (+5)
 ///   3. Exact `qualified_name` match (+15)
-///   4. Public / exported symbol     (+2)
-///   5. High-value kinds: fn/method  (+3), class/struct/trait (+2), enum (+1)
-pub fn apply_ranking_boosts(mut results: Vec<ScoredNode>, query: &str) -> Vec<ScoredNode> {
+///   4. Public / exported symbol      (+2)
+///   5. High-value kinds: fn/method   (+3), class/struct/trait (+2), enum (+1)
+///   6. Same directory as `reference_file` (+3)
+///   7. Same language as `reference_language` (+2)
+pub fn apply_ranking_boosts(
+    mut results: Vec<ScoredNode>,
+    query: &str,
+    reference_file: Option<&str>,
+    reference_language: Option<&str>,
+) -> Vec<ScoredNode> {
     let q_lower = query.trim().to_lowercase();
+
+    // Pre-compute the directory of the reference file (everything before the
+    // last `/`).  An empty reference dir means the root, and every root-level
+    // file would match — that is intentional and consistent.
+    let ref_dir: Option<String> = reference_file.map(|f| {
+        match f.rfind('/') {
+            Some(idx) => f[..idx].to_string(),
+            None => String::new(),
+        }
+    });
+
+    let ref_lang: Option<String> = reference_language.map(|l| l.to_lowercase());
 
     for r in &mut results {
         let n = &r.node;
@@ -116,6 +135,24 @@ pub fn apply_ranking_boosts(mut results: Vec<ScoredNode>, query: &str) -> Vec<Sc
             if m.contains("pub") || m.contains("public") || m.contains("export") {
                 r.score += 2.0;
             }
+        }
+
+        // Same-directory boost
+        if let Some(rdir) = &ref_dir {
+            let node_dir = match n.file_path.rfind('/') {
+                Some(idx) => &n.file_path[..idx],
+                None => "",
+            };
+            if node_dir == rdir.as_str() {
+                r.score += 3.0;
+            }
+        }
+
+        // Same-language boost
+        if let Some(rlang) = &ref_lang
+            && n.language.to_lowercase() == *rlang
+        {
+            r.score += 2.0;
         }
     }
 
@@ -217,7 +254,12 @@ pub fn search(store: &Store, query: &SearchQuery) -> Result<Vec<ScoredNode>> {
 
     // Apply post-FTS ranking boosts using the original (un-expanded) text so
     // boost comparisons are made against what the user actually typed.
-    let boosted = apply_ranking_boosts(fts_results, &query.text);
+    let boosted = apply_ranking_boosts(
+        fts_results,
+        &query.text,
+        query.reference_file.as_deref(),
+        query.reference_language.as_deref(),
+    );
 
     if query.graph_expand && !boosted.is_empty() {
         let limit = query.limit;
@@ -299,7 +341,7 @@ mod tests {
         };
 
         let input = vec![ScoredNode { node, score: 5.0 }];
-        let boosted = apply_ranking_boosts(input, "search");
+        let boosted = apply_ranking_boosts(input, "search", None, None);
 
         // Exact name (+20) + fn kind (+3) + pub (+2) = +25 on top of 5.0
         assert!(
@@ -307,5 +349,132 @@ mod tests {
             "expected score >= 30, got {}",
             boosted[0].score
         );
+    }
+
+    fn make_test_node(name: &str, qn: &str, file_path: &str, language: &str) -> ScoredNode {
+        use atlas_core::{Node, NodeId, NodeKind};
+        ScoredNode {
+            node: Node {
+                id: NodeId::UNSET,
+                kind: NodeKind::Function,
+                name: name.to_string(),
+                qualified_name: qn.to_string(),
+                file_path: file_path.to_string(),
+                line_start: 1,
+                line_end: 10,
+                language: language.to_string(),
+                parent_name: None,
+                params: None,
+                return_type: None,
+                modifiers: None,
+                is_test: false,
+                file_hash: "h".to_string(),
+                extra_json: serde_json::Value::Null,
+            },
+            score: 1.0,
+        }
+    }
+
+    #[test]
+    fn same_directory_boost_applied() {
+        let same_dir = make_test_node("foo", "src/util.rs::fn::foo", "src/util.rs", "rust");
+        let diff_dir = make_test_node("foo", "other/lib.rs::fn::foo", "other/lib.rs", "rust");
+
+        let input = vec![diff_dir.clone(), same_dir.clone()];
+        let boosted = apply_ranking_boosts(input, "foo", Some("src/main.rs"), None);
+
+        let same_score = boosted
+            .iter()
+            .find(|r| r.node.file_path == "src/util.rs")
+            .unwrap()
+            .score;
+        let diff_score = boosted
+            .iter()
+            .find(|r| r.node.file_path == "other/lib.rs")
+            .unwrap()
+            .score;
+        assert!(
+            same_score > diff_score,
+            "same-dir result should score higher; same={same_score} diff={diff_score}"
+        );
+    }
+
+    #[test]
+    fn same_language_boost_applied() {
+        let rust_node = make_test_node("parse", "src/a.rs::fn::parse", "src/a.rs", "rust");
+        let go_node = make_test_node("parse", "src/a.go::fn::parse", "src/a.go", "go");
+
+        let input = vec![go_node.clone(), rust_node.clone()];
+        let boosted = apply_ranking_boosts(input, "parse", None, Some("rust"));
+
+        let rust_score = boosted
+            .iter()
+            .find(|r| r.node.language == "rust")
+            .unwrap()
+            .score;
+        let go_score = boosted
+            .iter()
+            .find(|r| r.node.language == "go")
+            .unwrap()
+            .score;
+        assert!(
+            rust_score > go_score,
+            "same-language result should score higher; rust={rust_score} go={go_score}"
+        );
+    }
+
+    #[test]
+    fn same_dir_and_same_lang_both_applied() {
+        // Node in same dir AND same language should get both boosts.
+        let best =
+            make_test_node("helper", "src/a.rs::fn::helper", "src/a.rs", "rust");
+        let dir_only =
+            make_test_node("helper", "src/b.go::fn::helper", "src/b.go", "go");
+        let neither =
+            make_test_node("helper", "lib/c.py::fn::helper", "lib/c.py", "python");
+
+        let input = vec![neither.clone(), dir_only.clone(), best.clone()];
+        let boosted =
+            apply_ranking_boosts(input, "helper", Some("src/main.rs"), Some("rust"));
+
+        let best_score = boosted
+            .iter()
+            .find(|r| r.node.file_path == "src/a.rs")
+            .unwrap()
+            .score;
+        let dir_only_score = boosted
+            .iter()
+            .find(|r| r.node.file_path == "src/b.go")
+            .unwrap()
+            .score;
+        let neither_score = boosted
+            .iter()
+            .find(|r| r.node.file_path == "lib/c.py")
+            .unwrap()
+            .score;
+
+        assert!(
+            best_score > dir_only_score,
+            "dir+lang node must beat dir-only; best={best_score} dir_only={dir_only_score}"
+        );
+        assert!(
+            dir_only_score > neither_score,
+            "dir-only node must beat neither; dir_only={dir_only_score} neither={neither_score}"
+        );
+    }
+
+    #[test]
+    fn no_reference_file_no_boost() {
+        let n1 = make_test_node("f", "src/a.rs::fn::f", "src/a.rs", "rust");
+        let n2 = make_test_node("f", "lib/b.rs::fn::f", "lib/b.rs", "rust");
+
+        let input = vec![n1.clone(), n2.clone()];
+        let boosted = apply_ranking_boosts(input, "f", None, None);
+
+        // Both same language, no reference → scores should be equal (both
+        // start at 1.0 with only the fn-kind +3 applied equally).
+        let score_a = boosted.iter().find(|r| r.node.file_path == "src/a.rs").unwrap().score;
+        let score_b = boosted.iter().find(|r| r.node.file_path == "lib/b.rs").unwrap().score;
+        assert_eq!(score_a, score_b, "without reference both nodes should score equally");
     }
 }
