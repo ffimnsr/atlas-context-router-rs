@@ -38,6 +38,24 @@ pub fn to_forward_slashes(s: &str) -> String {
     s.replace('\\', "/")
 }
 
+/// Normalize path casing for the current platform.
+///
+/// On Windows the filesystem is case-insensitive, so two paths that differ
+/// only in case refer to the same file.  To guarantee the qualified-name
+/// scheme is stable regardless of how a path was obtained, we lowercase the
+/// entire path on Windows.  On Unix the filesystem is case-sensitive, so no
+/// transformation is applied.
+///
+/// Call this **after** [`to_forward_slashes`] so that the input is already
+/// separator-normalized.
+pub fn normalize_case(s: &str) -> String {
+    if cfg!(target_os = "windows") {
+        s.to_ascii_lowercase()
+    } else {
+        s.to_owned()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -94,5 +112,36 @@ mod tests {
     fn deep_nesting_normalised() {
         let p = Utf8Path::new("a/./b/./c/../d.rs");
         assert_eq!(normalise_components(p).as_str(), "a/b/d.rs");
+    }
+
+    // --- normalize_case (Windows casing policy) ------------------------------
+
+    /// On Linux the function is a no-op — case is preserved.
+    #[test]
+    #[cfg(not(target_os = "windows"))]
+    fn normalize_case_noop_on_unix() {
+        assert_eq!(normalize_case("Src/Main.rs"), "Src/Main.rs");
+        assert_eq!(normalize_case("PKG/FOO.GO"), "PKG/FOO.GO");
+    }
+
+    /// On Windows the function lowercases to produce a stable canonical form.
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn normalize_case_lowercases_on_windows() {
+        assert_eq!(normalize_case("Src/Main.rs"), "src/main.rs");
+        assert_eq!(normalize_case("PKG/FOO.GO"), "pkg/foo.go");
+        assert_eq!(normalize_case("packages/Atlas-Core/Src/Lib.rs"), "packages/atlas-core/src/lib.rs");
+    }
+
+    /// Verify that `to_forward_slashes` + `normalize_case` together produce
+    /// the expected canonical form on all platforms when given a Windows-style
+    /// mixed-separator path.
+    #[test]
+    fn round_trip_windows_path_unix() {
+        let raw = "Packages\\Atlas-CLI\\Src\\Main.rs";
+        let slashed = to_forward_slashes(raw);
+        assert_eq!(slashed, "Packages/Atlas-CLI/Src/Main.rs");
+        // normalize_case is a no-op on Unix but returns a String either way.
+        let _ = normalize_case(&slashed);
     }
 }

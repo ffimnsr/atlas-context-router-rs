@@ -91,7 +91,7 @@ The upstream repo’s real kernel is the repository scanner, parser layer, SQLit
   - [x] `packages/atlas-search`
   - [x] `packages/atlas-review`
   - [x] `packages/atlas-impact`
-  - [ ] `packages/atlas-mcp` (later)
+  - [ ] `packages/atlas-mcp`
 - [x] Keep public API narrow between crates
 
 ---
@@ -113,7 +113,7 @@ The upstream repo’s real kernel is the repository scanner, parser layer, SQLit
 
 - [x] CLI:
   - [x] `clap`
-  - [ ] `clap_complete` (later)
+  - [ ] `clap_complete`
 - [x] Errors:
   - [x] `thiserror`
   - [x] `anyhow` for CLI layer only
@@ -260,10 +260,9 @@ The upstream implementation already treats SQLite as the durable center of the s
 - [x] `nodes`
 - [x] `edges`
 - [x] `nodes_fts`
-- [ ] reserve later:
-  - [ ] `flows`
-  - [ ] `flow_memberships`
-  - [ ] `communities`
+- [ ] `flows`
+- [ ] `flow_memberships`
+- [ ] `communities`
 
 ### 3.4 `metadata` table
 
@@ -381,24 +380,23 @@ The upstream project’s primary promise includes full build plus incremental up
 - [x] Convert to repo-relative paths for persistence
 - [x] Normalize separators to `/`
 - [x] Resolve `.` and `..`
-- [ ] Decide symlink policy
-- [ ] Add Windows casing normalization tests
+- [x] Decide symlink policy
+- [x] Add Windows casing normalization tests
 
 ### 4.3 Ignore handling
 
 - [x] Support git-tracked files first via `git ls-files`
-- [ ] Add `.atlasignore` later
-- [ ] Respect upstream-style ignore file compatibility later if needed
-- [ ] Ignore by default:
-  - [ ] `.git`
-  - [ ] `node_modules`
-  - [ ] `vendor`
-  - [ ] `dist`
-  - [ ] `build`
-  - [ ] `.next`
-  - [ ] `target`
-  - [ ] `.venv`
-  - [ ] `__pycache__`
+- [x] Add `.atlasignore` later
+- [x] Ignore by default:
+  - [x] `.git`
+  - [x] `node_modules`
+  - [x] `vendor`
+  - [x] `dist`
+  - [x] `build`
+  - [x] `.next`
+  - [x] `target`
+  - [x] `.venv`
+  - [x] `__pycache__`
 
 ### 4.4 File collection
 
@@ -438,8 +436,7 @@ The upstream project’s primary promise includes full build plus incremental up
 - [x] MVP rename behavior:
   - [x] remove old path
   - [x] parse new path as fresh file
-- [ ] later:
-  - [ ] preserve stable node identity across rename if hash unchanged
+- [ ] preserve stable node identity across rename if hash unchanged
 
 ---
 
@@ -573,7 +570,7 @@ The upstream parser is both the most important subsystem and the most monolithic
 - [x] imports/exports
 - [ ] call expressions
 - [x] TS type/interface nodes
-- [ ] later TS path alias resolution
+- [ ] TS path alias resolution
 
 ### 7.4 Call-target resolution tiers
 
@@ -1745,38 +1742,245 @@ Shared support for explainability, config, CLI surface, JSON contracts, benchmar
 - [ ] edge validation
 - [ ] DB consistency checks
 
-## Phase 28 — Optional Advanced Features
+## Phase 28 — Real-Time & Continuous Mode
 
-### 28.1 Code intelligence
+Deterministic watch flow on top of existing incremental pipeline. Goal: near-real-time graph freshness without full rebuilds for small edits.
 
-- [ ] similar-function detection
-- [ ] duplicate detection
+### 28.1 Watch mode scope
 
-### 28.2 Architecture insights
+- [ ] auto-update graph when files change
+- [ ] stay efficient on rapid edit bursts
+- [ ] avoid full rebuild path for ordinary edits
+- [ ] integrate with existing incremental parse + update flow
+- [ ] stay deterministic and LLM-free
 
-- [ ] detect layers
-- [ ] infer modules
-- [ ] label components
+### 28.2 File watcher
 
-### 28.3 Watch mode
+- [ ] choose watcher crate (for example `notify`)
+- [ ] watch repo directories recursively
+- [ ] ignore:
+  - [ ] `.git`
+  - [ ] build directories
+  - [ ] ignored paths
+- [ ] map watch roots to normalized repo-relative paths
+- [ ] handle platform-specific watcher quirks
 
-- [ ] auto-update on file change
+### 28.3 Change detection
 
-### 28.4 Multi-repo
+- [ ] detect:
+  - [ ] file create
+  - [ ] file modify
+  - [ ] file delete
+  - [ ] file rename
+- [ ] map events to file paths
+- [ ] normalize duplicate event bursts
+- [ ] keep delete/rename handling consistent with batch update mode
+
+### 28.4 Update pipeline integration
+
+- [ ] on change enqueue file for update
+- [ ] batch changes with debounce window (`100–500ms`)
+- [ ] trigger:
+  - [ ] incremental parsing
+  - [ ] graph update
+- [ ] reuse existing update/build primitives where practical
+- [ ] avoid duplicate queue entries for same file
+
+### 28.5 Incremental update logic
+
+- [ ] reuse existing update logic
+- [ ] handle:
+  - [ ] modified files
+  - [ ] deleted files
+  - [ ] renamed files
+- [ ] preserve dependent invalidation rules
+- [ ] ensure graph slice replacement semantics stay atomic
+
+### 28.6 Queue, workers, state
+
+- [ ] create update queue
+- [ ] worker responsibilities:
+  - [ ] parse file
+  - [ ] update graph
+- [ ] ensure:
+  - [ ] single DB writer
+  - [ ] no race conditions
+- [ ] track:
+  - [ ] pending updates
+  - [ ] in-progress updates
+  - [ ] last update time
+- [ ] expose internal state for status/debug surfaces later
+
+### 28.7 Performance and failure handling
+
+- [ ] debounce rapid file changes
+- [ ] coalesce duplicate updates
+- [ ] limit concurrent parsing
+- [ ] handle parse failures gracefully
+- [ ] add retry logic only if bounded and safe
+- [ ] log watch/update errors
+- [ ] keep watch loop alive after recoverable failures
+
+### 28.8 CLI and tests
+
+- [ ] add `atlas watch`
+- [ ] show:
+  - [ ] files updated
+  - [ ] nodes updated
+  - [ ] errors
+- [ ] support JSON output if command surface standardizes on it
+- [ ] tests:
+  - [ ] file modify triggers update
+  - [ ] file delete removes graph slice
+  - [ ] rename handled correctly
+  - [ ] debounce works
+  - [ ] no duplicate updates
+- [ ] completion criteria:
+  - [ ] watch mode updates graph in near real-time
+  - [ ] no full rebuild required for small changes
+  - [ ] queue and writer path remain race-free
+
+## Phase 29 — Intelligence & Insights
+
+Deterministic analytics layer on top of graph + stored metadata. Produce explainable architecture insights, metrics, risk assessments, pattern detection. No LLM dependency.
+
+### 29.1 Architecture analysis
+
+- [ ] build module-level graph
+- [ ] detect strongly connected components (SCC)
+- [ ] identify cyclic dependencies
+- [ ] classify cycles (`local` vs `cross-module`)
+- [ ] output cycle paths
+- [ ] define configurable layer rules
+- [ ] map files/modules to layers
+- [ ] detect invalid edges
+- [ ] output layer violations
+- [ ] compute coupling score per module
+- [ ] detect high-coupling modules
+- [ ] detect tightly coupled clusters
+- [ ] compute nodes per file
+- [ ] compute edges per file
+- [ ] flag large/highly connected files
+
+### 29.2 Code health metrics
+
+- [ ] node-level metrics:
+  - [ ] fan-in
+  - [ ] fan-out
+  - [ ] dependency depth
+  - [ ] reference count
+  - [ ] test adjacency
+- [ ] file-level metrics:
+  - [ ] node count
+  - [ ] edge count
+  - [ ] average fan-in/out
+  - [ ] import count
+  - [ ] test coverage ratio
+- [ ] module-level metrics:
+  - [ ] internal vs external dependencies
+  - [ ] coupling score
+  - [ ] cohesion approximation
+- [ ] compute percentiles
+- [ ] detect outliers
+
+### 29.3 Risk assessment engine
+
+- [ ] score from inputs:
+  - [ ] public API
+  - [ ] fan-in/out
+  - [ ] cross-module dependencies
+  - [ ] test adjacency
+  - [ ] depth
+  - [ ] unresolved edges
+- [ ] implement weighted formula
+- [ ] normalize to `0–100`
+- [ ] classify `low` / `medium` / `high`
+- [ ] output:
+  - [ ] factors list
+  - [ ] evidence nodes/edges
+
+### 29.4 Pattern detection
+
+- [ ] duplicate patterns:
+  - [ ] repeated call chains
+  - [ ] similar subgraphs
+- [ ] unused structures:
+  - [ ] unused modules
+  - [ ] isolated graphs
+  - [ ] orphan nodes
+- [ ] high centrality:
+  - [ ] compute centrality
+  - [ ] find hubs
+  - [ ] find bottlenecks
+- [ ] deep chains:
+  - [ ] detect long call chains
+  - [ ] flag complexity
+
+### 29.5 APIs, outputs, CLI, config, tests
+
+- [ ] create `InsightsEngine`
+- [ ] implement:
+  - [ ] `analyze_architecture()`
+  - [ ] `compute_metrics()`
+  - [ ] `assess_risk()`
+  - [ ] `detect_patterns()`
+  - [ ] `find_cycles()`
+- [ ] define:
+  - [ ] `ArchitectureReport`
+  - [ ] `MetricsReport`
+  - [ ] `RiskReport`
+  - [ ] `PatternReport`
+- [ ] ensure each report includes:
+  - [ ] summary
+  - [ ] detailed findings
+  - [ ] evidence
+- [ ] CLI:
+  - [ ] `atlas insights architecture`
+  - [ ] `atlas insights metrics`
+  - [ ] `atlas insights risk <symbol>`
+  - [ ] `atlas insights patterns`
+  - [ ] JSON output support
+- [ ] config:
+  - [ ] thresholds
+  - [ ] layer config
+  - [ ] ignore lists
+- [ ] tests:
+  - [ ] cycle detection
+  - [ ] coupling detection
+  - [ ] unused-node detection
+  - [ ] risk scoring validation
+  - [ ] outlier detection
+- [ ] completion criteria:
+  - [ ] accurate architecture insights
+  - [ ] correct metrics
+  - [ ] explainable risk scoring
+  - [ ] useful pattern detection
+  - [ ] structured outputs
+
+## Phase 30 — Optional Advanced Features
+
+### 30.1 Multi-repo
 
 - [ ] shared graph
 - [ ] cross-repo impact
 
-## Phase 29 — Deferred Lowest Priority
+### 30.2 Remaining code intelligence
 
-### 29.1 Wiki / docs generation
+- [ ] similar-function detection beyond graph-shape heuristics
+- [ ] duplicate detection beyond exact structural patterns
+- [ ] infer modules
+- [ ] label components
+
+## Phase 31 — Deferred Lowest Priority
+
+### 31.1 Wiki / docs generation
 
 - [ ] generate Markdown docs
 - [ ] module pages
 - [ ] function pages
 - [ ] static site export
 
-### 29.2 v2 completion criteria
+### 31.2 v2 completion criteria
 
 - [ ] search beats grep
 - [ ] impact analysis is reliable
@@ -1784,7 +1988,7 @@ Shared support for explainability, config, CLI surface, JSON contracts, benchmar
 - [ ] MCP tools are usable by agents
 - [ ] performance scales to large repos
 
-### 29.3 Guiding principle
+### 31.3 Guiding principle
 
 - [ ] avoid feature growth without signal quality gains
 - [ ] prioritize better ranking
@@ -2002,20 +2206,34 @@ And the system has:
 - [ ] debug tools
 - [ ] data integrity tooling
 
-### Slice 25 — optional advanced
+### Slice 25 — watch mode
 
-- [ ] code intelligence
-- [ ] architecture insights
-- [ ] watch mode
+- [ ] file watcher
+- [ ] change detection mapping
+- [ ] queue/debounce/worker system
+- [ ] incremental update integration
+- [ ] watch CLI + tests
+
+### Slice 26 — insights
+
+- [ ] architecture analysis
+- [ ] code-health metrics
+- [ ] risk assessment engine
+- [ ] pattern detection
+- [ ] `InsightsEngine` reports + CLI + tests
+
+### Slice 27 — optional advanced
+
 - [ ] multi-repo support
+- [ ] remaining advanced code intelligence
 
-### Slice 26 — deferred lowest priority
+### Slice 28 — deferred lowest priority
 
 - [ ] wiki/docs generation
 - [ ] v2 completion criteria
 - [ ] lowest-priority guiding-principle items
 
-### Slice 27 — deferred platform and ecosystem
+### Slice 29 — deferred platform and ecosystem
 
 - [ ] install hooks
 - [ ] flows/communities schema

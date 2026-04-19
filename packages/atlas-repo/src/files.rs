@@ -13,19 +13,45 @@ const BINARY_SNIFF_BYTES: usize = 8 * 1024;
 /// Atlas-specific ignore file name.
 const ATLASIGNORE_FILE: &str = ".atlasignore";
 
+/// Directory/path patterns that are always ignored regardless of `.atlasignore`.
+///
+/// These cover well-known build artefact and dependency directories that should
+/// never be part of the code graph even if they are accidentally tracked by git.
+pub const DEFAULT_IGNORE_PATTERNS: &[&str] = &[
+    ".git",
+    "node_modules",
+    "vendor",
+    "dist",
+    "build",
+    ".next",
+    "target",
+    ".venv",
+    "__pycache__",
+];
+
 /// Collect all git-tracked files under `repo_root`, filtering out:
 /// - files larger than `max_bytes` (defaults to [`DEFAULT_MAX_FILE_BYTES`])
 /// - binary files (null byte in first 8 KiB)
+/// - symlinks (skipped — git tracks symlinks as pointer objects, not content)
+/// - paths matched by [`DEFAULT_IGNORE_PATTERNS`]
 /// - paths matched by patterns in `.atlasignore` at the repo root
 ///
 /// Returned paths are repo-relative, forward-slash separated.
 pub fn collect_files(repo_root: &Utf8Path, max_bytes: Option<u64>) -> Result<Vec<Utf8PathBuf>> {
     let threshold = max_bytes.unwrap_or(DEFAULT_MAX_FILE_BYTES);
     let raw = git_ls_files(repo_root)?;
+    let default_patterns: Vec<String> = DEFAULT_IGNORE_PATTERNS
+        .iter()
+        .map(|s| format!("{}/", s))
+        .collect();
     let ignore_patterns = load_atlasignore(repo_root);
     let mut results = Vec::with_capacity(raw.len());
 
     for rel_path in raw {
+        if should_ignore(rel_path.as_str(), &default_patterns) {
+            tracing::debug!("skipping '{}': matched default ignore", rel_path);
+            continue;
+        }
         if should_ignore(rel_path.as_str(), &ignore_patterns) {
             tracing::debug!("skipping '{}': matched .atlasignore", rel_path);
             continue;
@@ -34,7 +60,7 @@ pub fn collect_files(repo_root: &Utf8Path, max_bytes: Option<u64>) -> Result<Vec
         match check_file(&abs, threshold) {
             Ok(true) => results.push(rel_path),
             Ok(false) => {
-                tracing::debug!("skipping '{}': too large or binary", rel_path);
+                tracing::debug!("skipping '{}': too large, binary, or symlink", rel_path);
             }
             Err(e) => {
                 tracing::warn!("skipping '{}': {}", rel_path, e);
@@ -184,17 +210,27 @@ fn git_ls_files(repo_root: &Utf8Path) -> Result<Vec<Utf8PathBuf>> {
     Ok(paths)
 }
 
-/// Return `true` if the file should be included (exists, small enough, not binary).
+/// Return `true` if the file should be included (exists, small enough, not binary, not a symlink).
+///
+/// Symlink policy: symlinks are **skipped**. Git tracks symlinks as special pointer
+/// objects; reading the target's bytes would produce content that does not match
+/// what git indexes, and following symlinks outside the repo root is a security
+/// concern. If a symlink target should be analysed, it should be tracked directly.
 fn check_file(abs: &Utf8Path, max_bytes: u64) -> Result<bool> {
-    let meta = abs
+    // Use symlink_metadata so we can detect symlinks without following them.
+    let sym_meta = abs
         .as_std_path()
-        .metadata()
-        .with_context(|| format!("metadata for '{abs}'"))?;
+        .symlink_metadata()
+        .with_context(|| format!("symlink_metadata for '{abs}'"))?;
 
-    if !meta.is_file() {
+    if sym_meta.file_type().is_symlink() {
+        tracing::debug!("skipping '{}': symlink", abs);
         return Ok(false);
     }
-    if meta.len() > max_bytes {
+    if !sym_meta.is_file() {
+        return Ok(false);
+    }
+    if sym_meta.len() > max_bytes {
         return Ok(false);
     }
     if is_binary(abs)? {
@@ -296,6 +332,52 @@ mod tests {
         let patterns: Vec<String> = vec!["generated/proto".to_string()];
         assert!(should_ignore("generated/proto", &patterns));
         assert!(!should_ignore("src/generated/proto", &patterns));
+    }
+
+    // --- DEFAULT_IGNORE_PATTERNS ---------------------------------------------
+
+    #[test]
+    fn default_patterns_block_node_modules() {
+        let patterns: Vec<String> = DEFAULT_IGNORE_PATTERNS
+            .iter()
+            .map(|s| format!("{}/", s))
+            .collect();
+        assert!(should_ignore("node_modules/lodash/index.js", &patterns));
+        assert!(should_ignore("vendor/github.com/pkg/errors/errors.go", &patterns));
+        assert!(should_ignore("target/debug/atlas", &patterns));
+        assert!(should_ignore(".venv/lib/python3.11/site.py", &patterns));
+        assert!(should_ignore("__pycache__/main.cpython-311.pyc", &patterns));
+        assert!(should_ignore("dist/bundle.js", &patterns));
+        assert!(should_ignore("build/output.o", &patterns));
+        assert!(should_ignore(".next/server/pages/index.js", &patterns));
+    }
+
+    #[test]
+    fn default_patterns_allow_normal_src() {
+        let patterns: Vec<String> = DEFAULT_IGNORE_PATTERNS
+            .iter()
+            .map(|s| format!("{}/", s))
+            .collect();
+        assert!(!should_ignore("src/main.rs", &patterns));
+        assert!(!should_ignore("packages/atlas-core/src/lib.rs", &patterns));
+    }
+
+    // --- symlink policy ------------------------------------------------------
+
+    #[test]
+    fn symlink_is_skipped() {
+        use std::os::unix::fs::symlink;
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("real.txt");
+        std::fs::write(&target, b"hello").unwrap();
+        let link = dir.path().join("link.txt");
+        symlink(&target, &link).unwrap();
+        let link_utf8 = Utf8Path::from_path(&link).unwrap();
+        // Symlinks must be rejected.
+        assert!(!check_file(link_utf8, DEFAULT_MAX_FILE_BYTES).unwrap());
+        // The real file is accepted.
+        let target_utf8 = Utf8Path::from_path(&target).unwrap();
+        assert!(check_file(target_utf8, DEFAULT_MAX_FILE_BYTES).unwrap());
     }
 
     #[test]
