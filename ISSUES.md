@@ -550,7 +550,7 @@ The upstream parser is both the most important subsystem and the most monolithic
 - [x] structs
 - [x] interfaces
 - [x] imports
-- [ ] call edges
+- [x] call edges
 
 ### 7.2 Python
 
@@ -568,21 +568,25 @@ The upstream parser is both the most important subsystem and the most monolithic
 - [x] classes
 - [x] methods
 - [x] imports/exports
-- [ ] call expressions
+- [x] call expressions
 - [x] TS type/interface nodes
-- [ ] TS path alias resolution
+- [x] TS path alias resolution
 
 ### 7.4 Call-target resolution tiers
 
-- [ ] Tier 1:
-  - [ ] capture textual callee target only
-- [ ] Tier 2:
-  - [ ] resolve same-file symbols
-- [ ] Tier 3:
-  - [ ] resolve same-package/module symbols
-- [ ] Tier 4:
-  - [ ] resolve imports where practical
-- [ ] Never block parse success on perfect call resolution
+- [x] Tier 1:
+  - [x] capture textual callee target only
+- [x] Tier 2:
+  - [x] resolve same-file symbols
+- [x] Tier 3:
+  - [x] resolve same-package/module symbols
+- [x] Tier 4:
+  - [x] resolve imports where practical
+- [x] Never block parse success on perfect call resolution
+- [ ] Next call-resolution edge cases:
+  - [ ] support non-relative/package-style `tsconfig` `extends` values
+  - [ ] resolve JS/TS barrel re-export chains for import-based call targets
+  - [ ] support latest tsconfig for typescript 6 where it deprecated some fields
 
 ## Phase 7.5 — v1.1 Language Handlers
 
@@ -1258,7 +1262,7 @@ Build deterministic retrieval-and-selection layer over graph. No LLM dependence.
 - [ ] resolve by exact symbol name
 - [ ] resolve by file path
 - [ ] resolve by ranked search if ambiguous
-- [ ] return ambiguity metadata if multiple candidates remain
+- [ ] return ambiguity metadata if multiple candidates remain, including import/call-resolution ties
 
 ### 22.5 Retrieval, ranking, trimming
 
