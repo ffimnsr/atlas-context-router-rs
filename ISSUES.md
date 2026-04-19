@@ -244,7 +244,7 @@ The upstream implementation already treats SQLite as the durable center of the s
   - [x] `PRAGMA foreign_keys=ON;`
   - [x] `PRAGMA busy_timeout=5000;`
 - [x] Use one write connection policy for mutation-heavy operations
-- [ ] Add startup integrity check command later
+- [x] Add startup integrity check command later
 
 ### 3.2 Migrations
 
@@ -684,17 +684,17 @@ Implement these like Rust and Go: dedicated handler, qualified-name scheme, edge
 
 ### 8.2 Concurrency model
 
-- [ ] concurrent file parsing
-- [ ] single writer thread for SQLite
-- [ ] bounded queue between parser workers and DB writer
-- [ ] memory cap for queued parsed files
-- [ ] backpressure instead of unbounded buffering
+- [x] concurrent file parsing
+- [x] single writer thread for SQLite
+- [x] bounded queue between parser workers and DB writer
+- [x] memory cap for queued parsed files
+- [x] backpressure instead of unbounded buffering
 
 ### 8.3 Failure handling
 
 - [x] continue on per-file parse failure
 - [x] surface file parse errors in summary
-- [ ] add `--fail-fast`
+- [x] add `--fail-fast`
 - [x] keep DB consistent on crashes
 
 ---
@@ -985,7 +985,7 @@ The upstream report highlights parser fidelity and install/hook fragility as the
 
 - [ ] `atlas doctor` later
 - [ ] `atlas db check` later
-- [ ] tracing spans around build/update phases
+- [x] tracing spans around build/update phases
 - [ ] optional metrics export later
 
 ---
@@ -1368,11 +1368,11 @@ And the system has:
 
 ### Slice 12 — hardening
 
-- [ ] finish build concurrency model
-- [ ] add failure-handling gaps in build/update path
-- [ ] add startup integrity check command
-- [ ] improve performance, query tuning, memory, diagnostics
-- [ ] add cross-platform hardening beyond current Windows baseline
+- [x] finish build concurrency model
+- [x] add failure-handling gaps in build/update path
+- [x] add startup integrity check command
+- [x] improve performance, query tuning, memory, diagnostics
+- [x] add cross-platform hardening beyond current Windows baseline
 
 ### Slice 13 — MCP and agent surface
 

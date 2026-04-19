@@ -29,7 +29,11 @@ pub enum Command {
     Init,
 
     /// Scan all tracked files and build the code graph from scratch.
-    Build,
+    Build {
+        /// Stop immediately on the first parse error instead of continuing.
+        #[arg(long)]
+        fail_fast: bool,
+    },
 
     /// Incrementally update the graph for files changed since a base ref.
     Update {
@@ -48,6 +52,10 @@ pub enum Command {
         /// Explicit list of files to update.
         #[arg(long, num_args = 1..)]
         files: Vec<String>,
+
+        /// Stop immediately on the first parse error instead of continuing.
+        #[arg(long)]
+        fail_fast: bool,
     },
 
     /// Show database status and graph statistics.
@@ -114,4 +122,7 @@ pub enum Command {
 
     /// Start a JSON-RPC / MCP stdio server.
     Serve,
+
+    /// Run an integrity check on the atlas database.
+    DbCheck,
 }

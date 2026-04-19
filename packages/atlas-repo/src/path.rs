@@ -60,4 +60,42 @@ mod tests {
         let p = Utf8Path::new("./src/lib.rs");
         assert_eq!(normalise_components(p).as_str(), "src/lib.rs");
     }
+
+    #[test]
+    fn forward_slashes_passthrough() {
+        assert_eq!(to_forward_slashes("src/lib.rs"), "src/lib.rs");
+    }
+
+    #[test]
+    fn backslashes_converted_to_forward() {
+        assert_eq!(
+            to_forward_slashes("src\\main\\lib.rs"),
+            "src/main/lib.rs"
+        );
+    }
+
+    #[test]
+    fn mixed_separators_converted() {
+        assert_eq!(
+            to_forward_slashes("packages\\atlas-cli/src\\main.rs"),
+            "packages/atlas-cli/src/main.rs"
+        );
+    }
+
+    #[test]
+    fn empty_string_passthrough() {
+        assert_eq!(to_forward_slashes(""), "");
+    }
+
+    #[test]
+    fn multiple_consecutive_dotdots() {
+        let p = Utf8Path::new("a/b/../../c/d.rs");
+        assert_eq!(normalise_components(p).as_str(), "c/d.rs");
+    }
+
+    #[test]
+    fn deep_nesting_normalised() {
+        let p = Utf8Path::new("a/./b/./c/../d.rs");
+        assert_eq!(normalise_components(p).as_str(), "a/b/d.rs");
+    }
 }

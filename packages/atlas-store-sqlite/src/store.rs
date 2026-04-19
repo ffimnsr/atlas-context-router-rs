@@ -224,6 +224,51 @@ impl Store {
         })
     }
 
+    /// Run SQLite integrity checks and return any issues found.
+    ///
+    /// Runs both `PRAGMA integrity_check` and `PRAGMA foreign_key_check`.
+    /// Returns `Ok(vec![])` when the database is healthy. Any returned strings
+    /// describe individual integrity violations.
+    pub fn integrity_check(&self) -> Result<Vec<String>> {
+        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
+        let mut issues = Vec::new();
+
+        // PRAGMA integrity_check returns "ok" on a clean DB.
+        {
+            let mut stmt = self
+                .conn
+                .prepare("PRAGMA integrity_check")
+                .map_err(db_err)?;
+            let mut rows = stmt.query([]).map_err(db_err)?;
+            while let Some(row) = rows.next().map_err(db_err)? {
+                let msg: String = row.get(0).map_err(db_err)?;
+                if msg != "ok" {
+                    issues.push(format!("integrity_check: {msg}"));
+                }
+            }
+        }
+
+        // PRAGMA foreign_key_check returns rows for each violation.
+        {
+            let mut stmt = self
+                .conn
+                .prepare("PRAGMA foreign_key_check")
+                .map_err(db_err)?;
+            let mut rows = stmt.query([]).map_err(db_err)?;
+            while let Some(row) = rows.next().map_err(db_err)? {
+                let table: String = row.get(0).map_err(db_err)?;
+                let rowid: Option<i64> = row.get(1).map_err(db_err)?;
+                let parent: String = row.get(2).map_err(db_err)?;
+                let fkid: i64 = row.get(3).map_err(db_err)?;
+                issues.push(format!(
+                    "foreign_key_check: table={table} rowid={rowid:?} parent={parent} fkid={fkid}"
+                ));
+            }
+        }
+
+        Ok(issues)
+    }
+
     // -------------------------------------------------------------------------
     // File-graph mutation
     // -------------------------------------------------------------------------
@@ -1725,5 +1770,29 @@ mod tests {
             "after insert id must be a real DB id"
         );
         assert!(fetched[0].id.0 > 0);
+    }
+
+    #[test]
+    fn integrity_check_clean_db() {
+        let store = open_in_memory();
+        let issues = store.integrity_check().expect("integrity_check should not error");
+        assert!(
+            issues.is_empty(),
+            "fresh in-memory DB should have no issues: {issues:?}"
+        );
+    }
+
+    #[test]
+    fn integrity_check_after_writes() {
+        let mut store = open_in_memory();
+        let node = make_node(NodeKind::Function, "foo", "a.rs::fn::foo", "a.rs", "rust");
+        store
+            .replace_file_graph("a.rs", "h1", Some("rust"), None, &[node], &[])
+            .unwrap();
+        let issues = store.integrity_check().expect("integrity_check should not error");
+        assert!(
+            issues.is_empty(),
+            "DB with data should still pass integrity check: {issues:?}"
+        );
     }
 }
