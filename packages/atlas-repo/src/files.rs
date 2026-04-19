@@ -38,6 +38,23 @@ pub const DEFAULT_IGNORE_PATTERNS: &[&str] = &[
 ///
 /// Returned paths are repo-relative, forward-slash separated.
 pub fn collect_files(repo_root: &Utf8Path, max_bytes: Option<u64>) -> Result<Vec<Utf8PathBuf>> {
+    let (files, _) = collect_supported_files(repo_root, max_bytes, |_| true)?;
+    Ok(files)
+}
+
+/// Collect all git-tracked files under `repo_root`, applying the same filters
+/// as [`collect_files`] plus a caller-supplied support predicate.
+///
+/// Returns the accepted repo-relative paths and the number of files skipped by
+/// the support predicate (typically unsupported extensions/languages).
+pub fn collect_supported_files<F>(
+    repo_root: &Utf8Path,
+    max_bytes: Option<u64>,
+    mut supports_path: F,
+) -> Result<(Vec<Utf8PathBuf>, usize)>
+where
+    F: FnMut(&Utf8Path) -> bool,
+{
     let threshold = max_bytes.unwrap_or(DEFAULT_MAX_FILE_BYTES);
     let raw = git_ls_files(repo_root)?;
     let default_patterns: Vec<String> = DEFAULT_IGNORE_PATTERNS
@@ -46,6 +63,7 @@ pub fn collect_files(repo_root: &Utf8Path, max_bytes: Option<u64>) -> Result<Vec
         .collect();
     let ignore_patterns = load_atlasignore(repo_root);
     let mut results = Vec::with_capacity(raw.len());
+    let mut skipped_unsupported = 0usize;
 
     for rel_path in raw {
         if should_ignore(rel_path.as_str(), &default_patterns) {
@@ -54,6 +72,11 @@ pub fn collect_files(repo_root: &Utf8Path, max_bytes: Option<u64>) -> Result<Vec
         }
         if should_ignore(rel_path.as_str(), &ignore_patterns) {
             tracing::debug!("skipping '{}': matched .atlasignore", rel_path);
+            continue;
+        }
+        if !supports_path(rel_path.as_path()) {
+            skipped_unsupported += 1;
+            tracing::debug!("skipping '{}': unsupported extension", rel_path);
             continue;
         }
         let abs = repo_root.join(&rel_path);
@@ -68,7 +91,7 @@ pub fn collect_files(repo_root: &Utf8Path, max_bytes: Option<u64>) -> Result<Vec
         }
     }
 
-    Ok(results)
+    Ok((results, skipped_unsupported))
 }
 
 /// Read `.atlasignore` from the repo root and return non-empty, non-comment
@@ -273,6 +296,31 @@ mod tests {
     }
 
     #[test]
+    fn collect_supported_files_skips_unsupported_extensions() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8Path::from_path(dir.path()).unwrap();
+
+        let status = Command::new("git")
+            .args(["init", "--quiet"])
+            .current_dir(root)
+            .status()
+            .expect("git init");
+        assert!(status.success(), "git init should succeed");
+
+        std::fs::write(root.join("main.rs").as_std_path(), "fn main() {}\n").unwrap();
+        std::fs::write(root.join("notes.md").as_std_path(), "# notes\n").unwrap();
+        std::fs::write(root.join("config.yaml").as_std_path(), "name: atlas\n").unwrap();
+
+        let (files, skipped_unsupported) = collect_supported_files(root, None, |path| {
+            matches!(path.extension(), Some("rs") | Some("py"))
+        })
+        .expect("collect_supported_files");
+
+        assert_eq!(skipped_unsupported, 2);
+        assert_eq!(files, vec![Utf8PathBuf::from("main.rs")]);
+    }
+
+    #[test]
     fn binary_detection_rejects_null_bytes() {
         use std::io::Write;
         let dir = tempfile::tempdir().unwrap();
@@ -343,7 +391,10 @@ mod tests {
             .map(|s| format!("{}/", s))
             .collect();
         assert!(should_ignore("node_modules/lodash/index.js", &patterns));
-        assert!(should_ignore("vendor/github.com/pkg/errors/errors.go", &patterns));
+        assert!(should_ignore(
+            "vendor/github.com/pkg/errors/errors.go",
+            &patterns
+        ));
         assert!(should_ignore("target/debug/atlas", &patterns));
         assert!(should_ignore(".venv/lib/python3.11/site.py", &patterns));
         assert!(should_ignore("__pycache__/main.cpython-311.pyc", &patterns));

@@ -16,7 +16,10 @@ const HOP_DECAY: f64 = 0.25;
 fn base_score_for_kind(kind: NodeKind) -> f64 {
     match kind {
         NodeKind::Function | NodeKind::Method => 1.0,
-        NodeKind::Class | NodeKind::Struct | NodeKind::Enum | NodeKind::Trait
+        NodeKind::Class
+        | NodeKind::Struct
+        | NodeKind::Enum
+        | NodeKind::Trait
         | NodeKind::Interface => 1.2,
         NodeKind::Module | NodeKind::Package => 0.8,
         NodeKind::Constant | NodeKind::Variable => 0.5,
@@ -28,11 +31,7 @@ fn base_score_for_kind(kind: NodeKind) -> f64 {
 /// Extra multiplier for public-API nodes (e.g. `pub fn`).
 fn api_multiplier(node: &Node) -> f64 {
     let mods = node.modifiers.as_deref().unwrap_or("");
-    if mods.contains("pub") {
-        1.5
-    } else {
-        1.0
-    }
+    if mods.contains("pub") { 1.5 } else { 1.0 }
 }
 
 // ---------------------------------------------------------------------------
@@ -85,12 +84,8 @@ fn score_nodes(base: &ImpactResult) -> Vec<ScoredImpactNode> {
     let mut adj: HashMap<&str, Vec<(&str, f64)>> = HashMap::new();
     for e in &base.relevant_edges {
         let w = e.kind.traversal_weight() * e.confidence as f64;
-        adj.entry(&e.source_qn)
-            .or_default()
-            .push((&e.target_qn, w));
-        adj.entry(&e.target_qn)
-            .or_default()
-            .push((&e.source_qn, w));
+        adj.entry(&e.source_qn).or_default().push((&e.target_qn, w));
+        adj.entry(&e.target_qn).or_default().push((&e.source_qn, w));
     }
 
     // BFS from seeds (take highest score, re-queue when improved).
@@ -124,14 +119,14 @@ fn score_nodes(base: &ImpactResult) -> Vec<ScoredImpactNode> {
         .map(|n| n.qualified_name.as_str())
         .collect();
 
-    let all_nodes = base
-        .changed_nodes
-        .iter()
-        .chain(base.impacted_nodes.iter());
+    let all_nodes = base.changed_nodes.iter().chain(base.impacted_nodes.iter());
 
     let mut result: Vec<ScoredImpactNode> = all_nodes
         .map(|n| {
-            let impact_score = scores.get(n.qualified_name.as_str()).copied().unwrap_or(0.0);
+            let impact_score = scores
+                .get(n.qualified_name.as_str())
+                .copied()
+                .unwrap_or(0.0);
             let change_kind = if seed_qns.contains(n.qualified_name.as_str()) {
                 Some(classify_node(n))
             } else {
@@ -146,7 +141,11 @@ fn score_nodes(base: &ImpactResult) -> Vec<ScoredImpactNode> {
         .collect();
 
     // Highest score first.
-    result.sort_by(|a, b| b.impact_score.partial_cmp(&a.impact_score).unwrap_or(std::cmp::Ordering::Equal));
+    result.sort_by(|a, b| {
+        b.impact_score
+            .partial_cmp(&a.impact_score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     result
 }
 
@@ -211,9 +210,7 @@ fn compute_test_impact(base: &ImpactResult) -> TestImpactResult {
     let edges_to_tests: HashSet<String> = base
         .relevant_edges
         .iter()
-        .filter(|e| {
-            matches!(e.kind, EdgeKind::Tests | EdgeKind::TestedBy)
-        })
+        .filter(|e| matches!(e.kind, EdgeKind::Tests | EdgeKind::TestedBy))
         .flat_map(|e| [e.source_qn.clone(), e.target_qn.clone()])
         .collect();
 
@@ -242,9 +239,7 @@ fn compute_test_impact(base: &ImpactResult) -> TestImpactResult {
         .relevant_edges
         .iter()
         .filter(|e| matches!(e.kind, EdgeKind::Tests | EdgeKind::TestedBy))
-        .flat_map(|e| {
-            [e.source_qn.clone(), e.target_qn.clone()]
-        })
+        .flat_map(|e| [e.source_qn.clone(), e.target_qn.clone()])
         .collect();
 
     let uncovered_changed_nodes: Vec<Node> = base
@@ -319,9 +314,7 @@ fn detect_boundary_violations(base: &ImpactResult) -> Vec<BoundaryViolation> {
         let count = cross_module_qns.len();
         violations.push(BoundaryViolation {
             kind: BoundaryKind::CrossModule,
-            description: format!(
-                "{count} node(s) in other modules are impacted by this change"
-            ),
+            description: format!("{count} node(s) in other modules are impacted by this change"),
             nodes: cross_module_qns,
         });
     }
@@ -332,9 +325,7 @@ fn detect_boundary_violations(base: &ImpactResult) -> Vec<BoundaryViolation> {
         let count = cross_package_qns.len();
         violations.push(BoundaryViolation {
             kind: BoundaryKind::CrossPackage,
-            description: format!(
-                "{count} node(s) in other packages are impacted by this change"
-            ),
+            description: format!("{count} node(s) in other packages are impacted by this change"),
             nodes: cross_package_qns,
         });
     }
@@ -353,12 +344,12 @@ fn compute_risk_level(
     test_impact: &TestImpactResult,
     violations: &[BoundaryViolation],
 ) -> RiskLevel {
-    let has_api_change = scored.iter().any(|s| {
-        s.change_kind == Some(ChangeKind::ApiChange)
-    });
-    let has_sig_change = scored.iter().any(|s| {
-        s.change_kind == Some(ChangeKind::SignatureChange)
-    });
+    let has_api_change = scored
+        .iter()
+        .any(|s| s.change_kind == Some(ChangeKind::ApiChange));
+    let has_sig_change = scored
+        .iter()
+        .any(|s| s.change_kind == Some(ChangeKind::SignatureChange));
     let has_cross_module = violations
         .iter()
         .any(|v| v.kind == BoundaryKind::CrossModule);
@@ -422,11 +413,7 @@ mod tests {
         }
     }
 
-    fn base_result(
-        changed: Vec<Node>,
-        impacted: Vec<Node>,
-        edges: Vec<Edge>,
-    ) -> ImpactResult {
+    fn base_result(changed: Vec<Node>, impacted: Vec<Node>, edges: Vec<Edge>) -> ImpactResult {
         let impacted_files: Vec<String> = impacted
             .iter()
             .map(|n| n.file_path.clone())
@@ -455,7 +442,10 @@ mod tests {
             .iter()
             .find(|s| s.node.qualified_name == "b.rs::fn::bar")
             .expect("bar must be scored");
-        assert!(bar.impact_score > 0.0, "bar should have positive impact score");
+        assert!(
+            bar.impact_score > 0.0,
+            "bar should have positive impact score"
+        );
         // foo is seed so it should have highest or equal score.
         let foo = result
             .scored_nodes
@@ -493,8 +483,7 @@ mod tests {
         let test_node = make_node(NodeKind::Test, "a.rs::test::foo_test", "src/a.rs", true);
         let edge = make_edge(EdgeKind::Tests, "a.rs::test::foo_test", "a.rs::fn::foo");
 
-        let base =
-            base_result(vec![seed], vec![test_node.clone()], vec![edge]);
+        let base = base_result(vec![seed], vec![test_node.clone()], vec![edge]);
         let result = analyze(base);
 
         assert!(
@@ -530,9 +519,18 @@ mod tests {
 
     #[test]
     fn cross_module_violation_detected() {
-        let seed = make_node(NodeKind::Function, "a.rs::fn::foo", "src/moduleA/a.rs", false);
-        let impacted =
-            make_node(NodeKind::Function, "b.rs::fn::bar", "src/moduleB/b.rs", false);
+        let seed = make_node(
+            NodeKind::Function,
+            "a.rs::fn::foo",
+            "src/moduleA/a.rs",
+            false,
+        );
+        let impacted = make_node(
+            NodeKind::Function,
+            "b.rs::fn::bar",
+            "src/moduleB/b.rs",
+            false,
+        );
 
         let base = base_result(vec![seed], vec![impacted], vec![]);
         let result = analyze(base);
@@ -541,14 +539,26 @@ mod tests {
             .boundary_violations
             .iter()
             .any(|v| v.kind == BoundaryKind::CrossModule);
-        assert!(has_cross, "different modules should produce CrossModule violation");
+        assert!(
+            has_cross,
+            "different modules should produce CrossModule violation"
+        );
     }
 
     #[test]
     fn no_violation_when_same_module() {
-        let seed = make_node(NodeKind::Function, "a.rs::fn::foo", "src/module/a.rs", false);
-        let impacted =
-            make_node(NodeKind::Function, "b.rs::fn::bar", "src/module/b.rs", false);
+        let seed = make_node(
+            NodeKind::Function,
+            "a.rs::fn::foo",
+            "src/module/a.rs",
+            false,
+        );
+        let impacted = make_node(
+            NodeKind::Function,
+            "b.rs::fn::bar",
+            "src/module/b.rs",
+            false,
+        );
 
         let base = base_result(vec![seed], vec![impacted], vec![]);
         let result = analyze(base);
@@ -557,19 +567,30 @@ mod tests {
             .boundary_violations
             .iter()
             .any(|v| v.kind == BoundaryKind::CrossModule);
-        assert!(!has_cross, "same module should produce no CrossModule violation");
+        assert!(
+            !has_cross,
+            "same module should produce no CrossModule violation"
+        );
     }
 
     #[test]
     fn risk_critical_on_api_change_with_cross_package() {
-        let mut seed =
-            make_node(NodeKind::Struct, "pkg_a/a.rs::struct::Foo", "pkg_a/a.rs", false);
+        let mut seed = make_node(
+            NodeKind::Struct,
+            "pkg_a/a.rs::struct::Foo",
+            "pkg_a/a.rs",
+            false,
+        );
         seed.modifiers = Some("pub".to_string());
         seed.params = None;
         seed.return_type = None;
 
-        let impacted =
-            make_node(NodeKind::Function, "pkg_b/b.rs::fn::bar", "pkg_b/b.rs", false);
+        let impacted = make_node(
+            NodeKind::Function,
+            "pkg_b/b.rs::fn::bar",
+            "pkg_b/b.rs",
+            false,
+        );
 
         let base = base_result(vec![seed], vec![impacted], vec![]);
         let result = analyze(base);
@@ -579,8 +600,7 @@ mod tests {
 
     #[test]
     fn risk_low_for_internal_single_file_change() {
-        let mut seed =
-            make_node(NodeKind::Function, "src/a.rs::fn::foo", "src/a.rs", false);
+        let mut seed = make_node(NodeKind::Function, "src/a.rs::fn::foo", "src/a.rs", false);
         seed.modifiers = Some("".to_string()); // private
         seed.params = None;
         seed.return_type = None;
@@ -639,8 +659,7 @@ mod tests {
     fn disconnected_impacted_node_gets_zero_score() {
         let seed = make_node(NodeKind::Function, "a::fn::foo", "src/a.rs", false);
         // disconnected: no edges connect it to seed
-        let disconnected =
-            make_node(NodeKind::Function, "z::fn::orphan", "src/z.rs", false);
+        let disconnected = make_node(NodeKind::Function, "z::fn::orphan", "src/z.rs", false);
 
         let base = base_result(vec![seed], vec![disconnected], vec![]);
         let result = analyze(base);

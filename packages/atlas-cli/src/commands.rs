@@ -4,11 +4,13 @@ use std::time::Instant;
 
 use anyhow::{Context, Result};
 use atlas_core::SearchQuery;
-use atlas_core::model::{ChangeType, ImpactResult, ParsedFile, ReviewContext, RiskSummary};
+use atlas_core::model::{
+    ChangeType, ImpactResult, ParsedFile, ReviewContext, ReviewImpactOverview, RiskSummary,
+};
 use atlas_impact::analyze as advanced_impact;
 use atlas_parser::ParserRegistry;
 use atlas_repo::{
-    DiffTarget, changed_files, collect_files, find_repo_root, hash_file, repo_relative,
+    DiffTarget, changed_files, collect_supported_files, find_repo_root, hash_file, repo_relative,
 };
 use atlas_search as search;
 use atlas_store_sqlite::Store;
@@ -19,6 +21,7 @@ use crate::cli::{Cli, Command};
 
 /// Default parse-worker batch size.  Override with `ATLAS_PARSE_BATCH_SIZE`.
 const DEFAULT_PARSE_BATCH_SIZE: usize = 64;
+const MACHINE_SCHEMA_VERSION: &str = "atlas_cli.v1";
 
 /// Read the effective batch size from the environment, falling back to the
 /// compile-time default.  Clamps to [1, 4096] to prevent extreme values.
@@ -48,10 +51,7 @@ fn node_signature(n: &atlas_core::Node) -> String {
 
 /// Collect the qualified names of symbols whose interface signature changed or
 /// that were added/removed between `old_sigs` and the freshly parsed `nodes`.
-fn changed_qnames(
-    old_sigs: &HashMap<String, String>,
-    nodes: &[atlas_core::Node],
-) -> Vec<String> {
+fn changed_qnames(old_sigs: &HashMap<String, String>, nodes: &[atlas_core::Node]) -> Vec<String> {
     let mut changed: Vec<String> = Vec::new();
 
     // Added or signature-changed symbols.
@@ -73,6 +73,108 @@ fn changed_qnames(
     changed
 }
 
+fn json_envelope(command: &str, data: serde_json::Value) -> serde_json::Value {
+    serde_json::json!({
+        "schema_version": MACHINE_SCHEMA_VERSION,
+        "command": command,
+        "data": data,
+    })
+}
+
+fn print_json(command: &str, data: serde_json::Value) -> Result<()> {
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&json_envelope(command, data))?
+    );
+    Ok(())
+}
+
+fn detect_changes_target(base: &Option<String>, staged: bool) -> DiffTarget {
+    if staged {
+        DiffTarget::Staged
+    } else if let Some(base_ref) = base {
+        DiffTarget::BaseRef(base_ref.clone())
+    } else {
+        DiffTarget::WorkingTree
+    }
+}
+
+fn supported_update_candidates(
+    repo_root: &Utf8Path,
+    registry: &ParserRegistry,
+    paths: &[String],
+) -> (Vec<(String, camino::Utf8PathBuf)>, usize) {
+    let mut skipped_unsupported = 0usize;
+    let candidates = paths
+        .iter()
+        .filter_map(|rel_str| {
+            if !registry.supports(rel_str) {
+                skipped_unsupported += 1;
+                return None;
+            }
+            Some((rel_str.clone(), repo_root.join(rel_str)))
+        })
+        .collect();
+    (candidates, skipped_unsupported)
+}
+
+fn change_tag(change_type: ChangeType) -> &'static str {
+    match change_type {
+        ChangeType::Added => "A",
+        ChangeType::Modified => "M",
+        ChangeType::Deleted => "D",
+        ChangeType::Renamed => "R",
+        ChangeType::Copied => "C",
+    }
+}
+
+fn augment_changes_with_node_counts(
+    changes: &[atlas_core::model::ChangedFile],
+    store: Option<&Store>,
+) -> Vec<serde_json::Value> {
+    changes
+        .iter()
+        .map(|cf| {
+            let node_count = store
+                .and_then(|s| s.nodes_by_file(&cf.path).ok())
+                .map(|ns| ns.len());
+            let mut value = serde_json::to_value(cf).unwrap_or_default();
+            if let Some(count) = node_count {
+                value["node_count"] = serde_json::json!(count);
+            }
+            value
+        })
+        .collect()
+}
+
+fn status_payload(
+    repo: &str,
+    db_path: &str,
+    stats: &atlas_core::GraphStats,
+    base: &Option<String>,
+    staged: bool,
+    changes: &[atlas_core::model::ChangedFile],
+    store: Option<&Store>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "repo_root": repo,
+        "db_path": db_path,
+        "diff_target": {
+            "base": base,
+            "staged": staged,
+            "kind": if staged { "staged" } else if base.is_some() { "base_ref" } else { "working_tree" },
+        },
+        "indexed_file_count": stats.file_count,
+        "node_count": stats.node_count,
+        "edge_count": stats.edge_count,
+        "nodes_by_kind": stats.nodes_by_kind,
+        "languages": stats.languages,
+        "last_indexed_at": stats.last_indexed_at,
+        "changed_file_count": changes.len(),
+        "changed_files": augment_changes_with_node_counts(changes, store),
+    })
+}
+
 pub fn run_init(cli: &Cli) -> Result<()> {
     let repo = resolve_repo(cli)?;
     let atlas_dir = crate::paths::atlas_dir(&repo);
@@ -82,21 +184,52 @@ pub fn run_init(cli: &Cli) -> Result<()> {
     let db_path = db_path(cli, &repo);
     Store::open(&db_path).with_context(|| format!("cannot open database at {db_path}"))?;
 
-    println!("Initialized atlas in {}", atlas_dir.display());
-    println!("Database: {db_path}");
+    if cli.json {
+        print_json(
+            "init",
+            serde_json::json!({
+                "atlas_dir": atlas_dir.display().to_string(),
+                "db_path": db_path,
+            }),
+        )?;
+    } else {
+        println!("Initialized atlas in {}", atlas_dir.display());
+        println!("Database: {db_path}");
+    }
     Ok(())
 }
 
 pub fn run_status(cli: &Cli) -> Result<()> {
     let repo = resolve_repo(cli)?;
+    let repo_root_path =
+        find_repo_root(Utf8Path::new(&repo)).context("cannot find git repo root")?;
+    let repo_root = repo_root_path.as_path();
     let db_path = db_path(cli, &repo);
+
+    let (base, staged) = match &cli.command {
+        Command::Status { base, staged } => (base.clone(), *staged),
+        _ => unreachable!(),
+    };
 
     let store =
         Store::open(&db_path).with_context(|| format!("cannot open database at {db_path}"))?;
     let stats = store.stats().context("cannot read stats")?;
+    let changes = changed_files(repo_root, &detect_changes_target(&base, staged))
+        .context("cannot detect changed files")?;
 
     if cli.json {
-        println!("{}", serde_json::to_string_pretty(&stats)?);
+        print_json(
+            "status",
+            status_payload(
+                &repo,
+                &db_path,
+                &stats,
+                &base,
+                staged,
+                &changes,
+                Some(&store),
+            ),
+        )?;
     } else {
         println!("Repo root : {repo}");
         println!("Database  : {db_path}");
@@ -114,6 +247,25 @@ pub fn run_status(cli: &Cli) -> Result<()> {
         }
         if let Some(ts) = &stats.last_indexed_at {
             println!("Last indexed: {ts}");
+        }
+        if base.is_some() || staged || !changes.is_empty() {
+            println!("Changed files: {}", changes.len());
+            for cf in &changes {
+                let node_info = store
+                    .nodes_by_file(&cf.path)
+                    .ok()
+                    .map(|nodes| format!(" [{} nodes]", nodes.len()))
+                    .unwrap_or_default();
+                if let Some(old) = &cf.old_path {
+                    println!(
+                        "  {}  {old} -> {}{node_info}",
+                        change_tag(cf.change_type),
+                        cf.path
+                    );
+                } else {
+                    println!("  {}  {}{node_info}", change_tag(cf.change_type), cf.path);
+                }
+            }
         }
     }
     Ok(())
@@ -140,10 +292,13 @@ pub fn run_build(cli: &Cli) -> Result<()> {
     // Load stored hashes once to skip unchanged files.
     let stored_hashes = store.file_hashes().context("cannot read stored hashes")?;
 
-    let all_files = collect_files(repo_root, None).context("cannot collect tracked files")?;
+    let (all_files, mut skipped_unsupported) =
+        collect_supported_files(repo_root, None, |rel_path| {
+            registry.supports(rel_path.as_str())
+        })
+        .context("cannot collect tracked files")?;
 
-    let mut scanned = 0usize;
-    let mut skipped_unsupported = 0usize;
+    let scanned = all_files.len() + skipped_unsupported;
     let mut skipped_unchanged = 0usize;
     let mut parse_errors = 0usize;
 
@@ -152,13 +307,7 @@ pub fn run_build(cli: &Cli) -> Result<()> {
     let mut candidates: Vec<Candidate> = Vec::new();
 
     for rel_path in &all_files {
-        scanned += 1;
         let rel_str = rel_path.as_str().to_owned();
-
-        if !registry.supports(&rel_str) {
-            skipped_unsupported += 1;
-            continue;
-        }
 
         let abs_path = repo_root.join(rel_path);
         let hash = match hash_file(&abs_path) {
@@ -187,6 +336,7 @@ pub fn run_build(cli: &Cli) -> Result<()> {
     let batch_size = parse_batch_size();
     let _parse_span = tracing::info_span!("build.parse_and_write").entered();
 
+    let mut parsed_count = 0usize;
     let mut total_nodes = 0usize;
     let mut total_edges = 0usize;
 
@@ -213,6 +363,7 @@ pub fn run_build(cli: &Cli) -> Result<()> {
         for (rel_str, outcome) in results {
             match outcome {
                 Ok(pf) => {
+                    parsed_count += 1;
                     parsed_files.push(pf);
                 }
                 Err(msg) if msg == "unsupported (skipped)" => {
@@ -241,11 +392,6 @@ pub fn run_build(cli: &Cli) -> Result<()> {
     }
 
     drop(_parse_span);
-
-    let parsed_count = candidates
-        .len()
-        .saturating_sub(parse_errors)
-        .saturating_sub(skipped_unsupported);
     let elapsed = started.elapsed();
 
     if cli.json {
@@ -259,7 +405,7 @@ pub fn run_build(cli: &Cli) -> Result<()> {
             "edges_inserted": total_edges,
             "elapsed_ms": elapsed.as_millis(),
         });
-        println!("{}", serde_json::to_string_pretty(&summary)?);
+        print_json("build", summary)?;
     } else {
         println!("Build complete ({:.2}s)", elapsed.as_secs_f64());
         println!("  Scanned             : {scanned}");
@@ -391,19 +537,9 @@ pub fn run_update(cli: &Cli) -> Result<()> {
     // -----------------------------------------------------------------------
     // Phase 1: parse the directly-changed files.
     // -----------------------------------------------------------------------
-    type UpdateCandidate = (String, camino::Utf8PathBuf);
-    let changed_candidates: Vec<UpdateCandidate> = to_parse_paths
-        .iter()
-        .filter_map(|rel_str| {
-            if !registry.supports(rel_str) {
-                return None;
-            }
-            let abs_path = repo_root.join(rel_str);
-            Some((rel_str.clone(), abs_path))
-        })
-        .collect();
-
-    skipped_unsupported += to_parse_paths.len().saturating_sub(changed_candidates.len());
+    let (changed_candidates, changed_unsupported) =
+        supported_update_candidates(repo_root, &registry, &to_parse_paths);
+    skipped_unsupported += changed_unsupported;
 
     let _parse_span = tracing::info_span!("update.parse_changed").entered();
 
@@ -466,21 +602,16 @@ pub fn run_update(cli: &Cli) -> Result<()> {
     drop(_deps_span);
 
     // Build the set of changed paths so we skip those already parsed.
-    let changed_paths_set: HashSet<&str> =
-        to_parse_paths.iter().map(String::as_str).collect();
+    let changed_paths_set: HashSet<&str> = to_parse_paths.iter().map(String::as_str).collect();
 
-    let dep_candidates: Vec<UpdateCandidate> = dependents
+    let dependent_paths: Vec<String> = dependents
         .iter()
         .filter(|d| !changed_paths_set.contains(d.as_str()))
-        .filter_map(|rel_str| {
-            if !registry.supports(rel_str) {
-                skipped_unsupported += 1;
-                return None;
-            }
-            let abs_path = repo_root.join(rel_str);
-            Some((rel_str.clone(), abs_path))
-        })
+        .cloned()
         .collect();
+    let (dep_candidates, dep_unsupported) =
+        supported_update_candidates(repo_root, &registry, &dependent_paths);
+    skipped_unsupported += dep_unsupported;
 
     // -----------------------------------------------------------------------
     // Phase 2: parse dependent files.
@@ -560,7 +691,7 @@ pub fn run_update(cli: &Cli) -> Result<()> {
             "edges_updated": total_edges,
             "elapsed_ms": elapsed.as_millis(),
         });
-        println!("{}", serde_json::to_string_pretty(&summary)?);
+        print_json("update", summary)?;
     } else {
         println!("Update complete ({:.2}s)", elapsed.as_secs_f64());
         println!("  Deleted  : {deleted_count}");
@@ -585,18 +716,11 @@ pub fn run_detect_changes(cli: &Cli) -> Result<()> {
     let repo_root = repo_root_path.as_path();
     let db_path = db_path(cli, &repo);
 
-    let diff_target = match &cli.command {
-        Command::DetectChanges { base, staged } => {
-            if *staged {
-                DiffTarget::Staged
-            } else if let Some(base_ref) = base {
-                DiffTarget::BaseRef(base_ref.clone())
-            } else {
-                DiffTarget::WorkingTree
-            }
-        }
-        _ => DiffTarget::WorkingTree,
+    let (base, staged) = match &cli.command {
+        Command::DetectChanges { base, staged } => (base.clone(), *staged),
+        _ => unreachable!(),
     };
+    let diff_target = detect_changes_target(&base, staged);
 
     let changes = changed_files(repo_root, &diff_target).context("cannot detect changed files")?;
 
@@ -604,34 +728,21 @@ pub fn run_detect_changes(cli: &Cli) -> Result<()> {
     let store_result = Store::open(&db_path);
 
     if cli.json {
-        // Augment each entry with a graph node count if the DB is available.
-        let augmented: Vec<serde_json::Value> = changes
-            .iter()
-            .map(|cf| {
-                let node_count = store_result
-                    .as_ref()
-                    .ok()
-                    .and_then(|s| s.nodes_by_file(&cf.path).ok())
-                    .map(|ns| ns.len());
-                let mut v = serde_json::to_value(cf).unwrap_or_default();
-                if let Some(c) = node_count {
-                    v["node_count"] = serde_json::json!(c);
-                }
-                v
-            })
-            .collect();
-        println!("{}", serde_json::to_string_pretty(&augmented)?);
+        print_json(
+            "detect_changes",
+            serde_json::json!({
+                "diff_target": {
+                    "base": base,
+                    "staged": staged,
+                    "kind": if staged { "staged" } else if base.is_some() { "base_ref" } else { "working_tree" },
+                },
+                "changes": augment_changes_with_node_counts(&changes, store_result.as_ref().ok()),
+            }),
+        )?;
     } else if changes.is_empty() {
         println!("No changed files detected.");
     } else {
         for cf in &changes {
-            let tag = match cf.change_type {
-                ChangeType::Added => "A",
-                ChangeType::Modified => "M",
-                ChangeType::Deleted => "D",
-                ChangeType::Renamed => "R",
-                ChangeType::Copied => "C",
-            };
             let node_info = store_result
                 .as_ref()
                 .ok()
@@ -639,9 +750,13 @@ pub fn run_detect_changes(cli: &Cli) -> Result<()> {
                 .map(|ns| format!(" [{} nodes]", ns.len()))
                 .unwrap_or_default();
             if let Some(old) = &cf.old_path {
-                println!("{tag}  {old} -> {}{node_info}", cf.path);
+                println!(
+                    "{}  {old} -> {}{node_info}",
+                    change_tag(cf.change_type),
+                    cf.path
+                );
             } else {
-                println!("{tag}  {}{node_info}", cf.path);
+                println!("{}  {}{node_info}", change_tag(cf.change_type), cf.path);
             }
         }
         println!("\n{} file(s) changed.", changes.len());
@@ -709,7 +824,21 @@ pub fn run_query(cli: &Cli) -> Result<()> {
     let results = search::search(&store, &query).context("search failed")?;
 
     if cli.json {
-        println!("{}", serde_json::to_string_pretty(&results)?);
+        print_json(
+            "query",
+            serde_json::json!({
+                "query": {
+                    "text": query.text,
+                    "kind": query.kind,
+                    "language": query.language,
+                    "subpath": query.subpath,
+                    "limit": query.limit,
+                    "graph_expand": query.graph_expand,
+                    "graph_max_hops": query.graph_max_hops,
+                },
+                "results": results,
+            }),
+        )?;
     } else if results.is_empty() {
         println!("No results.");
     } else {
@@ -780,15 +909,18 @@ pub fn run_impact(cli: &Cli) -> Result<()> {
 
     if target_files.is_empty() {
         if cli.json {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&ImpactResult {
+            print_json(
+                "impact",
+                serde_json::json!({
+                    "files": target_files,
+                    "analysis": ImpactResult {
                     changed_nodes: vec![],
                     impacted_nodes: vec![],
                     impacted_files: vec![],
                     relevant_edges: vec![],
-                })?
-            );
+                    }
+                }),
+            )?;
         } else {
             println!("No changed files detected.");
         }
@@ -803,7 +935,13 @@ pub fn run_impact(cli: &Cli) -> Result<()> {
     let advanced = advanced_impact(result);
 
     if cli.json {
-        println!("{}", serde_json::to_string_pretty(&advanced)?);
+        print_json(
+            "impact",
+            serde_json::json!({
+                "files": target_files,
+                "analysis": advanced,
+            }),
+        )?;
     } else {
         println!("Changed files : {}", target_files.len());
         println!("Changed nodes : {}", advanced.base.changed_nodes.len());
@@ -834,7 +972,10 @@ pub fn run_impact(cli: &Cli) -> Result<()> {
             }
         }
         if !advanced.test_impact.affected_tests.is_empty() {
-            println!("\nAffected tests: {}", advanced.test_impact.affected_tests.len());
+            println!(
+                "\nAffected tests: {}",
+                advanced.test_impact.affected_tests.len()
+            );
         }
         if !advanced.test_impact.uncovered_changed_nodes.is_empty() {
             println!("\nChanged nodes with no test coverage:");
@@ -863,8 +1004,13 @@ pub fn run_review_context(cli: &Cli) -> Result<()> {
     let store =
         Store::open(&db_path).with_context(|| format!("cannot open database at {db_path}"))?;
 
-    let (base, explicit_files) = match &cli.command {
-        Command::ReviewContext { base, files } => (base.clone(), files.clone()),
+    let (base, explicit_files, max_depth, max_nodes) = match &cli.command {
+        Command::ReviewContext {
+            base,
+            files,
+            max_depth,
+            max_nodes,
+        } => (base.clone(), files.clone(), *max_depth, *max_nodes as usize),
         _ => unreachable!(),
     };
 
@@ -901,16 +1047,36 @@ pub fn run_review_context(cli: &Cli) -> Result<()> {
             let empty = ReviewContext {
                 changed_files: vec![],
                 changed_symbols: vec![],
+                changed_symbol_summaries: vec![],
                 impacted_neighbors: vec![],
                 critical_edges: vec![],
+                impact_overview: ReviewImpactOverview {
+                    max_depth,
+                    max_nodes,
+                    impacted_node_count: 0,
+                    impacted_file_count: 0,
+                    relevant_edge_count: 0,
+                    reached_node_limit: false,
+                },
                 risk_summary: RiskSummary {
                     changed_symbol_count: 0,
                     public_api_changes: 0,
                     test_adjacent: false,
+                    affected_test_count: 0,
+                    uncovered_changed_symbol_count: 0,
+                    large_function_touched: false,
+                    large_function_count: 0,
                     cross_module_impact: false,
+                    cross_package_impact: false,
                 },
             };
-            println!("{}", serde_json::to_string_pretty(&empty)?);
+            print_json(
+                "review_context",
+                serde_json::json!({
+                    "files": target_files,
+                    "review_context": empty,
+                }),
+            )?;
         } else {
             println!("No changed files detected.");
         }
@@ -919,34 +1085,63 @@ pub fn run_review_context(cli: &Cli) -> Result<()> {
 
     let path_refs: Vec<&str> = target_files.iter().map(String::as_str).collect();
     let impact = store
-        .impact_radius(&path_refs, 3, 200)
+        .impact_radius(&path_refs, max_depth, max_nodes)
         .context("impact radius query failed")?;
 
-    let ctx = atlas_review::assemble_review_context(&impact, &target_files);
+    let ctx = atlas_review::assemble_review_context(&impact, &target_files, max_depth, max_nodes);
 
     if cli.json {
-        println!("{}", serde_json::to_string_pretty(&ctx)?);
+        print_json(
+            "review_context",
+            serde_json::json!({
+                "files": target_files,
+                "review_context": ctx,
+            }),
+        )?;
     } else {
         println!("Changed files ({}):", ctx.changed_files.len());
         for f in &ctx.changed_files {
             println!("  {f}");
         }
+        println!("\nImpact radius:");
+        println!("  Max depth         : {}", ctx.impact_overview.max_depth);
+        println!("  Max nodes         : {}", ctx.impact_overview.max_nodes);
+        println!(
+            "  Impacted nodes    : {}",
+            ctx.impact_overview.impacted_node_count
+        );
+        println!(
+            "  Impacted files    : {}",
+            ctx.impact_overview.impacted_file_count
+        );
+        println!(
+            "  Relevant edges    : {}",
+            ctx.impact_overview.relevant_edge_count
+        );
+        println!(
+            "  Node limit reached: {}",
+            ctx.impact_overview.reached_node_limit
+        );
         println!(
             "\nChanged symbols: {}",
             ctx.risk_summary.changed_symbol_count
         );
-        for n in ctx.changed_symbols.iter().take(20) {
+        for summary in ctx.changed_symbol_summaries.iter().take(10) {
             println!(
-                "  {} {} ({}:{})",
-                n.kind.as_str(),
-                n.qualified_name,
-                n.file_path,
-                n.line_start
+                "  {} {} ({}:{}) | callers {} | callees {} | importers {} | tests {}",
+                summary.node.kind.as_str(),
+                summary.node.qualified_name,
+                summary.node.file_path,
+                summary.node.line_start,
+                summary.callers.len(),
+                summary.callees.len(),
+                summary.importers.len(),
+                summary.tests.len()
             );
         }
         println!(
             "\nImpacted neighbors (top {}):",
-            ctx.impacted_neighbors.len()
+            ctx.impacted_neighbors.len().min(20)
         );
         for n in ctx.impacted_neighbors.iter().take(20) {
             println!(
@@ -962,10 +1157,26 @@ pub fn run_review_context(cli: &Cli) -> Result<()> {
             "  Public API changes : {}",
             ctx.risk_summary.public_api_changes
         );
+        println!(
+            "  Affected tests     : {}",
+            ctx.risk_summary.affected_test_count
+        );
+        println!(
+            "  Uncovered changes  : {}",
+            ctx.risk_summary.uncovered_changed_symbol_count
+        );
+        println!(
+            "  Large functions    : {}",
+            ctx.risk_summary.large_function_count
+        );
         println!("  Test adjacent      : {}", ctx.risk_summary.test_adjacent);
         println!(
             "  Cross-module impact: {}",
             ctx.risk_summary.cross_module_impact
+        );
+        println!(
+            "  Cross-package impact: {}",
+            ctx.risk_summary.cross_package_impact
         );
     }
 
@@ -987,7 +1198,7 @@ pub fn run_db_check(cli: &Cli) -> Result<()> {
             "ok": issues.is_empty(),
             "issues": issues,
         });
-        println!("{}", serde_json::to_string_pretty(&result)?);
+        print_json("db_check", result)?;
     } else if issues.is_empty() {
         println!("Database integrity OK: {db_path}");
     } else {

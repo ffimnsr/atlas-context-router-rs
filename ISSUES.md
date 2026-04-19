@@ -403,7 +403,7 @@ The upstream project’s primary promise includes full build plus incremental up
 - [x] `collect_files(repo_root)`
 - [x] Use `git ls-files`
 - [ ] Optional recursive submodule handling later
-- [ ] Skip unsupported extensions
+- [x] Skip unsupported extensions
 - [x] skip binary files
 - [x] skip giant files
 - [x] configurable file size threshold
@@ -818,40 +818,40 @@ The main user benefit of the upstream project is not just building the graph, bu
 
 ### 12.1 Minimal context
 
-- [ ] input:
-  - [ ] changed files
-  - [ ] max depth
-  - [ ] max nodes
-- [ ] output:
-  - [ ] changed node summaries
-  - [ ] key impacted neighbors
-  - [ ] critical edges
-  - [ ] relevant file excerpts later
+- [x] input:
+  - [x] changed files
+  - [x] max depth
+  - [x] max nodes
+- [x] output:
+  - [x] changed node summaries
+  - [x] key impacted neighbors
+  - [x] critical edges
+  - [x] relevant file excerpts later
 
 ### 12.2 Review context
 
-- [ ] identify touched functions/methods/classes
-- [ ] list callers/callees/importers/tests
-- [ ] include impact-radius result
-- [ ] rank by relevance
-- [ ] avoid dumping entire graph
-- [ ] provide machine-readable JSON and concise text output
+- [x] identify touched functions/methods/classes
+- [x] list callers/callees/importers/tests
+- [x] include impact-radius result
+- [x] rank by relevance
+- [x] avoid dumping entire graph
+- [x] provide machine-readable JSON and concise text output
 
 ### 12.3 Risk/change summaries
 
-- [ ] changed files list
-- [ ] changed symbol count
-- [ ] public API node changes
-- [ ] test coverage adjacency
-- [ ] large function touched
-- [ ] cross-module/cross-package impact
+- [x] changed files list
+- [x] changed symbol count
+- [x] public API node changes
+- [x] test coverage adjacency
+- [x] large function touched
+- [x] cross-module/cross-package impact
 
 ### 12.4 CLI
 
-- [ ] `atlas review-context --base origin/main`
-- [ ] `atlas review-context --files ...`
-- [ ] `atlas review-context --json`
-- [ ] `atlas detect-changes --base origin/main`
+- [x] `atlas review-context --base origin/main`
+- [x] `atlas review-context --files ...`
+- [x] `atlas review-context --json`
+- [x] `atlas detect-changes --base origin/main`
 
 ---
 
@@ -878,7 +878,7 @@ The main user benefit of the upstream project is not just building the graph, bu
 
 - [x] human-readable output
 - [x] structured JSON output
-- [ ] stable machine schema for automation
+- [x] stable machine schema for automation
 - [x] concise error messages
 - [x] rich verbose diagnostics when requested
 
@@ -892,7 +892,7 @@ The main user benefit of the upstream project is not just building the graph, bu
 - [x] nodes by kind
 - [x] languages present
 - [x] last build/update time
-- [ ] changed files since base
+- [x] changed files since base
 
 ---
 

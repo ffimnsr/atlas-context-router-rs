@@ -59,7 +59,15 @@ pub enum Command {
     },
 
     /// Show database status and graph statistics.
-    Status,
+    Status {
+        /// Git ref or range to diff against for changed-file status.
+        #[arg(long)]
+        base: Option<String>,
+
+        /// Diff staged changes only for changed-file status.
+        #[arg(long)]
+        staged: bool,
+    },
 
     /// List files changed since a base ref.
     DetectChanges {
@@ -130,6 +138,14 @@ pub enum Command {
         /// Explicit list of files.
         #[arg(long, num_args = 1..)]
         files: Vec<String>,
+
+        /// Maximum traversal depth.
+        #[arg(long, default_value_t = 3)]
+        max_depth: u32,
+
+        /// Maximum number of impacted nodes to consider.
+        #[arg(long, default_value_t = 200)]
+        max_nodes: u32,
     },
 
     /// Start a JSON-RPC / MCP stdio server.

@@ -5,7 +5,9 @@
 //! fields to reduce token overhead while keeping the information an agent
 //! actually needs.
 
-use atlas_core::model::{Edge, ImpactResult, Node, ReviewContext};
+use atlas_core::model::{
+    ChangedSymbolSummary, Edge, ImpactResult, Node, ReviewContext, ReviewImpactOverview,
+};
 use serde::Serialize;
 
 // ---------------------------------------------------------------------------
@@ -129,11 +131,32 @@ pub struct PackagedReview<'a> {
     pub changed_files: &'a [String],
     pub changed_symbol_count: usize,
     pub changed_symbols: Vec<CompactNode<'a>>,
+    pub changed_symbol_summaries: Vec<PackagedChangedSymbolSummary<'a>>,
     pub impacted_neighbor_count: usize,
     pub impacted_neighbors: Vec<CompactNode<'a>>,
     pub critical_edges: Vec<CompactEdge<'a>>,
+    pub impact_overview: PackagedImpactOverview,
     pub risk: PackagedRisk,
     pub truncated: bool,
+}
+
+#[derive(Serialize)]
+pub struct PackagedChangedSymbolSummary<'a> {
+    pub node: CompactNode<'a>,
+    pub callers: Vec<CompactNode<'a>>,
+    pub callees: Vec<CompactNode<'a>>,
+    pub importers: Vec<CompactNode<'a>>,
+    pub tests: Vec<CompactNode<'a>>,
+}
+
+#[derive(Serialize)]
+pub struct PackagedImpactOverview {
+    pub max_depth: u32,
+    pub max_nodes: usize,
+    pub impacted_node_count: usize,
+    pub impacted_file_count: usize,
+    pub relevant_edge_count: usize,
+    pub reached_node_limit: bool,
 }
 
 #[derive(Serialize)]
@@ -141,7 +164,12 @@ pub struct PackagedRisk {
     pub changed_symbol_count: usize,
     pub public_api_changes: usize,
     pub test_adjacent: bool,
+    pub affected_test_count: usize,
+    pub uncovered_changed_symbol_count: usize,
+    pub large_function_touched: bool,
+    pub large_function_count: usize,
     pub cross_module_impact: bool,
+    pub cross_package_impact: bool,
 }
 
 pub fn package_review<'a>(ctx: &'a ReviewContext) -> PackagedReview<'a> {
@@ -152,6 +180,7 @@ pub fn package_review<'a>(ctx: &'a ReviewContext) -> PackagedReview<'a> {
     let sym_capped = sym_total.min(MAX_NODES);
     let nbr_capped = nbr_total.min(MAX_NODES);
     let edge_capped = edge_total.min(MAX_EDGES);
+    let summary_capped = ctx.changed_symbol_summaries.len().min(MAX_NODES);
 
     PackagedReview {
         changed_files: &ctx.changed_files,
@@ -159,6 +188,10 @@ pub fn package_review<'a>(ctx: &'a ReviewContext) -> PackagedReview<'a> {
         changed_symbols: ctx.changed_symbols[..sym_capped]
             .iter()
             .map(compact_node)
+            .collect(),
+        changed_symbol_summaries: ctx.changed_symbol_summaries[..summary_capped]
+            .iter()
+            .map(package_changed_symbol_summary)
             .collect(),
         impacted_neighbor_count: nbr_total,
         impacted_neighbors: ctx.impacted_neighbors[..nbr_capped]
@@ -169,12 +202,44 @@ pub fn package_review<'a>(ctx: &'a ReviewContext) -> PackagedReview<'a> {
             .iter()
             .map(compact_edge)
             .collect(),
+        impact_overview: package_impact_overview(&ctx.impact_overview),
         risk: PackagedRisk {
             changed_symbol_count: ctx.risk_summary.changed_symbol_count,
             public_api_changes: ctx.risk_summary.public_api_changes,
             test_adjacent: ctx.risk_summary.test_adjacent,
+            affected_test_count: ctx.risk_summary.affected_test_count,
+            uncovered_changed_symbol_count: ctx.risk_summary.uncovered_changed_symbol_count,
+            large_function_touched: ctx.risk_summary.large_function_touched,
+            large_function_count: ctx.risk_summary.large_function_count,
             cross_module_impact: ctx.risk_summary.cross_module_impact,
+            cross_package_impact: ctx.risk_summary.cross_package_impact,
         },
-        truncated: sym_capped < sym_total || nbr_capped < nbr_total || edge_capped < edge_total,
+        truncated: sym_capped < sym_total
+            || summary_capped < ctx.changed_symbol_summaries.len()
+            || nbr_capped < nbr_total
+            || edge_capped < edge_total,
+    }
+}
+
+fn package_changed_symbol_summary(
+    summary: &ChangedSymbolSummary,
+) -> PackagedChangedSymbolSummary<'_> {
+    PackagedChangedSymbolSummary {
+        node: compact_node(&summary.node),
+        callers: summary.callers.iter().map(compact_node).collect(),
+        callees: summary.callees.iter().map(compact_node).collect(),
+        importers: summary.importers.iter().map(compact_node).collect(),
+        tests: summary.tests.iter().map(compact_node).collect(),
+    }
+}
+
+fn package_impact_overview(overview: &ReviewImpactOverview) -> PackagedImpactOverview {
+    PackagedImpactOverview {
+        max_depth: overview.max_depth,
+        max_nodes: overview.max_nodes,
+        impacted_node_count: overview.impacted_node_count,
+        impacted_file_count: overview.impacted_file_count,
+        relevant_edge_count: overview.relevant_edge_count,
+        reached_node_limit: overview.reached_node_limit,
     }
 }

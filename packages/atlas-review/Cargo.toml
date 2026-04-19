@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 atlas-core.workspace = true
+atlas-impact = { path = "../atlas-impact" }
 tracing.workspace = true
 
 [dev-dependencies]

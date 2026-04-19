@@ -300,7 +300,12 @@ impl Store {
         match do_replace_file_graph(&self.conn, path, hash, language, size, nodes, edges) {
             Ok(()) => {
                 self.conn.execute_batch("COMMIT").map_err(db_err)?;
-                info!(path, nodes = nodes.len(), edges = edges.len(), "replaced file graph");
+                info!(
+                    path,
+                    nodes = nodes.len(),
+                    edges = edges.len(),
+                    "replaced file graph"
+                );
                 Ok(())
             }
             Err(e) => {
@@ -317,10 +322,7 @@ impl Store {
     /// file.  If any file fails the entire batch is rolled back.
     ///
     /// Returns `(total_nodes, total_edges)` inserted.
-    pub fn replace_files_transactional(
-        &mut self,
-        files: &[ParsedFile],
-    ) -> Result<(usize, usize)> {
+    pub fn replace_files_transactional(&mut self, files: &[ParsedFile]) -> Result<(usize, usize)> {
         if files.is_empty() {
             return Ok((0, 0));
         }
@@ -798,15 +800,17 @@ impl Store {
 
         // Build a LIKE pattern from the subpath (escape SQLite LIKE wildcards).
         let subpath_like = query.subpath.as_deref().map(|sp| {
-            let escaped = sp.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
+            let escaped = sp
+                .replace('\\', "\\\\")
+                .replace('%', "\\%")
+                .replace('_', "\\_");
             format!("{escaped}%")
         });
 
         // Build dynamic WHERE clause and a matching params vector so the
         // number of `?` placeholders always equals the number of bound values.
         let mut filters: Vec<String> = vec!["nodes_fts MATCH ?".to_string()];
-        let mut params: Vec<Box<dyn rusqlite::types::ToSql>> =
-            vec![Box::new(fts_query)];
+        let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = vec![Box::new(fts_query)];
 
         if let Some(kind) = &query.kind {
             filters.push("n.kind = ?".to_string());
@@ -851,13 +855,13 @@ impl Store {
         let mut stmt = self.conn.prepare(&sql).map_err(db_err)?;
         let results = stmt
             .query_map(params_ref.as_slice(), |row| {
-                    let node = row_to_node(row)?;
-                    let score: f64 = row.get(15)?;
-                    Ok(ScoredNode {
-                        node,
-                        // BM25 returns negative values; negate for ascending score.
-                        score: -score,
-                    })
+                let node = row_to_node(row)?;
+                let score: f64 = row.get(15)?;
+                Ok(ScoredNode {
+                    node,
+                    // BM25 returns negative values; negate for ascending score.
+                    score: -score,
+                })
             })
             .map_err(db_err)?
             .filter_map(|r| r.ok())
@@ -1590,8 +1594,14 @@ mod tests {
             .chain(result.impacted_nodes.iter())
             .map(|n| n.qualified_name.as_str())
             .collect();
-        assert!(all_qns.contains(&"a.rs::fn::a"), "seed node must be present");
-        assert!(all_qns.contains(&"b.rs::fn::b"), "connected node must be present");
+        assert!(
+            all_qns.contains(&"a.rs::fn::a"),
+            "seed node must be present"
+        );
+        assert!(
+            all_qns.contains(&"b.rs::fn::b"),
+            "connected node must be present"
+        );
         assert!(
             !all_qns.contains(&"c.rs::fn::c"),
             "disconnected node must not appear"
@@ -2307,8 +2317,7 @@ mod tests {
         let sigs_after = store.node_signatures_by_file("a.rs").unwrap();
 
         assert_eq!(
-            sigs_before["a.rs::fn::foo"],
-            sigs_after["a.rs::fn::foo"],
+            sigs_before["a.rs::fn::foo"], sigs_after["a.rs::fn::foo"],
             "moving a function should not change its signature"
         );
     }

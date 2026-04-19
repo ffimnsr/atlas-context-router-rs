@@ -63,7 +63,9 @@ pub fn tool_list() -> serde_json::Value {
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "files": { "type": "array", "items": { "type": "string" }, "description": "Repo-relative changed file paths" }
+                        "files": { "type": "array", "items": { "type": "string" }, "description": "Repo-relative changed file paths" },
+                        "max_depth": { "type": "integer", "description": "Traversal depth limit (default 3)" },
+                        "max_nodes": { "type": "integer", "description": "Maximum impacted nodes to consider (default 200)" }
                     },
                     "required": ["files"]
                 }
@@ -182,13 +184,15 @@ fn tool_get_review_context(
     if files.is_empty() {
         return Err(anyhow::anyhow!("missing required argument: files"));
     }
+    let max_depth = u64_arg(args, "max_depth").unwrap_or(3) as u32;
+    let max_nodes = u64_arg(args, "max_nodes").unwrap_or(200) as usize;
 
     let store = open_store(db_path)?;
     let file_refs: Vec<&str> = files.iter().map(String::as_str).collect();
     let impact = store
-        .impact_radius(&file_refs, 3, 200)
+        .impact_radius(&file_refs, max_depth, max_nodes)
         .context("impact_radius query failed")?;
-    let ctx = atlas_review::assemble_review_context(&impact, &files);
+    let ctx = atlas_review::assemble_review_context(&impact, &files, max_depth, max_nodes);
     let packaged = package_review(&ctx);
     tool_result(serde_json::to_string_pretty(&packaged)?)
 }

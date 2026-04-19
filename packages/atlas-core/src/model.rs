@@ -112,9 +112,30 @@ pub struct ImpactResult {
 pub struct ReviewContext {
     pub changed_files: Vec<String>,
     pub changed_symbols: Vec<Node>,
+    pub changed_symbol_summaries: Vec<ChangedSymbolSummary>,
     pub impacted_neighbors: Vec<Node>,
     pub critical_edges: Vec<Edge>,
+    pub impact_overview: ReviewImpactOverview,
     pub risk_summary: RiskSummary,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChangedSymbolSummary {
+    pub node: Node,
+    pub callers: Vec<Node>,
+    pub callees: Vec<Node>,
+    pub importers: Vec<Node>,
+    pub tests: Vec<Node>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReviewImpactOverview {
+    pub max_depth: u32,
+    pub max_nodes: usize,
+    pub impacted_node_count: usize,
+    pub impacted_file_count: usize,
+    pub relevant_edge_count: usize,
+    pub reached_node_limit: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -122,7 +143,12 @@ pub struct RiskSummary {
     pub changed_symbol_count: usize,
     pub public_api_changes: usize,
     pub test_adjacent: bool,
+    pub affected_test_count: usize,
+    pub uncovered_changed_symbol_count: usize,
+    pub large_function_touched: bool,
+    pub large_function_count: usize,
     pub cross_module_impact: bool,
+    pub cross_package_impact: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

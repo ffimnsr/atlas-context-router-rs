@@ -12,13 +12,18 @@ fn sqlite_fts5_smoke_round_trip() {
     run_atlas(repo.path(), &["init"]);
     run_atlas(repo.path(), &["build"]);
 
-    let status = read_json_output(run_atlas(repo.path(), &["--json", "status"]));
-    assert_eq!(status["file_count"], json!(2));
+    let status = read_json_data_output("status", run_atlas(repo.path(), &["--json", "status"]));
+    assert_eq!(status["indexed_file_count"], json!(2));
     assert!(status["node_count"].as_i64().unwrap_or_default() >= 5);
     assert!(status["edge_count"].as_i64().unwrap_or_default() >= 1);
 
-    let query = read_json_output(run_atlas(repo.path(), &["--json", "query", "greet_twice"]));
-    let results = query.as_array().expect("query should return a JSON array");
+    let query = read_json_data_output(
+        "query",
+        run_atlas(repo.path(), &["--json", "query", "greet_twice"]),
+    );
+    let results = query["results"]
+        .as_array()
+        .expect("query results should be an array");
     assert_eq!(results.len(), 1);
     assert_eq!(results[0]["node"]["name"], json!("greet_twice"));
     assert_eq!(results[0]["node"]["kind"], json!("method"));
@@ -32,11 +37,34 @@ fn fixture_query_output_matches_golden() {
     run_atlas(repo.path(), &["init"]);
     run_atlas(repo.path(), &["build"]);
 
-    let mut query = read_json_output(run_atlas(repo.path(), &["--json", "query", "greet_twice"]));
+    let mut query = read_json_data_output(
+        "query",
+        run_atlas(repo.path(), &["--json", "query", "greet_twice"]),
+    );
     normalize_query_results(&mut query);
 
     let golden = read_golden_json("query_greet_twice.json");
     assert_eq!(query, golden);
+}
+
+#[test]
+fn build_and_update_skip_unsupported_files_without_count_drift() {
+    let repo = setup_fixture_repo();
+
+    run_atlas(repo.path(), &["init"]);
+    write_repo_file(repo.path(), "notes.md", "# atlas notes\n");
+
+    let build = read_json_data_output("build", run_atlas(repo.path(), &["--json", "build"]));
+    assert!(build["skipped_unsupported"].as_u64().unwrap_or_default() >= 1);
+    assert!(build["parsed"].as_u64().unwrap_or_default() >= 2);
+
+    let update = read_json_data_output(
+        "update",
+        run_atlas(repo.path(), &["--json", "update", "--files", "notes.md"]),
+    );
+    assert_eq!(update["skipped_unsupported"], json!(1));
+    assert_eq!(update["parsed"], json!(0));
+    assert_eq!(update["parse_errors"], json!(0));
 }
 
 #[test]
@@ -46,13 +74,18 @@ fn mvp_command_contract_holds_for_committed_fixture_repo() {
     run_atlas(repo.path(), &["init"]);
     run_atlas(repo.path(), &["build"]);
 
-    let status = read_json_output(run_atlas(repo.path(), &["--json", "status"]));
-    assert_eq!(status["file_count"], json!(2));
+    let status = read_json_data_output("status", run_atlas(repo.path(), &["--json", "status"]));
+    assert_eq!(status["indexed_file_count"], json!(2));
     assert!(status["node_count"].as_i64().unwrap_or_default() >= 5);
     assert!(status["edge_count"].as_i64().unwrap_or_default() >= 1);
 
-    let query = read_json_output(run_atlas(repo.path(), &["--json", "query", "greet_twice"]));
-    let results = query.as_array().expect("query should return a JSON array");
+    let query = read_json_data_output(
+        "query",
+        run_atlas(repo.path(), &["--json", "query", "greet_twice"]),
+    );
+    let results = query["results"]
+        .as_array()
+        .expect("query results should return a JSON array");
     assert_eq!(results.len(), 1);
     assert_eq!(
         results[0]["node"]["qualified_name"],
@@ -77,30 +110,31 @@ pub fn helper(name: &str) -> String {
 "#,
     );
 
-    let changes = read_json_output(run_atlas(
-        repo.path(),
-        &["--json", "detect-changes", "--base", "HEAD"],
-    ));
-    let changes = changes
+    let changes = read_json_data_output(
+        "detect_changes",
+        run_atlas(repo.path(), &["--json", "detect-changes", "--base", "HEAD"]),
+    );
+    let changes = changes["changes"]
         .as_array()
-        .expect("detect-changes should return a JSON array");
+        .expect("detect-changes changes should return a JSON array");
     assert_eq!(changes.len(), 1);
     assert_eq!(changes[0]["path"], json!("src/lib.rs"));
     assert_eq!(changes[0]["change_type"], json!("modified"));
 
-    let update = read_json_output(run_atlas(
-        repo.path(),
-        &["--json", "update", "--base", "HEAD"],
-    ));
+    let update = read_json_data_output(
+        "update",
+        run_atlas(repo.path(), &["--json", "update", "--base", "HEAD"]),
+    );
     assert!(update["parsed"].as_u64().unwrap_or_default() >= 1);
     assert!(update["nodes_updated"].as_u64().unwrap_or_default() >= 1);
 
-    let impact = read_json_output(run_atlas(
-        repo.path(),
-        &["--json", "impact", "--base", "HEAD"],
-    ));
+    let impact = read_json_data_output(
+        "impact",
+        run_atlas(repo.path(), &["--json", "impact", "--base", "HEAD"]),
+    );
     // JSON shape is now AdvancedImpactResult: { base: {...}, scored_nodes, risk_level, ... }
-    let base = &impact["base"];
+    let analysis = &impact["analysis"];
+    let base = &analysis["base"];
     assert!(
         base["changed_nodes"]
             .as_array()
@@ -123,15 +157,28 @@ pub fn helper(name: &str) -> String {
             .any(|edge| edge["kind"] == json!("calls"))
     );
     // Advanced fields must be present.
-    assert!(impact["risk_level"].is_string(), "risk_level must be a string");
-    assert!(impact["scored_nodes"].is_array(), "scored_nodes must be an array");
-    assert!(impact["test_impact"].is_object(), "test_impact must be an object");
-    assert!(impact["boundary_violations"].is_array(), "boundary_violations must be an array");
+    assert!(
+        analysis["risk_level"].is_string(),
+        "risk_level must be a string"
+    );
+    assert!(
+        analysis["scored_nodes"].is_array(),
+        "scored_nodes must be an array"
+    );
+    assert!(
+        analysis["test_impact"].is_object(),
+        "test_impact must be an object"
+    );
+    assert!(
+        analysis["boundary_violations"].is_array(),
+        "boundary_violations must be an array"
+    );
 
-    let review_context = read_json_output(run_atlas(
-        repo.path(),
-        &["--json", "review-context", "--base", "HEAD"],
-    ));
+    let review_context = read_json_data_output(
+        "review_context",
+        run_atlas(repo.path(), &["--json", "review-context", "--base", "HEAD"]),
+    );
+    let review_context = &review_context["review_context"];
     assert_eq!(review_context["changed_files"], json!(["src/lib.rs"]));
     assert!(
         review_context["changed_symbols"]
@@ -140,31 +187,29 @@ pub fn helper(name: &str) -> String {
             .iter()
             .any(|node| node["file_path"] == json!("src/lib.rs"))
     );
-}
+    assert!(
+        review_context["changed_symbol_summaries"].is_array(),
+        "review-context changed_symbol_summaries must be an array"
+    );
+    assert!(
+        review_context["impact_overview"].is_object(),
+        "review-context impact_overview must be an object"
+    );
+    assert!(
+        review_context["risk_summary"]["cross_package_impact"].is_boolean(),
+        "review-context risk_summary.cross_package_impact must be a boolean"
+    );
 
-#[test]
-fn deferred_scope_stays_documented_outside_mvp_contract() {
-    let compatibility = fs::read_to_string(workspace_root().join("COMPATIBILITY.md"))
-        .expect("read compatibility doc");
-    assert!(compatibility.contains("## Deferred Features (not in v1)"));
-    for item in [
-        "embeddings / vector search",
-        "community detection",
-        "flows / diagramming",
-        "wiki generation",
-        "visualization / graph export",
-        "install hooks / watchers",
-    ] {
-        assert!(
-            compatibility.contains(item),
-            "missing deferred feature entry: {item}"
-        );
-    }
-
-    let v2_todo =
-        fs::read_to_string(workspace_root().join("atlas-v2-todo.md")).expect("read v2 todo");
-    assert!(v2_todo.contains("# Atlas — v2 Detailed TODO (Post-v1)"));
-    assert!(v2_todo.contains("Atlas v2 = smarter, not bigger."));
+    let status_with_base = read_json_data_output(
+        "status",
+        run_atlas(repo.path(), &["--json", "status", "--base", "HEAD"]),
+    );
+    assert_eq!(status_with_base["changed_file_count"], json!(1));
+    assert_eq!(status_with_base["diff_target"]["kind"], json!("base_ref"));
+    assert_eq!(
+        status_with_base["changed_files"][0]["path"],
+        json!("src/lib.rs")
+    );
 }
 
 fn setup_fixture_repo() -> TempDir {
@@ -197,10 +242,6 @@ fn fixture_repo_root() -> PathBuf {
         .join("sample_repo")
 }
 
-fn workspace_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..")
-}
-
 fn read_golden_json(name: &str) -> Value {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
@@ -210,8 +251,8 @@ fn read_golden_json(name: &str) -> Value {
 }
 
 fn normalize_query_results(value: &mut Value) {
-    let Some(results) = value.as_array_mut() else {
-        panic!("query output should be an array");
+    let Some(results) = value["results"].as_array_mut() else {
+        panic!("query output results should be an array");
     };
 
     for result in results {
@@ -223,6 +264,13 @@ fn normalize_query_results(value: &mut Value) {
 
 fn read_json_output(output: Output) -> Value {
     serde_json::from_slice(&output.stdout).expect("valid json output")
+}
+
+fn read_json_data_output(command: &str, output: Output) -> Value {
+    let value = read_json_output(output);
+    assert_eq!(value["schema_version"], json!("atlas_cli.v1"));
+    assert_eq!(value["command"], json!(command));
+    value["data"].clone()
 }
 
 fn write_repo_file(repo_root: &Path, relative_path: &str, content: &str) {

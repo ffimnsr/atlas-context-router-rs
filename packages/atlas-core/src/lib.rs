@@ -6,6 +6,7 @@ pub use error::{AtlasError, Result};
 pub use kinds::{EdgeKind, NodeKind};
 pub use model::{
     AdvancedImpactResult, BoundaryKind, BoundaryViolation, ChangeKind, ChangeType, ChangedFile,
-    Edge, FileRecord, GraphStats, ImpactResult, Node, NodeId, ParsedFile, ReviewContext,
-    RiskLevel, RiskSummary, ScoredImpactNode, ScoredNode, SearchQuery, TestImpactResult,
+    ChangedSymbolSummary, Edge, FileRecord, GraphStats, ImpactResult, Node, NodeId, ParsedFile,
+    ReviewContext, ReviewImpactOverview, RiskLevel, RiskSummary, ScoredImpactNode, ScoredNode,
+    SearchQuery, TestImpactResult,
 };

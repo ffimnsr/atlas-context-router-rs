@@ -22,9 +22,9 @@ fn split_camel(s: &str) -> Vec<String> {
         let prev_lower = i > 0 && chars[i - 1].is_lowercase();
         let next_lower = i + 1 < chars.len() && chars[i + 1].is_lowercase();
         if ch.is_uppercase() && i > 0 && (prev_lower || next_lower) && !current.is_empty() {
-                parts.push(current.clone());
-                current.clear();
-            }
+            parts.push(current.clone());
+            current.clear();
+        }
         current.push(ch);
     }
     if !current.is_empty() {
@@ -95,11 +95,9 @@ pub fn apply_ranking_boosts(
     // Pre-compute the directory of the reference file (everything before the
     // last `/`).  An empty reference dir means the root, and every root-level
     // file would match — that is intentional and consistent.
-    let ref_dir: Option<String> = reference_file.map(|f| {
-        match f.rfind('/') {
-            Some(idx) => f[..idx].to_string(),
-            None => String::new(),
-        }
+    let ref_dir: Option<String> = reference_file.map(|f| match f.rfind('/') {
+        Some(idx) => f[..idx].to_string(),
+        None => String::new(),
     });
 
     let ref_lang: Option<String> = reference_language.map(|l| l.to_lowercase());
@@ -156,7 +154,11 @@ pub fn apply_ranking_boosts(
         }
     }
 
-    results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    results.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     results
 }
 
@@ -228,7 +230,11 @@ pub fn graph_expand(
     }
 
     let mut results: Vec<ScoredNode> = result_map.into_values().collect();
-    results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    results.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     results.truncate(limit);
     Ok(results)
 }
@@ -426,16 +432,12 @@ mod tests {
     #[test]
     fn same_dir_and_same_lang_both_applied() {
         // Node in same dir AND same language should get both boosts.
-        let best =
-            make_test_node("helper", "src/a.rs::fn::helper", "src/a.rs", "rust");
-        let dir_only =
-            make_test_node("helper", "src/b.go::fn::helper", "src/b.go", "go");
-        let neither =
-            make_test_node("helper", "lib/c.py::fn::helper", "lib/c.py", "python");
+        let best = make_test_node("helper", "src/a.rs::fn::helper", "src/a.rs", "rust");
+        let dir_only = make_test_node("helper", "src/b.go::fn::helper", "src/b.go", "go");
+        let neither = make_test_node("helper", "lib/c.py::fn::helper", "lib/c.py", "python");
 
         let input = vec![neither.clone(), dir_only.clone(), best.clone()];
-        let boosted =
-            apply_ranking_boosts(input, "helper", Some("src/main.rs"), Some("rust"));
+        let boosted = apply_ranking_boosts(input, "helper", Some("src/main.rs"), Some("rust"));
 
         let best_score = boosted
             .iter()
@@ -473,8 +475,19 @@ mod tests {
 
         // Both same language, no reference → scores should be equal (both
         // start at 1.0 with only the fn-kind +3 applied equally).
-        let score_a = boosted.iter().find(|r| r.node.file_path == "src/a.rs").unwrap().score;
-        let score_b = boosted.iter().find(|r| r.node.file_path == "lib/b.rs").unwrap().score;
-        assert_eq!(score_a, score_b, "without reference both nodes should score equally");
+        let score_a = boosted
+            .iter()
+            .find(|r| r.node.file_path == "src/a.rs")
+            .unwrap()
+            .score;
+        let score_b = boosted
+            .iter()
+            .find(|r| r.node.file_path == "lib/b.rs")
+            .unwrap()
+            .score;
+        assert_eq!(
+            score_a, score_b,
+            "without reference both nodes should score equally"
+        );
     }
 }

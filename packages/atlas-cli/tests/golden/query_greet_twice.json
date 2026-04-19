@@ -1,22 +1,33 @@
-[
-  {
-    "node": {
-      "id": 0,
-      "kind": "method",
-      "name": "greet_twice",
-      "qualified_name": "src/lib.rs::method::Greeter::greet_twice",
-      "file_path": "src/lib.rs",
-      "line_start": 4,
-      "line_end": 6,
-      "language": "rust",
-      "parent_name": "src/lib.rs::impl::Greeter",
-      "params": "(name: &str)",
-      "return_type": "String",
-      "modifiers": "pub",
-      "is_test": false,
-      "file_hash": "<hash>",
-      "extra_json": null
-    },
-    "score": 0.0
-  }
-]
+{
+  "query": {
+    "text": "greet_twice",
+    "kind": null,
+    "language": null,
+    "subpath": null,
+    "limit": 20,
+    "graph_expand": false,
+    "graph_max_hops": 1
+  },
+  "results": [
+    {
+      "node": {
+        "id": 0,
+        "kind": "method",
+        "name": "greet_twice",
+        "qualified_name": "src/lib.rs::method::Greeter::greet_twice",
+        "file_path": "src/lib.rs",
+        "line_start": 4,
+        "line_end": 6,
+        "language": "rust",
+        "parent_name": "src/lib.rs::impl::Greeter",
+        "params": "(name: &str)",
+        "return_type": "String",
+        "modifiers": "pub",
+        "is_test": false,
+        "file_hash": "<hash>",
+        "extra_json": null
+      },
+      "score": 0.0
+    }
+  ]
+}

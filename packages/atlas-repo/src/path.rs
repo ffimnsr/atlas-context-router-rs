@@ -130,7 +130,10 @@ mod tests {
     fn normalize_case_lowercases_on_windows() {
         assert_eq!(normalize_case("Src/Main.rs"), "src/main.rs");
         assert_eq!(normalize_case("PKG/FOO.GO"), "pkg/foo.go");
-        assert_eq!(normalize_case("packages/Atlas-Core/Src/Lib.rs"), "packages/atlas-core/src/lib.rs");
+        assert_eq!(
+            normalize_case("packages/Atlas-Core/Src/Lib.rs"),
+            "packages/atlas-core/src/lib.rs"
+        );
     }
 
     /// Verify that `to_forward_slashes` + `normalize_case` together produce

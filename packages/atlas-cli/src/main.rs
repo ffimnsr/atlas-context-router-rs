@@ -14,7 +14,7 @@ fn main() {
         Command::Init => commands::run_init(&cli),
         Command::Build { .. } => commands::run_build(&cli),
         Command::Update { .. } => commands::run_update(&cli),
-        Command::Status => commands::run_status(&cli),
+        Command::Status { .. } => commands::run_status(&cli),
         Command::DetectChanges { .. } => commands::run_detect_changes(&cli),
         Command::Query { .. } => commands::run_query(&cli),
         Command::Impact { .. } => commands::run_impact(&cli),
