@@ -1376,10 +1376,10 @@ And the system has:
 
 ### Slice 13 — MCP and agent surface
 
-- [ ] create `packages/atlas-mcp`
-- [ ] finish MCP transport and serve-command details
-- [ ] expose core MCP tools with agent-usable output
-- [ ] optimize context packaging for agents
+- [x] create `packages/atlas-mcp`
+- [x] finish MCP transport and serve-command details
+- [x] expose core MCP tools with agent-usable output
+- [x] optimize context packaging for agents
 
 ### Slice 14 — post-MVP gate
 
