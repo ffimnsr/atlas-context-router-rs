@@ -1054,7 +1054,7 @@ These phases extend v1 after core graph/build/update/query path is reliable.
 
 ### 18.1 Hybrid search
 
-- [ ] keep SQLite FTS5 as baseline
+- [x] keep SQLite FTS5 as baseline
 - [ ] add embeddings behind optional toggle
 - [ ] chunk symbol-sized nodes for retrieval
 - [ ] generate embeddings
@@ -1066,19 +1066,19 @@ These phases extend v1 after core graph/build/update/query path is reliable.
 
 ### 18.2 Ranking improvements
 
-- [ ] exact name boost
-- [ ] qualified-name boost
+- [x] exact name boost
+- [x] qualified-name boost
 - [ ] fuzzy match
-- [ ] camelCase/snake_case token split
+- [x] camelCase/snake_case token split
 - [ ] recent-file boost
-- [ ] API-level boost
+- [x] API-level boost
 
 ### 18.3 Graph-aware search
 
-- [ ] expand results to callers
-- [ ] expand results to callees
-- [ ] expand results to imports
-- [ ] rank by graph distance
+- [x] expand results to callers
+- [x] expand results to callees
+- [x] expand results to imports
+- [x] rank by graph distance
 
 ## Phase 19 — Advanced Impact Analysis
 
@@ -1388,9 +1388,9 @@ And the system has:
 
 ### Slice 15 — retrieval
 
-- [ ] hybrid search
-- [ ] ranking improvements
-- [ ] graph-aware search
+- [x] hybrid search
+- [x] ranking improvements
+- [x] graph-aware search
 
 ### Slice 16 — advanced impact
 

@@ -801,20 +801,43 @@ impl Store {
         }
         let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
 
-        // Build dynamic WHERE clause for the optional filters.
-        let mut filters = vec!["nodes_fts MATCH ?1".to_string()];
-        if query.kind.is_some() {
-            filters.push("n.kind = ?2".to_string());
+        // FTS5 expects the MATCH operand to be an unquoted query string.
+        let fts_query = fts5_escape(&query.text);
+
+        // Build a LIKE pattern from the subpath (escape SQLite LIKE wildcards).
+        let subpath_like = query.subpath.as_deref().map(|sp| {
+            let escaped = sp.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
+            format!("{escaped}%")
+        });
+
+        // Build dynamic WHERE clause and a matching params vector so the
+        // number of `?` placeholders always equals the number of bound values.
+        let mut filters: Vec<String> = vec!["nodes_fts MATCH ?".to_string()];
+        let mut params: Vec<Box<dyn rusqlite::types::ToSql>> =
+            vec![Box::new(fts_query)];
+
+        if let Some(kind) = &query.kind {
+            filters.push("n.kind = ?".to_string());
+            params.push(Box::new(kind.clone()));
         }
-        if query.language.is_some() {
-            filters.push("n.language = ?3".to_string());
+        if let Some(lang) = &query.language {
+            filters.push("n.language = ?".to_string());
+            params.push(Box::new(lang.clone()));
         }
-        if query.file_path.is_some() {
-            filters.push("n.file_path = ?4".to_string());
+        if let Some(fp) = &query.file_path {
+            filters.push("n.file_path = ?".to_string());
+            params.push(Box::new(fp.clone()));
         }
         if let Some(is_test) = query.is_test {
             filters.push(format!("n.is_test = {}", is_test as i32));
         }
+        if let Some(ref like_pat) = subpath_like {
+            filters.push("n.file_path LIKE ? ESCAPE '\\'".to_string());
+            params.push(Box::new(like_pat.clone()));
+        }
+
+        // LIMIT is always the last positional parameter.
+        params.push(Box::new(query.limit as i64));
 
         let where_clause = filters.join(" AND ");
         let sql = format!(
@@ -827,26 +850,15 @@ impl Store {
              JOIN   nodes n ON n.id = nodes_fts.rowid
              WHERE  {where_clause}
              ORDER  BY score
-             LIMIT  ?5"
+             LIMIT  ?"
         );
 
+        let params_ref: Vec<&dyn rusqlite::types::ToSql> =
+            params.iter().map(|b| b.as_ref()).collect();
+
         let mut stmt = self.conn.prepare(&sql).map_err(db_err)?;
-
-        // FTS5 expects the MATCH operand to be an unquoted query string.
-        // Escape any special chars the user may have typed so we don't break
-        // FTS5 query syntax.
-        let fts_query = fts5_escape(&query.text);
-
         let results = stmt
-            .query_map(
-                rusqlite::params![
-                    fts_query,
-                    query.kind.as_deref().unwrap_or(""),
-                    query.language.as_deref().unwrap_or(""),
-                    query.file_path.as_deref().unwrap_or(""),
-                    query.limit as i64,
-                ],
-                |row| {
+            .query_map(params_ref.as_slice(), |row| {
                     let node = row_to_node(row)?;
                     let score: f64 = row.get(15)?;
                     Ok(ScoredNode {
@@ -854,13 +866,56 @@ impl Store {
                         // BM25 returns negative values; negate for ascending score.
                         score: -score,
                     })
-                },
-            )
+            })
             .map_err(db_err)?
             .filter_map(|r| r.ok())
             .collect();
 
         Ok(results)
+    }
+
+    /// Return all nodes reachable by exactly one edge hop from any of the
+    /// given `qualified_names`, excluding those names themselves.
+    ///
+    /// Used by the search layer for graph-aware result expansion.
+    pub fn nodes_connected_to(&self, qualified_names: &[&str]) -> Result<Vec<Node>> {
+        if qualified_names.is_empty() {
+            return Ok(vec![]);
+        }
+        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
+        let ph = repeat_placeholders(qualified_names.len());
+
+        // Collect target_qualified names reachable forward OR backward,
+        // then look them up as nodes, excluding the seed set.
+        let sql = format!(
+            "SELECT DISTINCT n.id, n.kind, n.name, n.qualified_name, n.file_path,
+                    n.line_start, n.line_end, n.language, n.parent_name,
+                    n.params, n.return_type, n.modifiers, n.is_test,
+                    n.file_hash, n.extra_json
+             FROM nodes n
+             WHERE n.qualified_name IN (
+                 SELECT e.target_qualified FROM edges e WHERE e.source_qualified IN ({ph})
+                 UNION
+                 SELECT e.source_qualified FROM edges e WHERE e.target_qualified IN ({ph})
+             )
+             AND n.qualified_name NOT IN ({ph})"
+        );
+
+        // Bind the list three times: forward targets, backward targets, exclusion.
+        let params_vec: Vec<&dyn rusqlite::types::ToSql> = qualified_names
+            .iter()
+            .chain(qualified_names.iter())
+            .chain(qualified_names.iter())
+            .map(|s| s as &dyn rusqlite::types::ToSql)
+            .collect();
+
+        let mut stmt = self.conn.prepare(&sql).map_err(db_err)?;
+        let rows = stmt
+            .query_map(params_vec.as_slice(), row_to_node)
+            .map_err(db_err)?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(rows)
     }
 }
 

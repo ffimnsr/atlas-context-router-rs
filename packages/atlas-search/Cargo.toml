@@ -5,4 +5,6 @@ edition = "2024"
 
 [dependencies]
 atlas-core.workspace = true
+atlas-store-sqlite = { path = "../atlas-store-sqlite" }
+serde_json.workspace = true
 tracing.workspace = true

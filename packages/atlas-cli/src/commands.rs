@@ -8,6 +8,7 @@ use atlas_parser::ParserRegistry;
 use atlas_repo::{
     DiffTarget, changed_files, collect_files, find_repo_root, hash_file, repo_relative,
 };
+use atlas_search as search;
 use atlas_store_sqlite::Store;
 use camino::Utf8Path;
 use rayon::prelude::*;
@@ -539,13 +540,24 @@ pub fn run_query(cli: &Cli) -> Result<()> {
     let store =
         Store::open(&db_path).with_context(|| format!("cannot open database at {db_path}"))?;
 
-    let (text, kind, language, limit) = match &cli.command {
+    let (text, kind, language, subpath, limit, expand, expand_hops) = match &cli.command {
         Command::Query {
             text,
             kind,
             language,
+            subpath,
             limit,
-        } => (text.clone(), kind.clone(), language.clone(), *limit),
+            expand,
+            expand_hops,
+        } => (
+            text.clone(),
+            kind.clone(),
+            language.clone(),
+            subpath.clone(),
+            *limit,
+            *expand,
+            *expand_hops,
+        ),
         _ => unreachable!(),
     };
 
@@ -553,11 +565,14 @@ pub fn run_query(cli: &Cli) -> Result<()> {
         text,
         kind,
         language,
+        subpath,
         limit,
+        graph_expand: expand,
+        graph_max_hops: expand_hops,
         ..Default::default()
     };
 
-    let results = store.search(&query).context("search failed")?;
+    let results = search::search(&store, &query).context("search failed")?;
 
     if cli.json {
         println!("{}", serde_json::to_string_pretty(&results)?);

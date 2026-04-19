@@ -131,8 +131,14 @@ pub struct SearchQuery {
     pub kind: Option<String>,
     pub language: Option<String>,
     pub file_path: Option<String>,
+    /// Filter results whose `file_path` starts with this subpath prefix.
+    pub subpath: Option<String>,
     pub is_test: Option<bool>,
     pub limit: usize,
+    /// Expand FTS seed results through graph edges.
+    pub graph_expand: bool,
+    /// Maximum edge hops when `graph_expand` is true (default: 1).
+    pub graph_max_hops: u32,
 }
 
 impl Default for SearchQuery {
@@ -142,8 +148,11 @@ impl Default for SearchQuery {
             kind: None,
             language: None,
             file_path: None,
+            subpath: None,
             is_test: None,
             limit: 20,
+            graph_expand: false,
+            graph_max_hops: 1,
         }
     }
 }

@@ -85,9 +85,21 @@ pub enum Command {
         #[arg(long)]
         language: Option<String>,
 
+        /// Filter by a file path prefix (subpath within the repo).
+        #[arg(long)]
+        subpath: Option<String>,
+
         /// Maximum results to return.
         #[arg(long, default_value_t = 20)]
         limit: usize,
+
+        /// Expand results through graph edges (graph-aware search).
+        #[arg(long)]
+        expand: bool,
+
+        /// Maximum edge hops when --expand is active.
+        #[arg(long, default_value_t = 1)]
+        expand_hops: u32,
     },
 
     /// Compute the impact radius of changed files.
