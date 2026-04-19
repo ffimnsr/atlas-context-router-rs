@@ -123,3 +123,16 @@ pub struct ScoredNode {
     pub node: Node,
     pub score: f64,
 }
+
+/// All data produced by parsing one file, ready to be persisted.
+///
+/// `nodes` and `edges` carry `id = 0`; the store assigns real database IDs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ParsedFile {
+    pub path: String,
+    pub language: Option<String>,
+    pub hash: String,
+    pub size: Option<i64>,
+    pub nodes: Vec<Node>,
+    pub edges: Vec<Edge>,
+}

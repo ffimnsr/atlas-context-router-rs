@@ -136,8 +136,10 @@ The upstream repo’s real kernel is the repository scanner, parser layer, SQLit
   - [ ] `tree-sitter`
   - [ ] language crates as needed
 - [ ] Git integration:
-  - [ ] start with `std::process::Command`
-  - [ ] consider `git2` later only if necessary
+  - [ ] use `git2`
+  - [ ] fallback to `std::process::Command`
+- [ ] For any hashmaps use `hashbrown` crate
+
 
 ### 1.3 CI and quality gates
 
@@ -336,28 +338,28 @@ The upstream implementation already treats SQLite as the durable center of the s
 
 - [x] `open(path)`
 - [x] `migrate()`
-- [ ] `replace_file_graph(file_path, file_hash, nodes, edges)`
-- [ ] `replace_batch(parsed_files)`
-- [ ] `delete_file_graph(file_path)`
-- [ ] `nodes_by_file(file_path)`
-- [ ] `edges_by_file(file_path)`
-- [ ] `find_dependents(changed_files)`
-- [ ] `impact_radius(changed_files, max_depth, max_nodes)`
-- [ ] `search(query)`
+- [x] `replace_file_graph(file_path, file_hash, nodes, edges)`
+- [x] `replace_batch(parsed_files)`
+- [x] `delete_file_graph(file_path)`
+- [x] `nodes_by_file(file_path)`
+- [x] `edges_by_file(file_path)`
+- [x] `find_dependents(changed_files)`
+- [x] `impact_radius(changed_files, max_depth, max_nodes)`
+- [x] `search(query)`
 - [x] `stats()`
 
 ### 3.11 Transaction semantics
 
-- [ ] Replace one file graph atomically:
-  - [ ] begin immediate transaction
-  - [ ] delete old FTS rows
-  - [ ] delete old edges for file
-  - [ ] delete old nodes for file
-  - [ ] upsert file row
-  - [ ] insert nodes
-  - [ ] insert edges
-  - [ ] insert FTS rows
-  - [ ] commit
+- [x] Replace one file graph atomically:
+  - [x] begin immediate transaction
+  - [x] delete old FTS rows
+  - [x] delete old edges for file
+  - [x] delete old nodes for file
+  - [x] upsert file row
+  - [x] insert nodes
+  - [x] insert edges
+  - [x] insert FTS rows
+  - [x] commit
 - [ ] Add rollback tests
 - [ ] Add lock-contention tests
 
@@ -1011,11 +1013,11 @@ And the system has:
 
 ### Slice 2 — storage
 
-- [ ] schema
-- [ ] insert/replace/delete
-- [ ] stats
-- [ ] FTS
-- [ ] basic search
+- [x] schema
+- [x] insert/replace/delete
+- [x] stats
+- [x] FTS
+- [x] basic search
 
 ### Slice 3 — repo
 
