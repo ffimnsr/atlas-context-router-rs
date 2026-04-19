@@ -1,6 +1,5 @@
 use std::fs;
 use std::io::{BufRead, Write};
-use std::path::Path;
 use std::time::Instant;
 
 use anyhow::{Context, Result};
@@ -17,7 +16,7 @@ use crate::cli::{Cli, Command};
 
 pub fn run_init(cli: &Cli) -> Result<()> {
     let repo = resolve_repo(cli)?;
-    let atlas_dir = Path::new(&repo).join(".atlas");
+    let atlas_dir = crate::paths::atlas_dir(&repo);
     fs::create_dir_all(&atlas_dir)
         .with_context(|| format!("cannot create {}", atlas_dir.display()))?;
 
@@ -751,11 +750,7 @@ fn db_path(cli: &Cli, repo: &str) -> String {
     if let Some(p) = &cli.db {
         return p.clone();
     }
-    Path::new(repo)
-        .join(".atlas")
-        .join("worldview.sqlite")
-        .to_string_lossy()
-        .into_owned()
+    crate::paths::default_db_path(repo)
 }
 
 // ---------------------------------------------------------------------------

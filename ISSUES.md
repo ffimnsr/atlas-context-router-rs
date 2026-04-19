@@ -19,19 +19,19 @@ The upstream repo’s real kernel is the repository scanner, parser layer, SQLit
 
 ## Product Name and CLI
 
-- [ ] Use binary name: `atlas`
-- [ ] Use hidden work dir: `.atlas/`
-- [ ] Use DB path: `.atlas/worldview.sqlite`
-- [ ] Use config path later: `.atlas/config.toml`
-- [ ] Use CLI commands:
-  - [ ] `atlas init`
-  - [ ] `atlas build`
-  - [ ] `atlas update`
-  - [ ] `atlas detect-changes`
-  - [ ] `atlas status`
-  - [ ] `atlas query`
-  - [ ] `atlas impact`
-  - [ ] `atlas review-context`
+- [x] Use binary name: `atlas`
+- [x] Use hidden work dir: `.atlas/`
+- [x] Use DB path: `.atlas/worldview.sqlite`
+- [ ] Use config path later: `.atlas/config.toml` (deferred)
+- [x] Use CLI commands:
+  - [x] `atlas init`
+  - [x] `atlas build`
+  - [x] `atlas update`
+  - [x] `atlas detect-changes`
+  - [x] `atlas status`
+  - [x] `atlas query`
+  - [x] `atlas impact`
+  - [x] `atlas review-context`
   - [x] `atlas serve` (later, MCP/stdin or JSON-RPC style)
 
 ---
@@ -40,44 +40,44 @@ The upstream repo’s real kernel is the repository scanner, parser layer, SQLit
 
 ### 0.1 Freeze v1 scope
 
-- [ ] Include in v1:
-  - [ ] repo root detection
-  - [ ] tracked-file collection
-  - [ ] git diff change detection
-  - [ ] parser abstraction
-  - [ ] first language handlers
-  - [ ] SQLite graph store
-  - [ ] batch file graph replacement
-  - [ ] recursive SQL impact traversal
-  - [ ] review context assembly
-  - [ ] FTS5 keyword search
-  - [ ] CLI
-- [ ] Explicitly defer:
-  - [ ] embeddings
-  - [ ] communities
-  - [ ] flows
-  - [ ] wiki
-  - [ ] visualization/export
-  - [ ] multi-repo registry
-  - [ ] install hooks
-  - [ ] auto-watch mode
-  - [ ] refactor/apply-refactor
-  - [ ] evaluation harness
-  - [ ] cloud providers
+- [x] Include in v1:
+  - [x] repo root detection
+  - [x] tracked-file collection
+  - [x] git diff change detection
+  - [x] parser abstraction
+  - [x] first language handlers
+  - [x] SQLite graph store
+  - [x] batch file graph replacement
+  - [x] recursive SQL impact traversal
+  - [x] review context assembly
+  - [x] FTS5 keyword search
+  - [x] CLI
+- [x] Explicitly defer:
+  - [x] embeddings
+  - [x] communities
+  - [x] flows
+  - [x] wiki
+  - [x] visualization/export
+  - [x] multi-repo registry
+  - [x] install hooks
+  - [x] auto-watch mode
+  - [x] refactor/apply-refactor
+  - [x] evaluation harness
+  - [x] cloud providers
 
 ### 0.2 Freeze compatibility policy
 
-- [ ] Preserve upstream behavior where it matters:
-  - [ ] qualified-name semantics
-  - [ ] incremental build/update flow
-  - [ ] SQLite-first persistence
-  - [ ] impact radius from changed-file seed nodes
-  - [ ] review/query usefulness
-- [ ] Permit deliberate redesign where it improves maintainability:
-  - [ ] split giant parser into per-language modules
-  - [ ] split graph store/query/review into separate crates/modules
-  - [ ] use repo-relative paths internally instead of absolute paths where possible
-- [ ] Document every intentional compatibility break
+- [x] Preserve upstream behavior where it matters:
+  - [x] qualified-name semantics
+  - [x] incremental build/update flow
+  - [x] SQLite-first persistence
+  - [x] impact radius from changed-file seed nodes
+  - [x] review/query usefulness
+- [x] Permit deliberate redesign where it improves maintainability:
+  - [x] split giant parser into per-language modules
+  - [x] split graph store/query/review into separate crates/modules
+  - [x] use repo-relative paths internally instead of absolute paths where possible
+- [x] Document every intentional compatibility break (see COMPATIBILITY.md)
 
 ### 0.3 Choose Rust crate strategy
 
@@ -122,23 +122,23 @@ The upstream repo’s real kernel is the repository scanner, parser layer, SQLit
   - [x] `serde_json`
 - [x] Paths/hash/time:
   - [x] `camino`
-  - [ ] `sha2`
-  - [ ] `time`
+  - [x] `sha2`
+  - [x] `time`
 - [x] SQLite:
   - [x] `rusqlite` with bundled SQLite + FTS5 support
 - [x] Logging:
   - [x] `tracing`
   - [x] `tracing-subscriber`
-- [ ] Concurrency:
-  - [ ] `rayon` or `crossbeam`
-  - [ ] prefer std threads first if simpler
+- [x] Concurrency:
+  - [x] `rayon` added to workspace deps (parallel file processing, v1.1)
+  - [x] using std threads for v1 baseline
 - [x] Tree-sitter:
   - [x] `tree-sitter`
   - [x] language crates as needed
-- [ ] Git integration:
-  - [ ] use `git2`
-  - [ ] fallback to `std::process::Command`
-- [ ] For any hashmaps use `hashbrown` crate
+- [x] Git integration:
+  - [x] use `std::process::Command` wrapping `git` CLI (v1 decision — avoids libgit2 build dep)
+  - [ ] `git2` deferred to post-v1
+- [x] For performance-sensitive hashmaps use `hashbrown` crate (added to workspace deps)
 
 
 ### 1.3 CI and quality gates
@@ -237,7 +237,7 @@ The upstream implementation already treats SQLite as the durable center of the s
 
 ### 3.1 Open database and pragmas
 
-- [x] Create DB at `.atlas/codegraph.sqlite`
+- [x] Create DB at `.atlas/worldview.sqlite`
 - [x] On open, set:
   - [x] `PRAGMA journal_mode=WAL;`
   - [x] `PRAGMA synchronous=NORMAL;`
@@ -470,15 +470,7 @@ The upstream parser is both the most important subsystem and the most monolithic
   - [x] Python
   - [x] JavaScript
   - [ ] TypeScript
-- [ ] v1.1 later:
-  - [ ] Java
-  - [ ] C#
-  - [ ] PHP
-  - [ ] JSON (tree-sitter-json)
-  - [ ] TOML (tree-sitter-toml)
-  - [ ] HTML (tree-sitter-html)
-  - [ ] CSS (tree-sitter-css)
-  - [ ] Bash (tree-sitter-bash)
+- [ ] v1.1 parser expansion covered in Phase 7.5
 - [ ] treat notebooks and framework-specific formats as later work
 
 ### 5.4 Tree-sitter integration
@@ -594,6 +586,78 @@ The upstream parser is both the most important subsystem and the most monolithic
 - [ ] Tier 4:
   - [ ] resolve imports where practical
 - [ ] Never block parse success on perfect call resolution
+
+## Phase 7.5 — v1.1 Language Handlers
+
+Implement these like Rust and Go: dedicated handler, qualified-name scheme, edge extraction, parser tests, build/update integration.
+
+### 7.5.1 Java
+
+- [ ] package node
+- [ ] classes
+- [ ] interfaces
+- [ ] enums
+- [ ] methods
+- [ ] imports
+- [ ] annotations
+- [ ] call edges
+- [ ] qualified-name scheme
+- [ ] parser tests
+
+### 7.5.2 C#
+
+- [ ] namespace node
+- [ ] classes
+- [ ] interfaces
+- [ ] enums
+- [ ] structs
+- [ ] methods
+- [ ] using imports
+- [ ] attributes
+- [ ] call edges
+- [ ] qualified-name scheme
+- [ ] parser tests
+
+### 7.5.3 PHP
+
+- [ ] namespace node
+- [ ] classes
+- [ ] interfaces
+- [ ] traits
+- [ ] functions
+- [ ] methods
+- [ ] `use` imports
+- [ ] attributes/annotations where practical
+- [ ] call edges
+- [ ] qualified-name scheme
+- [ ] parser tests
+
+### 7.5.4 JSON and TOML
+
+- [ ] JSON document node extraction
+- [ ] JSON top-level object/key symbol strategy
+- [ ] TOML document node extraction
+- [ ] TOML table/key symbol strategy
+- [ ] stable qualified-name scheme for config files
+- [ ] parser tests for nested keys and arrays
+
+### 7.5.5 HTML, CSS, Bash
+
+- [ ] HTML document/component node extraction
+- [ ] HTML imports/includes where practical
+- [ ] CSS selector/rule extraction
+- [ ] Bash functions
+- [ ] Bash sourced-file/import handling where practical
+- [ ] language-specific qualified-name scheme
+- [ ] parser tests for representative fixtures
+
+### 7.5.6 Shared acceptance criteria
+
+- [ ] unsupported constructs degrade gracefully
+- [ ] parser never panic on malformed source
+- [ ] line-span accuracy
+- [ ] file-slice replacement work same as Rust and Go
+- [ ] integration coverage in build/update path
 
 ---
 
@@ -1267,6 +1331,115 @@ And the system has:
 - [x] benchmarks
 - [x] Windows hardening
 - [x] serve/MCP
+
+### Slice 8 — product contract
+
+- [x] rename DB path to `.atlas/worldview.sqlite`
+- [x] finish binary/work-dir/config naming contract (paths module in atlas-cli)
+- [x] freeze v1 include/defer scope
+- [x] document every intentional compatibility break (see COMPATIBILITY.md)
+- [x] decide remaining dependency choices that affect public shape
+
+### Slice 9 — correctness gaps
+
+- [ ] add `NodeId` type
+- [ ] finish remaining SQLite table/transaction/schema test gaps
+- [ ] complete path normalization and ignore handling
+- [ ] finish deleted/renamed file behavior
+- [ ] complete remaining language-strategy and call-resolution work
+
+### Slice 10 — MVP command completion
+
+- [ ] finish `atlas init`
+- [ ] finish `atlas status`
+- [ ] finish `atlas query`
+- [ ] finish `atlas impact`
+- [ ] finish `atlas review-context`
+- [ ] close remaining impact/search/review CLI gaps
+
+### Slice 11 — quality gates
+
+- [ ] add `cargo fmt --check`
+- [ ] add `cargo clippy --all-targets --all-features -- -D warnings`
+- [ ] add `cargo test --workspace`
+- [ ] add Linux CI
+- [ ] add SQLite/FTS5 smoke coverage
+- [ ] add fixture/golden/integration regression coverage
+
+### Slice 12 — hardening
+
+- [ ] finish build concurrency model
+- [ ] add failure-handling gaps in build/update path
+- [ ] add startup integrity check command
+- [ ] improve performance, query tuning, memory, diagnostics
+- [ ] add cross-platform hardening beyond current Windows baseline
+
+### Slice 13 — MCP and agent surface
+
+- [ ] create `packages/atlas-mcp`
+- [ ] finish MCP transport and serve-command details
+- [ ] expose core MCP tools with agent-usable output
+- [ ] optimize context packaging for agents
+
+### Slice 14 — post-MVP gate
+
+- [ ] confirm MVP complete before expanding scope
+- [ ] keep deferred items from blocking core path
+
+### Slice 15 — retrieval
+
+- [ ] hybrid search
+- [ ] ranking improvements
+- [ ] graph-aware search
+
+### Slice 16 — advanced impact
+
+- [ ] weighted traversal
+- [ ] impact scoring
+- [ ] change classification
+- [ ] test impact
+- [ ] boundary detection
+
+### Slice 17 — incremental engine
+
+- [ ] incremental parsing
+- [ ] dependency invalidation follow-up
+- [ ] parallelization
+- [ ] large-repo handling
+
+### Slice 18 — developer workflows
+
+- [ ] explain change
+- [ ] smart review context
+- [ ] natural-language queries
+- [ ] CLI workflow UX
+
+### Slice 19 — observability
+
+- [ ] metrics
+- [ ] debug tools
+- [ ] data integrity tooling
+
+### Slice 20 — optional advanced
+
+- [ ] code intelligence
+- [ ] architecture insights
+- [ ] watch mode
+- [ ] multi-repo support
+
+### Slice 21 — deferred lowest priority
+
+- [ ] wiki/docs generation
+- [ ] v2 completion criteria
+- [ ] lowest-priority guiding-principle items
+
+### Slice 22 — deferred platform and ecosystem
+
+- [ ] install hooks
+- [ ] flows/communities schema
+- [ ] evaluation harness
+- [ ] cloud providers
+- [ ] shell completion and minor tooling leftovers
 
 ---
 
