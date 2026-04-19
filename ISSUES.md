@@ -22,7 +22,7 @@ The upstream repo’s real kernel is the repository scanner, parser layer, SQLit
 - [x] Use binary name: `atlas`
 - [x] Use hidden work dir: `.atlas/`
 - [x] Use DB path: `.atlas/worldview.sqlite`
-- [ ] Use config path later: `.atlas/config.toml`
+- [ ] Use config path: `.atlas/config.toml`
 - [x] Use CLI commands:
   - [x] `atlas init`
   - [x] `atlas build`
@@ -260,9 +260,9 @@ The upstream implementation already treats SQLite as the durable center of the s
 - [x] `nodes`
 - [x] `edges`
 - [x] `nodes_fts`
-- [ ] `flows`
-- [ ] `flow_memberships`
-- [ ] `communities`
+- [x] `flows`
+- [x] `flow_memberships`
+- [x] `communities`
 
 ### 3.4 `metadata` table
 
@@ -512,9 +512,9 @@ The upstream parser is both the most important subsystem and the most monolithic
 ### 6.3 Rust edge extraction
 
 - [x] `Contains`
-- [ ] `Calls`
+- [x] `Calls`
 - [x] `Implements` via `impl Trait for Type`
-- [ ] `References` for `use`/type refs later
+- [x] `References` for `use`/type refs later
 - [x] `Tests` / `TestedBy` for `#[cfg(test)]` and `#[test]`
 
 ### 6.4 Rust qualified-name scheme
@@ -532,10 +532,10 @@ The upstream parser is both the most important subsystem and the most monolithic
 - [x] free functions
 - [x] nested modules
 - [x] trait impls
-- [ ] generic functions
+- [x] generic functions
 - [x] methods on impl blocks
 - [x] test modules
-- [ ] macro-heavy files
+- [x] macro-heavy files
 - [x] line-span accuracy
 
 ---
@@ -2236,7 +2236,7 @@ And the system has:
 ### Slice 29 — deferred platform and ecosystem
 
 - [ ] install hooks
-- [ ] flows/communities schema
+- [x] flows/communities schema
 - [ ] evaluation harness
 - [ ] cloud providers
 - [ ] shell completion and minor tooling leftovers

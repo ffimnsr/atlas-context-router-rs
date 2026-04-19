@@ -1130,6 +1130,25 @@ mod tests {
     }
 
     #[test]
+    fn migration_creates_optional_flow_tables() {
+        let store = open_in_memory();
+        let mut stmt = store
+            .conn
+            .prepare(
+                "SELECT name FROM sqlite_master
+                 WHERE type = 'table' AND name IN ('flows', 'flow_memberships', 'communities')
+                 ORDER BY name",
+            )
+            .unwrap();
+        let names = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .unwrap()
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(names, vec!["communities", "flow_memberships", "flows"]);
+    }
+
+    #[test]
     fn schema_version_stored() {
         let store = open_in_memory();
         let version: i32 = store
@@ -1140,7 +1159,10 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(version, 1);
+        assert_eq!(
+            version,
+            MIGRATIONS.last().expect("latest migration").version
+        );
     }
 
     #[test]

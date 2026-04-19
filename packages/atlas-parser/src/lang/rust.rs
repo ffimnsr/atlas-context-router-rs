@@ -1,5 +1,5 @@
 use atlas_core::{Edge, EdgeKind, Node, NodeId, NodeKind, ParsedFile};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use tree_sitter::Node as TsNode;
 
 use crate::ast_helpers::{end_line, field_text, node_text, start_line};
@@ -53,6 +53,10 @@ impl LangParser for RustParser {
             let mut call_edges =
                 resolve_same_file_calls(tree.root_node(), ctx.source, ctx.rel_path, &nodes);
             edges.append(&mut call_edges);
+
+            let mut reference_edges =
+                resolve_same_file_references(tree.root_node(), ctx.source, ctx.rel_path, &nodes);
+            edges.append(&mut reference_edges);
         }
 
         ParsedFile {
@@ -478,6 +482,9 @@ fn walk_for_rust_calls<'a>(
 fn call_name_from_node<'a>(node: TsNode<'a>, source: &'a [u8]) -> Option<&'a str> {
     match node.kind() {
         "identifier" => Some(node_text(node, source)),
+        "generic_function" => node
+            .child_by_field_name("function")
+            .and_then(|function| call_name_from_node(function, source)),
         "scoped_identifier" => node
             .child_by_field_name("name")
             .map(|n| node_text(n, source)),
@@ -495,6 +502,237 @@ fn call_edge(caller_qn: &str, callee_qn: &str, rel_path: &str, line: u32) -> Edg
         line: Some(line),
         confidence: 0.8,
         confidence_tier: Some("same_file".to_owned()),
+        extra_json: serde_json::Value::Null,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Same-file reference resolution
+// ---------------------------------------------------------------------------
+
+fn resolve_same_file_references(
+    root: TsNode<'_>,
+    source: &[u8],
+    rel_path: &str,
+    nodes: &[Node],
+) -> Vec<Edge> {
+    let mut symbol_targets: HashMap<String, Vec<String>> = HashMap::new();
+    let mut type_targets: HashMap<String, Vec<String>> = HashMap::new();
+
+    for node in nodes {
+        if node.kind == NodeKind::File {
+            continue;
+        }
+
+        symbol_targets
+            .entry(node.name.clone())
+            .or_default()
+            .push(node.qualified_name.clone());
+
+        if matches!(
+            node.kind,
+            NodeKind::Module | NodeKind::Struct | NodeKind::Enum | NodeKind::Trait
+        ) {
+            type_targets
+                .entry(node.name.clone())
+                .or_default()
+                .push(node.qualified_name.clone());
+        }
+    }
+
+    ReferenceResolver {
+        source,
+        rel_path,
+        nodes,
+        symbol_targets,
+        type_targets,
+        seen: HashSet::new(),
+        edges: Vec::new(),
+    }
+    .resolve(root)
+}
+
+struct ReferenceResolver<'a> {
+    source: &'a [u8],
+    rel_path: &'a str,
+    nodes: &'a [Node],
+    symbol_targets: HashMap<String, Vec<String>>,
+    type_targets: HashMap<String, Vec<String>>,
+    seen: HashSet<(String, String, u32)>,
+    edges: Vec<Edge>,
+}
+
+impl<'a> ReferenceResolver<'a> {
+    fn resolve(mut self, root: TsNode<'_>) -> Vec<Edge> {
+        self.walk(root);
+        self.edges
+    }
+
+    fn walk(&mut self, node: TsNode<'_>) {
+        match node.kind() {
+            "use_declaration" => {
+                let source_qn = reference_source_qn(self.nodes, self.rel_path, start_line(node));
+                for name in use_reference_names(node, self.source) {
+                    let target_qn =
+                        unique_target_qn(&self.symbol_targets, &name).map(str::to_owned);
+                    self.maybe_push_reference_edge(
+                        source_qn,
+                        target_qn.as_deref(),
+                        start_line(node),
+                    );
+                }
+            }
+            "type_identifier" | "scoped_type_identifier" => {
+                if !is_definition_name(node) {
+                    let source_qn =
+                        reference_source_qn(self.nodes, self.rel_path, start_line(node));
+                    let name = type_reference_name(node, self.source);
+                    let target_qn = unique_target_qn(&self.type_targets, &name).map(str::to_owned);
+                    self.maybe_push_reference_edge(
+                        source_qn,
+                        target_qn.as_deref(),
+                        start_line(node),
+                    );
+                }
+            }
+            _ => {}
+        }
+
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            self.walk(child);
+        }
+    }
+
+    fn maybe_push_reference_edge(&mut self, source_qn: &str, target_qn: Option<&str>, line: u32) {
+        let Some(target_qn) = target_qn else {
+            return;
+        };
+        if source_qn == target_qn {
+            return;
+        }
+
+        let key = (source_qn.to_owned(), target_qn.to_owned(), line);
+        if !self.seen.insert(key.clone()) {
+            return;
+        }
+
+        self.edges.push(reference_edge(
+            &key.0,
+            &key.1,
+            self.rel_path,
+            line,
+            Some("same_file".to_owned()),
+        ));
+    }
+}
+
+fn unique_target_qn<'a>(targets: &'a HashMap<String, Vec<String>>, name: &str) -> Option<&'a str> {
+    match targets.get(name) {
+        Some(entries) if entries.len() == 1 => entries.first().map(|entry| entry.as_str()),
+        _ => None,
+    }
+}
+
+fn reference_source_qn<'a>(nodes: &'a [Node], rel_path: &'a str, line: u32) -> &'a str {
+    nodes
+        .iter()
+        .filter(|node| {
+            node.kind != NodeKind::File && node.line_start <= line && line <= node.line_end
+        })
+        .min_by_key(|node| {
+            (
+                node.line_end.saturating_sub(node.line_start),
+                node.line_start,
+            )
+        })
+        .map(|node| node.qualified_name.as_str())
+        .unwrap_or(rel_path)
+}
+
+fn use_reference_names(node: TsNode<'_>, source: &[u8]) -> Vec<String> {
+    let mut names = Vec::new();
+    if let Some(argument) = node.child_by_field_name("argument") {
+        collect_use_reference_names(argument, source, &mut names);
+    }
+    names.sort();
+    names.dedup();
+    names
+}
+
+fn collect_use_reference_names(node: TsNode<'_>, source: &[u8], names: &mut Vec<String>) {
+    match node.kind() {
+        "identifier" => push_reference_name(node_text(node, source), names),
+        "scoped_identifier" => {
+            push_reference_name(last_path_segment(node_text(node, source)), names)
+        }
+        "use_as_clause" => {
+            if let Some(path) = node.child_by_field_name("path") {
+                collect_use_reference_names(path, source, names);
+            }
+            return;
+        }
+        "scoped_use_list" => {
+            if let Some(path) = node.child_by_field_name("path") {
+                collect_use_reference_names(path, source, names);
+            }
+            if let Some(list) = node.child_by_field_name("list") {
+                collect_use_reference_names(list, source, names);
+            }
+            return;
+        }
+        _ => {}
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_use_reference_names(child, source, names);
+    }
+}
+
+fn push_reference_name(name: &str, names: &mut Vec<String>) {
+    if matches!(name, "crate" | "self" | "super" | "Self") || name.is_empty() {
+        return;
+    }
+    names.push(name.to_owned());
+}
+
+fn type_reference_name(node: TsNode<'_>, source: &[u8]) -> String {
+    last_path_segment(node_text(node, source)).to_owned()
+}
+
+fn last_path_segment(path: &str) -> &str {
+    path.split("::")
+        .last()
+        .unwrap_or(path)
+        .split('<')
+        .next()
+        .unwrap_or(path)
+        .trim()
+}
+
+fn is_definition_name(node: TsNode<'_>) -> bool {
+    node.parent()
+        .and_then(|parent| parent.child_by_field_name("name"))
+        .is_some_and(|name| name == node)
+}
+
+fn reference_edge(
+    source_qn: &str,
+    target_qn: &str,
+    rel_path: &str,
+    line: u32,
+    confidence_tier: Option<String>,
+) -> Edge {
+    Edge {
+        id: 0,
+        kind: EdgeKind::References,
+        source_qn: source_qn.to_owned(),
+        target_qn: target_qn.to_owned(),
+        file_path: rel_path.to_owned(),
+        line: Some(line),
+        confidence: 0.75,
+        confidence_tier,
         extra_json: serde_json::Value::Null,
     }
 }
@@ -646,6 +884,22 @@ fn caller() { helper(); }
     }
 
     #[test]
+    fn generic_function_call_resolved() {
+        let src = r#"
+fn helper<T>(value: T) -> T { value }
+fn caller() { let _ = helper::<u32>(1); }
+"#;
+        let pf = parse(src);
+        assert!(
+            pf.edges.iter().any(|e| e.kind == EdgeKind::Calls
+                && e.source_qn.contains("caller")
+                && e.target_qn.contains("helper")),
+            "expected a Calls edge from caller to generic helper; edges: {:?}",
+            pf.edges
+        );
+    }
+
+    #[test]
     fn method_call_resolved() {
         let src = r#"
 fn helper() {}
@@ -673,6 +927,84 @@ impl S {
                 .iter()
                 .any(|e| e.kind == EdgeKind::Calls && e.source_qn == e.target_qn),
             "recursive call must not produce a self-loop edge"
+        );
+    }
+
+    #[test]
+    fn extracts_generic_function() {
+        let pf = parse("pub fn wrap<T: Clone>(value: T) -> Option<T> { Some(value) }");
+        let func = pf
+            .nodes
+            .iter()
+            .find(|n| n.kind == NodeKind::Function && n.name == "wrap")
+            .expect("generic function");
+        assert_eq!(func.return_type.as_deref(), Some("Option<T>"));
+        assert_eq!(func.params.as_deref(), Some("(value: T)"));
+    }
+
+    #[test]
+    fn resolves_same_file_use_and_type_references() {
+        let src = r#"
+mod support {
+    pub struct Helper;
+}
+
+use self::support::Helper;
+
+fn build(value: Helper) -> Helper { value }
+"#;
+        let pf = parse(src);
+        assert!(
+            pf.edges.iter().any(|e| e.kind == EdgeKind::References
+                && e.source_qn == "src/lib.rs"
+                && e.target_qn.contains("module::support")),
+            "expected use reference to module support; edges: {:?}",
+            pf.edges
+        );
+        assert!(
+            pf.edges.iter().any(|e| e.kind == EdgeKind::References
+                && e.source_qn.contains("build")
+                && e.target_qn.contains("struct::support::Helper")),
+            "expected function type reference to Helper; edges: {:?}",
+            pf.edges
+        );
+    }
+
+    #[test]
+    fn macro_heavy_file_parses() {
+        let src = r#"
+macro_rules! call_helper {
+    ($value:expr) => {
+        helper($value)
+    };
+}
+
+#[derive(Debug, Clone)]
+struct Wrapper<T> {
+    value: T,
+}
+
+fn helper<T>(value: T) -> T { value }
+
+fn caller() {
+    let _ = call_helper!(Wrapper { value: 1 });
+}
+"#;
+        let pf = parse(src);
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|n| n.kind == NodeKind::Struct && n.name == "Wrapper")
+        );
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|n| n.kind == NodeKind::Function && n.name == "helper")
+        );
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|n| n.kind == NodeKind::Function && n.name == "caller")
         );
     }
 }
