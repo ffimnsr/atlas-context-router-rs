@@ -1,335 +1,1070 @@
-# TODO — Atlas Core Code Graph Engine in Rust
+# Atlas — Detailed Rust TODO for a code-review-graph Reimplementation
 
 ## Goal
 
-Build the core local engine first:
+Reimplement the core of `code-review-graph` in Rust with a cleaner architecture than the current Python monolith.
 
-- [ ] Scan a Git repository
-- [ ] Detect changed files using Git diff
-- [ ] Parse source files into symbols and relationships
-- [ ] Index parsed code into SQLite
-- [ ] Support fast local search using SQLite FTS5 + BM25
-- [ ] Prepare for later impact analysis and review-context generation
+The primary behavior to preserve is:
 
-## Non-Core for Later
+- build a repository code graph
+- incrementally update it from git diffs
+- persist graph data in SQLite
+- query graph structure and impact radius
+- assemble review context from changed files and neighboring nodes
+- expose a CLI first, with MCP later
 
-- [ ] MCP server
-- [ ] Visualization
-- [ ] Embeddings / vector search
-- [ ] Community detection
-- [ ] Flow tracing
-- [ ] Multi-repo registry
-- [ ] Github Copilot / VSCode Copilot Chat / ChatGPT Codex install hooks
-- [ ] Refactoring tools
-- [ ] Export formats
+The upstream repo’s real kernel is the repository scanner, parser layer, SQLite graph store, incremental updater, impact analysis, review-context/query layer, and thin transport surfaces. Flows, communities, embeddings, visualization, wiki, registry, install automation, and similar extras are secondary layers and should not block v1.
 
 ---
 
-## Phase 1 — Workspace Skeleton
+## Product Name and CLI
 
-### 1.1 Set up the Rust workspace
-
-- [ ] Keep the workspace root with:
-  - [ ] `packages/atlas-cli`
-  - [ ] `packages/atlas-engine`
-- [ ] Wire `atlas-cli` to depend on `atlas-engine`
-- [ ] Add initial dependencies for:
-  - [ ] CLI argument parsing
-  - [ ] SQLite access
-  - [ ] Git interaction
-  - [ ] Serialization
-  - [ ] Error handling
-- [ ] Confirm the chosen SQLite crate supports FTS5
-- [ ] Decide whether to use bundled SQLite for consistent FTS5 support
-- [ ] Add initial CLI commands:
+- [ ] Use binary name: `atlas`
+- [ ] Use hidden work dir: `.atlas/`
+- [ ] Use DB path: `.atlas/worldview.sqlite`
+- [ ] Use config path later: `.atlas/config.toml`
+- [ ] Use CLI commands:
   - [ ] `atlas init`
-  - [ ] `atlas scan`
+  - [ ] `atlas build`
   - [ ] `atlas update`
-  - [ ] `atlas search`
+  - [ ] `atlas detect-changes`
   - [ ] `atlas status`
-
-### 1.2 Create Rust module structure
-
-- [ ] `packages/atlas-cli/src/main.rs`
-- [ ] `packages/atlas-engine/src/lib.rs`
-- [ ] `packages/atlas-engine/src/config.rs`
-- [ ] `packages/atlas-engine/src/core.rs`
-- [ ] `packages/atlas-engine/src/repo.rs`
-- [ ] `packages/atlas-engine/src/gitdiff.rs`
-- [ ] `packages/atlas-engine/src/scanner.rs`
-- [ ] `packages/atlas-engine/src/parser/mod.rs`
-- [ ] `packages/atlas-engine/src/parser/rust.rs`
-- [ ] `packages/atlas-engine/src/store/mod.rs`
-- [ ] `packages/atlas-engine/src/store/sqlite.rs`
-- [ ] `packages/atlas-engine/src/search.rs`
-- [ ] `packages/atlas-engine/src/impact.rs`
+  - [ ] `atlas query`
+  - [ ] `atlas impact`
+  - [ ] `atlas review-context`
+  - [ ] `atlas serve` (later, MCP/stdin or JSON-RPC style)
 
 ---
 
-## Phase 2 — Core Types
+## Phase 0 — Core Architecture Decisions
 
-### 2.1 Define file record
+### 0.1 Freeze v1 scope
 
-- [ ] Create `FileRecord`
-- [ ] Include:
-  - [ ] `path`
-  - [ ] `language`
-  - [ ] `hash`
-  - [ ] `size`
-  - [ ] `indexed_at`
+- [ ] Include in v1:
+  - [ ] repo root detection
+  - [ ] tracked-file collection
+  - [ ] git diff change detection
+  - [ ] parser abstraction
+  - [ ] first language handlers
+  - [ ] SQLite graph store
+  - [ ] batch file graph replacement
+  - [ ] recursive SQL impact traversal
+  - [ ] review context assembly
+  - [ ] FTS5 keyword search
+  - [ ] CLI
+- [ ] Explicitly defer:
+  - [ ] embeddings
+  - [ ] communities
+  - [ ] flows
+  - [ ] wiki
+  - [ ] visualization/export
+  - [ ] multi-repo registry
+  - [ ] install hooks
+  - [ ] auto-watch mode
+  - [ ] refactor/apply-refactor
+  - [ ] evaluation harness
+  - [ ] cloud providers
 
-### 2.2 Define node
+### 0.2 Freeze compatibility policy
 
-- [ ] Create `Node`
-- [ ] Include:
-  - [ ] `id`
-  - [ ] `kind`
-  - [ ] `name`
-  - [ ] `qualified_name`
-  - [ ] `file_path`
-  - [ ] `language`
-  - [ ] `line_start`
-  - [ ] `line_end`
-  - [ ] `parent_name`
-  - [ ] `signature`
-  - [ ] `code`
-  - [ ] `file_hash`
-  - [ ] `extra_json`
+- [ ] Preserve upstream behavior where it matters:
+  - [ ] qualified-name semantics
+  - [ ] incremental build/update flow
+  - [ ] SQLite-first persistence
+  - [ ] impact radius from changed-file seed nodes
+  - [ ] review/query usefulness
+- [ ] Permit deliberate redesign where it improves maintainability:
+  - [ ] split giant parser into per-language modules
+  - [ ] split graph store/query/review into separate crates/modules
+  - [ ] use repo-relative paths internally instead of absolute paths where possible
+- [ ] Document every intentional compatibility break
 
-### 2.3 Define edge
+### 0.3 Choose Rust crate strategy
 
-- [ ] Create `Edge`
-- [ ] Include:
-  - [ ] `id`
-  - [ ] `kind`
-  - [ ] `source_qualified`
-  - [ ] `target_qualified`
-  - [ ] `file_path`
-  - [ ] `line`
-  - [ ] `confidence`
-  - [ ] `extra_json`
-
-### 2.4 Define node kinds
-
-- [ ] Create `NodeKind` enum
-- [ ] Add variants for:
-  - [ ] `File`
-  - [ ] `Module`
-  - [ ] `Import`
-  - [ ] `Struct`
-  - [ ] `Enum`
-  - [ ] `Trait`
-  - [ ] `Function`
-  - [ ] `Method`
-  - [ ] `Variable`
-  - [ ] `Constant`
-  - [ ] `Test`
-
-### 2.5 Define edge kinds
-
-- [ ] Create `EdgeKind` enum
-- [ ] Add variants for:
-  - [ ] `Contains`
-  - [ ] `Imports`
-  - [ ] `Calls`
-  - [ ] `Defines`
-  - [ ] `Implements`
-  - [ ] `Extends`
-  - [ ] `Tests`
-  - [ ] `References`
-
-### 2.6 Serialization and database mapping
-
-- [ ] Decide which types derive `Debug`, `Clone`, `Serialize`, and `Deserialize`
-- [ ] Decide whether `NodeKind` and `EdgeKind` are stored as strings or integers
-- [ ] Add conversion helpers between SQLite rows and Rust domain types
+- [ ] Start with one Cargo workspace
+- [ ] Create crates:
+  - [ ] `packages/atlas-cli`
+  - [ ] `packages/atlas-core`
+  - [ ] `packages/atlas-repo`
+  - [ ] `packages/atlas-parser`
+  - [ ] `packages/atlas-store-sqlite`
+  - [ ] `packages/atlas-search`
+  - [ ] `packages/atlas-review`
+  - [ ] `packages/atlas-impact`
+  - [ ] `packages/atlas-mcp` (later)
+- [ ] Keep public API narrow between crates
 
 ---
 
-## Phase 3 — SQLite Store
+## Phase 1 — Rust Project Foundation
 
-### 3.1 Database location
+### 1.1 Create workspace
 
-- [ ] Use default DB path: `.code-review-graph/codegraph.sqlite`
-- [ ] Create `.code-review-graph` on `atlas init`
-- [ ] Allow custom DB path through config or CLI flag
+- [ ] `cargo new --bin packages/atlas-cli`
+- [ ] `cargo new --lib packages/atlas-core`
+- [ ] `cargo new --lib packages/atlas-repo`
+- [ ] `cargo new --lib packages/atlas-parser`
+- [ ] `cargo new --lib packages/atlas-store-sqlite`
+- [ ] `cargo new --lib packages/atlas-search`
+- [ ] `cargo new --lib packages/atlas-review`
+- [ ] `cargo new --lib packages/atlas-impact`
 
-### 3.2 Schema
+### 1.2 Choose core dependencies
 
-- [ ] Create `metadata` table
-- [ ] Create `files` table
-- [ ] Create `nodes` table
-- [ ] Create `edges` table
+- [ ] CLI:
+  - [ ] `clap`
+  - [ ] `clap_complete` (later)
+- [ ] Errors:
+  - [ ] `thiserror`
+  - [ ] `anyhow` for CLI layer only
+- [ ] Serialization:
+  - [ ] `serde`
+  - [ ] `serde_json`
+- [ ] Paths/hash/time:
+  - [ ] `camino`
+  - [ ] `sha2`
+  - [ ] `time`
+- [ ] SQLite:
+  - [ ] `rusqlite` with bundled SQLite + FTS5 support
+- [ ] Logging:
+  - [ ] `tracing`
+  - [ ] `tracing-subscriber`
+- [ ] Concurrency:
+  - [ ] `rayon` or `crossbeam`
+  - [ ] prefer std threads first if simpler
+- [ ] Tree-sitter:
+  - [ ] `tree-sitter`
+  - [ ] language crates as needed
+- [ ] Git integration:
+  - [ ] start with `std::process::Command`
+  - [ ] consider `git2` later only if necessary
 
-### 3.3 Indexes
+### 1.3 CI and quality gates
 
-- [ ] Add indexes for:
-  - [ ] `nodes.kind`
-  - [ ] `nodes.file_path`
-  - [ ] `nodes.qualified_name`
-  - [ ] `nodes.language`
-  - [ ] `edges.kind`
-  - [ ] `edges.source_qualified`
-  - [ ] `edges.target_qualified`
-  - [ ] `edges.file_path`
-
-### 3.4 SQLite pragmas
-
-- [ ] Enable WAL
-- [ ] Enable foreign keys
-- [ ] Set busy timeout
-
-### 3.5 Store API
-
-- [ ] Implement `open`
-- [ ] Implement `migrate`
-- [ ] Implement `replace_file_graph`
-- [ ] Implement `delete_file_graph`
-- [ ] Implement `get_stats`
-- [ ] Implement `get_nodes_by_file`
-- [ ] Implement `get_edges_by_file`
-
-### 3.6 Transaction behavior
-
-`replace_file_graph` should do this in one transaction:
-
-- [ ] Delete old FTS rows for file nodes
-- [ ] Delete old nodes for file
-- [ ] Delete old edges for file
-- [ ] Upsert file record
-- [ ] Insert new nodes
-- [ ] Insert new edges
-- [ ] Insert new FTS rows
-- [ ] Commit
+- [ ] Add:
+  - [ ] `cargo fmt --check`
+  - [ ] `cargo clippy --all-targets --all-features -- -D warnings`
+  - [ ] `cargo test --workspace`
+- [ ] Add Linux CI
+- [ ] Add SQLite/FTS5 smoke test in CI
+- [ ] Add fixture-based regression tests
 
 ---
 
-## Phase 4 — SQLite FTS5 Search
+## Phase 2 — Domain Model
 
-### 4.1 Create FTS table
+The current project is fundamentally a code graph persisted in SQLite, with nodes, edges, metadata, impact traversals, and FTS-backed search. Preserving that data model is one of the strongest parity choices for the rewrite.
 
-- [ ] Create `nodes_fts`
+### 2.1 Define node kinds
+
+- [ ] `File`
+- [ ] `Package`
+- [ ] `Module`
+- [ ] `Import`
+- [ ] `Class`
+- [ ] `Interface`
+- [ ] `Struct`
+- [ ] `Enum`
+- [ ] `Function`
+- [ ] `Method`
+- [ ] `Variable`
+- [ ] `Constant`
+- [ ] `Trait`
+- [ ] `Test`
+
+### 2.2 Define edge kinds
+
+- [ ] `Contains`
+- [ ] `Imports`
+- [ ] `Calls`
+- [ ] `Defines`
+- [ ] `Implements`
+- [ ] `Extends`
+- [ ] `Tests`
+- [ ] `References`
+- [ ] `TestedBy`
+
+### 2.3 Define `Node`
+
+- [ ] Create `NodeId` type
+- [ ] Include:
+  - [ ] `id: i64`
+  - [ ] `kind: NodeKind`
+  - [ ] `name: String`
+  - [ ] `qualified_name: String`
+  - [ ] `file_path: String`
+  - [ ] `line_start: u32`
+  - [ ] `line_end: u32`
+  - [ ] `language: String`
+  - [ ] `parent_name: Option<String>`
+  - [ ] `params: Option<String>`
+  - [ ] `return_type: Option<String>`
+  - [ ] `modifiers: Option<String>`
+  - [ ] `is_test: bool`
+  - [ ] `file_hash: String`
+  - [ ] `extra_json: serde_json::Value`
+
+### 2.4 Define `Edge`
+
+- [ ] Include:
+  - [ ] `id: i64`
+  - [ ] `kind: EdgeKind`
+  - [ ] `source_qn: String`
+  - [ ] `target_qn: String`
+  - [ ] `file_path: String`
+  - [ ] `line: Option<u32>`
+  - [ ] `confidence: f32`
+  - [ ] `confidence_tier: Option<String>`
+  - [ ] `extra_json: serde_json::Value`
+
+### 2.5 Define supporting types
+
+- [ ] `FileRecord`
+- [ ] `GraphStats`
+- [ ] `ChangedFile`
+- [ ] `ImpactResult`
+- [ ] `ReviewContext`
+- [ ] `SearchQuery`
+- [ ] `ScoredNode`
+
+---
+
+## Phase 3 — SQLite Schema and Store
+
+The upstream implementation already treats SQLite as the durable center of the system, with WAL mode, explicit transactions, and atomic file-slice replacement. That should be preserved.
+
+### 3.1 Open database and pragmas
+
+- [ ] Create DB at `.atlas/codegraph.sqlite`
+- [ ] On open, set:
+  - [ ] `PRAGMA journal_mode=WAL;`
+  - [ ] `PRAGMA synchronous=NORMAL;`
+  - [ ] `PRAGMA foreign_keys=ON;`
+  - [ ] `PRAGMA busy_timeout=5000;`
+- [ ] Use one write connection policy for mutation-heavy operations
+- [ ] Add startup integrity check command later
+
+### 3.2 Migrations
+
+- [ ] Create migration runner
+- [ ] Add schema version table
+- [ ] Make migrations idempotent
+- [ ] Add golden-schema tests
+
+### 3.3 Tables
+
+- [ ] `metadata`
+- [ ] `files`
+- [ ] `nodes`
+- [ ] `edges`
+- [ ] `nodes_fts`
+- [ ] reserve later:
+  - [ ] `flows`
+  - [ ] `flow_memberships`
+  - [ ] `communities`
+
+### 3.4 `metadata` table
+
+- [ ] `key TEXT PRIMARY KEY`
+- [ ] `value TEXT NOT NULL`
+
+### 3.5 `files` table
+
+- [ ] `path TEXT PRIMARY KEY`
+- [ ] `language TEXT`
+- [ ] `hash TEXT NOT NULL`
+- [ ] `size INTEGER`
+- [ ] `indexed_at TEXT NOT NULL`
+
+### 3.6 `nodes` table
+
+- [ ] `id INTEGER PRIMARY KEY`
+- [ ] `kind TEXT NOT NULL`
+- [ ] `name TEXT NOT NULL`
+- [ ] `qualified_name TEXT NOT NULL UNIQUE`
+- [ ] `file_path TEXT NOT NULL`
+- [ ] `line_start INTEGER`
+- [ ] `line_end INTEGER`
+- [ ] `language TEXT`
+- [ ] `parent_name TEXT`
+- [ ] `params TEXT`
+- [ ] `return_type TEXT`
+- [ ] `modifiers TEXT`
+- [ ] `is_test INTEGER NOT NULL DEFAULT 0`
+- [ ] `file_hash TEXT`
+- [ ] `extra_json TEXT`
+
+### 3.7 `edges` table
+
+- [ ] `id INTEGER PRIMARY KEY`
+- [ ] `kind TEXT NOT NULL`
+- [ ] `source_qualified TEXT NOT NULL`
+- [ ] `target_qualified TEXT NOT NULL`
+- [ ] `file_path TEXT`
+- [ ] `line INTEGER`
+- [ ] `confidence REAL DEFAULT 1.0`
+- [ ] `confidence_tier TEXT`
+- [ ] `extra_json TEXT`
+
+### 3.8 Indexes
+
+- [ ] `idx_nodes_kind`
+- [ ] `idx_nodes_file_path`
+- [ ] `idx_nodes_qualified_name`
+- [ ] `idx_nodes_language`
+- [ ] `idx_edges_kind`
+- [ ] `idx_edges_source`
+- [ ] `idx_edges_target`
+- [ ] `idx_edges_file_path`
+
+### 3.9 FTS5 table
+
+- [ ] Create `nodes_fts` virtual table
 - [ ] Index:
   - [ ] `qualified_name`
   - [ ] `name`
   - [ ] `kind`
   - [ ] `file_path`
   - [ ] `language`
-  - [ ] `signature`
-  - [ ] `code`
+  - [ ] `params`
+  - [ ] `return_type`
+  - [ ] `modifiers`
+- [ ] Start with FTS only
+- [ ] Keep hybrid/vector search out of v1
 
-### 4.2 FTS sync strategy
+### 3.10 Store API
 
-- [ ] Use manual sync first
-- [ ] Insert into FTS on node insert
-- [ ] Remove old FTS rows on file replacement
-- [ ] Add `rebuild_fts` for recovery
+- [ ] `open(path)`
+- [ ] `migrate()`
+- [ ] `replace_file_graph(file_path, file_hash, nodes, edges)`
+- [ ] `replace_batch(parsed_files)`
+- [ ] `delete_file_graph(file_path)`
+- [ ] `nodes_by_file(file_path)`
+- [ ] `edges_by_file(file_path)`
+- [ ] `find_dependents(changed_files)`
+- [ ] `impact_radius(changed_files, max_depth, max_nodes)`
+- [ ] `search(query)`
+- [ ] `stats()`
 
-### 4.3 BM25 search
+### 3.11 Transaction semantics
 
-- [ ] Create `SearchResult`
-- [ ] Join FTS rows back to `nodes`
-- [ ] Order by BM25 score
-- [ ] Limit results
-- [ ] Remember: lower BM25 score is better in SQLite FTS5
-
-### 4.4 Search filters
-
-- [ ] Add `--limit`
-- [ ] Add `--kind`
-- [ ] Add `--language`
-- [ ] Add `--file`
-
----
-
-## Phase 5 — Repository and Diff Support
-
-### 5.1 Repository scanning
-
-- [ ] Walk the repository from a chosen root
-- [ ] Respect `.gitignore`
-- [ ] Skip generated or unsupported files
-- [ ] Detect language from extension and file content when needed
-
-### 5.2 Git diff support
-
-- [ ] Detect changed files relative to:
-  - [ ] working tree
-  - [ ] staged changes
-  - [ ] a base revision
-- [ ] Normalize paths relative to repo root
-- [ ] Handle file adds, deletes, renames, and modifications
+- [ ] Replace one file graph atomically:
+  - [ ] begin immediate transaction
+  - [ ] delete old FTS rows
+  - [ ] delete old edges for file
+  - [ ] delete old nodes for file
+  - [ ] upsert file row
+  - [ ] insert nodes
+  - [ ] insert edges
+  - [ ] insert FTS rows
+  - [ ] commit
+- [ ] Add rollback tests
+- [ ] Add lock-contention tests
 
 ---
 
-## Phase 6 — Parsing
+## Phase 4 — Repository Scanner and Git Diff
 
-### 6.1 Parser interface
+The upstream project’s primary promise includes full build plus incremental update from git diff. That makes repo scanning and change detection part of the actual product kernel, not glue code.
 
-- [ ] Define a parser trait or equivalent abstraction
-- [ ] Return parsed nodes and edges for a single file
-- [ ] Return structured parse errors without aborting the whole scan
+### 4.1 Repo root detection
 
-### 6.2 Rust parser
+- [ ] Implement `find_repo_root(start: &Utf8Path) -> Result<Utf8PathBuf>`
+- [ ] First try `git rev-parse --show-toplevel`
+- [ ] Fallback: walk parent dirs for `.git`
+- [ ] Normalize returned path
 
-- [ ] Parse Rust modules
-- [ ] Parse `use` imports
-- [ ] Parse structs
-- [ ] Parse enums
-- [ ] Parse traits
-- [ ] Parse functions
-- [ ] Parse impl blocks and methods
-- [ ] Parse constants and statics
-- [ ] Parse tests
-- [ ] Capture symbol spans and qualified names
+### 4.2 Path normalization
 
-### 6.3 Relationships
+- [ ] Convert to repo-relative paths for persistence
+- [ ] Normalize separators to `/`
+- [ ] Resolve `.` and `..`
+- [ ] Decide symlink policy
+- [ ] Add Windows casing normalization tests
 
-- [ ] Emit `contains` edges
-- [ ] Emit `imports` edges
-- [ ] Emit `defines` edges
-- [ ] Emit `calls` edges where practical
-- [ ] Emit `implements` edges for trait impls
-- [ ] Emit `references` edges for later enrichment
+### 4.3 Ignore handling
+
+- [ ] Support git-tracked files first via `git ls-files`
+- [ ] Add `.atlasignore` later
+- [ ] Respect upstream-style ignore file compatibility later if needed
+- [ ] Ignore by default:
+  - [ ] `.git`
+  - [ ] `node_modules`
+  - [ ] `vendor`
+  - [ ] `dist`
+  - [ ] `build`
+  - [ ] `.next`
+  - [ ] `target`
+  - [ ] `.venv`
+  - [ ] `__pycache__`
+
+### 4.4 File collection
+
+- [ ] `collect_files(repo_root)`
+- [ ] Use `git ls-files`
+- [ ] Optional recursive submodule handling later
+- [ ] Skip unsupported extensions
+- [ ] skip binary files
+- [ ] skip giant files
+- [ ] configurable file size threshold
+
+### 4.5 File hashing
+
+- [ ] SHA-256 file hash
+- [ ] skip unchanged files on full build
+- [ ] persist hash in `files`
+
+### 4.6 Change detection
+
+- [ ] `changed_files(repo_root, base_ref)`
+- [ ] support:
+  - [ ] `origin/main...HEAD`
+  - [ ] explicit base ref
+  - [ ] `--staged`
+  - [ ] `--working-tree`
+- [ ] parse `git diff --name-status`
+- [ ] handle:
+  - [ ] added
+  - [ ] modified
+  - [ ] deleted
+  - [ ] renamed
+  - [ ] copied
+
+### 4.7 Deleted and renamed files
+
+- [ ] delete stale file graph on delete
+- [ ] MVP rename behavior:
+  - [ ] remove old path
+  - [ ] parse new path as fresh file
+- [ ] later:
+  - [ ] preserve stable node identity across rename if hash unchanged
 
 ---
 
-## Phase 7 — CLI and UX
+## Phase 5 — Parser Abstraction
 
-### 7.1 CLI behavior
+The upstream parser is both the most important subsystem and the most monolithic file. The right Rust design is a per-language handler model behind a common parser interface.
 
-- [ ] `atlas init` creates config and database
-- [ ] `atlas scan` performs a full repository scan
-- [ ] `atlas update` processes only changed files when possible
-- [ ] `atlas search` queries indexed symbols
-- [ ] `atlas status` prints index metadata and counts
+### 5.1 Parser interface
 
-### 7.2 Output
+- [ ] `supports(path) -> bool`
+- [ ] `parse(repo_root, abs_path, src) -> ParsedFile`
+- [ ] `language_name()`
+- [ ] `extract_nodes()`
+- [ ] `extract_edges()`
 
-- [ ] Add human-readable output by default
-- [ ] Add JSON output for scripting
-- [ ] Define exit codes for common failure cases
+### 5.2 Parser registry
+
+- [ ] register handlers
+- [ ] resolve parser by extension
+- [ ] expose supported languages list
+- [ ] fail gracefully on unknown languages
+
+### 5.3 Language strategy
+
+- [ ] v1 first-class languages:
+  - [ ] Rust
+  - [ ] Go
+  - [ ] Python
+  - [ ] JavaScript
+  - [ ] TypeScript
+- [ ] v1.1 later:
+  - [ ] Java
+  - [ ] C#
+  - [ ] PHP
+- [ ] treat notebooks and framework-specific formats as later work
+
+### 5.4 Tree-sitter integration
+
+- [ ] wire core Tree-sitter parser
+- [ ] load per-language grammars
+- [ ] standardize AST walking helpers
+- [ ] standardize line-span extraction
+- [ ] standardize text slice extraction
+- [ ] standardize fallback behavior on parse failure
+
+### 5.5 Parser output shape
+
+- [ ] always emit a `File` node
+- [ ] emit symbol nodes
+- [ ] emit containment edges
+- [ ] emit imports edges
+- [ ] emit calls edges
+- [ ] emit tested-by/tests edges where possible
+- [ ] include unresolved edges if exact resolution is unavailable
 
 ---
 
-## Phase 8 — Quality
+## Phase 6 — First Language: Rust
 
-### 8.1 Tests
+### 6.1 Rust extension support
 
-- [ ] Add unit tests for core types
-- [ ] Add schema migration tests
-- [ ] Add store transaction tests
-- [ ] Add parser fixture tests
-- [ ] Add CLI smoke tests
+- [ ] `.rs`
 
-### 8.2 Error handling and logging
+### 6.2 Rust node extraction
 
-- [ ] Standardize error types across crates
-- [ ] Add contextual error messages
-- [ ] Add debug logging for scan and index operations
+- [ ] modules
+- [ ] functions
+- [ ] impl methods
+- [ ] structs
+- [ ] enums
+- [ ] traits
+- [ ] constants
+- [ ] statics
+- [ ] tests
 
-### 8.3 Performance
+### 6.3 Rust edge extraction
 
-- [ ] Measure scan time on a medium-size Rust repository
-- [ ] Measure search latency
-- [ ] Avoid unnecessary file reparsing during incremental updates
+- [ ] `Contains`
+- [ ] `Calls`
+- [ ] `Implements` via `impl Trait for Type`
+- [ ] `References` for `use`/type refs later
+- [ ] `Tests` / `TestedBy` for `#[cfg(test)]` and `#[test]`
+
+### 6.4 Rust qualified-name scheme
+
+- [ ] file node: `<relative-path>`
+- [ ] module node: `<relative-path>::module::<name>`
+- [ ] function node: `<relative-path>::fn::<name>`
+- [ ] method node: `<relative-path>::method::<Type>.<name>`
+- [ ] struct node: `<relative-path>::struct::<name>`
+- [ ] enum node: `<relative-path>::enum::<name>`
+- [ ] trait node: `<relative-path>::trait::<name>`
+
+### 6.5 Rust parser tests
+
+- [ ] free functions
+- [ ] nested modules
+- [ ] trait impls
+- [ ] generic functions
+- [ ] methods on impl blocks
+- [ ] test modules
+- [ ] macro-heavy files
+- [ ] line-span accuracy
+
+---
+
+## Phase 7 — Additional Language Handlers
+
+### 7.1 Go
+
+- [ ] package node
+- [ ] functions
+- [ ] methods
+- [ ] structs
+- [ ] interfaces
+- [ ] imports
+- [ ] call edges
+
+### 7.2 Python
+
+- [ ] modules
+- [ ] functions
+- [ ] classes
+- [ ] methods
+- [ ] imports
+- [ ] decorators
+- [ ] tests
+
+### 7.3 JavaScript/TypeScript
+
+- [ ] functions
+- [ ] classes
+- [ ] methods
+- [ ] imports/exports
+- [ ] call expressions
+- [ ] TS type/interface nodes
+- [ ] later TS path alias resolution
+
+### 7.4 Call-target resolution tiers
+
+- [ ] Tier 1:
+  - [ ] capture textual callee target only
+- [ ] Tier 2:
+  - [ ] resolve same-file symbols
+- [ ] Tier 3:
+  - [ ] resolve same-package/module symbols
+- [ ] Tier 4:
+  - [ ] resolve imports where practical
+- [ ] Never block parse success on perfect call resolution
+
+---
+
+## Phase 8 — Full Build Pipeline
+
+### 8.1 `atlas build`
+
+- [ ] find repo root
+- [ ] open DB
+- [ ] run migrations
+- [ ] collect tracked files
+- [ ] filter supported files
+- [ ] read + hash each file
+- [ ] skip unchanged files
+- [ ] parse file
+- [ ] replace file graph in DB
+- [ ] summarize:
+  - [ ] scanned count
+  - [ ] skipped count
+  - [ ] parsed count
+  - [ ] nodes inserted
+  - [ ] edges inserted
+  - [ ] elapsed time
+
+### 8.2 Concurrency model
+
+- [ ] concurrent file parsing
+- [ ] single writer thread for SQLite
+- [ ] bounded queue between parser workers and DB writer
+- [ ] memory cap for queued parsed files
+- [ ] backpressure instead of unbounded buffering
+
+### 8.3 Failure handling
+
+- [ ] continue on per-file parse failure
+- [ ] surface file parse errors in summary
+- [ ] add `--fail-fast`
+- [ ] keep DB consistent on crashes
+
+---
+
+## Phase 9 — Incremental Update Pipeline
+
+The upstream project’s incremental update flow is one of the highest-value behaviors to preserve. It re-parses changed files plus dependent files, then replaces only affected graph slices.
+
+### 9.1 `atlas update`
+
+- [ ] discover changed files
+- [ ] if no explicit list, call git diff
+- [ ] find dependent files from graph
+- [ ] merge + dedupe targets
+- [ ] remove deleted files from graph
+- [ ] parse changed + dependent files
+- [ ] batch replace graph slices
+- [ ] print update summary
+
+### 9.2 Dependent invalidation
+
+- [ ] implement `find_dependents(changed_files)`
+- [ ] start conservative:
+  - [ ] files importing changed file package/module
+  - [ ] callers/callees by edge links
+- [ ] tolerate over-invalidation in v1
+- [ ] avoid under-invalidation where possible
+
+### 9.3 Update modes
+
+- [ ] `atlas update --base origin/main`
+- [ ] `atlas update --staged`
+- [ ] `atlas update --working-tree`
+- [ ] `atlas update --files path1 path2`
+
+---
+
+## Phase 10 — Impact Radius
+
+The upstream system already uses a recursive SQLite CTE seeded from nodes in changed files. That SQL-first traversal should be preserved in Rust because it avoids rebuilding the full graph in memory.
+
+### 10.1 Seed selection
+
+- [ ] map changed files to node qualified names
+- [ ] load seed nodes into temp table
+- [ ] preserve changed node set separately from impacted node set
+
+### 10.2 Recursive traversal
+
+- [ ] forward through source -> target edges
+- [ ] backward through target -> source edges
+- [ ] depth-limited recursion
+- [ ] node-count cap
+- [ ] dedupe visited nodes
+
+### 10.3 Impact result shape
+
+- [ ] changed nodes
+- [ ] impacted nodes
+- [ ] impacted files
+- [ ] relevant edges among those nodes
+
+### 10.4 CLI
+
+- [ ] `atlas impact --base origin/main`
+- [ ] `atlas impact --files ...`
+- [ ] `atlas impact --max-depth 3`
+- [ ] `atlas impact --max-nodes 200`
+- [ ] `atlas impact --json`
+
+### 10.5 Tests
+
+- [ ] one-hop graph
+- [ ] cyclic graph
+- [ ] disconnected graph
+- [ ] depth cap behavior
+- [ ] max node cap behavior
+- [ ] deleted seed files
+- [ ] seed file with no nodes
+
+---
+
+## Phase 11 — Search
+
+The upstream search layer uses FTS5 and ranking heuristics; embeddings are explicitly optional and belong later, not in the first release.
+
+### 11.1 Basic FTS search
+
+- [ ] search `nodes_fts`
+- [ ] join back to `nodes`
+- [ ] order by BM25
+- [ ] limit results
+- [ ] return scored nodes
+
+### 11.2 Search filters
+
+- [ ] by kind
+- [ ] by language
+- [ ] by file path
+- [ ] by test status
+- [ ] by repo subpath
+
+### 11.3 Ranking heuristics
+
+- [ ] exact name boost
+- [ ] exact qualified-name boost
+- [ ] function/method/class boost
+- [ ] same-directory boost
+- [ ] same-language boost
+- [ ] changed-file boost later
+
+### 11.4 CLI
+
+- [ ] `atlas query "ReplaceFileGraph"`
+- [ ] `atlas query "impact radius" --kind function`
+- [ ] `atlas query "parser" --language rust`
+- [ ] `atlas query "foo" --json`
+
+---
+
+## Phase 12 — Review Context Assembly
+
+The main user benefit of the upstream project is not just building the graph, but generating minimal useful context around code changes. That review/query layer belongs in core scope.
+
+### 12.1 Minimal context
+
+- [ ] input:
+  - [ ] changed files
+  - [ ] max depth
+  - [ ] max nodes
+- [ ] output:
+  - [ ] changed node summaries
+  - [ ] key impacted neighbors
+  - [ ] critical edges
+  - [ ] relevant file excerpts later
+
+### 12.2 Review context
+
+- [ ] identify touched functions/methods/classes
+- [ ] list callers/callees/importers/tests
+- [ ] include impact-radius result
+- [ ] rank by relevance
+- [ ] avoid dumping entire graph
+- [ ] provide machine-readable JSON and concise text output
+
+### 12.3 Risk/change summaries
+
+- [ ] changed files list
+- [ ] changed symbol count
+- [ ] public API node changes
+- [ ] test coverage adjacency
+- [ ] large function touched
+- [ ] cross-module/cross-package impact
+
+### 12.4 CLI
+
+- [ ] `atlas review-context --base origin/main`
+- [ ] `atlas review-context --files ...`
+- [ ] `atlas review-context --json`
+- [ ] `atlas detect-changes --base origin/main`
+
+---
+
+## Phase 13 — CLI UX
+
+### 13.1 Clap commands
+
+- [ ] root command with global flags:
+  - [ ] `--repo`
+  - [ ] `--db`
+  - [ ] `--verbose`
+  - [ ] `--json`
+- [ ] subcommands:
+  - [ ] `init`
+  - [ ] `build`
+  - [ ] `update`
+  - [ ] `status`
+  - [ ] `detect-changes`
+  - [ ] `query`
+  - [ ] `impact`
+  - [ ] `review-context`
+
+### 13.2 Output styles
+
+- [ ] human-readable output
+- [ ] structured JSON output
+- [ ] stable machine schema for automation
+- [ ] concise error messages
+- [ ] rich verbose diagnostics when requested
+
+### 13.3 Status command
+
+- [ ] DB path
+- [ ] repo root
+- [ ] indexed file count
+- [ ] node count
+- [ ] edge count
+- [ ] nodes by kind
+- [ ] languages present
+- [ ] last build/update time
+- [ ] changed files since base
+
+---
+
+## Phase 14 — Testing Strategy
+
+The upstream report highlights parser fidelity and install/hook fragility as the real high-risk areas, not SQLite itself. For the Rust rewrite, parser and incremental-update tests should therefore be first-class.
+
+### 14.1 Unit tests
+
+- [ ] node/edge serialization
+- [ ] qualified-name generation
+- [ ] path normalization
+- [ ] hash stability
+- [ ] CLI arg parsing
+
+### 14.2 SQLite tests
+
+- [ ] migration creates schema
+- [ ] WAL mode enabled
+- [ ] file graph replacement works
+- [ ] delete file graph works
+- [ ] FTS search works
+- [ ] impact CTE works
+- [ ] lock/retry behavior
+
+### 14.3 Repo tests
+
+- [ ] repo root detection
+- [ ] tracked-file collection
+- [ ] change detection
+- [ ] rename handling
+- [ ] deleted file handling
+
+### 14.4 Parser golden tests
+
+- [ ] Rust fixtures
+- [ ] Go fixtures
+- [ ] Python fixtures
+- [ ] JS/TS fixtures
+- [ ] call edges
+- [ ] imports
+- [ ] tests detection
+- [ ] bad syntax handling
+- [ ] line ranges
+
+### 14.5 Integration tests
+
+- [ ] `atlas build` on sample repo
+- [ ] `atlas update` after edits
+- [ ] `atlas impact` returns expected nodes
+- [ ] `atlas review-context` returns stable useful output
+- [ ] `atlas query` returns expected ranked matches
+
+### 14.6 Cross-platform tests
+
+- [ ] Linux
+- [ ] Windows path/casing behavior
+- [ ] macOS path handling
+- [ ] git command behavior on each
+
+---
+
+## Phase 15 — Performance and Operational Hardening
+
+### 15.1 Build performance
+
+- [ ] measure files/sec
+- [ ] measure nodes/sec
+- [ ] measure DB writes/sec
+- [ ] benchmark parser workers vs writer bottleneck
+- [ ] tune batch sizes
+
+### 15.2 Query performance
+
+- [ ] benchmark FTS query latency
+- [ ] benchmark impact-radius latency
+- [ ] benchmark review-context latency
+
+### 15.3 Memory and reliability
+
+- [ ] cap parse queue size
+- [ ] avoid loading giant repos into memory
+- [ ] add partial-failure reporting
+- [ ] add crash-safe file replacement semantics
+
+### 15.4 Diagnostics
+
+- [ ] `atlas doctor` later
+- [ ] `atlas db check` later
+- [ ] tracing spans around build/update phases
+- [ ] optional metrics export later
+
+---
+
+## Phase 16 — MCP / Serve Layer
+
+The upstream repo exposes a stdio MCP server, but the report makes clear this should stay a thin wrapper over the domain services rather than becoming the architecture center.
+
+### 16.1 Core MCP scope
+
+- [ ] `build_or_update_graph`
+- [ ] `get_minimal_context`
+- [ ] `get_impact_radius`
+- [ ] `get_review_context`
+- [ ] `query_graph`
+- [ ] `traverse_graph`
+- [ ] `list_graph_stats`
+- [ ] `detect_changes`
+
+### 16.2 Transport design
+
+- [ ] keep service layer transport-independent
+- [ ] add stdio server later
+- [ ] avoid long-running tool deadlocks
+- [ ] wrap blocking work in dedicated worker threads if needed
+
+### 16.3 Serve command
+
+- [ ] `atlas serve`
+- [ ] expose only core tools in first version
+- [ ] add prompts later, not first
+
+---
+
+## Phase 17 — Later Features
+
+### 17.1 Strong candidates for v1.1 / v1.2
+
+- [ ] watch mode
+- [ ] docs lookup
+- [ ] large-function finder
+- [ ] test adjacency queries
+- [ ] architecture overview
+- [ ] flow tracing
+- [ ] communities
+
+### 17.2 Explicitly late-stage
+
+- [ ] embeddings
+- [ ] cloud providers
+- [ ] wiki generation
+- [ ] visualization
+- [ ] export formats
+- [ ] registry
+- [ ] install automation
+- [ ] refactor/apply-refactor
+- [ ] eval harness
+
+---
+
+## MVP Definition
+
+Release 1 is done when this works end-to-end:
+
+- [ ] `atlas init`
+- [ ] `atlas build`
+- [ ] `atlas status`
+- [ ] `atlas query "some symbol"`
+- [ ] `atlas update --base origin/main`
+- [ ] `atlas impact --base origin/main`
+- [ ] `atlas review-context --base origin/main`
+
+And the system has:
+
+- [ ] multi-language parsing for a small v1 language set
+- [ ] SQLite graph persistence
+- [ ] file-slice replacement
+- [ ] recursive impact-radius SQL traversal
+- [ ] review-context assembly
+- [ ] FTS5 search
+- [ ] CI on Linux + Windows
+
+---
+
+## Recommended Implementation Order
+
+### Slice 1 — foundation
+
+- [ ] workspace
+- [ ] error types
+- [ ] logging
+- [ ] SQLite open/migrate
+- [ ] CLI scaffold
+
+### Slice 2 — storage
+
+- [ ] schema
+- [ ] insert/replace/delete
+- [ ] stats
+- [ ] FTS
+- [ ] basic search
+
+### Slice 3 — repo
+
+- [ ] repo root
+- [ ] tracked files
+- [ ] hashing
+- [ ] git diff parsing
+
+### Slice 4 — parser
+
+- [ ] parser trait
+- [ ] Tree-sitter bootstrap
+- [ ] Rust language handler
+- [ ] Go language handler
+- [ ] node/edge extraction
+
+### Slice 5 — build/update
+
+- [ ] full build pipeline
+- [ ] single-writer DB loop
+- [ ] incremental update
+- [ ] dependent invalidation
+
+### Slice 6 — graph intelligence
+
+- [ ] impact-radius SQL
+- [ ] query helpers
+- [ ] review-context assembly
+- [ ] detect-changes summary
+
+### Slice 7 — polish
+
+- [ ] JSON outputs
+- [ ] more parsers
+- [ ] benchmarks
+- [ ] Windows hardening
+- [ ] serve/MCP
+
+---
+
+## Final Rule
+
+Keep Atlas centered on this chain:
+
+- repo scan
+- parse
+- persist graph
+- update incrementally
+- search/traverse
+- build review context
+
+Do not let optional features delay that core path.
