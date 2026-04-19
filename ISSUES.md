@@ -1013,7 +1013,7 @@ The upstream repo exposes a stdio MCP server, but the report makes clear this sh
 
 - [x] `atlas serve`
 - [x] expose only core tools in first version
-- [ ] add prompts later, not first
+- [ ] add prompts later, not first (MCP prompt templates for external LLMs to use as guidance)
 
 ---
 
