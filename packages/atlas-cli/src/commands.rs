@@ -10,7 +10,8 @@ use atlas_core::model::{
 use atlas_impact::analyze as advanced_impact;
 use atlas_parser::ParserRegistry;
 use atlas_repo::{
-    DiffTarget, changed_files, collect_supported_files, find_repo_root, hash_file, repo_relative,
+    DiffTarget, changed_files, collect_files, collect_supported_files, find_repo_root, hash_file,
+    repo_relative,
 };
 use atlas_search as search;
 use atlas_store_sqlite::Store;
@@ -20,19 +21,9 @@ use rayon::prelude::*;
 use crate::call_resolution::reconcile_call_targets;
 use crate::cli::{Cli, Command};
 
-/// Default parse-worker batch size.  Override with `ATLAS_PARSE_BATCH_SIZE`.
-const DEFAULT_PARSE_BATCH_SIZE: usize = 64;
+/// Default parse-worker batch size.  Can be overridden in `.atlas/config.toml`.
+pub(crate) const DEFAULT_PARSE_BATCH_SIZE: usize = 64;
 const MACHINE_SCHEMA_VERSION: &str = "atlas_cli.v1";
-
-/// Read the effective batch size from the environment, falling back to the
-/// compile-time default.  Clamps to [1, 4096] to prevent extreme values.
-fn parse_batch_size() -> usize {
-    std::env::var("ATLAS_PARSE_BATCH_SIZE")
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok())
-        .map(|n| n.clamp(1, 4096))
-        .unwrap_or(DEFAULT_PARSE_BATCH_SIZE)
-}
 
 /// Compute a content-signature string for `node`.
 ///
@@ -185,17 +176,26 @@ pub fn run_init(cli: &Cli) -> Result<()> {
     let db_path = db_path(cli, &repo);
     Store::open(&db_path).with_context(|| format!("cannot open database at {db_path}"))?;
 
+    let config_path = crate::paths::config_path(&repo);
+    let config_created = crate::config::Config::write_default(&atlas_dir)
+        .with_context(|| format!("cannot write config to {}", config_path.display()))?;
+
     if cli.json {
         print_json(
             "init",
             serde_json::json!({
                 "atlas_dir": atlas_dir.display().to_string(),
                 "db_path": db_path,
+                "config_path": config_path.display().to_string(),
+                "config_created": config_created,
             }),
         )?;
     } else {
         println!("Initialized atlas in {}", atlas_dir.display());
         println!("Database: {db_path}");
+        if config_created {
+            println!("Config  : {}", config_path.display());
+        }
     }
     Ok(())
 }
@@ -283,6 +283,8 @@ pub fn run_build(cli: &Cli) -> Result<()> {
     let repo_root = repo_root_path.as_path();
     let db_path = db_path(cli, &repo);
 
+    let config = crate::config::Config::load(&crate::paths::atlas_dir(&repo))?;
+
     let mut store =
         Store::open(&db_path).with_context(|| format!("cannot open database at {db_path}"))?;
 
@@ -334,7 +336,7 @@ pub fn run_build(cli: &Cli) -> Result<()> {
     drop(_scan_span);
 
     // --- Parallel parse in bounded chunks, batched DB write ------------------
-    let batch_size = parse_batch_size();
+    let batch_size = config.parse_batch_size();
     let _parse_span = tracing::info_span!("build.parse_and_write").entered();
 
     let mut parsed_count = 0usize;
@@ -446,6 +448,8 @@ pub fn run_update(cli: &Cli) -> Result<()> {
     let repo_root = repo_root_path.as_path();
     let db_path = db_path(cli, &repo);
 
+    let config = crate::config::Config::load(&crate::paths::atlas_dir(&repo))?;
+
     let mut store =
         Store::open(&db_path).with_context(|| format!("cannot open database at {db_path}"))?;
 
@@ -542,7 +546,7 @@ pub fn run_update(cli: &Cli) -> Result<()> {
     let registry = ParserRegistry::with_defaults();
     let mut parse_errors = 0usize;
     let mut skipped_unsupported = 0usize;
-    let batch_size = parse_batch_size();
+    let batch_size = config.parse_batch_size();
 
     // -----------------------------------------------------------------------
     // Phase 1: parse the directly-changed files.
@@ -1197,6 +1201,169 @@ pub fn run_review_context(cli: &Cli) -> Result<()> {
         );
     }
 
+    Ok(())
+}
+
+/// Structured result for a single doctor check.
+struct CheckResult {
+    name: &'static str,
+    ok: bool,
+    detail: String,
+}
+
+impl CheckResult {
+    fn pass(name: &'static str, detail: impl Into<String>) -> Self {
+        Self { name, ok: true, detail: detail.into() }
+    }
+    fn fail(name: &'static str, detail: impl Into<String>) -> Self {
+        Self { name, ok: false, detail: detail.into() }
+    }
+}
+
+pub fn run_doctor(cli: &Cli) -> Result<()> {
+    let mut checks: Vec<CheckResult> = Vec::new();
+
+    // 1. Repo root
+    let repo = match resolve_repo(cli) {
+        Ok(r) => {
+            checks.push(CheckResult::pass("repo_root", &r));
+            r
+        }
+        Err(e) => {
+            checks.push(CheckResult::fail("repo_root", e.to_string()));
+            return print_doctor_report(cli, &checks, false);
+        }
+    };
+
+    // 2. Git repo root detection
+    match find_repo_root(Utf8Path::new(&repo)) {
+        Ok(root) => checks.push(CheckResult::pass("git_root", root.as_str())),
+        Err(e) => checks.push(CheckResult::fail("git_root", e.to_string())),
+    }
+
+    // 3. .atlas dir
+    let atlas_dir = crate::paths::atlas_dir(&repo);
+    if atlas_dir.exists() {
+        checks.push(CheckResult::pass("atlas_dir", atlas_dir.display().to_string()));
+    } else {
+        checks.push(CheckResult::fail(
+            "atlas_dir",
+            format!("{} not found — run `atlas init`", atlas_dir.display()),
+        ));
+    }
+
+    // 4. Config file
+    let config_path = crate::paths::config_path(&repo);
+    if config_path.exists() {
+        checks.push(CheckResult::pass(
+            "config_file",
+            config_path.display().to_string(),
+        ));
+    } else {
+        checks.push(CheckResult::fail(
+            "config_file",
+            format!("{} not found — run `atlas init`", config_path.display()),
+        ));
+    }
+
+    // 5. DB file exists
+    let db_path_str = db_path(cli, &repo);
+    let db_exists = std::path::Path::new(&db_path_str).exists();
+    if db_exists {
+        checks.push(CheckResult::pass("db_file", &db_path_str));
+    } else {
+        checks.push(CheckResult::fail(
+            "db_file",
+            format!("{db_path_str} not found — run `atlas init`"),
+        ));
+    }
+
+    // 6. DB open + integrity + stats
+    if db_exists {
+        match Store::open(&db_path_str) {
+            Ok(store) => {
+                checks.push(CheckResult::pass("db_open", &db_path_str));
+                match store.integrity_check() {
+                    Ok(issues) if issues.is_empty() => {
+                        checks.push(CheckResult::pass("db_integrity", "ok"));
+                    }
+                    Ok(issues) => {
+                        checks.push(CheckResult::fail("db_integrity", issues.join("; ")));
+                    }
+                    Err(e) => {
+                        checks.push(CheckResult::fail("db_integrity", e.to_string()));
+                    }
+                }
+                match store.stats() {
+                    Ok(stats) => {
+                        checks.push(CheckResult::pass(
+                            "graph_stats",
+                            format!(
+                                "files={} nodes={} edges={}",
+                                stats.file_count, stats.node_count, stats.edge_count
+                            ),
+                        ));
+                    }
+                    Err(e) => {
+                        checks.push(CheckResult::fail("graph_stats", e.to_string()));
+                    }
+                }
+            }
+            Err(e) => {
+                checks.push(CheckResult::fail("db_open", e.to_string()));
+            }
+        }
+    }
+
+    // 7. git ls-files reachable
+    match collect_files(Utf8Path::new(&repo), None) {
+        Ok(files) => {
+            checks.push(CheckResult::pass(
+                "git_ls_files",
+                format!("{} tracked files", files.len()),
+            ));
+        }
+        Err(e) => {
+            checks.push(CheckResult::fail("git_ls_files", e.to_string()));
+        }
+    }
+
+    let all_ok = checks.iter().all(|c| c.ok);
+    print_doctor_report(cli, &checks, all_ok)?;
+    if !all_ok {
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
+fn print_doctor_report(cli: &Cli, checks: &[CheckResult], all_ok: bool) -> Result<()> {
+    if cli.json {
+        let items: Vec<serde_json::Value> = checks
+            .iter()
+            .map(|c| {
+                serde_json::json!({
+                    "check": c.name,
+                    "ok": c.ok,
+                    "detail": c.detail,
+                })
+            })
+            .collect();
+        print_json(
+            "doctor",
+            serde_json::json!({ "ok": all_ok, "checks": items }),
+        )?;
+    } else {
+        for c in checks {
+            let status = if c.ok { "PASS" } else { "FAIL" };
+            println!("  [{status}] {}: {}", c.name, c.detail);
+        }
+        println!();
+        if all_ok {
+            println!("All checks passed.");
+        } else {
+            eprintln!("Some checks failed.");
+        }
+    }
     Ok(())
 }
 

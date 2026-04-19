@@ -1233,6 +1233,18 @@ mod tests {
         assert!(!mode.is_empty());
     }
 
+    #[test]
+    fn wal_mode_enabled_on_file_db() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.sqlite");
+        let conn = Connection::open(&db_path).unwrap();
+        Store::apply_pragmas(&conn).unwrap();
+        let mode: String = conn
+            .query_row("PRAGMA journal_mode", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(mode, "wal", "file DB must use WAL journal mode");
+    }
+
     // --- replace_file_graph --------------------------------------------------
 
     #[test]

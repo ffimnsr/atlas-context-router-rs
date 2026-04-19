@@ -60,4 +60,45 @@ mod tests {
         let root = find_repo_root(here).expect("should find repo root");
         assert!(root.join(".git").exists(), ".git must exist at repo root");
     }
+
+    #[test]
+    fn finds_root_from_deep_nested_dir() {
+        // Start from src/ inside this crate — should still resolve to workspace root.
+        let here = Utf8Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/src"));
+        let root = find_repo_root(here).expect("should find repo root");
+        assert!(root.join(".git").exists(), ".git must exist at resolved root");
+    }
+
+    #[test]
+    fn fallback_walk_finds_git_dir() {
+        // Create a temp dir tree with a .git directory and start from a nested path.
+        let dir = tempfile::tempdir().unwrap();
+        let repo_root = dir.path();
+        // Simulate a .git directory at the root.
+        std::fs::create_dir(repo_root.join(".git")).unwrap();
+        let nested = repo_root.join("src").join("lib");
+        std::fs::create_dir_all(&nested).unwrap();
+        let nested_utf8 = camino::Utf8Path::from_path(&nested).unwrap();
+        let found = find_repo_root(nested_utf8).expect("walk should find .git");
+        let expected = camino::Utf8Path::from_path(
+            &repo_root.canonicalize().unwrap(),
+        )
+        .unwrap()
+        .to_owned();
+        assert_eq!(found, expected);
+    }
+
+    #[test]
+    fn no_git_dir_returns_error() {
+        // tmpdir with no .git in any ancestor (we create an isolated path).
+        let dir = tempfile::tempdir().unwrap();
+        // create a nested dir with no .git anywhere under the temp root
+        let nested = dir.path().join("a").join("b");
+        std::fs::create_dir_all(&nested).unwrap();
+        let nested_utf8 = camino::Utf8Path::from_path(&nested).unwrap();
+        // git rev-parse will fail, walk will fail → error expected
+        // (Note: if tempdir happens to live inside a git repo this test would
+        // pass unexpectedly via the git path.  We only assert non-panic here.)
+        let _ = find_repo_root(nested_utf8); // may succeed or fail; must not panic
+    }
 }

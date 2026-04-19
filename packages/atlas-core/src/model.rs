@@ -319,3 +319,155 @@ pub struct AdvancedImpactResult {
     /// Architecture boundary violations detected.
     pub boundary_violations: Vec<BoundaryViolation>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::kinds::{EdgeKind, NodeKind};
+
+    // -------------------------------------------------------------------------
+    // NodeId
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn node_id_serde_round_trip() {
+        let id = NodeId(42);
+        let json = serde_json::to_string(&id).unwrap();
+        // transparent: serialises as a plain number
+        assert_eq!(json, "42");
+        let back: NodeId = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, id);
+    }
+
+    #[test]
+    fn node_id_unset_sentinel() {
+        assert_eq!(NodeId::UNSET.0, 0);
+    }
+
+    #[test]
+    fn node_id_from_i64() {
+        assert_eq!(NodeId::from(7_i64), NodeId(7));
+        let raw: i64 = NodeId(99).into();
+        assert_eq!(raw, 99);
+    }
+
+    // -------------------------------------------------------------------------
+    // Node serialization
+    // -------------------------------------------------------------------------
+
+    fn sample_node() -> Node {
+        Node {
+            id: NodeId(1),
+            kind: NodeKind::Function,
+            name: "my_func".to_string(),
+            qualified_name: "src/lib.rs::fn::my_func".to_string(),
+            file_path: "src/lib.rs".to_string(),
+            line_start: 10,
+            line_end: 20,
+            language: "rust".to_string(),
+            parent_name: None,
+            params: Some("(x: i32)".to_string()),
+            return_type: Some("i32".to_string()),
+            modifiers: None,
+            is_test: false,
+            file_hash: "abc123".to_string(),
+            extra_json: serde_json::Value::Null,
+        }
+    }
+
+    #[test]
+    fn node_serde_round_trip() {
+        let n = sample_node();
+        let json = serde_json::to_string(&n).unwrap();
+        let back: Node = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.id, n.id);
+        assert_eq!(back.kind, n.kind);
+        assert_eq!(back.name, n.name);
+        assert_eq!(back.qualified_name, n.qualified_name);
+        assert_eq!(back.file_path, n.file_path);
+        assert_eq!(back.line_start, n.line_start);
+        assert_eq!(back.line_end, n.line_end);
+        assert_eq!(back.language, n.language);
+        assert_eq!(back.params, n.params);
+        assert_eq!(back.return_type, n.return_type);
+        assert_eq!(back.is_test, n.is_test);
+        assert_eq!(back.file_hash, n.file_hash);
+    }
+
+    #[test]
+    fn node_optional_fields_null_round_trip() {
+        let mut n = sample_node();
+        n.parent_name = None;
+        n.params = None;
+        n.return_type = None;
+        n.modifiers = None;
+        let json = serde_json::to_string(&n).unwrap();
+        let back: Node = serde_json::from_str(&json).unwrap();
+        assert!(back.parent_name.is_none());
+        assert!(back.params.is_none());
+        assert!(back.return_type.is_none());
+        assert!(back.modifiers.is_none());
+    }
+
+    #[test]
+    fn node_is_test_flag_preserved() {
+        let mut n = sample_node();
+        n.is_test = true;
+        n.kind = NodeKind::Test;
+        let json = serde_json::to_string(&n).unwrap();
+        let back: Node = serde_json::from_str(&json).unwrap();
+        assert!(back.is_test);
+        assert_eq!(back.kind, NodeKind::Test);
+    }
+
+    // -------------------------------------------------------------------------
+    // Edge serialization
+    // -------------------------------------------------------------------------
+
+    fn sample_edge() -> Edge {
+        Edge {
+            id: 0,
+            kind: EdgeKind::Calls,
+            source_qn: "src/a.rs::fn::caller".to_string(),
+            target_qn: "src/b.rs::fn::callee".to_string(),
+            file_path: "src/a.rs".to_string(),
+            line: Some(15),
+            confidence: 1.0,
+            confidence_tier: Some("high".to_string()),
+            extra_json: serde_json::Value::Null,
+        }
+    }
+
+    #[test]
+    fn edge_serde_round_trip() {
+        let e = sample_edge();
+        let json = serde_json::to_string(&e).unwrap();
+        let back: Edge = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.id, e.id);
+        assert_eq!(back.kind, e.kind);
+        assert_eq!(back.source_qn, e.source_qn);
+        assert_eq!(back.target_qn, e.target_qn);
+        assert_eq!(back.file_path, e.file_path);
+        assert_eq!(back.line, e.line);
+        assert_eq!(back.confidence, e.confidence);
+        assert_eq!(back.confidence_tier, e.confidence_tier);
+    }
+
+    #[test]
+    fn edge_optional_line_none_round_trip() {
+        let mut e = sample_edge();
+        e.line = None;
+        let json = serde_json::to_string(&e).unwrap();
+        let back: Edge = serde_json::from_str(&json).unwrap();
+        assert!(back.line.is_none());
+    }
+
+    #[test]
+    fn edge_optional_confidence_tier_none_round_trip() {
+        let mut e = sample_edge();
+        e.confidence_tier = None;
+        let json = serde_json::to_string(&e).unwrap();
+        let back: Edge = serde_json::from_str(&json).unwrap();
+        assert!(back.confidence_tier.is_none());
+    }
+}

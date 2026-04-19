@@ -1,6 +1,7 @@
 mod call_resolution;
 mod cli;
 mod commands;
+mod config;
 mod logging;
 mod paths;
 
@@ -22,6 +23,7 @@ fn main() {
         Command::ReviewContext { .. } => commands::run_review_context(&cli),
         Command::Serve => commands::run_serve(&cli),
         Command::DbCheck => commands::run_db_check(&cli),
+        Command::Doctor => commands::run_doctor(&cli),
     };
 
     if let Err(err) = result {

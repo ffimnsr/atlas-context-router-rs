@@ -138,3 +138,109 @@ impl std::str::FromStr for EdgeKind {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::str::FromStr;
+
+    // -------------------------------------------------------------------------
+    // NodeKind serialization / parsing (used in qualified-name scheme)
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn node_kind_as_str_matches_serde_name() {
+        let cases = [
+            (NodeKind::File, "file"),
+            (NodeKind::Package, "package"),
+            (NodeKind::Module, "module"),
+            (NodeKind::Import, "import"),
+            (NodeKind::Class, "class"),
+            (NodeKind::Interface, "interface"),
+            (NodeKind::Struct, "struct"),
+            (NodeKind::Enum, "enum"),
+            (NodeKind::Function, "function"),
+            (NodeKind::Method, "method"),
+            (NodeKind::Variable, "variable"),
+            (NodeKind::Constant, "constant"),
+            (NodeKind::Trait, "trait"),
+            (NodeKind::Test, "test"),
+        ];
+        for (kind, expected) in cases {
+            assert_eq!(kind.as_str(), expected, "NodeKind::{kind:?} as_str");
+            assert_eq!(kind.to_string(), expected, "NodeKind::{kind:?} Display");
+            // round-trip via FromStr
+            let parsed = NodeKind::from_str(expected).unwrap();
+            assert_eq!(parsed, kind, "NodeKind::from_str({expected})");
+        }
+    }
+
+    #[test]
+    fn node_kind_unknown_string_errors() {
+        assert!(NodeKind::from_str("unknown_kind").is_err());
+        assert!(NodeKind::from_str("").is_err());
+    }
+
+    #[test]
+    fn node_kind_serde_snake_case() {
+        let kind = NodeKind::Function;
+        let json = serde_json::to_string(&kind).unwrap();
+        assert_eq!(json, "\"function\"");
+        let back: NodeKind = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, kind);
+    }
+
+    // -------------------------------------------------------------------------
+    // EdgeKind serialization / parsing
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn edge_kind_as_str_matches_serde_name() {
+        let cases = [
+            (EdgeKind::Contains, "contains"),
+            (EdgeKind::Imports, "imports"),
+            (EdgeKind::Calls, "calls"),
+            (EdgeKind::Defines, "defines"),
+            (EdgeKind::Implements, "implements"),
+            (EdgeKind::Extends, "extends"),
+            (EdgeKind::Tests, "tests"),
+            (EdgeKind::References, "references"),
+            (EdgeKind::TestedBy, "tested_by"),
+        ];
+        for (kind, expected) in cases {
+            assert_eq!(kind.as_str(), expected, "EdgeKind::{kind:?} as_str");
+            assert_eq!(kind.to_string(), expected, "EdgeKind::{kind:?} Display");
+            let parsed = EdgeKind::from_str(expected).unwrap();
+            assert_eq!(parsed, kind, "EdgeKind::from_str({expected})");
+        }
+    }
+
+    #[test]
+    fn edge_kind_unknown_string_errors() {
+        assert!(EdgeKind::from_str("unknown_edge").is_err());
+        assert!(EdgeKind::from_str("").is_err());
+    }
+
+    #[test]
+    fn edge_kind_serde_snake_case() {
+        let kind = EdgeKind::TestedBy;
+        let json = serde_json::to_string(&kind).unwrap();
+        assert_eq!(json, "\"tested_by\"");
+        let back: EdgeKind = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, kind);
+    }
+
+    #[test]
+    fn edge_kind_traversal_weights_ordered() {
+        // calls must outweigh references
+        assert!(
+            EdgeKind::Calls.traversal_weight() > EdgeKind::References.traversal_weight(),
+            "Calls weight must exceed References weight"
+        );
+        // imports must outweigh references
+        assert!(
+            EdgeKind::Imports.traversal_weight() > EdgeKind::References.traversal_weight(),
+            "Imports weight must exceed References weight"
+        );
+    }
+}

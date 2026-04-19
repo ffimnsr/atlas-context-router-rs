@@ -22,7 +22,7 @@ The upstream repo’s real kernel is the repository scanner, parser layer, SQLit
 - [x] Use binary name: `atlas`
 - [x] Use hidden work dir: `.atlas/`
 - [x] Use DB path: `.atlas/worldview.sqlite`
-- [ ] Use config path: `.atlas/config.toml`
+- [x] Use config path: `.atlas/config.toml`
 - [x] Use CLI commands:
   - [x] `atlas init`
   - [x] `atlas build`
@@ -906,29 +906,29 @@ The upstream report highlights parser fidelity and install/hook fragility as the
 
 ### 14.1 Unit tests
 
-- [ ] node/edge serialization
-- [ ] qualified-name generation
-- [ ] path normalization
-- [ ] hash stability
-- [ ] CLI arg parsing
+- [x] node/edge serialization
+- [x] qualified-name generation
+- [x] path normalization
+- [x] hash stability
+- [x] CLI arg parsing
 
 ### 14.2 SQLite tests
 
-- [ ] migration creates schema
-- [ ] WAL mode enabled
-- [ ] file graph replacement works
-- [ ] delete file graph works
-- [ ] FTS search works
-- [ ] impact CTE works
-- [ ] lock/retry behavior
+- [x] migration creates schema
+- [x] WAL mode enabled
+- [x] file graph replacement works
+- [x] delete file graph works
+- [x] FTS search works
+- [x] impact CTE works
+- [ ] lock/retry behavior — **backlog**: requires concurrent SQLite connections or separate processes; cannot be covered with single-connection in-process tests
 
 ### 14.3 Repo tests
 
-- [ ] repo root detection
-- [ ] tracked-file collection
-- [ ] change detection
-- [ ] rename handling
-- [ ] deleted file handling
+- [x] repo root detection
+- [x] tracked-file collection
+- [x] change detection
+- [x] rename handling
+- [x] deleted file handling
 
 ### 14.4 Parser golden tests
 
@@ -963,31 +963,31 @@ The upstream report highlights parser fidelity and install/hook fragility as the
 
 ### 15.1 Build performance
 
-- [ ] measure files/sec
-- [ ] measure nodes/sec
-- [ ] measure DB writes/sec
-- [ ] benchmark parser workers vs writer bottleneck
-- [ ] tune batch sizes
+- [x] measure files/sec — covered by `store_bench` write-throughput criterion benchmark
+- [x] measure nodes/sec — covered by `store_bench` write-throughput criterion benchmark
+- [x] measure DB writes/sec — covered by `store_bench` write-throughput criterion benchmark
+- [ ] benchmark parser workers vs writer bottleneck — **backlog**: requires full pipeline harness with real repo; out of scope for unit-level benches
+- [ ] tune batch sizes — **backlog**: depends on profiling results from real workloads
 
 ### 15.2 Query performance
 
-- [ ] benchmark FTS query latency
-- [ ] benchmark impact-radius latency
-- [ ] benchmark review-context latency
+- [x] benchmark FTS query latency — covered by `store_bench`
+- [x] benchmark impact-radius latency — covered by `store_bench`
+- [ ] benchmark review-context latency — **backlog**: requires end-to-end integration bench; skipped for now
 
 ### 15.3 Memory and reliability
 
-- [ ] cap parse queue size
-- [ ] avoid loading giant repos into memory
-- [ ] add partial-failure reporting
-- [ ] add crash-safe file replacement semantics
+- [x] cap parse queue size — build pipeline uses bounded chunk-based batches; no unbounded in-memory accumulation
+- [x] avoid loading giant repos into memory — chunked parallel parse; per-file size cap in collector
+- [x] add partial-failure reporting — `parse_errors` counter surfaces failures in build/update summary
+- [x] add crash-safe file replacement semantics — each file graph replaced in an atomic `BEGIN IMMEDIATE` transaction
 
 ### 15.4 Diagnostics
 
-- [ ] `atlas doctor` later
-- [ ] `atlas db check` later
+- [x] `atlas doctor` — implemented: checks repo root, git root, .atlas dir, config, DB file, integrity, graph stats, git ls-files
+- [x] `atlas db check` — implemented
 - [x] tracing spans around build/update phases
-- [ ] optional metrics export later
+- [ ] optional metrics export — **backlog**: needs external metrics infra (Prometheus/OTEL); out of v1 scope
 
 ---
 
@@ -2244,18 +2244,3 @@ And the system has:
 - [ ] evaluation harness
 - [ ] cloud providers
 - [ ] shell completion and minor tooling leftovers
-
----
-
-## Final Rule
-
-Keep Atlas centered on this chain:
-
-- repo scan
-- parse
-- persist graph
-- update incrementally
-- search/traverse
-- build review context
-
-Do not let optional features delay that core path.
