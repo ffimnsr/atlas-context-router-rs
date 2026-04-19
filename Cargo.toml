@@ -1,0 +1,5 @@
+[workspace]
+members = [
+  "packages/atlas-cli",
+  "packages/atlas-engine",
+]
