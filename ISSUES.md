@@ -371,22 +371,22 @@ The upstream project’s primary promise includes full build plus incremental up
 
 ### 4.1 Repo root detection
 
-- [ ] Implement `find_repo_root(start: &Utf8Path) -> Result<Utf8PathBuf>`
-- [ ] First try `git rev-parse --show-toplevel`
-- [ ] Fallback: walk parent dirs for `.git`
-- [ ] Normalize returned path
+- [x] Implement `find_repo_root(start: &Utf8Path) -> Result<Utf8PathBuf>`
+- [x] First try `git rev-parse --show-toplevel`
+- [x] Fallback: walk parent dirs for `.git`
+- [x] Normalize returned path
 
 ### 4.2 Path normalization
 
-- [ ] Convert to repo-relative paths for persistence
-- [ ] Normalize separators to `/`
-- [ ] Resolve `.` and `..`
+- [x] Convert to repo-relative paths for persistence
+- [x] Normalize separators to `/`
+- [x] Resolve `.` and `..`
 - [ ] Decide symlink policy
 - [ ] Add Windows casing normalization tests
 
 ### 4.3 Ignore handling
 
-- [ ] Support git-tracked files first via `git ls-files`
+- [x] Support git-tracked files first via `git ls-files`
 - [ ] Add `.atlasignore` later
 - [ ] Respect upstream-style ignore file compatibility later if needed
 - [ ] Ignore by default:
@@ -402,42 +402,42 @@ The upstream project’s primary promise includes full build plus incremental up
 
 ### 4.4 File collection
 
-- [ ] `collect_files(repo_root)`
-- [ ] Use `git ls-files`
+- [x] `collect_files(repo_root)`
+- [x] Use `git ls-files`
 - [ ] Optional recursive submodule handling later
 - [ ] Skip unsupported extensions
-- [ ] skip binary files
-- [ ] skip giant files
-- [ ] configurable file size threshold
+- [x] skip binary files
+- [x] skip giant files
+- [x] configurable file size threshold
 
 ### 4.5 File hashing
 
-- [ ] SHA-256 file hash
+- [x] SHA-256 file hash
 - [ ] skip unchanged files on full build
 - [ ] persist hash in `files`
 
 ### 4.6 Change detection
 
-- [ ] `changed_files(repo_root, base_ref)`
-- [ ] support:
-  - [ ] `origin/main...HEAD`
-  - [ ] explicit base ref
-  - [ ] `--staged`
-  - [ ] `--working-tree`
-- [ ] parse `git diff --name-status`
-- [ ] handle:
-  - [ ] added
-  - [ ] modified
-  - [ ] deleted
-  - [ ] renamed
-  - [ ] copied
+- [x] `changed_files(repo_root, base_ref)`
+- [x] support:
+  - [x] `origin/main...HEAD`
+  - [x] explicit base ref
+  - [x] `--staged`
+  - [x] `--working-tree`
+- [x] parse `git diff --name-status`
+- [x] handle:
+  - [x] added
+  - [x] modified
+  - [x] deleted
+  - [x] renamed
+  - [x] copied
 
 ### 4.7 Deleted and renamed files
 
-- [ ] delete stale file graph on delete
-- [ ] MVP rename behavior:
-  - [ ] remove old path
-  - [ ] parse new path as fresh file
+- [x] delete stale file graph on delete
+- [x] MVP rename behavior:
+  - [x] remove old path
+  - [x] parse new path as fresh file
 - [ ] later:
   - [ ] preserve stable node identity across rename if hash unchanged
 
@@ -1021,10 +1021,10 @@ And the system has:
 
 ### Slice 3 — repo
 
-- [ ] repo root
-- [ ] tracked files
-- [ ] hashing
-- [ ] git diff parsing
+- [x] repo root
+- [x] tracked files
+- [x] hashing
+- [x] git diff parsing
 
 ### Slice 4 — parser
 

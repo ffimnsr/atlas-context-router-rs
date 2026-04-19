@@ -1,14 +1,11 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+mod diff;
+mod files;
+mod hash;
+mod path;
+mod root;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+pub use diff::{changed_files, DiffTarget};
+pub use files::{collect_files, DEFAULT_MAX_FILE_BYTES};
+pub use hash::hash_file;
+pub use path::repo_relative;
+pub use root::find_repo_root;
