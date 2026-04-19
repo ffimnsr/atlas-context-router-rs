@@ -35,5 +35,10 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # SQLite
 rusqlite = { version = "0.32", features = ["bundled", "bundled-full"] }
 
+# Tree-sitter
+tree-sitter = "0.26"
+tree-sitter-rust = "0.24"
+tree-sitter-go = "0.25"
+
 # internal crates
 atlas-core = { path = "packages/atlas-core" }

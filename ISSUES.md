@@ -132,9 +132,9 @@ The upstream repo’s real kernel is the repository scanner, parser layer, SQLit
 - [ ] Concurrency:
   - [ ] `rayon` or `crossbeam`
   - [ ] prefer std threads first if simpler
-- [ ] Tree-sitter:
-  - [ ] `tree-sitter`
-  - [ ] language crates as needed
+- [x] Tree-sitter:
+  - [x] `tree-sitter`
+  - [x] language crates as needed
 - [ ] Git integration:
   - [ ] use `git2`
   - [ ] fallback to `std::process::Command`
@@ -449,24 +449,24 @@ The upstream parser is both the most important subsystem and the most monolithic
 
 ### 5.1 Parser interface
 
-- [ ] `supports(path) -> bool`
-- [ ] `parse(repo_root, abs_path, src) -> ParsedFile`
-- [ ] `language_name()`
-- [ ] `extract_nodes()`
-- [ ] `extract_edges()`
+- [x] `supports(path) -> bool`
+- [x] `parse(repo_root, abs_path, src) -> ParsedFile`
+- [x] `language_name()`
+- [x] `extract_nodes()`
+- [x] `extract_edges()`
 
 ### 5.2 Parser registry
 
-- [ ] register handlers
-- [ ] resolve parser by extension
-- [ ] expose supported languages list
-- [ ] fail gracefully on unknown languages
+- [x] register handlers
+- [x] resolve parser by extension
+- [x] expose supported languages list
+- [x] fail gracefully on unknown languages
 
 ### 5.3 Language strategy
 
 - [ ] v1 first-class languages:
-  - [ ] Rust
-  - [ ] Go
+  - [x] Rust
+  - [x] Go
   - [ ] Python
   - [ ] JavaScript
   - [ ] TypeScript
@@ -478,22 +478,22 @@ The upstream parser is both the most important subsystem and the most monolithic
 
 ### 5.4 Tree-sitter integration
 
-- [ ] wire core Tree-sitter parser
-- [ ] load per-language grammars
-- [ ] standardize AST walking helpers
-- [ ] standardize line-span extraction
-- [ ] standardize text slice extraction
-- [ ] standardize fallback behavior on parse failure
+- [x] wire core Tree-sitter parser
+- [x] load per-language grammars
+- [x] standardize AST walking helpers
+- [x] standardize line-span extraction
+- [x] standardize text slice extraction
+- [x] standardize fallback behavior on parse failure
 
 ### 5.5 Parser output shape
 
-- [ ] always emit a `File` node
-- [ ] emit symbol nodes
-- [ ] emit containment edges
-- [ ] emit imports edges
-- [ ] emit calls edges
-- [ ] emit tested-by/tests edges where possible
-- [ ] include unresolved edges if exact resolution is unavailable
+- [x] always emit a `File` node
+- [x] emit symbol nodes
+- [x] emit containment edges
+- [x] emit imports edges
+- [x] emit calls edges
+- [x] emit tested-by/tests edges where possible
+- [x] include unresolved edges if exact resolution is unavailable
 
 ---
 
@@ -501,48 +501,48 @@ The upstream parser is both the most important subsystem and the most monolithic
 
 ### 6.1 Rust extension support
 
-- [ ] `.rs`
+- [x] `.rs`
 
 ### 6.2 Rust node extraction
 
-- [ ] modules
-- [ ] functions
-- [ ] impl methods
-- [ ] structs
-- [ ] enums
-- [ ] traits
-- [ ] constants
-- [ ] statics
-- [ ] tests
+- [x] modules
+- [x] functions
+- [x] impl methods
+- [x] structs
+- [x] enums
+- [x] traits
+- [x] constants
+- [x] statics
+- [x] tests
 
 ### 6.3 Rust edge extraction
 
-- [ ] `Contains`
+- [x] `Contains`
 - [ ] `Calls`
-- [ ] `Implements` via `impl Trait for Type`
+- [x] `Implements` via `impl Trait for Type`
 - [ ] `References` for `use`/type refs later
-- [ ] `Tests` / `TestedBy` for `#[cfg(test)]` and `#[test]`
+- [x] `Tests` / `TestedBy` for `#[cfg(test)]` and `#[test]`
 
 ### 6.4 Rust qualified-name scheme
 
-- [ ] file node: `<relative-path>`
-- [ ] module node: `<relative-path>::module::<name>`
-- [ ] function node: `<relative-path>::fn::<name>`
-- [ ] method node: `<relative-path>::method::<Type>.<name>`
-- [ ] struct node: `<relative-path>::struct::<name>`
-- [ ] enum node: `<relative-path>::enum::<name>`
-- [ ] trait node: `<relative-path>::trait::<name>`
+- [x] file node: `<relative-path>`
+- [x] module node: `<relative-path>::module::<name>`
+- [x] function node: `<relative-path>::fn::<name>`
+- [x] method node: `<relative-path>::method::<Type>.<name>`
+- [x] struct node: `<relative-path>::struct::<name>`
+- [x] enum node: `<relative-path>::enum::<name>`
+- [x] trait node: `<relative-path>::trait::<name>`
 
 ### 6.5 Rust parser tests
 
-- [ ] free functions
-- [ ] nested modules
-- [ ] trait impls
+- [x] free functions
+- [x] nested modules
+- [x] trait impls
 - [ ] generic functions
-- [ ] methods on impl blocks
-- [ ] test modules
+- [x] methods on impl blocks
+- [x] test modules
 - [ ] macro-heavy files
-- [ ] line-span accuracy
+- [x] line-span accuracy
 
 ---
 
@@ -550,12 +550,12 @@ The upstream parser is both the most important subsystem and the most monolithic
 
 ### 7.1 Go
 
-- [ ] package node
-- [ ] functions
-- [ ] methods
-- [ ] structs
-- [ ] interfaces
-- [ ] imports
+- [x] package node
+- [x] functions
+- [x] methods
+- [x] structs
+- [x] interfaces
+- [x] imports
 - [ ] call edges
 
 ### 7.2 Python
@@ -1028,11 +1028,11 @@ And the system has:
 
 ### Slice 4 — parser
 
-- [ ] parser trait
-- [ ] Tree-sitter bootstrap
-- [ ] Rust language handler
-- [ ] Go language handler
-- [ ] node/edge extraction
+- [x] parser trait
+- [x] Tree-sitter bootstrap
+- [x] Rust language handler
+- [x] Go language handler
+- [x] node/edge extraction
 
 ### Slice 5 — build/update
 
