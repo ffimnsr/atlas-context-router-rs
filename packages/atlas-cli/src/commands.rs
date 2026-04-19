@@ -4,7 +4,7 @@ use std::time::Instant;
 
 use anyhow::{Context, Result};
 use atlas_core::model::{ChangeType, ImpactResult, ReviewContext, RiskSummary};
-use atlas_core::{NodeKind, SearchQuery};
+use atlas_core::SearchQuery;
 use atlas_parser::ParserRegistry;
 use atlas_repo::{
     changed_files, collect_files, find_repo_root, hash_file, repo_relative, DiffTarget,
@@ -632,83 +632,7 @@ pub fn run_review_context(cli: &Cli) -> Result<()> {
         .impact_radius(&path_refs, 3, 200)
         .context("impact radius query failed")?;
 
-    // Public-API kinds: functions/methods/classes/traits/structs/enums/interfaces.
-    let public_api_kinds = [
-        NodeKind::Function,
-        NodeKind::Method,
-        NodeKind::Class,
-        NodeKind::Trait,
-        NodeKind::Struct,
-        NodeKind::Enum,
-        NodeKind::Interface,
-    ];
-
-    let public_api_changes = impact
-        .changed_nodes
-        .iter()
-        .filter(|n| {
-            public_api_kinds.contains(&n.kind)
-                && n.modifiers
-                    .as_deref()
-                    .map(|m| m.contains("pub"))
-                    .unwrap_or(false)
-        })
-        .count();
-
-    let test_adjacent = impact
-        .changed_nodes
-        .iter()
-        .chain(impact.impacted_nodes.iter())
-        .any(|n| n.is_test || n.kind == NodeKind::Test);
-
-    // Cross-module: impacted nodes come from files not in the changed set.
-    let changed_file_set: std::collections::HashSet<&str> =
-        target_files.iter().map(String::as_str).collect();
-    let cross_module_impact = impact
-        .impacted_nodes
-        .iter()
-        .any(|n| !changed_file_set.contains(n.file_path.as_str()));
-
-    let risk_summary = RiskSummary {
-        changed_symbol_count: impact.changed_nodes.len(),
-        public_api_changes,
-        test_adjacent,
-        cross_module_impact,
-    };
-
-    // Neighbors = impacted nodes not in changed set (top 50 by relevance).
-    let impacted_neighbors: Vec<_> = impact
-        .impacted_nodes
-        .iter()
-        .filter(|n| !changed_file_set.contains(n.file_path.as_str()))
-        .take(50)
-        .cloned()
-        .collect();
-
-    // Critical edges: edges connecting changed nodes to impacted neighbors.
-    let changed_qns: std::collections::HashSet<&str> =
-        impact.changed_nodes.iter().map(|n| n.qualified_name.as_str()).collect();
-    let neighbor_qns: std::collections::HashSet<&str> =
-        impacted_neighbors.iter().map(|n| n.qualified_name.as_str()).collect();
-    let critical_edges: Vec<_> = impact
-        .relevant_edges
-        .iter()
-        .filter(|e| {
-            (changed_qns.contains(e.source_qn.as_str())
-                && neighbor_qns.contains(e.target_qn.as_str()))
-                || (neighbor_qns.contains(e.source_qn.as_str())
-                    && changed_qns.contains(e.target_qn.as_str()))
-        })
-        .cloned()
-        .collect();
-
-    let ctx = ReviewContext {
-        changed_files: target_files.clone(),
-        changed_symbols: impact.changed_nodes.clone(),
-        impacted_neighbors,
-        critical_edges,
-        risk_summary,
-    };
+    let ctx = atlas_review::assemble_review_context(&impact, &target_files);
 
     if cli.json {
         println!("{}", serde_json::to_string_pretty(&ctx)?);

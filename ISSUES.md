@@ -1350,12 +1350,12 @@ And the system has:
 
 ### Slice 10 — MVP command completion
 
-- [ ] finish `atlas init`
-- [ ] finish `atlas status`
-- [ ] finish `atlas query`
-- [ ] finish `atlas impact`
-- [ ] finish `atlas review-context`
-- [ ] close remaining impact/search/review CLI gaps
+- [x] finish `atlas init`
+- [x] finish `atlas status`
+- [x] finish `atlas query`
+- [x] finish `atlas impact`
+- [x] finish `atlas review-context`
+- [x] close remaining impact/search/review CLI gaps
 
 ### Slice 11 — quality gates
 
