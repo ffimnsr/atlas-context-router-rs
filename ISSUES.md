@@ -16,11 +16,10 @@ Build the core local engine first:
 - [ ] MCP server
 - [ ] Visualization
 - [ ] Embeddings / vector search
-- [ ] Wiki generation
 - [ ] Community detection
 - [ ] Flow tracing
 - [ ] Multi-repo registry
-- [ ] Claude / Cursor install hooks
+- [ ] Github Copilot / VSCode Copilot Chat / ChatGPT Codex install hooks
 - [ ] Refactoring tools
 - [ ] Export formats
 
