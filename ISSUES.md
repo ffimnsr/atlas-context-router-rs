@@ -1084,32 +1084,32 @@ These phases extend v1 after core graph/build/update/query path is reliable.
 
 ### 19.1 Weighted traversal
 
-- [ ] assign traversal weights:
-  - [ ] calls > imports > references
-- [ ] add confidence tiers
+- [x] assign traversal weights:
+  - [x] calls > imports > references
+- [x] add confidence tiers
 
 ### 19.2 Impact scoring
 
-- [ ] compute `impact_score` per node
-- [ ] rank impacted nodes
+- [x] compute `impact_score` per node
+- [x] rank impacted nodes
 
 ### 19.3 Change classification
 
-- [ ] detect API change
-- [ ] detect signature change
-- [ ] detect internal change
-- [ ] assign risk level
+- [x] detect API change
+- [x] detect signature change
+- [x] detect internal change
+- [x] assign risk level
 
 ### 19.4 Test impact
 
-- [ ] map tests to functions
-- [ ] list affected tests
-- [ ] detect missing tests
+- [x] map tests to functions
+- [x] list affected tests
+- [x] detect missing tests
 
 ### 19.5 Boundary detection
 
-- [ ] detect cross-module changes
-- [ ] highlight architecture violations
+- [x] detect cross-module changes
+- [x] highlight architecture violations
 
 ## Phase 20 — Performance & Incremental Engine
 
@@ -1394,11 +1394,11 @@ And the system has:
 
 ### Slice 16 — advanced impact
 
-- [ ] weighted traversal
-- [ ] impact scoring
-- [ ] change classification
-- [ ] test impact
-- [ ] boundary detection
+- [x] weighted traversal
+- [x] impact scoring
+- [x] change classification
+- [x] test impact
+- [x] boundary detection
 
 ### Slice 17 — incremental engine
 

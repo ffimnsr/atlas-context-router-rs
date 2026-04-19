@@ -9,6 +9,7 @@ path = "src/main.rs"
 
 [dependencies]
 atlas-core.workspace = true
+atlas-impact = { path = "../atlas-impact" }
 atlas-mcp.workspace = true
 atlas-parser = { path = "../atlas-parser" }
 atlas-repo = { path = "../atlas-repo" }

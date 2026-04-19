@@ -99,27 +99,34 @@ pub fn helper(name: &str) -> String {
         repo.path(),
         &["--json", "impact", "--base", "HEAD"],
     ));
+    // JSON shape is now AdvancedImpactResult: { base: {...}, scored_nodes, risk_level, ... }
+    let base = &impact["base"];
     assert!(
-        impact["changed_nodes"]
+        base["changed_nodes"]
             .as_array()
             .expect("impact changed_nodes should be an array")
             .iter()
             .any(|node| node["file_path"] == json!("src/lib.rs"))
     );
     assert!(
-        impact["changed_nodes"]
+        base["changed_nodes"]
             .as_array()
             .expect("impact changed_nodes should be an array")
             .iter()
             .any(|node| node["qualified_name"] == json!("src/lib.rs::fn::helper"))
     );
     assert!(
-        impact["relevant_edges"]
+        base["relevant_edges"]
             .as_array()
             .expect("impact relevant_edges should be an array")
             .iter()
             .any(|edge| edge["kind"] == json!("calls"))
     );
+    // Advanced fields must be present.
+    assert!(impact["risk_level"].is_string(), "risk_level must be a string");
+    assert!(impact["scored_nodes"].is_array(), "scored_nodes must be an array");
+    assert!(impact["test_impact"].is_object(), "test_impact must be an object");
+    assert!(impact["boundary_violations"].is_array(), "boundary_violations must be an array");
 
     let review_context = read_json_output(run_atlas(
         repo.path(),

@@ -4,6 +4,7 @@ use std::time::Instant;
 use anyhow::{Context, Result};
 use atlas_core::SearchQuery;
 use atlas_core::model::{ChangeType, ImpactResult, ParsedFile, ReviewContext, RiskSummary};
+use atlas_impact::analyze as advanced_impact;
 use atlas_parser::ParserRegistry;
 use atlas_repo::{
     DiffTarget, changed_files, collect_files, find_repo_root, hash_file, repo_relative,
@@ -666,30 +667,52 @@ pub fn run_impact(cli: &Cli) -> Result<()> {
         .impact_radius(&path_refs, max_depth, max_nodes)
         .context("impact radius query failed")?;
 
+    let advanced = advanced_impact(result);
+
     if cli.json {
-        println!("{}", serde_json::to_string_pretty(&result)?);
+        println!("{}", serde_json::to_string_pretty(&advanced)?);
     } else {
         println!("Changed files : {}", target_files.len());
-        println!("Changed nodes : {}", result.changed_nodes.len());
-        println!("Impacted nodes: {}", result.impacted_nodes.len());
-        println!("Impacted files: {}", result.impacted_files.len());
-        println!("Relevant edges: {}", result.relevant_edges.len());
-        if !result.impacted_files.is_empty() {
+        println!("Changed nodes : {}", advanced.base.changed_nodes.len());
+        println!("Impacted nodes: {}", advanced.base.impacted_nodes.len());
+        println!("Impacted files: {}", advanced.base.impacted_files.len());
+        println!("Relevant edges: {}", advanced.base.relevant_edges.len());
+        println!("Risk level    : {}", advanced.risk_level);
+        if !advanced.base.impacted_files.is_empty() {
             println!("\nImpacted files:");
-            for f in &result.impacted_files {
+            for f in &advanced.base.impacted_files {
                 println!("  {f}");
             }
         }
-        if !result.impacted_nodes.is_empty() {
-            println!("\nImpacted nodes (top 20):");
-            for n in result.impacted_nodes.iter().take(20) {
+        if !advanced.scored_nodes.is_empty() {
+            println!("\nTop impacted nodes (by score):");
+            for sn in advanced.scored_nodes.iter().take(20) {
+                let ck = sn
+                    .change_kind
+                    .map(|c| format!(" [{c}]"))
+                    .unwrap_or_default();
                 println!(
-                    "  {} {} ({}:{})",
-                    n.kind.as_str(),
-                    n.qualified_name,
-                    n.file_path,
-                    n.line_start
+                    "  {:>6.2}  {} {}{}",
+                    sn.impact_score,
+                    sn.node.kind.as_str(),
+                    sn.node.qualified_name,
+                    ck
                 );
+            }
+        }
+        if !advanced.test_impact.affected_tests.is_empty() {
+            println!("\nAffected tests: {}", advanced.test_impact.affected_tests.len());
+        }
+        if !advanced.test_impact.uncovered_changed_nodes.is_empty() {
+            println!("\nChanged nodes with no test coverage:");
+            for n in &advanced.test_impact.uncovered_changed_nodes {
+                println!("  {} {}", n.kind.as_str(), n.qualified_name);
+            }
+        }
+        if !advanced.boundary_violations.is_empty() {
+            println!("\nBoundary violations:");
+            for v in &advanced.boundary_violations {
+                println!("  [{}] {}", v.kind, v.description);
             }
         }
     }

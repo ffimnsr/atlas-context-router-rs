@@ -175,3 +175,113 @@ pub struct ParsedFile {
     pub nodes: Vec<Node>,
     pub edges: Vec<Edge>,
 }
+
+// ---------------------------------------------------------------------------
+// Advanced impact types (Slice 16)
+// ---------------------------------------------------------------------------
+
+/// Coarse risk level assigned to a change set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RiskLevel {
+    Low,
+    Medium,
+    High,
+    Critical,
+}
+
+impl std::fmt::Display for RiskLevel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            RiskLevel::Low => "low",
+            RiskLevel::Medium => "medium",
+            RiskLevel::High => "high",
+            RiskLevel::Critical => "critical",
+        };
+        f.write_str(s)
+    }
+}
+
+/// How a symbol was changed in the current diff.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChangeKind {
+    /// Public/visibility modifier changed — externally visible interface break.
+    ApiChange,
+    /// Parameter list or return type changed.
+    SignatureChange,
+    /// Body-only change; public interface is stable.
+    InternalChange,
+}
+
+impl std::fmt::Display for ChangeKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            ChangeKind::ApiChange => "api_change",
+            ChangeKind::SignatureChange => "signature_change",
+            ChangeKind::InternalChange => "internal_change",
+        };
+        f.write_str(s)
+    }
+}
+
+/// A node enriched with a weighted impact score and optional change classification.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScoredImpactNode {
+    pub node: Node,
+    /// Higher = more impacted. Based on weighted edge traversal from seed nodes.
+    pub impact_score: f64,
+    /// Set only for nodes that are direct seed (changed) nodes.
+    pub change_kind: Option<ChangeKind>,
+}
+
+/// Test-coverage impact: which tests are affected and which changed symbols
+/// have no adjacent test.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TestImpactResult {
+    /// Test nodes (`is_test = true` or `NodeKind::Test`) within the impact set.
+    pub affected_tests: Vec<Node>,
+    /// Changed nodes that have no `Tests`/`TestedBy` edge to any test node.
+    pub uncovered_changed_nodes: Vec<Node>,
+}
+
+/// A detected cross-boundary impact.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BoundaryViolation {
+    pub kind: BoundaryKind,
+    pub description: String,
+    /// Representative qualified names crossing the boundary.
+    pub nodes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BoundaryKind {
+    CrossModule,
+    CrossPackage,
+}
+
+impl std::fmt::Display for BoundaryKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            BoundaryKind::CrossModule => "cross_module",
+            BoundaryKind::CrossPackage => "cross_package",
+        };
+        f.write_str(s)
+    }
+}
+
+/// Full advanced impact analysis result.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdvancedImpactResult {
+    /// Base impact radius (unchanged nodes + impacted nodes + edges).
+    pub base: ImpactResult,
+    /// Impacted nodes ranked by weighted traversal score (highest first).
+    pub scored_nodes: Vec<ScoredImpactNode>,
+    /// Overall risk level for this change set.
+    pub risk_level: RiskLevel,
+    /// Test-coverage impact.
+    pub test_impact: TestImpactResult,
+    /// Architecture boundary violations detected.
+    pub boundary_violations: Vec<BoundaryViolation>,
+}

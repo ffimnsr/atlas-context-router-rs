@@ -98,6 +98,20 @@ impl EdgeKind {
             EdgeKind::TestedBy => "tested_by",
         }
     }
+
+    /// Traversal weight used for weighted impact scoring.
+    ///
+    /// Higher weight = stronger dependency, contributes more to impact score.
+    pub fn traversal_weight(self) -> f64 {
+        match self {
+            EdgeKind::Calls => 3.0,
+            EdgeKind::Implements | EdgeKind::Extends => 2.5,
+            EdgeKind::Imports => 2.0,
+            EdgeKind::Defines | EdgeKind::Contains => 1.5,
+            EdgeKind::Tests | EdgeKind::TestedBy => 1.5,
+            EdgeKind::References => 1.0,
+        }
+    }
 }
 
 impl std::fmt::Display for EdgeKind {
