@@ -535,6 +535,63 @@ impl Store {
         Ok(rows)
     }
 
+    /// Replace only the stored edges for `path`, leaving nodes and file
+    /// metadata untouched.
+    pub fn rewrite_file_edges(&mut self, path: &str, edges: &[atlas_core::Edge]) -> Result<()> {
+        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
+        self.conn.execute_batch("BEGIN IMMEDIATE").map_err(db_err)?;
+        self.conn
+            .execute("DELETE FROM edges WHERE file_path = ?1", [path])
+            .map_err(db_err)?;
+        for edge in edges {
+            let extra = serde_json::to_string(&edge.extra_json).map_err(AtlasError::Serde)?;
+            self.conn
+                .execute(
+                    "INSERT INTO edges
+                         (kind, source_qualified, target_qualified, file_path,
+                          line, confidence, confidence_tier, extra_json)
+                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+                    params![
+                        edge.kind.as_str(),
+                        edge.source_qn,
+                        edge.target_qn,
+                        edge.file_path,
+                        edge.line,
+                        edge.confidence,
+                        edge.confidence_tier,
+                        extra,
+                    ],
+                )
+                .map_err(db_err)?;
+        }
+        self.conn.execute_batch("COMMIT").map_err(db_err)?;
+        Ok(())
+    }
+
+    /// Return callable nodes with the given simple `name` and `language`.
+    pub fn callable_nodes_by_name(&self, language: &str, name: &str) -> Result<Vec<Node>> {
+        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, kind, name, qualified_name, file_path, line_start, line_end,
+                        language, parent_name, params, return_type, modifiers,
+                        is_test, file_hash, extra_json
+                 FROM nodes
+                 WHERE language = ?1
+                   AND name = ?2
+                   AND kind IN ('function', 'method', 'test')
+                 ORDER BY file_path, line_start",
+            )
+            .map_err(db_err)?;
+        let rows = stmt
+            .query_map([language, name], row_to_node)
+            .map_err(db_err)?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(rows)
+    }
+
     /// Returns a map of `file_path → stored_hash` for all indexed files.
     ///
     /// Used by the build command to skip re-parsing files whose content has not

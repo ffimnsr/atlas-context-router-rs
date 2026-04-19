@@ -17,6 +17,7 @@ use atlas_store_sqlite::Store;
 use camino::Utf8Path;
 use rayon::prelude::*;
 
+use crate::call_resolution::reconcile_call_targets;
 use crate::cli::{Cli, Command};
 
 /// Default parse-worker batch size.  Override with `ATLAS_PARSE_BATCH_SIZE`.
@@ -339,6 +340,7 @@ pub fn run_build(cli: &Cli) -> Result<()> {
     let mut parsed_count = 0usize;
     let mut total_nodes = 0usize;
     let mut total_edges = 0usize;
+    let mut resolved_paths: Vec<String> = Vec::new();
 
     for chunk in candidates.chunks(batch_size) {
         // Parse this chunk in parallel.
@@ -364,6 +366,7 @@ pub fn run_build(cli: &Cli) -> Result<()> {
             match outcome {
                 Ok(pf) => {
                     parsed_count += 1;
+                    resolved_paths.push(pf.path.clone());
                     parsed_files.push(pf);
                 }
                 Err(msg) if msg == "unsupported (skipped)" => {
@@ -392,6 +395,13 @@ pub fn run_build(cli: &Cli) -> Result<()> {
     }
 
     drop(_parse_span);
+
+    if !resolved_paths.is_empty()
+        && let Err(err) = reconcile_call_targets(&mut store, repo_root, &resolved_paths)
+    {
+        tracing::warn!("late call-target resolution failed during build: {err:#}");
+    }
+
     let elapsed = started.elapsed();
 
     if cli.json {
@@ -677,6 +687,13 @@ pub fn run_update(cli: &Cli) -> Result<()> {
     }
 
     drop(_write_span);
+
+    let resolved_paths: Vec<String> = all_parsed.iter().map(|pf| pf.path.clone()).collect();
+    if !resolved_paths.is_empty()
+        && let Err(err) = reconcile_call_targets(&mut store, repo_root, &resolved_paths)
+    {
+        tracing::warn!("late call-target resolution failed during update: {err:#}");
+    }
 
     let parsed_count = parsed_changed.len() + parsed_deps.len();
     let elapsed = started.elapsed();

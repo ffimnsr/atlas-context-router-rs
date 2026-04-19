@@ -1,3 +1,4 @@
+mod call_resolution;
 mod cli;
 mod commands;
 mod logging;

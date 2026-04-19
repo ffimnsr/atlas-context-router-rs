@@ -374,6 +374,7 @@ fn visit_import(
     }
 
     let qn = format!("{}::import::{}", ctx.rel_path, source);
+    let bindings = parse_js_import_bindings(node_text(node, ctx.source));
     nodes.push(Node {
         id: NodeId::UNSET,
         kind: NodeKind::Import,
@@ -389,7 +390,10 @@ fn visit_import(
         modifiers: None,
         is_test: false,
         file_hash: ctx.file_hash.to_owned(),
-        extra_json: serde_json::Value::Null,
+        extra_json: serde_json::json!({
+            "source": source,
+            "bindings": bindings,
+        }),
     });
     edges.push(Edge {
         id: 0,
@@ -531,6 +535,73 @@ fn visit_ts_enum(
 // Same-file call resolution (JavaScript / TypeScript)
 // ---------------------------------------------------------------------------
 
+fn import_binding_json(local: &str, imported: Option<&str>, kind: &str) -> serde_json::Value {
+    serde_json::json!({
+        "local": local,
+        "imported": imported,
+        "kind": kind,
+    })
+}
+
+fn parse_js_import_bindings(statement: &str) -> Vec<serde_json::Value> {
+    let trimmed = statement.trim().trim_end_matches(';').trim();
+    let Some(rest) = trimmed.strip_prefix("import") else {
+        return Vec::new();
+    };
+    let rest = rest.trim();
+    if rest.starts_with('"') || rest.starts_with('\'') || rest.starts_with('`') {
+        return Vec::new();
+    }
+    let clause = rest
+        .split_once(" from ")
+        .map(|(head, _)| head)
+        .unwrap_or(rest);
+    let mut bindings = Vec::new();
+    let mut remaining = clause.trim();
+
+    if let Some((default_part, tail)) = remaining.split_once(',') {
+        let default_local = default_part.trim();
+        if !default_local.is_empty() {
+            bindings.push(import_binding_json(
+                default_local,
+                Some("default"),
+                "default",
+            ));
+        }
+        remaining = tail.trim();
+    }
+
+    if remaining.starts_with("* as ") {
+        let local = remaining.trim_start_matches("* as ").trim();
+        if !local.is_empty() {
+            bindings.push(import_binding_json(local, None, "namespace"));
+        }
+        return bindings;
+    }
+
+    if remaining.starts_with('{') && remaining.ends_with('}') {
+        let inner = &remaining[1..remaining.len().saturating_sub(1)];
+        for part in inner.split(',') {
+            let entry = part.trim();
+            if entry.is_empty() {
+                continue;
+            }
+            let (imported, local) = entry
+                .split_once(" as ")
+                .map(|(imported, local)| (imported.trim(), local.trim()))
+                .unwrap_or((entry, entry));
+            bindings.push(import_binding_json(local, Some(imported), "named"));
+        }
+        return bindings;
+    }
+
+    if !remaining.is_empty() {
+        bindings.push(import_binding_json(remaining, Some("default"), "default"));
+    }
+
+    bindings
+}
+
 fn resolve_js_calls(root: TsNode<'_>, source: &[u8], rel_path: &str, nodes: &[Node]) -> Vec<Edge> {
     let mut callables: HashMap<String, String> = HashMap::new();
     for n in nodes {
@@ -591,25 +662,35 @@ fn walk_js_calls<'a>(
     if kind == "call_expression"
         && let Some(caller_qn) = scope.last().cloned()
     {
-        let called_name = node
+        let called = node
             .child_by_field_name("function")
-            .and_then(|f| match f.kind() {
-                "identifier" => Some(node_text(f, source).to_owned()),
-                "member_expression" => f
-                    .child_by_field_name("property")
-                    .map(|p| node_text(p, source).to_owned()),
-                _ => None,
-            });
-        if let Some(name) = called_name
-            && let Some(callee_qn) = callables.get(&name)
-            && *callee_qn != caller_qn
+            .and_then(|f| js_call_target(f, source));
+        if let Some((text, name, receiver)) = called
+            && !is_self_call(&caller_qn, &name, receiver.as_deref())
         {
-            edges.push(js_call_edge(
-                &caller_qn,
-                callee_qn,
-                rel_path,
-                start_line(node),
-            ));
+            if let Some(callee_qn) = callables.get(&name)
+                && *callee_qn != caller_qn
+            {
+                edges.push(js_call_edge(
+                    &caller_qn,
+                    callee_qn,
+                    rel_path,
+                    start_line(node),
+                    &text,
+                    receiver.as_deref(),
+                    true,
+                ));
+            } else {
+                edges.push(js_call_edge(
+                    &caller_qn,
+                    &text,
+                    rel_path,
+                    start_line(node),
+                    &text,
+                    receiver.as_deref(),
+                    false,
+                ));
+            }
         }
     }
 
@@ -620,7 +701,53 @@ fn walk_js_calls<'a>(
     }
 }
 
-fn js_call_edge(caller: &str, callee: &str, rel_path: &str, line: u32) -> Edge {
+fn js_call_target(node: TsNode<'_>, source: &[u8]) -> Option<(String, String, Option<String>)> {
+    match node.kind() {
+        "identifier" => {
+            let name = node_text(node, source).to_owned();
+            Some((name.clone(), name, None))
+        }
+        "member_expression" => {
+            let property = node.child_by_field_name("property")?;
+            let object = node.child_by_field_name("object")?;
+            let callee_name = node_text(property, source).to_owned();
+            let receiver_text = node_text(object, source).to_owned();
+            Some((
+                node_text(node, source).to_owned(),
+                callee_name,
+                Some(receiver_text),
+            ))
+        }
+        _ => None,
+    }
+}
+
+fn is_self_call(caller_qn: &str, callee_name: &str, receiver: Option<&str>) -> bool {
+    if receiver.is_some() {
+        return false;
+    }
+    caller_simple_name(caller_qn) == callee_name
+}
+
+fn caller_simple_name(caller_qn: &str) -> &str {
+    caller_qn
+        .rsplit("::")
+        .next()
+        .unwrap_or(caller_qn)
+        .rsplit('.')
+        .next()
+        .unwrap_or(caller_qn)
+}
+
+fn js_call_edge(
+    caller: &str,
+    callee: &str,
+    rel_path: &str,
+    line: u32,
+    text: &str,
+    receiver: Option<&str>,
+    same_file: bool,
+) -> Edge {
     Edge {
         id: 0,
         kind: EdgeKind::Calls,
@@ -628,9 +755,13 @@ fn js_call_edge(caller: &str, callee: &str, rel_path: &str, line: u32) -> Edge {
         target_qn: callee.to_owned(),
         file_path: rel_path.to_owned(),
         line: Some(line),
-        confidence: 0.8,
-        confidence_tier: Some("same_file".to_owned()),
-        extra_json: serde_json::Value::Null,
+        confidence: if same_file { 0.8 } else { 0.3 },
+        confidence_tier: Some(if same_file { "same_file" } else { "text" }.to_owned()),
+        extra_json: serde_json::json!({
+            "callee_text": text,
+            "callee_name": caller_simple_name(callee),
+            "receiver_text": receiver,
+        }),
     }
 }
 
@@ -802,5 +933,18 @@ mod tests {
                 && e.target_qn.contains("helper")),
             "expected Calls edge from caller to helper in TS"
         );
+    }
+
+    #[test]
+    fn js_unresolved_call_keeps_text_target() {
+        let src = "function caller() { utils.helper(); }\n";
+        let pf = parse_js(src);
+        let edge = pf
+            .edges
+            .iter()
+            .find(|e| e.kind == EdgeKind::Calls)
+            .expect("call edge");
+        assert_eq!(edge.target_qn, "utils.helper");
+        assert_eq!(edge.confidence_tier.as_deref(), Some("text"));
     }
 }

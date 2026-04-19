@@ -276,7 +276,20 @@ fn visit_import(
     for child in node.children(&mut cursor) {
         match child.kind() {
             "dotted_name" => {
-                emit_import(ctx, node_text(child, ctx.source), child, nodes, edges);
+                let module_name = node_text(child, ctx.source);
+                emit_import(
+                    ctx,
+                    module_name,
+                    vec![import_binding_json(
+                        last_python_segment(module_name),
+                        module_name,
+                        "module",
+                    )],
+                    None,
+                    child,
+                    nodes,
+                    edges,
+                );
             }
             "aliased_import" => {
                 // `import foo as bar` — record the original module name.
@@ -284,7 +297,19 @@ fn visit_import(
                     .child_by_field_name("name")
                     .map(|n| node_text(n, ctx.source))
                     .unwrap_or_else(|| node_text(child, ctx.source));
-                emit_import(ctx, name, child, nodes, edges);
+                let local_name = child
+                    .child_by_field_name("alias")
+                    .map(|n| node_text(n, ctx.source))
+                    .unwrap_or_else(|| last_python_segment(name));
+                emit_import(
+                    ctx,
+                    name,
+                    vec![import_binding_json(local_name, name, "module")],
+                    None,
+                    child,
+                    nodes,
+                    edges,
+                );
             }
             _ => {}
         }
@@ -298,16 +323,54 @@ fn visit_import_from(
     edges: &mut Vec<Edge>,
 ) {
     // `from os.path import join` — record the source module.
+    let relative_level = import_from_relative_level(node_text(node, ctx.source));
     let module = node
         .child_by_field_name("module_name")
         .map(|n| node_text(n, ctx.source))
-        .unwrap_or(".");
-    emit_import(ctx, module, node, nodes, edges);
+        .unwrap_or("");
+    let mut bindings = Vec::new();
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        match child.kind() {
+            "dotted_name" => {
+                let imported = node_text(child, ctx.source);
+                if imported != module {
+                    bindings.push(import_binding_json(imported, imported, "from"));
+                }
+            }
+            "aliased_import" => {
+                let imported = child
+                    .child_by_field_name("name")
+                    .map(|n| node_text(n, ctx.source))
+                    .unwrap_or_else(|| node_text(child, ctx.source));
+                let local = child
+                    .child_by_field_name("alias")
+                    .map(|n| node_text(n, ctx.source))
+                    .unwrap_or(imported);
+                bindings.push(import_binding_json(local, imported, "from"));
+            }
+            "wildcard_import" => {
+                bindings.push(import_binding_json("*", "*", "wildcard"));
+            }
+            _ => {}
+        }
+    }
+    emit_import(
+        ctx,
+        module,
+        bindings,
+        Some(relative_level),
+        node,
+        nodes,
+        edges,
+    );
 }
 
 fn emit_import(
     ctx: &ParseContext<'_>,
     module_name: &str,
+    bindings: Vec<serde_json::Value>,
+    relative_level: Option<usize>,
     anchor: TsNode<'_>,
     nodes: &mut Vec<Node>,
     edges: &mut Vec<Edge>,
@@ -328,7 +391,11 @@ fn emit_import(
         modifiers: None,
         is_test: false,
         file_hash: ctx.file_hash.to_owned(),
-        extra_json: serde_json::Value::Null,
+        extra_json: serde_json::json!({
+            "source": module_name,
+            "bindings": bindings,
+            "relative_level": relative_level.unwrap_or(0),
+        }),
     });
     edges.push(Edge {
         id: 0,
@@ -346,6 +413,29 @@ fn emit_import(
 // ---------------------------------------------------------------------------
 // Same-file call resolution (Python)
 // ---------------------------------------------------------------------------
+
+fn import_binding_json(local: &str, imported: &str, kind: &str) -> serde_json::Value {
+    serde_json::json!({
+        "local": local,
+        "imported": imported,
+        "kind": kind,
+    })
+}
+
+fn last_python_segment(path: &str) -> &str {
+    path.rsplit('.').next().unwrap_or(path)
+}
+
+fn import_from_relative_level(statement: &str) -> usize {
+    let trimmed = statement.trim();
+    let Some(rest) = trimmed.strip_prefix("from") else {
+        return 0;
+    };
+    rest.trim_start()
+        .chars()
+        .take_while(|ch| *ch == '.')
+        .count()
+}
 
 fn resolve_python_calls(
     root: TsNode<'_>,
@@ -401,25 +491,35 @@ fn walk_python_calls<'a>(
         "call" => {
             if let Some(caller_qn) = scope.last().cloned() {
                 // `function` field holds the called expression.
-                let called_name =
-                    node.child_by_field_name("function")
-                        .and_then(|f| match f.kind() {
-                            "identifier" => Some(node_text(f, source).to_owned()),
-                            "attribute" => f
-                                .child_by_field_name("attribute")
-                                .map(|a| node_text(a, source).to_owned()),
-                            _ => None,
-                        });
-                if let Some(name) = called_name
-                    && let Some(callee_qn) = callables.get(&name)
-                    && *callee_qn != caller_qn
+                let called = node
+                    .child_by_field_name("function")
+                    .and_then(|f| python_call_target(f, source));
+                if let Some((text, name, receiver)) = called
+                    && !is_self_call(&caller_qn, &name, receiver.as_deref())
                 {
-                    edges.push(py_call_edge(
-                        &caller_qn,
-                        callee_qn,
-                        rel_path,
-                        start_line(node),
-                    ));
+                    if let Some(callee_qn) = callables.get(&name)
+                        && *callee_qn != caller_qn
+                    {
+                        edges.push(py_call_edge(
+                            &caller_qn,
+                            callee_qn,
+                            rel_path,
+                            start_line(node),
+                            &text,
+                            receiver.as_deref(),
+                            true,
+                        ));
+                    } else {
+                        edges.push(py_call_edge(
+                            &caller_qn,
+                            &text,
+                            rel_path,
+                            start_line(node),
+                            &text,
+                            receiver.as_deref(),
+                            false,
+                        ));
+                    }
                 }
             }
         }
@@ -431,7 +531,53 @@ fn walk_python_calls<'a>(
     }
 }
 
-fn py_call_edge(caller: &str, callee: &str, rel_path: &str, line: u32) -> Edge {
+fn python_call_target(node: TsNode<'_>, source: &[u8]) -> Option<(String, String, Option<String>)> {
+    match node.kind() {
+        "identifier" => {
+            let name = node_text(node, source).to_owned();
+            Some((name.clone(), name, None))
+        }
+        "attribute" => {
+            let callee = node.child_by_field_name("attribute")?;
+            let receiver = node.child_by_field_name("object")?;
+            let callee_name = node_text(callee, source).to_owned();
+            let receiver_text = node_text(receiver, source).to_owned();
+            Some((
+                node_text(node, source).to_owned(),
+                callee_name,
+                Some(receiver_text),
+            ))
+        }
+        _ => None,
+    }
+}
+
+fn is_self_call(caller_qn: &str, callee_name: &str, receiver: Option<&str>) -> bool {
+    if receiver.is_some() {
+        return false;
+    }
+    caller_simple_name(caller_qn) == callee_name
+}
+
+fn caller_simple_name(caller_qn: &str) -> &str {
+    caller_qn
+        .rsplit("::")
+        .next()
+        .unwrap_or(caller_qn)
+        .rsplit('.')
+        .next()
+        .unwrap_or(caller_qn)
+}
+
+fn py_call_edge(
+    caller: &str,
+    callee: &str,
+    rel_path: &str,
+    line: u32,
+    text: &str,
+    receiver: Option<&str>,
+    same_file: bool,
+) -> Edge {
     Edge {
         id: 0,
         kind: EdgeKind::Calls,
@@ -439,9 +585,13 @@ fn py_call_edge(caller: &str, callee: &str, rel_path: &str, line: u32) -> Edge {
         target_qn: callee.to_owned(),
         file_path: rel_path.to_owned(),
         line: Some(line),
-        confidence: 0.8,
-        confidence_tier: Some("same_file".to_owned()),
-        extra_json: serde_json::Value::Null,
+        confidence: if same_file { 0.8 } else { 0.3 },
+        confidence_tier: Some(if same_file { "same_file" } else { "text" }.to_owned()),
+        extra_json: serde_json::json!({
+            "callee_text": text,
+            "callee_name": caller_simple_name(callee),
+            "receiver_text": receiver,
+        }),
     }
 }
 
@@ -576,5 +726,18 @@ mod tests {
             "expected Calls edge from caller to helper; edges: {:?}",
             pf.edges
         );
+    }
+
+    #[test]
+    fn unresolved_call_keeps_text_target() {
+        let src = "def caller():\n    imported.helper()\n";
+        let pf = parse(src);
+        let edge = pf
+            .edges
+            .iter()
+            .find(|e| e.kind == EdgeKind::Calls)
+            .expect("call edge");
+        assert_eq!(edge.target_qn, "imported.helper");
+        assert_eq!(edge.confidence_tier.as_deref(), Some("text"));
     }
 }

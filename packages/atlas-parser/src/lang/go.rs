@@ -284,6 +284,17 @@ fn visit_imports(
                     let raw = node_text(n, ctx.source);
                     let path = raw.trim_matches('"').trim_matches('`');
                     let qn = format!("{}::import::{}", ctx.rel_path, path);
+                    let alias = child
+                        .child_by_field_name("name")
+                        .map(|name| node_text(name, ctx.source).to_owned())
+                        .or_else(|| {
+                            let mut cc = child.walk();
+                            child
+                                .children(&mut cc)
+                                .find(|part| part.kind() == "identifier")
+                                .map(|part| node_text(part, ctx.source).to_owned())
+                        })
+                        .unwrap_or_else(|| path.rsplit('/').next().unwrap_or(path).to_owned());
                     nodes.push(Node {
                         id: NodeId::UNSET,
                         kind: NodeKind::Import,
@@ -299,7 +310,16 @@ fn visit_imports(
                         modifiers: None,
                         is_test: false,
                         file_hash: ctx.file_hash.to_owned(),
-                        extra_json: serde_json::Value::Null,
+                        extra_json: serde_json::json!({
+                            "source": path,
+                            "bindings": [
+                                {
+                                    "local": alias,
+                                    "imported": path,
+                                    "kind": "package"
+                                }
+                            ],
+                        }),
                     });
                     edges.push(Edge {
                         id: 0,
@@ -373,27 +393,35 @@ fn walk_go_calls<'a>(
         "call_expression" => {
             if let Some(caller_qn) = scope.last().cloned() {
                 // In Go, call_expression.function can be identifier or selector_expression.
-                let called_name = node.child_by_field_name("function").and_then(|f| {
-                    match f.kind() {
-                        "identifier" => Some(node_text(f, source).to_owned()),
-                        "selector_expression" => {
-                            // e.g. `obj.Method()` — extract the `field` (method name).
-                            f.child_by_field_name("field")
-                                .map(|fi| node_text(fi, source).to_owned())
-                        }
-                        _ => None,
-                    }
-                });
-                if let Some(name) = called_name
-                    && let Some(callee_qn) = callables.get(&name)
-                    && *callee_qn != caller_qn
+                let called = node
+                    .child_by_field_name("function")
+                    .and_then(|f| go_call_target(f, source));
+                if let Some((text, name, receiver)) = called
+                    && !is_self_call(&caller_qn, &name, receiver.as_deref())
                 {
-                    edges.push(go_call_edge(
-                        &caller_qn,
-                        callee_qn,
-                        rel_path,
-                        start_line(node),
-                    ));
+                    if let Some(callee_qn) = callables.get(&name)
+                        && *callee_qn != caller_qn
+                    {
+                        edges.push(go_call_edge(
+                            &caller_qn,
+                            callee_qn,
+                            rel_path,
+                            start_line(node),
+                            &text,
+                            receiver.as_deref(),
+                            true,
+                        ));
+                    } else {
+                        edges.push(go_call_edge(
+                            &caller_qn,
+                            &text,
+                            rel_path,
+                            start_line(node),
+                            &text,
+                            receiver.as_deref(),
+                            false,
+                        ));
+                    }
                 }
             }
         }
@@ -405,7 +433,53 @@ fn walk_go_calls<'a>(
     }
 }
 
-fn go_call_edge(caller: &str, callee: &str, rel_path: &str, line: u32) -> Edge {
+fn go_call_target(node: TsNode<'_>, source: &[u8]) -> Option<(String, String, Option<String>)> {
+    match node.kind() {
+        "identifier" => {
+            let name = node_text(node, source).to_owned();
+            Some((name.clone(), name, None))
+        }
+        "selector_expression" => {
+            let field = node.child_by_field_name("field")?;
+            let receiver = node.child_by_field_name("operand")?;
+            let callee_name = node_text(field, source).to_owned();
+            let receiver_text = node_text(receiver, source).to_owned();
+            Some((
+                node_text(node, source).to_owned(),
+                callee_name,
+                Some(receiver_text),
+            ))
+        }
+        _ => None,
+    }
+}
+
+fn is_self_call(caller_qn: &str, callee_name: &str, receiver: Option<&str>) -> bool {
+    if receiver.is_some() {
+        return false;
+    }
+    caller_simple_name(caller_qn) == callee_name
+}
+
+fn caller_simple_name(caller_qn: &str) -> &str {
+    caller_qn
+        .rsplit("::")
+        .next()
+        .unwrap_or(caller_qn)
+        .rsplit('.')
+        .next()
+        .unwrap_or(caller_qn)
+}
+
+fn go_call_edge(
+    caller: &str,
+    callee: &str,
+    rel_path: &str,
+    line: u32,
+    text: &str,
+    receiver: Option<&str>,
+    same_file: bool,
+) -> Edge {
     Edge {
         id: 0,
         kind: EdgeKind::Calls,
@@ -413,9 +487,13 @@ fn go_call_edge(caller: &str, callee: &str, rel_path: &str, line: u32) -> Edge {
         target_qn: callee.to_owned(),
         file_path: rel_path.to_owned(),
         line: Some(line),
-        confidence: 0.8,
-        confidence_tier: Some("same_file".to_owned()),
-        extra_json: serde_json::Value::Null,
+        confidence: if same_file { 0.8 } else { 0.3 },
+        confidence_tier: Some(if same_file { "same_file" } else { "text" }.to_owned()),
+        extra_json: serde_json::json!({
+            "callee_text": text,
+            "callee_name": caller_simple_name(callee),
+            "receiver_text": receiver,
+        }),
     }
 }
 
@@ -508,5 +586,18 @@ mod tests {
             "expected Calls edge; edges: {:?}",
             pf.edges
         );
+    }
+
+    #[test]
+    fn unresolved_call_keeps_text_target() {
+        let src = "package main\nfunc caller() { helpers.Run() }";
+        let pf = parse(src);
+        let edge = pf
+            .edges
+            .iter()
+            .find(|e| e.kind == EdgeKind::Calls)
+            .expect("call edge");
+        assert_eq!(edge.target_qn, "helpers.Run");
+        assert_eq!(edge.confidence_tier.as_deref(), Some("text"));
     }
 }

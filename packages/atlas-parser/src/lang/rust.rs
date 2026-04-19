@@ -446,26 +446,67 @@ fn walk_for_rust_calls<'a>(
             if let Some(caller_qn) = scope.last() {
                 let called = node
                     .child_by_field_name("function")
-                    .and_then(|f| call_name_from_node(f, source));
-                if let Some(name) = called
-                    && let Some(callee_qn) = callables.get(name)
-                    && callee_qn != caller_qn
-                {
-                    edges.push(call_edge(caller_qn, callee_qn, rel_path, start_line(node)));
+                    .and_then(|f| rust_call_target(f, source));
+                if let Some((text, name, receiver)) = called {
+                    if is_self_call(caller_qn, &name, receiver.as_deref()) {
+                        return;
+                    }
+                    if let Some(callee_qn) = callables.get(&name)
+                        && callee_qn != caller_qn
+                    {
+                        edges.push(call_edge(
+                            caller_qn,
+                            callee_qn,
+                            rel_path,
+                            start_line(node),
+                            &text,
+                            receiver.as_deref(),
+                            true,
+                        ));
+                    } else {
+                        edges.push(call_edge(
+                            caller_qn,
+                            &text,
+                            rel_path,
+                            start_line(node),
+                            &text,
+                            receiver.as_deref(),
+                            false,
+                        ));
+                    }
                 }
             }
         }
         "method_call_expression" => {
             if let Some(caller_qn) = scope.last() {
-                // `method` field is the method name identifier.
-                let called = node
-                    .child_by_field_name("method")
-                    .map(|m| node_text(m, source));
-                if let Some(name) = called
-                    && let Some(callee_qn) = callables.get(name)
-                    && callee_qn != caller_qn
-                {
-                    edges.push(call_edge(caller_qn, callee_qn, rel_path, start_line(node)));
+                let called = rust_method_call_target(node, source);
+                if let Some((text, name, receiver)) = called {
+                    if is_self_call(caller_qn, &name, receiver.as_deref()) {
+                        return;
+                    }
+                    if let Some(callee_qn) = callables.get(&name)
+                        && callee_qn != caller_qn
+                    {
+                        edges.push(call_edge(
+                            caller_qn,
+                            callee_qn,
+                            rel_path,
+                            start_line(node),
+                            &text,
+                            receiver.as_deref(),
+                            true,
+                        ));
+                    } else {
+                        edges.push(call_edge(
+                            caller_qn,
+                            &text,
+                            rel_path,
+                            start_line(node),
+                            &text,
+                            receiver.as_deref(),
+                            false,
+                        ));
+                    }
                 }
             }
         }
@@ -478,21 +519,67 @@ fn walk_for_rust_calls<'a>(
     }
 }
 
-/// Extract a bare function name from the `function` child of a call_expression.
-fn call_name_from_node<'a>(node: TsNode<'a>, source: &'a [u8]) -> Option<&'a str> {
+fn rust_call_target(node: TsNode<'_>, source: &[u8]) -> Option<(String, String, Option<String>)> {
     match node.kind() {
-        "identifier" => Some(node_text(node, source)),
+        "identifier" => {
+            let name = node_text(node, source).to_owned();
+            Some((name.clone(), name, None))
+        }
         "generic_function" => node
             .child_by_field_name("function")
-            .and_then(|function| call_name_from_node(function, source)),
-        "scoped_identifier" => node
-            .child_by_field_name("name")
-            .map(|n| node_text(n, source)),
+            .and_then(|function| rust_call_target(function, source)),
+        "scoped_identifier" => node.child_by_field_name("name").map(|n| {
+            (
+                node_text(node, source).to_owned(),
+                node_text(n, source).to_owned(),
+                None,
+            )
+        }),
         _ => None,
     }
 }
 
-fn call_edge(caller_qn: &str, callee_qn: &str, rel_path: &str, line: u32) -> Edge {
+fn rust_method_call_target(
+    node: TsNode<'_>,
+    source: &[u8],
+) -> Option<(String, String, Option<String>)> {
+    let method = node.child_by_field_name("method")?;
+    let receiver = node.child_by_field_name("receiver")?;
+    let method_name = node_text(method, source).to_owned();
+    let receiver_text = node_text(receiver, source).to_owned();
+    Some((
+        node_text(node, source).to_owned(),
+        method_name,
+        Some(receiver_text),
+    ))
+}
+
+fn is_self_call(caller_qn: &str, callee_name: &str, receiver: Option<&str>) -> bool {
+    if receiver.is_some() {
+        return false;
+    }
+    caller_simple_name(caller_qn) == callee_name
+}
+
+fn caller_simple_name(caller_qn: &str) -> &str {
+    caller_qn
+        .rsplit("::")
+        .next()
+        .unwrap_or(caller_qn)
+        .rsplit('.')
+        .next()
+        .unwrap_or(caller_qn)
+}
+
+fn call_edge(
+    caller_qn: &str,
+    callee_qn: &str,
+    rel_path: &str,
+    line: u32,
+    text: &str,
+    receiver: Option<&str>,
+    same_file: bool,
+) -> Edge {
     Edge {
         id: 0,
         kind: EdgeKind::Calls,
@@ -500,9 +587,13 @@ fn call_edge(caller_qn: &str, callee_qn: &str, rel_path: &str, line: u32) -> Edg
         target_qn: callee_qn.to_owned(),
         file_path: rel_path.to_owned(),
         line: Some(line),
-        confidence: 0.8,
-        confidence_tier: Some("same_file".to_owned()),
-        extra_json: serde_json::Value::Null,
+        confidence: if same_file { 0.8 } else { 0.3 },
+        confidence_tier: Some(if same_file { "same_file" } else { "text" }.to_owned()),
+        extra_json: serde_json::json!({
+            "callee_text": text,
+            "callee_name": caller_simple_name(callee_qn),
+            "receiver_text": receiver,
+        }),
     }
 }
 
@@ -928,6 +1019,19 @@ impl S {
                 .any(|e| e.kind == EdgeKind::Calls && e.source_qn == e.target_qn),
             "recursive call must not produce a self-loop edge"
         );
+    }
+
+    #[test]
+    fn unresolved_call_keeps_text_target() {
+        let src = r#"fn caller() { crate::helper(); }"#;
+        let pf = parse(src);
+        let edge = pf
+            .edges
+            .iter()
+            .find(|e| e.kind == EdgeKind::Calls)
+            .expect("call edge");
+        assert_eq!(edge.target_qn, "crate::helper");
+        assert_eq!(edge.confidence_tier.as_deref(), Some("text"));
     }
 
     #[test]

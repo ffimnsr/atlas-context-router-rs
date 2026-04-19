@@ -2,6 +2,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+use atlas_core::EdgeKind;
+use atlas_store_sqlite::Store;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
@@ -212,27 +214,342 @@ pub fn helper(name: &str) -> String {
     );
 }
 
+#[test]
+fn build_resolves_rust_same_package_call_targets() {
+    let repo = setup_fixture_repo();
+
+    run_atlas(repo.path(), &["init"]);
+    run_atlas(repo.path(), &["build"]);
+
+    let store = open_store(repo.path());
+    let edges = store.edges_by_file("src/main.rs").expect("main edges");
+    assert!(
+        edges.iter().any(|edge| {
+            edge.kind == EdgeKind::Calls
+                && edge.target_qn == "src/lib.rs::fn::helper"
+                && edge.confidence_tier.as_deref() == Some("same_package")
+        }),
+        "expected src/main.rs helper call to resolve into src/lib.rs::fn::helper; edges: {edges:?}"
+    );
+}
+
+#[test]
+fn build_resolves_typescript_namespace_import_calls() {
+    let repo = setup_repo(&[
+        (
+            "src/app.ts",
+            "import * as utils from './utils';\nexport function caller(): void { utils.helper(); }\n",
+        ),
+        ("src/utils.ts", "export function helper(): void {}\n"),
+    ]);
+
+    run_atlas(repo.path(), &["init"]);
+    run_atlas(repo.path(), &["build"]);
+
+    let store = open_store(repo.path());
+    let edges = store.edges_by_file("src/app.ts").expect("app edges");
+    assert!(
+        edges.iter().any(|edge| {
+            edge.kind == EdgeKind::Calls
+                && edge.target_qn == "src/utils.ts::fn::helper"
+                && edge.confidence_tier.as_deref() == Some("imports")
+        }),
+        "expected namespace import call to resolve into src/utils.ts::fn::helper; edges: {edges:?}"
+    );
+}
+
+#[test]
+fn build_resolves_typescript_path_alias_calls() {
+    let repo = setup_repo(&[
+        (
+            "tsconfig.json",
+            r#"{
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@utils/*": ["src/utils/*"]
+    }
+  }
+}
+"#,
+        ),
+        (
+            "src/app.ts",
+            "import * as math from '@utils/math';\nexport function caller(): void { math.helper(); }\n",
+        ),
+        ("src/utils/math.ts", "export function helper(): void {}\n"),
+    ]);
+
+    run_atlas(repo.path(), &["init"]);
+    run_atlas(repo.path(), &["build"]);
+
+    let store = open_store(repo.path());
+    let edges = store.edges_by_file("src/app.ts").expect("app edges");
+    assert!(
+        edges.iter().any(|edge| {
+            edge.kind == EdgeKind::Calls
+                && edge.target_qn == "src/utils/math.ts::fn::helper"
+                && edge.confidence_tier.as_deref() == Some("imports")
+        }),
+        "expected path-alias call to resolve into src/utils/math.ts::fn::helper; edges: {edges:?}"
+    );
+}
+
+#[test]
+fn build_resolves_nested_typescript_path_alias_calls() {
+    let repo = setup_repo(&[
+        (
+            "apps/web/tsconfig.json",
+            r#"{
+  "compilerOptions": {
+    "baseUrl": "src",
+    "paths": {
+      "@lib/*": ["lib/*"]
+    }
+  }
+}
+"#,
+        ),
+        (
+            "apps/web/src/app.ts",
+            "import * as math from '@lib/math';\nexport function caller(): void { math.helper(); }\n",
+        ),
+        (
+            "apps/web/src/lib/math.ts",
+            "export function helper(): void {}\n",
+        ),
+    ]);
+
+    run_atlas(repo.path(), &["init"]);
+    run_atlas(repo.path(), &["build"]);
+
+    let store = open_store(repo.path());
+    let edges = store
+        .edges_by_file("apps/web/src/app.ts")
+        .expect("nested app edges");
+    assert!(
+        edges.iter().any(|edge| {
+            edge.kind == EdgeKind::Calls
+                && edge.target_qn == "apps/web/src/lib/math.ts::fn::helper"
+                && edge.confidence_tier.as_deref() == Some("imports")
+        }),
+        "expected nested path-alias call to resolve into apps/web/src/lib/math.ts::fn::helper; edges: {edges:?}"
+    );
+}
+
+#[test]
+fn build_resolves_typescript_extended_tsconfig_alias_calls() {
+    let repo = setup_repo(&[
+        (
+            "configs/tsconfig.base.json",
+            r#"{
+  "compilerOptions": {
+        "baseUrl": "..",
+    "paths": {
+      "@shared/*": ["src/shared/*"]
+    }
+  }
+}
+"#,
+        ),
+        (
+            "apps/web/tsconfig.json",
+            r#"{
+  "extends": "../../configs/tsconfig.base.json"
+}
+"#,
+        ),
+        ("src/shared/math.ts", "export function helper(): void {}\n"),
+        (
+            "apps/web/app.ts",
+            "import * as math from '@shared/math';\nexport function caller(): void { math.helper(); }\n",
+        ),
+    ]);
+
+    run_atlas(repo.path(), &["init"]);
+    run_atlas(repo.path(), &["build"]);
+
+    let store = open_store(repo.path());
+    let edges = store
+        .edges_by_file("apps/web/app.ts")
+        .expect("extended tsconfig app edges");
+    assert!(
+        edges.iter().any(|edge| {
+            edge.kind == EdgeKind::Calls
+                && edge.target_qn == "src/shared/math.ts::fn::helper"
+                && edge.confidence_tier.as_deref() == Some("imports")
+        }),
+        "expected extended-tsconfig alias call to resolve into src/shared/math.ts::fn::helper; edges: {edges:?}"
+    );
+}
+
+#[test]
+fn build_resolves_python_relative_import_calls() {
+    let repo = setup_repo(&[
+        ("pkg/__init__.py", ""),
+        (
+            "pkg/main.py",
+            "from .helpers import ping\n\ndef caller():\n    ping()\n",
+        ),
+        ("pkg/helpers.py", "def ping():\n    pass\n"),
+    ]);
+
+    run_atlas(repo.path(), &["init"]);
+    run_atlas(repo.path(), &["build"]);
+
+    let store = open_store(repo.path());
+    let edges = store.edges_by_file("pkg/main.py").expect("main edges");
+    assert!(
+        edges.iter().any(|edge| {
+            edge.kind == EdgeKind::Calls
+                && edge.target_qn == "pkg/helpers.py::fn::ping"
+                && edge.confidence_tier.as_deref() == Some("imports")
+        }),
+        "expected relative import call to resolve into pkg/helpers.py::fn::ping; edges: {edges:?}"
+    );
+}
+
+#[test]
+fn build_resolves_python_package_submodule_alias_calls() {
+    let repo = setup_repo(&[
+        ("pkg/__init__.py", ""),
+        (
+            "pkg/main.py",
+            "from pkg import helpers as helpers_mod\n\ndef caller():\n    helpers_mod.ping()\n",
+        ),
+        ("pkg/helpers.py", "def ping():\n    pass\n"),
+    ]);
+
+    run_atlas(repo.path(), &["init"]);
+    run_atlas(repo.path(), &["build"]);
+
+    let store = open_store(repo.path());
+    let edges = store.edges_by_file("pkg/main.py").expect("main edges");
+    assert!(
+        edges.iter().any(|edge| {
+            edge.kind == EdgeKind::Calls
+                && edge.target_qn == "pkg/helpers.py::fn::ping"
+                && edge.confidence_tier.as_deref() == Some("imports")
+        }),
+        "expected package submodule alias call to resolve into pkg/helpers.py::fn::ping; edges: {edges:?}"
+    );
+}
+
+#[test]
+fn build_resolves_python_package_init_export_calls() {
+    let repo = setup_repo(&[
+        ("pkg/__init__.py", "def ping():\n    pass\n"),
+        (
+            "pkg/main.py",
+            "from pkg import ping\n\ndef caller():\n    ping()\n",
+        ),
+    ]);
+
+    run_atlas(repo.path(), &["init"]);
+    run_atlas(repo.path(), &["build"]);
+
+    let store = open_store(repo.path());
+    let edges = store.edges_by_file("pkg/main.py").expect("main edges");
+    assert!(
+        edges.iter().any(|edge| {
+            edge.kind == EdgeKind::Calls
+                && edge.target_qn == "pkg/__init__.py::fn::ping"
+                && edge.confidence_tier.as_deref() == Some("imports")
+        }),
+        "expected package __init__ export call to resolve into pkg/__init__.py::fn::ping; edges: {edges:?}"
+    );
+}
+
+#[test]
+fn build_resolves_python_wildcard_import_calls() {
+    let repo = setup_repo(&[
+        ("pkg/__init__.py", "def ping():\n    pass\n"),
+        (
+            "pkg/main.py",
+            "from pkg import *\n\ndef caller():\n    ping()\n",
+        ),
+    ]);
+
+    run_atlas(repo.path(), &["init"]);
+    run_atlas(repo.path(), &["build"]);
+
+    let store = open_store(repo.path());
+    let edges = store.edges_by_file("pkg/main.py").expect("main edges");
+    assert!(
+        edges.iter().any(|edge| {
+            edge.kind == EdgeKind::Calls
+                && edge.target_qn == "pkg/__init__.py::fn::ping"
+                && edge.confidence_tier.as_deref() == Some("imports")
+        }),
+        "expected wildcard import call to resolve into pkg/__init__.py::fn::ping; edges: {edges:?}"
+    );
+}
+
+#[test]
+fn build_resolves_go_local_module_import_calls() {
+    let repo = setup_repo(&[
+        ("go.mod", "module example.com/demo\n\ngo 1.22\n"),
+        (
+            "cmd/app/main.go",
+            "package main\n\nimport \"example.com/demo/internal/helpers\"\n\nfunc caller() { helpers.Run() }\n",
+        ),
+        (
+            "internal/helpers/run.go",
+            "package helpers\n\nfunc Run() {}\n",
+        ),
+    ]);
+
+    run_atlas(repo.path(), &["init"]);
+    run_atlas(repo.path(), &["build"]);
+
+    let store = open_store(repo.path());
+    let edges = store
+        .edges_by_file("cmd/app/main.go")
+        .expect("go caller edges");
+    assert!(
+        edges.iter().any(|edge| {
+            edge.kind == EdgeKind::Calls
+                && edge.target_qn == "internal/helpers/run.go::fn::Run"
+                && edge.confidence_tier.as_deref() == Some("imports")
+        }),
+        "expected local-module import call to resolve into internal/helpers/run.go::fn::Run; edges: {edges:?}"
+    );
+}
+
 fn setup_fixture_repo() -> TempDir {
     let temp_dir = tempfile::tempdir().expect("temp dir");
     copy_dir_all(&fixture_repo_root(), temp_dir.path());
-    run_command(temp_dir.path(), "git", &["init", "--quiet"]);
+    init_git_repo(temp_dir.path());
+    temp_dir
+}
+
+fn setup_repo(files: &[(&str, &str)]) -> TempDir {
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    for (relative_path, content) in files {
+        let path = temp_dir.path().join(relative_path);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).expect("create test dir");
+        }
+        fs::write(path, content).expect("write test file");
+    }
+    init_git_repo(temp_dir.path());
+    temp_dir
+}
+
+fn init_git_repo(path: &Path) {
+    run_command(path, "git", &["init", "--quiet"]);
+    run_command(path, "git", &["config", "user.name", "Atlas Tests"]);
     run_command(
-        temp_dir.path(),
-        "git",
-        &["config", "user.name", "Atlas Tests"],
-    );
-    run_command(
-        temp_dir.path(),
+        path,
         "git",
         &["config", "user.email", "atlas-tests@example.com"],
     );
-    run_command(temp_dir.path(), "git", &["add", "."]);
+    run_command(path, "git", &["add", "."]);
     run_command(
-        temp_dir.path(),
+        path,
         "git",
         &["commit", "--quiet", "-m", "fixture baseline"],
     );
-    temp_dir
 }
 
 fn fixture_repo_root() -> PathBuf {
@@ -275,6 +592,17 @@ fn read_json_data_output(command: &str, output: Output) -> Value {
 
 fn write_repo_file(repo_root: &Path, relative_path: &str, content: &str) {
     fs::write(repo_root.join(relative_path), content).expect("write repo file");
+}
+
+fn open_store(repo_root: &Path) -> Store {
+    Store::open(
+        repo_root
+            .join(".atlas")
+            .join("worldview.sqlite")
+            .to_str()
+            .expect("db path"),
+    )
+    .expect("open atlas store")
 }
 
 fn run_atlas(repo_root: &Path, args: &[&str]) -> Output {
