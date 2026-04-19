@@ -68,10 +68,7 @@ mod tests {
 
     #[test]
     fn backslashes_converted_to_forward() {
-        assert_eq!(
-            to_forward_slashes("src\\main\\lib.rs"),
-            "src/main/lib.rs"
-        );
+        assert_eq!(to_forward_slashes("src\\main\\lib.rs"), "src/main/lib.rs");
     }
 
     #[test]

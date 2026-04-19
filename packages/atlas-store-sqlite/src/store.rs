@@ -1775,7 +1775,9 @@ mod tests {
     #[test]
     fn integrity_check_clean_db() {
         let store = open_in_memory();
-        let issues = store.integrity_check().expect("integrity_check should not error");
+        let issues = store
+            .integrity_check()
+            .expect("integrity_check should not error");
         assert!(
             issues.is_empty(),
             "fresh in-memory DB should have no issues: {issues:?}"
@@ -1789,7 +1791,9 @@ mod tests {
         store
             .replace_file_graph("a.rs", "h1", Some("rust"), None, &[node], &[])
             .unwrap();
-        let issues = store.integrity_check().expect("integrity_check should not error");
+        let issues = store
+            .integrity_check()
+            .expect("integrity_check should not error");
         assert!(
             issues.is_empty(),
             "DB with data should still pass integrity check: {issues:?}"

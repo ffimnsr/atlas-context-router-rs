@@ -84,7 +84,10 @@ pub struct PackagedImpact<'a> {
     pub truncated: bool,
 }
 
-pub fn package_impact<'a>(result: &'a ImpactResult, seed_files: &'a [String]) -> PackagedImpact<'a> {
+pub fn package_impact<'a>(
+    result: &'a ImpactResult,
+    seed_files: &'a [String],
+) -> PackagedImpact<'a> {
     let cn_total = result.changed_nodes.len();
     let inp_total = result.impacted_nodes.len();
     let edge_total = result.relevant_edges.len();

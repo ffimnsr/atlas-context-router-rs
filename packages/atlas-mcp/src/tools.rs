@@ -115,10 +115,7 @@ fn tool_list_graph_stats(db_path: &str) -> Result<serde_json::Value> {
     tool_result(serde_json::to_string_pretty(&stats)?)
 }
 
-fn tool_query_graph(
-    args: Option<&serde_json::Value>,
-    db_path: &str,
-) -> Result<serde_json::Value> {
+fn tool_query_graph(args: Option<&serde_json::Value>, db_path: &str) -> Result<serde_json::Value> {
     let text = str_arg(args, "text")?
         .ok_or_else(|| anyhow::anyhow!("missing required argument: text"))?
         .to_owned();
@@ -260,10 +257,7 @@ fn tool_detect_changes(
 // Argument helpers
 // ---------------------------------------------------------------------------
 
-fn str_arg<'a>(
-    args: Option<&'a serde_json::Value>,
-    key: &str,
-) -> Result<Option<&'a str>> {
+fn str_arg<'a>(args: Option<&'a serde_json::Value>, key: &str) -> Result<Option<&'a str>> {
     Ok(args.and_then(|a| a.get(key)).and_then(|v| v.as_str()))
 }
 

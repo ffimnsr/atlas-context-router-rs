@@ -34,11 +34,8 @@ pub fn run_server(repo_root: &str, db_path: &str) -> Result<()> {
         let request: serde_json::Value = match serde_json::from_str(line) {
             Ok(v) => v,
             Err(e) => {
-                let resp = jsonrpc_error(
-                    serde_json::Value::Null,
-                    -32700,
-                    format!("parse error: {e}"),
-                );
+                let resp =
+                    jsonrpc_error(serde_json::Value::Null, -32700, format!("parse error: {e}"));
                 writeln!(writer, "{resp}")?;
                 writer.flush()?;
                 continue;

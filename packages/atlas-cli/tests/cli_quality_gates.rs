@@ -39,10 +39,147 @@ fn fixture_query_output_matches_golden() {
     assert_eq!(query, golden);
 }
 
+#[test]
+fn mvp_command_contract_holds_for_committed_fixture_repo() {
+    let repo = setup_fixture_repo();
+
+    run_atlas(repo.path(), &["init"]);
+    run_atlas(repo.path(), &["build"]);
+
+    let status = read_json_output(run_atlas(repo.path(), &["--json", "status"]));
+    assert_eq!(status["file_count"], json!(2));
+    assert!(status["node_count"].as_i64().unwrap_or_default() >= 5);
+    assert!(status["edge_count"].as_i64().unwrap_or_default() >= 1);
+
+    let query = read_json_output(run_atlas(repo.path(), &["--json", "query", "greet_twice"]));
+    let results = query.as_array().expect("query should return a JSON array");
+    assert_eq!(results.len(), 1);
+    assert_eq!(
+        results[0]["node"]["qualified_name"],
+        json!("src/lib.rs::method::Greeter::greet_twice")
+    );
+
+    write_repo_file(
+        repo.path(),
+        "src/lib.rs",
+        r#"pub struct Greeter;
+
+impl Greeter {
+    pub fn greet_twice(name: &str) -> String {
+        format!("Hello, {name}! Hello again, {name}!")
+    }
+}
+
+pub fn helper(name: &str) -> String {
+    let greeting = Greeter::greet_twice(name);
+    format!("{greeting} [updated]")
+}
+"#,
+    );
+
+    let changes = read_json_output(run_atlas(
+        repo.path(),
+        &["--json", "detect-changes", "--base", "HEAD"],
+    ));
+    let changes = changes
+        .as_array()
+        .expect("detect-changes should return a JSON array");
+    assert_eq!(changes.len(), 1);
+    assert_eq!(changes[0]["path"], json!("src/lib.rs"));
+    assert_eq!(changes[0]["change_type"], json!("modified"));
+
+    let update = read_json_output(run_atlas(
+        repo.path(),
+        &["--json", "update", "--base", "HEAD"],
+    ));
+    assert!(update["parsed"].as_u64().unwrap_or_default() >= 1);
+    assert!(update["nodes_updated"].as_u64().unwrap_or_default() >= 1);
+
+    let impact = read_json_output(run_atlas(
+        repo.path(),
+        &["--json", "impact", "--base", "HEAD"],
+    ));
+    assert!(
+        impact["changed_nodes"]
+            .as_array()
+            .expect("impact changed_nodes should be an array")
+            .iter()
+            .any(|node| node["file_path"] == json!("src/lib.rs"))
+    );
+    assert!(
+        impact["changed_nodes"]
+            .as_array()
+            .expect("impact changed_nodes should be an array")
+            .iter()
+            .any(|node| node["qualified_name"] == json!("src/lib.rs::fn::helper"))
+    );
+    assert!(
+        impact["relevant_edges"]
+            .as_array()
+            .expect("impact relevant_edges should be an array")
+            .iter()
+            .any(|edge| edge["kind"] == json!("calls"))
+    );
+
+    let review_context = read_json_output(run_atlas(
+        repo.path(),
+        &["--json", "review-context", "--base", "HEAD"],
+    ));
+    assert_eq!(review_context["changed_files"], json!(["src/lib.rs"]));
+    assert!(
+        review_context["changed_symbols"]
+            .as_array()
+            .expect("review-context changed_symbols should be an array")
+            .iter()
+            .any(|node| node["file_path"] == json!("src/lib.rs"))
+    );
+}
+
+#[test]
+fn deferred_scope_stays_documented_outside_mvp_contract() {
+    let compatibility = fs::read_to_string(workspace_root().join("COMPATIBILITY.md"))
+        .expect("read compatibility doc");
+    assert!(compatibility.contains("## Deferred Features (not in v1)"));
+    for item in [
+        "embeddings / vector search",
+        "community detection",
+        "flows / diagramming",
+        "wiki generation",
+        "visualization / graph export",
+        "install hooks / watchers",
+    ] {
+        assert!(
+            compatibility.contains(item),
+            "missing deferred feature entry: {item}"
+        );
+    }
+
+    let v2_todo =
+        fs::read_to_string(workspace_root().join("atlas-v2-todo.md")).expect("read v2 todo");
+    assert!(v2_todo.contains("# Atlas — v2 Detailed TODO (Post-v1)"));
+    assert!(v2_todo.contains("Atlas v2 = smarter, not bigger."));
+}
+
 fn setup_fixture_repo() -> TempDir {
     let temp_dir = tempfile::tempdir().expect("temp dir");
     copy_dir_all(&fixture_repo_root(), temp_dir.path());
     run_command(temp_dir.path(), "git", &["init", "--quiet"]);
+    run_command(
+        temp_dir.path(),
+        "git",
+        &["config", "user.name", "Atlas Tests"],
+    );
+    run_command(
+        temp_dir.path(),
+        "git",
+        &["config", "user.email", "atlas-tests@example.com"],
+    );
+    run_command(temp_dir.path(), "git", &["add", "."]);
+    run_command(
+        temp_dir.path(),
+        "git",
+        &["commit", "--quiet", "-m", "fixture baseline"],
+    );
     temp_dir
 }
 
@@ -51,6 +188,10 @@ fn fixture_repo_root() -> PathBuf {
         .join("tests")
         .join("fixtures")
         .join("sample_repo")
+}
+
+fn workspace_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..")
 }
 
 fn read_golden_json(name: &str) -> Value {
@@ -75,6 +216,10 @@ fn normalize_query_results(value: &mut Value) {
 
 fn read_json_output(output: Output) -> Value {
     serde_json::from_slice(&output.stdout).expect("valid json output")
+}
+
+fn write_repo_file(repo_root: &Path, relative_path: &str, content: &str) {
+    fs::write(repo_root.join(relative_path), content).expect("write repo file");
 }
 
 fn run_atlas(repo_root: &Path, args: &[&str]) -> Output {

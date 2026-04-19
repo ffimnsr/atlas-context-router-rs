@@ -1383,8 +1383,8 @@ And the system has:
 
 ### Slice 14 — post-MVP gate
 
-- [ ] confirm MVP complete before expanding scope
-- [ ] keep deferred items from blocking core path
+- [x] confirm MVP complete before expanding scope
+- [x] keep deferred items from blocking core path
 
 ### Slice 15 — retrieval
 

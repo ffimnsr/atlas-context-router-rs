@@ -159,14 +159,16 @@ pub fn run_build(cli: &Cli) -> Result<()> {
                 Ok(pf) => {
                     total_nodes += pf.nodes.len();
                     total_edges += pf.edges.len();
-                    store.replace_file_graph(
-                        &pf.path,
-                        &pf.hash,
-                        pf.language.as_deref(),
-                        pf.size,
-                        &pf.nodes,
-                        &pf.edges,
-                    ).with_context(|| format!("cannot store '{rel_str}'"))?;
+                    store
+                        .replace_file_graph(
+                            &pf.path,
+                            &pf.hash,
+                            pf.language.as_deref(),
+                            pf.size,
+                            &pf.nodes,
+                            &pf.edges,
+                        )
+                        .with_context(|| format!("cannot store '{rel_str}'"))?;
                 }
                 Err(msg) if msg == "unsupported (skipped)" => {
                     skipped_unsupported += 1;
@@ -186,7 +188,10 @@ pub fn run_build(cli: &Cli) -> Result<()> {
 
     drop(_parse_span);
 
-    let parsed_count = candidates.len().saturating_sub(parse_errors).saturating_sub(skipped_unsupported);
+    let parsed_count = candidates
+        .len()
+        .saturating_sub(parse_errors)
+        .saturating_sub(skipped_unsupported);
     let elapsed = started.elapsed();
 
     if cli.json {
@@ -375,14 +380,16 @@ pub fn run_update(cli: &Cli) -> Result<()> {
                 Ok(pf) => {
                     total_nodes += pf.nodes.len();
                     total_edges += pf.edges.len();
-                    store.replace_file_graph(
-                        &pf.path,
-                        &pf.hash,
-                        pf.language.as_deref(),
-                        pf.size,
-                        &pf.nodes,
-                        &pf.edges,
-                    ).with_context(|| format!("cannot store '{rel_str}'"))?;
+                    store
+                        .replace_file_graph(
+                            &pf.path,
+                            &pf.hash,
+                            pf.language.as_deref(),
+                            pf.size,
+                            &pf.nodes,
+                            &pf.edges,
+                        )
+                        .with_context(|| format!("cannot store '{rel_str}'"))?;
                 }
                 Err(msg) if msg == "unsupported (skipped)" => {
                     skipped_unsupported += 1;
@@ -402,7 +409,10 @@ pub fn run_update(cli: &Cli) -> Result<()> {
 
     drop(_parse_span);
 
-    let parsed_count = candidates.len().saturating_sub(parse_errors).saturating_sub(skipped_unsupported);
+    let parsed_count = candidates
+        .len()
+        .saturating_sub(parse_errors)
+        .saturating_sub(skipped_unsupported);
     let elapsed = started.elapsed();
 
     if cli.json {
