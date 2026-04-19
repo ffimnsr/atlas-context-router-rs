@@ -3,11 +3,11 @@ use std::io::{BufRead, Write};
 use std::time::Instant;
 
 use anyhow::{Context, Result};
-use atlas_core::model::{ChangeType, ImpactResult, ReviewContext, RiskSummary};
 use atlas_core::SearchQuery;
+use atlas_core::model::{ChangeType, ImpactResult, ReviewContext, RiskSummary};
 use atlas_parser::ParserRegistry;
 use atlas_repo::{
-    changed_files, collect_files, find_repo_root, hash_file, repo_relative, DiffTarget,
+    DiffTarget, changed_files, collect_files, find_repo_root, hash_file, repo_relative,
 };
 use atlas_store_sqlite::Store;
 use camino::Utf8Path;
@@ -21,8 +21,7 @@ pub fn run_init(cli: &Cli) -> Result<()> {
         .with_context(|| format!("cannot create {}", atlas_dir.display()))?;
 
     let db_path = db_path(cli, &repo);
-    Store::open(&db_path)
-        .with_context(|| format!("cannot open database at {db_path}"))?;
+    Store::open(&db_path).with_context(|| format!("cannot open database at {db_path}"))?;
 
     println!("Initialized atlas in {}", atlas_dir.display());
     println!("Database: {db_path}");
@@ -33,8 +32,8 @@ pub fn run_status(cli: &Cli) -> Result<()> {
     let repo = resolve_repo(cli)?;
     let db_path = db_path(cli, &repo);
 
-    let store = Store::open(&db_path)
-        .with_context(|| format!("cannot open database at {db_path}"))?;
+    let store =
+        Store::open(&db_path).with_context(|| format!("cannot open database at {db_path}"))?;
     let stats = store.stats().context("cannot read stats")?;
 
     if cli.json {
@@ -70,8 +69,8 @@ pub fn run_build(cli: &Cli) -> Result<()> {
     let repo_root = repo_root_path.as_path();
     let db_path = db_path(cli, &repo);
 
-    let mut store = Store::open(&db_path)
-        .with_context(|| format!("cannot open database at {db_path}"))?;
+    let mut store =
+        Store::open(&db_path).with_context(|| format!("cannot open database at {db_path}"))?;
 
     let registry = ParserRegistry::with_defaults();
 
@@ -174,8 +173,8 @@ pub fn run_update(cli: &Cli) -> Result<()> {
     let repo_root = repo_root_path.as_path();
     let db_path = db_path(cli, &repo);
 
-    let mut store = Store::open(&db_path)
-        .with_context(|| format!("cannot open database at {db_path}"))?;
+    let mut store =
+        Store::open(&db_path).with_context(|| format!("cannot open database at {db_path}"))?;
 
     let explicit_files: Vec<String> = match &cli.command {
         Command::Update { files, .. } => files.clone(),
@@ -354,8 +353,7 @@ pub fn run_detect_changes(cli: &Cli) -> Result<()> {
         _ => DiffTarget::WorkingTree,
     };
 
-    let changes =
-        changed_files(repo_root, &diff_target).context("cannot detect changed files")?;
+    let changes = changed_files(repo_root, &diff_target).context("cannot detect changed files")?;
 
     // Try to open the DB for graph summary — tolerate failure (DB may not exist yet).
     let store_result = Store::open(&db_path);
@@ -410,7 +408,9 @@ pub fn run_detect_changes(cli: &Cli) -> Result<()> {
                 .filter(|cf| cf.change_type != ChangeType::Deleted)
                 .map(|cf| cf.path.as_str())
                 .collect();
-            if !non_deleted.is_empty() && let Ok(impact) = store.impact_radius(&non_deleted, 5, 200) {
+            if !non_deleted.is_empty()
+                && let Ok(impact) = store.impact_radius(&non_deleted, 5, 200)
+            {
                 println!("\nGraph impact summary:");
                 println!("  Changed symbols : {}", impact.changed_nodes.len());
                 println!("  Impacted nodes  : {}", impact.impacted_nodes.len());
@@ -426,8 +426,8 @@ pub fn run_query(cli: &Cli) -> Result<()> {
     let repo = resolve_repo(cli)?;
     let db_path = db_path(cli, &repo);
 
-    let store = Store::open(&db_path)
-        .with_context(|| format!("cannot open database at {db_path}"))?;
+    let store =
+        Store::open(&db_path).with_context(|| format!("cannot open database at {db_path}"))?;
 
     let (text, kind, language, limit) = match &cli.command {
         Command::Query {
@@ -478,8 +478,8 @@ pub fn run_impact(cli: &Cli) -> Result<()> {
     let repo_root = repo_root_path.as_path();
     let db_path = db_path(cli, &repo);
 
-    let store = Store::open(&db_path)
-        .with_context(|| format!("cannot open database at {db_path}"))?;
+    let store =
+        Store::open(&db_path).with_context(|| format!("cannot open database at {db_path}"))?;
 
     let (base, explicit_files, max_depth, max_nodes) = match &cli.command {
         Command::Impact {
@@ -521,12 +521,15 @@ pub fn run_impact(cli: &Cli) -> Result<()> {
 
     if target_files.is_empty() {
         if cli.json {
-            println!("{}", serde_json::to_string_pretty(&ImpactResult {
-                changed_nodes: vec![],
-                impacted_nodes: vec![],
-                impacted_files: vec![],
-                relevant_edges: vec![],
-            })?);
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&ImpactResult {
+                    changed_nodes: vec![],
+                    impacted_nodes: vec![],
+                    impacted_files: vec![],
+                    relevant_edges: vec![],
+                })?
+            );
         } else {
             println!("No changed files detected.");
         }
@@ -555,7 +558,13 @@ pub fn run_impact(cli: &Cli) -> Result<()> {
         if !result.impacted_nodes.is_empty() {
             println!("\nImpacted nodes (top 20):");
             for n in result.impacted_nodes.iter().take(20) {
-                println!("  {} {} ({}:{})", n.kind.as_str(), n.qualified_name, n.file_path, n.line_start);
+                println!(
+                    "  {} {} ({}:{})",
+                    n.kind.as_str(),
+                    n.qualified_name,
+                    n.file_path,
+                    n.line_start
+                );
             }
         }
     }
@@ -570,8 +579,8 @@ pub fn run_review_context(cli: &Cli) -> Result<()> {
     let repo_root = repo_root_path.as_path();
     let db_path = db_path(cli, &repo);
 
-    let store = Store::open(&db_path)
-        .with_context(|| format!("cannot open database at {db_path}"))?;
+    let store =
+        Store::open(&db_path).with_context(|| format!("cannot open database at {db_path}"))?;
 
     let (base, explicit_files) = match &cli.command {
         Command::ReviewContext { base, files } => (base.clone(), files.clone()),
@@ -641,18 +650,42 @@ pub fn run_review_context(cli: &Cli) -> Result<()> {
         for f in &ctx.changed_files {
             println!("  {f}");
         }
-        println!("\nChanged symbols: {}", ctx.risk_summary.changed_symbol_count);
+        println!(
+            "\nChanged symbols: {}",
+            ctx.risk_summary.changed_symbol_count
+        );
         for n in ctx.changed_symbols.iter().take(20) {
-            println!("  {} {} ({}:{})", n.kind.as_str(), n.qualified_name, n.file_path, n.line_start);
+            println!(
+                "  {} {} ({}:{})",
+                n.kind.as_str(),
+                n.qualified_name,
+                n.file_path,
+                n.line_start
+            );
         }
-        println!("\nImpacted neighbors (top {}):", ctx.impacted_neighbors.len());
+        println!(
+            "\nImpacted neighbors (top {}):",
+            ctx.impacted_neighbors.len()
+        );
         for n in ctx.impacted_neighbors.iter().take(20) {
-            println!("  {} {} ({}:{})", n.kind.as_str(), n.qualified_name, n.file_path, n.line_start);
+            println!(
+                "  {} {} ({}:{})",
+                n.kind.as_str(),
+                n.qualified_name,
+                n.file_path,
+                n.line_start
+            );
         }
         println!("\nRisk summary:");
-        println!("  Public API changes : {}", ctx.risk_summary.public_api_changes);
+        println!(
+            "  Public API changes : {}",
+            ctx.risk_summary.public_api_changes
+        );
         println!("  Test adjacent      : {}", ctx.risk_summary.test_adjacent);
-        println!("  Cross-module impact: {}", ctx.risk_summary.cross_module_impact);
+        println!(
+            "  Cross-module impact: {}",
+            ctx.risk_summary.cross_module_impact
+        );
     }
 
     Ok(())
@@ -712,14 +745,18 @@ pub fn run_serve(cli: &Cli) -> Result<()> {
         let request: serde_json::Value = match serde_json::from_str(line) {
             Ok(v) => v,
             Err(e) => {
-                let resp = jsonrpc_error(serde_json::Value::Null, -32700, format!("parse error: {e}"));
+                let resp =
+                    jsonrpc_error(serde_json::Value::Null, -32700, format!("parse error: {e}"));
                 writeln!(writer, "{resp}")?;
                 writer.flush()?;
                 continue;
             }
         };
 
-        let id = request.get("id").cloned().unwrap_or(serde_json::Value::Null);
+        let id = request
+            .get("id")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
         let method = request.get("method").and_then(|m| m.as_str()).unwrap_or("");
         let params = request.get("params");
 
@@ -747,16 +784,14 @@ fn handle_mcp_method(
     db_path: &str,
 ) -> Result<serde_json::Value> {
     match method {
-        "initialize" => {
-            Ok(serde_json::json!({
-                "protocolVersion": "2024-11-05",
-                "capabilities": { "tools": {} },
-                "serverInfo": {
-                    "name": "atlas",
-                    "version": env!("CARGO_PKG_VERSION")
-                }
-            }))
-        }
+        "initialize" => Ok(serde_json::json!({
+            "protocolVersion": "2024-11-05",
+            "capabilities": { "tools": {} },
+            "serverInfo": {
+                "name": "atlas",
+                "version": env!("CARGO_PKG_VERSION")
+            }
+        })),
 
         "tools/list" => Ok(mcp_tool_list()),
 
@@ -842,8 +877,8 @@ fn mcp_call_tool(
     args: Option<&serde_json::Value>,
     db_path: &str,
 ) -> Result<serde_json::Value> {
-    let store = Store::open(db_path)
-        .with_context(|| format!("cannot open database at {db_path}"))?;
+    let store =
+        Store::open(db_path).with_context(|| format!("cannot open database at {db_path}"))?;
 
     match name {
         "list_graph_stats" => {
@@ -856,8 +891,14 @@ fn mcp_call_tool(
                 .and_then(|a| a.get("text"))
                 .and_then(|t| t.as_str())
                 .ok_or_else(|| anyhow::anyhow!("missing required argument: text"))?;
-            let kind = args.and_then(|a| a.get("kind")).and_then(|k| k.as_str()).map(str::to_owned);
-            let language = args.and_then(|a| a.get("language")).and_then(|l| l.as_str()).map(str::to_owned);
+            let kind = args
+                .and_then(|a| a.get("kind"))
+                .and_then(|k| k.as_str())
+                .map(str::to_owned);
+            let language = args
+                .and_then(|a| a.get("language"))
+                .and_then(|l| l.as_str())
+                .map(str::to_owned);
             let limit = args
                 .and_then(|a| a.get("limit"))
                 .and_then(|l| l.as_u64())
@@ -865,7 +906,13 @@ fn mcp_call_tool(
                 .unwrap_or(20);
 
             let results = store
-                .search(&SearchQuery { text: text.to_owned(), kind, language, limit, ..Default::default() })
+                .search(&SearchQuery {
+                    text: text.to_owned(),
+                    kind,
+                    language,
+                    limit,
+                    ..Default::default()
+                })
                 .context("search failed")?;
             tool_result(serde_json::to_string_pretty(&results)?)
         }
@@ -874,7 +921,11 @@ fn mcp_call_tool(
             let files: Vec<String> = args
                 .and_then(|a| a.get("files"))
                 .and_then(|f| f.as_array())
-                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(str::to_owned)).collect())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(str::to_owned))
+                        .collect()
+                })
                 .unwrap_or_default();
             if files.is_empty() {
                 return Err(anyhow::anyhow!("missing required argument: files"));
@@ -901,7 +952,11 @@ fn mcp_call_tool(
             let files: Vec<String> = args
                 .and_then(|a| a.get("files"))
                 .and_then(|f| f.as_array())
-                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(str::to_owned)).collect())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(str::to_owned))
+                        .collect()
+                })
                 .unwrap_or_default();
             if files.is_empty() {
                 return Err(anyhow::anyhow!("missing required argument: files"));
@@ -915,11 +970,9 @@ fn mcp_call_tool(
             tool_result(serde_json::to_string_pretty(&ctx)?)
         }
 
-        "detect_changes" => {
-            Err(anyhow::anyhow!(
-                "detect_changes requires git repo context; use `atlas detect-changes` CLI instead"
-            ))
-        }
+        "detect_changes" => Err(anyhow::anyhow!(
+            "detect_changes requires git repo context; use `atlas detect-changes` CLI instead"
+        )),
 
         other => Err(anyhow::anyhow!("unknown tool: {other}")),
     }

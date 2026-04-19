@@ -129,9 +129,15 @@ fn visit_function(
     nodes: &mut Vec<Node>,
     edges: &mut Vec<Edge>,
 ) {
-    let Some(name) = field_text(node, "name", ctx.source) else { return };
+    let Some(name) = field_text(node, "name", ctx.source) else {
+        return;
+    };
     let is_test = name.starts_with("Test") || name.starts_with("Benchmark");
-    let kind = if is_test { NodeKind::Test } else { NodeKind::Function };
+    let kind = if is_test {
+        NodeKind::Test
+    } else {
+        NodeKind::Function
+    };
     let type_prefix = if is_test { "test" } else { "fn" };
     let qn = format!("{}::{}::{}", ctx.rel_path, type_prefix, name);
     let params = field_text(node, "parameters", ctx.source).map(|s| s.to_owned());
@@ -165,7 +171,9 @@ fn visit_method(
     nodes: &mut Vec<Node>,
     edges: &mut Vec<Edge>,
 ) {
-    let Some(name) = field_text(node, "name", ctx.source) else { return };
+    let Some(name) = field_text(node, "name", ctx.source) else {
+        return;
+    };
     // Receiver type is inside the `receiver` field: `(t *Type)` → extract Type.
     let receiver_type = node
         .child_by_field_name("receiver")
@@ -224,7 +232,9 @@ fn visit_type_spec(
     nodes: &mut Vec<Node>,
     edges: &mut Vec<Edge>,
 ) {
-    let Some(name) = field_text(node, "name", ctx.source) else { return };
+    let Some(name) = field_text(node, "name", ctx.source) else {
+        return;
+    };
     // Determine if it's a struct or interface by looking at the `type` field.
     let (kind, type_prefix) = if let Some(type_node) = node.child_by_field_name("type") {
         match type_node.kind() {
@@ -317,7 +327,10 @@ fn visit_imports(
 fn resolve_go_calls(root: TsNode<'_>, source: &[u8], rel_path: &str, nodes: &[Node]) -> Vec<Edge> {
     let mut callables: HashMap<String, String> = HashMap::new();
     for n in nodes {
-        if matches!(n.kind, NodeKind::Function | NodeKind::Method | NodeKind::Test) {
+        if matches!(
+            n.kind,
+            NodeKind::Function | NodeKind::Method | NodeKind::Test
+        ) {
             callables.insert(n.name.clone(), n.qualified_name.clone());
         }
     }
@@ -365,17 +378,22 @@ fn walk_go_calls<'a>(
                         "identifier" => Some(node_text(f, source).to_owned()),
                         "selector_expression" => {
                             // e.g. `obj.Method()` — extract the `field` (method name).
-                            f.child_by_field_name("field").map(|fi| node_text(fi, source).to_owned())
+                            f.child_by_field_name("field")
+                                .map(|fi| node_text(fi, source).to_owned())
                         }
                         _ => None,
                     }
                 });
-                if let Some(name) = called_name {
-                    if let Some(callee_qn) = callables.get(&name) {
-                        if *callee_qn != caller_qn {
-                            edges.push(go_call_edge(&caller_qn, callee_qn, rel_path, start_line(node)));
-                        }
-                    }
+                if let Some(name) = called_name
+                    && let Some(callee_qn) = callables.get(&name)
+                    && *callee_qn != caller_qn
+                {
+                    edges.push(go_call_edge(
+                        &caller_qn,
+                        callee_qn,
+                        rel_path,
+                        start_line(node),
+                    ));
                 }
             }
         }
@@ -426,31 +444,51 @@ mod tests {
     #[test]
     fn extracts_function() {
         let pf = parse("package main\nfunc Hello() string { return \"\" }");
-        assert!(pf.nodes.iter().any(|n| n.kind == NodeKind::Function && n.name == "Hello"));
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|n| n.kind == NodeKind::Function && n.name == "Hello")
+        );
     }
 
     #[test]
     fn extracts_struct() {
         let pf = parse("package main\ntype Foo struct { x int }");
-        assert!(pf.nodes.iter().any(|n| n.kind == NodeKind::Struct && n.name == "Foo"));
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|n| n.kind == NodeKind::Struct && n.name == "Foo")
+        );
     }
 
     #[test]
     fn extracts_interface() {
         let pf = parse("package main\ntype Reader interface { Read(p []byte) (int, error) }");
-        assert!(pf.nodes.iter().any(|n| n.kind == NodeKind::Interface && n.name == "Reader"));
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|n| n.kind == NodeKind::Interface && n.name == "Reader")
+        );
     }
 
     #[test]
     fn extracts_method() {
         let pf = parse("package main\ntype Foo struct{}\nfunc (f *Foo) Bar() {}");
-        assert!(pf.nodes.iter().any(|n| n.kind == NodeKind::Method && n.name == "Bar"));
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|n| n.kind == NodeKind::Method && n.name == "Bar")
+        );
     }
 
     #[test]
     fn test_function_detected() {
         let pf = parse("package main\nfunc TestFoo(t *testing.T) {}");
-        assert!(pf.nodes.iter().any(|n| n.kind == NodeKind::Test && n.name == "TestFoo"));
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|n| n.kind == NodeKind::Test && n.name == "TestFoo")
+        );
     }
 
     #[test]
@@ -467,7 +505,8 @@ mod tests {
             pf.edges.iter().any(|e| e.kind == EdgeKind::Calls
                 && e.source_qn.contains("caller")
                 && e.target_qn.contains("helper")),
-            "expected Calls edge; edges: {:?}", pf.edges
+            "expected Calls edge; edges: {:?}",
+            pf.edges
         );
     }
 }

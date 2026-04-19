@@ -22,7 +22,7 @@ The upstream repo’s real kernel is the repository scanner, parser layer, SQLit
 - [x] Use binary name: `atlas`
 - [x] Use hidden work dir: `.atlas/`
 - [x] Use DB path: `.atlas/worldview.sqlite`
-- [ ] Use config path later: `.atlas/config.toml` (deferred)
+- [ ] Use config path later: `.atlas/config.toml`
 - [x] Use CLI commands:
   - [x] `atlas init`
   - [x] `atlas build`
@@ -143,13 +143,13 @@ The upstream repo’s real kernel is the repository scanner, parser layer, SQLit
 
 ### 1.3 CI and quality gates
 
-- [ ] Add:
-  - [ ] `cargo fmt --check`
-  - [ ] `cargo clippy --all-targets --all-features -- -D warnings`
-  - [ ] `cargo test --workspace`
-- [ ] Add Linux CI
-- [ ] Add SQLite/FTS5 smoke test in CI
-- [ ] Add fixture-based regression tests
+- [x] Add:
+  - [x] `cargo fmt --check`
+  - [x] `cargo clippy --all-targets --all-features -- -D warnings`
+  - [x] `cargo test --workspace`
+- [x] Add Linux CI
+- [x] Add SQLite/FTS5 smoke test in CI
+- [x] Add fixture-based regression tests
 
 ---
 
@@ -1359,12 +1359,12 @@ And the system has:
 
 ### Slice 11 — quality gates
 
-- [ ] add `cargo fmt --check`
-- [ ] add `cargo clippy --all-targets --all-features -- -D warnings`
-- [ ] add `cargo test --workspace`
-- [ ] add Linux CI
-- [ ] add SQLite/FTS5 smoke coverage
-- [ ] add fixture/golden/integration regression coverage
+- [x] add `cargo fmt --check`
+- [x] add `cargo clippy --all-targets --all-features -- -D warnings`
+- [x] add `cargo test --workspace`
+- [x] add Linux CI
+- [x] add SQLite/FTS5 smoke coverage
+- [x] add fixture/golden/integration regression coverage
 
 ### Slice 12 — hardening
 

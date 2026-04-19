@@ -17,7 +17,9 @@ pub struct ParserRegistry {
 impl ParserRegistry {
     /// Create a registry pre-populated with every built-in language handler.
     pub fn with_defaults() -> Self {
-        let mut r = Self { handlers: Vec::new() };
+        let mut r = Self {
+            handlers: Vec::new(),
+        };
         r.register(Box::new(RustParser));
         r.register(Box::new(GoParser));
         r.register(Box::new(PythonParser));
@@ -38,14 +40,13 @@ impl ParserRegistry {
 
     /// Parse a file.  Returns `None` when no registered handler supports the
     /// file's extension — callers should skip those files.
-    pub fn parse(
-        &self,
-        rel_path: &str,
-        file_hash: &str,
-        source: &[u8],
-    ) -> Option<ParsedFile> {
+    pub fn parse(&self, rel_path: &str, file_hash: &str, source: &[u8]) -> Option<ParsedFile> {
         let handler = self.handler_for(rel_path)?;
-        let ctx = ParseContext { rel_path, file_hash, source };
+        let ctx = ParseContext {
+            rel_path,
+            file_hash,
+            source,
+        };
         Some(handler.parse(&ctx))
     }
 

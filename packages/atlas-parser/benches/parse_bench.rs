@@ -1,4 +1,4 @@
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 
 use atlas_parser::ParserRegistry;
 
@@ -209,16 +209,24 @@ fn bench_parse_go(c: &mut Criterion) {
 
 fn bench_parse_python(c: &mut Criterion) {
     let registry = ParserRegistry::with_defaults();
-    c.bench_with_input(BenchmarkId::new("parse", "python"), &PYTHON_SRC, |b, src| {
-        b.iter(|| registry.parse("scanner.py", "abc123", src.as_bytes()));
-    });
+    c.bench_with_input(
+        BenchmarkId::new("parse", "python"),
+        &PYTHON_SRC,
+        |b, src| {
+            b.iter(|| registry.parse("scanner.py", "abc123", src.as_bytes()));
+        },
+    );
 }
 
 fn bench_parse_typescript(c: &mut Criterion) {
     let registry = ParserRegistry::with_defaults();
-    c.bench_with_input(BenchmarkId::new("parse", "typescript"), &TS_SRC, |b, src| {
-        b.iter(|| registry.parse("src/server.ts", "abc123", src.as_bytes()));
-    });
+    c.bench_with_input(
+        BenchmarkId::new("parse", "typescript"),
+        &TS_SRC,
+        |b, src| {
+            b.iter(|| registry.parse("src/server.ts", "abc123", src.as_bytes()));
+        },
+    );
 }
 
 fn bench_parse_all_languages(c: &mut Criterion) {

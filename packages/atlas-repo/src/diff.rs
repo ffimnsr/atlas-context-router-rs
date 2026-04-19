@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use atlas_core::model::{ChangedFile, ChangeType};
+use atlas_core::model::{ChangeType, ChangedFile};
 use camino::Utf8Path;
 use std::process::Command;
 
@@ -46,8 +46,8 @@ pub fn changed_files(repo_root: &Utf8Path, target: &DiffTarget) -> Result<Vec<Ch
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let stdout = std::str::from_utf8(&output.stdout)
-        .context("git diff output is not valid UTF-8")?;
+    let stdout =
+        std::str::from_utf8(&output.stdout).context("git diff output is not valid UTF-8")?;
 
     parse_name_status_z(stdout)
 }

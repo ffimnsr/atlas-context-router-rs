@@ -218,7 +218,12 @@ fn visit_function(
         file_hash: ctx.file_hash.to_owned(),
         extra_json: serde_json::Value::Null,
     });
-    edges.push(contains_edge(parent_qn, &qn, ctx.rel_path, start_line(node)));
+    edges.push(contains_edge(
+        parent_qn,
+        &qn,
+        ctx.rel_path,
+        start_line(node),
+    ));
 }
 
 fn visit_class(
@@ -255,7 +260,12 @@ fn visit_class(
         file_hash: ctx.file_hash.to_owned(),
         extra_json: serde_json::Value::Null,
     });
-    edges.push(contains_edge(ctx.rel_path, &qn, ctx.rel_path, start_line(node)));
+    edges.push(contains_edge(
+        ctx.rel_path,
+        &qn,
+        ctx.rel_path,
+        start_line(node),
+    ));
 
     // Walk class body for method definitions.
     if let Some(body) = node.child_by_field_name("body") {
@@ -427,7 +437,12 @@ fn visit_ts_interface(
         file_hash: ctx.file_hash.to_owned(),
         extra_json: serde_json::Value::Null,
     });
-    edges.push(contains_edge(ctx.rel_path, &qn, ctx.rel_path, start_line(node)));
+    edges.push(contains_edge(
+        ctx.rel_path,
+        &qn,
+        ctx.rel_path,
+        start_line(node),
+    ));
 }
 
 fn visit_ts_type_alias(
@@ -463,7 +478,12 @@ fn visit_ts_type_alias(
         file_hash: ctx.file_hash.to_owned(),
         extra_json: serde_json::Value::Null,
     });
-    edges.push(contains_edge(ctx.rel_path, &qn, ctx.rel_path, start_line(node)));
+    edges.push(contains_edge(
+        ctx.rel_path,
+        &qn,
+        ctx.rel_path,
+        start_line(node),
+    ));
 }
 
 fn visit_ts_enum(
@@ -499,7 +519,12 @@ fn visit_ts_enum(
         file_hash: ctx.file_hash.to_owned(),
         extra_json: serde_json::Value::Null,
     });
-    edges.push(contains_edge(ctx.rel_path, &qn, ctx.rel_path, start_line(node)));
+    edges.push(contains_edge(
+        ctx.rel_path,
+        &qn,
+        ctx.rel_path,
+        start_line(node),
+    ));
 }
 
 // ---------------------------------------------------------------------------
@@ -509,7 +534,10 @@ fn visit_ts_enum(
 fn resolve_js_calls(root: TsNode<'_>, source: &[u8], rel_path: &str, nodes: &[Node]) -> Vec<Edge> {
     let mut callables: HashMap<String, String> = HashMap::new();
     for n in nodes {
-        if matches!(n.kind, NodeKind::Function | NodeKind::Method | NodeKind::Test) {
+        if matches!(
+            n.kind,
+            NodeKind::Function | NodeKind::Method | NodeKind::Test
+        ) {
             callables.insert(n.name.clone(), n.qualified_name.clone());
         }
     }
@@ -534,7 +562,7 @@ fn walk_js_calls<'a>(
             | "function"
             | "method_definition"
             | "function_signature" // TS
-            | "method_signature"   // TS
+            | "method_signature" // TS
     );
 
     if is_function_scope {
@@ -560,24 +588,28 @@ fn walk_js_calls<'a>(
         return;
     }
 
-    if kind == "call_expression" {
-        if let Some(caller_qn) = scope.last().cloned() {
-            let called_name = node.child_by_field_name("function").and_then(|f| {
-                match f.kind() {
-                    "identifier" => Some(node_text(f, source).to_owned()),
-                    "member_expression" => {
-                        f.child_by_field_name("property").map(|p| node_text(p, source).to_owned())
-                    }
-                    _ => None,
-                }
+    if kind == "call_expression"
+        && let Some(caller_qn) = scope.last().cloned()
+    {
+        let called_name = node
+            .child_by_field_name("function")
+            .and_then(|f| match f.kind() {
+                "identifier" => Some(node_text(f, source).to_owned()),
+                "member_expression" => f
+                    .child_by_field_name("property")
+                    .map(|p| node_text(p, source).to_owned()),
+                _ => None,
             });
-            if let Some(name) = called_name {
-                if let Some(callee_qn) = callables.get(&name) {
-                    if *callee_qn != caller_qn {
-                        edges.push(js_call_edge(&caller_qn, callee_qn, rel_path, start_line(node)));
-                    }
-                }
-            }
+        if let Some(name) = called_name
+            && let Some(callee_qn) = callables.get(&name)
+            && *callee_qn != caller_qn
+        {
+            edges.push(js_call_edge(
+                &caller_qn,
+                callee_qn,
+                rel_path,
+                start_line(node),
+            ));
         }
     }
 
@@ -637,25 +669,41 @@ mod tests {
     #[test]
     fn js_extracts_function() {
         let pf = parse_js("function greet(name) { return name; }\n");
-        assert!(pf.nodes.iter().any(|n| n.kind == NodeKind::Function && n.name == "greet"));
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|n| n.kind == NodeKind::Function && n.name == "greet")
+        );
     }
 
     #[test]
     fn js_extracts_class() {
         let pf = parse_js("class Greeter { }\n");
-        assert!(pf.nodes.iter().any(|n| n.kind == NodeKind::Class && n.name == "Greeter"));
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|n| n.kind == NodeKind::Class && n.name == "Greeter")
+        );
     }
 
     #[test]
     fn js_extracts_method() {
         let pf = parse_js("class Greeter { greet(name) { return name; } }\n");
-        assert!(pf.nodes.iter().any(|n| n.kind == NodeKind::Method && n.name == "greet"));
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|n| n.kind == NodeKind::Method && n.name == "greet")
+        );
     }
 
     #[test]
     fn js_export_function() {
         let pf = parse_js("export function add(a, b) { return a + b; }\n");
-        assert!(pf.nodes.iter().any(|n| n.kind == NodeKind::Function && n.name == "add"));
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|n| n.kind == NodeKind::Function && n.name == "add")
+        );
     }
 
     #[test]
@@ -676,7 +724,9 @@ mod tests {
     fn ts_extracts_interface() {
         let pf = parse_ts("interface Greeter { greet(name: string): void; }\n");
         assert!(
-            pf.nodes.iter().any(|n| n.kind == NodeKind::Interface && n.name == "Greeter"),
+            pf.nodes
+                .iter()
+                .any(|n| n.kind == NodeKind::Interface && n.name == "Greeter"),
             "interface node not found"
         );
     }
@@ -684,7 +734,11 @@ mod tests {
     #[test]
     fn ts_extracts_enum() {
         let pf = parse_ts("enum Color { Red, Green, Blue }\n");
-        assert!(pf.nodes.iter().any(|n| n.kind == NodeKind::Enum && n.name == "Color"));
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|n| n.kind == NodeKind::Enum && n.name == "Color")
+        );
     }
 
     #[test]
@@ -698,14 +752,26 @@ mod tests {
         let pf = parse_ts(
             "class Service {\n  constructor(private db: DB) {}\n  fetch(id: string): Promise<Data> { return this.db.get(id); }\n}\n",
         );
-        assert!(pf.nodes.iter().any(|n| n.kind == NodeKind::Class && n.name == "Service"));
-        assert!(pf.nodes.iter().any(|n| n.kind == NodeKind::Method && n.name == "fetch"));
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|n| n.kind == NodeKind::Class && n.name == "Service")
+        );
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|n| n.kind == NodeKind::Method && n.name == "fetch")
+        );
     }
 
     #[test]
     fn ts_export_class() {
         let pf = parse_ts("export class Router { route() {} }\n");
-        assert!(pf.nodes.iter().any(|n| n.kind == NodeKind::Class && n.name == "Router"));
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|n| n.kind == NodeKind::Class && n.name == "Router")
+        );
     }
 
     #[test]
@@ -721,7 +787,8 @@ mod tests {
             pf.edges.iter().any(|e| e.kind == EdgeKind::Calls
                 && e.source_qn.contains("caller")
                 && e.target_qn.contains("helper")),
-            "expected Calls edge from caller to helper; edges: {:?}", pf.edges
+            "expected Calls edge from caller to helper; edges: {:?}",
+            pf.edges
         );
     }
 

@@ -115,14 +115,16 @@ fn glob_match_inner(pat: &[u8], text: &[u8]) -> bool {
     match (pat.first(), text.first()) {
         (None, None) => true,
         (None, Some(_)) => false,
-        (Some(b'?'), Some(&tc)) if tc != b'/' => {
-            glob_match_inner(&pat[1..], &text[1..])
-        }
+        (Some(b'?'), Some(&tc)) if tc != b'/' => glob_match_inner(&pat[1..], &text[1..]),
         (Some(b'?'), _) => false,
         (Some(b'*'), _) => {
             // Check for `**`
             if pat.get(1) == Some(&b'*') {
-                let rest_pat = if pat.get(2) == Some(&b'/') { &pat[3..] } else { &pat[2..] };
+                let rest_pat = if pat.get(2) == Some(&b'/') {
+                    &pat[3..]
+                } else {
+                    &pat[2..]
+                };
                 // Try matching `**` against every suffix of text.
                 for i in 0..=text.len() {
                     if glob_match_inner(rest_pat, &text[i..]) {
@@ -144,9 +146,7 @@ fn glob_match_inner(pat: &[u8], text: &[u8]) -> bool {
                 false
             }
         }
-        (Some(&pc), Some(&tc)) if pc == tc => {
-            glob_match_inner(&pat[1..], &text[1..])
-        }
+        (Some(&pc), Some(&tc)) if pc == tc => glob_match_inner(&pat[1..], &text[1..]),
         _ => false,
     }
 }
@@ -154,7 +154,13 @@ fn glob_match_inner(pat: &[u8], text: &[u8]) -> bool {
 /// Run `git ls-files` and return repo-relative paths.
 fn git_ls_files(repo_root: &Utf8Path) -> Result<Vec<Utf8PathBuf>> {
     let output = Command::new("git")
-        .args(["ls-files", "--cached", "--others", "--exclude-standard", "-z"])
+        .args([
+            "ls-files",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "-z",
+        ])
         .current_dir(repo_root)
         .output()
         .context("failed to run git ls-files")?;
@@ -166,8 +172,8 @@ fn git_ls_files(repo_root: &Utf8Path) -> Result<Vec<Utf8PathBuf>> {
     );
 
     // Null-separated output from `-z` flag.
-    let stdout = std::str::from_utf8(&output.stdout)
-        .context("git ls-files output is not valid UTF-8")?;
+    let stdout =
+        std::str::from_utf8(&output.stdout).context("git ls-files output is not valid UTF-8")?;
 
     let paths = stdout
         .split('\0')
@@ -200,8 +206,8 @@ fn check_file(abs: &Utf8Path, max_bytes: u64) -> Result<bool> {
 /// Sniff first `BINARY_SNIFF_BYTES` for null bytes.
 fn is_binary(path: &Utf8Path) -> Result<bool> {
     use std::io::Read;
-    let mut f = std::fs::File::open(path.as_std_path())
-        .with_context(|| format!("open '{path}'"))?;
+    let mut f =
+        std::fs::File::open(path.as_std_path()).with_context(|| format!("open '{path}'"))?;
     let mut buf = vec![0u8; BINARY_SNIFF_BYTES];
     let n = f.read(&mut buf).with_context(|| format!("read '{path}'"))?;
     Ok(buf[..n].contains(&0u8))
@@ -223,10 +229,7 @@ mod tests {
             .expect("canonicalize workspace root");
 
         let files = collect_files(&abs, None).expect("collect_files");
-        assert!(
-            !files.is_empty(),
-            "should find at least one tracked file"
-        );
+        assert!(!files.is_empty(), "should find at least one tracked file");
         assert!(
             files.iter().any(|p| p.extension() == Some("rs")),
             "should include .rs files"
@@ -297,11 +300,8 @@ mod tests {
 
     #[test]
     fn should_ignore_comments_and_blank_lines_skipped() {
-        let patterns: Vec<String> = vec![
-            "# comment".to_string(),
-            "".to_string(),
-            "*.log".to_string(),
-        ];
+        let patterns: Vec<String> =
+            vec!["# comment".to_string(), "".to_string(), "*.log".to_string()];
         assert!(!should_ignore("src/main.rs", &patterns));
         assert!(should_ignore("debug.log", &patterns));
     }

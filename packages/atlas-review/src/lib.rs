@@ -1,5 +1,5 @@
-use atlas_core::model::{ImpactResult, ReviewContext, RiskSummary};
 use atlas_core::NodeKind;
+use atlas_core::model::{ImpactResult, ReviewContext, RiskSummary};
 
 /// Assemble a [`ReviewContext`] from a completed impact traversal.
 ///
@@ -62,10 +62,15 @@ pub fn assemble_review_context(
         .collect();
 
     // Critical edges: those crossing the boundary between changed and impacted.
-    let changed_qns: std::collections::HashSet<&str> =
-        impact.changed_nodes.iter().map(|n| n.qualified_name.as_str()).collect();
-    let neighbor_qns: std::collections::HashSet<&str> =
-        impacted_neighbors.iter().map(|n| n.qualified_name.as_str()).collect();
+    let changed_qns: std::collections::HashSet<&str> = impact
+        .changed_nodes
+        .iter()
+        .map(|n| n.qualified_name.as_str())
+        .collect();
+    let neighbor_qns: std::collections::HashSet<&str> = impacted_neighbors
+        .iter()
+        .map(|n| n.qualified_name.as_str())
+        .collect();
     let critical_edges: Vec<_> = impact
         .relevant_edges
         .iter()

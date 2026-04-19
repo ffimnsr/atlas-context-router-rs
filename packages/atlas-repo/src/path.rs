@@ -46,10 +46,7 @@ mod tests {
     fn basic_relative() {
         let root = Utf8Path::new("/home/user/proj");
         let abs = Utf8Path::new("/home/user/proj/src/main.rs");
-        assert_eq!(
-            repo_relative(root, abs).unwrap().as_str(),
-            "src/main.rs"
-        );
+        assert_eq!(repo_relative(root, abs).unwrap().as_str(), "src/main.rs");
     }
 
     #[test]

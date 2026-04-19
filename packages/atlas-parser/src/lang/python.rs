@@ -181,7 +181,12 @@ fn visit_function(
         file_hash: ctx.file_hash.to_owned(),
         extra_json: serde_json::Value::Null,
     });
-    edges.push(contains_edge(parent_qn, &qn, ctx.rel_path, start_line(node)));
+    edges.push(contains_edge(
+        parent_qn,
+        &qn,
+        ctx.rel_path,
+        start_line(node),
+    ));
 }
 
 fn visit_class(
@@ -217,7 +222,12 @@ fn visit_class(
         file_hash: ctx.file_hash.to_owned(),
         extra_json: serde_json::Value::Null,
     });
-    edges.push(contains_edge(ctx.rel_path, &qn, ctx.rel_path, start_line(node)));
+    edges.push(contains_edge(
+        ctx.rel_path,
+        &qn,
+        ctx.rel_path,
+        start_line(node),
+    ));
 
     // Walk class body for methods and nested class defs.
     if let Some(body) = node.child_by_field_name("body") {
@@ -337,10 +347,18 @@ fn emit_import(
 // Same-file call resolution (Python)
 // ---------------------------------------------------------------------------
 
-fn resolve_python_calls(root: TsNode<'_>, source: &[u8], rel_path: &str, nodes: &[Node]) -> Vec<Edge> {
+fn resolve_python_calls(
+    root: TsNode<'_>,
+    source: &[u8],
+    rel_path: &str,
+    nodes: &[Node],
+) -> Vec<Edge> {
     let mut callables: HashMap<String, String> = HashMap::new();
     for n in nodes {
-        if matches!(n.kind, NodeKind::Function | NodeKind::Method | NodeKind::Test) {
+        if matches!(
+            n.kind,
+            NodeKind::Function | NodeKind::Method | NodeKind::Test
+        ) {
             callables.insert(n.name.clone(), n.qualified_name.clone());
         }
     }
@@ -383,19 +401,25 @@ fn walk_python_calls<'a>(
         "call" => {
             if let Some(caller_qn) = scope.last().cloned() {
                 // `function` field holds the called expression.
-                let called_name = node.child_by_field_name("function").and_then(|f| {
-                    match f.kind() {
-                        "identifier" => Some(node_text(f, source).to_owned()),
-                        "attribute" => f.child_by_field_name("attribute").map(|a| node_text(a, source).to_owned()),
-                        _ => None,
-                    }
-                });
-                if let Some(name) = called_name {
-                    if let Some(callee_qn) = callables.get(&name) {
-                        if *callee_qn != caller_qn {
-                            edges.push(py_call_edge(&caller_qn, callee_qn, rel_path, start_line(node)));
-                        }
-                    }
+                let called_name =
+                    node.child_by_field_name("function")
+                        .and_then(|f| match f.kind() {
+                            "identifier" => Some(node_text(f, source).to_owned()),
+                            "attribute" => f
+                                .child_by_field_name("attribute")
+                                .map(|a| node_text(a, source).to_owned()),
+                            _ => None,
+                        });
+                if let Some(name) = called_name
+                    && let Some(callee_qn) = callables.get(&name)
+                    && *callee_qn != caller_qn
+                {
+                    edges.push(py_call_edge(
+                        &caller_qn,
+                        callee_qn,
+                        rel_path,
+                        start_line(node),
+                    ));
                 }
             }
         }
@@ -448,7 +472,10 @@ mod tests {
     #[test]
     fn extracts_function() {
         let pf = parse("def hello(x: int) -> str:\n    return str(x)\n");
-        let f = pf.nodes.iter().find(|n| n.kind == NodeKind::Function && n.name == "hello");
+        let f = pf
+            .nodes
+            .iter()
+            .find(|n| n.kind == NodeKind::Function && n.name == "hello");
         assert!(f.is_some(), "function node not found");
         let f = f.unwrap();
         assert!(f.params.is_some());
@@ -458,20 +485,30 @@ mod tests {
     #[test]
     fn extracts_class() {
         let pf = parse("class Foo:\n    pass\n");
-        assert!(pf.nodes.iter().any(|n| n.kind == NodeKind::Class && n.name == "Foo"));
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|n| n.kind == NodeKind::Class && n.name == "Foo")
+        );
     }
 
     #[test]
     fn extracts_method() {
         let pf = parse("class Foo:\n    def bar(self):\n        pass\n");
-        assert!(pf.nodes.iter().any(|n| n.kind == NodeKind::Method && n.name == "bar"));
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|n| n.kind == NodeKind::Method && n.name == "bar")
+        );
     }
 
     #[test]
     fn test_function_detected() {
         let pf = parse("def test_addition():\n    assert 1 + 1 == 2\n");
         assert!(
-            pf.nodes.iter().any(|n| n.kind == NodeKind::Test && n.name == "test_addition"),
+            pf.nodes
+                .iter()
+                .any(|n| n.kind == NodeKind::Test && n.name == "test_addition"),
             "test node not found"
         );
     }
@@ -480,7 +517,9 @@ mod tests {
     fn test_method_detected() {
         let pf = parse("class TestFoo:\n    def test_bar(self):\n        pass\n");
         assert!(
-            pf.nodes.iter().any(|n| n.kind == NodeKind::Test && n.name == "test_bar"),
+            pf.nodes
+                .iter()
+                .any(|n| n.kind == NodeKind::Test && n.name == "test_bar"),
             "test method node not found"
         );
     }
@@ -489,7 +528,11 @@ mod tests {
     fn import_statement_edges() {
         let pf = parse("import os\n");
         assert!(pf.edges.iter().any(|e| e.kind == EdgeKind::Imports));
-        assert!(pf.nodes.iter().any(|n| n.kind == NodeKind::Import && n.name == "os"));
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|n| n.kind == NodeKind::Import && n.name == "os")
+        );
     }
 
     #[test]
@@ -501,7 +544,11 @@ mod tests {
     #[test]
     fn decorated_function_extracted() {
         let pf = parse("@staticmethod\ndef compute():\n    pass\n");
-        assert!(pf.nodes.iter().any(|n| n.kind == NodeKind::Function && n.name == "compute"));
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|n| n.kind == NodeKind::Function && n.name == "compute")
+        );
     }
 
     #[test]
@@ -526,7 +573,8 @@ mod tests {
             pf.edges.iter().any(|e| e.kind == EdgeKind::Calls
                 && e.source_qn.contains("caller")
                 && e.target_qn.contains("helper")),
-            "expected Calls edge from caller to helper; edges: {:?}", pf.edges
+            "expected Calls edge from caller to helper; edges: {:?}",
+            pf.edges
         );
     }
 }

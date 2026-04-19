@@ -27,12 +27,13 @@ impl LangParser for RustParser {
         let mut edges: Vec<Edge> = Vec::new();
 
         // Always emit a File node.
-        let (file_lines, _) = ctx
-            .source
-            .iter()
-            .fold((1u32, false), |(ln, _), &b| {
-                if b == b'\n' { (ln + 1, true) } else { (ln, false) }
-            });
+        let (file_lines, _) = ctx.source.iter().fold((1u32, false), |(ln, _), &b| {
+            if b == b'\n' {
+                (ln + 1, true)
+            } else {
+                (ln, false)
+            }
+        });
         nodes.push(file_node(ctx.rel_path, ctx.file_hash, file_lines));
 
         if let Some(tree) = tree {
@@ -49,12 +50,8 @@ impl LangParser for RustParser {
             walker.walk_block(tree.root_node());
 
             // Second pass: same-file call resolution.
-            let mut call_edges = resolve_same_file_calls(
-                tree.root_node(),
-                ctx.source,
-                ctx.rel_path,
-                &nodes,
-            );
+            let mut call_edges =
+                resolve_same_file_calls(tree.root_node(), ctx.source, ctx.rel_path, &nodes);
             edges.append(&mut call_edges);
         }
 
@@ -87,7 +84,10 @@ struct Walker<'s, 'o> {
 
 impl<'s, 'o> Walker<'s, 'o> {
     fn current_parent_qn(&self) -> &str {
-        self.scope_stack.last().map(|s| s.as_str()).unwrap_or(self.rel_path)
+        self.scope_stack
+            .last()
+            .map(|s| s.as_str())
+            .unwrap_or(self.rel_path)
     }
 
     /// Walk all children of a block/source_file.
@@ -113,7 +113,9 @@ impl<'s, 'o> Walker<'s, 'o> {
     }
 
     fn visit_fn(&mut self, node: TsNode<'_>, is_method: bool) {
-        let Some(name) = field_text(node, "name", self.source) else { return };
+        let Some(name) = field_text(node, "name", self.source) else {
+            return;
+        };
         let is_test = self.in_test_mod || has_test_attr(node, self.source);
         let kind = if is_test {
             NodeKind::Test
@@ -129,7 +131,12 @@ impl<'s, 'o> Walker<'s, 'o> {
             _ => "fn",
         };
         let parent_qn = self.current_parent_qn().to_owned();
-        let qn = format!("{}::{}::{}", self.rel_path, type_prefix, qualified_suffix(&parent_qn, self.rel_path, name));
+        let qn = format!(
+            "{}::{}::{}",
+            self.rel_path,
+            type_prefix,
+            qualified_suffix(&parent_qn, self.rel_path, name)
+        );
         let params = field_text(node, "parameters", self.source).map(|s| s.to_owned());
         let ret = field_text(node, "return_type", self.source).map(|s| s.to_owned());
 
@@ -150,11 +157,18 @@ impl<'s, 'o> Walker<'s, 'o> {
             file_hash: self.file_hash.to_owned(),
             extra_json: serde_json::Value::Null,
         });
-        self.edges.push(contains_edge(&parent_qn, &qn, self.rel_path, start_line(node)));
+        self.edges.push(contains_edge(
+            &parent_qn,
+            &qn,
+            self.rel_path,
+            start_line(node),
+        ));
     }
 
     fn visit_mod(&mut self, node: TsNode<'_>) {
-        let Some(name) = field_text(node, "name", self.source) else { return };
+        let Some(name) = field_text(node, "name", self.source) else {
+            return;
+        };
         let parent_qn = self.current_parent_qn().to_owned();
         let suffix = qualified_suffix(&parent_qn, self.rel_path, name);
         let qn = format!("{}::module::{}", self.rel_path, suffix);
@@ -180,7 +194,12 @@ impl<'s, 'o> Walker<'s, 'o> {
             file_hash: self.file_hash.to_owned(),
             extra_json: serde_json::Value::Null,
         });
-        self.edges.push(contains_edge(&parent_qn, &qn, self.rel_path, start_line(node)));
+        self.edges.push(contains_edge(
+            &parent_qn,
+            &qn,
+            self.rel_path,
+            start_line(node),
+        ));
 
         // Recurse into inline module body.
         if let Some(body) = node.child_by_field_name("body") {
@@ -193,7 +212,9 @@ impl<'s, 'o> Walker<'s, 'o> {
     }
 
     fn visit_named_item(&mut self, node: TsNode<'_>, kind: NodeKind, type_prefix: &str) {
-        let Some(name) = field_text(node, "name", self.source) else { return };
+        let Some(name) = field_text(node, "name", self.source) else {
+            return;
+        };
         let parent_qn = self.current_parent_qn().to_owned();
         let suffix = qualified_suffix(&parent_qn, self.rel_path, name);
         let qn = format!("{}::{}::{}", self.rel_path, type_prefix, suffix);
@@ -215,11 +236,18 @@ impl<'s, 'o> Walker<'s, 'o> {
             file_hash: self.file_hash.to_owned(),
             extra_json: serde_json::Value::Null,
         });
-        self.edges.push(contains_edge(&parent_qn, &qn, self.rel_path, start_line(node)));
+        self.edges.push(contains_edge(
+            &parent_qn,
+            &qn,
+            self.rel_path,
+            start_line(node),
+        ));
     }
 
     fn visit_impl(&mut self, node: TsNode<'_>) {
-        let Some(type_name) = field_text(node, "type", self.source) else { return };
+        let Some(type_name) = field_text(node, "type", self.source) else {
+            return;
+        };
         let trait_name = field_text(node, "trait", self.source);
 
         // Emit an `Implements` edge if this is `impl Trait for Type`.
@@ -368,7 +396,10 @@ fn resolve_same_file_calls(
     // Build callable name → qualified_name map.
     let mut callables: HashMap<String, String> = HashMap::new();
     for n in nodes {
-        if matches!(n.kind, NodeKind::Function | NodeKind::Method | NodeKind::Test) {
+        if matches!(
+            n.kind,
+            NodeKind::Function | NodeKind::Method | NodeKind::Test
+        ) {
             callables.insert(n.name.clone(), n.qualified_name.clone());
         }
     }
@@ -412,12 +443,11 @@ fn walk_for_rust_calls<'a>(
                 let called = node
                     .child_by_field_name("function")
                     .and_then(|f| call_name_from_node(f, source));
-                if let Some(name) = called {
-                    if let Some(callee_qn) = callables.get(name) {
-                        if callee_qn != caller_qn {
-                            edges.push(call_edge(caller_qn, callee_qn, rel_path, start_line(node)));
-                        }
-                    }
+                if let Some(name) = called
+                    && let Some(callee_qn) = callables.get(name)
+                    && callee_qn != caller_qn
+                {
+                    edges.push(call_edge(caller_qn, callee_qn, rel_path, start_line(node)));
                 }
             }
         }
@@ -427,12 +457,11 @@ fn walk_for_rust_calls<'a>(
                 let called = node
                     .child_by_field_name("method")
                     .map(|m| node_text(m, source));
-                if let Some(name) = called {
-                    if let Some(callee_qn) = callables.get(name) {
-                        if callee_qn != caller_qn {
-                            edges.push(call_edge(caller_qn, callee_qn, rel_path, start_line(node)));
-                        }
-                    }
+                if let Some(name) = called
+                    && let Some(callee_qn) = callables.get(name)
+                    && callee_qn != caller_qn
+                {
+                    edges.push(call_edge(caller_qn, callee_qn, rel_path, start_line(node)));
                 }
             }
         }
@@ -449,7 +478,9 @@ fn walk_for_rust_calls<'a>(
 fn call_name_from_node<'a>(node: TsNode<'a>, source: &'a [u8]) -> Option<&'a str> {
     match node.kind() {
         "identifier" => Some(node_text(node, source)),
-        "scoped_identifier" => node.child_by_field_name("name").map(|n| node_text(n, source)),
+        "scoped_identifier" => node
+            .child_by_field_name("name")
+            .map(|n| node_text(n, source)),
         _ => None,
     }
 }
@@ -495,7 +526,11 @@ mod tests {
     #[test]
     fn extracts_free_function() {
         let pf = parse("pub fn greet(name: &str) -> String { todo!() }");
-        let func = pf.nodes.iter().find(|n| n.kind == NodeKind::Function).expect("function");
+        let func = pf
+            .nodes
+            .iter()
+            .find(|n| n.kind == NodeKind::Function)
+            .expect("function");
         assert_eq!(func.name, "greet");
         assert!(func.qualified_name.contains("fn::greet"));
     }
@@ -503,27 +538,43 @@ mod tests {
     #[test]
     fn extracts_struct() {
         let pf = parse("pub struct Foo { x: i32 }");
-        let s = pf.nodes.iter().find(|n| n.kind == NodeKind::Struct).expect("struct");
+        let s = pf
+            .nodes
+            .iter()
+            .find(|n| n.kind == NodeKind::Struct)
+            .expect("struct");
         assert_eq!(s.name, "Foo");
     }
 
     #[test]
     fn extracts_enum() {
         let pf = parse("enum Color { Red, Green, Blue }");
-        assert!(pf.nodes.iter().any(|n| n.kind == NodeKind::Enum && n.name == "Color"));
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|n| n.kind == NodeKind::Enum && n.name == "Color")
+        );
     }
 
     #[test]
     fn extracts_trait() {
         let pf = parse("pub trait Drawable { fn draw(&self); }");
-        assert!(pf.nodes.iter().any(|n| n.kind == NodeKind::Trait && n.name == "Drawable"));
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|n| n.kind == NodeKind::Trait && n.name == "Drawable")
+        );
     }
 
     #[test]
     fn extracts_method_and_impl_edge() {
         let src = "struct Foo; impl Foo { pub fn bar(&self) {} }";
         let pf = parse(src);
-        assert!(pf.nodes.iter().any(|n| n.kind == NodeKind::Method && n.name == "bar"));
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|n| n.kind == NodeKind::Method && n.name == "bar")
+        );
     }
 
     #[test]
@@ -543,16 +594,32 @@ mod tests {
 }
 "#;
         let pf = parse(src);
-        assert!(pf.nodes.iter().any(|n| n.kind == NodeKind::Test && n.name == "it_works"));
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|n| n.kind == NodeKind::Test && n.name == "it_works")
+        );
     }
 
     #[test]
     fn nested_module() {
         let src = "mod outer { mod inner { fn deep() {} } }";
         let pf = parse(src);
-        assert!(pf.nodes.iter().any(|n| n.kind == NodeKind::Module && n.name == "outer"));
-        assert!(pf.nodes.iter().any(|n| n.kind == NodeKind::Module && n.name == "inner"));
-        assert!(pf.nodes.iter().any(|n| n.kind == NodeKind::Function && n.name == "deep"));
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|n| n.kind == NodeKind::Module && n.name == "outer")
+        );
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|n| n.kind == NodeKind::Module && n.name == "inner")
+        );
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|n| n.kind == NodeKind::Function && n.name == "deep")
+        );
     }
 
     #[test]
@@ -573,7 +640,8 @@ fn caller() { helper(); }
             pf.edges.iter().any(|e| e.kind == EdgeKind::Calls
                 && e.source_qn.contains("caller")
                 && e.target_qn.contains("helper")),
-            "expected a Calls edge from caller to helper; edges: {:?}", pf.edges
+            "expected a Calls edge from caller to helper; edges: {:?}",
+            pf.edges
         );
     }
 
@@ -588,8 +656,9 @@ impl S {
 "#;
         let pf = parse(src);
         assert!(
-            pf.edges.iter().any(|e| e.kind == EdgeKind::Calls
-                && e.target_qn.contains("helper")),
+            pf.edges
+                .iter()
+                .any(|e| e.kind == EdgeKind::Calls && e.target_qn.contains("helper")),
             "expected Calls edge to helper from method"
         );
     }
@@ -600,7 +669,9 @@ impl S {
         let src = r#"fn recurse(n: u32) -> u32 { if n == 0 { 0 } else { recurse(n-1) } }"#;
         let pf = parse(src);
         assert!(
-            !pf.edges.iter().any(|e| e.kind == EdgeKind::Calls && e.source_qn == e.target_qn),
+            !pf.edges
+                .iter()
+                .any(|e| e.kind == EdgeKind::Calls && e.source_qn == e.target_qn),
             "recursive call must not produce a self-loop edge"
         );
     }

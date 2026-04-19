@@ -7,11 +7,15 @@ tasks:
     commands:
       - cargo fmt --all
     description: Format the code using rustfmt.
+  format-check:
+    commands:
+      - cargo fmt --all --check
+    description: Verify formatting matches rustfmt output.
   lint:
     commands:
       - cargo clippy --all-targets --all-features -- -D warnings
     description: Lint the code using clippy and treat warnings as errors.
   test:
     commands:
-      - cargo test --all
-    description: Run all tests.
+      - cargo test --workspace
+    description: Run workspace tests.
