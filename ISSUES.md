@@ -982,6 +982,213 @@ The upstream repo exposes a stdio MCP server, but the report makes clear this sh
 
 ---
 
+## Post-MVP / Atlas v2 Roadmap
+
+These phases extend v1 after core graph/build/update/query path is reliable.
+
+## Phase 18 — Retrieval & Search Intelligence
+
+### 18.1 Hybrid search
+
+- [ ] keep SQLite FTS5 as baseline
+- [ ] add embeddings behind optional toggle
+- [ ] chunk symbol-sized nodes for retrieval
+- [ ] generate embeddings
+- [ ] store vectors in SQLite or external store
+- [ ] implement hybrid retrieval:
+  - [ ] FTS results
+  - [ ] vector results
+  - [ ] reciprocal-rank fusion merge
+
+### 18.2 Ranking improvements
+
+- [ ] exact name boost
+- [ ] qualified-name boost
+- [ ] fuzzy match
+- [ ] camelCase/snake_case token split
+- [ ] recent-file boost
+- [ ] API-level boost
+
+### 18.3 Graph-aware search
+
+- [ ] expand results to callers
+- [ ] expand results to callees
+- [ ] expand results to imports
+- [ ] rank by graph distance
+
+## Phase 19 — Advanced Impact Analysis
+
+### 19.1 Weighted traversal
+
+- [ ] assign traversal weights:
+  - [ ] calls > imports > references
+- [ ] add confidence tiers
+
+### 19.2 Impact scoring
+
+- [ ] compute `impact_score` per node
+- [ ] rank impacted nodes
+
+### 19.3 Change classification
+
+- [ ] detect API change
+- [ ] detect signature change
+- [ ] detect internal change
+- [ ] assign risk level
+
+### 19.4 Test impact
+
+- [ ] map tests to functions
+- [ ] list affected tests
+- [ ] detect missing tests
+
+### 19.5 Boundary detection
+
+- [ ] detect cross-module changes
+- [ ] highlight architecture violations
+
+## Phase 20 — Performance & Incremental Engine
+
+### 20.1 Incremental parsing
+
+- [ ] partial file reparse
+- [ ] optional Tree-sitter incremental parsing
+
+### 20.2 Dependency invalidation
+
+- [ ] improve `find_dependents`
+- [ ] reduce over-invalidation
+
+### 20.3 Parallelization
+
+- [ ] optimize worker pool
+- [ ] batch DB writes
+- [ ] reduce lock contention
+
+### 20.4 Large-repo handling
+
+- [ ] streaming parsing
+- [ ] memory caps
+- [ ] chunked DB writes
+
+## Phase 21 — Developer Workflow Features
+
+### 21.1 Explain change
+
+- [ ] summarize diff
+- [ ] list impacted components
+- [ ] explain ripple effects
+
+### 21.2 Smart review context
+
+- [ ] prioritize high-impact nodes
+- [ ] include call chains
+- [ ] remove noise
+
+### 21.3 Natural-language queries
+
+- [ ] support `where is X used`
+- [ ] support `what calls Y`
+- [ ] support `what breaks if I change Z`
+- [ ] map intent to graph query
+
+### 21.4 CLI UX
+
+- [ ] interactive shell (`atlas shell`)
+- [ ] fuzzy search
+- [ ] paging
+- [ ] colored output
+
+## Phase 22 — MCP / Agent Integration
+
+### 22.1 Core tools
+
+- [ ] `get_review_context`
+- [ ] `get_impact_radius`
+- [ ] `query_graph`
+- [ ] `explain_change`
+
+### 22.2 Output design
+
+- [ ] structured JSON
+- [ ] stable schemas
+- [ ] token-efficient responses
+
+### 22.3 Context optimization
+
+- [ ] return summaries only
+- [ ] limit node count
+- [ ] prioritize relevance
+
+## Phase 23 — Observability
+
+### 23.1 Metrics
+
+- [ ] indexing time
+- [ ] nodes/sec
+- [ ] query latency
+- [ ] impact latency
+
+### 23.2 Debug tools
+
+- [ ] `atlas doctor`
+- [ ] `atlas debug graph`
+- [ ] `atlas explain-query`
+
+### 23.3 Data integrity
+
+- [ ] orphan-node detection
+- [ ] edge validation
+- [ ] DB consistency checks
+
+## Phase 24 — Optional Advanced Features
+
+### 24.1 Code intelligence
+
+- [ ] similar-function detection
+- [ ] duplicate detection
+
+### 24.2 Architecture insights
+
+- [ ] detect layers
+- [ ] infer modules
+- [ ] label components
+
+### 24.3 Watch mode
+
+- [ ] auto-update on file change
+
+### 24.4 Multi-repo
+
+- [ ] shared graph
+- [ ] cross-repo impact
+
+## Phase 25 — Deferred Lowest Priority
+
+### 25.1 Wiki / docs generation
+
+- [ ] generate Markdown docs
+- [ ] module pages
+- [ ] function pages
+- [ ] static site export
+
+### 25.2 v2 completion criteria
+
+- [ ] search beats grep
+- [ ] impact analysis is reliable
+- [ ] review context is useful
+- [ ] MCP tools are usable by agents
+- [ ] performance scales to large repos
+
+### 25.3 Guiding principle
+
+- [ ] avoid feature growth without signal quality gains
+- [ ] prioritize better ranking
+- [ ] prioritize better context
+- [ ] prioritize better signals
+
+---
+
 ## MVP Definition
 
 Release 1 is done when this works end-to-end:
@@ -1039,19 +1246,20 @@ And the system has:
 - [x] Go language handler
 - [x] node/edge extraction
 
+
 ### Slice 5 — build/update
 
-- [ ] full build pipeline
-- [ ] single-writer DB loop
-- [ ] incremental update
-- [ ] dependent invalidation
+- [x] full build pipeline
+- [x] single-writer DB loop
+- [x] incremental update
+- [x] dependent invalidation
 
 ### Slice 6 — graph intelligence
 
-- [ ] impact-radius SQL
-- [ ] query helpers
-- [ ] review-context assembly
-- [ ] detect-changes summary
+- [x] impact-radius SQL
+- [x] query helpers
+- [x] review-context assembly
+- [x] detect-changes summary
 
 ### Slice 7 — polish
 
