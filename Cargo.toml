@@ -1,5 +1,39 @@
 [workspace]
 members = [
   "packages/atlas-cli",
-  "packages/atlas-engine",
+  "packages/atlas-core",
+  "packages/atlas-store-sqlite",
+  "packages/atlas-repo",
+  "packages/atlas-parser",
+  "packages/atlas-search",
+  "packages/atlas-review",
+  "packages/atlas-impact",
 ]
+resolver = "2"
+
+[workspace.dependencies]
+# errors
+thiserror = "2"
+anyhow = "1"
+
+# serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# paths / hash / time
+camino = { version = "1", features = ["serde1"] }
+sha2 = "0.10"
+time = { version = "0.3", features = ["serde"] }
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# SQLite
+rusqlite = { version = "0.32", features = ["bundled", "bundled-full"] }
+
+# internal crates
+atlas-core = { path = "packages/atlas-core" }

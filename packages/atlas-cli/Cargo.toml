@@ -3,4 +3,15 @@ name = "atlas-cli"
 version = "0.1.0"
 edition = "2024"
 
+[[bin]]
+name = "atlas"
+path = "src/main.rs"
+
 [dependencies]
+atlas-core.workspace = true
+atlas-store-sqlite = { path = "../atlas-store-sqlite" }
+anyhow.workspace = true
+clap.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

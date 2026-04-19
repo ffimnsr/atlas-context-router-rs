@@ -81,18 +81,18 @@ The upstream repo’s real kernel is the repository scanner, parser layer, SQLit
 
 ### 0.3 Choose Rust crate strategy
 
-- [ ] Start with one Cargo workspace
-- [ ] Create crates:
-  - [ ] `packages/atlas-cli`
-  - [ ] `packages/atlas-core`
-  - [ ] `packages/atlas-repo`
-  - [ ] `packages/atlas-parser`
-  - [ ] `packages/atlas-store-sqlite`
-  - [ ] `packages/atlas-search`
-  - [ ] `packages/atlas-review`
-  - [ ] `packages/atlas-impact`
+- [x] Start with one Cargo workspace
+- [x] Create crates:
+  - [x] `packages/atlas-cli`
+  - [x] `packages/atlas-core`
+  - [x] `packages/atlas-repo`
+  - [x] `packages/atlas-parser`
+  - [x] `packages/atlas-store-sqlite`
+  - [x] `packages/atlas-search`
+  - [x] `packages/atlas-review`
+  - [x] `packages/atlas-impact`
   - [ ] `packages/atlas-mcp` (later)
-- [ ] Keep public API narrow between crates
+- [x] Keep public API narrow between crates
 
 ---
 
@@ -100,35 +100,35 @@ The upstream repo’s real kernel is the repository scanner, parser layer, SQLit
 
 ### 1.1 Create workspace
 
-- [ ] `cargo new --bin packages/atlas-cli`
-- [ ] `cargo new --lib packages/atlas-core`
-- [ ] `cargo new --lib packages/atlas-repo`
-- [ ] `cargo new --lib packages/atlas-parser`
-- [ ] `cargo new --lib packages/atlas-store-sqlite`
-- [ ] `cargo new --lib packages/atlas-search`
-- [ ] `cargo new --lib packages/atlas-review`
-- [ ] `cargo new --lib packages/atlas-impact`
+- [x] `cargo new --bin packages/atlas-cli`
+- [x] `cargo new --lib packages/atlas-core`
+- [x] `cargo new --lib packages/atlas-repo`
+- [x] `cargo new --lib packages/atlas-parser`
+- [x] `cargo new --lib packages/atlas-store-sqlite`
+- [x] `cargo new --lib packages/atlas-search`
+- [x] `cargo new --lib packages/atlas-review`
+- [x] `cargo new --lib packages/atlas-impact`
 
 ### 1.2 Choose core dependencies
 
-- [ ] CLI:
-  - [ ] `clap`
+- [x] CLI:
+  - [x] `clap`
   - [ ] `clap_complete` (later)
-- [ ] Errors:
-  - [ ] `thiserror`
-  - [ ] `anyhow` for CLI layer only
-- [ ] Serialization:
-  - [ ] `serde`
-  - [ ] `serde_json`
-- [ ] Paths/hash/time:
-  - [ ] `camino`
+- [x] Errors:
+  - [x] `thiserror`
+  - [x] `anyhow` for CLI layer only
+- [x] Serialization:
+  - [x] `serde`
+  - [x] `serde_json`
+- [x] Paths/hash/time:
+  - [x] `camino`
   - [ ] `sha2`
   - [ ] `time`
-- [ ] SQLite:
-  - [ ] `rusqlite` with bundled SQLite + FTS5 support
-- [ ] Logging:
-  - [ ] `tracing`
-  - [ ] `tracing-subscriber`
+- [x] SQLite:
+  - [x] `rusqlite` with bundled SQLite + FTS5 support
+- [x] Logging:
+  - [x] `tracing`
+  - [x] `tracing-subscriber`
 - [ ] Concurrency:
   - [ ] `rayon` or `crossbeam`
   - [ ] prefer std threads first if simpler
@@ -157,75 +157,75 @@ The current project is fundamentally a code graph persisted in SQLite, with node
 
 ### 2.1 Define node kinds
 
-- [ ] `File`
-- [ ] `Package`
-- [ ] `Module`
-- [ ] `Import`
-- [ ] `Class`
-- [ ] `Interface`
-- [ ] `Struct`
-- [ ] `Enum`
-- [ ] `Function`
-- [ ] `Method`
-- [ ] `Variable`
-- [ ] `Constant`
-- [ ] `Trait`
-- [ ] `Test`
+- [x] `File`
+- [x] `Package`
+- [x] `Module`
+- [x] `Import`
+- [x] `Class`
+- [x] `Interface`
+- [x] `Struct`
+- [x] `Enum`
+- [x] `Function`
+- [x] `Method`
+- [x] `Variable`
+- [x] `Constant`
+- [x] `Trait`
+- [x] `Test`
 
 ### 2.2 Define edge kinds
 
-- [ ] `Contains`
-- [ ] `Imports`
-- [ ] `Calls`
-- [ ] `Defines`
-- [ ] `Implements`
-- [ ] `Extends`
-- [ ] `Tests`
-- [ ] `References`
-- [ ] `TestedBy`
+- [x] `Contains`
+- [x] `Imports`
+- [x] `Calls`
+- [x] `Defines`
+- [x] `Implements`
+- [x] `Extends`
+- [x] `Tests`
+- [x] `References`
+- [x] `TestedBy`
 
 ### 2.3 Define `Node`
 
 - [ ] Create `NodeId` type
-- [ ] Include:
-  - [ ] `id: i64`
-  - [ ] `kind: NodeKind`
-  - [ ] `name: String`
-  - [ ] `qualified_name: String`
-  - [ ] `file_path: String`
-  - [ ] `line_start: u32`
-  - [ ] `line_end: u32`
-  - [ ] `language: String`
-  - [ ] `parent_name: Option<String>`
-  - [ ] `params: Option<String>`
-  - [ ] `return_type: Option<String>`
-  - [ ] `modifiers: Option<String>`
-  - [ ] `is_test: bool`
-  - [ ] `file_hash: String`
-  - [ ] `extra_json: serde_json::Value`
+- [x] Include:
+  - [x] `id: i64`
+  - [x] `kind: NodeKind`
+  - [x] `name: String`
+  - [x] `qualified_name: String`
+  - [x] `file_path: String`
+  - [x] `line_start: u32`
+  - [x] `line_end: u32`
+  - [x] `language: String`
+  - [x] `parent_name: Option<String>`
+  - [x] `params: Option<String>`
+  - [x] `return_type: Option<String>`
+  - [x] `modifiers: Option<String>`
+  - [x] `is_test: bool`
+  - [x] `file_hash: String`
+  - [x] `extra_json: serde_json::Value`
 
 ### 2.4 Define `Edge`
 
-- [ ] Include:
-  - [ ] `id: i64`
-  - [ ] `kind: EdgeKind`
-  - [ ] `source_qn: String`
-  - [ ] `target_qn: String`
-  - [ ] `file_path: String`
-  - [ ] `line: Option<u32>`
-  - [ ] `confidence: f32`
-  - [ ] `confidence_tier: Option<String>`
-  - [ ] `extra_json: serde_json::Value`
+- [x] Include:
+  - [x] `id: i64`
+  - [x] `kind: EdgeKind`
+  - [x] `source_qn: String`
+  - [x] `target_qn: String`
+  - [x] `file_path: String`
+  - [x] `line: Option<u32>`
+  - [x] `confidence: f32`
+  - [x] `confidence_tier: Option<String>`
+  - [x] `extra_json: serde_json::Value`
 
 ### 2.5 Define supporting types
 
-- [ ] `FileRecord`
-- [ ] `GraphStats`
-- [ ] `ChangedFile`
-- [ ] `ImpactResult`
-- [ ] `ReviewContext`
-- [ ] `SearchQuery`
-- [ ] `ScoredNode`
+- [x] `FileRecord`
+- [x] `GraphStats`
+- [x] `ChangedFile`
+- [x] `ImpactResult`
+- [x] `ReviewContext`
+- [x] `SearchQuery`
+- [x] `ScoredNode`
 
 ---
 
@@ -235,29 +235,29 @@ The upstream implementation already treats SQLite as the durable center of the s
 
 ### 3.1 Open database and pragmas
 
-- [ ] Create DB at `.atlas/codegraph.sqlite`
-- [ ] On open, set:
-  - [ ] `PRAGMA journal_mode=WAL;`
-  - [ ] `PRAGMA synchronous=NORMAL;`
-  - [ ] `PRAGMA foreign_keys=ON;`
-  - [ ] `PRAGMA busy_timeout=5000;`
-- [ ] Use one write connection policy for mutation-heavy operations
+- [x] Create DB at `.atlas/codegraph.sqlite`
+- [x] On open, set:
+  - [x] `PRAGMA journal_mode=WAL;`
+  - [x] `PRAGMA synchronous=NORMAL;`
+  - [x] `PRAGMA foreign_keys=ON;`
+  - [x] `PRAGMA busy_timeout=5000;`
+- [x] Use one write connection policy for mutation-heavy operations
 - [ ] Add startup integrity check command later
 
 ### 3.2 Migrations
 
-- [ ] Create migration runner
-- [ ] Add schema version table
-- [ ] Make migrations idempotent
+- [x] Create migration runner
+- [x] Add schema version table
+- [x] Make migrations idempotent
 - [ ] Add golden-schema tests
 
 ### 3.3 Tables
 
-- [ ] `metadata`
-- [ ] `files`
-- [ ] `nodes`
-- [ ] `edges`
-- [ ] `nodes_fts`
+- [x] `metadata`
+- [x] `files`
+- [x] `nodes`
+- [x] `edges`
+- [x] `nodes_fts`
 - [ ] reserve later:
   - [ ] `flows`
   - [ ] `flow_memberships`
@@ -265,77 +265,77 @@ The upstream implementation already treats SQLite as the durable center of the s
 
 ### 3.4 `metadata` table
 
-- [ ] `key TEXT PRIMARY KEY`
-- [ ] `value TEXT NOT NULL`
+- [x] `key TEXT PRIMARY KEY`
+- [x] `value TEXT NOT NULL`
 
 ### 3.5 `files` table
 
-- [ ] `path TEXT PRIMARY KEY`
-- [ ] `language TEXT`
-- [ ] `hash TEXT NOT NULL`
-- [ ] `size INTEGER`
-- [ ] `indexed_at TEXT NOT NULL`
+- [x] `path TEXT PRIMARY KEY`
+- [x] `language TEXT`
+- [x] `hash TEXT NOT NULL`
+- [x] `size INTEGER`
+- [x] `indexed_at TEXT NOT NULL`
 
 ### 3.6 `nodes` table
 
-- [ ] `id INTEGER PRIMARY KEY`
-- [ ] `kind TEXT NOT NULL`
-- [ ] `name TEXT NOT NULL`
-- [ ] `qualified_name TEXT NOT NULL UNIQUE`
-- [ ] `file_path TEXT NOT NULL`
-- [ ] `line_start INTEGER`
-- [ ] `line_end INTEGER`
-- [ ] `language TEXT`
-- [ ] `parent_name TEXT`
-- [ ] `params TEXT`
-- [ ] `return_type TEXT`
-- [ ] `modifiers TEXT`
-- [ ] `is_test INTEGER NOT NULL DEFAULT 0`
-- [ ] `file_hash TEXT`
-- [ ] `extra_json TEXT`
+- [x] `id INTEGER PRIMARY KEY`
+- [x] `kind TEXT NOT NULL`
+- [x] `name TEXT NOT NULL`
+- [x] `qualified_name TEXT NOT NULL UNIQUE`
+- [x] `file_path TEXT NOT NULL`
+- [x] `line_start INTEGER`
+- [x] `line_end INTEGER`
+- [x] `language TEXT`
+- [x] `parent_name TEXT`
+- [x] `params TEXT`
+- [x] `return_type TEXT`
+- [x] `modifiers TEXT`
+- [x] `is_test INTEGER NOT NULL DEFAULT 0`
+- [x] `file_hash TEXT`
+- [x] `extra_json TEXT`
 
 ### 3.7 `edges` table
 
-- [ ] `id INTEGER PRIMARY KEY`
-- [ ] `kind TEXT NOT NULL`
-- [ ] `source_qualified TEXT NOT NULL`
-- [ ] `target_qualified TEXT NOT NULL`
-- [ ] `file_path TEXT`
-- [ ] `line INTEGER`
-- [ ] `confidence REAL DEFAULT 1.0`
-- [ ] `confidence_tier TEXT`
-- [ ] `extra_json TEXT`
+- [x] `id INTEGER PRIMARY KEY`
+- [x] `kind TEXT NOT NULL`
+- [x] `source_qualified TEXT NOT NULL`
+- [x] `target_qualified TEXT NOT NULL`
+- [x] `file_path TEXT`
+- [x] `line INTEGER`
+- [x] `confidence REAL DEFAULT 1.0`
+- [x] `confidence_tier TEXT`
+- [x] `extra_json TEXT`
 
 ### 3.8 Indexes
 
-- [ ] `idx_nodes_kind`
-- [ ] `idx_nodes_file_path`
-- [ ] `idx_nodes_qualified_name`
-- [ ] `idx_nodes_language`
-- [ ] `idx_edges_kind`
-- [ ] `idx_edges_source`
-- [ ] `idx_edges_target`
-- [ ] `idx_edges_file_path`
+- [x] `idx_nodes_kind`
+- [x] `idx_nodes_file_path`
+- [x] `idx_nodes_qualified_name`
+- [x] `idx_nodes_language`
+- [x] `idx_edges_kind`
+- [x] `idx_edges_source`
+- [x] `idx_edges_target`
+- [x] `idx_edges_file_path`
 
 ### 3.9 FTS5 table
 
-- [ ] Create `nodes_fts` virtual table
-- [ ] Index:
-  - [ ] `qualified_name`
-  - [ ] `name`
-  - [ ] `kind`
-  - [ ] `file_path`
-  - [ ] `language`
-  - [ ] `params`
-  - [ ] `return_type`
-  - [ ] `modifiers`
-- [ ] Start with FTS only
-- [ ] Keep hybrid/vector search out of v1
+- [x] Create `nodes_fts` virtual table
+- [x] Index:
+  - [x] `qualified_name`
+  - [x] `name`
+  - [x] `kind`
+  - [x] `file_path`
+  - [x] `language`
+  - [x] `params`
+  - [x] `return_type`
+  - [x] `modifiers`
+- [x] Start with FTS only
+- [x] Keep hybrid/vector search out of v1
 
 ### 3.10 Store API
 
-- [ ] `open(path)`
-- [ ] `migrate()`
+- [x] `open(path)`
+- [x] `migrate()`
 - [ ] `replace_file_graph(file_path, file_hash, nodes, edges)`
 - [ ] `replace_batch(parsed_files)`
 - [ ] `delete_file_graph(file_path)`
@@ -344,7 +344,7 @@ The upstream implementation already treats SQLite as the durable center of the s
 - [ ] `find_dependents(changed_files)`
 - [ ] `impact_radius(changed_files, max_depth, max_nodes)`
 - [ ] `search(query)`
-- [ ] `stats()`
+- [x] `stats()`
 
 ### 3.11 Transaction semantics
 
@@ -791,39 +791,39 @@ The main user benefit of the upstream project is not just building the graph, bu
 
 ### 13.1 Clap commands
 
-- [ ] root command with global flags:
-  - [ ] `--repo`
-  - [ ] `--db`
-  - [ ] `--verbose`
-  - [ ] `--json`
-- [ ] subcommands:
-  - [ ] `init`
-  - [ ] `build`
-  - [ ] `update`
-  - [ ] `status`
-  - [ ] `detect-changes`
-  - [ ] `query`
-  - [ ] `impact`
-  - [ ] `review-context`
+- [x] root command with global flags:
+  - [x] `--repo`
+  - [x] `--db`
+  - [x] `--verbose`
+  - [x] `--json`
+- [x] subcommands:
+  - [x] `init`
+  - [x] `build`
+  - [x] `update`
+  - [x] `status`
+  - [x] `detect-changes`
+  - [x] `query`
+  - [x] `impact`
+  - [x] `review-context`
 
 ### 13.2 Output styles
 
-- [ ] human-readable output
-- [ ] structured JSON output
+- [x] human-readable output
+- [x] structured JSON output
 - [ ] stable machine schema for automation
-- [ ] concise error messages
-- [ ] rich verbose diagnostics when requested
+- [x] concise error messages
+- [x] rich verbose diagnostics when requested
 
 ### 13.3 Status command
 
-- [ ] DB path
-- [ ] repo root
-- [ ] indexed file count
-- [ ] node count
-- [ ] edge count
-- [ ] nodes by kind
-- [ ] languages present
-- [ ] last build/update time
+- [x] DB path
+- [x] repo root
+- [x] indexed file count
+- [x] node count
+- [x] edge count
+- [x] nodes by kind
+- [x] languages present
+- [x] last build/update time
 - [ ] changed files since base
 
 ---
@@ -1003,11 +1003,11 @@ And the system has:
 
 ### Slice 1 — foundation
 
-- [ ] workspace
-- [ ] error types
-- [ ] logging
-- [ ] SQLite open/migrate
-- [ ] CLI scaffold
+- [x] workspace
+- [x] error types
+- [x] logging
+- [x] SQLite open/migrate
+- [x] CLI scaffold
 
 ### Slice 2 — storage
 

@@ -1,0 +1,10 @@
+[package]
+name = "atlas-repo"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+atlas-core.workspace = true
+anyhow.workspace = true
+camino.workspace = true
+tracing.workspace = true
