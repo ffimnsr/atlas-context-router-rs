@@ -1115,25 +1115,25 @@ These phases extend v1 after core graph/build/update/query path is reliable.
 
 ### 20.1 Incremental parsing
 
-- [ ] partial file reparse
+- [x] partial file reparse
 - [ ] optional Tree-sitter incremental parsing
 
 ### 20.2 Dependency invalidation
 
-- [ ] improve `find_dependents`
-- [ ] reduce over-invalidation
+- [x] improve `find_dependents`
+- [x] reduce over-invalidation
 
 ### 20.3 Parallelization
 
-- [ ] optimize worker pool
-- [ ] batch DB writes
-- [ ] reduce lock contention
+- [x] optimize worker pool
+- [x] batch DB writes
+- [x] reduce lock contention
 
 ### 20.4 Large-repo handling
 
-- [ ] streaming parsing
-- [ ] memory caps
-- [ ] chunked DB writes
+- [x] streaming parsing
+- [x] memory caps
+- [x] chunked DB writes
 
 ## Phase 21 — Developer Workflow Features
 
@@ -1163,80 +1163,620 @@ These phases extend v1 after core graph/build/update/query path is reliable.
 - [ ] paging
 - [ ] colored output
 
-## Phase 22 — MCP / Agent Integration
+## Phase 22 — Context Engine
 
-### 22.1 Core tools
+Build deterministic retrieval-and-selection layer over graph. No LLM dependence. Input structured request or simple text. Output bounded, explainable context for CLI, review flow, later agent flow.
+
+### 22.1 Scope and responsibilities
+
+- [ ] accept structured or semi-structured request
+- [ ] resolve target symbol(s), file(s), or change-set
+- [ ] retrieve nearby graph structure
+- [ ] rank retrieved items by relevance
+- [ ] trim to bounded result size
+- [ ] return machine-readable context
+
+### 22.2 Request model
+
+- [ ] define `ContextIntent` enum:
+  - [ ] `ImpactAnalysis`
+  - [ ] `UsageLookup`
+  - [ ] `RefactorSafety`
+  - [ ] `DeadCodeCheck`
+  - [ ] `RenamePreview`
+  - [ ] `DependencyRemoval`
+  - [ ] `ReviewContext`
+  - [ ] `SymbolContext`
+- [ ] define `ContextTarget` variants:
+  - [ ] symbol qualified name
+  - [ ] symbol name
+  - [ ] file path
+  - [ ] changed file list
+  - [ ] changed symbol list
+  - [ ] edge query seed
+- [ ] define `ContextRequest` fields:
+  - [ ] intent
+  - [ ] target
+  - [ ] max_nodes
+  - [ ] max_edges
+  - [ ] max_files
+  - [ ] max_depth
+  - [ ] include_code_spans
+  - [ ] include_tests
+  - [ ] include_imports
+  - [ ] include_callers
+  - [ ] include_callees
+  - [ ] include_neighbors
+
+### 22.3 Response model
+
+- [ ] define `ContextResult`:
+  - [ ] resolved target nodes
+  - [ ] selected nodes
+  - [ ] selected edges
+  - [ ] selected files
+  - [ ] code spans
+  - [ ] relevance scores
+  - [ ] truncation flags
+  - [ ] retrieval metadata
+- [ ] define `SelectedNode`:
+  - [ ] node id
+  - [ ] qualified name
+  - [ ] kind
+  - [ ] file path
+  - [ ] line span
+  - [ ] relevance score
+  - [ ] selection reason
+- [ ] define `SelectedEdge`:
+  - [ ] source
+  - [ ] target
+  - [ ] edge kind
+  - [ ] depth
+  - [ ] relevance score
+  - [ ] selection reason
+- [ ] define `SelectedFile`:
+  - [ ] path
+  - [ ] language
+  - [ ] reason included
+  - [ ] node count included
+
+### 22.4 Intent parsing and resolution
+
+- [ ] implement exact symbol lookup path
+- [ ] implement simple query classifier:
+  - [ ] contains `what breaks`
+  - [ ] contains `used by`
+  - [ ] contains `who calls`
+  - [ ] contains `safe to refactor`
+  - [ ] contains `dead code`
+  - [ ] contains `rename`
+  - [ ] contains `remove dependency`
+- [ ] add regex extraction for:
+  - [ ] quoted symbol names
+  - [ ] file paths
+  - [ ] function-like names
+  - [ ] method-like names
+- [ ] fallback to symbol search + context expansion
+- [ ] resolve by qualified name
+- [ ] resolve by exact symbol name
+- [ ] resolve by file path
+- [ ] resolve by ranked search if ambiguous
+- [ ] return ambiguity metadata if multiple candidates remain
+
+### 22.5 Retrieval, ranking, trimming
+
+- [ ] fetch direct node record
+- [ ] fetch direct callers
+- [ ] fetch direct callees
+- [ ] fetch import edges
+- [ ] fetch file containment edges
+- [ ] fetch test adjacency if enabled
+- [ ] fetch one-hop neighbors
+- [ ] fetch multi-hop neighbors if requested
+- [ ] rank highest:
+  - [ ] exact target node
+  - [ ] direct callers
+  - [ ] direct callees
+- [ ] rank medium:
+  - [ ] same-file siblings
+  - [ ] tests targeting target node
+  - [ ] imports linked to target file
+- [ ] rank lower:
+  - [ ] second-hop neighbors
+  - [ ] broad file-level nodes
+  - [ ] weak reference edges
+- [ ] add scoring factors:
+  - [ ] graph distance
+  - [ ] edge confidence
+  - [ ] same file boost
+  - [ ] same package/module boost
+  - [ ] public API boost
+  - [ ] test adjacency boost
+- [ ] hard-limit nodes
+- [ ] hard-limit edges
+- [ ] hard-limit files
+- [ ] prefer direct relationships over broad context
+- [ ] drop low-confidence edges first
+- [ ] drop distant neighbors before dropping direct callers/callees
+- [ ] mark output as truncated if limits applied
+
+### 22.6 Code spans, APIs, tests
+
+- [ ] include target symbol span
+- [ ] include caller/callee spans if enabled
+- [ ] include nearest relevant lines only
+- [ ] avoid whole-file dumps by default
+- [ ] provide file path + line range references
+- [ ] create `ContextEngine`
+- [ ] implement:
+  - [ ] `resolve_target`
+  - [ ] `build_symbol_context`
+  - [ ] `build_review_context`
+  - [ ] `build_impact_context`
+  - [ ] `rank_context`
+  - [ ] `trim_context`
+- [ ] tests:
+  - [ ] exact symbol lookup
+  - [ ] ambiguous symbol resolution
+  - [ ] missing symbol behavior
+  - [ ] bounded node trimming
+  - [ ] caller/callee prioritization
+  - [ ] include/exclude tests behavior
+  - [ ] code span selection accuracy
+
+## Phase 23 — Autonomous Code Reasoning
+
+Answer structural questions from graph + parser + store facts only. No unsupported claims. Return structured findings with evidence and certainty.
+
+### 23.1 Engine responsibilities and core types
+
+- [ ] analyze removal impact
+- [ ] detect dead code candidates
+- [ ] score refactor safety
+- [ ] validate dependency removal
+- [ ] inspect rename blast radius
+- [ ] classify change risk
+- [ ] detect missing test adjacency
+- [ ] explain graph facts behind result
+- [ ] define `ReasoningResult`
+- [ ] define `ReasoningEvidence`
+- [ ] define `ReasoningWarning`
+- [ ] define `ConfidenceTier`
+- [ ] define `SafetyScore`
+- [ ] define `ImpactClass`
+- [ ] define `DeadCodeCandidate`
+- [ ] define `DependencyRemovalResult`
+- [ ] define `RenamePreviewResult`
+
+### 23.2 Removal impact analysis
+
+- [ ] accept symbol or file as seed
+- [ ] find direct inbound edges
+- [ ] find direct outbound edges
+- [ ] traverse impact graph to configured depth
+- [ ] separate:
+  - [ ] definitely impacted
+  - [ ] probably impacted
+  - [ ] weakly related
+- [ ] return:
+  - [ ] impacted symbols
+  - [ ] impacted files
+  - [ ] impacted tests
+  - [ ] relevant edges
+- [ ] use high-confidence heuristics:
+  - [ ] direct call edges
+  - [ ] direct import edges
+  - [ ] direct test links
+- [ ] use medium-confidence heuristics:
+  - [ ] inferred symbol links
+  - [ ] unresolved selector calls within same file/package
+- [ ] use low-confidence heuristics:
+  - [ ] textual references only
+  - [ ] weak unresolved edges
+- [ ] include seed node(s)
+- [ ] include per-node depth
+- [ ] include edge kind per path
+- [ ] include impact class
+
+### 23.3 Dead code, safety, dependency removal
+
+- [ ] detect dead code candidates when:
+  - [ ] no inbound call edges
+  - [ ] no inbound reference edges
+  - [ ] not public/exported
+  - [ ] not in configured entrypoint allowlist
+  - [ ] not framework entrypoint
+  - [ ] not test
+  - [ ] not referenced by known routing/config conventions
+  - [ ] not dynamically registered where detectable
+- [ ] support suppression / allowlists:
+  - [ ] main entrypoints
+  - [ ] CLI command handlers
+  - [ ] framework lifecycle hooks
+  - [ ] exported plugin symbols
+  - [ ] reflection-based registration points
+  - [ ] manual ignore list
+- [ ] dead-code output:
+  - [ ] candidate symbol
+  - [ ] why flagged
+  - [ ] certainty tier
+  - [ ] blockers preventing auto-removal
+- [ ] score refactor safety from:
+  - [ ] fan-in
+  - [ ] fan-out
+  - [ ] visibility
+  - [ ] file/module scope
+  - [ ] public API status
+  - [ ] linked test count
+  - [ ] dependency depth
+  - [ ] dynamic usage risk
+  - [ ] unresolved edge count
+- [ ] mark safer when:
+  - [ ] private/internal
+  - [ ] low fan-in
+  - [ ] low fan-out
+  - [ ] strong test adjacency
+  - [ ] self-contained in one file/module
+- [ ] mark riskier when:
+  - [ ] public/exported
+  - [ ] many inbound callers
+  - [ ] many cross-module callers
+  - [ ] unresolved/dynamic references
+  - [ ] no tests nearby
+- [ ] refactor-safety output:
+  - [ ] numeric score
+  - [ ] safety band: `safe`, `caution`, `risky`
+  - [ ] reasons list
+  - [ ] suggested validations
+- [ ] validate dependency removal:
+  - [ ] detect unused imports
+  - [ ] detect unreferenced dependencies
+  - [ ] verify zero references in graph
+  - [ ] verify zero references in same-file AST if needed
+  - [ ] verify no tests depend on target
+  - [ ] flag dynamic/reflective uncertainty
+- [ ] dependency-removal output:
+  - [ ] removable boolean
+  - [ ] blocking references
+  - [ ] confidence tier
+  - [ ] suggested cleanup edits
+
+### 23.4 Rename radius, test adjacency, risk, APIs
+
+- [ ] preview rename blast radius:
+  - [ ] locate definition
+  - [ ] locate all references
+  - [ ] classify references as same-file, same-module/package, cross-module/package, tests
+  - [ ] detect unresolved references needing manual review
+  - [ ] count affected files
+  - [ ] count affected symbols
+- [ ] rename output:
+  - [ ] affected references
+  - [ ] affected files
+  - [ ] risk level
+  - [ ] collision warnings
+  - [ ] manual review flags
+- [ ] estimate test adjacency:
+  - [ ] map tests to symbols where possible
+  - [ ] map changed symbol to direct tests
+  - [ ] map changed symbol to same-file tests
+  - [ ] map changed symbol to same-module tests
+  - [ ] flag no linked tests
+  - [ ] flag weak test adjacency only
+- [ ] test-adjacency output:
+  - [ ] linked tests
+  - [ ] coverage strength
+  - [ ] recommendation flag
+- [ ] classify change risk from:
+  - [ ] public API touched
+  - [ ] test adjacency strength
+  - [ ] cross-module impact
+  - [ ] inbound caller count
+  - [ ] unresolved references
+  - [ ] dependency fan-out
+  - [ ] impacted file count
+- [ ] risk output:
+  - [ ] low / medium / high
+  - [ ] contributing factors
+  - [ ] suggested review focus
+- [ ] create `ReasoningEngine`
+- [ ] implement:
+  - [ ] `analyze_removal`
+  - [ ] `detect_dead_code`
+  - [ ] `score_refactor_safety`
+  - [ ] `check_dependency_removal`
+  - [ ] `preview_rename_radius`
+  - [ ] `classify_change_risk`
+  - [ ] `find_test_adjacency`
+- [ ] tests:
+  - [ ] simple call graph impact
+  - [ ] cyclic graph impact
+  - [ ] dead private function candidate
+  - [ ] exported/public function not flagged
+  - [ ] entrypoint suppression
+  - [ ] rename blast radius same file
+  - [ ] rename blast radius cross module
+  - [ ] dependency removal blocked by reference
+  - [ ] missing test signal for changed symbol
+  - [ ] risk scoring sanity checks
+
+## Phase 24 — Smart Refactoring Core
+
+Deterministic, syntax-aware transforms backed by graph validation. Start with strongly checkable operations only: rename, dead-code removal, import cleanup. Keep extract-function as detection/planning first.
+
+### 24.1 Responsibilities and operation model
+
+- [ ] plan refactor
+- [ ] simulate impact before apply
+- [ ] apply deterministic text/AST edits
+- [ ] validate no collisions
+- [ ] validate references updated
+- [ ] emit patch preview
+- [ ] support dry-run mode
+- [ ] support rollback on validation failure
+- [ ] define `RefactorOperation` enum:
+  - [ ] `RenameSymbol`
+  - [ ] `RemoveDeadCode`
+  - [ ] `CleanImports`
+  - [ ] `ExtractFunctionCandidate`
+- [ ] define `RefactorPlan`
+- [ ] define `RefactorEdit`
+- [ ] define `RefactorPatch`
+- [ ] define `RefactorValidationResult`
+- [ ] define `RefactorDryRunResult`
+
+### 24.2 Rename symbol
+
+- [ ] require unique definition resolution
+- [ ] require valid new identifier
+- [ ] reject local collision at definition site
+- [ ] reject obvious collision in affected scopes
+- [ ] resolve definition node
+- [ ] gather all references
+- [ ] classify references by certainty
+- [ ] build edit set
+- [ ] simulate rename impact
+- [ ] apply edits in stable order
+- [ ] validate resulting references
+- [ ] rename validation:
+  - [ ] renamed definition exists
+  - [ ] all expected references updated
+  - [ ] no duplicate definitions created
+  - [ ] no blocked write targets
+  - [ ] unresolved/manual-review references reported separately
+- [ ] rename output:
+  - [ ] files changed
+  - [ ] edits count
+  - [ ] manual review list
+  - [ ] patch preview
+
+### 24.3 Remove dead code and clean imports
+
+- [ ] remove dead code only when:
+  - [ ] candidate has sufficient confidence
+  - [ ] no protected entrypoint status
+  - [ ] no unresolved high-risk blockers
+- [ ] dead-code removal steps:
+  - [ ] select removable node
+  - [ ] remove symbol span
+  - [ ] clean surrounding whitespace/comments if safe
+  - [ ] run import cleanup on touched file
+  - [ ] update graph slice
+- [ ] dead-code validation:
+  - [ ] symbol definition removed
+  - [ ] no dangling same-file references
+  - [ ] import cleanup stable
+  - [ ] patch preview generated
+- [ ] import-cleanup steps:
+  - [ ] compute actual symbol usage in file
+  - [ ] compare imports vs usage
+  - [ ] mark unused imports
+  - [ ] remove unused imports
+  - [ ] normalize spacing/order if formatter integration exists later
+- [ ] import-cleanup validation:
+  - [ ] no used import removed
+  - [ ] file remains syntactically valid if parser re-check exists
+  - [ ] no duplicate imports created
+
+### 24.4 Extract-function detection, simulation, APIs, tests
+
+- [ ] detect extract-function candidates from:
+  - [ ] large contiguous block
+  - [ ] repeated block pattern
+  - [ ] clear input variables
+  - [ ] clear output variables
+  - [ ] limited side-effect boundaries
+- [ ] score candidates with:
+  - [ ] repeated logic boost
+  - [ ] long block boost
+  - [ ] low free-variable count boost
+  - [ ] low control-flow complexity boost
+- [ ] candidate output:
+  - [ ] span
+  - [ ] proposed inputs
+  - [ ] proposed outputs
+  - [ ] extraction difficulty score
+  - [ ] no auto-apply in initial version
+- [ ] run impact simulation before non-trivial refactor:
+  - [ ] rename blast radius
+  - [ ] removal impact
+  - [ ] safety score
+  - [ ] affected files
+  - [ ] affected symbols
+  - [ ] nearby tests
+  - [ ] unresolved risks
+- [ ] patch and dry-run support:
+  - [ ] generate unified diff preview
+  - [ ] support `--dry-run`
+  - [ ] support per-file edit grouping
+  - [ ] support machine-readable edit output
+  - [ ] support cancellation before apply
+- [ ] create `RefactorEngine`
+- [ ] implement:
+  - [ ] `plan_rename`
+  - [ ] `apply_rename`
+  - [ ] `plan_dead_code_removal`
+  - [ ] `apply_dead_code_removal`
+  - [ ] `plan_import_cleanup`
+  - [ ] `apply_import_cleanup`
+  - [ ] `detect_extract_function_candidates`
+  - [ ] `simulate_refactor_impact`
+- [ ] add safety checks:
+  - [ ] file write safety
+  - [ ] edit overlap detection
+  - [ ] parser revalidation hook later
+  - [ ] reject unsafe overlapping edits
+  - [ ] reject ambiguous rename targets
+  - [ ] reject low-confidence dead code removals by default
+- [ ] tests:
+  - [ ] rename single-file symbol
+  - [ ] rename multi-file symbol
+  - [ ] rename collision rejection
+  - [ ] dead code removal private helper
+  - [ ] protected entrypoint not removed
+  - [ ] unused import removed
+  - [ ] used import preserved
+  - [ ] extract-function candidate detection basic case
+  - [ ] dry-run output stable
+  - [ ] patch output stable
+
+## Phase 25 — Shared Analysis and Refactor Infrastructure
+
+Shared support for explainability, config, CLI surface, JSON contracts, benchmarks. Phase 22-24 depend on this.
+
+### 25.1 Evidence and explainability
+
+- [ ] attach evidence edges
+- [ ] attach evidence nodes
+- [ ] attach scoring factors
+- [ ] attach uncertainty flags
+
+### 25.2 Config surface
+
+- [ ] max context nodes
+- [ ] max context depth
+- [ ] dead code certainty threshold
+- [ ] refactor safety threshold
+- [ ] impact max depth
+- [ ] impact max nodes
+- [ ] dynamic usage allowlist
+- [ ] entrypoint allowlist
+- [ ] framework conventions file
+
+### 25.3 Language support policy
+
+- [ ] phase-2 features degrade gracefully by language
+- [ ] enable rename only where symbol/reference mapping is mature
+- [ ] enable dead code only where inbound usage confidence is acceptable
+- [ ] enable import cleanup only where parser support is reliable
+
+### 25.4 CLI surfaces
+
+- [ ] `atlas context <symbol>`
+- [ ] `atlas analyze remove <symbol>`
+- [ ] `atlas analyze dead-code`
+- [ ] `atlas analyze safety <symbol>`
+- [ ] `atlas analyze dependency <symbol-or-import>`
+- [ ] `atlas refactor rename <symbol> <new-name> --dry-run`
+- [ ] `atlas refactor remove-dead <symbol> --dry-run`
+- [ ] `atlas refactor clean-imports <file> --dry-run`
+
+### 25.5 JSON output, benchmarks, completion criteria
+
+- [ ] stable JSON schema for all analysis commands
+- [ ] stable JSON schema for patch previews
+- [ ] include evidence and certainty fields
+- [ ] benchmark context retrieval latency
+- [ ] benchmark impact analysis latency
+- [ ] benchmark dead-code scan latency
+- [ ] benchmark rename planning latency
+- [ ] benchmark import-cleanup latency
+- [ ] completion criteria:
+  - [ ] context engine resolves and returns bounded symbol/change context
+  - [ ] removal impact analysis works on representative repos
+  - [ ] dead code detection produces useful candidates with suppressions
+  - [ ] refactor safety scoring is implemented and explainable
+  - [ ] dependency removal checks are implemented
+  - [ ] rename blast radius is implemented
+  - [ ] deterministic rename refactor works in dry-run and apply modes
+  - [ ] deterministic dead code removal works for high-confidence candidates
+  - [ ] import cleanup works reliably
+  - [ ] extract-function candidate detection exists even if auto-apply stays deferred
+
+## Phase 26 — MCP / Agent Integration
+
+### 26.1 Core tools
 
 - [ ] `get_review_context`
 - [ ] `get_impact_radius`
 - [ ] `query_graph`
 - [ ] `explain_change`
 
-### 22.2 Output design
+### 26.2 Output design
 
 - [ ] structured JSON
 - [ ] stable schemas
 - [ ] token-efficient responses
 
-### 22.3 Context optimization
+### 26.3 Context optimization
 
 - [ ] return summaries only
 - [ ] limit node count
 - [ ] prioritize relevance
 
-## Phase 23 — Observability
+## Phase 27 — Observability
 
-### 23.1 Metrics
+### 27.1 Metrics
 
 - [ ] indexing time
 - [ ] nodes/sec
 - [ ] query latency
 - [ ] impact latency
 
-### 23.2 Debug tools
+### 27.2 Debug tools
 
 - [ ] `atlas doctor`
 - [ ] `atlas debug graph`
 - [ ] `atlas explain-query`
 
-### 23.3 Data integrity
+### 27.3 Data integrity
 
 - [ ] orphan-node detection
 - [ ] edge validation
 - [ ] DB consistency checks
 
-## Phase 24 — Optional Advanced Features
+## Phase 28 — Optional Advanced Features
 
-### 24.1 Code intelligence
+### 28.1 Code intelligence
 
 - [ ] similar-function detection
 - [ ] duplicate detection
 
-### 24.2 Architecture insights
+### 28.2 Architecture insights
 
 - [ ] detect layers
 - [ ] infer modules
 - [ ] label components
 
-### 24.3 Watch mode
+### 28.3 Watch mode
 
 - [ ] auto-update on file change
 
-### 24.4 Multi-repo
+### 28.4 Multi-repo
 
 - [ ] shared graph
 - [ ] cross-repo impact
 
-## Phase 25 — Deferred Lowest Priority
+## Phase 29 — Deferred Lowest Priority
 
-### 25.1 Wiki / docs generation
+### 29.1 Wiki / docs generation
 
 - [ ] generate Markdown docs
 - [ ] module pages
 - [ ] function pages
 - [ ] static site export
 
-### 25.2 v2 completion criteria
+### 29.2 v2 completion criteria
 
 - [ ] search beats grep
 - [ ] impact analysis is reliable
@@ -1244,7 +1784,7 @@ These phases extend v1 after core graph/build/update/query path is reliable.
 - [ ] MCP tools are usable by agents
 - [ ] performance scales to large repos
 
-### 25.3 Guiding principle
+### 29.3 Guiding principle
 
 - [ ] avoid feature growth without signal quality gains
 - [ ] prioritize better ranking
@@ -1402,10 +1942,10 @@ And the system has:
 
 ### Slice 17 — incremental engine
 
-- [ ] incremental parsing
-- [ ] dependency invalidation follow-up
-- [ ] parallelization
-- [ ] large-repo handling
+- [x] incremental parsing
+- [x] dependency invalidation follow-up
+- [x] parallelization
+- [x] large-repo handling
 
 ### Slice 18 — developer workflows
 
@@ -1414,26 +1954,68 @@ And the system has:
 - [ ] natural-language queries
 - [ ] CLI workflow UX
 
-### Slice 19 — observability
+### Slice 19 — context engine
+
+- [ ] context request/response model
+- [ ] deterministic intent parsing
+- [ ] target resolution pipeline
+- [ ] retrieval/ranking/trimming
+- [ ] code-span selection
+- [ ] `ContextEngine` API + tests
+
+### Slice 20 — reasoning engine
+
+- [ ] reasoning result/evidence types
+- [ ] removal impact analysis
+- [ ] dead code detection
+- [ ] refactor safety scoring
+- [ ] dependency removal validation
+- [ ] rename radius + risk/test adjacency
+
+### Slice 21 — refactor engine
+
+- [ ] refactor operation/plan/patch types
+- [ ] rename planning/apply
+- [ ] dead-code removal
+- [ ] import cleanup
+- [ ] extract-function candidate detection
+- [ ] dry-run/patch/validation coverage
+
+### Slice 22 — shared analysis infra
+
+- [ ] explainability/evidence plumbing
+- [ ] config surface
+- [ ] language capability gates
+- [ ] CLI commands for context/analyze/refactor
+- [ ] stable JSON contracts
+- [ ] benchmarks and phase-completion gate
+
+### Slice 23 — MCP and agent surface
+
+- [ ] core MCP tools
+- [ ] stable structured output
+- [ ] token-efficient relevance trimming
+
+### Slice 24 — observability
 
 - [ ] metrics
 - [ ] debug tools
 - [ ] data integrity tooling
 
-### Slice 20 — optional advanced
+### Slice 25 — optional advanced
 
 - [ ] code intelligence
 - [ ] architecture insights
 - [ ] watch mode
 - [ ] multi-repo support
 
-### Slice 21 — deferred lowest priority
+### Slice 26 — deferred lowest priority
 
 - [ ] wiki/docs generation
 - [ ] v2 completion criteria
 - [ ] lowest-priority guiding-principle items
 
-### Slice 22 — deferred platform and ecosystem
+### Slice 27 — deferred platform and ecosystem
 
 - [ ] install hooks
 - [ ] flows/communities schema

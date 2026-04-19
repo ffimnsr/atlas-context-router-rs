@@ -1,3 +1,4 @@
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::time::Instant;
 
@@ -16,10 +17,61 @@ use rayon::prelude::*;
 
 use crate::cli::{Cli, Command};
 
-/// Parse-worker batch size: number of files sent to rayon in one chunk.
-/// Keeps memory bounded — only this many parsed files reside in memory at once
-/// before being handed to the SQLite writer.
-const PARSE_BATCH_SIZE: usize = 64;
+/// Default parse-worker batch size.  Override with `ATLAS_PARSE_BATCH_SIZE`.
+const DEFAULT_PARSE_BATCH_SIZE: usize = 64;
+
+/// Read the effective batch size from the environment, falling back to the
+/// compile-time default.  Clamps to [1, 4096] to prevent extreme values.
+fn parse_batch_size() -> usize {
+    std::env::var("ATLAS_PARSE_BATCH_SIZE")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .map(|n| n.clamp(1, 4096))
+        .unwrap_or(DEFAULT_PARSE_BATCH_SIZE)
+}
+
+/// Compute a content-signature string for `node`.
+///
+/// Captures the interface attributes that, when changed, indicate dependents
+/// may be affected.  Line positions are excluded intentionally — moving a
+/// symbol within a file does not change its interface.
+fn node_signature(n: &atlas_core::Node) -> String {
+    format!(
+        "{}|{}|{}|{}|{}",
+        n.kind.as_str(),
+        n.params.as_deref().unwrap_or(""),
+        n.return_type.as_deref().unwrap_or(""),
+        n.modifiers.as_deref().unwrap_or(""),
+        n.is_test as u8,
+    )
+}
+
+/// Collect the qualified names of symbols whose interface signature changed or
+/// that were added/removed between `old_sigs` and the freshly parsed `nodes`.
+fn changed_qnames(
+    old_sigs: &HashMap<String, String>,
+    nodes: &[atlas_core::Node],
+) -> Vec<String> {
+    let mut changed: Vec<String> = Vec::new();
+
+    // Added or signature-changed symbols.
+    for n in nodes {
+        let new_sig = node_signature(n);
+        match old_sigs.get(&n.qualified_name) {
+            Some(old_sig) if old_sig == &new_sig => {}
+            _ => changed.push(n.qualified_name.clone()),
+        }
+    }
+
+    // Removed symbols (in old but not in new).
+    let new_qns: HashSet<&str> = nodes.iter().map(|n| n.qualified_name.as_str()).collect();
+    for qn in old_sigs.keys() {
+        if !new_qns.contains(qn.as_str()) {
+            changed.push(qn.clone());
+        }
+    }
+    changed
+}
 
 pub fn run_init(cli: &Cli) -> Result<()> {
     let repo = resolve_repo(cli)?;
@@ -131,13 +183,14 @@ pub fn run_build(cli: &Cli) -> Result<()> {
 
     drop(_scan_span);
 
-    // --- Parallel parse in bounded chunks, sequential DB write ---------------
+    // --- Parallel parse in bounded chunks, batched DB write ------------------
+    let batch_size = parse_batch_size();
     let _parse_span = tracing::info_span!("build.parse_and_write").entered();
 
     let mut total_nodes = 0usize;
     let mut total_edges = 0usize;
 
-    for chunk in candidates.chunks(PARSE_BATCH_SIZE) {
+    for chunk in candidates.chunks(batch_size) {
         // Parse this chunk in parallel.
         let results: Vec<(String, Result<ParsedFile, String>)> = chunk
             .par_iter()
@@ -155,22 +208,12 @@ pub fn run_build(cli: &Cli) -> Result<()> {
             })
             .collect();
 
-        // Write sequentially from the parsed results.
+        // Collect successful parses and handle errors.
+        let mut parsed_files: Vec<ParsedFile> = Vec::with_capacity(chunk.len());
         for (rel_str, outcome) in results {
             match outcome {
                 Ok(pf) => {
-                    total_nodes += pf.nodes.len();
-                    total_edges += pf.edges.len();
-                    store
-                        .replace_file_graph(
-                            &pf.path,
-                            &pf.hash,
-                            pf.language.as_deref(),
-                            pf.size,
-                            &pf.nodes,
-                            &pf.edges,
-                        )
-                        .with_context(|| format!("cannot store '{rel_str}'"))?;
+                    parsed_files.push(pf);
                 }
                 Err(msg) if msg == "unsupported (skipped)" => {
                     skipped_unsupported += 1;
@@ -185,6 +228,15 @@ pub fn run_build(cli: &Cli) -> Result<()> {
                     }
                 }
             }
+        }
+
+        // Write all successful parses in one transaction per chunk.
+        if !parsed_files.is_empty() {
+            let (n, e) = store
+                .replace_files_transactional(&parsed_files)
+                .context("cannot store parsed files")?;
+            total_nodes += n;
+            total_edges += e;
         }
     }
 
@@ -304,25 +356,23 @@ pub fn run_update(cli: &Cli) -> Result<()> {
         }
     }
 
-    let _deps_span = tracing::info_span!("update.find_dependents").entered();
+    // -----------------------------------------------------------------------
+    // Incremental parsing: load old node signatures before reparsing so we
+    // can detect which symbols actually changed.
+    // -----------------------------------------------------------------------
+    let _sig_span = tracing::info_span!("update.load_signatures").entered();
+    let old_sigs: HashMap<String, HashMap<String, String>> = to_parse_paths
+        .iter()
+        .filter_map(|p| {
+            store
+                .node_signatures_by_file(p)
+                .ok()
+                .map(|sigs| (p.clone(), sigs))
+        })
+        .collect();
+    drop(_sig_span);
 
-    // Find files that depend on any of the changed files.
-    let changed_ref_strs: Vec<&str> = to_parse_paths.iter().map(String::as_str).collect();
-    let dependents = store
-        .find_dependents(&changed_ref_strs)
-        .context("cannot query dependents")?;
-
-    drop(_deps_span);
-
-    // Merge + deduplicate.
-    let mut all_to_parse: Vec<String> = to_parse_paths.clone();
-    for dep in dependents {
-        if !all_to_parse.contains(&dep) {
-            all_to_parse.push(dep);
-        }
-    }
-
-    // Remove stale graphs first.
+    // Remove stale graphs first (before parsing so dependent queries are clean).
     let deleted_count = to_delete.len();
     {
         let _del_span = tracing::info_span!("update.delete_stale").entered();
@@ -336,29 +386,29 @@ pub fn run_update(cli: &Cli) -> Result<()> {
     let registry = ParserRegistry::with_defaults();
     let mut parse_errors = 0usize;
     let mut skipped_unsupported = 0usize;
+    let batch_size = parse_batch_size();
 
-    // Candidates: (rel_str, abs_path)  — no hash pre-check in update path.
+    // -----------------------------------------------------------------------
+    // Phase 1: parse the directly-changed files.
+    // -----------------------------------------------------------------------
     type UpdateCandidate = (String, camino::Utf8PathBuf);
-    let candidates: Vec<UpdateCandidate> = all_to_parse
+    let changed_candidates: Vec<UpdateCandidate> = to_parse_paths
         .iter()
         .filter_map(|rel_str| {
             if !registry.supports(rel_str) {
-                return None; // counted below
+                return None;
             }
             let abs_path = repo_root.join(rel_str);
             Some((rel_str.clone(), abs_path))
         })
         .collect();
 
-    skipped_unsupported += all_to_parse.len().saturating_sub(candidates.len());
+    skipped_unsupported += to_parse_paths.len().saturating_sub(changed_candidates.len());
 
-    // --- Parallel parse in bounded chunks, sequential DB write ---------------
-    let _parse_span = tracing::info_span!("update.parse_and_write").entered();
+    let _parse_span = tracing::info_span!("update.parse_changed").entered();
 
-    let mut total_nodes = 0usize;
-    let mut total_edges = 0usize;
-
-    for chunk in candidates.chunks(PARSE_BATCH_SIZE) {
+    let mut parsed_changed: Vec<ParsedFile> = Vec::new();
+    for chunk in changed_candidates.chunks(batch_size) {
         let results: Vec<(String, Result<ParsedFile, String>)> = chunk
             .par_iter()
             .map(|(rel_str, abs_path)| {
@@ -379,23 +429,8 @@ pub fn run_update(cli: &Cli) -> Result<()> {
 
         for (rel_str, outcome) in results {
             match outcome {
-                Ok(pf) => {
-                    total_nodes += pf.nodes.len();
-                    total_edges += pf.edges.len();
-                    store
-                        .replace_file_graph(
-                            &pf.path,
-                            &pf.hash,
-                            pf.language.as_deref(),
-                            pf.size,
-                            &pf.nodes,
-                            &pf.edges,
-                        )
-                        .with_context(|| format!("cannot store '{rel_str}'"))?;
-                }
-                Err(msg) if msg == "unsupported (skipped)" => {
-                    skipped_unsupported += 1;
-                }
+                Ok(pf) => parsed_changed.push(pf),
+                Err(msg) if msg == "unsupported (skipped)" => skipped_unsupported += 1,
                 Err(msg) => {
                     tracing::warn!("processing '{}' failed: {msg}", rel_str);
                     parse_errors += 1;
@@ -411,10 +446,108 @@ pub fn run_update(cli: &Cli) -> Result<()> {
 
     drop(_parse_span);
 
-    let parsed_count = candidates
-        .len()
-        .saturating_sub(parse_errors)
-        .saturating_sub(skipped_unsupported);
+    // -----------------------------------------------------------------------
+    // Dependency invalidation: compute which symbols changed, then use a
+    // targeted query instead of a file-level scan to reduce over-invalidation.
+    // -----------------------------------------------------------------------
+    let _deps_span = tracing::info_span!("update.find_dependents").entered();
+
+    let mut all_changed_qnames: Vec<String> = Vec::new();
+    for pf in &parsed_changed {
+        let empty = HashMap::new();
+        let old = old_sigs.get(&pf.path).unwrap_or(&empty);
+        all_changed_qnames.extend(changed_qnames(old, &pf.nodes));
+    }
+
+    let changed_qn_refs: Vec<&str> = all_changed_qnames.iter().map(String::as_str).collect();
+    let dependents = store
+        .find_dependents_for_qnames(&changed_qn_refs)
+        .context("cannot query dependents")?;
+    drop(_deps_span);
+
+    // Build the set of changed paths so we skip those already parsed.
+    let changed_paths_set: HashSet<&str> =
+        to_parse_paths.iter().map(String::as_str).collect();
+
+    let dep_candidates: Vec<UpdateCandidate> = dependents
+        .iter()
+        .filter(|d| !changed_paths_set.contains(d.as_str()))
+        .filter_map(|rel_str| {
+            if !registry.supports(rel_str) {
+                skipped_unsupported += 1;
+                return None;
+            }
+            let abs_path = repo_root.join(rel_str);
+            Some((rel_str.clone(), abs_path))
+        })
+        .collect();
+
+    // -----------------------------------------------------------------------
+    // Phase 2: parse dependent files.
+    // -----------------------------------------------------------------------
+    let _dep_parse_span = tracing::info_span!("update.parse_dependents").entered();
+
+    let mut parsed_deps: Vec<ParsedFile> = Vec::new();
+    for chunk in dep_candidates.chunks(batch_size) {
+        let results: Vec<(String, Result<ParsedFile, String>)> = chunk
+            .par_iter()
+            .map(|(rel_str, abs_path)| {
+                let hash = match hash_file(abs_path) {
+                    Ok(h) => h,
+                    Err(e) => return (rel_str.clone(), Err(format!("hash error: {e}"))),
+                };
+                let source = match fs::read(abs_path.as_std_path()) {
+                    Ok(b) => b,
+                    Err(e) => return (rel_str.clone(), Err(format!("read error: {e}"))),
+                };
+                match registry.parse(rel_str, &hash, &source) {
+                    Some(pf) => (rel_str.clone(), Ok(pf)),
+                    None => (rel_str.clone(), Err("unsupported (skipped)".into())),
+                }
+            })
+            .collect();
+
+        for (rel_str, outcome) in results {
+            match outcome {
+                Ok(pf) => parsed_deps.push(pf),
+                Err(msg) if msg == "unsupported (skipped)" => skipped_unsupported += 1,
+                Err(msg) => {
+                    tracing::warn!("processing dependent '{}' failed: {msg}", rel_str);
+                    parse_errors += 1;
+                    if fail_fast {
+                        return Err(anyhow::anyhow!(
+                            "processing dependent '{rel_str}' failed: {msg} (--fail-fast)"
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    drop(_dep_parse_span);
+
+    // -----------------------------------------------------------------------
+    // Write all parsed files (changed + dependents) in batched transactions.
+    // -----------------------------------------------------------------------
+    let _write_span = tracing::info_span!("update.write").entered();
+
+    let mut total_nodes = 0usize;
+    let mut total_edges = 0usize;
+
+    let all_parsed: Vec<&ParsedFile> = parsed_changed.iter().chain(parsed_deps.iter()).collect();
+
+    for chunk in all_parsed.chunks(batch_size) {
+        let chunk_owned: Vec<ParsedFile> = chunk.iter().map(|pf| (*pf).clone()).collect();
+        let (n, e) = store
+            .replace_files_transactional(&chunk_owned)
+            .context("cannot store parsed files")?;
+        total_nodes += n;
+        total_edges += e;
+    }
+
+    drop(_write_span);
+
+    let parsed_count = parsed_changed.len() + parsed_deps.len();
     let elapsed = started.elapsed();
 
     if cli.json {

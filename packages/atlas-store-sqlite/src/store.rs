@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use atlas_core::{
     AtlasError, EdgeKind, GraphStats, ImpactResult, Node, NodeId, NodeKind, ParsedFile, Result,
     ScoredNode, SearchQuery,
@@ -294,159 +296,67 @@ impl Store {
         edges: &[atlas_core::Edge],
     ) -> Result<()> {
         let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
+        self.conn.execute_batch("BEGIN IMMEDIATE").map_err(db_err)?;
+        match do_replace_file_graph(&self.conn, path, hash, language, size, nodes, edges) {
+            Ok(()) => {
+                self.conn.execute_batch("COMMIT").map_err(db_err)?;
+                info!(path, nodes = nodes.len(), edges = edges.len(), "replaced file graph");
+                Ok(())
+            }
+            Err(e) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(e)
+            }
+        }
+    }
 
+    /// Replace graph slices for multiple parsed files in one transaction.
+    ///
+    /// Significantly faster than calling `replace_file_graph` per file: the
+    /// SQLite write-ahead log is flushed once per batch rather than once per
+    /// file.  If any file fails the entire batch is rolled back.
+    ///
+    /// Returns `(total_nodes, total_edges)` inserted.
+    pub fn replace_files_transactional(
+        &mut self,
+        files: &[ParsedFile],
+    ) -> Result<(usize, usize)> {
+        if files.is_empty() {
+            return Ok((0, 0));
+        }
+        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
         self.conn.execute_batch("BEGIN IMMEDIATE").map_err(db_err)?;
 
-        // Step 2: FTS-unindex old nodes.
-        let old_nodes = {
-            let mut stmt = self
-                .conn
-                .prepare(
-                    "SELECT id, kind, name, qualified_name, file_path, line_start, line_end,
-                            language, parent_name, params, return_type, modifiers,
-                            is_test, file_hash, extra_json
-                     FROM nodes WHERE file_path = ?1",
-                )
-                .map_err(db_err)?;
-            let rows: Vec<Node> = stmt
-                .query_map([path], row_to_node)
-                .map_err(db_err)?
-                .filter_map(|r| r.ok())
-                .collect();
-            rows
-        };
-
-        for n in &old_nodes {
-            self.conn
-                .execute(
-                    "INSERT INTO nodes_fts(nodes_fts, rowid,
-                             qualified_name, name, kind, file_path, language,
-                             params, return_type, modifiers)
-                     VALUES('delete', ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-                    params![
-                        n.id.0,
-                        n.qualified_name,
-                        n.name,
-                        n.kind.as_str(),
-                        n.file_path,
-                        n.language,
-                        n.params,
-                        n.return_type,
-                        n.modifiers,
-                    ],
-                )
-                .map_err(db_err)?;
+        let mut total_nodes = 0usize;
+        let mut total_edges = 0usize;
+        for f in files {
+            match do_replace_file_graph(
+                &self.conn,
+                &f.path,
+                &f.hash,
+                f.language.as_deref(),
+                f.size,
+                &f.nodes,
+                &f.edges,
+            ) {
+                Ok(()) => {
+                    total_nodes += f.nodes.len();
+                    total_edges += f.edges.len();
+                    info!(
+                        path = f.path.as_str(),
+                        nodes = f.nodes.len(),
+                        edges = f.edges.len(),
+                        "replaced file graph"
+                    );
+                }
+                Err(e) => {
+                    let _ = self.conn.execute_batch("ROLLBACK");
+                    return Err(e);
+                }
+            }
         }
-
-        // Steps 3–4: clear edges and nodes for this file.
-        self.conn
-            .execute("DELETE FROM edges WHERE file_path = ?1", [path])
-            .map_err(db_err)?;
-        // Remove dangling cross-file edges referencing old nodes from this file.
-        self.conn
-            .execute(
-                "DELETE FROM edges
-                 WHERE source_qualified IN (SELECT qualified_name FROM nodes WHERE file_path = ?1)
-                    OR target_qualified IN (SELECT qualified_name FROM nodes WHERE file_path = ?1)",
-                [path],
-            )
-            .map_err(db_err)?;
-        self.conn
-            .execute("DELETE FROM nodes WHERE file_path = ?1", [path])
-            .map_err(db_err)?;
-
-        // Step 5: upsert the file row.
-        self.conn
-            .execute(
-                "INSERT OR REPLACE INTO files (path, language, hash, size, indexed_at)
-                 VALUES (?1, ?2, ?3, ?4, datetime('now'))",
-                params![path, language, hash, size],
-            )
-            .map_err(db_err)?;
-
-        // Steps 6a + 6b: insert each node then its FTS row.
-        for n in nodes {
-            let extra = serde_json::to_string(&n.extra_json).map_err(AtlasError::Serde)?;
-            self.conn
-                .execute(
-                    "INSERT OR REPLACE INTO nodes
-                         (kind, name, qualified_name, file_path, line_start, line_end,
-                          language, parent_name, params, return_type, modifiers,
-                          is_test, file_hash, extra_json)
-                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
-                    params![
-                        n.kind.as_str(),
-                        n.name,
-                        n.qualified_name,
-                        n.file_path,
-                        n.line_start,
-                        n.line_end,
-                        n.language,
-                        n.parent_name,
-                        n.params,
-                        n.return_type,
-                        n.modifiers,
-                        n.is_test as i32,
-                        n.file_hash,
-                        extra,
-                    ],
-                )
-                .map_err(db_err)?;
-
-            let rowid = self.conn.last_insert_rowid();
-            self.conn
-                .execute(
-                    "INSERT INTO nodes_fts (rowid,
-                             qualified_name, name, kind, file_path, language,
-                             params, return_type, modifiers)
-                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
-                    params![
-                        rowid,
-                        n.qualified_name,
-                        n.name,
-                        n.kind.as_str(),
-                        n.file_path,
-                        n.language,
-                        n.params,
-                        n.return_type,
-                        n.modifiers,
-                    ],
-                )
-                .map_err(db_err)?;
-        }
-
-        // Step 7: insert edges.
-        for e in edges {
-            let extra = serde_json::to_string(&e.extra_json).map_err(AtlasError::Serde)?;
-            self.conn
-                .execute(
-                    "INSERT INTO edges
-                         (kind, source_qualified, target_qualified, file_path,
-                          line, confidence, confidence_tier, extra_json)
-                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
-                    params![
-                        e.kind.as_str(),
-                        e.source_qn,
-                        e.target_qn,
-                        e.file_path,
-                        e.line,
-                        e.confidence,
-                        e.confidence_tier,
-                        extra,
-                    ],
-                )
-                .map_err(db_err)?;
-        }
-
         self.conn.execute_batch("COMMIT").map_err(db_err)?;
-
-        info!(
-            path,
-            nodes = nodes.len(),
-            edges = edges.len(),
-            "replaced file graph"
-        );
-        Ok(())
+        Ok((total_nodes, total_edges))
     }
 
     /// Replace graph slices for a batch of parsed files (calls
@@ -463,6 +373,45 @@ impl Store {
             )?;
         }
         Ok(())
+    }
+
+    /// Returns a map of `qualified_name → content-signature` for every node
+    /// stored for `path`.
+    ///
+    /// The signature encodes the structural attributes that determine whether
+    /// dependents of a symbol need re-evaluation: `kind`, `params`,
+    /// `return_type`, `modifiers`, and `is_test`.  Line positions are excluded
+    /// intentionally — moving a function within a file does not change its
+    /// interface and must not trigger unnecessary dependent reparsing.
+    pub fn node_signatures_by_file(&self, path: &str) -> Result<HashMap<String, String>> {
+        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT qualified_name, kind, params, return_type, modifiers, is_test
+                 FROM nodes WHERE file_path = ?1",
+            )
+            .map_err(db_err)?;
+        let map = stmt
+            .query_map([path], |row| {
+                let qn: String = row.get(0)?;
+                let kind: String = row.get(1)?;
+                let params: Option<String> = row.get(2)?;
+                let ret: Option<String> = row.get(3)?;
+                let mods: Option<String> = row.get(4)?;
+                let is_test: i32 = row.get(5)?;
+                let sig = format!(
+                    "{kind}|{}|{}|{}|{is_test}",
+                    params.as_deref().unwrap_or(""),
+                    ret.as_deref().unwrap_or(""),
+                    mods.as_deref().unwrap_or(""),
+                );
+                Ok((qn, sig))
+            })
+            .map_err(db_err)?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(map)
     }
 
     /// Atomically remove every node, edge and FTS row for `path`.
@@ -626,6 +575,49 @@ impl Store {
             .iter()
             .chain(changed_paths.iter())
             .map(|p| p as &dyn rusqlite::types::ToSql)
+            .collect();
+
+        let mut stmt = self.conn.prepare(&sql).map_err(db_err)?;
+        let rows = stmt
+            .query_map(params.as_slice(), |r| r.get(0))
+            .map_err(db_err)?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(rows)
+    }
+
+    /// Files that have at least one edge pointing into any of `changed_qnames`.
+    ///
+    /// More targeted than [`find_dependents`] which operates on file paths:
+    /// this accepts specific qualified names so the caller can restrict
+    /// invalidation to symbols whose signatures actually changed, avoiding
+    /// unnecessary reparsing of files that only depend on stable symbols.
+    pub fn find_dependents_for_qnames(&self, changed_qnames: &[&str]) -> Result<Vec<String>> {
+        if changed_qnames.is_empty() {
+            return Ok(vec![]);
+        }
+        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
+
+        let placeholders = repeat_placeholders(changed_qnames.len());
+        // Find source files of edges whose target is one of the changed QNs.
+        // Source files that define those QNs are excluded (they are the changed
+        // files themselves and will be processed by the caller already).
+        let sql = format!(
+            "SELECT DISTINCT ns.file_path
+             FROM edges  e
+             JOIN nodes  ns ON e.source_qualified = ns.qualified_name
+             WHERE e.target_qualified IN ({placeholders})
+               AND e.source_qualified NOT IN (
+                   SELECT qualified_name FROM nodes
+                   WHERE qualified_name IN ({placeholders})
+               )
+             ORDER BY ns.file_path"
+        );
+
+        let params: Vec<&dyn rusqlite::types::ToSql> = changed_qnames
+            .iter()
+            .chain(changed_qnames.iter())
+            .map(|q| q as &dyn rusqlite::types::ToSql)
             .collect();
 
         let mut stmt = self.conn.prepare(&sql).map_err(db_err)?;
@@ -917,6 +909,161 @@ impl Store {
             .collect();
         Ok(rows)
     }
+}
+
+// ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
+
+/// Core per-file graph replacement logic without transaction management.
+///
+/// Performs all the FTS-delete / DELETE / UPSERT / INSERT steps for a single
+/// file.  The caller is responsible for wrapping calls in a transaction
+/// (either per-file with `BEGIN IMMEDIATE`/`COMMIT` or a multi-file batch).
+fn do_replace_file_graph(
+    conn: &Connection,
+    path: &str,
+    hash: &str,
+    language: Option<&str>,
+    size: Option<i64>,
+    nodes: &[Node],
+    edges: &[atlas_core::Edge],
+) -> Result<()> {
+    let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
+
+    // Step 2: FTS-unindex old nodes.
+    let old_nodes = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, kind, name, qualified_name, file_path, line_start, line_end,
+                        language, parent_name, params, return_type, modifiers,
+                        is_test, file_hash, extra_json
+                 FROM nodes WHERE file_path = ?1",
+            )
+            .map_err(db_err)?;
+        let rows: Vec<Node> = stmt
+            .query_map([path], row_to_node)
+            .map_err(db_err)?
+            .filter_map(|r| r.ok())
+            .collect();
+        rows
+    };
+
+    for n in &old_nodes {
+        conn.execute(
+            "INSERT INTO nodes_fts(nodes_fts, rowid,
+                     qualified_name, name, kind, file_path, language,
+                     params, return_type, modifiers)
+             VALUES('delete', ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                n.id.0,
+                n.qualified_name,
+                n.name,
+                n.kind.as_str(),
+                n.file_path,
+                n.language,
+                n.params,
+                n.return_type,
+                n.modifiers,
+            ],
+        )
+        .map_err(db_err)?;
+    }
+
+    // Steps 3–4: clear edges and nodes for this file.
+    conn.execute("DELETE FROM edges WHERE file_path = ?1", [path])
+        .map_err(db_err)?;
+    // Remove dangling cross-file edges referencing old nodes from this file.
+    conn.execute(
+        "DELETE FROM edges
+         WHERE source_qualified IN (SELECT qualified_name FROM nodes WHERE file_path = ?1)
+            OR target_qualified IN (SELECT qualified_name FROM nodes WHERE file_path = ?1)",
+        [path],
+    )
+    .map_err(db_err)?;
+    conn.execute("DELETE FROM nodes WHERE file_path = ?1", [path])
+        .map_err(db_err)?;
+
+    // Step 5: upsert the file row.
+    conn.execute(
+        "INSERT OR REPLACE INTO files (path, language, hash, size, indexed_at)
+         VALUES (?1, ?2, ?3, ?4, datetime('now'))",
+        params![path, language, hash, size],
+    )
+    .map_err(db_err)?;
+
+    // Steps 6a + 6b: insert each node then its FTS row.
+    for n in nodes {
+        let extra = serde_json::to_string(&n.extra_json).map_err(AtlasError::Serde)?;
+        conn.execute(
+            "INSERT OR REPLACE INTO nodes
+                 (kind, name, qualified_name, file_path, line_start, line_end,
+                  language, parent_name, params, return_type, modifiers,
+                  is_test, file_hash, extra_json)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
+            params![
+                n.kind.as_str(),
+                n.name,
+                n.qualified_name,
+                n.file_path,
+                n.line_start,
+                n.line_end,
+                n.language,
+                n.parent_name,
+                n.params,
+                n.return_type,
+                n.modifiers,
+                n.is_test as i32,
+                n.file_hash,
+                extra,
+            ],
+        )
+        .map_err(db_err)?;
+
+        let rowid = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO nodes_fts (rowid,
+                     qualified_name, name, kind, file_path, language,
+                     params, return_type, modifiers)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+            params![
+                rowid,
+                n.qualified_name,
+                n.name,
+                n.kind.as_str(),
+                n.file_path,
+                n.language,
+                n.params,
+                n.return_type,
+                n.modifiers,
+            ],
+        )
+        .map_err(db_err)?;
+    }
+
+    // Step 7: insert edges.
+    for e in edges {
+        let extra = serde_json::to_string(&e.extra_json).map_err(AtlasError::Serde)?;
+        conn.execute(
+            "INSERT INTO edges
+                 (kind, source_qualified, target_qualified, file_path,
+                  line, confidence, confidence_tier, extra_json)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+            params![
+                e.kind.as_str(),
+                e.source_qn,
+                e.target_qn,
+                e.file_path,
+                e.line,
+                e.confidence,
+                e.confidence_tier,
+                extra,
+            ],
+        )
+        .map_err(db_err)?;
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1853,5 +2000,207 @@ mod tests {
             issues.is_empty(),
             "DB with data should still pass integrity check: {issues:?}"
         );
+    }
+
+    // -------------------------------------------------------------------------
+    // replace_files_transactional
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn replace_files_transactional_inserts_all_files() {
+        let mut store = open_in_memory();
+        let files = vec![
+            ParsedFile {
+                path: "src/a.rs".to_string(),
+                language: Some("rust".to_string()),
+                hash: "h1".to_string(),
+                size: Some(100),
+                nodes: vec![make_node(
+                    NodeKind::Function,
+                    "foo",
+                    "src/a.rs::fn::foo",
+                    "src/a.rs",
+                    "rust",
+                )],
+                edges: vec![],
+            },
+            ParsedFile {
+                path: "src/b.rs".to_string(),
+                language: Some("rust".to_string()),
+                hash: "h2".to_string(),
+                size: Some(200),
+                nodes: vec![
+                    make_node(
+                        NodeKind::Function,
+                        "bar",
+                        "src/b.rs::fn::bar",
+                        "src/b.rs",
+                        "rust",
+                    ),
+                    make_node(
+                        NodeKind::Function,
+                        "baz",
+                        "src/b.rs::fn::baz",
+                        "src/b.rs",
+                        "rust",
+                    ),
+                ],
+                edges: vec![make_edge(
+                    EdgeKind::Calls,
+                    "src/b.rs::fn::baz",
+                    "src/b.rs::fn::bar",
+                    "src/b.rs",
+                )],
+            },
+        ];
+
+        let (total_nodes, total_edges) = store.replace_files_transactional(&files).unwrap();
+        assert_eq!(total_nodes, 3);
+        assert_eq!(total_edges, 1);
+
+        let stats = store.stats().unwrap();
+        assert_eq!(stats.file_count, 2);
+        assert_eq!(stats.node_count, 3);
+        assert_eq!(stats.edge_count, 1);
+    }
+
+    #[test]
+    fn replace_files_transactional_empty_is_noop() {
+        let mut store = open_in_memory();
+        let (n, e) = store.replace_files_transactional(&[]).unwrap();
+        assert_eq!(n, 0);
+        assert_eq!(e, 0);
+        assert_eq!(store.stats().unwrap().file_count, 0);
+    }
+
+    #[test]
+    fn replace_files_transactional_is_idempotent() {
+        let mut store = open_in_memory();
+        let files = vec![ParsedFile {
+            path: "a.rs".to_string(),
+            language: Some("rust".to_string()),
+            hash: "h1".to_string(),
+            size: None,
+            nodes: vec![make_node(
+                NodeKind::Function,
+                "foo",
+                "a.rs::fn::foo",
+                "a.rs",
+                "rust",
+            )],
+            edges: vec![],
+        }];
+        store.replace_files_transactional(&files).unwrap();
+        store.replace_files_transactional(&files).unwrap();
+        assert_eq!(store.stats().unwrap().node_count, 1);
+    }
+
+    // -------------------------------------------------------------------------
+    // node_signatures_by_file
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn node_signatures_by_file_returns_empty_for_unknown_file() {
+        let store = open_in_memory();
+        let sigs = store.node_signatures_by_file("nonexistent.rs").unwrap();
+        assert!(sigs.is_empty());
+    }
+
+    #[test]
+    fn node_signatures_by_file_returns_entry_per_node() {
+        let mut store = open_in_memory();
+        let nodes = vec![
+            make_node(NodeKind::Function, "foo", "a.rs::fn::foo", "a.rs", "rust"),
+            make_node(NodeKind::Function, "bar", "a.rs::fn::bar", "a.rs", "rust"),
+        ];
+        store
+            .replace_file_graph("a.rs", "h1", Some("rust"), None, &nodes, &[])
+            .unwrap();
+
+        let sigs = store.node_signatures_by_file("a.rs").unwrap();
+        assert_eq!(sigs.len(), 2);
+        assert!(sigs.contains_key("a.rs::fn::foo"));
+        assert!(sigs.contains_key("a.rs::fn::bar"));
+    }
+
+    #[test]
+    fn node_signatures_stable_across_position_change() {
+        let mut store = open_in_memory();
+        let mut node = make_node(NodeKind::Function, "foo", "a.rs::fn::foo", "a.rs", "rust");
+        node.line_start = 1;
+        node.line_end = 5;
+        store
+            .replace_file_graph("a.rs", "h1", Some("rust"), None, &[node.clone()], &[])
+            .unwrap();
+        let sigs_before = store.node_signatures_by_file("a.rs").unwrap();
+
+        // Move the function to different lines — signature must be identical.
+        let mut moved = node;
+        moved.line_start = 100;
+        moved.line_end = 110;
+        store
+            .replace_file_graph("a.rs", "h2", Some("rust"), None, &[moved], &[])
+            .unwrap();
+        let sigs_after = store.node_signatures_by_file("a.rs").unwrap();
+
+        assert_eq!(
+            sigs_before["a.rs::fn::foo"],
+            sigs_after["a.rs::fn::foo"],
+            "moving a function should not change its signature"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // find_dependents_for_qnames
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn find_dependents_for_qnames_returns_importers_of_changed_symbols() {
+        let mut store = open_in_memory();
+
+        // a.rs defines `foo`
+        let node_a = make_node(NodeKind::Function, "foo", "a.rs::fn::foo", "a.rs", "rust");
+        store
+            .replace_file_graph("a.rs", "h1", Some("rust"), None, &[node_a], &[])
+            .unwrap();
+
+        // b.rs defines `bar` and calls a.rs::fn::foo
+        let node_b = make_node(NodeKind::Function, "bar", "b.rs::fn::bar", "b.rs", "rust");
+        let edge_b_to_a = make_edge(EdgeKind::Calls, "b.rs::fn::bar", "a.rs::fn::foo", "b.rs");
+        store
+            .replace_file_graph("b.rs", "h2", Some("rust"), None, &[node_b], &[edge_b_to_a])
+            .unwrap();
+
+        // c.rs defines `qux` with no edges
+        let node_c = make_node(NodeKind::Function, "qux", "c.rs::fn::qux", "c.rs", "rust");
+        store
+            .replace_file_graph("c.rs", "h3", Some("rust"), None, &[node_c], &[])
+            .unwrap();
+
+        // Changing a.rs::fn::foo should only invalidate b.rs, not c.rs.
+        let deps = store
+            .find_dependents_for_qnames(&["a.rs::fn::foo"])
+            .unwrap();
+        assert_eq!(deps, vec!["b.rs"]);
+    }
+
+    #[test]
+    fn find_dependents_for_qnames_empty_input_returns_empty() {
+        let store = open_in_memory();
+        let deps = store.find_dependents_for_qnames(&[]).unwrap();
+        assert!(deps.is_empty());
+    }
+
+    #[test]
+    fn find_dependents_for_qnames_no_edges_returns_empty() {
+        let mut store = open_in_memory();
+        let node = make_node(NodeKind::Function, "foo", "a.rs::fn::foo", "a.rs", "rust");
+        store
+            .replace_file_graph("a.rs", "h1", Some("rust"), None, &[node], &[])
+            .unwrap();
+        let deps = store
+            .find_dependents_for_qnames(&["a.rs::fn::foo"])
+            .unwrap();
+        assert!(deps.is_empty());
     }
 }
