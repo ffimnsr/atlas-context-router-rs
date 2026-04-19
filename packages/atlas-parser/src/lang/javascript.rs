@@ -1,4 +1,5 @@
-use atlas_core::{Edge, EdgeKind, Node, NodeKind, ParsedFile};
+use atlas_core::{Edge, EdgeKind, Node, NodeId, NodeKind, ParsedFile};
+use std::collections::HashMap;
 use tree_sitter::Node as TsNode;
 
 use crate::ast_helpers::{end_line, node_text, start_line};
@@ -84,6 +85,10 @@ fn parse_source(
         for child in root.children(&mut cursor) {
             visit_toplevel(child, ctx, lang, &mut nodes, &mut edges);
         }
+
+        // Second pass: same-file call resolution.
+        let mut call_edges = resolve_js_calls(root, ctx.source, ctx.rel_path, &nodes);
+        edges.append(&mut call_edges);
     }
 
     ParsedFile {
@@ -102,7 +107,7 @@ fn parse_source(
 
 fn file_node(rel_path: &str, file_hash: &str, line_end: u32, lang: &str) -> Node {
     Node {
-        id: 0,
+        id: NodeId::UNSET,
         kind: NodeKind::File,
         name: rel_path.rsplit('/').next().unwrap_or(rel_path).to_owned(),
         qualified_name: rel_path.to_owned(),
@@ -197,7 +202,7 @@ fn visit_function(
         .map(|n| node_text(n, ctx.source).to_owned());
 
     nodes.push(Node {
-        id: 0,
+        id: NodeId::UNSET,
         kind: NodeKind::Function,
         name: name.to_owned(),
         qualified_name: qn.clone(),
@@ -234,7 +239,7 @@ fn visit_class(
     let qn = format!("{}::class::{}", ctx.rel_path, name);
 
     nodes.push(Node {
-        id: 0,
+        id: NodeId::UNSET,
         kind: NodeKind::Class,
         name: name.to_owned(),
         qualified_name: qn.clone(),
@@ -289,7 +294,7 @@ fn visit_method(
         .map(|n| node_text(n, ctx.source).to_owned());
 
     nodes.push(Node {
-        id: 0,
+        id: NodeId::UNSET,
         kind: NodeKind::Method,
         name: name.to_owned(),
         qualified_name: qn.clone(),
@@ -360,7 +365,7 @@ fn visit_import(
 
     let qn = format!("{}::import::{}", ctx.rel_path, source);
     nodes.push(Node {
-        id: 0,
+        id: NodeId::UNSET,
         kind: NodeKind::Import,
         name: source.clone(),
         qualified_name: qn.clone(),
@@ -406,7 +411,7 @@ fn visit_ts_interface(
 
     let qn = format!("{}::interface::{}", ctx.rel_path, name);
     nodes.push(Node {
-        id: 0,
+        id: NodeId::UNSET,
         kind: NodeKind::Interface,
         name: name.to_owned(),
         qualified_name: qn.clone(),
@@ -442,7 +447,7 @@ fn visit_ts_type_alias(
 
     let qn = format!("{}::type::{}", ctx.rel_path, name);
     nodes.push(Node {
-        id: 0,
+        id: NodeId::UNSET,
         kind: NodeKind::Variable,
         name: name.to_owned(),
         qualified_name: qn.clone(),
@@ -478,7 +483,7 @@ fn visit_ts_enum(
 
     let qn = format!("{}::enum::{}", ctx.rel_path, name);
     nodes.push(Node {
-        id: 0,
+        id: NodeId::UNSET,
         kind: NodeKind::Enum,
         name: name.to_owned(),
         qualified_name: qn.clone(),
@@ -495,6 +500,106 @@ fn visit_ts_enum(
         extra_json: serde_json::Value::Null,
     });
     edges.push(contains_edge(ctx.rel_path, &qn, ctx.rel_path, start_line(node)));
+}
+
+// ---------------------------------------------------------------------------
+// Same-file call resolution (JavaScript / TypeScript)
+// ---------------------------------------------------------------------------
+
+fn resolve_js_calls(root: TsNode<'_>, source: &[u8], rel_path: &str, nodes: &[Node]) -> Vec<Edge> {
+    let mut callables: HashMap<String, String> = HashMap::new();
+    for n in nodes {
+        if matches!(n.kind, NodeKind::Function | NodeKind::Method | NodeKind::Test) {
+            callables.insert(n.name.clone(), n.qualified_name.clone());
+        }
+    }
+    let mut edges = Vec::new();
+    let mut scope: Vec<String> = Vec::new();
+    walk_js_calls(root, source, rel_path, &callables, &mut scope, &mut edges);
+    edges
+}
+
+fn walk_js_calls<'a>(
+    node: TsNode<'a>,
+    source: &[u8],
+    rel_path: &str,
+    callables: &HashMap<String, String>,
+    scope: &mut Vec<String>,
+    edges: &mut Vec<Edge>,
+) {
+    let kind = node.kind();
+    let is_function_scope = matches!(
+        kind,
+        "function_declaration"
+            | "function"
+            | "method_definition"
+            | "function_signature" // TS
+            | "method_signature"   // TS
+    );
+
+    if is_function_scope {
+        // Try to find the function name.
+        let pushed = if let Some(name_node) = node.child_by_field_name("name") {
+            let name = node_text(name_node, source);
+            if let Some(qn) = callables.get(name) {
+                scope.push(qn.clone());
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            walk_js_calls(child, source, rel_path, callables, scope, edges);
+        }
+        if pushed {
+            scope.pop();
+        }
+        return;
+    }
+
+    if kind == "call_expression" {
+        if let Some(caller_qn) = scope.last().cloned() {
+            let called_name = node.child_by_field_name("function").and_then(|f| {
+                match f.kind() {
+                    "identifier" => Some(node_text(f, source).to_owned()),
+                    "member_expression" => {
+                        f.child_by_field_name("property").map(|p| node_text(p, source).to_owned())
+                    }
+                    _ => None,
+                }
+            });
+            if let Some(name) = called_name {
+                if let Some(callee_qn) = callables.get(&name) {
+                    if *callee_qn != caller_qn {
+                        edges.push(js_call_edge(&caller_qn, callee_qn, rel_path, start_line(node)));
+                    }
+                }
+            }
+        }
+    }
+
+    // Default recursive walk.
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        walk_js_calls(child, source, rel_path, callables, scope, edges);
+    }
+}
+
+fn js_call_edge(caller: &str, callee: &str, rel_path: &str, line: u32) -> Edge {
+    Edge {
+        id: 0,
+        kind: EdgeKind::Calls,
+        source_qn: caller.to_owned(),
+        target_qn: callee.to_owned(),
+        file_path: rel_path.to_owned(),
+        line: Some(line),
+        confidence: 0.8,
+        confidence_tier: Some("same_file".to_owned()),
+        extra_json: serde_json::Value::Null,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -606,5 +711,29 @@ mod tests {
     #[test]
     fn d_ts_not_supported() {
         assert!(!TsParser.supports("index.d.ts"));
+    }
+
+    #[test]
+    fn js_same_file_call_resolved() {
+        let src = "function helper() {}\nfunction caller() { helper(); }\n";
+        let pf = parse_js(src);
+        assert!(
+            pf.edges.iter().any(|e| e.kind == EdgeKind::Calls
+                && e.source_qn.contains("caller")
+                && e.target_qn.contains("helper")),
+            "expected Calls edge from caller to helper; edges: {:?}", pf.edges
+        );
+    }
+
+    #[test]
+    fn ts_same_file_call_resolved() {
+        let src = "function helper(): void {}\nfunction caller(): void { helper(); }\n";
+        let pf = parse_ts(src);
+        assert!(
+            pf.edges.iter().any(|e| e.kind == EdgeKind::Calls
+                && e.source_qn.contains("caller")
+                && e.target_qn.contains("helper")),
+            "expected Calls edge from caller to helper in TS"
+        );
     }
 }

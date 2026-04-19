@@ -1342,11 +1342,11 @@ And the system has:
 
 ### Slice 9 — correctness gaps
 
-- [ ] add `NodeId` type
-- [ ] finish remaining SQLite table/transaction/schema test gaps
-- [ ] complete path normalization and ignore handling
-- [ ] finish deleted/renamed file behavior
-- [ ] complete remaining language-strategy and call-resolution work
+- [x] add `NodeId` type
+- [x] finish remaining SQLite table/transaction/schema test gaps
+- [x] complete path normalization and ignore handling
+- [x] finish deleted/renamed file behavior
+- [x] complete remaining language-strategy and call-resolution work
 
 ### Slice 10 — MVP command completion
 

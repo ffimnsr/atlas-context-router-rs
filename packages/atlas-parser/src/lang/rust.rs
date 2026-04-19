@@ -1,4 +1,5 @@
-use atlas_core::{Edge, EdgeKind, Node, NodeKind, ParsedFile};
+use atlas_core::{Edge, EdgeKind, Node, NodeId, NodeKind, ParsedFile};
+use std::collections::HashMap;
 use tree_sitter::Node as TsNode;
 
 use crate::ast_helpers::{end_line, field_text, node_text, start_line};
@@ -46,6 +47,15 @@ impl LangParser for RustParser {
                 in_test_mod: false,
             };
             walker.walk_block(tree.root_node());
+
+            // Second pass: same-file call resolution.
+            let mut call_edges = resolve_same_file_calls(
+                tree.root_node(),
+                ctx.source,
+                ctx.rel_path,
+                &nodes,
+            );
+            edges.append(&mut call_edges);
         }
 
         ParsedFile {
@@ -124,7 +134,7 @@ impl<'s, 'o> Walker<'s, 'o> {
         let ret = field_text(node, "return_type", self.source).map(|s| s.to_owned());
 
         self.nodes.push(Node {
-            id: 0,
+            id: NodeId::UNSET,
             kind,
             name: name.to_owned(),
             qualified_name: qn.clone(),
@@ -154,7 +164,7 @@ impl<'s, 'o> Walker<'s, 'o> {
         let is_test_mod = self.in_test_mod || has_cfg_test(node, self.source);
 
         self.nodes.push(Node {
-            id: 0,
+            id: NodeId::UNSET,
             kind: NodeKind::Module,
             name: name.to_owned(),
             qualified_name: qn.clone(),
@@ -189,7 +199,7 @@ impl<'s, 'o> Walker<'s, 'o> {
         let qn = format!("{}::{}::{}", self.rel_path, type_prefix, suffix);
 
         self.nodes.push(Node {
-            id: 0,
+            id: NodeId::UNSET,
             kind,
             name: name.to_owned(),
             qualified_name: qn.clone(),
@@ -251,7 +261,7 @@ impl<'s, 'o> Walker<'s, 'o> {
 
 fn file_node(rel_path: &str, file_hash: &str, line_end: u32) -> Node {
     Node {
-        id: 0,
+        id: NodeId::UNSET,
         kind: NodeKind::File,
         name: rel_path.rsplit('/').next().unwrap_or(rel_path).to_owned(),
         qualified_name: rel_path.to_owned(),
@@ -340,6 +350,122 @@ fn has_cfg_test(node: TsNode<'_>, source: &[u8]) -> bool {
         sib = s.prev_named_sibling();
     }
     false
+}
+
+// ---------------------------------------------------------------------------
+// Same-file call resolution
+// ---------------------------------------------------------------------------
+
+/// Walk `root` looking for call and method-call expressions.
+/// Emits `Calls` edges (confidence=0.8, tier="same_file") for any call whose
+/// callee name matches a function or method defined in the same file.
+fn resolve_same_file_calls(
+    root: TsNode<'_>,
+    source: &[u8],
+    rel_path: &str,
+    nodes: &[Node],
+) -> Vec<Edge> {
+    // Build callable name → qualified_name map.
+    let mut callables: HashMap<String, String> = HashMap::new();
+    for n in nodes {
+        if matches!(n.kind, NodeKind::Function | NodeKind::Method | NodeKind::Test) {
+            callables.insert(n.name.clone(), n.qualified_name.clone());
+        }
+    }
+
+    let mut edges = Vec::new();
+    let mut scope: Vec<String> = Vec::new();
+    walk_for_rust_calls(root, source, rel_path, &callables, &mut scope, &mut edges);
+    edges
+}
+
+fn walk_for_rust_calls<'a>(
+    node: TsNode<'a>,
+    source: &[u8],
+    rel_path: &str,
+    callables: &HashMap<String, String>,
+    scope: &mut Vec<String>,
+    edges: &mut Vec<Edge>,
+) {
+    match node.kind() {
+        "function_item" => {
+            let caller_qn = node
+                .child_by_field_name("name")
+                .and_then(|n| callables.get(node_text(n, source)));
+            let pushed = if let Some(qn) = caller_qn {
+                scope.push(qn.clone());
+                true
+            } else {
+                false
+            };
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                walk_for_rust_calls(child, source, rel_path, callables, scope, edges);
+            }
+            if pushed {
+                scope.pop();
+            }
+            return; // already recursed
+        }
+        "call_expression" => {
+            if let Some(caller_qn) = scope.last() {
+                let called = node
+                    .child_by_field_name("function")
+                    .and_then(|f| call_name_from_node(f, source));
+                if let Some(name) = called {
+                    if let Some(callee_qn) = callables.get(name) {
+                        if callee_qn != caller_qn {
+                            edges.push(call_edge(caller_qn, callee_qn, rel_path, start_line(node)));
+                        }
+                    }
+                }
+            }
+        }
+        "method_call_expression" => {
+            if let Some(caller_qn) = scope.last() {
+                // `method` field is the method name identifier.
+                let called = node
+                    .child_by_field_name("method")
+                    .map(|m| node_text(m, source));
+                if let Some(name) = called {
+                    if let Some(callee_qn) = callables.get(name) {
+                        if callee_qn != caller_qn {
+                            edges.push(call_edge(caller_qn, callee_qn, rel_path, start_line(node)));
+                        }
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    // Default recursive walk.
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        walk_for_rust_calls(child, source, rel_path, callables, scope, edges);
+    }
+}
+
+/// Extract a bare function name from the `function` child of a call_expression.
+fn call_name_from_node<'a>(node: TsNode<'a>, source: &'a [u8]) -> Option<&'a str> {
+    match node.kind() {
+        "identifier" => Some(node_text(node, source)),
+        "scoped_identifier" => node.child_by_field_name("name").map(|n| node_text(n, source)),
+        _ => None,
+    }
+}
+
+fn call_edge(caller_qn: &str, callee_qn: &str, rel_path: &str, line: u32) -> Edge {
+    Edge {
+        id: 0,
+        kind: EdgeKind::Calls,
+        source_qn: caller_qn.to_owned(),
+        target_qn: callee_qn.to_owned(),
+        file_path: rel_path.to_owned(),
+        line: Some(line),
+        confidence: 0.8,
+        confidence_tier: Some("same_file".to_owned()),
+        extra_json: serde_json::Value::Null,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -434,5 +560,48 @@ mod tests {
         let src = "mod foo { fn bar() {} }";
         let pf = parse(src);
         assert!(pf.edges.iter().any(|e| e.kind == EdgeKind::Contains));
+    }
+
+    #[test]
+    fn same_file_call_resolved() {
+        let src = r#"
+fn helper() {}
+fn caller() { helper(); }
+"#;
+        let pf = parse(src);
+        assert!(
+            pf.edges.iter().any(|e| e.kind == EdgeKind::Calls
+                && e.source_qn.contains("caller")
+                && e.target_qn.contains("helper")),
+            "expected a Calls edge from caller to helper; edges: {:?}", pf.edges
+        );
+    }
+
+    #[test]
+    fn method_call_resolved() {
+        let src = r#"
+fn helper() {}
+struct S;
+impl S {
+    fn do_work(&self) { helper(); }
+}
+"#;
+        let pf = parse(src);
+        assert!(
+            pf.edges.iter().any(|e| e.kind == EdgeKind::Calls
+                && e.target_qn.contains("helper")),
+            "expected Calls edge to helper from method"
+        );
+    }
+
+    #[test]
+    fn no_self_calls_edge() {
+        // A recursive call should not produce a self-loop.
+        let src = r#"fn recurse(n: u32) -> u32 { if n == 0 { 0 } else { recurse(n-1) } }"#;
+        let pf = parse(src);
+        assert!(
+            !pf.edges.iter().any(|e| e.kind == EdgeKind::Calls && e.source_qn == e.target_qn),
+            "recursive call must not produce a self-loop edge"
+        );
     }
 }

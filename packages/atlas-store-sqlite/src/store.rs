@@ -1,6 +1,6 @@
 use atlas_core::{
-    AtlasError, EdgeKind, GraphStats, ImpactResult, Node, NodeKind, ParsedFile, Result, ScoredNode,
-    SearchQuery,
+    AtlasError, EdgeKind, GraphStats, ImpactResult, Node, NodeId, NodeKind, ParsedFile, Result,
+    ScoredNode, SearchQuery,
 };
 use rusqlite::{Connection, OpenFlags, Row, params};
 use tracing::{debug, info};
@@ -24,7 +24,7 @@ fn row_to_node(row: &Row<'_>) -> rusqlite::Result<Node> {
         .unwrap_or(serde_json::Value::Null);
 
     Ok(Node {
-        id: row.get(0)?,
+        id: NodeId(row.get(0)?),
         kind,
         name: row.get(2)?,
         qualified_name: row.get(3)?,
@@ -289,7 +289,7 @@ impl Store {
                              params, return_type, modifiers)
                      VALUES('delete', ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                     params![
-                        n.id,
+                        n.id.0,
                         n.qualified_name,
                         n.name,
                         n.kind.as_str(),
@@ -306,6 +306,15 @@ impl Store {
         // Steps 3–4: clear edges and nodes for this file.
         self.conn
             .execute("DELETE FROM edges WHERE file_path = ?1", [path])
+            .map_err(db_err)?;
+        // Remove dangling cross-file edges referencing old nodes from this file.
+        self.conn
+            .execute(
+                "DELETE FROM edges
+                 WHERE source_qualified IN (SELECT qualified_name FROM nodes WHERE file_path = ?1)
+                    OR target_qualified IN (SELECT qualified_name FROM nodes WHERE file_path = ?1)",
+                [path],
+            )
             .map_err(db_err)?;
         self.conn
             .execute("DELETE FROM nodes WHERE file_path = ?1", [path])
@@ -455,7 +464,7 @@ impl Store {
                              params, return_type, modifiers)
                      VALUES('delete', ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                     params![
-                        n.id,
+                        n.id.0,
                         n.qualified_name,
                         n.name,
                         n.kind.as_str(),
@@ -471,6 +480,18 @@ impl Store {
 
         self.conn
             .execute("DELETE FROM edges WHERE file_path = ?1", [path])
+            .map_err(db_err)?;
+        // Also remove dangling cross-file edges whose source or target
+        // qualified name belongs to a node in the deleted file.  These edges
+        // originate from other files and would otherwise linger as stale
+        // references after the target nodes are gone.
+        self.conn
+            .execute(
+                "DELETE FROM edges
+                 WHERE source_qualified IN (SELECT qualified_name FROM nodes WHERE file_path = ?1)
+                    OR target_qualified IN (SELECT qualified_name FROM nodes WHERE file_path = ?1)",
+                [path],
+            )
             .map_err(db_err)?;
         self.conn
             .execute("DELETE FROM nodes WHERE file_path = ?1", [path])
@@ -807,7 +828,7 @@ impl Store {
 
 #[cfg(test)]
 mod tests {
-    use atlas_core::{Edge, EdgeKind, Node, NodeKind, ParsedFile, SearchQuery};
+    use atlas_core::{Edge, EdgeKind, Node, NodeId, NodeKind, ParsedFile, SearchQuery};
 
     use super::*;
 
@@ -827,7 +848,7 @@ mod tests {
         language: &str,
     ) -> Node {
         Node {
-            id: 0,
+            id: NodeId::UNSET,
             kind,
             name: name.to_string(),
             qualified_name: qn.to_string(),
@@ -960,6 +981,48 @@ mod tests {
         assert_eq!(stats.file_count, 0);
         assert_eq!(stats.node_count, 0);
         assert_eq!(stats.edge_count, 0);
+    }
+
+    #[test]
+    fn delete_file_graph_removes_dangling_cross_file_edges() {
+        let mut store = open_in_memory();
+        // b.rs has an edge pointing INTO a node from a.rs.
+        let na = make_node(NodeKind::Function, "fa", "a.rs::fn::fa", "a.rs", "rust");
+        let nb = make_node(NodeKind::Function, "fb", "b.rs::fn::fb", "b.rs", "rust");
+        // Edge lives in b.rs but targets a.rs::fn::fa.
+        let cross_edge = make_edge(EdgeKind::Calls, "b.rs::fn::fb", "a.rs::fn::fa", "b.rs");
+        store.replace_file_graph("a.rs", "h", None, None, &[na], &[]).unwrap();
+        store.replace_file_graph("b.rs", "h", None, None, &[nb], &[cross_edge]).unwrap();
+
+        // Verify the cross-file edge is present before deletion.
+        assert_eq!(store.stats().unwrap().edge_count, 1);
+
+        // Deleting a.rs must also remove the dangling edge from b.rs.
+        store.delete_file_graph("a.rs").unwrap();
+
+        let stats = store.stats().unwrap();
+        assert_eq!(stats.file_count, 1, "b.rs file should remain");
+        assert_eq!(stats.edge_count, 0, "dangling cross-file edge must be removed");
+    }
+
+    #[test]
+    fn replace_file_graph_removes_stale_cross_file_edges_on_update() {
+        let mut store = open_in_memory();
+        // b.rs references old_fn from a.rs; after a.rs is re-indexed with only
+        // new_fn the edge must be cleaned up.
+        let na = make_node(NodeKind::Function, "old_fn", "a.rs::fn::old_fn", "a.rs", "rust");
+        let nb = make_node(NodeKind::Function, "caller", "b.rs::fn::caller", "b.rs", "rust");
+        let stale = make_edge(EdgeKind::Calls, "b.rs::fn::caller", "a.rs::fn::old_fn", "b.rs");
+        store.replace_file_graph("a.rs", "h1", None, None, &[na], &[]).unwrap();
+        store.replace_file_graph("b.rs", "h1", None, None, &[nb], &[stale]).unwrap();
+        assert_eq!(store.stats().unwrap().edge_count, 1);
+
+        // Re-index a.rs with a *different* function; old_fn is now gone.
+        let new_na = make_node(NodeKind::Function, "new_fn", "a.rs::fn::new_fn", "a.rs", "rust");
+        store.replace_file_graph("a.rs", "h2", None, None, &[new_na], &[]).unwrap();
+
+        // The stale edge from b.rs towards the now-gone old_fn must be removed.
+        assert_eq!(store.stats().unwrap().edge_count, 0, "stale cross-file edge must be cleaned up");
     }
 
     // --- replace_batch -------------------------------------------------------
@@ -1153,5 +1216,201 @@ mod tests {
         };
         let results = store.search(&q).unwrap();
         assert!(results.is_empty());
+    }
+
+    // --- stats correctness ---------------------------------------------------
+
+    #[test]
+    fn stats_returns_nodes_by_kind() {
+        let mut store = open_in_memory();
+        let func = make_node(NodeKind::Function, "fn1", "a.rs::fn::fn1", "a.rs", "rust");
+        let strct = make_node(NodeKind::Struct, "MyStruct", "a.rs::struct::MyStruct", "a.rs", "rust");
+        store.replace_file_graph("a.rs", "h", Some("rust"), None, &[func, strct], &[]).unwrap();
+
+        let stats = store.stats().unwrap();
+        assert_eq!(stats.node_count, 2);
+        assert!(stats.nodes_by_kind.iter().any(|(k, _)| k == "function"));
+        assert!(stats.nodes_by_kind.iter().any(|(k, _)| k == "struct"));
+    }
+
+    #[test]
+    fn stats_returns_languages() {
+        let mut store = open_in_memory();
+        let node = make_node(NodeKind::Function, "fn1", "a.rs::fn::fn1", "a.rs", "rust");
+        store.replace_file_graph("a.rs", "h", Some("rust"), None, &[node], &[]).unwrap();
+
+        let stats = store.stats().unwrap();
+        assert!(stats.languages.contains(&"rust".to_string()));
+    }
+
+    #[test]
+    fn stats_last_indexed_at_set_after_replace() {
+        let mut store = open_in_memory();
+        let node = make_node(NodeKind::Function, "fn1", "a.rs::fn::fn1", "a.rs", "rust");
+        store.replace_file_graph("a.rs", "h", Some("rust"), None, &[node], &[]).unwrap();
+
+        let stats = store.stats().unwrap();
+        assert!(stats.last_indexed_at.is_some(), "last_indexed_at should be set");
+    }
+
+    // --- file_hashes ---------------------------------------------------------
+
+    #[test]
+    fn file_hashes_returns_stored_hashes() {
+        let mut store = open_in_memory();
+        let nodes_a = vec![make_node(NodeKind::Function, "f", "a.rs::fn::f", "a.rs", "rust")];
+        let nodes_b = vec![make_node(NodeKind::Function, "g", "b.rs::fn::g", "b.rs", "go")];
+        store.replace_file_graph("a.rs", "hash_aaa", Some("rust"), None, &nodes_a, &[]).unwrap();
+        store.replace_file_graph("b.rs", "hash_bbb", Some("go"), None, &nodes_b, &[]).unwrap();
+
+        let hashes = store.file_hashes().unwrap();
+        assert_eq!(hashes.get("a.rs").map(String::as_str), Some("hash_aaa"));
+        assert_eq!(hashes.get("b.rs").map(String::as_str), Some("hash_bbb"));
+    }
+
+    #[test]
+    fn file_hashes_empty_when_no_files() {
+        let store = open_in_memory();
+        let hashes = store.file_hashes().unwrap();
+        assert!(hashes.is_empty());
+    }
+
+    #[test]
+    fn file_hashes_updated_after_replace() {
+        let mut store = open_in_memory();
+        let nodes = vec![make_node(NodeKind::Function, "f", "a.rs::fn::f", "a.rs", "rust")];
+        store.replace_file_graph("a.rs", "old_hash", None, None, &nodes, &[]).unwrap();
+        store.replace_file_graph("a.rs", "new_hash", None, None, &nodes, &[]).unwrap();
+
+        let hashes = store.file_hashes().unwrap();
+        assert_eq!(hashes.get("a.rs").map(String::as_str), Some("new_hash"));
+        assert_eq!(hashes.len(), 1);
+    }
+
+    // --- impact_radius limits ------------------------------------------------
+
+    #[test]
+    fn impact_radius_respects_depth_limit() {
+        let mut store = open_in_memory();
+        // a → b → c → d: with depth=1, only b should be reachable from a.
+        let na = make_node(NodeKind::Function, "a", "a.rs::fn::a", "a.rs", "rust");
+        let nb = make_node(NodeKind::Function, "b", "b.rs::fn::b", "b.rs", "rust");
+        let nc = make_node(NodeKind::Function, "c", "c.rs::fn::c", "c.rs", "rust");
+        let nd = make_node(NodeKind::Function, "d", "d.rs::fn::d", "d.rs", "rust");
+        let e1 = make_edge(EdgeKind::Calls, "a.rs::fn::a", "b.rs::fn::b", "a.rs");
+        let e2 = make_edge(EdgeKind::Calls, "b.rs::fn::b", "c.rs::fn::c", "b.rs");
+        let e3 = make_edge(EdgeKind::Calls, "c.rs::fn::c", "d.rs::fn::d", "c.rs");
+        store.replace_file_graph("a.rs", "h", None, None, &[na], &[e1]).unwrap();
+        store.replace_file_graph("b.rs", "h", None, None, &[nb], &[e2]).unwrap();
+        store.replace_file_graph("c.rs", "h", None, None, &[nc], &[e3]).unwrap();
+        store.replace_file_graph("d.rs", "h", None, None, &[nd], &[]).unwrap();
+
+        let result = store.impact_radius(&["a.rs"], 1, 200).unwrap();
+        let all_files: Vec<&str> = result
+            .changed_nodes
+            .iter()
+            .chain(result.impacted_nodes.iter())
+            .map(|n| n.file_path.as_str())
+            .collect();
+        // At depth 1 from a.rs, b.rs should be reachable but c.rs and d.rs should not.
+        assert!(all_files.contains(&"b.rs"), "b.rs should be reached at depth 1");
+        assert!(!all_files.contains(&"d.rs"), "d.rs beyond depth limit should not appear");
+    }
+
+    #[test]
+    fn impact_radius_respects_node_count_limit() {
+        let mut store = open_in_memory();
+        // Create a fan-out: a → b, a → c, a → d, a → e (4 targets)
+        let na = make_node(NodeKind::Function, "a", "a.rs::fn::a", "a.rs", "rust");
+        let nb = make_node(NodeKind::Function, "b", "b.rs::fn::b", "b.rs", "rust");
+        let nc = make_node(NodeKind::Function, "c", "c.rs::fn::c", "c.rs", "rust");
+        let nd = make_node(NodeKind::Function, "d", "d.rs::fn::d", "d.rs", "rust");
+        let e1 = make_edge(EdgeKind::Calls, "a.rs::fn::a", "b.rs::fn::b", "a.rs");
+        let e2 = make_edge(EdgeKind::Calls, "a.rs::fn::a", "c.rs::fn::c", "a.rs");
+        let e3 = make_edge(EdgeKind::Calls, "a.rs::fn::a", "d.rs::fn::d", "a.rs");
+        store.replace_file_graph("a.rs", "h", None, None, &[na], &[e1, e2, e3]).unwrap();
+        store.replace_file_graph("b.rs", "h", None, None, &[nb], &[]).unwrap();
+        store.replace_file_graph("c.rs", "h", None, None, &[nc], &[]).unwrap();
+        store.replace_file_graph("d.rs", "h", None, None, &[nd], &[]).unwrap();
+
+        // Limit to 2 total nodes — should stop before visiting all of b/c/d.
+        let result = store.impact_radius(&["a.rs"], 5, 2).unwrap();
+        let total = result.changed_nodes.len() + result.impacted_nodes.len();
+        assert!(total <= 2, "node count limit must be respected; got {total}");
+    }
+
+    // --- FTS language / file_path / is_test filters --------------------------
+
+    #[test]
+    fn fts_search_respects_language_filter() {
+        let mut store = open_in_memory();
+        let rust_fn = make_node(NodeKind::Function, "shared_name", "a.rs::fn::shared_name", "a.rs", "rust");
+        let go_fn   = make_node(NodeKind::Function, "shared_name", "b.go::fn::shared_name", "b.go", "go");
+        store.replace_file_graph("a.rs", "h", Some("rust"), None, &[rust_fn], &[]).unwrap();
+        store.replace_file_graph("b.go", "h", Some("go"),   None, &[go_fn],   &[]).unwrap();
+
+        let q = SearchQuery {
+            text: "shared_name".to_string(),
+            language: Some("go".to_string()),
+            limit: 10,
+            ..Default::default()
+        };
+        let results = store.search(&q).unwrap();
+        assert!(!results.is_empty());
+        assert!(results.iter().all(|r| r.node.language == "go"));
+    }
+
+    #[test]
+    fn fts_search_respects_file_path_filter() {
+        let mut store = open_in_memory();
+        let na = make_node(NodeKind::Function, "common", "a.rs::fn::common", "a.rs", "rust");
+        let nb = make_node(NodeKind::Function, "common", "b.rs::fn::common", "b.rs", "rust");
+        store.replace_file_graph("a.rs", "h", None, None, &[na], &[]).unwrap();
+        store.replace_file_graph("b.rs", "h", None, None, &[nb], &[]).unwrap();
+
+        let q = SearchQuery {
+            text: "common".to_string(),
+            file_path: Some("a.rs".to_string()),
+            limit: 10,
+            ..Default::default()
+        };
+        let results = store.search(&q).unwrap();
+        assert!(!results.is_empty());
+        assert!(results.iter().all(|r| r.node.file_path == "a.rs"));
+    }
+
+    #[test]
+    fn fts_search_respects_is_test_filter() {
+        let mut store = open_in_memory();
+        let mut test_node = make_node(NodeKind::Function, "test_foo", "a.rs::fn::test_foo", "a.rs", "rust");
+        test_node.is_test = true;
+        let prod_node = make_node(NodeKind::Function, "foo", "a.rs::fn::foo", "a.rs", "rust");
+        store.replace_file_graph("a.rs", "h", None, None, &[test_node, prod_node], &[]).unwrap();
+
+        // Search for is_test = true should only return test nodes.
+        let q = SearchQuery {
+            text: "foo".to_string(),
+            is_test: Some(true),
+            limit: 10,
+            ..Default::default()
+        };
+        let results = store.search(&q).unwrap();
+        assert!(!results.is_empty());
+        assert!(results.iter().all(|r| r.node.is_test));
+    }
+
+    // --- transaction rollback on schema mismatch is covered by migration_creates_schema ---
+    // --- NodeId type ---------------------------------------------------------
+
+    #[test]
+    fn node_id_assigned_after_insert() {
+        let mut store = open_in_memory();
+        let node = make_node(NodeKind::Function, "fn_alpha", "a.rs::fn::fn_alpha", "a.rs", "rust");
+        assert_eq!(node.id, NodeId::UNSET, "before insert id must be UNSET");
+        store.replace_file_graph("a.rs", "h", None, None, &[node], &[]).unwrap();
+        let fetched = store.nodes_by_file("a.rs").unwrap();
+        assert_eq!(fetched.len(), 1);
+        assert_ne!(fetched[0].id, NodeId::UNSET, "after insert id must be a real DB id");
+        assert!(fetched[0].id.0 > 0);
     }
 }

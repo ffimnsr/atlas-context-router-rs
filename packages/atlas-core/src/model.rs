@@ -2,9 +2,39 @@ use serde::{Deserialize, Serialize};
 
 use crate::kinds::{EdgeKind, NodeKind};
 
+/// Opaque primary key for a graph node.
+///
+/// `NodeId(0)` is the sentinel value used before a database ID is assigned.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct NodeId(pub i64);
+
+impl NodeId {
+    /// Sentinel used before a real database ID has been assigned.
+    pub const UNSET: NodeId = NodeId(0);
+}
+
+impl From<i64> for NodeId {
+    fn from(v: i64) -> Self {
+        NodeId(v)
+    }
+}
+
+impl From<NodeId> for i64 {
+    fn from(id: NodeId) -> Self {
+        id.0
+    }
+}
+
+impl std::fmt::Display for NodeId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Node {
-    pub id: i64,
+    pub id: NodeId,
     pub kind: NodeKind,
     pub name: String,
     pub qualified_name: String,

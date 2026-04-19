@@ -1,4 +1,5 @@
-use atlas_core::{Edge, EdgeKind, Node, NodeKind, ParsedFile};
+use atlas_core::{Edge, EdgeKind, Node, NodeId, NodeKind, ParsedFile};
+use std::collections::HashMap;
 use tree_sitter::Node as TsNode;
 
 use crate::ast_helpers::{end_line, field_text, node_text, start_line};
@@ -50,6 +51,10 @@ impl LangParser for GoParser {
                     _ => {}
                 }
             }
+
+            // Second pass: same-file call resolution.
+            let mut call_edges = resolve_go_calls(root, ctx.source, ctx.rel_path, &nodes);
+            edges.append(&mut call_edges);
         }
 
         ParsedFile {
@@ -69,7 +74,7 @@ impl LangParser for GoParser {
 
 fn file_node(rel_path: &str, file_hash: &str, line_end: u32) -> Node {
     Node {
-        id: 0,
+        id: NodeId::UNSET,
         kind: NodeKind::File,
         name: rel_path.rsplit('/').next().unwrap_or(rel_path).to_owned(),
         qualified_name: rel_path.to_owned(),
@@ -134,7 +139,7 @@ fn visit_function(
     let file_qn = ctx.rel_path;
 
     nodes.push(Node {
-        id: 0,
+        id: NodeId::UNSET,
         kind,
         name: name.to_owned(),
         qualified_name: qn.clone(),
@@ -178,7 +183,7 @@ fn visit_method(
     let file_qn = ctx.rel_path;
 
     nodes.push(Node {
-        id: 0,
+        id: NodeId::UNSET,
         kind: NodeKind::Method,
         name: name.to_owned(),
         qualified_name: qn.clone(),
@@ -234,7 +239,7 @@ fn visit_type_spec(
     let file_qn = ctx.rel_path;
 
     nodes.push(Node {
-        id: 0,
+        id: NodeId::UNSET,
         kind,
         name: name.to_owned(),
         qualified_name: qn.clone(),
@@ -270,7 +275,7 @@ fn visit_imports(
                     let path = raw.trim_matches('"').trim_matches('`');
                     let qn = format!("{}::import::{}", ctx.rel_path, path);
                     nodes.push(Node {
-                        id: 0,
+                        id: NodeId::UNSET,
                         kind: NodeKind::Import,
                         name: path.to_owned(),
                         qualified_name: qn.clone(),
@@ -305,6 +310,97 @@ fn visit_imports(
 
 // ---------------------------------------------------------------------------
 // Tests
+// ---------------------------------------------------------------------------
+// Same-file call resolution (Go)
+// ---------------------------------------------------------------------------
+
+fn resolve_go_calls(root: TsNode<'_>, source: &[u8], rel_path: &str, nodes: &[Node]) -> Vec<Edge> {
+    let mut callables: HashMap<String, String> = HashMap::new();
+    for n in nodes {
+        if matches!(n.kind, NodeKind::Function | NodeKind::Method | NodeKind::Test) {
+            callables.insert(n.name.clone(), n.qualified_name.clone());
+        }
+    }
+    let mut edges = Vec::new();
+    let mut scope: Vec<String> = Vec::new();
+    walk_go_calls(root, source, rel_path, &callables, &mut scope, &mut edges);
+    edges
+}
+
+fn walk_go_calls<'a>(
+    node: TsNode<'a>,
+    source: &[u8],
+    rel_path: &str,
+    callables: &HashMap<String, String>,
+    scope: &mut Vec<String>,
+    edges: &mut Vec<Edge>,
+) {
+    match node.kind() {
+        "function_declaration" | "method_declaration" => {
+            let pushed = if let Some(name_node) = node.child_by_field_name("name") {
+                let name = node_text(name_node, source);
+                if let Some(qn) = callables.get(name) {
+                    scope.push(qn.clone());
+                    true
+                } else {
+                    false
+                }
+            } else {
+                false
+            };
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                walk_go_calls(child, source, rel_path, callables, scope, edges);
+            }
+            if pushed {
+                scope.pop();
+            }
+            return;
+        }
+        "call_expression" => {
+            if let Some(caller_qn) = scope.last().cloned() {
+                // In Go, call_expression.function can be identifier or selector_expression.
+                let called_name = node.child_by_field_name("function").and_then(|f| {
+                    match f.kind() {
+                        "identifier" => Some(node_text(f, source).to_owned()),
+                        "selector_expression" => {
+                            // e.g. `obj.Method()` — extract the `field` (method name).
+                            f.child_by_field_name("field").map(|fi| node_text(fi, source).to_owned())
+                        }
+                        _ => None,
+                    }
+                });
+                if let Some(name) = called_name {
+                    if let Some(callee_qn) = callables.get(&name) {
+                        if *callee_qn != caller_qn {
+                            edges.push(go_call_edge(&caller_qn, callee_qn, rel_path, start_line(node)));
+                        }
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        walk_go_calls(child, source, rel_path, callables, scope, edges);
+    }
+}
+
+fn go_call_edge(caller: &str, callee: &str, rel_path: &str, line: u32) -> Edge {
+    Edge {
+        id: 0,
+        kind: EdgeKind::Calls,
+        source_qn: caller.to_owned(),
+        target_qn: callee.to_owned(),
+        file_path: rel_path.to_owned(),
+        line: Some(line),
+        confidence: 0.8,
+        confidence_tier: Some("same_file".to_owned()),
+        extra_json: serde_json::Value::Null,
+    }
+}
+
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
@@ -361,5 +457,17 @@ mod tests {
     fn import_edges() {
         let pf = parse("package main\nimport \"fmt\"\nfunc main() {}");
         assert!(pf.edges.iter().any(|e| e.kind == EdgeKind::Imports));
+    }
+
+    #[test]
+    fn same_file_call_resolved() {
+        let src = "package main\nfunc helper() {}\nfunc caller() { helper() }";
+        let pf = parse(src);
+        assert!(
+            pf.edges.iter().any(|e| e.kind == EdgeKind::Calls
+                && e.source_qn.contains("caller")
+                && e.target_qn.contains("helper")),
+            "expected Calls edge; edges: {:?}", pf.edges
+        );
     }
 }

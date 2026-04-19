@@ -91,11 +91,11 @@ pub fn assemble_review_context(
 mod tests {
     use super::*;
     use atlas_core::model::{Edge, ImpactResult, Node};
-    use atlas_core::{EdgeKind, NodeKind};
+    use atlas_core::{EdgeKind, NodeId, NodeKind};
 
     fn make_node(qn: &str, file: &str, kind: NodeKind) -> Node {
         Node {
-            id: 0,
+            id: NodeId::UNSET,
             kind,
             name: qn.to_string(),
             qualified_name: qn.to_string(),
