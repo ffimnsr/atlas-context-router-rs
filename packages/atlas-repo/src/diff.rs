@@ -3,6 +3,8 @@ use atlas_core::model::{ChangedFile, ChangeType};
 use camino::Utf8Path;
 use std::process::Command;
 
+use crate::path::to_forward_slashes;
+
 /// Specification of what to diff against.
 #[derive(Debug, Clone)]
 pub enum DiffTarget {
@@ -68,45 +70,45 @@ fn parse_name_status_z(raw: &str) -> Result<Vec<ChangedFile>> {
 
         match status_char {
             'A' => {
-                let path = consume(&mut i, &parts)?;
+                let path = to_forward_slashes(consume(&mut i, &parts)?);
                 results.push(ChangedFile {
-                    path: path.to_owned(),
+                    path,
                     change_type: ChangeType::Added,
                     old_path: None,
                 });
             }
             'M' => {
-                let path = consume(&mut i, &parts)?;
+                let path = to_forward_slashes(consume(&mut i, &parts)?);
                 results.push(ChangedFile {
-                    path: path.to_owned(),
+                    path,
                     change_type: ChangeType::Modified,
                     old_path: None,
                 });
             }
             'D' => {
-                let path = consume(&mut i, &parts)?;
+                let path = to_forward_slashes(consume(&mut i, &parts)?);
                 results.push(ChangedFile {
-                    path: path.to_owned(),
+                    path,
                     change_type: ChangeType::Deleted,
                     old_path: None,
                 });
             }
             'R' => {
-                let old_path = consume(&mut i, &parts)?;
-                let new_path = consume(&mut i, &parts)?;
+                let old_path = to_forward_slashes(consume(&mut i, &parts)?);
+                let new_path = to_forward_slashes(consume(&mut i, &parts)?);
                 results.push(ChangedFile {
-                    path: new_path.to_owned(),
+                    path: new_path,
                     change_type: ChangeType::Renamed,
-                    old_path: Some(old_path.to_owned()),
+                    old_path: Some(old_path),
                 });
             }
             'C' => {
-                let old_path = consume(&mut i, &parts)?;
-                let new_path = consume(&mut i, &parts)?;
+                let old_path = to_forward_slashes(consume(&mut i, &parts)?);
+                let new_path = to_forward_slashes(consume(&mut i, &parts)?);
                 results.push(ChangedFile {
-                    path: new_path.to_owned(),
+                    path: new_path,
                     change_type: ChangeType::Copied,
-                    old_path: Some(old_path.to_owned()),
+                    old_path: Some(old_path),
                 });
             }
             other => {

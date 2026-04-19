@@ -18,6 +18,7 @@ fn main() {
         Command::Query { .. } => commands::run_query(&cli),
         Command::Impact { .. } => commands::run_impact(&cli),
         Command::ReviewContext { .. } => commands::run_review_context(&cli),
+        Command::Serve => commands::run_serve(&cli),
     };
 
     if let Err(err) = result {

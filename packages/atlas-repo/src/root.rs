@@ -2,6 +2,8 @@ use anyhow::{Context, Result};
 use camino::{Utf8Path, Utf8PathBuf};
 use std::process::Command;
 
+use crate::path::to_forward_slashes;
+
 /// Locate the git repository root by first running `git rev-parse --show-toplevel`
 /// and falling back to walking parent directories for a `.git` entry.
 pub fn find_repo_root(start: &Utf8Path) -> Result<Utf8PathBuf> {
@@ -24,7 +26,9 @@ fn git_toplevel(cwd: &Utf8Path) -> Result<Utf8PathBuf> {
         .context("git output is not valid UTF-8")?
         .trim();
 
-    Ok(Utf8PathBuf::from(raw))
+    // On Windows git may return backslash-separated or mixed paths — normalise.
+    let normalised = to_forward_slashes(raw);
+    Ok(Utf8PathBuf::from(&normalised))
 }
 
 fn walk_for_git(start: &Utf8Path) -> Result<Utf8PathBuf> {

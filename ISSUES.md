@@ -32,7 +32,7 @@ The upstream repo’s real kernel is the repository scanner, parser layer, SQLit
   - [ ] `atlas query`
   - [ ] `atlas impact`
   - [ ] `atlas review-context`
-  - [ ] `atlas serve` (later, MCP/stdin or JSON-RPC style)
+  - [x] `atlas serve` (later, MCP/stdin or JSON-RPC style)
 
 ---
 
@@ -467,8 +467,8 @@ The upstream parser is both the most important subsystem and the most monolithic
 - [ ] v1 first-class languages:
   - [x] Rust
   - [x] Go
-  - [ ] Python
-  - [ ] JavaScript
+  - [x] Python
+  - [x] JavaScript
   - [ ] TypeScript
 - [ ] v1.1 later:
   - [ ] Java
@@ -565,22 +565,22 @@ The upstream parser is both the most important subsystem and the most monolithic
 
 ### 7.2 Python
 
-- [ ] modules
-- [ ] functions
-- [ ] classes
-- [ ] methods
-- [ ] imports
+- [x] modules
+- [x] functions
+- [x] classes
+- [x] methods
+- [x] imports
 - [ ] decorators
-- [ ] tests
+- [x] tests
 
 ### 7.3 JavaScript/TypeScript
 
-- [ ] functions
-- [ ] classes
-- [ ] methods
-- [ ] imports/exports
+- [x] functions
+- [x] classes
+- [x] methods
+- [x] imports/exports
 - [ ] call expressions
-- [ ] TS type/interface nodes
+- [x] TS type/interface nodes
 - [ ] later TS path alias resolution
 
 ### 7.4 Call-target resolution tiers
@@ -888,7 +888,7 @@ The upstream report highlights parser fidelity and install/hook fragility as the
 ### 14.6 Cross-platform tests
 
 - [ ] Linux
-- [ ] Windows path/casing behavior
+- [x] Windows path/casing behavior
 - [ ] macOS path handling
 - [ ] git command behavior on each
 
@@ -950,8 +950,8 @@ The upstream repo exposes a stdio MCP server, but the report makes clear this sh
 
 ### 16.3 Serve command
 
-- [ ] `atlas serve`
-- [ ] expose only core tools in first version
+- [x] `atlas serve`
+- [x] expose only core tools in first version
 - [ ] add prompts later, not first
 
 ---
@@ -1246,7 +1246,6 @@ And the system has:
 - [x] Go language handler
 - [x] node/edge extraction
 
-
 ### Slice 5 — build/update
 
 - [x] full build pipeline
@@ -1263,11 +1262,11 @@ And the system has:
 
 ### Slice 7 — polish
 
-- [ ] JSON outputs
-- [ ] more parsers
-- [ ] benchmarks
-- [ ] Windows hardening
-- [ ] serve/MCP
+- [x] JSON outputs
+- [x] more parsers
+- [x] benchmarks
+- [x] Windows hardening
+- [x] serve/MCP
 
 ---
 

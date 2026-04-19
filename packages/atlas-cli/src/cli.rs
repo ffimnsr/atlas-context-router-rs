@@ -111,4 +111,7 @@ pub enum Command {
         #[arg(long, num_args = 1..)]
         files: Vec<String>,
     },
+
+    /// Start a JSON-RPC / MCP stdio server.
+    Serve,
 }

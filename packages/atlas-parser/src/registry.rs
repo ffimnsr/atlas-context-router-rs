@@ -1,6 +1,11 @@
 use std::path::Path;
 
-use crate::lang::{go::GoParser, rust::RustParser};
+use crate::lang::{
+    go::GoParser,
+    javascript::{JsParser, TsParser},
+    python::PythonParser,
+    rust::RustParser,
+};
 use crate::traits::{LangParser, ParseContext};
 use atlas_core::ParsedFile;
 
@@ -15,6 +20,9 @@ impl ParserRegistry {
         let mut r = Self { handlers: Vec::new() };
         r.register(Box::new(RustParser));
         r.register(Box::new(GoParser));
+        r.register(Box::new(PythonParser));
+        r.register(Box::new(JsParser));
+        r.register(Box::new(TsParser));
         r
     }
 
@@ -68,6 +76,10 @@ mod tests {
         let reg = ParserRegistry::with_defaults();
         assert!(reg.supports("src/main.rs"));
         assert!(reg.supports("cmd/main.go"));
-        assert!(!reg.supports("index.py"));
+        assert!(reg.supports("index.py"));
+        assert!(reg.supports("app.js"));
+        assert!(reg.supports("app.ts"));
+        assert!(reg.supports("app.tsx"));
+        assert!(!reg.supports("config.yaml"));
     }
 }

@@ -1,4 +1,5 @@
 use std::fs;
+use std::io::{BufRead, Write};
 use std::path::Path;
 use std::time::Instant;
 
@@ -755,4 +756,272 @@ fn db_path(cli: &Cli, repo: &str) -> String {
         .join("worldview.sqlite")
         .to_string_lossy()
         .into_owned()
+}
+
+// ---------------------------------------------------------------------------
+// MCP / JSON-RPC serve
+// ---------------------------------------------------------------------------
+
+/// Run a minimal JSON-RPC 2.0 / MCP stdio server.
+///
+/// Reads newline-delimited JSON requests from stdin and writes responses to
+/// stdout.  Supported MCP methods:
+///   - `initialize`
+///   - `initialized` (notification — no response)
+///   - `tools/list`
+///   - `tools/call` with tools: `list_graph_stats`, `query_graph`,
+///     `get_impact_radius`, `get_review_context`, `detect_changes`
+pub fn run_serve(cli: &Cli) -> Result<()> {
+    let repo = resolve_repo(cli)?;
+    let db_path = db_path(cli, &repo);
+
+    eprintln!("atlas: MCP server ready (repo={repo}, db={db_path})");
+    eprintln!("atlas: reading JSON-RPC requests from stdin");
+
+    let stdin = std::io::stdin();
+    let stdout = std::io::stdout();
+    let reader = std::io::BufReader::new(stdin.lock());
+    let mut writer = std::io::BufWriter::new(stdout.lock());
+
+    for line in reader.lines() {
+        let line = line.context("stdin read error")?;
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+
+        let request: serde_json::Value = match serde_json::from_str(line) {
+            Ok(v) => v,
+            Err(e) => {
+                let resp = jsonrpc_error(serde_json::Value::Null, -32700, format!("parse error: {e}"));
+                writeln!(writer, "{resp}")?;
+                writer.flush()?;
+                continue;
+            }
+        };
+
+        let id = request.get("id").cloned().unwrap_or(serde_json::Value::Null);
+        let method = request.get("method").and_then(|m| m.as_str()).unwrap_or("");
+        let params = request.get("params");
+
+        // Notifications (no id or method starts with `notifications/`) — no response.
+        if method == "initialized" || method.starts_with("notifications/") {
+            continue;
+        }
+
+        let response = match handle_mcp_method(method, params, &db_path) {
+            Ok(result) => jsonrpc_ok(id, result),
+            Err(e) => jsonrpc_error(id, -32000, e.to_string()),
+        };
+
+        writeln!(writer, "{response}")?;
+        writer.flush()?;
+    }
+
+    Ok(())
+}
+
+/// Dispatch a single MCP method call.
+fn handle_mcp_method(
+    method: &str,
+    params: Option<&serde_json::Value>,
+    db_path: &str,
+) -> Result<serde_json::Value> {
+    match method {
+        "initialize" => {
+            Ok(serde_json::json!({
+                "protocolVersion": "2024-11-05",
+                "capabilities": { "tools": {} },
+                "serverInfo": {
+                    "name": "atlas",
+                    "version": env!("CARGO_PKG_VERSION")
+                }
+            }))
+        }
+
+        "tools/list" => Ok(mcp_tool_list()),
+
+        "tools/call" => {
+            let name = params
+                .and_then(|p| p.get("name"))
+                .and_then(|n| n.as_str())
+                .ok_or_else(|| anyhow::anyhow!("missing tool name"))?;
+            let args = params.and_then(|p| p.get("arguments"));
+            mcp_call_tool(name, args, db_path)
+        }
+
+        other => Err(anyhow::anyhow!("method not found: {other}")),
+    }
+}
+
+/// Return the MCP tool-list response.
+fn mcp_tool_list() -> serde_json::Value {
+    serde_json::json!({
+        "tools": [
+            {
+                "name": "list_graph_stats",
+                "description": "Return node/edge counts and language statistics for the indexed graph.",
+                "inputSchema": { "type": "object", "properties": {}, "required": [] }
+            },
+            {
+                "name": "query_graph",
+                "description": "Full-text search the code graph and return ranked symbol matches.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "text":     { "type": "string",  "description": "Search query" },
+                        "kind":     { "type": "string",  "description": "Filter by node kind" },
+                        "language": { "type": "string",  "description": "Filter by language" },
+                        "limit":    { "type": "integer", "description": "Max results (default 20)" }
+                    },
+                    "required": ["text"]
+                }
+            },
+            {
+                "name": "get_impact_radius",
+                "description": "Compute the set of nodes and files affected by changes in the given files.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "files":     { "type": "array",   "items": { "type": "string" }, "description": "Changed file paths" },
+                        "max_depth": { "type": "integer", "description": "Traversal depth (default 5)" },
+                        "max_nodes": { "type": "integer", "description": "Max nodes to return (default 200)" }
+                    },
+                    "required": ["files"]
+                }
+            },
+            {
+                "name": "get_review_context",
+                "description": "Assemble review context (changed symbols, impacted neighbors, risk summary) for the given files.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "files": { "type": "array", "items": { "type": "string" }, "description": "Changed file paths" }
+                    },
+                    "required": ["files"]
+                }
+            },
+            {
+                "name": "detect_changes",
+                "description": "List files changed since a base git ref.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "base":   { "type": "string",  "description": "Base ref (e.g. origin/main)" },
+                        "staged": { "type": "boolean", "description": "Use staged changes" }
+                    },
+                    "required": []
+                }
+            }
+        ]
+    })
+}
+
+/// Dispatch a `tools/call` invocation to the appropriate store operation.
+fn mcp_call_tool(
+    name: &str,
+    args: Option<&serde_json::Value>,
+    db_path: &str,
+) -> Result<serde_json::Value> {
+    let store = Store::open(db_path)
+        .with_context(|| format!("cannot open database at {db_path}"))?;
+
+    match name {
+        "list_graph_stats" => {
+            let stats = store.stats().context("stats query failed")?;
+            tool_result(serde_json::to_string_pretty(&stats)?)
+        }
+
+        "query_graph" => {
+            let text = args
+                .and_then(|a| a.get("text"))
+                .and_then(|t| t.as_str())
+                .ok_or_else(|| anyhow::anyhow!("missing required argument: text"))?;
+            let kind = args.and_then(|a| a.get("kind")).and_then(|k| k.as_str()).map(str::to_owned);
+            let language = args.and_then(|a| a.get("language")).and_then(|l| l.as_str()).map(str::to_owned);
+            let limit = args
+                .and_then(|a| a.get("limit"))
+                .and_then(|l| l.as_u64())
+                .map(|l| l as usize)
+                .unwrap_or(20);
+
+            let results = store
+                .search(&SearchQuery { text: text.to_owned(), kind, language, limit, ..Default::default() })
+                .context("search failed")?;
+            tool_result(serde_json::to_string_pretty(&results)?)
+        }
+
+        "get_impact_radius" => {
+            let files: Vec<String> = args
+                .and_then(|a| a.get("files"))
+                .and_then(|f| f.as_array())
+                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(str::to_owned)).collect())
+                .unwrap_or_default();
+            if files.is_empty() {
+                return Err(anyhow::anyhow!("missing required argument: files"));
+            }
+            let max_depth = args
+                .and_then(|a| a.get("max_depth"))
+                .and_then(|d| d.as_u64())
+                .map(|d| d as u32)
+                .unwrap_or(5);
+            let max_nodes = args
+                .and_then(|a| a.get("max_nodes"))
+                .and_then(|n| n.as_u64())
+                .map(|n| n as usize)
+                .unwrap_or(200);
+
+            let file_refs: Vec<&str> = files.iter().map(String::as_str).collect();
+            let result = store
+                .impact_radius(&file_refs, max_depth, max_nodes)
+                .context("impact_radius query failed")?;
+            tool_result(serde_json::to_string_pretty(&result)?)
+        }
+
+        "get_review_context" => {
+            let files: Vec<String> = args
+                .and_then(|a| a.get("files"))
+                .and_then(|f| f.as_array())
+                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(str::to_owned)).collect())
+                .unwrap_or_default();
+            if files.is_empty() {
+                return Err(anyhow::anyhow!("missing required argument: files"));
+            }
+
+            let file_refs: Vec<&str> = files.iter().map(String::as_str).collect();
+            let impact = store
+                .impact_radius(&file_refs, 3, 200)
+                .context("impact_radius query failed")?;
+            let ctx = atlas_review::assemble_review_context(&impact, &files);
+            tool_result(serde_json::to_string_pretty(&ctx)?)
+        }
+
+        "detect_changes" => {
+            Err(anyhow::anyhow!(
+                "detect_changes requires git repo context; use `atlas detect-changes` CLI instead"
+            ))
+        }
+
+        other => Err(anyhow::anyhow!("unknown tool: {other}")),
+    }
+}
+
+/// Wrap a text payload in an MCP tool-result envelope.
+fn tool_result(text: String) -> Result<serde_json::Value> {
+    Ok(serde_json::json!({
+        "content": [{ "type": "text", "text": text }]
+    }))
+}
+
+fn jsonrpc_ok(id: serde_json::Value, result: serde_json::Value) -> String {
+    serde_json::json!({ "jsonrpc": "2.0", "id": id, "result": result }).to_string()
+}
+
+fn jsonrpc_error(id: serde_json::Value, code: i32, message: String) -> String {
+    serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "error": { "code": code, "message": message }
+    })
+    .to_string()
 }

@@ -34,7 +34,6 @@ fn normalise_components(path: &Utf8Path) -> Utf8PathBuf {
 }
 
 /// Ensure separators are `/` (matters on Windows where camino may receive `\`).
-#[allow(dead_code)]
 pub fn to_forward_slashes(s: &str) -> String {
     s.replace('\\', "/")
 }
