@@ -531,6 +531,24 @@ impl Store {
         Ok(rows)
     }
 
+    /// Returns a map of `file_path → stored_hash` for all indexed files.
+    ///
+    /// Used by the build command to skip re-parsing files whose content has not
+    /// changed since the last indexed pass.
+    pub fn file_hashes(&self) -> Result<std::collections::HashMap<String, String>> {
+        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
+        let mut stmt = self
+            .conn
+            .prepare("SELECT path, hash FROM files")
+            .map_err(db_err)?;
+        let map = stmt
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+            .map_err(db_err)?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(map)
+    }
+
     /// Files that have at least one edge pointing **into** a node defined in
     /// any of `changed_paths` (i.e. direct importers / callers).
     pub fn find_dependents(&self, changed_paths: &[&str]) -> Result<Vec<String>> {

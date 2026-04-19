@@ -413,8 +413,8 @@ The upstream project’s primary promise includes full build plus incremental up
 ### 4.5 File hashing
 
 - [x] SHA-256 file hash
-- [ ] skip unchanged files on full build
-- [ ] persist hash in `files`
+- [x] skip unchanged files on full build
+- [x] persist hash in `files`
 
 ### 4.6 Change detection
 
@@ -474,6 +474,11 @@ The upstream parser is both the most important subsystem and the most monolithic
   - [ ] Java
   - [ ] C#
   - [ ] PHP
+  - [ ] JSON (tree-sitter-json)
+  - [ ] TOML (tree-sitter-toml)
+  - [ ] HTML (tree-sitter-html)
+  - [ ] CSS (tree-sitter-css)
+  - [ ] Bash (tree-sitter-bash)
 - [ ] treat notebooks and framework-specific formats as later work
 
 ### 5.4 Tree-sitter integration
@@ -596,22 +601,22 @@ The upstream parser is both the most important subsystem and the most monolithic
 
 ### 8.1 `atlas build`
 
-- [ ] find repo root
-- [ ] open DB
-- [ ] run migrations
-- [ ] collect tracked files
-- [ ] filter supported files
-- [ ] read + hash each file
-- [ ] skip unchanged files
-- [ ] parse file
-- [ ] replace file graph in DB
-- [ ] summarize:
-  - [ ] scanned count
-  - [ ] skipped count
-  - [ ] parsed count
-  - [ ] nodes inserted
-  - [ ] edges inserted
-  - [ ] elapsed time
+- [x] find repo root
+- [x] open DB
+- [x] run migrations
+- [x] collect tracked files
+- [x] filter supported files
+- [x] read + hash each file
+- [x] skip unchanged files
+- [x] parse file
+- [x] replace file graph in DB
+- [x] summarize:
+  - [x] scanned count
+  - [x] skipped count
+  - [x] parsed count
+  - [x] nodes inserted
+  - [x] edges inserted
+  - [x] elapsed time
 
 ### 8.2 Concurrency model
 
@@ -623,10 +628,10 @@ The upstream parser is both the most important subsystem and the most monolithic
 
 ### 8.3 Failure handling
 
-- [ ] continue on per-file parse failure
-- [ ] surface file parse errors in summary
+- [x] continue on per-file parse failure
+- [x] surface file parse errors in summary
 - [ ] add `--fail-fast`
-- [ ] keep DB consistent on crashes
+- [x] keep DB consistent on crashes
 
 ---
 
@@ -636,30 +641,30 @@ The upstream project’s incremental update flow is one of the highest-value beh
 
 ### 9.1 `atlas update`
 
-- [ ] discover changed files
-- [ ] if no explicit list, call git diff
-- [ ] find dependent files from graph
-- [ ] merge + dedupe targets
-- [ ] remove deleted files from graph
-- [ ] parse changed + dependent files
-- [ ] batch replace graph slices
-- [ ] print update summary
+- [x] discover changed files
+- [x] if no explicit list, call git diff
+- [x] find dependent files from graph
+- [x] merge + dedupe targets
+- [x] remove deleted files from graph
+- [x] parse changed + dependent files
+- [x] batch replace graph slices
+- [x] print update summary
 
 ### 9.2 Dependent invalidation
 
-- [ ] implement `find_dependents(changed_files)`
-- [ ] start conservative:
-  - [ ] files importing changed file package/module
-  - [ ] callers/callees by edge links
-- [ ] tolerate over-invalidation in v1
-- [ ] avoid under-invalidation where possible
+- [x] implement `find_dependents(changed_files)`
+- [x] start conservative:
+  - [x] files importing changed file package/module
+  - [x] callers/callees by edge links
+- [x] tolerate over-invalidation in v1
+- [x] avoid under-invalidation where possible
 
 ### 9.3 Update modes
 
-- [ ] `atlas update --base origin/main`
-- [ ] `atlas update --staged`
-- [ ] `atlas update --working-tree`
-- [ ] `atlas update --files path1 path2`
+- [x] `atlas update --base origin/main`
+- [x] `atlas update --staged`
+- [x] `atlas update --working-tree`
+- [x] `atlas update --files path1 path2`
 
 ---
 
