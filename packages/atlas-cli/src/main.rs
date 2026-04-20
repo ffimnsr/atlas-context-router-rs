@@ -30,6 +30,8 @@ fn main() {
         Command::Context { .. } => commands::run_context(&cli),
         Command::Analyze { .. } => commands::run_analyze(&cli),
         Command::Refactor { .. } => commands::run_refactor(&cli),
+        Command::Flows { .. } => commands::run_flows(&cli),
+        Command::Communities { .. } => commands::run_communities(&cli),
     };
 
     if let Err(err) = result {

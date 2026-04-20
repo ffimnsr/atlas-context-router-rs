@@ -9,12 +9,12 @@ use atlas_core::model::{
 use atlas_engine::{BuildOptions, UpdateOptions, UpdateTarget, build_graph, update_graph};
 use atlas_impact::analyze as advanced_impact;
 use atlas_repo::{DiffTarget, changed_files, collect_files, find_repo_root, repo_relative};
-use atlas_review::ContextEngine;
+use atlas_review::{ContextEngine, query_parser};
 use atlas_search as search;
 use atlas_store_sqlite::Store;
 use camino::Utf8Path;
 
-use crate::cli::{Cli, Command};
+use crate::cli::{AnalyzeCommand, Cli, Command, CommunitiesCommand, FlowsCommand, RefactorCommand};
 
 const MACHINE_SCHEMA_VERSION: &str = "atlas_cli.v1";
 
@@ -908,85 +908,91 @@ pub fn run_context(cli: &Cli) -> Result<()> {
     let repo = resolve_repo(cli)?;
     let db_path = db_path(cli, &repo);
 
-    let (
-        qname,
-        name,
-        file,
-        files,
-        intent_str,
-        max_nodes,
-        max_edges,
-        max_files,
-        depth,
-        code_spans,
-        tests,
-        imports,
-        neighbors,
-    ) = match &cli.command {
-        Command::Context {
-            qname,
-            name,
-            file,
-            files,
+    let (query, file, files, intent_override, max_nodes, max_edges, max_files, depth, code_spans, tests, imports, neighbors) =
+        match &cli.command {
+            Command::Context {
+                query,
+                file,
+                files,
+                intent,
+                max_nodes,
+                max_edges,
+                max_files,
+                depth,
+                code_spans,
+                tests,
+                imports,
+                neighbors,
+            } => (
+                query.clone(),
+                file.clone(),
+                files.clone(),
+                intent.clone(),
+                *max_nodes,
+                *max_edges,
+                *max_files,
+                *depth,
+                *code_spans,
+                *tests,
+                *imports,
+                *neighbors,
+            ),
+            _ => unreachable!(),
+        };
+
+    // Build the base request: parse from free-text query or structured flags.
+    let mut request = if !files.is_empty() {
+        // Explicit changed-file list → review/impact.
+        let intent = parse_intent_override(intent_override.as_deref(), ContextIntent::Review);
+        ContextRequest {
             intent,
-            max_nodes,
-            max_edges,
-            max_files,
-            depth,
-            code_spans,
-            tests,
-            imports,
-            neighbors,
-        } => (
-            qname.clone(),
-            name.clone(),
-            file.clone(),
-            files.clone(),
-            intent.clone(),
-            *max_nodes,
-            *max_edges,
-            *max_files,
-            *depth,
-            *code_spans,
-            *tests,
-            *imports,
-            *neighbors,
-        ),
-        _ => unreachable!(),
-    };
-
-    let intent = match intent_str.as_str() {
-        "review" => ContextIntent::Review,
-        "impact" => ContextIntent::Impact,
-        "file" => ContextIntent::File,
-        _ => ContextIntent::Symbol,
-    };
-
-    let target = if !files.is_empty() {
-        ContextTarget::ChangedFiles { paths: files }
-    } else if let Some(qn) = qname {
-        ContextTarget::QualifiedName { qname: qn }
-    } else if let Some(n) = name {
-        ContextTarget::SymbolName { name: n }
-    } else if let Some(f) = file {
-        ContextTarget::FilePath { path: f }
+            target: ContextTarget::ChangedFiles { paths: files },
+            ..ContextRequest::default()
+        }
+    } else if let Some(path) = file {
+        // Explicit file target.
+        let intent = parse_intent_override(intent_override.as_deref(), ContextIntent::File);
+        ContextRequest {
+            intent,
+            target: ContextTarget::FilePath { path },
+            ..ContextRequest::default()
+        }
+    } else if let Some(q) = query {
+        // Free-text or symbol/qualified name — route through query parser.
+        let mut parsed = query_parser::parse_query(&q);
+        if let Some(intent) = intent_override.as_deref().and_then(parse_intent_str) {
+            parsed.intent = intent;
+        }
+        parsed
     } else {
-        anyhow::bail!("one of --qname, --name, --file, or --files is required");
+        anyhow::bail!("provide a TARGET query, --file <path>, or --files <paths...>");
     };
 
-    let request = ContextRequest {
-        intent,
-        target,
-        max_nodes,
-        max_edges,
-        max_files,
-        depth,
-        include_code_spans: code_spans,
-        include_tests: tests,
-        include_imports: imports,
-        include_neighbors: neighbors,
-        ..ContextRequest::default()
-    };
+    // Apply explicit limit/depth overrides.
+    if max_nodes.is_some() {
+        request.max_nodes = max_nodes;
+    }
+    if max_edges.is_some() {
+        request.max_edges = max_edges;
+    }
+    if max_files.is_some() {
+        request.max_files = max_files;
+    }
+    if depth.is_some() {
+        request.depth = depth;
+    }
+    if code_spans {
+        request.include_code_spans = true;
+    }
+    if tests {
+        request.include_tests = true;
+    }
+    if imports {
+        request.include_imports = true;
+    }
+    if neighbors {
+        request.include_neighbors = true;
+    }
 
     let store =
         Store::open(&db_path).with_context(|| format!("cannot open database at {db_path}"))?;
@@ -1002,6 +1008,12 @@ pub fn run_context(cli: &Cli) -> Result<()> {
             for c in &ambiguity.candidates {
                 println!("  {c}");
             }
+            println!("\nUse a qualified name or --file to narrow the target.");
+            return Ok(());
+        }
+
+        if result.nodes.is_empty() && result.files.is_empty() {
+            println!("No context found. Check the target name or path.");
             return Ok(());
         }
 
@@ -1075,6 +1087,27 @@ pub fn run_context(cli: &Cli) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn parse_intent_str(s: &str) -> Option<ContextIntent> {
+    match s {
+        "symbol" => Some(ContextIntent::Symbol),
+        "file" => Some(ContextIntent::File),
+        "review" => Some(ContextIntent::Review),
+        "impact" => Some(ContextIntent::Impact),
+        "usage_lookup" | "usage" => Some(ContextIntent::UsageLookup),
+        "refactor_safety" | "refactor" => Some(ContextIntent::RefactorSafety),
+        "dead_code_check" | "dead_code" => Some(ContextIntent::DeadCodeCheck),
+        "rename_preview" | "rename" => Some(ContextIntent::RenamePreview),
+        "dependency_removal" | "deps" => Some(ContextIntent::DependencyRemoval),
+        _ => None,
+    }
+}
+
+fn parse_intent_override(override_str: Option<&str>, default: ContextIntent) -> ContextIntent {
+    override_str
+        .and_then(parse_intent_str)
+        .unwrap_or(default)
 }
 
 /// Structured result for a single doctor check.
@@ -1430,8 +1463,6 @@ pub fn run_completions(cli: &Cli) -> Result<()> {
 pub fn run_analyze(cli: &Cli) -> Result<()> {
     use atlas_reasoning::ReasoningEngine;
 
-    use crate::cli::AnalyzeCommand;
-
     let repo = resolve_repo(cli)?;
     let db_path = db_path(cli, &repo);
     let store =
@@ -1595,8 +1626,6 @@ pub fn run_analyze(cli: &Cli) -> Result<()> {
 
 pub fn run_refactor(cli: &Cli) -> Result<()> {
     use atlas_refactor::RefactorEngine;
-
-    use crate::cli::RefactorCommand;
 
     let repo = resolve_repo(cli)?;
     let repo_root_path =
@@ -1907,6 +1936,238 @@ pub fn run_explain_query(cli: &Cli) -> Result<()> {
                     r.node.file_path,
                     r.node.line_start,
                 );
+            }
+        }
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// atlas flows
+// ---------------------------------------------------------------------------
+
+pub fn run_flows(cli: &Cli) -> Result<()> {
+    let repo = resolve_repo(cli)?;
+    let db_path = db_path(cli, &repo);
+    let store =
+        Store::open(&db_path).with_context(|| format!("cannot open database at {db_path}"))?;
+
+    let sub = match &cli.command {
+        Command::Flows { subcommand } => subcommand,
+        _ => unreachable!(),
+    };
+
+    match sub {
+        FlowsCommand::List => {
+            let flows = store.list_flows()?;
+            if cli.json {
+                print_json("flows.list", serde_json::to_value(&flows)?)?;
+            } else if flows.is_empty() {
+                println!("No flows.");
+            } else {
+                for f in &flows {
+                    let kind = f.kind.as_deref().unwrap_or("-");
+                    let desc = f.description.as_deref().unwrap_or("");
+                    println!("[{}] {} ({kind}) {desc}", f.id, f.name);
+                }
+            }
+        }
+        FlowsCommand::Create { name, kind, description } => {
+            let id = store.create_flow(name, kind.as_deref(), description.as_deref())?;
+            if cli.json {
+                print_json("flows.create", serde_json::json!({ "id": id, "name": name }))?;
+            } else {
+                println!("Created flow '{name}' (id={id})");
+            }
+        }
+        FlowsCommand::Delete { name } => {
+            let flow = store
+                .get_flow_by_name(name)?
+                .with_context(|| format!("flow '{name}' not found"))?;
+            store.delete_flow(flow.id)?;
+            if cli.json {
+                print_json("flows.delete", serde_json::json!({ "name": name }))?;
+            } else {
+                println!("Deleted flow '{name}'");
+            }
+        }
+        FlowsCommand::Members { name } => {
+            let flow = store
+                .get_flow_by_name(name)?
+                .with_context(|| format!("flow '{name}' not found"))?;
+            let members = store.get_flow_members(flow.id)?;
+            if cli.json {
+                print_json("flows.members", serde_json::to_value(&members)?)?;
+            } else if members.is_empty() {
+                println!("Flow '{name}' has no members.");
+            } else {
+                for m in &members {
+                    let pos = m.position.map(|p| p.to_string()).unwrap_or("-".into());
+                    let role = m.role.as_deref().unwrap_or("-");
+                    println!("  [{pos}] {} (role={role})", m.node_qualified_name);
+                }
+            }
+        }
+        FlowsCommand::AddMember { flow, node_qn, position, role } => {
+            let f = store
+                .get_flow_by_name(flow)?
+                .with_context(|| format!("flow '{flow}' not found"))?;
+            store.add_flow_member(f.id, node_qn, *position, role.as_deref())?;
+            if cli.json {
+                print_json(
+                    "flows.add-member",
+                    serde_json::json!({ "flow": flow, "node_qn": node_qn }),
+                )?;
+            } else {
+                println!("Added '{node_qn}' to flow '{flow}'");
+            }
+        }
+        FlowsCommand::RemoveMember { flow, node_qn } => {
+            let f = store
+                .get_flow_by_name(flow)?
+                .with_context(|| format!("flow '{flow}' not found"))?;
+            store.remove_flow_member(f.id, node_qn)?;
+            if cli.json {
+                print_json(
+                    "flows.remove-member",
+                    serde_json::json!({ "flow": flow, "node_qn": node_qn }),
+                )?;
+            } else {
+                println!("Removed '{node_qn}' from flow '{flow}'");
+            }
+        }
+        FlowsCommand::ForNode { node_qn } => {
+            let flows = store.flows_for_node(node_qn)?;
+            if cli.json {
+                print_json("flows.for-node", serde_json::to_value(&flows)?)?;
+            } else if flows.is_empty() {
+                println!("No flows contain node '{node_qn}'.");
+            } else {
+                for f in &flows {
+                    println!("[{}] {}", f.id, f.name);
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// atlas communities
+// ---------------------------------------------------------------------------
+
+pub fn run_communities(cli: &Cli) -> Result<()> {
+    let repo = resolve_repo(cli)?;
+    let db_path = db_path(cli, &repo);
+    let store =
+        Store::open(&db_path).with_context(|| format!("cannot open database at {db_path}"))?;
+
+    let sub = match &cli.command {
+        Command::Communities { subcommand } => subcommand,
+        _ => unreachable!(),
+    };
+
+    match sub {
+        CommunitiesCommand::List => {
+            let comms = store.list_communities()?;
+            if cli.json {
+                print_json("communities.list", serde_json::to_value(&comms)?)?;
+            } else if comms.is_empty() {
+                println!("No communities.");
+            } else {
+                for c in &comms {
+                    let alg = c.algorithm.as_deref().unwrap_or("-");
+                    let parent = c
+                        .parent_community_id
+                        .map(|p| p.to_string())
+                        .unwrap_or("-".into());
+                    println!(
+                        "[{}] {} (algorithm={alg}, level={}, parent={parent})",
+                        c.id,
+                        c.name,
+                        c.level.unwrap_or(0)
+                    );
+                }
+            }
+        }
+        CommunitiesCommand::Create { name, algorithm, level, parent } => {
+            let id =
+                store.create_community(name, algorithm.as_deref(), *level, *parent)?;
+            if cli.json {
+                print_json(
+                    "communities.create",
+                    serde_json::json!({ "id": id, "name": name }),
+                )?;
+            } else {
+                println!("Created community '{name}' (id={id})");
+            }
+        }
+        CommunitiesCommand::Delete { name } => {
+            let comm = store
+                .get_community_by_name(name)?
+                .with_context(|| format!("community '{name}' not found"))?;
+            store.delete_community(comm.id)?;
+            if cli.json {
+                print_json("communities.delete", serde_json::json!({ "name": name }))?;
+            } else {
+                println!("Deleted community '{name}'");
+            }
+        }
+        CommunitiesCommand::Nodes { name } => {
+            let comm = store
+                .get_community_by_name(name)?
+                .with_context(|| format!("community '{name}' not found"))?;
+            let nodes = store.get_community_nodes(comm.id)?;
+            if cli.json {
+                print_json("communities.nodes", serde_json::to_value(&nodes)?)?;
+            } else if nodes.is_empty() {
+                println!("Community '{name}' has no members.");
+            } else {
+                for n in &nodes {
+                    println!("  {}", n.node_qualified_name);
+                }
+            }
+        }
+        CommunitiesCommand::AddNode { community, node_qn } => {
+            let comm = store
+                .get_community_by_name(community)?
+                .with_context(|| format!("community '{community}' not found"))?;
+            store.add_community_node(comm.id, node_qn)?;
+            if cli.json {
+                print_json(
+                    "communities.add-node",
+                    serde_json::json!({ "community": community, "node_qn": node_qn }),
+                )?;
+            } else {
+                println!("Added '{node_qn}' to community '{community}'");
+            }
+        }
+        CommunitiesCommand::RemoveNode { community, node_qn } => {
+            let comm = store
+                .get_community_by_name(community)?
+                .with_context(|| format!("community '{community}' not found"))?;
+            store.remove_community_node(comm.id, node_qn)?;
+            if cli.json {
+                print_json(
+                    "communities.remove-node",
+                    serde_json::json!({ "community": community, "node_qn": node_qn }),
+                )?;
+            } else {
+                println!("Removed '{node_qn}' from community '{community}'");
+            }
+        }
+        CommunitiesCommand::ForNode { node_qn } => {
+            let comms = store.communities_for_node(node_qn)?;
+            if cli.json {
+                print_json("communities.for-node", serde_json::to_value(&comms)?)?;
+            } else if comms.is_empty() {
+                println!("No communities contain node '{node_qn}'.");
+            } else {
+                for c in &comms {
+                    println!("[{}] {}", c.id, c.name);
+                }
             }
         }
     }

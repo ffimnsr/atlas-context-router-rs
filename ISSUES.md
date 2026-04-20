@@ -2,7 +2,7 @@
 
 ## Goal
 
-Reimplement the core of `code-review-graph` in Rust with a cleaner architecture than the current Python monolith.
+Create a cli for stateful coding agent backend.
 
 The primary behavior to preserve is:
 
@@ -13,7 +13,12 @@ The primary behavior to preserve is:
 - assemble review context from changed files and neighboring nodes
 - expose a CLI first, with MCP later
 
-The upstream repo’s real kernel is the repository scanner, parser layer, SQLite graph store, incremental updater, impact analysis, review-context/query layer, and thin transport surfaces. Flows, communities, embeddings, visualization, wiki, registry, install automation, and similar extras are secondary layers and should not block v1.
+For terms that are easy to misread in this document:
+
+- `flow`: named ordered path or scenario over existing graph nodes, for example `http request -> handler -> service -> repository`, `changed symbol -> direct callers -> affected tests`, or `review path for this PR`. This is metadata over graph, not new edge kind and not runtime tracing requirement in v1.
+- `flow membership`: join row in `flow_memberships` that says one node participates in one flow, with optional `position`, `role`, and metadata. `membership` here never means user/team/account membership.
+- `community`: unordered cluster of related nodes/modules/files found by some graph algorithm or heuristic, for example SCC/cycle cluster, package cluster, or architecture slice. Community says "these belong together"; flow says "these form ordered path".
+- `embeddings`: optional vector search data for retrieval/ranking only. Not required for core build/update/query path.
 
 ---
 
@@ -261,9 +266,15 @@ The upstream implementation already treats SQLite as the durable center of the s
 - [x] `nodes`
 - [x] `edges`
 - [x] `nodes_fts`
-- [x] `flows`
-- [x] `flow_memberships`
-- [x] `communities`
+- [x] `flows` — catalog of named ordered scenarios or paths over graph
+- [x] `flow_memberships` — join table assigning node to flow with order/role metadata
+- [x] `communities` — catalog of named graph clusters; membership table can be added later if clustering work needs persistent node-to-community assignment
+
+#### 3.3.1 Flow, Flow Membership, Communities Meaning
+
+- `flows` should store reusable higher-level paths over graph, not duplicate raw `edges`. Example: "payment request path" or "rename blast radius walkthrough".
+- `flow_memberships` should store which node is in which flow, plus `position` for order and `role` for labels like `entrypoint`, `middle`, `sink`, `changed`, `caller`, `test`.
+- `communities` should store cluster metadata such as algorithm, level, parent/child hierarchy, and summary stats. Current schema does not yet persist explicit per-node community membership; if later features need that, add a separate `community_memberships` table instead of overloading `flow_memberships`.
 
 ### 3.4 `metadata` table
 
@@ -990,6 +1001,11 @@ The upstream report highlights parser fidelity and install/hook fragility as the
 - [x] tracing spans around build/update phases
 - [ ] optional metrics export — **backlog**: needs external metrics infra (Prometheus/OTEL); not on core path
 
+### 15.5 Session and content-store stats
+
+- [ ] add session stats
+- [ ] add content-store stats
+
 ---
 
 ## Phase 16 — MCP / Serve Layer
@@ -1020,6 +1036,11 @@ The upstream repo exposes a stdio MCP server, but the report makes clear this sh
 - [x] expose only core tools in first version
 - [ ] add prompts later, not first (MCP prompt templates for external LLMs to use as guidance)
 
+### 16.4 Session lifecycle and saved context
+
+- [ ] add session lifecycle support
+- [ ] add saved-context retrieval tools
+
 ---
 
 ## Phase 17 — Later Features
@@ -1031,8 +1052,8 @@ The upstream repo exposes a stdio MCP server, but the report makes clear this sh
 - [ ] large-function finder
 - [ ] test adjacency queries
 - [ ] architecture overview
-- [ ] flow tracing
-- [ ] communities
+- [ ] flow tracing — build/query named ordered paths such as request path, dependency chain, or review path
+- [ ] communities — detect/store related node clusters for architecture summaries and hotspot grouping
 
 ### 17.2 Explicitly late-stage
 
@@ -1173,7 +1194,7 @@ Build deterministic retrieval-and-selection layer over graph. No LLM dependence.
 
 Implement Phase 22 in this order so each slice reuses existing store/search/review pieces and leaves Phase 23-25 with stable contracts instead of churn.
 
-1. Slice 1: core types and crate boundary
+1. Core types and crate boundary
 
 - [x] decide crate home for context engine (`packages/atlas-review` if scope stays retrieval-only, new crate only if responsibilities outgrow review assembly)
 - [x] add `ContextIntent`, `ContextTarget`, `ContextRequest`, `ContextResult`, `SelectedNode`, `SelectedEdge`, `SelectedFile`
@@ -1189,7 +1210,7 @@ Exit criteria:
 - [x] model types compile
 - [x] json snapshot tests cover serialize/deserialize round-trip
 
-2. Slice 2: store/query support needed by engine
+2. Store/query support needed by engine
 
 - [x] audit and expose exact helper queries from SQLite store before engine logic grows
 - [x] add focused store helpers for direct callers, direct callees, import neighbors, containment neighbors, node lookup by qname/name/path
@@ -1204,7 +1225,7 @@ Exit criteria:
 - [x] unit tests for each helper query on small graph fixtures
 - [x] helper outputs stable for missing nodes, ambiguous names, deleted paths
 
-3. Slice 3: exact target resolution path
+3. Exact target resolution path
 
 - [x] implement `resolve_target` for qualified name, exact symbol name, exact file path
 - [x] return single resolved node/file when exact match exists
@@ -1221,7 +1242,7 @@ Exit criteria:
 - [x] tests for ambiguous short symbol names
 - [x] tests for missing target with suggestions
 
-4. Slice 4: deterministic symbol-context retrieval
+4. Deterministic symbol-context retrieval
 
 - [x] implement `build_symbol_context` from resolved seed
 - [x] retrieve direct node, callers, callees, imports, containment siblings, optional tests
@@ -1237,7 +1258,7 @@ Exit criteria:
 - [x] direct callers/callees always survive trimming over broad file neighbors
 - [x] include/exclude flags work for tests/imports/neighbors
 
-5. Slice 5: ranking and trimming policy
+5. Ranking and trimming policy
 
 - [x] implement `rank_context`
 - [x] score by exact-target boost, graph distance, edge confidence, same-file, same-package, public API, test adjacency
@@ -1254,7 +1275,7 @@ Exit criteria:
 - [x] tests prove caps deterministic under tie conditions
 - [x] truncated output explains what got cut
 
-6. Slice 6: review and impact context builders
+6. Review and impact context builders
 
 - [x] implement `build_review_context` by adapting existing changed-file and impact flow into `ContextResult`
 - [x] implement `build_impact_context` from file seeds and changed-symbol seeds
@@ -1268,7 +1289,7 @@ Exit criteria:
 - [x] current review-context command can be mapped onto context engine without behavior regression
 - [x] impact context returns machine-readable bounded graph slice
 
-7. Slice 7: semi-structured query parsing
+7. Semi-structured query parsing
 
 - [x] add simple classifier for `what breaks`, `used by`, `who calls`, `safe to refactor`, `dead code`, `rename`, `remove dependency`
 - [x] add regex extraction for quoted symbols, file paths, function-like names, method-like names
@@ -1283,7 +1304,7 @@ Exit criteria:
 - [x] text requests resolve to same result as equivalent structured requests
 - [x] ambiguity metadata survives classifier path
 
-8. Slice 8: code spans and source packaging
+8. Code spans and source packaging
 
 - [x] include target span first
 - [x] include caller/callee spans only when enabled
@@ -1298,31 +1319,31 @@ Exit criteria:
 - [x] code span tests verify exact lines for target and adjacent symbols
 - [x] large file requests stay bounded
 
-9. Slice 9: public surfaces
+9. Public surfaces
 
 - [x] add internal engine entrypoint `ContextEngine`
 - [x] wire CLI prototype behind future `atlas context` surface or hidden/dev command first
 - [x] expose MCP tool only after JSON shape stabilizes
 - [x] keep old `review-context` command during transition; switch implementation under hood first
 
-### 9.1 Public rollout checklist for `atlas context` and MCP context tools
+9.1. Public rollout checklist for `atlas context` and MCP context tools
 
-- [ ] unhide `atlas context` once command shape is frozen
-- [ ] replace dev-style `--qname` / `--name` / `--file` targeting UX with stable public CLI contract
-- [ ] decide whether `atlas context` accepts free text, explicit subcommands, or both; document one public path
-- [ ] keep `atlas review-context` during transition; define whether it stays as alias, focused shortcut, or deprecated surface
-- [ ] document `atlas context` examples and JSON contract in `README.md`
-- [ ] add CLI parser tests for public `atlas context` syntax
-- [ ] add fixture/integration tests for `atlas context` symbol, file, review, impact, ambiguity, and not-found flows
-- [ ] add golden/snapshot coverage for public `atlas context --json` output
-- [ ] freeze `ContextResult` compatibility expectations for public CLI consumers
-- [ ] document default limits and truncation behavior for public context output
-- [ ] decide whether MCP public context surface stays review-focused (`get_review_context`) or adds generic `get_context`
-- [ ] if generic MCP context tool added, keep it thin over `ContextEngine` with no duplicated ranking/trimming logic
-- [ ] document MCP tool schemas and response contracts for public/agent use
-- [ ] add `packages/atlas-mcp` tests for `tools/list`, `tools/call`, argument validation, ambiguity, not-found, and truncation cases
-- [ ] freeze compact MCP payload contract (`PackagedContextResult` or successor) before broad external use
-- [ ] confirm public MCP tools stay token-efficient without hiding critical ambiguity/truncation metadata
+- [x] unhide `atlas context` once command shape is frozen
+- [x] replace dev-style `--qname` / `--name` / `--file` targeting UX with stable public CLI contract
+- [x] decide whether `atlas context` accepts free text, explicit subcommands, or both; document one public path
+- [x] keep `atlas review-context` during transition; define whether it stays as alias, focused shortcut, or deprecated surface
+- [x] document `atlas context` examples and JSON contract in `README.md`
+- [x] add CLI parser tests for public `atlas context` syntax
+- [x] add fixture/integration tests for `atlas context` symbol, file, review, impact, ambiguity, and not-found flows
+- [x] add golden/snapshot coverage for public `atlas context --json` output
+- [x] freeze `ContextResult` compatibility expectations for public CLI consumers
+- [x] document default limits and truncation behavior for public context output
+- [x] decide whether MCP public context surface stays review-focused (`get_review_context`) or adds generic `get_context`
+- [x] if generic MCP context tool added, keep it thin over `ContextEngine` with no duplicated ranking/trimming logic
+- [x] document MCP tool schemas and response contracts for public/agent use
+- [x] add `packages/atlas-mcp` tests for `tools/list`, `tools/call`, argument validation, ambiguity, not-found, and truncation cases
+- [x] freeze compact MCP payload contract (`PackagedContextResult` or successor) before broad external use
+- [x] confirm public MCP tools stay token-efficient without hiding critical ambiguity/truncation metadata
 
 Why ninth:
 - shipping surface too early freezes unstable payloads
@@ -1332,7 +1353,7 @@ Exit criteria:
 - [x] CLI json output stable enough for golden tests
 - [x] MCP adapter thin, no duplicated retrieval logic
 
-10. Slice 10: finish gates for “context engine complete”
+10. Finish gates for “context engine complete”
 
 - [x] exact symbol lookup
 - [x] ambiguous symbol resolution
@@ -1345,7 +1366,7 @@ Exit criteria:
 - [x] `cargo test --workspace`
 - [x] `cargo clippy --workspace --all-targets --all-features -- -D warnings`
 
-Completion rule:
+11. Validate completion rule
 - [x] Phase 22 done only when review flow, symbol flow, and impact flow all share same engine contracts and no duplicate ranking/trimming logic remains in CLI or MCP layers
 
 ### 22.1 Scope and responsibilities
@@ -1481,6 +1502,11 @@ Completion rule:
 - [x] drop distant neighbors before dropping direct callers/callees
 - [x] mark output as truncated if limits applied
 
+### 22.5.1 Saved-context retrieval integration
+
+- [ ] add retrieval from content store after graph retrieval
+- [ ] add session-aware ranking
+
 ### 22.6 Code spans, APIs, tests
 
 - [x] include target symbol span
@@ -1504,6 +1530,12 @@ Completion rule:
   - [x] caller/callee prioritization
   - [x] include/exclude tests behavior
   - [x] code span selection accuracy
+
+### 22.7 Retrieval metadata and output hints
+
+- [ ] include `saved_context_sources` in `ContextResult`
+- [ ] include `source_ids` for retrieved saved artifacts
+- [ ] include retrieval hints in output
 
 ## Phase 23 — Autonomous Code Reasoning
 
@@ -1680,6 +1712,11 @@ Answer structural questions from graph + parser + store facts only. No unsupport
   - [x] dependency removal blocked by reference
   - [x] missing test signal for changed symbol
   - [x] risk scoring sanity checks
+
+### 23.5 Session events and saved artifacts
+
+- [ ] reasoning results must emit session events
+- [ ] reasoning results must reference `source_id` for saved artifacts
 
 ## Phase 24 — Smart Refactoring Core
 
@@ -2274,229 +2311,6 @@ And system has:
 
 ---
 
-## Recommended Implementation Order
-
-### Slice 1 — foundation
-
-- [x] workspace
-- [x] error types
-- [x] logging
-- [x] SQLite open/migrate
-- [x] CLI scaffold
-
-### Slice 2 — storage
-
-- [x] schema
-- [x] insert/replace/delete
-- [x] stats
-- [x] FTS
-- [x] basic search
-
-### Slice 3 — repo
-
-- [x] repo root
-- [x] tracked files
-- [x] hashing
-- [x] git diff parsing
-
-### Slice 4 — parser
-
-- [x] parser trait
-- [x] Tree-sitter bootstrap
-- [x] Rust language handler
-- [x] Go language handler
-- [x] node/edge extraction
-
-### Slice 5 — build/update
-
-- [x] full build pipeline
-- [x] single-writer DB loop
-- [x] incremental update
-- [x] dependent invalidation
-
-### Slice 6 — graph intelligence
-
-- [x] impact-radius SQL
-- [x] query helpers
-- [x] review-context assembly
-- [x] detect-changes summary
-
-### Slice 7 — polish
-
-- [x] JSON outputs
-- [x] more parsers
-- [x] benchmarks
-- [x] Windows hardening
-- [x] serve/MCP
-
-### Slice 8 — product contract
-
-- [x] rename DB path to `.atlas/worldview.sqlite`
-- [x] rename DB path to `.atlas/worldtree.db`
-- [x] finish binary/work-dir/config naming contract (paths module in atlas-cli)
-- [x] freeze v1 include/out-of-scope boundaries
-- [x] document every intentional compatibility break (see COMPATIBILITY.md)
-- [x] decide remaining dependency choices that affect public shape
-
-### Slice 9 — correctness gaps
-
-- [x] add `NodeId` type
-- [x] finish remaining SQLite table/transaction/schema test gaps
-- [x] complete path normalization and ignore handling
-- [x] finish deleted/renamed file behavior
-- [x] complete remaining language-strategy and call-resolution work
-
-### Slice 10 — MVP command completion
-
-- [x] finish `atlas init`
-- [x] finish `atlas status`
-- [x] finish `atlas query`
-- [x] finish `atlas impact`
-- [x] finish `atlas review-context`
-- [x] close remaining impact/search/review CLI gaps
-
-### Slice 11 — quality gates
-
-- [x] add `cargo fmt --check`
-- [x] add `cargo clippy --all-targets --all-features -- -D warnings`
-- [x] add `cargo test --workspace`
-- [x] add Linux CI
-- [x] add SQLite/FTS5 smoke coverage
-- [x] add fixture/golden/integration regression coverage
-
-### Slice 12 — hardening
-
-- [x] finish build concurrency model
-- [x] add failure-handling gaps in build/update path
-- [x] add startup integrity check command
-- [x] improve performance, query tuning, memory, diagnostics
-- [x] add cross-platform hardening beyond current Windows baseline
-
-### Slice 13 — MCP and agent surface
-
-- [x] create `packages/atlas-mcp`
-- [x] finish MCP transport and serve-command details
-- [x] expose core MCP tools with agent-usable output
-- [x] optimize context packaging for agents
-
-### Slice 14 — post-MVP gate
-
-- [x] confirm MVP complete before expanding scope
-- [x] keep out-of-scope items from blocking core path
-
-### Slice 15 — retrieval
-
-- [x] hybrid search
-- [x] ranking improvements
-- [x] graph-aware search
-
-### Slice 16 — advanced impact
-
-- [x] weighted traversal
-- [x] impact scoring
-- [x] change classification
-- [x] test impact
-- [x] boundary detection
-
-### Slice 17 — incremental engine
-
-- [x] incremental parsing
-- [x] dependency invalidation follow-up
-- [x] parallelization
-- [x] large-repo handling
-
-### Slice 18 — developer workflows
-
-- [ ] explain change
-- [ ] smart review context
-- [ ] natural-language queries
-- [ ] CLI workflow UX
-
-### Slice 19 — context engine
-
-- [ ] context request/response model
-- [ ] deterministic intent parsing
-- [ ] target resolution pipeline
-- [ ] retrieval/ranking/trimming
-- [ ] code-span selection
-- [ ] `ContextEngine` API + tests
-
-### Slice 20 — reasoning engine
-
-- [ ] reasoning result/evidence types
-- [ ] removal impact analysis
-- [ ] dead code detection
-- [ ] refactor safety scoring
-- [ ] dependency removal validation
-- [ ] rename radius + risk/test adjacency
-
-### Slice 21 — refactor engine
-
-- [ ] refactor operation/plan/patch types
-- [ ] rename planning/apply
-- [ ] dead-code removal
-- [ ] import cleanup
-- [ ] extract-function candidate detection
-- [ ] dry-run/patch/validation coverage
-
-### Slice 22 — shared analysis infra
-
-- [ ] explainability/evidence plumbing
-- [ ] config surface
-- [ ] language capability gates
-- [ ] CLI commands for context/analyze/refactor
-- [ ] stable JSON contracts
-- [ ] benchmarks and phase-completion gate
-
-### Slice 23 — MCP and agent surface
-
-- [ ] core MCP tools
-- [ ] stable structured output
-- [ ] token-efficient relevance trimming
-
-### Slice 24 — observability
-
-- [ ] metrics
-- [ ] debug tools
-- [ ] data integrity tooling
-
-### Slice 25 — watch mode
-
-- [ ] file watcher
-- [ ] change detection mapping
-- [ ] queue/debounce/worker system
-- [ ] incremental update integration
-- [ ] watch CLI + tests
-
-### Slice 26 — insights
-
-- [ ] architecture analysis
-- [ ] code-health metrics
-- [ ] risk assessment engine
-- [ ] pattern detection
-- [ ] `InsightsEngine` reports + CLI + tests
-
-### Slice 27 — optional advanced
-
-- [ ] multi-repo support
-- [ ] remaining advanced code intelligence
-
-### Slice 28 — lowest priority
-
-- [ ] wiki/docs generation
-- [ ] v2 completion criteria
-- [ ] lowest-priority guiding-principle items
-
-### Slice 29 — platform and ecosystem backlog
-
-- [x] install hooks
-- [x] flows/communities schema
-- [ ] evaluation harness
-- [ ] cloud providers
-- [x] shell completion and minor tooling leftovers
-
----
-
 ## Context-Mode Integration Backlog
 
 ### Purpose
@@ -2509,8 +2323,6 @@ This backlog covers pieces needed for:
 - session continuity
 - resume snapshots
 - retrieval-backed restoration
-
-Keep detailed implementation approach here. Keep agent-wide behavior and repo-wide coding rules in `AGENTS.md`, not duplicated here.
 
 ### Core Design Rules
 
@@ -2839,18 +2651,6 @@ Keep detailed implementation approach here. Keep agent-wide behavior and repo-wi
 - [ ] max content DB size
 - [ ] retention TTL
 - [ ] snapshot size cap
-
-### Merge Points into Existing Atlas TODO
-
-- [ ] Merge into Phase 22 `Context Engine`: add retrieval from content store
-- [ ] Merge into Phase 22 `Context Engine`: add session-aware ranking
-- [ ] Merge into Phase 22 `Context Engine`: include retrieval hints in output
-- [ ] Merge into Phase 23 `Reasoning`: reasoning results must emit session events
-- [ ] Merge into Phase 23 `Reasoning`: reasoning results must reference `source_id` for saved artifacts
-- [ ] Merge into Phase 16 `MCP`: add session lifecycle support
-- [ ] Merge into Phase 16 `MCP`: add saved-context retrieval tools
-- [ ] Merge into Phase 15 `Performance and Operational Hardening`: add session stats
-- [ ] Merge into Phase 15 `Performance and Operational Hardening`: add content-store stats
 
 ### Completion Criteria
 

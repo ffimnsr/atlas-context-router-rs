@@ -226,50 +226,57 @@ pub enum Command {
         shell: Shell,
     },
 
-    /// [dev] Build context around a symbol, file, or change-set using the context engine.
-    #[command(hide = true, name = "context")]
+    /// Build context around a symbol, file, or change-set using the context engine.
+    ///
+    /// TARGET accepts: a symbol name, qualified name, free-text query, or file
+    /// path.  Alternatively, supply --file or --files for explicit targets.
+    /// Examples:
+    ///   atlas context "AuthService"
+    ///   atlas context "who calls handle_request"
+    ///   atlas context --file src/auth.rs
+    ///   atlas context --files src/auth.rs src/session.rs --intent review
+    #[command(name = "context")]
     Context {
-        /// Exact qualified name of the target symbol.
-        #[arg(long)]
-        qname: Option<String>,
+        /// Symbol name, qualified name, or free-text query (auto-classified).
+        /// Omit when using --file or --files.
+        #[arg(value_name = "TARGET")]
+        query: Option<String>,
 
-        /// Short symbol name (may be ambiguous).
-        #[arg(long)]
-        name: Option<String>,
-
-        /// Repo-relative file path target.
+        /// Explicit repo-relative file path target (file intent).
         #[arg(long)]
         file: Option<String>,
 
-        /// Changed file paths for review/impact intent.
+        /// Changed file paths for review/impact context.
         #[arg(long, num_args = 1..)]
         files: Vec<String>,
 
-        /// Intent: symbol, file, review, impact (default: symbol).
-        #[arg(long, default_value = "symbol")]
-        intent: String,
+        /// Override intent: symbol, file, review, impact, usage_lookup,
+        /// refactor_safety, dead_code_check, rename_preview, dependency_removal.
+        /// Inferred automatically when omitted.
+        #[arg(long)]
+        intent: Option<String>,
 
-        /// Maximum nodes to include.
+        /// Maximum nodes to include (default: 100).
         #[arg(long)]
         max_nodes: Option<usize>,
 
-        /// Maximum edges to include.
+        /// Maximum edges to include (default: 100).
         #[arg(long)]
         max_edges: Option<usize>,
 
-        /// Maximum files to include.
+        /// Maximum files to include (default: 20).
         #[arg(long)]
         max_files: Option<usize>,
 
-        /// Traversal depth (graph hops from seed).
+        /// Traversal depth in graph hops (default: 2).
         #[arg(long)]
         depth: Option<u32>,
 
-        /// Populate code spans (line ranges) in the result.
+        /// Include source line ranges in result.
         #[arg(long)]
         code_spans: bool,
 
-        /// Include test adjacency nodes.
+        /// Include test-adjacency nodes.
         #[arg(long)]
         tests: bool,
 
@@ -282,6 +289,18 @@ pub enum Command {
         neighbors: bool,
     },
 
+    /// Manage named ordered sequences of graph nodes (flows).
+    Flows {
+        #[command(subcommand)]
+        subcommand: FlowsCommand,
+    },
+
+    /// Manage graph node communities (clusters / partitions).
+    Communities {
+        #[command(subcommand)]
+        subcommand: CommunitiesCommand,
+    },
+
     /// Analyse a symbol or the whole graph for removal impact, dead code, safety, or dependencies.
     Analyze {
         #[command(subcommand)]
@@ -292,6 +311,138 @@ pub enum Command {
     Refactor {
         #[command(subcommand)]
         subcommand: RefactorCommand,
+    },
+}
+
+/// Sub-commands for `atlas flows`.
+#[derive(Debug, Subcommand)]
+pub enum FlowsCommand {
+    /// List all flows.
+    List,
+
+    /// Create a new flow.
+    Create {
+        /// Name for the new flow.
+        name: String,
+
+        /// Optional kind label (e.g. `auth`, `data-pipeline`).
+        #[arg(long)]
+        kind: Option<String>,
+
+        /// Optional human-readable description.
+        #[arg(long)]
+        description: Option<String>,
+    },
+
+    /// Delete a flow by name.
+    Delete {
+        /// Name of the flow to delete.
+        name: String,
+    },
+
+    /// List members of a flow.
+    Members {
+        /// Name of the flow.
+        name: String,
+    },
+
+    /// Add a node to a flow.
+    #[command(name = "add-member")]
+    AddMember {
+        /// Name of the flow.
+        flow: String,
+
+        /// Qualified name of the node to add.
+        node_qn: String,
+
+        /// Ordering position in the flow (optional).
+        #[arg(long)]
+        position: Option<i64>,
+
+        /// Optional role label for the node in this flow.
+        #[arg(long)]
+        role: Option<String>,
+    },
+
+    /// Remove a node from a flow.
+    #[command(name = "remove-member")]
+    RemoveMember {
+        /// Name of the flow.
+        flow: String,
+
+        /// Qualified name of the node to remove.
+        node_qn: String,
+    },
+
+    /// List flows that contain a given node.
+    #[command(name = "for-node")]
+    ForNode {
+        /// Qualified name of the node.
+        node_qn: String,
+    },
+}
+
+/// Sub-commands for `atlas communities`.
+#[derive(Debug, Subcommand)]
+pub enum CommunitiesCommand {
+    /// List all communities.
+    List,
+
+    /// Create a new community.
+    Create {
+        /// Name for the new community.
+        name: String,
+
+        /// Clustering algorithm used (e.g. `louvain`, `label-propagation`).
+        #[arg(long)]
+        algorithm: Option<String>,
+
+        /// Nesting level (0 = top-level).
+        #[arg(long)]
+        level: Option<i64>,
+
+        /// Id of the parent community for hierarchical clustering.
+        #[arg(long)]
+        parent: Option<i64>,
+    },
+
+    /// Delete a community by name.
+    Delete {
+        /// Name of the community to delete.
+        name: String,
+    },
+
+    /// List node members of a community.
+    Nodes {
+        /// Name of the community.
+        name: String,
+    },
+
+    /// Add a node to a community.
+    #[command(name = "add-node")]
+    AddNode {
+        /// Name of the community.
+        community: String,
+
+        /// Qualified name of the node to add.
+        node_qn: String,
+    },
+
+    /// Remove a node from a community.
+    #[command(name = "remove-node")]
+    RemoveNode {
+        /// Name of the community.
+        community: String,
+
+        /// Qualified name of the node to remove.
+        node_qn: String,
+    },
+
+    /// List communities that contain a given node.
+    #[command(name = "for-node")]
+    ForNode {
+        /// Qualified name of the node.
+        node_qn: String,
     },
 }
 

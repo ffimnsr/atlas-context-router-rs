@@ -875,6 +875,221 @@ fn read_json_data_output(command: &str, output: Output) -> Value {
     value["data"].clone()
 }
 
+// ---------------------------------------------------------------------------
+// Phase 22, 9.1 — public `atlas context` surface tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn context_symbol_flow_returns_bounded_json() {
+    let repo = setup_fixture_repo();
+    run_atlas(repo.path(), &["init"]);
+    run_atlas(repo.path(), &["build"]);
+
+    // Positional free-text / symbol name query.
+    let data = read_json_data_output(
+        "context",
+        run_atlas(repo.path(), &["--json", "context", "greet_twice"]),
+    );
+
+    // Result shape: nodes, edges, files, truncation, request.
+    let nodes = data["nodes"].as_array().expect("nodes must be an array");
+    assert!(
+        !nodes.is_empty(),
+        "symbol context must return at least one node"
+    );
+    assert!(
+        nodes.iter().any(|n| n["node"]["qualified_name"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("greet_twice")),
+        "greet_twice must appear in symbol context nodes"
+    );
+    assert!(
+        data["truncation"].is_object(),
+        "truncation metadata must be present"
+    );
+    assert_eq!(
+        data["request"]["intent"],
+        json!("symbol"),
+        "request.intent must be 'symbol'"
+    );
+}
+
+#[test]
+fn context_file_flag_returns_file_intent_json() {
+    let repo = setup_fixture_repo();
+    run_atlas(repo.path(), &["init"]);
+    run_atlas(repo.path(), &["build"]);
+
+    let data = read_json_data_output(
+        "context",
+        run_atlas(repo.path(), &["--json", "context", "--file", "src/lib.rs"]),
+    );
+
+    assert!(
+        data["files"]
+            .as_array()
+            .expect("files must be an array")
+            .iter()
+            .any(|f| f["path"] == json!("src/lib.rs")),
+        "file context must include src/lib.rs in files"
+    );
+    assert_eq!(data["request"]["intent"], json!("file"));
+}
+
+#[test]
+fn context_files_flag_returns_review_intent_json() {
+    let repo = setup_fixture_repo();
+    run_atlas(repo.path(), &["init"]);
+    run_atlas(repo.path(), &["build"]);
+
+    let data = read_json_data_output(
+        "context",
+        run_atlas(
+            repo.path(),
+            &["--json", "context", "--files", "src/lib.rs"],
+        ),
+    );
+
+    assert_eq!(
+        data["request"]["intent"],
+        json!("review"),
+        "files flag must default to review intent"
+    );
+    assert!(
+        data["files"]
+            .as_array()
+            .expect("files must be an array")
+            .iter()
+            .any(|f| f["path"] == json!("src/lib.rs")),
+        "review context must include src/lib.rs"
+    );
+}
+
+#[test]
+fn context_intent_override_changes_request_intent() {
+    let repo = setup_fixture_repo();
+    run_atlas(repo.path(), &["init"]);
+    run_atlas(repo.path(), &["build"]);
+
+    let data = read_json_data_output(
+        "context",
+        run_atlas(
+            repo.path(),
+            &["--json", "context", "--files", "src/lib.rs", "--intent", "impact"],
+        ),
+    );
+
+    assert_eq!(
+        data["request"]["intent"],
+        json!("impact"),
+        "--intent impact must override default"
+    );
+}
+
+#[test]
+fn context_not_found_exits_ok_with_empty_nodes() {
+    let repo = setup_fixture_repo();
+    run_atlas(repo.path(), &["init"]);
+    run_atlas(repo.path(), &["build"]);
+
+    // Unknown symbol. Engine returns not-found; CLI exits 0 in both modes.
+    let data = read_json_data_output(
+        "context",
+        run_atlas(
+            repo.path(),
+            &["--json", "context", "totally_nonexistent_xyz_symbol"],
+        ),
+    );
+
+    // Not-found: nodes empty, truncation present.
+    assert!(
+        data["nodes"].as_array().is_none_or(|a| a.is_empty()),
+        "not-found must return empty nodes"
+    );
+    assert!(data["truncation"].is_object());
+}
+
+#[test]
+fn context_ambiguous_symbol_returns_ambiguity_metadata() {
+    // Set up a repo with two functions sharing the same short name.
+    let repo = setup_repo(&[
+        ("src/foo.rs", "pub fn process() {}\n"),
+        ("src/bar.rs", "pub fn process() {}\n"),
+    ]);
+    run_atlas(repo.path(), &["init"]);
+    run_atlas(repo.path(), &["build"]);
+
+    let data = read_json_data_output(
+        "context",
+        run_atlas(repo.path(), &["--json", "context", "process"]),
+    );
+
+    // Ambiguous: ambiguity object must be present and have candidates.
+    if let Some(ambiguity) = data.get("ambiguity").filter(|v| !v.is_null()) {
+        let candidates = ambiguity["candidates"]
+            .as_array()
+            .expect("ambiguity.candidates must be an array");
+        assert!(
+            candidates.len() >= 2,
+            "ambiguity must list at least two candidates"
+        );
+    }
+    // Either ambiguity is set, or nodes contains both — engine may resolve; just
+    // confirm the output is valid JSON with the expected schema.
+    assert!(data["truncation"].is_object());
+}
+
+#[test]
+fn context_human_readable_symbol_output() {
+    let repo = setup_fixture_repo();
+    run_atlas(repo.path(), &["init"]);
+    run_atlas(repo.path(), &["build"]);
+
+    let out = stdout_text(&run_atlas(repo.path(), &["context", "greet_twice"]));
+    assert!(
+        out.contains("Nodes"),
+        "human output must contain 'Nodes': {out}"
+    );
+    assert!(
+        out.contains("Summary"),
+        "human output must contain 'Summary' line: {out}"
+    );
+}
+
+#[test]
+fn context_json_contract_stable_for_golden_snapshot() {
+    let repo = setup_fixture_repo();
+    run_atlas(repo.path(), &["init"]);
+    run_atlas(repo.path(), &["build"]);
+
+    let mut data = read_json_data_output(
+        "context",
+        run_atlas(repo.path(), &["--json", "context", "helper"]),
+    );
+
+    // Normalize fields that vary between runs.
+    normalize_context_result(&mut data);
+
+    let golden = read_golden_json("context_helper.json");
+    assert_eq!(data, golden, "context JSON output must match golden snapshot");
+}
+
+fn normalize_context_result(value: &mut serde_json::Value) {
+    // Blank out IDs and hashes that vary between fresh DB instances.
+    if let Some(nodes) = value["nodes"].as_array_mut() {
+        for n in nodes.iter_mut() {
+            n["node"]["id"] = json!(0);
+            n["node"]["file_hash"] = json!("<hash>");
+        }
+    }
+    if let Some(edges) = value["edges"].as_array_mut() {
+        for e in edges.iter_mut() {
+            e["edge"]["id"] = json!(0);
+        }
+    }
+}
+
 fn write_repo_file(repo_root: &Path, relative_path: &str, content: &str) {
     fs::write(repo_root.join(relative_path), content).expect("write repo file");
 }

@@ -189,6 +189,71 @@ atlas doctor
 atlas db-check
 ```
 
+## Context Engine (`atlas context`)
+
+Build bounded, machine-readable context around any symbol, file, or change-set.
+
+**Symbol or free-text query** (auto-classified):
+
+```bash
+atlas context "AuthService"
+atlas context "who calls handle_request"
+atlas context "safe to remove helper"
+```
+
+**Explicit file target:**
+
+```bash
+atlas context --file src/auth.rs
+```
+
+**Changed-file review context:**
+
+```bash
+atlas context --files src/auth.rs src/session.rs
+atlas context --files src/auth.rs --intent impact
+```
+
+**Machine-readable JSON:**
+
+```bash
+atlas --json context "AuthService"
+atlas --json context --file src/auth.rs
+atlas --json context --files src/auth.rs src/session.rs
+```
+
+**Supported `--intent` values:** `symbol` (default), `file`, `review`, `impact`,
+`usage_lookup`, `refactor_safety`, `dead_code_check`, `rename_preview`,
+`dependency_removal`.
+
+**Limit flags:** `--max-nodes`, `--max-edges`, `--max-files`, `--depth`.
+Extra flags: `--code-spans`, `--tests`, `--imports`, `--neighbors`.
+
+**Default limits:** 100 nodes, 100 edges, 20 files, depth 2.
+
+**JSON contract** (`atlas --json context ...`):
+
+```json
+{
+  "schema_version": "atlas_cli.v1",
+  "command": "context",
+  "data": {
+    "intent": "symbol",
+    "request": { "intent": "symbol", "target": { "kind": "symbol_name", "name": "..." }, ... },
+    "nodes": [ { "distance": 0, "selection_reason": "direct_target", "relevance_score": 121.0, "node": { ... } } ],
+    "edges": [ { "depth": 1, "selection_reason": "callee", "edge": { ... } } ],
+    "files": [ { "path": "src/lib.rs", "selection_reason": "direct_target", "line_ranges": [] } ],
+    "truncation": { "truncated": false, "nodes_dropped": 0, "edges_dropped": 0, "files_dropped": 0 },
+    "ambiguity": null
+  }
+}
+```
+
+When the target is ambiguous, `ambiguity` contains `{ "query": "...", "candidates": [...] }` instead of nodes.
+When the target is not found, `nodes` is empty and `ambiguity` is null.
+
+`atlas review-context` remains available as a focused shortcut for change-set review during transition.
+
 ## Output Modes
 
 Most user-facing commands support machine-readable output:
@@ -207,6 +272,40 @@ atlas --json install --platform claude
 - `.vscode/mcp.json` for GitHub Copilot installs
 - `~/.codex/config.toml` entry for Codex installs
 - `.git/hooks/*` for installed git hooks
+
+## MCP Tools
+
+The MCP server (`atlas serve`) exposes these tools to agents:
+
+| Tool | Description |
+|------|-------------|
+| `list_graph_stats` | Node/edge counts and language breakdown |
+| `query_graph` | Keyword search, returns compact symbol list |
+| `get_impact_radius` | Graph traversal from changed files |
+| `get_review_context` | Review bundle: symbols, neighbors, risk summary |
+| `get_context` | General context engine: symbol, file, review, impact |
+| `detect_changes` | Git diff → changed-file list with node counts |
+| `build_or_update_graph` | Full scan or incremental graph update |
+| `traverse_graph` | Bi-directional graph traversal from a qualified name |
+| `get_minimal_context` | Auto-detect changes and return compact impact bundle |
+| `explain_change` | Advanced impact: risk, change kinds, boundary/test gaps |
+
+**`get_context` schema:**
+
+```json
+{
+  "query":     "free-text or symbol name (alternative to file/files)",
+  "file":      "repo-relative file path",
+  "files":     ["list", "of", "changed", "paths"],
+  "intent":    "symbol|file|review|impact|usage_lookup|refactor_safety|dead_code_check|rename_preview|dependency_removal",
+  "max_nodes": 100,
+  "max_edges": 100,
+  "max_depth": 2
+}
+```
+
+Response is a compact `PackagedContextResult` with `intent`, `node_count`, `nodes`, `edge_count`, `edges`,
+`file_count`, `files`, `truncated`, `nodes_dropped`, `edges_dropped`, and optional `ambiguity_candidates`.
 
 ## Contributing
 

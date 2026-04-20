@@ -9,7 +9,7 @@ use atlas_core::SearchQuery;
 use atlas_core::model::{ContextIntent, ContextRequest, ContextTarget};
 use atlas_engine::{BuildOptions, UpdateOptions, UpdateTarget, build_graph, update_graph};
 use atlas_repo::{DiffTarget, changed_files, find_repo_root};
-use atlas_review::ContextEngine;
+use atlas_review::{ContextEngine, query_parser};
 use atlas_store_sqlite::Store;
 use camino::Utf8Path;
 use serde::Serialize;
@@ -140,6 +140,23 @@ pub fn tool_list() -> serde_json::Value {
                     },
                     "required": []
                 }
+            },
+            {
+                "name": "get_context",
+                "description": "Build bounded context around a symbol, file, or change-set using the context engine. Accepts a free-text query (auto-classified), an explicit file path, or a list of changed files. Returns a compact agent-optimized result with ranked nodes, edges, files, and truncation/ambiguity metadata.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "query":     { "type": "string",  "description": "Free-text or symbol name query (e.g. 'who calls handle_request', 'AuthService', 'src/lib.rs::fn::foo'). Alternative to file/files." },
+                        "file":      { "type": "string",  "description": "Repo-relative file path target (file intent). Alternative to query/files." },
+                        "files":     { "type": "array", "items": { "type": "string" }, "description": "Changed file paths for review/impact context. Alternative to query/file." },
+                        "intent":    { "type": "string",  "description": "Override intent: symbol, file, review, impact, usage_lookup, refactor_safety, dead_code_check, rename_preview, dependency_removal. Inferred when omitted." },
+                        "max_nodes": { "type": "integer", "description": "Maximum nodes to include (default 100)" },
+                        "max_edges": { "type": "integer", "description": "Maximum edges to include (default 100)" },
+                        "max_depth": { "type": "integer", "description": "Traversal depth in graph hops (default 2)" }
+                    },
+                    "required": []
+                }
             }
         ]
     })
@@ -166,6 +183,7 @@ pub fn call(
         "traverse_graph" => tool_traverse_graph(args, db_path),
         "get_minimal_context" => tool_get_minimal_context(args, repo_root, db_path),
         "explain_change" => tool_explain_change(args, repo_root, db_path),
+        "get_context" => tool_get_context(args, db_path),
         other => Err(anyhow::anyhow!("unknown tool: {other}")),
     }
 }
@@ -688,6 +706,83 @@ fn tool_explain_change(
 // Argument helpers
 // ---------------------------------------------------------------------------
 
+fn parse_mcp_intent(s: &str) -> atlas_core::model::ContextIntent {
+    use atlas_core::model::ContextIntent;
+    match s {
+        "file" => ContextIntent::File,
+        "review" => ContextIntent::Review,
+        "impact" => ContextIntent::Impact,
+        "usage_lookup" | "usage" => ContextIntent::UsageLookup,
+        "refactor_safety" | "refactor" => ContextIntent::RefactorSafety,
+        "dead_code_check" | "dead_code" => ContextIntent::DeadCodeCheck,
+        "rename_preview" | "rename" => ContextIntent::RenamePreview,
+        "dependency_removal" | "deps" => ContextIntent::DependencyRemoval,
+        _ => ContextIntent::Symbol,
+    }
+}
+
+fn tool_get_context(args: Option<&serde_json::Value>, db_path: &str) -> Result<serde_json::Value> {
+    use atlas_core::model::{ContextIntent, ContextRequest, ContextTarget};
+
+    let query = str_arg(args, "query")?.map(str::to_owned);
+    let file = str_arg(args, "file")?.map(str::to_owned);
+    let files = string_array_arg(args, "files")?;
+    let intent_override = str_arg(args, "intent")?.map(str::to_owned);
+    let max_nodes = u64_arg(args, "max_nodes").map(|n| n as usize);
+    let max_edges = u64_arg(args, "max_edges").map(|n| n as usize);
+    let max_depth = u64_arg(args, "max_depth").map(|n| n as u32);
+
+    let mut request = if !files.is_empty() {
+        let intent = intent_override
+            .as_deref()
+            .map(parse_mcp_intent)
+            .unwrap_or(ContextIntent::Review);
+        ContextRequest {
+            intent,
+            target: ContextTarget::ChangedFiles { paths: files },
+            ..ContextRequest::default()
+        }
+    } else if let Some(path) = file {
+        let intent = intent_override
+            .as_deref()
+            .map(parse_mcp_intent)
+            .unwrap_or(ContextIntent::File);
+        ContextRequest {
+            intent,
+            target: ContextTarget::FilePath { path },
+            ..ContextRequest::default()
+        }
+    } else if let Some(q) = query {
+        let mut parsed = query_parser::parse_query(&q);
+        if let Some(ref ov) = intent_override {
+            parsed.intent = parse_mcp_intent(ov);
+        }
+        parsed
+    } else {
+        return Err(anyhow::anyhow!(
+            "get_context requires one of: 'query', 'file', or 'files'"
+        ));
+    };
+
+    if max_nodes.is_some() {
+        request.max_nodes = max_nodes;
+    }
+    if max_edges.is_some() {
+        request.max_edges = max_edges;
+    }
+    if max_depth.is_some() {
+        request.depth = max_depth;
+    }
+
+    let store = open_store(db_path)?;
+    let engine = ContextEngine::new(&store);
+    let result = engine.build(&request).context("context engine failed")?;
+    let packaged = package_context_result(&result);
+    tool_result(serde_json::to_string_pretty(&packaged)?)
+}
+
+
+
 fn str_arg<'a>(args: Option<&'a serde_json::Value>, key: &str) -> Result<Option<&'a str>> {
     Ok(args.and_then(|a| a.get(key)).and_then(|v| v.as_str()))
 }
@@ -754,6 +849,135 @@ mod tests {
                 .any(|t| t.get("name") == Some(&"explain_change".into()))
         );
     }
+
+    #[test]
+    fn tool_list_includes_get_context() {
+        let list = tool_list();
+        let tools = list.get("tools").and_then(|t| t.as_array()).unwrap();
+        assert!(
+            tools
+                .iter()
+                .any(|t| t.get("name") == Some(&"get_context".into())),
+            "tools/list must include get_context"
+        );
+    }
+
+    #[test]
+    fn get_context_missing_args_returns_error() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db_path = dir.path().join("atlas.db");
+        let db_path = db_path.to_string_lossy().to_string();
+        let _ = Store::open(&db_path).expect("open store");
+
+        // No query/file/files → expect error.
+        let result = call("get_context", Some(&serde_json::json!({})), "/ignored", &db_path);
+        assert!(result.is_err(), "empty get_context args must return an error");
+    }
+
+    #[test]
+    fn get_context_query_returns_packaged_result() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db_path = dir.path().join("atlas.db");
+        let db_path = db_path.to_string_lossy().to_string();
+
+        let mut store = Store::open(&db_path).expect("open store");
+        let node = Node {
+            id: atlas_core::model::NodeId::UNSET,
+            kind: NodeKind::Function,
+            name: "compute".to_owned(),
+            qualified_name: "src/math.rs::fn::compute".to_owned(),
+            file_path: "src/math.rs".to_owned(),
+            line_start: 1,
+            line_end: 5,
+            language: "rust".to_owned(),
+            parent_name: None,
+            params: Some("(x: i32) -> i32".to_owned()),
+            return_type: Some("i32".to_owned()),
+            modifiers: Some("pub".to_owned()),
+            is_test: false,
+            file_hash: "h1".to_owned(),
+            extra_json: serde_json::json!({}),
+        };
+        store
+            .replace_file_graph("src/math.rs", "h1", Some("rust"), Some(5), &[node], &[])
+            .expect("replace_file_graph");
+
+        let args = serde_json::json!({ "query": "compute" });
+        let resp = call("get_context", Some(&args), "/ignored", &db_path).expect("call");
+        let text = unwrap_tool_text(resp);
+        let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
+
+        // Compact PackagedContextResult schema.
+        assert!(v.get("intent").is_some(), "result must have intent");
+        assert!(v.get("node_count").is_some(), "result must have node_count");
+        assert!(v.get("nodes").and_then(|n| n.as_array()).is_some(), "nodes must be array");
+        assert!(v.get("truncated").is_some(), "result must have truncated flag");
+    }
+
+    #[test]
+    fn get_context_files_returns_review_intent() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db_path = dir.path().join("atlas.db");
+        let db_path = db_path.to_string_lossy().to_string();
+        let _ = Store::open(&db_path).expect("open store");
+
+        let args = serde_json::json!({ "files": ["src/main.rs"] });
+        let resp = call("get_context", Some(&args), "/ignored", &db_path).expect("call");
+        let text = unwrap_tool_text(resp);
+        let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
+
+        assert_eq!(
+            v.get("intent").and_then(|i| i.as_str()),
+            Some("review"),
+            "files arg must produce review intent"
+        );
+    }
+
+    #[test]
+    fn get_context_not_found_returns_empty_nodes() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db_path = dir.path().join("atlas.db");
+        let db_path = db_path.to_string_lossy().to_string();
+        let _ = Store::open(&db_path).expect("open store");
+
+        let args = serde_json::json!({ "query": "nonexistent_xyz_unknown_symbol" });
+        let resp = call("get_context", Some(&args), "/ignored", &db_path).expect("call");
+        let text = unwrap_tool_text(resp);
+        let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
+
+        let node_count = v.get("node_count").and_then(|n| n.as_u64()).unwrap_or(99);
+        assert_eq!(node_count, 0, "not-found query must return 0 nodes");
+    }
+
+    #[test]
+    fn unknown_tool_returns_error() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db_path = dir.path().join("atlas.db");
+        let db_path = db_path.to_string_lossy().to_string();
+        let _ = Store::open(&db_path).expect("open store");
+
+        let result = call("unknown_tool_xyz", None, "/ignored", &db_path);
+        assert!(result.is_err(), "unknown tool must return an error");
+        assert!(result.unwrap_err().to_string().contains("unknown tool"));
+    }
+
+    #[test]
+    fn tool_list_schema_has_required_fields() {
+        let list = tool_list();
+        let tools = list.get("tools").and_then(|t| t.as_array()).unwrap();
+        for tool in tools {
+            let name = tool.get("name").and_then(|n| n.as_str()).unwrap_or("<missing>");
+            assert!(
+                tool.get("description").is_some(),
+                "tool {name} must have description"
+            );
+            assert!(
+                tool.pointer("/inputSchema/type").is_some(),
+                "tool {name} must have inputSchema.type"
+            );
+        }
+    }
+
 
     #[test]
     fn explain_change_reports_change_kind_counts() {

@@ -1,0 +1,152 @@
+{
+  "ambiguity": null,
+  "edges": [
+    {
+      "depth": 1,
+      "edge": {
+        "confidence": 0.800000011920929,
+        "confidence_tier": "same_file",
+        "extra_json": {
+          "callee_name": "greet_twice",
+          "callee_text": "Greeter::greet_twice",
+          "receiver_text": null
+        },
+        "file_path": "src/lib.rs",
+        "id": 0,
+        "kind": "calls",
+        "line": 10,
+        "source_qn": "src/lib.rs::fn::helper",
+        "target_qn": "src/lib.rs::method::Greeter::greet_twice"
+      },
+      "relevance_score": 88.0,
+      "selection_reason": "callee"
+    },
+    {
+      "depth": 1,
+      "edge": {
+        "confidence": 0.6499999761581421,
+        "confidence_tier": "same_package",
+        "extra_json": {
+          "callee_name": "helper",
+          "callee_text": "helper",
+          "receiver_text": null
+        },
+        "file_path": "src/main.rs",
+        "id": 0,
+        "kind": "calls",
+        "line": 4,
+        "source_qn": "src/main.rs::fn::main",
+        "target_qn": "src/lib.rs::fn::helper"
+      },
+      "relevance_score": 86.5,
+      "selection_reason": "caller"
+    }
+  ],
+  "files": [
+    {
+      "language": "rust",
+      "line_ranges": [],
+      "node_count_included": 2,
+      "path": "src/lib.rs",
+      "selection_reason": "direct_target"
+    },
+    {
+      "language": "rust",
+      "line_ranges": [],
+      "node_count_included": 1,
+      "path": "src/main.rs",
+      "selection_reason": "caller"
+    }
+  ],
+  "nodes": [
+    {
+      "distance": 0,
+      "node": {
+        "extra_json": null,
+        "file_hash": "<hash>",
+        "file_path": "src/lib.rs",
+        "id": 0,
+        "is_test": false,
+        "kind": "function",
+        "language": "rust",
+        "line_end": 11,
+        "line_start": 9,
+        "modifiers": "pub",
+        "name": "helper",
+        "params": "(name: &str)",
+        "parent_name": "src/lib.rs",
+        "qualified_name": "src/lib.rs::fn::helper",
+        "return_type": "String"
+      },
+      "relevance_score": 121.0,
+      "selection_reason": "direct_target"
+    },
+    {
+      "distance": 1,
+      "node": {
+        "extra_json": null,
+        "file_hash": "<hash>",
+        "file_path": "src/lib.rs",
+        "id": 0,
+        "is_test": false,
+        "kind": "method",
+        "language": "rust",
+        "line_end": 6,
+        "line_start": 4,
+        "modifiers": "pub",
+        "name": "greet_twice",
+        "params": "(name: &str)",
+        "parent_name": "src/lib.rs::impl::Greeter",
+        "qualified_name": "src/lib.rs::method::Greeter::greet_twice",
+        "return_type": "String"
+      },
+      "relevance_score": 96.0,
+      "selection_reason": "callee"
+    },
+    {
+      "distance": 1,
+      "node": {
+        "extra_json": null,
+        "file_hash": "<hash>",
+        "file_path": "src/main.rs",
+        "id": 0,
+        "is_test": false,
+        "kind": "function",
+        "language": "rust",
+        "line_end": 6,
+        "line_start": 3,
+        "modifiers": null,
+        "name": "main",
+        "params": "()",
+        "parent_name": "src/main.rs",
+        "qualified_name": "src/main.rs::fn::main",
+        "return_type": null
+      },
+      "relevance_score": 88.0,
+      "selection_reason": "caller"
+    }
+  ],
+  "request": {
+    "depth": null,
+    "include_callees": true,
+    "include_callers": true,
+    "include_code_spans": false,
+    "include_imports": true,
+    "include_neighbors": false,
+    "include_tests": false,
+    "intent": "symbol",
+    "max_edges": null,
+    "max_files": null,
+    "max_nodes": null,
+    "target": {
+      "kind": "symbol_name",
+      "name": "helper"
+    }
+  },
+  "truncation": {
+    "edges_dropped": 0,
+    "files_dropped": 0,
+    "nodes_dropped": 0,
+    "truncated": false
+  }
+}
