@@ -12,6 +12,10 @@ members = [
   "packages/atlas-review",
   "packages/atlas-impact",
   "packages/atlas-reasoning",
+  "packages/atlas-contentstore",
+  "packages/atlas-session",
+  "packages/atlas-contextsave",
+  "packages/atlas-adapters",
 ]
 resolver = "2"
 
