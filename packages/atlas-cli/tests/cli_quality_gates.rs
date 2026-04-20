@@ -11,6 +11,35 @@ use atlas_store_sqlite::Store;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
+const GIT_LOCAL_ENV_VARS: &[&str] = &[
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_COMMON_DIR",
+    "GIT_CONFIG",
+    "GIT_CONFIG_COUNT",
+    "GIT_CONFIG_KEY_0",
+    "GIT_CONFIG_VALUE_0",
+    "GIT_DIR",
+    "GIT_GRAFT_FILE",
+    "GIT_IMPLICIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_INTERNAL_SUPER_PREFIX",
+    "GIT_NAMESPACE",
+    "GIT_NO_REPLACE_OBJECTS",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_PREFIX",
+    "GIT_REPLACE_REF_BASE",
+    "GIT_SHALLOW_FILE",
+    "GIT_WORK_TREE",
+];
+
+fn sanitized_command(program: &str) -> Command {
+    let mut command = Command::new(program);
+    for env_var in GIT_LOCAL_ENV_VARS {
+        command.env_remove(env_var);
+    }
+    command
+}
+
 #[test]
 fn sqlite_fts5_smoke_round_trip() {
     let repo = setup_fixture_repo();
@@ -1007,7 +1036,7 @@ fn interactive_shell_accepts_query_and_context_requests() {
     run_atlas(repo.path(), &["init"]);
     run_atlas(repo.path(), &["build"]);
 
-    let mut child = Command::new(env!("CARGO_BIN_EXE_atlas"))
+    let mut child = sanitized_command(env!("CARGO_BIN_EXE_atlas"))
         .args(["shell", "--fuzzy"])
         .current_dir(repo.path())
         .stdin(Stdio::piped())
@@ -1134,7 +1163,7 @@ fn serve_command_handles_stdio_jsonrpc_flow_end_to_end() {
     run_atlas(repo.path(), &["init"]);
     run_atlas(repo.path(), &["build"]);
 
-    let mut child = Command::new(env!("CARGO_BIN_EXE_atlas"))
+    let mut child = sanitized_command(env!("CARGO_BIN_EXE_atlas"))
         .arg("serve")
         .current_dir(repo.path())
         .stdin(Stdio::piped())
@@ -2045,7 +2074,7 @@ impl DetachedWorktree {
 
 impl Drop for DetachedWorktree {
     fn drop(&mut self) {
-        let _ = Command::new("git")
+        let _ = sanitized_command("git")
             .args(["worktree", "remove", "--force"])
             .arg(&self.path)
             .current_dir(&self.source_repo)
@@ -2500,7 +2529,7 @@ fn run_atlas(repo_root: &Path, args: &[&str]) -> Output {
 }
 
 fn run_command(repo_root: &Path, program: &str, args: &[&str]) -> Output {
-    let output = Command::new(program)
+    let output = sanitized_command(program)
         .args(args)
         .current_dir(repo_root)
         .output()
@@ -2549,7 +2578,7 @@ impl Drop for SpawnedWatch {
 }
 
 fn spawn_atlas_watch(repo_root: &Path, args: &[&str]) -> SpawnedWatch {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_atlas"))
+    let mut child = sanitized_command(env!("CARGO_BIN_EXE_atlas"))
         .args(args)
         .current_dir(repo_root)
         .stdin(Stdio::null())
@@ -2852,7 +2881,7 @@ fn watch_no_duplicate_updates_idempotent() {
 #[test]
 fn watch_command_registered_in_help() {
     // Run help (which exits 0 with clap) to confirm watch is a valid subcommand.
-    let output = Command::new(env!("CARGO_BIN_EXE_atlas"))
+    let output = sanitized_command(env!("CARGO_BIN_EXE_atlas"))
         .args(["watch", "--help"])
         .output()
         .expect("failed to run atlas watch --help");
