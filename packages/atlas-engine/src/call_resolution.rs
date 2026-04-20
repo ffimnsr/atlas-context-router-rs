@@ -14,6 +14,7 @@ pub fn reconcile_call_targets(
     let mut touched_files = 0usize;
     let mut seen = HashSet::new();
     let mut candidate_cache: HashMap<(String, String), Vec<Node>> = HashMap::new();
+    let mut owner_cache: HashMap<String, Option<String>> = HashMap::new();
     let config = load_resolver_config(repo_root);
 
     for path in file_paths {
@@ -71,6 +72,7 @@ pub fn reconcile_call_targets(
                         &language,
                         &meta.callee_name,
                         &mut candidate_cache,
+                        &mut owner_cache,
                     )
                 })
             } else {
@@ -87,6 +89,7 @@ pub fn reconcile_call_targets(
                         &language,
                         &meta.callee_name,
                         &mut candidate_cache,
+                        &mut owner_cache,
                     )
                 })
             };
@@ -400,8 +403,36 @@ fn resolve_same_package_target(
     language: &str,
     callee_name: &str,
     candidate_cache: &mut HashMap<(String, String), Vec<Node>>,
+    owner_cache: &mut HashMap<String, Option<String>>,
 ) -> Option<(String, &'static str, f32)> {
     let candidates = callable_candidates(store, language, callee_name, candidate_cache).ok()?;
+    let current_owner = cached_owner_id(store, path, owner_cache);
+
+    if let Some(current_owner) = current_owner {
+        let same_owner_matches: Vec<Node> = candidates
+            .iter()
+            .filter(|node| node.file_path != path)
+            .filter(|node| {
+                cached_owner_id(store, &node.file_path, owner_cache).as_deref()
+                    == Some(current_owner.as_str())
+            })
+            .cloned()
+            .collect();
+        if let Some(node) = unique_node(same_owner_matches.clone()) {
+            return Some((node.qualified_name, "same_package", 0.65));
+        }
+
+        let current_dir = Utf8Path::new(path)
+            .parent()
+            .unwrap_or_else(|| Utf8Path::new(""));
+        let same_dir_matches: Vec<Node> = same_owner_matches
+            .into_iter()
+            .filter(|node| same_dir(current_dir, &node.file_path))
+            .collect();
+        return unique_node(same_dir_matches)
+            .map(|node| (node.qualified_name, "same_package", 0.65));
+    }
+
     let current_dir = Utf8Path::new(path)
         .parent()
         .unwrap_or_else(|| Utf8Path::new(""));
@@ -411,6 +442,19 @@ fn resolve_same_package_target(
         .filter(|node| same_dir(current_dir, &node.file_path))
         .collect();
     unique_node(matches).map(|node| (node.qualified_name, "same_package", 0.65))
+}
+
+fn cached_owner_id(
+    store: &Store,
+    path: &str,
+    owner_cache: &mut HashMap<String, Option<String>>,
+) -> Option<String> {
+    if let Some(owner_id) = owner_cache.get(path) {
+        return owner_id.clone();
+    }
+    let owner_id = store.file_owner_id(path).ok().flatten();
+    owner_cache.insert(path.to_owned(), owner_id.clone());
+    owner_id
 }
 
 fn resolve_import_target(

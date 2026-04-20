@@ -264,7 +264,7 @@ fn compute_test_impact(base: &ImpactResult) -> TestImpactResult {
 /// Detect cross-module and cross-package impacts.
 ///
 /// Module  = unique directory prefix of a node's `file_path`.
-/// Package = top-level directory component of `file_path`.
+/// Package = `owner_id` from node metadata when present, else top-level path component.
 fn detect_boundary_violations(base: &ImpactResult) -> Vec<BoundaryViolation> {
     let module_of = |path: &str| -> String {
         // Use the directory part of the path (everything before the last `/`).
@@ -274,9 +274,19 @@ fn detect_boundary_violations(base: &ImpactResult) -> Vec<BoundaryViolation> {
         }
     };
 
-    let package_of = |path: &str| -> String {
-        // Top-level component.
-        path.split('/').next().unwrap_or(path).to_string()
+    let package_of = |node: &Node| -> String {
+        node.extra_json
+            .as_object()
+            .and_then(|extra| extra.get("owner_id"))
+            .and_then(|value| value.as_str())
+            .map(str::to_owned)
+            .unwrap_or_else(|| {
+                node.file_path
+                    .split('/')
+                    .next()
+                    .unwrap_or(&node.file_path)
+                    .to_string()
+            })
     };
 
     let changed_modules: HashSet<String> = base
@@ -285,11 +295,7 @@ fn detect_boundary_violations(base: &ImpactResult) -> Vec<BoundaryViolation> {
         .map(|n| module_of(&n.file_path))
         .collect();
 
-    let changed_packages: HashSet<String> = base
-        .changed_nodes
-        .iter()
-        .map(|n| package_of(&n.file_path))
-        .collect();
+    let changed_packages: HashSet<String> = base.changed_nodes.iter().map(package_of).collect();
 
     // Collect impacted nodes outside the changed modules/packages.
     let mut cross_module_qns: Vec<String> = Vec::new();
@@ -300,7 +306,7 @@ fn detect_boundary_violations(base: &ImpactResult) -> Vec<BoundaryViolation> {
         if !changed_modules.contains(&m) {
             cross_module_qns.push(n.qualified_name.clone());
         }
-        let p = package_of(&n.file_path);
+        let p = package_of(n);
         if !changed_packages.contains(&p) {
             cross_package_qns.push(n.qualified_name.clone());
         }

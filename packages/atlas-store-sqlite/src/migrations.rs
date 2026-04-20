@@ -26,4 +26,8 @@ pub const MIGRATIONS: &[Migration] = &[
         version: 4,
         sql: include_str!("migrations/004_fix_flow_memberships_and_community_nodes.sql"),
     },
+    Migration {
+        version: 5,
+        sql: include_str!("migrations/005_file_owners.sql"),
+    },
 ];

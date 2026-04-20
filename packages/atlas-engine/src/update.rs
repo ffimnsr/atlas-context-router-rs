@@ -6,14 +6,18 @@ use std::fs;
 use std::time::Instant;
 
 use anyhow::{Context, Result};
-use atlas_core::model::{ChangeType, ParsedFile};
+use atlas_core::{
+    PackageOwner,
+    model::{ChangeType, ParsedFile},
+};
 use atlas_parser::{ParserRegistry, TreeCache};
-use atlas_repo::{DiffTarget, changed_files, hash_file, repo_relative};
+use atlas_repo::{DiffTarget, changed_files, discover_package_owners, hash_file, repo_relative};
 use atlas_store_sqlite::Store;
 use camino::Utf8Path;
 use rayon::prelude::*;
 
 use crate::call_resolution::reconcile_call_targets;
+use crate::owner_graph::refresh_owner_graphs;
 
 type ParseWorkItem = (String, camino::Utf8PathBuf, Option<tree_sitter::Tree>);
 type ParseOutcome = Result<(ParsedFile, Option<tree_sitter::Tree>), String>;
@@ -124,6 +128,7 @@ pub fn update_graph(
 
     let mut store =
         Store::open(db_path).with_context(|| format!("cannot open database at {db_path}"))?;
+    let owners = discover_package_owners(repo_root).context("cannot discover package owners")?;
 
     // ── Determine which files changed ────────────────────────────────────────
     let _diff_span = tracing::info_span!("update.detect_changes").entered();
@@ -170,8 +175,13 @@ pub fn update_graph(
                     let new_abs = repo_root.join(&cf.path);
                     let new_hash = atlas_repo::hash_file(&new_abs).ok();
                     let stored_hash = store.file_hash(old).ok().flatten();
+                    let old_owner_id = store.file_owner_id(old).ok().flatten();
+                    let new_owner_id = owners
+                        .owner_for_path(&cf.path)
+                        .map(|owner| owner.owner_id.clone());
                     if let (Some(nh), Some(sh)) = (&new_hash, &stored_hash)
                         && nh == sh
+                        && old_owner_id == new_owner_id
                     {
                         to_rename.push((old.clone(), cf.path.clone()));
                         continue;
@@ -198,6 +208,9 @@ pub fn update_graph(
             store
                 .rename_file_graph(old, new)
                 .with_context(|| format!("cannot rename graph '{old}' -> '{new}'"))?;
+            store
+                .upsert_file_owner(new, owners.owner_for_path(new))
+                .with_context(|| format!("cannot update owner metadata for '{new}'"))?;
         }
     }
 
@@ -268,7 +281,10 @@ pub fn update_graph(
                     Err(e) => return (rel_str.clone(), Err(format!("read error: {e}"))),
                 };
                 match registry.parse(rel_str, &hash, &source, old_tree.as_ref()) {
-                    Some(result) => (rel_str.clone(), Ok(result)),
+                    Some((mut pf, tree)) => {
+                        annotate_parsed_file_owner(&mut pf, owners.owner_for_path(rel_str));
+                        (rel_str.clone(), Ok((pf, tree)))
+                    }
                     None => (rel_str.clone(), Err("unsupported (skipped)".into())),
                 }
             })
@@ -348,7 +364,10 @@ pub fn update_graph(
                     Err(e) => return (rel_str.clone(), Err(format!("read error: {e}"))),
                 };
                 match registry.parse(rel_str, &hash, &source, old_tree.as_ref()) {
-                    Some(result) => (rel_str.clone(), Ok(result)),
+                    Some((mut pf, tree)) => {
+                        annotate_parsed_file_owner(&mut pf, owners.owner_for_path(rel_str));
+                        (rel_str.clone(), Ok((pf, tree)))
+                    }
                     None => (rel_str.clone(), Err("unsupported (skipped)".into())),
                 }
             })
@@ -388,6 +407,11 @@ pub fn update_graph(
         let (n, e) = store
             .replace_files_transactional(&chunk_owned)
             .context("cannot store parsed files")?;
+        for pf in &chunk_owned {
+            store
+                .upsert_file_owner(&pf.path, owners.owner_for_path(&pf.path))
+                .with_context(|| format!("cannot store owner metadata for {}", pf.path))?;
+        }
         total_nodes += n;
         total_edges += e;
 
@@ -404,6 +428,9 @@ pub fn update_graph(
         }
     }
     drop(_write_span);
+
+    refresh_owner_graphs(&mut store, repo_root, &owners)
+        .context("cannot refresh package/workspace nodes")?;
 
     let resolved_paths: Vec<String> = all_parsed.iter().map(|pf| pf.path.clone()).collect();
     if !resolved_paths.is_empty()
@@ -424,4 +451,36 @@ pub fn update_graph(
         edges_updated: total_edges,
         elapsed_ms: started.elapsed().as_millis(),
     })
+}
+
+fn annotate_parsed_file_owner(parsed_file: &mut ParsedFile, owner: Option<&PackageOwner>) {
+    let Some(owner) = owner else {
+        return;
+    };
+    for node in &mut parsed_file.nodes {
+        let mut extra = node.extra_json.as_object().cloned().unwrap_or_default();
+        extra.insert(
+            "owner_id".to_owned(),
+            serde_json::Value::String(owner.owner_id.clone()),
+        );
+        extra.insert(
+            "owner_kind".to_owned(),
+            serde_json::Value::String(owner.kind.as_str().to_owned()),
+        );
+        extra.insert(
+            "owner_root".to_owned(),
+            serde_json::Value::String(owner.root.clone()),
+        );
+        extra.insert(
+            "owner_manifest_path".to_owned(),
+            serde_json::Value::String(owner.manifest_path.clone()),
+        );
+        if let Some(package_name) = &owner.package_name {
+            extra.insert(
+                "owner_name".to_owned(),
+                serde_json::Value::String(package_name.clone()),
+            );
+        }
+        node.extra_json = serde_json::Value::Object(extra);
+    }
 }

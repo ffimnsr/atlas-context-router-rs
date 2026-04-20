@@ -3,6 +3,7 @@
 mod call_resolution;
 pub mod config;
 pub mod lang_policy;
+mod owner_graph;
 pub mod paths;
 
 mod build;

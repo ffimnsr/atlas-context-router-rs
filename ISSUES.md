@@ -459,19 +459,47 @@ The upstream project’s primary promise includes full build plus incremental up
 
 ### 4.8 Workspace and package-member awareness (useful for monorepo)
 
-Track real workspace/package boundaries instead of using top-level path heuristics so repos like this Cargo workspace behave correctly during build, impact, review, and reasoning.
+Track real workspace/package boundaries instead of using top-level path heuristics so monorepos like this Cargo workspace, NPM workspace, or Go workspace behave correctly during build, impact, review, and reasoning.
 
-- [ ] parse root `Cargo.toml` workspace metadata when present
-- [ ] resolve `workspace.members` globs into concrete member roots
-- [ ] detect standalone package roots for repos without workspace table
-- [ ] map each tracked file to owning workspace member / package root
-- [ ] persist package identity separately from plain file path prefixes
-- [ ] emit first-class package/workspace nodes instead of path-only heuristics
-- [ ] replace top-level-directory `cross_package` heuristic with owning-package comparison
-- [ ] replace same-directory `same_package` heuristic with owning-package-aware resolution
-- [ ] ensure cross-crate imports and impact edges in `packages/*` style repos classify correctly
-- [ ] add fixture repo with multiple Cargo workspace members
-- [ ] add regression tests for `build`, `update`, `impact`, `review-context`, and reasoning on multi-package workspace repos
+- [x] parse root `Cargo.toml` workspace metadata when present
+- [x] resolve `workspace.members` globs into concrete member roots
+- [x] parse root `package.json` workspace metadata when present
+- [x] resolve NPM `workspaces` entries into concrete member roots
+- [x] detect standalone package roots for repos without workspace table
+- [x] map each tracked file to owning workspace member / package root
+- [x] persist package identity separately from plain file path prefixes
+- [x] emit first-class package/workspace nodes instead of path-only heuristics
+- [x] replace top-level-directory `cross_package` heuristic with owning-package comparison
+- [x] replace same-directory `same_package` heuristic with owning-package-aware resolution
+- [x] ensure cross-crate and cross-package imports / impact edges in `packages/*` style repos classify correctly
+- [x] add fixture repo with multiple Cargo workspace members
+- [x] add fixture repo with multiple NPM workspace members
+- [x] add fixture repo with multiple Go workspace modules
+- [x] add regression tests for `build`, `update`, `impact`, `review-context`, and reasoning on multi-package workspace repos
+
+#### 4.8.1 Owner Resolution Rules for Repos Without Workspace Metadata
+
+Repos with multiple packages but no root workspace file must still resolve package ownership correctly. Workspace metadata is preferred when present, but standalone package-root detection is required and must produce same owner model.
+
+- [x] detect standalone Cargo package roots from any tracked `Cargo.toml` containing `[package]`
+- [x] detect standalone NPM package roots from any tracked `package.json` representing a real package
+- [x] detect standalone Go module roots from any tracked `go.mod`
+- [x] assign each tracked file to nearest ancestor package root when no workspace manifest exists
+- [x] use nearest valid package root when nested package roots exist
+- [x] keep files outside any package root as `unknown_owner` or repo-scope owner instead of forcing package match
+- [x] use stable owner identity derived from ecosystem + manifest path, not package name alone
+- [x] ensure root package does not swallow files under nested child package roots
+- [x] ensure rename or move across package roots changes owner identity correctly during `update`
+
+#### 4.8.2 Multi-Package Acceptance Cases
+
+- [x] no-workspace Cargo repo with `crates/foo/Cargo.toml` and `libs/bar/Cargo.toml` resolves files under each root to different owning packages
+- [x] no-workspace Cargo repo with root `Cargo.toml` plus nested `tools/gen/Cargo.toml` assigns `tools/gen/**` to nested package, not root package
+- [x] no-workspace NPM repo with `apps/web/package.json` and `packages/ui/package.json` resolves files under each root to different owning packages
+- [x] mixed repo with package roots plus repo-level scripts/docs keeps non-package files outside package ownership unless explicitly attached to a package
+- [x] ambiguous symbol/query results across multiple packages include owning package identity in ranking/output metadata
+- [x] `cross_package` reasoning, impact, and review signals compare owner identity, not top-level path segment
+- [x] `same_package` call-resolution fallback scopes candidates by owning package first, then uses directory/import proximity only as tie-breakers or ranking signals
 
 ---
 
@@ -627,7 +655,21 @@ The upstream parser is both the most important subsystem and the most monolithic
 
 Implement these like Rust and Go: dedicated handler, qualified-name scheme, edge extraction, parser tests, build/update integration.
 
-### 7.5.1 Java
+When implementation starts, pin exact grammar source in crate/module docs so parser wiring does not drift:
+
+- Java: `github.com/tree-sitter/tree-sitter-java`
+- C: `github.com/tree-sitter/tree-sitter-c`
+- Scala: `github.com/tree-sitter/tree-sitter-scala`
+- C#: `github.com/tree-sitter/tree-sitter-c-sharp`
+- PHP: `github.com/tree-sitter/tree-sitter-php`
+- Ruby: `github.com/tree-sitter/tree-sitter-ruby`
+- C++: `github.com/tree-sitter/tree-sitter-cpp`
+- Bash: `github.com/tree-sitter/tree-sitter-bash`
+- HTML: `github.com/tree-sitter/tree-sitter-html`
+- CSS: `github.com/tree-sitter/tree-sitter-css`
+- Markdown: `github.com/tree-sitter-grammars/tree-sitter-markdown`
+
+### 7.5.1 Java (`tree-sitter/tree-sitter-java`)
 
 - [ ] package node
 - [ ] classes
@@ -640,7 +682,7 @@ Implement these like Rust and Go: dedicated handler, qualified-name scheme, edge
 - [ ] qualified-name scheme
 - [ ] parser tests
 
-### 7.5.2 C#
+### 7.5.2 C# (`tree-sitter/tree-sitter-c-sharp`)
 
 - [ ] namespace node
 - [ ] classes
@@ -654,7 +696,7 @@ Implement these like Rust and Go: dedicated handler, qualified-name scheme, edge
 - [ ] qualified-name scheme
 - [ ] parser tests
 
-### 7.5.3 PHP
+### 7.5.3 PHP (`tree-sitter/tree-sitter-php`)
 
 - [ ] namespace node
 - [ ] classes
@@ -668,7 +710,58 @@ Implement these like Rust and Go: dedicated handler, qualified-name scheme, edge
 - [ ] qualified-name scheme
 - [ ] parser tests
 
-### 7.5.4 JSON and TOML
+### 7.5.4 C (`tree-sitter/tree-sitter-c`)
+
+- [ ] translation-unit / file node
+- [ ] functions
+- [ ] structs
+- [ ] enums
+- [ ] typedefs
+- [ ] macros/preprocessor references where practical
+- [ ] `#include` imports
+- [ ] call edges
+- [ ] qualified-name scheme
+- [ ] parser tests
+
+### 7.5.5 C++ (`tree-sitter/tree-sitter-cpp`)
+
+- [ ] namespace node
+- [ ] classes
+- [ ] structs
+- [ ] enums
+- [ ] templates where practical
+- [ ] methods
+- [ ] `#include` imports
+- [ ] call edges
+- [ ] qualified-name scheme
+- [ ] parser tests
+
+### 7.5.6 Scala (`tree-sitter/tree-sitter-scala`)
+
+- [ ] package node
+- [ ] objects
+- [ ] classes
+- [ ] traits
+- [ ] case classes
+- [ ] methods
+- [ ] imports
+- [ ] call edges
+- [ ] qualified-name scheme
+- [ ] parser tests
+
+### 7.5.7 Ruby (`tree-sitter/tree-sitter-ruby`)
+
+- [ ] module node
+- [ ] classes
+- [ ] methods
+- [ ] singleton methods where practical
+- [ ] `require` / `require_relative` imports
+- [ ] mixins/include/extend where practical
+- [ ] call edges
+- [ ] qualified-name scheme
+- [ ] parser tests
+
+### 7.5.8 JSON and TOML
 
 - [ ] JSON document node extraction
 - [ ] JSON top-level object/key symbol strategy
@@ -677,7 +770,7 @@ Implement these like Rust and Go: dedicated handler, qualified-name scheme, edge
 - [ ] stable qualified-name scheme for config files
 - [ ] parser tests for nested keys and arrays
 
-### 7.5.5 HTML, CSS, Bash
+### 7.5.9 HTML, CSS, Bash (`tree-sitter/tree-sitter-html`, `tree-sitter/tree-sitter-css`, `tree-sitter/tree-sitter-bash`)
 
 - [ ] HTML document/component node extraction
 - [ ] HTML imports/includes where practical
@@ -687,7 +780,16 @@ Implement these like Rust and Go: dedicated handler, qualified-name scheme, edge
 - [ ] language-specific qualified-name scheme
 - [ ] parser tests for representative fixtures
 
-### 7.5.6 Shared acceptance criteria
+### 7.5.10 Markdown (`tree-sitter-grammars/tree-sitter-markdown`)
+
+- [ ] document node extraction
+- [ ] heading hierarchy extraction
+- [ ] fenced-code block extraction where practical
+- [ ] link/reference extraction where practical
+- [ ] stable qualified-name scheme by heading path
+- [ ] parser tests for nested heading documents
+
+### 7.5.11 Shared acceptance criteria
 
 - [ ] unsupported constructs degrade gracefully
 - [ ] parser never panic on malformed source
@@ -2314,8 +2416,10 @@ And system has:
 - [ ] reliable impact scoring with test and boundary signals
 - [ ] workspace-aware package/crate boundaries on multi-package repos:
   - [ ] Cargo workspace members resolve into explicit package identities
+  - [ ] NPM workspace members resolve into explicit package identities
+  - [ ] Go workspace modules resolve into explicit package identities
   - [ ] `cross_package` and related reasoning signals use owning package, not top-level directory name
-  - [ ] fixture acceptance passes on repo layouts like `packages/<crate>` with multiple workspace members
+  - [ ] fixture acceptance passes on repo layouts like `packages/<crate>`, `packages/<app>`, or `go.work` multi-module roots
 - [x] smart review context with better ranking and trimming
 - [ ] review-context usefulness acceptance gate passes on fixture repos and changed-file flows
 - [x] deterministic context engine with target resolution and code-span selection

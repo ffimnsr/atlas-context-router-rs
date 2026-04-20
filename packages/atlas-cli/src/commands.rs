@@ -188,6 +188,29 @@ fn empty_explain_change_summary() -> ExplainChangeSummary {
     }
 }
 
+fn query_display_path(node: &atlas_core::Node) -> String {
+    node.extra_json
+        .as_object()
+        .and_then(|extra| {
+            extra
+                .get("owner_manifest_path")
+                .or_else(|| extra.get("workspace_manifest_path"))
+        })
+        .and_then(|value| value.as_str())
+        .map(str::to_owned)
+        .unwrap_or_else(|| node.file_path.clone())
+}
+
+fn query_owner_identity(node: &atlas_core::Node) -> Option<String> {
+    node.extra_json.as_object().and_then(|extra| {
+        extra
+            .get("owner_id")
+            .or_else(|| extra.get("workspace_id"))
+            .and_then(|value| value.as_str())
+            .map(str::to_owned)
+    })
+}
+
 fn build_explain_change_summary(
     store: &Store,
     files: &[String],
@@ -815,13 +838,17 @@ pub fn run_query(cli: &Cli) -> Result<()> {
     } else {
         for r in &results {
             let n = &r.node;
+            let display_path = query_display_path(n);
             println!(
-                "[{:.3}] {} {} ({}:{})",
+                "[{:.3}] {} {} ({}:{}){}",
                 r.score,
                 n.kind.as_str(),
                 n.qualified_name,
-                n.file_path,
+                display_path,
                 n.line_start,
+                query_owner_identity(n)
+                    .map(|owner| format!(" [owner {owner}]"))
+                    .unwrap_or_default(),
             );
         }
         println!("\n{} result(s). ({latency_ms}ms)", results.len());

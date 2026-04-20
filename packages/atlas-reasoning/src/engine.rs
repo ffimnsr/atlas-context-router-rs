@@ -554,9 +554,9 @@ impl<'s> ReasoningEngine<'s> {
         let test_adj = !tests.is_empty();
 
         let cross_module = inbound.iter().any(|(n, _)| n.file_path != node.file_path);
-        let cross_package = inbound
-            .iter()
-            .any(|(n, _)| different_package(&n.file_path, &node.file_path));
+        let cross_package = inbound.iter().any(|(n, _)| {
+            file_paths_cross_package(self.store, &n.file_path, &node.file_path).unwrap_or(false)
+        });
 
         let unresolved = inbound
             .iter()
@@ -738,6 +738,15 @@ fn different_package(a: &str, b: &str) -> bool {
     let a_top = a.split('/').next().unwrap_or("");
     let b_top = b.split('/').next().unwrap_or("");
     a_top != b_top && !a_top.is_empty() && !b_top.is_empty()
+}
+
+fn file_paths_cross_package(store: &Store, a: &str, b: &str) -> Result<bool> {
+    let owner_a = store.file_owner_id(a)?;
+    let owner_b = store.file_owner_id(b)?;
+    Ok(match (owner_a, owner_b) {
+        (Some(owner_a), Some(owner_b)) => owner_a != owner_b,
+        _ => different_package(a, b),
+    })
 }
 
 fn dead_code_reasons(node: &Node) -> (Vec<String>, ConfidenceTier, Vec<String>) {
@@ -952,7 +961,7 @@ fn build_review_focus(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use atlas_core::{Edge, EdgeKind, Node, NodeId, NodeKind};
+    use atlas_core::{Edge, EdgeKind, Node, NodeId, NodeKind, PackageOwner, PackageOwnerKind};
     use atlas_store_sqlite::Store;
 
     fn make_store() -> Store {
@@ -1011,6 +1020,21 @@ mod tests {
                 .replace_file_graph(&path, "hash", lang.as_deref(), None, &ns, &es)
                 .unwrap();
         }
+    }
+
+    fn attach_owner(store: &mut Store, path: &str, manifest_path: &str) {
+        let root = manifest_path
+            .rsplit_once('/')
+            .map(|(prefix, _)| prefix)
+            .unwrap_or("");
+        let owner = PackageOwner {
+            owner_id: format!("cargo:{manifest_path}"),
+            kind: PackageOwnerKind::Cargo,
+            root: root.to_owned(),
+            manifest_path: manifest_path.to_owned(),
+            package_name: manifest_path.split('/').rev().nth(1).map(str::to_owned),
+        };
+        store.upsert_file_owner(path, Some(&owner)).unwrap();
     }
 
     // -----------------------------------------------------------------------
@@ -1322,5 +1346,49 @@ mod tests {
         // No callers, no tests → score penalized but stored; band should not be Risky
         // (only ~0.15 deducted for no tests from 1.0 start → 0.85 → Safe).
         assert_eq!(result.safety.band, SafetyBand::Safe);
+    }
+
+    #[test]
+    fn classify_change_risk_uses_owner_identity_for_cross_package() {
+        let mut store = make_store();
+        let target = node(
+            0,
+            "helper",
+            "packages/foo/src/lib.rs::fn::helper",
+            "packages/foo/src/lib.rs",
+            NodeKind::Function,
+        );
+        let caller = node(
+            0,
+            "caller",
+            "packages/bar/src/lib.rs::fn::caller",
+            "packages/bar/src/lib.rs",
+            NodeKind::Function,
+        );
+        let edges = vec![edge(
+            "packages/bar/src/lib.rs::fn::caller",
+            "packages/foo/src/lib.rs::fn::helper",
+            EdgeKind::Calls,
+            "packages/bar/src/lib.rs",
+        )];
+        seed_graph(&mut store, vec![target.clone(), caller], edges);
+        attach_owner(&mut store, &target.file_path, "packages/foo/Cargo.toml");
+        attach_owner(
+            &mut store,
+            "packages/bar/src/lib.rs",
+            "packages/bar/Cargo.toml",
+        );
+
+        let engine = ReasoningEngine::new(&store);
+        let result = engine.classify_change_risk(&target.qualified_name).unwrap();
+
+        assert!(
+            result
+                .contributing_factors
+                .iter()
+                .any(|factor| factor.contains("cross-package")),
+            "expected cross-package factor, got {:?}",
+            result.contributing_factors
+        );
     }
 }

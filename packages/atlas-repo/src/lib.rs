@@ -1,6 +1,7 @@
 mod diff;
 mod files;
 mod hash;
+mod owners;
 mod path;
 mod root;
 
@@ -10,5 +11,6 @@ pub use files::{
     glob_match, load_atlasignore, should_ignore,
 };
 pub use hash::hash_file;
+pub use owners::{PackageOwners, WorkspaceRoot, discover_package_owners};
 pub use path::{normalize_case, repo_relative, to_forward_slashes};
 pub use root::find_repo_root;

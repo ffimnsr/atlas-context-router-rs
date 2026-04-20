@@ -5,14 +5,15 @@ use std::fs;
 use std::time::Instant;
 
 use anyhow::{Context, Result};
-use atlas_core::model::ParsedFile;
+use atlas_core::{PackageOwner, model::ParsedFile};
 use atlas_parser::ParserRegistry;
-use atlas_repo::{collect_supported_files, find_repo_root, hash_file};
+use atlas_repo::{collect_supported_files, discover_package_owners, find_repo_root, hash_file};
 use atlas_store_sqlite::Store;
 use camino::Utf8Path;
 use rayon::prelude::*;
 
 use crate::call_resolution::reconcile_call_targets;
+use crate::owner_graph::refresh_owner_graphs;
 
 /// Options controlling the build pipeline.
 pub struct BuildOptions {
@@ -60,6 +61,7 @@ pub fn build_graph(
         Store::open(db_path).with_context(|| format!("cannot open database at {db_path}"))?;
 
     let registry = ParserRegistry::with_defaults();
+    let owners = discover_package_owners(repo_root).context("cannot discover package owners")?;
 
     let _scan_span = tracing::info_span!("build.scan").entered();
 
@@ -120,7 +122,10 @@ pub fn build_graph(
                     Err(e) => return (rel_str.clone(), Err(format!("read error: {e}"))),
                 };
                 match registry.parse(rel_str, hash, &source, None) {
-                    Some((pf, _tree)) => (rel_str.clone(), Ok(pf)),
+                    Some((mut pf, _tree)) => {
+                        annotate_parsed_file_owner(&mut pf, owners.owner_for_path(rel_str));
+                        (rel_str.clone(), Ok(pf))
+                    }
                     None => (rel_str.clone(), Err("unsupported (skipped)".into())),
                 }
             })
@@ -153,6 +158,11 @@ pub fn build_graph(
             let (n, e) = store
                 .replace_files_transactional(&parsed_files)
                 .context("cannot store parsed files")?;
+            for pf in &parsed_files {
+                store
+                    .upsert_file_owner(&pf.path, owners.owner_for_path(&pf.path))
+                    .with_context(|| format!("cannot store owner metadata for {}", pf.path))?;
+            }
             total_nodes += n;
             total_edges += e;
 
@@ -170,6 +180,9 @@ pub fn build_graph(
     }
 
     drop(_parse_span);
+
+    refresh_owner_graphs(&mut store, repo_root, &owners)
+        .context("cannot refresh package/workspace nodes")?;
 
     if !resolved_paths.is_empty()
         && let Err(err) = reconcile_call_targets(&mut store, repo_root, &resolved_paths)
@@ -195,4 +208,36 @@ pub fn build_graph(
 #[allow(dead_code)]
 pub fn resolve_repo_root(start_dir: &str) -> Result<camino::Utf8PathBuf> {
     find_repo_root(Utf8Path::new(start_dir)).context("cannot find git repo root")
+}
+
+fn annotate_parsed_file_owner(parsed_file: &mut ParsedFile, owner: Option<&PackageOwner>) {
+    let Some(owner) = owner else {
+        return;
+    };
+    for node in &mut parsed_file.nodes {
+        let mut extra = node.extra_json.as_object().cloned().unwrap_or_default();
+        extra.insert(
+            "owner_id".to_owned(),
+            serde_json::Value::String(owner.owner_id.clone()),
+        );
+        extra.insert(
+            "owner_kind".to_owned(),
+            serde_json::Value::String(owner.kind.as_str().to_owned()),
+        );
+        extra.insert(
+            "owner_root".to_owned(),
+            serde_json::Value::String(owner.root.clone()),
+        );
+        extra.insert(
+            "owner_manifest_path".to_owned(),
+            serde_json::Value::String(owner.manifest_path.clone()),
+        );
+        if let Some(package_name) = &owner.package_name {
+            extra.insert(
+                "owner_name".to_owned(),
+                serde_json::Value::String(package_name.clone()),
+            );
+        }
+        node.extra_json = serde_json::Value::Object(extra);
+    }
 }

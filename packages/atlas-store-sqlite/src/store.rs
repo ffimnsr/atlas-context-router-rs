@@ -2,7 +2,8 @@ use std::collections::HashMap;
 
 use atlas_core::{
     AtlasError, Community, CommunityNode, EdgeKind, Flow, FlowMembership, GraphStats, ImpactResult,
-    Node, NodeId, NodeKind, ParsedFile, Result, ScoredNode, SearchQuery,
+    Node, NodeId, NodeKind, PackageOwner, PackageOwnerKind, ParsedFile, Result, ScoredNode,
+    SearchQuery,
 };
 use rusqlite::{Connection, OpenFlags, Row, params};
 use tracing::{debug, info};
@@ -639,6 +640,104 @@ impl Store {
         Ok(result)
     }
 
+    /// Returns the stored owner metadata for `path`, if present.
+    pub fn file_owner(&self, path: &str) -> Result<Option<PackageOwner>> {
+        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
+        use rusqlite::OptionalExtension;
+        let result = self
+            .conn
+            .query_row(
+                "SELECT owner_id, owner_kind, owner_root, owner_manifest_path, owner_name
+                 FROM files WHERE path = ?1",
+                [path],
+                |row| {
+                    let owner_id: Option<String> = row.get(0)?;
+                    let owner_kind: Option<String> = row.get(1)?;
+                    let owner_root: Option<String> = row.get(2)?;
+                    let owner_manifest_path: Option<String> = row.get(3)?;
+                    let owner_name: Option<String> = row.get(4)?;
+                    Ok(
+                        match (owner_id, owner_kind, owner_root, owner_manifest_path) {
+                            (Some(owner_id), Some(owner_kind), Some(root), Some(manifest_path)) => {
+                                let kind = match owner_kind.as_str() {
+                                    "cargo" => PackageOwnerKind::Cargo,
+                                    "npm" => PackageOwnerKind::Npm,
+                                    "go" => PackageOwnerKind::Go,
+                                    _ => return Ok(None),
+                                };
+                                Some(PackageOwner {
+                                    owner_id,
+                                    kind,
+                                    root,
+                                    manifest_path,
+                                    package_name: owner_name,
+                                })
+                            }
+                            _ => None,
+                        },
+                    )
+                },
+            )
+            .optional()
+            .map_err(db_err)?
+            .flatten();
+        Ok(result)
+    }
+
+    pub fn file_owner_id(&self, path: &str) -> Result<Option<String>> {
+        Ok(self.file_owner(path)?.map(|owner| owner.owner_id))
+    }
+
+    pub fn file_paths_with_prefix(&self, prefix: &str) -> Result<Vec<String>> {
+        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
+        let like = format!("{prefix}%");
+        let mut stmt = self
+            .conn
+            .prepare("SELECT path FROM files WHERE path LIKE ?1 ORDER BY path")
+            .map_err(db_err)?;
+        let paths = stmt
+            .query_map([like], |row| row.get::<_, String>(0))
+            .map_err(db_err)?
+            .filter_map(|row| row.ok())
+            .collect();
+        Ok(paths)
+    }
+
+    /// Upsert owner metadata for a stored file row.
+    pub fn upsert_file_owner(&mut self, path: &str, owner: Option<&PackageOwner>) -> Result<()> {
+        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
+        let (owner_id, owner_kind, owner_root, owner_manifest_path, owner_name) = match owner {
+            Some(owner) => (
+                Some(owner.owner_id.as_str()),
+                Some(owner.kind.as_str()),
+                Some(owner.root.as_str()),
+                Some(owner.manifest_path.as_str()),
+                owner.package_name.as_deref(),
+            ),
+            None => (None, None, None, None, None),
+        };
+        self.conn
+            .execute(
+                "UPDATE files
+                 SET owner_id = ?2,
+                     owner_kind = ?3,
+                     owner_root = ?4,
+                     owner_manifest_path = ?5,
+                     owner_name = ?6
+                 WHERE path = ?1",
+                params![
+                    path,
+                    owner_id,
+                    owner_kind,
+                    owner_root,
+                    owner_manifest_path,
+                    owner_name,
+                ],
+            )
+            .map_err(db_err)?;
+        Ok(())
+    }
+
     /// Rename a file in the graph, preserving every node's primary-key `id`.
     ///
     /// Updates `file_path` on all nodes and edges owned by `old_path`, moves
@@ -712,8 +811,12 @@ impl Store {
         // Move the files row (path is the PK so we delete + re-insert).
         self.conn
             .execute(
-                "INSERT OR REPLACE INTO files (path, language, hash, size, indexed_at)
-                 SELECT ?1, language, hash, size, datetime('now') FROM files WHERE path = ?2",
+                "INSERT OR REPLACE INTO files
+                     (path, language, hash, size, indexed_at, owner_id, owner_kind,
+                      owner_root, owner_manifest_path, owner_name)
+                 SELECT ?1, language, hash, size, datetime('now'), owner_id, owner_kind,
+                        owner_root, owner_manifest_path, owner_name
+                 FROM files WHERE path = ?2",
                 [new_path, old_path],
             )
             .map_err(db_err)?;
@@ -2096,8 +2199,15 @@ fn do_replace_file_graph(
 
     // Step 5: upsert the file row.
     conn.execute(
-        "INSERT OR REPLACE INTO files (path, language, hash, size, indexed_at)
-         VALUES (?1, ?2, ?3, ?4, datetime('now'))",
+        "INSERT OR REPLACE INTO files
+             (path, language, hash, size, indexed_at, owner_id, owner_kind,
+              owner_root, owner_manifest_path, owner_name)
+         VALUES (?1, ?2, ?3, ?4, datetime('now'),
+                 (SELECT owner_id FROM files WHERE path = ?1),
+                 (SELECT owner_kind FROM files WHERE path = ?1),
+                 (SELECT owner_root FROM files WHERE path = ?1),
+                 (SELECT owner_manifest_path FROM files WHERE path = ?1),
+                 (SELECT owner_name FROM files WHERE path = ?1))",
         params![path, language, hash, size],
     )
     .map_err(db_err)?;
@@ -2672,7 +2782,18 @@ mod tests {
             ("metadata".to_string(), cols(&["key", "value"])),
             (
                 "files".to_string(),
-                cols(&["path", "language", "hash", "size", "indexed_at"]),
+                cols(&[
+                    "path",
+                    "language",
+                    "hash",
+                    "size",
+                    "indexed_at",
+                    "owner_id",
+                    "owner_kind",
+                    "owner_root",
+                    "owner_manifest_path",
+                    "owner_name",
+                ]),
             ),
             (
                 "nodes".to_string(),
@@ -2776,6 +2897,7 @@ mod tests {
             "idx_chunks_has_embedding".to_string(),
             "idx_chunks_node_qn".to_string(),
             "idx_communities_algorithm".to_string(),
+            "idx_files_owner_id".to_string(),
             "idx_communities_parent".to_string(),
             "idx_community_nodes_node_qn".to_string(),
             "idx_edges_file_path".to_string(),
@@ -4329,6 +4451,100 @@ mod tests {
     }
 
     // -------------------------------------------------------------------------
+    // file_owner / upsert_file_owner
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn file_owner_round_trips_cargo_owner() {
+        let mut store = open_in_memory();
+        let node = make_node(
+            NodeKind::Function,
+            "foo",
+            "crates/foo/src/lib.rs::fn::foo",
+            "crates/foo/src/lib.rs",
+            "rust",
+        );
+        store
+            .replace_file_graph(
+                "crates/foo/src/lib.rs",
+                "abc",
+                Some("rust"),
+                None,
+                &[node],
+                &[],
+            )
+            .unwrap();
+
+        let owner = PackageOwner {
+            owner_id: "cargo:crates/foo/Cargo.toml".to_owned(),
+            kind: PackageOwnerKind::Cargo,
+            root: "crates/foo".to_owned(),
+            manifest_path: "crates/foo/Cargo.toml".to_owned(),
+            package_name: Some("foo".to_owned()),
+        };
+        store
+            .upsert_file_owner("crates/foo/src/lib.rs", Some(&owner))
+            .unwrap();
+
+        let stored = store
+            .file_owner("crates/foo/src/lib.rs")
+            .unwrap()
+            .expect("owner");
+        assert_eq!(stored.owner_id, "cargo:crates/foo/Cargo.toml");
+        assert_eq!(stored.kind, PackageOwnerKind::Cargo);
+        assert_eq!(stored.root, "crates/foo");
+        assert_eq!(stored.manifest_path, "crates/foo/Cargo.toml");
+        assert_eq!(stored.package_name.as_deref(), Some("foo"));
+    }
+
+    #[test]
+    fn file_owner_returns_none_when_not_set() {
+        let mut store = open_in_memory();
+        let node = make_node(
+            NodeKind::Function,
+            "bar",
+            "scripts/run.py::fn::bar",
+            "scripts/run.py",
+            "python",
+        );
+        store
+            .replace_file_graph("scripts/run.py", "ff", Some("python"), None, &[node], &[])
+            .unwrap();
+        // No upsert → owner should be None.
+        assert_eq!(store.file_owner("scripts/run.py").unwrap(), None);
+    }
+
+    #[test]
+    fn file_owner_id_returns_id_string() {
+        let mut store = open_in_memory();
+        let node = make_node(
+            NodeKind::Function,
+            "go_fn",
+            "lib/core/core.go::fn::go_fn",
+            "lib/core/core.go",
+            "go",
+        );
+        store
+            .replace_file_graph("lib/core/core.go", "g1", Some("go"), None, &[node], &[])
+            .unwrap();
+
+        let owner = PackageOwner {
+            owner_id: "go:lib/core/go.mod".to_owned(),
+            kind: PackageOwnerKind::Go,
+            root: "lib/core".to_owned(),
+            manifest_path: "lib/core/go.mod".to_owned(),
+            package_name: Some("example.com/core".to_owned()),
+        };
+        store
+            .upsert_file_owner("lib/core/core.go", Some(&owner))
+            .unwrap();
+
+        assert_eq!(
+            store.file_owner_id("lib/core/core.go").unwrap().as_deref(),
+            Some("go:lib/core/go.mod")
+        );
+    }
+
     // file_hash
     // -------------------------------------------------------------------------
 
