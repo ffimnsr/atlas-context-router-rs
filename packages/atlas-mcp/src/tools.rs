@@ -15,6 +15,10 @@ use camino::Utf8Path;
 use serde::Serialize;
 
 use crate::context::{compact_node, package_context_result, package_impact};
+use crate::output::{OutputFormat, render_serializable, resolve_output_format};
+
+const DEFAULT_JSON_OUTPUT_DESCRIPTION: &str = "Response body format: 'json' (default) or 'toon'";
+const DEFAULT_TOON_OUTPUT_DESCRIPTION: &str = "Response body format: 'toon' (default) or 'json'";
 
 // ---------------------------------------------------------------------------
 // Tool schema list
@@ -29,7 +33,9 @@ pub fn tool_list() -> serde_json::Value {
                 "description": "Return node/edge counts and language breakdown for the indexed graph.",
                 "inputSchema": {
                     "type": "object",
-                    "properties": {},
+                    "properties": {
+                        "output_format": { "type": "string", "description": DEFAULT_JSON_OUTPUT_DESCRIPTION }
+                    },
                     "required": []
                 }
             },
@@ -42,7 +48,8 @@ pub fn tool_list() -> serde_json::Value {
                         "text":     { "type": "string",  "description": "Search query text" },
                         "kind":     { "type": "string",  "description": "Filter by node kind (e.g. 'function', 'struct')" },
                         "language": { "type": "string",  "description": "Filter by language (e.g. 'rust', 'python')" },
-                        "limit":    { "type": "integer", "description": "Maximum results to return (default 20)" }
+                        "limit":    { "type": "integer", "description": "Maximum results to return (default 20)" },
+                        "output_format": { "type": "string", "description": DEFAULT_JSON_OUTPUT_DESCRIPTION }
                     },
                     "required": ["text"]
                 }
@@ -55,7 +62,8 @@ pub fn tool_list() -> serde_json::Value {
                     "properties": {
                         "files":     { "type": "array",   "items": { "type": "string" }, "description": "Repo-relative changed file paths" },
                         "max_depth": { "type": "integer", "description": "Traversal depth limit (default 5)" },
-                        "max_nodes": { "type": "integer", "description": "Maximum impacted nodes to return (default 200)" }
+                        "max_nodes": { "type": "integer", "description": "Maximum impacted nodes to return (default 200)" },
+                        "output_format": { "type": "string", "description": DEFAULT_TOON_OUTPUT_DESCRIPTION }
                     },
                     "required": ["files"]
                 }
@@ -68,7 +76,8 @@ pub fn tool_list() -> serde_json::Value {
                     "properties": {
                         "files": { "type": "array", "items": { "type": "string" }, "description": "Repo-relative changed file paths" },
                         "max_depth": { "type": "integer", "description": "Traversal depth limit (default 3)" },
-                        "max_nodes": { "type": "integer", "description": "Maximum impacted nodes to consider (default 200)" }
+                        "max_nodes": { "type": "integer", "description": "Maximum impacted nodes to consider (default 200)" },
+                        "output_format": { "type": "string", "description": DEFAULT_TOON_OUTPUT_DESCRIPTION }
                     },
                     "required": ["files"]
                 }
@@ -80,7 +89,8 @@ pub fn tool_list() -> serde_json::Value {
                     "type": "object",
                     "properties": {
                         "base":   { "type": "string",  "description": "Base ref (e.g. 'origin/main'). Omit to diff working tree." },
-                        "staged": { "type": "boolean", "description": "Diff staged changes only (default false)" }
+                        "staged": { "type": "boolean", "description": "Diff staged changes only (default false)" },
+                        "output_format": { "type": "string", "description": DEFAULT_JSON_OUTPUT_DESCRIPTION }
                     },
                     "required": []
                 }
@@ -94,7 +104,8 @@ pub fn tool_list() -> serde_json::Value {
                         "mode":   { "type": "string",  "description": "'build' (full scan, default) or 'update' (incremental)" },
                         "base":   { "type": "string",  "description": "For update: base git ref (e.g. 'origin/main')" },
                         "staged": { "type": "boolean", "description": "For update: diff staged changes only" },
-                        "files":  { "type": "array", "items": { "type": "string" }, "description": "For update: explicit list of repo-relative file paths to re-index" }
+                        "files":  { "type": "array", "items": { "type": "string" }, "description": "For update: explicit list of repo-relative file paths to re-index" },
+                        "output_format": { "type": "string", "description": DEFAULT_JSON_OUTPUT_DESCRIPTION }
                     },
                     "required": []
                 }
@@ -107,7 +118,8 @@ pub fn tool_list() -> serde_json::Value {
                     "properties": {
                         "from_qn":   { "type": "string",  "description": "Qualified name of the starting node (e.g. 'src/lib.rs::fn::my_func')" },
                         "max_depth": { "type": "integer", "description": "Traversal depth limit (default 3)" },
-                        "max_nodes": { "type": "integer", "description": "Maximum nodes to return (default 100)" }
+                        "max_nodes": { "type": "integer", "description": "Maximum nodes to return (default 100)" },
+                        "output_format": { "type": "string", "description": DEFAULT_JSON_OUTPUT_DESCRIPTION }
                     },
                     "required": ["from_qn"]
                 }
@@ -121,7 +133,8 @@ pub fn tool_list() -> serde_json::Value {
                         "base":      { "type": "string",  "description": "Base git ref (e.g. 'origin/main'). Omit to diff working tree." },
                         "staged":    { "type": "boolean", "description": "Diff staged changes only (default false)" },
                         "max_depth": { "type": "integer", "description": "Traversal depth limit (default 2)" },
-                        "max_nodes": { "type": "integer", "description": "Maximum impacted nodes (default 50)" }
+                        "max_nodes": { "type": "integer", "description": "Maximum impacted nodes (default 50)" },
+                        "output_format": { "type": "string", "description": DEFAULT_JSON_OUTPUT_DESCRIPTION }
                     },
                     "required": []
                 }
@@ -136,7 +149,8 @@ pub fn tool_list() -> serde_json::Value {
                         "base":      { "type": "string",  "description": "Base git ref (e.g. 'origin/main'). Infers changed files from git diff when files not provided." },
                         "staged":    { "type": "boolean", "description": "Diff staged changes only (default false). Used when inferring files from git." },
                         "max_depth": { "type": "integer", "description": "Traversal depth limit for impact (default 5)" },
-                        "max_nodes": { "type": "integer", "description": "Maximum impacted nodes (default 200)" }
+                        "max_nodes": { "type": "integer", "description": "Maximum impacted nodes (default 200)" },
+                        "output_format": { "type": "string", "description": DEFAULT_TOON_OUTPUT_DESCRIPTION }
                     },
                     "required": []
                 }
@@ -153,7 +167,8 @@ pub fn tool_list() -> serde_json::Value {
                         "intent":    { "type": "string",  "description": "Override intent: symbol, file, review, impact, usage_lookup, refactor_safety, dead_code_check, rename_preview, dependency_removal. Inferred when omitted." },
                         "max_nodes": { "type": "integer", "description": "Maximum nodes to include (default 100)" },
                         "max_edges": { "type": "integer", "description": "Maximum edges to include (default 100)" },
-                        "max_depth": { "type": "integer", "description": "Traversal depth in graph hops (default 2)" }
+                        "max_depth": { "type": "integer", "description": "Traversal depth in graph hops (default 2)" },
+                        "output_format": { "type": "string", "description": DEFAULT_TOON_OUTPUT_DESCRIPTION }
                     },
                     "required": []
                 }
@@ -173,18 +188,30 @@ pub fn call(
     repo_root: &str,
     db_path: &str,
 ) -> Result<serde_json::Value> {
+    let output_format = resolve_output_format(args, default_output_format_for_tool(name))?;
     match name {
-        "list_graph_stats" => tool_list_graph_stats(db_path),
-        "query_graph" => tool_query_graph(args, db_path),
-        "get_impact_radius" => tool_get_impact_radius(args, db_path),
-        "get_review_context" => tool_get_review_context(args, db_path),
-        "detect_changes" => tool_detect_changes(args, repo_root, db_path),
-        "build_or_update_graph" => tool_build_or_update_graph(args, repo_root, db_path),
-        "traverse_graph" => tool_traverse_graph(args, db_path),
-        "get_minimal_context" => tool_get_minimal_context(args, repo_root, db_path),
-        "explain_change" => tool_explain_change(args, repo_root, db_path),
-        "get_context" => tool_get_context(args, db_path),
+        "list_graph_stats" => tool_list_graph_stats(db_path, output_format),
+        "query_graph" => tool_query_graph(args, db_path, output_format),
+        "get_impact_radius" => tool_get_impact_radius(args, db_path, output_format),
+        "get_review_context" => tool_get_review_context(args, db_path, output_format),
+        "detect_changes" => tool_detect_changes(args, repo_root, db_path, output_format),
+        "build_or_update_graph" => {
+            tool_build_or_update_graph(args, repo_root, db_path, output_format)
+        }
+        "traverse_graph" => tool_traverse_graph(args, db_path, output_format),
+        "get_minimal_context" => tool_get_minimal_context(args, repo_root, db_path, output_format),
+        "explain_change" => tool_explain_change(args, repo_root, db_path, output_format),
+        "get_context" => tool_get_context(args, db_path, output_format),
         other => Err(anyhow::anyhow!("unknown tool: {other}")),
+    }
+}
+
+fn default_output_format_for_tool(name: &str) -> OutputFormat {
+    match name {
+        "get_impact_radius" | "get_review_context" | "explain_change" | "get_context" => {
+            OutputFormat::Toon
+        }
+        _ => OutputFormat::Json,
     }
 }
 
@@ -192,13 +219,17 @@ pub fn call(
 // Individual tool implementations
 // ---------------------------------------------------------------------------
 
-fn tool_list_graph_stats(db_path: &str) -> Result<serde_json::Value> {
+fn tool_list_graph_stats(db_path: &str, output_format: OutputFormat) -> Result<serde_json::Value> {
     let store = open_store(db_path)?;
     let stats = store.stats().context("stats query failed")?;
-    tool_result(serde_json::to_string_pretty(&stats)?)
+    tool_result_value(&stats, output_format)
 }
 
-fn tool_query_graph(args: Option<&serde_json::Value>, db_path: &str) -> Result<serde_json::Value> {
+fn tool_query_graph(
+    args: Option<&serde_json::Value>,
+    db_path: &str,
+    output_format: OutputFormat,
+) -> Result<serde_json::Value> {
     let text = str_arg(args, "text")?
         .ok_or_else(|| anyhow::anyhow!("missing required argument: text"))?
         .to_owned();
@@ -233,12 +264,13 @@ fn tool_query_graph(args: Option<&serde_json::Value>, db_path: &str) -> Result<s
         })
         .collect();
 
-    tool_result(serde_json::to_string_pretty(&compact)?)
+    tool_result_value(&compact, output_format)
 }
 
 fn tool_get_impact_radius(
     args: Option<&serde_json::Value>,
     db_path: &str,
+    output_format: OutputFormat,
 ) -> Result<serde_json::Value> {
     let files = string_array_arg(args, "files")?;
     if files.is_empty() {
@@ -254,12 +286,13 @@ fn tool_get_impact_radius(
         .context("impact_radius query failed")?;
 
     let packaged = package_impact(&result, &files);
-    tool_result(serde_json::to_string_pretty(&packaged)?)
+    tool_result_value(&packaged, output_format)
 }
 
 fn tool_get_review_context(
     args: Option<&serde_json::Value>,
     db_path: &str,
+    output_format: OutputFormat,
 ) -> Result<serde_json::Value> {
     let files = string_array_arg(args, "files")?;
     if files.is_empty() {
@@ -279,13 +312,14 @@ fn tool_get_review_context(
     };
     let result = engine.build(&request).context("context engine failed")?;
     let packaged = package_context_result(&result);
-    tool_result(serde_json::to_string_pretty(&packaged)?)
+    tool_result_value(&packaged, output_format)
 }
 
 fn tool_detect_changes(
     args: Option<&serde_json::Value>,
     repo_root: &str,
     db_path: &str,
+    output_format: OutputFormat,
 ) -> Result<serde_json::Value> {
     let base = str_arg(args, "base")?.map(str::to_owned);
     let staged = bool_arg(args, "staged").unwrap_or(false);
@@ -339,13 +373,14 @@ fn tool_detect_changes(
         })
         .collect();
 
-    tool_result(serde_json::to_string_pretty(&entries)?)
+    tool_result_value(&entries, output_format)
 }
 
 fn tool_build_or_update_graph(
     args: Option<&serde_json::Value>,
     repo_root: &str,
     db_path: &str,
+    output_format: OutputFormat,
 ) -> Result<serde_json::Value> {
     let mode = str_arg(args, "mode")?.unwrap_or("build");
     let repo_root_path =
@@ -378,17 +413,20 @@ fn tool_build_or_update_graph(
                 target,
             },
         )?;
-        tool_result(serde_json::to_string_pretty(&serde_json::json!({
-            "mode": "update",
-            "deleted": summary.deleted,
-            "renamed": summary.renamed,
-            "parsed": summary.parsed,
-            "skipped_unsupported": summary.skipped_unsupported,
-            "parse_errors": summary.parse_errors,
-            "nodes_updated": summary.nodes_updated,
-            "edges_updated": summary.edges_updated,
-            "elapsed_ms": summary.elapsed_ms,
-        }))?)
+        tool_result_value(
+            &serde_json::json!({
+                "mode": "update",
+                "deleted": summary.deleted,
+                "renamed": summary.renamed,
+                "parsed": summary.parsed,
+                "skipped_unsupported": summary.skipped_unsupported,
+                "parse_errors": summary.parse_errors,
+                "nodes_updated": summary.nodes_updated,
+                "edges_updated": summary.edges_updated,
+                "elapsed_ms": summary.elapsed_ms,
+            }),
+            output_format,
+        )
     } else {
         // Default: full build
         let config = atlas_engine::Config::load(&atlas_engine::paths::atlas_dir(repo_root))
@@ -402,23 +440,27 @@ fn tool_build_or_update_graph(
                 batch_size: config.parse_batch_size(),
             },
         )?;
-        tool_result(serde_json::to_string_pretty(&serde_json::json!({
-            "mode": "build",
-            "scanned": summary.scanned,
-            "skipped_unsupported": summary.skipped_unsupported,
-            "skipped_unchanged": summary.skipped_unchanged,
-            "parsed": summary.parsed,
-            "parse_errors": summary.parse_errors,
-            "nodes_inserted": summary.nodes_inserted,
-            "edges_inserted": summary.edges_inserted,
-            "elapsed_ms": summary.elapsed_ms,
-        }))?)
+        tool_result_value(
+            &serde_json::json!({
+                "mode": "build",
+                "scanned": summary.scanned,
+                "skipped_unsupported": summary.skipped_unsupported,
+                "skipped_unchanged": summary.skipped_unchanged,
+                "parsed": summary.parsed,
+                "parse_errors": summary.parse_errors,
+                "nodes_inserted": summary.nodes_inserted,
+                "edges_inserted": summary.edges_inserted,
+                "elapsed_ms": summary.elapsed_ms,
+            }),
+            output_format,
+        )
     }
 }
 
 fn tool_traverse_graph(
     args: Option<&serde_json::Value>,
     db_path: &str,
+    output_format: OutputFormat,
 ) -> Result<serde_json::Value> {
     let from_qn = str_arg(args, "from_qn")?
         .ok_or_else(|| anyhow::anyhow!("missing required argument: from_qn"))?
@@ -433,13 +475,14 @@ fn tool_traverse_graph(
 
     let seeds = vec![from_qn];
     let packaged = package_impact(&result, &seeds);
-    tool_result(serde_json::to_string_pretty(&packaged)?)
+    tool_result_value(&packaged, output_format)
 }
 
 fn tool_get_minimal_context(
     args: Option<&serde_json::Value>,
     repo_root: &str,
     db_path: &str,
+    output_format: OutputFormat,
 ) -> Result<serde_json::Value> {
     let base = str_arg(args, "base")?.map(str::to_owned);
     let staged = bool_arg(args, "staged").unwrap_or(false);
@@ -494,13 +537,14 @@ fn tool_get_minimal_context(
         impact: packaged,
     };
 
-    tool_result(serde_json::to_string_pretty(&ctx)?)
+    tool_result_value(&ctx, output_format)
 }
 
 fn tool_explain_change(
     args: Option<&serde_json::Value>,
     repo_root: &str,
     db_path: &str,
+    output_format: OutputFormat,
 ) -> Result<serde_json::Value> {
     let max_depth = u64_arg(args, "max_depth").unwrap_or(5) as u32;
     let max_nodes = u64_arg(args, "max_nodes").unwrap_or(200) as usize;
@@ -529,18 +573,21 @@ fn tool_explain_change(
     }
 
     if files.is_empty() {
-        return tool_result(serde_json::to_string_pretty(&serde_json::json!({
-            "risk_level": "low",
-            "changed_file_count": 0,
-            "changed_symbol_count": 0,
-            "changed_by_kind": { "api_change": 0, "signature_change": 0, "internal_change": 0 },
-            "changed_symbols": [],
-            "impacted_file_count": 0,
-            "impacted_node_count": 0,
-            "boundary_violations": [],
-            "test_impact": { "affected_test_count": 0, "uncovered_symbol_count": 0, "uncovered_symbols": [] },
-            "summary": "No changed files detected."
-        }))?);
+        return tool_result_value(
+            &serde_json::json!({
+                "risk_level": "low",
+                "changed_file_count": 0,
+                "changed_symbol_count": 0,
+                "changed_by_kind": { "api_change": 0, "signature_change": 0, "internal_change": 0 },
+                "changed_symbols": [],
+                "impacted_file_count": 0,
+                "impacted_node_count": 0,
+                "boundary_violations": [],
+                "test_impact": { "affected_test_count": 0, "uncovered_symbol_count": 0, "uncovered_symbols": [] },
+                "summary": "No changed files detected."
+            }),
+            output_format,
+        );
     }
 
     let store = open_store(db_path)?;
@@ -699,7 +746,7 @@ fn tool_explain_change(
         summary: &summary,
     };
 
-    tool_result(serde_json::to_string_pretty(&result)?)
+    tool_result_value(&result, output_format)
 }
 
 // ---------------------------------------------------------------------------
@@ -721,7 +768,11 @@ fn parse_mcp_intent(s: &str) -> atlas_core::model::ContextIntent {
     }
 }
 
-fn tool_get_context(args: Option<&serde_json::Value>, db_path: &str) -> Result<serde_json::Value> {
+fn tool_get_context(
+    args: Option<&serde_json::Value>,
+    db_path: &str,
+    output_format: OutputFormat,
+) -> Result<serde_json::Value> {
     use atlas_core::model::{ContextIntent, ContextRequest, ContextTarget};
 
     let query = str_arg(args, "query")?.map(str::to_owned);
@@ -778,10 +829,8 @@ fn tool_get_context(args: Option<&serde_json::Value>, db_path: &str) -> Result<s
     let engine = ContextEngine::new(&store);
     let result = engine.build(&request).context("context engine failed")?;
     let packaged = package_context_result(&result);
-    tool_result(serde_json::to_string_pretty(&packaged)?)
+    tool_result_value(&packaged, output_format)
 }
-
-
 
 fn str_arg<'a>(args: Option<&'a serde_json::Value>, key: &str) -> Result<Option<&'a str>> {
     Ok(args.and_then(|a| a.get(key)).and_then(|v| v.as_str()))
@@ -815,19 +864,149 @@ fn open_store(db_path: &str) -> Result<Store> {
     Store::open(db_path).with_context(|| format!("cannot open database at {db_path}"))
 }
 
-/// Wrap text in an MCP tool-result content envelope.
-fn tool_result(text: String) -> Result<serde_json::Value> {
-    Ok(serde_json::json!({
-        "content": [{ "type": "text", "text": text }]
-    }))
+/// Wrap structured output in an MCP tool-result content envelope.
+fn tool_result_value<T: Serialize>(
+    value: &T,
+    output_format: OutputFormat,
+) -> Result<serde_json::Value> {
+    let rendered = render_serializable(value, output_format)?;
+    let mut response = serde_json::json!({
+        "content": [{
+            "type": "text",
+            "text": rendered.text,
+            "mimeType": rendered.actual_format.mime_type(),
+        }],
+        "atlas_output_format": rendered.actual_format.as_str(),
+        "atlas_requested_output_format": rendered.requested_format.as_str(),
+    });
+
+    if let Some(reason) = rendered.fallback_reason {
+        response["atlas_fallback_reason"] = serde_json::Value::String(reason);
+    }
+
+    Ok(response)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    use atlas_core::EdgeKind;
     use atlas_core::kinds::NodeKind;
-    use atlas_core::model::{Node, NodeId};
+    use atlas_core::model::{Edge, Node, NodeId};
+    use tempfile::TempDir;
+
+    struct McpFixture {
+        _dir: TempDir,
+        db_path: String,
+    }
+
+    fn make_node(kind: NodeKind, name: &str, qualified_name: &str, file_path: &str) -> Node {
+        Node {
+            id: NodeId::UNSET,
+            kind,
+            name: name.to_owned(),
+            qualified_name: qualified_name.to_owned(),
+            file_path: file_path.to_owned(),
+            line_start: 1,
+            line_end: 5,
+            language: "rust".to_owned(),
+            parent_name: None,
+            params: Some("()".to_owned()),
+            return_type: None,
+            modifiers: Some("pub".to_owned()),
+            is_test: kind == NodeKind::Test,
+            file_hash: format!("hash:{file_path}"),
+            extra_json: serde_json::json!({}),
+        }
+    }
+
+    fn make_edge(kind: EdgeKind, source_qn: &str, target_qn: &str, file_path: &str) -> Edge {
+        Edge {
+            id: 0,
+            kind,
+            source_qn: source_qn.to_owned(),
+            target_qn: target_qn.to_owned(),
+            file_path: file_path.to_owned(),
+            line: Some(1),
+            confidence: 1.0,
+            confidence_tier: Some("high".to_owned()),
+            extra_json: serde_json::json!({}),
+        }
+    }
+
+    fn setup_mcp_fixture() -> McpFixture {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db_path = dir.path().join("atlas.db");
+        let db_path = db_path.to_string_lossy().to_string();
+
+        let mut store = Store::open(&db_path).expect("open store");
+
+        let compute = make_node(
+            NodeKind::Function,
+            "compute",
+            "src/service.rs::fn::compute",
+            "src/service.rs",
+        );
+        store
+            .replace_file_graph(
+                "src/service.rs",
+                "hash:src/service.rs",
+                Some("rust"),
+                Some(5),
+                std::slice::from_ref(&compute),
+                &[],
+            )
+            .expect("replace service graph");
+
+        let handle = make_node(
+            NodeKind::Function,
+            "handle_request",
+            "src/api.rs::fn::handle_request",
+            "src/api.rs",
+        );
+        let handle_calls_compute = make_edge(
+            EdgeKind::Calls,
+            "src/api.rs::fn::handle_request",
+            "src/service.rs::fn::compute",
+            "src/api.rs",
+        );
+        store
+            .replace_file_graph(
+                "src/api.rs",
+                "hash:src/api.rs",
+                Some("rust"),
+                Some(5),
+                std::slice::from_ref(&handle),
+                &[handle_calls_compute],
+            )
+            .expect("replace api graph");
+
+        let compute_test = make_node(
+            NodeKind::Test,
+            "compute_test",
+            "tests/service_test.rs::fn::compute_test",
+            "tests/service_test.rs",
+        );
+        let test_targets_compute = make_edge(
+            EdgeKind::Tests,
+            "tests/service_test.rs::fn::compute_test",
+            "src/service.rs::fn::compute",
+            "tests/service_test.rs",
+        );
+        store
+            .replace_file_graph(
+                "tests/service_test.rs",
+                "hash:tests/service_test.rs",
+                Some("rust"),
+                Some(5),
+                std::slice::from_ref(&compute_test),
+                &[test_targets_compute],
+            )
+            .expect("replace test graph");
+
+        McpFixture { _dir: dir, db_path }
+    }
 
     fn unwrap_tool_text(resp: serde_json::Value) -> String {
         resp.get("content")
@@ -837,6 +1016,12 @@ mod tests {
             .and_then(|t| t.as_str())
             .expect("tool response content[0].text")
             .to_owned()
+    }
+
+    fn unwrap_tool_format(resp: &serde_json::Value) -> &str {
+        resp.get("atlas_output_format")
+            .and_then(|value| value.as_str())
+            .expect("tool response atlas_output_format")
     }
 
     #[test]
@@ -870,8 +1055,16 @@ mod tests {
         let _ = Store::open(&db_path).expect("open store");
 
         // No query/file/files → expect error.
-        let result = call("get_context", Some(&serde_json::json!({})), "/ignored", &db_path);
-        assert!(result.is_err(), "empty get_context args must return an error");
+        let result = call(
+            "get_context",
+            Some(&serde_json::json!({})),
+            "/ignored",
+            &db_path,
+        );
+        assert!(
+            result.is_err(),
+            "empty get_context args must return an error"
+        );
     }
 
     #[test]
@@ -902,7 +1095,7 @@ mod tests {
             .replace_file_graph("src/math.rs", "h1", Some("rust"), Some(5), &[node], &[])
             .expect("replace_file_graph");
 
-        let args = serde_json::json!({ "query": "compute" });
+        let args = serde_json::json!({ "query": "compute", "output_format": "json" });
         let resp = call("get_context", Some(&args), "/ignored", &db_path).expect("call");
         let text = unwrap_tool_text(resp);
         let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
@@ -910,8 +1103,14 @@ mod tests {
         // Compact PackagedContextResult schema.
         assert!(v.get("intent").is_some(), "result must have intent");
         assert!(v.get("node_count").is_some(), "result must have node_count");
-        assert!(v.get("nodes").and_then(|n| n.as_array()).is_some(), "nodes must be array");
-        assert!(v.get("truncated").is_some(), "result must have truncated flag");
+        assert!(
+            v.get("nodes").and_then(|n| n.as_array()).is_some(),
+            "nodes must be array"
+        );
+        assert!(
+            v.get("truncated").is_some(),
+            "result must have truncated flag"
+        );
     }
 
     #[test]
@@ -921,7 +1120,7 @@ mod tests {
         let db_path = db_path.to_string_lossy().to_string();
         let _ = Store::open(&db_path).expect("open store");
 
-        let args = serde_json::json!({ "files": ["src/main.rs"] });
+        let args = serde_json::json!({ "files": ["src/main.rs"], "output_format": "json" });
         let resp = call("get_context", Some(&args), "/ignored", &db_path).expect("call");
         let text = unwrap_tool_text(resp);
         let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
@@ -940,7 +1139,7 @@ mod tests {
         let db_path = db_path.to_string_lossy().to_string();
         let _ = Store::open(&db_path).expect("open store");
 
-        let args = serde_json::json!({ "query": "nonexistent_xyz_unknown_symbol" });
+        let args = serde_json::json!({ "query": "nonexistent_xyz_unknown_symbol", "output_format": "json" });
         let resp = call("get_context", Some(&args), "/ignored", &db_path).expect("call");
         let text = unwrap_tool_text(resp);
         let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
@@ -966,7 +1165,10 @@ mod tests {
         let list = tool_list();
         let tools = list.get("tools").and_then(|t| t.as_array()).unwrap();
         for tool in tools {
-            let name = tool.get("name").and_then(|n| n.as_str()).unwrap_or("<missing>");
+            let name = tool
+                .get("name")
+                .and_then(|n| n.as_str())
+                .unwrap_or("<missing>");
             assert!(
                 tool.get("description").is_some(),
                 "tool {name} must have description"
@@ -978,6 +1180,189 @@ mod tests {
         }
     }
 
+    #[test]
+    fn tool_list_documents_output_format() {
+        let list = tool_list();
+        let tools = list
+            .get("tools")
+            .and_then(|value| value.as_array())
+            .unwrap();
+
+        for tool in tools {
+            let props = tool
+                .pointer("/inputSchema/properties")
+                .and_then(|value| value.as_object())
+                .expect("inputSchema properties");
+            assert!(
+                props.contains_key("output_format"),
+                "tool must document output_format"
+            );
+        }
+    }
+
+    #[test]
+    fn tool_list_marks_context_heavy_tools_as_toon_default() {
+        let list = tool_list();
+        let tools = list
+            .get("tools")
+            .and_then(|value| value.as_array())
+            .expect("tools array");
+
+        for name in [
+            "get_impact_radius",
+            "get_review_context",
+            "explain_change",
+            "get_context",
+        ] {
+            let tool = tools
+                .iter()
+                .find(|tool| tool.get("name") == Some(&serde_json::Value::String(name.to_owned())))
+                .expect("tool entry");
+            let description = tool
+                .pointer("/inputSchema/properties/output_format/description")
+                .and_then(|value| value.as_str())
+                .expect("output_format description");
+            assert_eq!(description, DEFAULT_TOON_OUTPUT_DESCRIPTION);
+        }
+    }
+
+    #[test]
+    fn get_context_defaults_to_toon_output_format() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db_path = dir.path().join("atlas.db");
+        let db_path = db_path.to_string_lossy().to_string();
+
+        let mut store = Store::open(&db_path).expect("open store");
+        let node = Node {
+            id: NodeId::UNSET,
+            kind: NodeKind::Function,
+            name: "compute".to_owned(),
+            qualified_name: "src/math.rs::fn::compute".to_owned(),
+            file_path: "src/math.rs".to_owned(),
+            line_start: 1,
+            line_end: 5,
+            language: "rust".to_owned(),
+            parent_name: None,
+            params: Some("(x: i32) -> i32".to_owned()),
+            return_type: Some("i32".to_owned()),
+            modifiers: Some("pub".to_owned()),
+            is_test: false,
+            file_hash: "h1".to_owned(),
+            extra_json: serde_json::json!({}),
+        };
+        store
+            .replace_file_graph("src/math.rs", "h1", Some("rust"), Some(5), &[node], &[])
+            .expect("replace_file_graph");
+
+        let args = serde_json::json!({ "query": "compute" });
+        let resp = call("get_context", Some(&args), "/ignored", &db_path).expect("call");
+        let text = unwrap_tool_text(resp.clone());
+
+        assert_eq!(unwrap_tool_format(&resp), "toon");
+        assert!(text.contains("intent: symbol"));
+    }
+
+    #[test]
+    fn explicit_json_override_beats_toon_default() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db_path = dir.path().join("atlas.db");
+        let db_path = db_path.to_string_lossy().to_string();
+
+        let mut store = Store::open(&db_path).expect("open store");
+        let node = Node {
+            id: NodeId::UNSET,
+            kind: NodeKind::Function,
+            name: "compute".to_owned(),
+            qualified_name: "src/math.rs::fn::compute".to_owned(),
+            file_path: "src/math.rs".to_owned(),
+            line_start: 1,
+            line_end: 5,
+            language: "rust".to_owned(),
+            parent_name: None,
+            params: Some("(x: i32) -> i32".to_owned()),
+            return_type: Some("i32".to_owned()),
+            modifiers: Some("pub".to_owned()),
+            is_test: false,
+            file_hash: "h1".to_owned(),
+            extra_json: serde_json::json!({}),
+        };
+        store
+            .replace_file_graph("src/math.rs", "h1", Some("rust"), Some(5), &[node], &[])
+            .expect("replace_file_graph");
+
+        let args = serde_json::json!({ "query": "compute", "output_format": "json" });
+        let resp = call("get_context", Some(&args), "/ignored", &db_path).expect("call");
+        let text = unwrap_tool_text(resp.clone());
+
+        assert_eq!(unwrap_tool_format(&resp), "json");
+        assert!(serde_json::from_str::<serde_json::Value>(&text).is_ok());
+    }
+
+    #[test]
+    fn get_context_supports_toon_output_format() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db_path = dir.path().join("atlas.db");
+        let db_path = db_path.to_string_lossy().to_string();
+
+        let mut store = Store::open(&db_path).expect("open store");
+        let node = Node {
+            id: NodeId::UNSET,
+            kind: NodeKind::Function,
+            name: "compute".to_owned(),
+            qualified_name: "src/math.rs::fn::compute".to_owned(),
+            file_path: "src/math.rs".to_owned(),
+            line_start: 1,
+            line_end: 5,
+            language: "rust".to_owned(),
+            parent_name: None,
+            params: Some("(x: i32) -> i32".to_owned()),
+            return_type: Some("i32".to_owned()),
+            modifiers: Some("pub".to_owned()),
+            is_test: false,
+            file_hash: "h1".to_owned(),
+            extra_json: serde_json::json!({}),
+        };
+        store
+            .replace_file_graph("src/math.rs", "h1", Some("rust"), Some(5), &[node], &[])
+            .expect("replace_file_graph");
+
+        let args = serde_json::json!({ "query": "compute", "output_format": "toon" });
+        let resp = call("get_context", Some(&args), "/ignored", &db_path).expect("call");
+        let text = unwrap_tool_text(resp.clone());
+
+        assert_eq!(unwrap_tool_format(&resp), "toon");
+        assert!(text.contains("intent: symbol"));
+        assert!(text.contains("node_count: 1"));
+        assert!(!text.contains("\"intent\""));
+    }
+
+    #[test]
+    fn tool_result_value_falls_back_to_json_when_toon_is_empty() {
+        let rendered = super::tool_result_value(&serde_json::json!({}), OutputFormat::Toon)
+            .expect("tool result");
+
+        assert_eq!(unwrap_tool_format(&rendered), "json");
+        assert!(rendered.get("atlas_fallback_reason").is_some());
+    }
+
+    #[test]
+    fn invalid_output_format_returns_error() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db_path = dir.path().join("atlas.db");
+        let db_path = db_path.to_string_lossy().to_string();
+        let _ = Store::open(&db_path).expect("open store");
+
+        let args = serde_json::json!({ "query": "compute", "output_format": "xml" });
+        let result = call("get_context", Some(&args), "/ignored", &db_path);
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("unsupported output_format")
+        );
+    }
 
     #[test]
     fn explain_change_reports_change_kind_counts() {
@@ -1011,6 +1396,7 @@ mod tests {
             "files": ["src/a.rs"],
             "max_depth": 5,
             "max_nodes": 200,
+            "output_format": "json",
         });
         let resp = call("explain_change", Some(&args), "/ignored", &db_path).expect("call");
         let text = unwrap_tool_text(resp);
@@ -1038,5 +1424,76 @@ mod tests {
             v.pointer("/changed_symbols/0/qn").and_then(|s| s.as_str()),
             Some("src/a.rs::fn::foo")
         );
+    }
+
+    #[test]
+    fn mcp_agent_facing_flows_pass_usability_acceptance_gate() {
+        let fixture = setup_mcp_fixture();
+
+        let query_args = serde_json::json!({ "text": "compute" });
+        let query_resp = call(
+            "query_graph",
+            Some(&query_args),
+            "/ignored",
+            &fixture.db_path,
+        )
+        .expect("query_graph call");
+        let query_text = unwrap_tool_text(query_resp.clone());
+        let query_json: serde_json::Value =
+            serde_json::from_str(&query_text).expect("query_graph json response");
+        let query_results = query_json.as_array().expect("query results array");
+        assert_eq!(unwrap_tool_format(&query_resp), "json");
+        assert!(query_resp.get("atlas_fallback_reason").is_none());
+        assert!(
+            !query_results.is_empty(),
+            "query_graph must return ranked results"
+        );
+        assert_eq!(query_results[0]["qn"], "src/service.rs::fn::compute");
+
+        let impact_args = serde_json::json!({ "files": ["src/service.rs"] });
+        let impact_resp = call(
+            "get_impact_radius",
+            Some(&impact_args),
+            "/ignored",
+            &fixture.db_path,
+        )
+        .expect("get_impact_radius call");
+        let impact_text = unwrap_tool_text(impact_resp.clone());
+        assert_eq!(unwrap_tool_format(&impact_resp), "toon");
+        assert!(impact_resp.get("atlas_fallback_reason").is_none());
+        assert!(impact_text.contains("changed_file_count: 1"));
+        assert!(impact_text.contains("src/api.rs::fn::handle_request"));
+        assert!(impact_text.contains("tests/service_test.rs::fn::compute_test"));
+
+        let review_args = serde_json::json!({ "files": ["src/service.rs"] });
+        let review_resp = call(
+            "get_review_context",
+            Some(&review_args),
+            "/ignored",
+            &fixture.db_path,
+        )
+        .expect("get_review_context call");
+        let review_text = unwrap_tool_text(review_resp.clone());
+        assert_eq!(unwrap_tool_format(&review_resp), "toon");
+        assert!(review_resp.get("atlas_fallback_reason").is_none());
+        assert!(review_text.contains("intent: review"));
+        assert!(review_text.contains("file_count:"));
+        assert!(review_text.contains("src/service.rs"));
+        assert!(review_text.contains("src/api.rs"));
+
+        let context_args = serde_json::json!({ "query": "compute" });
+        let context_resp = call(
+            "get_context",
+            Some(&context_args),
+            "/ignored",
+            &fixture.db_path,
+        )
+        .expect("get_context call");
+        let context_text = unwrap_tool_text(context_resp.clone());
+        assert_eq!(unwrap_tool_format(&context_resp), "toon");
+        assert!(context_resp.get("atlas_fallback_reason").is_none());
+        assert!(context_text.contains("intent: symbol"));
+        assert!(context_text.contains("src/service.rs::fn::compute"));
+        assert!(context_text.contains("src/api.rs::fn::handle_request"));
     }
 }

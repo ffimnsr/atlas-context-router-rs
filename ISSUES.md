@@ -20,6 +20,13 @@ For terms that are easy to misread in this document:
 - `community`: unordered cluster of related nodes/modules/files found by some graph algorithm or heuristic, for example SCC/cycle cluster, package cluster, or architecture slice. Community says "these belong together"; flow says "these form ordered path".
 - `embeddings`: optional vector search data for retrieval/ranking only. Not required for core build/update/query path.
 
+### Core Design Rule
+
+- Avoid feature growth without signal quality gains
+- Prioritize better ranking
+- Prioritize better context
+- Prioritize better signals
+
 ---
 
 ## Product Name and CLI
@@ -449,6 +456,22 @@ The upstream project’s primary promise includes full build plus incremental up
   - [x] remove old path
   - [x] parse new path as fresh file
 - [x] preserve stable node identity across rename if hash unchanged
+
+### 4.8 Workspace and package-member awareness (useful for monorepo)
+
+Track real workspace/package boundaries instead of using top-level path heuristics so repos like this Cargo workspace behave correctly during build, impact, review, and reasoning.
+
+- [ ] parse root `Cargo.toml` workspace metadata when present
+- [ ] resolve `workspace.members` globs into concrete member roots
+- [ ] detect standalone package roots for repos without workspace table
+- [ ] map each tracked file to owning workspace member / package root
+- [ ] persist package identity separately from plain file path prefixes
+- [ ] emit first-class package/workspace nodes instead of path-only heuristics
+- [ ] replace top-level-directory `cross_package` heuristic with owning-package comparison
+- [ ] replace same-directory `same_package` heuristic with owning-package-aware resolution
+- [ ] ensure cross-crate imports and impact edges in `packages/*` style repos classify correctly
+- [ ] add fixture repo with multiple Cargo workspace members
+- [ ] add regression tests for `build`, `update`, `impact`, `review-context`, and reasoning on multi-package workspace repos
 
 ---
 
@@ -2201,65 +2224,50 @@ Deterministic analytics layer on top of graph + stored metadata. Produce explain
 - [ ] function pages
 - [ ] static site export
 
-### 31.2 v2 completion criteria
-
-- [ ] search beats grep
-- [ ] impact analysis is reliable
-- [ ] review context is useful
-- [ ] MCP tools are usable by agents
-- [ ] performance scales to large repos
-
-### 31.3 Guiding principle
-
-- [ ] avoid feature growth without signal quality gains
-- [ ] prioritize better ranking
-- [ ] prioritize better context
-- [ ] prioritize better signals
-
 ## Phase 32 — TOON Output
 
 TOON for LLM-facing MCP output only. Goal: reduce token usage for review and context payloads without changing Atlas core storage, parser, or JSON-RPC transport. Prefer official Rust TOON library (official only) (`toon-format/toon-rust`) over a custom Atlas encoder. Build Atlas-specific adapter code only where library integration is insufficient.
 
 ### 32.1 Scope and boundaries
 
-- [ ] evaluate official Rust TOON library for Atlas use
-- [ ] add TOON dependency only if maintenance, API shape, and spec coverage are acceptable
-- [ ] create thin Atlas adapter layer only if needed
-- [ ] keep TOON limited to LLM-facing MCP output
-- [ ] keep JSON as baseline and fallback output
-- [ ] do not use TOON for SQLite persistence, internal domain models, or MCP transport framing
-- [ ] avoid custom TOON implementation unless official library is blocked or insufficient
+- [x] evaluate official Rust TOON library for Atlas use
+- [x] add TOON dependency only if maintenance, API shape, and spec coverage are acceptable
+- [x] create thin Atlas adapter layer only if needed
+- [x] keep TOON limited to LLM-facing MCP output
+- [x] keep JSON as baseline and fallback output
+- [x] do not use TOON for SQLite persistence, internal domain models, or MCP transport framing
+- [x] avoid custom TOON implementation unless official library is blocked or insufficient
 
 ### 32.2 Encoding MVP
 
-- [ ] encode `serde_json::Value` to TOON through library API
-- [ ] confirm support for objects, arrays, strings, numbers, booleans, and null
-- [ ] confirm deterministic field ordering behavior or add wrapper normalization
-- [ ] confirm canonical number formatting behavior or add wrapper normalization
-- [ ] confirm delimiter-aware quoting rules
-- [ ] confirm inline primitive arrays
-- [ ] confirm tabular encoding for uniform arrays of primitive-only objects
-- [ ] confirm expanded encoding for mixed or nested arrays
-- [ ] add Atlas-side fallback/error path when payload shape exceeds supported library behavior
+- [x] encode `serde_json::Value` to TOON through library API
+- [x] confirm support for objects, arrays, strings, numbers, booleans, and null
+- [x] confirm deterministic field ordering behavior or add wrapper normalization
+- [x] confirm canonical number formatting behavior or add wrapper normalization
+- [x] confirm delimiter-aware quoting rules
+- [x] confirm inline primitive arrays
+- [x] confirm tabular encoding for uniform arrays of primitive-only objects
+- [x] confirm expanded encoding for mixed or nested arrays
+- [x] add Atlas-side fallback/error path when payload shape exceeds supported library behavior
 
 ### 32.3 MCP integration
 
-- [ ] add MCP response mode for TOON text output
-- [ ] use TOON first for context-heavy agent-facing tools
-- [ ] keep MCP tool contracts stable while swapping payload body format
-- [ ] add opt-in selection per tool or global config flag
+- [x] add MCP response mode for TOON text output
+- [x] use TOON first for context-heavy agent-facing tools
+- [x] keep MCP tool contracts stable while swapping payload body format
+- [x] add opt-in selection per tool or global config flag
 
 ### 32.4 Validation and quality gates
 
-- [ ] add fixture tests from TOON spec examples for supported library subset
-- [ ] add round-trip tests for Atlas-produced payloads where feasible
-- [ ] reject unsupported cases instead of emitting ambiguous output
-- [ ] benchmark token count and response size vs JSON on representative MCP payloads
-- [ ] document exact supported TOON subset, library choice, pinned version, and deliberate deviations from full spec
+- [x] add fixture tests from TOON spec examples for supported library subset
+- [x] add round-trip tests for Atlas-produced payloads where feasible
+- [x] reject unsupported cases instead of emitting ambiguous output
+- [x] benchmark token count and response size vs JSON on representative MCP payloads
+- [x] document exact supported TOON subset, library choice, pinned version, and deliberate deviations from full spec
 
 ---
 
-## MVP Definition
+## Release 1 Definition (MVP)
 
 Release 1 is done when this works end-to-end:
 
@@ -2287,33 +2295,44 @@ And the system has:
 
 Release 2 is done when this works end-to-end:
 
-- [ ] `atlas install`
-- [ ] `atlas update --base origin/main`
-- [ ] `atlas query "some symbol" --expand`
-- [ ] `atlas review-context --base origin/main`
-- [ ] `atlas explain-change --base origin/main`
-- [ ] `atlas context "what should I read before editing X?"`
-- [ ] `atlas analyze dead-code --subpath <path>`
-- [ ] `atlas refactor rename --symbol <qualified-name> --to <new-name> --dry-run`
+- [x] `atlas install`
+- [x] `atlas update --base origin/main`
+- [x] `atlas query "some symbol" --expand`
+- [x] `atlas review-context --base origin/main`
+- [x] `atlas explain-change --base origin/main`
+- [x] `atlas context "what should I read before editing X?"`
+- [x] `atlas analyze dead-code --subpath <path>`
+- [x] `atlas refactor rename --symbol <qualified-name> --to <new-name> --dry-run`
 
 And system has:
 
-- [ ] graph-aware search that beats plain grep for symbol lookup
+- [ ] graph-aware search proven against grep baseline for symbol lookup:
+  - [ ] exact symbol and qualified-name lookup returns intended definition in top 3 on fixture queries
+  - [ ] ambiguous short-name lookup returns ranked candidates with kind and file metadata
+  - [ ] caller/callee/import expansion surfaces relevant graph neighbors plain grep cannot infer
+  - [ ] fixture evaluation shows better top-1 or top-3 symbol lookup accuracy than plain grep baseline
 - [ ] reliable impact scoring with test and boundary signals
-- [ ] smart review context with better ranking and trimming
-- [ ] deterministic context engine with target resolution and code-span selection
-- [ ] reasoning engine for removal impact, dead code, and refactor risk
-- [ ] refactor planning with dry-run patch validation
-- [ ] stable MCP tools usable by agents with token-efficient output
+- [ ] workspace-aware package/crate boundaries on multi-package repos:
+  - [ ] Cargo workspace members resolve into explicit package identities
+  - [ ] `cross_package` and related reasoning signals use owning package, not top-level directory name
+  - [ ] fixture acceptance passes on repo layouts like `packages/<crate>` with multiple workspace members
+- [x] smart review context with better ranking and trimming
+- [ ] review-context usefulness acceptance gate passes on fixture repos and changed-file flows
+- [x] deterministic context engine with target resolution and code-span selection
+- [x] reasoning engine for removal impact, dead code, and refactor risk
+- [x] refactor planning with dry-run patch validation
+- [x] stable MCP tools usable by agents with token-efficient output
+- [x] MCP tool usability acceptance gate passes for agent-facing review, impact, query, and context flows
 - [ ] watch mode for incremental local updates
-- [ ] observability/debug tooling for graph integrity and pipeline behavior
+- [x] observability/debug tooling for graph integrity and pipeline behavior
 - [ ] performance that scales to large repos
+- [ ] large-repo performance acceptance gate passes on representative repos without memory or latency regressions
 
 ---
 
 ## Context-Mode Integration Backlog
 
-### Purpose
+### Goals
 
 Extend Atlas with context-mode persistence and session continuity without mixing those concerns into graph database.
 
@@ -2324,22 +2343,42 @@ This backlog covers pieces needed for:
 - resume snapshots
 - retrieval-backed restoration
 
-### Core Design Rules
+#### Core Design Rules
 
-- [ ] DO NOT store saved context in graph database
-- [ ] DO NOT replay raw command history into future sessions
-- [ ] ALWAYS restore context through retrieval
-- [ ] ALWAYS store large outputs outside model context
-- [ ] KEEP graph storage, content storage, and session storage as separate systems
+- DO NOT store saved context in graph database
+- DO NOT replay raw command history into future sessions
+- ALWAYS restore context through retrieval
+- ALWAYS store large outputs outside model context
+- KEEP graph storage, content storage, and session storage as separate systems
 
-### New Crates
+### Phase CM1 — Foundation and crate boundaries
+
+Create storage and adapter boundaries first so later work does not leak session or artifact concerns into graph code.
+
+#### New crates
 
 - [ ] `packages/atlas-contentstore`
 - [ ] `packages/atlas-session`
 - [ ] `packages/atlas-contextsave`
 - [ ] `packages/atlas-adapters`
 
-### Content Store
+#### Session identity model
+
+- [ ] Define `session_id = hash(repo_root + worktree + frontend)`
+- [ ] Normalize paths before hashing
+- [ ] Keep worktree isolation
+
+Why first:
+- later content/session/MCP work all depend on stable boundaries
+- prevents graph DB and transport layers from becoming persistence dumping grounds
+
+Exit criteria:
+- [ ] crates compile with narrow responsibilities
+- [ ] session identity rules are fixed before persistence APIs spread
+
+### Phase CM2 — Content store for saved artifacts
+
+Build durable artifact storage before eventing so large outputs already have somewhere safe to go.
 
 #### Database
 
@@ -2407,7 +2446,17 @@ This backlog covers pieces needed for:
 - [ ] If output is above large-output threshold, index it and return pointer only
 - [ ] Never put raw large output into future prompts
 
-### Session Store
+Why second:
+- session events need artifact references from day one
+- retrieval-backed restore is impossible without persisted chunks and source ids
+
+Exit criteria:
+- [ ] large artifacts can be stored and retrieved by `source_id`
+- [ ] chunking is deterministic enough for tests and follow-up retrieval
+
+### Phase CM3 — Session store and event ledger
+
+Persist session facts and bounded events next so every later surface can write into one service.
 
 #### Database
 
@@ -2471,7 +2520,17 @@ This backlog covers pieces needed for:
 - [ ] `SESSION_START`
 - [ ] `SESSION_RESUME`
 
-### Event Extraction
+Why third:
+- snapshot building and CLI/MCP continuity need durable session records
+- event limits must exist before broad hook coverage creates noisy or oversized history
+
+Exit criteria:
+- [ ] session records persist across runs
+- [ ] event retention and dedup rules are enforced centrally
+
+### Phase CM4 — Event extraction and adapter pipeline
+
+Instrument existing commands and engines only after the session/content services exist.
 
 #### Hook points
 
@@ -2501,7 +2560,36 @@ This backlog covers pieces needed for:
 - [ ] Payloads must include identifiers for retrieval when large artifacts exist
 - [ ] Payloads must never embed large stdout blobs
 
-### Resume Snapshot Builder
+#### Adapter interfaces
+
+- [ ] `BeforeCommand`
+- [ ] `AfterCommand`
+- [ ] `OnError`
+- [ ] `OnUserIntent`
+- [ ] `BeforeExit`
+
+#### Initial adapters
+
+- [ ] CLI adapter
+- [ ] MCP adapter
+
+#### Adapter rules
+
+- [ ] Adapters must emit normalized events
+- [ ] Adapters must not write SQLite directly
+- [ ] Adapters must use session service layer
+
+Why fourth:
+- hooks before storage would force rewrites or duplicated logic
+- adapters keep CLI and MCP instrumentation transport-specific but persistence-agnostic
+
+Exit criteria:
+- [ ] core command flows emit normalized bounded events
+- [ ] no direct SQLite writes occur from CLI or MCP adapters
+
+### Phase CM5 — Resume snapshots and CLI session workflow
+
+Once events exist, build bounded resume material and user-facing session commands.
 
 #### Snapshot API
 
@@ -2533,7 +2621,32 @@ This backlog covers pieces needed for:
 - [ ] Inject snapshot at next session start or explicit resume
 - [ ] Mark snapshot consumed after successful injection
 
-### Retrieval Integration
+#### CLI commands
+
+- [ ] `atlas session start`
+- [ ] `atlas session status`
+- [ ] `atlas session resume`
+- [ ] `atlas session clear`
+- [ ] `atlas session list`
+
+#### CLI behavior
+
+- [ ] Auto-create session on interactive run
+- [ ] Auto-load resume snapshot when available
+- [ ] Show compact resume summary
+- [ ] Never replay raw historic output
+
+Why fifth:
+- snapshots are only useful once event history and artifact references exist
+- CLI session commands should operate on the same bounded data model that resume uses
+
+Exit criteria:
+- [ ] session resume works from stored snapshot, not raw history replay
+- [ ] CLI surfaces expose session lifecycle without leaking internal storage details
+
+### Phase CM6 — Retrieval-backed restoration in Context Engine
+
+Extend context retrieval only after saved artifacts and session identity are stable.
 
 #### Context Engine request additions
 
@@ -2559,30 +2672,17 @@ This backlog covers pieces needed for:
 - [ ] include `source_ids`
 - [ ] include `retrieval_hints`
 
-### CLI Session System
+Why sixth:
+- context integration depends on both content search and session identity
+- ranking should only absorb saved context once the retrieval inputs are trustworthy
 
-#### Commands
+Exit criteria:
+- [ ] context restoration works through retrieval, not transcript replay
+- [ ] `ContextResult` exposes enough source ids and hints for follow-up fetches
 
-- [ ] `atlas session start`
-- [ ] `atlas session status`
-- [ ] `atlas session resume`
-- [ ] `atlas session clear`
-- [ ] `atlas session list`
+### Phase CM7 — MCP continuity and saved-context tools
 
-#### Session identity
-
-- [ ] Define `session_id = hash(repo_root + worktree + frontend)`
-- [ ] Normalize paths before hashing
-- [ ] Keep worktree isolation
-
-#### CLI behavior
-
-- [ ] Auto-create session on interactive run
-- [ ] Auto-load resume snapshot when available
-- [ ] Show compact resume summary
-- [ ] Never replay raw historic output
-
-### MCP Integration
+Expose session continuity to agents only after storage, events, resume, and retrieval paths are working locally.
 
 #### New MCP tools
 
@@ -2604,28 +2704,19 @@ This backlog covers pieces needed for:
 - [ ] Return `source_id` for stored artifacts
 - [ ] Return retrieval hints for follow-up access
 
-### Adapter Layer
+Why seventh:
+- MCP should stay thin over already-proven services
+- agent-facing session tools are risky to expose before local lifecycle behavior is stable
 
-#### Interfaces
+Exit criteria:
+- [ ] MCP returns pointers and previews instead of raw large payloads
+- [ ] session-aware MCP tools work without duplicating business logic from CLI/services
 
-- [ ] `BeforeCommand`
-- [ ] `AfterCommand`
-- [ ] `OnError`
-- [ ] `OnUserIntent`
-- [ ] `BeforeExit`
+### Phase CM8 — Safety limits, tests, and completion gate
 
-#### Initial adapters
+Close with the operational guards and tests that keep context-mode safe and maintainable.
 
-- [ ] CLI adapter
-- [ ] MCP adapter
-
-#### Adapter rule
-
-- [ ] Adapters must emit normalized events
-- [ ] Adapters must not write SQLite directly
-- [ ] Adapters must use session service layer
-
-### Tests
+#### Tests
 
 - [ ] session creation
 - [ ] event deduplication
@@ -2636,8 +2727,6 @@ This backlog covers pieces needed for:
 - [ ] compression routing
 - [ ] CLI continuity
 - [ ] MCP continuity
-
-### Safety and Limits
 
 #### Redaction
 
@@ -2652,7 +2741,7 @@ This backlog covers pieces needed for:
 - [ ] retention TTL
 - [ ] snapshot size cap
 
-### Completion Criteria
+#### Completion criteria
 
 - [ ] sessions persist across runs
 - [ ] large outputs are stored instead of passed directly
@@ -2660,3 +2749,7 @@ This backlog covers pieces needed for:
 - [ ] resume snapshot works correctly
 - [ ] MCP returns pointers instead of blobs
 - [ ] graph DB, content DB, and session DB remain separate systems
+
+Why last:
+- limits and redaction must validate the final integrated system, not just one crate in isolation
+- completion gate should assert end-to-end continuity behavior across CLI, retrieval, and MCP

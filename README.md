@@ -176,6 +176,20 @@ atlas review-context --base origin/main
 atlas review-context --files packages/atlas-cli/src/install.rs
 ```
 
+Explain changed code with impact and risk summary:
+
+```bash
+atlas explain-change --base origin/main
+atlas explain-change --files packages/atlas-cli/src/commands.rs
+```
+
+Dead-code scan and deterministic rename preview:
+
+```bash
+atlas analyze dead-code --subpath packages/atlas-cli
+atlas refactor rename --symbol src/lib.rs::fn::helper --to helper_renamed --dry-run
+```
+
 Run MCP server over stdio:
 
 ```bash
@@ -290,6 +304,8 @@ The MCP server (`atlas serve`) exposes these tools to agents:
 | `get_minimal_context` | Auto-detect changes and return compact impact bundle |
 | `explain_change` | Advanced impact: risk, change kinds, boundary/test gaps |
 
+All MCP tools accept optional `output_format` with `json` or `toon`. `get_context`, `get_review_context`, `get_impact_radius`, and `explain_change` default to TOON. Other tools default to JSON. Explicit `output_format=json` still overrides TOON-first defaults. TOON uses official `toon-format` crate, stays limited to MCP response bodies, validates encode/decode round-trip, sorts object keys for deterministic output, and falls back to JSON when TOON output would be empty or invalid.
+
 **`get_context` schema:**
 
 ```json
@@ -300,7 +316,8 @@ The MCP server (`atlas serve`) exposes these tools to agents:
   "intent":    "symbol|file|review|impact|usage_lookup|refactor_safety|dead_code_check|rename_preview|dependency_removal",
   "max_nodes": 100,
   "max_edges": 100,
-  "max_depth": 2
+  "max_depth": 2,
+  "output_format": "json|toon"
 }
 ```
 

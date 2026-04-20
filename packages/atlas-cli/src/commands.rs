@@ -13,6 +13,7 @@ use atlas_review::{ContextEngine, query_parser};
 use atlas_search as search;
 use atlas_store_sqlite::Store;
 use camino::Utf8Path;
+use serde::Serialize;
 
 use crate::cli::{AnalyzeCommand, Cli, Command, CommunitiesCommand, FlowsCommand, RefactorCommand};
 
@@ -98,6 +99,217 @@ fn status_payload(
         "last_indexed_at": stats.last_indexed_at,
         "changed_file_count": changes.len(),
         "changed_files": augment_changes_with_node_counts(changes, store),
+    })
+}
+
+#[derive(Serialize)]
+struct ExplainChangedByKind {
+    api_change: usize,
+    signature_change: usize,
+    internal_change: usize,
+}
+
+#[derive(Serialize)]
+struct ExplainChangedSymbol {
+    qn: String,
+    kind: String,
+    file: String,
+    line: u32,
+    change_kind: String,
+    lang: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sig: Option<String>,
+}
+
+#[derive(Serialize)]
+struct ExplainBoundaryViolation {
+    kind: String,
+    description: String,
+    nodes: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct ExplainTestImpact {
+    affected_test_count: usize,
+    uncovered_symbol_count: usize,
+    uncovered_symbols: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct ExplainChangeSummary {
+    risk_level: String,
+    changed_file_count: usize,
+    changed_symbol_count: usize,
+    changed_by_kind: ExplainChangedByKind,
+    changed_symbols: Vec<ExplainChangedSymbol>,
+    impacted_file_count: usize,
+    impacted_node_count: usize,
+    boundary_violations: Vec<ExplainBoundaryViolation>,
+    test_impact: ExplainTestImpact,
+    summary: String,
+}
+
+fn normalize_explicit_files(repo_root: &Utf8Path, explicit_files: &[String]) -> Vec<String> {
+    explicit_files
+        .iter()
+        .map(|p| {
+            let abs = Utf8Path::new(p);
+            if abs.is_absolute() {
+                repo_relative(repo_root, abs)
+                    .unwrap_or_else(|_| abs.to_owned())
+                    .to_string()
+            } else {
+                p.clone()
+            }
+        })
+        .collect()
+}
+
+fn empty_explain_change_summary() -> ExplainChangeSummary {
+    ExplainChangeSummary {
+        risk_level: "low".to_string(),
+        changed_file_count: 0,
+        changed_symbol_count: 0,
+        changed_by_kind: ExplainChangedByKind {
+            api_change: 0,
+            signature_change: 0,
+            internal_change: 0,
+        },
+        changed_symbols: vec![],
+        impacted_file_count: 0,
+        impacted_node_count: 0,
+        boundary_violations: vec![],
+        test_impact: ExplainTestImpact {
+            affected_test_count: 0,
+            uncovered_symbol_count: 0,
+            uncovered_symbols: vec![],
+        },
+        summary: "No changed files detected.".to_string(),
+    }
+}
+
+fn build_explain_change_summary(
+    store: &Store,
+    files: &[String],
+    max_depth: u32,
+    max_nodes: usize,
+) -> Result<ExplainChangeSummary> {
+    let file_refs: Vec<&str> = files.iter().map(String::as_str).collect();
+    let base_impact = store
+        .impact_radius(&file_refs, max_depth, max_nodes)
+        .context("impact radius query failed")?;
+    let advanced = advanced_impact(base_impact);
+
+    let mut changed_by_kind = ExplainChangedByKind {
+        api_change: 0,
+        signature_change: 0,
+        internal_change: 0,
+    };
+
+    let changed_symbols: Vec<ExplainChangedSymbol> = advanced
+        .scored_nodes
+        .iter()
+        .filter_map(|sn| sn.change_kind.map(|ck| (&sn.node, ck)))
+        .map(|(node, change_kind)| {
+            let change_kind = match change_kind {
+                atlas_core::ChangeKind::ApiChange => {
+                    changed_by_kind.api_change += 1;
+                    "api_change"
+                }
+                atlas_core::ChangeKind::SignatureChange => {
+                    changed_by_kind.signature_change += 1;
+                    "signature_change"
+                }
+                atlas_core::ChangeKind::InternalChange => {
+                    changed_by_kind.internal_change += 1;
+                    "internal_change"
+                }
+            };
+            ExplainChangedSymbol {
+                qn: node.qualified_name.clone(),
+                kind: node.kind.as_str().to_string(),
+                file: node.file_path.clone(),
+                line: node.line_start,
+                change_kind: change_kind.to_string(),
+                lang: node.language.clone(),
+                sig: node.params.clone(),
+            }
+        })
+        .collect();
+
+    let boundary_violations: Vec<ExplainBoundaryViolation> = advanced
+        .boundary_violations
+        .iter()
+        .map(|violation| ExplainBoundaryViolation {
+            kind: match violation.kind {
+                atlas_core::BoundaryKind::CrossModule => "cross_module",
+                atlas_core::BoundaryKind::CrossPackage => "cross_package",
+            }
+            .to_string(),
+            description: violation.description.clone(),
+            nodes: violation.nodes.clone(),
+        })
+        .collect();
+
+    let uncovered_symbols: Vec<String> = advanced
+        .test_impact
+        .uncovered_changed_nodes
+        .iter()
+        .map(|node| node.qualified_name.clone())
+        .collect();
+
+    let risk_level = advanced.risk_level.to_string();
+    let impacted_file_count = advanced.base.impacted_files.len();
+    let impacted_node_count = advanced.base.impacted_nodes.len();
+
+    let mut summary_parts: Vec<String> = vec![format!("Risk: {}.", risk_level)];
+    if changed_by_kind.api_change > 0 {
+        summary_parts.push(format!("{} api change(s).", changed_by_kind.api_change));
+    }
+    if changed_by_kind.signature_change > 0 {
+        summary_parts.push(format!(
+            "{} signature change(s).",
+            changed_by_kind.signature_change
+        ));
+    }
+    if changed_by_kind.internal_change > 0 {
+        summary_parts.push(format!(
+            "{} internal change(s).",
+            changed_by_kind.internal_change
+        ));
+    }
+    summary_parts.push(format!(
+        "Affects {} file(s), {} node(s).",
+        impacted_file_count, impacted_node_count
+    ));
+    if !boundary_violations.is_empty() {
+        summary_parts.push(format!(
+            "{} boundary violation(s).",
+            boundary_violations.len()
+        ));
+    }
+    if !uncovered_symbols.is_empty() {
+        summary_parts.push(format!(
+            "{} changed symbol(s) lack test coverage.",
+            uncovered_symbols.len()
+        ));
+    }
+
+    Ok(ExplainChangeSummary {
+        risk_level,
+        changed_file_count: files.len(),
+        changed_symbol_count: changed_symbols.len(),
+        changed_by_kind,
+        changed_symbols,
+        impacted_file_count,
+        impacted_node_count,
+        boundary_violations,
+        test_impact: ExplainTestImpact {
+            affected_test_count: advanced.test_impact.affected_tests.len(),
+            uncovered_symbol_count: uncovered_symbols.len(),
+            uncovered_symbols,
+        },
+        summary: summary_parts.join(" "),
     })
 }
 
@@ -430,6 +642,106 @@ pub fn run_detect_changes(cli: &Cli) -> Result<()> {
                 println!("  Impacted files  : {}", impact.impacted_files.len());
             }
         }
+    }
+
+    Ok(())
+}
+
+pub fn run_explain_change(cli: &Cli) -> Result<()> {
+    let repo = resolve_repo(cli)?;
+    let repo_root_path =
+        find_repo_root(Utf8Path::new(&repo)).context("cannot find git repo root")?;
+    let repo_root = repo_root_path.as_path();
+    let db_path = db_path(cli, &repo);
+
+    let (base, staged, explicit_files, max_depth, max_nodes) = match &cli.command {
+        Command::ExplainChange {
+            base,
+            staged,
+            files,
+            max_depth,
+            max_nodes,
+        } => (
+            base.clone(),
+            *staged,
+            files.clone(),
+            *max_depth,
+            *max_nodes as usize,
+        ),
+        _ => unreachable!(),
+    };
+
+    let target_files = if !explicit_files.is_empty() {
+        normalize_explicit_files(repo_root, &explicit_files)
+    } else {
+        changed_files(repo_root, &detect_changes_target(&base, staged))
+            .context("cannot detect changed files")?
+            .into_iter()
+            .filter(|cf| cf.change_type != ChangeType::Deleted)
+            .map(|cf| cf.path)
+            .collect()
+    };
+
+    if target_files.is_empty() {
+        let empty = empty_explain_change_summary();
+        if cli.json {
+            print_json("explain_change", serde_json::to_value(&empty)?)?;
+        } else {
+            println!("No changed files detected.");
+        }
+        return Ok(());
+    }
+
+    let store =
+        Store::open(&db_path).with_context(|| format!("cannot open database at {db_path}"))?;
+    let summary = build_explain_change_summary(&store, &target_files, max_depth, max_nodes)?;
+
+    if cli.json {
+        print_json("explain_change", serde_json::to_value(&summary)?)?;
+    } else {
+        println!("Risk level      : {}", summary.risk_level);
+        println!("Changed files   : {}", summary.changed_file_count);
+        println!("Changed symbols : {}", summary.changed_symbol_count);
+        println!(
+            "Change kinds    : api {} | signature {} | internal {}",
+            summary.changed_by_kind.api_change,
+            summary.changed_by_kind.signature_change,
+            summary.changed_by_kind.internal_change
+        );
+        println!("Impacted files  : {}", summary.impacted_file_count);
+        println!("Impacted nodes  : {}", summary.impacted_node_count);
+
+        if !summary.changed_symbols.is_empty() {
+            println!("\nChanged symbols:");
+            for symbol in summary.changed_symbols.iter().take(20) {
+                println!(
+                    "  [{}] {} {} ({}:{})",
+                    symbol.change_kind, symbol.kind, symbol.qn, symbol.file, symbol.line
+                );
+            }
+        }
+
+        if !summary.boundary_violations.is_empty() {
+            println!("\nBoundary violations:");
+            for violation in &summary.boundary_violations {
+                println!("  [{}] {}", violation.kind, violation.description);
+            }
+        }
+
+        if summary.test_impact.affected_test_count > 0 {
+            println!(
+                "\nAffected tests  : {}",
+                summary.test_impact.affected_test_count
+            );
+        }
+        if summary.test_impact.uncovered_symbol_count > 0 {
+            println!("Changed symbols without test coverage:");
+            for symbol in &summary.test_impact.uncovered_symbols {
+                println!("  {symbol}");
+            }
+        }
+
+        println!("\nSummary: {}", summary.summary);
     }
 
     Ok(())
@@ -908,37 +1220,49 @@ pub fn run_context(cli: &Cli) -> Result<()> {
     let repo = resolve_repo(cli)?;
     let db_path = db_path(cli, &repo);
 
-    let (query, file, files, intent_override, max_nodes, max_edges, max_files, depth, code_spans, tests, imports, neighbors) =
-        match &cli.command {
-            Command::Context {
-                query,
-                file,
-                files,
-                intent,
-                max_nodes,
-                max_edges,
-                max_files,
-                depth,
-                code_spans,
-                tests,
-                imports,
-                neighbors,
-            } => (
-                query.clone(),
-                file.clone(),
-                files.clone(),
-                intent.clone(),
-                *max_nodes,
-                *max_edges,
-                *max_files,
-                *depth,
-                *code_spans,
-                *tests,
-                *imports,
-                *neighbors,
-            ),
-            _ => unreachable!(),
-        };
+    let (
+        query,
+        file,
+        files,
+        intent_override,
+        max_nodes,
+        max_edges,
+        max_files,
+        depth,
+        code_spans,
+        tests,
+        imports,
+        neighbors,
+    ) = match &cli.command {
+        Command::Context {
+            query,
+            file,
+            files,
+            intent,
+            max_nodes,
+            max_edges,
+            max_files,
+            depth,
+            code_spans,
+            tests,
+            imports,
+            neighbors,
+        } => (
+            query.clone(),
+            file.clone(),
+            files.clone(),
+            intent.clone(),
+            *max_nodes,
+            *max_edges,
+            *max_files,
+            *depth,
+            *code_spans,
+            *tests,
+            *imports,
+            *neighbors,
+        ),
+        _ => unreachable!(),
+    };
 
     // Build the base request: parse from free-text query or structured flags.
     let mut request = if !files.is_empty() {
@@ -1105,9 +1429,7 @@ fn parse_intent_str(s: &str) -> Option<ContextIntent> {
 }
 
 fn parse_intent_override(override_str: Option<&str>, default: ContextIntent) -> ContextIntent {
-    override_str
-        .and_then(parse_intent_str)
-        .unwrap_or(default)
+    override_str.and_then(parse_intent_str).unwrap_or(default)
 }
 
 /// Structured result for a single doctor check.
@@ -1516,10 +1838,14 @@ pub fn run_analyze(cli: &Cli) -> Result<()> {
             }
         }
 
-        AnalyzeCommand::DeadCode { allowlist, limit } => {
+        AnalyzeCommand::DeadCode {
+            allowlist,
+            subpath,
+            limit,
+        } => {
             let allowlist_refs: Vec<&str> = allowlist.iter().map(String::as_str).collect();
             let candidates = engine
-                .detect_dead_code(&allowlist_refs, Some(*limit))
+                .detect_dead_code(&allowlist_refs, subpath.as_deref(), Some(*limit))
                 .context("dead-code detection failed")?;
 
             if cli.json {
@@ -1644,9 +1970,19 @@ pub fn run_refactor(cli: &Cli) -> Result<()> {
     match sub {
         RefactorCommand::Rename {
             symbol,
-            new_name,
+            to,
+            legacy_symbol,
+            legacy_to,
             dry_run,
         } => {
+            let symbol = symbol
+                .as_deref()
+                .or(legacy_symbol.as_deref())
+                .context("rename requires --symbol <qualified-name>")?;
+            let new_name = to
+                .as_deref()
+                .or(legacy_to.as_deref())
+                .context("rename requires --to <new-name>")?;
             let plan = engine
                 .plan_rename(symbol, new_name)
                 .with_context(|| format!("rename plan for `{symbol}` → `{new_name}` failed"))?;
@@ -1973,10 +2309,17 @@ pub fn run_flows(cli: &Cli) -> Result<()> {
                 }
             }
         }
-        FlowsCommand::Create { name, kind, description } => {
+        FlowsCommand::Create {
+            name,
+            kind,
+            description,
+        } => {
             let id = store.create_flow(name, kind.as_deref(), description.as_deref())?;
             if cli.json {
-                print_json("flows.create", serde_json::json!({ "id": id, "name": name }))?;
+                print_json(
+                    "flows.create",
+                    serde_json::json!({ "id": id, "name": name }),
+                )?;
             } else {
                 println!("Created flow '{name}' (id={id})");
             }
@@ -2009,7 +2352,12 @@ pub fn run_flows(cli: &Cli) -> Result<()> {
                 }
             }
         }
-        FlowsCommand::AddMember { flow, node_qn, position, role } => {
+        FlowsCommand::AddMember {
+            flow,
+            node_qn,
+            position,
+            role,
+        } => {
             let f = store
                 .get_flow_by_name(flow)?
                 .with_context(|| format!("flow '{flow}' not found"))?;
@@ -2092,9 +2440,13 @@ pub fn run_communities(cli: &Cli) -> Result<()> {
                 }
             }
         }
-        CommunitiesCommand::Create { name, algorithm, level, parent } => {
-            let id =
-                store.create_community(name, algorithm.as_deref(), *level, *parent)?;
+        CommunitiesCommand::Create {
+            name,
+            algorithm,
+            level,
+            parent,
+        } => {
+            let id = store.create_community(name, algorithm.as_deref(), *level, *parent)?;
             if cli.json {
                 print_json(
                     "communities.create",

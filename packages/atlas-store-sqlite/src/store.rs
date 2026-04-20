@@ -1873,11 +1873,19 @@ impl Store {
     /// The caller is responsible for allowlist suppression and framework checks.
     /// Bounded by `limit`.
     pub fn dead_code_candidates(&self, limit: usize) -> Result<Vec<Node>> {
+        self.dead_code_candidates_filtered(None, limit)
+    }
+
+    /// Same as [`Store::dead_code_candidates`], optionally restricted to a
+    /// repo-relative file-path prefix.
+    pub fn dead_code_candidates_filtered(
+        &self,
+        subpath: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<Node>> {
         let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
-        let mut stmt = self
-            .conn
-            .prepare(
-                "SELECT n.id, n.kind, n.name, n.qualified_name, n.file_path,
+        let mut sql = String::from(
+            "SELECT n.id, n.kind, n.name, n.qualified_name, n.file_path,
                     n.line_start, n.line_end, n.language, n.parent_name,
                     n.params, n.return_type, n.modifiers, n.is_test,
                     n.file_hash, n.extra_json
@@ -1894,16 +1902,36 @@ impl Store {
                    SELECT 1 FROM edges e
                    WHERE e.target_qualified = n.qualified_name
                      AND e.kind IN ('calls','references','imports','extends','implements')
-               )
-             ORDER BY n.file_path, n.line_start
-             LIMIT ?1",
-            )
-            .map_err(db_err)?;
-        let rows = stmt
-            .query_map(params![limit as i64], row_to_node)
-            .map_err(db_err)?
-            .filter_map(|r| r.ok())
-            .collect();
+               )",
+        );
+        let rows = if let Some(subpath) = subpath {
+            sql.push_str("\n               AND n.file_path LIKE ?1 ESCAPE '\\'");
+            sql.push_str(
+                "\n             ORDER BY n.file_path, n.line_start\n             LIMIT ?2",
+            );
+
+            let like_pattern = {
+                let escaped = subpath
+                    .replace('\\', "\\\\")
+                    .replace('%', "\\%")
+                    .replace('_', "\\_");
+                format!("{escaped}%")
+            };
+            let mut stmt = self.conn.prepare(&sql).map_err(db_err)?;
+            stmt.query_map(params![like_pattern, limit as i64], row_to_node)
+                .map_err(db_err)?
+                .filter_map(|r| r.ok())
+                .collect()
+        } else {
+            sql.push_str(
+                "\n             ORDER BY n.file_path, n.line_start\n             LIMIT ?1",
+            );
+            let mut stmt = self.conn.prepare(&sql).map_err(db_err)?;
+            stmt.query_map(params![limit as i64], row_to_node)
+                .map_err(db_err)?
+                .filter_map(|r| r.ok())
+                .collect()
+        };
         Ok(rows)
     }
 }
@@ -2260,7 +2288,9 @@ impl Store {
                  FROM flows WHERE id = ?1",
             )
             .map_err(db_err)?;
-        let mut rows = stmt.query_map(params![flow_id], row_to_flow).map_err(db_err)?;
+        let mut rows = stmt
+            .query_map(params![flow_id], row_to_flow)
+            .map_err(db_err)?;
         Ok(rows.next().and_then(|r| r.ok()))
     }
 
@@ -4813,7 +4843,9 @@ mod tests {
         let store = open_in_memory();
         assert!(store.list_flows().unwrap().is_empty());
 
-        let id = store.create_flow("login", Some("auth"), Some("Login flow")).unwrap();
+        let id = store
+            .create_flow("login", Some("auth"), Some("Login flow"))
+            .unwrap();
         assert!(id > 0);
 
         let flows = store.list_flows().unwrap();
@@ -4849,9 +4881,15 @@ mod tests {
         let store = open_in_memory();
         let flow_id = store.create_flow("pipeline", None, None).unwrap();
 
-        store.add_flow_member(flow_id, "pkg::fn::step_a", Some(0), Some("entry")).unwrap();
-        store.add_flow_member(flow_id, "pkg::fn::step_b", Some(1), None).unwrap();
-        store.add_flow_member(flow_id, "pkg::fn::step_c", Some(2), None).unwrap();
+        store
+            .add_flow_member(flow_id, "pkg::fn::step_a", Some(0), Some("entry"))
+            .unwrap();
+        store
+            .add_flow_member(flow_id, "pkg::fn::step_b", Some(1), None)
+            .unwrap();
+        store
+            .add_flow_member(flow_id, "pkg::fn::step_c", Some(2), None)
+            .unwrap();
 
         let members = store.get_flow_members(flow_id).unwrap();
         assert_eq!(members.len(), 3);
@@ -4860,23 +4898,35 @@ mod tests {
         assert_eq!(members[0].role.as_deref(), Some("entry"));
         assert_eq!(members[2].node_qualified_name, "pkg::fn::step_c");
 
-        store.remove_flow_member(flow_id, "pkg::fn::step_b").unwrap();
+        store
+            .remove_flow_member(flow_id, "pkg::fn::step_b")
+            .unwrap();
         let members = store.get_flow_members(flow_id).unwrap();
         assert_eq!(members.len(), 2);
-        assert!(!members.iter().any(|m| m.node_qualified_name == "pkg::fn::step_b"));
+        assert!(
+            !members
+                .iter()
+                .any(|m| m.node_qualified_name == "pkg::fn::step_b")
+        );
     }
 
     #[test]
     fn flow_membership_survives_node_rebuild() {
         let mut store = open_in_memory();
         let node = make_node(NodeKind::Function, "step", "pkg::fn::step", "a.rs", "rust");
-        store.replace_file_graph("a.rs", "h1", None, None, &[node.clone()], &[]).unwrap();
+        store
+            .replace_file_graph("a.rs", "h1", None, None, std::slice::from_ref(&node), &[])
+            .unwrap();
 
         let flow_id = store.create_flow("myflow", None, None).unwrap();
-        store.add_flow_member(flow_id, "pkg::fn::step", Some(0), None).unwrap();
+        store
+            .add_flow_member(flow_id, "pkg::fn::step", Some(0), None)
+            .unwrap();
 
         // Simulate `atlas build` re-indexing the same file.
-        store.replace_file_graph("a.rs", "h2", None, None, &[node], &[]).unwrap();
+        store
+            .replace_file_graph("a.rs", "h2", None, None, &[node], &[])
+            .unwrap();
 
         // Membership must still exist after rebuild.
         let members = store.get_flow_members(flow_id).unwrap();
@@ -4888,9 +4938,13 @@ mod tests {
     fn flow_add_member_update_idempotent() {
         let store = open_in_memory();
         let flow_id = store.create_flow("f", None, None).unwrap();
-        store.add_flow_member(flow_id, "a::b", Some(0), Some("old")).unwrap();
+        store
+            .add_flow_member(flow_id, "a::b", Some(0), Some("old"))
+            .unwrap();
         // Replace with updated position/role.
-        store.add_flow_member(flow_id, "a::b", Some(5), Some("new")).unwrap();
+        store
+            .add_flow_member(flow_id, "a::b", Some(5), Some("new"))
+            .unwrap();
         let members = store.get_flow_members(flow_id).unwrap();
         assert_eq!(members.len(), 1);
         assert_eq!(members[0].position, Some(5));
@@ -4973,7 +5027,9 @@ mod tests {
     #[test]
     fn community_parent_child_relationship() {
         let store = open_in_memory();
-        let parent_id = store.create_community("parent", Some("louvain"), Some(0), None).unwrap();
+        let parent_id = store
+            .create_community("parent", Some("louvain"), Some(0), None)
+            .unwrap();
         let child_id = store
             .create_community("child", Some("louvain"), Some(1), Some(parent_id))
             .unwrap();
@@ -5008,16 +5064,24 @@ mod tests {
     fn community_membership_survives_node_rebuild() {
         let mut store = open_in_memory();
         let node = make_node(NodeKind::Function, "fn_a", "pkg::fn::fn_a", "a.rs", "rust");
-        store.replace_file_graph("a.rs", "h1", None, None, &[node.clone()], &[]).unwrap();
+        store
+            .replace_file_graph("a.rs", "h1", None, None, std::slice::from_ref(&node), &[])
+            .unwrap();
 
         let comm_id = store.create_community("mycomm", None, None, None).unwrap();
         store.add_community_node(comm_id, "pkg::fn::fn_a").unwrap();
 
         // Rebuild — simulates `atlas build`.
-        store.replace_file_graph("a.rs", "h2", None, None, &[node], &[]).unwrap();
+        store
+            .replace_file_graph("a.rs", "h2", None, None, &[node], &[])
+            .unwrap();
 
         let nodes = store.get_community_nodes(comm_id).unwrap();
-        assert_eq!(nodes.len(), 1, "community membership must survive node rebuild");
+        assert_eq!(
+            nodes.len(),
+            1,
+            "community membership must survive node rebuild"
+        );
         assert_eq!(nodes[0].node_qualified_name, "pkg::fn::fn_a");
     }
 

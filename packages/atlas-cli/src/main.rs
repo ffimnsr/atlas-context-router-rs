@@ -25,6 +25,7 @@ fn main() {
         Command::Doctor => commands::run_doctor(&cli),
         Command::DebugGraph { .. } => commands::run_debug_graph(&cli),
         Command::ExplainQuery { .. } => commands::run_explain_query(&cli),
+        Command::ExplainChange { .. } => commands::run_explain_change(&cli),
         Command::Install { .. } => commands::run_install(&cli),
         Command::Completions { .. } => commands::run_completions(&cli),
         Command::Context { .. } => commands::run_context(&cli),

@@ -182,10 +182,11 @@ impl<'s> ReasoningEngine<'s> {
     pub fn detect_dead_code(
         &self,
         extra_allowlist: &[&str],
+        subpath: Option<&str>,
         limit: Option<usize>,
     ) -> Result<Vec<DeadCodeCandidate>> {
         let cap = limit.unwrap_or(500);
-        let raw = self.store.dead_code_candidates(cap)?;
+        let raw = self.store.dead_code_candidates_filtered(subpath, cap)?;
 
         let allowlist_set: HashSet<&str> = extra_allowlist.iter().copied().collect();
 
@@ -1102,7 +1103,7 @@ mod tests {
         seed_graph(&mut store, vec![priv_node], vec![]);
 
         let engine = ReasoningEngine::new(&store);
-        let candidates = engine.detect_dead_code(&[], None).unwrap();
+        let candidates = engine.detect_dead_code(&[], None, None).unwrap();
         assert!(
             candidates
                 .iter()
@@ -1128,7 +1129,7 @@ mod tests {
         seed_graph(&mut store, vec![pub_node], vec![]);
 
         let engine = ReasoningEngine::new(&store);
-        let candidates = engine.detect_dead_code(&[], None).unwrap();
+        let candidates = engine.detect_dead_code(&[], None, None).unwrap();
         assert!(
             !candidates
                 .iter()
@@ -1153,7 +1154,7 @@ mod tests {
         seed_graph(&mut store, vec![main_node], vec![]);
 
         let engine = ReasoningEngine::new(&store);
-        let candidates = engine.detect_dead_code(&[], None).unwrap();
+        let candidates = engine.detect_dead_code(&[], None, None).unwrap();
         assert!(
             !candidates.iter().any(|c| c.node.name == "main"),
             "main entrypoint should be suppressed"

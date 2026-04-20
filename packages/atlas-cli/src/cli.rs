@@ -200,6 +200,30 @@ pub enum Command {
         limit: usize,
     },
 
+    /// Summarize a change-set: changed symbols, impact, risk, and test gaps.
+    #[command(name = "explain-change")]
+    ExplainChange {
+        /// Git ref or range to diff against.
+        #[arg(long)]
+        base: Option<String>,
+
+        /// Diff staged changes only.
+        #[arg(long)]
+        staged: bool,
+
+        /// Explicit list of files to explain.
+        #[arg(long, num_args = 1..)]
+        files: Vec<String>,
+
+        /// Maximum traversal depth.
+        #[arg(long, default_value_t = 5)]
+        max_depth: u32,
+
+        /// Maximum number of impacted nodes to consider.
+        #[arg(long, default_value_t = 200)]
+        max_nodes: u32,
+    },
+
     /// Install MCP server configuration for AI coding platforms.
     Install {
         /// Target platform: copilot, claude, codex, or all (default: all detected).
@@ -470,6 +494,10 @@ pub enum AnalyzeCommand {
         #[arg(long, num_args = 1..)]
         allowlist: Vec<String>,
 
+        /// Restrict candidates to files under this repo-relative path prefix.
+        #[arg(long)]
+        subpath: Option<String>,
+
         /// Maximum number of candidates to return.
         #[arg(long, default_value_t = 100)]
         limit: usize,
@@ -494,10 +522,20 @@ pub enum RefactorCommand {
     /// Rename a symbol across all reference sites.
     Rename {
         /// Fully-qualified name of the symbol to rename.
-        symbol: String,
+        #[arg(long)]
+        symbol: Option<String>,
 
         /// New simple name for the symbol.
-        new_name: String,
+        #[arg(long = "to")]
+        to: Option<String>,
+
+        /// Legacy positional symbol argument.
+        #[arg(hide = true)]
+        legacy_symbol: Option<String>,
+
+        /// Legacy positional new-name argument.
+        #[arg(hide = true)]
+        legacy_to: Option<String>,
 
         /// Preview edits without writing any files.
         #[arg(long)]
@@ -816,6 +854,27 @@ mod tests {
         }
     }
 
+    #[test]
+    fn parse_explain_change_with_base() {
+        let cli = parse(&["atlas", "explain-change", "--base", "origin/main"]);
+        if let Command::ExplainChange {
+            base,
+            staged,
+            files,
+            max_depth,
+            max_nodes,
+        } = cli.command
+        {
+            assert_eq!(base.as_deref(), Some("origin/main"));
+            assert!(!staged);
+            assert!(files.is_empty());
+            assert_eq!(max_depth, 5);
+            assert_eq!(max_nodes, 200);
+        } else {
+            panic!("expected ExplainChange command");
+        }
+    }
+
     // -------------------------------------------------------------------------
     // unknown / missing required args
     // -------------------------------------------------------------------------
@@ -918,5 +977,87 @@ mod tests {
     #[test]
     fn completions_missing_shell_fails() {
         assert!(Cli::try_parse_from(["atlas", "completions"]).is_err());
+    }
+
+    #[test]
+    fn parse_analyze_dead_code_with_subpath() {
+        let cli = parse(&["atlas", "analyze", "dead-code", "--subpath", "src"]);
+        if let Command::Analyze { subcommand } = cli.command {
+            match subcommand {
+                AnalyzeCommand::DeadCode { subpath, limit, .. } => {
+                    assert_eq!(subpath.as_deref(), Some("src"));
+                    assert_eq!(limit, 100);
+                }
+                _ => panic!("expected analyze dead-code"),
+            }
+        } else {
+            panic!("expected Analyze command");
+        }
+    }
+
+    #[test]
+    fn parse_refactor_rename_with_named_flags() {
+        let cli = parse(&[
+            "atlas",
+            "refactor",
+            "rename",
+            "--symbol",
+            "src/lib.rs::fn::helper",
+            "--to",
+            "helper_renamed",
+            "--dry-run",
+        ]);
+        if let Command::Refactor { subcommand } = cli.command {
+            match subcommand {
+                RefactorCommand::Rename {
+                    symbol,
+                    to,
+                    dry_run,
+                    legacy_symbol,
+                    legacy_to,
+                } => {
+                    assert_eq!(symbol.as_deref(), Some("src/lib.rs::fn::helper"));
+                    assert_eq!(to.as_deref(), Some("helper_renamed"));
+                    assert!(dry_run);
+                    assert!(legacy_symbol.is_none());
+                    assert!(legacy_to.is_none());
+                }
+                _ => panic!("expected refactor rename"),
+            }
+        } else {
+            panic!("expected Refactor command");
+        }
+    }
+
+    #[test]
+    fn parse_refactor_rename_legacy_positionals() {
+        let cli = parse(&[
+            "atlas",
+            "refactor",
+            "rename",
+            "src/lib.rs::fn::helper",
+            "helper_renamed",
+            "--dry-run",
+        ]);
+        if let Command::Refactor { subcommand } = cli.command {
+            match subcommand {
+                RefactorCommand::Rename {
+                    symbol,
+                    to,
+                    dry_run,
+                    legacy_symbol,
+                    legacy_to,
+                } => {
+                    assert!(symbol.is_none());
+                    assert!(to.is_none());
+                    assert!(dry_run);
+                    assert_eq!(legacy_symbol.as_deref(), Some("src/lib.rs::fn::helper"));
+                    assert_eq!(legacy_to.as_deref(), Some("helper_renamed"));
+                }
+                _ => panic!("expected refactor rename"),
+            }
+        } else {
+            panic!("expected Refactor command");
+        }
     }
 }

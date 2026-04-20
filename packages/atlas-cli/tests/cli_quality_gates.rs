@@ -1,6 +1,7 @@
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 
 use atlas_core::{EdgeKind, NodeKind};
 use atlas_store_sqlite::Store;
@@ -221,6 +222,212 @@ pub fn helper(name: &str) -> String {
         status_with_base["changed_files"][0]["path"],
         json!("src/lib.rs")
     );
+}
+
+#[test]
+fn explain_change_command_reports_change_summary() {
+    let repo = setup_fixture_repo();
+
+    run_atlas(repo.path(), &["init"]);
+    run_atlas(repo.path(), &["build"]);
+    rewrite_fixture_helper(repo.path());
+
+    let explain = read_json_data_output(
+        "explain_change",
+        run_atlas(repo.path(), &["--json", "explain-change", "--base", "HEAD"]),
+    );
+
+    assert_eq!(explain["changed_file_count"], json!(1));
+    assert!(
+        explain["changed_symbol_count"].as_u64().unwrap_or_default() >= 1,
+        "expected at least one changed symbol: {explain:?}"
+    );
+    assert!(
+        explain["changed_by_kind"]["api_change"]
+            .as_u64()
+            .unwrap_or_default()
+            >= 1,
+        "expected api change count in explain-change output: {explain:?}"
+    );
+    assert_eq!(explain["risk_level"], json!("high"));
+    assert!(
+        explain["summary"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Risk:"),
+        "summary must include risk sentence: {explain:?}"
+    );
+}
+
+#[test]
+fn analyze_dead_code_subpath_filters_candidates() {
+    let repo = setup_repo(&[
+        (
+            "src/lib.rs",
+            "mod a;\n\npub fn caller() {\n    a::live();\n}\n",
+        ),
+        ("src/a.rs", "pub fn live() {}\n\nfn unused_in_src() {}\n"),
+        ("examples/demo.rs", "fn unused_in_examples() {}\n"),
+    ]);
+
+    run_atlas(repo.path(), &["init"]);
+    run_atlas(repo.path(), &["build"]);
+
+    let candidates = read_json_data_output(
+        "analyze_dead_code",
+        run_atlas(
+            repo.path(),
+            &["--json", "analyze", "dead-code", "--subpath", "src"],
+        ),
+    );
+    let candidates = candidates.as_array().expect("dead-code candidates array");
+
+    assert!(!candidates.is_empty(), "expected dead-code candidates");
+    assert!(candidates.iter().all(|candidate| {
+        candidate["node"]["file_path"]
+            .as_str()
+            .unwrap_or_default()
+            .starts_with("src")
+    }));
+    assert!(candidates.iter().any(|candidate| {
+        candidate["node"]["qualified_name"] == json!("src/a.rs::fn::unused_in_src")
+    }));
+    assert!(candidates.iter().all(|candidate| {
+        candidate["node"]["qualified_name"] != json!("examples/demo.rs::fn::unused_in_examples")
+    }));
+}
+
+#[test]
+fn refactor_rename_named_flags_support_dry_run() {
+    let repo = setup_repo(&[(
+        "src/lib.rs",
+        "pub fn helper() -> i32 {\n    1\n}\n\npub fn caller() -> i32 {\n    helper()\n}\n",
+    )]);
+
+    run_atlas(repo.path(), &["init"]);
+    run_atlas(repo.path(), &["build"]);
+
+    let result = read_json_data_output(
+        "refactor_rename",
+        run_atlas(
+            repo.path(),
+            &[
+                "--json",
+                "refactor",
+                "rename",
+                "--symbol",
+                "src/lib.rs::fn::helper",
+                "--to",
+                "helper_renamed",
+                "--dry-run",
+            ],
+        ),
+    );
+
+    assert_eq!(result["dry_run"], json!(true));
+    assert_eq!(result["files_changed"], json!(1));
+    assert!(
+        result["patches"]
+            .as_array()
+            .expect("patch array")
+            .iter()
+            .any(|patch| patch["unified_diff"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("helper_renamed")),
+        "rename dry-run must include renamed identifier in patch: {result:?}"
+    );
+
+    let after =
+        fs::read_to_string(repo.path().join("src/lib.rs")).expect("read source after dry-run");
+    assert!(after.contains("pub fn helper() -> i32"));
+    assert!(after.contains("helper()"));
+}
+
+#[test]
+fn serve_command_handles_stdio_jsonrpc_flow_end_to_end() {
+    let repo = setup_fixture_repo();
+
+    run_atlas(repo.path(), &["init"]);
+    run_atlas(repo.path(), &["build"]);
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_atlas"))
+        .arg("serve")
+        .current_dir(repo.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap_or_else(|err| panic!("failed to spawn atlas serve: {err}"));
+
+    let requests = concat!(
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}\n",
+        "{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}\n",
+        "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\",\"params\":{}}\n",
+        "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"query_graph\",\"arguments\":{\"text\":\"greet_twice\"}}}\n",
+        "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"get_context\",\"arguments\":{\"query\":\"greet_twice\"}}}\n"
+    );
+
+    {
+        let stdin = child.stdin.as_mut().expect("serve stdin");
+        stdin
+            .write_all(requests.as_bytes())
+            .expect("write serve requests");
+    }
+
+    let output = child
+        .wait_with_output()
+        .expect("wait for atlas serve output");
+
+    assert!(
+        output.status.success(),
+        "atlas serve failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let responses = parse_jsonrpc_lines(&output.stdout);
+    assert_eq!(
+        responses.len(),
+        4,
+        "initialized notification must not emit a response"
+    );
+
+    assert_eq!(responses[0]["id"], json!(1));
+    assert_eq!(
+        responses[0]["result"]["protocolVersion"],
+        json!("2024-11-05")
+    );
+
+    assert_eq!(responses[1]["id"], json!(2));
+    let tools = responses[1]["result"]["tools"]
+        .as_array()
+        .expect("tools/list result tools array");
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool["name"] == json!("get_context")),
+        "tools/list must expose get_context"
+    );
+
+    assert_eq!(responses[2]["id"], json!(3));
+    assert_eq!(responses[2]["result"]["atlas_output_format"], json!("json"));
+    let query_text = responses[2]["result"]["content"][0]["text"]
+        .as_str()
+        .expect("query_graph text content");
+    let query_value: Value = serde_json::from_str(query_text).expect("query_graph payload json");
+    assert_eq!(
+        query_value[0]["qn"],
+        json!("src/lib.rs::method::Greeter::greet_twice")
+    );
+
+    assert_eq!(responses[3]["id"], json!(4));
+    assert_eq!(responses[3]["result"]["atlas_output_format"], json!("toon"));
+    let context_text = responses[3]["result"]["content"][0]["text"]
+        .as_str()
+        .expect("get_context text content");
+    assert!(context_text.contains("intent: symbol"));
+    assert!(context_text.contains("src/lib.rs::method::Greeter::greet_twice"));
 }
 
 #[test]
@@ -868,6 +1075,15 @@ fn read_json_output(output: Output) -> Value {
     serde_json::from_slice(&output.stdout).expect("valid json output")
 }
 
+fn parse_jsonrpc_lines(stdout: &[u8]) -> Vec<Value> {
+    String::from_utf8(stdout.to_vec())
+        .expect("jsonrpc stdout utf-8")
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str(line).expect("jsonrpc response line"))
+        .collect()
+}
+
 fn read_json_data_output(command: &str, output: Output) -> Value {
     let value = read_json_output(output);
     assert_eq!(value["schema_version"], json!("atlas_cli.v1"));
@@ -945,10 +1161,7 @@ fn context_files_flag_returns_review_intent_json() {
 
     let data = read_json_data_output(
         "context",
-        run_atlas(
-            repo.path(),
-            &["--json", "context", "--files", "src/lib.rs"],
-        ),
+        run_atlas(repo.path(), &["--json", "context", "--files", "src/lib.rs"]),
     );
 
     assert_eq!(
@@ -976,7 +1189,14 @@ fn context_intent_override_changes_request_intent() {
         "context",
         run_atlas(
             repo.path(),
-            &["--json", "context", "--files", "src/lib.rs", "--intent", "impact"],
+            &[
+                "--json",
+                "context",
+                "--files",
+                "src/lib.rs",
+                "--intent",
+                "impact",
+            ],
         ),
     );
 
@@ -1072,7 +1292,10 @@ fn context_json_contract_stable_for_golden_snapshot() {
     normalize_context_result(&mut data);
 
     let golden = read_golden_json("context_helper.json");
-    assert_eq!(data, golden, "context JSON output must match golden snapshot");
+    assert_eq!(
+        data, golden,
+        "context JSON output must match golden snapshot"
+    );
 }
 
 fn normalize_context_result(value: &mut serde_json::Value) {

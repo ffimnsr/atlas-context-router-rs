@@ -14,6 +14,7 @@
 //! | `explain_change`    | Advanced impact: risk, change kinds, boundary/test gaps|
 
 mod context;
+mod output;
 mod tools;
 mod transport;
 
