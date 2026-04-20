@@ -8,10 +8,10 @@ echo "[pre-commit] format check"
 cargo fmt --all --check
 
 echo "[pre-commit] lint"
-cargo clippy --all-targets --all-features -- -D warnings
+cargo clippy --workspace --all-targets --all-features -- -D warnings
 
 echo "[pre-commit] lint stable"
-cargo +stable clippy --all-targets --all-features -- -D warnings
+cargo +stable clippy --workspace --all-targets --all-features -- -D warnings
 
 echo "[pre-commit] test"
 cargo test --workspace

@@ -13,11 +13,11 @@ tasks:
     description: Verify formatting matches rustfmt output.
   lint:
     commands:
-      - cargo clippy --all-targets --all-features -- -D warnings
+      - cargo clippy --workspace --all-targets --all-features -- -D warnings
     description: Lint the code using clippy and treat warnings as errors.
   lint-stable:
     commands:
-      - cargo +stable clippy --all-targets --all-features -- -D warnings
+      - cargo +stable clippy --workspace --all-targets --all-features -- -D warnings
     description: Lint the code using clippy on stable Rust and treat warnings as errors.
   test:
     commands:
