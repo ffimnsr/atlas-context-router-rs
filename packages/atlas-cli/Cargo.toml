@@ -21,6 +21,7 @@ atlas-store-sqlite = { path = "../atlas-store-sqlite" }
 anyhow.workspace = true
 camino.workspace = true
 clap.workspace = true
+clap_complete.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true

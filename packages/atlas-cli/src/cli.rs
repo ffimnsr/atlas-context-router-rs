@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand};
+use clap_complete::Shell;
 
 #[derive(Debug, Parser)]
 #[command(name = "atlas", about = "Atlas code graph CLI")]
@@ -156,6 +157,32 @@ pub enum Command {
 
     /// Run a health check on the atlas setup (repo, config, database).
     Doctor,
+
+    /// Install MCP server configuration for AI coding platforms.
+    Install {
+        /// Target platform: copilot, claude, codex, or all (default: all detected).
+        #[arg(long, default_value = "all")]
+        platform: String,
+
+        /// Show what would be done without writing any files.
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Skip installing git hooks.
+        #[arg(long)]
+        no_hooks: bool,
+
+        /// Skip injecting graph instructions into AGENTS.md / CLAUDE.md.
+        #[arg(long)]
+        no_instructions: bool,
+    },
+
+    /// Print shell completion script to stdout.
+    Completions {
+        /// Shell to generate completions for.
+        #[arg(value_enum)]
+        shell: Shell,
+    },
 }
 
 #[cfg(test)]
@@ -403,5 +430,80 @@ mod tests {
     #[test]
     fn query_missing_text_arg_fails() {
         assert!(Cli::try_parse_from(["atlas", "query"]).is_err());
+    }
+
+    // -------------------------------------------------------------------------
+    // install
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn parse_install_defaults() {
+        let cli = parse(&["atlas", "install"]);
+        if let Command::Install { platform, dry_run, no_hooks, no_instructions } = cli.command {
+            assert_eq!(platform, "all");
+            assert!(!dry_run);
+            assert!(!no_hooks);
+            assert!(!no_instructions);
+        } else {
+            panic!("expected Install command");
+        }
+    }
+
+    #[test]
+    fn parse_install_platform_claude() {
+        let cli = parse(&["atlas", "install", "--platform", "claude"]);
+        if let Command::Install { platform, .. } = cli.command {
+            assert_eq!(platform, "claude");
+        } else {
+            panic!("expected Install command");
+        }
+    }
+
+    #[test]
+    fn parse_install_dry_run() {
+        let cli = parse(&["atlas", "install", "--dry-run"]);
+        if let Command::Install { dry_run, .. } = cli.command {
+            assert!(dry_run);
+        } else {
+            panic!("expected Install command");
+        }
+    }
+
+    #[test]
+    fn parse_install_no_hooks_and_no_instructions() {
+        let cli = parse(&["atlas", "install", "--no-hooks", "--no-instructions"]);
+        if let Command::Install { no_hooks, no_instructions, .. } = cli.command {
+            assert!(no_hooks);
+            assert!(no_instructions);
+        } else {
+            panic!("expected Install command");
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // completions
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn parse_completions_bash() {
+        let cli = parse(&["atlas", "completions", "bash"]);
+        assert!(matches!(
+            cli.command,
+            Command::Completions { shell: clap_complete::Shell::Bash }
+        ));
+    }
+
+    #[test]
+    fn parse_completions_zsh() {
+        let cli = parse(&["atlas", "completions", "zsh"]);
+        assert!(matches!(
+            cli.command,
+            Command::Completions { shell: clap_complete::Shell::Zsh }
+        ));
+    }
+
+    #[test]
+    fn completions_missing_shell_fails() {
+        assert!(Cli::try_parse_from(["atlas", "completions"]).is_err());
     }
 }

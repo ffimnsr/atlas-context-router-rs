@@ -30,6 +30,7 @@ time = { version = "0.3", features = ["serde"] }
 
 # CLI
 clap = { version = "4", features = ["derive"] }
+clap_complete = "4"
 
 # logging
 tracing = "0.1"

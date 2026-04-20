@@ -38,7 +38,7 @@ The upstream repo’s real kernel is the repository scanner, parser layer, SQLit
 
 ## Phase 0 — Core Architecture Decisions
 
-### 0.1 Freeze v1 scope
+### 0.1 Freeze release-1 scope
 
 - [x] Include in v1:
   - [x] repo root detection
@@ -52,18 +52,18 @@ The upstream repo’s real kernel is the repository scanner, parser layer, SQLit
   - [x] review context assembly
   - [x] FTS5 keyword search
   - [x] CLI
-- [x] Explicitly defer:
-  - [x] embeddings
-  - [x] communities
-  - [x] flows
-  - [x] wiki
-  - [x] visualization/export
-  - [x] multi-repo registry
-  - [x] install hooks
-  - [x] auto-watch mode
-  - [x] refactor/apply-refactor
-  - [x] evaluation harness
-  - [x] cloud providers
+- [x] Move non-MVP items to post-MVP backlog:
+  - [ ] embeddings
+  - [ ] communities
+  - [ ] flows
+  - [ ] wiki
+  - [ ] visualization/export
+  - [ ] multi-repo registry
+  - [ ] install hooks
+  - [ ] auto-watch mode
+  - [ ] refactor/apply-refactor
+  - [ ] evaluation harness
+  - [ ] cloud providers
 
 ### 0.2 Freeze compatibility policy
 
@@ -92,8 +92,8 @@ The upstream repo’s real kernel is the repository scanner, parser layer, SQLit
   - [x] `packages/atlas-review`
   - [x] `packages/atlas-impact`
   - [ ] `packages/atlas-mcp`
+  - [x] `packages/atlas-engine` — shared build/update pipeline crate
 - [x] Keep public API narrow between crates
-- [x] `packages/atlas-engine` — shared build/update pipeline crate
 
 ---
 
@@ -138,7 +138,7 @@ The upstream repo’s real kernel is the repository scanner, parser layer, SQLit
   - [x] language crates as needed
 - [x] Git integration:
   - [x] use `std::process::Command` wrapping `git` CLI (v1 decision — avoids libgit2 build dep)
-  - [ ] `git2` deferred to post-v1
+  - [ ] `git2` optional later
 - [x] For performance-sensitive hashmaps use `hashbrown` crate (added to workspace deps)
 
 
@@ -988,7 +988,7 @@ The upstream report highlights parser fidelity and install/hook fragility as the
 - [x] `atlas doctor` — implemented: checks repo root, git root, .atlas dir, config, DB file, integrity, graph stats, git ls-files
 - [x] `atlas db check` — implemented
 - [x] tracing spans around build/update phases
-- [ ] optional metrics export — **backlog**: needs external metrics infra (Prometheus/OTEL); out of v1 scope
+- [ ] optional metrics export — **backlog**: needs external metrics infra (Prometheus/OTEL); not on core path
 
 ---
 
@@ -1703,7 +1703,7 @@ Shared support for explainability, config, CLI surface, JSON contracts, benchmar
   - [ ] deterministic rename refactor works in dry-run and apply modes
   - [ ] deterministic dead code removal works for high-confidence candidates
   - [ ] import cleanup works reliably
-  - [ ] extract-function candidate detection exists even if auto-apply stays deferred
+  - [ ] extract-function candidate detection exists even if auto-apply stays out of scope
 
 ## Phase 26 — MCP / Agent Integration
 
@@ -1976,7 +1976,7 @@ Deterministic analytics layer on top of graph + stored metadata. Produce explain
 - [ ] infer modules
 - [ ] label components
 
-## Phase 31 — Deferred Lowest Priority
+## Phase 31 — Lowest Priority
 
 ### 31.1 Wiki / docs generation
 
@@ -2006,23 +2006,23 @@ Deterministic analytics layer on top of graph + stored metadata. Produce explain
 
 Release 1 is done when this works end-to-end:
 
-- [ ] `atlas init`
-- [ ] `atlas build`
-- [ ] `atlas status`
-- [ ] `atlas query "some symbol"`
-- [ ] `atlas update --base origin/main`
-- [ ] `atlas impact --base origin/main`
-- [ ] `atlas review-context --base origin/main`
+- [x] `atlas init`
+- [x] `atlas build`
+- [x] `atlas status`
+- [x] `atlas query "some symbol"`
+- [x] `atlas update --base origin/main`
+- [x] `atlas impact --base origin/main`
+- [x] `atlas review-context --base origin/main`
 
 And the system has:
 
-- [ ] multi-language parsing for a small v1 language set
-- [ ] SQLite graph persistence
-- [ ] file-slice replacement
-- [ ] recursive impact-radius SQL traversal
-- [ ] review-context assembly
-- [ ] FTS5 search
-- [ ] CI on Linux + Windows
+- [x] multi-language parsing for a small v1 language set
+- [x] SQLite graph persistence
+- [x] file-slice replacement
+- [x] recursive impact-radius SQL traversal
+- [x] review-context assembly
+- [x] FTS5 search
+- [x] CI on Linux
 
 ---
 
@@ -2085,7 +2085,7 @@ And the system has:
 
 - [x] rename DB path to `.atlas/worldview.sqlite`
 - [x] finish binary/work-dir/config naming contract (paths module in atlas-cli)
-- [x] freeze v1 include/defer scope
+- [x] freeze v1 include/out-of-scope boundaries
 - [x] document every intentional compatibility break (see COMPATIBILITY.md)
 - [x] decide remaining dependency choices that affect public shape
 
@@ -2133,7 +2133,7 @@ And the system has:
 ### Slice 14 — post-MVP gate
 
 - [x] confirm MVP complete before expanding scope
-- [x] keep deferred items from blocking core path
+- [x] keep out-of-scope items from blocking core path
 
 ### Slice 15 — retrieval
 
@@ -2232,16 +2232,16 @@ And the system has:
 - [ ] multi-repo support
 - [ ] remaining advanced code intelligence
 
-### Slice 28 — deferred lowest priority
+### Slice 28 — lowest priority
 
 - [ ] wiki/docs generation
 - [ ] v2 completion criteria
 - [ ] lowest-priority guiding-principle items
 
-### Slice 29 — deferred platform and ecosystem
+### Slice 29 — platform and ecosystem backlog
 
-- [ ] install hooks
+- [x] install hooks
 - [x] flows/communities schema
 - [ ] evaluation harness
 - [ ] cloud providers
-- [ ] shell completion and minor tooling leftovers
+- [x] shell completion and minor tooling leftovers

@@ -1,5 +1,6 @@
 mod cli;
 mod commands;
+mod install;
 mod logging;
 
 use clap::Parser;
@@ -21,6 +22,8 @@ fn main() {
         Command::Serve => commands::run_serve(&cli),
         Command::DbCheck => commands::run_db_check(&cli),
         Command::Doctor => commands::run_doctor(&cli),
+        Command::Install { .. } => commands::run_install(&cli),
+        Command::Completions { .. } => commands::run_completions(&cli),
     };
 
     if let Err(err) = result {
