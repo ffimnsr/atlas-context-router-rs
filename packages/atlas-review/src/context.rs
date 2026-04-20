@@ -1,19 +1,25 @@
 // Phase 22 — Context Engine: Slices 3, 4, 5, 6, 8
+// Phase CM6 — Retrieval-backed restoration
 //
 // Slice 3: resolve_target
 // Slice 4: build_symbol_context
 // Slice 5: rank_context / trim_context
 // Slice 6: build_review_context / build_impact_context
 // Slice 8: apply_code_spans
+// CM6: retrieve_saved_context
 
 use std::collections::{HashMap, HashSet};
 
+use atlas_contentstore::{
+    ContentStore,
+    store::{SearchFilters, SourceRow},
+};
 use atlas_core::{
     Result,
     model::{
         AmbiguityMeta, ContextRequest, ContextResult, ContextTarget, NoiseReductionSummary,
-        SelectedEdge, SelectedFile, SelectedNode, SelectionReason, TruncationMeta,
-        WorkflowCallChain, WorkflowComponent, WorkflowFocusNode, WorkflowSummary,
+        SavedContextSource, SelectedEdge, SelectedFile, SelectedNode, SelectionReason,
+        TruncationMeta, WorkflowCallChain, WorkflowComponent, WorkflowFocusNode, WorkflowSummary,
     },
 };
 use atlas_store_sqlite::Store;
@@ -300,6 +306,7 @@ pub fn build_symbol_context(
         truncation: TruncationMeta::none(),
         ambiguity: None,
         workflow: None,
+        saved_context_sources: vec![],
     };
 
     rank_context(&mut result);
@@ -326,6 +333,7 @@ pub fn build_ambiguous_result(request: &ContextRequest, meta: AmbiguityMeta) -> 
         truncation: TruncationMeta::none(),
         ambiguity: Some(meta),
         workflow: None,
+        saved_context_sources: vec![],
     }
 }
 
@@ -348,6 +356,7 @@ pub fn build_not_found_result(request: &ContextRequest, suggestions: Vec<String>
         truncation: TruncationMeta::none(),
         ambiguity,
         workflow: None,
+        saved_context_sources: vec![],
     }
 }
 
@@ -760,6 +769,7 @@ pub fn build_review_context(store: &Store, request: &ContextRequest) -> Result<C
         truncation: TruncationMeta::none(),
         ambiguity: None,
         workflow: None,
+        saved_context_sources: vec![],
     };
 
     rank_context(&mut result);
@@ -1248,21 +1258,191 @@ fn build_noise_reduction_summary(result: &ContextResult) -> NoiseReductionSummar
 }
 
 // ---------------------------------------------------------------------------
+// CM6: saved-context retrieval
+// ---------------------------------------------------------------------------
+
+/// Maximum number of saved-context sources to include in a result.
+const MAX_SAVED_SOURCES: usize = 5;
+
+/// Query the content store for saved artifacts relevant to this request.
+///
+/// Build a BM25 query from the top symbol names and file basenames that
+/// appear in the graph result.  Score each unique source by:
+/// - inverse-rank position (RRF-like: 10 / (rank + 1))
+/// - recency boost: +5.0 when the artifact was created within the past 7 days
+///   (determined by lexicographic RFC3339 comparison)
+/// - same-session boost: +10.0 when the artifact session matches `request.session_id`
+///
+/// Returns at most [`MAX_SAVED_SOURCES`] sources ordered by descending score.
+fn retrieve_saved_context(
+    content_store: &ContentStore,
+    request: &ContextRequest,
+    result: &ContextResult,
+) -> Vec<SavedContextSource> {
+    // Build query from top symbol names and file basenames.
+    let mut terms: Vec<String> = result
+        .nodes
+        .iter()
+        .take(5)
+        .map(|sn| sn.node.name.clone())
+        .collect();
+    for sf in result.files.iter().take(3) {
+        let basename = sf.path.rsplit('/').next().unwrap_or(&sf.path);
+        terms.push(basename.to_string());
+    }
+    terms.dedup();
+
+    if terms.is_empty() {
+        return vec![];
+    }
+
+    let query = terms.join(" ");
+    let filters = SearchFilters {
+        session_id: request.session_id.clone(),
+        ..SearchFilters::default()
+    };
+
+    let chunks = match content_store.search_with_fallback(&query, &filters) {
+        Ok(c) => c,
+        Err(_) => return vec![],
+    };
+
+    // Collect unique source_ids preserving first-seen rank order.
+    let mut seen_ids: Vec<String> = Vec::new();
+    for chunk in &chunks {
+        if !seen_ids.contains(&chunk.source_id) {
+            seen_ids.push(chunk.source_id.clone());
+            if seen_ids.len() >= MAX_SAVED_SOURCES {
+                break;
+            }
+        }
+    }
+
+    // RFC3339 strings sort lexicographically; compute cutoff for 7-day recency.
+    let seven_days_ago = {
+        // Approximate: subtract 604800 seconds from now expressed as a string.
+        // Use a simple subtraction on the unix epoch rather than the `time` crate.
+        let now_secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let cutoff = now_secs.saturating_sub(7 * 24 * 60 * 60);
+        // Format as a sortable RFC3339 prefix: "YYYY-MM-DDTHH:MM:SSZ"
+        let secs = cutoff;
+        let days_since_epoch = secs / 86400;
+        let rem = secs % 86400;
+        let hours = rem / 3600;
+        let minutes = (rem % 3600) / 60;
+        let seconds = rem % 60;
+        // Gregorian calendar approximation reliable for 1970-2100.
+        let (year, month, day) = epoch_days_to_ymd(days_since_epoch);
+        format!(
+            "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+            year, month, day, hours, minutes, seconds
+        )
+    };
+
+    let mut scored: Vec<SavedContextSource> = Vec::new();
+    for (rank, source_id) in seen_ids.iter().enumerate() {
+        let meta: SourceRow = match content_store.get_source(source_id) {
+            Ok(Some(m)) => m,
+            _ => continue,
+        };
+        let preview: String = chunks
+            .iter()
+            .find(|c| &c.source_id == source_id)
+            .map(|c| c.content.chars().take(512).collect())
+            .unwrap_or_default();
+
+        // Base: inverse-rank score.
+        let mut score = 10.0_f32 / (rank as f32 + 1.0);
+
+        // Recency boost.
+        if meta.created_at.as_str() >= seven_days_ago.as_str() {
+            score += 5.0;
+        }
+
+        // Same-session boost.
+        if let (Some(req_sid), Some(art_sid)) =
+            (request.session_id.as_deref(), meta.session_id.as_deref())
+            && req_sid == art_sid
+        {
+            score += 10.0;
+        }
+
+        let retrieval_hint = format!(
+            "source_id={} label={:?} type={}",
+            source_id, meta.label, meta.source_type
+        );
+
+        scored.push(SavedContextSource {
+            source_id: source_id.clone(),
+            label: meta.label,
+            source_type: meta.source_type,
+            session_id: meta.session_id,
+            preview,
+            retrieval_hint,
+            relevance_score: score,
+        });
+    }
+
+    scored.sort_by(|a, b| {
+        b.relevance_score
+            .partial_cmp(&a.relevance_score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    scored
+}
+
+/// Convert days since the Unix epoch to (year, month, day) using the
+/// proleptic Gregorian calendar.  Adequate for RFC3339 recency comparison.
+fn epoch_days_to_ymd(days: u64) -> (u64, u8, u8) {
+    // Algorithm: civil date from days since 1970-01-01.
+    let z = days as i64 + 719468;
+    let era = (if z >= 0 { z } else { z - 146096 }) / 146097;
+    let doe = (z - era * 146097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    (y as u64, m as u8, d as u8)
+}
+
+// ---------------------------------------------------------------------------
 // Slice 9: ContextEngine public entrypoint
 // ---------------------------------------------------------------------------
 
 /// Stateless context engine facade.
 ///
 /// Wraps the free-function pipeline into a struct so callers inject one
-/// [`Store`] reference and call engine operations as methods.
+/// [`Store`] reference and call engine operations as methods.  An optional
+/// [`ContentStore`] enables CM6 saved-context retrieval.
 pub struct ContextEngine<'a> {
     store: &'a Store,
+    /// Optional content store for CM6 retrieval-backed restoration.
+    content_store: Option<&'a ContentStore>,
 }
 
 impl<'a> ContextEngine<'a> {
     /// Create a new engine backed by `store`.
     pub fn new(store: &'a Store) -> Self {
-        Self { store }
+        Self {
+            store,
+            content_store: None,
+        }
+    }
+
+    /// Attach a content store to enable saved-context retrieval (CM6).
+    ///
+    /// When attached and `request.include_saved_context` is `true`, the engine
+    /// queries the content store for relevant saved artifacts after graph
+    /// retrieval and merges them into `ContextResult::saved_context_sources`.
+    pub fn with_content_store(mut self, cs: &'a ContentStore) -> Self {
+        self.content_store = Some(cs);
+        self
     }
 
     /// Resolve a [`ContextTarget`] to a concrete node, file, or ambiguity result.
@@ -1274,8 +1454,16 @@ impl<'a> ContextEngine<'a> {
     ///
     /// Routes by intent (Review / Impact / Symbol / File), resolves target,
     /// retrieves neighbors, ranks, trims, and optionally applies code spans.
+    /// When `request.include_saved_context` is `true` and a content store is
+    /// attached, also populates `saved_context_sources` (CM6).
     pub fn build(&self, request: &ContextRequest) -> Result<ContextResult> {
-        build_context(self.store, request)
+        let mut result = build_context(self.store, request)?;
+        if request.include_saved_context
+            && let Some(cs) = self.content_store
+        {
+            result.saved_context_sources = retrieve_saved_context(cs, request, &result);
+        }
+        Ok(result)
     }
 }
 

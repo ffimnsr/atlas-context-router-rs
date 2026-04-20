@@ -7,6 +7,7 @@ description = "MCP server exposing Atlas graph, impact, and review tools over st
 [dependencies]
 atlas-core.workspace = true
 atlas-adapters = { path = "../atlas-adapters" }
+atlas-contentstore = { path = "../atlas-contentstore" }
 atlas-engine.workspace = true
 atlas-impact = { path = "../atlas-impact" }
 atlas-parser = { path = "../atlas-parser" }

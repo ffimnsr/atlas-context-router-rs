@@ -20,6 +20,7 @@ atlas-refactor = { path = "../atlas-refactor" }
 atlas-repo = { path = "../atlas-repo" }
 atlas-search = { path = "../atlas-search" }
 atlas-review = { path = "../atlas-review" }
+atlas-session = { path = "../atlas-session" }
 atlas-store-sqlite = { path = "../atlas-store-sqlite" }
 anyhow.workspace = true
 camino.workspace = true

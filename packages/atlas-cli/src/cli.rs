@@ -367,6 +367,31 @@ pub enum Command {
         #[command(subcommand)]
         subcommand: RefactorCommand,
     },
+
+    /// Manage Atlas context-mode sessions (start, status, resume, clear, list).
+    Session {
+        #[command(subcommand)]
+        subcommand: SessionCommand,
+    },
+}
+
+/// Sub-commands for `atlas session`.
+#[derive(Debug, Subcommand)]
+pub enum SessionCommand {
+    /// Start (or re-register) the current session.
+    Start,
+
+    /// Show the current session status and recent event summary.
+    Status,
+
+    /// Print the pending resume snapshot, then mark it consumed.
+    Resume,
+
+    /// Delete the current session and all its stored events.
+    Clear,
+
+    /// List all known sessions for this repo.
+    List,
 }
 
 /// Sub-commands for `atlas flows`.

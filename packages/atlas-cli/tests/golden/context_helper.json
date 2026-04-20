@@ -133,11 +133,13 @@
     "include_code_spans": false,
     "include_imports": true,
     "include_neighbors": false,
+    "include_saved_context": false,
     "include_tests": false,
     "intent": "symbol",
     "max_edges": null,
     "max_files": null,
     "max_nodes": null,
+    "session_id": null,
     "target": {
       "kind": "symbol_name",
       "name": "helper"
@@ -234,5 +236,6 @@
         "omitted test-only neighbors"
       ]
     }
-  }
+  },
+  "saved_context_sources": []
 }

@@ -35,6 +35,7 @@ fn main() {
         Command::Refactor { .. } => commands::run_refactor(&cli),
         Command::Flows { .. } => commands::run_flows(&cli),
         Command::Communities { .. } => commands::run_communities(&cli),
+        Command::Session { .. } => commands::run_session(&cli),
     };
 
     if let Err(err) = result {

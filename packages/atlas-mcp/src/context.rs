@@ -5,7 +5,9 @@
 //! fields to reduce token overhead while keeping the information an agent
 //! actually needs.
 
-use atlas_core::model::{ContextResult, Edge, ImpactResult, Node, SelectedEdge, SelectedNode};
+use atlas_core::model::{
+    ContextResult, Edge, ImpactResult, Node, SavedContextSource, SelectedEdge, SelectedNode,
+};
 use serde::Serialize;
 
 // ---------------------------------------------------------------------------
@@ -140,6 +142,23 @@ pub struct PackagedContextResult<'a> {
     pub ambiguity_query: Option<&'a str>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub ambiguity_candidates: Vec<&'a str>,
+    /// Saved-context sources from the content store (CM6).
+    /// Only present when `include_saved_context` was `true` in the request.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub saved_context_sources: Vec<PackagedSavedSource<'a>>,
+}
+
+/// Compact representation of a [`SavedContextSource`].
+#[derive(Serialize)]
+pub struct PackagedSavedSource<'a> {
+    pub source_id: &'a str,
+    pub label: &'a str,
+    pub source_type: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<&'a str>,
+    pub preview: &'a str,
+    pub retrieval_hint: &'a str,
+    pub relevance_score: f32,
 }
 
 #[derive(Serialize)]
@@ -240,5 +259,18 @@ pub fn package_context_result(result: &ContextResult) -> PackagedContextResult<'
         edges_dropped: result.truncation.edges_dropped + edge_count.saturating_sub(edge_cap),
         ambiguity_query,
         ambiguity_candidates,
+        saved_context_sources: result
+            .saved_context_sources
+            .iter()
+            .map(|s: &SavedContextSource| PackagedSavedSource {
+                source_id: &s.source_id,
+                label: &s.label,
+                source_type: &s.source_type,
+                session_id: s.session_id.as_deref(),
+                preview: &s.preview,
+                retrieval_hint: &s.retrieval_hint,
+                relevance_score: s.relevance_score,
+            })
+            .collect(),
     }
 }

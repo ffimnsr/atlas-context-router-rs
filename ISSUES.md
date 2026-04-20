@@ -3322,66 +3322,66 @@ Once events exist, build bounded resume material and user-facing session command
 
 #### Snapshot API
 
-- [ ] `build_resume(session_id) -> ResumeSnapshot`
+- [x] `build_resume(session_id) -> ResumeSnapshot`
 
 #### Snapshot content
 
-- [ ] repo root
-- [ ] worktree identifier
-- [ ] last user intent
-- [ ] most recent important commands
-- [ ] changed files
-- [ ] impacted symbols
-- [ ] unresolved errors
-- [ ] recent reasoning outputs
-- [ ] saved artifact references
-- [ ] current task state
-- [ ] recent decisions
-- [ ] active rules/instructions
-- [ ] retrieval-ready source labels or queries for important prior artifacts
+- [x] repo root
+- [x] worktree identifier
+- [x] last user intent
+- [x] most recent important commands
+- [x] changed files
+- [x] impacted symbols
+- [x] unresolved errors
+- [x] recent reasoning outputs
+- [x] saved artifact references
+- [x] current task state
+- [x] recent decisions
+- [x] active rules/instructions
+- [x] retrieval-ready source labels or queries for important prior artifacts
 
 #### Snapshot constraints
 
-- [ ] snapshot size must be bounded
-- [ ] snapshot must contain retrieval hints
-- [ ] snapshot must prefer identifiers and summaries over raw content
-- [ ] snapshot must be stable enough for tests
-- [ ] snapshot must group events by category
-- [ ] snapshot must include exact follow-up search commands / retrieval directives
-- [ ] snapshot rendering must be deterministic and easy to snapshot-test
+- [x] snapshot size must be bounded
+- [x] snapshot must contain retrieval hints
+- [x] snapshot must prefer identifiers and summaries over raw content
+- [x] snapshot must be stable enough for tests
+- [x] snapshot must group events by category
+- [x] snapshot must include exact follow-up search commands / retrieval directives
+- [x] snapshot rendering must be deterministic and easy to snapshot-test
 
 #### Lifecycle
 
-- [ ] build snapshot before compaction or reset
-- [ ] persist snapshot into `session_resume`
-- [ ] inject snapshot at next session start or explicit resume
-- [ ] mark snapshot consumed after successful injection
+- [x] build snapshot before compaction or reset
+- [x] persist snapshot into `session_resume`
+- [x] inject snapshot at next session start or explicit resume
+- [x] mark snapshot consumed after successful injection
 
 #### CLI commands
 
-- [ ] `atlas session start`
-- [ ] `atlas session status`
-- [ ] `atlas session resume`
-- [ ] `atlas session clear`
-- [ ] `atlas session list`
+- [x] `atlas session start`
+- [x] `atlas session status`
+- [x] `atlas session resume`
+- [x] `atlas session clear`
+- [x] `atlas session list`
 
 #### CLI behavior
 
-- [ ] auto-create session on interactive run
-- [ ] auto-load resume snapshot when available
-- [ ] show compact resume summary
-- [ ] add session lifecycle support
-- [ ] never replay raw historic output
-- [ ] degrade gracefully on hosts or shells without full lifecycle hooks
+- [x] auto-create session on interactive run
+- [x] auto-load resume snapshot when available
+- [x] show compact resume summary
+- [x] add session lifecycle support
+- [x] never replay raw historic output
+- [x] degrade gracefully on hosts or shells without full lifecycle hooks
 
 Why fifth:
 - snapshots are only useful once event history and artifact references exist
 - CLI session commands should operate on the same bounded data model that resume uses
 
 Exit criteria:
-- [ ] session resume works from stored snapshot, not raw history replay
-- [ ] CLI surfaces expose session lifecycle without leaking internal storage details
-- [ ] resume snapshot gives enough retrieval instructions to recover prior tool results, topics, and decisions on demand
+- [x] session resume works from stored snapshot, not raw history replay
+- [x] CLI surfaces expose session lifecycle without leaking internal storage details
+- [x] resume snapshot gives enough retrieval instructions to recover prior tool results, topics, and decisions on demand
 
 ### Phase CM6 — Retrieval-backed restoration in Context Engine
 
@@ -3389,41 +3389,41 @@ Extend context retrieval only after saved artifacts and session identity are sta
 
 #### Context Engine request additions
 
-- [ ] add `include_saved_context: bool`
-- [ ] add `session_id: Option<String>`
+- [x] add `include_saved_context: bool`
+- [x] add `session_id: Option<String>`
 
 #### Retrieval flow
 
-- [ ] query content store by symbol name after graph retrieval
-- [ ] query content store by file path after graph retrieval
-- [ ] query content store by session ID after graph retrieval
-- [ ] add retrieval from content store after graph retrieval
-- [ ] merge saved-context results into `ContextResult`
+- [x] query content store by symbol name after graph retrieval
+- [x] query content store by file path after graph retrieval
+- [x] query content store by session ID after graph retrieval
+- [x] add retrieval from content store after graph retrieval
+- [x] merge saved-context results into `ContextResult`
 
 #### Ranking additions
 
-- [ ] add saved-context relevance
-- [ ] add recency boost
-- [ ] add same-session boost
-- [ ] add session-aware ranking
-- [ ] preserve lexical retrieval as primary ranking path
-- [ ] avoid vector/embedding dependency in v1 continuity path
+- [x] add saved-context relevance
+- [x] add recency boost
+- [x] add same-session boost
+- [x] add session-aware ranking
+- [x] preserve lexical retrieval as primary ranking path
+- [x] avoid vector/embedding dependency in v1 continuity path
 
 #### Result additions
 
-- [ ] include `saved_context_sources`
-- [ ] include `source_ids`
-- [ ] include `retrieval_hints`
-- [ ] include saved-context previews without dumping raw blobs
-- [ ] include enough metadata to reopen prior tool result, topic, message, or query by retrieval
+- [x] include `saved_context_sources`
+- [x] include `source_ids`
+- [x] include `retrieval_hints`
+- [x] include saved-context previews without dumping raw blobs
+- [x] include enough metadata to reopen prior tool result, topic, message, or query by retrieval
 
 Why sixth:
 - context integration depends on both content search and session identity
 - ranking should only absorb saved context once the retrieval inputs are trustworthy
 
 Exit criteria:
-- [ ] context restoration works through retrieval, not transcript replay
-- [ ] `ContextResult` exposes enough source ids and hints for follow-up fetches
+- [x] context restoration works through retrieval, not transcript replay
+- [x] `ContextResult` exposes enough source ids and hints for follow-up fetches
 
 ### Phase CM7 — MCP continuity and saved-context tools
 

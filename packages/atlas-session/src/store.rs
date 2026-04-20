@@ -59,6 +59,10 @@ pub enum SessionEventType {
     ContextRequest,
     ReasoningResult,
     UserIntent,
+    /// A deliberate decision recorded during a session (e.g. "chose approach A over B").
+    Decision,
+    /// An active rule or instruction that governs agent behaviour in this session.
+    RuleInstruction,
     Error,
     SessionStart,
     SessionResume,
@@ -78,6 +82,8 @@ impl SessionEventType {
             Self::ContextRequest => "CONTEXT_REQUEST",
             Self::ReasoningResult => "REASONING_RESULT",
             Self::UserIntent => "USER_INTENT",
+            Self::Decision => "DECISION",
+            Self::RuleInstruction => "RULE_INSTRUCTION",
             Self::Error => "ERROR",
             Self::SessionStart => "SESSION_START",
             Self::SessionResume => "SESSION_RESUME",
@@ -107,6 +113,8 @@ impl std::str::FromStr for SessionEventType {
             "CONTEXT_REQUEST" => Ok(Self::ContextRequest),
             "REASONING_RESULT" => Ok(Self::ReasoningResult),
             "USER_INTENT" => Ok(Self::UserIntent),
+            "DECISION" => Ok(Self::Decision),
+            "RULE_INSTRUCTION" => Ok(Self::RuleInstruction),
             "ERROR" => Ok(Self::Error),
             "SESSION_START" => Ok(Self::SessionStart),
             "SESSION_RESUME" => Ok(Self::SessionResume),
@@ -458,6 +466,262 @@ impl SessionStore {
         Ok(())
     }
 
+    /// List all sessions ordered by most-recently-updated first.
+    pub fn list_sessions(&self) -> Result<Vec<SessionMeta>> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT session_id, repo_root, frontend, worktree_id, created_at, updated_at,
+                        last_resume_at, last_compaction_at
+                 FROM session_meta
+                 ORDER BY updated_at DESC, session_id ASC",
+            )
+            .map_err(|e| AtlasError::Db(e.to_string()))?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(SessionMeta {
+                    session_id: SessionId(row.get(0)?),
+                    repo_root: row.get(1)?,
+                    frontend: row.get(2)?,
+                    worktree_id: row.get(3)?,
+                    created_at: row.get(4)?,
+                    updated_at: row.get(5)?,
+                    last_resume_at: row.get(6)?,
+                    last_compaction_at: row.get(7)?,
+                })
+            })
+            .map_err(|e| AtlasError::Db(e.to_string()))?;
+        Ok(rows.filter_map(std::result::Result::ok).collect())
+    }
+
+    /// Delete a session and all associated events and snapshots.
+    ///
+    /// Returns `true` when the session existed, `false` when it was not found.
+    pub fn delete_session(&mut self, session_id: &SessionId) -> Result<bool> {
+        let rows = self
+            .conn
+            .execute(
+                "DELETE FROM session_meta WHERE session_id = ?1",
+                params![session_id.as_str()],
+            )
+            .map_err(|e| AtlasError::Db(e.to_string()))?;
+        Ok(rows > 0)
+    }
+
+    /// Build and persist a bounded resume snapshot for `session_id`.
+    ///
+    /// Groups all stored events into categorised summary buckets, serialises
+    /// the result as JSON, stores it in `session_resume`, and returns the
+    /// persisted [`ResumeSnapshot`].
+    ///
+    /// Snapshot constraints:
+    /// - Prefers identifiers and short summaries over raw content.
+    /// - Bounded per-bucket limits prevent unbounded growth.
+    /// - Includes retrieval hints so callers can fetch prior artifacts on demand.
+    pub fn build_resume(&mut self, session_id: &SessionId) -> Result<ResumeSnapshot> {
+        let meta = self
+            .get_session_meta(session_id)?
+            .ok_or_else(|| AtlasError::Other(format!("session {} not found", session_id)))?;
+
+        let events = self.list_events(session_id)?;
+        let event_count = events.len() as i64;
+
+        // ------------------------------------------------------------------
+        // Accumulate bucketed summaries from the event ledger.
+        // ------------------------------------------------------------------
+        let mut last_user_intent: Option<String> = None;
+        // Most recent commands (bounded to 10, latest at end).
+        let mut recent_commands: Vec<serde_json::Value> = Vec::new();
+        // File-change references gathered from review/impact events.
+        let mut changed_files: Vec<String> = Vec::new();
+        // Impacted symbol names gathered from impact events.
+        let mut impacted_symbols: Vec<String> = Vec::new();
+        // Unresolved error messages (COMMAND_FAIL / ERROR events).
+        let mut unresolved_errors: Vec<serde_json::Value> = Vec::new();
+        // Reasoning summaries with optional source_id.
+        let mut recent_reasoning: Vec<serde_json::Value> = Vec::new();
+        // Artifact source_ids from reasoning results.
+        let mut saved_artifact_refs: Vec<String> = Vec::new();
+        // Recent deliberate decisions (bounded to 10).
+        let mut recent_decisions: Vec<serde_json::Value> = Vec::new();
+        // Active rules / instructions (bounded to 10, later entries override).
+        let mut active_rules: Vec<serde_json::Value> = Vec::new();
+        // Graph state from most recent build/update event.
+        let mut graph_state: Option<serde_json::Value> = None;
+        // Retrieval hints (query labels, source_ids).
+        let mut retrieval_hints: Vec<serde_json::Value> = Vec::new();
+
+        for event in &events {
+            let payload: serde_json::Value =
+                serde_json::from_str(&event.payload_json).unwrap_or(serde_json::Value::Null);
+
+            match event.event_type {
+                SessionEventType::UserIntent => {
+                    if let Some(intent) = payload.get("intent").and_then(|v| v.as_str()) {
+                        last_user_intent = Some(intent.to_string());
+                    }
+                }
+                SessionEventType::CommandRun => {
+                    let entry = serde_json::json!({
+                        "command": payload.get("command"),
+                        "status": payload.get("status"),
+                        "at": event.created_at,
+                    });
+                    recent_commands.push(entry);
+                    if recent_commands.len() > 10 {
+                        recent_commands.remove(0);
+                    }
+                }
+                SessionEventType::CommandFail | SessionEventType::Error => {
+                    let entry = serde_json::json!({
+                        "command": payload.get("command").or_else(|| payload.get("tool")),
+                        "error": payload.get("error").or_else(|| payload.get("extra")),
+                        "at": event.created_at,
+                    });
+                    unresolved_errors.push(entry);
+                    if unresolved_errors.len() > 5 {
+                        unresolved_errors.remove(0);
+                    }
+                }
+                SessionEventType::ReviewContext | SessionEventType::ImpactAnalysis => {
+                    // Pull file list and impacted symbols when available.
+                    if let Some(files) = payload.get("files").and_then(|v| v.as_array()) {
+                        for f in files {
+                            if let Some(s) = f.as_str() {
+                                let owned = s.to_string();
+                                if !changed_files.contains(&owned) {
+                                    changed_files.push(owned);
+                                }
+                            }
+                        }
+                        if changed_files.len() > 20 {
+                            changed_files.truncate(20);
+                        }
+                    }
+                    if let Some(syms) = payload.get("impacted_symbols").and_then(|v| v.as_array()) {
+                        for sym in syms {
+                            if let Some(s) = sym.as_str() {
+                                let owned = s.to_string();
+                                if !impacted_symbols.contains(&owned) {
+                                    impacted_symbols.push(owned);
+                                }
+                            }
+                        }
+                        if impacted_symbols.len() > 30 {
+                            impacted_symbols.truncate(30);
+                        }
+                    }
+                }
+                SessionEventType::ReasoningResult => {
+                    if let Some(src) = payload.get("source_id").and_then(|v| v.as_str()) {
+                        let owned = src.to_string();
+                        if !saved_artifact_refs.contains(&owned) {
+                            saved_artifact_refs.push(owned.clone());
+                        }
+                        retrieval_hints.push(serde_json::json!({
+                            "kind": "saved_artifact",
+                            "source_id": owned,
+                            "summary": payload.get("summary"),
+                        }));
+                    }
+                    let entry = serde_json::json!({
+                        "summary": payload.get("summary"),
+                        "source_id": payload.get("source_id"),
+                        "at": event.created_at,
+                    });
+                    recent_reasoning.push(entry);
+                    if recent_reasoning.len() > 5 {
+                        recent_reasoning.remove(0);
+                    }
+                }
+                SessionEventType::ContextRequest => {
+                    if let Some(qh) = payload.get("query_hint").and_then(|v| v.as_str()) {
+                        retrieval_hints.push(serde_json::json!({
+                            "kind": "context_query",
+                            "query": qh,
+                        }));
+                        if retrieval_hints.len() > 15 {
+                            retrieval_hints.remove(0);
+                        }
+                    }
+                }
+                SessionEventType::Decision => {
+                    let entry = serde_json::json!({
+                        "summary": payload.get("summary"),
+                        "rationale": payload.get("rationale"),
+                        "at": event.created_at,
+                    });
+                    recent_decisions.push(entry);
+                    if recent_decisions.len() > 10 {
+                        recent_decisions.remove(0);
+                    }
+                }
+                SessionEventType::RuleInstruction => {
+                    // Each rule is identified by a short label; later entries
+                    // for the same label replace earlier ones so only the
+                    // current active set is retained.
+                    let label = payload
+                        .get("label")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let entry = serde_json::json!({
+                        "label": label,
+                        "rule": payload.get("rule"),
+                        "source": payload.get("source"),
+                        "at": event.created_at,
+                    });
+                    // Replace existing entry with same label, or append.
+                    if let Some(pos) = active_rules.iter().position(|r| {
+                        r.get("label").and_then(|v| v.as_str()) == Some(label.as_str())
+                    }) {
+                        active_rules[pos] = entry;
+                    } else {
+                        active_rules.push(entry);
+                        if active_rules.len() > 10 {
+                            active_rules.remove(0);
+                        }
+                    }
+                }
+                SessionEventType::GraphBuild | SessionEventType::GraphUpdate => {
+                    graph_state = Some(payload.clone());
+                }
+                // SessionStart / SessionResume / FileRead / FileWrite not
+                // distilled into the snapshot; they already contribute to
+                // the event ledger record count.
+                _ => {}
+            }
+        }
+
+        let snapshot = serde_json::json!({
+            "session_id": session_id.as_str(),
+            "repo_root": meta.repo_root,
+            "worktree_id": meta.worktree_id,
+            "frontend": meta.frontend,
+            "session_created_at": meta.created_at,
+            "last_user_intent": last_user_intent,
+            "recent_commands": recent_commands,
+            "changed_files": changed_files,
+            "impacted_symbols": impacted_symbols,
+            "unresolved_errors": unresolved_errors,
+            "recent_reasoning": recent_reasoning,
+            "saved_artifact_refs": saved_artifact_refs,
+            "recent_decisions": recent_decisions,
+            "active_rules": active_rules,
+            "graph_state": graph_state,
+            "retrieval_hints": retrieval_hints,
+            "event_count": event_count,
+        });
+
+        let snapshot_str = serde_json::to_string(&snapshot)
+            .map_err(|e| AtlasError::Other(format!("cannot serialise resume snapshot: {e}")))?;
+
+        self.put_resume_snapshot(session_id, &snapshot_str, event_count, false)?;
+
+        self.get_resume_snapshot(session_id)?
+            .ok_or_else(|| AtlasError::Other("resume snapshot was not persisted".to_string()))
+    }
+
     fn ensure_payload_fits(&self, payload_json: &str) -> Result<()> {
         if payload_json.len() > self.config.max_inline_payload_bytes {
             return Err(AtlasError::Other(format!(
@@ -757,5 +1021,172 @@ mod tests {
 
         let expected_path: PathBuf = dir.path().join(".atlas").join(DEFAULT_SESSION_DB);
         assert!(expected_path.exists());
+    }
+
+    #[test]
+    fn list_sessions_returns_all_in_recency_order() {
+        let (_dir, mut store) = open_store(16, 1024);
+
+        let id_a = SessionId::derive("/repo/a", "", "cli");
+        let id_b = SessionId::derive("/repo/b", "", "mcp");
+        store
+            .upsert_session_meta(id_a.clone(), "/repo/a", "cli", None)
+            .unwrap();
+        store
+            .upsert_session_meta(id_b.clone(), "/repo/b", "mcp", None)
+            .unwrap();
+
+        let sessions = store.list_sessions().unwrap();
+        assert_eq!(sessions.len(), 2);
+        // Most recently updated (id_b) should come first.
+        assert_eq!(sessions[0].session_id, id_b);
+        assert_eq!(sessions[1].session_id, id_a);
+    }
+
+    #[test]
+    fn delete_session_removes_events_and_returns_true_only_when_existed() {
+        let (_dir, mut store) = open_store(16, 1024);
+        let session_id = session_id();
+        seed_session(&mut store, &session_id);
+
+        // Append an event so there is something to cascade-delete.
+        store
+            .append_event(NewSessionEvent {
+                session_id: session_id.clone(),
+                event_type: SessionEventType::CommandRun,
+                priority: 2,
+                payload: serde_json::json!({ "command": "build" }),
+                created_at: None,
+            })
+            .unwrap();
+
+        assert!(store.delete_session(&session_id).unwrap());
+        assert!(store.get_session_meta(&session_id).unwrap().is_none());
+        assert!(store.list_events(&session_id).unwrap().is_empty());
+
+        // Second call should return false.
+        assert!(!store.delete_session(&session_id).unwrap());
+    }
+
+    #[test]
+    fn build_resume_persists_and_groups_events() {
+        let (_dir, mut store) = open_store(64, 8192);
+        let session_id = session_id();
+        seed_session(&mut store, &session_id);
+
+        let events = vec![
+            NewSessionEvent {
+                session_id: session_id.clone(),
+                event_type: SessionEventType::UserIntent,
+                priority: 3,
+                payload: serde_json::json!({ "intent": "review" }),
+                created_at: None,
+            },
+            NewSessionEvent {
+                session_id: session_id.clone(),
+                event_type: SessionEventType::CommandRun,
+                priority: 2,
+                payload: serde_json::json!({ "command": "build", "status": "ok" }),
+                created_at: None,
+            },
+            NewSessionEvent {
+                session_id: session_id.clone(),
+                event_type: SessionEventType::ReasoningResult,
+                priority: 3,
+                payload: serde_json::json!({ "source_id": "src-abc", "summary": "impact analysis" }),
+                created_at: None,
+            },
+        ];
+        for ev in events {
+            store.append_event(ev).unwrap();
+        }
+
+        let snap = store.build_resume(&session_id).unwrap();
+        assert!(!snap.consumed);
+        assert_eq!(snap.event_count, 3);
+        assert_eq!(snap.session_id, session_id);
+
+        let inner: serde_json::Value = serde_json::from_str(&snap.snapshot).unwrap();
+        assert_eq!(inner["last_user_intent"], "review");
+        assert_eq!(inner["recent_commands"].as_array().unwrap().len(), 1);
+        assert!(
+            inner["saved_artifact_refs"]
+                .as_array()
+                .unwrap()
+                .contains(&serde_json::json!("src-abc"))
+        );
+        assert_eq!(inner["event_count"], 3);
+    }
+
+    #[test]
+    fn build_resume_captures_decisions_and_deduplicates_rules_by_label() {
+        let (_dir, mut store) = open_store(64, 8192);
+        let session_id = session_id();
+        seed_session(&mut store, &session_id);
+
+        let events = vec![
+            NewSessionEvent {
+                session_id: session_id.clone(),
+                event_type: SessionEventType::Decision,
+                priority: 4,
+                payload: serde_json::json!({ "summary": "prefer composition", "rationale": "simpler" }),
+                created_at: None,
+            },
+            // First version of rule "no_mut_global".
+            NewSessionEvent {
+                session_id: session_id.clone(),
+                event_type: SessionEventType::RuleInstruction,
+                priority: 4,
+                payload: serde_json::json!({
+                    "label": "no_mut_global",
+                    "rule": "avoid global mutable state",
+                    "source": "AGENTS.md",
+                }),
+                created_at: None,
+            },
+            // Second version of the same label — should replace the first.
+            NewSessionEvent {
+                session_id: session_id.clone(),
+                event_type: SessionEventType::RuleInstruction,
+                priority: 4,
+                payload: serde_json::json!({
+                    "label": "no_mut_global",
+                    "rule": "avoid global mutable state (updated)",
+                    "source": "AGENTS.md",
+                }),
+                created_at: None,
+            },
+            // A distinct rule.
+            NewSessionEvent {
+                session_id: session_id.clone(),
+                event_type: SessionEventType::RuleInstruction,
+                priority: 4,
+                payload: serde_json::json!({
+                    "label": "use_result",
+                    "rule": "use Result and ? for error propagation",
+                    "source": "AGENTS.md",
+                }),
+                created_at: None,
+            },
+        ];
+        for ev in events {
+            store.append_event(ev).unwrap();
+        }
+
+        let snap = store.build_resume(&session_id).unwrap();
+        let inner: serde_json::Value = serde_json::from_str(&snap.snapshot).unwrap();
+
+        let decisions = inner["recent_decisions"].as_array().unwrap();
+        assert_eq!(decisions.len(), 1);
+        assert_eq!(decisions[0]["summary"], "prefer composition");
+
+        let rules = inner["active_rules"].as_array().unwrap();
+        assert_eq!(rules.len(), 2);
+        // The "no_mut_global" entry should carry the updated text.
+        let no_mut = rules
+            .iter()
+            .find(|r| r["label"] == "no_mut_global")
+            .expect("no_mut_global rule missing");
+        assert_eq!(no_mut["rule"], "avoid global mutable state (updated)");
     }
 }

@@ -14,8 +14,8 @@ pub use model::{
     ReasoningWarning, RefactorDryRunResult, RefactorEdit, RefactorEditKind, RefactorOperation,
     RefactorPatch, RefactorPlan, RefactorSafetyResult, RefactorValidationResult, ReferenceScope,
     RemovalImpactResult, RenamePreviewResult, RenameReference, ReviewContext, ReviewImpactOverview,
-    RiskLevel, RiskSummary, SafetyBand, SafetyScore, ScoredImpactNode, ScoredNode, SearchQuery,
-    SelectedEdge, SelectedFile, SelectedNode, SelectionReason, SimulatedRefactorImpact,
-    TestAdjacencyResult, TestImpactResult, TruncationMeta, WorkflowCallChain, WorkflowComponent,
-    WorkflowFocusNode, WorkflowSummary,
+    RiskLevel, RiskSummary, SafetyBand, SafetyScore, SavedContextSource, ScoredImpactNode,
+    ScoredNode, SearchQuery, SelectedEdge, SelectedFile, SelectedNode, SelectionReason,
+    SimulatedRefactorImpact, TestAdjacencyResult, TestImpactResult, TruncationMeta,
+    WorkflowCallChain, WorkflowComponent, WorkflowFocusNode, WorkflowSummary,
 };

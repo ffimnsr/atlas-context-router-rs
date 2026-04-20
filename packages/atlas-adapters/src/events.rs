@@ -145,6 +145,43 @@ pub fn extract_tool_event(tool_name: &str, status: &str, extra: Value) -> Pendin
     }
 }
 
+/// Record a deliberate decision taken during a session.
+///
+/// `summary` is a short human-readable label (e.g. "chose approach A over B").
+/// `rationale` is an optional one-sentence explanation.
+/// Neither field should embed raw output blobs.
+pub fn extract_decision_event(summary: &str, rationale: Option<&str>) -> PendingEvent {
+    let payload = normalize_payload(json!({
+        "summary": summary,
+        "rationale": rationale,
+    }));
+    PendingEvent {
+        event_type: SessionEventType::Decision,
+        priority: 4,
+        payload,
+    }
+}
+
+/// Record an active rule or instruction governing agent behaviour.
+///
+/// `label` uniquely identifies the rule within the session (e.g.
+/// `"prefer_composition"`).  Later calls with the same `label` replace the
+/// earlier record in the resume snapshot.  `rule` carries the short rule text.
+/// `source` is an optional reference to where the rule was loaded from (e.g.
+/// a file path or MCP tool result).
+pub fn extract_rule_event(label: &str, rule: &str, source: Option<&str>) -> PendingEvent {
+    let payload = normalize_payload(json!({
+        "label": label,
+        "rule": rule,
+        "source": source,
+    }));
+    PendingEvent {
+        event_type: SessionEventType::RuleInstruction,
+        priority: 4,
+        payload,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Normalize / hash
 // ---------------------------------------------------------------------------

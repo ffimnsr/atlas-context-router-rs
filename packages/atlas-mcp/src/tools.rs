@@ -169,6 +169,8 @@ pub fn tool_list() -> serde_json::Value {
                         "max_nodes": { "type": "integer", "description": "Maximum nodes to include (default 100)" },
                         "max_edges": { "type": "integer", "description": "Maximum edges to include (default 100)" },
                         "max_depth": { "type": "integer", "description": "Traversal depth in graph hops (default 2)" },
+                        "include_saved_context": { "type": "boolean", "description": "When true, also query the content store for saved artifacts relevant to this request and include them in the result (default false)." },
+                        "session_id": { "type": "string",  "description": "Restrict saved-context retrieval to artifacts from this session and apply a same-session relevance boost." },
                         "output_format": { "type": "string", "description": DEFAULT_TOON_OUTPUT_DESCRIPTION }
                     },
                     "required": []
@@ -791,6 +793,7 @@ fn tool_get_context(
     db_path: &str,
     output_format: OutputFormat,
 ) -> Result<serde_json::Value> {
+    use atlas_contentstore::ContentStore;
     use atlas_core::model::{ContextIntent, ContextRequest, ContextTarget};
 
     let query = str_arg(args, "query")?.map(str::to_owned);
@@ -800,6 +803,8 @@ fn tool_get_context(
     let max_nodes = u64_arg(args, "max_nodes").map(|n| n as usize);
     let max_edges = u64_arg(args, "max_edges").map(|n| n as usize);
     let max_depth = u64_arg(args, "max_depth").map(|n| n as u32);
+    let include_saved_context = bool_arg(args, "include_saved_context").unwrap_or(false);
+    let session_id = str_arg(args, "session_id")?.map(str::to_owned);
 
     let mut request = if !files.is_empty() {
         let intent = intent_override
@@ -842,10 +847,27 @@ fn tool_get_context(
     if max_depth.is_some() {
         request.depth = max_depth;
     }
+    request.include_saved_context = include_saved_context;
+    request.session_id = session_id;
 
     let store = open_store(db_path)?;
     let engine = ContextEngine::new(&store);
-    let result = engine.build(&request).context("context engine failed")?;
+
+    // CM6: attach content store when saved-context retrieval is requested.
+    let result = if include_saved_context {
+        let content_db = derive_content_db_path(db_path);
+        match ContentStore::open(&content_db) {
+            Ok(mut cs) => {
+                let _ = cs.migrate();
+                let engine = engine.with_content_store(&cs);
+                engine.build(&request).context("context engine failed")?
+            }
+            Err(_) => engine.build(&request).context("context engine failed")?,
+        }
+    } else {
+        engine.build(&request).context("context engine failed")?
+    };
+
     let packaged = package_context_result(&result);
     tool_result_value(&packaged, output_format)
 }
@@ -880,6 +902,18 @@ fn string_array_arg(args: Option<&serde_json::Value>, key: &str) -> Result<Vec<S
 
 fn open_store(db_path: &str) -> Result<Store> {
     Store::open(db_path).with_context(|| format!("cannot open database at {db_path}"))
+}
+
+/// Derive the content-store DB path from the graph DB path.
+///
+/// Graph DB is typically `.atlas/worldtree.db`; content DB is `.atlas/context.db`
+/// in the same directory.
+fn derive_content_db_path(db_path: &str) -> String {
+    if let Some(parent) = std::path::Path::new(db_path).parent() {
+        parent.join("context.db").to_string_lossy().into_owned()
+    } else {
+        "context.db".to_string()
+    }
 }
 
 /// Wrap structured output in an MCP tool-result content envelope.

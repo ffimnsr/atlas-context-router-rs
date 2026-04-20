@@ -544,6 +544,14 @@ pub struct ContextRequest {
     pub include_callers: bool,
     /// Include direct callees in context (defaults to true).
     pub include_callees: bool,
+    // --- CM6: retrieval-backed restoration ---
+    /// When `true`, the engine queries the content store for saved artifacts
+    /// relevant to this request and populates `ContextResult::saved_context_sources`.
+    /// Has no effect when no content store is provided to the engine.
+    pub include_saved_context: bool,
+    /// Restrict saved-context retrieval to artifacts from this session.
+    /// Also applies a same-session relevance boost when scoring.
+    pub session_id: Option<String>,
 }
 
 impl Default for ContextRequest {
@@ -563,6 +571,8 @@ impl Default for ContextRequest {
             include_code_spans: false,
             include_callers: true,
             include_callees: true,
+            include_saved_context: false,
+            session_id: None,
         }
     }
 }
@@ -730,6 +740,32 @@ pub struct WorkflowSummary {
     pub noise_reduction: NoiseReductionSummary,
 }
 
+/// A saved artifact from the content store surfaced inside a [`ContextResult`].
+///
+/// Returned when `ContextRequest::include_saved_context` is `true` and the
+/// content store contains artifacts relevant to the current query.  Only
+/// compact metadata and a short preview are included here; the full content
+/// is retrieved separately using `source_id`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SavedContextSource {
+    /// Stable identifier for the stored artifact; pass to content-store
+    /// retrieval APIs to fetch the full blob.
+    pub source_id: String,
+    /// Human-readable label assigned when the artifact was indexed.
+    pub label: String,
+    /// Category: `"review_context"`, `"impact_result"`, `"command_output"`, etc.
+    pub source_type: String,
+    /// Session that produced this artifact, if recorded.
+    pub session_id: Option<String>,
+    /// Truncated preview of the first chunk (≤ 512 chars); never the raw blob.
+    pub preview: String,
+    /// Opaque hint an agent can use to retrieve the full artifact,
+    /// e.g. `"source_id=<id>"` for a future MCP `search_saved_context` call.
+    pub retrieval_hint: String,
+    /// Relevance score for ranking within this result (higher = more relevant).
+    pub relevance_score: f32,
+}
+
 /// Output of the context engine for a single [`ContextRequest`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContextResult {
@@ -742,6 +778,12 @@ pub struct ContextResult {
     pub ambiguity: Option<AmbiguityMeta>,
     /// Focused workflow metadata for higher-level developer UX.
     pub workflow: Option<WorkflowSummary>,
+    /// Relevant saved artifacts from the content store.
+    ///
+    /// Populated only when `request.include_saved_context` is `true` and a
+    /// content store is provided to the engine.  Ordered by descending
+    /// `relevance_score`.
+    pub saved_context_sources: Vec<SavedContextSource>,
 }
 
 // ---------------------------------------------------------------------------
@@ -1248,6 +1290,8 @@ mod tests {
             include_code_spans: false,
             include_callers: true,
             include_callees: true,
+            include_saved_context: false,
+            session_id: None,
         }
     }
 
@@ -1537,6 +1581,7 @@ mod tests {
                     rules_applied: vec!["omitted containment siblings".to_string()],
                 },
             }),
+            saved_context_sources: vec![],
         };
         let json = serde_json::to_string(&result).unwrap();
         let back: ContextResult = serde_json::from_str(&json).unwrap();
@@ -1568,6 +1613,7 @@ mod tests {
                 resolved: false,
             }),
             workflow: None,
+            saved_context_sources: vec![],
         };
         let json = serde_json::to_string(&result).unwrap();
         let back: ContextResult = serde_json::from_str(&json).unwrap();
