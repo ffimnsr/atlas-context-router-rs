@@ -2,7 +2,7 @@
 name = "atlas-contextsave"
 version = "0.1.0"
 edition = "2024"
-description = "Context save/restore coordinator for Atlas context-mode integration"
+description = "Context save/restore coordinator for Atlas context memory integration"
 
 [dependencies]
 atlas-core.workspace = true

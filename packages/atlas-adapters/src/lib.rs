@@ -1,4 +1,4 @@
-//! Transport and frontend adapter layer for Atlas context-mode integration.
+//! Transport and frontend adapter layer for Atlas context memory integration.
 //!
 //! Provides thin adapter implementations so CLI, MCP, and other surfaces can
 //! funnel session events and large outputs through the content and session

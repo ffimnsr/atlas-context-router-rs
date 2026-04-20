@@ -1,4 +1,4 @@
--- Session store schema for Atlas context-mode event ledger persistence.
+-- Session store schema for Atlas context memory event ledger persistence.
 -- Kept separate from worldtree.db (graph) and context.db (artifact content).
 
 CREATE TABLE IF NOT EXISTS session_meta (

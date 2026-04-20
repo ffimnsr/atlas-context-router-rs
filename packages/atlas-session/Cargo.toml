@@ -2,7 +2,7 @@
 name = "atlas-session"
 version = "0.1.0"
 edition = "2024"
-description = "Session identity, event ledger, and resume snapshots for Atlas context-mode"
+description = "Session identity, event ledger, and resume snapshots for Atlas context memory"
 
 [dependencies]
 atlas-core.workspace = true

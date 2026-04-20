@@ -368,7 +368,7 @@ pub enum Command {
         subcommand: RefactorCommand,
     },
 
-    /// Manage Atlas context-mode sessions (start, status, resume, clear, list).
+    /// Manage Atlas context memory sessions (start, status, resume, clear, list).
     Session {
         #[command(subcommand)]
         subcommand: SessionCommand,
