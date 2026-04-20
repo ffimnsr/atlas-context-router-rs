@@ -389,6 +389,49 @@ pub fn graph_expand(
     Ok(results)
 }
 
+fn exact_symbol_hits(store: &Store, query: &SearchQuery) -> Result<Vec<ScoredNode>> {
+    let trimmed = query.text.trim();
+    if trimmed.is_empty() {
+        return Ok(vec![]);
+    }
+
+    let mut merged: HashMap<String, ScoredNode> = HashMap::new();
+
+    if let Some(node) = store.node_by_qname(trimmed)? {
+        merged.insert(
+            node.qualified_name.clone(),
+            ScoredNode { node, score: 100.0 },
+        );
+    }
+
+    if !trimmed.chars().any(char::is_whitespace) {
+        for node in store.nodes_by_name(trimmed, query.limit.max(25))? {
+            let qn = node.qualified_name.clone();
+            let score = if merged.contains_key(&qn) { 100.0 } else { 80.0 };
+            merged.entry(qn).or_insert(ScoredNode { node, score });
+        }
+    }
+
+    Ok(merged.into_values().collect())
+}
+
+fn merge_scored_nodes(primary: Vec<ScoredNode>, secondary: Vec<ScoredNode>) -> Vec<ScoredNode> {
+    let mut merged: HashMap<String, ScoredNode> = HashMap::new();
+
+    for result in primary.into_iter().chain(secondary) {
+        let qn = result.node.qualified_name.clone();
+        match merged.get_mut(&qn) {
+            Some(existing) if result.score > existing.score => *existing = result,
+            Some(_) => {}
+            None => {
+                merged.insert(qn, result);
+            }
+        }
+    }
+
+    merged.into_values().collect()
+}
+
 // ---------------------------------------------------------------------------
 // Top-level search entry point
 // ---------------------------------------------------------------------------
@@ -413,6 +456,8 @@ pub fn search(store: &Store, query: &SearchQuery) -> Result<Vec<ScoredNode>> {
     }
 
     // ---- FTS path ----------------------------------------------------------
+    let exact_hits = exact_symbol_hits(store, query)?;
+
     // Build an FTS query that includes camelCase/snake_case token variants.
     let expanded_text = build_fts_query(&query.text);
     let effective_query = SearchQuery {
@@ -460,7 +505,7 @@ pub fn search(store: &Store, query: &SearchQuery) -> Result<Vec<ScoredNode>> {
     // Apply post-FTS ranking boosts using the original (un-expanded) text so
     // boost comparisons are made against what the user actually typed.
     let boosted = apply_ranking_boosts(
-        fts_results,
+        merge_scored_nodes(exact_hits, fts_results),
         &query.text,
         query.reference_file.as_deref(),
         query.reference_language.as_deref(),

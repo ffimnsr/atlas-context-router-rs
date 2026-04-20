@@ -90,6 +90,210 @@ fn query_fuzzy_flag_recovers_close_typo() {
 }
 
 #[test]
+fn query_exact_symbol_and_qname_rank_definition_in_top_three() {
+    let repo = setup_fixture_repo();
+
+    run_atlas(repo.path(), &["init"]);
+    run_atlas(repo.path(), &["build"]);
+
+    let expected_qn = "src/lib.rs::method::Greeter::greet_twice";
+
+    let exact_name = read_json_data_output(
+        "query",
+        run_atlas(repo.path(), &["--json", "query", "greet_twice"]),
+    );
+    let exact_name_qns = atlas_query_qnames(&exact_name);
+    assert!(
+        exact_name_qns.iter().take(3).any(|qn| qn == expected_qn),
+        "exact symbol lookup must rank intended definition in top 3: {exact_name:?}"
+    );
+
+    let exact_qname = read_json_data_output(
+        "query",
+        run_atlas(repo.path(), &["--json", "query", expected_qn]),
+    );
+    let exact_qname_qns = atlas_query_qnames(&exact_qname);
+    assert!(
+        exact_qname_qns.iter().take(3).any(|qn| qn == expected_qn),
+        "qualified-name lookup must rank intended definition in top 3: {exact_qname:?}"
+    );
+}
+
+#[test]
+fn query_ambiguous_short_name_returns_ranked_candidates_with_metadata() {
+    let repo = setup_repo(&[
+        (
+            "Cargo.toml",
+            "[workspace]\nmembers = ['packages/*']\n",
+        ),
+        (
+            "packages/foo/Cargo.toml",
+            "[package]\nname = 'foo'\nversion = '0.1.0'\nedition = '2021'\n",
+        ),
+        ("packages/foo/src/lib.rs", "pub fn helper() {}\n"),
+        (
+            "packages/bar/Cargo.toml",
+            "[package]\nname = 'bar'\nversion = '0.1.0'\nedition = '2021'\n",
+        ),
+        ("packages/bar/src/lib.rs", "pub fn helper() {}\n"),
+    ]);
+
+    run_atlas(repo.path(), &["init"]);
+    run_atlas(repo.path(), &["build"]);
+
+    let query = read_json_data_output(
+        "query",
+        run_atlas(repo.path(), &["--json", "query", "helper"]),
+    );
+    let results = query["results"].as_array().expect("query results array");
+    assert!(results.len() >= 2, "ambiguous lookup must return candidates");
+    assert!(
+        results.windows(2).all(|pair| {
+            pair[0]["score"].as_f64().unwrap_or_default()
+                >= pair[1]["score"].as_f64().unwrap_or_default()
+        }),
+        "ambiguous candidates must be ranked descending: {query:?}"
+    );
+    assert!(
+        results.iter().take(2).all(|result| {
+            result["node"]["kind"].is_string() && result["node"]["file_path"].is_string()
+        }),
+        "ambiguous candidates must include kind and file metadata: {query:?}"
+    );
+
+    let qnames = atlas_query_qnames(&query);
+    assert!(
+        qnames
+            .iter()
+            .any(|qn| qn == "packages/foo/src/lib.rs::fn::helper")
+            && qnames
+                .iter()
+                .any(|qn| qn == "packages/bar/src/lib.rs::fn::helper"),
+        "ambiguous lookup must surface both helper definitions: {query:?}"
+    );
+}
+
+#[test]
+fn query_graph_expand_surfaces_neighbors_plain_grep_cannot_infer() {
+    let repo = setup_fixture_repo();
+
+    run_atlas(repo.path(), &["init"]);
+    run_atlas(repo.path(), &["build"]);
+
+    let store = open_store(repo.path());
+    let target_qn = "src/lib.rs::method::Greeter::greet_twice";
+    let atlas = read_json_data_output(
+        "query",
+        run_atlas(
+            repo.path(),
+            &[
+                "--json",
+                "query",
+                target_qn,
+                "--expand",
+                "--expand-hops",
+                "2",
+            ],
+        ),
+    );
+    let atlas_qns = atlas_query_qnames(&atlas);
+    let grep_qns = plain_grep_ranked_candidates(repo.path(), &store, target_qn, 5);
+
+    assert!(
+        atlas_qns.iter().any(|qn| qn == "src/lib.rs::fn::helper"),
+        "graph expansion must surface direct callee/caller neighbor helper: {atlas:?}"
+    );
+    assert!(
+        atlas_qns.iter().any(|qn| qn == "src/main.rs::fn::main"),
+        "graph expansion must surface transitive caller neighbor main: {atlas:?}"
+    );
+    assert!(
+        !grep_qns.iter().any(|qn| qn == "src/main.rs::fn::main"),
+        "plain grep baseline must not infer transitive caller main from qname lookup: {grep_qns:?}"
+    );
+}
+
+#[test]
+fn graph_aware_symbol_lookup_beats_plain_grep_baseline_on_fixtures() {
+    let repo = setup_repo(&[
+        (
+            "src/a_calls.rs",
+            "pub fn call_helper() { helper(); }\npub fn call_render() { render(); }\n",
+        ),
+        (
+            "src/b_more_calls.rs",
+            "pub fn relay_helper() { helper(); }\npub fn relay_render() { render(); }\n",
+        ),
+        (
+            "src/z_defs.rs",
+            "pub fn helper() {}\npub fn render() {}\n",
+        ),
+    ]);
+
+    run_atlas(repo.path(), &["init"]);
+    run_atlas(repo.path(), &["build"]);
+
+    let store = open_store(repo.path());
+    let cases = [
+        LookupEvalCase {
+            query: "helper",
+            expected_qn: "src/z_defs.rs::fn::helper",
+        },
+        LookupEvalCase {
+            query: "render",
+            expected_qn: "src/z_defs.rs::fn::render",
+        },
+    ];
+
+    let atlas_top1 = cases
+        .iter()
+        .filter(|case| {
+            let query = read_json_data_output(
+                "query",
+                run_atlas(repo.path(), &["--json", "query", case.query]),
+            );
+            atlas_query_qnames(&query)
+                .first()
+                .is_some_and(|qn| qn == case.expected_qn)
+        })
+        .count();
+    let atlas_top3 = cases
+        .iter()
+        .filter(|case| {
+            let query = read_json_data_output(
+                "query",
+                run_atlas(repo.path(), &["--json", "query", case.query]),
+            );
+            atlas_query_qnames(&query)
+                .iter()
+                .take(3)
+                .any(|qn| qn == case.expected_qn)
+        })
+        .count();
+    let grep_top1 = cases
+        .iter()
+        .filter(|case| {
+            plain_grep_ranked_candidates(repo.path(), &store, case.query, 1)
+                .first()
+                .is_some_and(|qn| qn == case.expected_qn)
+        })
+        .count();
+    let grep_top3 = cases
+        .iter()
+        .filter(|case| {
+            plain_grep_ranked_candidates(repo.path(), &store, case.query, 3)
+                .iter()
+                .any(|qn| qn == case.expected_qn)
+        })
+        .count();
+
+    assert!(
+        atlas_top1 > grep_top1 || atlas_top3 > grep_top3,
+        "atlas query must beat plain grep on top-1 or top-3 accuracy: atlas top1/top3 = {atlas_top1}/{atlas_top3}, grep = {grep_top1}/{grep_top3}"
+    );
+}
+
+#[test]
 fn build_and_update_skip_unsupported_files_without_count_drift() {
     let repo = setup_fixture_repo();
 
@@ -353,6 +557,387 @@ fn review_context_includes_workflow_summary_and_call_chains() {
     assert!(
         review_ctx["workflow"]["noise_reduction"]["rules_applied"].is_array(),
         "expected noise reduction metadata in review context: {review_ctx:?}"
+    );
+}
+
+#[test]
+fn review_context_changed_file_flow_stays_bounded_and_keeps_useful_neighbors() {
+    let repo = setup_fixture_repo();
+
+    run_atlas(repo.path(), &["init"]);
+    run_atlas(repo.path(), &["build"]);
+    rewrite_fixture_helper(repo.path());
+
+    let review_ctx = read_json_data_output(
+        "review_context",
+        run_atlas(
+            repo.path(),
+            &[
+                "--json",
+                "review-context",
+                "--base",
+                "HEAD",
+                "--max-nodes",
+                "4",
+            ],
+        ),
+    );
+
+    let nodes = review_ctx["nodes"].as_array().expect("review nodes array");
+    assert!(
+        nodes.len() <= 4,
+        "review-context must stay bounded by requested max-nodes: {review_ctx:?}"
+    );
+    assert!(
+        nodes.iter().any(|node| {
+            node["selection_reason"] == json!("direct_target")
+                && node["node"]["qualified_name"] == json!("src/lib.rs::fn::helper")
+        }),
+        "review-context must keep changed symbol helper as direct target: {review_ctx:?}"
+    );
+    assert!(
+        nodes.iter().any(|node| {
+            node["selection_reason"] == json!("impact_neighbor")
+                && node["node"]["qualified_name"] == json!("src/main.rs::fn::main")
+        }),
+        "review-context must retain useful caller neighbor from changed-file flow: {review_ctx:?}"
+    );
+    assert!(
+        review_ctx["files"]
+            .as_array()
+            .expect("review files array")
+            .iter()
+            .any(|file| file["path"] == json!("src/main.rs")),
+        "review-context files must include impacted caller file: {review_ctx:?}"
+    );
+    assert!(
+        review_ctx["workflow"]["call_chains"]
+            .as_array()
+            .expect("call chains array")
+            .iter()
+            .any(|chain| {
+                chain["summary"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .contains("src/main.rs::fn::main -> src/lib.rs::fn::helper")
+            }),
+        "review-context workflow must surface useful changed-file call chain: {review_ctx:?}"
+    );
+}
+
+#[test]
+fn review_context_cross_package_changed_file_flow_surfaces_useful_focus() {
+    let repo = setup_repo(&[
+        (
+            "package.json",
+            r#"{"private":true,"workspaces":["apps/*","packages/*"]}"#,
+        ),
+        (
+            "tsconfig.json",
+            r#"{
+    "compilerOptions": {
+        "baseUrl": ".",
+        "paths": {
+            "@ui/*": ["packages/ui/src/*"]
+        }
+    }
+}
+"#,
+        ),
+        (
+            "apps/web/package.json",
+            r#"{"name":"web","version":"0.1.0"}"#,
+        ),
+        (
+            "apps/web/src/app.ts",
+            "import { helper } from '@ui/helper';\nexport function run(): string {\n    return helper();\n}\n",
+        ),
+        (
+            "packages/ui/package.json",
+            r#"{"name":"ui","version":"0.1.0"}"#,
+        ),
+        (
+            "packages/ui/src/helper.ts",
+            "export function helper(): string {\n    return 'v1';\n}\n",
+        ),
+    ]);
+
+    run_atlas(repo.path(), &["init"]);
+    run_atlas(repo.path(), &["build"]);
+    write_repo_file(
+        repo.path(),
+        "packages/ui/src/helper.ts",
+        "export function helper(): string {\n    return 'v2';\n}\n",
+    );
+
+    let review_ctx = read_json_data_output(
+        "review_context",
+        run_atlas(
+            repo.path(),
+            &[
+                "--json",
+                "review-context",
+                "--base",
+                "HEAD",
+                "--max-nodes",
+                "5",
+            ],
+        ),
+    );
+
+    assert!(
+        review_ctx["nodes"]
+            .as_array()
+            .expect("review nodes array")
+            .iter()
+            .any(|node| {
+                node["selection_reason"] == json!("direct_target")
+                    && node["node"]["qualified_name"]
+                        == json!("packages/ui/src/helper.ts::fn::helper")
+            }),
+        "review-context must keep changed cross-package target helper: {review_ctx:?}"
+    );
+    assert!(
+        review_ctx["nodes"]
+            .as_array()
+            .expect("review nodes array")
+            .iter()
+            .any(|node| {
+                node["selection_reason"] == json!("impact_neighbor")
+                    && node["node"]["qualified_name"] == json!("apps/web/src/app.ts::fn::run")
+            }),
+        "review-context must surface impacted cross-package caller: {review_ctx:?}"
+    );
+    assert!(
+        review_ctx["files"]
+            .as_array()
+            .expect("review files array")
+            .iter()
+            .any(|file| file["path"] == json!("apps/web/src/app.ts")),
+        "review-context must include impacted application file: {review_ctx:?}"
+    );
+    assert!(
+        review_ctx["workflow"]["high_impact_nodes"]
+            .as_array()
+            .expect("high impact nodes array")
+            .iter()
+            .any(|node| node["qualified_name"] == json!("apps/web/src/app.ts::fn::run")),
+        "workflow summary must keep impacted cross-package caller in focus: {review_ctx:?}"
+    );
+    assert!(
+        review_ctx["workflow"]["ripple_effects"]
+            .as_array()
+            .expect("ripple effects array")
+            .iter()
+            .any(|item| {
+                let text = item.as_str().unwrap_or_default();
+                text.contains("Impact spans") || text.contains("neighboring file")
+            }),
+        "workflow summary must explain why the cross-package change matters: {review_ctx:?}"
+    );
+}
+
+#[test]
+fn impact_reports_test_signal_for_changed_symbol() {
+    let repo = setup_repo(&[
+        (
+            "Cargo.toml",
+            "[package]\nname = 'demo'\nversion = '0.1.0'\nedition = '2021'\n",
+        ),
+        (
+            "src/lib.rs",
+            "pub fn helper() -> i32 {\n    1\n}\n\n#[cfg(test)]\nmod tests {\n    use super::helper;\n\n    #[test]\n    fn helper_works() {\n        assert_eq!(helper(), 1);\n    }\n}\n",
+        ),
+    ]);
+
+    run_atlas(repo.path(), &["init"]);
+    run_atlas(repo.path(), &["build"]);
+    write_repo_file(
+        repo.path(),
+        "src/lib.rs",
+        "pub fn helper() -> i32 {\n    2\n}\n\n#[cfg(test)]\nmod tests {\n    use super::helper;\n\n    #[test]\n    fn helper_works() {\n        assert_eq!(helper(), 2);\n    }\n}\n",
+    );
+
+    let impact = read_json_data_output(
+        "impact",
+        run_atlas(repo.path(), &["--json", "impact", "--base", "HEAD"]),
+    );
+
+    assert!(
+        impact["analysis"]["test_impact"]["affected_tests"]
+            .as_array()
+            .expect("affected tests array")
+            .iter()
+            .any(|node| node["is_test"] == json!(true)),
+        "impact must report affected tests for covered changed symbol: {impact:?}"
+    );
+    assert!(
+        impact["analysis"]["scored_nodes"]
+            .as_array()
+            .expect("scored nodes array")
+            .iter()
+            .any(|node| node["node"]["is_test"] == json!(true)),
+        "impact scores must carry test-adjacent nodes: {impact:?}"
+    );
+}
+
+#[test]
+fn impact_reports_boundary_and_uncovered_signals_for_cross_package_change() {
+    let repo = setup_repo(&[
+        (
+            "package.json",
+            r#"{"private":true,"workspaces":["apps/*","packages/*"]}"#,
+        ),
+        (
+            "tsconfig.json",
+            r#"{
+    "compilerOptions": {
+        "baseUrl": ".",
+        "paths": {
+            "@ui/*": ["packages/ui/src/*"]
+        }
+    }
+}
+"#,
+        ),
+        (
+            "apps/web/package.json",
+            r#"{"name":"web","version":"0.1.0"}"#,
+        ),
+        (
+            "apps/web/src/app.ts",
+            "import { helper } from '@ui/helper';\nexport function run(): string {\n    return helper();\n}\n",
+        ),
+        (
+            "packages/ui/package.json",
+            r#"{"name":"ui","version":"0.1.0"}"#,
+        ),
+        (
+            "packages/ui/src/helper.ts",
+            "export function helper(): string {\n    return 'v1';\n}\n",
+        ),
+    ]);
+
+    run_atlas(repo.path(), &["init"]);
+    run_atlas(repo.path(), &["build"]);
+    write_repo_file(
+        repo.path(),
+        "packages/ui/src/helper.ts",
+        "export function helper(): string {\n    return 'v2';\n}\n",
+    );
+
+    let impact = read_json_data_output(
+        "impact",
+        run_atlas(repo.path(), &["--json", "impact", "--base", "HEAD"]),
+    );
+
+    assert!(
+        impact["analysis"]["boundary_violations"]
+            .as_array()
+            .expect("boundary violations array")
+            .iter()
+            .any(|violation| violation["kind"] == json!("cross_package")),
+        "impact must surface cross-package boundary signal: {impact:?}"
+    );
+    assert!(
+        impact["analysis"]["test_impact"]["uncovered_changed_nodes"]
+            .as_array()
+            .expect("uncovered changed nodes array")
+            .iter()
+            .any(|node| node["qualified_name"] == json!("packages/ui/src/helper.ts::fn::helper")),
+        "changed helper without tests must be flagged uncovered: {impact:?}"
+    );
+    assert!(
+        matches!(impact["analysis"]["risk_level"].as_str(), Some("high") | Some("critical")),
+        "cross-package untested change must elevate risk: {impact:?}"
+    );
+}
+
+#[test]
+fn detached_current_repo_worktree_meets_large_repo_performance_gate() {
+    let worktree = setup_current_repo_detached_worktree();
+
+    run_atlas(worktree.path(), &["init"]);
+
+    let build = read_json_data_output(
+        "build",
+        run_atlas(worktree.path(), &["--json", "build"]),
+    );
+    assert!(
+        build["parsed"].as_u64().unwrap_or_default() >= 50,
+        "representative repo build should parse substantial tracked files: {build:?}"
+    );
+    assert!(
+        build["nodes_inserted"].as_u64().unwrap_or_default() >= 200,
+        "representative repo build should index substantial graph size: {build:?}"
+    );
+    assert!(
+        build["elapsed_ms"].as_u64().unwrap_or(u64::MAX) <= 60_000,
+        "representative repo build latency regressed: {build:?}"
+    );
+
+    let status = read_json_data_output(
+        "status",
+        run_atlas(worktree.path(), &["--json", "status"]),
+    );
+    assert!(
+        status["indexed_file_count"].as_u64().unwrap_or_default() >= 50,
+        "status should report representative repo scale: {status:?}"
+    );
+
+    let query = read_json_data_output(
+        "query",
+        run_atlas(worktree.path(), &["--json", "query", "ContextEngine"]),
+    );
+    assert!(
+        !query["results"]
+            .as_array()
+            .expect("query results array")
+            .is_empty(),
+        "large-repo query should return known symbol hits: {query:?}"
+    );
+    assert!(
+        query["latency_ms"].as_u64().unwrap_or(u64::MAX) <= 10_000,
+        "large-repo query latency regressed: {query:?}"
+    );
+
+    let impact_target = "packages/atlas-impact/src/lib.rs";
+    let original = fs::read_to_string(worktree.path().join(impact_target)).expect("read impact file");
+    let mut updated = original.clone();
+    updated.push_str("\n// perf gate change\n");
+    write_repo_file(worktree.path(), impact_target, &updated);
+
+    let impact = read_json_data_output(
+        "impact",
+        run_atlas(
+            worktree.path(),
+            &["--json", "impact", "--base", "HEAD", "--max-depth", "3", "--max-nodes", "200"],
+        ),
+    );
+    assert!(
+        impact["analysis"]["base"]["changed_nodes"]
+            .as_array()
+            .expect("changed nodes array")
+            .iter()
+            .any(|node| node["file_path"] == json!(impact_target)),
+        "impact must include changed file seed from representative repo: {impact:?}"
+    );
+    assert!(
+        impact["latency_ms"].as_u64().unwrap_or(u64::MAX) <= 15_000,
+        "large-repo impact latency regressed: {impact:?}"
+    );
+
+    let update = read_json_data_output(
+        "update",
+        run_atlas(worktree.path(), &["--json", "update", "--base", "HEAD"]),
+    );
+    assert!(
+        update["parsed"].as_u64().unwrap_or_default() >= 1,
+        "large-repo update should parse changed worktree file: {update:?}"
+    );
+    assert!(
+        update["elapsed_ms"].as_u64().unwrap_or(u64::MAX) <= 20_000,
+        "large-repo update latency regressed: {update:?}"
     );
 }
 
@@ -1428,6 +2013,53 @@ fn setup_repo(files: &[(&str, &str)]) -> TempDir {
     temp_dir
 }
 
+struct DetachedWorktree {
+    temp_dir: TempDir,
+    source_repo: PathBuf,
+    path: PathBuf,
+}
+
+impl DetachedWorktree {
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for DetachedWorktree {
+    fn drop(&mut self) {
+        let _ = Command::new("git")
+            .args(["worktree", "remove", "--force"])
+            .arg(&self.path)
+            .current_dir(&self.source_repo)
+            .output();
+        let _ = &self.temp_dir;
+    }
+}
+
+fn setup_current_repo_detached_worktree() -> DetachedWorktree {
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let path = temp_dir.path().join("repo-worktree");
+    let source_repo = current_repo_root();
+
+    run_command(
+        &source_repo,
+        "git",
+        &[
+            "worktree",
+            "add",
+            "--detach",
+            path.to_str().expect("worktree path"),
+            "HEAD",
+        ],
+    );
+
+    DetachedWorktree {
+        temp_dir,
+        source_repo,
+        path,
+    }
+}
+
 fn init_git_repo(path: &Path) {
     run_command(path, "git", &["init", "--quiet"]);
     run_command(path, "git", &["config", "user.name", "Atlas Tests"]);
@@ -1450,6 +2082,14 @@ fn fixture_repo_root() -> PathBuf {
         .join("fixtures")
         .join("sample_repo")
 }
+
+    fn current_repo_root() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("workspace repo root")
+        .to_path_buf()
+    }
 
 fn read_golden_json(name: &str) -> Value {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -1760,6 +2400,81 @@ fn open_store(repo_root: &Path) -> Store {
             .expect("db path"),
     )
     .expect("open atlas store")
+}
+
+#[derive(Clone, Copy)]
+struct LookupEvalCase<'a> {
+    query: &'a str,
+    expected_qn: &'a str,
+}
+
+fn atlas_query_qnames(data: &Value) -> Vec<String> {
+    data["results"]
+        .as_array()
+        .expect("query results array")
+        .iter()
+        .filter_map(|result| result["node"]["qualified_name"].as_str().map(str::to_owned))
+        .collect()
+}
+
+fn plain_grep_ranked_candidates(
+    repo_root: &Path,
+    store: &Store,
+    query: &str,
+    limit: usize,
+) -> Vec<String> {
+    let tracked = tracked_repo_files(repo_root);
+    let mut ranked = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    for path in tracked {
+        let Ok(contents) = fs::read_to_string(repo_root.join(&path)) else {
+            continue;
+        };
+        let Ok(nodes) = store.nodes_by_file(&path) else {
+            continue;
+        };
+
+        for (index, line) in contents.lines().enumerate() {
+            if !line.contains(query) {
+                continue;
+            }
+
+            let Some(node) = nodes
+                .iter()
+                .filter(|node| {
+                    let line_no = index as u32 + 1;
+                    node.line_start <= line_no && line_no <= node.line_end
+                })
+                .min_by_key(|node| {
+                    (
+                        node.line_end.saturating_sub(node.line_start),
+                        node.line_start,
+                        node.qualified_name.clone(),
+                    )
+                })
+            else {
+                continue;
+            };
+
+            if seen.insert(node.qualified_name.clone()) {
+                ranked.push(node.qualified_name.clone());
+                if ranked.len() >= limit {
+                    return ranked;
+                }
+            }
+        }
+    }
+
+    ranked
+}
+
+fn tracked_repo_files(repo_root: &Path) -> Vec<String> {
+    String::from_utf8(run_command(repo_root, "git", &["ls-files"]).stdout)
+        .expect("git ls-files stdout")
+        .lines()
+        .map(str::to_owned)
+        .collect()
 }
 
 fn run_atlas(repo_root: &Path, args: &[&str]) -> Output {

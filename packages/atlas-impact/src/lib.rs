@@ -11,6 +11,10 @@ use atlas_core::{
 // Decay factor applied to the impact score at each graph hop.
 // Must be < 1/max_edge_weight (max = 3.0) to guarantee scores decrease per hop.
 const HOP_DECAY: f64 = 0.25;
+const TEST_ADJACENCY_BOOST: f64 = 0.35;
+const UNCOVERED_CHANGE_BOOST: f64 = 0.45;
+const CROSS_MODULE_BOOST: f64 = 0.30;
+const CROSS_PACKAGE_BOOST: f64 = 0.60;
 
 // Base scores by node kind (seed nodes start with this score).
 fn base_score_for_kind(kind: NodeKind) -> f64 {
@@ -44,9 +48,9 @@ fn api_multiplier(node: &Node) -> f64 {
 /// computation here is done in Rust over the in-memory node/edge sets so no
 /// additional database queries are needed.
 pub fn analyze(base: ImpactResult) -> AdvancedImpactResult {
-    let scored_nodes = score_nodes(&base);
     let test_impact = compute_test_impact(&base);
     let boundary_violations = detect_boundary_violations(&base);
+    let scored_nodes = score_nodes(&base, &test_impact, &boundary_violations);
     let risk_level = compute_risk_level(&base, &scored_nodes, &test_impact, &boundary_violations);
 
     AdvancedImpactResult {
@@ -68,7 +72,11 @@ pub fn analyze(base: ImpactResult) -> AdvancedImpactResult {
 /// Each hop through `relevant_edges` decays the score by `HOP_DECAY` times
 /// the edge's `traversal_weight`.  Every node is kept at its highest score
 /// across all paths (max propagation).
-fn score_nodes(base: &ImpactResult) -> Vec<ScoredImpactNode> {
+fn score_nodes(
+    base: &ImpactResult,
+    test_impact: &TestImpactResult,
+    violations: &[BoundaryViolation],
+) -> Vec<ScoredImpactNode> {
     // Seed scores for changed nodes.
     let mut scores: HashMap<String, f64> = base
         .changed_nodes
@@ -118,15 +126,34 @@ fn score_nodes(base: &ImpactResult) -> Vec<ScoredImpactNode> {
         .iter()
         .map(|n| n.qualified_name.as_str())
         .collect();
+    let test_adjacent_qns = test_adjacent_qns(base, test_impact);
+    let uncovered_qns: HashSet<String> = test_impact
+        .uncovered_changed_nodes
+        .iter()
+        .map(|n| n.qualified_name.clone())
+        .collect();
+    let (cross_module_qns, cross_package_qns) = boundary_signal_sets(violations);
 
     let all_nodes = base.changed_nodes.iter().chain(base.impacted_nodes.iter());
 
     let mut result: Vec<ScoredImpactNode> = all_nodes
         .map(|n| {
-            let impact_score = scores
+            let mut impact_score = scores
                 .get(n.qualified_name.as_str())
                 .copied()
                 .unwrap_or(0.0);
+            if test_adjacent_qns.contains(&n.qualified_name) {
+                impact_score += TEST_ADJACENCY_BOOST;
+            }
+            if uncovered_qns.contains(&n.qualified_name) {
+                impact_score += UNCOVERED_CHANGE_BOOST;
+            }
+            if cross_module_qns.contains(&n.qualified_name) {
+                impact_score += CROSS_MODULE_BOOST;
+            }
+            if cross_package_qns.contains(&n.qualified_name) {
+                impact_score += CROSS_PACKAGE_BOOST;
+            }
             let change_kind = if seed_qns.contains(n.qualified_name.as_str()) {
                 Some(classify_node(n))
             } else {
@@ -257,6 +284,23 @@ fn compute_test_impact(base: &ImpactResult) -> TestImpactResult {
     }
 }
 
+fn test_adjacent_qns(base: &ImpactResult, test_impact: &TestImpactResult) -> HashSet<String> {
+    let mut qns: HashSet<String> = test_impact
+        .affected_tests
+        .iter()
+        .map(|n| n.qualified_name.clone())
+        .collect();
+
+    for edge in &base.relevant_edges {
+        if matches!(edge.kind, EdgeKind::Tests | EdgeKind::TestedBy) {
+            qns.insert(edge.source_qn.clone());
+            qns.insert(edge.target_qn.clone());
+        }
+    }
+
+    qns
+}
+
 // ---------------------------------------------------------------------------
 // Boundary detection
 // ---------------------------------------------------------------------------
@@ -339,6 +383,26 @@ fn detect_boundary_violations(base: &ImpactResult) -> Vec<BoundaryViolation> {
     violations
 }
 
+fn boundary_signal_sets(
+    violations: &[BoundaryViolation],
+) -> (HashSet<String>, HashSet<String>) {
+    let mut cross_module_qns = HashSet::new();
+    let mut cross_package_qns = HashSet::new();
+
+    for violation in violations {
+        match violation.kind {
+            BoundaryKind::CrossModule => {
+                cross_module_qns.extend(violation.nodes.iter().cloned());
+            }
+            BoundaryKind::CrossPackage => {
+                cross_package_qns.extend(violation.nodes.iter().cloned());
+            }
+        }
+    }
+
+    (cross_module_qns, cross_package_qns)
+}
+
 // ---------------------------------------------------------------------------
 // Risk level
 // ---------------------------------------------------------------------------
@@ -367,7 +431,7 @@ fn compute_risk_level(
 
     if has_api_change && (has_cross_package || has_cross_module) {
         RiskLevel::Critical
-    } else if has_api_change || (has_cross_package && impacted_count > 5) {
+    } else if has_api_change || (has_cross_package && (uncovered || impacted_count > 5)) {
         RiskLevel::High
     } else if has_sig_change || has_cross_module || (impacted_count > 20) || uncovered {
         RiskLevel::Medium
@@ -417,6 +481,11 @@ mod tests {
             confidence_tier: None,
             extra_json: serde_json::Value::Null,
         }
+    }
+
+    fn with_owner(mut node: Node, owner_id: &str) -> Node {
+        node.extra_json = serde_json::json!({ "owner_id": owner_id });
+        node
     }
 
     fn base_result(changed: Vec<Node>, impacted: Vec<Node>, edges: Vec<Edge>) -> ImpactResult {
@@ -618,6 +687,33 @@ mod tests {
     }
 
     #[test]
+    fn risk_high_for_untested_cross_package_internal_change() {
+        let seed = with_owner(
+            make_node(
+                NodeKind::Function,
+                "packages/ui/src/lib.rs::fn::helper",
+                "packages/ui/src/lib.rs",
+                false,
+            ),
+            "cargo:packages/ui/Cargo.toml",
+        );
+        let impacted = with_owner(
+            make_node(
+                NodeKind::Function,
+                "packages/web/src/lib.rs::fn::run",
+                "packages/web/src/lib.rs",
+                false,
+            ),
+            "cargo:packages/web/Cargo.toml",
+        );
+        let base = base_result(vec![seed], vec![impacted], vec![]);
+
+        let result = analyze(base);
+
+        assert_eq!(result.risk_level, RiskLevel::High);
+    }
+
+    #[test]
     fn empty_base_produces_empty_result() {
         let base = ImpactResult {
             changed_nodes: vec![],
@@ -676,5 +772,118 @@ mod tests {
             .find(|s| s.node.qualified_name == "z::fn::orphan")
             .unwrap();
         assert_eq!(orphan.impact_score, 0.0);
+    }
+
+    #[test]
+    fn test_adjacency_boosts_scored_node_priority() {
+        let seed = make_node(NodeKind::Function, "src/a.rs::fn::seed", "src/a.rs", false);
+        let covered = make_node(
+            NodeKind::Function,
+            "src/a.rs::fn::covered",
+            "src/a.rs",
+            false,
+        );
+        let plain = make_node(NodeKind::Function, "src/b.rs::fn::plain", "src/b.rs", false);
+        let test_node = make_node(NodeKind::Test, "src/a.rs::test::covered", "src/a.rs", true);
+
+        let base = base_result(
+            vec![seed],
+            vec![covered, plain, test_node],
+            vec![
+                make_edge(EdgeKind::Calls, "src/a.rs::fn::seed", "src/a.rs::fn::covered"),
+                make_edge(EdgeKind::Calls, "src/a.rs::fn::seed", "src/b.rs::fn::plain"),
+                make_edge(
+                    EdgeKind::Tests,
+                    "src/a.rs::test::covered",
+                    "src/a.rs::fn::covered",
+                ),
+            ],
+        );
+
+        let result = analyze(base);
+        let covered_score = result
+            .scored_nodes
+            .iter()
+            .find(|s| s.node.qualified_name == "src/a.rs::fn::covered")
+            .unwrap()
+            .impact_score;
+        let plain_score = result
+            .scored_nodes
+            .iter()
+            .find(|s| s.node.qualified_name == "src/b.rs::fn::plain")
+            .unwrap()
+            .impact_score;
+
+        assert!(
+            covered_score > plain_score,
+            "test-adjacent node should score above equally distant plain node"
+        );
+    }
+
+    #[test]
+    fn cross_package_signal_boosts_scored_node_priority() {
+        let seed = with_owner(
+            make_node(
+                NodeKind::Function,
+                "packages/core/src/lib.rs::fn::seed",
+                "packages/core/src/lib.rs",
+                false,
+            ),
+            "cargo:packages/core/Cargo.toml",
+        );
+        let local = with_owner(
+            make_node(
+                NodeKind::Function,
+                "packages/core/src/lib.rs::fn::local",
+                "packages/core/src/lib.rs",
+                false,
+            ),
+            "cargo:packages/core/Cargo.toml",
+        );
+        let cross = with_owner(
+            make_node(
+                NodeKind::Function,
+                "packages/ui/src/lib.rs::fn::cross",
+                "packages/ui/src/lib.rs",
+                false,
+            ),
+            "cargo:packages/ui/Cargo.toml",
+        );
+
+        let base = base_result(
+            vec![seed],
+            vec![local, cross],
+            vec![
+                make_edge(
+                    EdgeKind::Calls,
+                    "packages/core/src/lib.rs::fn::seed",
+                    "packages/core/src/lib.rs::fn::local",
+                ),
+                make_edge(
+                    EdgeKind::Calls,
+                    "packages/core/src/lib.rs::fn::seed",
+                    "packages/ui/src/lib.rs::fn::cross",
+                ),
+            ],
+        );
+
+        let result = analyze(base);
+        let local_score = result
+            .scored_nodes
+            .iter()
+            .find(|s| s.node.qualified_name == "packages/core/src/lib.rs::fn::local")
+            .unwrap()
+            .impact_score;
+        let cross_score = result
+            .scored_nodes
+            .iter()
+            .find(|s| s.node.qualified_name == "packages/ui/src/lib.rs::fn::cross")
+            .unwrap()
+            .impact_score;
+
+        assert!(
+            cross_score > local_score,
+            "cross-package node should score above same-distance local node"
+        );
     }
 }

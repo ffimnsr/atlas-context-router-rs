@@ -524,6 +524,8 @@ pub fn rank_context(result: &mut ContextResult) {
 /// 4. Trim edge list to `max_edges`.
 /// 5. Trim file list to `max_files`, keeping DirectTarget files first.
 pub fn trim_context(result: &mut ContextResult) {
+    use atlas_core::model::ContextIntent;
+
     let max_nodes = result.request.max_nodes.unwrap_or(DEFAULT_MAX_NODES);
     let max_edges = result.request.max_edges.unwrap_or(DEFAULT_MAX_EDGES);
     let max_files = result.request.max_files.unwrap_or(DEFAULT_MAX_FILES);
@@ -537,7 +539,16 @@ pub fn trim_context(result: &mut ContextResult) {
             .nodes
             .drain(..)
             .partition(|n| n.selection_reason == SelectionReason::DirectTarget);
-        result.nodes = targets;
+
+        let reserve_non_target = usize::from(
+            result.request.intent == ContextIntent::Review
+                && max_nodes > 1
+                && !rest.is_empty()
+                && targets.len() >= max_nodes,
+        );
+        let keep_targets = max_nodes.saturating_sub(reserve_non_target);
+
+        result.nodes = targets.into_iter().take(keep_targets).collect();
         let budget = max_nodes.saturating_sub(result.nodes.len());
         result.nodes.extend(rest.into_iter().take(budget));
     }
@@ -678,8 +689,9 @@ pub fn build_review_context(store: &Store, request: &ContextRequest) -> Result<C
 
     let max_nodes = request.max_nodes.unwrap_or(DEFAULT_MAX_NODES);
     let max_depth = request.depth.unwrap_or(2);
+    let traversal_max_nodes = max_nodes.saturating_add(max_nodes.min(16));
 
-    let impact = store.impact_radius(&path_refs, max_depth, max_nodes)?;
+    let impact = store.impact_radius(&path_refs, max_depth, traversal_max_nodes)?;
     let advanced = atlas_impact::analyze(impact.clone());
     let impact_scores: HashMap<String, f64> = advanced
         .scored_nodes
@@ -1787,6 +1799,30 @@ mod tests {
         req.max_nodes = Some(3);
         let result = build_context(&store, &req).unwrap();
         assert!(result.nodes.len() <= 3, "node cap exceeded");
+    }
+
+    #[test]
+    fn review_context_tight_cap_keeps_impacted_neighbor() {
+        let mut store = open_store();
+        seed_graph(&mut store);
+        let mut req = review_request(vec!["src/a.rs".to_string()]);
+        req.max_nodes = Some(2);
+        let result = build_context(&store, &req).unwrap();
+
+        assert_eq!(result.nodes.len(), 2);
+        assert!(
+            result
+                .nodes
+                .iter()
+                .any(|node| node.selection_reason == SelectionReason::DirectTarget)
+        );
+        assert!(
+            result
+                .nodes
+                .iter()
+                .any(|node| node.selection_reason == SelectionReason::ImpactNeighbor),
+            "expected impacted neighbor to survive tight review cap"
+        );
     }
 
     #[test]

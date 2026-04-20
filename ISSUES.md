@@ -1126,11 +1126,6 @@ The upstream report highlights parser fidelity and install/hook fragility as the
 - [x] tracing spans around build/update phases
 - [ ] optional metrics export — **backlog**: needs external metrics infra (Prometheus/OTEL); not on core path
 
-### 15.5 Session and content-store stats
-
-- [ ] add session stats
-- [ ] add content-store stats
-
 ---
 
 ## Phase 16 — MCP / Serve Layer
@@ -1161,11 +1156,6 @@ The upstream repo exposes a stdio MCP server, but the report makes clear this sh
 - [x] expose only core tools in first version
 - [ ] add prompts later, not first (MCP prompt templates for external LLMs to use as guidance)
 
-### 16.4 Session lifecycle and saved context
-
-- [ ] add session lifecycle support
-- [ ] add saved-context retrieval tools
-
 ---
 
 ## Phase 17 — Later Features
@@ -1184,7 +1174,7 @@ The upstream repo exposes a stdio MCP server, but the report makes clear this sh
 
 - [ ] embeddings
 - [ ] cloud providers
-- [x] wiki generation
+- [ ] wiki generation
 - [ ] visualization
 - [ ] export formats
 - [ ] registry
@@ -1627,11 +1617,6 @@ Exit criteria:
 - [x] drop distant neighbors before dropping direct callers/callees
 - [x] mark output as truncated if limits applied
 
-### 22.5.1 Saved-context retrieval integration
-
-- [ ] add retrieval from content store after graph retrieval
-- [ ] add session-aware ranking
-
 ### 22.6 Code spans, APIs, tests
 
 - [x] include target symbol span
@@ -1655,12 +1640,6 @@ Exit criteria:
   - [x] caller/callee prioritization
   - [x] include/exclude tests behavior
   - [x] code span selection accuracy
-
-### 22.7 Retrieval metadata and output hints
-
-- [ ] include `saved_context_sources` in `ContextResult`
-- [ ] include `source_ids` for retrieved saved artifacts
-- [ ] include retrieval hints in output
 
 ## Phase 23 — Autonomous Code Reasoning
 
@@ -1837,11 +1816,6 @@ Answer structural questions from graph + parser + store facts only. No unsupport
   - [x] dependency removal blocked by reference
   - [x] missing test signal for changed symbol
   - [x] risk scoring sanity checks
-
-### 23.5 Session events and saved artifacts
-
-- [ ] reasoning results must emit session events
-- [ ] reasoning results must reference `source_id` for saved artifacts
 
 ## Phase 24 — Smart Refactoring Core
 
@@ -2321,8 +2295,8 @@ Deterministic analytics layer on top of graph + stored metadata. Produce explain
 
 ### 31.1 Wiki / docs generation
 
-- [x] generate Markdown docs
-- [x] module pages
+- [ ] generate Markdown docs
+- [ ] module pages
 - [ ] function pages
 - [ ] static site export
 
@@ -2408,20 +2382,20 @@ Release 2 is done when this works end-to-end:
 
 And system has:
 
-- [ ] graph-aware search proven against grep baseline for symbol lookup:
-  - [ ] exact symbol and qualified-name lookup returns intended definition in top 3 on fixture queries
-  - [ ] ambiguous short-name lookup returns ranked candidates with kind and file metadata
-  - [ ] caller/callee/import expansion surfaces relevant graph neighbors plain grep cannot infer
-  - [ ] fixture evaluation shows better top-1 or top-3 symbol lookup accuracy than plain grep baseline
-- [ ] reliable impact scoring with test and boundary signals
-- [ ] workspace-aware package/crate boundaries on multi-package repos:
-  - [ ] Cargo workspace members resolve into explicit package identities
-  - [ ] NPM workspace members resolve into explicit package identities
-  - [ ] Go workspace modules resolve into explicit package identities
-  - [ ] `cross_package` and related reasoning signals use owning package, not top-level directory name
-  - [ ] fixture acceptance passes on repo layouts like `packages/<crate>`, `packages/<app>`, or `go.work` multi-module roots
+- [x] graph-aware search proven against grep baseline for symbol lookup:
+  - [x] exact symbol and qualified-name lookup returns intended definition in top 3 on fixture queries
+  - [x] ambiguous short-name lookup returns ranked candidates with kind and file metadata
+  - [x] caller/callee/import expansion surfaces relevant graph neighbors plain grep cannot infer
+  - [x] fixture evaluation shows better top-1 or top-3 symbol lookup accuracy than plain grep baseline
+- [x] reliable impact scoring with test and boundary signals
+- [x] workspace-aware package/crate boundaries on multi-package repos:
+  - [x] Cargo workspace members resolve into explicit package identities
+  - [x] NPM workspace members resolve into explicit package identities
+  - [x] Go workspace modules resolve into explicit package identities
+  - [x] `cross_package` and related reasoning signals use owning package, not top-level directory name
+  - [x] fixture acceptance passes on repo layouts like `packages/<crate>`, `packages/<app>`, or `go.work` multi-module roots
 - [x] smart review context with better ranking and trimming
-- [ ] review-context usefulness acceptance gate passes on fixture repos and changed-file flows
+- [x] review-context usefulness acceptance gate passes on fixture repos and changed-file flows
 - [x] deterministic context engine with target resolution and code-span selection
 - [x] reasoning engine for removal impact, dead code, and refactor risk
 - [x] refactor planning with dry-run patch validation
@@ -2429,9 +2403,9 @@ And system has:
 - [x] MCP tool usability acceptance gate passes for agent-facing review, impact, query, and context flows
 - [ ] watch mode for incremental local updates
 - [x] observability/debug tooling for graph integrity and pipeline behavior
-- [ ] performance that scales to large repos
-  - [ ] use the current repo on a new disconnected worktree for testing?
-- [ ] large-repo performance acceptance gate passes on representative repos without memory or latency regressions
+- [x] performance that scales to large repos
+  - [x] use the current repo on a new disconnected worktree for testing?
+- [x] large-repo performance acceptance gate passes on representative repos without memory or latency regressions
 
 ---
 
@@ -2469,9 +2443,9 @@ Create storage and adapter boundaries first so later work does not leak session 
 
 #### Session identity model
 
-- [ ] Define `session_id = hash(repo_root + worktree + frontend)`
-- [ ] Normalize paths before hashing
-- [ ] Keep worktree isolation
+- [ ] define `session_id = hash(repo_root + worktree + frontend)`
+- [ ] normalize paths before hashing
+- [ ] keep worktree isolation
 
 Why first:
 - later content/session/MCP work all depend on stable boundaries
@@ -2487,13 +2461,13 @@ Build durable artifact storage before eventing so large outputs already have som
 
 #### Database
 
-- [ ] Create SQLite database at `.atlas/context.db`
-- [ ] Enable `PRAGMA journal_mode=WAL;`
-- [ ] Enable `PRAGMA synchronous=NORMAL;`
-- [ ] Enable `PRAGMA foreign_keys=ON;`
-- [ ] Enable `PRAGMA busy_timeout=5000;`
-- [ ] Enable FTS5 support
-- [ ] Keep this database separate from `.atlas/worldtree.db`
+- [ ] create SQLite database at `.atlas/context.db`
+- [ ] enable `PRAGMA journal_mode=WAL;`
+- [ ] enable `PRAGMA synchronous=NORMAL;`
+- [ ] enable `PRAGMA foreign_keys=ON;`
+- [ ] enable `PRAGMA busy_timeout=5000;`
+- [ ] enable FTS5 support
+- [ ] keep this database separate from `.atlas/worldtree.db`
 
 #### Required tables
 
@@ -2537,12 +2511,12 @@ Build durable artifact storage before eventing so large outputs already have som
 
 #### Chunking rules
 
-- [ ] Markdown must split by headings first
-- [ ] Plain text must split by paragraph blocks or line windows
+- [ ] markdown must split by headings first
+- [ ] plain text must split by paragraph blocks or line windows
 - [ ] JSON must split by path and array batches
-- [ ] Oversized chunks must be subdivided
-- [ ] Each chunk must preserve stable `chunk_index`
-- [ ] Each chunk should preserve human-readable `title` when possible
+- [ ] oversized chunks must be subdivided
+- [ ] each chunk must preserve stable `chunk_index`
+- [ ] each chunk should preserve human-readable `title` when possible
 
 #### Compression routing
 
@@ -2645,8 +2619,9 @@ Instrument existing commands and engines only after the session/content services
 - [ ] `atlas update`
 - [ ] `atlas review-context`
 - [ ] `atlas impact`
-- [ ] Context Engine request handling
-- [ ] Reasoning engine request handling
+- [ ] context engine request handling
+- [ ] reasoning engine request handling
+- [ ] reasoning results must emit session events
 - [ ] MCP tool execution
 
 #### Extraction API
@@ -2660,10 +2635,11 @@ Instrument existing commands and engines only after the session/content services
 
 #### Event payload rules
 
-- [ ] Payloads must be structured JSON
-- [ ] Payloads must be bounded in size
-- [ ] Payloads must include identifiers for retrieval when large artifacts exist
-- [ ] Payloads must never embed large stdout blobs
+- [ ] payloads must be structured JSON
+- [ ] payloads must be bounded in size
+- [ ] payloads must include identifiers for retrieval when large artifacts exist
+- [ ] reasoning results must reference `source_id` for saved artifacts
+- [ ] payloads must never embed large stdout blobs
 
 #### Adapter interfaces
 
@@ -2680,9 +2656,9 @@ Instrument existing commands and engines only after the session/content services
 
 #### Adapter rules
 
-- [ ] Adapters must emit normalized events
-- [ ] Adapters must not write SQLite directly
-- [ ] Adapters must use session service layer
+- [ ] adapters must emit normalized events
+- [ ] adapters must not write SQLite directly
+- [ ] adapters must use session service layer
 
 Why fourth:
 - hooks before storage would force rewrites or duplicated logic
@@ -2714,17 +2690,17 @@ Once events exist, build bounded resume material and user-facing session command
 
 #### Snapshot constraints
 
-- [ ] Snapshot size must be bounded
-- [ ] Snapshot must contain retrieval hints
-- [ ] Snapshot must prefer identifiers and summaries over raw content
-- [ ] Snapshot must be stable enough for tests
+- [ ] snapshot size must be bounded
+- [ ] snapshot must contain retrieval hints
+- [ ] snapshot must prefer identifiers and summaries over raw content
+- [ ] snapshot must be stable enough for tests
 
 #### Lifecycle
 
-- [ ] Build snapshot before compaction or reset
-- [ ] Persist snapshot into `session_resume`
-- [ ] Inject snapshot at next session start or explicit resume
-- [ ] Mark snapshot consumed after successful injection
+- [ ] build snapshot before compaction or reset
+- [ ] persist snapshot into `session_resume`
+- [ ] inject snapshot at next session start or explicit resume
+- [ ] mark snapshot consumed after successful injection
 
 #### CLI commands
 
@@ -2736,10 +2712,11 @@ Once events exist, build bounded resume material and user-facing session command
 
 #### CLI behavior
 
-- [ ] Auto-create session on interactive run
-- [ ] Auto-load resume snapshot when available
-- [ ] Show compact resume summary
-- [ ] Never replay raw historic output
+- [ ] auto-create session on interactive run
+- [ ] auto-load resume snapshot when available
+- [ ] show compact resume summary
+- [ ] add session lifecycle support
+- [ ] never replay raw historic output
 
 Why fifth:
 - snapshots are only useful once event history and artifact references exist
@@ -2755,21 +2732,23 @@ Extend context retrieval only after saved artifacts and session identity are sta
 
 #### Context Engine request additions
 
-- [ ] Add `include_saved_context: bool`
-- [ ] Add `session_id: Option<String>`
+- [ ] add `include_saved_context: bool`
+- [ ] add `session_id: Option<String>`
 
 #### Retrieval flow
 
-- [ ] Query content store by symbol name after graph retrieval
-- [ ] Query content store by file path after graph retrieval
-- [ ] Query content store by session ID after graph retrieval
-- [ ] Merge saved-context results into `ContextResult`
+- [ ] query content store by symbol name after graph retrieval
+- [ ] query content store by file path after graph retrieval
+- [ ] query content store by session ID after graph retrieval
+- [ ] add retrieval from content store after graph retrieval
+- [ ] merge saved-context results into `ContextResult`
 
 #### Ranking additions
 
 - [ ] add saved-context relevance
 - [ ] add recency boost
 - [ ] add same-session boost
+- [ ] add session-aware ranking
 
 #### Result additions
 
@@ -2795,6 +2774,7 @@ Expose session continuity to agents only after storage, events, resume, and retr
 - [ ] `resume_session`
 - [ ] `search_saved_context`
 - [ ] `save_context_artifact`
+- [ ] add saved-context retrieval tools
 
 #### Existing tool changes
 
@@ -2805,9 +2785,9 @@ Expose session continuity to agents only after storage, events, resume, and retr
 
 #### Output rules
 
-- [ ] Return previews instead of large blobs
-- [ ] Return `source_id` for stored artifacts
-- [ ] Return retrieval hints for follow-up access
+- [ ] return previews instead of large blobs
+- [ ] return `source_id` for stored artifacts
+- [ ] return retrieval hints for follow-up access
 
 Why seventh:
 - MCP should stay thin over already-proven services
@@ -2845,6 +2825,11 @@ Close with the operational guards and tests that keep context-mode safe and main
 - [ ] max content DB size
 - [ ] retention TTL
 - [ ] snapshot size cap
+
+#### Operational visibility
+
+- [ ] add session stats
+- [ ] add content-store stats
 
 #### Completion criteria
 
