@@ -196,14 +196,14 @@ export function createServer(config: Config): Server {
 fn bench_parse_rust(c: &mut Criterion) {
     let registry = ParserRegistry::with_defaults();
     c.bench_with_input(BenchmarkId::new("parse", "rust"), &RUST_SRC, |b, src| {
-        b.iter(|| registry.parse("src/registry.rs", "abc123", src.as_bytes()));
+        b.iter(|| registry.parse("src/registry.rs", "abc123", src.as_bytes(), None));
     });
 }
 
 fn bench_parse_go(c: &mut Criterion) {
     let registry = ParserRegistry::with_defaults();
     c.bench_with_input(BenchmarkId::new("parse", "go"), &GO_SRC, |b, src| {
-        b.iter(|| registry.parse("server/handler.go", "abc123", src.as_bytes()));
+        b.iter(|| registry.parse("server/handler.go", "abc123", src.as_bytes(), None));
     });
 }
 
@@ -213,7 +213,7 @@ fn bench_parse_python(c: &mut Criterion) {
         BenchmarkId::new("parse", "python"),
         &PYTHON_SRC,
         |b, src| {
-            b.iter(|| registry.parse("scanner.py", "abc123", src.as_bytes()));
+            b.iter(|| registry.parse("scanner.py", "abc123", src.as_bytes(), None));
         },
     );
 }
@@ -224,7 +224,7 @@ fn bench_parse_typescript(c: &mut Criterion) {
         BenchmarkId::new("parse", "typescript"),
         &TS_SRC,
         |b, src| {
-            b.iter(|| registry.parse("src/server.ts", "abc123", src.as_bytes()));
+            b.iter(|| registry.parse("src/server.ts", "abc123", src.as_bytes(), None));
         },
     );
 }
@@ -240,7 +240,7 @@ fn bench_parse_all_languages(c: &mut Criterion) {
     c.bench_function("parse/all_languages", |b| {
         b.iter(|| {
             for (path, src) in files {
-                let _ = registry.parse(path, "abc123", src.as_bytes());
+                let _ = registry.parse(path, "abc123", src.as_bytes(), None);
             }
         });
     });

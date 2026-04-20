@@ -21,7 +21,7 @@ The upstream repo’s real kernel is the repository scanner, parser layer, SQLit
 
 - [x] Use binary name: `atlas`
 - [x] Use hidden work dir: `.atlas/`
-- [x] Use DB path: `.atlas/worldview.sqlite`
+- [x] Use DB path: `.atlas/worldtree.db`
 - [x] Use config path: `.atlas/config.toml`
 - [x] Use CLI commands:
   - [x] `atlas init`
@@ -587,7 +587,7 @@ The upstream parser is both the most important subsystem and the most monolithic
 - [ ] Next call-resolution edge cases:
   - [ ] support non-relative/package-style `tsconfig` `extends` values
   - [ ] resolve JS/TS barrel re-export chains for import-based call targets
-  - [ ] support latest tsconfig for typescript 6 where it deprecated some fields
+  - [ ] support latest tsconfig for typescript 6 where it deprecated some fields like baseUrl
 
 ## Phase 7.5 — v1.1 Language Handlers
 
@@ -1118,7 +1118,7 @@ These phases extend v1 after core graph/build/update/query path is reliable.
 ### 20.1 Incremental parsing
 
 - [x] partial file reparse
-- [ ] optional Tree-sitter incremental parsing
+- [x] optional Tree-sitter incremental parsing
 
 ### 20.2 Dependency invalidation
 
@@ -2000,28 +2000,31 @@ Deterministic analytics layer on top of graph + stored metadata. Produce explain
 - [ ] prioritize better context
 - [ ] prioritize better signals
 
-## Phase 32 — TOON Output Package
+## Phase 32 — TOON Output
 
-Internal TOON package for LLM-facing MCP output only. Goal: reduce token usage for review and context payloads without changing Atlas core storage, parser, or JSON-RPC transport. Do not rely on external TOON crates.
+TOON for LLM-facing MCP output only. Goal: reduce token usage for review and context payloads without changing Atlas core storage, parser, or JSON-RPC transport. Prefer official Rust TOON library (official only) (`toon-format/toon-rust`) over a custom Atlas encoder. Build Atlas-specific adapter code only where library integration is insufficient.
 
 ### 32.1 Scope and boundaries
 
-- [ ] create `packages/atlas-toon`
+- [ ] evaluate official Rust TOON library for Atlas use
+- [ ] add TOON dependency only if maintenance, API shape, and spec coverage are acceptable
+- [ ] create thin Atlas adapter layer only if needed
 - [ ] keep TOON limited to LLM-facing MCP output
 - [ ] keep JSON as baseline and fallback output
 - [ ] do not use TOON for SQLite persistence, internal domain models, or MCP transport framing
-- [ ] do not depend on external TOON crates
+- [ ] avoid custom TOON implementation unless official library is blocked or insufficient
 
-### 32.2 Encoder MVP
+### 32.2 Encoding MVP
 
-- [ ] encode `serde_json::Value` to TOON
-- [ ] support objects, arrays, strings, numbers, booleans, and null
-- [ ] implement deterministic field ordering
-- [ ] implement canonical number formatting
-- [ ] implement delimiter-aware quoting rules
-- [ ] implement inline primitive arrays
-- [ ] implement tabular encoding for uniform arrays of primitive-only objects
-- [ ] implement expanded encoding for mixed or nested arrays
+- [ ] encode `serde_json::Value` to TOON through library API
+- [ ] confirm support for objects, arrays, strings, numbers, booleans, and null
+- [ ] confirm deterministic field ordering behavior or add wrapper normalization
+- [ ] confirm canonical number formatting behavior or add wrapper normalization
+- [ ] confirm delimiter-aware quoting rules
+- [ ] confirm inline primitive arrays
+- [ ] confirm tabular encoding for uniform arrays of primitive-only objects
+- [ ] confirm expanded encoding for mixed or nested arrays
+- [ ] add Atlas-side fallback/error path when payload shape exceeds supported library behavior
 
 ### 32.3 MCP integration
 
@@ -2032,11 +2035,11 @@ Internal TOON package for LLM-facing MCP output only. Goal: reduce token usage f
 
 ### 32.4 Validation and quality gates
 
-- [ ] add fixture tests from TOON spec examples for supported subset
+- [ ] add fixture tests from TOON spec examples for supported library subset
 - [ ] add round-trip tests for Atlas-produced payloads where feasible
 - [ ] reject unsupported cases instead of emitting ambiguous output
 - [ ] benchmark token count and response size vs JSON on representative MCP payloads
-- [ ] document exact supported TOON subset and deliberate deviations from full spec
+- [ ] document exact supported TOON subset, library choice, pinned version, and deliberate deviations from full spec
 
 ---
 
@@ -2150,6 +2153,7 @@ And system has:
 ### Slice 8 — product contract
 
 - [x] rename DB path to `.atlas/worldview.sqlite`
+- [x] rename DB path to `.atlas/worldtree.db`
 - [x] finish binary/work-dir/config naming contract (paths module in atlas-cli)
 - [x] freeze v1 include/out-of-scope boundaries
 - [x] document every intentional compatibility break (see COMPATIBILITY.md)

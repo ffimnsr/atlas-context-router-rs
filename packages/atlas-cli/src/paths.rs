@@ -2,7 +2,7 @@
 pub const ATLAS_DIR: &str = ".atlas";
 
 /// Default SQLite database filename inside the atlas work directory.
-pub const ATLAS_DB: &str = "worldview.sqlite";
+pub const ATLAS_DB: &str = "worldtree.db";
 
 /// Default config filename inside the atlas work directory.
 pub const ATLAS_CONFIG: &str = "config.toml";

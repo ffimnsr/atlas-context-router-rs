@@ -16,20 +16,20 @@ impl LangParser for GoParser {
         path.ends_with(".go")
     }
 
-    fn parse(&self, ctx: &ParseContext<'_>) -> ParsedFile {
+    fn parse(&self, ctx: &ParseContext<'_>) -> (ParsedFile, Option<tree_sitter::Tree>) {
         let mut parser = tree_sitter::Parser::new();
         parser
             .set_language(&tree_sitter_go::LANGUAGE.into())
             .expect("tree-sitter-go grammar failed to load");
 
-        let tree = parser.parse(ctx.source, None);
+        let tree = parser.parse(ctx.source, ctx.old_tree);
         let mut nodes: Vec<Node> = Vec::new();
         let mut edges: Vec<Edge> = Vec::new();
 
         let line_count = ctx.source.iter().filter(|&&b| b == b'\n').count() as u32 + 1;
         nodes.push(file_node(ctx.rel_path, ctx.file_hash, line_count));
 
-        if let Some(tree) = tree {
+        if let Some(ref tree) = tree {
             let root = tree.root_node();
             let package_name = find_package_name(root, ctx.source);
 
@@ -57,14 +57,15 @@ impl LangParser for GoParser {
             edges.append(&mut call_edges);
         }
 
-        ParsedFile {
+        let pf = ParsedFile {
             path: ctx.rel_path.to_owned(),
             language: Some("go".to_owned()),
             hash: ctx.file_hash.to_owned(),
             size: Some(ctx.source.len() as i64),
             nodes,
             edges,
-        }
+        };
+        (pf, tree)
     }
 }
 
@@ -506,11 +507,13 @@ mod tests {
 
     fn parse(src: &str) -> ParsedFile {
         let p = GoParser;
-        p.parse(&ParseContext {
+        let (pf, _) = p.parse(&ParseContext {
             rel_path: "cmd/main.go",
             file_hash: "cafebabe",
             source: src.as_bytes(),
-        })
+            old_tree: None,
+        });
+        pf
     }
 
     #[test]

@@ -16,13 +16,13 @@ impl LangParser for RustParser {
         path.ends_with(".rs")
     }
 
-    fn parse(&self, ctx: &ParseContext<'_>) -> ParsedFile {
+    fn parse(&self, ctx: &ParseContext<'_>) -> (ParsedFile, Option<tree_sitter::Tree>) {
         let mut parser = tree_sitter::Parser::new();
         parser
             .set_language(&tree_sitter_rust::LANGUAGE.into())
             .expect("tree-sitter-rust grammar failed to load");
 
-        let tree = parser.parse(ctx.source, None);
+        let tree = parser.parse(ctx.source, ctx.old_tree);
         let mut nodes: Vec<Node> = Vec::new();
         let mut edges: Vec<Edge> = Vec::new();
 
@@ -36,7 +36,7 @@ impl LangParser for RustParser {
         });
         nodes.push(file_node(ctx.rel_path, ctx.file_hash, file_lines));
 
-        if let Some(tree) = tree {
+        if let Some(ref tree) = tree {
             let mut walker = Walker {
                 source: ctx.source,
                 rel_path: ctx.rel_path,
@@ -59,14 +59,15 @@ impl LangParser for RustParser {
             edges.append(&mut reference_edges);
         }
 
-        ParsedFile {
+        let pf = ParsedFile {
             path: ctx.rel_path.to_owned(),
             language: Some("rust".to_owned()),
             hash: ctx.file_hash.to_owned(),
             size: Some(ctx.source.len() as i64),
             nodes,
             edges,
-        }
+        };
+        (pf, tree)
     }
 }
 
@@ -839,11 +840,13 @@ mod tests {
 
     fn parse(src: &str) -> ParsedFile {
         let p = RustParser;
-        p.parse(&ParseContext {
+        let (pf, _) = p.parse(&ParseContext {
             rel_path: "src/lib.rs",
             file_hash: "deadbeef",
             source: src.as_bytes(),
-        })
+            old_tree: None,
+        });
+        pf
     }
 
     #[test]

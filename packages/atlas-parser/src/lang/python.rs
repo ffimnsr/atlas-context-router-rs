@@ -16,20 +16,20 @@ impl LangParser for PythonParser {
         path.ends_with(".py")
     }
 
-    fn parse(&self, ctx: &ParseContext<'_>) -> ParsedFile {
+    fn parse(&self, ctx: &ParseContext<'_>) -> (ParsedFile, Option<tree_sitter::Tree>) {
         let mut parser = tree_sitter::Parser::new();
         parser
             .set_language(&tree_sitter_python::LANGUAGE.into())
             .expect("tree-sitter-python grammar failed to load");
 
-        let tree = parser.parse(ctx.source, None);
+        let tree = parser.parse(ctx.source, ctx.old_tree);
         let mut nodes: Vec<Node> = Vec::new();
         let mut edges: Vec<Edge> = Vec::new();
 
         let line_count = ctx.source.iter().filter(|&&b| b == b'\n').count() as u32 + 1;
         nodes.push(file_node(ctx.rel_path, ctx.file_hash, line_count));
 
-        if let Some(tree) = tree {
+        if let Some(ref tree) = tree {
             let root = tree.root_node();
             let mut cursor = root.walk();
             for child in root.children(&mut cursor) {
@@ -41,14 +41,15 @@ impl LangParser for PythonParser {
             edges.append(&mut call_edges);
         }
 
-        ParsedFile {
+        let pf = ParsedFile {
             path: ctx.rel_path.to_owned(),
             language: Some("python".to_owned()),
             hash: ctx.file_hash.to_owned(),
             size: Some(ctx.source.len() as i64),
             nodes,
             edges,
-        }
+        };
+        (pf, tree)
     }
 }
 
@@ -605,11 +606,13 @@ mod tests {
     use crate::traits::ParseContext;
 
     fn parse(src: &str) -> ParsedFile {
-        PythonParser.parse(&ParseContext {
+        let (pf, _) = PythonParser.parse(&ParseContext {
             rel_path: "src/example.py",
             file_hash: "deadbeef",
             source: src.as_bytes(),
-        })
+            old_tree: None,
+        });
+        pf
     }
 
     #[test]

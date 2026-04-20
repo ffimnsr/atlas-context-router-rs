@@ -38,14 +38,27 @@ impl ParserRegistry {
         self.handlers.iter().map(|h| h.language_name()).collect()
     }
 
-    /// Parse a file.  Returns `None` when no registered handler supports the
-    /// file's extension — callers should skip those files.
-    pub fn parse(&self, rel_path: &str, file_hash: &str, source: &[u8]) -> Option<ParsedFile> {
+    /// Parse a file, optionally supplying a previous tree-sitter tree to
+    /// enable incremental re-parsing.  Returns `None` when no registered
+    /// handler supports the file's extension — callers should skip those
+    /// files.
+    ///
+    /// The second element of the returned tuple is the new tree-sitter tree,
+    /// which the caller may cache and pass back as `old_tree` on the next
+    /// parse of the same file.
+    pub fn parse(
+        &self,
+        rel_path: &str,
+        file_hash: &str,
+        source: &[u8],
+        old_tree: Option<&tree_sitter::Tree>,
+    ) -> Option<(ParsedFile, Option<tree_sitter::Tree>)> {
         let handler = self.handler_for(rel_path)?;
         let ctx = ParseContext {
             rel_path,
             file_hash,
             source,
+            old_tree,
         };
         Some(handler.parse(&ctx))
     }

@@ -27,7 +27,7 @@ impl LangParser for JsParser {
             || path.ends_with(".cjs")
     }
 
-    fn parse(&self, ctx: &ParseContext<'_>) -> ParsedFile {
+    fn parse(&self, ctx: &ParseContext<'_>) -> (ParsedFile, Option<tree_sitter::Tree>) {
         let mut parser = tree_sitter::Parser::new();
         parser
             .set_language(&tree_sitter_javascript::LANGUAGE.into())
@@ -49,7 +49,7 @@ impl LangParser for TsParser {
         path.ends_with(".ts") || path.ends_with(".tsx")
     }
 
-    fn parse(&self, ctx: &ParseContext<'_>) -> ParsedFile {
+    fn parse(&self, ctx: &ParseContext<'_>) -> (ParsedFile, Option<tree_sitter::Tree>) {
         let mut parser = tree_sitter::Parser::new();
         let lang = if ctx.rel_path.ends_with(".tsx") {
             tree_sitter_typescript::LANGUAGE_TSX.into()
@@ -71,15 +71,15 @@ fn parse_source(
     parser: &mut tree_sitter::Parser,
     ctx: &ParseContext<'_>,
     lang: &'static str,
-) -> ParsedFile {
-    let tree = parser.parse(ctx.source, None);
+) -> (ParsedFile, Option<tree_sitter::Tree>) {
+    let tree = parser.parse(ctx.source, ctx.old_tree);
     let mut nodes: Vec<Node> = Vec::new();
     let mut edges: Vec<Edge> = Vec::new();
 
     let line_count = ctx.source.iter().filter(|&&b| b == b'\n').count() as u32 + 1;
     nodes.push(file_node(ctx.rel_path, ctx.file_hash, line_count, lang));
 
-    if let Some(tree) = tree {
+    if let Some(ref tree) = tree {
         let root = tree.root_node();
         let mut cursor = root.walk();
         for child in root.children(&mut cursor) {
@@ -91,14 +91,15 @@ fn parse_source(
         edges.append(&mut call_edges);
     }
 
-    ParsedFile {
+    let pf = ParsedFile {
         path: ctx.rel_path.to_owned(),
         language: Some(lang.to_owned()),
         hash: ctx.file_hash.to_owned(),
         size: Some(ctx.source.len() as i64),
         nodes,
         edges,
-    }
+    };
+    (pf, tree)
 }
 
 // ---------------------------------------------------------------------------
@@ -775,19 +776,23 @@ mod tests {
     use crate::traits::ParseContext;
 
     fn parse_js(src: &str) -> ParsedFile {
-        JsParser.parse(&ParseContext {
+        let (pf, _) = JsParser.parse(&ParseContext {
             rel_path: "src/app.js",
             file_hash: "cafebabe",
             source: src.as_bytes(),
-        })
+            old_tree: None,
+        });
+        pf
     }
 
     fn parse_ts(src: &str) -> ParsedFile {
-        TsParser.parse(&ParseContext {
+        let (pf, _) = TsParser.parse(&ParseContext {
             rel_path: "src/app.ts",
             file_hash: "cafebabe",
             source: src.as_bytes(),
-        })
+            old_tree: None,
+        });
+        pf
     }
 
     #[test]

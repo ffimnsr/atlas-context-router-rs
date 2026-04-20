@@ -119,8 +119,8 @@ pub fn build_graph(
                     Ok(b) => b,
                     Err(e) => return (rel_str.clone(), Err(format!("read error: {e}"))),
                 };
-                match registry.parse(rel_str, hash, &source) {
-                    Some(pf) => (rel_str.clone(), Ok(pf)),
+                match registry.parse(rel_str, hash, &source, None) {
+                    Some((pf, _tree)) => (rel_str.clone(), Ok(pf)),
                     None => (rel_str.clone(), Err("unsupported (skipped)".into())),
                 }
             })

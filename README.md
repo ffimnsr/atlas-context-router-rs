@@ -6,7 +6,7 @@ Atlas builds a local code graph for your repository, stores it in SQLite, and gi
 
 - scans tracked files in your repository
 - parses supported languages into graph nodes and edges
-- stores graph data in `.atlas/worldview.sqlite`
+- stores graph data in `.atlas/worldtree.db`
 - updates incrementally from git changes
 - answers graph-aware queries from CLI or MCP clients
 
@@ -202,7 +202,7 @@ atlas --json install --platform claude
 ## Files Atlas Writes
 
 - `.atlas/config.toml`
-- `.atlas/worldview.sqlite`
+- `.atlas/worldtree.db`
 - `.mcp.json` for Claude Code installs
 - `.vscode/mcp.json` for GitHub Copilot installs
 - `~/.codex/config.toml` entry for Codex installs

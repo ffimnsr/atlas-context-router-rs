@@ -598,7 +598,7 @@ fn open_store(repo_root: &Path) -> Store {
     Store::open(
         repo_root
             .join(".atlas")
-            .join("worldview.sqlite")
+            .join("worldtree.db")
             .to_str()
             .expect("db path"),
     )

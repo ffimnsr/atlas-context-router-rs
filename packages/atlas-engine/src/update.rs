@@ -7,7 +7,7 @@ use std::time::Instant;
 
 use anyhow::{Context, Result};
 use atlas_core::model::{ChangeType, ParsedFile};
-use atlas_parser::ParserRegistry;
+use atlas_parser::{ParserRegistry, TreeCache};
 use atlas_repo::{DiffTarget, changed_files, hash_file, repo_relative};
 use atlas_store_sqlite::Store;
 use camino::Utf8Path;
@@ -224,6 +224,14 @@ pub fn update_graph(
     let registry = ParserRegistry::with_defaults();
     let mut parse_errors = 0usize;
     let mut skipped_unsupported = 0usize;
+    // In-process tree cache: trees from this run are reused when a file is
+    // re-parsed as a dependent later in the same update.
+    let mut tree_cache = TreeCache::new();
+
+    // Evict trees for files that were deleted so stale entries don't linger.
+    for path in &to_delete {
+        tree_cache.evict(path);
+    }
 
     // ── Phase 1: parse directly-changed files ────────────────────────────────
     let (changed_candidates, changed_unsupported) =
@@ -234,9 +242,22 @@ pub fn update_graph(
     let mut parsed_changed: Vec<ParsedFile> = Vec::new();
 
     for chunk in changed_candidates.chunks(opts.batch_size) {
-        let results: Vec<(String, Result<ParsedFile, String>)> = chunk
-            .par_iter()
+        // Move old trees out of the cache for each file in this chunk so
+        // they can be owned by the parallel closure (Tree: Send, not Sync).
+        let mut work: Vec<(String, camino::Utf8PathBuf, Option<tree_sitter::Tree>)> = chunk
+            .iter()
             .map(|(rel_str, abs_path)| {
+                let old_tree = tree_cache.remove(rel_str);
+                (rel_str.clone(), abs_path.clone(), old_tree)
+            })
+            .collect();
+
+        let results: Vec<(
+            String,
+            Result<(ParsedFile, Option<tree_sitter::Tree>), String>,
+        )> = work
+            .par_iter_mut()
+            .map(|(rel_str, abs_path, old_tree)| {
                 let hash = match hash_file(abs_path) {
                     Ok(h) => h,
                     Err(e) => return (rel_str.clone(), Err(format!("hash error: {e}"))),
@@ -245,8 +266,8 @@ pub fn update_graph(
                     Ok(b) => b,
                     Err(e) => return (rel_str.clone(), Err(format!("read error: {e}"))),
                 };
-                match registry.parse(rel_str, &hash, &source) {
-                    Some(pf) => (rel_str.clone(), Ok(pf)),
+                match registry.parse(rel_str, &hash, &source, old_tree.as_ref()) {
+                    Some(result) => (rel_str.clone(), Ok(result)),
                     None => (rel_str.clone(), Err("unsupported (skipped)".into())),
                 }
             })
@@ -254,7 +275,12 @@ pub fn update_graph(
 
         for (rel_str, outcome) in results {
             match outcome {
-                Ok(pf) => parsed_changed.push(pf),
+                Ok((pf, tree)) => {
+                    if let Some(t) = tree {
+                        tree_cache.insert(rel_str.clone(), t);
+                    }
+                    parsed_changed.push(pf);
+                }
                 Err(msg) if msg == "unsupported (skipped)" => skipped_unsupported += 1,
                 Err(msg) => {
                     tracing::warn!("processing '{}' failed: {msg}", rel_str);
@@ -301,9 +327,20 @@ pub fn update_graph(
     let mut parsed_deps: Vec<ParsedFile> = Vec::new();
 
     for chunk in dep_candidates.chunks(opts.batch_size) {
-        let results: Vec<(String, Result<ParsedFile, String>)> = chunk
-            .par_iter()
+        let mut work: Vec<(String, camino::Utf8PathBuf, Option<tree_sitter::Tree>)> = chunk
+            .iter()
             .map(|(rel_str, abs_path)| {
+                let old_tree = tree_cache.remove(rel_str);
+                (rel_str.clone(), abs_path.clone(), old_tree)
+            })
+            .collect();
+
+        let results: Vec<(
+            String,
+            Result<(ParsedFile, Option<tree_sitter::Tree>), String>,
+        )> = work
+            .par_iter_mut()
+            .map(|(rel_str, abs_path, old_tree)| {
                 let hash = match hash_file(abs_path) {
                     Ok(h) => h,
                     Err(e) => return (rel_str.clone(), Err(format!("hash error: {e}"))),
@@ -312,8 +349,8 @@ pub fn update_graph(
                     Ok(b) => b,
                     Err(e) => return (rel_str.clone(), Err(format!("read error: {e}"))),
                 };
-                match registry.parse(rel_str, &hash, &source) {
-                    Some(pf) => (rel_str.clone(), Ok(pf)),
+                match registry.parse(rel_str, &hash, &source, old_tree.as_ref()) {
+                    Some(result) => (rel_str.clone(), Ok(result)),
                     None => (rel_str.clone(), Err("unsupported (skipped)".into())),
                 }
             })
@@ -321,7 +358,12 @@ pub fn update_graph(
 
         for (rel_str, outcome) in results {
             match outcome {
-                Ok(pf) => parsed_deps.push(pf),
+                Ok((pf, tree)) => {
+                    if let Some(t) = tree {
+                        tree_cache.insert(rel_str.clone(), t);
+                    }
+                    parsed_deps.push(pf);
+                }
                 Err(msg) if msg == "unsupported (skipped)" => skipped_unsupported += 1,
                 Err(msg) => {
                     tracing::warn!("processing dependent '{}' failed: {msg}", rel_str);
