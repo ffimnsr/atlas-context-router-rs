@@ -31,8 +31,10 @@ pub enum UpdateTarget {
     Staged,
     /// Changes relative to the given git ref (e.g. `"origin/main"`).
     BaseRef(String),
-    /// Explicit set of repo-relative file paths.
+    /// Explicit set of repo-relative file paths (all treated as Modified).
     Files(Vec<String>),
+    /// Pre-classified batch of changes (used by watch mode).
+    Batch(Vec<atlas_core::model::ChangedFile>),
 }
 
 /// Options controlling the incremental update pipeline.
@@ -150,6 +152,7 @@ pub fn update_graph(
                 }
             })
             .collect(),
+        UpdateTarget::Batch(changes) => changes.clone(),
         other => {
             let diff_target = match other {
                 UpdateTarget::Staged => DiffTarget::Staged,

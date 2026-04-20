@@ -29,6 +29,7 @@ fn main() {
         Command::Install { .. } => commands::run_install(&cli),
         Command::Completions { .. } => commands::run_completions(&cli),
         Command::Shell { .. } => commands::run_shell(&cli),
+        Command::Watch { .. } => commands::run_watch(&cli),
         Command::Context { .. } => commands::run_context(&cli),
         Command::Analyze { .. } => commands::run_analyze(&cli),
         Command::Refactor { .. } => commands::run_refactor(&cli),

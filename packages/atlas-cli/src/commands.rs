@@ -1475,6 +1475,70 @@ pub fn run_review_context(cli: &Cli) -> Result<()> {
     Ok(())
 }
 
+pub fn run_watch(cli: &Cli) -> Result<()> {
+    use atlas_engine::{WatchRunner, config};
+    use std::time::Duration;
+
+    let repo = resolve_repo(cli)?;
+    let repo_root_path =
+        find_repo_root(Utf8Path::new(&repo)).context("cannot find git repo root")?;
+    let db_path = db_path(cli, &repo);
+
+    let engine_config = config::Config::load(&atlas_engine::paths::atlas_dir(&repo))?;
+
+    let (debounce_ms, watch_json) = match &cli.command {
+        crate::cli::Command::Watch { debounce_ms, json } => (*debounce_ms, *json),
+        _ => (200, false),
+    };
+    let json_output = cli.json || watch_json;
+    let debounce = Duration::from_millis(debounce_ms);
+
+    let mut runner = WatchRunner::new(
+        repo_root_path.as_path(),
+        db_path.clone(),
+        debounce,
+        engine_config.parse_batch_size(),
+    )
+    .context("cannot start watch runner")?;
+
+    if !json_output {
+        println!(
+            "Watching '{}' (debounce {}ms) — press Ctrl+C to stop",
+            repo_root_path, debounce_ms
+        );
+    }
+
+    runner.run(|result| {
+        if json_output {
+            let obj = serde_json::json!({
+                "schema_version": "atlas_cli.v1",
+                "command": "watch",
+                "data": {
+                    "files_updated": result.files_updated,
+                    "nodes_updated": result.nodes_updated,
+                    "errors": result.errors,
+                    "elapsed_ms": result.elapsed_ms,
+                    "error_messages": result.error_messages,
+                }
+            });
+            println!("{}", serde_json::to_string(&obj).unwrap_or_default());
+        } else if result.errors > 0 {
+            eprintln!(
+                "watch: {} file(s) — {} node(s) updated — {} error(s) [{} ms]",
+                result.files_updated, result.nodes_updated, result.errors, result.elapsed_ms,
+            );
+            for msg in &result.error_messages {
+                eprintln!("  {msg}");
+            }
+        } else {
+            println!(
+                "watch: {} file(s) — {} node(s) updated [{} ms]",
+                result.files_updated, result.nodes_updated, result.elapsed_ms,
+            );
+        }
+    })
+}
+
 pub fn run_context(cli: &Cli) -> Result<()> {
     let repo = resolve_repo(cli)?;
     let db_path = db_path(cli, &repo);

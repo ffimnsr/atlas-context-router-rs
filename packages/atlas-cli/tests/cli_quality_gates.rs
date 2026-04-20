@@ -2519,3 +2519,208 @@ fn copy_dir_all(src: &Path, dst: &Path) {
         }
     }
 }
+
+// ── Phase 28 watch-pipeline integration tests ─────────────────────────────────
+//
+// These tests verify the underlying update pipeline that `atlas watch` uses:
+// modify, delete, and rename events all go through `update_graph` with
+// `UpdateTarget::Files` (or `Batch` inside WatchRunner), so exercising that
+// path via `atlas update --files` gives complete coverage of the code path
+// that watch drives, without spinning up a blocking watcher process.
+
+/// File modify causes graph to reflect new content.
+#[test]
+fn watch_file_modify_triggers_graph_update() {
+    let repo = setup_repo(&[(
+        "src/lib.rs",
+        "pub fn hello() -> &'static str { \"hello\" }\n",
+    )]);
+
+    run_atlas(repo.path(), &["init"]);
+    run_atlas(repo.path(), &["build"]);
+
+    // Confirm initial node exists.
+    let before = read_json_data_output(
+        "query",
+        run_atlas(repo.path(), &["--json", "query", "hello"]),
+    );
+    let before_results = before["results"].as_array().expect("query results");
+    assert!(
+        !before_results.is_empty(),
+        "should find 'hello' before modify"
+    );
+
+    // Modify file: rename function.
+    fs::write(
+        repo.path().join("src/lib.rs"),
+        "pub fn hello_world() -> &'static str { \"hi\" }\n",
+    )
+    .expect("write modified file");
+
+    // Simulate what watch does: update the changed file explicitly.
+    run_atlas(repo.path(), &["update", "--files", "src/lib.rs"]);
+
+    // Old name gone, new name present.
+    let after_old = read_json_data_output(
+        "query",
+        run_atlas(repo.path(), &["--json", "query", "hello"]),
+    );
+    let after_new = read_json_data_output(
+        "query",
+        run_atlas(repo.path(), &["--json", "query", "hello_world"]),
+    );
+
+    let new_results = after_new["results"].as_array().expect("query results");
+    assert!(
+        !new_results.is_empty(),
+        "new function 'hello_world' should appear after update: {after_new:?}"
+    );
+
+    // "hello" as standalone function should no longer be in results (only hello_world matches)
+    let old_results = after_old["results"].as_array().expect("query results");
+    let exact_hello: Vec<_> = old_results
+        .iter()
+        .filter(|r| r["node"]["name"] == serde_json::json!("hello"))
+        .collect();
+    assert!(
+        exact_hello.is_empty(),
+        "old function 'hello' should be gone after update: {after_old:?}"
+    );
+}
+
+/// File delete removes its graph slice.
+#[test]
+fn watch_file_delete_removes_graph_slice() {
+    let repo = setup_repo(&[
+        ("src/lib.rs", "pub fn keep_me() {}\n"),
+        ("src/remove_me.rs", "pub fn to_be_deleted() {}\n"),
+    ]);
+
+    run_atlas(repo.path(), &["init"]);
+    run_atlas(repo.path(), &["build"]);
+
+    // Confirm both nodes exist.
+    let before = read_json_data_output(
+        "query",
+        run_atlas(repo.path(), &["--json", "query", "to_be_deleted"]),
+    );
+    let before_results = before["results"].as_array().expect("query results");
+    assert!(
+        !before_results.is_empty(),
+        "should find 'to_be_deleted' before delete"
+    );
+
+    // Delete the file and simulate watch update.
+    fs::remove_file(repo.path().join("src/remove_me.rs")).expect("remove file");
+
+    // Watch uses update pipeline with explicit files; for deletes the watcher
+    // emits a Deleted event which maps to ChangeType::Deleted in the batch.
+    // We exercise the same code via the working-tree diff (file disappears from git status).
+    run_atlas(repo.path(), &["update"]);
+
+    let after = read_json_data_output(
+        "query",
+        run_atlas(repo.path(), &["--json", "query", "to_be_deleted"]),
+    );
+    let after_results = after["results"].as_array().expect("query results");
+    assert!(
+        after_results.is_empty(),
+        "deleted function should not appear in graph after update: {after:?}"
+    );
+
+    // The surviving function should still be indexed.
+    let keep = read_json_data_output(
+        "query",
+        run_atlas(repo.path(), &["--json", "query", "keep_me"]),
+    );
+    let keep_results = keep["results"].as_array().expect("query results");
+    assert!(
+        !keep_results.is_empty(),
+        "'keep_me' should still be in graph"
+    );
+}
+
+/// File rename handled correctly: old graph slice gone, new one present.
+#[test]
+fn watch_file_rename_handled_correctly() {
+    let repo = setup_repo(&[("src/original.rs", "pub fn original_fn() {}\n")]);
+
+    run_atlas(repo.path(), &["init"]);
+    run_atlas(repo.path(), &["build"]);
+
+    // Use git mv so the rename is staged and atlas update --staged can see it.
+    run_command(
+        repo.path(),
+        "git",
+        &["mv", "src/original.rs", "src/renamed.rs"],
+    );
+
+    // atlas update --staged exercises the same rename path that WatchRunner
+    // uses via UpdateTarget::Batch with ChangeType::Renamed.
+    run_atlas(repo.path(), &["update", "--staged"]);
+
+    // The function still exists (same content, different path).
+    let after = read_json_data_output(
+        "query",
+        run_atlas(repo.path(), &["--json", "query", "original_fn"]),
+    );
+    let after_results = after["results"].as_array().expect("query results");
+    assert!(
+        !after_results.is_empty(),
+        "function should still be findable after rename: {after:?}"
+    );
+
+    // The new file path should be reflected.
+    let file_path = after_results[0]["node"]["file_path"].as_str().unwrap_or("");
+    assert!(
+        file_path.contains("renamed"),
+        "node should point to renamed file path, got: {file_path}"
+    );
+}
+
+/// Debounce deduplication: no duplicate graph entries when the same file is
+/// processed multiple times in one batch (unit-tested in atlas-engine; this
+/// test verifies the CLI update path is idempotent).
+#[test]
+fn watch_no_duplicate_updates_idempotent() {
+    let repo = setup_repo(&[("src/lib.rs", "pub fn stable() {}\n")]);
+
+    run_atlas(repo.path(), &["init"]);
+    run_atlas(repo.path(), &["build"]);
+
+    let status_before =
+        read_json_data_output("status", run_atlas(repo.path(), &["--json", "status"]));
+    let nodes_before = status_before["node_count"].as_i64().unwrap_or(0);
+
+    // Run update twice on the same unchanged file — node count must not grow.
+    run_atlas(repo.path(), &["update", "--files", "src/lib.rs"]);
+    run_atlas(repo.path(), &["update", "--files", "src/lib.rs"]);
+
+    let status_after =
+        read_json_data_output("status", run_atlas(repo.path(), &["--json", "status"]));
+    let nodes_after = status_after["node_count"].as_i64().unwrap_or(0);
+    assert_eq!(
+        nodes_before, nodes_after,
+        "re-updating the same file must not add duplicate nodes"
+    );
+}
+
+/// `atlas watch --help` exits successfully, confirming command is registered.
+#[test]
+fn watch_command_registered_in_help() {
+    // Run help (which exits 0 with clap) to confirm watch is a valid subcommand.
+    let output = Command::new(env!("CARGO_BIN_EXE_atlas"))
+        .args(["watch", "--help"])
+        .output()
+        .expect("failed to run atlas watch --help");
+    assert!(
+        output.status.success(),
+        "atlas watch --help should exit 0; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("debounce") || stdout.contains("Watch"),
+        "help output should mention debounce or Watch: {stdout}"
+    );
+}

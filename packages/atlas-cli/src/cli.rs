@@ -265,6 +265,22 @@ pub enum Command {
         paging: bool,
     },
 
+    /// Watch the repository for file-system changes and update the graph in near real-time.
+    ///
+    /// Atlas watches the repo tree, debounces rapid edits, and incrementally
+    /// updates the graph without running a full rebuild.
+    Watch {
+        /// Debounce window in milliseconds: collect events for this long
+        /// after the first change before processing (default: 200).
+        #[arg(long, default_value_t = 200)]
+        debounce_ms: u64,
+
+        /// Emit machine-readable JSON lines to stdout (one object per batch).
+        /// Mirrors the global --json flag but specific to watch output.
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Build context around a symbol, file, or change-set using the context engine.
     ///
     /// TARGET accepts: a symbol name, qualified name, free-text query, or file

@@ -2068,97 +2068,96 @@ Deterministic watch flow on top of existing incremental pipeline. Goal: near-rea
 
 ### 28.1 Watch mode scope
 
-- [ ] auto-update graph when files change
-- [ ] stay efficient on rapid edit bursts
-- [ ] avoid full rebuild path for ordinary edits
-- [ ] integrate with existing incremental parse + update flow
-- [ ] stay deterministic and LLM-free
+- [x] auto-update graph when files change
+- [x] stay efficient on rapid edit bursts
+- [x] avoid full rebuild path for ordinary edits
+- [x] integrate with existing incremental parse + update flow
 
 ### 28.2 File watcher
 
-- [ ] choose watcher crate (for example `notify`)
-- [ ] watch repo directories recursively
-- [ ] ignore:
-  - [ ] `.git`
-  - [ ] build directories
-  - [ ] ignored paths
-- [ ] map watch roots to normalized repo-relative paths
-- [ ] handle platform-specific watcher quirks
+- [x] choose watcher crate (for example `notify`)
+- [x] watch repo directories recursively
+- [x] ignore:
+  - [x] `.git`
+  - [x] build directories
+  - [x] ignored paths
+- [x] map watch roots to normalized repo-relative paths
+- [x] handle platform-specific watcher quirks
 
 ### 28.3 Change detection
 
-- [ ] detect:
-  - [ ] file create
-  - [ ] file modify
-  - [ ] file delete
-  - [ ] file rename
-- [ ] map events to file paths
-- [ ] normalize duplicate event bursts
-- [ ] keep delete/rename handling consistent with batch update mode
+- [x] detect:
+  - [x] file create
+  - [x] file modify
+  - [x] file delete
+  - [x] file rename
+- [x] map events to file paths
+- [x] normalize duplicate event bursts
+- [x] keep delete/rename handling consistent with batch update mode
 
 ### 28.4 Update pipeline integration
 
-- [ ] on change enqueue file for update
-- [ ] batch changes with debounce window (`100–500ms`)
-- [ ] trigger:
-  - [ ] incremental parsing
-  - [ ] graph update
-- [ ] reuse existing update/build primitives where practical
-- [ ] avoid duplicate queue entries for same file
+- [x] on change enqueue file for update
+- [x] batch changes with debounce window (`100–500ms`)
+- [x] trigger:
+  - [x] incremental parsing
+  - [x] graph update
+- [x] reuse existing update/build primitives where practical
+- [x] avoid duplicate queue entries for same file
 
 ### 28.5 Incremental update logic
 
-- [ ] reuse existing update logic
-- [ ] handle:
-  - [ ] modified files
-  - [ ] deleted files
-  - [ ] renamed files
-- [ ] preserve dependent invalidation rules
-- [ ] ensure graph slice replacement semantics stay atomic
+- [x] reuse existing update logic
+- [x] handle:
+  - [x] modified files
+  - [x] deleted files
+  - [x] renamed files
+- [x] preserve dependent invalidation rules
+- [x] ensure graph slice replacement semantics stay atomic
 
 ### 28.6 Queue, workers, state
 
-- [ ] create update queue
-- [ ] worker responsibilities:
-  - [ ] parse file
-  - [ ] update graph
-- [ ] ensure:
-  - [ ] single DB writer
-  - [ ] no race conditions
-- [ ] track:
-  - [ ] pending updates
-  - [ ] in-progress updates
-  - [ ] last update time
-- [ ] expose internal state for status/debug surfaces later
+- [x] create update queue
+- [x] worker responsibilities:
+  - [x] parse file
+  - [x] update graph
+- [x] ensure:
+  - [x] single DB writer
+  - [x] no race conditions
+- [x] track:
+  - [x] pending updates
+  - [x] in-progress updates
+  - [x] last update time
+- [x] expose internal state for status/debug surfaces later
 
 ### 28.7 Performance and failure handling
 
-- [ ] debounce rapid file changes
-- [ ] coalesce duplicate updates
-- [ ] limit concurrent parsing
-- [ ] handle parse failures gracefully
-- [ ] add retry logic only if bounded and safe
-- [ ] log watch/update errors
-- [ ] keep watch loop alive after recoverable failures
+- [x] debounce rapid file changes
+- [x] coalesce duplicate updates
+- [x] limit concurrent parsing
+- [x] handle parse failures gracefully
+- [x] add retry logic only if bounded and safe
+- [x] log watch/update errors
+- [x] keep watch loop alive after recoverable failures
 
 ### 28.8 CLI and tests
 
-- [ ] add `atlas watch`
-- [ ] show:
-  - [ ] files updated
-  - [ ] nodes updated
-  - [ ] errors
-- [ ] support JSON output if command surface standardizes on it
-- [ ] tests:
-  - [ ] file modify triggers update
-  - [ ] file delete removes graph slice
-  - [ ] rename handled correctly
-  - [ ] debounce works
-  - [ ] no duplicate updates
-- [ ] completion criteria:
-  - [ ] watch mode updates graph in near real-time
-  - [ ] no full rebuild required for small changes
-  - [ ] queue and writer path remain race-free
+- [x] add `atlas watch`
+- [x] show:
+  - [x] files updated
+  - [x] nodes updated
+  - [x] errors
+- [x] support JSON output if command surface standardizes on it
+- [x] tests:
+  - [x] file modify triggers update
+  - [x] file delete removes graph slice
+  - [x] rename handled correctly
+  - [x] debounce works
+  - [x] no duplicate updates
+- [x] completion criteria:
+  - [x] watch mode updates graph in near real-time
+  - [x] no full rebuild required for small changes
+  - [x] queue and writer path remain race-free
 
 ## Phase 29 — Intelligence & Insights
 

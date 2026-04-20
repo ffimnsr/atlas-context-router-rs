@@ -674,18 +674,11 @@ impl<'a> ReferenceResolver<'a> {
                     );
                 }
             }
-            "type_identifier" | "scoped_type_identifier" => {
-                if !is_definition_name(node) {
-                    let source_qn =
-                        reference_source_qn(self.nodes, self.rel_path, start_line(node));
-                    let name = type_reference_name(node, self.source);
-                    let target_qn = unique_target_qn(&self.type_targets, &name).map(str::to_owned);
-                    self.maybe_push_reference_edge(
-                        source_qn,
-                        target_qn.as_deref(),
-                        start_line(node),
-                    );
-                }
+            "type_identifier" | "scoped_type_identifier" if !is_definition_name(node) => {
+                let source_qn = reference_source_qn(self.nodes, self.rel_path, start_line(node));
+                let name = type_reference_name(node, self.source);
+                let target_qn = unique_target_qn(&self.type_targets, &name).map(str::to_owned);
+                self.maybe_push_reference_edge(source_qn, target_qn.as_deref(), start_line(node));
             }
             _ => {}
         }

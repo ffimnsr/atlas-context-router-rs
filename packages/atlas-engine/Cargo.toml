@@ -11,6 +11,7 @@ atlas-repo = { path = "../atlas-repo" }
 atlas-store-sqlite = { path = "../atlas-store-sqlite" }
 anyhow.workspace = true
 camino.workspace = true
+notify.workspace = true
 rayon.workspace = true
 serde.workspace = true
 serde_json.workspace = true

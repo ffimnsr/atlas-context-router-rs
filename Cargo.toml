@@ -59,6 +59,7 @@ ureq = { version = "2", features = ["json"] }
 # concurrency
 rayon = "1"
 hashbrown = "0.15"
+notify = "7"
 
 # internal crates
 atlas-core      = { path = "packages/atlas-core" }
