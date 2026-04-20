@@ -23,6 +23,8 @@ fn main() {
         Command::Serve => commands::run_serve(&cli),
         Command::DbCheck => commands::run_db_check(&cli),
         Command::Doctor => commands::run_doctor(&cli),
+        Command::DebugGraph { .. } => commands::run_debug_graph(&cli),
+        Command::ExplainQuery { .. } => commands::run_explain_query(&cli),
         Command::Install { .. } => commands::run_install(&cli),
         Command::Completions { .. } => commands::run_completions(&cli),
         Command::Context { .. } => commands::run_context(&cli),

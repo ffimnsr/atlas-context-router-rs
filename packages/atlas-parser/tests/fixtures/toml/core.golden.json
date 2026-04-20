@@ -1,0 +1,315 @@
+{
+  "edges": [
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/toml/core.toml",
+      "id": 0,
+      "kind": "contains",
+      "line": 1,
+      "source_qn": "fixtures/toml/core.toml",
+      "target_qn": "fixtures/toml/core.toml::table::package"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/toml/core.toml",
+      "id": 0,
+      "kind": "contains",
+      "line": 4,
+      "source_qn": "fixtures/toml/core.toml::table::package",
+      "target_qn": "fixtures/toml/core.toml::key::package.keywords"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/toml/core.toml",
+      "id": 0,
+      "kind": "contains",
+      "line": 4,
+      "source_qn": "fixtures/toml/core.toml::key::package.keywords",
+      "target_qn": "fixtures/toml/core.toml::key::package.keywords[0]"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/toml/core.toml",
+      "id": 0,
+      "kind": "contains",
+      "line": 4,
+      "source_qn": "fixtures/toml/core.toml::key::package.keywords",
+      "target_qn": "fixtures/toml/core.toml::key::package.keywords[1]"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/toml/core.toml",
+      "id": 0,
+      "kind": "contains",
+      "line": 2,
+      "source_qn": "fixtures/toml/core.toml::table::package",
+      "target_qn": "fixtures/toml/core.toml::key::package.name"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/toml/core.toml",
+      "id": 0,
+      "kind": "contains",
+      "line": 3,
+      "source_qn": "fixtures/toml/core.toml::table::package",
+      "target_qn": "fixtures/toml/core.toml::key::package.version"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/toml/core.toml",
+      "id": 0,
+      "kind": "contains",
+      "line": 1,
+      "source_qn": "fixtures/toml/core.toml",
+      "target_qn": "fixtures/toml/core.toml::table::tool"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/toml/core.toml",
+      "id": 0,
+      "kind": "contains",
+      "line": 6,
+      "source_qn": "fixtures/toml/core.toml::table::tool",
+      "target_qn": "fixtures/toml/core.toml::table::tool.meta"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/toml/core.toml",
+      "id": 0,
+      "kind": "contains",
+      "line": 7,
+      "source_qn": "fixtures/toml/core.toml::table::tool.meta",
+      "target_qn": "fixtures/toml/core.toml::key::tool.meta.enabled"
+    }
+  ],
+  "hash": "fixture-hash",
+  "language": "toml",
+  "nodes": [
+    {
+      "extra_json": null,
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/toml/core.toml",
+      "id": 0,
+      "is_test": false,
+      "kind": "file",
+      "language": "toml",
+      "line_end": 8,
+      "line_start": 1,
+      "modifiers": null,
+      "name": "core.toml",
+      "params": null,
+      "parent_name": null,
+      "qualified_name": "fixtures/toml/core.toml",
+      "return_type": null
+    },
+    {
+      "extra_json": {
+        "parent_path": "",
+        "path": "package",
+        "value_kind": "table"
+      },
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/toml/core.toml",
+      "id": 0,
+      "is_test": false,
+      "kind": "module",
+      "language": "toml",
+      "line_end": 1,
+      "line_start": 1,
+      "modifiers": null,
+      "name": "package",
+      "params": null,
+      "parent_name": "fixtures/toml/core.toml",
+      "qualified_name": "fixtures/toml/core.toml::table::package",
+      "return_type": null
+    },
+    {
+      "extra_json": {
+        "parent_path": "package",
+        "path": "package.keywords",
+        "value_kind": "array"
+      },
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/toml/core.toml",
+      "id": 0,
+      "is_test": false,
+      "kind": "variable",
+      "language": "toml",
+      "line_end": 4,
+      "line_start": 4,
+      "modifiers": null,
+      "name": "keywords",
+      "params": null,
+      "parent_name": "fixtures/toml/core.toml::table::package",
+      "qualified_name": "fixtures/toml/core.toml::key::package.keywords",
+      "return_type": null
+    },
+    {
+      "extra_json": {
+        "parent_path": "package.keywords",
+        "path": "package.keywords[0]",
+        "value_kind": "array_item"
+      },
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/toml/core.toml",
+      "id": 0,
+      "is_test": false,
+      "kind": "variable",
+      "language": "toml",
+      "line_end": 4,
+      "line_start": 4,
+      "modifiers": null,
+      "name": "[0]",
+      "params": null,
+      "parent_name": "fixtures/toml/core.toml::key::package.keywords",
+      "qualified_name": "fixtures/toml/core.toml::key::package.keywords[0]",
+      "return_type": null
+    },
+    {
+      "extra_json": {
+        "parent_path": "package.keywords",
+        "path": "package.keywords[1]",
+        "value_kind": "array_item"
+      },
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/toml/core.toml",
+      "id": 0,
+      "is_test": false,
+      "kind": "variable",
+      "language": "toml",
+      "line_end": 4,
+      "line_start": 4,
+      "modifiers": null,
+      "name": "[1]",
+      "params": null,
+      "parent_name": "fixtures/toml/core.toml::key::package.keywords",
+      "qualified_name": "fixtures/toml/core.toml::key::package.keywords[1]",
+      "return_type": null
+    },
+    {
+      "extra_json": {
+        "parent_path": "package",
+        "path": "package.name",
+        "value_kind": "string"
+      },
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/toml/core.toml",
+      "id": 0,
+      "is_test": false,
+      "kind": "variable",
+      "language": "toml",
+      "line_end": 2,
+      "line_start": 2,
+      "modifiers": null,
+      "name": "name",
+      "params": null,
+      "parent_name": "fixtures/toml/core.toml::table::package",
+      "qualified_name": "fixtures/toml/core.toml::key::package.name",
+      "return_type": null
+    },
+    {
+      "extra_json": {
+        "parent_path": "package",
+        "path": "package.version",
+        "value_kind": "string"
+      },
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/toml/core.toml",
+      "id": 0,
+      "is_test": false,
+      "kind": "variable",
+      "language": "toml",
+      "line_end": 3,
+      "line_start": 3,
+      "modifiers": null,
+      "name": "version",
+      "params": null,
+      "parent_name": "fixtures/toml/core.toml::table::package",
+      "qualified_name": "fixtures/toml/core.toml::key::package.version",
+      "return_type": null
+    },
+    {
+      "extra_json": {
+        "parent_path": "",
+        "path": "tool",
+        "value_kind": "table"
+      },
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/toml/core.toml",
+      "id": 0,
+      "is_test": false,
+      "kind": "module",
+      "language": "toml",
+      "line_end": 1,
+      "line_start": 1,
+      "modifiers": null,
+      "name": "tool",
+      "params": null,
+      "parent_name": "fixtures/toml/core.toml",
+      "qualified_name": "fixtures/toml/core.toml::table::tool",
+      "return_type": null
+    },
+    {
+      "extra_json": {
+        "parent_path": "tool",
+        "path": "tool.meta",
+        "value_kind": "table"
+      },
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/toml/core.toml",
+      "id": 0,
+      "is_test": false,
+      "kind": "module",
+      "language": "toml",
+      "line_end": 6,
+      "line_start": 6,
+      "modifiers": null,
+      "name": "meta",
+      "params": null,
+      "parent_name": "fixtures/toml/core.toml::table::tool",
+      "qualified_name": "fixtures/toml/core.toml::table::tool.meta",
+      "return_type": null
+    },
+    {
+      "extra_json": {
+        "parent_path": "tool.meta",
+        "path": "tool.meta.enabled",
+        "value_kind": "boolean"
+      },
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/toml/core.toml",
+      "id": 0,
+      "is_test": false,
+      "kind": "variable",
+      "language": "toml",
+      "line_end": 7,
+      "line_start": 7,
+      "modifiers": null,
+      "name": "enabled",
+      "params": null,
+      "parent_name": "fixtures/toml/core.toml::table::tool.meta",
+      "qualified_name": "fixtures/toml/core.toml::key::tool.meta.enabled",
+      "return_type": null
+    }
+  ],
+  "path": "fixtures/toml/core.toml",
+  "size": 100
+}

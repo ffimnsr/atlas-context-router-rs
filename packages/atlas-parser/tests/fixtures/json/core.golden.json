@@ -1,0 +1,430 @@
+{
+  "edges": [
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/json/core.json",
+      "id": 0,
+      "kind": "contains",
+      "line": 2,
+      "source_qn": "fixtures/json/core.json",
+      "target_qn": "fixtures/json/core.json::key::service"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/json/core.json",
+      "id": 0,
+      "kind": "contains",
+      "line": 3,
+      "source_qn": "fixtures/json/core.json::key::service",
+      "target_qn": "fixtures/json/core.json::key::service.host"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/json/core.json",
+      "id": 0,
+      "kind": "contains",
+      "line": 4,
+      "source_qn": "fixtures/json/core.json::key::service",
+      "target_qn": "fixtures/json/core.json::key::service.ports"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/json/core.json",
+      "id": 0,
+      "kind": "contains",
+      "line": 4,
+      "source_qn": "fixtures/json/core.json::key::service.ports",
+      "target_qn": "fixtures/json/core.json::key::service.ports[0]"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/json/core.json",
+      "id": 0,
+      "kind": "contains",
+      "line": 4,
+      "source_qn": "fixtures/json/core.json::key::service.ports",
+      "target_qn": "fixtures/json/core.json::key::service.ports[1]"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/json/core.json",
+      "id": 0,
+      "kind": "contains",
+      "line": 5,
+      "source_qn": "fixtures/json/core.json::key::service",
+      "target_qn": "fixtures/json/core.json::key::service.features"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/json/core.json",
+      "id": 0,
+      "kind": "contains",
+      "line": 6,
+      "source_qn": "fixtures/json/core.json::key::service.features",
+      "target_qn": "fixtures/json/core.json::key::service.features[0]"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/json/core.json",
+      "id": 0,
+      "kind": "contains",
+      "line": 6,
+      "source_qn": "fixtures/json/core.json::key::service.features[0]",
+      "target_qn": "fixtures/json/core.json::key::service.features[0].name"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/json/core.json",
+      "id": 0,
+      "kind": "contains",
+      "line": 6,
+      "source_qn": "fixtures/json/core.json::key::service.features[0]",
+      "target_qn": "fixtures/json/core.json::key::service.features[0].enabled"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/json/core.json",
+      "id": 0,
+      "kind": "contains",
+      "line": 7,
+      "source_qn": "fixtures/json/core.json::key::service.features",
+      "target_qn": "fixtures/json/core.json::key::service.features[1]"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/json/core.json",
+      "id": 0,
+      "kind": "contains",
+      "line": 7,
+      "source_qn": "fixtures/json/core.json::key::service.features[1]",
+      "target_qn": "fixtures/json/core.json::key::service.features[1].name"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/json/core.json",
+      "id": 0,
+      "kind": "contains",
+      "line": 7,
+      "source_qn": "fixtures/json/core.json::key::service.features[1]",
+      "target_qn": "fixtures/json/core.json::key::service.features[1].enabled"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/json/core.json",
+      "id": 0,
+      "kind": "contains",
+      "line": 10,
+      "source_qn": "fixtures/json/core.json",
+      "target_qn": "fixtures/json/core.json::key::enabled"
+    }
+  ],
+  "hash": "fixture-hash",
+  "language": "json",
+  "nodes": [
+    {
+      "extra_json": null,
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/json/core.json",
+      "id": 0,
+      "is_test": false,
+      "kind": "file",
+      "language": "json",
+      "line_end": 12,
+      "line_start": 1,
+      "modifiers": null,
+      "name": "core.json",
+      "params": null,
+      "parent_name": null,
+      "qualified_name": "fixtures/json/core.json",
+      "return_type": null
+    },
+    {
+      "extra_json": {
+        "path": "service",
+        "value_kind": "object"
+      },
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/json/core.json",
+      "id": 0,
+      "is_test": false,
+      "kind": "module",
+      "language": "json",
+      "line_end": 9,
+      "line_start": 2,
+      "modifiers": null,
+      "name": "service",
+      "params": null,
+      "parent_name": "fixtures/json/core.json",
+      "qualified_name": "fixtures/json/core.json::key::service",
+      "return_type": null
+    },
+    {
+      "extra_json": {
+        "path": "service.host",
+        "value_kind": "string"
+      },
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/json/core.json",
+      "id": 0,
+      "is_test": false,
+      "kind": "variable",
+      "language": "json",
+      "line_end": 3,
+      "line_start": 3,
+      "modifiers": null,
+      "name": "host",
+      "params": null,
+      "parent_name": "fixtures/json/core.json::key::service",
+      "qualified_name": "fixtures/json/core.json::key::service.host",
+      "return_type": null
+    },
+    {
+      "extra_json": {
+        "path": "service.ports",
+        "value_kind": "array"
+      },
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/json/core.json",
+      "id": 0,
+      "is_test": false,
+      "kind": "variable",
+      "language": "json",
+      "line_end": 4,
+      "line_start": 4,
+      "modifiers": null,
+      "name": "ports",
+      "params": null,
+      "parent_name": "fixtures/json/core.json::key::service",
+      "qualified_name": "fixtures/json/core.json::key::service.ports",
+      "return_type": null
+    },
+    {
+      "extra_json": {
+        "path": "service.ports[0]",
+        "value_kind": "array_item"
+      },
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/json/core.json",
+      "id": 0,
+      "is_test": false,
+      "kind": "variable",
+      "language": "json",
+      "line_end": 4,
+      "line_start": 4,
+      "modifiers": null,
+      "name": "[0]",
+      "params": null,
+      "parent_name": "fixtures/json/core.json::key::service.ports",
+      "qualified_name": "fixtures/json/core.json::key::service.ports[0]",
+      "return_type": null
+    },
+    {
+      "extra_json": {
+        "path": "service.ports[1]",
+        "value_kind": "array_item"
+      },
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/json/core.json",
+      "id": 0,
+      "is_test": false,
+      "kind": "variable",
+      "language": "json",
+      "line_end": 4,
+      "line_start": 4,
+      "modifiers": null,
+      "name": "[1]",
+      "params": null,
+      "parent_name": "fixtures/json/core.json::key::service.ports",
+      "qualified_name": "fixtures/json/core.json::key::service.ports[1]",
+      "return_type": null
+    },
+    {
+      "extra_json": {
+        "path": "service.features",
+        "value_kind": "array"
+      },
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/json/core.json",
+      "id": 0,
+      "is_test": false,
+      "kind": "variable",
+      "language": "json",
+      "line_end": 8,
+      "line_start": 5,
+      "modifiers": null,
+      "name": "features",
+      "params": null,
+      "parent_name": "fixtures/json/core.json::key::service",
+      "qualified_name": "fixtures/json/core.json::key::service.features",
+      "return_type": null
+    },
+    {
+      "extra_json": {
+        "path": "service.features[0]",
+        "value_kind": "object"
+      },
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/json/core.json",
+      "id": 0,
+      "is_test": false,
+      "kind": "module",
+      "language": "json",
+      "line_end": 6,
+      "line_start": 6,
+      "modifiers": null,
+      "name": "[0]",
+      "params": null,
+      "parent_name": "fixtures/json/core.json::key::service.features",
+      "qualified_name": "fixtures/json/core.json::key::service.features[0]",
+      "return_type": null
+    },
+    {
+      "extra_json": {
+        "path": "service.features[0].name",
+        "value_kind": "string"
+      },
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/json/core.json",
+      "id": 0,
+      "is_test": false,
+      "kind": "variable",
+      "language": "json",
+      "line_end": 6,
+      "line_start": 6,
+      "modifiers": null,
+      "name": "name",
+      "params": null,
+      "parent_name": "fixtures/json/core.json::key::service.features[0]",
+      "qualified_name": "fixtures/json/core.json::key::service.features[0].name",
+      "return_type": null
+    },
+    {
+      "extra_json": {
+        "path": "service.features[0].enabled",
+        "value_kind": "boolean"
+      },
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/json/core.json",
+      "id": 0,
+      "is_test": false,
+      "kind": "variable",
+      "language": "json",
+      "line_end": 6,
+      "line_start": 6,
+      "modifiers": null,
+      "name": "enabled",
+      "params": null,
+      "parent_name": "fixtures/json/core.json::key::service.features[0]",
+      "qualified_name": "fixtures/json/core.json::key::service.features[0].enabled",
+      "return_type": null
+    },
+    {
+      "extra_json": {
+        "path": "service.features[1]",
+        "value_kind": "object"
+      },
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/json/core.json",
+      "id": 0,
+      "is_test": false,
+      "kind": "module",
+      "language": "json",
+      "line_end": 7,
+      "line_start": 7,
+      "modifiers": null,
+      "name": "[1]",
+      "params": null,
+      "parent_name": "fixtures/json/core.json::key::service.features",
+      "qualified_name": "fixtures/json/core.json::key::service.features[1]",
+      "return_type": null
+    },
+    {
+      "extra_json": {
+        "path": "service.features[1].name",
+        "value_kind": "string"
+      },
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/json/core.json",
+      "id": 0,
+      "is_test": false,
+      "kind": "variable",
+      "language": "json",
+      "line_end": 7,
+      "line_start": 7,
+      "modifiers": null,
+      "name": "name",
+      "params": null,
+      "parent_name": "fixtures/json/core.json::key::service.features[1]",
+      "qualified_name": "fixtures/json/core.json::key::service.features[1].name",
+      "return_type": null
+    },
+    {
+      "extra_json": {
+        "path": "service.features[1].enabled",
+        "value_kind": "boolean"
+      },
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/json/core.json",
+      "id": 0,
+      "is_test": false,
+      "kind": "variable",
+      "language": "json",
+      "line_end": 7,
+      "line_start": 7,
+      "modifiers": null,
+      "name": "enabled",
+      "params": null,
+      "parent_name": "fixtures/json/core.json::key::service.features[1]",
+      "qualified_name": "fixtures/json/core.json::key::service.features[1].enabled",
+      "return_type": null
+    },
+    {
+      "extra_json": {
+        "path": "enabled",
+        "value_kind": "boolean"
+      },
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/json/core.json",
+      "id": 0,
+      "is_test": false,
+      "kind": "variable",
+      "language": "json",
+      "line_end": 10,
+      "line_start": 10,
+      "modifiers": null,
+      "name": "enabled",
+      "params": null,
+      "parent_name": "fixtures/json/core.json",
+      "qualified_name": "fixtures/json/core.json::key::enabled",
+      "return_type": null
+    }
+  ],
+  "path": "fixtures/json/core.json",
+  "size": 208
+}

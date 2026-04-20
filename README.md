@@ -208,13 +208,6 @@ atlas --json install --platform claude
 - `~/.codex/config.toml` entry for Codex installs
 - `.git/hooks/*` for installed git hooks
 
-## Similar Open Source Projects
-
-- `code-review-graph` for graph-assisted code review workflows
-- Sourcegraph for large-scale code search and navigation
-- Semgrep for rule-based code scanning and pattern matching
-- ripgrep-based CLI workflows for fast text search without graph context
-
 ## Contributing
 
 Contributions welcome.

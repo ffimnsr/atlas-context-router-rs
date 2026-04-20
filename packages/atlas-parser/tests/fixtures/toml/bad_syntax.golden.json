@@ -1,0 +1,26 @@
+{
+  "edges": [],
+  "hash": "fixture-hash",
+  "language": "toml",
+  "nodes": [
+    {
+      "extra_json": null,
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/toml/bad_syntax.toml",
+      "id": 0,
+      "is_test": false,
+      "kind": "file",
+      "language": "toml",
+      "line_end": 3,
+      "line_start": 1,
+      "modifiers": null,
+      "name": "bad_syntax.toml",
+      "params": null,
+      "parent_name": null,
+      "qualified_name": "fixtures/toml/bad_syntax.toml",
+      "return_type": null
+    }
+  ],
+  "path": "fixtures/toml/bad_syntax.toml",
+  "size": 24
+}

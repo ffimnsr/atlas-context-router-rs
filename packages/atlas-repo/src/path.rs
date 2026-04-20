@@ -147,4 +147,21 @@ mod tests {
         // normalize_case is a no-op on Unix but returns a String either way.
         let _ = normalize_case(&slashed);
     }
+
+    #[test]
+    fn repo_relative_normalizes_nested_unix_components() {
+        let root = Utf8Path::new("/repo");
+        let abs = Utf8Path::new("/repo/src/./nested/../lib.rs");
+        assert_eq!(repo_relative(root, abs).unwrap().as_str(), "src/lib.rs");
+    }
+
+    /// Linux and macOS share the Unix path policy: separators are normalized,
+    /// but case is preserved.
+    #[test]
+    #[cfg(not(target_os = "windows"))]
+    fn unix_policy_preserves_case_after_separator_normalization() {
+        let raw = "Packages\\Atlas-Core\\Src\\Lib.rs";
+        let canonical = normalize_case(&to_forward_slashes(raw));
+        assert_eq!(canonical, "Packages/Atlas-Core/Src/Lib.rs");
+    }
 }

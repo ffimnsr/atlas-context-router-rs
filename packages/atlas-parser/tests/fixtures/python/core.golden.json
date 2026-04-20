@@ -29,7 +29,7 @@
       "file_path": "fixtures/python/core.py",
       "id": 0,
       "kind": "contains",
-      "line": 5,
+      "line": 6,
       "source_qn": "fixtures/python/core.py",
       "target_qn": "fixtures/python/core.py::fn::helper"
     },
@@ -40,7 +40,7 @@
       "file_path": "fixtures/python/core.py",
       "id": 0,
       "kind": "contains",
-      "line": 9,
+      "line": 10,
       "source_qn": "fixtures/python/core.py",
       "target_qn": "fixtures/python/core.py::fn::caller"
     },
@@ -51,7 +51,7 @@
       "file_path": "fixtures/python/core.py",
       "id": 0,
       "kind": "contains",
-      "line": 13,
+      "line": 15,
       "source_qn": "fixtures/python/core.py",
       "target_qn": "fixtures/python/core.py::class::TestMath"
     },
@@ -62,7 +62,7 @@
       "file_path": "fixtures/python/core.py",
       "id": 0,
       "kind": "contains",
-      "line": 14,
+      "line": 16,
       "source_qn": "fixtures/python/core.py::class::TestMath",
       "target_qn": "fixtures/python/core.py::test::TestMath.test_add"
     },
@@ -77,7 +77,7 @@
       "file_path": "fixtures/python/core.py",
       "id": 0,
       "kind": "calls",
-      "line": 10,
+      "line": 11,
       "source_qn": "fixtures/python/core.py::fn::caller",
       "target_qn": "fixtures/python/core.py::fn::helper"
     },
@@ -92,7 +92,7 @@
       "file_path": "fixtures/python/core.py",
       "id": 0,
       "kind": "calls",
-      "line": 15,
+      "line": 17,
       "source_qn": "fixtures/python/core.py::test::TestMath.test_add",
       "target_qn": "fixtures/python/core.py::fn::caller"
     }
@@ -108,7 +108,7 @@
       "is_test": false,
       "kind": "file",
       "language": "python",
-      "line_end": 16,
+      "line_end": 18,
       "line_start": 1,
       "modifiers": null,
       "name": "core.py",
@@ -172,15 +172,22 @@
       "return_type": null
     },
     {
-      "extra_json": null,
+      "extra_json": {
+        "decorators": [
+          {
+            "name": "cached",
+            "text": "cached"
+          }
+        ]
+      },
       "file_hash": "fixture-hash",
       "file_path": "fixtures/python/core.py",
       "id": 0,
       "is_test": false,
       "kind": "function",
       "language": "python",
-      "line_end": 6,
-      "line_start": 5,
+      "line_end": 7,
+      "line_start": 6,
       "modifiers": null,
       "name": "helper",
       "params": "(value: int)",
@@ -196,8 +203,8 @@
       "is_test": false,
       "kind": "function",
       "language": "python",
-      "line_end": 10,
-      "line_start": 9,
+      "line_end": 11,
+      "line_start": 10,
       "modifiers": null,
       "name": "caller",
       "params": "()",
@@ -206,15 +213,22 @@
       "return_type": "int"
     },
     {
-      "extra_json": null,
+      "extra_json": {
+        "decorators": [
+          {
+            "name": "dataclass",
+            "text": "dataclass"
+          }
+        ]
+      },
       "file_hash": "fixture-hash",
       "file_path": "fixtures/python/core.py",
       "id": 0,
       "is_test": true,
       "kind": "class",
       "language": "python",
-      "line_end": 15,
-      "line_start": 13,
+      "line_end": 17,
+      "line_start": 15,
       "modifiers": null,
       "name": "TestMath",
       "params": null,
@@ -230,8 +244,8 @@
       "is_test": true,
       "kind": "test",
       "language": "python",
-      "line_end": 15,
-      "line_start": 14,
+      "line_end": 17,
+      "line_start": 16,
       "modifiers": null,
       "name": "test_add",
       "params": "(self)",
@@ -241,5 +255,5 @@
     }
   ],
   "path": "fixtures/python/core.py",
-  "size": 233
+  "size": 252
 }

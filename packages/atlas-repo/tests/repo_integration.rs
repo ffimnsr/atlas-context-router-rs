@@ -126,6 +126,36 @@ fn collect_files_excludes_files_over_size_limit() {
     );
 }
 
+#[test]
+fn collect_files_preserves_nested_posix_paths_with_spaces() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    git_init(root);
+
+    let nested = root.join("src").join("mac os").join("helper.rs");
+    std::fs::create_dir_all(nested.parent().unwrap()).unwrap();
+    std::fs::write(&nested, "pub fn helper() {}\n").unwrap();
+
+    let script = root.join("scripts").join("build tool.py");
+    std::fs::create_dir_all(script.parent().unwrap()).unwrap();
+    std::fs::write(&script, "print('atlas')\n").unwrap();
+
+    git_add_all(root);
+
+    let root_utf8 = Utf8Path::from_path(root).unwrap();
+    let files = collect_files(root_utf8, None).unwrap();
+    let names: Vec<&str> = files.iter().map(|p| p.as_str()).collect();
+
+    assert!(
+        names.contains(&"src/mac os/helper.rs"),
+        "nested Rust path should stay repo-relative with forward slashes; got {names:?}"
+    );
+    assert!(
+        names.contains(&"scripts/build tool.py"),
+        "paths with spaces should be preserved exactly; got {names:?}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // 14.3 change detection
 // ---------------------------------------------------------------------------
@@ -264,5 +294,69 @@ fn changed_files_working_tree_detects_unstaged_modification() {
             .iter()
             .any(|c| c.path == "lib.rs" && c.change_type == ChangeType::Modified),
         "unstaged modification must appear as Modified in working-tree diff; got {changes:?}"
+    );
+}
+
+#[test]
+fn changed_files_base_ref_handles_nested_paths_with_spaces() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    git_init(root);
+
+    let nested = root.join("src").join("mac os").join("helper.rs");
+    std::fs::create_dir_all(nested.parent().unwrap()).unwrap();
+    std::fs::write(&nested, "pub fn helper_v1() {}\n").unwrap();
+    git_add_all(root);
+    git_commit(root, "initial");
+
+    std::fs::write(&nested, "pub fn helper_v2() {}\n").unwrap();
+
+    let root_utf8 = Utf8Path::from_path(root).unwrap();
+    let changes = changed_files(root_utf8, &DiffTarget::BaseRef("HEAD".to_string())).unwrap();
+
+    use atlas_core::model::ChangeType;
+    assert!(
+        changes
+            .iter()
+            .any(|c| c.path == "src/mac os/helper.rs" && c.change_type == ChangeType::Modified),
+        "base-ref diff should preserve nested forward-slash paths with spaces; got {changes:?}"
+    );
+}
+
+#[test]
+fn changed_files_detects_staged_renamed_nested_file_with_spaces() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    git_init(root);
+
+    let original_dir = root.join("src").join("old folder");
+    std::fs::create_dir_all(&original_dir).unwrap();
+    let old_path = original_dir.join("old name.rs");
+    std::fs::write(&old_path, "pub fn before() {}\n").unwrap();
+    git_add_all(root);
+    git_commit(root, "initial");
+
+    let new_dir = root.join("src").join("new folder");
+    std::fs::create_dir_all(&new_dir).unwrap();
+    let status = Command::new("git")
+        .args([
+            "mv",
+            "src/old folder/old name.rs",
+            "src/new folder/new name.rs",
+        ])
+        .current_dir(root)
+        .status()
+        .expect("git mv");
+    assert!(status.success(), "git mv should succeed");
+
+    let root_utf8 = Utf8Path::from_path(root).unwrap();
+    let changes = changed_files(root_utf8, &DiffTarget::Staged).unwrap();
+
+    use atlas_core::model::ChangeType;
+    assert!(
+        changes.iter().any(|c| c.change_type == ChangeType::Renamed
+            && c.path == "src/new folder/new name.rs"
+            && c.old_path.as_deref() == Some("src/old folder/old name.rs")),
+        "staged rename should preserve old/new nested paths with spaces; got {changes:?}"
     );
 }

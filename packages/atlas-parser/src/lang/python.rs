@@ -129,6 +129,18 @@ fn visit_function(
     nodes: &mut Vec<Node>,
     edges: &mut Vec<Edge>,
 ) {
+    visit_function_with_decorators(node, ctx, parent_qn, in_class, &[], nodes, edges);
+}
+
+fn visit_function_with_decorators(
+    node: TsNode<'_>,
+    ctx: &ParseContext<'_>,
+    parent_qn: &str,
+    in_class: bool,
+    decorators: &[serde_json::Value],
+    nodes: &mut Vec<Node>,
+    edges: &mut Vec<Edge>,
+) {
     let name = node
         .child_by_field_name("name")
         .map(|n| node_text(n, ctx.source))
@@ -180,7 +192,7 @@ fn visit_function(
         modifiers: None,
         is_test,
         file_hash: ctx.file_hash.to_owned(),
-        extra_json: serde_json::Value::Null,
+        extra_json: decorator_extra_json(decorators),
     });
     edges.push(contains_edge(
         parent_qn,
@@ -193,6 +205,16 @@ fn visit_function(
 fn visit_class(
     node: TsNode<'_>,
     ctx: &ParseContext<'_>,
+    nodes: &mut Vec<Node>,
+    edges: &mut Vec<Edge>,
+) {
+    visit_class_with_decorators(node, ctx, &[], nodes, edges);
+}
+
+fn visit_class_with_decorators(
+    node: TsNode<'_>,
+    ctx: &ParseContext<'_>,
+    decorators: &[serde_json::Value],
     nodes: &mut Vec<Node>,
     edges: &mut Vec<Edge>,
 ) {
@@ -221,7 +243,7 @@ fn visit_class(
         modifiers: None,
         is_test: name.starts_with("Test"),
         file_hash: ctx.file_hash.to_owned(),
-        extra_json: serde_json::Value::Null,
+        extra_json: decorator_extra_json(decorators),
     });
     edges.push(contains_edge(
         ctx.rel_path,
@@ -239,10 +261,23 @@ fn visit_class(
                     visit_function(child, ctx, &qn, true, nodes, edges);
                 }
                 "decorated_definition" => {
-                    if let Some(def) = child.child_by_field_name("definition")
-                        && def.kind() == "function_definition"
-                    {
-                        visit_function(def, ctx, &qn, true, nodes, edges);
+                    let decorators = decorated_metadata(child, ctx.source);
+                    if let Some(def) = child.child_by_field_name("definition") {
+                        match def.kind() {
+                            "function_definition" => visit_function_with_decorators(
+                                def,
+                                ctx,
+                                &qn,
+                                true,
+                                &decorators,
+                                nodes,
+                                edges,
+                            ),
+                            "class_definition" => {
+                                visit_class_with_decorators(def, ctx, &decorators, nodes, edges);
+                            }
+                            _ => {}
+                        }
                     }
                 }
                 _ => {}
@@ -257,12 +292,59 @@ fn visit_decorated(
     nodes: &mut Vec<Node>,
     edges: &mut Vec<Edge>,
 ) {
+    let decorators = decorated_metadata(node, ctx.source);
     if let Some(def) = node.child_by_field_name("definition") {
         match def.kind() {
-            "function_definition" => visit_function(def, ctx, ctx.rel_path, false, nodes, edges),
-            "class_definition" => visit_class(def, ctx, nodes, edges),
+            "function_definition" => visit_function_with_decorators(
+                def,
+                ctx,
+                ctx.rel_path,
+                false,
+                &decorators,
+                nodes,
+                edges,
+            ),
+            "class_definition" => visit_class_with_decorators(def, ctx, &decorators, nodes, edges),
             _ => {}
         }
+    }
+}
+
+fn decorated_metadata(node: TsNode<'_>, source: &[u8]) -> Vec<serde_json::Value> {
+    let mut decorators = Vec::new();
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if child.kind() != "decorator" {
+            continue;
+        }
+        let raw = node_text(child, source).trim();
+        let text = raw.trim_start_matches('@').trim();
+        if text.is_empty() {
+            continue;
+        }
+        let name = text
+            .split('(')
+            .next()
+            .unwrap_or(text)
+            .rsplit('.')
+            .next()
+            .unwrap_or(text)
+            .trim();
+        decorators.push(serde_json::json!({
+            "name": name,
+            "text": text,
+        }));
+    }
+    decorators
+}
+
+fn decorator_extra_json(decorators: &[serde_json::Value]) -> serde_json::Value {
+    if decorators.is_empty() {
+        serde_json::Value::Null
+    } else {
+        serde_json::json!({
+            "decorators": decorators,
+        })
     }
 }
 
@@ -697,11 +779,34 @@ mod tests {
     #[test]
     fn decorated_function_extracted() {
         let pf = parse("@staticmethod\ndef compute():\n    pass\n");
-        assert!(
-            pf.nodes
-                .iter()
-                .any(|n| n.kind == NodeKind::Function && n.name == "compute")
-        );
+        let node = pf
+            .nodes
+            .iter()
+            .find(|n| n.kind == NodeKind::Function && n.name == "compute")
+            .expect("decorated function node");
+        let decorators = node
+            .extra_json
+            .get("decorators")
+            .and_then(|value| value.as_array())
+            .expect("decorators metadata");
+        assert_eq!(decorators.len(), 1);
+        assert_eq!(decorators[0]["name"], "staticmethod");
+    }
+
+    #[test]
+    fn decorated_class_extracted() {
+        let pf = parse("@dataclass\nclass Example:\n    pass\n");
+        let node = pf
+            .nodes
+            .iter()
+            .find(|n| n.kind == NodeKind::Class && n.name == "Example")
+            .expect("decorated class node");
+        let decorators = node
+            .extra_json
+            .get("decorators")
+            .and_then(|value| value.as_array())
+            .expect("decorators metadata");
+        assert_eq!(decorators[0]["name"], "dataclass");
     }
 
     #[test]

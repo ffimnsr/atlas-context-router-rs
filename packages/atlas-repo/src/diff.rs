@@ -181,6 +181,19 @@ mod tests {
     }
 
     #[test]
+    fn windows_style_paths_are_normalized_when_parsing_git_output() {
+        let raw = "M\0src\\lib.rs\0R100\0old\\name.rs\0new\\name.rs\0";
+        let files = parse(raw);
+
+        assert_eq!(files.len(), 2);
+        assert_eq!(files[0].change_type, ChangeType::Modified);
+        assert_eq!(files[0].path, "src/lib.rs");
+        assert_eq!(files[1].change_type, ChangeType::Renamed);
+        assert_eq!(files[1].path, "new/name.rs");
+        assert_eq!(files[1].old_path.as_deref(), Some("old/name.rs"));
+    }
+
+    #[test]
     fn empty_output() {
         assert!(parse("").is_empty());
     }

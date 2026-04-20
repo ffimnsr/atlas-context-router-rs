@@ -2,7 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-use atlas_core::EdgeKind;
+use atlas_core::{EdgeKind, NodeKind};
 use atlas_store_sqlite::Store;
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -15,7 +15,7 @@ fn sqlite_fts5_smoke_round_trip() {
     run_atlas(repo.path(), &["build"]);
 
     let status = read_json_data_output("status", run_atlas(repo.path(), &["--json", "status"]));
-    assert_eq!(status["indexed_file_count"], json!(2));
+    assert!(status["indexed_file_count"].as_u64().unwrap_or_default() >= 2);
     assert!(status["node_count"].as_i64().unwrap_or_default() >= 5);
     assert!(status["edge_count"].as_i64().unwrap_or_default() >= 1);
 
@@ -77,7 +77,7 @@ fn mvp_command_contract_holds_for_committed_fixture_repo() {
     run_atlas(repo.path(), &["build"]);
 
     let status = read_json_data_output("status", run_atlas(repo.path(), &["--json", "status"]));
-    assert_eq!(status["indexed_file_count"], json!(2));
+    assert!(status["indexed_file_count"].as_u64().unwrap_or_default() >= 2);
     assert!(status["node_count"].as_i64().unwrap_or_default() >= 5);
     assert!(status["edge_count"].as_i64().unwrap_or_default() >= 1);
 
@@ -221,6 +221,106 @@ pub fn helper(name: &str) -> String {
         status_with_base["changed_files"][0]["path"],
         json!("src/lib.rs")
     );
+}
+
+#[test]
+fn build_on_sample_repo_emits_expected_summary() {
+    let repo = setup_fixture_repo();
+
+    run_atlas(repo.path(), &["init"]);
+
+    let output = run_atlas(repo.path(), &["build"]);
+    let stdout = stdout_text(&output);
+
+    assert_contains_all(
+        &stdout,
+        &[
+            "Build complete (",
+            "Scanned             :",
+            "Unsupported skipped : 3",
+            "Parsed              : 3",
+            "Nodes inserted      : 24",
+            "Edges inserted      : 24",
+        ],
+    );
+}
+
+#[test]
+fn update_after_fixture_edit_emits_expected_summary() {
+    let repo = setup_fixture_repo();
+
+    run_atlas(repo.path(), &["init"]);
+    run_atlas(repo.path(), &["build"]);
+    rewrite_fixture_helper(repo.path());
+
+    let output = run_atlas(repo.path(), &["update", "--base", "HEAD"]);
+    let stdout = stdout_text(&output);
+
+    assert_contains_all(
+        &stdout,
+        &[
+            "Update complete (",
+            "Deleted  : 0",
+            "Parsed   : 1",
+            "Nodes    : 4",
+            "Edges    : 5",
+        ],
+    );
+}
+
+#[test]
+fn impact_review_context_and_query_cover_phase_14_5_cli_flow() {
+    let repo = setup_fixture_repo();
+
+    run_atlas(repo.path(), &["init"]);
+    run_atlas(repo.path(), &["build"]);
+    rewrite_fixture_helper(repo.path());
+    run_atlas(repo.path(), &["update", "--base", "HEAD"]);
+
+    let impact = stdout_text(&run_atlas(repo.path(), &["impact", "--base", "HEAD"]));
+    assert_contains_all(
+        &impact,
+        &[
+            "Changed files : 1",
+            "Changed nodes : 4",
+            "Relevant edges: 5",
+            "Risk level    : high",
+            "struct src/lib.rs::struct::Greeter [api_change]",
+            "method src/lib.rs::method::Greeter::greet_twice [signature_change]",
+            "function src/lib.rs::fn::helper [signature_change]",
+        ],
+    );
+
+    let review = stdout_text(&run_atlas(
+        repo.path(),
+        &["review-context", "--base", "HEAD"],
+    ));
+    assert_contains_all(
+        &review,
+        &[
+            "Changed files (1):",
+            "  src/lib.rs",
+            "Changed symbols: 4",
+            "function src/lib.rs::fn::helper (src/lib.rs:9)",
+            "Risk summary:",
+            "  Public API changes : 3",
+            "  Uncovered changes  : 4",
+            "  Cross-package impact: false",
+        ],
+    );
+
+    let query = stdout_text(&run_atlas(repo.path(), &["query", "greet_twice"]));
+    let query_lines: Vec<&str> = query.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(
+        query_lines.len(),
+        2,
+        "expected one ranked result and a count"
+    );
+    assert!(
+        query_lines[0].contains("method src/lib.rs::method::Greeter::greet_twice (src/lib.rs:4)"),
+        "unexpected first query result: {query}"
+    );
+    assert!(query_lines[1].starts_with("1 result(s)."));
 }
 
 #[test]
@@ -393,6 +493,78 @@ fn build_resolves_typescript_extended_tsconfig_alias_calls() {
 }
 
 #[test]
+fn build_resolves_typescript_reexport_chain_calls() {
+    let repo = setup_repo(&[
+        (
+            "src/app.ts",
+            "import { helper } from './barrel';\nexport function caller(): void { helper(); }\n",
+        ),
+        ("src/barrel.ts", "export { helper } from './impl';\n"),
+        ("src/impl.ts", "export function helper(): void {}\n"),
+    ]);
+
+    run_atlas(repo.path(), &["init"]);
+    run_atlas(repo.path(), &["build"]);
+
+    let store = open_store(repo.path());
+    let edges = store.edges_by_file("src/app.ts").expect("app edges");
+    assert!(
+        edges.iter().any(|edge| {
+            edge.kind == EdgeKind::Calls
+                && edge.target_qn == "src/impl.ts::fn::helper"
+                && edge.confidence_tier.as_deref() == Some("imports")
+        }),
+        "expected re-export chain call to resolve into src/impl.ts::fn::helper; edges: {edges:?}"
+    );
+}
+
+#[test]
+fn build_resolves_typescript_package_extends_alias_calls() {
+    let repo = setup_repo(&[
+        (
+            "node_modules/@atlas/tsconfig/base.json",
+            r#"{
+  "compilerOptions": {
+    "baseUrl": "../../../",
+    "paths": {
+      "@shared/*": ["src/shared/*"]
+    }
+  }
+}
+"#,
+        ),
+        (
+            "apps/web/tsconfig.json",
+            r#"{
+  "extends": "@atlas/tsconfig/base"
+}
+"#,
+        ),
+        (
+            "apps/web/app.ts",
+            "import * as math from '@shared/math';\nexport function caller(): void { math.helper(); }\n",
+        ),
+        ("src/shared/math.ts", "export function helper(): void {}\n"),
+    ]);
+
+    run_atlas(repo.path(), &["init"]);
+    run_atlas(repo.path(), &["build"]);
+
+    let store = open_store(repo.path());
+    let edges = store
+        .edges_by_file("apps/web/app.ts")
+        .expect("package-extends app edges");
+    assert!(
+        edges.iter().any(|edge| {
+            edge.kind == EdgeKind::Calls
+                && edge.target_qn == "src/shared/math.ts::fn::helper"
+                && edge.confidence_tier.as_deref() == Some("imports")
+        }),
+        "expected package-style tsconfig extends to resolve alias into src/shared/math.ts::fn::helper; edges: {edges:?}"
+    );
+}
+
+#[test]
 fn build_resolves_python_relative_import_calls() {
     let repo = setup_repo(&[
         ("pkg/__init__.py", ""),
@@ -525,6 +697,96 @@ fn build_resolves_go_local_module_import_calls() {
     );
 }
 
+#[test]
+fn build_and_update_replace_json_toml_file_graphs() {
+    let repo = setup_repo(&[
+        (
+            "config/app.json",
+            "{\n  \"service\": { \"mode\": \"dev\" },\n  \"enabled\": true\n}\n",
+        ),
+        (
+            "Cargo.toml",
+            "[package]\nname = \"atlas\"\nversion = \"0.1.0\"\n",
+        ),
+    ]);
+
+    run_atlas(repo.path(), &["init"]);
+    let build = read_json_data_output("build", run_atlas(repo.path(), &["--json", "build"]));
+    assert_eq!(build["parse_errors"], json!(0));
+    assert!(build["parsed"].as_u64().unwrap_or_default() >= 2);
+
+    let store = open_store(repo.path());
+    let json_nodes = store.nodes_by_file("config/app.json").expect("json nodes");
+    assert!(
+        json_nodes
+            .iter()
+            .any(|node| node.qualified_name == "config/app.json::key::service.mode")
+    );
+    assert!(json_nodes.iter().any(|node| node.kind == NodeKind::Module));
+    let toml_nodes = store.nodes_by_file("Cargo.toml").expect("toml nodes");
+    assert!(
+        toml_nodes
+            .iter()
+            .any(|node| node.qualified_name == "Cargo.toml::key::package.name")
+    );
+
+    write_repo_file(
+        repo.path(),
+        "config/app.json",
+        "{\n  \"service\": { \"port\": 8080 },\n  \"enabled\": false\n}\n",
+    );
+    write_repo_file(
+        repo.path(),
+        "Cargo.toml",
+        "[package]\nname = \"atlas-renamed\"\nversion = \"0.2.0\"\n",
+    );
+
+    let update = read_json_data_output(
+        "update",
+        run_atlas(
+            repo.path(),
+            &[
+                "--json",
+                "update",
+                "--files",
+                "config/app.json",
+                "--files",
+                "Cargo.toml",
+            ],
+        ),
+    );
+    assert_eq!(update["parse_errors"], json!(0));
+    assert_eq!(update["parsed"], json!(2));
+
+    let store = open_store(repo.path());
+    let json_nodes = store
+        .nodes_by_file("config/app.json")
+        .expect("updated json nodes");
+    assert!(
+        !json_nodes
+            .iter()
+            .any(|node| node.qualified_name == "config/app.json::key::service.mode")
+    );
+    assert!(
+        json_nodes
+            .iter()
+            .any(|node| node.qualified_name == "config/app.json::key::service.port")
+    );
+    let toml_nodes = store
+        .nodes_by_file("Cargo.toml")
+        .expect("updated toml nodes");
+    assert!(
+        toml_nodes
+            .iter()
+            .any(|node| node.qualified_name == "Cargo.toml::key::package.name")
+    );
+    let name_node = toml_nodes
+        .iter()
+        .find(|node| node.qualified_name == "Cargo.toml::key::package.name")
+        .expect("package name node");
+    assert_eq!(name_node.line_start, 2);
+}
+
 fn setup_fixture_repo() -> TempDir {
     let temp_dir = tempfile::tempdir().expect("temp dir");
     copy_dir_all(&fixture_repo_root(), temp_dir.path());
@@ -577,6 +839,7 @@ fn read_golden_json(name: &str) -> Value {
 }
 
 fn normalize_query_results(value: &mut Value) {
+    value["latency_ms"] = json!(0);
     let Some(results) = value["results"].as_array_mut() else {
         panic!("query output results should be an array");
     };
@@ -585,6 +848,19 @@ fn normalize_query_results(value: &mut Value) {
         result["score"] = json!(0.0);
         result["node"]["id"] = json!(0);
         result["node"]["file_hash"] = json!("<hash>");
+    }
+}
+
+fn stdout_text(output: &Output) -> String {
+    String::from_utf8(output.stdout.clone()).expect("stdout should be utf-8")
+}
+
+fn assert_contains_all(haystack: &str, needles: &[&str]) {
+    for needle in needles {
+        assert!(
+            haystack.contains(needle),
+            "expected output to contain {needle:?}\nstdout:\n{haystack}"
+        );
     }
 }
 
@@ -601,6 +877,26 @@ fn read_json_data_output(command: &str, output: Output) -> Value {
 
 fn write_repo_file(repo_root: &Path, relative_path: &str, content: &str) {
     fs::write(repo_root.join(relative_path), content).expect("write repo file");
+}
+
+fn rewrite_fixture_helper(repo_root: &Path) {
+    write_repo_file(
+        repo_root,
+        "src/lib.rs",
+        r#"pub struct Greeter;
+
+impl Greeter {
+    pub fn greet_twice(name: &str) -> String {
+        format!("Hello, {name}! Hello again, {name}!")
+    }
+}
+
+pub fn helper(name: &str) -> String {
+    let greeting = Greeter::greet_twice(name);
+    format!("{greeting} [updated]")
+}
+"#,
+    );
 }
 
 fn open_store(repo_root: &Path) -> Store {

@@ -1,0 +1,11 @@
+{
+  "service": {
+    "host": "localhost",
+    "ports": [8080, 8081],
+    "features": [
+      { "name": "search", "enabled": true },
+      { "name": "review", "enabled": false }
+    ]
+  },
+  "enabled": true
+}

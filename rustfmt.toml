@@ -1,0 +1,1 @@
+ignore = ["packages/atlas-parser/tests/fixtures"]

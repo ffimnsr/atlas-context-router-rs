@@ -3,8 +3,10 @@ use std::path::Path;
 use crate::lang::{
     go::GoParser,
     javascript::{JsParser, TsParser},
+    json::JsonParser,
     python::PythonParser,
     rust::RustParser,
+    toml::TomlParser,
 };
 use crate::traits::{LangParser, ParseContext};
 use atlas_core::ParsedFile;
@@ -25,6 +27,8 @@ impl ParserRegistry {
         r.register(Box::new(PythonParser));
         r.register(Box::new(JsParser));
         r.register(Box::new(TsParser));
+        r.register(Box::new(JsonParser));
+        r.register(Box::new(TomlParser));
         r
     }
 
@@ -94,6 +98,8 @@ mod tests {
         assert!(reg.supports("app.js"));
         assert!(reg.supports("app.ts"));
         assert!(reg.supports("app.tsx"));
+        assert!(reg.supports("config.json"));
+        assert!(reg.supports("Cargo.toml"));
         assert!(!reg.supports("config.yaml"));
     }
 }

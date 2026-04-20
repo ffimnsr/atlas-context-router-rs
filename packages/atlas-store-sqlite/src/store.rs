@@ -9,6 +9,8 @@ use tracing::{debug, info};
 
 use crate::migrations::MIGRATIONS;
 
+type DanglingEdge = (i64, String, String, String, &'static str);
+
 // ---------------------------------------------------------------------------
 // Row-mapping helpers
 // ---------------------------------------------------------------------------
@@ -269,6 +271,137 @@ impl Store {
         }
 
         Ok(issues)
+    }
+
+    // -------------------------------------------------------------------------
+    // Observability — data integrity & graph debug
+    // -------------------------------------------------------------------------
+
+    /// Return nodes that have no edges (neither as source nor target).
+    ///
+    /// These are isolated nodes that may indicate parse gaps or stale data.
+    /// `limit` caps the result set; pass `usize::MAX` for all.
+    pub fn orphan_nodes(&self, limit: usize) -> Result<Vec<Node>> {
+        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
+        let sql = "
+            SELECT n.id, n.kind, n.name, n.qualified_name, n.file_path,
+                   n.line_start, n.line_end, n.language, n.parent_name,
+                   n.params, n.return_type, n.modifiers, n.is_test,
+                   n.file_hash, n.extra_json
+            FROM nodes n
+            WHERE NOT EXISTS (
+                SELECT 1 FROM edges e
+                WHERE e.source_qn = n.qualified_name
+                   OR e.target_qn = n.qualified_name
+            )
+            LIMIT ?1
+        ";
+        let mut stmt = self.conn.prepare(sql).map_err(db_err)?;
+        let nodes = stmt
+            .query_map(params![limit as i64], row_to_node)
+            .map_err(db_err)?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(nodes)
+    }
+
+    /// Return edges whose `source_qn` or `target_qn` do not match any node in the graph.
+    ///
+    /// Each returned tuple is `(edge_id, source_qn, target_qn, kind, side)` where
+    /// `side` is `"source"` or `"target"`.
+    pub fn dangling_edges(&self, limit: usize) -> Result<Vec<DanglingEdge>> {
+        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
+        let mut results = Vec::new();
+
+        // Dangling source
+        {
+            let sql = "
+                SELECT e.id, e.source_qn, e.target_qn, e.kind
+                FROM edges e
+                WHERE NOT EXISTS (SELECT 1 FROM nodes n WHERE n.qualified_name = e.source_qn)
+                LIMIT ?1
+            ";
+            let mut stmt = self.conn.prepare(sql).map_err(db_err)?;
+            let rows: Vec<_> = stmt
+                .query_map(params![limit as i64], |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                    ))
+                })
+                .map_err(db_err)?
+                .filter_map(|r| r.ok())
+                .collect();
+            for (id, src, tgt, kind) in rows {
+                results.push((id, src, tgt, kind, "source"));
+            }
+        }
+
+        // Dangling target
+        if results.len() < limit {
+            let remaining = limit - results.len();
+            let sql = "
+                SELECT e.id, e.source_qn, e.target_qn, e.kind
+                FROM edges e
+                WHERE NOT EXISTS (SELECT 1 FROM nodes n WHERE n.qualified_name = e.target_qn)
+                LIMIT ?1
+            ";
+            let mut stmt = self.conn.prepare(sql).map_err(db_err)?;
+            let rows: Vec<_> = stmt
+                .query_map(params![remaining as i64], |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                    ))
+                })
+                .map_err(db_err)?
+                .filter_map(|r| r.ok())
+                .collect();
+            for (id, src, tgt, kind) in rows {
+                results.push((id, src, tgt, kind, "target"));
+            }
+        }
+
+        Ok(results)
+    }
+
+    /// Return edge counts grouped by kind, ordered descending.
+    pub fn edge_kind_stats(&self) -> Result<Vec<(String, i64)>> {
+        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
+        let mut stmt = self
+            .conn
+            .prepare("SELECT kind, COUNT(*) FROM edges GROUP BY kind ORDER BY COUNT(*) DESC")
+            .map_err(db_err)?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))
+            .map_err(db_err)?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(rows)
+    }
+
+    /// Return the top `n` files by node count.
+    pub fn top_files_by_node_count(&self, n: usize) -> Result<Vec<(String, i64)>> {
+        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT file_path, COUNT(*) AS cnt FROM nodes
+                 GROUP BY file_path ORDER BY cnt DESC LIMIT ?1",
+            )
+            .map_err(db_err)?;
+        let rows = stmt
+            .query_map(params![n as i64], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+            })
+            .map_err(db_err)?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(rows)
     }
 
     // -------------------------------------------------------------------------

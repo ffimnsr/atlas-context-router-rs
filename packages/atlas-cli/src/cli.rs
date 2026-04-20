@@ -163,11 +163,42 @@ pub enum Command {
     /// Start a JSON-RPC / MCP stdio server.
     Serve,
 
-    /// Run an integrity check on the atlas database.
+    /// Run an integrity check on the atlas database (SQLite + orphan/dangling checks).
     DbCheck,
 
     /// Run a health check on the atlas setup (repo, config, database).
     Doctor,
+
+    /// Show detailed graph structure for debugging.
+    #[command(name = "debug-graph")]
+    DebugGraph {
+        /// Maximum number of orphan nodes and dangling edges to display.
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+    },
+
+    /// Show what a query would match, with timing and match details.
+    #[command(name = "explain-query")]
+    ExplainQuery {
+        /// Search text.
+        text: String,
+
+        /// Filter by node kind.
+        #[arg(long)]
+        kind: Option<String>,
+
+        /// Filter by language.
+        #[arg(long)]
+        language: Option<String>,
+
+        /// Filter by file path prefix.
+        #[arg(long)]
+        subpath: Option<String>,
+
+        /// Maximum results.
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+    },
 
     /// Install MCP server configuration for AI coding platforms.
     Install {

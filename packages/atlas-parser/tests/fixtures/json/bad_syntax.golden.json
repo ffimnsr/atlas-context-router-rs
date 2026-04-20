@@ -1,0 +1,26 @@
+{
+  "edges": [],
+  "hash": "fixture-hash",
+  "language": "json",
+  "nodes": [
+    {
+      "extra_json": null,
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/json/bad_syntax.json",
+      "id": 0,
+      "is_test": false,
+      "kind": "file",
+      "language": "json",
+      "line_end": 3,
+      "line_start": 1,
+      "modifiers": null,
+      "name": "bad_syntax.json",
+      "params": null,
+      "parent_name": null,
+      "qualified_name": "fixtures/json/bad_syntax.json",
+      "return_type": null
+    }
+  ],
+  "path": "fixtures/json/bad_syntax.json",
+  "size": 22
+}

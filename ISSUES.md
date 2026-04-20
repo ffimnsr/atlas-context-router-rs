@@ -53,15 +53,15 @@ The upstream repo’s real kernel is the repository scanner, parser layer, SQLit
   - [x] FTS5 keyword search
   - [x] CLI
 - [x] Move non-MVP items to post-MVP backlog:
-  - [ ] embeddings
-  - [ ] communities
-  - [ ] flows
+  - [x] embeddings
+  - [x] communities
+  - [x] flows
   - [ ] wiki
   - [ ] visualization/export
   - [ ] multi-repo registry
-  - [ ] install hooks
+  - [x] install hooks
   - [ ] auto-watch mode
-  - [ ] refactor/apply-refactor
+  - [x] refactor/apply-refactor
   - [ ] evaluation harness
   - [ ] cloud providers
 
@@ -945,18 +945,18 @@ The upstream report highlights parser fidelity and install/hook fragility as the
 
 ### 14.5 Integration tests
 
-- [ ] `atlas build` on sample repo
-- [ ] `atlas update` after edits
-- [ ] `atlas impact` returns expected nodes
-- [ ] `atlas review-context` returns stable useful output
-- [ ] `atlas query` returns expected ranked matches
+- [x] `atlas build` on sample repo
+- [x] `atlas update` after edits
+- [x] `atlas impact` returns expected nodes
+- [x] `atlas review-context` returns stable useful output
+- [x] `atlas query` returns expected ranked matches
 
 ### 14.6 Cross-platform tests
 
-- [ ] Linux
+- [x] Linux
 - [x] Windows path/casing behavior
-- [ ] macOS path handling
-- [ ] git command behavior on each
+- [x] macOS path handling
+- [x] git command behavior on each
 
 ---
 
@@ -1909,22 +1909,22 @@ Shared support for explainability, config, CLI surface, JSON contracts, benchmar
 
 ### 27.1 Metrics
 
-- [ ] indexing time
-- [ ] nodes/sec
-- [ ] query latency
-- [ ] impact latency
+- [x] indexing time
+- [x] nodes/sec
+- [x] query latency
+- [x] impact latency
 
 ### 27.2 Debug tools
 
-- [ ] `atlas doctor`
-- [ ] `atlas debug graph`
-- [ ] `atlas explain-query`
+- [x] `atlas doctor`
+- [x] `atlas debug graph`
+- [x] `atlas explain-query`
 
 ### 27.3 Data integrity
 
-- [ ] orphan-node detection
-- [ ] edge validation
-- [ ] DB consistency checks
+- [x] orphan-node detection
+- [x] edge validation
+- [x] DB consistency checks
 
 ## Phase 28 — Real-Time & Continuous Mode
 

@@ -237,11 +237,22 @@ pub fn run_build(cli: &Cli) -> Result<()> {
                 "nodes_inserted": summary.nodes_inserted,
                 "edges_inserted": summary.edges_inserted,
                 "elapsed_ms": summary.elapsed_ms,
+                "nodes_per_sec": if summary.elapsed_ms > 0 {
+                    (summary.nodes_inserted as f64 / summary.elapsed_ms as f64 * 1000.0).round() as u64
+                } else { summary.nodes_inserted as u64 },
             }),
         )?;
     } else {
+        let nodes_per_sec = if summary.elapsed_ms > 0 {
+            format!(
+                "{:.0} nodes/s",
+                summary.nodes_inserted as f64 / summary.elapsed_ms as f64 * 1000.0
+            )
+        } else {
+            String::from("—")
+        };
         println!(
-            "Build complete ({:.2}s)",
+            "Build complete ({:.2}s, {nodes_per_sec})",
             summary.elapsed_ms as f64 / 1000.0
         );
         println!("  Scanned             : {}", summary.scanned);
@@ -315,11 +326,22 @@ pub fn run_update(cli: &Cli) -> Result<()> {
                 "nodes_updated": summary.nodes_updated,
                 "edges_updated": summary.edges_updated,
                 "elapsed_ms": summary.elapsed_ms,
+                "nodes_per_sec": if summary.elapsed_ms > 0 {
+                    (summary.nodes_updated as f64 / summary.elapsed_ms as f64 * 1000.0).round() as u64
+                } else { summary.nodes_updated as u64 },
             }),
         )?;
     } else {
+        let nodes_per_sec = if summary.elapsed_ms > 0 {
+            format!(
+                "{:.0} nodes/s",
+                summary.nodes_updated as f64 / summary.elapsed_ms as f64 * 1000.0
+            )
+        } else {
+            String::from("—")
+        };
         println!(
-            "Update complete ({:.2}s)",
+            "Update complete ({:.2}s, {nodes_per_sec})",
             summary.elapsed_ms as f64 / 1000.0
         );
         println!("  Deleted  : {}", summary.deleted);
@@ -455,7 +477,9 @@ pub fn run_query(cli: &Cli) -> Result<()> {
         ..Default::default()
     };
 
+    let t0 = std::time::Instant::now();
     let results = search::search(&store, &query).context("search failed")?;
+    let latency_ms = t0.elapsed().as_millis();
 
     if cli.json {
         print_json(
@@ -470,11 +494,12 @@ pub fn run_query(cli: &Cli) -> Result<()> {
                     "graph_expand": query.graph_expand,
                     "graph_max_hops": query.graph_max_hops,
                 },
+                "latency_ms": latency_ms,
                 "results": results,
             }),
         )?;
     } else if results.is_empty() {
-        println!("No results.");
+        println!("No results. ({latency_ms}ms)");
     } else {
         for r in &results {
             let n = &r.node;
@@ -487,7 +512,7 @@ pub fn run_query(cli: &Cli) -> Result<()> {
                 n.line_start,
             );
         }
-        println!("\n{} result(s).", results.len());
+        println!("\n{} result(s). ({latency_ms}ms)", results.len());
     }
 
     Ok(())
@@ -610,9 +635,11 @@ pub fn run_impact(cli: &Cli) -> Result<()> {
     }
 
     let path_refs: Vec<&str> = target_files.iter().map(String::as_str).collect();
+    let t0 = std::time::Instant::now();
     let result = store
         .impact_radius(&path_refs, max_depth, max_nodes)
         .context("impact radius query failed")?;
+    let latency_ms = t0.elapsed().as_millis();
 
     let advanced = advanced_impact(result);
 
@@ -621,6 +648,7 @@ pub fn run_impact(cli: &Cli) -> Result<()> {
             "impact",
             serde_json::json!({
                 "files": target_files,
+                "latency_ms": latency_ms,
                 "analysis": advanced,
             }),
         )?;
@@ -631,6 +659,7 @@ pub fn run_impact(cli: &Cli) -> Result<()> {
         println!("Impacted files: {}", advanced.base.impacted_files.len());
         println!("Relevant edges: {}", advanced.base.relevant_edges.len());
         println!("Risk level    : {}", advanced.risk_level);
+        println!("Latency       : {latency_ms}ms");
         if !advanced.base.impacted_files.is_empty() {
             println!("\nImpacted files:");
             for f in &advanced.base.impacted_files {
@@ -1231,19 +1260,52 @@ pub fn run_db_check(cli: &Cli) -> Result<()> {
 
     let issues = store.integrity_check().context("integrity check failed")?;
 
+    const ORPHAN_LIMIT: usize = 100;
+    let orphans = store.orphan_nodes(ORPHAN_LIMIT).unwrap_or_default();
+    let dangling = store.dangling_edges(ORPHAN_LIMIT).unwrap_or_default();
+
+    let ok = issues.is_empty() && orphans.is_empty() && dangling.is_empty();
+
     if cli.json {
         let result = serde_json::json!({
             "db_path": db_path,
-            "ok": issues.is_empty(),
+            "ok": ok,
             "issues": issues,
+            "orphan_node_count": orphans.len(),
+            "dangling_edge_count": dangling.len(),
         });
         print_json("db_check", result)?;
-    } else if issues.is_empty() {
+    } else if ok {
         println!("Database integrity OK: {db_path}");
     } else {
-        eprintln!("Database integrity FAILED: {db_path}");
-        for issue in &issues {
-            eprintln!("  {issue}");
+        if !issues.is_empty() {
+            eprintln!("Database integrity FAILED: {db_path}");
+            for issue in &issues {
+                eprintln!("  {issue}");
+            }
+        }
+        if !orphans.is_empty() {
+            eprintln!("Orphan nodes (no edges): {}", orphans.len());
+            for n in orphans.iter().take(10) {
+                eprintln!(
+                    "  {} {} ({})",
+                    n.kind.as_str(),
+                    n.qualified_name,
+                    n.file_path
+                );
+            }
+            if orphans.len() > 10 {
+                eprintln!("  … and {} more", orphans.len() - 10);
+            }
+        }
+        if !dangling.is_empty() {
+            eprintln!("Dangling edges (missing endpoint): {}", dangling.len());
+            for (id, src, tgt, kind, side) in dangling.iter().take(10) {
+                eprintln!("  edge {id} kind={kind} missing {side}: {src} -> {tgt}");
+            }
+            if dangling.len() > 10 {
+                eprintln!("  … and {} more", dangling.len() - 10);
+            }
         }
         std::process::exit(1);
     }
@@ -1629,4 +1691,225 @@ fn print_refactor_result(result: &atlas_core::RefactorDryRunResult, dry_run: boo
             println!("{}", p.unified_diff);
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Debug graph — Phase 27.2 / 27.3
+// ---------------------------------------------------------------------------
+
+pub fn run_debug_graph(cli: &Cli) -> Result<()> {
+    let limit = match &cli.command {
+        Command::DebugGraph { limit } => *limit,
+        _ => unreachable!(),
+    };
+
+    let repo = resolve_repo(cli)?;
+    let db_path = db_path(cli, &repo);
+    let store =
+        Store::open(&db_path).with_context(|| format!("cannot open database at {db_path}"))?;
+
+    let stats = store.stats().context("cannot read graph stats")?;
+    let edge_kinds = store.edge_kind_stats().context("edge kind stats failed")?;
+    let top_files = store
+        .top_files_by_node_count(10)
+        .context("top files query failed")?;
+    let orphans = store
+        .orphan_nodes(limit)
+        .context("orphan node query failed")?;
+    let dangling = store
+        .dangling_edges(limit)
+        .context("dangling edge query failed")?;
+
+    if cli.json {
+        print_json(
+            "debug_graph",
+            serde_json::json!({
+                "nodes": stats.node_count,
+                "edges": stats.edge_count,
+                "files": stats.file_count,
+                "nodes_by_kind": stats.nodes_by_kind,
+                "edges_by_kind": edge_kinds,
+                "top_files_by_node_count": top_files,
+                "orphan_nodes": orphans.iter().map(|n| serde_json::json!({
+                    "kind": n.kind.as_str(),
+                    "qualified_name": n.qualified_name,
+                    "file_path": n.file_path,
+                    "line_start": n.line_start,
+                })).collect::<Vec<_>>(),
+                "dangling_edges": dangling.iter().map(|(id, src, tgt, kind, side)| serde_json::json!({
+                    "id": id,
+                    "kind": kind,
+                    "source_qn": src,
+                    "target_qn": tgt,
+                    "missing_side": side,
+                })).collect::<Vec<_>>(),
+            }),
+        )?;
+    } else {
+        println!("Graph summary");
+        println!("  Nodes : {}", stats.node_count);
+        println!("  Edges : {}", stats.edge_count);
+        println!("  Files : {}", stats.file_count);
+
+        if !stats.nodes_by_kind.is_empty() {
+            println!("\nNodes by kind:");
+            for (kind, count) in &stats.nodes_by_kind {
+                println!("  {kind:<16} {count}");
+            }
+        }
+
+        if !edge_kinds.is_empty() {
+            println!("\nEdges by kind:");
+            for (kind, count) in &edge_kinds {
+                println!("  {kind:<16} {count}");
+            }
+        }
+
+        if !top_files.is_empty() {
+            println!("\nTop files by node count:");
+            for (path, count) in &top_files {
+                println!("  {count:>6}  {path}");
+            }
+        }
+
+        println!("\nData integrity:");
+        if orphans.is_empty() {
+            println!("  Orphan nodes    : 0 (OK)");
+        } else {
+            println!("  Orphan nodes    : {} (no edges)", orphans.len());
+            for n in orphans.iter().take(5) {
+                println!(
+                    "    {} {} ({}:{})",
+                    n.kind.as_str(),
+                    n.qualified_name,
+                    n.file_path,
+                    n.line_start
+                );
+            }
+            if orphans.len() > 5 {
+                println!(
+                    "    … and {} more (use --limit to show more)",
+                    orphans.len() - 5
+                );
+            }
+        }
+        if dangling.is_empty() {
+            println!("  Dangling edges  : 0 (OK)");
+        } else {
+            println!("  Dangling edges  : {} (missing endpoint)", dangling.len());
+            for (id, src, tgt, kind, side) in dangling.iter().take(5) {
+                println!("    edge {id} [{kind}] missing {side}: {src} -> {tgt}");
+            }
+            if dangling.len() > 5 {
+                println!("    … and {} more", dangling.len() - 5);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Explain query — Phase 27.2
+// ---------------------------------------------------------------------------
+
+pub fn run_explain_query(cli: &Cli) -> Result<()> {
+    let (text, kind, language, subpath, limit) = match &cli.command {
+        Command::ExplainQuery {
+            text,
+            kind,
+            language,
+            subpath,
+            limit,
+        } => (
+            text.clone(),
+            kind.clone(),
+            language.clone(),
+            subpath.clone(),
+            *limit,
+        ),
+        _ => unreachable!(),
+    };
+
+    let repo = resolve_repo(cli)?;
+    let db_path = db_path(cli, &repo);
+    let store =
+        Store::open(&db_path).with_context(|| format!("cannot open database at {db_path}"))?;
+
+    let query = SearchQuery {
+        text: text.clone(),
+        kind: kind.clone(),
+        language: language.clone(),
+        subpath: subpath.clone(),
+        limit,
+        ..Default::default()
+    };
+
+    let t0 = std::time::Instant::now();
+    let results = search::search(&store, &query).context("search failed")?;
+    let latency_ms = t0.elapsed().as_millis();
+
+    let matches: Vec<serde_json::Value> = results
+        .iter()
+        .map(|r| {
+            serde_json::json!({
+                "score": r.score,
+                "kind": r.node.kind.as_str(),
+                "qualified_name": r.node.qualified_name,
+                "file_path": r.node.file_path,
+                "line_start": r.node.line_start,
+                "language": r.node.language,
+            })
+        })
+        .collect();
+
+    if cli.json {
+        print_json(
+            "explain_query",
+            serde_json::json!({
+                "query": {
+                    "text": text,
+                    "kind": kind,
+                    "language": language,
+                    "subpath": subpath,
+                    "limit": limit,
+                },
+                "latency_ms": latency_ms,
+                "result_count": results.len(),
+                "matches": matches,
+            }),
+        )?;
+    } else {
+        println!("Query explanation");
+        println!("  Text     : {text}");
+        if let Some(k) = &kind {
+            println!("  Kind     : {k}");
+        }
+        if let Some(l) = &language {
+            println!("  Language : {l}");
+        }
+        if let Some(s) = &subpath {
+            println!("  Subpath  : {s}");
+        }
+        println!("  Limit    : {limit}");
+        println!("  Latency  : {latency_ms}ms");
+        println!("  Results  : {}", results.len());
+        if results.is_empty() {
+            println!("\nNo matches.");
+        } else {
+            println!("\nMatches (score / kind / qualified_name):");
+            for r in &results {
+                println!(
+                    "  [{:.4}] {} {} @ {}:{}",
+                    r.score,
+                    r.node.kind.as_str(),
+                    r.node.qualified_name,
+                    r.node.file_path,
+                    r.node.line_start,
+                );
+            }
+        }
+    }
+
+    Ok(())
 }

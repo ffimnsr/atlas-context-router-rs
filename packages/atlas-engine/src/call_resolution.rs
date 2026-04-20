@@ -233,7 +233,7 @@ fn parse_tsconfig_recursive(
     let mut config = value
         .get("extends")
         .and_then(|extends| extends.as_str())
-        .and_then(|extends| resolve_tsconfig_extends_path(&normalized, extends))
+        .and_then(|extends| resolve_tsconfig_extends_path(repo_root, &normalized, extends))
         .and_then(|parent_path| parse_tsconfig_recursive(repo_root, &parent_path, visited))
         .unwrap_or_else(|| TsConfig {
             base_url: config_dir.to_owned(),
@@ -282,17 +282,43 @@ fn parse_tsconfig_recursive(
     (config.base_url_explicit || !config.paths.is_empty()).then_some(config)
 }
 
-fn resolve_tsconfig_extends_path(current_path: &Utf8Path, extends: &str) -> Option<Utf8PathBuf> {
-    if extends.is_empty() || (!extends.starts_with('.') && !extends.starts_with('/')) {
+fn resolve_tsconfig_extends_path(
+    repo_root: &Utf8Path,
+    current_path: &Utf8Path,
+    extends: &str,
+) -> Option<Utf8PathBuf> {
+    if extends.is_empty() {
         return None;
     }
 
-    let current_dir = current_path.parent().unwrap_or_else(|| Utf8Path::new(""));
-    let mut candidate = normalize_relative_path(current_dir.join(extends));
-    if candidate.extension().is_none() {
-        candidate.set_extension("json");
+    if extends.starts_with('.') || extends.starts_with('/') {
+        let current_dir = current_path.parent().unwrap_or_else(|| Utf8Path::new(""));
+        let mut candidate = normalize_relative_path(current_dir.join(extends));
+        if candidate.extension().is_none() {
+            candidate.set_extension("json");
+        }
+        return Some(candidate);
     }
-    Some(candidate)
+
+    let current_dir = current_path.parent().unwrap_or_else(|| Utf8Path::new(""));
+    for ancestor in current_dir
+        .ancestors()
+        .chain(std::iter::once(Utf8Path::new("")))
+    {
+        let node_modules_dir = if ancestor.as_str().is_empty() {
+            Utf8PathBuf::from("node_modules")
+        } else {
+            ancestor.join("node_modules")
+        };
+        for mut candidate in package_tsconfig_candidates(&node_modules_dir, extends) {
+            candidate = normalize_relative_path(candidate);
+            if repo_root.join(&candidate).exists() {
+                return Some(candidate);
+            }
+        }
+    }
+
+    None
 }
 
 fn load_go_module(repo_root: &Utf8Path) -> Option<String> {
@@ -407,20 +433,51 @@ fn resolve_import_target(
 
     for binding in matching_bindings {
         let imported_name = imported_symbol_name(binding, meta)?;
-        let candidate_files =
-            resolve_import_files(ctx.config, ctx.repo_root, ctx.path, ctx.language, binding)?;
-        let candidates =
-            callable_candidates(ctx.store, ctx.language, imported_name, candidate_cache).ok()?;
-        let matches: Vec<Node> = candidates
-            .into_iter()
-            .filter(|node| candidate_files.contains(node.file_path.as_str()))
-            .collect();
-        if let Some(node) = unique_node(matches) {
-            return Some((node.qualified_name, "imports", 0.75));
+        let resolution_options = import_resolution_options(ctx, binding, imported_name)?;
+        for (candidate_files, candidate_name) in resolution_options {
+            let candidates = callable_candidates(
+                ctx.store,
+                ctx.language,
+                candidate_name.as_str(),
+                candidate_cache,
+            )
+            .ok()?;
+            let matches: Vec<Node> = candidates
+                .into_iter()
+                .filter(|node| candidate_files.contains(node.file_path.as_str()))
+                .collect();
+            if let Some(node) = unique_node(matches) {
+                return Some((node.qualified_name, "imports", 0.75));
+            }
         }
     }
 
     None
+}
+
+fn import_resolution_options(
+    ctx: &ResolutionContext<'_>,
+    binding: &ImportBinding,
+    imported_name: &str,
+) -> Option<Vec<(HashSet<String>, String)>> {
+    let candidate_files =
+        resolve_import_files(ctx.config, ctx.repo_root, ctx.path, ctx.language, binding)?;
+    let mut options = vec![(candidate_files.clone(), imported_name.to_owned())];
+
+    if matches!(ctx.language, "javascript" | "typescript") {
+        let mut visited = HashSet::new();
+        options.extend(follow_js_ts_reexports(
+            ctx.config,
+            ctx.repo_root,
+            ctx.language,
+            &candidate_files,
+            imported_name,
+            0,
+            &mut visited,
+        ));
+    }
+
+    Some(options)
 }
 
 fn imported_symbol_name<'a>(binding: &'a ImportBinding, meta: &'a CallMeta) -> Option<&'a str> {
@@ -667,6 +724,116 @@ fn existing_repo_paths(
         }
     }
     if paths.is_empty() { None } else { Some(paths) }
+}
+
+fn package_tsconfig_candidates(base_dir: &Utf8Path, extends: &str) -> Vec<Utf8PathBuf> {
+    let mut candidates = Vec::new();
+    let base = base_dir.join(extends);
+    candidates.push(base.clone());
+    if base.extension().is_none() {
+        candidates.push(Utf8PathBuf::from(format!("{base}.json")));
+    }
+    candidates.push(base.join("tsconfig.json"));
+    candidates
+}
+
+fn follow_js_ts_reexports(
+    config: &ResolverConfig,
+    repo_root: &Utf8Path,
+    language: &str,
+    files: &HashSet<String>,
+    imported_name: &str,
+    depth: usize,
+    visited: &mut HashSet<(String, String)>,
+) -> Vec<(HashSet<String>, String)> {
+    if depth >= 4 {
+        return Vec::new();
+    }
+
+    let mut results = Vec::new();
+    for file in files {
+        if !visited.insert((file.clone(), imported_name.to_owned())) {
+            continue;
+        }
+        let abs_path = repo_root.join(file);
+        let Ok(source) = fs::read_to_string(abs_path.as_std_path()) else {
+            continue;
+        };
+        for (reexport_source, next_name) in js_ts_reexports_for_symbol(&source, imported_name) {
+            let binding = ImportBinding {
+                source: reexport_source,
+                local: next_name.clone(),
+                imported: Some(next_name.clone()),
+                kind: "named".to_owned(),
+                relative_level: 0,
+            };
+            let Some(next_files) =
+                resolve_import_files(config, repo_root, file, language, &binding)
+            else {
+                continue;
+            };
+            results.push((next_files.clone(), next_name.clone()));
+            results.extend(follow_js_ts_reexports(
+                config,
+                repo_root,
+                language,
+                &next_files,
+                &next_name,
+                depth + 1,
+                visited,
+            ));
+        }
+    }
+    results
+}
+
+fn js_ts_reexports_for_symbol(source: &str, symbol: &str) -> Vec<(String, String)> {
+    let mut results = Vec::new();
+    for line in source.lines() {
+        let trimmed = line.trim();
+        if !trimmed.starts_with("export ") || !trimmed.contains(" from ") {
+            continue;
+        }
+        let Some(module_source) = quoted_module_source(trimmed) else {
+            continue;
+        };
+
+        if trimmed.starts_with("export * from ") {
+            results.push((module_source.to_owned(), symbol.to_owned()));
+            continue;
+        }
+
+        let Some(open) = trimmed.find('{') else {
+            continue;
+        };
+        let Some(close) = trimmed[open + 1..].find('}') else {
+            continue;
+        };
+        let clause = &trimmed[open + 1..open + 1 + close];
+        for spec in clause
+            .split(',')
+            .map(str::trim)
+            .filter(|spec| !spec.is_empty())
+        {
+            let (local, exported) = if let Some((left, right)) = spec.split_once(" as ") {
+                (left.trim(), right.trim())
+            } else {
+                (spec, spec)
+            };
+            if exported == symbol {
+                results.push((module_source.to_owned(), local.to_owned()));
+            }
+        }
+    }
+    results
+}
+
+fn quoted_module_source(input: &str) -> Option<&str> {
+    let start = input.find(['"', '\''])?;
+    let quote = input.as_bytes()[start] as char;
+    let rest = &input[start + 1..];
+    let end = rest.find(quote)?;
+    Some(&rest[..end])
 }
 
 fn callable_candidates(
