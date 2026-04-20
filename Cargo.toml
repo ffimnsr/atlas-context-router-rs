@@ -4,12 +4,14 @@ members = [
   "packages/atlas-core",
   "packages/atlas-engine",
   "packages/atlas-mcp",
+  "packages/atlas-refactor",
   "packages/atlas-store-sqlite",
   "packages/atlas-repo",
   "packages/atlas-parser",
   "packages/atlas-search",
   "packages/atlas-review",
   "packages/atlas-impact",
+  "packages/atlas-reasoning",
 ]
 resolver = "2"
 
@@ -58,6 +60,7 @@ rayon = "1"
 hashbrown = "0.15"
 
 # internal crates
-atlas-core   = { path = "packages/atlas-core" }
-atlas-engine = { path = "packages/atlas-engine" }
-atlas-mcp    = { path = "packages/atlas-mcp" }
+atlas-core      = { path = "packages/atlas-core" }
+atlas-engine    = { path = "packages/atlas-engine" }
+atlas-mcp       = { path = "packages/atlas-mcp" }
+atlas-reasoning = { path = "packages/atlas-reasoning" }

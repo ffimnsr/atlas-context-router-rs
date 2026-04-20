@@ -252,7 +252,7 @@ The upstream implementation already treats SQLite as the durable center of the s
 - [x] Create migration runner
 - [x] Add schema version table
 - [x] Make migrations idempotent
-- [ ] Add golden-schema tests
+- [x] Add golden-schema tests
 
 ### 3.3 Tables
 
@@ -360,8 +360,8 @@ The upstream implementation already treats SQLite as the durable center of the s
   - [x] insert edges
   - [x] insert FTS rows
   - [x] commit
-- [ ] Add rollback tests
-- [ ] Add lock-contention tests
+- [x] Add rollback tests
+- [x] Add lock-contention tests
 
 ---
 
@@ -933,15 +933,15 @@ The upstream report highlights parser fidelity and install/hook fragility as the
 
 ### 14.4 Parser golden tests
 
-- [ ] Rust fixtures
-- [ ] Go fixtures
-- [ ] Python fixtures
-- [ ] JS/TS fixtures
-- [ ] call edges
-- [ ] imports
-- [ ] tests detection
-- [ ] bad syntax handling
-- [ ] line ranges
+- [x] Rust fixtures
+- [x] Go fixtures
+- [x] Python fixtures
+- [x] JS/TS fixtures
+- [x] call edges
+- [x] imports
+- [x] tests detection
+- [x] bad syntax handling
+- [x] line ranges
 
 ### 14.5 Integration tests
 
@@ -1305,6 +1305,25 @@ Exit criteria:
 - [x] expose MCP tool only after JSON shape stabilizes
 - [x] keep old `review-context` command during transition; switch implementation under hood first
 
+### 9.1 Public rollout checklist for `atlas context` and MCP context tools
+
+- [ ] unhide `atlas context` once command shape is frozen
+- [ ] replace dev-style `--qname` / `--name` / `--file` targeting UX with stable public CLI contract
+- [ ] decide whether `atlas context` accepts free text, explicit subcommands, or both; document one public path
+- [ ] keep `atlas review-context` during transition; define whether it stays as alias, focused shortcut, or deprecated surface
+- [ ] document `atlas context` examples and JSON contract in `README.md`
+- [ ] add CLI parser tests for public `atlas context` syntax
+- [ ] add fixture/integration tests for `atlas context` symbol, file, review, impact, ambiguity, and not-found flows
+- [ ] add golden/snapshot coverage for public `atlas context --json` output
+- [ ] freeze `ContextResult` compatibility expectations for public CLI consumers
+- [ ] document default limits and truncation behavior for public context output
+- [ ] decide whether MCP public context surface stays review-focused (`get_review_context`) or adds generic `get_context`
+- [ ] if generic MCP context tool added, keep it thin over `ContextEngine` with no duplicated ranking/trimming logic
+- [ ] document MCP tool schemas and response contracts for public/agent use
+- [ ] add `packages/atlas-mcp` tests for `tools/list`, `tools/call`, argument validation, ambiguity, not-found, and truncation cases
+- [ ] freeze compact MCP payload contract (`PackagedContextResult` or successor) before broad external use
+- [ ] confirm public MCP tools stay token-efficient without hiding critical ambiguity/truncation metadata
+
 Why ninth:
 - shipping surface too early freezes unstable payloads
 - hidden/dev entrypoint lets fixture tests harden engine before user-facing commit
@@ -1492,175 +1511,175 @@ Answer structural questions from graph + parser + store facts only. No unsupport
 
 ### 23.1 Engine responsibilities and core types
 
-- [ ] analyze removal impact
-- [ ] detect dead code candidates
-- [ ] score refactor safety
-- [ ] validate dependency removal
-- [ ] inspect rename blast radius
-- [ ] classify change risk
-- [ ] detect missing test adjacency
-- [ ] explain graph facts behind result
-- [ ] define `ReasoningResult`
-- [ ] define `ReasoningEvidence`
-- [ ] define `ReasoningWarning`
-- [ ] define `ConfidenceTier`
-- [ ] define `SafetyScore`
-- [ ] define `ImpactClass`
-- [ ] define `DeadCodeCandidate`
-- [ ] define `DependencyRemovalResult`
-- [ ] define `RenamePreviewResult`
+- [x] analyze removal impact
+- [x] detect dead code candidates
+- [x] score refactor safety
+- [x] validate dependency removal
+- [x] inspect rename blast radius
+- [x] classify change risk
+- [x] detect missing test adjacency
+- [x] explain graph facts behind result
+- [x] define `ReasoningResult`
+- [x] define `ReasoningEvidence`
+- [x] define `ReasoningWarning`
+- [x] define `ConfidenceTier`
+- [x] define `SafetyScore`
+- [x] define `ImpactClass`
+- [x] define `DeadCodeCandidate`
+- [x] define `DependencyRemovalResult`
+- [x] define `RenamePreviewResult`
 
 ### 23.2 Removal impact analysis
 
-- [ ] accept symbol or file as seed
-- [ ] find direct inbound edges
-- [ ] find direct outbound edges
-- [ ] traverse impact graph to configured depth
-- [ ] separate:
-  - [ ] definitely impacted
-  - [ ] probably impacted
-  - [ ] weakly related
-- [ ] return:
-  - [ ] impacted symbols
-  - [ ] impacted files
-  - [ ] impacted tests
-  - [ ] relevant edges
-- [ ] use high-confidence heuristics:
-  - [ ] direct call edges
-  - [ ] direct import edges
-  - [ ] direct test links
-- [ ] use medium-confidence heuristics:
-  - [ ] inferred symbol links
-  - [ ] unresolved selector calls within same file/package
-- [ ] use low-confidence heuristics:
-  - [ ] textual references only
-  - [ ] weak unresolved edges
-- [ ] include seed node(s)
-- [ ] include per-node depth
-- [ ] include edge kind per path
-- [ ] include impact class
+- [x] accept symbol or file as seed
+- [x] find direct inbound edges
+- [x] find direct outbound edges
+- [x] traverse impact graph to configured depth
+- [x] separate:
+  - [x] definitely impacted
+  - [x] probably impacted
+  - [x] weakly related
+- [x] return:
+  - [x] impacted symbols
+  - [x] impacted files
+  - [x] impacted tests
+  - [x] relevant edges
+- [x] use high-confidence heuristics:
+  - [x] direct call edges
+  - [x] direct import edges
+  - [x] direct test links
+- [x] use medium-confidence heuristics:
+  - [x] inferred symbol links
+  - [x] unresolved selector calls within same file/package
+- [x] use low-confidence heuristics:
+  - [x] textual references only
+  - [x] weak unresolved edges
+- [x] include seed node(s)
+- [x] include per-node depth
+- [x] include edge kind per path
+- [x] include impact class
 
 ### 23.3 Dead code, safety, dependency removal
 
-- [ ] detect dead code candidates when:
-  - [ ] no inbound call edges
-  - [ ] no inbound reference edges
-  - [ ] not public/exported
-  - [ ] not in configured entrypoint allowlist
-  - [ ] not framework entrypoint
-  - [ ] not test
-  - [ ] not referenced by known routing/config conventions
-  - [ ] not dynamically registered where detectable
-- [ ] support suppression / allowlists:
-  - [ ] main entrypoints
-  - [ ] CLI command handlers
-  - [ ] framework lifecycle hooks
-  - [ ] exported plugin symbols
-  - [ ] reflection-based registration points
-  - [ ] manual ignore list
-- [ ] dead-code output:
-  - [ ] candidate symbol
-  - [ ] why flagged
-  - [ ] certainty tier
-  - [ ] blockers preventing auto-removal
-- [ ] score refactor safety from:
-  - [ ] fan-in
-  - [ ] fan-out
-  - [ ] visibility
-  - [ ] file/module scope
-  - [ ] public API status
-  - [ ] linked test count
-  - [ ] dependency depth
-  - [ ] dynamic usage risk
-  - [ ] unresolved edge count
-- [ ] mark safer when:
-  - [ ] private/internal
-  - [ ] low fan-in
-  - [ ] low fan-out
-  - [ ] strong test adjacency
-  - [ ] self-contained in one file/module
-- [ ] mark riskier when:
-  - [ ] public/exported
-  - [ ] many inbound callers
-  - [ ] many cross-module callers
-  - [ ] unresolved/dynamic references
-  - [ ] no tests nearby
-- [ ] refactor-safety output:
-  - [ ] numeric score
-  - [ ] safety band: `safe`, `caution`, `risky`
-  - [ ] reasons list
-  - [ ] suggested validations
-- [ ] validate dependency removal:
-  - [ ] detect unused imports
-  - [ ] detect unreferenced dependencies
-  - [ ] verify zero references in graph
-  - [ ] verify zero references in same-file AST if needed
-  - [ ] verify no tests depend on target
-  - [ ] flag dynamic/reflective uncertainty
-- [ ] dependency-removal output:
-  - [ ] removable boolean
-  - [ ] blocking references
-  - [ ] confidence tier
-  - [ ] suggested cleanup edits
+- [x] detect dead code candidates when:
+  - [x] no inbound call edges
+  - [x] no inbound reference edges
+  - [x] not public/exported
+  - [x] not in configured entrypoint allowlist
+  - [x] not framework entrypoint
+  - [x] not test
+  - [x] not referenced by known routing/config conventions
+  - [x] not dynamically registered where detectable
+- [x] support suppression / allowlists:
+  - [x] main entrypoints
+  - [x] CLI command handlers
+  - [x] framework lifecycle hooks
+  - [x] exported plugin symbols
+  - [x] reflection-based registration points
+  - [x] manual ignore list
+- [x] dead-code output:
+  - [x] candidate symbol
+  - [x] why flagged
+  - [x] certainty tier
+  - [x] blockers preventing auto-removal
+- [x] score refactor safety from:
+  - [x] fan-in
+  - [x] fan-out
+  - [x] visibility
+  - [x] file/module scope
+  - [x] public API status
+  - [x] linked test count
+  - [x] dependency depth
+  - [x] dynamic usage risk
+  - [x] unresolved edge count
+- [x] mark safer when:
+  - [x] private/internal
+  - [x] low fan-in
+  - [x] low fan-out
+  - [x] strong test adjacency
+  - [x] self-contained in one file/module
+- [x] mark riskier when:
+  - [x] public/exported
+  - [x] many inbound callers
+  - [x] many cross-module callers
+  - [x] unresolved/dynamic references
+  - [x] no tests nearby
+- [x] refactor-safety output:
+  - [x] numeric score
+  - [x] safety band: `safe`, `caution`, `risky`
+  - [x] reasons list
+  - [x] suggested validations
+- [x] validate dependency removal:
+  - [x] detect unused imports
+  - [x] detect unreferenced dependencies
+  - [x] verify zero references in graph
+  - [x] verify zero references in same-file AST if needed
+  - [x] verify no tests depend on target
+  - [x] flag dynamic/reflective uncertainty
+- [x] dependency-removal output:
+  - [x] removable boolean
+  - [x] blocking references
+  - [x] confidence tier
+  - [x] suggested cleanup edits
 
 ### 23.4 Rename radius, test adjacency, risk, APIs
 
-- [ ] preview rename blast radius:
-  - [ ] locate definition
-  - [ ] locate all references
-  - [ ] classify references as same-file, same-module/package, cross-module/package, tests
-  - [ ] detect unresolved references needing manual review
-  - [ ] count affected files
-  - [ ] count affected symbols
-- [ ] rename output:
-  - [ ] affected references
-  - [ ] affected files
-  - [ ] risk level
-  - [ ] collision warnings
-  - [ ] manual review flags
-- [ ] estimate test adjacency:
-  - [ ] map tests to symbols where possible
-  - [ ] map changed symbol to direct tests
-  - [ ] map changed symbol to same-file tests
-  - [ ] map changed symbol to same-module tests
-  - [ ] flag no linked tests
-  - [ ] flag weak test adjacency only
-- [ ] test-adjacency output:
-  - [ ] linked tests
-  - [ ] coverage strength
-  - [ ] recommendation flag
-- [ ] classify change risk from:
-  - [ ] public API touched
-  - [ ] test adjacency strength
-  - [ ] cross-module impact
-  - [ ] inbound caller count
-  - [ ] unresolved references
-  - [ ] dependency fan-out
-  - [ ] impacted file count
-- [ ] risk output:
-  - [ ] low / medium / high
-  - [ ] contributing factors
-  - [ ] suggested review focus
-- [ ] create `ReasoningEngine`
-- [ ] implement:
-  - [ ] `analyze_removal`
-  - [ ] `detect_dead_code`
-  - [ ] `score_refactor_safety`
-  - [ ] `check_dependency_removal`
-  - [ ] `preview_rename_radius`
-  - [ ] `classify_change_risk`
-  - [ ] `find_test_adjacency`
-- [ ] tests:
-  - [ ] simple call graph impact
-  - [ ] cyclic graph impact
-  - [ ] dead private function candidate
-  - [ ] exported/public function not flagged
-  - [ ] entrypoint suppression
-  - [ ] rename blast radius same file
-  - [ ] rename blast radius cross module
-  - [ ] dependency removal blocked by reference
-  - [ ] missing test signal for changed symbol
-  - [ ] risk scoring sanity checks
+- [x] preview rename blast radius:
+  - [x] locate definition
+  - [x] locate all references
+  - [x] classify references as same-file, same-module/package, cross-module/package, tests
+  - [x] detect unresolved references needing manual review
+  - [x] count affected files
+  - [x] count affected symbols
+- [x] rename output:
+  - [x] affected references
+  - [x] affected files
+  - [x] risk level
+  - [x] collision warnings
+  - [x] manual review flags
+- [x] estimate test adjacency:
+  - [x] map tests to symbols where possible
+  - [x] map changed symbol to direct tests
+  - [x] map changed symbol to same-file tests
+  - [x] map changed symbol to same-module tests
+  - [x] flag no linked tests
+  - [x] flag weak test adjacency only
+- [x] test-adjacency output:
+  - [x] linked tests
+  - [x] coverage strength
+  - [x] recommendation flag
+- [x] classify change risk from:
+  - [x] public API touched
+  - [x] test adjacency strength
+  - [x] cross-module impact
+  - [x] inbound caller count
+  - [x] unresolved references
+  - [x] dependency fan-out
+  - [x] impacted file count
+- [x] risk output:
+  - [x] low / medium / high
+  - [x] contributing factors
+  - [x] suggested review focus
+- [x] create `ReasoningEngine`
+- [x] implement:
+  - [x] `analyze_removal`
+  - [x] `detect_dead_code`
+  - [x] `score_refactor_safety`
+  - [x] `check_dependency_removal`
+  - [x] `preview_rename_radius`
+  - [x] `classify_change_risk`
+  - [x] `find_test_adjacency`
+- [x] tests:
+  - [x] simple call graph impact
+  - [x] cyclic graph impact
+  - [x] dead private function candidate
+  - [x] exported/public function not flagged
+  - [x] entrypoint suppression
+  - [x] rename blast radius same file
+  - [x] rename blast radius cross module
+  - [x] dependency removal blocked by reference
+  - [x] missing test signal for changed symbol
+  - [x] risk scoring sanity checks
 
 ## Phase 24 — Smart Refactoring Core
 
@@ -1668,139 +1687,139 @@ Deterministic, syntax-aware transforms backed by graph validation. Start with st
 
 ### 24.1 Responsibilities and operation model
 
-- [ ] plan refactor
-- [ ] simulate impact before apply
-- [ ] apply deterministic text/AST edits
-- [ ] validate no collisions
-- [ ] validate references updated
-- [ ] emit patch preview
-- [ ] support dry-run mode
-- [ ] support rollback on validation failure
-- [ ] define `RefactorOperation` enum:
-  - [ ] `RenameSymbol`
-  - [ ] `RemoveDeadCode`
-  - [ ] `CleanImports`
-  - [ ] `ExtractFunctionCandidate`
-- [ ] define `RefactorPlan`
-- [ ] define `RefactorEdit`
-- [ ] define `RefactorPatch`
-- [ ] define `RefactorValidationResult`
-- [ ] define `RefactorDryRunResult`
+- [x] plan refactor
+- [x] simulate impact before apply
+- [x] apply deterministic text/AST edits
+- [x] validate no collisions
+- [x] validate references updated
+- [x] emit patch preview
+- [x] support dry-run mode
+- [x] support rollback on validation failure
+- [x] define `RefactorOperation` enum:
+  - [x] `RenameSymbol`
+  - [x] `RemoveDeadCode`
+  - [x] `CleanImports`
+  - [x] `ExtractFunctionCandidate`
+- [x] define `RefactorPlan`
+- [x] define `RefactorEdit`
+- [x] define `RefactorPatch`
+- [x] define `RefactorValidationResult`
+- [x] define `RefactorDryRunResult`
 
 ### 24.2 Rename symbol
 
-- [ ] require unique definition resolution
-- [ ] require valid new identifier
-- [ ] reject local collision at definition site
-- [ ] reject obvious collision in affected scopes
-- [ ] resolve definition node
-- [ ] gather all references
-- [ ] classify references by certainty
-- [ ] build edit set
-- [ ] simulate rename impact
-- [ ] apply edits in stable order
-- [ ] validate resulting references
-- [ ] rename validation:
-  - [ ] renamed definition exists
-  - [ ] all expected references updated
-  - [ ] no duplicate definitions created
-  - [ ] no blocked write targets
-  - [ ] unresolved/manual-review references reported separately
-- [ ] rename output:
-  - [ ] files changed
-  - [ ] edits count
-  - [ ] manual review list
-  - [ ] patch preview
+- [x] require unique definition resolution
+- [x] require valid new identifier
+- [x] reject local collision at definition site
+- [x] reject obvious collision in affected scopes
+- [x] resolve definition node
+- [x] gather all references
+- [x] classify references by certainty
+- [x] build edit set
+- [x] simulate rename impact
+- [x] apply edits in stable order
+- [x] validate resulting references
+- [x] rename validation:
+  - [x] renamed definition exists
+  - [x] all expected references updated
+  - [x] no duplicate definitions created
+  - [x] no blocked write targets
+  - [x] unresolved/manual-review references reported separately
+- [x] rename output:
+  - [x] files changed
+  - [x] edits count
+  - [x] manual review list
+  - [x] patch preview
 
 ### 24.3 Remove dead code and clean imports
 
-- [ ] remove dead code only when:
-  - [ ] candidate has sufficient confidence
-  - [ ] no protected entrypoint status
-  - [ ] no unresolved high-risk blockers
-- [ ] dead-code removal steps:
-  - [ ] select removable node
-  - [ ] remove symbol span
-  - [ ] clean surrounding whitespace/comments if safe
-  - [ ] run import cleanup on touched file
+- [x] remove dead code only when:
+  - [x] candidate has sufficient confidence
+  - [x] no protected entrypoint status
+  - [x] no unresolved high-risk blockers
+- [x] dead-code removal steps:
+  - [x] select removable node
+  - [x] remove symbol span
+  - [x] clean surrounding whitespace/comments if safe
+  - [x] run import cleanup on touched file
   - [ ] update graph slice
-- [ ] dead-code validation:
-  - [ ] symbol definition removed
-  - [ ] no dangling same-file references
-  - [ ] import cleanup stable
-  - [ ] patch preview generated
-- [ ] import-cleanup steps:
-  - [ ] compute actual symbol usage in file
-  - [ ] compare imports vs usage
-  - [ ] mark unused imports
-  - [ ] remove unused imports
+- [x] dead-code validation:
+  - [x] symbol definition removed
+  - [x] no dangling same-file references
+  - [x] import cleanup stable
+  - [x] patch preview generated
+- [x] import-cleanup steps:
+  - [x] compute actual symbol usage in file
+  - [x] compare imports vs usage
+  - [x] mark unused imports
+  - [x] remove unused imports
   - [ ] normalize spacing/order if formatter integration exists later
-- [ ] import-cleanup validation:
-  - [ ] no used import removed
+- [x] import-cleanup validation:
+  - [x] no used import removed
   - [ ] file remains syntactically valid if parser re-check exists
-  - [ ] no duplicate imports created
+  - [x] no duplicate imports created
 
 ### 24.4 Extract-function detection, simulation, APIs, tests
 
-- [ ] detect extract-function candidates from:
-  - [ ] large contiguous block
-  - [ ] repeated block pattern
-  - [ ] clear input variables
-  - [ ] clear output variables
+- [x] detect extract-function candidates from:
+  - [x] large contiguous block
+  - [x] repeated block pattern
+  - [x] clear input variables
+  - [x] clear output variables
   - [ ] limited side-effect boundaries
-- [ ] score candidates with:
-  - [ ] repeated logic boost
-  - [ ] long block boost
-  - [ ] low free-variable count boost
+- [x] score candidates with:
+  - [x] repeated logic boost
+  - [x] long block boost
+  - [x] low free-variable count boost
   - [ ] low control-flow complexity boost
-- [ ] candidate output:
-  - [ ] span
-  - [ ] proposed inputs
-  - [ ] proposed outputs
-  - [ ] extraction difficulty score
-  - [ ] no auto-apply in initial version
-- [ ] run impact simulation before non-trivial refactor:
-  - [ ] rename blast radius
-  - [ ] removal impact
-  - [ ] safety score
-  - [ ] affected files
-  - [ ] affected symbols
-  - [ ] nearby tests
-  - [ ] unresolved risks
-- [ ] patch and dry-run support:
-  - [ ] generate unified diff preview
-  - [ ] support `--dry-run`
-  - [ ] support per-file edit grouping
-  - [ ] support machine-readable edit output
-  - [ ] support cancellation before apply
-- [ ] create `RefactorEngine`
-- [ ] implement:
-  - [ ] `plan_rename`
-  - [ ] `apply_rename`
-  - [ ] `plan_dead_code_removal`
-  - [ ] `apply_dead_code_removal`
-  - [ ] `plan_import_cleanup`
-  - [ ] `apply_import_cleanup`
-  - [ ] `detect_extract_function_candidates`
-  - [ ] `simulate_refactor_impact`
-- [ ] add safety checks:
-  - [ ] file write safety
-  - [ ] edit overlap detection
+- [x] candidate output:
+  - [x] span
+  - [x] proposed inputs
+  - [x] proposed outputs
+  - [x] extraction difficulty score
+  - [x] no auto-apply in initial version
+- [x] run impact simulation before non-trivial refactor:
+  - [x] rename blast radius
+  - [x] removal impact
+  - [x] safety score
+  - [x] affected files
+  - [x] affected symbols
+  - [x] nearby tests
+  - [x] unresolved risks
+- [x] patch and dry-run support:
+  - [x] generate unified diff preview
+  - [x] support `--dry-run`
+  - [x] support per-file edit grouping
+  - [x] support machine-readable edit output
+  - [x] support cancellation before apply
+- [x] create `RefactorEngine`
+- [x] implement:
+  - [x] `plan_rename`
+  - [x] `apply_rename`
+  - [x] `plan_dead_code_removal`
+  - [x] `apply_dead_code_removal`
+  - [x] `plan_import_cleanup`
+  - [x] `apply_import_cleanup`
+  - [x] `detect_extract_function_candidates`
+  - [x] `simulate_refactor_impact`
+- [x] add safety checks:
+  - [x] file write safety
+  - [x] edit overlap detection
   - [ ] parser revalidation hook later
-  - [ ] reject unsafe overlapping edits
-  - [ ] reject ambiguous rename targets
-  - [ ] reject low-confidence dead code removals by default
-- [ ] tests:
-  - [ ] rename single-file symbol
-  - [ ] rename multi-file symbol
-  - [ ] rename collision rejection
-  - [ ] dead code removal private helper
-  - [ ] protected entrypoint not removed
-  - [ ] unused import removed
-  - [ ] used import preserved
-  - [ ] extract-function candidate detection basic case
-  - [ ] dry-run output stable
-  - [ ] patch output stable
+  - [x] reject unsafe overlapping edits
+  - [x] reject ambiguous rename targets
+  - [x] reject low-confidence dead code removals by default
+- [x] tests:
+  - [x] rename single-file symbol
+  - [x] rename multi-file symbol
+  - [x] rename collision rejection
+  - [x] dead code removal private helper
+  - [x] protected entrypoint not removed
+  - [x] unused import removed
+  - [x] used import preserved
+  - [x] extract-function candidate detection basic case
+  - [x] dry-run output stable
+  - [x] patch output stable
 
 ## Phase 25 — Shared Analysis and Refactor Infrastructure
 
@@ -1808,62 +1827,62 @@ Shared support for explainability, config, CLI surface, JSON contracts, benchmar
 
 ### 25.1 Evidence and explainability
 
-- [ ] attach evidence edges
-- [ ] attach evidence nodes
-- [ ] attach scoring factors
-- [ ] attach uncertainty flags
+- [x] attach evidence edges
+- [x] attach evidence nodes
+- [x] attach scoring factors
+- [x] attach uncertainty flags
 
 ### 25.2 Config surface
 
-- [ ] max context nodes
-- [ ] max context depth
-- [ ] dead code certainty threshold
-- [ ] refactor safety threshold
-- [ ] impact max depth
-- [ ] impact max nodes
-- [ ] dynamic usage allowlist
-- [ ] entrypoint allowlist
-- [ ] framework conventions file
+- [x] max context nodes
+- [x] max context depth
+- [x] dead code certainty threshold
+- [x] refactor safety threshold
+- [x] impact max depth
+- [x] impact max nodes
+- [x] dynamic usage allowlist
+- [x] entrypoint allowlist
+- [x] framework conventions file
 
 ### 25.3 Language support policy
 
-- [ ] phase-2 features degrade gracefully by language
-- [ ] enable rename only where symbol/reference mapping is mature
-- [ ] enable dead code only where inbound usage confidence is acceptable
-- [ ] enable import cleanup only where parser support is reliable
+- [x] phase-2 features degrade gracefully by language
+- [x] enable rename only where symbol/reference mapping is mature
+- [x] enable dead code only where inbound usage confidence is acceptable
+- [x] enable import cleanup only where parser support is reliable
 
 ### 25.4 CLI surfaces
 
-- [ ] `atlas context <symbol>`
-- [ ] `atlas analyze remove <symbol>`
-- [ ] `atlas analyze dead-code`
-- [ ] `atlas analyze safety <symbol>`
-- [ ] `atlas analyze dependency <symbol-or-import>`
-- [ ] `atlas refactor rename <symbol> <new-name> --dry-run`
-- [ ] `atlas refactor remove-dead <symbol> --dry-run`
-- [ ] `atlas refactor clean-imports <file> --dry-run`
+- [x] `atlas context <symbol>`
+- [x] `atlas analyze remove <symbol>`
+- [x] `atlas analyze dead-code`
+- [x] `atlas analyze safety <symbol>`
+- [x] `atlas analyze dependency <symbol-or-import>`
+- [x] `atlas refactor rename <symbol> <new-name> --dry-run`
+- [x] `atlas refactor remove-dead <symbol> --dry-run`
+- [x] `atlas refactor clean-imports <file> --dry-run`
 
 ### 25.5 JSON output, benchmarks, completion criteria
 
-- [ ] stable JSON schema for all analysis commands
-- [ ] stable JSON schema for patch previews
-- [ ] include evidence and certainty fields
+- [x] stable JSON schema for all analysis commands
+- [x] stable JSON schema for patch previews
+- [x] include evidence and certainty fields
 - [ ] benchmark context retrieval latency
 - [ ] benchmark impact analysis latency
 - [ ] benchmark dead-code scan latency
 - [ ] benchmark rename planning latency
 - [ ] benchmark import-cleanup latency
-- [ ] completion criteria:
-  - [ ] context engine resolves and returns bounded symbol/change context
-  - [ ] removal impact analysis works on representative repos
-  - [ ] dead code detection produces useful candidates with suppressions
-  - [ ] refactor safety scoring is implemented and explainable
-  - [ ] dependency removal checks are implemented
-  - [ ] rename blast radius is implemented
-  - [ ] deterministic rename refactor works in dry-run and apply modes
-  - [ ] deterministic dead code removal works for high-confidence candidates
-  - [ ] import cleanup works reliably
-  - [ ] extract-function candidate detection exists even if auto-apply stays out of scope
+- [x] completion criteria:
+  - [x] context engine resolves and returns bounded symbol/change context
+  - [x] removal impact analysis works on representative repos
+  - [x] dead code detection produces useful candidates with suppressions
+  - [x] refactor safety scoring is implemented and explainable
+  - [x] dependency removal checks are implemented
+  - [x] rename blast radius is implemented
+  - [x] deterministic rename refactor works in dry-run and apply modes
+  - [x] deterministic dead code removal works for high-confidence candidates
+  - [x] import cleanup works reliably
+  - [x] extract-function candidate detection exists even if auto-apply stays out of scope
 
 ## Phase 26 — MCP / Agent Integration
 

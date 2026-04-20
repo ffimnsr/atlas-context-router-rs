@@ -2,10 +2,9 @@ use std::fs;
 
 use anyhow::{Context, Result};
 use atlas_core::SearchQuery;
-use atlas_core::model::{
-    ChangeType, ContextIntent, ContextRequest, ContextTarget, ImpactResult, ReviewContext,
-    ReviewImpactOverview, RiskSummary,
-};
+use atlas_core::model::
+    {ChangeType, ContextIntent, ContextRequest, ContextTarget, ImpactResult, ReviewContext,
+    ReviewImpactOverview, RiskSummary,};
 use atlas_engine::{BuildOptions, UpdateOptions, UpdateTarget, build_graph, update_graph};
 use atlas_impact::analyze as advanced_impact;
 use atlas_repo::{DiffTarget, changed_files, collect_files, find_repo_root, repo_relative};
@@ -1306,4 +1305,257 @@ pub fn run_completions(cli: &Cli) -> Result<()> {
     let mut cmd = crate::cli::Cli::command();
     generate(shell, &mut cmd, "atlas", &mut std::io::stdout());
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Analyze — autonomous code reasoning (Phase 25)
+// ---------------------------------------------------------------------------
+
+pub fn run_analyze(cli: &Cli) -> Result<()> {
+    use atlas_reasoning::ReasoningEngine;
+
+    use crate::cli::AnalyzeCommand;
+
+    let repo = resolve_repo(cli)?;
+    let db_path = db_path(cli, &repo);
+    let store =
+        Store::open(&db_path).with_context(|| format!("cannot open database at {db_path}"))?;
+    let engine = ReasoningEngine::new(&store);
+
+    let sub = match &cli.command {
+        Command::Analyze { subcommand } => subcommand,
+        _ => unreachable!(),
+    };
+
+    match sub {
+        AnalyzeCommand::Remove { symbol, max_depth, max_nodes } => {
+            let result = engine
+                .analyze_removal(&[symbol.as_str()], Some(*max_depth), Some(*max_nodes))
+                .with_context(|| format!("removal analysis for `{symbol}` failed"))?;
+
+            if cli.json {
+                print_json("analyze_remove", serde_json::to_value(&result)?)?;
+            } else {
+                println!("Removal impact for: {symbol}");
+                println!("  Seed nodes      : {}", result.seed.len());
+                println!("  Impacted symbols: {}", result.impacted_symbols.len());
+                println!("  Impacted files  : {}", result.impacted_files.len());
+                println!("  Impacted tests  : {}", result.impacted_tests.len());
+                for im in result.impacted_symbols.iter().take(20) {
+                    println!(
+                        "  [{:?}] {} {} (depth {})",
+                        im.impact_class,
+                        im.node.kind.as_str(),
+                        im.node.qualified_name,
+                        im.depth,
+                    );
+                }
+                if !result.uncertainty_flags.is_empty() {
+                    println!("\nUncertainty:");
+                    for flag in &result.uncertainty_flags {
+                        println!("  ! {flag}");
+                    }
+                }
+                if !result.warnings.is_empty() {
+                    println!("\nWarnings:");
+                    for w in &result.warnings {
+                        println!("  [{:?}] {}", w.confidence, w.message);
+                    }
+                }
+            }
+        }
+
+        AnalyzeCommand::DeadCode { allowlist, limit } => {
+            let allowlist_refs: Vec<&str> = allowlist.iter().map(String::as_str).collect();
+            let candidates = engine
+                .detect_dead_code(&allowlist_refs, Some(*limit))
+                .context("dead-code detection failed")?;
+
+            if cli.json {
+                print_json("analyze_dead_code", serde_json::to_value(&candidates)?)?;
+            } else if candidates.is_empty() {
+                println!("No dead-code candidates found.");
+            } else {
+                println!("Dead-code candidates ({}):", candidates.len());
+                for c in &candidates {
+                    println!(
+                        "  [{:?}] {} {} ({}:{})",
+                        c.certainty,
+                        c.node.kind.as_str(),
+                        c.node.qualified_name,
+                        c.node.file_path,
+                        c.node.line_start,
+                    );
+                    for r in &c.reasons {
+                        println!("    - {r}");
+                    }
+                    for b in &c.blockers {
+                        println!("    ! blocker: {b}");
+                    }
+                }
+            }
+        }
+
+        AnalyzeCommand::Safety { symbol } => {
+            let result = engine
+                .score_refactor_safety(symbol)
+                .with_context(|| format!("safety scoring for `{symbol}` failed"))?;
+
+            if cli.json {
+                print_json("analyze_safety", serde_json::to_value(&result)?)?;
+            } else {
+                println!("Refactor safety for: {symbol}");
+                println!("  Score  : {:.3}", result.safety.score);
+                println!("  Band   : {:?}", result.safety.band);
+                println!("  Fan-in : {}", result.fan_in);
+                println!("  Fan-out: {}", result.fan_out);
+                println!("  Tests  : {}", result.linked_test_count);
+                if !result.safety.reasons.is_empty() {
+                    println!("\nReasons:");
+                    for r in &result.safety.reasons {
+                        println!("  - {r}");
+                    }
+                }
+                if !result.safety.suggested_validations.is_empty() {
+                    println!("\nSuggested validations:");
+                    for v in &result.safety.suggested_validations {
+                        println!("  - {v}");
+                    }
+                }
+            }
+        }
+
+        AnalyzeCommand::Dependency { symbol } => {
+            let result = engine
+                .check_dependency_removal(symbol)
+                .with_context(|| format!("dependency check for `{symbol}` failed"))?;
+
+            if cli.json {
+                print_json("analyze_dependency", serde_json::to_value(&result)?)?;
+            } else {
+                let verdict = if result.removable { "REMOVABLE" } else { "BLOCKED" };
+                println!("Dependency check for: {symbol}");
+                println!("  Verdict   : {verdict}");
+                println!("  Confidence: {:?}", result.confidence);
+                println!("  Blocking  : {}", result.blocking_references.len());
+                for n in &result.blocking_references {
+                    println!("  - {} {} ({})", n.kind.as_str(), n.qualified_name, n.file_path);
+                }
+                if !result.suggested_cleanups.is_empty() {
+                    println!("\nSuggested cleanups:");
+                    for s in &result.suggested_cleanups {
+                        println!("  - {s}");
+                    }
+                }
+                if !result.uncertainty_flags.is_empty() {
+                    println!("\nUncertainty:");
+                    for flag in &result.uncertainty_flags {
+                        println!("  ! {flag}");
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Refactor — deterministic transforms (Phase 25)
+// ---------------------------------------------------------------------------
+
+pub fn run_refactor(cli: &Cli) -> Result<()> {
+    use atlas_refactor::RefactorEngine;
+
+    use crate::cli::RefactorCommand;
+
+    let repo = resolve_repo(cli)?;
+    let repo_root_path =
+        find_repo_root(Utf8Path::new(&repo)).context("cannot find git repo root")?;
+    let repo_root = repo_root_path.as_std_path();
+    let db_path = db_path(cli, &repo);
+    let store =
+        Store::open(&db_path).with_context(|| format!("cannot open database at {db_path}"))?;
+    let engine = RefactorEngine::new(&store, repo_root);
+
+    let sub = match &cli.command {
+        Command::Refactor { subcommand } => subcommand,
+        _ => unreachable!(),
+    };
+
+    match sub {
+        RefactorCommand::Rename { symbol, new_name, dry_run } => {
+            let plan = engine
+                .plan_rename(symbol, new_name)
+                .with_context(|| format!("rename plan for `{symbol}` → `{new_name}` failed"))?;
+            let result = engine
+                .apply_rename(&plan, *dry_run)
+                .context("apply rename failed")?;
+
+            if cli.json {
+                print_json("refactor_rename", serde_json::to_value(&result)?)?;
+            } else {
+                print_refactor_result(&result, *dry_run);
+            }
+        }
+
+        RefactorCommand::RemoveDead { symbol, dry_run } => {
+            let plan = engine
+                .plan_dead_code_removal(symbol)
+                .with_context(|| format!("remove-dead plan for `{symbol}` failed"))?;
+            let result = engine
+                .apply_dead_code_removal(&plan, *dry_run)
+                .context("apply dead-code removal failed")?;
+
+            if cli.json {
+                print_json("refactor_remove_dead", serde_json::to_value(&result)?)?;
+            } else {
+                print_refactor_result(&result, *dry_run);
+            }
+        }
+
+        RefactorCommand::CleanImports { file, dry_run } => {
+            let plan = engine
+                .plan_import_cleanup(file)
+                .with_context(|| format!("import-cleanup plan for `{file}` failed"))?;
+            let result = engine
+                .apply_import_cleanup(&plan, *dry_run)
+                .context("apply import cleanup failed")?;
+
+            if cli.json {
+                print_json("refactor_clean_imports", serde_json::to_value(&result)?)?;
+            } else {
+                print_refactor_result(&result, *dry_run);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn print_refactor_result(result: &atlas_core::RefactorDryRunResult, dry_run: bool) {
+    let mode = if dry_run { "dry-run" } else { "applied" };
+    println!("Refactor ({mode}):");
+    println!("  Files changed : {}", result.files_changed);
+    println!("  Edits         : {}", result.edit_count);
+    println!("  Safety        : {:?}", result.plan.estimated_safety);
+    if !result.plan.manual_review.is_empty() {
+        println!("\nManual review required:");
+        for item in &result.plan.manual_review {
+            println!("  ! {item}");
+        }
+    }
+    if !result.validation.warnings.is_empty() {
+        println!("\nValidation warnings:");
+        for w in &result.validation.warnings {
+            println!("  ~ {w}");
+        }
+    }
+    if !result.patches.is_empty() {
+        println!("\nPatches:");
+        for p in &result.patches {
+            println!("--- {}", p.file_path);
+            println!("{}", p.unified_diff);
+        }
+    }
 }

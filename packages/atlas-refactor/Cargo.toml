@@ -1,0 +1,16 @@
+[package]
+name = "atlas-refactor"
+version = "0.1.0"
+edition = "2024"
+description = "Smart refactoring core for Atlas — deterministic rename, dead-code removal, import cleanup, and extract-function detection"
+
+[dependencies]
+atlas-core.workspace = true
+atlas-store-sqlite = { path = "../atlas-store-sqlite" }
+tracing.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+atlas-core.workspace = true
+serde_json.workspace = true
+tempfile = "3"

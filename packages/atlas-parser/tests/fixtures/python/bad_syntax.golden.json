@@ -1,0 +1,55 @@
+{
+  "edges": [
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/python/bad_syntax.py",
+      "id": 0,
+      "kind": "contains",
+      "line": 1,
+      "source_qn": "fixtures/python/bad_syntax.py",
+      "target_qn": "fixtures/python/bad_syntax.py::fn::broken"
+    }
+  ],
+  "hash": "fixture-hash",
+  "language": "python",
+  "nodes": [
+    {
+      "extra_json": null,
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/python/bad_syntax.py",
+      "id": 0,
+      "is_test": false,
+      "kind": "file",
+      "language": "python",
+      "line_end": 4,
+      "line_start": 1,
+      "modifiers": null,
+      "name": "bad_syntax.py",
+      "params": null,
+      "parent_name": null,
+      "qualified_name": "fixtures/python/bad_syntax.py",
+      "return_type": null
+    },
+    {
+      "extra_json": null,
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/python/bad_syntax.py",
+      "id": 0,
+      "is_test": false,
+      "kind": "function",
+      "language": "python",
+      "line_end": 3,
+      "line_start": 1,
+      "modifiers": null,
+      "name": "broken",
+      "params": "(value: int)",
+      "parent_name": "fixtures/python/bad_syntax.py",
+      "qualified_name": "fixtures/python/bad_syntax.py::fn::broken",
+      "return_type": "int"
+    }
+  ],
+  "path": "fixtures/python/bad_syntax.py",
+  "size": 73
+}

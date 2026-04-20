@@ -250,6 +250,99 @@ pub enum Command {
         #[arg(long)]
         neighbors: bool,
     },
+
+    /// Analyse a symbol or the whole graph for removal impact, dead code, safety, or dependencies.
+    Analyze {
+        #[command(subcommand)]
+        subcommand: AnalyzeCommand,
+    },
+
+    /// Plan or apply deterministic refactoring operations.
+    Refactor {
+        #[command(subcommand)]
+        subcommand: RefactorCommand,
+    },
+}
+
+/// Sub-commands for `atlas analyze`.
+#[derive(Debug, Subcommand)]
+pub enum AnalyzeCommand {
+    /// Show the blast radius of removing a symbol from the codebase.
+    Remove {
+        /// Fully-qualified name of the symbol to analyse.
+        symbol: String,
+
+        /// Maximum BFS traversal depth.
+        #[arg(long, default_value_t = 3)]
+        max_depth: u32,
+
+        /// Maximum number of impacted nodes.
+        #[arg(long, default_value_t = 200)]
+        max_nodes: usize,
+    },
+
+    /// List dead-code candidates in the graph.
+    #[command(name = "dead-code")]
+    DeadCode {
+        /// Additional qualified names to suppress (treat as live).
+        #[arg(long, num_args = 1..)]
+        allowlist: Vec<String>,
+
+        /// Maximum number of candidates to return.
+        #[arg(long, default_value_t = 100)]
+        limit: usize,
+    },
+
+    /// Score refactor safety for a symbol.
+    Safety {
+        /// Fully-qualified name of the symbol to score.
+        symbol: String,
+    },
+
+    /// Check whether a symbol or import dependency can be removed.
+    Dependency {
+        /// Fully-qualified name of the symbol or import to check.
+        symbol: String,
+    },
+}
+
+/// Sub-commands for `atlas refactor`.
+#[derive(Debug, Subcommand)]
+pub enum RefactorCommand {
+    /// Rename a symbol across all reference sites.
+    Rename {
+        /// Fully-qualified name of the symbol to rename.
+        symbol: String,
+
+        /// New simple name for the symbol.
+        new_name: String,
+
+        /// Preview edits without writing any files.
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// Remove a dead-code symbol from the codebase.
+    #[command(name = "remove-dead")]
+    RemoveDead {
+        /// Fully-qualified name of the dead-code symbol to remove.
+        symbol: String,
+
+        /// Preview edits without writing any files.
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// Remove unused imports from a source file.
+    #[command(name = "clean-imports")]
+    CleanImports {
+        /// Repo-relative path to the source file.
+        file: String,
+
+        /// Preview edits without writing any files.
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[cfg(test)]

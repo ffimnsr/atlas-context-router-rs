@@ -1,0 +1,70 @@
+{
+  "edges": [
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/typescript/bad_syntax.ts",
+      "id": 0,
+      "kind": "contains",
+      "line": 1,
+      "source_qn": "fixtures/typescript/bad_syntax.ts",
+      "target_qn": "fixtures/typescript/bad_syntax.ts::fn::broken"
+    },
+    {
+      "confidence": 0.30000001192092896,
+      "confidence_tier": "text",
+      "extra_json": {
+        "callee_name": "toUpperCase",
+        "callee_text": "name.toUpperCase",
+        "receiver_text": "name"
+      },
+      "file_path": "fixtures/typescript/bad_syntax.ts",
+      "id": 0,
+      "kind": "calls",
+      "line": 3,
+      "source_qn": "fixtures/typescript/bad_syntax.ts::fn::broken",
+      "target_qn": "name.toUpperCase"
+    }
+  ],
+  "hash": "fixture-hash",
+  "language": "typescript",
+  "nodes": [
+    {
+      "extra_json": null,
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/typescript/bad_syntax.ts",
+      "id": 0,
+      "is_test": false,
+      "kind": "file",
+      "language": "typescript",
+      "line_end": 4,
+      "line_start": 1,
+      "modifiers": null,
+      "name": "bad_syntax.ts",
+      "params": null,
+      "parent_name": null,
+      "qualified_name": "fixtures/typescript/bad_syntax.ts",
+      "return_type": null
+    },
+    {
+      "extra_json": null,
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/typescript/bad_syntax.ts",
+      "id": 0,
+      "is_test": false,
+      "kind": "function",
+      "language": "typescript",
+      "line_end": 3,
+      "line_start": 1,
+      "modifiers": null,
+      "name": "broken",
+      "params": "(name: string)",
+      "parent_name": "fixtures/typescript/bad_syntax.ts",
+      "qualified_name": "fixtures/typescript/bad_syntax.ts::fn::broken",
+      "return_type": ": string"
+    }
+  ],
+  "path": "fixtures/typescript/bad_syntax.ts",
+  "size": 103
+}

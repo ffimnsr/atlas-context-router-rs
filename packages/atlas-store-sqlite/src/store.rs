@@ -4,7 +4,7 @@ use atlas_core::{
     AtlasError, EdgeKind, GraphStats, ImpactResult, Node, NodeId, NodeKind, ParsedFile, Result,
     ScoredNode, SearchQuery,
 };
-use rusqlite::{Connection, OpenFlags, Row, params};
+use rusqlite::{params, Connection, OpenFlags, Row};
 use tracing::{debug, info};
 
 use crate::migrations::MIGRATIONS;
@@ -1668,6 +1668,111 @@ impl Store {
             .collect();
         Ok(rows)
     }
+
+    /// All edges targeting `qname` (inbound), any kind, paired with the source
+    /// node. Bounded by `limit`. Supports dead-code and fan-in analysis.
+    pub fn inbound_edges(
+        &self,
+        qname: &str,
+        limit: usize,
+    ) -> Result<Vec<(Node, atlas_core::Edge)>> {
+        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT n.id, n.kind, n.name, n.qualified_name, n.file_path,
+                        n.line_start, n.line_end, n.language, n.parent_name,
+                        n.params, n.return_type, n.modifiers, n.is_test,
+                        n.file_hash, n.extra_json,
+                        e.id, e.kind, e.source_qualified, e.target_qualified,
+                        e.file_path, e.line, e.confidence, e.confidence_tier, e.extra_json
+                 FROM edges e
+                 JOIN nodes n ON n.qualified_name = e.source_qualified
+                 WHERE e.target_qualified = ?1
+                 ORDER BY e.confidence DESC, e.source_qualified
+                 LIMIT ?2",
+            )
+            .map_err(db_err)?;
+        let rows = stmt
+            .query_map(params![qname, limit as i64], row_to_node_and_edge)
+            .map_err(db_err)?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(rows)
+    }
+
+    /// All edges sourcing from `qname` (outbound), any kind, paired with the
+    /// target node. Bounded by `limit`. Supports fan-out analysis.
+    pub fn outbound_edges(
+        &self,
+        qname: &str,
+        limit: usize,
+    ) -> Result<Vec<(Node, atlas_core::Edge)>> {
+        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT n.id, n.kind, n.name, n.qualified_name, n.file_path,
+                        n.line_start, n.line_end, n.language, n.parent_name,
+                        n.params, n.return_type, n.modifiers, n.is_test,
+                        n.file_hash, n.extra_json,
+                        e.id, e.kind, e.source_qualified, e.target_qualified,
+                        e.file_path, e.line, e.confidence, e.confidence_tier, e.extra_json
+                 FROM edges e
+                 JOIN nodes n ON n.qualified_name = e.target_qualified
+                 WHERE e.source_qualified = ?1
+                 ORDER BY e.confidence DESC, e.target_qualified
+                 LIMIT ?2",
+            )
+            .map_err(db_err)?;
+        let rows = stmt
+            .query_map(params![qname, limit as i64], row_to_node_and_edge)
+            .map_err(db_err)?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(rows)
+    }
+
+    /// Return nodes that are dead-code candidates: no inbound semantic edges
+    /// (calls, references, imports, extends, implements), not a test, not
+    /// public/exported, and of a semantic kind (function, method, class, etc.).
+    ///
+    /// The caller is responsible for allowlist suppression and framework checks.
+    /// Bounded by `limit`.
+    pub fn dead_code_candidates(&self, limit: usize) -> Result<Vec<Node>> {
+        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT n.id, n.kind, n.name, n.qualified_name, n.file_path,
+                    n.line_start, n.line_end, n.language, n.parent_name,
+                    n.params, n.return_type, n.modifiers, n.is_test,
+                    n.file_hash, n.extra_json
+             FROM nodes n
+             WHERE n.is_test = 0
+               AND n.kind IN ('function','method','class','struct','enum',
+                              'trait','interface','constant','variable')
+               AND NOT (
+                   COALESCE(n.modifiers,'') LIKE '%pub%'
+                   OR COALESCE(n.modifiers,'') LIKE '%export%'
+                   OR COALESCE(n.modifiers,'') LIKE '%public%'
+               )
+               AND NOT EXISTS (
+                   SELECT 1 FROM edges e
+                   WHERE e.target_qualified = n.qualified_name
+                     AND e.kind IN ('calls','references','imports','extends','implements')
+               )
+             ORDER BY n.file_path, n.line_start
+             LIMIT ?1",
+            )
+            .map_err(db_err)?;
+        let rows = stmt
+            .query_map(params![limit as i64], row_to_node)
+            .map_err(db_err)?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(rows)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1682,9 +1787,7 @@ impl Store {
 ///   file_hash, extra_json  (indices 0-14)
 /// Edge columns: id, kind, source_qualified, target_qualified, file_path,
 ///   line, confidence, confidence_tier, extra_json  (indices 15-23)
-fn row_to_node_and_edge(
-    row: &rusqlite::Row<'_>,
-) -> rusqlite::Result<(Node, atlas_core::Edge)> {
+fn row_to_node_and_edge(row: &rusqlite::Row<'_>) -> rusqlite::Result<(Node, atlas_core::Edge)> {
     // -- node --
     let node_kind_str: String = row.get(1)?;
     let node_kind = node_kind_str
@@ -1914,6 +2017,9 @@ fn do_replace_file_graph(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::{BTreeMap, BTreeSet};
+    use std::time::Duration;
+
     use atlas_core::{Edge, EdgeKind, Node, NodeId, NodeKind, ParsedFile, SearchQuery};
 
     use super::*;
@@ -1924,6 +2030,44 @@ mod tests {
         let mut store = Store { conn };
         store.migrate().unwrap();
         store
+    }
+
+    fn open_file_backed() -> (tempfile::TempDir, String, Store) {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.sqlite");
+        let path = db_path.to_str().unwrap().to_string();
+        let store = Store::open(&path).unwrap();
+        (dir, path, store)
+    }
+
+    fn table_columns(conn: &Connection, table: &str) -> Vec<String> {
+        let sql = format!("PRAGMA table_info('{table}')");
+        let mut stmt = conn.prepare(&sql).unwrap();
+        stmt.query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .unwrap()
+    }
+
+    fn schema_indexes(conn: &Connection) -> BTreeSet<String> {
+        let mut stmt = conn
+            .prepare(
+                "SELECT name
+                 FROM sqlite_master
+                 WHERE type = 'index'
+                   AND sql IS NOT NULL
+                   AND name NOT LIKE 'sqlite_%'
+                 ORDER BY name",
+            )
+            .unwrap();
+        stmt.query_map([], |row| row.get::<_, String>(0))
+            .unwrap()
+            .collect::<std::result::Result<BTreeSet<_>, _>>()
+            .unwrap()
+    }
+
+    fn cols(names: &[&str]) -> Vec<String> {
+        names.iter().map(|name| (*name).to_string()).collect()
     }
 
     fn make_node(kind: NodeKind, name: &str, qn: &str, file_path: &str, language: &str) -> Node {
@@ -1988,6 +2132,141 @@ mod tests {
             .collect::<std::result::Result<Vec<_>, _>>()
             .unwrap();
         assert_eq!(names, vec!["communities", "flow_memberships", "flows"]);
+    }
+
+    #[test]
+    fn migration_schema_matches_golden_layout() {
+        let store = open_in_memory();
+        let expected_columns = BTreeMap::from([
+            ("metadata".to_string(), cols(&["key", "value"])),
+            (
+                "files".to_string(),
+                cols(&["path", "language", "hash", "size", "indexed_at"]),
+            ),
+            (
+                "nodes".to_string(),
+                cols(&[
+                    "id",
+                    "kind",
+                    "name",
+                    "qualified_name",
+                    "file_path",
+                    "line_start",
+                    "line_end",
+                    "language",
+                    "parent_name",
+                    "params",
+                    "return_type",
+                    "modifiers",
+                    "is_test",
+                    "file_hash",
+                    "extra_json",
+                ]),
+            ),
+            (
+                "edges".to_string(),
+                cols(&[
+                    "id",
+                    "kind",
+                    "source_qualified",
+                    "target_qualified",
+                    "file_path",
+                    "line",
+                    "confidence",
+                    "confidence_tier",
+                    "extra_json",
+                ]),
+            ),
+            (
+                "nodes_fts".to_string(),
+                cols(&[
+                    "qualified_name",
+                    "name",
+                    "kind",
+                    "file_path",
+                    "language",
+                    "params",
+                    "return_type",
+                    "modifiers",
+                ]),
+            ),
+            (
+                "flows".to_string(),
+                cols(&[
+                    "id",
+                    "name",
+                    "kind",
+                    "description",
+                    "extra_json",
+                    "created_at",
+                    "updated_at",
+                ]),
+            ),
+            (
+                "flow_memberships".to_string(),
+                cols(&[
+                    "flow_id",
+                    "node_qualified_name",
+                    "position",
+                    "role",
+                    "extra_json",
+                ]),
+            ),
+            (
+                "communities".to_string(),
+                cols(&[
+                    "id",
+                    "name",
+                    "algorithm",
+                    "level",
+                    "parent_community_id",
+                    "extra_json",
+                    "created_at",
+                    "updated_at",
+                ]),
+            ),
+            (
+                "retrieval_chunks".to_string(),
+                cols(&["id", "node_qn", "chunk_idx", "text", "embedding"]),
+            ),
+        ]);
+
+        let actual_columns = expected_columns
+            .keys()
+            .map(|table| ((*table).to_string(), table_columns(&store.conn, table)))
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(actual_columns, expected_columns);
+
+        let expected_indexes = BTreeSet::from([
+            "idx_chunks_has_embedding".to_string(),
+            "idx_chunks_node_qn".to_string(),
+            "idx_communities_algorithm".to_string(),
+            "idx_communities_parent".to_string(),
+            "idx_edges_file_path".to_string(),
+            "idx_edges_kind".to_string(),
+            "idx_edges_source".to_string(),
+            "idx_edges_target".to_string(),
+            "idx_flow_memberships_flow_position".to_string(),
+            "idx_flow_memberships_node_qualified_name".to_string(),
+            "idx_flows_kind".to_string(),
+            "idx_nodes_file_path".to_string(),
+            "idx_nodes_kind".to_string(),
+            "idx_nodes_language".to_string(),
+            "idx_nodes_qualified_name".to_string(),
+        ]);
+        assert_eq!(schema_indexes(&store.conn), expected_indexes);
+
+        let nodes_fts_sql: String = store
+            .conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'nodes_fts'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(nodes_fts_sql.contains("USING fts5"));
+        assert!(nodes_fts_sql.contains("content='nodes'"));
+        assert!(nodes_fts_sql.contains("content_rowid='id'"));
     }
 
     #[test]
@@ -2400,12 +2679,10 @@ mod tests {
 
         let result = store.impact_radius(&["a.rs"], 3, 200).unwrap();
         assert_eq!(result.changed_nodes.len(), 1);
-        assert!(
-            result
-                .impacted_nodes
-                .iter()
-                .any(|n| n.qualified_name == "b.rs::fn::b")
-        );
+        assert!(result
+            .impacted_nodes
+            .iter()
+            .any(|n| n.qualified_name == "b.rs::fn::b"));
         assert!(result.impacted_files.contains(&"b.rs".to_string()));
     }
 
@@ -2678,11 +2955,9 @@ mod tests {
             ..Default::default()
         };
         let results = store.search(&q).unwrap();
-        assert!(
-            results
-                .iter()
-                .all(|r| matches!(r.node.kind, NodeKind::Struct))
-        );
+        assert!(results
+            .iter()
+            .all(|r| matches!(r.node.kind, NodeKind::Struct)));
     }
 
     #[test]
@@ -2996,7 +3271,268 @@ mod tests {
         assert!(results.iter().all(|r| r.node.is_test));
     }
 
-    // --- transaction rollback on schema mismatch is covered by migration_creates_schema ---
+    #[test]
+    fn replace_file_graph_rolls_back_on_insert_error() {
+        let mut store = open_in_memory();
+        let original_node = make_node(
+            NodeKind::Function,
+            "stable",
+            "a.rs::fn::stable",
+            "a.rs",
+            "rust",
+        );
+        let original_edge = make_edge(
+            EdgeKind::Calls,
+            "a.rs::fn::stable",
+            "a.rs::fn::stable",
+            "a.rs",
+        );
+        store
+            .replace_file_graph(
+                "a.rs",
+                "old-hash",
+                Some("rust"),
+                Some(10),
+                std::slice::from_ref(&original_node),
+                std::slice::from_ref(&original_edge),
+            )
+            .unwrap();
+
+        store
+            .conn
+            .execute_batch(
+                "CREATE TEMP TRIGGER fail_replace_file_graph
+                 BEFORE INSERT ON nodes
+                 WHEN NEW.qualified_name = 'a.rs::fn::broken'
+                 BEGIN
+                     SELECT RAISE(ABORT, 'simulated node insert failure');
+                 END;",
+            )
+            .unwrap();
+
+        let err = store
+            .replace_file_graph(
+                "a.rs",
+                "new-hash",
+                Some("rust"),
+                Some(20),
+                &[make_node(
+                    NodeKind::Function,
+                    "broken",
+                    "a.rs::fn::broken",
+                    "a.rs",
+                    "rust",
+                )],
+                &[],
+            )
+            .unwrap_err();
+        assert!(
+            matches!(err, AtlasError::Db(msg) if msg.contains("simulated node insert failure"))
+        );
+
+        store
+            .conn
+            .execute_batch("DROP TRIGGER fail_replace_file_graph")
+            .unwrap();
+
+        let nodes = store.nodes_by_file("a.rs").unwrap();
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].qualified_name, original_node.qualified_name);
+
+        let edges = store.edges_by_file("a.rs").unwrap();
+        assert_eq!(edges.len(), 1);
+        assert_eq!(edges[0].source_qn, original_edge.source_qn);
+        assert_eq!(edges[0].target_qn, original_edge.target_qn);
+
+        let stored_hash: String = store
+            .conn
+            .query_row("SELECT hash FROM files WHERE path = 'a.rs'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(stored_hash, "old-hash");
+
+        let results = store
+            .search(&SearchQuery {
+                text: "stable".to_string(),
+                limit: 10,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].node.qualified_name, "a.rs::fn::stable");
+    }
+
+    #[test]
+    fn replace_files_transactional_rolls_back_all_files_on_error() {
+        let mut store = open_in_memory();
+        store
+            .conn
+            .execute_batch(
+                "CREATE TEMP TRIGGER fail_replace_files_transactional
+                 BEFORE INSERT ON nodes
+                 WHEN NEW.file_path = 'src/b.rs'
+                 BEGIN
+                     SELECT RAISE(ABORT, 'simulated batch insert failure');
+                 END;",
+            )
+            .unwrap();
+
+        let files = vec![
+            ParsedFile {
+                path: "src/a.rs".to_string(),
+                language: Some("rust".to_string()),
+                hash: "h1".to_string(),
+                size: Some(10),
+                nodes: vec![make_node(
+                    NodeKind::Function,
+                    "good",
+                    "src/a.rs::fn::good",
+                    "src/a.rs",
+                    "rust",
+                )],
+                edges: vec![],
+            },
+            ParsedFile {
+                path: "src/b.rs".to_string(),
+                language: Some("rust".to_string()),
+                hash: "h2".to_string(),
+                size: Some(20),
+                nodes: vec![make_node(
+                    NodeKind::Function,
+                    "bad",
+                    "src/b.rs::fn::bad",
+                    "src/b.rs",
+                    "rust",
+                )],
+                edges: vec![],
+            },
+        ];
+
+        let err = store.replace_files_transactional(&files).unwrap_err();
+        assert!(
+            matches!(err, AtlasError::Db(msg) if msg.contains("simulated batch insert failure"))
+        );
+
+        store
+            .conn
+            .execute_batch("DROP TRIGGER fail_replace_files_transactional")
+            .unwrap();
+
+        let stats = store.stats().unwrap();
+        assert_eq!(stats.file_count, 0);
+        assert_eq!(stats.node_count, 0);
+        assert_eq!(stats.edge_count, 0);
+        assert!(store.nodes_by_file("src/a.rs").unwrap().is_empty());
+        assert!(store.nodes_by_file("src/b.rs").unwrap().is_empty());
+    }
+
+    #[test]
+    fn replace_file_graph_reports_lock_contention() {
+        let (_dir, path, lock_holder) = open_file_backed();
+        let mut blocked_writer = Store::open(&path).unwrap();
+        lock_holder
+            .conn
+            .busy_timeout(Duration::from_millis(50))
+            .unwrap();
+        blocked_writer
+            .conn
+            .busy_timeout(Duration::from_millis(50))
+            .unwrap();
+
+        lock_holder.conn.execute_batch("BEGIN IMMEDIATE").unwrap();
+
+        let err = blocked_writer
+            .replace_file_graph(
+                "locked.rs",
+                "h1",
+                Some("rust"),
+                Some(10),
+                &[make_node(
+                    NodeKind::Function,
+                    "locked",
+                    "locked.rs::fn::locked",
+                    "locked.rs",
+                    "rust",
+                )],
+                &[],
+            )
+            .unwrap_err();
+        assert!(matches!(err, AtlasError::Db(msg) if msg.contains("locked")));
+
+        lock_holder.conn.execute_batch("ROLLBACK").unwrap();
+        blocked_writer
+            .replace_file_graph(
+                "locked.rs",
+                "h1",
+                Some("rust"),
+                Some(10),
+                &[make_node(
+                    NodeKind::Function,
+                    "locked",
+                    "locked.rs::fn::locked",
+                    "locked.rs",
+                    "rust",
+                )],
+                &[],
+            )
+            .unwrap();
+        assert_eq!(blocked_writer.nodes_by_file("locked.rs").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn replace_files_transactional_reports_lock_contention() {
+        let (_dir, path, lock_holder) = open_file_backed();
+        let mut blocked_writer = Store::open(&path).unwrap();
+        lock_holder
+            .conn
+            .busy_timeout(Duration::from_millis(50))
+            .unwrap();
+        blocked_writer
+            .conn
+            .busy_timeout(Duration::from_millis(50))
+            .unwrap();
+
+        lock_holder.conn.execute_batch("BEGIN IMMEDIATE").unwrap();
+
+        let err = blocked_writer
+            .replace_files_transactional(&[ParsedFile {
+                path: "locked.rs".to_string(),
+                language: Some("rust".to_string()),
+                hash: "h1".to_string(),
+                size: Some(10),
+                nodes: vec![make_node(
+                    NodeKind::Function,
+                    "locked_batch",
+                    "locked.rs::fn::locked_batch",
+                    "locked.rs",
+                    "rust",
+                )],
+                edges: vec![],
+            }])
+            .unwrap_err();
+        assert!(matches!(err, AtlasError::Db(msg) if msg.contains("locked")));
+
+        lock_holder.conn.execute_batch("ROLLBACK").unwrap();
+        blocked_writer
+            .replace_files_transactional(&[ParsedFile {
+                path: "locked.rs".to_string(),
+                language: Some("rust".to_string()),
+                hash: "h1".to_string(),
+                size: Some(10),
+                nodes: vec![make_node(
+                    NodeKind::Function,
+                    "locked_batch",
+                    "locked.rs::fn::locked_batch",
+                    "locked.rs",
+                    "rust",
+                )],
+                edges: vec![],
+            }])
+            .unwrap();
+        assert_eq!(blocked_writer.nodes_by_file("locked.rs").unwrap().len(), 1);
+    }
+
     // --- NodeId type ---------------------------------------------------------
 
     #[test]
@@ -3383,11 +3919,35 @@ mod tests {
 
     fn setup_call_graph(store: &mut Store) {
         // a.rs: caller → b.rs: callee
-        let caller = make_node(NodeKind::Function, "caller", "a.rs::fn::caller", "a.rs", "rust");
-        let callee = make_node(NodeKind::Function, "callee", "b.rs::fn::callee", "b.rs", "rust");
-        let edge = make_edge(EdgeKind::Calls, "a.rs::fn::caller", "b.rs::fn::callee", "a.rs");
+        let caller = make_node(
+            NodeKind::Function,
+            "caller",
+            "a.rs::fn::caller",
+            "a.rs",
+            "rust",
+        );
+        let callee = make_node(
+            NodeKind::Function,
+            "callee",
+            "b.rs::fn::callee",
+            "b.rs",
+            "rust",
+        );
+        let edge = make_edge(
+            EdgeKind::Calls,
+            "a.rs::fn::caller",
+            "b.rs::fn::callee",
+            "a.rs",
+        );
         store
-            .replace_file_graph("a.rs", "h1", Some("rust"), None, &[caller], std::slice::from_ref(&edge))
+            .replace_file_graph(
+                "a.rs",
+                "h1",
+                Some("rust"),
+                None,
+                &[caller],
+                std::slice::from_ref(&edge),
+            )
             .unwrap();
         store
             .replace_file_graph("b.rs", "h2", Some("rust"), None, &[callee], &[])
@@ -3426,8 +3986,20 @@ mod tests {
     #[test]
     fn nodes_by_name_multiple_matches() {
         let mut store = open_in_memory();
-        let n1 = make_node(NodeKind::Function, "process", "a.rs::fn::process", "a.rs", "rust");
-        let n2 = make_node(NodeKind::Function, "process", "b.rs::fn::process", "b.rs", "rust");
+        let n1 = make_node(
+            NodeKind::Function,
+            "process",
+            "a.rs::fn::process",
+            "a.rs",
+            "rust",
+        );
+        let n2 = make_node(
+            NodeKind::Function,
+            "process",
+            "b.rs::fn::process",
+            "b.rs",
+            "rust",
+        );
         store
             .replace_file_graph("a.rs", "h1", None, None, &[n1], &[])
             .unwrap();
@@ -3441,8 +4013,20 @@ mod tests {
     #[test]
     fn nodes_by_name_limit_respected() {
         let mut store = open_in_memory();
-        let n1 = make_node(NodeKind::Function, "process", "a.rs::fn::process", "a.rs", "rust");
-        let n2 = make_node(NodeKind::Function, "process", "b.rs::fn::process", "b.rs", "rust");
+        let n1 = make_node(
+            NodeKind::Function,
+            "process",
+            "a.rs::fn::process",
+            "a.rs",
+            "rust",
+        );
+        let n2 = make_node(
+            NodeKind::Function,
+            "process",
+            "b.rs::fn::process",
+            "b.rs",
+            "rust",
+        );
         store
             .replace_file_graph("a.rs", "h1", None, None, &[n1], &[])
             .unwrap();
@@ -3522,9 +4106,26 @@ mod tests {
     // --- import_neighbors ----------------------------------------------------
 
     fn setup_import_graph(store: &mut Store) {
-        let importer = make_node(NodeKind::Module, "mod_a", "a.rs::mod::mod_a", "a.rs", "rust");
-        let importee = make_node(NodeKind::Module, "mod_b", "b.rs::mod::mod_b", "b.rs", "rust");
-        let edge = make_edge(EdgeKind::Imports, "a.rs::mod::mod_a", "b.rs::mod::mod_b", "a.rs");
+        let importer = make_node(
+            NodeKind::Module,
+            "mod_a",
+            "a.rs::mod::mod_a",
+            "a.rs",
+            "rust",
+        );
+        let importee = make_node(
+            NodeKind::Module,
+            "mod_b",
+            "b.rs::mod::mod_b",
+            "b.rs",
+            "rust",
+        );
+        let edge = make_edge(
+            EdgeKind::Imports,
+            "a.rs::mod::mod_a",
+            "b.rs::mod::mod_b",
+            "a.rs",
+        );
         store
             .replace_file_graph("a.rs", "h1", None, None, &[importer], &[edge])
             .unwrap();
@@ -3608,11 +4209,19 @@ mod tests {
     fn containment_siblings_no_parent_returns_empty() {
         let mut store = open_in_memory();
         // node with no parent_name
-        let n = make_node(NodeKind::Function, "standalone", "a.rs::fn::standalone", "a.rs", "rust");
+        let n = make_node(
+            NodeKind::Function,
+            "standalone",
+            "a.rs::fn::standalone",
+            "a.rs",
+            "rust",
+        );
         store
             .replace_file_graph("a.rs", "h1", None, None, &[n], &[])
             .unwrap();
-        let siblings = store.containment_siblings("a.rs::fn::standalone", 10).unwrap();
+        let siblings = store
+            .containment_siblings("a.rs::fn::standalone", 10)
+            .unwrap();
         assert!(siblings.is_empty());
     }
 
@@ -3626,10 +4235,27 @@ mod tests {
     // --- test_neighbors ------------------------------------------------------
 
     fn setup_test_graph(store: &mut Store) {
-        let src = make_node(NodeKind::Function, "parse", "a.rs::fn::parse", "a.rs", "rust");
-        let mut test_node = make_node(NodeKind::Test, "test_parse", "tests.rs::test::test_parse", "tests.rs", "rust");
+        let src = make_node(
+            NodeKind::Function,
+            "parse",
+            "a.rs::fn::parse",
+            "a.rs",
+            "rust",
+        );
+        let mut test_node = make_node(
+            NodeKind::Test,
+            "test_parse",
+            "tests.rs::test::test_parse",
+            "tests.rs",
+            "rust",
+        );
         test_node.is_test = true;
-        let edge = make_edge(EdgeKind::Tests, "tests.rs::test::test_parse", "a.rs::fn::parse", "tests.rs");
+        let edge = make_edge(
+            EdgeKind::Tests,
+            "tests.rs::test::test_parse",
+            "a.rs::fn::parse",
+            "tests.rs",
+        );
         store
             .replace_file_graph("a.rs", "h1", None, None, &[src], &[])
             .unwrap();
@@ -3655,7 +4281,9 @@ mod tests {
         let mut store = open_in_memory();
         setup_test_graph(&mut store);
         // test_parse tests parse → parse must appear
-        let neighbors = store.test_neighbors("tests.rs::test::test_parse", 10).unwrap();
+        let neighbors = store
+            .test_neighbors("tests.rs::test::test_parse", 10)
+            .unwrap();
         assert_eq!(neighbors.len(), 1);
         let (node, _edge) = &neighbors[0];
         assert_eq!(node.qualified_name, "a.rs::fn::parse");

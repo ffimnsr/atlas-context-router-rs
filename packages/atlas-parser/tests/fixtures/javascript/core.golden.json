@@ -1,0 +1,211 @@
+{
+  "edges": [
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/javascript/core.js",
+      "id": 0,
+      "kind": "imports",
+      "line": 1,
+      "source_qn": "fixtures/javascript/core.js",
+      "target_qn": "fixtures/javascript/core.js::import::./dep.js"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/javascript/core.js",
+      "id": 0,
+      "kind": "contains",
+      "line": 3,
+      "source_qn": "fixtures/javascript/core.js",
+      "target_qn": "fixtures/javascript/core.js::fn::helper"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/javascript/core.js",
+      "id": 0,
+      "kind": "contains",
+      "line": 7,
+      "source_qn": "fixtures/javascript/core.js",
+      "target_qn": "fixtures/javascript/core.js::fn::caller"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/javascript/core.js",
+      "id": 0,
+      "kind": "contains",
+      "line": 11,
+      "source_qn": "fixtures/javascript/core.js",
+      "target_qn": "fixtures/javascript/core.js::class::Greeter"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/javascript/core.js",
+      "id": 0,
+      "kind": "contains",
+      "line": 12,
+      "source_qn": "fixtures/javascript/core.js::class::Greeter",
+      "target_qn": "fixtures/javascript/core.js::method::Greeter.greet"
+    },
+    {
+      "confidence": 0.800000011920929,
+      "confidence_tier": "same_file",
+      "extra_json": {
+        "callee_name": "helper",
+        "callee_text": "helper",
+        "receiver_text": null
+      },
+      "file_path": "fixtures/javascript/core.js",
+      "id": 0,
+      "kind": "calls",
+      "line": 8,
+      "source_qn": "fixtures/javascript/core.js::fn::caller",
+      "target_qn": "fixtures/javascript/core.js::fn::helper"
+    },
+    {
+      "confidence": 0.800000011920929,
+      "confidence_tier": "same_file",
+      "extra_json": {
+        "callee_name": "caller",
+        "callee_text": "caller",
+        "receiver_text": null
+      },
+      "file_path": "fixtures/javascript/core.js",
+      "id": 0,
+      "kind": "calls",
+      "line": 13,
+      "source_qn": "fixtures/javascript/core.js::method::Greeter.greet",
+      "target_qn": "fixtures/javascript/core.js::fn::caller"
+    }
+  ],
+  "hash": "fixture-hash",
+  "language": "javascript",
+  "nodes": [
+    {
+      "extra_json": null,
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/javascript/core.js",
+      "id": 0,
+      "is_test": false,
+      "kind": "file",
+      "language": "javascript",
+      "line_end": 16,
+      "line_start": 1,
+      "modifiers": null,
+      "name": "core.js",
+      "params": null,
+      "parent_name": null,
+      "qualified_name": "fixtures/javascript/core.js",
+      "return_type": null
+    },
+    {
+      "extra_json": {
+        "bindings": [
+          {
+            "imported": "default",
+            "kind": "default",
+            "local": "defaultThing"
+          },
+          {
+            "imported": "helperAlias",
+            "kind": "named",
+            "local": "helperImport"
+          }
+        ],
+        "source": "./dep.js"
+      },
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/javascript/core.js",
+      "id": 0,
+      "is_test": false,
+      "kind": "import",
+      "language": "javascript",
+      "line_end": 1,
+      "line_start": 1,
+      "modifiers": null,
+      "name": "./dep.js",
+      "params": null,
+      "parent_name": "fixtures/javascript/core.js",
+      "qualified_name": "fixtures/javascript/core.js::import::./dep.js",
+      "return_type": null
+    },
+    {
+      "extra_json": null,
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/javascript/core.js",
+      "id": 0,
+      "is_test": false,
+      "kind": "function",
+      "language": "javascript",
+      "line_end": 5,
+      "line_start": 3,
+      "modifiers": null,
+      "name": "helper",
+      "params": "(value)",
+      "parent_name": "fixtures/javascript/core.js",
+      "qualified_name": "fixtures/javascript/core.js::fn::helper",
+      "return_type": null
+    },
+    {
+      "extra_json": null,
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/javascript/core.js",
+      "id": 0,
+      "is_test": false,
+      "kind": "function",
+      "language": "javascript",
+      "line_end": 9,
+      "line_start": 7,
+      "modifiers": null,
+      "name": "caller",
+      "params": "()",
+      "parent_name": "fixtures/javascript/core.js",
+      "qualified_name": "fixtures/javascript/core.js::fn::caller",
+      "return_type": null
+    },
+    {
+      "extra_json": null,
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/javascript/core.js",
+      "id": 0,
+      "is_test": false,
+      "kind": "class",
+      "language": "javascript",
+      "line_end": 15,
+      "line_start": 11,
+      "modifiers": null,
+      "name": "Greeter",
+      "params": null,
+      "parent_name": "fixtures/javascript/core.js",
+      "qualified_name": "fixtures/javascript/core.js::class::Greeter",
+      "return_type": null
+    },
+    {
+      "extra_json": null,
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/javascript/core.js",
+      "id": 0,
+      "is_test": false,
+      "kind": "method",
+      "language": "javascript",
+      "line_end": 14,
+      "line_start": 12,
+      "modifiers": null,
+      "name": "greet",
+      "params": "()",
+      "parent_name": "fixtures/javascript/core.js::class::Greeter",
+      "qualified_name": "fixtures/javascript/core.js::method::Greeter.greet",
+      "return_type": null
+    }
+  ],
+  "path": "fixtures/javascript/core.js",
+  "size": 217
+}

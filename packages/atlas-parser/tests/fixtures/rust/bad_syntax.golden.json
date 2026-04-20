@@ -1,0 +1,26 @@
+{
+  "edges": [],
+  "hash": "fixture-hash",
+  "language": "rust",
+  "nodes": [
+    {
+      "extra_json": null,
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/rust/bad_syntax.rs",
+      "id": 0,
+      "is_test": false,
+      "kind": "file",
+      "language": "rust",
+      "line_end": 4,
+      "line_start": 1,
+      "modifiers": null,
+      "name": "bad_syntax.rs",
+      "params": null,
+      "parent_name": null,
+      "qualified_name": "fixtures/rust/bad_syntax.rs",
+      "return_type": null
+    }
+  ],
+  "path": "fixtures/rust/bad_syntax.rs",
+  "size": 72
+}

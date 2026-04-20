@@ -26,6 +26,8 @@ fn main() {
         Command::Install { .. } => commands::run_install(&cli),
         Command::Completions { .. } => commands::run_completions(&cli),
         Command::Context { .. } => commands::run_context(&cli),
+        Command::Analyze { .. } => commands::run_analyze(&cli),
+        Command::Refactor { .. } => commands::run_refactor(&cli),
     };
 
     if let Err(err) = result {

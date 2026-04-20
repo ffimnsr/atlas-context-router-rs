@@ -14,6 +14,10 @@ pub struct Config {
     pub build: BuildConfig,
     #[serde(default)]
     pub search: SearchConfig,
+    #[serde(default)]
+    pub analysis: AnalysisConfig,
+    #[serde(default)]
+    pub context: ContextConfig,
 }
 
 /// Search-phase configuration.
@@ -88,5 +92,61 @@ impl Config {
     /// Return the effective parse batch size, clamped to [1, 4096].
     pub fn parse_batch_size(&self) -> usize {
         self.build.parse_batch_size.clamp(1, 4096)
+    }
+}
+
+/// Analysis-phase configuration (dead-code, refactor safety, impact traversal).
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AnalysisConfig {
+    /// Minimum certainty tier for dead-code candidates to surface.
+    /// Accepted values: `"high"`, `"medium"`, `"low"` (default: `"low"`).
+    pub dead_code_certainty_threshold: String,
+    /// Minimum safety score [0.0, 1.0] required before auto-applying a refactor.
+    /// Dry-run always works regardless of this value.
+    pub refactor_safety_threshold: f64,
+    /// Maximum BFS depth for impact analysis (default: 5).
+    pub impact_max_depth: u32,
+    /// Maximum nodes returned by impact analysis (default: 200).
+    pub impact_max_nodes: usize,
+    /// Qualified names treated as live even when no inbound edges are found.
+    /// Useful for framework entry points not captured by the parser.
+    pub dynamic_usage_allowlist: Vec<String>,
+    /// Simple function/symbol names never auto-removed regardless of usage.
+    /// Extends the built-in entrypoint list (`main`, `new`, `init`, …).
+    pub entrypoint_allowlist: Vec<String>,
+    /// Optional path to a TOML file mapping framework names to convention rules.
+    /// Relative paths are resolved from the repo root.
+    pub framework_conventions_file: Option<String>,
+}
+
+impl Default for AnalysisConfig {
+    fn default() -> Self {
+        Self {
+            dead_code_certainty_threshold: "low".to_owned(),
+            refactor_safety_threshold: 0.5,
+            impact_max_depth: 5,
+            impact_max_nodes: 200,
+            dynamic_usage_allowlist: Vec::new(),
+            entrypoint_allowlist: Vec::new(),
+            framework_conventions_file: None,
+        }
+    }
+}
+
+/// Context-engine configuration (symbol/file/review context bounds).
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ContextConfig {
+    /// Default maximum nodes returned by the context engine (default: 100).
+    pub max_context_nodes: usize,
+    /// Default maximum traversal depth for context queries (default: 2).
+    pub max_context_depth: u32,
+}
+
+impl Default for ContextConfig {
+    fn default() -> Self {
+        Self {
+            max_context_nodes: 100,
+            max_context_depth: 2,
+        }
     }
 }

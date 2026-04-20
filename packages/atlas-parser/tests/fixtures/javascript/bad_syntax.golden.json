@@ -1,0 +1,26 @@
+{
+  "edges": [],
+  "hash": "fixture-hash",
+  "language": "javascript",
+  "nodes": [
+    {
+      "extra_json": null,
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/javascript/bad_syntax.js",
+      "id": 0,
+      "is_test": false,
+      "kind": "file",
+      "language": "javascript",
+      "line_end": 4,
+      "line_start": 1,
+      "modifiers": null,
+      "name": "bad_syntax.js",
+      "params": null,
+      "parent_name": null,
+      "qualified_name": "fixtures/javascript/bad_syntax.js",
+      "return_type": null
+    }
+  ],
+  "path": "fixtures/javascript/bad_syntax.js",
+  "size": 66
+}

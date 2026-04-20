@@ -588,6 +588,328 @@ pub struct ContextResult {
     pub ambiguity: Option<AmbiguityMeta>,
 }
 
+// ---------------------------------------------------------------------------
+// Phase 23 — Autonomous Code Reasoning types
+// ---------------------------------------------------------------------------
+
+/// Confidence tier for reasoning outputs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConfidenceTier {
+    High,
+    Medium,
+    Low,
+}
+
+impl std::fmt::Display for ConfidenceTier {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            ConfidenceTier::High => "high",
+            ConfidenceTier::Medium => "medium",
+            ConfidenceTier::Low => "low",
+        };
+        f.write_str(s)
+    }
+}
+
+/// How certain the engine is that a given node is impacted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ImpactClass {
+    /// Direct call / import / test edge — definitely impacted.
+    Definite,
+    /// Inferred link or unresolved selector in same file/package.
+    Probable,
+    /// Textual or unresolved weak edge only.
+    Weak,
+}
+
+impl std::fmt::Display for ImpactClass {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            ImpactClass::Definite => "definite",
+            ImpactClass::Probable => "probable",
+            ImpactClass::Weak => "weak",
+        };
+        f.write_str(s)
+    }
+}
+
+/// Coarse refactor-safety band.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SafetyBand {
+    Safe,
+    Caution,
+    Risky,
+}
+
+impl std::fmt::Display for SafetyBand {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            SafetyBand::Safe => "safe",
+            SafetyBand::Caution => "caution",
+            SafetyBand::Risky => "risky",
+        };
+        f.write_str(s)
+    }
+}
+
+/// Numeric refactor-safety score with a coarse band and human-readable reasons.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SafetyScore {
+    /// 0.0 = most risky, 1.0 = safest.
+    pub score: f64,
+    pub band: SafetyBand,
+    pub reasons: Vec<String>,
+    pub suggested_validations: Vec<String>,
+}
+
+/// A single piece of supporting evidence for a reasoning result.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReasoningEvidence {
+    pub key: String,
+    pub value: String,
+}
+
+/// A warning attached to a reasoning result.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReasoningWarning {
+    pub message: String,
+    pub confidence: ConfidenceTier,
+}
+
+/// A node enriched with depth, impact class, and the edge kind that introduced it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImpactedNode {
+    pub node: Node,
+    pub depth: u32,
+    pub impact_class: ImpactClass,
+    pub via_edge_kind: Option<EdgeKind>,
+}
+
+/// Full removal-impact result (23.2).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RemovalImpactResult {
+    pub seed: Vec<Node>,
+    pub impacted_symbols: Vec<ImpactedNode>,
+    pub impacted_files: Vec<String>,
+    pub impacted_tests: Vec<Node>,
+    pub relevant_edges: Vec<Edge>,
+    /// Nodes that directly served as evidence for the impact conclusion.
+    pub evidence_nodes: Vec<Node>,
+    pub warnings: Vec<ReasoningWarning>,
+    pub evidence: Vec<ReasoningEvidence>,
+    /// Uncertainty flags: qualitative reasons the result may be incomplete.
+    pub uncertainty_flags: Vec<String>,
+}
+
+/// A dead code candidate with its flagging reasons (23.3).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeadCodeCandidate {
+    pub node: Node,
+    pub reasons: Vec<String>,
+    pub certainty: ConfidenceTier,
+    /// Blockers that prevent automatic removal.
+    pub blockers: Vec<String>,
+}
+
+/// Refactor-safety result for a single symbol (23.3).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RefactorSafetyResult {
+    pub node: Node,
+    pub safety: SafetyScore,
+    pub fan_in: usize,
+    pub fan_out: usize,
+    pub linked_test_count: usize,
+    pub unresolved_edge_count: usize,
+    pub evidence: Vec<ReasoningEvidence>,
+}
+
+/// Dependency-removal validation result (23.3).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DependencyRemovalResult {
+    pub target_qname: String,
+    pub removable: bool,
+    pub blocking_references: Vec<Node>,
+    /// Edges that directly block removal or serve as evidence.
+    pub evidence_edges: Vec<Edge>,
+    pub confidence: ConfidenceTier,
+    pub suggested_cleanups: Vec<String>,
+    pub evidence: Vec<ReasoningEvidence>,
+    /// Uncertainty flags: qualitative reasons the result may be incomplete.
+    pub uncertainty_flags: Vec<String>,
+}
+
+/// Scope of a reference relative to the definition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReferenceScope {
+    SameFile,
+    SameModule,
+    CrossModule,
+    Test,
+}
+
+/// One reference that would be affected by a rename (23.4).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RenameReference {
+    pub node: Node,
+    pub edge: Edge,
+    pub scope: ReferenceScope,
+}
+
+/// Rename blast-radius preview (23.4).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RenamePreviewResult {
+    pub target: Node,
+    pub new_name: String,
+    pub affected_references: Vec<RenameReference>,
+    pub affected_files: Vec<String>,
+    pub risk_level: RiskLevel,
+    pub collision_warnings: Vec<String>,
+    pub manual_review_flags: Vec<String>,
+}
+
+/// Strength of test coverage for a symbol.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CoverageStrength {
+    Direct,
+    SameFile,
+    SameModule,
+    None,
+}
+
+/// Test-adjacency result for a single symbol (23.4).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TestAdjacencyResult {
+    pub symbol: Node,
+    pub linked_tests: Vec<Node>,
+    pub coverage_strength: CoverageStrength,
+    pub recommendation: Option<String>,
+}
+
+/// Change-risk classification result (23.4).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChangeRiskResult {
+    pub risk_level: RiskLevel,
+    pub contributing_factors: Vec<String>,
+    pub suggested_review_focus: Vec<String>,
+}
+
+// ---------------------------------------------------------------------------
+// Phase 24 — Smart Refactoring Core types
+// ---------------------------------------------------------------------------
+
+/// A category of refactoring operation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RefactorOperation {
+    RenameSymbol { old_qname: String, new_name: String },
+    RemoveDeadCode { target_qname: String },
+    CleanImports { file_path: String },
+    ExtractFunctionCandidate { file_path: String, line_start: u32, line_end: u32 },
+}
+
+/// The kind of text transformation a single edit performs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RefactorEditKind {
+    /// Rename an occurrence of an identifier.
+    RenameOccurrence,
+    /// Remove a contiguous line span (dead symbol body).
+    RemoveSpan,
+    /// Remove an import/use statement.
+    RemoveImport,
+}
+
+/// A single deterministic text replacement applied to one file.
+///
+/// Line numbers are 1-based and inclusive.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RefactorEdit {
+    pub file_path: String,
+    /// 1-based start line (inclusive).
+    pub line_start: u32,
+    /// 1-based end line (inclusive).
+    pub line_end: u32,
+    pub old_text: String,
+    pub new_text: String,
+    pub edit_kind: RefactorEditKind,
+}
+
+/// Unified-diff patch for one file.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RefactorPatch {
+    pub file_path: String,
+    pub unified_diff: String,
+}
+
+/// All planned edits and metadata describing the full refactoring step.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RefactorPlan {
+    pub operation: RefactorOperation,
+    pub edits: Vec<RefactorEdit>,
+    pub affected_files: Vec<String>,
+    /// References that require human review (low-confidence, dynamic, cross-module).
+    pub manual_review: Vec<String>,
+    pub estimated_safety: SafetyBand,
+}
+
+/// Structured outcome of a post-apply (or simulated) validation pass.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RefactorValidationResult {
+    pub valid: bool,
+    pub errors: Vec<String>,
+    pub warnings: Vec<String>,
+    pub manual_review: Vec<String>,
+}
+
+/// Full result of a dry-run or applied refactoring execution.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RefactorDryRunResult {
+    pub plan: RefactorPlan,
+    pub patches: Vec<RefactorPatch>,
+    pub validation: RefactorValidationResult,
+    /// Number of files changed (or would be changed in dry-run).
+    pub files_changed: usize,
+    /// Total edits applied.
+    pub edit_count: usize,
+    /// `true` when no files were actually written.
+    pub dry_run: bool,
+}
+
+/// A candidate block for extract-function analysis (detection only; no auto-apply).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExtractFunctionCandidate {
+    pub file_path: String,
+    /// 1-based start line of the block.
+    pub line_start: u32,
+    /// 1-based end line of the block.
+    pub line_end: u32,
+    pub proposed_inputs: Vec<String>,
+    pub proposed_outputs: Vec<String>,
+    /// Higher = better extraction candidate.
+    pub difficulty_score: f64,
+    pub score_reasons: Vec<String>,
+}
+
+/// High-level simulated impact of a planned refactoring before any files are written.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SimulatedRefactorImpact {
+    /// Qualified names of graph nodes within the blast radius.
+    pub affected_symbols: Vec<String>,
+    /// Files touched by the simulated edits or graph impact.
+    pub affected_files: Vec<String>,
+    /// 0.0 (most risky) to 1.0 (safest).
+    pub safety_score: f64,
+    /// Test nodes that may need re-running.
+    pub nearby_tests: Vec<String>,
+    /// Unresolved concerns that block a high-confidence apply.
+    pub unresolved_risks: Vec<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

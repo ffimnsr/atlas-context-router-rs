@@ -14,6 +14,8 @@ atlas-engine.workspace = true
 atlas-impact = { path = "../atlas-impact" }
 atlas-mcp.workspace = true
 atlas-parser = { path = "../atlas-parser" }
+atlas-reasoning = { path = "../atlas-reasoning" }
+atlas-refactor = { path = "../atlas-refactor" }
 atlas-repo = { path = "../atlas-repo" }
 atlas-search = { path = "../atlas-search" }
 atlas-review = { path = "../atlas-review" }

@@ -1,0 +1,242 @@
+{
+  "edges": [
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/go/core.go",
+      "id": 0,
+      "kind": "contains",
+      "line": 9,
+      "source_qn": "fixtures/go/core.go",
+      "target_qn": "fixtures/go/core.go::struct::Greeter"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/go/core.go",
+      "id": 0,
+      "kind": "contains",
+      "line": 11,
+      "source_qn": "fixtures/go/core.go",
+      "target_qn": "fixtures/go/core.go::fn::helper"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/go/core.go",
+      "id": 0,
+      "kind": "contains",
+      "line": 15,
+      "source_qn": "fixtures/go/core.go",
+      "target_qn": "fixtures/go/core.go::fn::caller"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/go/core.go",
+      "id": 0,
+      "kind": "contains",
+      "line": 19,
+      "source_qn": "fixtures/go/core.go",
+      "target_qn": "fixtures/go/core.go::method::.Greet"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/go/core.go",
+      "id": 0,
+      "kind": "contains",
+      "line": 23,
+      "source_qn": "fixtures/go/core.go",
+      "target_qn": "fixtures/go/core.go::test::TestGreet"
+    },
+    {
+      "confidence": 0.30000001192092896,
+      "confidence_tier": "text",
+      "extra_json": {
+        "callee_name": "ToUpper",
+        "callee_text": "alias.ToUpper",
+        "receiver_text": "alias"
+      },
+      "file_path": "fixtures/go/core.go",
+      "id": 0,
+      "kind": "calls",
+      "line": 12,
+      "source_qn": "fixtures/go/core.go::fn::helper",
+      "target_qn": "alias.ToUpper"
+    },
+    {
+      "confidence": 0.800000011920929,
+      "confidence_tier": "same_file",
+      "extra_json": {
+        "callee_name": "helper",
+        "callee_text": "helper",
+        "receiver_text": null
+      },
+      "file_path": "fixtures/go/core.go",
+      "id": 0,
+      "kind": "calls",
+      "line": 16,
+      "source_qn": "fixtures/go/core.go::fn::caller",
+      "target_qn": "fixtures/go/core.go::fn::helper"
+    },
+    {
+      "confidence": 0.800000011920929,
+      "confidence_tier": "same_file",
+      "extra_json": {
+        "callee_name": "caller",
+        "callee_text": "caller",
+        "receiver_text": null
+      },
+      "file_path": "fixtures/go/core.go",
+      "id": 0,
+      "kind": "calls",
+      "line": 20,
+      "source_qn": "fixtures/go/core.go::method::.Greet",
+      "target_qn": "fixtures/go/core.go::fn::caller"
+    },
+    {
+      "confidence": 0.30000001192092896,
+      "confidence_tier": "text",
+      "extra_json": {
+        "callee_name": "Println",
+        "callee_text": "fmt.Println",
+        "receiver_text": "fmt"
+      },
+      "file_path": "fixtures/go/core.go",
+      "id": 0,
+      "kind": "calls",
+      "line": 24,
+      "source_qn": "fixtures/go/core.go::test::TestGreet",
+      "target_qn": "fmt.Println"
+    },
+    {
+      "confidence": 0.800000011920929,
+      "confidence_tier": "same_file",
+      "extra_json": {
+        "callee_name": "helper",
+        "callee_text": "helper",
+        "receiver_text": null
+      },
+      "file_path": "fixtures/go/core.go",
+      "id": 0,
+      "kind": "calls",
+      "line": 24,
+      "source_qn": "fixtures/go/core.go::test::TestGreet",
+      "target_qn": "fixtures/go/core.go::fn::helper"
+    }
+  ],
+  "hash": "fixture-hash",
+  "language": "go",
+  "nodes": [
+    {
+      "extra_json": null,
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/go/core.go",
+      "id": 0,
+      "is_test": false,
+      "kind": "file",
+      "language": "go",
+      "line_end": 26,
+      "line_start": 1,
+      "modifiers": null,
+      "name": "core.go",
+      "params": null,
+      "parent_name": null,
+      "qualified_name": "fixtures/go/core.go",
+      "return_type": null
+    },
+    {
+      "extra_json": null,
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/go/core.go",
+      "id": 0,
+      "is_test": false,
+      "kind": "struct",
+      "language": "go",
+      "line_end": 9,
+      "line_start": 9,
+      "modifiers": null,
+      "name": "Greeter",
+      "params": null,
+      "parent_name": "fixtures/go/core.go",
+      "qualified_name": "fixtures/go/core.go::struct::Greeter",
+      "return_type": null
+    },
+    {
+      "extra_json": null,
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/go/core.go",
+      "id": 0,
+      "is_test": false,
+      "kind": "function",
+      "language": "go",
+      "line_end": 13,
+      "line_start": 11,
+      "modifiers": null,
+      "name": "helper",
+      "params": "(name string)",
+      "parent_name": "fixtures/go/core.go",
+      "qualified_name": "fixtures/go/core.go::fn::helper",
+      "return_type": "string"
+    },
+    {
+      "extra_json": null,
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/go/core.go",
+      "id": 0,
+      "is_test": false,
+      "kind": "function",
+      "language": "go",
+      "line_end": 17,
+      "line_start": 15,
+      "modifiers": null,
+      "name": "caller",
+      "params": "(name string)",
+      "parent_name": "fixtures/go/core.go",
+      "qualified_name": "fixtures/go/core.go::fn::caller",
+      "return_type": "string"
+    },
+    {
+      "extra_json": null,
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/go/core.go",
+      "id": 0,
+      "is_test": false,
+      "kind": "method",
+      "language": "go",
+      "line_end": 21,
+      "line_start": 19,
+      "modifiers": null,
+      "name": "Greet",
+      "params": "(name string)",
+      "parent_name": "fixtures/go/core.go",
+      "qualified_name": "fixtures/go/core.go::method::.Greet",
+      "return_type": "string"
+    },
+    {
+      "extra_json": null,
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/go/core.go",
+      "id": 0,
+      "is_test": true,
+      "kind": "test",
+      "language": "go",
+      "line_end": 25,
+      "line_start": 23,
+      "modifiers": null,
+      "name": "TestGreet",
+      "params": "(t *testing.T)",
+      "parent_name": "fixtures/go/core.go",
+      "qualified_name": "fixtures/go/core.go::test::TestGreet",
+      "return_type": null
+    }
+  ],
+  "path": "fixtures/go/core.go",
+  "size": 363
+}

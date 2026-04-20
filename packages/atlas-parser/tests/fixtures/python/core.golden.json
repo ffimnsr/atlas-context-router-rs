@@ -1,0 +1,245 @@
+{
+  "edges": [
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/python/core.py",
+      "id": 0,
+      "kind": "imports",
+      "line": 1,
+      "source_qn": "fixtures/python/core.py",
+      "target_qn": "fixtures/python/core.py::import::os.path"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/python/core.py",
+      "id": 0,
+      "kind": "imports",
+      "line": 2,
+      "source_qn": "fixtures/python/core.py",
+      "target_qn": "fixtures/python/core.py::import::.helpers"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/python/core.py",
+      "id": 0,
+      "kind": "contains",
+      "line": 5,
+      "source_qn": "fixtures/python/core.py",
+      "target_qn": "fixtures/python/core.py::fn::helper"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/python/core.py",
+      "id": 0,
+      "kind": "contains",
+      "line": 9,
+      "source_qn": "fixtures/python/core.py",
+      "target_qn": "fixtures/python/core.py::fn::caller"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/python/core.py",
+      "id": 0,
+      "kind": "contains",
+      "line": 13,
+      "source_qn": "fixtures/python/core.py",
+      "target_qn": "fixtures/python/core.py::class::TestMath"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/python/core.py",
+      "id": 0,
+      "kind": "contains",
+      "line": 14,
+      "source_qn": "fixtures/python/core.py::class::TestMath",
+      "target_qn": "fixtures/python/core.py::test::TestMath.test_add"
+    },
+    {
+      "confidence": 0.800000011920929,
+      "confidence_tier": "same_file",
+      "extra_json": {
+        "callee_name": "helper",
+        "callee_text": "helper",
+        "receiver_text": null
+      },
+      "file_path": "fixtures/python/core.py",
+      "id": 0,
+      "kind": "calls",
+      "line": 10,
+      "source_qn": "fixtures/python/core.py::fn::caller",
+      "target_qn": "fixtures/python/core.py::fn::helper"
+    },
+    {
+      "confidence": 0.800000011920929,
+      "confidence_tier": "same_file",
+      "extra_json": {
+        "callee_name": "caller",
+        "callee_text": "caller",
+        "receiver_text": null
+      },
+      "file_path": "fixtures/python/core.py",
+      "id": 0,
+      "kind": "calls",
+      "line": 15,
+      "source_qn": "fixtures/python/core.py::test::TestMath.test_add",
+      "target_qn": "fixtures/python/core.py::fn::caller"
+    }
+  ],
+  "hash": "fixture-hash",
+  "language": "python",
+  "nodes": [
+    {
+      "extra_json": null,
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/python/core.py",
+      "id": 0,
+      "is_test": false,
+      "kind": "file",
+      "language": "python",
+      "line_end": 16,
+      "line_start": 1,
+      "modifiers": null,
+      "name": "core.py",
+      "params": null,
+      "parent_name": null,
+      "qualified_name": "fixtures/python/core.py",
+      "return_type": null
+    },
+    {
+      "extra_json": {
+        "bindings": [
+          {
+            "imported": "os.path",
+            "kind": "module",
+            "local": "osp"
+          }
+        ],
+        "relative_level": 0,
+        "source": "os.path"
+      },
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/python/core.py",
+      "id": 0,
+      "is_test": false,
+      "kind": "import",
+      "language": "python",
+      "line_end": 1,
+      "line_start": 1,
+      "modifiers": null,
+      "name": "os.path",
+      "params": null,
+      "parent_name": "fixtures/python/core.py",
+      "qualified_name": "fixtures/python/core.py::import::os.path",
+      "return_type": null
+    },
+    {
+      "extra_json": {
+        "bindings": [
+          {
+            "imported": "helper",
+            "kind": "from",
+            "local": "imported_helper"
+          }
+        ],
+        "relative_level": 1,
+        "source": ".helpers"
+      },
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/python/core.py",
+      "id": 0,
+      "is_test": false,
+      "kind": "import",
+      "language": "python",
+      "line_end": 2,
+      "line_start": 2,
+      "modifiers": null,
+      "name": ".helpers",
+      "params": null,
+      "parent_name": "fixtures/python/core.py",
+      "qualified_name": "fixtures/python/core.py::import::.helpers",
+      "return_type": null
+    },
+    {
+      "extra_json": null,
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/python/core.py",
+      "id": 0,
+      "is_test": false,
+      "kind": "function",
+      "language": "python",
+      "line_end": 6,
+      "line_start": 5,
+      "modifiers": null,
+      "name": "helper",
+      "params": "(value: int)",
+      "parent_name": "fixtures/python/core.py",
+      "qualified_name": "fixtures/python/core.py::fn::helper",
+      "return_type": "int"
+    },
+    {
+      "extra_json": null,
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/python/core.py",
+      "id": 0,
+      "is_test": false,
+      "kind": "function",
+      "language": "python",
+      "line_end": 10,
+      "line_start": 9,
+      "modifiers": null,
+      "name": "caller",
+      "params": "()",
+      "parent_name": "fixtures/python/core.py",
+      "qualified_name": "fixtures/python/core.py::fn::caller",
+      "return_type": "int"
+    },
+    {
+      "extra_json": null,
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/python/core.py",
+      "id": 0,
+      "is_test": true,
+      "kind": "class",
+      "language": "python",
+      "line_end": 15,
+      "line_start": 13,
+      "modifiers": null,
+      "name": "TestMath",
+      "params": null,
+      "parent_name": "fixtures/python/core.py",
+      "qualified_name": "fixtures/python/core.py::class::TestMath",
+      "return_type": null
+    },
+    {
+      "extra_json": null,
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/python/core.py",
+      "id": 0,
+      "is_test": true,
+      "kind": "test",
+      "language": "python",
+      "line_end": 15,
+      "line_start": 14,
+      "modifiers": null,
+      "name": "test_add",
+      "params": "(self)",
+      "parent_name": "fixtures/python/core.py::class::TestMath",
+      "qualified_name": "fixtures/python/core.py::test::TestMath.test_add",
+      "return_type": null
+    }
+  ],
+  "path": "fixtures/python/core.py",
+  "size": 233
+}

@@ -6,8 +6,14 @@ pub use error::{AtlasError, Result};
 pub use kinds::{EdgeKind, NodeKind};
 pub use model::{
     AdvancedImpactResult, AmbiguityMeta, BoundaryKind, BoundaryViolation, ChangeKind, ChangeType,
-    ChangedFile, ChangedSymbolSummary, ContextIntent, ContextRequest, ContextResult, ContextTarget,
-    Edge, FileRecord, GraphStats, ImpactResult, Node, NodeId, ParsedFile, ReviewContext,
-    ReviewImpactOverview, RiskLevel, RiskSummary, ScoredImpactNode, ScoredNode, SearchQuery,
-    SelectedEdge, SelectedFile, SelectedNode, SelectionReason, TestImpactResult, TruncationMeta,
+    ChangedFile, ChangedSymbolSummary, ChangeRiskResult, ConfidenceTier, ContextIntent,
+    ContextRequest, ContextResult, ContextTarget, CoverageStrength, DeadCodeCandidate,
+    DependencyRemovalResult, Edge, ExtractFunctionCandidate, FileRecord, GraphStats, ImpactClass,
+    ImpactResult, ImpactedNode, Node, NodeId, ParsedFile, ReasoningEvidence, ReasoningWarning,
+    RefactorDryRunResult, RefactorEdit, RefactorEditKind, RefactorOperation, RefactorPatch,
+    RefactorPlan, RefactorSafetyResult, RefactorValidationResult, ReferenceScope,
+    RemovalImpactResult, RenamePreviewResult, RenameReference, ReviewContext, ReviewImpactOverview,
+    RiskLevel, RiskSummary, SafetyBand, SafetyScore, ScoredImpactNode, ScoredNode, SearchQuery,
+    SelectedEdge, SelectedFile, SelectedNode, SelectionReason, SimulatedRefactorImpact,
+    TestAdjacencyResult, TestImpactResult, TruncationMeta,
 };
