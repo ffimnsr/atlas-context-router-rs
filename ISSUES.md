@@ -2400,7 +2400,7 @@ And system has:
 - [x] refactor planning with dry-run patch validation
 - [x] stable MCP tools usable by agents with token-efficient output
 - [x] MCP tool usability acceptance gate passes for agent-facing review, impact, query, and context flows
-- [ ] watch mode for incremental local updates
+- [x] watch mode for incremental local updates
 - [x] observability/debug tooling for graph integrity and pipeline behavior
 - [x] performance that scales to large repos
   - [x] use the current repo on a new disconnected worktree for testing?

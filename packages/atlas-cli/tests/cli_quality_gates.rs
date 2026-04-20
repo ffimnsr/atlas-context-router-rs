@@ -1,7 +1,10 @@
 use std::fs;
-use std::io::Write;
+use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Child, Command, Output, Stdio};
+use std::sync::mpsc;
+use std::thread;
+use std::time::{Duration, Instant};
 
 use atlas_core::{EdgeKind, NodeKind};
 use atlas_store_sqlite::Store;
@@ -2504,6 +2507,82 @@ fn run_command(repo_root: &Path, program: &str, args: &[&str]) -> Output {
     output
 }
 
+struct SpawnedWatch {
+    child: Child,
+    stdout_rx: mpsc::Receiver<String>,
+    stderr_rx: mpsc::Receiver<String>,
+}
+
+impl SpawnedWatch {
+    fn recv_stdout_line(&mut self, timeout: Duration) -> String {
+        match self.stdout_rx.recv_timeout(timeout) {
+            Ok(line) => line,
+            Err(err) => {
+                let status = self.child.try_wait().expect("check atlas watch status");
+                let stderr = drain_lines(&self.stderr_rx).join("\n");
+                panic!(
+                    "timed out waiting for atlas watch output after {timeout:?}: {err}; status={status:?}; stderr:\n{stderr}"
+                );
+            }
+        }
+    }
+}
+
+impl Drop for SpawnedWatch {
+    fn drop(&mut self) {
+        if self.child.try_wait().ok().flatten().is_none() {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+    }
+}
+
+fn spawn_atlas_watch(repo_root: &Path, args: &[&str]) -> SpawnedWatch {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_atlas"))
+        .args(args)
+        .current_dir(repo_root)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap_or_else(|err| panic!("failed to spawn atlas watch: {err}"));
+
+    let stdout = child.stdout.take().expect("atlas watch stdout");
+    let stderr = child.stderr.take().expect("atlas watch stderr");
+
+    SpawnedWatch {
+        child,
+        stdout_rx: spawn_line_reader(stdout),
+        stderr_rx: spawn_line_reader(stderr),
+    }
+}
+
+fn spawn_line_reader<R>(reader: R) -> mpsc::Receiver<String>
+where
+    R: std::io::Read + Send + 'static,
+{
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        for line in BufReader::new(reader).lines() {
+            match line {
+                Ok(line) => {
+                    let _ = tx.send(line);
+                }
+                Err(_) => break,
+            }
+        }
+    });
+    rx
+}
+
+fn drain_lines(rx: &mpsc::Receiver<String>) -> Vec<String> {
+    let mut lines = Vec::new();
+    while let Ok(line) = rx.try_recv() {
+        lines.push(line);
+    }
+    lines
+}
+
 fn copy_dir_all(src: &Path, dst: &Path) {
     for entry in fs::read_dir(src).expect("fixture dir") {
         let entry = entry.expect("fixture entry");
@@ -2522,11 +2601,64 @@ fn copy_dir_all(src: &Path, dst: &Path) {
 
 // ── Phase 28 watch-pipeline integration tests ─────────────────────────────────
 //
-// These tests verify the underlying update pipeline that `atlas watch` uses:
-// modify, delete, and rename events all go through `update_graph` with
-// `UpdateTarget::Files` (or `Batch` inside WatchRunner), so exercising that
-// path via `atlas update --files` gives complete coverage of the code path
-// that watch drives, without spinning up a blocking watcher process.
+// Most tests below verify the underlying update pipeline that `atlas watch`
+// uses: modify, delete, and rename events all go through `update_graph` with
+// `UpdateTarget::Files` (or `Batch` inside WatchRunner). Separate end-to-end
+// test below also spins up the real blocking watcher process.
+
+#[test]
+fn watch_mode_updates_graph_end_to_end_in_real_time() {
+    let repo = setup_repo(&[(
+        "src/lib.rs",
+        "pub fn hello() -> &'static str { \"hello\" }\n",
+    )]);
+
+    run_atlas(repo.path(), &["init"]);
+    run_atlas(repo.path(), &["build"]);
+
+    let mut watch = spawn_atlas_watch(
+        repo.path(),
+        &["--json", "watch", "--debounce-ms", "100"],
+    );
+
+    // Give the watcher a brief moment to subscribe before mutating files.
+    thread::sleep(Duration::from_millis(250));
+
+    fs::write(
+        repo.path().join("src/lib.rs"),
+        "pub fn hello_watch() -> &'static str { \"hello\" }\n",
+    )
+    .expect("write watched file");
+
+    let started = Instant::now();
+    let line = watch.recv_stdout_line(Duration::from_secs(5));
+    let elapsed = started.elapsed();
+
+    let payload: Value = serde_json::from_str(&line)
+        .unwrap_or_else(|err| panic!("atlas watch emitted invalid JSON line: {err}; line={line}"));
+
+    assert_eq!(payload["schema_version"], json!("atlas_cli.v1"));
+    assert_eq!(payload["command"], json!("watch"));
+    assert!(
+        payload["data"]["files_updated"].as_u64().unwrap_or_default() >= 1,
+        "watch batch should report at least one updated file: {payload:?}"
+    );
+    assert_eq!(payload["data"]["errors"], json!(0));
+    assert!(
+        elapsed <= Duration::from_secs(5),
+        "watch update should arrive near real-time: elapsed={elapsed:?} payload={payload:?}"
+    );
+
+    let query = read_json_data_output(
+        "query",
+        run_atlas(repo.path(), &["--json", "query", "hello_watch"]),
+    );
+    let results = query["results"].as_array().expect("query results array");
+    assert!(
+        !results.is_empty(),
+        "graph should contain updated symbol after atlas watch batch: {query:?}"
+    );
+}
 
 /// File modify causes graph to reflect new content.
 #[test]
