@@ -33,11 +33,17 @@ pub fn chunk_text(raw: &str, content_type: &str) -> Vec<Chunk> {
     let mut idx: usize = 0;
     for chunk in base {
         if chunk.content.len() <= MAX_CHUNK_BYTES {
-            out.push(Chunk { chunk_index: idx, ..chunk });
+            out.push(Chunk {
+                chunk_index: idx,
+                ..chunk
+            });
             idx += 1;
         } else {
             for sub in subdivide(&chunk.content, chunk.title.as_deref(), &chunk.content_type) {
-                out.push(Chunk { chunk_index: idx, ..sub });
+                out.push(Chunk {
+                    chunk_index: idx,
+                    ..sub
+                });
                 idx += 1;
             }
         }
@@ -56,13 +62,23 @@ fn chunk_markdown(src: &str) -> Vec<Chunk> {
 
     for line in src.lines() {
         if let Some(heading) = extract_heading(line) {
-            flush_text_chunk(&mut chunks, &mut current_lines, current_title.take(), "text/markdown");
+            flush_text_chunk(
+                &mut chunks,
+                &mut current_lines,
+                current_title.take(),
+                "text/markdown",
+            );
             current_title = Some(heading);
         } else {
             current_lines.push(line);
         }
     }
-    flush_text_chunk(&mut chunks, &mut current_lines, current_title, "text/markdown");
+    flush_text_chunk(
+        &mut chunks,
+        &mut current_lines,
+        current_title,
+        "text/markdown",
+    );
     if chunks.is_empty() {
         chunks.push(Chunk {
             chunk_index: 0,
@@ -170,8 +186,7 @@ fn chunk_json(src: &str) -> Vec<Chunk> {
                     .map(|(k, v)| Chunk {
                         chunk_index: 0,
                         title: Some(k),
-                        content: serde_json::to_string_pretty(&v)
-                            .unwrap_or_else(|_| v.to_string()),
+                        content: serde_json::to_string_pretty(&v).unwrap_or_else(|_| v.to_string()),
                         content_type: "application/json".into(),
                     })
                     .collect();

@@ -7,4 +7,7 @@ pub mod chunking;
 mod migrations;
 pub mod store;
 
-pub use store::{ChunkResult, ContentStore, OutputRouting, SearchFilters, SourceMeta, SourceRow};
+pub use store::{
+    ChunkResult, ContentStore, ContentStoreConfig, OutputRouting, SearchFilters, SourceMeta,
+    SourceRow,
+};

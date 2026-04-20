@@ -10,5 +10,12 @@
 //! or on content-storage concerns (`atlas-contentstore`).
 
 pub mod identity;
+mod migrations;
+pub mod store;
 
 pub use identity::SessionId;
+pub use store::{
+    DEFAULT_SESSION_DB, DEFAULT_SESSION_MAX_EVENTS, MAX_INLINE_EVENT_PAYLOAD_BYTES,
+    NewSessionEvent, ResumeSnapshot, SessionEventRow, SessionEventType, SessionMeta, SessionStore,
+    SessionStoreConfig,
+};

@@ -3021,6 +3021,8 @@ This backlog covers pieces needed for:
 - ALWAYS restore context through retrieval
 - ALWAYS store large outputs outside model context
 - KEEP graph storage, content storage, and session storage as separate systems
+- KEEP continuity best-effort; never block primary CLI/MCP flow on session persistence failure
+- KEEP retrieval lexical and local first; embeddings are optional later, not required for v1 context-mode completion
 
 ### Phase CM1 — Foundation and crate boundaries
 
@@ -3090,6 +3092,14 @@ Build durable artifact storage before eventing so large outputs already have som
 - [x] FTS5 virtual table indexing `source_id`
 - [x] FTS5 virtual table indexing `content_type`
 
+`chunks_trigram`
+
+- [x] trigram FTS5 table for typo-tolerant fallback retrieval
+
+`vocabulary`
+
+- [x] vocabulary table for bounded fuzzy correction and term suggestions
+
 #### Content store API
 
 - [x] `open(path)`
@@ -3117,6 +3127,22 @@ Build durable artifact storage before eventing so large outputs already have som
 - [x] if output is above large-output threshold, index it and return pointer only
 - [x] never put raw large output into future prompts
 
+#### Retrieval quality stack
+
+- [x] keep byte-threshold routing configurable and documented
+- [x] add `search_with_fallback(query, filters)`
+- [x] add source/content-type aware ranking
+- [x] add BM25 title weighting
+- [x] add trigram fallback retrieval
+- [x] add reciprocal-rank fusion between lexical and trigram results
+- [x] add vocabulary-based fuzzy correction
+- [x] add proximity reranking for multi-term queries
+- [x] add title boosts for high-signal matches
+
+Why second-and-a-half:
+- stored artifacts are only useful for continuity if retrieval quality is good enough to recover exact prior tool results and topics
+- parity target is retrieval-driven compression, not blob storage alone
+
 Why second:
 - session events need artifact references from day one
 - retrieval-backed restore is impossible without persisted chunks and source ids
@@ -3124,6 +3150,7 @@ Why second:
 Exit criteria:
 - [x] large artifacts can be stored and retrieved by `source_id`
 - [x] chunking is deterministic enough for tests and follow-up retrieval
+- [x] saved artifact search is strong enough to recover relevant prior results without replaying raw history
 
 ### Phase CM3 — Session store and event ledger
 
@@ -3131,90 +3158,92 @@ Persist session facts and bounded events next so every later surface can write i
 
 #### Database
 
-- [ ] create SQLite database at `.atlas/session.db`
+- [x] create SQLite database at `.atlas/session.db`
 
 #### Required tables
 
 `session_meta`
 
-- [ ] `session_id TEXT PRIMARY KEY`
-- [ ] `repo_root TEXT NOT NULL`
-- [ ] `frontend TEXT NOT NULL`
-- [ ] `worktree_id TEXT`
-- [ ] `created_at TEXT NOT NULL`
-- [ ] `updated_at TEXT NOT NULL`
-- [ ] `last_resume_at TEXT`
-- [ ] `last_compaction_at TEXT`
+- [x] `session_id TEXT PRIMARY KEY`
+- [x] `repo_root TEXT NOT NULL`
+- [x] `frontend TEXT NOT NULL`
+- [x] `worktree_id TEXT`
+- [x] `created_at TEXT NOT NULL`
+- [x] `updated_at TEXT NOT NULL`
+- [x] `last_resume_at TEXT`
+- [x] `last_compaction_at TEXT`
 
 `session_events`
 
-- [ ] `id INTEGER PRIMARY KEY`
-- [ ] `session_id TEXT NOT NULL`
-- [ ] `event_type TEXT NOT NULL`
-- [ ] `priority INTEGER NOT NULL`
-- [ ] `payload_json TEXT NOT NULL`
-- [ ] `event_hash TEXT NOT NULL`
-- [ ] `created_at TEXT NOT NULL`
+- [x] `id INTEGER PRIMARY KEY`
+- [x] `session_id TEXT NOT NULL`
+- [x] `event_type TEXT NOT NULL`
+- [x] `priority INTEGER NOT NULL`
+- [x] `payload_json TEXT NOT NULL`
+- [x] `event_hash TEXT NOT NULL`
+- [x] `created_at TEXT NOT NULL`
 
 `session_resume`
 
-- [ ] `session_id TEXT PRIMARY KEY`
-- [ ] `snapshot TEXT NOT NULL`
-- [ ] `event_count INTEGER NOT NULL`
-- [ ] `consumed INTEGER NOT NULL DEFAULT 0`
-- [ ] `created_at TEXT NOT NULL`
-- [ ] `updated_at TEXT NOT NULL`
+- [x] `session_id TEXT PRIMARY KEY`
+- [x] `snapshot TEXT NOT NULL`
+- [x] `event_count INTEGER NOT NULL`
+- [x] `consumed INTEGER NOT NULL DEFAULT 0`
+- [x] `created_at TEXT NOT NULL`
+- [x] `updated_at TEXT NOT NULL`
 
 #### Event rules
 
-- [ ] deduplicate events using `event_hash`
-- [ ] keep maximum number of events per session
-- [ ] evict events by lower priority first
-- [ ] evict events by older records first
-- [ ] never store large raw output in `session_events`
-- [ ] large raw output must be stored in content store and referenced from session event payload
+- [x] deduplicate events using `event_hash`
+- [x] keep maximum number of events per session
+- [x] evict events by lower priority first
+- [x] evict events by older records first
+- [x] never store large raw output in `session_events`
+- [x] large raw output must be stored in content store and referenced from session event payload
 
 #### Fixed event types
 
-- [ ] `FILE_READ`
-- [ ] `FILE_WRITE`
-- [ ] `COMMAND_RUN`
-- [ ] `COMMAND_FAIL`
-- [ ] `GRAPH_BUILD`
-- [ ] `GRAPH_UPDATE`
-- [ ] `REVIEW_CONTEXT`
-- [ ] `IMPACT_ANALYSIS`
-- [ ] `CONTEXT_REQUEST`
-- [ ] `REASONING_RESULT`
-- [ ] `USER_INTENT`
-- [ ] `ERROR`
-- [ ] `SESSION_START`
-- [ ] `SESSION_RESUME`
+- [x] `FILE_READ`
+- [x] `FILE_WRITE`
+- [x] `COMMAND_RUN`
+- [x] `COMMAND_FAIL`
+- [x] `GRAPH_BUILD`
+- [x] `GRAPH_UPDATE`
+- [x] `REVIEW_CONTEXT`
+- [x] `IMPACT_ANALYSIS`
+- [x] `CONTEXT_REQUEST`
+- [x] `REASONING_RESULT`
+- [x] `USER_INTENT`
+- [x] `ERROR`
+- [x] `SESSION_START`
+- [x] `SESSION_RESUME`
 
 Why third:
 - snapshot building and CLI/MCP continuity need durable session records
 - event limits must exist before broad hook coverage creates noisy or oversized history
 
 Exit criteria:
-- [ ] session records persist across runs
-- [ ] event retention and dedup rules are enforced centrally
+- [x] session records persist across runs
+- [x] event retention and dedup rules are enforced centrally
 
 ### Phase CM4 — Event extraction and adapter pipeline
 
 Instrument existing commands and engines only after the session/content services exist.
 
-#### Hook points
+#### Internal session event capture points
 
 - [ ] CLI command start
 - [ ] CLI command finish
+- [ ] session start / adapter startup
+- [ ] before compaction
 - [ ] `atlas build`
 - [ ] `atlas update`
 - [ ] `atlas review-context`
 - [ ] `atlas impact`
 - [ ] context engine request handling
 - [ ] reasoning engine request handling
-- [ ] reasoning results must emit session events
-- [ ] MCP tool execution
+- [ ] reasoning engine response must emit session events
+- [ ] MCP tool handler execution boundaries
 
 #### Extraction API
 
@@ -3222,6 +3251,8 @@ Instrument existing commands and engines only after the session/content services
 - [ ] `extract_graph_event`
 - [ ] `extract_context_event`
 - [ ] `extract_reasoning_event`
+- [ ] `extract_user_event`
+- [ ] `extract_tool_event`
 - [ ] `normalize_event`
 - [ ] `hash_event`
 
@@ -3232,13 +3263,35 @@ Instrument existing commands and engines only after the session/content services
 - [ ] payloads must include identifiers for retrieval when large artifacts exist
 - [ ] reasoning results must reference `source_id` for saved artifacts
 - [ ] payloads must never embed large stdout blobs
+- [ ] continuity write failures must degrade to log-and-continue behavior
 
-#### Adapter interfaces
+#### Event categories to preserve
+
+- [ ] file operations
+- [ ] task state
+- [ ] decisions
+- [ ] rules/instructions
+- [ ] cwd / repo state changes
+- [ ] git actions
+- [ ] environment changes
+- [ ] data references
+- [ ] skills / tool-selection hints
+- [ ] subagent / delegated work state
+
+#### Session bridge artifacts
+
+- [ ] write transient session event markdown bridge file when direct hook payload transport is unavailable
+- [ ] auto-index session bridge markdown into content store
+- [ ] clean up consumed or stale bridge files
+
+#### External hooks adapter interfaces
 
 - [ ] `BeforeCommand`
 - [ ] `AfterCommand`
 - [ ] `OnError`
 - [ ] `OnUserIntent`
+- [ ] `OnSessionStart`
+- [ ] `BeforeCompact`
 - [ ] `BeforeExit`
 
 #### Initial adapters
@@ -3251,6 +3304,8 @@ Instrument existing commands and engines only after the session/content services
 - [ ] adapters must emit normalized events
 - [ ] adapters must not write SQLite directly
 - [ ] adapters must use session service layer
+- [ ] adapters may degrade gracefully when host lacks a native session-start hook
+- [ ] host-specific hook gaps must reduce continuity features, not break command execution
 
 Why fourth:
 - hooks before storage would force rewrites or duplicated logic
@@ -3259,6 +3314,7 @@ Why fourth:
 Exit criteria:
 - [ ] core command flows emit normalized bounded events
 - [ ] no direct SQLite writes occur from CLI or MCP adapters
+- [ ] continuity remains non-blocking even when hook capture or persistence partially fails
 
 ### Phase CM5 — Resume snapshots and CLI session workflow
 
@@ -3279,6 +3335,10 @@ Once events exist, build bounded resume material and user-facing session command
 - [ ] unresolved errors
 - [ ] recent reasoning outputs
 - [ ] saved artifact references
+- [ ] current task state
+- [ ] recent decisions
+- [ ] active rules/instructions
+- [ ] retrieval-ready source labels or queries for important prior artifacts
 
 #### Snapshot constraints
 
@@ -3286,6 +3346,9 @@ Once events exist, build bounded resume material and user-facing session command
 - [ ] snapshot must contain retrieval hints
 - [ ] snapshot must prefer identifiers and summaries over raw content
 - [ ] snapshot must be stable enough for tests
+- [ ] snapshot must group events by category
+- [ ] snapshot must include exact follow-up search commands / retrieval directives
+- [ ] snapshot rendering must be deterministic and easy to snapshot-test
 
 #### Lifecycle
 
@@ -3309,6 +3372,7 @@ Once events exist, build bounded resume material and user-facing session command
 - [ ] show compact resume summary
 - [ ] add session lifecycle support
 - [ ] never replay raw historic output
+- [ ] degrade gracefully on hosts or shells without full lifecycle hooks
 
 Why fifth:
 - snapshots are only useful once event history and artifact references exist
@@ -3317,6 +3381,7 @@ Why fifth:
 Exit criteria:
 - [ ] session resume works from stored snapshot, not raw history replay
 - [ ] CLI surfaces expose session lifecycle without leaking internal storage details
+- [ ] resume snapshot gives enough retrieval instructions to recover prior tool results, topics, and decisions on demand
 
 ### Phase CM6 — Retrieval-backed restoration in Context Engine
 
@@ -3341,12 +3406,16 @@ Extend context retrieval only after saved artifacts and session identity are sta
 - [ ] add recency boost
 - [ ] add same-session boost
 - [ ] add session-aware ranking
+- [ ] preserve lexical retrieval as primary ranking path
+- [ ] avoid vector/embedding dependency in v1 continuity path
 
 #### Result additions
 
 - [ ] include `saved_context_sources`
 - [ ] include `source_ids`
 - [ ] include `retrieval_hints`
+- [ ] include saved-context previews without dumping raw blobs
+- [ ] include enough metadata to reopen prior tool result, topic, message, or query by retrieval
 
 Why sixth:
 - context integration depends on both content search and session identity
@@ -3366,6 +3435,8 @@ Expose session continuity to agents only after storage, events, resume, and retr
 - [ ] `resume_session`
 - [ ] `search_saved_context`
 - [ ] `save_context_artifact`
+- [ ] `get_context_stats`
+- [ ] `purge_saved_context`
 - [ ] add saved-context retrieval tools
 
 #### Existing tool changes
@@ -3380,6 +3451,7 @@ Expose session continuity to agents only after storage, events, resume, and retr
 - [ ] return previews instead of large blobs
 - [ ] return `source_id` for stored artifacts
 - [ ] return retrieval hints for follow-up access
+- [ ] expose compact stats for avoided bytes / stored artifact counts when requested
 
 Why seventh:
 - MCP should stay thin over already-proven services
@@ -3402,14 +3474,21 @@ Close with the operational guards and tests that keep context-mode safe and main
 - [ ] snapshot consume flow
 - [ ] artifact indexing and retrieval
 - [ ] compression routing
+- [ ] search relevance: BM25, trigram fallback, fuzzy correction, RRF ordering, proximity/title rerank
+- [ ] session extraction from representative hook payloads
 - [ ] CLI continuity
 - [ ] MCP continuity
+- [ ] bridge markdown ingest and cleanup
+- [ ] corrupt DB recovery / quarantine
+- [ ] best-effort continuity failure path
+- [ ] race/concurrency coverage for session writes and snapshot updates
 
 #### Redaction
 
 - [ ] strip environment variables
 - [ ] strip secrets from command arguments
 - [ ] strip tokens from logs and payloads
+- [ ] avoid indexing sensitive bridge payloads or raw secrets into content store
 
 #### Limits
 
@@ -3417,11 +3496,17 @@ Close with the operational guards and tests that keep context-mode safe and main
 - [ ] max content DB size
 - [ ] retention TTL
 - [ ] snapshot size cap
+- [ ] stale source cleanup
+- [ ] stale session cleanup
+- [ ] dedup time window for repeated near-identical events
 
 #### Operational visibility
 
 - [ ] add session stats
 - [ ] add content-store stats
+- [ ] add avoided-context byte counters
+- [ ] add indexed artifact / preview / pointer routing counters
+- [ ] add purge visibility for session DB, content DB, and bridge artifacts
 
 #### Completion criteria
 
@@ -3431,6 +3516,8 @@ Close with the operational guards and tests that keep context-mode safe and main
 - [ ] resume snapshot works correctly
 - [ ] MCP returns pointers instead of blobs
 - [ ] graph DB, content DB, and session DB remain separate systems
+- [ ] retrieval quality is good enough to recover prior topics, tool results, messages, and queries without transcript replay
+- [ ] continuity failures stay best-effort and do not block primary Atlas commands
 
 Why last:
 - limits and redaction must validate the final integrated system, not just one crate in isolation

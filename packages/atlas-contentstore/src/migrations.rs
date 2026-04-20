@@ -5,7 +5,13 @@ pub struct Migration {
     pub sql: &'static str,
 }
 
-pub const MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    sql: include_str!("migrations/001_initial_schema.sql"),
-}];
+pub const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        sql: include_str!("migrations/001_initial_schema.sql"),
+    },
+    Migration {
+        version: 2,
+        sql: include_str!("migrations/002_trigram_and_vocabulary.sql"),
+    },
+];

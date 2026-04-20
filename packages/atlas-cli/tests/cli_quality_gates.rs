@@ -2616,10 +2616,7 @@ fn watch_mode_updates_graph_end_to_end_in_real_time() {
     run_atlas(repo.path(), &["init"]);
     run_atlas(repo.path(), &["build"]);
 
-    let mut watch = spawn_atlas_watch(
-        repo.path(),
-        &["--json", "watch", "--debounce-ms", "100"],
-    );
+    let mut watch = spawn_atlas_watch(repo.path(), &["--json", "watch", "--debounce-ms", "100"]);
 
     // Give the watcher a brief moment to subscribe before mutating files.
     thread::sleep(Duration::from_millis(250));
@@ -2640,7 +2637,10 @@ fn watch_mode_updates_graph_end_to_end_in_real_time() {
     assert_eq!(payload["schema_version"], json!("atlas_cli.v1"));
     assert_eq!(payload["command"], json!("watch"));
     assert!(
-        payload["data"]["files_updated"].as_u64().unwrap_or_default() >= 1,
+        payload["data"]["files_updated"]
+            .as_u64()
+            .unwrap_or_default()
+            >= 1,
         "watch batch should report at least one updated file: {payload:?}"
     );
     assert_eq!(payload["data"]["errors"], json!(0));
