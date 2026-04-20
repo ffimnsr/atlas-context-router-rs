@@ -6,6 +6,7 @@
 
 use anyhow::{Context, Result};
 use atlas_core::SearchQuery;
+use atlas_engine::{BuildOptions, UpdateOptions, UpdateTarget, build_graph, update_graph};
 use atlas_repo::{DiffTarget, changed_files, find_repo_root};
 use atlas_store_sqlite::Store;
 use camino::Utf8Path;
@@ -81,6 +82,47 @@ pub fn tool_list() -> serde_json::Value {
                     },
                     "required": []
                 }
+            },
+            {
+                "name": "build_or_update_graph",
+                "description": "Scan, parse, and persist (or incrementally update) the code graph. Use mode='build' for a full scan or mode='update' for a git-diff-based incremental update.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "mode":   { "type": "string",  "description": "'build' (full scan, default) or 'update' (incremental)" },
+                        "base":   { "type": "string",  "description": "For update: base git ref (e.g. 'origin/main')" },
+                        "staged": { "type": "boolean", "description": "For update: diff staged changes only" },
+                        "files":  { "type": "array", "items": { "type": "string" }, "description": "For update: explicit list of repo-relative file paths to re-index" }
+                    },
+                    "required": []
+                }
+            },
+            {
+                "name": "traverse_graph",
+                "description": "Bi-directional graph traversal from a specific symbol (qualified name). Returns all nodes reachable within depth hops.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "from_qn":   { "type": "string",  "description": "Qualified name of the starting node (e.g. 'src/lib.rs::fn::my_func')" },
+                        "max_depth": { "type": "integer", "description": "Traversal depth limit (default 3)" },
+                        "max_nodes": { "type": "integer", "description": "Maximum nodes to return (default 100)" }
+                    },
+                    "required": ["from_qn"]
+                }
+            },
+            {
+                "name": "get_minimal_context",
+                "description": "Auto-detect changed files from git, then return a compact review bundle: changed symbols, immediate impact, risk flags. Lower token overhead than get_review_context.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "base":      { "type": "string",  "description": "Base git ref (e.g. 'origin/main'). Omit to diff working tree." },
+                        "staged":    { "type": "boolean", "description": "Diff staged changes only (default false)" },
+                        "max_depth": { "type": "integer", "description": "Traversal depth limit (default 2)" },
+                        "max_nodes": { "type": "integer", "description": "Maximum impacted nodes (default 50)" }
+                    },
+                    "required": []
+                }
             }
         ]
     })
@@ -103,6 +145,9 @@ pub fn call(
         "get_impact_radius" => tool_get_impact_radius(args, db_path),
         "get_review_context" => tool_get_review_context(args, db_path),
         "detect_changes" => tool_detect_changes(args, repo_root, db_path),
+        "build_or_update_graph" => tool_build_or_update_graph(args, repo_root, db_path),
+        "traverse_graph" => tool_traverse_graph(args, db_path),
+        "get_minimal_context" => tool_get_minimal_context(args, repo_root, db_path),
         other => Err(anyhow::anyhow!("unknown tool: {other}")),
     }
 }
@@ -255,6 +300,164 @@ fn tool_detect_changes(
         .collect();
 
     tool_result(serde_json::to_string_pretty(&entries)?)
+}
+
+fn tool_build_or_update_graph(
+    args: Option<&serde_json::Value>,
+    repo_root: &str,
+    db_path: &str,
+) -> Result<serde_json::Value> {
+    let mode = str_arg(args, "mode")?.unwrap_or("build");
+    let repo_root_path =
+        find_repo_root(Utf8Path::new(repo_root)).context("cannot find git repo root")?;
+
+    if mode == "update" {
+        let base = str_arg(args, "base")?.map(str::to_owned);
+        let staged = bool_arg(args, "staged").unwrap_or(false);
+        let files = string_array_arg(args, "files")?;
+
+        let target = if !files.is_empty() {
+            UpdateTarget::Files(files)
+        } else if staged {
+            UpdateTarget::Staged
+        } else if let Some(b) = base {
+            UpdateTarget::BaseRef(b)
+        } else {
+            UpdateTarget::WorkingTree
+        };
+
+        let config = atlas_engine::Config::load(
+            &atlas_engine::paths::atlas_dir(repo_root),
+        )
+        .unwrap_or_default();
+
+        let summary = update_graph(
+            repo_root_path.as_path(),
+            db_path,
+            &UpdateOptions {
+                fail_fast: false,
+                batch_size: config.parse_batch_size(),
+                target,
+            },
+        )?;
+        tool_result(serde_json::to_string_pretty(&serde_json::json!({
+            "mode": "update",
+            "deleted": summary.deleted,
+            "parsed": summary.parsed,
+            "skipped_unsupported": summary.skipped_unsupported,
+            "parse_errors": summary.parse_errors,
+            "nodes_updated": summary.nodes_updated,
+            "edges_updated": summary.edges_updated,
+            "elapsed_ms": summary.elapsed_ms,
+        }))?)
+    } else {
+        // Default: full build
+        let config = atlas_engine::Config::load(
+            &atlas_engine::paths::atlas_dir(repo_root),
+        )
+        .unwrap_or_default();
+
+        let summary = build_graph(
+            repo_root_path.as_path(),
+            db_path,
+            &BuildOptions {
+                fail_fast: false,
+                batch_size: config.parse_batch_size(),
+            },
+        )?;
+        tool_result(serde_json::to_string_pretty(&serde_json::json!({
+            "mode": "build",
+            "scanned": summary.scanned,
+            "skipped_unsupported": summary.skipped_unsupported,
+            "skipped_unchanged": summary.skipped_unchanged,
+            "parsed": summary.parsed,
+            "parse_errors": summary.parse_errors,
+            "nodes_inserted": summary.nodes_inserted,
+            "edges_inserted": summary.edges_inserted,
+            "elapsed_ms": summary.elapsed_ms,
+        }))?)
+    }
+}
+
+fn tool_traverse_graph(
+    args: Option<&serde_json::Value>,
+    db_path: &str,
+) -> Result<serde_json::Value> {
+    let from_qn = str_arg(args, "from_qn")?
+        .ok_or_else(|| anyhow::anyhow!("missing required argument: from_qn"))?
+        .to_owned();
+    let max_depth = u64_arg(args, "max_depth").unwrap_or(3) as u32;
+    let max_nodes = u64_arg(args, "max_nodes").unwrap_or(100) as usize;
+
+    let store = open_store(db_path)?;
+    let result = store
+        .traverse_from_qnames(&[from_qn.as_str()], max_depth, max_nodes)
+        .context("traverse_from_qnames failed")?;
+
+    let seeds = vec![from_qn];
+    let packaged = package_impact(&result, &seeds);
+    tool_result(serde_json::to_string_pretty(&packaged)?)
+}
+
+fn tool_get_minimal_context(
+    args: Option<&serde_json::Value>,
+    repo_root: &str,
+    db_path: &str,
+) -> Result<serde_json::Value> {
+    let base = str_arg(args, "base")?.map(str::to_owned);
+    let staged = bool_arg(args, "staged").unwrap_or(false);
+    let max_depth = u64_arg(args, "max_depth").unwrap_or(2) as u32;
+    let max_nodes = u64_arg(args, "max_nodes").unwrap_or(50) as usize;
+
+    let repo_root_path =
+        find_repo_root(Utf8Path::new(repo_root)).context("cannot find git repo root")?;
+
+    let diff_target = if staged {
+        DiffTarget::Staged
+    } else if let Some(ref b) = base {
+        DiffTarget::BaseRef(b.clone())
+    } else {
+        DiffTarget::WorkingTree
+    };
+
+    let changes = changed_files(repo_root_path.as_path(), &diff_target)
+        .context("cannot detect changed files")?;
+
+    let changed_file_paths: Vec<String> = changes
+        .iter()
+        .filter(|cf| cf.change_type != atlas_core::ChangeType::Deleted)
+        .map(|cf| cf.path.clone())
+        .collect();
+
+    let store = open_store(db_path)?;
+    let file_refs: Vec<&str> = changed_file_paths.iter().map(String::as_str).collect();
+    let impact = store
+        .impact_radius(&file_refs, max_depth, max_nodes)
+        .context("impact_radius failed")?;
+
+    let packaged = package_impact(&impact, &changed_file_paths);
+
+    #[derive(Serialize)]
+    struct MinimalContext<'a> {
+        changed_file_count: usize,
+        deleted_file_count: usize,
+        changed_files: Vec<&'a str>,
+        impact: crate::context::PackagedImpact<'a>,
+    }
+
+    let deleted_count = changes
+        .iter()
+        .filter(|cf| cf.change_type == atlas_core::ChangeType::Deleted)
+        .count();
+
+    let ctx = MinimalContext {
+        changed_file_count: changed_file_paths.len(),
+        deleted_file_count: deleted_count,
+        changed_files: changed_file_paths.iter().map(String::as_str).collect(),
+        impact: packaged,
+    };
+
+    tool_result(serde_json::to_string_pretty(&ctx)?)
 }
 
 // ---------------------------------------------------------------------------

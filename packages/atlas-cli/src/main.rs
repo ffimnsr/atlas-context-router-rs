@@ -1,9 +1,6 @@
-mod call_resolution;
 mod cli;
 mod commands;
-mod config;
 mod logging;
-mod paths;
 
 use clap::Parser;
 use cli::{Cli, Command};

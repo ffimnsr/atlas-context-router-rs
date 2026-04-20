@@ -970,6 +970,148 @@ impl Store {
             .collect();
         Ok(rows)
     }
+
+    /// Bi-directional impact radius seeded from explicit qualified names rather
+    /// than file paths.
+    ///
+    /// Identical traversal semantics to `impact_radius`, but the seed set is
+    /// the provided `seed_qnames` instead of every node in a set of files.
+    /// The seeds appear in `ImpactResult::changed_nodes`; all other reachable
+    /// nodes appear in `ImpactResult::impacted_nodes`.
+    pub fn traverse_from_qnames(
+        &self,
+        seed_qnames: &[&str],
+        max_depth: u32,
+        max_nodes: usize,
+    ) -> Result<ImpactResult> {
+        if seed_qnames.is_empty() {
+            return Ok(ImpactResult {
+                changed_nodes: vec![],
+                impacted_nodes: vec![],
+                impacted_files: vec![],
+                relevant_edges: vec![],
+            });
+        }
+        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
+        let ph = repeat_placeholders(seed_qnames.len());
+
+        // Load seed nodes.
+        let seed_sql = format!(
+            "SELECT id, kind, name, qualified_name, file_path, line_start, line_end,
+                    language, parent_name, params, return_type, modifiers,
+                    is_test, file_hash, extra_json
+             FROM nodes WHERE qualified_name IN ({ph})"
+        );
+        let mut stmt = self.conn.prepare(&seed_sql).map_err(db_err)?;
+        let params_seed: Vec<&dyn rusqlite::types::ToSql> =
+            seed_qnames.iter().map(|s| s as &dyn rusqlite::types::ToSql).collect();
+        let changed_nodes: Vec<Node> = stmt
+            .query_map(params_seed.as_slice(), row_to_node)
+            .map_err(db_err)?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        // Recursive CTE: bidirectional traversal starting from seed QNs.
+        let cte_sql = format!(
+            "WITH RECURSIVE impact(qn, depth) AS (
+               SELECT qualified_name, 0 FROM nodes WHERE qualified_name IN ({ph})
+               UNION
+               SELECT e.source_qualified, i.depth + 1
+               FROM   impact i
+               JOIN   edges  e ON e.target_qualified = i.qn
+               WHERE  i.depth < ?
+               UNION
+               SELECT e.target_qualified, i.depth + 1
+               FROM   impact i
+               JOIN   edges  e ON e.source_qualified = i.qn
+               WHERE  i.depth < ?
+             )
+             SELECT DISTINCT qn FROM impact LIMIT ?"
+        );
+
+        let mut all_params: Vec<Box<dyn rusqlite::types::ToSql>> = seed_qnames
+            .iter()
+            .map(|s| Box::new(s.to_string()) as Box<dyn rusqlite::types::ToSql>)
+            .collect();
+        all_params.push(Box::new(max_depth as i64));
+        all_params.push(Box::new(max_depth as i64));
+        all_params.push(Box::new(max_nodes as i64));
+        let params_ref: Vec<&dyn rusqlite::types::ToSql> =
+            all_params.iter().map(|b| b.as_ref()).collect();
+
+        let mut stmt = self.conn.prepare(&cte_sql).map_err(db_err)?;
+        let all_qns: Vec<String> = stmt
+            .query_map(params_ref.as_slice(), |r| r.get(0))
+            .map_err(db_err)?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        let seed_set: std::collections::HashSet<&str> =
+            seed_qnames.iter().copied().collect();
+        let impacted_qns: Vec<&str> = all_qns
+            .iter()
+            .filter(|qn| !seed_set.contains(qn.as_str()))
+            .map(|s| s.as_str())
+            .collect();
+
+        let impacted_nodes = if impacted_qns.is_empty() {
+            vec![]
+        } else {
+            let iph = repeat_placeholders(impacted_qns.len());
+            let sql = format!(
+                "SELECT id, kind, name, qualified_name, file_path, line_start, line_end,
+                        language, parent_name, params, return_type, modifiers,
+                        is_test, file_hash, extra_json
+                 FROM nodes WHERE qualified_name IN ({iph})"
+            );
+            let p: Vec<&dyn rusqlite::types::ToSql> =
+                impacted_qns.iter().map(|s| s as &dyn rusqlite::types::ToSql).collect();
+            let mut stmt = self.conn.prepare(&sql).map_err(db_err)?;
+            stmt.query_map(p.as_slice(), row_to_node)
+                .map_err(db_err)?
+                .filter_map(|r| r.ok())
+                .collect()
+        };
+
+        let impacted_files: Vec<String> = {
+            let mut files: Vec<String> = impacted_nodes
+                .iter()
+                .map(|n: &Node| n.file_path.clone())
+                .collect();
+            files.sort();
+            files.dedup();
+            files
+        };
+
+        let relevant_edges = if all_qns.is_empty() {
+            vec![]
+        } else {
+            let eph = repeat_placeholders(all_qns.len());
+            let sql = format!(
+                "SELECT id, kind, source_qualified, target_qualified, file_path,
+                        line, confidence, confidence_tier, extra_json
+                 FROM edges
+                 WHERE source_qualified IN ({eph}) AND target_qualified IN ({eph})"
+            );
+            let p: Vec<&dyn rusqlite::types::ToSql> = all_qns
+                .iter()
+                .chain(all_qns.iter())
+                .map(|s| s as &dyn rusqlite::types::ToSql)
+                .collect();
+            let mut stmt = self.conn.prepare(&sql).map_err(db_err)?;
+            stmt.query_map(p.as_slice(), row_to_edge)
+                .map_err(db_err)?
+                .filter_map(|r| r.ok())
+                .collect()
+        };
+
+        Ok(ImpactResult {
+            changed_nodes,
+            impacted_nodes,
+            impacted_files,
+            relevant_edges,
+        })
+    }
 }
 
 // ---------------------------------------------------------------------------

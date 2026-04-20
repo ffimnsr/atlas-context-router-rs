@@ -93,6 +93,7 @@ The upstream repo’s real kernel is the repository scanner, parser layer, SQLit
   - [x] `packages/atlas-impact`
   - [ ] `packages/atlas-mcp`
 - [x] Keep public API narrow between crates
+- [x] `packages/atlas-engine` — shared build/update pipeline crate
 
 ---
 
@@ -997,20 +998,20 @@ The upstream repo exposes a stdio MCP server, but the report makes clear this sh
 
 ### 16.1 Core MCP scope
 
-- [ ] `build_or_update_graph`
-- [ ] `get_minimal_context`
-- [ ] `get_impact_radius`
-- [ ] `get_review_context`
-- [ ] `query_graph`
-- [ ] `traverse_graph`
-- [ ] `list_graph_stats`
-- [ ] `detect_changes`
+- [x] `build_or_update_graph`
+- [x] `get_minimal_context`
+- [x] `get_impact_radius`
+- [x] `get_review_context`
+- [x] `query_graph`
+- [x] `traverse_graph`
+- [x] `list_graph_stats`
+- [x] `detect_changes`
 
 ### 16.2 Transport design
 
-- [ ] keep service layer transport-independent
-- [ ] add stdio server later
-- [ ] avoid long-running tool deadlocks
+- [x] keep service layer transport-independent
+- [x] add stdio server later
+- [x] avoid long-running tool deadlocks
 - [ ] wrap blocking work in dedicated worker threads if needed
 
 ### 16.3 Serve command

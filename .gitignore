@@ -33,3 +33,6 @@ coverage/
 
 # Ignore logs
 *.log
+
+# Atlas specific ignores
+.atlas/

@@ -2,6 +2,7 @@
 members = [
   "packages/atlas-cli",
   "packages/atlas-core",
+  "packages/atlas-engine",
   "packages/atlas-mcp",
   "packages/atlas-store-sqlite",
   "packages/atlas-repo",
@@ -53,5 +54,6 @@ rayon = "1"
 hashbrown = "0.15"
 
 # internal crates
-atlas-core = { path = "packages/atlas-core" }
-atlas-mcp  = { path = "packages/atlas-mcp" }
+atlas-core   = { path = "packages/atlas-core" }
+atlas-engine = { path = "packages/atlas-engine" }
+atlas-mcp    = { path = "packages/atlas-mcp" }

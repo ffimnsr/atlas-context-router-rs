@@ -1,69 +1,26 @@
-use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::time::Instant;
 
 use anyhow::{Context, Result};
 use atlas_core::SearchQuery;
 use atlas_core::model::{
-    ChangeType, ImpactResult, ParsedFile, ReviewContext, ReviewImpactOverview, RiskSummary,
+    ChangeType, ImpactResult, ReviewContext, ReviewImpactOverview, RiskSummary,
+};
+use atlas_engine::{
+    BuildOptions, UpdateOptions, UpdateTarget,
+    build_graph, update_graph,
 };
 use atlas_impact::analyze as advanced_impact;
-use atlas_parser::ParserRegistry;
 use atlas_repo::{
-    DiffTarget, changed_files, collect_files, collect_supported_files, find_repo_root, hash_file,
+    DiffTarget, changed_files, collect_files, find_repo_root,
     repo_relative,
 };
 use atlas_search as search;
 use atlas_store_sqlite::Store;
 use camino::Utf8Path;
-use rayon::prelude::*;
 
-use crate::call_resolution::reconcile_call_targets;
 use crate::cli::{Cli, Command};
 
-/// Default parse-worker batch size.  Can be overridden in `.atlas/config.toml`.
-pub(crate) const DEFAULT_PARSE_BATCH_SIZE: usize = 64;
 const MACHINE_SCHEMA_VERSION: &str = "atlas_cli.v1";
-
-/// Compute a content-signature string for `node`.
-///
-/// Captures the interface attributes that, when changed, indicate dependents
-/// may be affected.  Line positions are excluded intentionally — moving a
-/// symbol within a file does not change its interface.
-fn node_signature(n: &atlas_core::Node) -> String {
-    format!(
-        "{}|{}|{}|{}|{}",
-        n.kind.as_str(),
-        n.params.as_deref().unwrap_or(""),
-        n.return_type.as_deref().unwrap_or(""),
-        n.modifiers.as_deref().unwrap_or(""),
-        n.is_test as u8,
-    )
-}
-
-/// Collect the qualified names of symbols whose interface signature changed or
-/// that were added/removed between `old_sigs` and the freshly parsed `nodes`.
-fn changed_qnames(old_sigs: &HashMap<String, String>, nodes: &[atlas_core::Node]) -> Vec<String> {
-    let mut changed: Vec<String> = Vec::new();
-
-    // Added or signature-changed symbols.
-    for n in nodes {
-        let new_sig = node_signature(n);
-        match old_sigs.get(&n.qualified_name) {
-            Some(old_sig) if old_sig == &new_sig => {}
-            _ => changed.push(n.qualified_name.clone()),
-        }
-    }
-
-    // Removed symbols (in old but not in new).
-    let new_qns: HashSet<&str> = nodes.iter().map(|n| n.qualified_name.as_str()).collect();
-    for qn in old_sigs.keys() {
-        if !new_qns.contains(qn.as_str()) {
-            changed.push(qn.clone());
-        }
-    }
-    changed
-}
 
 fn json_envelope(command: &str, data: serde_json::Value) -> serde_json::Value {
     serde_json::json!({
@@ -89,25 +46,6 @@ fn detect_changes_target(base: &Option<String>, staged: bool) -> DiffTarget {
     } else {
         DiffTarget::WorkingTree
     }
-}
-
-fn supported_update_candidates(
-    repo_root: &Utf8Path,
-    registry: &ParserRegistry,
-    paths: &[String],
-) -> (Vec<(String, camino::Utf8PathBuf)>, usize) {
-    let mut skipped_unsupported = 0usize;
-    let candidates = paths
-        .iter()
-        .filter_map(|rel_str| {
-            if !registry.supports(rel_str) {
-                skipped_unsupported += 1;
-                return None;
-            }
-            Some((rel_str.clone(), repo_root.join(rel_str)))
-        })
-        .collect();
-    (candidates, skipped_unsupported)
 }
 
 fn change_tag(change_type: ChangeType) -> &'static str {
@@ -169,15 +107,15 @@ fn status_payload(
 
 pub fn run_init(cli: &Cli) -> Result<()> {
     let repo = resolve_repo(cli)?;
-    let atlas_dir = crate::paths::atlas_dir(&repo);
+    let atlas_dir = atlas_engine::paths::atlas_dir(&repo);
     fs::create_dir_all(&atlas_dir)
         .with_context(|| format!("cannot create {}", atlas_dir.display()))?;
 
     let db_path = db_path(cli, &repo);
     Store::open(&db_path).with_context(|| format!("cannot open database at {db_path}"))?;
 
-    let config_path = crate::paths::config_path(&repo);
-    let config_created = crate::config::Config::write_default(&atlas_dir)
+    let config_path = atlas_engine::paths::config_path(&repo);
+    let config_created = atlas_engine::Config::write_default(&atlas_dir)
         .with_context(|| format!("cannot write config to {}", config_path.display()))?;
 
     if cli.json {
@@ -273,170 +211,55 @@ pub fn run_status(cli: &Cli) -> Result<()> {
 }
 
 pub fn run_build(cli: &Cli) -> Result<()> {
-    let started = Instant::now();
-
     let fail_fast = matches!(&cli.command, Command::Build { fail_fast } if *fail_fast);
 
     let repo = resolve_repo(cli)?;
     let repo_root_path =
         find_repo_root(Utf8Path::new(&repo)).context("cannot find git repo root")?;
-    let repo_root = repo_root_path.as_path();
     let db_path = db_path(cli, &repo);
 
-    let config = crate::config::Config::load(&crate::paths::atlas_dir(&repo))?;
+    let config = atlas_engine::Config::load(&atlas_engine::paths::atlas_dir(&repo))?;
 
-    let mut store =
-        Store::open(&db_path).with_context(|| format!("cannot open database at {db_path}"))?;
-
-    let registry = ParserRegistry::with_defaults();
-
-    let _scan_span = tracing::info_span!("build.scan").entered();
-
-    // Load stored hashes once to skip unchanged files.
-    let stored_hashes = store.file_hashes().context("cannot read stored hashes")?;
-
-    let (all_files, mut skipped_unsupported) =
-        collect_supported_files(repo_root, None, |rel_path| {
-            registry.supports(rel_path.as_str())
-        })
-        .context("cannot collect tracked files")?;
-
-    let scanned = all_files.len() + skipped_unsupported;
-    let mut skipped_unchanged = 0usize;
-    let mut parse_errors = 0usize;
-
-    // Candidates: (rel_path_string, abs_path, hash)
-    type Candidate = (String, camino::Utf8PathBuf, String);
-    let mut candidates: Vec<Candidate> = Vec::new();
-
-    for rel_path in &all_files {
-        let rel_str = rel_path.as_str().to_owned();
-
-        let abs_path = repo_root.join(rel_path);
-        let hash = match hash_file(&abs_path) {
-            Ok(h) => h,
-            Err(e) => {
-                tracing::warn!("hashing '{}' failed: {e}", rel_str);
-                parse_errors += 1;
-                if fail_fast {
-                    return Err(e.context(format!("hashing '{rel_str}' failed (--fail-fast)")));
-                }
-                continue;
-            }
-        };
-
-        if stored_hashes.get(&rel_str).is_some_and(|h| h == &hash) {
-            skipped_unchanged += 1;
-            continue;
-        }
-
-        candidates.push((rel_str, abs_path, hash));
-    }
-
-    drop(_scan_span);
-
-    // --- Parallel parse in bounded chunks, batched DB write ------------------
-    let batch_size = config.parse_batch_size();
-    let _parse_span = tracing::info_span!("build.parse_and_write").entered();
-
-    let mut parsed_count = 0usize;
-    let mut total_nodes = 0usize;
-    let mut total_edges = 0usize;
-    let mut resolved_paths: Vec<String> = Vec::new();
-
-    for chunk in candidates.chunks(batch_size) {
-        // Parse this chunk in parallel.
-        let results: Vec<(String, Result<ParsedFile, String>)> = chunk
-            .par_iter()
-            .map(|(rel_str, abs_path, hash)| {
-                let source = match fs::read(abs_path.as_std_path()) {
-                    Ok(b) => b,
-                    Err(e) => {
-                        return (rel_str.clone(), Err(format!("read error: {e}")));
-                    }
-                };
-                match registry.parse(rel_str, hash, &source) {
-                    Some(pf) => (rel_str.clone(), Ok(pf)),
-                    None => (rel_str.clone(), Err("unsupported (skipped)".into())),
-                }
-            })
-            .collect();
-
-        // Collect successful parses and handle errors.
-        let mut parsed_files: Vec<ParsedFile> = Vec::with_capacity(chunk.len());
-        for (rel_str, outcome) in results {
-            match outcome {
-                Ok(pf) => {
-                    parsed_count += 1;
-                    resolved_paths.push(pf.path.clone());
-                    parsed_files.push(pf);
-                }
-                Err(msg) if msg == "unsupported (skipped)" => {
-                    skipped_unsupported += 1;
-                }
-                Err(msg) => {
-                    tracing::warn!("parsing '{}' failed: {msg}", rel_str);
-                    parse_errors += 1;
-                    if fail_fast {
-                        return Err(anyhow::anyhow!(
-                            "parsing '{rel_str}' failed: {msg} (--fail-fast)"
-                        ));
-                    }
-                }
-            }
-        }
-
-        // Write all successful parses in one transaction per chunk.
-        if !parsed_files.is_empty() {
-            let (n, e) = store
-                .replace_files_transactional(&parsed_files)
-                .context("cannot store parsed files")?;
-            total_nodes += n;
-            total_edges += e;
-        }
-    }
-
-    drop(_parse_span);
-
-    if !resolved_paths.is_empty()
-        && let Err(err) = reconcile_call_targets(&mut store, repo_root, &resolved_paths)
-    {
-        tracing::warn!("late call-target resolution failed during build: {err:#}");
-    }
-
-    let elapsed = started.elapsed();
+    let summary = build_graph(
+        repo_root_path.as_path(),
+        &db_path,
+        &BuildOptions {
+            fail_fast,
+            batch_size: config.parse_batch_size(),
+        },
+    )?;
 
     if cli.json {
-        let summary = serde_json::json!({
-            "scanned": scanned,
-            "skipped_unsupported": skipped_unsupported,
-            "skipped_unchanged": skipped_unchanged,
-            "parsed": parsed_count,
-            "parse_errors": parse_errors,
-            "nodes_inserted": total_nodes,
-            "edges_inserted": total_edges,
-            "elapsed_ms": elapsed.as_millis(),
-        });
-        print_json("build", summary)?;
+        print_json(
+            "build",
+            serde_json::json!({
+                "scanned": summary.scanned,
+                "skipped_unsupported": summary.skipped_unsupported,
+                "skipped_unchanged": summary.skipped_unchanged,
+                "parsed": summary.parsed,
+                "parse_errors": summary.parse_errors,
+                "nodes_inserted": summary.nodes_inserted,
+                "edges_inserted": summary.edges_inserted,
+                "elapsed_ms": summary.elapsed_ms,
+            }),
+        )?;
     } else {
-        println!("Build complete ({:.2}s)", elapsed.as_secs_f64());
-        println!("  Scanned             : {scanned}");
-        println!("  Unsupported skipped : {skipped_unsupported}");
-        println!("  Unchanged skipped   : {skipped_unchanged}");
-        println!("  Parsed              : {parsed_count}");
-        if parse_errors > 0 {
-            println!("  Errors              : {parse_errors}");
+        println!("Build complete ({:.2}s)", summary.elapsed_ms as f64 / 1000.0);
+        println!("  Scanned             : {}", summary.scanned);
+        println!("  Unsupported skipped : {}", summary.skipped_unsupported);
+        println!("  Unchanged skipped   : {}", summary.skipped_unchanged);
+        println!("  Parsed              : {}", summary.parsed);
+        if summary.parse_errors > 0 {
+            println!("  Errors              : {}", summary.parse_errors);
         }
-        println!("  Nodes inserted      : {total_nodes}");
-        println!("  Edges inserted      : {total_edges}");
+        println!("  Nodes inserted      : {}", summary.nodes_inserted);
+        println!("  Edges inserted      : {}", summary.edges_inserted);
     }
 
     Ok(())
 }
 
 pub fn run_update(cli: &Cli) -> Result<()> {
-    let started = Instant::now();
-
     let fail_fast = matches!(
         &cli.command,
         Command::Update { fail_fast, .. } if *fail_fast
@@ -445,286 +268,67 @@ pub fn run_update(cli: &Cli) -> Result<()> {
     let repo = resolve_repo(cli)?;
     let repo_root_path =
         find_repo_root(Utf8Path::new(&repo)).context("cannot find git repo root")?;
-    let repo_root = repo_root_path.as_path();
     let db_path = db_path(cli, &repo);
 
-    let config = crate::config::Config::load(&crate::paths::atlas_dir(&repo))?;
-
-    let mut store =
-        Store::open(&db_path).with_context(|| format!("cannot open database at {db_path}"))?;
+    let config = atlas_engine::Config::load(&atlas_engine::paths::atlas_dir(&repo))?;
 
     let explicit_files: Vec<String> = match &cli.command {
         Command::Update { files, .. } => files.clone(),
         _ => vec![],
     };
 
-    let _diff_span = tracing::info_span!("update.detect_changes").entered();
-
-    let git_changes: Vec<atlas_core::model::ChangedFile> = if explicit_files.is_empty() {
-        let target = match &cli.command {
+    let target = if !explicit_files.is_empty() {
+        UpdateTarget::Files(explicit_files)
+    } else {
+        match &cli.command {
             Command::Update { base, staged, .. } => {
                 if *staged {
-                    DiffTarget::Staged
+                    UpdateTarget::Staged
                 } else if let Some(base_ref) = base {
-                    DiffTarget::BaseRef(base_ref.clone())
+                    UpdateTarget::BaseRef(base_ref.clone())
                 } else {
-                    DiffTarget::WorkingTree
+                    UpdateTarget::WorkingTree
                 }
             }
-            _ => DiffTarget::WorkingTree,
-        };
-        changed_files(repo_root, &target).context("cannot detect changed files")?
-    } else {
-        explicit_files
-            .iter()
-            .map(|p| {
-                let abs = Utf8Path::new(p);
-                let rel = if abs.is_absolute() {
-                    repo_relative(repo_root, abs).unwrap_or_else(|_| abs.to_owned())
-                } else {
-                    abs.to_owned()
-                };
-                atlas_core::model::ChangedFile {
-                    path: rel.to_string(),
-                    change_type: ChangeType::Modified,
-                    old_path: None,
-                }
-            })
-            .collect()
+            _ => UpdateTarget::WorkingTree,
+        }
     };
 
-    drop(_diff_span);
-
-    // Split deleted from to-parse.
-    let mut to_delete: Vec<String> = Vec::new();
-    let mut to_parse_paths: Vec<String> = Vec::new();
-
-    for cf in &git_changes {
-        match cf.change_type {
-            ChangeType::Deleted => {
-                to_delete.push(cf.path.clone());
-            }
-            ChangeType::Renamed | ChangeType::Copied => {
-                if let Some(old) = &cf.old_path {
-                    to_delete.push(old.clone());
-                }
-                to_parse_paths.push(cf.path.clone());
-            }
-            _ => {
-                to_parse_paths.push(cf.path.clone());
-            }
-        }
-    }
-
-    // -----------------------------------------------------------------------
-    // Incremental parsing: load old node signatures before reparsing so we
-    // can detect which symbols actually changed.
-    // -----------------------------------------------------------------------
-    let _sig_span = tracing::info_span!("update.load_signatures").entered();
-    let old_sigs: HashMap<String, HashMap<String, String>> = to_parse_paths
-        .iter()
-        .filter_map(|p| {
-            store
-                .node_signatures_by_file(p)
-                .ok()
-                .map(|sigs| (p.clone(), sigs))
-        })
-        .collect();
-    drop(_sig_span);
-
-    // Remove stale graphs first (before parsing so dependent queries are clean).
-    let deleted_count = to_delete.len();
-    {
-        let _del_span = tracing::info_span!("update.delete_stale").entered();
-        for path in &to_delete {
-            store
-                .delete_file_graph(path)
-                .with_context(|| format!("cannot delete graph for '{path}'"))?;
-        }
-    }
-
-    let registry = ParserRegistry::with_defaults();
-    let mut parse_errors = 0usize;
-    let mut skipped_unsupported = 0usize;
-    let batch_size = config.parse_batch_size();
-
-    // -----------------------------------------------------------------------
-    // Phase 1: parse the directly-changed files.
-    // -----------------------------------------------------------------------
-    let (changed_candidates, changed_unsupported) =
-        supported_update_candidates(repo_root, &registry, &to_parse_paths);
-    skipped_unsupported += changed_unsupported;
-
-    let _parse_span = tracing::info_span!("update.parse_changed").entered();
-
-    let mut parsed_changed: Vec<ParsedFile> = Vec::new();
-    for chunk in changed_candidates.chunks(batch_size) {
-        let results: Vec<(String, Result<ParsedFile, String>)> = chunk
-            .par_iter()
-            .map(|(rel_str, abs_path)| {
-                let hash = match hash_file(abs_path) {
-                    Ok(h) => h,
-                    Err(e) => return (rel_str.clone(), Err(format!("hash error: {e}"))),
-                };
-                let source = match fs::read(abs_path.as_std_path()) {
-                    Ok(b) => b,
-                    Err(e) => return (rel_str.clone(), Err(format!("read error: {e}"))),
-                };
-                match registry.parse(rel_str, &hash, &source) {
-                    Some(pf) => (rel_str.clone(), Ok(pf)),
-                    None => (rel_str.clone(), Err("unsupported (skipped)".into())),
-                }
-            })
-            .collect();
-
-        for (rel_str, outcome) in results {
-            match outcome {
-                Ok(pf) => parsed_changed.push(pf),
-                Err(msg) if msg == "unsupported (skipped)" => skipped_unsupported += 1,
-                Err(msg) => {
-                    tracing::warn!("processing '{}' failed: {msg}", rel_str);
-                    parse_errors += 1;
-                    if fail_fast {
-                        return Err(anyhow::anyhow!(
-                            "processing '{rel_str}' failed: {msg} (--fail-fast)"
-                        ));
-                    }
-                }
-            }
-        }
-    }
-
-    drop(_parse_span);
-
-    // -----------------------------------------------------------------------
-    // Dependency invalidation: compute which symbols changed, then use a
-    // targeted query instead of a file-level scan to reduce over-invalidation.
-    // -----------------------------------------------------------------------
-    let _deps_span = tracing::info_span!("update.find_dependents").entered();
-
-    let mut all_changed_qnames: Vec<String> = Vec::new();
-    for pf in &parsed_changed {
-        let empty = HashMap::new();
-        let old = old_sigs.get(&pf.path).unwrap_or(&empty);
-        all_changed_qnames.extend(changed_qnames(old, &pf.nodes));
-    }
-
-    let changed_qn_refs: Vec<&str> = all_changed_qnames.iter().map(String::as_str).collect();
-    let dependents = store
-        .find_dependents_for_qnames(&changed_qn_refs)
-        .context("cannot query dependents")?;
-    drop(_deps_span);
-
-    // Build the set of changed paths so we skip those already parsed.
-    let changed_paths_set: HashSet<&str> = to_parse_paths.iter().map(String::as_str).collect();
-
-    let dependent_paths: Vec<String> = dependents
-        .iter()
-        .filter(|d| !changed_paths_set.contains(d.as_str()))
-        .cloned()
-        .collect();
-    let (dep_candidates, dep_unsupported) =
-        supported_update_candidates(repo_root, &registry, &dependent_paths);
-    skipped_unsupported += dep_unsupported;
-
-    // -----------------------------------------------------------------------
-    // Phase 2: parse dependent files.
-    // -----------------------------------------------------------------------
-    let _dep_parse_span = tracing::info_span!("update.parse_dependents").entered();
-
-    let mut parsed_deps: Vec<ParsedFile> = Vec::new();
-    for chunk in dep_candidates.chunks(batch_size) {
-        let results: Vec<(String, Result<ParsedFile, String>)> = chunk
-            .par_iter()
-            .map(|(rel_str, abs_path)| {
-                let hash = match hash_file(abs_path) {
-                    Ok(h) => h,
-                    Err(e) => return (rel_str.clone(), Err(format!("hash error: {e}"))),
-                };
-                let source = match fs::read(abs_path.as_std_path()) {
-                    Ok(b) => b,
-                    Err(e) => return (rel_str.clone(), Err(format!("read error: {e}"))),
-                };
-                match registry.parse(rel_str, &hash, &source) {
-                    Some(pf) => (rel_str.clone(), Ok(pf)),
-                    None => (rel_str.clone(), Err("unsupported (skipped)".into())),
-                }
-            })
-            .collect();
-
-        for (rel_str, outcome) in results {
-            match outcome {
-                Ok(pf) => parsed_deps.push(pf),
-                Err(msg) if msg == "unsupported (skipped)" => skipped_unsupported += 1,
-                Err(msg) => {
-                    tracing::warn!("processing dependent '{}' failed: {msg}", rel_str);
-                    parse_errors += 1;
-                    if fail_fast {
-                        return Err(anyhow::anyhow!(
-                            "processing dependent '{rel_str}' failed: {msg} (--fail-fast)"
-                        ));
-                    }
-                }
-            }
-        }
-    }
-
-    drop(_dep_parse_span);
-
-    // -----------------------------------------------------------------------
-    // Write all parsed files (changed + dependents) in batched transactions.
-    // -----------------------------------------------------------------------
-    let _write_span = tracing::info_span!("update.write").entered();
-
-    let mut total_nodes = 0usize;
-    let mut total_edges = 0usize;
-
-    let all_parsed: Vec<&ParsedFile> = parsed_changed.iter().chain(parsed_deps.iter()).collect();
-
-    for chunk in all_parsed.chunks(batch_size) {
-        let chunk_owned: Vec<ParsedFile> = chunk.iter().map(|pf| (*pf).clone()).collect();
-        let (n, e) = store
-            .replace_files_transactional(&chunk_owned)
-            .context("cannot store parsed files")?;
-        total_nodes += n;
-        total_edges += e;
-    }
-
-    drop(_write_span);
-
-    let resolved_paths: Vec<String> = all_parsed.iter().map(|pf| pf.path.clone()).collect();
-    if !resolved_paths.is_empty()
-        && let Err(err) = reconcile_call_targets(&mut store, repo_root, &resolved_paths)
-    {
-        tracing::warn!("late call-target resolution failed during update: {err:#}");
-    }
-
-    let parsed_count = parsed_changed.len() + parsed_deps.len();
-    let elapsed = started.elapsed();
+    let summary = update_graph(
+        repo_root_path.as_path(),
+        &db_path,
+        &UpdateOptions {
+            fail_fast,
+            batch_size: config.parse_batch_size(),
+            target,
+        },
+    )?;
 
     if cli.json {
-        let summary = serde_json::json!({
-            "deleted": deleted_count,
-            "parsed": parsed_count,
-            "skipped_unsupported": skipped_unsupported,
-            "parse_errors": parse_errors,
-            "nodes_updated": total_nodes,
-            "edges_updated": total_edges,
-            "elapsed_ms": elapsed.as_millis(),
-        });
-        print_json("update", summary)?;
+        print_json(
+            "update",
+            serde_json::json!({
+                "deleted": summary.deleted,
+                "parsed": summary.parsed,
+                "skipped_unsupported": summary.skipped_unsupported,
+                "parse_errors": summary.parse_errors,
+                "nodes_updated": summary.nodes_updated,
+                "edges_updated": summary.edges_updated,
+                "elapsed_ms": summary.elapsed_ms,
+            }),
+        )?;
     } else {
-        println!("Update complete ({:.2}s)", elapsed.as_secs_f64());
-        println!("  Deleted  : {deleted_count}");
-        println!("  Parsed   : {parsed_count}");
-        if skipped_unsupported > 0 {
-            println!("  Unsupported skipped : {skipped_unsupported}");
+        println!("Update complete ({:.2}s)", summary.elapsed_ms as f64 / 1000.0);
+        println!("  Deleted  : {}", summary.deleted);
+        println!("  Parsed   : {}", summary.parsed);
+        if summary.skipped_unsupported > 0 {
+            println!("  Unsupported skipped : {}", summary.skipped_unsupported);
         }
-        if parse_errors > 0 {
-            println!("  Errors   : {parse_errors}");
+        if summary.parse_errors > 0 {
+            println!("  Errors   : {}", summary.parse_errors);
         }
-        println!("  Nodes    : {total_nodes}");
-        println!("  Edges    : {total_edges}");
+        println!("  Nodes    : {}", summary.nodes_updated);
+        println!("  Edges    : {}", summary.edges_updated);
     }
 
     Ok(())
@@ -1242,7 +846,7 @@ pub fn run_doctor(cli: &Cli) -> Result<()> {
     }
 
     // 3. .atlas dir
-    let atlas_dir = crate::paths::atlas_dir(&repo);
+    let atlas_dir = atlas_engine::paths::atlas_dir(&repo);
     if atlas_dir.exists() {
         checks.push(CheckResult::pass("atlas_dir", atlas_dir.display().to_string()));
     } else {
@@ -1253,7 +857,7 @@ pub fn run_doctor(cli: &Cli) -> Result<()> {
     }
 
     // 4. Config file
-    let config_path = crate::paths::config_path(&repo);
+    let config_path = atlas_engine::paths::config_path(&repo);
     if config_path.exists() {
         checks.push(CheckResult::pass(
             "config_file",
@@ -1412,7 +1016,7 @@ fn db_path(cli: &Cli, repo: &str) -> String {
     if let Some(p) = &cli.db {
         return p.clone();
     }
-    crate::paths::default_db_path(repo)
+    atlas_engine::paths::default_db_path(repo)
 }
 
 // ---------------------------------------------------------------------------
