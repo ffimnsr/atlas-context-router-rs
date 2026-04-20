@@ -3708,3 +3708,194 @@ Support multi-agent workflows.
 - [ ] system improves over time
 
 ---
+
+## Patch — Remaining Retrieval Improvements Still Worth Adding
+
+These are the high-value retrieval/indexing improvements still missing or only partially specified after the current v3 plan.
+
+They are meant to strengthen Atlas’s retrieval/content sidecar without changing the graph-first core.
+
+### Patch R1 — Retrieval index lifecycle state
+
+Atlas already has strong graph build/update state and separate content/session stores, but retrieval/content indexing should also have an explicit lifecycle model so “built”, “indexed”, “searchable”, and “failed” do not drift.
+
+- [ ] add explicit retrieval index state model
+- [ ] create retrieval/content index status table or snapshot
+- [ ] track per repo / per source states:
+  - [ ] `indexing`
+  - [ ] `indexed`
+  - [ ] `index_failed`
+- [ ] persist:
+  - [ ] total files discovered
+  - [ ] files indexed
+  - [ ] total chunks written
+  - [ ] chunks reused
+  - [ ] last successful index time
+  - [ ] last error
+- [ ] expose retrieval index status through CLI
+- [ ] expose retrieval index status through MCP
+- [ ] ensure one source of truth for “searchable now”
+- [ ] ensure interrupted indexing can recover cleanly without manual cleanup
+
+Why:
+- prevents state drift between stored content, searchable content, and agent-visible status
+- improves crash recovery and diagnostics
+
+### Patch R2 — Retrieval batching and chunk explosion guardrails
+
+Current plan has chunking and retrieval, but operational safety limits should be explicit.
+
+- [ ] add configurable `retrieval_batch_size`
+- [ ] add configurable `embedding_batch_size`
+- [ ] add hard `max_chunks_per_index_run`
+- [ ] add hard `max_chunks_per_file`
+- [ ] add policy for oversized indexing runs:
+  - [ ] fail fast
+  - [ ] partial index with warning
+  - [ ] skip pathological file with error entry
+- [ ] measure and log:
+  - [ ] buffered chunk count
+  - [ ] buffered bytes
+  - [ ] staged vector bytes
+  - [ ] batch flush count
+- [ ] add tests for:
+  - [ ] chunk explosion from large file
+  - [ ] recursive fallback chunk explosion
+  - [ ] partial indexing recovery after hard cap hit
+
+Why:
+- protects retrieval layer from pathological files and runaway indexing cost
+- makes retrieval/index behavior predictable under load
+
+### Patch R3 — Embedding dimension registry and freeze rules
+
+Atlas already has optional embeddings and hybrid retrieval roadmap, but dimension handling should be explicit and deterministic.
+
+- [ ] create embedding provider registry metadata
+- [ ] persist:
+  - [ ] provider name
+  - [ ] model name
+  - [ ] embedding dimension
+  - [ ] discovered_at
+  - [ ] index schema version
+- [ ] require dimension to be frozen at index creation time
+- [ ] reject insert/search if dimension does not match active retrieval index
+- [ ] cache discovered dimensions per provider/model
+- [ ] add CLI / diagnostics surface for current embedding config
+- [ ] add tests for:
+  - [ ] dimension mismatch on insert
+  - [ ] dimension mismatch on query
+  - [ ] provider switch with incompatible existing index
+  - [ ] explicit rebuild requirement after dimension change
+
+Why:
+- avoids one of the most common hybrid/vector indexing failure modes
+- keeps retrieval layer deterministic and debuggable
+
+### Patch R4 — Retrieval backend capability flags
+
+Atlas should make backend capability checks explicit instead of assuming all retrieval backends support all modes.
+
+- [ ] define retrieval backend capability model
+- [ ] support capability flags for:
+  - [ ] lexical FTS
+  - [ ] dense vector search
+  - [ ] hybrid lexical + vector fusion
+  - [ ] sparse / BM25-native retrieval
+  - [ ] metadata filtering
+- [ ] validate requested retrieval mode against backend capabilities before query/index
+- [ ] disable unsupported hybrid mode automatically with explicit warning
+- [ ] ensure MCP/CLI surfaces report active retrieval mode clearly
+- [ ] add tests for:
+  - [ ] lexical-only backend
+  - [ ] dense-only backend
+  - [ ] hybrid-capable backend
+  - [ ] unsupported mode request fails cleanly
+
+Why:
+- makes future retrieval backends or storage variants safe to introduce
+- avoids silent degradation and confusing behavior
+
+### Patch R5 — Stable content-derived chunk identity
+
+Current chunk storage should have a true stable identity separate from display order.
+
+- [ ] add stable `chunk_id`
+- [ ] define `chunk_id` from content-derived hash over:
+  - [ ] source/file path
+  - [ ] line span or chunk boundary
+  - [ ] normalized content
+- [ ] keep `chunk_index` or display order separately
+- [ ] use `chunk_id` for:
+  - [ ] dedupe
+  - [ ] chunk reuse
+  - [ ] retrieval cache keys
+  - [ ] saved-context references
+- [ ] add tests for:
+  - [ ] same content same `chunk_id`
+  - [ ] moved chunk with changed path policy documented
+  - [ ] changed line span/content produces new `chunk_id`
+
+Why:
+- improves deduplication and retrieval consistency across rebuilds
+- helps saved-context and future historical retrieval features
+
+### Patch R6 — Retrieval/token-efficiency evaluation
+
+Atlas already measures correctness and performance in many places, but retrieval should also be evaluated as a context-efficiency system.
+
+- [ ] add retrieval benchmark metrics:
+  - [ ] `recall_at_k`
+  - [ ] `mrr`
+  - [ ] exact target hit rate
+  - [ ] retrieved tokens per query
+  - [ ] emitted tokens per query
+  - [ ] tool calls per task
+- [ ] benchmark:
+  - [ ] graph-only context
+  - [ ] lexical retrieval only
+  - [ ] hybrid retrieval
+  - [ ] hybrid retrieval + graph expansion
+- [ ] add fixed-budget evaluation:
+  - [ ] quality under small context budget
+  - [ ] quality under medium context budget
+- [ ] track whether retrieval actually reduces:
+  - [ ] payload size
+  - [ ] repeated search calls
+  - [ ] context noise
+- [ ] add acceptance thresholds before enabling hybrid retrieval by default
+
+Why:
+- keeps retrieval improvements aligned with actual user value
+- validates that the retrieval layer improves token efficiency, not just ranking complexity
+
+### Patch R7 — Later experimental post-retrieval compaction
+
+This is not core and should stay late, but it is a useful optional experiment once retrieval and context engine behavior are stable.
+
+- [ ] add backlog item for post-retrieval compaction experiment
+- [ ] only evaluate after:
+  - [ ] hybrid retrieval is stable
+  - [ ] context engine output quality is stable
+  - [ ] token-efficiency metrics exist
+- [ ] keep initial experiment strictly optional
+- [ ] require evidence that compaction reduces tokens without harming answer quality
+- [ ] do not let this replace retrieval filtering or graph-based selection
+
+Why:
+- useful possible optimization later
+- should not destabilize current graph-first + retrieval-assisted architecture
+
+### Patch completion criteria
+
+This patch is complete when:
+
+- [ ] retrieval/content index has explicit searchable state
+- [ ] retrieval indexing has batch and chunk guardrails
+- [ ] embedding dimension rules are explicit and enforced
+- [ ] retrieval backend capabilities are validated, not assumed
+- [ ] stable `chunk_id` exists and is used for dedupe/reuse
+- [ ] retrieval/token-efficiency benchmarks are in place
+- [ ] optional post-retrieval compaction is tracked as a late experiment only
+
+---
