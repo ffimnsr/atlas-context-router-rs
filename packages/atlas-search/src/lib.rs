@@ -407,7 +407,11 @@ fn exact_symbol_hits(store: &Store, query: &SearchQuery) -> Result<Vec<ScoredNod
     if !trimmed.chars().any(char::is_whitespace) {
         for node in store.nodes_by_name(trimmed, query.limit.max(25))? {
             let qn = node.qualified_name.clone();
-            let score = if merged.contains_key(&qn) { 100.0 } else { 80.0 };
+            let score = if merged.contains_key(&qn) {
+                100.0
+            } else {
+                80.0
+            };
             merged.entry(qn).or_insert(ScoredNode { node, score });
         }
     }

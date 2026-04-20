@@ -383,9 +383,7 @@ fn detect_boundary_violations(base: &ImpactResult) -> Vec<BoundaryViolation> {
     violations
 }
 
-fn boundary_signal_sets(
-    violations: &[BoundaryViolation],
-) -> (HashSet<String>, HashSet<String>) {
+fn boundary_signal_sets(violations: &[BoundaryViolation]) -> (HashSet<String>, HashSet<String>) {
     let mut cross_module_qns = HashSet::new();
     let mut cross_package_qns = HashSet::new();
 
@@ -790,7 +788,11 @@ mod tests {
             vec![seed],
             vec![covered, plain, test_node],
             vec![
-                make_edge(EdgeKind::Calls, "src/a.rs::fn::seed", "src/a.rs::fn::covered"),
+                make_edge(
+                    EdgeKind::Calls,
+                    "src/a.rs::fn::seed",
+                    "src/a.rs::fn::covered",
+                ),
                 make_edge(EdgeKind::Calls, "src/a.rs::fn::seed", "src/b.rs::fn::plain"),
                 make_edge(
                     EdgeKind::Tests,

@@ -2520,10 +2520,10 @@ Build durable artifact storage before eventing so large outputs already have som
 
 #### Compression routing
 
-- [ ] If output is below small-output threshold, return raw output directly
-- [ ] If output is above preview threshold, index it and return compact preview
-- [ ] If output is above large-output threshold, index it and return pointer only
-- [ ] Never put raw large output into future prompts
+- [ ] if output is below small-output threshold, return raw output directly
+- [ ] if output is above preview threshold, index it and return compact preview
+- [ ] if output is above large-output threshold, index it and return pointer only
+- [ ] never put raw large output into future prompts
 
 Why second:
 - session events need artifact references from day one
@@ -2539,7 +2539,7 @@ Persist session facts and bounded events next so every later surface can write i
 
 #### Database
 
-- [ ] Create SQLite database at `.atlas/session.db`
+- [ ] create SQLite database at `.atlas/session.db`
 
 #### Required tables
 
@@ -2575,12 +2575,12 @@ Persist session facts and bounded events next so every later surface can write i
 
 #### Event rules
 
-- [ ] Deduplicate events using `event_hash`
-- [ ] Keep maximum number of events per session
-- [ ] Evict events by lower priority first
-- [ ] Evict events by older records first
-- [ ] Never store large raw output in `session_events`
-- [ ] Large raw output must be stored in content store and referenced from session event payload
+- [ ] deduplicate events using `event_hash`
+- [ ] keep maximum number of events per session
+- [ ] evict events by lower priority first
+- [ ] evict events by older records first
+- [ ] never store large raw output in `session_events`
+- [ ] large raw output must be stored in content store and referenced from session event payload
 
 #### Fixed event types
 

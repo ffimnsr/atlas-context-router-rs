@@ -122,10 +122,7 @@ fn query_exact_symbol_and_qname_rank_definition_in_top_three() {
 #[test]
 fn query_ambiguous_short_name_returns_ranked_candidates_with_metadata() {
     let repo = setup_repo(&[
-        (
-            "Cargo.toml",
-            "[workspace]\nmembers = ['packages/*']\n",
-        ),
+        ("Cargo.toml", "[workspace]\nmembers = ['packages/*']\n"),
         (
             "packages/foo/Cargo.toml",
             "[package]\nname = 'foo'\nversion = '0.1.0'\nedition = '2021'\n",
@@ -146,7 +143,10 @@ fn query_ambiguous_short_name_returns_ranked_candidates_with_metadata() {
         run_atlas(repo.path(), &["--json", "query", "helper"]),
     );
     let results = query["results"].as_array().expect("query results array");
-    assert!(results.len() >= 2, "ambiguous lookup must return candidates");
+    assert!(
+        results.len() >= 2,
+        "ambiguous lookup must return candidates"
+    );
     assert!(
         results.windows(2).all(|pair| {
             pair[0]["score"].as_f64().unwrap_or_default()
@@ -224,10 +224,7 @@ fn graph_aware_symbol_lookup_beats_plain_grep_baseline_on_fixtures() {
             "src/b_more_calls.rs",
             "pub fn relay_helper() { helper(); }\npub fn relay_render() { render(); }\n",
         ),
-        (
-            "src/z_defs.rs",
-            "pub fn helper() {}\npub fn render() {}\n",
-        ),
+        ("src/z_defs.rs", "pub fn helper() {}\npub fn render() {}\n"),
     ]);
 
     run_atlas(repo.path(), &["init"]);
@@ -848,7 +845,10 @@ fn impact_reports_boundary_and_uncovered_signals_for_cross_package_change() {
         "changed helper without tests must be flagged uncovered: {impact:?}"
     );
     assert!(
-        matches!(impact["analysis"]["risk_level"].as_str(), Some("high") | Some("critical")),
+        matches!(
+            impact["analysis"]["risk_level"].as_str(),
+            Some("high") | Some("critical")
+        ),
         "cross-package untested change must elevate risk: {impact:?}"
     );
 }
@@ -859,10 +859,7 @@ fn detached_current_repo_worktree_meets_large_repo_performance_gate() {
 
     run_atlas(worktree.path(), &["init"]);
 
-    let build = read_json_data_output(
-        "build",
-        run_atlas(worktree.path(), &["--json", "build"]),
-    );
+    let build = read_json_data_output("build", run_atlas(worktree.path(), &["--json", "build"]));
     assert!(
         build["parsed"].as_u64().unwrap_or_default() >= 50,
         "representative repo build should parse substantial tracked files: {build:?}"
@@ -876,10 +873,7 @@ fn detached_current_repo_worktree_meets_large_repo_performance_gate() {
         "representative repo build latency regressed: {build:?}"
     );
 
-    let status = read_json_data_output(
-        "status",
-        run_atlas(worktree.path(), &["--json", "status"]),
-    );
+    let status = read_json_data_output("status", run_atlas(worktree.path(), &["--json", "status"]));
     assert!(
         status["indexed_file_count"].as_u64().unwrap_or_default() >= 50,
         "status should report representative repo scale: {status:?}"
@@ -902,7 +896,8 @@ fn detached_current_repo_worktree_meets_large_repo_performance_gate() {
     );
 
     let impact_target = "packages/atlas-impact/src/lib.rs";
-    let original = fs::read_to_string(worktree.path().join(impact_target)).expect("read impact file");
+    let original =
+        fs::read_to_string(worktree.path().join(impact_target)).expect("read impact file");
     let mut updated = original.clone();
     updated.push_str("\n// perf gate change\n");
     write_repo_file(worktree.path(), impact_target, &updated);
@@ -911,7 +906,16 @@ fn detached_current_repo_worktree_meets_large_repo_performance_gate() {
         "impact",
         run_atlas(
             worktree.path(),
-            &["--json", "impact", "--base", "HEAD", "--max-depth", "3", "--max-nodes", "200"],
+            &[
+                "--json",
+                "impact",
+                "--base",
+                "HEAD",
+                "--max-depth",
+                "3",
+                "--max-nodes",
+                "200",
+            ],
         ),
     );
     assert!(
@@ -2083,13 +2087,13 @@ fn fixture_repo_root() -> PathBuf {
         .join("sample_repo")
 }
 
-    fn current_repo_root() -> PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR"))
+fn current_repo_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(Path::parent)
         .expect("workspace repo root")
         .to_path_buf()
-    }
+}
 
 fn read_golden_json(name: &str) -> Value {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
