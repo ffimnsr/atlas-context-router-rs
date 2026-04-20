@@ -2,6 +2,7 @@
 name = "atlas-search"
 version = "0.1.0"
 edition = "2024"
+description = "FTS-backed graph search and ranking utilities for Atlas"
 
 [dependencies]
 atlas-core.workspace = true

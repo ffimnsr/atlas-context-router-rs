@@ -2,6 +2,7 @@
 name = "atlas-parser"
 version = "0.1.0"
 edition = "2024"
+description = "Tree-sitter based source parsing and parser registry for Atlas"
 
 [dependencies]
 atlas-core.workspace = true

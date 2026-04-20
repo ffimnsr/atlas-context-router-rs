@@ -2,6 +2,7 @@
 name = "atlas-impact"
 version = "0.1.0"
 edition = "2024"
+description = "Impact scoring, boundary analysis, and test reachability for Atlas"
 
 [dependencies]
 atlas-core.workspace = true

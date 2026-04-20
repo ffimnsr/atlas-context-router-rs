@@ -2,6 +2,7 @@
 name = "atlas-repo"
 version = "0.1.0"
 edition = "2024"
+description = "Repository discovery, file collection, diffing, and path utilities for Atlas"
 
 [dependencies]
 atlas-core.workspace = true

@@ -2,6 +2,7 @@
 name = "atlas-mcp"
 version = "0.1.0"
 edition = "2024"
+description = "MCP server exposing Atlas graph, impact, and review tools over stdio"
 
 [dependencies]
 atlas-core.workspace = true

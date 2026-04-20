@@ -2,6 +2,7 @@
 name = "atlas-core"
 version = "0.1.0"
 edition = "2024"
+description = "Core domain models, kinds, and error types shared across Atlas crates"
 
 [dependencies]
 thiserror.workspace = true

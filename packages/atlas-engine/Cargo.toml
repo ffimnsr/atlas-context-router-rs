@@ -2,6 +2,7 @@
 name = "atlas-engine"
 version = "0.1.0"
 edition = "2024"
+description = "Shared build and incremental update pipeline for Atlas graphs"
 
 [dependencies]
 atlas-core.workspace = true

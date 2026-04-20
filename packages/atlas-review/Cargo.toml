@@ -2,6 +2,7 @@
 name = "atlas-review"
 version = "0.1.0"
 edition = "2024"
+description = "Review context assembly and risk summarization for Atlas code changes"
 
 [dependencies]
 atlas-core.workspace = true

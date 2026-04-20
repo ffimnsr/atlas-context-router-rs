@@ -2,6 +2,7 @@
 name = "atlas-store-sqlite"
 version = "0.1.0"
 edition = "2024"
+description = "SQLite graph store and migrations for Atlas code graph persistence"
 
 [dependencies]
 atlas-core.workspace = true
