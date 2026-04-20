@@ -5,15 +5,9 @@ use atlas_core::SearchQuery;
 use atlas_core::model::{
     ChangeType, ImpactResult, ReviewContext, ReviewImpactOverview, RiskSummary,
 };
-use atlas_engine::{
-    BuildOptions, UpdateOptions, UpdateTarget,
-    build_graph, update_graph,
-};
+use atlas_engine::{BuildOptions, UpdateOptions, UpdateTarget, build_graph, update_graph};
 use atlas_impact::analyze as advanced_impact;
-use atlas_repo::{
-    DiffTarget, changed_files, collect_files, find_repo_root,
-    repo_relative,
-};
+use atlas_repo::{DiffTarget, changed_files, collect_files, find_repo_root, repo_relative};
 use atlas_search as search;
 use atlas_store_sqlite::Store;
 use camino::Utf8Path;
@@ -244,7 +238,10 @@ pub fn run_build(cli: &Cli) -> Result<()> {
             }),
         )?;
     } else {
-        println!("Build complete ({:.2}s)", summary.elapsed_ms as f64 / 1000.0);
+        println!(
+            "Build complete ({:.2}s)",
+            summary.elapsed_ms as f64 / 1000.0
+        );
         println!("  Scanned             : {}", summary.scanned);
         println!("  Unsupported skipped : {}", summary.skipped_unsupported);
         println!("  Unchanged skipped   : {}", summary.skipped_unchanged);
@@ -319,7 +316,10 @@ pub fn run_update(cli: &Cli) -> Result<()> {
             }),
         )?;
     } else {
-        println!("Update complete ({:.2}s)", summary.elapsed_ms as f64 / 1000.0);
+        println!(
+            "Update complete ({:.2}s)",
+            summary.elapsed_ms as f64 / 1000.0
+        );
         println!("  Deleted  : {}", summary.deleted);
         if summary.renamed > 0 {
             println!("  Renamed  : {}", summary.renamed);
@@ -418,7 +418,7 @@ pub fn run_query(cli: &Cli) -> Result<()> {
     let store =
         Store::open(&db_path).with_context(|| format!("cannot open database at {db_path}"))?;
 
-    let (text, kind, language, subpath, limit, expand, expand_hops) = match &cli.command {
+    let (text, kind, language, subpath, limit, expand, expand_hops, hybrid) = match &cli.command {
         Command::Query {
             text,
             kind,
@@ -427,6 +427,7 @@ pub fn run_query(cli: &Cli) -> Result<()> {
             limit,
             expand,
             expand_hops,
+            hybrid,
         } => (
             text.clone(),
             kind.clone(),
@@ -435,6 +436,7 @@ pub fn run_query(cli: &Cli) -> Result<()> {
             *limit,
             *expand,
             *expand_hops,
+            *hybrid,
         ),
         _ => unreachable!(),
     };
@@ -447,6 +449,7 @@ pub fn run_query(cli: &Cli) -> Result<()> {
         limit,
         graph_expand: expand,
         graph_max_hops: expand_hops,
+        hybrid,
         ..Default::default()
     };
 
@@ -485,6 +488,54 @@ pub fn run_query(cli: &Cli) -> Result<()> {
         println!("\n{} result(s).", results.len());
     }
 
+    Ok(())
+}
+
+pub fn run_embed(cli: &Cli) -> Result<()> {
+    let limit = match &cli.command {
+        Command::Embed { limit } => *limit,
+        _ => unreachable!(),
+    };
+
+    let embed_cfg = atlas_search::embed::EmbeddingConfig::from_env()
+        .context("ATLAS_EMBED_URL not set — cannot generate embeddings")?;
+
+    let repo = resolve_repo(cli)?;
+    let db_path = db_path(cli, &repo);
+    let store =
+        Store::open(&db_path).with_context(|| format!("cannot open database at {db_path}"))?;
+
+    let chunks = store
+        .chunks_missing_embeddings(limit)
+        .context("failed to read chunks")?;
+
+    if chunks.is_empty() {
+        println!("All chunks already have embeddings.");
+        return Ok(());
+    }
+
+    let total = chunks.len();
+    let mut done = 0usize;
+    let mut errors = 0usize;
+
+    for (id, qn, text) in chunks {
+        match atlas_search::embed::embed_text(&embed_cfg, &text) {
+            Ok(vec) => {
+                if let Err(err) = store.set_chunk_embedding(id, &vec) {
+                    tracing::warn!("store embedding failed for {qn}: {err:#}");
+                    errors += 1;
+                } else {
+                    done += 1;
+                }
+            }
+            Err(err) => {
+                tracing::warn!("embed failed for {qn}: {err:#}");
+                errors += 1;
+            }
+        }
+    }
+
+    println!("Embedded {done}/{total} chunks ({errors} errors).");
     Ok(())
 }
 
@@ -821,10 +872,18 @@ struct CheckResult {
 
 impl CheckResult {
     fn pass(name: &'static str, detail: impl Into<String>) -> Self {
-        Self { name, ok: true, detail: detail.into() }
+        Self {
+            name,
+            ok: true,
+            detail: detail.into(),
+        }
     }
     fn fail(name: &'static str, detail: impl Into<String>) -> Self {
-        Self { name, ok: false, detail: detail.into() }
+        Self {
+            name,
+            ok: false,
+            detail: detail.into(),
+        }
     }
 }
 
@@ -852,7 +911,10 @@ pub fn run_doctor(cli: &Cli) -> Result<()> {
     // 3. .atlas dir
     let atlas_dir = atlas_engine::paths::atlas_dir(&repo);
     if atlas_dir.exists() {
-        checks.push(CheckResult::pass("atlas_dir", atlas_dir.display().to_string()));
+        checks.push(CheckResult::pass(
+            "atlas_dir",
+            atlas_dir.display().to_string(),
+        ));
     } else {
         checks.push(CheckResult::fail(
             "atlas_dir",
@@ -1056,13 +1118,8 @@ pub fn run_install(cli: &Cli) -> Result<()> {
         println!("Dry run — no files will be written.\n");
     }
 
-    let summary = crate::install::run_install(
-        repo_root,
-        &platform,
-        dry_run,
-        no_hooks,
-        no_instructions,
-    )?;
+    let summary =
+        crate::install::run_install(repo_root, &platform, dry_run, no_hooks, no_instructions)?;
 
     if cli.json {
         print_json(

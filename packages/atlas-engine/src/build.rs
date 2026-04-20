@@ -155,6 +155,17 @@ pub fn build_graph(
                 .context("cannot store parsed files")?;
             total_nodes += n;
             total_edges += e;
+
+            // Index chunk text for retrieval (embeddings generated separately).
+            for pf in &parsed_files {
+                for node in &pf.nodes {
+                    if let Err(err) =
+                        store.upsert_chunk(&node.qualified_name, 0, &node.chunk_text())
+                    {
+                        tracing::warn!("chunk upsert failed for {}: {err:#}", node.qualified_name);
+                    }
+                }
+            }
         }
     }
 

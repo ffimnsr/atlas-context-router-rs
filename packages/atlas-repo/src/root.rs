@@ -66,7 +66,10 @@ mod tests {
         // Start from src/ inside this crate — should still resolve to workspace root.
         let here = Utf8Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/src"));
         let root = find_repo_root(here).expect("should find repo root");
-        assert!(root.join(".git").exists(), ".git must exist at resolved root");
+        assert!(
+            root.join(".git").exists(),
+            ".git must exist at resolved root"
+        );
     }
 
     #[test]
@@ -80,11 +83,9 @@ mod tests {
         std::fs::create_dir_all(&nested).unwrap();
         let nested_utf8 = camino::Utf8Path::from_path(&nested).unwrap();
         let found = find_repo_root(nested_utf8).expect("walk should find .git");
-        let expected = camino::Utf8Path::from_path(
-            &repo_root.canonicalize().unwrap(),
-        )
-        .unwrap()
-        .to_owned();
+        let expected = camino::Utf8Path::from_path(&repo_root.canonicalize().unwrap())
+            .unwrap()
+            .to_owned();
         assert_eq!(found, expected);
     }
 

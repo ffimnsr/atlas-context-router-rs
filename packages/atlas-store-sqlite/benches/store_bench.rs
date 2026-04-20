@@ -1,8 +1,6 @@
 use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
 
-use atlas_core::{
-    Edge, EdgeKind, Node, NodeId, NodeKind, ParsedFile, SearchQuery,
-};
+use atlas_core::{Edge, EdgeKind, Node, NodeId, NodeKind, ParsedFile, SearchQuery};
 use atlas_store_sqlite::Store;
 
 // ---------------------------------------------------------------------------
@@ -161,11 +159,7 @@ fn bench_impact_radius(c: &mut Criterion) {
 
     c.bench_function("store/impact_radius_450_nodes", |b| {
         let seed: Vec<&str> = paths[..3].iter().map(String::as_str).collect();
-        b.iter(|| {
-            store
-                .impact_radius(&seed, 5, 200)
-                .expect("impact")
-        });
+        b.iter(|| store.impact_radius(&seed, 5, 200).expect("impact"));
     });
 }
 

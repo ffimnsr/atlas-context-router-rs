@@ -90,7 +90,10 @@ fn collect_files_excludes_binary_files() {
     let files = collect_files(root_utf8, None).unwrap();
 
     let names: Vec<&str> = files.iter().map(|p| p.as_str()).collect();
-    assert!(names.contains(&"readme.txt"), "text file should be collected");
+    assert!(
+        names.contains(&"readme.txt"),
+        "text file should be collected"
+    );
     assert!(!names.contains(&"data.bin"), "binary file must be excluded");
 }
 
@@ -113,8 +116,14 @@ fn collect_files_excludes_files_over_size_limit() {
     let files = collect_files(root_utf8, Some(5)).unwrap();
 
     let names: Vec<&str> = files.iter().map(|p| p.as_str()).collect();
-    assert!(names.contains(&"small.txt"), "small file should be collected");
-    assert!(!names.contains(&"big.txt"), "oversized file must be excluded");
+    assert!(
+        names.contains(&"small.txt"),
+        "small file should be collected"
+    );
+    assert!(
+        !names.contains(&"big.txt"),
+        "oversized file must be excluded"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -141,7 +150,9 @@ fn changed_files_detects_staged_added_file() {
 
     use atlas_core::model::ChangeType;
     assert!(
-        changes.iter().any(|c| c.path == "new.rs" && c.change_type == ChangeType::Added),
+        changes
+            .iter()
+            .any(|c| c.path == "new.rs" && c.change_type == ChangeType::Added),
         "staged new file must appear as Added; got {changes:?}"
     );
 }
@@ -165,7 +176,9 @@ fn changed_files_detects_staged_modified_file() {
 
     use atlas_core::model::ChangeType;
     assert!(
-        changes.iter().any(|c| c.path == "lib.rs" && c.change_type == ChangeType::Modified),
+        changes
+            .iter()
+            .any(|c| c.path == "lib.rs" && c.change_type == ChangeType::Modified),
         "staged modified file must appear as Modified; got {changes:?}"
     );
 }
@@ -247,7 +260,9 @@ fn changed_files_working_tree_detects_unstaged_modification() {
 
     use atlas_core::model::ChangeType;
     assert!(
-        changes.iter().any(|c| c.path == "lib.rs" && c.change_type == ChangeType::Modified),
+        changes
+            .iter()
+            .any(|c| c.path == "lib.rs" && c.change_type == ChangeType::Modified),
         "unstaged modification must appear as Modified in working-tree diff; got {changes:?}"
     );
 }

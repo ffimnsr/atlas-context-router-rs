@@ -7,5 +7,8 @@ description = "FTS-backed graph search and ranking utilities for Atlas"
 [dependencies]
 atlas-core.workspace = true
 atlas-store-sqlite = { path = "../atlas-store-sqlite" }
+anyhow.workspace = true
 serde_json.workspace = true
+serde.workspace = true
 tracing.workspace = true
+ureq.workspace = true

@@ -18,4 +18,8 @@ pub const MIGRATIONS: &[Migration] = &[
         version: 2,
         sql: include_str!("migrations/002_flow_and_community_tables.sql"),
     },
+    Migration {
+        version: 3,
+        sql: include_str!("migrations/003_retrieval_chunks.sql"),
+    },
 ];

@@ -350,6 +350,18 @@ pub fn update_graph(
             .context("cannot store parsed files")?;
         total_nodes += n;
         total_edges += e;
+
+        // Refresh chunk text; delete stale entries first, then re-insert.
+        for pf in &chunk_owned {
+            if let Err(err) = store.delete_chunks_for_file(&pf.path) {
+                tracing::warn!("chunk delete failed for {}: {err:#}", pf.path);
+            }
+            for node in &pf.nodes {
+                if let Err(err) = store.upsert_chunk(&node.qualified_name, 0, &node.chunk_text()) {
+                    tracing::warn!("chunk upsert failed for {}: {err:#}", node.qualified_name);
+                }
+            }
+        }
     }
     drop(_write_span);
 

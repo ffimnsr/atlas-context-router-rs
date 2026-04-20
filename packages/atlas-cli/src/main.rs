@@ -17,6 +17,7 @@ fn main() {
         Command::Status { .. } => commands::run_status(&cli),
         Command::DetectChanges { .. } => commands::run_detect_changes(&cli),
         Command::Query { .. } => commands::run_query(&cli),
+        Command::Embed { .. } => commands::run_embed(&cli),
         Command::Impact { .. } => commands::run_impact(&cli),
         Command::ReviewContext { .. } => commands::run_review_context(&cli),
         Command::Serve => commands::run_serve(&cli),

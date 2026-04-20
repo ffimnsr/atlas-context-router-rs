@@ -50,6 +50,9 @@ tree-sitter-typescript = "0.23"
 # benchmarks
 criterion = { version = "0.5", features = ["html_reports"] }
 
+# HTTP client
+ureq = { version = "2", features = ["json"] }
+
 # concurrency
 rayon = "1"
 hashbrown = "0.15"

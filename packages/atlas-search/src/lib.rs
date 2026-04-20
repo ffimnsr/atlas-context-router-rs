@@ -4,6 +4,8 @@ use atlas_core::{NodeKind, Result, ScoredNode, SearchQuery};
 use atlas_store_sqlite::Store;
 use tracing::debug;
 
+pub mod embed;
+
 // ---------------------------------------------------------------------------
 // Token splitting
 // ---------------------------------------------------------------------------
@@ -337,7 +339,21 @@ pub fn graph_expand(
 /// This is the primary search entry point for callers that want all
 /// Slice 15 features. Raw `Store::search` is still available for cases
 /// where only basic FTS is needed.
+///
+/// When `query.hybrid` is `true` **and** `ATLAS_EMBED_URL` is set in the
+/// environment, the hybrid path is taken: FTS and vector results are merged
+/// via Reciprocal Rank Fusion.  Falls back silently to FTS-only when no
+/// embedding backend is configured.
 pub fn search(store: &Store, query: &SearchQuery) -> Result<Vec<ScoredNode>> {
+    // ---- hybrid path -------------------------------------------------------
+    if query.hybrid {
+        if let Some(embed_cfg) = embed::EmbeddingConfig::from_env() {
+            return search_hybrid(store, query, &embed_cfg);
+        }
+        debug!("hybrid=true but ATLAS_EMBED_URL not set; falling back to FTS");
+    }
+
+    // ---- FTS path ----------------------------------------------------------
     // Build an FTS query that includes camelCase/snake_case token variants.
     let expanded_text = build_fts_query(&query.text);
     let effective_query = SearchQuery {
@@ -376,6 +392,92 @@ pub fn search(store: &Store, query: &SearchQuery) -> Result<Vec<ScoredNode>> {
     } else {
         Ok(boosted)
     }
+}
+
+// ---------------------------------------------------------------------------
+// Hybrid search internals
+// ---------------------------------------------------------------------------
+
+/// Merge two ranked lists using Reciprocal Rank Fusion (RRF).
+///
+/// RRF score for document `d` = Σ 1 / (k + rank(d, retriever)).
+/// `k` (typically 60) dampens the influence of absolute rank position.
+/// Both lists may be empty; an empty list contributes nothing to the scores.
+pub fn reciprocal_rank_fusion(
+    fts: &[ScoredNode],
+    vector: &[ScoredNode],
+    k: u32,
+) -> Vec<ScoredNode> {
+    let mut acc: HashMap<String, (ScoredNode, f64)> = HashMap::new();
+
+    for (rank, n) in fts.iter().enumerate() {
+        let entry = acc
+            .entry(n.node.qualified_name.clone())
+            .or_insert_with(|| (n.clone(), 0.0));
+        entry.1 += 1.0 / (k as f64 + rank as f64 + 1.0);
+    }
+    for (rank, n) in vector.iter().enumerate() {
+        let entry = acc
+            .entry(n.node.qualified_name.clone())
+            .or_insert_with(|| (n.clone(), 0.0));
+        entry.1 += 1.0 / (k as f64 + rank as f64 + 1.0);
+    }
+
+    let mut results: Vec<ScoredNode> = acc
+        .into_values()
+        .map(|(mut n, score)| {
+            n.score = score;
+            n
+        })
+        .collect();
+    results.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    results
+}
+
+/// Run FTS + vector retrieval and merge with RRF.
+fn search_hybrid(
+    store: &Store,
+    query: &SearchQuery,
+    embed_cfg: &embed::EmbeddingConfig,
+) -> Result<Vec<ScoredNode>> {
+    // FTS branch — fetch top_k_fts candidates then apply ranking boosts.
+    let fts_q = SearchQuery {
+        text: build_fts_query(&query.text),
+        limit: query.top_k_fts,
+        ..query.clone()
+    };
+    let fts_raw = store.search(&fts_q)?;
+
+    let recent_set: HashSet<String> = if query.recent_file_boost {
+        store.recently_indexed_files(50)?.into_iter().collect()
+    } else {
+        HashSet::new()
+    };
+    let changed_set: HashSet<String> = query.changed_files.iter().cloned().collect();
+
+    let fts_boosted = apply_ranking_boosts(
+        fts_raw,
+        &query.text,
+        query.reference_file.as_deref(),
+        query.reference_language.as_deref(),
+        query.fuzzy_match,
+        &recent_set,
+        &changed_set,
+    );
+
+    // Vector branch — embed query and fetch top_k_vector candidates.
+    let query_vec = embed::embed_text(embed_cfg, &query.text)
+        .map_err(|e| atlas_core::AtlasError::Other(e.to_string()))?;
+    let vector_results = store.nodes_by_vector_similarity(&query_vec, query.top_k_vector)?;
+
+    // RRF merge and truncate to requested limit.
+    let mut merged = reciprocal_rank_fusion(&fts_boosted, &vector_results, query.rrf_k);
+    merged.truncate(query.limit);
+    Ok(merged)
 }
 
 // ---------------------------------------------------------------------------
@@ -450,7 +552,15 @@ mod tests {
         };
 
         let input = vec![ScoredNode { node, score: 5.0 }];
-        let boosted = apply_ranking_boosts(input, "search", None, None, false, &HashSet::new(), &HashSet::new());
+        let boosted = apply_ranking_boosts(
+            input,
+            "search",
+            None,
+            None,
+            false,
+            &HashSet::new(),
+            &HashSet::new(),
+        );
 
         // Exact name (+20) + fn kind (+3) + pub (+2) = +25 on top of 5.0
         assert!(
@@ -490,8 +600,15 @@ mod tests {
         let diff_dir = make_test_node("foo", "other/lib.rs::fn::foo", "other/lib.rs", "rust");
 
         let input = vec![diff_dir.clone(), same_dir.clone()];
-        let boosted =
-            apply_ranking_boosts(input, "foo", Some("src/main.rs"), None, false, &HashSet::new(), &HashSet::new());
+        let boosted = apply_ranking_boosts(
+            input,
+            "foo",
+            Some("src/main.rs"),
+            None,
+            false,
+            &HashSet::new(),
+            &HashSet::new(),
+        );
 
         let same_score = boosted
             .iter()
@@ -515,8 +632,15 @@ mod tests {
         let go_node = make_test_node("parse", "src/a.go::fn::parse", "src/a.go", "go");
 
         let input = vec![go_node.clone(), rust_node.clone()];
-        let boosted =
-            apply_ranking_boosts(input, "parse", None, Some("rust"), false, &HashSet::new(), &HashSet::new());
+        let boosted = apply_ranking_boosts(
+            input,
+            "parse",
+            None,
+            Some("rust"),
+            false,
+            &HashSet::new(),
+            &HashSet::new(),
+        );
 
         let rust_score = boosted
             .iter()
@@ -584,8 +708,15 @@ mod tests {
         let n2 = make_test_node("f", "lib/b.rs::fn::f", "lib/b.rs", "rust");
 
         let input = vec![n1.clone(), n2.clone()];
-        let boosted =
-            apply_ranking_boosts(input, "f", None, None, false, &HashSet::new(), &HashSet::new());
+        let boosted = apply_ranking_boosts(
+            input,
+            "f",
+            None,
+            None,
+            false,
+            &HashSet::new(),
+            &HashSet::new(),
+        );
 
         // Both same language, no reference → scores should be equal (both
         // start at 1.0 with only the fn-kind +3 applied equally).
@@ -626,8 +757,15 @@ mod tests {
         );
 
         let input = vec![distant.clone(), close.clone()];
-        let boosted =
-            apply_ranking_boosts(input, "sarch", None, None, true, &HashSet::new(), &HashSet::new());
+        let boosted = apply_ranking_boosts(
+            input,
+            "sarch",
+            None,
+            None,
+            true,
+            &HashSet::new(),
+            &HashSet::new(),
+        );
 
         let close_score = boosted
             .iter()
@@ -650,10 +788,24 @@ mod tests {
         // Same setup but fuzzy_match=false → no extra boost for "sarch".
         let close = make_test_node("search", "src/lib.rs::fn::search", "src/lib.rs", "rust");
         let input = vec![close];
-        let no_fuzzy =
-            apply_ranking_boosts(input.clone(), "sarch", None, None, false, &HashSet::new(), &HashSet::new());
-        let with_fuzzy =
-            apply_ranking_boosts(input, "sarch", None, None, true, &HashSet::new(), &HashSet::new());
+        let no_fuzzy = apply_ranking_boosts(
+            input.clone(),
+            "sarch",
+            None,
+            None,
+            false,
+            &HashSet::new(),
+            &HashSet::new(),
+        );
+        let with_fuzzy = apply_ranking_boosts(
+            input,
+            "sarch",
+            None,
+            None,
+            true,
+            &HashSet::new(),
+            &HashSet::new(),
+        );
 
         assert!(
             with_fuzzy[0].score > no_fuzzy[0].score,
@@ -663,13 +815,30 @@ mod tests {
 
     #[test]
     fn recent_file_boost_applied() {
-        let recent = make_test_node("do_work", "src/fresh.rs::fn::do_work", "src/fresh.rs", "rust");
-        let old = make_test_node("do_work", "src/stale.rs::fn::do_work", "src/stale.rs", "rust");
+        let recent = make_test_node(
+            "do_work",
+            "src/fresh.rs::fn::do_work",
+            "src/fresh.rs",
+            "rust",
+        );
+        let old = make_test_node(
+            "do_work",
+            "src/stale.rs::fn::do_work",
+            "src/stale.rs",
+            "rust",
+        );
 
         let recent_set: HashSet<String> = ["src/fresh.rs".to_string()].into();
         let input = vec![old.clone(), recent.clone()];
-        let boosted =
-            apply_ranking_boosts(input, "do_work", None, None, false, &recent_set, &HashSet::new());
+        let boosted = apply_ranking_boosts(
+            input,
+            "do_work",
+            None,
+            None,
+            false,
+            &recent_set,
+            &HashSet::new(),
+        );
 
         let recent_score = boosted
             .iter()
@@ -690,9 +859,24 @@ mod tests {
     #[test]
     fn recent_file_boost_empty_set_no_effect() {
         let n = make_test_node("work", "src/a.rs::fn::work", "src/a.rs", "rust");
-        let base = apply_ranking_boosts(vec![n.clone()], "work", None, None, false, &HashSet::new(), &HashSet::new());
-        let with_empty_recent =
-            apply_ranking_boosts(vec![n], "work", None, None, false, &HashSet::new(), &HashSet::new());
+        let base = apply_ranking_boosts(
+            vec![n.clone()],
+            "work",
+            None,
+            None,
+            false,
+            &HashSet::new(),
+            &HashSet::new(),
+        );
+        let with_empty_recent = apply_ranking_boosts(
+            vec![n],
+            "work",
+            None,
+            None,
+            false,
+            &HashSet::new(),
+            &HashSet::new(),
+        );
         assert_eq!(
             base[0].score, with_empty_recent[0].score,
             "empty recent set must not change score"
@@ -716,8 +900,15 @@ mod tests {
 
         let changed_set: HashSet<String> = ["src/changed.rs".to_string()].into();
         let input = vec![unchanged.clone(), changed.clone()];
-        let boosted =
-            apply_ranking_boosts(input, "do_work", None, None, false, &HashSet::new(), &changed_set);
+        let boosted = apply_ranking_boosts(
+            input,
+            "do_work",
+            None,
+            None,
+            false,
+            &HashSet::new(),
+            &changed_set,
+        );
 
         let changed_score = boosted
             .iter()

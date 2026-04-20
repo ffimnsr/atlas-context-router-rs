@@ -51,6 +51,33 @@ pub struct Node {
     pub extra_json: serde_json::Value,
 }
 
+impl Node {
+    /// Build a concise text representation suitable for semantic embedding.
+    ///
+    /// Format: `{kind} {name}[({params})][ -> {return_type}]  [{qualified_name}]`
+    /// This provides a dense, symbol-level chunk for vector retrieval.
+    pub fn chunk_text(&self) -> String {
+        let mut out = format!("{} {}", self.kind.as_str(), self.name);
+        if let Some(p) = &self.params
+            && !p.is_empty()
+        {
+            out.push('(');
+            out.push_str(p);
+            out.push(')');
+        }
+        if let Some(r) = &self.return_type
+            && !r.is_empty()
+        {
+            out.push_str(" -> ");
+            out.push_str(r);
+        }
+        out.push_str("  [");
+        out.push_str(&self.qualified_name);
+        out.push(']');
+        out
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Edge {
     pub id: i64,
@@ -181,6 +208,18 @@ pub struct SearchQuery {
     /// Caller populates this with the paths from the current git diff.
     /// Empty vec disables the boost.
     pub changed_files: Vec<String>,
+    /// Enable hybrid (FTS + vector) retrieval.
+    ///
+    /// When `true` and `ATLAS_EMBED_URL` is set, the search layer runs both
+    /// FTS and vector retrieval and merges results with Reciprocal Rank Fusion.
+    /// Falls back to FTS-only when no embedding backend is configured.
+    pub hybrid: bool,
+    /// FTS candidate pool size before RRF merge (default: 60).
+    pub top_k_fts: usize,
+    /// Vector candidate pool size before RRF merge (default: 60).
+    pub top_k_vector: usize,
+    /// Reciprocal Rank Fusion k constant (default: 60).
+    pub rrf_k: u32,
 }
 
 impl Default for SearchQuery {
@@ -200,6 +239,10 @@ impl Default for SearchQuery {
             fuzzy_match: false,
             recent_file_boost: false,
             changed_files: vec![],
+            hybrid: false,
+            top_k_fts: 60,
+            top_k_vector: 60,
+            rrf_k: 60,
         }
     }
 }

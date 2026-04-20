@@ -109,6 +109,10 @@ pub enum Command {
         /// Maximum edge hops when --expand is active.
         #[arg(long, default_value_t = 1)]
         expand_hops: u32,
+
+        /// Use hybrid FTS + vector search with RRF (requires ATLAS_EMBED_URL).
+        #[arg(long)]
+        hybrid: bool,
     },
 
     /// Compute the impact radius of changed files.
@@ -147,6 +151,13 @@ pub enum Command {
         /// Maximum number of impacted nodes to consider.
         #[arg(long, default_value_t = 200)]
         max_nodes: u32,
+    },
+
+    /// Generate and store embeddings for all un-embedded chunks.
+    Embed {
+        /// Maximum number of chunks to embed in one run.
+        #[arg(long, default_value_t = 1000)]
+        limit: usize,
     },
 
     /// Start a JSON-RPC / MCP stdio server.
@@ -208,7 +219,14 @@ mod tests {
 
     #[test]
     fn global_repo_and_db_flags() {
-        let cli = parse(&["atlas", "--repo", "/tmp/proj", "--db", "/tmp/w.sqlite", "status"]);
+        let cli = parse(&[
+            "atlas",
+            "--repo",
+            "/tmp/proj",
+            "--db",
+            "/tmp/w.sqlite",
+            "status",
+        ]);
         assert_eq!(cli.repo.as_deref(), Some("/tmp/proj"));
         assert_eq!(cli.db.as_deref(), Some("/tmp/w.sqlite"));
     }
@@ -269,7 +287,14 @@ mod tests {
     #[test]
     fn parse_update_with_base_ref() {
         let cli = parse(&["atlas", "update", "--base", "origin/main"]);
-        if let Command::Update { base, staged, working_tree, files, fail_fast } = cli.command {
+        if let Command::Update {
+            base,
+            staged,
+            working_tree,
+            files,
+            fail_fast,
+        } = cli.command
+        {
             assert_eq!(base.as_deref(), Some("origin/main"));
             assert!(!staged);
             assert!(!working_tree);
@@ -307,7 +332,14 @@ mod tests {
     #[test]
     fn parse_query_text_only() {
         let cli = parse(&["atlas", "query", "ReplaceFileGraph"]);
-        if let Command::Query { text, kind, language, limit, .. } = cli.command {
+        if let Command::Query {
+            text,
+            kind,
+            language,
+            limit,
+            ..
+        } = cli.command
+        {
             assert_eq!(text, "ReplaceFileGraph");
             assert!(kind.is_none());
             assert!(language.is_none());
@@ -319,8 +351,22 @@ mod tests {
 
     #[test]
     fn parse_query_with_kind_and_language_filters() {
-        let cli = parse(&["atlas", "query", "foo", "--kind", "function", "--language", "rust"]);
-        if let Command::Query { text, kind, language, .. } = cli.command {
+        let cli = parse(&[
+            "atlas",
+            "query",
+            "foo",
+            "--kind",
+            "function",
+            "--language",
+            "rust",
+        ]);
+        if let Command::Query {
+            text,
+            kind,
+            language,
+            ..
+        } = cli.command
+        {
             assert_eq!(text, "foo");
             assert_eq!(kind.as_deref(), Some("function"));
             assert_eq!(language.as_deref(), Some("rust"));
@@ -332,7 +378,12 @@ mod tests {
     #[test]
     fn parse_query_expand_flag() {
         let cli = parse(&["atlas", "query", "foo", "--expand", "--expand-hops", "3"]);
-        if let Command::Query { expand, expand_hops, .. } = cli.command {
+        if let Command::Query {
+            expand,
+            expand_hops,
+            ..
+        } = cli.command
+        {
             assert!(expand);
             assert_eq!(expand_hops, 3);
         } else {
@@ -347,7 +398,12 @@ mod tests {
     #[test]
     fn parse_impact_defaults() {
         let cli = parse(&["atlas", "impact"]);
-        if let Command::Impact { max_depth, max_nodes, .. } = cli.command {
+        if let Command::Impact {
+            max_depth,
+            max_nodes,
+            ..
+        } = cli.command
+        {
             assert_eq!(max_depth, 5);
             assert_eq!(max_nodes, 200);
         } else {
@@ -368,7 +424,12 @@ mod tests {
     #[test]
     fn parse_impact_with_depth_and_nodes() {
         let cli = parse(&["atlas", "impact", "--max-depth", "3", "--max-nodes", "50"]);
-        if let Command::Impact { max_depth, max_nodes, .. } = cli.command {
+        if let Command::Impact {
+            max_depth,
+            max_nodes,
+            ..
+        } = cli.command
+        {
             assert_eq!(max_depth, 3);
             assert_eq!(max_nodes, 50);
         } else {
@@ -383,7 +444,13 @@ mod tests {
     #[test]
     fn parse_review_context_defaults() {
         let cli = parse(&["atlas", "review-context"]);
-        if let Command::ReviewContext { max_depth, max_nodes, base, files } = cli.command {
+        if let Command::ReviewContext {
+            max_depth,
+            max_nodes,
+            base,
+            files,
+        } = cli.command
+        {
             assert_eq!(max_depth, 3);
             assert_eq!(max_nodes, 200);
             assert!(base.is_none());
@@ -439,7 +506,13 @@ mod tests {
     #[test]
     fn parse_install_defaults() {
         let cli = parse(&["atlas", "install"]);
-        if let Command::Install { platform, dry_run, no_hooks, no_instructions } = cli.command {
+        if let Command::Install {
+            platform,
+            dry_run,
+            no_hooks,
+            no_instructions,
+        } = cli.command
+        {
             assert_eq!(platform, "all");
             assert!(!dry_run);
             assert!(!no_hooks);
@@ -472,7 +545,12 @@ mod tests {
     #[test]
     fn parse_install_no_hooks_and_no_instructions() {
         let cli = parse(&["atlas", "install", "--no-hooks", "--no-instructions"]);
-        if let Command::Install { no_hooks, no_instructions, .. } = cli.command {
+        if let Command::Install {
+            no_hooks,
+            no_instructions,
+            ..
+        } = cli.command
+        {
             assert!(no_hooks);
             assert!(no_instructions);
         } else {
@@ -489,7 +567,9 @@ mod tests {
         let cli = parse(&["atlas", "completions", "bash"]);
         assert!(matches!(
             cli.command,
-            Command::Completions { shell: clap_complete::Shell::Bash }
+            Command::Completions {
+                shell: clap_complete::Shell::Bash
+            }
         ));
     }
 
@@ -498,7 +578,9 @@ mod tests {
         let cli = parse(&["atlas", "completions", "zsh"]);
         assert!(matches!(
             cli.command,
-            Command::Completions { shell: clap_complete::Shell::Zsh }
+            Command::Completions {
+                shell: clap_complete::Shell::Zsh
+            }
         ));
     }
 

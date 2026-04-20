@@ -1057,14 +1057,14 @@ These phases extend v1 after core graph/build/update/query path is reliable.
 ### 18.1 Hybrid search
 
 - [x] keep SQLite FTS5 as baseline
-- [ ] add embeddings behind optional toggle
-- [ ] chunk symbol-sized nodes for retrieval
-- [ ] generate embeddings
-- [ ] store vectors in SQLite or external store
-- [ ] implement hybrid retrieval:
-  - [ ] FTS results
-  - [ ] vector results
-  - [ ] reciprocal-rank fusion merge
+- [x] add embeddings behind optional toggle
+- [x] chunk symbol-sized nodes for retrieval
+- [x] generate embeddings
+- [x] store vectors in SQLite or external store
+- [x] implement hybrid retrieval:
+  - [x] FTS results
+  - [x] vector results
+  - [x] reciprocal-rank fusion merge
 
 ### 18.2 Ranking improvements
 
@@ -1999,6 +1999,44 @@ Deterministic analytics layer on top of graph + stored metadata. Produce explain
 - [ ] prioritize better ranking
 - [ ] prioritize better context
 - [ ] prioritize better signals
+
+## Phase 32 — TOON Output Package
+
+Internal TOON package for LLM-facing MCP output only. Goal: reduce token usage for review and context payloads without changing Atlas core storage, parser, or JSON-RPC transport. Do not rely on external TOON crates.
+
+### 32.1 Scope and boundaries
+
+- [ ] create `packages/atlas-toon`
+- [ ] keep TOON limited to LLM-facing MCP output
+- [ ] keep JSON as baseline and fallback output
+- [ ] do not use TOON for SQLite persistence, internal domain models, or MCP transport framing
+- [ ] do not depend on external TOON crates
+
+### 32.2 Encoder MVP
+
+- [ ] encode `serde_json::Value` to TOON
+- [ ] support objects, arrays, strings, numbers, booleans, and null
+- [ ] implement deterministic field ordering
+- [ ] implement canonical number formatting
+- [ ] implement delimiter-aware quoting rules
+- [ ] implement inline primitive arrays
+- [ ] implement tabular encoding for uniform arrays of primitive-only objects
+- [ ] implement expanded encoding for mixed or nested arrays
+
+### 32.3 MCP integration
+
+- [ ] add MCP response mode for TOON text output
+- [ ] use TOON first for context-heavy agent-facing tools
+- [ ] keep MCP tool contracts stable while swapping payload body format
+- [ ] add opt-in selection per tool or global config flag
+
+### 32.4 Validation and quality gates
+
+- [ ] add fixture tests from TOON spec examples for supported subset
+- [ ] add round-trip tests for Atlas-produced payloads where feasible
+- [ ] reject unsupported cases instead of emitting ambiguous output
+- [ ] benchmark token count and response size vs JSON on representative MCP payloads
+- [ ] document exact supported TOON subset and deliberate deviations from full spec
 
 ---
 

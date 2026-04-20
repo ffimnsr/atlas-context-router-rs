@@ -65,9 +65,7 @@ pub fn run_install(
 
         match installer(repo_root, dry_run)? {
             PlatformResult::Configured(label) => summary.configured.push(label),
-            PlatformResult::AlreadyConfigured(label) => {
-                summary.already_configured.push(label)
-            }
+            PlatformResult::AlreadyConfigured(label) => summary.already_configured.push(label),
             PlatformResult::Skipped => {}
         }
     }
@@ -125,7 +123,7 @@ fn install_copilot(repo_root: &Path, dry_run: bool) -> Result<PlatformResult> {
     let server_entry = copilot_server_entry();
     merge_json_mcp(
         &config_path,
-        "servers",       // VS Code uses "servers" not "mcpServers"
+        "servers", // VS Code uses "servers" not "mcpServers"
         "atlas",
         server_entry,
         dry_run,
@@ -191,8 +189,8 @@ fn merge_json_mcp(
     display_name: &str,
 ) -> Result<PlatformResult> {
     let mut root: serde_json::Map<String, Value> = if path.exists() {
-        let text = fs::read_to_string(path)
-            .with_context(|| format!("cannot read {}", path.display()))?;
+        let text =
+            fs::read_to_string(path).with_context(|| format!("cannot read {}", path.display()))?;
         match serde_json::from_str::<Value>(&text) {
             Ok(Value::Object(m)) => m,
             _ => serde_json::Map::new(),
@@ -251,12 +249,14 @@ fn merge_toml_mcp(
         return Ok(PlatformResult::AlreadyConfigured(display_name.to_owned()));
     }
 
-    let section = format!(
-        "\n{section_header}\ncommand = \"atlas\"\nargs = [\"serve\"]\ntype = \"stdio\"\n"
-    );
+    let section =
+        format!("\n{section_header}\ncommand = \"atlas\"\nargs = [\"serve\"]\ntype = \"stdio\"\n");
 
     if dry_run {
-        println!("  [dry-run] {display_name}: would append to {}", path.display());
+        println!(
+            "  [dry-run] {display_name}: would append to {}",
+            path.display()
+        );
         return Ok(PlatformResult::Configured(display_name.to_owned()));
     }
 
@@ -310,7 +310,10 @@ pub fn install_git_hooks(repo_root: &Path, dry_run: bool) -> Result<Vec<PathBuf>
 
     let mut paths = Vec::new();
     for hook_name in ["pre-commit", "post-checkout", "post-merge", "post-rewrite"] {
-        paths.push(install_git_hook(git_dir.join("hooks").join(hook_name), dry_run)?);
+        paths.push(install_git_hook(
+            git_dir.join("hooks").join(hook_name),
+            dry_run,
+        )?);
     }
 
     Ok(paths)
@@ -428,8 +431,7 @@ pub fn inject_instructions(repo_root: &Path, dry_run: bool) -> Result<Vec<String
         // Only create AGENTS.md / CLAUDE.md when it does not exist yet;
         // always append when the file is already present.
         let existing = if path.exists() {
-            fs::read_to_string(&path)
-                .with_context(|| format!("cannot read {}", path.display()))?
+            fs::read_to_string(&path).with_context(|| format!("cannot read {}", path.display()))?
         } else {
             // Only create the file if it does not exist.
             String::new()
@@ -458,8 +460,11 @@ pub fn inject_instructions(repo_root: &Path, dry_run: bool) -> Result<Vec<String
             "\n\n"
         };
 
-        fs::write(&path, format!("{existing}{separator}{INSTRUCTIONS_SECTION}"))
-            .with_context(|| format!("cannot write {}", path.display()))?;
+        fs::write(
+            &path,
+            format!("{existing}{separator}{INSTRUCTIONS_SECTION}"),
+        )
+        .with_context(|| format!("cannot write {}", path.display()))?;
 
         updated.push(filename.to_string());
     }
@@ -547,8 +552,7 @@ mod tests {
         assert!(matches!(result, PlatformResult::Configured(_)));
         let vscode_path = tmp.path().join(".vscode").join("mcp.json");
         assert!(vscode_path.exists());
-        let val: Value =
-            serde_json::from_str(&fs::read_to_string(&vscode_path).unwrap()).unwrap();
+        let val: Value = serde_json::from_str(&fs::read_to_string(&vscode_path).unwrap()).unwrap();
         assert!(val["servers"]["atlas"]["command"] == "atlas");
     }
 
@@ -593,22 +597,30 @@ mod tests {
         repo_with_git(tmp.path());
         let summary = run_install(tmp.path(), "claude", false, false, true).unwrap();
         assert_eq!(summary.hook_paths.len(), 4);
-        assert!(summary
-            .hook_paths
-            .iter()
-            .any(|path| path.ends_with("pre-commit")));
-        assert!(summary
-            .hook_paths
-            .iter()
-            .any(|path| path.ends_with("post-checkout")));
-        assert!(summary
-            .hook_paths
-            .iter()
-            .any(|path| path.ends_with("post-merge")));
-        assert!(summary
-            .hook_paths
-            .iter()
-            .any(|path| path.ends_with("post-rewrite")));
+        assert!(
+            summary
+                .hook_paths
+                .iter()
+                .any(|path| path.ends_with("pre-commit"))
+        );
+        assert!(
+            summary
+                .hook_paths
+                .iter()
+                .any(|path| path.ends_with("post-checkout"))
+        );
+        assert!(
+            summary
+                .hook_paths
+                .iter()
+                .any(|path| path.ends_with("post-merge"))
+        );
+        assert!(
+            summary
+                .hook_paths
+                .iter()
+                .any(|path| path.ends_with("post-rewrite"))
+        );
     }
 
     #[test]

@@ -326,10 +326,8 @@ fn tool_build_or_update_graph(
             UpdateTarget::WorkingTree
         };
 
-        let config = atlas_engine::Config::load(
-            &atlas_engine::paths::atlas_dir(repo_root),
-        )
-        .unwrap_or_default();
+        let config = atlas_engine::Config::load(&atlas_engine::paths::atlas_dir(repo_root))
+            .unwrap_or_default();
 
         let summary = update_graph(
             repo_root_path.as_path(),
@@ -353,10 +351,8 @@ fn tool_build_or_update_graph(
         }))?)
     } else {
         // Default: full build
-        let config = atlas_engine::Config::load(
-            &atlas_engine::paths::atlas_dir(repo_root),
-        )
-        .unwrap_or_default();
+        let config = atlas_engine::Config::load(&atlas_engine::paths::atlas_dir(repo_root))
+            .unwrap_or_default();
 
         let summary = build_graph(
             repo_root_path.as_path(),
