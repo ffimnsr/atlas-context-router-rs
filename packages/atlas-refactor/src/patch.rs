@@ -76,9 +76,16 @@ fn build_hunks<'a>(ops: &[DiffOp<'a>], context: usize) -> Vec<Vec<AnnotatedLine<
     for op in ops {
         let (ol, nl) = (old_ln, new_ln);
         match op {
-            DiffOp::Equal(_) => { old_ln += 1; new_ln += 1; }
-            DiffOp::Remove(_) => { old_ln += 1; }
-            DiffOp::Insert(_) => { new_ln += 1; }
+            DiffOp::Equal(_) => {
+                old_ln += 1;
+                new_ln += 1;
+            }
+            DiffOp::Remove(_) => {
+                old_ln += 1;
+            }
+            DiffOp::Insert(_) => {
+                new_ln += 1;
+            }
         }
         annotated.push((op.clone(), ol, nl));
     }
@@ -119,7 +126,11 @@ fn build_hunks<'a>(ops: &[DiffOp<'a>], context: usize) -> Vec<Vec<AnnotatedLine<
         .map(|(s, e)| {
             annotated[s..=e]
                 .iter()
-                .map(|(op, ol, nl)| AnnotatedLine { op: op.clone(), old_line: *ol, new_line: *nl })
+                .map(|(op, ol, nl)| AnnotatedLine {
+                    op: op.clone(),
+                    old_line: *ol,
+                    new_line: *nl,
+                })
                 .collect()
         })
         .collect()
@@ -153,8 +164,14 @@ pub(crate) fn unified_diff_annotated(path: &str, old: &str, new: &str) -> String
     for hunk in &hunks {
         let old_start = hunk.first().map(|l| l.old_line).unwrap_or(1);
         let new_start = hunk.first().map(|l| l.new_line).unwrap_or(1);
-        let old_count = hunk.iter().filter(|l| !matches!(l.op, DiffOp::Insert(_))).count();
-        let new_count = hunk.iter().filter(|l| !matches!(l.op, DiffOp::Remove(_))).count();
+        let old_count = hunk
+            .iter()
+            .filter(|l| !matches!(l.op, DiffOp::Insert(_)))
+            .count();
+        let new_count = hunk
+            .iter()
+            .filter(|l| !matches!(l.op, DiffOp::Remove(_)))
+            .count();
 
         out.push_str(&format!(
             "@@ -{old_start},{old_count} +{new_start},{new_count} @@\n"

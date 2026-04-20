@@ -120,7 +120,10 @@ pub(crate) fn check_overlaps(edits: &[RefactorEdit]) -> Result<()> {
     use std::collections::HashMap;
     let mut by_file: HashMap<&str, Vec<(u32, u32)>> = HashMap::new();
     for e in edits {
-        by_file.entry(&e.file_path).or_default().push((e.line_start, e.line_end));
+        by_file
+            .entry(&e.file_path)
+            .or_default()
+            .push((e.line_start, e.line_end));
     }
     for (path, mut spans) in by_file {
         // Sort ascending to detect overlaps.
@@ -141,7 +144,7 @@ pub(crate) fn check_overlaps(edits: &[RefactorEdit]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use atlas_core::{RefactorEditKind};
+    use atlas_core::RefactorEditKind;
 
     fn make_edit(file: &str, ls: u32, le: u32, old: &str, new: &str) -> RefactorEdit {
         RefactorEdit {
@@ -156,13 +159,19 @@ mod tests {
 
     #[test]
     fn replace_identifier_simple() {
-        assert_eq!(replace_identifier("let foo = bar;", "foo", "baz"), "let baz = bar;");
+        assert_eq!(
+            replace_identifier("let foo = bar;", "foo", "baz"),
+            "let baz = bar;"
+        );
     }
 
     #[test]
     fn replace_identifier_no_partial_match() {
         // "foo" inside "foobar" must not be replaced.
-        assert_eq!(replace_identifier("let foobar = foo;", "foo", "baz"), "let foobar = baz;");
+        assert_eq!(
+            replace_identifier("let foobar = foo;", "foo", "baz"),
+            "let foobar = baz;"
+        );
     }
 
     #[test]
@@ -195,7 +204,13 @@ mod tests {
     #[test]
     fn apply_edits_rename_single_line() {
         let content = "fn old_name() {}\nfn other() {}\n";
-        let edits = vec![make_edit("f.rs", 1, 1, "fn old_name() {}", "fn new_name() {}")];
+        let edits = vec![make_edit(
+            "f.rs",
+            1,
+            1,
+            "fn old_name() {}",
+            "fn new_name() {}",
+        )];
         let result = apply_edits(content, &edits).unwrap();
         assert_eq!(result, "fn new_name() {}\nfn other() {}\n");
     }

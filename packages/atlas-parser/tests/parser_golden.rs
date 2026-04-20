@@ -30,7 +30,11 @@ impl FixtureCase {
 fn parser_fixtures_match_goldens() {
     let fixture_root = Path::new(FIXTURE_DIR);
     let cases = fixture_cases(fixture_root);
-    assert!(!cases.is_empty(), "expected parser fixtures under {}", fixture_root.display());
+    assert!(
+        !cases.is_empty(),
+        "expected parser fixtures under {}",
+        fixture_root.display()
+    );
 
     let registry = ParserRegistry::with_defaults();
     let update_goldens = env::var_os("ATLAS_UPDATE_GOLDENS").is_some();
@@ -50,8 +54,10 @@ fn parser_fixtures_match_goldens() {
                 &golden_path,
                 format!(
                     "{}\n",
-                    serde_json::to_string_pretty(&actual)
-                        .unwrap_or_else(|err| panic!("failed pretty-printing {}: {err}", case.rel_path))
+                    serde_json::to_string_pretty(&actual).unwrap_or_else(|err| panic!(
+                        "failed pretty-printing {}: {err}",
+                        case.rel_path
+                    ))
                 ),
             )
             .unwrap_or_else(|err| panic!("failed writing {}: {err}", golden_path.display()));
@@ -64,7 +70,8 @@ fn parser_fixtures_match_goldens() {
         .unwrap_or_else(|err| panic!("failed parsing {}: {err}", golden_path.display()));
 
         assert_eq!(
-            actual, expected,
+            actual,
+            expected,
             "golden mismatch for {} (fixture {})",
             case.rel_path,
             case.fixture_path.display()

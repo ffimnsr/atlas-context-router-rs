@@ -1888,22 +1888,22 @@ Shared support for explainability, config, CLI surface, JSON contracts, benchmar
 
 ### 26.1 Core tools
 
-- [ ] `get_review_context`
-- [ ] `get_impact_radius`
-- [ ] `query_graph`
-- [ ] `explain_change`
+- [x] `get_review_context`
+- [x] `get_impact_radius`
+- [x] `query_graph`
+- [x] `explain_change`
 
 ### 26.2 Output design
 
-- [ ] structured JSON
-- [ ] stable schemas
-- [ ] token-efficient responses
+- [x] structured JSON
+- [x] stable schemas
+- [x] token-efficient responses
 
 ### 26.3 Context optimization
 
-- [ ] return summaries only
-- [ ] limit node count
-- [ ] prioritize relevance
+- [x] return summaries only
+- [x] limit node count
+- [x] prioritize relevance
 
 ## Phase 27 — Observability
 

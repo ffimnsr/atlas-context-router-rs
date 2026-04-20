@@ -2,9 +2,10 @@ use std::fs;
 
 use anyhow::{Context, Result};
 use atlas_core::SearchQuery;
-use atlas_core::model::
-    {ChangeType, ContextIntent, ContextRequest, ContextTarget, ImpactResult, ReviewContext,
-    ReviewImpactOverview, RiskSummary,};
+use atlas_core::model::{
+    ChangeType, ContextIntent, ContextRequest, ContextTarget, ImpactResult, ReviewContext,
+    ReviewImpactOverview, RiskSummary,
+};
 use atlas_engine::{BuildOptions, UpdateOptions, UpdateTarget, build_graph, update_graph};
 use atlas_impact::analyze as advanced_impact;
 use atlas_repo::{DiffTarget, changed_files, collect_files, find_repo_root, repo_relative};
@@ -770,7 +771,9 @@ pub fn run_review_context(cli: &Cli) -> Result<()> {
         // JSON path: use context engine → ContextResult (new stable schema).
         let request = ContextRequest {
             intent: ContextIntent::Review,
-            target: ContextTarget::ChangedFiles { paths: target_files.clone() },
+            target: ContextTarget::ChangedFiles {
+                paths: target_files.clone(),
+            },
             max_nodes: Some(max_nodes),
             depth: Some(max_depth),
             ..ContextRequest::default()
@@ -788,84 +791,84 @@ pub fn run_review_context(cli: &Cli) -> Result<()> {
     let ctx = atlas_review::assemble_review_context(&impact, &target_files, max_depth, max_nodes);
 
     println!("Changed files ({}):", ctx.changed_files.len());
-        for f in &ctx.changed_files {
-            println!("  {f}");
-        }
-        println!("\nImpact radius:");
-        println!("  Max depth         : {}", ctx.impact_overview.max_depth);
-        println!("  Max nodes         : {}", ctx.impact_overview.max_nodes);
+    for f in &ctx.changed_files {
+        println!("  {f}");
+    }
+    println!("\nImpact radius:");
+    println!("  Max depth         : {}", ctx.impact_overview.max_depth);
+    println!("  Max nodes         : {}", ctx.impact_overview.max_nodes);
+    println!(
+        "  Impacted nodes    : {}",
+        ctx.impact_overview.impacted_node_count
+    );
+    println!(
+        "  Impacted files    : {}",
+        ctx.impact_overview.impacted_file_count
+    );
+    println!(
+        "  Relevant edges    : {}",
+        ctx.impact_overview.relevant_edge_count
+    );
+    println!(
+        "  Node limit reached: {}",
+        ctx.impact_overview.reached_node_limit
+    );
+    println!(
+        "\nChanged symbols: {}",
+        ctx.risk_summary.changed_symbol_count
+    );
+    for summary in ctx.changed_symbol_summaries.iter().take(10) {
         println!(
-            "  Impacted nodes    : {}",
-            ctx.impact_overview.impacted_node_count
+            "  {} {} ({}:{}) | callers {} | callees {} | importers {} | tests {}",
+            summary.node.kind.as_str(),
+            summary.node.qualified_name,
+            summary.node.file_path,
+            summary.node.line_start,
+            summary.callers.len(),
+            summary.callees.len(),
+            summary.importers.len(),
+            summary.tests.len()
         );
+    }
+    println!(
+        "\nImpacted neighbors (top {}):",
+        ctx.impacted_neighbors.len().min(20)
+    );
+    for n in ctx.impacted_neighbors.iter().take(20) {
         println!(
-            "  Impacted files    : {}",
-            ctx.impact_overview.impacted_file_count
+            "  {} {} ({}:{})",
+            n.kind.as_str(),
+            n.qualified_name,
+            n.file_path,
+            n.line_start
         );
-        println!(
-            "  Relevant edges    : {}",
-            ctx.impact_overview.relevant_edge_count
-        );
-        println!(
-            "  Node limit reached: {}",
-            ctx.impact_overview.reached_node_limit
-        );
-        println!(
-            "\nChanged symbols: {}",
-            ctx.risk_summary.changed_symbol_count
-        );
-        for summary in ctx.changed_symbol_summaries.iter().take(10) {
-            println!(
-                "  {} {} ({}:{}) | callers {} | callees {} | importers {} | tests {}",
-                summary.node.kind.as_str(),
-                summary.node.qualified_name,
-                summary.node.file_path,
-                summary.node.line_start,
-                summary.callers.len(),
-                summary.callees.len(),
-                summary.importers.len(),
-                summary.tests.len()
-            );
-        }
-        println!(
-            "\nImpacted neighbors (top {}):",
-            ctx.impacted_neighbors.len().min(20)
-        );
-        for n in ctx.impacted_neighbors.iter().take(20) {
-            println!(
-                "  {} {} ({}:{})",
-                n.kind.as_str(),
-                n.qualified_name,
-                n.file_path,
-                n.line_start
-            );
-        }
-        println!("\nRisk summary:");
-        println!(
-            "  Public API changes : {}",
-            ctx.risk_summary.public_api_changes
-        );
-        println!(
-            "  Affected tests     : {}",
-            ctx.risk_summary.affected_test_count
-        );
-        println!(
-            "  Uncovered changes  : {}",
-            ctx.risk_summary.uncovered_changed_symbol_count
-        );
-        println!(
-            "  Large functions    : {}",
-            ctx.risk_summary.large_function_count
-        );
-        println!("  Test adjacent      : {}", ctx.risk_summary.test_adjacent);
-        println!(
-            "  Cross-module impact: {}",
-            ctx.risk_summary.cross_module_impact
-        );
-        println!(
-            "  Cross-package impact: {}",
-            ctx.risk_summary.cross_package_impact
-        );
+    }
+    println!("\nRisk summary:");
+    println!(
+        "  Public API changes : {}",
+        ctx.risk_summary.public_api_changes
+    );
+    println!(
+        "  Affected tests     : {}",
+        ctx.risk_summary.affected_test_count
+    );
+    println!(
+        "  Uncovered changes  : {}",
+        ctx.risk_summary.uncovered_changed_symbol_count
+    );
+    println!(
+        "  Large functions    : {}",
+        ctx.risk_summary.large_function_count
+    );
+    println!("  Test adjacent      : {}", ctx.risk_summary.test_adjacent);
+    println!(
+        "  Cross-module impact: {}",
+        ctx.risk_summary.cross_module_impact
+    );
+    println!(
+        "  Cross-package impact: {}",
+        ctx.risk_summary.cross_package_impact
+    );
 
     Ok(())
 }
@@ -876,16 +879,49 @@ pub fn run_context(cli: &Cli) -> Result<()> {
     let repo = resolve_repo(cli)?;
     let db_path = db_path(cli, &repo);
 
-    let (qname, name, file, files, intent_str, max_nodes, max_edges, max_files, depth,
-        code_spans, tests, imports, neighbors) = match &cli.command {
+    let (
+        qname,
+        name,
+        file,
+        files,
+        intent_str,
+        max_nodes,
+        max_edges,
+        max_files,
+        depth,
+        code_spans,
+        tests,
+        imports,
+        neighbors,
+    ) = match &cli.command {
         Command::Context {
-            qname, name, file, files, intent,
-            max_nodes, max_edges, max_files, depth,
-            code_spans, tests, imports, neighbors,
+            qname,
+            name,
+            file,
+            files,
+            intent,
+            max_nodes,
+            max_edges,
+            max_files,
+            depth,
+            code_spans,
+            tests,
+            imports,
+            neighbors,
         } => (
-            qname.clone(), name.clone(), file.clone(), files.clone(), intent.clone(),
-            *max_nodes, *max_edges, *max_files, *depth,
-            *code_spans, *tests, *imports, *neighbors,
+            qname.clone(),
+            name.clone(),
+            file.clone(),
+            files.clone(),
+            intent.clone(),
+            *max_nodes,
+            *max_edges,
+            *max_files,
+            *depth,
+            *code_spans,
+            *tests,
+            *imports,
+            *neighbors,
         ),
         _ => unreachable!(),
     };
@@ -962,11 +998,20 @@ pub fn run_context(cli: &Cli) -> Result<()> {
         }
         println!("\nFiles ({}):", result.files.len());
         for sf in &result.files {
-            let ranges: Vec<String> = sf.line_ranges.iter().map(|(s, e)| format!("{s}-{e}")).collect();
+            let ranges: Vec<String> = sf
+                .line_ranges
+                .iter()
+                .map(|(s, e)| format!("{s}-{e}"))
+                .collect();
             if ranges.is_empty() {
                 println!("  {} [{:?}]", sf.path, sf.selection_reason);
             } else {
-                println!("  {} [{:?}] lines {}", sf.path, sf.selection_reason, ranges.join(", "));
+                println!(
+                    "  {} [{:?}] lines {}",
+                    sf.path,
+                    sf.selection_reason,
+                    ranges.join(", ")
+                );
             }
         }
         if result.truncation.truncated {
@@ -979,16 +1024,25 @@ pub fn run_context(cli: &Cli) -> Result<()> {
         }
 
         // Print counts for nodes tagged as DirectTarget on their own line
-        let direct_count = result.nodes.iter()
+        let direct_count = result
+            .nodes
+            .iter()
             .filter(|n| n.selection_reason == SelectionReason::DirectTarget)
             .count();
-        let caller_count = result.nodes.iter()
+        let caller_count = result
+            .nodes
+            .iter()
             .filter(|n| n.selection_reason == SelectionReason::Caller)
             .count();
-        let callee_count = result.nodes.iter()
+        let callee_count = result
+            .nodes
+            .iter()
             .filter(|n| n.selection_reason == SelectionReason::Callee)
             .count();
-        println!("\nSummary: {} target, {} callers, {} callees", direct_count, caller_count, callee_count);
+        println!(
+            "\nSummary: {} target, {} callers, {} callees",
+            direct_count, caller_count, callee_count
+        );
     }
 
     Ok(())
@@ -1328,7 +1382,11 @@ pub fn run_analyze(cli: &Cli) -> Result<()> {
     };
 
     match sub {
-        AnalyzeCommand::Remove { symbol, max_depth, max_nodes } => {
+        AnalyzeCommand::Remove {
+            symbol,
+            max_depth,
+            max_nodes,
+        } => {
             let result = engine
                 .analyze_removal(&[symbol.as_str()], Some(*max_depth), Some(*max_nodes))
                 .with_context(|| format!("removal analysis for `{symbol}` failed"))?;
@@ -1433,13 +1491,22 @@ pub fn run_analyze(cli: &Cli) -> Result<()> {
             if cli.json {
                 print_json("analyze_dependency", serde_json::to_value(&result)?)?;
             } else {
-                let verdict = if result.removable { "REMOVABLE" } else { "BLOCKED" };
+                let verdict = if result.removable {
+                    "REMOVABLE"
+                } else {
+                    "BLOCKED"
+                };
                 println!("Dependency check for: {symbol}");
                 println!("  Verdict   : {verdict}");
                 println!("  Confidence: {:?}", result.confidence);
                 println!("  Blocking  : {}", result.blocking_references.len());
                 for n in &result.blocking_references {
-                    println!("  - {} {} ({})", n.kind.as_str(), n.qualified_name, n.file_path);
+                    println!(
+                        "  - {} {} ({})",
+                        n.kind.as_str(),
+                        n.qualified_name,
+                        n.file_path
+                    );
                 }
                 if !result.suggested_cleanups.is_empty() {
                     println!("\nSuggested cleanups:");
@@ -1484,7 +1551,11 @@ pub fn run_refactor(cli: &Cli) -> Result<()> {
     };
 
     match sub {
-        RefactorCommand::Rename { symbol, new_name, dry_run } => {
+        RefactorCommand::Rename {
+            symbol,
+            new_name,
+            dry_run,
+        } => {
             let plan = engine
                 .plan_rename(symbol, new_name)
                 .with_context(|| format!("rename plan for `{symbol}` → `{new_name}` failed"))?;

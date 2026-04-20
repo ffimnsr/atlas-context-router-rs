@@ -64,8 +64,7 @@ pub(crate) fn detect_candidates(
 
         let block_lines = &body[best_start..best_start + best_len];
 
-        let (proposed_inputs, proposed_outputs) =
-            estimate_io(block_lines, fn_lines);
+        let (proposed_inputs, proposed_outputs) = estimate_io(block_lines, fn_lines);
         let (score, reasons) = score_candidate(
             best_len as u32,
             &proposed_inputs,
@@ -87,7 +86,9 @@ pub(crate) fn detect_candidates(
 
     // Sort: highest scoring (easiest to extract) first.
     candidates.sort_by(|a, b| {
-        b.difficulty_score.partial_cmp(&a.difficulty_score).unwrap_or(std::cmp::Ordering::Equal)
+        b.difficulty_score
+            .partial_cmp(&a.difficulty_score)
+            .unwrap_or(std::cmp::Ordering::Equal)
     });
 
     Ok(candidates)
@@ -144,7 +145,10 @@ fn estimate_io<'a>(block: &[&'a str], fn_body: &[&'a str]) -> (Vec<String>, Vec<
         .iter()
         .flat_map(|l| {
             let t = l.trim();
-            if let Some(rest) = t.strip_prefix("let ").or_else(|| t.strip_prefix("let mut ")) {
+            if let Some(rest) = t
+                .strip_prefix("let ")
+                .or_else(|| t.strip_prefix("let mut "))
+            {
                 // Take the first word as the bound name.
                 let name: String = rest.chars().take_while(|c| is_ident_char(*c)).collect();
                 if !name.is_empty() && outer_idents.contains(&name) {
@@ -188,12 +192,46 @@ fn is_ident_char(c: char) -> bool {
 fn is_keyword(s: &str) -> bool {
     matches!(
         s,
-        "let" | "mut" | "fn" | "if" | "else" | "for" | "while" | "loop"
-            | "match" | "return" | "use" | "pub" | "mod" | "impl" | "struct"
-            | "enum" | "trait" | "type" | "const" | "static" | "self"
-            | "Self" | "true" | "false" | "in" | "as" | "where" | "async"
-            | "await" | "move" | "ref" | "dyn" | "box" | "break" | "continue"
-            | "crate" | "super" | "extern" | "unsafe" | "yield"
+        "let"
+            | "mut"
+            | "fn"
+            | "if"
+            | "else"
+            | "for"
+            | "while"
+            | "loop"
+            | "match"
+            | "return"
+            | "use"
+            | "pub"
+            | "mod"
+            | "impl"
+            | "struct"
+            | "enum"
+            | "trait"
+            | "type"
+            | "const"
+            | "static"
+            | "self"
+            | "Self"
+            | "true"
+            | "false"
+            | "in"
+            | "as"
+            | "where"
+            | "async"
+            | "await"
+            | "move"
+            | "ref"
+            | "dyn"
+            | "box"
+            | "break"
+            | "continue"
+            | "crate"
+            | "super"
+            | "extern"
+            | "unsafe"
+            | "yield"
     )
 }
 
@@ -220,7 +258,10 @@ fn score_candidate(
         score += 2.0;
         reasons.push("low free-variable count".into());
     } else {
-        reasons.push(format!("{} free variables (higher complexity)", inputs.len()));
+        reasons.push(format!(
+            "{} free variables (higher complexity)",
+            inputs.len()
+        ));
     }
 
     if outputs.len() <= 2 {
@@ -242,8 +283,11 @@ fn has_repeated_pattern(fn_body: &[&str], block: &[&str]) -> bool {
     if block.is_empty() || fn_body.len() < block.len() * 2 {
         return false;
     }
-    let block_set: std::collections::HashSet<&str> =
-        block.iter().copied().filter(|l| !l.trim().is_empty()).collect();
+    let block_set: std::collections::HashSet<&str> = block
+        .iter()
+        .copied()
+        .filter(|l| !l.trim().is_empty())
+        .collect();
     let threshold = (block_set.len() as f64 * 0.5).ceil() as usize;
 
     let window = block.len();

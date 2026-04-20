@@ -421,7 +421,10 @@ pub enum ContextTarget {
     /// Set of changed symbol qualified names (for symbol-seeded impact).
     ChangedSymbols { qnames: Vec<String> },
     /// Seed from a specific edge relationship (source symbol + optional edge kind).
-    EdgeQuerySeed { source_qname: String, edge_kind: Option<String> },
+    EdgeQuerySeed {
+        source_qname: String,
+        edge_kind: Option<String>,
+    },
 }
 
 /// Structured request to the context engine.
@@ -455,7 +458,9 @@ impl Default for ContextRequest {
     fn default() -> Self {
         Self {
             intent: ContextIntent::Symbol,
-            target: ContextTarget::SymbolName { name: String::new() },
+            target: ContextTarget::SymbolName {
+                name: String::new(),
+            },
             max_nodes: None,
             max_edges: None,
             max_files: None,
@@ -561,7 +566,12 @@ pub struct TruncationMeta {
 impl TruncationMeta {
     /// No truncation applied.
     pub fn none() -> Self {
-        Self { nodes_dropped: 0, edges_dropped: 0, files_dropped: 0, truncated: false }
+        Self {
+            nodes_dropped: 0,
+            edges_dropped: 0,
+            files_dropped: 0,
+            truncated: false,
+        }
     }
 }
 
@@ -806,10 +816,21 @@ pub struct ChangeRiskResult {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RefactorOperation {
-    RenameSymbol { old_qname: String, new_name: String },
-    RemoveDeadCode { target_qname: String },
-    CleanImports { file_path: String },
-    ExtractFunctionCandidate { file_path: String, line_start: u32, line_end: u32 },
+    RenameSymbol {
+        old_qname: String,
+        new_name: String,
+    },
+    RemoveDeadCode {
+        target_qname: String,
+    },
+    CleanImports {
+        file_path: String,
+    },
+    ExtractFunctionCandidate {
+        file_path: String,
+        line_start: u32,
+        line_end: u32,
+    },
 }
 
 /// The kind of text transformation a single edit performs.
@@ -1101,7 +1122,9 @@ mod tests {
 
     #[test]
     fn context_target_qualified_name_round_trip() {
-        let t = ContextTarget::QualifiedName { qname: "crate::foo::bar".to_string() };
+        let t = ContextTarget::QualifiedName {
+            qname: "crate::foo::bar".to_string(),
+        };
         let json = serde_json::to_string(&t).unwrap();
         let back: ContextTarget = serde_json::from_str(&json).unwrap();
         assert_eq!(back, t);
@@ -1111,7 +1134,9 @@ mod tests {
 
     #[test]
     fn context_target_symbol_name_round_trip() {
-        let t = ContextTarget::SymbolName { name: "my_func".to_string() };
+        let t = ContextTarget::SymbolName {
+            name: "my_func".to_string(),
+        };
         let json = serde_json::to_string(&t).unwrap();
         let back: ContextTarget = serde_json::from_str(&json).unwrap();
         assert_eq!(back, t);
@@ -1120,7 +1145,9 @@ mod tests {
 
     #[test]
     fn context_target_file_path_round_trip() {
-        let t = ContextTarget::FilePath { path: "src/lib.rs".to_string() };
+        let t = ContextTarget::FilePath {
+            path: "src/lib.rs".to_string(),
+        };
         let json = serde_json::to_string(&t).unwrap();
         let back: ContextTarget = serde_json::from_str(&json).unwrap();
         assert_eq!(back, t);
@@ -1175,7 +1202,10 @@ mod tests {
             (SelectionReason::Callee, "\"callee\""),
             (SelectionReason::Importer, "\"importer\""),
             (SelectionReason::Importee, "\"importee\""),
-            (SelectionReason::ContainmentSibling, "\"containment_sibling\""),
+            (
+                SelectionReason::ContainmentSibling,
+                "\"containment_sibling\"",
+            ),
             (SelectionReason::TestAdjacent, "\"test_adjacent\""),
             (SelectionReason::ImpactNeighbor, "\"impact_neighbor\""),
         ];
@@ -1259,7 +1289,12 @@ mod tests {
 
     #[test]
     fn truncation_meta_with_drops_round_trip() {
-        let tm = TruncationMeta { nodes_dropped: 5, edges_dropped: 3, files_dropped: 1, truncated: true };
+        let tm = TruncationMeta {
+            nodes_dropped: 5,
+            edges_dropped: 3,
+            files_dropped: 1,
+            truncated: true,
+        };
         let json = serde_json::to_string(&tm).unwrap();
         let back: TruncationMeta = serde_json::from_str(&json).unwrap();
         assert!(back.truncated);
@@ -1335,7 +1370,9 @@ mod tests {
         let result = ContextResult {
             request: ContextRequest {
                 intent: ContextIntent::Symbol,
-                target: ContextTarget::SymbolName { name: "parse".to_string() },
+                target: ContextTarget::SymbolName {
+                    name: "parse".to_string(),
+                },
                 ..ContextRequest::default()
             },
             nodes: vec![],

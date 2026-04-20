@@ -4,7 +4,7 @@ use atlas_core::{
     AtlasError, EdgeKind, GraphStats, ImpactResult, Node, NodeId, NodeKind, ParsedFile, Result,
     ScoredNode, SearchQuery,
 };
-use rusqlite::{params, Connection, OpenFlags, Row};
+use rusqlite::{Connection, OpenFlags, Row, params};
 use tracing::{debug, info};
 
 use crate::migrations::MIGRATIONS;
@@ -2679,10 +2679,12 @@ mod tests {
 
         let result = store.impact_radius(&["a.rs"], 3, 200).unwrap();
         assert_eq!(result.changed_nodes.len(), 1);
-        assert!(result
-            .impacted_nodes
-            .iter()
-            .any(|n| n.qualified_name == "b.rs::fn::b"));
+        assert!(
+            result
+                .impacted_nodes
+                .iter()
+                .any(|n| n.qualified_name == "b.rs::fn::b")
+        );
         assert!(result.impacted_files.contains(&"b.rs".to_string()));
     }
 
@@ -2955,9 +2957,11 @@ mod tests {
             ..Default::default()
         };
         let results = store.search(&q).unwrap();
-        assert!(results
-            .iter()
-            .all(|r| matches!(r.node.kind, NodeKind::Struct)));
+        assert!(
+            results
+                .iter()
+                .all(|r| matches!(r.node.kind, NodeKind::Struct))
+        );
     }
 
     #[test]

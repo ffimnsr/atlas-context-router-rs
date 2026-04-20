@@ -66,14 +66,38 @@ impl Default for LanguagePolicy {
         // Established maturity levels based on atlas-parser coverage.
         Self {
             entries: vec![
-                LangEntry { language: "rust".into(), maturity: Maturity::Stable },
-                LangEntry { language: "python".into(), maturity: Maturity::Stable },
-                LangEntry { language: "typescript".into(), maturity: Maturity::Beta },
-                LangEntry { language: "javascript".into(), maturity: Maturity::Beta },
-                LangEntry { language: "go".into(), maturity: Maturity::Beta },
-                LangEntry { language: "java".into(), maturity: Maturity::Experimental },
-                LangEntry { language: "c".into(), maturity: Maturity::Experimental },
-                LangEntry { language: "cpp".into(), maturity: Maturity::Experimental },
+                LangEntry {
+                    language: "rust".into(),
+                    maturity: Maturity::Stable,
+                },
+                LangEntry {
+                    language: "python".into(),
+                    maturity: Maturity::Stable,
+                },
+                LangEntry {
+                    language: "typescript".into(),
+                    maturity: Maturity::Beta,
+                },
+                LangEntry {
+                    language: "javascript".into(),
+                    maturity: Maturity::Beta,
+                },
+                LangEntry {
+                    language: "go".into(),
+                    maturity: Maturity::Beta,
+                },
+                LangEntry {
+                    language: "java".into(),
+                    maturity: Maturity::Experimental,
+                },
+                LangEntry {
+                    language: "c".into(),
+                    maturity: Maturity::Experimental,
+                },
+                LangEntry {
+                    language: "cpp".into(),
+                    maturity: Maturity::Experimental,
+                },
             ],
         }
     }

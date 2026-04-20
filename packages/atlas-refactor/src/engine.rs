@@ -7,9 +7,9 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use atlas_core::{
-    AtlasError, EdgeKind, ExtractFunctionCandidate, NodeKind, RefactorDryRunResult,
-    RefactorEdit, RefactorEditKind, RefactorOperation, RefactorPatch, RefactorPlan,
-    RefactorValidationResult, Result, SafetyBand, SimulatedRefactorImpact,
+    AtlasError, EdgeKind, ExtractFunctionCandidate, NodeKind, RefactorDryRunResult, RefactorEdit,
+    RefactorEditKind, RefactorOperation, RefactorPatch, RefactorPlan, RefactorValidationResult,
+    Result, SafetyBand, SimulatedRefactorImpact,
 };
 use atlas_store_sqlite::Store;
 use tracing::debug;
@@ -27,7 +27,15 @@ const EDGE_QUERY_LIMIT: usize = 500;
 
 /// Simple-name entrypoints suppressed from auto-removal.
 const ENTRYPOINT_NAMES: &[&str] = &[
-    "main", "new", "init", "setup", "configure", "run", "start", "handler", "middleware",
+    "main",
+    "new",
+    "init",
+    "setup",
+    "configure",
+    "run",
+    "start",
+    "handler",
+    "middleware",
 ];
 
 // ---------------------------------------------------------------------------
@@ -59,9 +67,10 @@ impl<'s> RefactorEngine<'s> {
         validate_identifier(new_name)?;
 
         // Resolve definition node.
-        let target = self.store.node_by_qname(old_qname)?.ok_or_else(|| {
-            AtlasError::Other(format!("symbol not found: `{old_qname}`"))
-        })?;
+        let target = self
+            .store
+            .node_by_qname(old_qname)?
+            .ok_or_else(|| AtlasError::Other(format!("symbol not found: `{old_qname}`")))?;
 
         let old_name = &target.name;
 
@@ -161,7 +170,9 @@ impl<'s> RefactorEngine<'s> {
 
         // Deduplicate edits by (file, line_start).
         edits.sort_by(|a, b| {
-            a.file_path.cmp(&b.file_path).then(a.line_start.cmp(&b.line_start))
+            a.file_path
+                .cmp(&b.file_path)
+                .then(a.line_start.cmp(&b.line_start))
         });
         edits.dedup_by(|a, b| a.file_path == b.file_path && a.line_start == b.line_start);
 
@@ -191,15 +202,12 @@ impl<'s> RefactorEngine<'s> {
     ///
     /// In dry-run mode generates patches but writes nothing. Otherwise applies
     /// edits in reverse line order per file and validates the result.
-    pub fn apply_rename(
-        &self,
-        plan: &RefactorPlan,
-        dry_run: bool,
-    ) -> Result<RefactorDryRunResult> {
+    pub fn apply_rename(&self, plan: &RefactorPlan, dry_run: bool) -> Result<RefactorDryRunResult> {
         let (old_qname, new_name) = match &plan.operation {
-            RefactorOperation::RenameSymbol { old_qname, new_name } => {
-                (old_qname.as_str(), new_name.as_str())
-            }
+            RefactorOperation::RenameSymbol {
+                old_qname,
+                new_name,
+            } => (old_qname.as_str(), new_name.as_str()),
             _ => return Err(AtlasError::Other("plan is not a rename operation".into())),
         };
 
@@ -230,9 +238,10 @@ impl<'s> RefactorEngine<'s> {
     ///
     /// Rejects: insufficient confidence, entrypoint names, unresolved blockers.
     pub fn plan_dead_code_removal(&self, qname: &str) -> Result<RefactorPlan> {
-        let node = self.store.node_by_qname(qname)?.ok_or_else(|| {
-            AtlasError::Other(format!("symbol not found: `{qname}`"))
-        })?;
+        let node = self
+            .store
+            .node_by_qname(qname)?
+            .ok_or_else(|| AtlasError::Other(format!("symbol not found: `{qname}`")))?;
 
         // Reject entrypoints by simple name.
         if ENTRYPOINT_NAMES.contains(&node.name.as_str()) {
@@ -265,7 +274,12 @@ impl<'s> RefactorEngine<'s> {
         let mut manual_review: Vec<String> = inbound
             .iter()
             .filter(|(_, e)| e.confidence < 0.6)
-            .map(|(n, _)| format!("unresolved reference in `{}` — verify manually", n.file_path))
+            .map(|(n, _)| {
+                format!(
+                    "unresolved reference in `{}` — verify manually",
+                    n.file_path
+                )
+            })
             .collect();
 
         // Check confidence: require at least Medium via dead_code_candidates.
@@ -273,16 +287,17 @@ impl<'s> RefactorEngine<'s> {
         let candidate = dead.iter().find(|n| n.qualified_name == qname);
         if candidate.is_none() && inbound.is_empty() {
             // Not flagged and no inbound — treat as safe but warn.
-            manual_review.push(
-                "symbol is not in dead-code list; verify it is truly unused".to_string(),
-            );
+            manual_review
+                .push("symbol is not in dead-code list; verify it is truly unused".to_string());
         }
 
         // Build edit: remove the node span.
         let file_content = self.read_file_content(&node.file_path)?;
         let file_lines: Vec<&str> = file_content.lines().collect();
         let start_0 = node.line_start.saturating_sub(1) as usize;
-        let end_0 = (node.line_end as usize).min(file_lines.len()).saturating_sub(1);
+        let end_0 = (node.line_end as usize)
+            .min(file_lines.len())
+            .saturating_sub(1);
         let old_text: String = file_lines[start_0..=end_0].join("\n");
 
         let mut edits: Vec<RefactorEdit> = vec![RefactorEdit {
@@ -302,16 +317,24 @@ impl<'s> RefactorEngine<'s> {
 
         // Sort and dedup.
         edits.sort_by(|a, b| {
-            a.file_path.cmp(&b.file_path).then(a.line_start.cmp(&b.line_start))
+            a.file_path
+                .cmp(&b.file_path)
+                .then(a.line_start.cmp(&b.line_start))
         });
         edits.dedup_by(|a, b| a.file_path == b.file_path && a.line_start == b.line_start);
 
-        let has_low_confidence = !inbound.is_empty() && inbound.iter().any(|(_, e)| e.confidence < 0.6);
-        let estimated_safety =
-            if has_low_confidence { SafetyBand::Caution } else { SafetyBand::Safe };
+        let has_low_confidence =
+            !inbound.is_empty() && inbound.iter().any(|(_, e)| e.confidence < 0.6);
+        let estimated_safety = if has_low_confidence {
+            SafetyBand::Caution
+        } else {
+            SafetyBand::Safe
+        };
 
         Ok(RefactorPlan {
-            operation: RefactorOperation::RemoveDeadCode { target_qname: qname.to_string() },
+            operation: RefactorOperation::RemoveDeadCode {
+                target_qname: qname.to_string(),
+            },
             edits,
             affected_files: vec![node.file_path.clone()],
             manual_review,
@@ -333,9 +356,9 @@ impl<'s> RefactorEngine<'s> {
         self.apply_plan_internal(plan, dry_run, |validation, new_contents| {
             // Verify: no same-file reference to removed symbol remains.
             let _ = new_contents;
-            validation.warnings.push(
-                "run `atlas build` to refresh graph after dead-code removal".to_string(),
-            );
+            validation
+                .warnings
+                .push("run `atlas build` to refresh graph after dead-code removal".to_string());
         })
     }
 
@@ -359,12 +382,18 @@ impl<'s> RefactorEngine<'s> {
         let mut edits: Vec<RefactorEdit> = Vec::new();
         let mut manual_review: Vec<String> = Vec::new();
 
-        for ImportInfo { line_no, imported_names, raw_line } in imports {
+        for ImportInfo {
+            line_no,
+            imported_names,
+            raw_line,
+        } in imports
+        {
             // Check if any imported name is used outside the import line.
             let used = imported_names.iter().any(|name| {
-                lines.iter().enumerate().any(|(i, &l)| {
-                    i + 1 != line_no as usize && contains_word(l, name)
-                })
+                lines
+                    .iter()
+                    .enumerate()
+                    .any(|(i, &l)| i + 1 != line_no as usize && contains_word(l, name))
             });
 
             if !used {
@@ -382,9 +411,10 @@ impl<'s> RefactorEngine<'s> {
                 let unused: Vec<&String> = imported_names
                     .iter()
                     .filter(|name| {
-                        !lines.iter().enumerate().any(|(i, &l)| {
-                            i + 1 != line_no as usize && contains_word(l, name)
-                        })
+                        !lines
+                            .iter()
+                            .enumerate()
+                            .any(|(i, &l)| i + 1 != line_no as usize && contains_word(l, name))
                     })
                     .collect();
                 if !unused.is_empty() {
@@ -401,9 +431,15 @@ impl<'s> RefactorEngine<'s> {
 
         let has_edits = !edits.is_empty();
         Ok(RefactorPlan {
-            operation: RefactorOperation::CleanImports { file_path: file_path.to_string() },
+            operation: RefactorOperation::CleanImports {
+                file_path: file_path.to_string(),
+            },
             edits,
-            affected_files: if has_edits { vec![file_path.to_string()] } else { vec![] },
+            affected_files: if has_edits {
+                vec![file_path.to_string()]
+            } else {
+                vec![]
+            },
             manual_review,
             estimated_safety: SafetyBand::Safe,
         })
@@ -452,10 +488,7 @@ impl<'s> RefactorEngine<'s> {
     ///
     /// Traverses the graph from the seed symbol(s) in the plan and reports
     /// affected symbols, files, nearby tests, and a safety score.
-    pub fn simulate_refactor_impact(
-        &self,
-        plan: &RefactorPlan,
-    ) -> Result<SimulatedRefactorImpact> {
+    pub fn simulate_refactor_impact(&self, plan: &RefactorPlan) -> Result<SimulatedRefactorImpact> {
         let seed_qnames: Vec<String> = match &plan.operation {
             RefactorOperation::RenameSymbol { old_qname, .. } => vec![old_qname.clone()],
             RefactorOperation::RemoveDeadCode { target_qname } => vec![target_qname.clone()],
@@ -467,13 +500,12 @@ impl<'s> RefactorEngine<'s> {
                     .map(|n| n.qualified_name)
                     .collect()
             }
-            RefactorOperation::ExtractFunctionCandidate { file_path, .. } => {
-                self.store
-                    .nodes_by_file(file_path)?
-                    .into_iter()
-                    .map(|n| n.qualified_name)
-                    .collect()
-            }
+            RefactorOperation::ExtractFunctionCandidate { file_path, .. } => self
+                .store
+                .nodes_by_file(file_path)?
+                .into_iter()
+                .map(|n| n.qualified_name)
+                .collect(),
         };
 
         let mut affected_symbols: HashSet<String> = HashSet::new();
@@ -535,9 +567,8 @@ impl<'s> RefactorEngine<'s> {
     /// Read the content of a repository-relative file.
     fn read_file_content(&self, rel_path: &str) -> Result<String> {
         let abs = self.repo_root.join(rel_path);
-        std::fs::read_to_string(&abs).map_err(|e| {
-            AtlasError::Other(format!("cannot read `{}`: {e}", abs.display()))
-        })
+        std::fs::read_to_string(&abs)
+            .map_err(|e| AtlasError::Other(format!("cannot read `{}`: {e}", abs.display())))
     }
 
     /// Read a single line (1-based) from a file.
@@ -548,9 +579,7 @@ impl<'s> RefactorEngine<'s> {
             .nth((line_no as usize).saturating_sub(1))
             .map(|l| l.to_string())
             .ok_or_else(|| {
-                AtlasError::Other(format!(
-                    "line {line_no} out of range in `{rel_path}`"
-                ))
+                AtlasError::Other(format!("line {line_no} out of range in `{rel_path}`"))
             })
     }
 
@@ -571,7 +600,10 @@ impl<'s> RefactorEngine<'s> {
         // Group edits by file.
         let mut by_file: HashMap<String, Vec<&RefactorEdit>> = HashMap::new();
         for edit in &plan.edits {
-            by_file.entry(edit.file_path.clone()).or_default().push(edit);
+            by_file
+                .entry(edit.file_path.clone())
+                .or_default()
+                .push(edit);
         }
 
         let mut patches: Vec<RefactorPatch> = Vec::new();
@@ -588,7 +620,9 @@ impl<'s> RefactorEngine<'s> {
                 Ok(c) => c,
                 Err(e) => {
                     validation.valid = false;
-                    validation.errors.push(format!("cannot read `{file_path}`: {e}"));
+                    validation
+                        .errors
+                        .push(format!("cannot read `{file_path}`: {e}"));
                     continue;
                 }
             };
@@ -601,14 +635,19 @@ impl<'s> RefactorEngine<'s> {
                 Ok(c) => c,
                 Err(e) => {
                     validation.valid = false;
-                    validation.errors.push(format!("apply failed for `{file_path}`: {e}"));
+                    validation
+                        .errors
+                        .push(format!("apply failed for `{file_path}`: {e}"));
                     continue;
                 }
             };
 
             let diff = unified_diff_annotated(&file_path, &old_content, &new_content);
             if !diff.is_empty() {
-                patches.push(RefactorPatch { file_path: file_path.clone(), unified_diff: diff });
+                patches.push(RefactorPatch {
+                    file_path: file_path.clone(),
+                    unified_diff: diff,
+                });
             }
 
             new_contents.insert(file_path, (old_content, new_content));
@@ -623,7 +662,9 @@ impl<'s> RefactorEngine<'s> {
                 let abs = self.repo_root.join(file_path);
                 if let Err(e) = std::fs::write(&abs, new_content) {
                     validation.valid = false;
-                    validation.errors.push(format!("write failed `{}`: {e}", abs.display()));
+                    validation
+                        .errors
+                        .push(format!("write failed `{}`: {e}", abs.display()));
                 } else {
                     debug!(path = %file_path, "wrote refactored file");
                 }
@@ -693,7 +734,11 @@ fn find_imports<'a>(lines: &[&'a str], lang: Lang) -> Vec<ImportInfo<'a>> {
                 if trimmed.starts_with("use ") {
                     let names = extract_rust_use_names(trimmed);
                     if !names.is_empty() {
-                        imports.push(ImportInfo { line_no, imported_names: names, raw_line: line });
+                        imports.push(ImportInfo {
+                            line_no,
+                            imported_names: names,
+                            raw_line: line,
+                        });
                     }
                 }
             }
@@ -701,7 +746,11 @@ fn find_imports<'a>(lines: &[&'a str], lang: Lang) -> Vec<ImportInfo<'a>> {
                 if trimmed.starts_with("import ") || trimmed.starts_with("from ") {
                     let names = extract_python_import_names(trimmed);
                     if !names.is_empty() {
-                        imports.push(ImportInfo { line_no, imported_names: names, raw_line: line });
+                        imports.push(ImportInfo {
+                            line_no,
+                            imported_names: names,
+                            raw_line: line,
+                        });
                     }
                 }
             }
@@ -709,7 +758,11 @@ fn find_imports<'a>(lines: &[&'a str], lang: Lang) -> Vec<ImportInfo<'a>> {
                 if trimmed.starts_with("import ") {
                     let names = extract_js_import_names(trimmed);
                     if !names.is_empty() {
-                        imports.push(ImportInfo { line_no, imported_names: names, raw_line: line });
+                        imports.push(ImportInfo {
+                            line_no,
+                            imported_names: names,
+                            raw_line: line,
+                        });
                     }
                 }
             }
@@ -718,7 +771,11 @@ fn find_imports<'a>(lines: &[&'a str], lang: Lang) -> Vec<ImportInfo<'a>> {
                 if trimmed.starts_with("import ") {
                     let names = extract_go_import_name(trimmed);
                     if !names.is_empty() {
-                        imports.push(ImportInfo { line_no, imported_names: names, raw_line: line });
+                        imports.push(ImportInfo {
+                            line_no,
+                            imported_names: names,
+                            raw_line: line,
+                        });
                     }
                 }
             }
@@ -734,10 +791,7 @@ fn find_imports<'a>(lines: &[&'a str], lang: Lang) -> Vec<ImportInfo<'a>> {
 /// e.g. `use foo::bar::Baz;` → `["Baz"]`
 fn extract_rust_use_names(line: &str) -> Vec<String> {
     // Strip `use ` prefix and trailing `;`.
-    let body = line
-        .trim_start_matches("use ")
-        .trim_end_matches(';')
-        .trim();
+    let body = line.trim_start_matches("use ").trim_end_matches(';').trim();
 
     if body.contains('{') {
         // Multi-import: extract identifiers inside braces.
@@ -781,7 +835,11 @@ fn extract_python_import_names(line: &str) -> Vec<String> {
                 .split(',')
                 .map(|s| {
                     let s = s.trim();
-                    if let Some(p) = s.find(" as ") { s[p + 4..].trim().to_string() } else { s.to_string() }
+                    if let Some(p) = s.find(" as ") {
+                        s[p + 4..].trim().to_string()
+                    } else {
+                        s.to_string()
+                    }
                 })
                 .filter(|s| !s.is_empty() && s != "*")
                 .collect();
@@ -791,7 +849,11 @@ fn extract_python_import_names(line: &str) -> Vec<String> {
             .split(',')
             .map(|s| {
                 let s = s.trim();
-                if let Some(p) = s.find(" as ") { s[p + 4..].trim().to_string() } else { s.split('.').next().unwrap_or(s).to_string() }
+                if let Some(p) = s.find(" as ") {
+                    s[p + 4..].trim().to_string()
+                } else {
+                    s.split('.').next().unwrap_or(s).to_string()
+                }
             })
             .filter(|s| !s.is_empty())
             .collect();
@@ -809,14 +871,21 @@ fn extract_js_import_names(line: &str) -> Vec<String> {
                 .split(',')
                 .map(|s| {
                     let s = s.trim();
-                    if let Some(p) = s.find(" as ") { s[p + 4..].trim().to_string() } else { s.to_string() }
+                    if let Some(p) = s.find(" as ") {
+                        s[p + 4..].trim().to_string()
+                    } else {
+                        s.to_string()
+                    }
                 })
                 .filter(|s| !s.is_empty())
                 .collect();
         }
     } else {
         // Default import: first word.
-        let name: String = body.chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '_').collect();
+        let name: String = body
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+            .collect();
         if !name.is_empty() && name != "type" {
             return vec![name];
         }
@@ -832,12 +901,13 @@ fn extract_go_import_name(line: &str) -> Vec<String> {
         return vec![];
     }
     // Last path component without quotes.
-    let name = body.trim_matches('"').split('/').next_back().unwrap_or(body).to_string();
-    if name.is_empty() {
-        vec![]
-    } else {
-        vec![name]
-    }
+    let name = body
+        .trim_matches('"')
+        .split('/')
+        .next_back()
+        .unwrap_or(body)
+        .to_string();
+    if name.is_empty() { vec![] } else { vec![name] }
 }
 
 /// Check if `line` contains `word` as a whole-word occurrence.
@@ -902,10 +972,7 @@ mod tests {
 
     #[test]
     fn extract_python_import_simple() {
-        assert_eq!(
-            extract_python_import_names("import os"),
-            vec!["os"]
-        );
+        assert_eq!(extract_python_import_names("import os"), vec!["os"]);
     }
 
     #[test]

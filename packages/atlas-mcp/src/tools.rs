@@ -125,6 +125,21 @@ pub fn tool_list() -> serde_json::Value {
                     },
                     "required": []
                 }
+            },
+            {
+                "name": "explain_change",
+                "description": "Advanced impact analysis for a set of changed files: risk level, changed-symbol breakdown by change kind (api/signature/internal), boundary violations, test coverage gaps, and a compact summary. Deterministic, LLM-free.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "files":     { "type": "array", "items": { "type": "string" }, "description": "Repo-relative changed file paths. Required unless using base/staged." },
+                        "base":      { "type": "string",  "description": "Base git ref (e.g. 'origin/main'). Infers changed files from git diff when files not provided." },
+                        "staged":    { "type": "boolean", "description": "Diff staged changes only (default false). Used when inferring files from git." },
+                        "max_depth": { "type": "integer", "description": "Traversal depth limit for impact (default 5)" },
+                        "max_nodes": { "type": "integer", "description": "Maximum impacted nodes (default 200)" }
+                    },
+                    "required": []
+                }
             }
         ]
     })
@@ -150,6 +165,7 @@ pub fn call(
         "build_or_update_graph" => tool_build_or_update_graph(args, repo_root, db_path),
         "traverse_graph" => tool_traverse_graph(args, db_path),
         "get_minimal_context" => tool_get_minimal_context(args, repo_root, db_path),
+        "explain_change" => tool_explain_change(args, repo_root, db_path),
         other => Err(anyhow::anyhow!("unknown tool: {other}")),
     }
 }
@@ -463,6 +479,211 @@ fn tool_get_minimal_context(
     tool_result(serde_json::to_string_pretty(&ctx)?)
 }
 
+fn tool_explain_change(
+    args: Option<&serde_json::Value>,
+    repo_root: &str,
+    db_path: &str,
+) -> Result<serde_json::Value> {
+    let max_depth = u64_arg(args, "max_depth").unwrap_or(5) as u32;
+    let max_nodes = u64_arg(args, "max_nodes").unwrap_or(200) as usize;
+
+    // Resolve changed file list: explicit list takes priority; fall back to git diff.
+    let mut files = string_array_arg(args, "files")?;
+    if files.is_empty() {
+        let staged = bool_arg(args, "staged").unwrap_or(false);
+        let base = str_arg(args, "base")?.map(str::to_owned);
+        let repo_root_path =
+            find_repo_root(Utf8Path::new(repo_root)).context("cannot find git repo root")?;
+        let diff_target = if staged {
+            DiffTarget::Staged
+        } else if let Some(b) = base {
+            DiffTarget::BaseRef(b)
+        } else {
+            DiffTarget::WorkingTree
+        };
+        let changes = changed_files(repo_root_path.as_path(), &diff_target)
+            .context("cannot detect changed files")?;
+        files = changes
+            .into_iter()
+            .filter(|cf| cf.change_type != atlas_core::ChangeType::Deleted)
+            .map(|cf| cf.path)
+            .collect();
+    }
+
+    if files.is_empty() {
+        return tool_result(serde_json::to_string_pretty(&serde_json::json!({
+            "risk_level": "low",
+            "changed_file_count": 0,
+            "changed_symbol_count": 0,
+            "changed_by_kind": { "api_change": 0, "signature_change": 0, "internal_change": 0 },
+            "changed_symbols": [],
+            "impacted_file_count": 0,
+            "impacted_node_count": 0,
+            "boundary_violations": [],
+            "test_impact": { "affected_test_count": 0, "uncovered_symbol_count": 0, "uncovered_symbols": [] },
+            "summary": "No changed files detected."
+        }))?);
+    }
+
+    let store = open_store(db_path)?;
+    let file_refs: Vec<&str> = files.iter().map(String::as_str).collect();
+    let base_impact = store
+        .impact_radius(&file_refs, max_depth, max_nodes)
+        .context("impact_radius query failed")?;
+
+    let advanced = atlas_impact::analyze(base_impact);
+
+    // Summarise changed symbols by change kind.
+    let mut api_count: usize = 0;
+    let mut sig_count: usize = 0;
+    let mut internal_count: usize = 0;
+
+    #[derive(Serialize)]
+    struct ChangedSymbol<'a> {
+        qn: &'a str,
+        kind: &'a str,
+        file: &'a str,
+        line: u32,
+        change_kind: &'a str,
+        lang: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        sig: Option<&'a str>,
+    }
+
+    let changed_symbols: Vec<ChangedSymbol<'_>> = advanced
+        .scored_nodes
+        .iter()
+        .filter_map(|sn| sn.change_kind.map(|ck| (&sn.node, ck)))
+        .map(|(n, ck)| {
+            let ck_str = match ck {
+                atlas_core::ChangeKind::ApiChange => {
+                    api_count += 1;
+                    "api_change"
+                }
+                atlas_core::ChangeKind::SignatureChange => {
+                    sig_count += 1;
+                    "signature_change"
+                }
+                atlas_core::ChangeKind::InternalChange => {
+                    internal_count += 1;
+                    "internal_change"
+                }
+            };
+            ChangedSymbol {
+                qn: &n.qualified_name,
+                kind: n.kind.as_str(),
+                file: &n.file_path,
+                line: n.line_start,
+                change_kind: ck_str,
+                lang: &n.language,
+                sig: n.params.as_deref(),
+            }
+        })
+        .collect();
+
+    let changed_symbol_count = changed_symbols.len();
+
+    #[derive(Serialize)]
+    struct BoundaryViolationCompact<'a> {
+        kind: &'a str,
+        description: &'a str,
+        nodes: &'a [String],
+    }
+
+    let boundary_violations: Vec<BoundaryViolationCompact<'_>> = advanced
+        .boundary_violations
+        .iter()
+        .map(|bv| BoundaryViolationCompact {
+            kind: match bv.kind {
+                atlas_core::BoundaryKind::CrossModule => "cross_module",
+                atlas_core::BoundaryKind::CrossPackage => "cross_package",
+            },
+            description: &bv.description,
+            nodes: &bv.nodes,
+        })
+        .collect();
+
+    let affected_test_count = advanced.test_impact.affected_tests.len();
+    let uncovered: Vec<&str> = advanced
+        .test_impact
+        .uncovered_changed_nodes
+        .iter()
+        .map(|n| n.qualified_name.as_str())
+        .collect();
+    let uncovered_count = uncovered.len();
+
+    // Build deterministic summary text.
+    let risk_str = advanced.risk_level.to_string();
+    let impacted_file_count = advanced.base.impacted_files.len();
+    let impacted_node_count = advanced.base.impacted_nodes.len();
+
+    let mut summary_parts: Vec<String> = Vec::new();
+    summary_parts.push(format!("Risk: {}.", risk_str));
+    if api_count > 0 {
+        summary_parts.push(format!("{} api change(s).", api_count));
+    }
+    if sig_count > 0 {
+        summary_parts.push(format!("{} signature change(s).", sig_count));
+    }
+    if internal_count > 0 {
+        summary_parts.push(format!("{} internal change(s).", internal_count));
+    }
+    summary_parts.push(format!(
+        "Affects {} file(s), {} node(s).",
+        impacted_file_count, impacted_node_count
+    ));
+    if !boundary_violations.is_empty() {
+        summary_parts.push(format!(
+            "{} boundary violation(s).",
+            boundary_violations.len()
+        ));
+    }
+    if uncovered_count > 0 {
+        summary_parts.push(format!(
+            "{} changed symbol(s) lack test coverage.",
+            uncovered_count
+        ));
+    }
+    let summary = summary_parts.join(" ");
+
+    #[derive(Serialize)]
+    struct ExplainChangeResult<'a> {
+        risk_level: &'a str,
+        changed_file_count: usize,
+        changed_symbol_count: usize,
+        changed_by_kind: serde_json::Value,
+        changed_symbols: Vec<ChangedSymbol<'a>>,
+        impacted_file_count: usize,
+        impacted_node_count: usize,
+        boundary_violations: Vec<BoundaryViolationCompact<'a>>,
+        test_impact: serde_json::Value,
+        summary: &'a str,
+    }
+
+    let result = ExplainChangeResult {
+        risk_level: &risk_str,
+        changed_file_count: files.len(),
+        changed_symbol_count,
+        changed_by_kind: serde_json::json!({
+            "api_change": api_count,
+            "signature_change": sig_count,
+            "internal_change": internal_count,
+        }),
+        changed_symbols,
+        impacted_file_count,
+        impacted_node_count,
+        boundary_violations,
+        test_impact: serde_json::json!({
+            "affected_test_count": affected_test_count,
+            "uncovered_symbol_count": uncovered_count,
+            "uncovered_symbols": uncovered,
+        }),
+        summary: &summary,
+    };
+
+    tool_result(serde_json::to_string_pretty(&result)?)
+}
+
 // ---------------------------------------------------------------------------
 // Argument helpers
 // ---------------------------------------------------------------------------
@@ -504,4 +725,94 @@ fn tool_result(text: String) -> Result<serde_json::Value> {
     Ok(serde_json::json!({
         "content": [{ "type": "text", "text": text }]
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use atlas_core::kinds::NodeKind;
+    use atlas_core::model::{Node, NodeId};
+
+    fn unwrap_tool_text(resp: serde_json::Value) -> String {
+        resp.get("content")
+            .and_then(|c| c.as_array())
+            .and_then(|c| c.first())
+            .and_then(|c0| c0.get("text"))
+            .and_then(|t| t.as_str())
+            .expect("tool response content[0].text")
+            .to_owned()
+    }
+
+    #[test]
+    fn tool_list_includes_explain_change() {
+        let list = tool_list();
+        let tools = list.get("tools").and_then(|t| t.as_array()).unwrap();
+        assert!(
+            tools
+                .iter()
+                .any(|t| t.get("name") == Some(&"explain_change".into()))
+        );
+    }
+
+    #[test]
+    fn explain_change_reports_change_kind_counts() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db_path = dir.path().join("atlas.db");
+        let db_path = db_path.to_string_lossy().to_string();
+
+        let mut store = Store::open(&db_path).expect("open store");
+        let node = Node {
+            id: NodeId::UNSET,
+            kind: NodeKind::Function,
+            name: "foo".to_owned(),
+            qualified_name: "src/a.rs::fn::foo".to_owned(),
+            file_path: "src/a.rs".to_owned(),
+            line_start: 1,
+            line_end: 3,
+            language: "rust".to_owned(),
+            parent_name: None,
+            params: Some("x: i32".to_owned()),
+            return_type: Some("i32".to_owned()),
+            modifiers: Some("pub".to_owned()),
+            is_test: false,
+            file_hash: "h1".to_owned(),
+            extra_json: serde_json::json!({}),
+        };
+        store
+            .replace_file_graph("src/a.rs", "h1", Some("rust"), Some(10), &[node], &[])
+            .expect("replace_file_graph");
+
+        let args = serde_json::json!({
+            "files": ["src/a.rs"],
+            "max_depth": 5,
+            "max_nodes": 200,
+        });
+        let resp = call("explain_change", Some(&args), "/ignored", &db_path).expect("call");
+        let text = unwrap_tool_text(resp);
+        let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
+
+        assert_eq!(
+            v.get("changed_file_count").and_then(|n| n.as_u64()),
+            Some(1)
+        );
+        assert_eq!(
+            v.get("changed_symbol_count").and_then(|n| n.as_u64()),
+            Some(1)
+        );
+        assert_eq!(
+            v.pointer("/changed_by_kind/signature_change")
+                .and_then(|n| n.as_u64()),
+            Some(1)
+        );
+        assert_eq!(
+            v.pointer("/changed_symbols/0/change_kind")
+                .and_then(|s| s.as_str()),
+            Some("signature_change")
+        );
+        assert_eq!(
+            v.pointer("/changed_symbols/0/qn").and_then(|s| s.as_str()),
+            Some("src/a.rs::fn::foo")
+        );
+    }
 }

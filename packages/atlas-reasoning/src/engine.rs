@@ -38,7 +38,15 @@ type BfsImpact = (Vec<ImpactNodeInfo>, Vec<Edge>);
 /// Simple-name patterns that are always suppressed as entrypoints even when
 /// they have no inbound edges in the graph.
 const ENTRYPOINT_NAMES: &[&str] = &[
-    "main", "new", "init", "setup", "configure", "run", "start", "handler", "middleware",
+    "main",
+    "new",
+    "init",
+    "setup",
+    "configure",
+    "run",
+    "start",
+    "handler",
+    "middleware",
 ];
 
 // ---------------------------------------------------------------------------
@@ -102,8 +110,7 @@ impl<'s> ReasoningEngine<'s> {
         }
 
         // BFS from seeds through inbound & outbound edges up to `depth`.
-        let (impacted, relevant_edges) =
-            self.bfs_impact(seed_qnames, depth, cap)?;
+        let (impacted, relevant_edges) = self.bfs_impact(seed_qnames, depth, cap)?;
 
         let seed_set: HashSet<&str> = seed_qnames.iter().copied().collect();
 
@@ -195,7 +202,12 @@ impl<'s> ReasoningEngine<'s> {
                 }
 
                 let (reasons, certainty, blockers) = dead_code_reasons(&node);
-                Some(DeadCodeCandidate { node, reasons, certainty, blockers })
+                Some(DeadCodeCandidate {
+                    node,
+                    reasons,
+                    certainty,
+                    blockers,
+                })
             })
             .collect();
 
@@ -238,18 +250,29 @@ impl<'s> ReasoningEngine<'s> {
             .iter()
             .chain(outbound.iter())
             .filter(|(_, e)| {
-                e.confidence_tier.as_deref().unwrap_or("") == "low"
-                    || e.confidence < 0.5
+                e.confidence_tier.as_deref().unwrap_or("") == "low" || e.confidence < 0.5
             })
             .count();
 
-        let (score, band, reasons, suggested_validations) =
-            compute_safety_score(&node, fan_in, fan_out, linked_test_count, is_public,
-                                 cross_module_callers, unresolved_edge_count);
+        let (score, band, reasons, suggested_validations) = compute_safety_score(
+            &node,
+            fan_in,
+            fan_out,
+            linked_test_count,
+            is_public,
+            cross_module_callers,
+            unresolved_edge_count,
+        );
 
         let evidence = vec![
-            ReasoningEvidence { key: "fan_in".to_owned(), value: fan_in.to_string() },
-            ReasoningEvidence { key: "fan_out".to_owned(), value: fan_out.to_string() },
+            ReasoningEvidence {
+                key: "fan_in".to_owned(),
+                value: fan_in.to_string(),
+            },
+            ReasoningEvidence {
+                key: "fan_out".to_owned(),
+                value: fan_out.to_string(),
+            },
             ReasoningEvidence {
                 key: "linked_tests".to_owned(),
                 value: linked_test_count.to_string(),
@@ -266,7 +289,12 @@ impl<'s> ReasoningEngine<'s> {
 
         Ok(RefactorSafetyResult {
             node,
-            safety: SafetyScore { score, band, reasons, suggested_validations },
+            safety: SafetyScore {
+                score,
+                band,
+                reasons,
+                suggested_validations,
+            },
             fan_in,
             fan_out,
             linked_test_count,
@@ -320,9 +348,8 @@ impl<'s> ReasoningEngine<'s> {
             .map(|n| format!("remove reference in `{}`", n.file_path))
             .collect();
         if has_low_confidence && removable {
-            suggested_cleanups.push(
-                "verify no dynamic/reflective usage before removing".to_owned(),
-            );
+            suggested_cleanups
+                .push("verify no dynamic/reflective usage before removing".to_owned());
         }
 
         let evidence = vec![
@@ -387,7 +414,11 @@ impl<'s> ReasoningEngine<'s> {
             if ref_node.is_test || ref_node.kind == NodeKind::Test {
                 let scope = ReferenceScope::Test;
                 affected_files.insert(ref_node.file_path.clone());
-                affected_references.push(RenameReference { node: ref_node, edge, scope });
+                affected_references.push(RenameReference {
+                    node: ref_node,
+                    edge,
+                    scope,
+                });
                 continue;
             }
 
@@ -408,13 +439,16 @@ impl<'s> ReasoningEngine<'s> {
             }
 
             affected_files.insert(ref_node.file_path.clone());
-            affected_references.push(RenameReference { node: ref_node, edge, scope });
+            affected_references.push(RenameReference {
+                node: ref_node,
+                edge,
+                scope,
+            });
         }
 
         // Collision check: does anything else share the new simple name in the
         // same module/file? (best-effort name uniqueness check)
-        let collision_warnings =
-            self.detect_name_collisions(new_name, &target)?;
+        let collision_warnings = self.detect_name_collisions(new_name, &target)?;
 
         let risk_level = rename_risk(
             &target,
@@ -453,8 +487,7 @@ impl<'s> ReasoningEngine<'s> {
         };
 
         let test_pairs = self.store.test_neighbors(qname, EDGE_QUERY_LIMIT)?;
-        let mut linked_tests: Vec<Node> =
-            test_pairs.into_iter().map(|(n, _)| n).collect();
+        let mut linked_tests: Vec<Node> = test_pairs.into_iter().map(|(n, _)| n).collect();
 
         // If no direct test edge, look for same-file test nodes.
         let coverage_strength = if !linked_tests.is_empty() {
@@ -476,9 +509,9 @@ impl<'s> ReasoningEngine<'s> {
         };
 
         let recommendation = match coverage_strength {
-            CoverageStrength::None => Some(
-                "no tests found for this symbol — consider adding a dedicated test".to_owned(),
-            ),
+            CoverageStrength::None => {
+                Some("no tests found for this symbol — consider adding a dedicated test".to_owned())
+            }
             CoverageStrength::SameFile => Some(
                 "tests are co-located in the same file but not directly linked via edge — \
                  verify coverage"
@@ -487,7 +520,12 @@ impl<'s> ReasoningEngine<'s> {
             _ => None,
         };
 
-        Ok(TestAdjacencyResult { symbol, linked_tests, coverage_strength, recommendation })
+        Ok(TestAdjacencyResult {
+            symbol,
+            linked_tests,
+            coverage_strength,
+            recommendation,
+        })
     }
 
     // -----------------------------------------------------------------------
@@ -515,8 +553,9 @@ impl<'s> ReasoningEngine<'s> {
         let test_adj = !tests.is_empty();
 
         let cross_module = inbound.iter().any(|(n, _)| n.file_path != node.file_path);
-        let cross_package =
-            inbound.iter().any(|(n, _)| different_package(&n.file_path, &node.file_path));
+        let cross_package = inbound
+            .iter()
+            .any(|(n, _)| different_package(&n.file_path, &node.file_path));
 
         let unresolved = inbound
             .iter()
@@ -547,7 +586,11 @@ impl<'s> ReasoningEngine<'s> {
         let suggested_review_focus =
             build_review_focus(is_public, cross_module, cross_package, fan_in, &tests);
 
-        Ok(ChangeRiskResult { risk_level, contributing_factors: factors, suggested_review_focus })
+        Ok(ChangeRiskResult {
+            risk_level,
+            contributing_factors: factors,
+            suggested_review_focus,
+        })
     }
 
     // -----------------------------------------------------------------------
@@ -615,7 +658,10 @@ impl<'s> ReasoningEngine<'s> {
                 results.push((node, *depth, *ek));
             }
         }
-        results.sort_by(|a, b| a.1.cmp(&b.1).then(a.0.qualified_name.cmp(&b.0.qualified_name)));
+        results.sort_by(|a, b| {
+            a.1.cmp(&b.1)
+                .then(a.0.qualified_name.cmp(&b.0.qualified_name))
+        });
 
         Ok((results, all_edges))
     }
@@ -710,11 +756,12 @@ fn dead_code_reasons(node: &Node) -> (Vec<String>, ConfidenceTier, Vec<String>) 
             blockers.push("may be used via reflection or dynamic dispatch".to_owned());
             ConfidenceTier::Medium
         }
-        NodeKind::Class | NodeKind::Struct | NodeKind::Enum | NodeKind::Trait
+        NodeKind::Class
+        | NodeKind::Struct
+        | NodeKind::Enum
+        | NodeKind::Trait
         | NodeKind::Interface => {
-            blockers.push(
-                "may be instantiated via reflection, macro, or config".to_owned(),
-            );
+            blockers.push("may be instantiated via reflection, macro, or config".to_owned());
             ConfidenceTier::Medium
         }
         _ => ConfidenceTier::High,
@@ -781,7 +828,9 @@ fn compute_safety_score(
     if unresolved > 0 {
         let penalty = (unresolved as f64 * 0.03).min(0.2);
         score -= penalty;
-        reasons.push(format!("{unresolved} low-confidence/unresolved edges — dynamic usage risk"));
+        reasons.push(format!(
+            "{unresolved} low-confidence/unresolved edges — dynamic usage risk"
+        ));
         validations.push("verify no dynamic dispatch before removing".to_owned());
     }
 
@@ -814,10 +863,7 @@ fn rename_risk(
     RiskLevel::Low
 }
 
-fn compute_risk_level(
-    _node: &Node,
-    inputs: RiskInputs,
-) -> (RiskLevel, Vec<String>) {
+fn compute_risk_level(_node: &Node, inputs: RiskInputs) -> (RiskLevel, Vec<String>) {
     let mut score: i32 = 0;
     let mut factors: Vec<String> = vec![];
 
@@ -844,7 +890,10 @@ fn compute_risk_level(
     }
     if inputs.unresolved > 0 {
         score += 1;
-        factors.push(format!("{} unresolved/dynamic references", inputs.unresolved));
+        factors.push(format!(
+            "{} unresolved/dynamic references",
+            inputs.unresolved
+        ));
     }
     if inputs.fan_out > 15 {
         score += 1;
@@ -885,7 +934,9 @@ fn build_review_focus(
         focus.push("check cross-module call sites for compatibility".to_owned());
     }
     if fan_in > 5 {
-        focus.push(format!("verify all {fan_in} call sites handle change correctly"));
+        focus.push(format!(
+            "verify all {fan_in} call sites handle change correctly"
+        ));
     }
     if tests.is_empty() {
         focus.push("add tests before merging — symbol is uncovered".to_owned());
@@ -956,14 +1007,7 @@ mod tests {
         for (path, (ns, es)) in files {
             let lang = ns.first().map(|n| n.language.clone());
             store
-                .replace_file_graph(
-                    &path,
-                    "hash",
-                    lang.as_deref(),
-                    None,
-                    &ns,
-                    &es,
-                )
+                .replace_file_graph(&path, "hash", lang.as_deref(), None, &ns, &es)
                 .unwrap();
         }
     }
@@ -979,16 +1023,25 @@ mod tests {
             node(0, "fn_b", "src/b.rs::fn_b", "src/b.rs", NodeKind::Function),
         ];
         // fn_b calls fn_a
-        let edges = vec![edge("src/b.rs::fn_b", "src/a.rs::fn_a", EdgeKind::Calls, "src/b.rs")];
+        let edges = vec![edge(
+            "src/b.rs::fn_b",
+            "src/a.rs::fn_a",
+            EdgeKind::Calls,
+            "src/b.rs",
+        )];
         seed_graph(&mut store, nodes, edges);
 
         let engine = ReasoningEngine::new(&store);
-        let result =
-            engine.analyze_removal(&["src/a.rs::fn_a"], None, None).unwrap();
+        let result = engine
+            .analyze_removal(&["src/a.rs::fn_a"], None, None)
+            .unwrap();
 
         assert!(!result.seed.is_empty(), "seed should resolve");
         assert!(
-            result.impacted_symbols.iter().any(|im| im.node.qualified_name == "src/b.rs::fn_b"),
+            result
+                .impacted_symbols
+                .iter()
+                .any(|im| im.node.qualified_name == "src/b.rs::fn_b"),
             "fn_b should be in impacted symbols"
         );
     }
@@ -1004,16 +1057,32 @@ mod tests {
             node(0, "fn_b", "src/b.rs::fn_b", "src/b.rs", NodeKind::Function),
         ];
         let edges = vec![
-            edge("src/a.rs::fn_a", "src/b.rs::fn_b", EdgeKind::Calls, "src/a.rs"),
-            edge("src/b.rs::fn_b", "src/a.rs::fn_a", EdgeKind::Calls, "src/b.rs"),
+            edge(
+                "src/a.rs::fn_a",
+                "src/b.rs::fn_b",
+                EdgeKind::Calls,
+                "src/a.rs",
+            ),
+            edge(
+                "src/b.rs::fn_b",
+                "src/a.rs::fn_a",
+                EdgeKind::Calls,
+                "src/b.rs",
+            ),
         ];
         seed_graph(&mut store, nodes, edges);
 
         let engine = ReasoningEngine::new(&store);
-        let result =
-            engine.analyze_removal(&["src/a.rs::fn_a"], Some(5), Some(100)).unwrap();
+        let result = engine
+            .analyze_removal(&["src/a.rs::fn_a"], Some(5), Some(100))
+            .unwrap();
         // Should terminate and include fn_b.
-        assert!(result.impacted_symbols.iter().any(|im| im.node.qualified_name == "src/b.rs::fn_b"));
+        assert!(
+            result
+                .impacted_symbols
+                .iter()
+                .any(|im| im.node.qualified_name == "src/b.rs::fn_b")
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -1022,15 +1091,22 @@ mod tests {
     #[test]
     fn dead_code_private_function_flagged() {
         let mut store = make_store();
-        let mut priv_node =
-            node(0, "unused_fn", "src/a.rs::unused_fn", "src/a.rs", NodeKind::Function);
+        let mut priv_node = node(
+            0,
+            "unused_fn",
+            "src/a.rs::unused_fn",
+            "src/a.rs",
+            NodeKind::Function,
+        );
         priv_node.modifiers = None; // private
         seed_graph(&mut store, vec![priv_node], vec![]);
 
         let engine = ReasoningEngine::new(&store);
         let candidates = engine.detect_dead_code(&[], None).unwrap();
         assert!(
-            candidates.iter().any(|c| c.node.qualified_name == "src/a.rs::unused_fn"),
+            candidates
+                .iter()
+                .any(|c| c.node.qualified_name == "src/a.rs::unused_fn"),
             "private unused_fn should be dead-code candidate"
         );
     }
@@ -1041,15 +1117,22 @@ mod tests {
     #[test]
     fn dead_code_exported_function_not_flagged() {
         let mut store = make_store();
-        let mut pub_node =
-            node(0, "pub_fn", "src/a.rs::pub_fn", "src/a.rs", NodeKind::Function);
+        let mut pub_node = node(
+            0,
+            "pub_fn",
+            "src/a.rs::pub_fn",
+            "src/a.rs",
+            NodeKind::Function,
+        );
         pub_node.modifiers = Some("pub".to_owned());
         seed_graph(&mut store, vec![pub_node], vec![]);
 
         let engine = ReasoningEngine::new(&store);
         let candidates = engine.detect_dead_code(&[], None).unwrap();
         assert!(
-            !candidates.iter().any(|c| c.node.qualified_name == "src/a.rs::pub_fn"),
+            !candidates
+                .iter()
+                .any(|c| c.node.qualified_name == "src/a.rs::pub_fn"),
             "pub function should not be flagged"
         );
     }
@@ -1060,8 +1143,13 @@ mod tests {
     #[test]
     fn dead_code_entrypoint_suppressed() {
         let mut store = make_store();
-        let main_node =
-            node(0, "main", "src/main.rs::main", "src/main.rs", NodeKind::Function);
+        let main_node = node(
+            0,
+            "main",
+            "src/main.rs::main",
+            "src/main.rs",
+            NodeKind::Function,
+        );
         seed_graph(&mut store, vec![main_node], vec![]);
 
         let engine = ReasoningEngine::new(&store);
@@ -1080,16 +1168,31 @@ mod tests {
         let mut store = make_store();
         let nodes = vec![
             node(0, "fn_a", "src/a.rs::fn_a", "src/a.rs", NodeKind::Function),
-            node(0, "fn_caller", "src/a.rs::fn_caller", "src/a.rs", NodeKind::Function),
+            node(
+                0,
+                "fn_caller",
+                "src/a.rs::fn_caller",
+                "src/a.rs",
+                NodeKind::Function,
+            ),
         ];
-        let edges =
-            vec![edge("src/a.rs::fn_caller", "src/a.rs::fn_a", EdgeKind::Calls, "src/a.rs")];
+        let edges = vec![edge(
+            "src/a.rs::fn_caller",
+            "src/a.rs::fn_a",
+            EdgeKind::Calls,
+            "src/a.rs",
+        )];
         seed_graph(&mut store, nodes, edges);
 
         let engine = ReasoningEngine::new(&store);
-        let result = engine.preview_rename_radius("src/a.rs::fn_a", "fn_a_renamed").unwrap();
+        let result = engine
+            .preview_rename_radius("src/a.rs::fn_a", "fn_a_renamed")
+            .unwrap();
         assert!(
-            result.affected_references.iter().any(|r| r.scope == ReferenceScope::SameFile),
+            result
+                .affected_references
+                .iter()
+                .any(|r| r.scope == ReferenceScope::SameFile),
             "caller in same file should appear as SameFile reference"
         );
     }
@@ -1101,8 +1204,20 @@ mod tests {
     fn rename_cross_module_radius() {
         let mut store = make_store();
         let nodes = vec![
-            node(0, "fn_a", "module_a/lib.rs::fn_a", "module_a/lib.rs", NodeKind::Function),
-            node(0, "fn_b", "module_b/lib.rs::fn_b", "module_b/lib.rs", NodeKind::Function),
+            node(
+                0,
+                "fn_a",
+                "module_a/lib.rs::fn_a",
+                "module_a/lib.rs",
+                NodeKind::Function,
+            ),
+            node(
+                0,
+                "fn_b",
+                "module_b/lib.rs::fn_b",
+                "module_b/lib.rs",
+                NodeKind::Function,
+            ),
         ];
         let edges = vec![edge(
             "module_b/lib.rs::fn_b",
@@ -1113,8 +1228,9 @@ mod tests {
         seed_graph(&mut store, nodes, edges);
 
         let engine = ReasoningEngine::new(&store);
-        let result =
-            engine.preview_rename_radius("module_a/lib.rs::fn_a", "fn_a_v2").unwrap();
+        let result = engine
+            .preview_rename_radius("module_a/lib.rs::fn_a", "fn_a_v2")
+            .unwrap();
         assert!(
             result
                 .affected_references
@@ -1131,8 +1247,20 @@ mod tests {
     fn dependency_removal_blocked_by_reference() {
         let mut store = make_store();
         let nodes = vec![
-            node(0, "dep_a", "src/a.rs::dep_a", "src/a.rs", NodeKind::Function),
-            node(0, "consumer", "src/b.rs::consumer", "src/b.rs", NodeKind::Function),
+            node(
+                0,
+                "dep_a",
+                "src/a.rs::dep_a",
+                "src/a.rs",
+                NodeKind::Function,
+            ),
+            node(
+                0,
+                "consumer",
+                "src/b.rs::consumer",
+                "src/b.rs",
+                NodeKind::Function,
+            ),
         ];
         let edges = vec![edge(
             "src/b.rs::consumer",
@@ -1144,7 +1272,10 @@ mod tests {
 
         let engine = ReasoningEngine::new(&store);
         let result = engine.check_dependency_removal("src/a.rs::dep_a").unwrap();
-        assert!(!result.removable, "dep_a is still referenced — not removable");
+        assert!(
+            !result.removable,
+            "dep_a is still referenced — not removable"
+        );
         assert!(!result.blocking_references.is_empty());
     }
 
@@ -1154,8 +1285,13 @@ mod tests {
     #[test]
     fn test_adjacency_missing_for_changed_symbol() {
         let mut store = make_store();
-        let no_test_node =
-            node(0, "fn_x", "src/lib.rs::fn_x", "src/lib.rs", NodeKind::Function);
+        let no_test_node = node(
+            0,
+            "fn_x",
+            "src/lib.rs::fn_x",
+            "src/lib.rs",
+            NodeKind::Function,
+        );
         seed_graph(&mut store, vec![no_test_node], vec![]);
 
         let engine = ReasoningEngine::new(&store);
@@ -1171,8 +1307,13 @@ mod tests {
     fn refactor_safety_sanity_checks() {
         let mut store = make_store();
         // Private fn, no callers, no tests — should be Safe band.
-        let solo =
-            node(0, "solo_fn", "src/a.rs::solo_fn", "src/a.rs", NodeKind::Function);
+        let solo = node(
+            0,
+            "solo_fn",
+            "src/a.rs::solo_fn",
+            "src/a.rs",
+            NodeKind::Function,
+        );
         seed_graph(&mut store, vec![solo], vec![]);
 
         let engine = ReasoningEngine::new(&store);

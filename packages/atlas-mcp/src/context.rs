@@ -5,9 +5,7 @@
 //! fields to reduce token overhead while keeping the information an agent
 //! actually needs.
 
-use atlas_core::model::{
-    ContextResult, Edge, ImpactResult, Node, SelectedEdge, SelectedNode,
-};
+use atlas_core::model::{ContextResult, Edge, ImpactResult, Node, SelectedEdge, SelectedNode};
 use serde::Serialize;
 
 // ---------------------------------------------------------------------------
@@ -121,10 +119,6 @@ pub fn package_impact<'a>(
     }
 }
 
-
-
-
-
 // ---------------------------------------------------------------------------
 // Compact ContextResult packaging (Slice 9 — thin MCP adapter)
 // ---------------------------------------------------------------------------
@@ -225,7 +219,10 @@ pub fn package_context_result(result: &ContextResult) -> PackagedContextResult<'
         .collect();
 
     let (ambiguity_query, ambiguity_candidates) = if let Some(amb) = &result.ambiguity {
-        (Some(amb.query.as_str()), amb.candidates.iter().map(String::as_str).collect())
+        (
+            Some(amb.query.as_str()),
+            amb.candidates.iter().map(String::as_str).collect(),
+        )
     } else {
         (None, vec![])
     };

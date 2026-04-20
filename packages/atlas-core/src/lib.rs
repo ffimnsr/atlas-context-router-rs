@@ -5,8 +5,8 @@ pub mod model;
 pub use error::{AtlasError, Result};
 pub use kinds::{EdgeKind, NodeKind};
 pub use model::{
-    AdvancedImpactResult, AmbiguityMeta, BoundaryKind, BoundaryViolation, ChangeKind, ChangeType,
-    ChangedFile, ChangedSymbolSummary, ChangeRiskResult, ConfidenceTier, ContextIntent,
+    AdvancedImpactResult, AmbiguityMeta, BoundaryKind, BoundaryViolation, ChangeKind,
+    ChangeRiskResult, ChangeType, ChangedFile, ChangedSymbolSummary, ConfidenceTier, ContextIntent,
     ContextRequest, ContextResult, ContextTarget, CoverageStrength, DeadCodeCandidate,
     DependencyRemovalResult, Edge, ExtractFunctionCandidate, FileRecord, GraphStats, ImpactClass,
     ImpactResult, ImpactedNode, Node, NodeId, ParsedFile, ReasoningEvidence, ReasoningWarning,

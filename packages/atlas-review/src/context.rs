@@ -11,8 +11,8 @@ use std::collections::{HashMap, HashSet};
 use atlas_core::{
     Result,
     model::{
-        AmbiguityMeta, ContextRequest, ContextResult, ContextTarget, SelectionReason, SelectedEdge,
-        SelectedFile, SelectedNode, TruncationMeta,
+        AmbiguityMeta, ContextRequest, ContextResult, ContextTarget, SelectedEdge, SelectedFile,
+        SelectedNode, SelectionReason, TruncationMeta,
     },
 };
 use atlas_store_sqlite::Store;
@@ -53,9 +53,9 @@ pub fn resolve_target(store: &Store, target: &ContextTarget) -> Result<ResolvedT
         // These multi-value or special targets are handled by builders, not here.
         ContextTarget::ChangedFiles { .. }
         | ContextTarget::ChangedSymbols { .. }
-        | ContextTarget::EdgeQuerySeed { .. } => {
-            Ok(ResolvedTarget::NotFound { suggestions: vec![] })
-        }
+        | ContextTarget::EdgeQuerySeed { .. } => Ok(ResolvedTarget::NotFound {
+            suggestions: vec![],
+        }),
     }
 }
 
@@ -73,10 +73,11 @@ fn resolve_by_name(store: &Store, name: &str) -> Result<ResolvedTarget> {
     let nodes = store.nodes_by_name(name, CANDIDATE_CAP)?;
     match nodes.len() {
         0 => fts_fallback(store, name),
-        1 => Ok(ResolvedTarget::Node(Box::new(nodes.into_iter().next().unwrap()))),
+        1 => Ok(ResolvedTarget::Node(Box::new(
+            nodes.into_iter().next().unwrap(),
+        ))),
         _ => {
-            let candidates: Vec<String> =
-                nodes.iter().map(|n| n.qualified_name.clone()).collect();
+            let candidates: Vec<String> = nodes.iter().map(|n| n.qualified_name.clone()).collect();
             Ok(ResolvedTarget::Ambiguous(AmbiguityMeta {
                 query: name.to_owned(),
                 candidates,
@@ -90,7 +91,9 @@ fn resolve_by_file(store: &Store, path: &str) -> Result<ResolvedTarget> {
     let nodes = store.nodes_by_file(path)?;
     if nodes.is_empty() {
         // Path not in DB; return not-found with no suggestions.
-        return Ok(ResolvedTarget::NotFound { suggestions: vec![] });
+        return Ok(ResolvedTarget::NotFound {
+            suggestions: vec![],
+        });
     }
     Ok(ResolvedTarget::File(path.to_owned()))
 }
@@ -108,9 +111,14 @@ fn fts_fallback(store: &Store, text: &str) -> Result<ResolvedTarget> {
     };
     let results = fts_search(store, &query)?;
     if results.is_empty() {
-        return Ok(ResolvedTarget::NotFound { suggestions: vec![] });
+        return Ok(ResolvedTarget::NotFound {
+            suggestions: vec![],
+        });
     }
-    let candidates: Vec<String> = results.iter().map(|r| r.node.qualified_name.clone()).collect();
+    let candidates: Vec<String> = results
+        .iter()
+        .map(|r| r.node.qualified_name.clone())
+        .collect();
     Ok(ResolvedTarget::Ambiguous(AmbiguityMeta {
         query: text.to_owned(),
         candidates,
@@ -313,10 +321,7 @@ pub fn build_ambiguous_result(request: &ContextRequest, meta: AmbiguityMeta) -> 
 }
 
 /// Build a [`ContextResult`] for a not-found target.
-pub fn build_not_found_result(
-    request: &ContextRequest,
-    suggestions: Vec<String>,
-) -> ContextResult {
+pub fn build_not_found_result(request: &ContextRequest, suggestions: Vec<String>) -> ContextResult {
     let ambiguity = if suggestions.is_empty() {
         None
     } else {
@@ -475,7 +480,11 @@ pub fn rank_context(result: &mut ContextResult) {
     });
 
     // Compute and assign edge scores.
-    let edge_scores: Vec<f32> = result.edges.iter().map(|se| edge_score(se) as f32).collect();
+    let edge_scores: Vec<f32> = result
+        .edges
+        .iter()
+        .map(|se| edge_score(se) as f32)
+        .collect();
     for (se, s) in result.edges.iter_mut().zip(&edge_scores) {
         se.relevance_score = *s;
     }
@@ -525,8 +534,11 @@ pub fn trim_context(result: &mut ContextResult) {
     let dropped_nodes = original_node_count.saturating_sub(result.nodes.len());
 
     // Remaining-node qname set (for edge pruning).
-    let remaining_qnames: HashSet<&str> =
-        result.nodes.iter().map(|n| n.node.qualified_name.as_str()).collect();
+    let remaining_qnames: HashSet<&str> = result
+        .nodes
+        .iter()
+        .map(|n| n.node.qualified_name.as_str())
+        .collect();
 
     // --- Edges ---
     let original_edge_count = result.edges.len();
@@ -604,7 +616,10 @@ pub fn build_context(store: &Store, request: &ContextRequest) -> Result<ContextR
             };
             return build_impact_context(store, &derived);
         }
-        ContextTarget::EdgeQuerySeed { source_qname, edge_kind: _ } => {
+        ContextTarget::EdgeQuerySeed {
+            source_qname,
+            edge_kind: _,
+        } => {
             // Route through symbol context on the source node.
             // Edge kind filtering is reserved for a future slice.
             return match store.node_by_qname(source_qname)? {
@@ -656,8 +671,11 @@ pub fn build_review_context(store: &Store, request: &ContextRequest) -> Result<C
 
     let impact = store.impact_radius(&path_refs, max_depth, max_nodes)?;
 
-    let changed_qns: HashSet<String> =
-        impact.changed_nodes.iter().map(|n| n.qualified_name.clone()).collect();
+    let changed_qns: HashSet<String> = impact
+        .changed_nodes
+        .iter()
+        .map(|n| n.qualified_name.clone())
+        .collect();
 
     let mut nodes: Vec<SelectedNode> = Vec::new();
     let mut seen_qnames: HashSet<String> = HashSet::new();
@@ -739,12 +757,10 @@ pub fn build_impact_context(store: &Store, request: &ContextRequest) -> Result<C
     let seed_paths: Vec<String> = match &request.target {
         ContextTarget::ChangedFiles { paths } => paths.clone(),
         ContextTarget::FilePath { path } => vec![path.clone()],
-        ContextTarget::QualifiedName { qname } => {
-            match store.node_by_qname(qname)? {
-                Some(node) => vec![node.file_path],
-                None => return Ok(build_not_found_result(request, vec![])),
-            }
-        }
+        ContextTarget::QualifiedName { qname } => match store.node_by_qname(qname)? {
+            Some(node) => vec![node.file_path],
+            None => return Ok(build_not_found_result(request, vec![])),
+        },
         ContextTarget::SymbolName { name } => {
             let nodes = store.nodes_by_name(name, 1)?;
             match nodes.into_iter().next() {
@@ -812,9 +828,18 @@ pub fn apply_code_spans(result: &mut ContextResult) {
 
         // Target node is always recorded.
         // Callers/callees are recorded; others are skipped to keep spans narrow.
-        let include = matches!(sn.selection_reason, SelectionReason::DirectTarget | SelectionReason::Caller | SelectionReason::Callee | SelectionReason::ImpactNeighbor);
+        let include = matches!(
+            sn.selection_reason,
+            SelectionReason::DirectTarget
+                | SelectionReason::Caller
+                | SelectionReason::Callee
+                | SelectionReason::ImpactNeighbor
+        );
         if include {
-            span_map.entry(sn.node.file_path.clone()).or_default().push((start, end));
+            span_map
+                .entry(sn.node.file_path.clone())
+                .or_default()
+                .push((start, end));
         }
     }
 
@@ -893,8 +918,7 @@ mod tests {
     use atlas_core::{
         EdgeKind, NodeId, NodeKind,
         model::{
-            ContextIntent, ContextRequest, ContextTarget, Edge, Node, ParsedFile,
-            SelectionReason,
+            ContextIntent, ContextRequest, ContextTarget, Edge, Node, ParsedFile, SelectionReason,
         },
     };
     use atlas_store_sqlite::Store;
@@ -956,7 +980,13 @@ mod tests {
         //   src/b.rs: fn_c
         //   tests/test_a.rs: test_fn_a (tests fn_a)
         let nodes = [
-            make_node("src/a.rs::fn_a", "fn_a", "src/a.rs", NodeKind::Function, None),
+            make_node(
+                "src/a.rs::fn_a",
+                "fn_a",
+                "src/a.rs",
+                NodeKind::Function,
+                None,
+            ),
             make_node(
                 "src/a.rs::fn_a_helper",
                 "fn_a_helper",
@@ -964,8 +994,20 @@ mod tests {
                 NodeKind::Function,
                 Some("mod_a"),
             ),
-            make_node("src/b.rs::fn_b", "fn_b", "src/b.rs", NodeKind::Function, None),
-            make_node("src/b.rs::fn_c", "fn_c", "src/b.rs", NodeKind::Function, None),
+            make_node(
+                "src/b.rs::fn_b",
+                "fn_b",
+                "src/b.rs",
+                NodeKind::Function,
+                None,
+            ),
+            make_node(
+                "src/b.rs::fn_c",
+                "fn_c",
+                "src/b.rs",
+                NodeKind::Function,
+                None,
+            ),
             make_node(
                 "tests/test_a.rs::test_fn_a",
                 "test_fn_a",
@@ -1031,7 +1073,9 @@ mod tests {
     fn resolve_exact_qname_hit() {
         let mut store = open_store();
         seed_graph(&mut store);
-        let target = ContextTarget::QualifiedName { qname: "src/a.rs::fn_a".to_string() };
+        let target = ContextTarget::QualifiedName {
+            qname: "src/a.rs::fn_a".to_string(),
+        };
         let resolved = resolve_target(&store, &target).unwrap();
         assert!(
             matches!(resolved, ResolvedTarget::Node(n) if n.qualified_name == "src/a.rs::fn_a")
@@ -1042,7 +1086,9 @@ mod tests {
     fn resolve_exact_qname_miss_returns_not_found_or_ambiguous() {
         let mut store = open_store();
         seed_graph(&mut store);
-        let target = ContextTarget::QualifiedName { qname: "nonexistent::qname".to_string() };
+        let target = ContextTarget::QualifiedName {
+            qname: "nonexistent::qname".to_string(),
+        };
         let resolved = resolve_target(&store, &target).unwrap();
         // FTS fallback either returns NotFound or some Ambiguous candidates.
         assert!(matches!(
@@ -1055,7 +1101,9 @@ mod tests {
     fn resolve_unique_symbol_name() {
         let mut store = open_store();
         seed_graph(&mut store);
-        let target = ContextTarget::SymbolName { name: "fn_a".to_string() };
+        let target = ContextTarget::SymbolName {
+            name: "fn_a".to_string(),
+        };
         let resolved = resolve_target(&store, &target).unwrap();
         assert!(matches!(resolved, ResolvedTarget::Node(n) if n.name == "fn_a"));
     }
@@ -1082,7 +1130,9 @@ mod tests {
         store.replace_batch(&[dupe]).unwrap();
         seed_graph(&mut store);
 
-        let target = ContextTarget::SymbolName { name: "fn_a".to_string() };
+        let target = ContextTarget::SymbolName {
+            name: "fn_a".to_string(),
+        };
         let resolved = resolve_target(&store, &target).unwrap();
         assert!(matches!(resolved, ResolvedTarget::Ambiguous(ref m) if m.candidates.len() >= 2));
     }
@@ -1091,7 +1141,9 @@ mod tests {
     fn resolve_file_path_hit() {
         let mut store = open_store();
         seed_graph(&mut store);
-        let target = ContextTarget::FilePath { path: "src/a.rs".to_string() };
+        let target = ContextTarget::FilePath {
+            path: "src/a.rs".to_string(),
+        };
         let resolved = resolve_target(&store, &target).unwrap();
         assert!(matches!(resolved, ResolvedTarget::File(p) if p == "src/a.rs"));
     }
@@ -1100,7 +1152,9 @@ mod tests {
     fn resolve_file_path_miss_returns_not_found() {
         let mut store = open_store();
         seed_graph(&mut store);
-        let target = ContextTarget::FilePath { path: "src/missing.rs".to_string() };
+        let target = ContextTarget::FilePath {
+            path: "src/missing.rs".to_string(),
+        };
         let resolved = resolve_target(&store, &target).unwrap();
         assert!(matches!(resolved, ResolvedTarget::NotFound { .. }));
     }
@@ -1109,7 +1163,9 @@ mod tests {
     fn resolve_missing_symbol_returns_not_found() {
         let mut store = open_store();
         seed_graph(&mut store);
-        let target = ContextTarget::SymbolName { name: "zzz_totally_absent".to_string() };
+        let target = ContextTarget::SymbolName {
+            name: "zzz_totally_absent".to_string(),
+        };
         let resolved = resolve_target(&store, &target).unwrap();
         assert!(matches!(
             resolved,
@@ -1124,7 +1180,9 @@ mod tests {
     fn symbol_request(qname: &str) -> ContextRequest {
         ContextRequest {
             intent: ContextIntent::Symbol,
-            target: ContextTarget::QualifiedName { qname: qname.to_string() },
+            target: ContextTarget::QualifiedName {
+                qname: qname.to_string(),
+            },
             include_tests: false,
             include_imports: false,
             include_neighbors: false,
@@ -1140,7 +1198,11 @@ mod tests {
         let req = symbol_request("src/a.rs::fn_a");
         let result = build_symbol_context(&store, seed, &req).unwrap();
 
-        let qnames: Vec<&str> = result.nodes.iter().map(|n| n.node.qualified_name.as_str()).collect();
+        let qnames: Vec<&str> = result
+            .nodes
+            .iter()
+            .map(|n| n.node.qualified_name.as_str())
+            .collect();
         assert!(qnames.contains(&"src/a.rs::fn_a"), "seed missing");
         assert!(qnames.contains(&"src/b.rs::fn_b"), "callee fn_b missing");
     }
@@ -1171,9 +1233,15 @@ mod tests {
         req.include_tests = true;
         let result = build_symbol_context(&store, seed, &req).unwrap();
 
-        let qnames: Vec<&str> =
-            result.nodes.iter().map(|n| n.node.qualified_name.as_str()).collect();
-        assert!(qnames.contains(&"tests/test_a.rs::test_fn_a"), "test node missing");
+        let qnames: Vec<&str> = result
+            .nodes
+            .iter()
+            .map(|n| n.node.qualified_name.as_str())
+            .collect();
+        assert!(
+            qnames.contains(&"tests/test_a.rs::test_fn_a"),
+            "test node missing"
+        );
     }
 
     #[test]
@@ -1270,8 +1338,16 @@ mod tests {
 
         let r1 = run(&store);
         let r2 = run(&store);
-        let qns1: Vec<&str> = r1.nodes.iter().map(|n| n.node.qualified_name.as_str()).collect();
-        let qns2: Vec<&str> = r2.nodes.iter().map(|n| n.node.qualified_name.as_str()).collect();
+        let qns1: Vec<&str> = r1
+            .nodes
+            .iter()
+            .map(|n| n.node.qualified_name.as_str())
+            .collect();
+        let qns2: Vec<&str> = r2
+            .nodes
+            .iter()
+            .map(|n| n.node.qualified_name.as_str())
+            .collect();
         assert_eq!(qns1, qns2, "trim output non-deterministic");
     }
 
@@ -1287,7 +1363,12 @@ mod tests {
             ..ContextRequest::default()
         };
         let result = build_context(&store, &req).unwrap();
-        assert!(result.nodes.iter().any(|n| n.node.qualified_name == "src/b.rs::fn_b"));
+        assert!(
+            result
+                .nodes
+                .iter()
+                .any(|n| n.node.qualified_name == "src/b.rs::fn_b")
+        );
     }
 
     // ------------------------------------------------------------------
@@ -1333,7 +1414,10 @@ mod tests {
             .nodes
             .iter()
             .any(|n| n.selection_reason == SelectionReason::ImpactNeighbor);
-        assert!(has_neighbor, "expected ImpactNeighbor nodes from impact traversal");
+        assert!(
+            has_neighbor,
+            "expected ImpactNeighbor nodes from impact traversal"
+        );
     }
 
     #[test]
@@ -1352,7 +1436,9 @@ mod tests {
         seed_graph(&mut store);
         let req = ContextRequest {
             intent: ContextIntent::Impact,
-            target: ContextTarget::FilePath { path: "src/a.rs".to_string() },
+            target: ContextTarget::FilePath {
+                path: "src/a.rs".to_string(),
+            },
             ..ContextRequest::default()
         };
         let result = build_context(&store, &req).unwrap();
@@ -1365,12 +1451,17 @@ mod tests {
         seed_graph(&mut store);
         let req = ContextRequest {
             intent: ContextIntent::Impact,
-            target: ContextTarget::QualifiedName { qname: "src/a.rs::fn_a".to_string() },
+            target: ContextTarget::QualifiedName {
+                qname: "src/a.rs::fn_a".to_string(),
+            },
             ..ContextRequest::default()
         };
         let result = build_context(&store, &req).unwrap();
         // fn_a is in src/a.rs which calls fn_b; fn_b should appear.
-        let has_fn_b = result.nodes.iter().any(|n| n.node.qualified_name == "src/b.rs::fn_b");
+        let has_fn_b = result
+            .nodes
+            .iter()
+            .any(|n| n.node.qualified_name == "src/b.rs::fn_b");
         assert!(has_fn_b, "fn_b should appear as impact neighbor of fn_a");
     }
 
@@ -1380,11 +1471,16 @@ mod tests {
         seed_graph(&mut store);
         let req = ContextRequest {
             intent: ContextIntent::Impact,
-            target: ContextTarget::QualifiedName { qname: "no::such::symbol".to_string() },
+            target: ContextTarget::QualifiedName {
+                qname: "no::such::symbol".to_string(),
+            },
             ..ContextRequest::default()
         };
         let result = build_context(&store, &req).unwrap();
-        assert!(result.nodes.is_empty(), "missing symbol should yield empty result");
+        assert!(
+            result.nodes.is_empty(),
+            "missing symbol should yield empty result"
+        );
     }
 
     // ------------------------------------------------------------------
@@ -1405,7 +1501,10 @@ mod tests {
             .iter()
             .find(|f| f.path == "src/a.rs")
             .expect("src/a.rs must be in files");
-        assert!(!target_file.line_ranges.is_empty(), "target file must have line ranges");
+        assert!(
+            !target_file.line_ranges.is_empty(),
+            "target file must have line ranges"
+        );
     }
 
     #[test]
@@ -1419,7 +1518,10 @@ mod tests {
 
         // When code spans are disabled, line_ranges must be empty.
         for sf in &result.files {
-            assert!(sf.line_ranges.is_empty(), "line_ranges should be empty when spans disabled");
+            assert!(
+                sf.line_ranges.is_empty(),
+                "line_ranges should be empty when spans disabled"
+            );
         }
     }
 

@@ -35,7 +35,9 @@ fn write_file(dir: &Path, rel_path: &str, content: &str) {
 
 /// Insert a `ParsedFile` into the store.
 fn insert_pf(store: &mut Store, pf: atlas_core::ParsedFile) {
-    store.replace_files_transactional(&[pf]).expect("replace_files_transactional");
+    store
+        .replace_files_transactional(&[pf])
+        .expect("replace_files_transactional");
 }
 
 /// Return a minimal `ParsedFile` for a file with one function node.
@@ -89,7 +91,9 @@ fn rename_single_file_symbol() {
     insert_pf(&mut store, pf);
 
     let engine = RefactorEngine::new(&store, dir.path());
-    let plan = engine.plan_rename("src/lib.rs::fn::old_name", "new_name").expect("plan");
+    let plan = engine
+        .plan_rename("src/lib.rs::fn::old_name", "new_name")
+        .expect("plan");
 
     assert!(!plan.edits.is_empty(), "expected at least one edit");
     assert!(plan.affected_files.contains(&src.to_string()));
@@ -101,8 +105,14 @@ fn rename_single_file_symbol() {
     assert!(result.validation.valid);
     assert!(!result.patches.is_empty());
     let diff = &result.patches[0].unified_diff;
-    assert!(diff.contains("+fn new_name()"), "expected +fn new_name in diff:\n{diff}");
-    assert!(diff.contains("-fn old_name()"), "expected -fn old_name in diff:\n{diff}");
+    assert!(
+        diff.contains("+fn new_name()"),
+        "expected +fn new_name in diff:\n{diff}"
+    );
+    assert!(
+        diff.contains("-fn old_name()"),
+        "expected -fn old_name in diff:\n{diff}"
+    );
 
     // File must be unchanged after dry run.
     let after = std::fs::read_to_string(dir.path().join(src)).unwrap();
@@ -164,7 +174,9 @@ fn rename_multi_file_symbol() {
     insert_pf(&mut store, pf_ref);
 
     let engine = RefactorEngine::new(&store, dir.path());
-    let plan = engine.plan_rename("src/lib.rs::fn::my_func", "renamed_func").unwrap();
+    let plan = engine
+        .plan_rename("src/lib.rs::fn::my_func", "renamed_func")
+        .unwrap();
 
     assert!(
         plan.affected_files.contains(&def_file.to_string())
@@ -300,10 +312,15 @@ fn dead_code_removal_private_helper() {
     insert_pf(&mut store, pf);
 
     let engine = RefactorEngine::new(&store, dir.path());
-    let plan = engine.plan_dead_code_removal("src/util.rs::fn::unused_helper").unwrap();
+    let plan = engine
+        .plan_dead_code_removal("src/util.rs::fn::unused_helper")
+        .unwrap();
 
     assert!(!plan.edits.is_empty());
-    let removal = plan.edits.iter().find(|e| e.edit_kind == RefactorEditKind::RemoveSpan);
+    let removal = plan
+        .edits
+        .iter()
+        .find(|e| e.edit_kind == RefactorEditKind::RemoveSpan);
     assert!(removal.is_some(), "expected a RemoveSpan edit");
 
     let result = engine.apply_dead_code_removal(&plan, true).unwrap();
@@ -341,19 +358,34 @@ fn unused_import_removed() {
     let src = "src/lib.rs";
     let content = "use std::io::Write;\nuse std::fmt::Display;\n\nfn foo() {\n    let x: Display = todo!();\n    let _ = x;\n}\n";
     write_file(dir.path(), src, content);
-    insert_pf(&mut store, parsed_file_with_fn(src, "foo", "src/lib.rs::fn::foo", 4, 7));
+    insert_pf(
+        &mut store,
+        parsed_file_with_fn(src, "foo", "src/lib.rs::fn::foo", 4, 7),
+    );
 
     let engine = RefactorEngine::new(&store, dir.path());
     let plan = engine.plan_import_cleanup(src).unwrap();
 
     // `Write` is unused, `Display` is used.
-    let removals: Vec<_> = plan.edits.iter().filter(|e| e.edit_kind == RefactorEditKind::RemoveImport).collect();
+    let removals: Vec<_> = plan
+        .edits
+        .iter()
+        .filter(|e| e.edit_kind == RefactorEditKind::RemoveImport)
+        .collect();
     assert_eq!(removals.len(), 1, "only Write should be removed");
-    assert!(removals[0].old_text.contains("Write"), "wrong import removed: {:?}", removals[0].old_text);
+    assert!(
+        removals[0].old_text.contains("Write"),
+        "wrong import removed: {:?}",
+        removals[0].old_text
+    );
 
     let result = engine.apply_import_cleanup(&plan, true).unwrap();
     assert!(result.validation.valid);
-    let diff = result.patches.first().map(|p| p.unified_diff.as_str()).unwrap_or("");
+    let diff = result
+        .patches
+        .first()
+        .map(|p| p.unified_diff.as_str())
+        .unwrap_or("");
     assert!(diff.contains("-use std::io::Write"), "diff: {diff}");
 }
 
@@ -365,14 +397,18 @@ fn used_import_preserved() {
     let src = "src/lib.rs";
     let content = "use std::io::Write;\nfn foo(w: &mut dyn Write) {}\n";
     write_file(dir.path(), src, content);
-    insert_pf(&mut store, parsed_file_with_fn(src, "foo", "src/lib.rs::fn::foo", 2, 2));
+    insert_pf(
+        &mut store,
+        parsed_file_with_fn(src, "foo", "src/lib.rs::fn::foo", 2, 2),
+    );
 
     let engine = RefactorEngine::new(&store, dir.path());
     let plan = engine.plan_import_cleanup(src).unwrap();
 
     assert!(
         plan.edits.is_empty(),
-        "Write is used — no edits expected; got {:?}", plan.edits
+        "Write is used — no edits expected; got {:?}",
+        plan.edits
     );
 }
 
@@ -420,7 +456,9 @@ fn dry_run_output_stable() {
     insert_pf(&mut store, pf);
 
     let engine = RefactorEngine::new(&store, dir.path());
-    let plan = engine.plan_rename("src/lib.rs::fn::stable", "stable_v2").unwrap();
+    let plan = engine
+        .plan_rename("src/lib.rs::fn::stable", "stable_v2")
+        .unwrap();
 
     let r1 = engine.apply_rename(&plan, true).unwrap();
     let r2 = engine.apply_rename(&plan, true).unwrap();
@@ -445,7 +483,9 @@ fn simulate_impact_basic() {
     insert_pf(&mut store, pf);
 
     let engine = RefactorEngine::new(&store, dir.path());
-    let plan = engine.plan_rename("src/lib.rs::fn::target", "renamed").unwrap();
+    let plan = engine
+        .plan_rename("src/lib.rs::fn::target", "renamed")
+        .unwrap();
     let sim = engine.simulate_refactor_impact(&plan).unwrap();
 
     // Safety score must be in [0, 1].

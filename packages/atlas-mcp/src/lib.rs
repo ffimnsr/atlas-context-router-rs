@@ -10,6 +10,7 @@
 //! | `get_impact_radius` | Graph traversal from changed files                     |
 //! | `get_review_context`| Review bundle: symbols, neighbors, risk summary        |
 //! | `detect_changes`    | Git diff → changed-file list with per-file node counts |
+//! | `explain_change`    | Advanced impact: risk, change kinds, boundary/test gaps|
 
 mod context;
 mod tools;

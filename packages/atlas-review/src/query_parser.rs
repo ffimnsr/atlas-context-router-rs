@@ -129,9 +129,7 @@ fn extract_target(text: &str, intent: ContextIntent) -> ContextTarget {
             | ContextIntent::Impact
             | ContextIntent::ImpactAnalysis
             | ContextIntent::RefactorSafety
-            | ContextIntent::DependencyRemoval => {
-                ContextTarget::ChangedFiles { paths: vec![path] }
-            }
+            | ContextIntent::DependencyRemoval => ContextTarget::ChangedFiles { paths: vec![path] },
             _ => ContextTarget::FilePath { path },
         };
     }
@@ -147,17 +145,25 @@ fn extract_target(text: &str, intent: ContextIntent) -> ContextTarget {
     }
 
     // Fallback: use the whole trimmed text as a symbol name.
-    ContextTarget::SymbolName { name: text.trim().to_string() }
+    ContextTarget::SymbolName {
+        name: text.trim().to_string(),
+    }
 }
 
 /// Classify a quoted substring into a `ContextTarget`.
 fn classify_string_target(s: &str) -> ContextTarget {
     if s.contains("::") {
-        ContextTarget::QualifiedName { qname: s.to_string() }
+        ContextTarget::QualifiedName {
+            qname: s.to_string(),
+        }
     } else if looks_like_file_path(s) {
-        ContextTarget::FilePath { path: s.to_string() }
+        ContextTarget::FilePath {
+            path: s.to_string(),
+        }
     } else {
-        ContextTarget::SymbolName { name: s.to_string() }
+        ContextTarget::SymbolName {
+            name: s.to_string(),
+        }
     }
 }
 
@@ -222,7 +228,9 @@ fn extract_qualified_name(text: &str) -> Option<String> {
         // Dotted path with at least two components where any is CamelCase.
         let parts: Vec<&str> = token.split('.').collect();
         if parts.len() >= 2
-            && parts.iter().any(|p| p.chars().next().map(|c| c.is_uppercase()).unwrap_or(false))
+            && parts
+                .iter()
+                .any(|p| p.chars().next().map(|c| c.is_uppercase()).unwrap_or(false))
             && parts.iter().all(|p| is_identifier(p))
         {
             return Some(token.to_string());
@@ -243,7 +251,11 @@ fn extract_best_identifier(text: &str) -> Option<String> {
             continue;
         }
         // CamelCase: starts with uppercase and has no underscores.
-        if token.chars().next().map(|c| c.is_uppercase()).unwrap_or(false)
+        if token
+            .chars()
+            .next()
+            .map(|c| c.is_uppercase())
+            .unwrap_or(false)
             && !token.contains('_')
             && token.chars().any(|c| c.is_lowercase())
         {
@@ -260,7 +272,10 @@ fn extract_best_identifier(text: &str) -> Option<String> {
 
 fn is_identifier(s: &str) -> bool {
     !s.is_empty()
-        && s.chars().next().map(|c| c.is_alphabetic() || c == '_').unwrap_or(false)
+        && s.chars()
+            .next()
+            .map(|c| c.is_alphabetic() || c == '_')
+            .unwrap_or(false)
         && s.chars().all(|c| c.is_alphanumeric() || c == '_')
 }
 
@@ -399,7 +414,9 @@ mod tests {
         let parsed = parse_query("who calls rank_context");
         let structured = ContextRequest {
             intent: ContextIntent::Symbol,
-            target: ContextTarget::SymbolName { name: "rank_context".to_string() },
+            target: ContextTarget::SymbolName {
+                name: "rank_context".to_string(),
+            },
             ..ContextRequest::default()
         };
         // Same target kind and name.
