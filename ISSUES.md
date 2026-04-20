@@ -3232,38 +3232,38 @@ Instrument existing commands and engines only after the session/content services
 
 #### Internal session event capture points
 
-- [ ] CLI command start
-- [ ] CLI command finish
-- [ ] session start / adapter startup
-- [ ] before compaction
-- [ ] `atlas build`
-- [ ] `atlas update`
-- [ ] `atlas review-context`
-- [ ] `atlas impact`
-- [ ] context engine request handling
-- [ ] reasoning engine request handling
-- [ ] reasoning engine response must emit session events
-- [ ] MCP tool handler execution boundaries
+- [x] CLI command start
+- [x] CLI command finish
+- [x] session start / adapter startup
+- [x] before compaction
+- [x] `atlas build`
+- [x] `atlas update`
+- [x] `atlas review-context`
+- [x] `atlas impact`
+- [x] context engine request handling
+- [x] reasoning engine request handling
+- [x] reasoning engine response must emit session events
+- [x] MCP tool handler execution boundaries
 
 #### Extraction API
 
-- [ ] `extract_cli_event`
-- [ ] `extract_graph_event`
-- [ ] `extract_context_event`
-- [ ] `extract_reasoning_event`
-- [ ] `extract_user_event`
-- [ ] `extract_tool_event`
-- [ ] `normalize_event`
-- [ ] `hash_event`
+- [x] `extract_cli_event`
+- [x] `extract_graph_event`
+- [x] `extract_context_event`
+- [x] `extract_reasoning_event`
+- [x] `extract_user_event`
+- [x] `extract_tool_event`
+- [x] `normalize_event`
+- [x] `hash_event`
 
 #### Event payload rules
 
-- [ ] payloads must be structured JSON
-- [ ] payloads must be bounded in size
-- [ ] payloads must include identifiers for retrieval when large artifacts exist
-- [ ] reasoning results must reference `source_id` for saved artifacts
-- [ ] payloads must never embed large stdout blobs
-- [ ] continuity write failures must degrade to log-and-continue behavior
+- [x] payloads must be structured JSON
+- [x] payloads must be bounded in size
+- [x] payloads must include identifiers for retrieval when large artifacts exist
+- [x] reasoning results must reference `source_id` for saved artifacts
+- [x] payloads must never embed large stdout blobs
+- [x] continuity write failures must degrade to log-and-continue behavior
 
 #### Event categories to preserve
 
@@ -3286,35 +3286,35 @@ Instrument existing commands and engines only after the session/content services
 
 #### External hooks adapter interfaces
 
-- [ ] `BeforeCommand`
-- [ ] `AfterCommand`
-- [ ] `OnError`
-- [ ] `OnUserIntent`
-- [ ] `OnSessionStart`
-- [ ] `BeforeCompact`
-- [ ] `BeforeExit`
+- [x] `BeforeCommand`
+- [x] `AfterCommand`
+- [x] `OnError`
+- [x] `OnUserIntent`
+- [x] `OnSessionStart`
+- [x] `BeforeCompact`
+- [x] `BeforeExit`
 
 #### Initial adapters
 
-- [ ] CLI adapter
-- [ ] MCP adapter
+- [x] CLI adapter
+- [x] MCP adapter
 
 #### Adapter rules
 
-- [ ] adapters must emit normalized events
-- [ ] adapters must not write SQLite directly
-- [ ] adapters must use session service layer
-- [ ] adapters may degrade gracefully when host lacks a native session-start hook
-- [ ] host-specific hook gaps must reduce continuity features, not break command execution
+- [x] adapters must emit normalized events
+- [x] adapters must not write SQLite directly
+- [x] adapters must use session service layer
+- [x] adapters may degrade gracefully when host lacks a native session-start hook
+- [x] host-specific hook gaps must reduce continuity features, not break command execution
 
 Why fourth:
 - hooks before storage would force rewrites or duplicated logic
 - adapters keep CLI and MCP instrumentation transport-specific but persistence-agnostic
 
 Exit criteria:
-- [ ] core command flows emit normalized bounded events
-- [ ] no direct SQLite writes occur from CLI or MCP adapters
-- [ ] continuity remains non-blocking even when hook capture or persistence partially fails
+- [x] core command flows emit normalized bounded events
+- [x] no direct SQLite writes occur from CLI or MCP adapters
+- [x] continuity remains non-blocking even when hook capture or persistence partially fails
 
 ### Phase CM5 — Resume snapshots and CLI session workflow
 

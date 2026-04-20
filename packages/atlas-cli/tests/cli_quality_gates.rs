@@ -1227,10 +1227,10 @@ fn build_on_sample_repo_emits_expected_summary() {
         &[
             "Build complete (",
             "Scanned             :",
-            "Unsupported skipped : 3",
-            "Parsed              : 3",
-            "Nodes inserted      : 24",
-            "Edges inserted      : 24",
+            "Unsupported skipped : 0",
+            "Parsed              : 2",
+            "Nodes inserted      : 6",
+            "Edges inserted      : 7",
         ],
     );
 }

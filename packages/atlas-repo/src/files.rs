@@ -18,6 +18,7 @@ const ATLASIGNORE_FILE: &str = ".atlasignore";
 /// These cover well-known build artefact and dependency directories that should
 /// never be part of the code graph even if they are accidentally tracked by git.
 pub const DEFAULT_IGNORE_PATTERNS: &[&str] = &[
+    ".atlas",
     ".git",
     "node_modules",
     "vendor",
@@ -318,6 +319,43 @@ mod tests {
 
         assert_eq!(skipped_unsupported, 2);
         assert_eq!(files, vec![Utf8PathBuf::from("main.rs")]);
+    }
+
+    #[test]
+    fn collect_supported_files_skips_internal_atlas_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8Path::from_path(dir.path()).unwrap();
+
+        let status = Command::new("git")
+            .args(["init", "--quiet"])
+            .current_dir(root)
+            .status()
+            .expect("git init");
+        assert!(status.success(), "git init should succeed");
+
+        std::fs::create_dir_all(root.join("src").as_std_path()).unwrap();
+        std::fs::create_dir_all(root.join(".atlas").as_std_path()).unwrap();
+        std::fs::write(root.join("src/main.rs").as_std_path(), "fn main() {}\n").unwrap();
+        std::fs::write(
+            root.join(".atlas/config.toml").as_std_path(),
+            "[build]\nparse_batch_size = 8\n",
+        )
+        .unwrap();
+
+        let status = Command::new("git")
+            .args(["add", "."])
+            .current_dir(root)
+            .status()
+            .expect("git add");
+        assert!(status.success(), "git add should succeed");
+
+        let (files, skipped_unsupported) = collect_supported_files(root, None, |path| {
+            matches!(path.extension(), Some("rs") | Some("toml"))
+        })
+        .expect("collect_supported_files");
+
+        assert_eq!(skipped_unsupported, 0);
+        assert_eq!(files, vec![Utf8PathBuf::from("src/main.rs")]);
     }
 
     #[test]

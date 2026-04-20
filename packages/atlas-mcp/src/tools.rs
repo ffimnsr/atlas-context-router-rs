@@ -5,6 +5,7 @@
 //! `{ "content": [{ "type": "text", "text": "<json>" }] }`.
 
 use anyhow::{Context, Result};
+use atlas_adapters::{AdapterHooks, McpAdapter};
 use atlas_core::SearchQuery;
 use atlas_core::model::{ContextIntent, ContextRequest, ContextTarget};
 use atlas_engine::{BuildOptions, UpdateOptions, UpdateTarget, build_graph, update_graph};
@@ -183,6 +184,23 @@ pub fn tool_list() -> serde_json::Value {
 
 /// Dispatch a `tools/call` invocation.
 pub fn call(
+    name: &str,
+    args: Option<&serde_json::Value>,
+    repo_root: &str,
+    db_path: &str,
+) -> Result<serde_json::Value> {
+    let mut adapter = McpAdapter::open(repo_root);
+    if let Some(ref mut a) = adapter {
+        a.before_command(name);
+    }
+    let result = call_inner(name, args, repo_root, db_path);
+    if let Some(ref mut a) = adapter {
+        a.after_command(name, result.is_ok());
+    }
+    result
+}
+
+fn call_inner(
     name: &str,
     args: Option<&serde_json::Value>,
     repo_root: &str,

@@ -3,6 +3,7 @@ use std::io::{self, BufRead, IsTerminal, Write};
 use std::process::{Command as ProcessCommand, Stdio};
 
 use anyhow::{Context, Result};
+use atlas_adapters::{AdapterHooks, CliAdapter, extract_context_event, extract_reasoning_event};
 use atlas_core::SearchQuery;
 use atlas_core::model::{
     ChangeType, ContextIntent, ContextRequest, ContextResult, ContextTarget, ImpactResult,
@@ -600,65 +601,76 @@ pub fn run_status(cli: &Cli) -> Result<()> {
 
 pub fn run_build(cli: &Cli) -> Result<()> {
     let fail_fast = matches!(&cli.command, Command::Build { fail_fast } if *fail_fast);
-
     let repo = resolve_repo(cli)?;
-    let repo_root_path =
-        find_repo_root(Utf8Path::new(&repo)).context("cannot find git repo root")?;
-    let db_path = db_path(cli, &repo);
-
-    let config = atlas_engine::Config::load(&atlas_engine::paths::atlas_dir(&repo))?;
-
-    let summary = build_graph(
-        repo_root_path.as_path(),
-        &db_path,
-        &BuildOptions {
-            fail_fast,
-            batch_size: config.parse_batch_size(),
-        },
-    )?;
-
-    if cli.json {
-        print_json(
-            "build",
-            serde_json::json!({
-                "scanned": summary.scanned,
-                "skipped_unsupported": summary.skipped_unsupported,
-                "skipped_unchanged": summary.skipped_unchanged,
-                "parsed": summary.parsed,
-                "parse_errors": summary.parse_errors,
-                "nodes_inserted": summary.nodes_inserted,
-                "edges_inserted": summary.edges_inserted,
-                "elapsed_ms": summary.elapsed_ms,
-                "nodes_per_sec": if summary.elapsed_ms > 0 {
-                    (summary.nodes_inserted as f64 / summary.elapsed_ms as f64 * 1000.0).round() as u64
-                } else { summary.nodes_inserted as u64 },
-            }),
-        )?;
-    } else {
-        let nodes_per_sec = if summary.elapsed_ms > 0 {
-            format!(
-                "{:.0} nodes/s",
-                summary.nodes_inserted as f64 / summary.elapsed_ms as f64 * 1000.0
-            )
-        } else {
-            String::from("—")
-        };
-        println!(
-            "Build complete ({:.2}s, {nodes_per_sec})",
-            summary.elapsed_ms as f64 / 1000.0
-        );
-        println!("  Scanned             : {}", summary.scanned);
-        println!("  Unsupported skipped : {}", summary.skipped_unsupported);
-        println!("  Unchanged skipped   : {}", summary.skipped_unchanged);
-        println!("  Parsed              : {}", summary.parsed);
-        if summary.parse_errors > 0 {
-            println!("  Errors              : {}", summary.parse_errors);
-        }
-        println!("  Nodes inserted      : {}", summary.nodes_inserted);
-        println!("  Edges inserted      : {}", summary.edges_inserted);
+    let mut adapter = CliAdapter::open(&repo);
+    if let Some(ref mut a) = adapter {
+        a.before_command("build");
     }
 
-    Ok(())
+    let result = (|| -> Result<()> {
+        let repo_root_path =
+            find_repo_root(Utf8Path::new(&repo)).context("cannot find git repo root")?;
+        let db_path = db_path(cli, &repo);
+
+        let config = atlas_engine::Config::load(&atlas_engine::paths::atlas_dir(&repo))?;
+
+        let summary = build_graph(
+            repo_root_path.as_path(),
+            &db_path,
+            &BuildOptions {
+                fail_fast,
+                batch_size: config.parse_batch_size(),
+            },
+        )?;
+
+        if cli.json {
+            print_json(
+                "build",
+                serde_json::json!({
+                    "scanned": summary.scanned,
+                    "skipped_unsupported": summary.skipped_unsupported,
+                    "skipped_unchanged": summary.skipped_unchanged,
+                    "parsed": summary.parsed,
+                    "parse_errors": summary.parse_errors,
+                    "nodes_inserted": summary.nodes_inserted,
+                    "edges_inserted": summary.edges_inserted,
+                    "elapsed_ms": summary.elapsed_ms,
+                    "nodes_per_sec": if summary.elapsed_ms > 0 {
+                        (summary.nodes_inserted as f64 / summary.elapsed_ms as f64 * 1000.0).round() as u64
+                    } else { summary.nodes_inserted as u64 },
+                }),
+            )?;
+        } else {
+            let nodes_per_sec = if summary.elapsed_ms > 0 {
+                format!(
+                    "{:.0} nodes/s",
+                    summary.nodes_inserted as f64 / summary.elapsed_ms as f64 * 1000.0
+                )
+            } else {
+                String::from("—")
+            };
+            println!(
+                "Build complete ({:.2}s, {nodes_per_sec})",
+                summary.elapsed_ms as f64 / 1000.0
+            );
+            println!("  Scanned             : {}", summary.scanned);
+            println!("  Unsupported skipped : {}", summary.skipped_unsupported);
+            println!("  Unchanged skipped   : {}", summary.skipped_unchanged);
+            println!("  Parsed              : {}", summary.parsed);
+            if summary.parse_errors > 0 {
+                println!("  Errors              : {}", summary.parse_errors);
+            }
+            println!("  Nodes inserted      : {}", summary.nodes_inserted);
+            println!("  Edges inserted      : {}", summary.edges_inserted);
+        }
+
+        Ok(())
+    })();
+
+    if let Some(ref mut a) = adapter {
+        a.after_command("build", result.is_ok());
+    }
+    result
 }
 
 pub fn run_update(cli: &Cli) -> Result<()> {
@@ -666,92 +678,103 @@ pub fn run_update(cli: &Cli) -> Result<()> {
         &cli.command,
         Command::Update { fail_fast, .. } if *fail_fast
     );
-
     let repo = resolve_repo(cli)?;
-    let repo_root_path =
-        find_repo_root(Utf8Path::new(&repo)).context("cannot find git repo root")?;
-    let db_path = db_path(cli, &repo);
-
-    let config = atlas_engine::Config::load(&atlas_engine::paths::atlas_dir(&repo))?;
-
-    let explicit_files: Vec<String> = match &cli.command {
-        Command::Update { files, .. } => files.clone(),
-        _ => vec![],
-    };
-
-    let target = if !explicit_files.is_empty() {
-        UpdateTarget::Files(explicit_files)
-    } else {
-        match &cli.command {
-            Command::Update { base, staged, .. } => {
-                if *staged {
-                    UpdateTarget::Staged
-                } else if let Some(base_ref) = base {
-                    UpdateTarget::BaseRef(base_ref.clone())
-                } else {
-                    UpdateTarget::WorkingTree
-                }
-            }
-            _ => UpdateTarget::WorkingTree,
-        }
-    };
-
-    let summary = update_graph(
-        repo_root_path.as_path(),
-        &db_path,
-        &UpdateOptions {
-            fail_fast,
-            batch_size: config.parse_batch_size(),
-            target,
-        },
-    )?;
-
-    if cli.json {
-        print_json(
-            "update",
-            serde_json::json!({
-                "deleted": summary.deleted,
-                "renamed": summary.renamed,
-                "parsed": summary.parsed,
-                "skipped_unsupported": summary.skipped_unsupported,
-                "parse_errors": summary.parse_errors,
-                "nodes_updated": summary.nodes_updated,
-                "edges_updated": summary.edges_updated,
-                "elapsed_ms": summary.elapsed_ms,
-                "nodes_per_sec": if summary.elapsed_ms > 0 {
-                    (summary.nodes_updated as f64 / summary.elapsed_ms as f64 * 1000.0).round() as u64
-                } else { summary.nodes_updated as u64 },
-            }),
-        )?;
-    } else {
-        let nodes_per_sec = if summary.elapsed_ms > 0 {
-            format!(
-                "{:.0} nodes/s",
-                summary.nodes_updated as f64 / summary.elapsed_ms as f64 * 1000.0
-            )
-        } else {
-            String::from("—")
-        };
-        println!(
-            "Update complete ({:.2}s, {nodes_per_sec})",
-            summary.elapsed_ms as f64 / 1000.0
-        );
-        println!("  Deleted  : {}", summary.deleted);
-        if summary.renamed > 0 {
-            println!("  Renamed  : {}", summary.renamed);
-        }
-        println!("  Parsed   : {}", summary.parsed);
-        if summary.skipped_unsupported > 0 {
-            println!("  Unsupported skipped : {}", summary.skipped_unsupported);
-        }
-        if summary.parse_errors > 0 {
-            println!("  Errors   : {}", summary.parse_errors);
-        }
-        println!("  Nodes    : {}", summary.nodes_updated);
-        println!("  Edges    : {}", summary.edges_updated);
+    let mut adapter = CliAdapter::open(&repo);
+    if let Some(ref mut a) = adapter {
+        a.before_command("update");
     }
 
-    Ok(())
+    let result = (|| -> Result<()> {
+        let repo_root_path =
+            find_repo_root(Utf8Path::new(&repo)).context("cannot find git repo root")?;
+        let db_path = db_path(cli, &repo);
+
+        let config = atlas_engine::Config::load(&atlas_engine::paths::atlas_dir(&repo))?;
+
+        let explicit_files: Vec<String> = match &cli.command {
+            Command::Update { files, .. } => files.clone(),
+            _ => vec![],
+        };
+
+        let target = if !explicit_files.is_empty() {
+            UpdateTarget::Files(explicit_files)
+        } else {
+            match &cli.command {
+                Command::Update { base, staged, .. } => {
+                    if *staged {
+                        UpdateTarget::Staged
+                    } else if let Some(base_ref) = base {
+                        UpdateTarget::BaseRef(base_ref.clone())
+                    } else {
+                        UpdateTarget::WorkingTree
+                    }
+                }
+                _ => UpdateTarget::WorkingTree,
+            }
+        };
+
+        let summary = update_graph(
+            repo_root_path.as_path(),
+            &db_path,
+            &UpdateOptions {
+                fail_fast,
+                batch_size: config.parse_batch_size(),
+                target,
+            },
+        )?;
+
+        if cli.json {
+            print_json(
+                "update",
+                serde_json::json!({
+                    "deleted": summary.deleted,
+                    "renamed": summary.renamed,
+                    "parsed": summary.parsed,
+                    "skipped_unsupported": summary.skipped_unsupported,
+                    "parse_errors": summary.parse_errors,
+                    "nodes_updated": summary.nodes_updated,
+                    "edges_updated": summary.edges_updated,
+                    "elapsed_ms": summary.elapsed_ms,
+                    "nodes_per_sec": if summary.elapsed_ms > 0 {
+                        (summary.nodes_updated as f64 / summary.elapsed_ms as f64 * 1000.0).round() as u64
+                    } else { summary.nodes_updated as u64 },
+                }),
+            )?;
+        } else {
+            let nodes_per_sec = if summary.elapsed_ms > 0 {
+                format!(
+                    "{:.0} nodes/s",
+                    summary.nodes_updated as f64 / summary.elapsed_ms as f64 * 1000.0
+                )
+            } else {
+                String::from("—")
+            };
+            println!(
+                "Update complete ({:.2}s, {nodes_per_sec})",
+                summary.elapsed_ms as f64 / 1000.0
+            );
+            println!("  Deleted  : {}", summary.deleted);
+            if summary.renamed > 0 {
+                println!("  Renamed  : {}", summary.renamed);
+            }
+            println!("  Parsed   : {}", summary.parsed);
+            if summary.skipped_unsupported > 0 {
+                println!("  Unsupported skipped : {}", summary.skipped_unsupported);
+            }
+            if summary.parse_errors > 0 {
+                println!("  Errors   : {}", summary.parse_errors);
+            }
+            println!("  Nodes    : {}", summary.nodes_updated);
+            println!("  Edges    : {}", summary.edges_updated);
+        }
+
+        Ok(())
+    })();
+
+    if let Some(ref mut a) = adapter {
+        a.after_command("update", result.is_ok());
+    }
+    result
 }
 
 pub fn run_detect_changes(cli: &Cli) -> Result<()> {
@@ -829,147 +852,159 @@ pub fn run_detect_changes(cli: &Cli) -> Result<()> {
 
 pub fn run_explain_change(cli: &Cli) -> Result<()> {
     let repo = resolve_repo(cli)?;
-    let repo_root_path =
-        find_repo_root(Utf8Path::new(&repo)).context("cannot find git repo root")?;
-    let repo_root = repo_root_path.as_path();
-    let db_path = db_path(cli, &repo);
+    let mut adapter = CliAdapter::open(&repo);
+    if let Some(ref mut a) = adapter {
+        a.before_command("explain-change");
+    }
 
-    let (base, staged, explicit_files, max_depth, max_nodes) = match &cli.command {
-        Command::ExplainChange {
-            base,
-            staged,
-            files,
-            max_depth,
-            max_nodes,
-        } => (
-            base.clone(),
-            *staged,
-            files.clone(),
-            *max_depth,
-            *max_nodes as usize,
-        ),
-        _ => unreachable!(),
-    };
+    let result = (|| -> Result<()> {
+        let repo_root_path =
+            find_repo_root(Utf8Path::new(&repo)).context("cannot find git repo root")?;
+        let repo_root = repo_root_path.as_path();
+        let db_path = db_path(cli, &repo);
 
-    let changes = if !explicit_files.is_empty() {
-        normalize_explicit_files(repo_root, &explicit_files)
-            .into_iter()
-            .map(|path| atlas_core::model::ChangedFile {
-                path,
-                change_type: ChangeType::Modified,
-                old_path: None,
-            })
-            .collect()
-    } else {
-        changed_files(repo_root, &detect_changes_target(&base, staged))
-            .context("cannot detect changed files")?
-    };
+        let (base, staged, explicit_files, max_depth, max_nodes) = match &cli.command {
+            Command::ExplainChange {
+                base,
+                staged,
+                files,
+                max_depth,
+                max_nodes,
+            } => (
+                base.clone(),
+                *staged,
+                files.clone(),
+                *max_depth,
+                *max_nodes as usize,
+            ),
+            _ => unreachable!(),
+        };
 
-    let target_files: Vec<String> = changes
-        .iter()
-        .filter(|change| change.change_type != ChangeType::Deleted)
-        .map(|change| change.path.clone())
-        .collect();
-
-    if target_files.is_empty() {
-        let empty = empty_explain_change_summary();
-        if cli.json {
-            print_json("explain_change", serde_json::to_value(&empty)?)?;
+        let changes = if !explicit_files.is_empty() {
+            normalize_explicit_files(repo_root, &explicit_files)
+                .into_iter()
+                .map(|path| atlas_core::model::ChangedFile {
+                    path,
+                    change_type: ChangeType::Modified,
+                    old_path: None,
+                })
+                .collect()
         } else {
-            println!("No changed files detected.");
-        }
-        return Ok(());
-    }
+            changed_files(repo_root, &detect_changes_target(&base, staged))
+                .context("cannot detect changed files")?
+        };
 
-    let store =
-        Store::open(&db_path).with_context(|| format!("cannot open database at {db_path}"))?;
-    let summary =
-        build_explain_change_summary(&store, &changes, &target_files, max_depth, max_nodes)?;
+        let target_files: Vec<String> = changes
+            .iter()
+            .filter(|change| change.change_type != ChangeType::Deleted)
+            .map(|change| change.path.clone())
+            .collect();
 
-    if cli.json {
-        print_json("explain_change", serde_json::to_value(&summary)?)?;
-    } else {
-        println!("Risk level      : {}", summary.risk_level);
-        println!("Changed files   : {}", summary.changed_file_count);
-        println!("Changed symbols : {}", summary.changed_symbol_count);
-        println!(
-            "Diff summary    : +{} ~{} -{} r{}",
-            summary.diff_summary.counts.added,
-            summary.diff_summary.counts.modified,
-            summary.diff_summary.counts.deleted,
-            summary.diff_summary.counts.renamed
-        );
-        println!(
-            "Change kinds    : api {} | signature {} | internal {}",
-            summary.changed_by_kind.api_change,
-            summary.changed_by_kind.signature_change,
-            summary.changed_by_kind.internal_change
-        );
-        println!("Impacted files  : {}", summary.impacted_file_count);
-        println!("Impacted nodes  : {}", summary.impacted_node_count);
-
-        if !summary.changed_symbols.is_empty() {
-            println!("\nChanged symbols:");
-            for symbol in summary.changed_symbols.iter().take(20) {
-                println!(
-                    "  [{}] {} {} ({}:{})",
-                    symbol.change_kind, symbol.kind, symbol.qn, symbol.file, symbol.line
-                );
+        if target_files.is_empty() {
+            let empty = empty_explain_change_summary();
+            if cli.json {
+                print_json("explain_change", serde_json::to_value(&empty)?)?;
+            } else {
+                println!("No changed files detected.");
             }
+            return Ok(());
         }
 
-        if !summary.boundary_violations.is_empty() {
-            println!("\nBoundary violations:");
-            for violation in &summary.boundary_violations {
-                println!("  [{}] {}", violation.kind, violation.description);
-            }
-        }
+        let store =
+            Store::open(&db_path).with_context(|| format!("cannot open database at {db_path}"))?;
+        let summary =
+            build_explain_change_summary(&store, &changes, &target_files, max_depth, max_nodes)?;
 
-        if !summary.impacted_components.is_empty() {
-            println!("\nImpacted components:");
-            for component in summary.impacted_components.iter().take(8) {
-                println!(
-                    "  [{}] {} | changed {} | impacted {} | files {}",
-                    component.kind,
-                    component.label,
-                    component.changed_node_count,
-                    component.impacted_node_count,
-                    component.file_count
-                );
-            }
-        }
-
-        if !summary.call_chains.is_empty() {
-            println!("\nCall chains:");
-            for chain in summary.call_chains.iter().take(5) {
-                println!("  {}", chain.summary);
-            }
-        }
-
-        if !summary.ripple_effects.is_empty() {
-            println!("\nRipple effects:");
-            for ripple in &summary.ripple_effects {
-                println!("  {ripple}");
-            }
-        }
-
-        if summary.test_impact.affected_test_count > 0 {
+        if cli.json {
+            print_json("explain_change", serde_json::to_value(&summary)?)?;
+        } else {
+            println!("Risk level      : {}", summary.risk_level);
+            println!("Changed files   : {}", summary.changed_file_count);
+            println!("Changed symbols : {}", summary.changed_symbol_count);
             println!(
-                "\nAffected tests  : {}",
-                summary.test_impact.affected_test_count
+                "Diff summary    : +{} ~{} -{} r{}",
+                summary.diff_summary.counts.added,
+                summary.diff_summary.counts.modified,
+                summary.diff_summary.counts.deleted,
+                summary.diff_summary.counts.renamed
             );
-        }
-        if summary.test_impact.uncovered_symbol_count > 0 {
-            println!("Changed symbols without test coverage:");
-            for symbol in &summary.test_impact.uncovered_symbols {
-                println!("  {symbol}");
+            println!(
+                "Change kinds    : api {} | signature {} | internal {}",
+                summary.changed_by_kind.api_change,
+                summary.changed_by_kind.signature_change,
+                summary.changed_by_kind.internal_change
+            );
+            println!("Impacted files  : {}", summary.impacted_file_count);
+            println!("Impacted nodes  : {}", summary.impacted_node_count);
+
+            if !summary.changed_symbols.is_empty() {
+                println!("\nChanged symbols:");
+                for symbol in summary.changed_symbols.iter().take(20) {
+                    println!(
+                        "  [{}] {} {} ({}:{})",
+                        symbol.change_kind, symbol.kind, symbol.qn, symbol.file, symbol.line
+                    );
+                }
             }
+
+            if !summary.boundary_violations.is_empty() {
+                println!("\nBoundary violations:");
+                for violation in &summary.boundary_violations {
+                    println!("  [{}] {}", violation.kind, violation.description);
+                }
+            }
+
+            if !summary.impacted_components.is_empty() {
+                println!("\nImpacted components:");
+                for component in summary.impacted_components.iter().take(8) {
+                    println!(
+                        "  [{}] {} | changed {} | impacted {} | files {}",
+                        component.kind,
+                        component.label,
+                        component.changed_node_count,
+                        component.impacted_node_count,
+                        component.file_count
+                    );
+                }
+            }
+
+            if !summary.call_chains.is_empty() {
+                println!("\nCall chains:");
+                for chain in summary.call_chains.iter().take(5) {
+                    println!("  {}", chain.summary);
+                }
+            }
+
+            if !summary.ripple_effects.is_empty() {
+                println!("\nRipple effects:");
+                for ripple in &summary.ripple_effects {
+                    println!("  {ripple}");
+                }
+            }
+
+            if summary.test_impact.affected_test_count > 0 {
+                println!(
+                    "\nAffected tests  : {}",
+                    summary.test_impact.affected_test_count
+                );
+            }
+            if summary.test_impact.uncovered_symbol_count > 0 {
+                println!("Changed symbols without test coverage:");
+                for symbol in &summary.test_impact.uncovered_symbols {
+                    println!("  {symbol}");
+                }
+            }
+
+            println!("\nSummary: {}", summary.summary);
         }
 
-        println!("\nSummary: {}", summary.summary);
-    }
+        Ok(())
+    })();
 
-    Ok(())
+    if let Some(ref mut a) = adapter {
+        a.after_command("explain-change", result.is_ok());
+    }
+    result
 }
 
 pub fn run_query(cli: &Cli) -> Result<()> {
@@ -1114,365 +1149,390 @@ pub fn run_embed(cli: &Cli) -> Result<()> {
 
 pub fn run_impact(cli: &Cli) -> Result<()> {
     let repo = resolve_repo(cli)?;
-    let repo_root_path =
-        find_repo_root(Utf8Path::new(&repo)).context("cannot find git repo root")?;
-    let repo_root = repo_root_path.as_path();
-    let db_path = db_path(cli, &repo);
+    let mut adapter = CliAdapter::open(&repo);
+    if let Some(ref mut a) = adapter {
+        a.before_command("impact");
+    }
 
-    let store =
-        Store::open(&db_path).with_context(|| format!("cannot open database at {db_path}"))?;
+    let result = (|| -> Result<()> {
+        let repo_root_path =
+            find_repo_root(Utf8Path::new(&repo)).context("cannot find git repo root")?;
+        let repo_root = repo_root_path.as_path();
+        let db_path = db_path(cli, &repo);
 
-    let (base, explicit_files, max_depth, max_nodes) = match &cli.command {
-        Command::Impact {
-            base,
-            files,
-            max_depth,
-            max_nodes,
-        } => (base.clone(), files.clone(), *max_depth, *max_nodes as usize),
-        _ => unreachable!(),
-    };
+        let store =
+            Store::open(&db_path).with_context(|| format!("cannot open database at {db_path}"))?;
 
-    let target_files: Vec<String> = if !explicit_files.is_empty() {
-        explicit_files
-            .iter()
-            .map(|p| {
-                let abs = Utf8Path::new(p);
-                if abs.is_absolute() {
-                    repo_relative(repo_root, abs)
-                        .unwrap_or_else(|_| abs.to_owned())
-                        .to_string()
-                } else {
-                    p.clone()
-                }
-            })
-            .collect()
-    } else {
-        let diff_target = if let Some(base_ref) = &base {
-            DiffTarget::BaseRef(base_ref.clone())
-        } else {
-            DiffTarget::WorkingTree
+        let (base, explicit_files, max_depth, max_nodes) = match &cli.command {
+            Command::Impact {
+                base,
+                files,
+                max_depth,
+                max_nodes,
+            } => (base.clone(), files.clone(), *max_depth, *max_nodes as usize),
+            _ => unreachable!(),
         };
-        changed_files(repo_root, &diff_target)
-            .context("cannot detect changed files")?
-            .into_iter()
-            .filter(|cf| cf.change_type != ChangeType::Deleted)
-            .map(|cf| cf.path)
-            .collect()
-    };
 
-    if target_files.is_empty() {
+        let target_files: Vec<String> = if !explicit_files.is_empty() {
+            explicit_files
+                .iter()
+                .map(|p| {
+                    let abs = Utf8Path::new(p);
+                    if abs.is_absolute() {
+                        repo_relative(repo_root, abs)
+                            .unwrap_or_else(|_| abs.to_owned())
+                            .to_string()
+                    } else {
+                        p.clone()
+                    }
+                })
+                .collect()
+        } else {
+            let diff_target = if let Some(base_ref) = &base {
+                DiffTarget::BaseRef(base_ref.clone())
+            } else {
+                DiffTarget::WorkingTree
+            };
+            changed_files(repo_root, &diff_target)
+                .context("cannot detect changed files")?
+                .into_iter()
+                .filter(|cf| cf.change_type != ChangeType::Deleted)
+                .map(|cf| cf.path)
+                .collect()
+        };
+
+        if target_files.is_empty() {
+            if cli.json {
+                print_json(
+                    "impact",
+                    serde_json::json!({
+                        "files": target_files,
+                        "analysis": ImpactResult {
+                        changed_nodes: vec![],
+                        impacted_nodes: vec![],
+                        impacted_files: vec![],
+                        relevant_edges: vec![],
+                        }
+                    }),
+                )?;
+            } else {
+                println!("No changed files detected.");
+            }
+            return Ok(());
+        }
+
+        let path_refs: Vec<&str> = target_files.iter().map(String::as_str).collect();
+        let t0 = std::time::Instant::now();
+        let result = store
+            .impact_radius(&path_refs, max_depth, max_nodes)
+            .context("impact radius query failed")?;
+        let latency_ms = t0.elapsed().as_millis();
+
+        let advanced = advanced_impact(result);
+
         if cli.json {
             print_json(
                 "impact",
                 serde_json::json!({
                     "files": target_files,
-                    "analysis": ImpactResult {
-                    changed_nodes: vec![],
-                    impacted_nodes: vec![],
-                    impacted_files: vec![],
-                    relevant_edges: vec![],
-                    }
+                    "latency_ms": latency_ms,
+                    "analysis": advanced,
                 }),
             )?;
         } else {
-            println!("No changed files detected.");
-        }
-        return Ok(());
-    }
-
-    let path_refs: Vec<&str> = target_files.iter().map(String::as_str).collect();
-    let t0 = std::time::Instant::now();
-    let result = store
-        .impact_radius(&path_refs, max_depth, max_nodes)
-        .context("impact radius query failed")?;
-    let latency_ms = t0.elapsed().as_millis();
-
-    let advanced = advanced_impact(result);
-
-    if cli.json {
-        print_json(
-            "impact",
-            serde_json::json!({
-                "files": target_files,
-                "latency_ms": latency_ms,
-                "analysis": advanced,
-            }),
-        )?;
-    } else {
-        println!("Changed files : {}", target_files.len());
-        println!("Changed nodes : {}", advanced.base.changed_nodes.len());
-        println!("Impacted nodes: {}", advanced.base.impacted_nodes.len());
-        println!("Impacted files: {}", advanced.base.impacted_files.len());
-        println!("Relevant edges: {}", advanced.base.relevant_edges.len());
-        println!("Risk level    : {}", advanced.risk_level);
-        println!("Latency       : {latency_ms}ms");
-        if !advanced.base.impacted_files.is_empty() {
-            println!("\nImpacted files:");
-            for f in &advanced.base.impacted_files {
-                println!("  {f}");
+            println!("Changed files : {}", target_files.len());
+            println!("Changed nodes : {}", advanced.base.changed_nodes.len());
+            println!("Impacted nodes: {}", advanced.base.impacted_nodes.len());
+            println!("Impacted files: {}", advanced.base.impacted_files.len());
+            println!("Relevant edges: {}", advanced.base.relevant_edges.len());
+            println!("Risk level    : {}", advanced.risk_level);
+            println!("Latency       : {latency_ms}ms");
+            if !advanced.base.impacted_files.is_empty() {
+                println!("\nImpacted files:");
+                for f in &advanced.base.impacted_files {
+                    println!("  {f}");
+                }
             }
-        }
-        if !advanced.scored_nodes.is_empty() {
-            println!("\nTop impacted nodes (by score):");
-            for sn in advanced.scored_nodes.iter().take(20) {
-                let ck = sn
-                    .change_kind
-                    .map(|c| format!(" [{c}]"))
-                    .unwrap_or_default();
+            if !advanced.scored_nodes.is_empty() {
+                println!("\nTop impacted nodes (by score):");
+                for sn in advanced.scored_nodes.iter().take(20) {
+                    let ck = sn
+                        .change_kind
+                        .map(|c| format!(" [{c}]"))
+                        .unwrap_or_default();
+                    println!(
+                        "  {:>6.2}  {} {}{}",
+                        sn.impact_score,
+                        sn.node.kind.as_str(),
+                        sn.node.qualified_name,
+                        ck
+                    );
+                }
+            }
+            if !advanced.test_impact.affected_tests.is_empty() {
                 println!(
-                    "  {:>6.2}  {} {}{}",
-                    sn.impact_score,
-                    sn.node.kind.as_str(),
-                    sn.node.qualified_name,
-                    ck
+                    "\nAffected tests: {}",
+                    advanced.test_impact.affected_tests.len()
                 );
             }
-        }
-        if !advanced.test_impact.affected_tests.is_empty() {
-            println!(
-                "\nAffected tests: {}",
-                advanced.test_impact.affected_tests.len()
-            );
-        }
-        if !advanced.test_impact.uncovered_changed_nodes.is_empty() {
-            println!("\nChanged nodes with no test coverage:");
-            for n in &advanced.test_impact.uncovered_changed_nodes {
-                println!("  {} {}", n.kind.as_str(), n.qualified_name);
+            if !advanced.test_impact.uncovered_changed_nodes.is_empty() {
+                println!("\nChanged nodes with no test coverage:");
+                for n in &advanced.test_impact.uncovered_changed_nodes {
+                    println!("  {} {}", n.kind.as_str(), n.qualified_name);
+                }
+            }
+            if !advanced.boundary_violations.is_empty() {
+                println!("\nBoundary violations:");
+                for v in &advanced.boundary_violations {
+                    println!("  [{}] {}", v.kind, v.description);
+                }
             }
         }
-        if !advanced.boundary_violations.is_empty() {
-            println!("\nBoundary violations:");
-            for v in &advanced.boundary_violations {
-                println!("  [{}] {}", v.kind, v.description);
-            }
-        }
-    }
 
-    Ok(())
+        Ok(())
+    })();
+
+    if let Some(ref mut a) = adapter {
+        a.after_command("impact", result.is_ok());
+    }
+    result
 }
 
 pub fn run_review_context(cli: &Cli) -> Result<()> {
     let repo = resolve_repo(cli)?;
-    let repo_root_path =
-        find_repo_root(Utf8Path::new(&repo)).context("cannot find git repo root")?;
-    let repo_root = repo_root_path.as_path();
-    let db_path = db_path(cli, &repo);
+    let mut adapter = CliAdapter::open(&repo);
+    if let Some(ref mut a) = adapter {
+        a.before_command("review-context");
+    }
 
-    let store =
-        Store::open(&db_path).with_context(|| format!("cannot open database at {db_path}"))?;
+    let result = (|| -> Result<()> {
+        let repo_root_path =
+            find_repo_root(Utf8Path::new(&repo)).context("cannot find git repo root")?;
+        let repo_root = repo_root_path.as_path();
+        let db_path = db_path(cli, &repo);
 
-    let (base, explicit_files, max_depth, max_nodes) = match &cli.command {
-        Command::ReviewContext {
-            base,
-            files,
-            max_depth,
-            max_nodes,
-        } => (base.clone(), files.clone(), *max_depth, *max_nodes as usize),
-        _ => unreachable!(),
-    };
+        let store =
+            Store::open(&db_path).with_context(|| format!("cannot open database at {db_path}"))?;
 
-    let target_files: Vec<String> = if !explicit_files.is_empty() {
-        explicit_files
-            .iter()
-            .map(|p| {
-                let abs = Utf8Path::new(p);
-                if abs.is_absolute() {
-                    repo_relative(repo_root, abs)
-                        .unwrap_or_else(|_| abs.to_owned())
-                        .to_string()
-                } else {
-                    p.clone()
-                }
-            })
-            .collect()
-    } else {
-        let diff_target = if let Some(base_ref) = &base {
-            DiffTarget::BaseRef(base_ref.clone())
-        } else {
-            DiffTarget::WorkingTree
+        let (base, explicit_files, max_depth, max_nodes) = match &cli.command {
+            Command::ReviewContext {
+                base,
+                files,
+                max_depth,
+                max_nodes,
+            } => (base.clone(), files.clone(), *max_depth, *max_nodes as usize),
+            _ => unreachable!(),
         };
-        changed_files(repo_root, &diff_target)
-            .context("cannot detect changed files")?
-            .into_iter()
-            .filter(|cf| cf.change_type != ChangeType::Deleted)
-            .map(|cf| cf.path)
-            .collect()
-    };
 
-    if target_files.is_empty() {
-        if cli.json {
-            let empty = ReviewContext {
-                changed_files: vec![],
-                changed_symbols: vec![],
-                changed_symbol_summaries: vec![],
-                impacted_neighbors: vec![],
-                critical_edges: vec![],
-                impact_overview: ReviewImpactOverview {
-                    max_depth,
-                    max_nodes,
-                    impacted_node_count: 0,
-                    impacted_file_count: 0,
-                    relevant_edge_count: 0,
-                    reached_node_limit: false,
-                },
-                risk_summary: RiskSummary {
-                    changed_symbol_count: 0,
-                    public_api_changes: 0,
-                    test_adjacent: false,
-                    affected_test_count: 0,
-                    uncovered_changed_symbol_count: 0,
-                    large_function_touched: false,
-                    large_function_count: 0,
-                    cross_module_impact: false,
-                    cross_package_impact: false,
-                },
-            };
-            print_json(
-                "review_context",
-                serde_json::json!({
-                    "files": target_files,
-                    "review_context": empty,
-                }),
-            )?;
+        let target_files: Vec<String> = if !explicit_files.is_empty() {
+            explicit_files
+                .iter()
+                .map(|p| {
+                    let abs = Utf8Path::new(p);
+                    if abs.is_absolute() {
+                        repo_relative(repo_root, abs)
+                            .unwrap_or_else(|_| abs.to_owned())
+                            .to_string()
+                    } else {
+                        p.clone()
+                    }
+                })
+                .collect()
         } else {
-            println!("No changed files detected.");
+            let diff_target = if let Some(base_ref) = &base {
+                DiffTarget::BaseRef(base_ref.clone())
+            } else {
+                DiffTarget::WorkingTree
+            };
+            changed_files(repo_root, &diff_target)
+                .context("cannot detect changed files")?
+                .into_iter()
+                .filter(|cf| cf.change_type != ChangeType::Deleted)
+                .map(|cf| cf.path)
+                .collect()
+        };
+
+        if target_files.is_empty() {
+            if cli.json {
+                let empty = ReviewContext {
+                    changed_files: vec![],
+                    changed_symbols: vec![],
+                    changed_symbol_summaries: vec![],
+                    impacted_neighbors: vec![],
+                    critical_edges: vec![],
+                    impact_overview: ReviewImpactOverview {
+                        max_depth,
+                        max_nodes,
+                        impacted_node_count: 0,
+                        impacted_file_count: 0,
+                        relevant_edge_count: 0,
+                        reached_node_limit: false,
+                    },
+                    risk_summary: RiskSummary {
+                        changed_symbol_count: 0,
+                        public_api_changes: 0,
+                        test_adjacent: false,
+                        affected_test_count: 0,
+                        uncovered_changed_symbol_count: 0,
+                        large_function_touched: false,
+                        large_function_count: 0,
+                        cross_module_impact: false,
+                        cross_package_impact: false,
+                    },
+                };
+                print_json(
+                    "review_context",
+                    serde_json::json!({
+                        "files": target_files,
+                        "review_context": empty,
+                    }),
+                )?;
+            } else {
+                println!("No changed files detected.");
+            }
+            return Ok(());
         }
-        return Ok(());
-    }
 
-    let path_refs: Vec<&str> = target_files.iter().map(String::as_str).collect();
-    let workflow_request = ContextRequest {
-        intent: ContextIntent::Review,
-        target: ContextTarget::ChangedFiles {
-            paths: target_files.clone(),
-        },
-        max_nodes: Some(max_nodes),
-        depth: Some(max_depth),
-        ..ContextRequest::default()
-    };
-    let workflow_result = ContextEngine::new(&store)
-        .build(&workflow_request)
-        .context("context engine failed")?;
+        let path_refs: Vec<&str> = target_files.iter().map(String::as_str).collect();
+        let workflow_request = ContextRequest {
+            intent: ContextIntent::Review,
+            target: ContextTarget::ChangedFiles {
+                paths: target_files.clone(),
+            },
+            max_nodes: Some(max_nodes),
+            depth: Some(max_depth),
+            ..ContextRequest::default()
+        };
+        let workflow_result = ContextEngine::new(&store)
+            .build(&workflow_request)
+            .context("context engine failed")?;
 
-    if cli.json {
-        print_json("review_context", serde_json::to_value(&workflow_result)?)?;
-        return Ok(());
-    }
+        if cli.json {
+            print_json("review_context", serde_json::to_value(&workflow_result)?)?;
+            return Ok(());
+        }
 
-    let impact = store
-        .impact_radius(&path_refs, max_depth, max_nodes)
-        .context("impact radius query failed")?;
+        let impact = store
+            .impact_radius(&path_refs, max_depth, max_nodes)
+            .context("impact radius query failed")?;
 
-    let ctx = atlas_review::assemble_review_context(&impact, &target_files, max_depth, max_nodes);
+        let ctx =
+            atlas_review::assemble_review_context(&impact, &target_files, max_depth, max_nodes);
 
-    println!("Changed files ({}):", ctx.changed_files.len());
-    for f in &ctx.changed_files {
-        println!("  {f}");
-    }
-    println!("\nImpact radius:");
-    println!("  Max depth         : {}", ctx.impact_overview.max_depth);
-    println!("  Max nodes         : {}", ctx.impact_overview.max_nodes);
-    println!(
-        "  Impacted nodes    : {}",
-        ctx.impact_overview.impacted_node_count
-    );
-    println!(
-        "  Impacted files    : {}",
-        ctx.impact_overview.impacted_file_count
-    );
-    println!(
-        "  Relevant edges    : {}",
-        ctx.impact_overview.relevant_edge_count
-    );
-    println!(
-        "  Node limit reached: {}",
-        ctx.impact_overview.reached_node_limit
-    );
-    println!(
-        "\nChanged symbols: {}",
-        ctx.risk_summary.changed_symbol_count
-    );
-    for summary in ctx.changed_symbol_summaries.iter().take(10) {
+        println!("Changed files ({}):", ctx.changed_files.len());
+        for f in &ctx.changed_files {
+            println!("  {f}");
+        }
+        println!("\nImpact radius:");
+        println!("  Max depth         : {}", ctx.impact_overview.max_depth);
+        println!("  Max nodes         : {}", ctx.impact_overview.max_nodes);
         println!(
-            "  {} {} ({}:{}) | callers {} | callees {} | importers {} | tests {}",
-            summary.node.kind.as_str(),
-            summary.node.qualified_name,
-            summary.node.file_path,
-            summary.node.line_start,
-            summary.callers.len(),
-            summary.callees.len(),
-            summary.importers.len(),
-            summary.tests.len()
+            "  Impacted nodes    : {}",
+            ctx.impact_overview.impacted_node_count
         );
-    }
-    println!(
-        "\nImpacted neighbors (top {}):",
-        ctx.impacted_neighbors.len().min(20)
-    );
-    for n in ctx.impacted_neighbors.iter().take(20) {
         println!(
-            "  {} {} ({}:{})",
-            n.kind.as_str(),
-            n.qualified_name,
-            n.file_path,
-            n.line_start
+            "  Impacted files    : {}",
+            ctx.impact_overview.impacted_file_count
         );
-    }
-    println!("\nRisk summary:");
-    println!(
-        "  Public API changes : {}",
-        ctx.risk_summary.public_api_changes
-    );
-    println!(
-        "  Affected tests     : {}",
-        ctx.risk_summary.affected_test_count
-    );
-    println!(
-        "  Uncovered changes  : {}",
-        ctx.risk_summary.uncovered_changed_symbol_count
-    );
-    println!(
-        "  Large functions    : {}",
-        ctx.risk_summary.large_function_count
-    );
-    println!("  Test adjacent      : {}", ctx.risk_summary.test_adjacent);
-    println!(
-        "  Cross-module impact: {}",
-        ctx.risk_summary.cross_module_impact
-    );
-    println!(
-        "  Cross-package impact: {}",
-        ctx.risk_summary.cross_package_impact
-    );
+        println!(
+            "  Relevant edges    : {}",
+            ctx.impact_overview.relevant_edge_count
+        );
+        println!(
+            "  Node limit reached: {}",
+            ctx.impact_overview.reached_node_limit
+        );
+        println!(
+            "\nChanged symbols: {}",
+            ctx.risk_summary.changed_symbol_count
+        );
+        for summary in ctx.changed_symbol_summaries.iter().take(10) {
+            println!(
+                "  {} {} ({}:{}) | callers {} | callees {} | importers {} | tests {}",
+                summary.node.kind.as_str(),
+                summary.node.qualified_name,
+                summary.node.file_path,
+                summary.node.line_start,
+                summary.callers.len(),
+                summary.callees.len(),
+                summary.importers.len(),
+                summary.tests.len()
+            );
+        }
+        println!(
+            "\nImpacted neighbors (top {}):",
+            ctx.impacted_neighbors.len().min(20)
+        );
+        for n in ctx.impacted_neighbors.iter().take(20) {
+            println!(
+                "  {} {} ({}:{})",
+                n.kind.as_str(),
+                n.qualified_name,
+                n.file_path,
+                n.line_start
+            );
+        }
+        println!("\nRisk summary:");
+        println!(
+            "  Public API changes : {}",
+            ctx.risk_summary.public_api_changes
+        );
+        println!(
+            "  Affected tests     : {}",
+            ctx.risk_summary.affected_test_count
+        );
+        println!(
+            "  Uncovered changes  : {}",
+            ctx.risk_summary.uncovered_changed_symbol_count
+        );
+        println!(
+            "  Large functions    : {}",
+            ctx.risk_summary.large_function_count
+        );
+        println!("  Test adjacent      : {}", ctx.risk_summary.test_adjacent);
+        println!(
+            "  Cross-module impact: {}",
+            ctx.risk_summary.cross_module_impact
+        );
+        println!(
+            "  Cross-package impact: {}",
+            ctx.risk_summary.cross_package_impact
+        );
 
-    if let Some(workflow) = &workflow_result.workflow {
-        if let Some(headline) = &workflow.headline {
-            println!("\nFocus: {headline}");
-        }
-        if !workflow.high_impact_nodes.is_empty() {
-            println!("\nHigh-impact nodes:");
-            for node in workflow.high_impact_nodes.iter().take(5) {
-                println!(
-                    "  [{:.1}] {} {} ({})",
-                    node.relevance_score, node.kind, node.qualified_name, node.file_path
-                );
+        if let Some(workflow) = &workflow_result.workflow {
+            if let Some(headline) = &workflow.headline {
+                println!("\nFocus: {headline}");
+            }
+            if !workflow.high_impact_nodes.is_empty() {
+                println!("\nHigh-impact nodes:");
+                for node in workflow.high_impact_nodes.iter().take(5) {
+                    println!(
+                        "  [{:.1}] {} {} ({})",
+                        node.relevance_score, node.kind, node.qualified_name, node.file_path
+                    );
+                }
+            }
+            if !workflow.call_chains.is_empty() {
+                println!("\nCall chains:");
+                for chain in workflow.call_chains.iter().take(5) {
+                    println!("  {}", chain.summary);
+                }
+            }
+            if !workflow.ripple_effects.is_empty() {
+                println!("\nRipple effects:");
+                for ripple in &workflow.ripple_effects {
+                    println!("  {ripple}");
+                }
             }
         }
-        if !workflow.call_chains.is_empty() {
-            println!("\nCall chains:");
-            for chain in workflow.call_chains.iter().take(5) {
-                println!("  {}", chain.summary);
-            }
-        }
-        if !workflow.ripple_effects.is_empty() {
-            println!("\nRipple effects:");
-            for ripple in &workflow.ripple_effects {
-                println!("  {ripple}");
-            }
-        }
-    }
 
-    Ok(())
+        Ok(())
+    })();
+
+    if let Some(ref mut a) = adapter {
+        a.after_command("review-context", result.is_ok());
+    }
+    result
 }
 
 pub fn run_watch(cli: &Cli) -> Result<()> {
@@ -1541,27 +1601,18 @@ pub fn run_watch(cli: &Cli) -> Result<()> {
 
 pub fn run_context(cli: &Cli) -> Result<()> {
     let repo = resolve_repo(cli)?;
+    let mut adapter = CliAdapter::open(&repo);
+    if let Some(ref mut a) = adapter {
+        a.before_command("context");
+    }
     let db_path = db_path(cli, &repo);
 
-    let (
-        query,
-        file,
-        files,
-        intent_override,
-        max_nodes,
-        max_edges,
-        max_files,
-        depth,
-        code_spans,
-        tests,
-        imports,
-        neighbors,
-    ) = match &cli.command {
-        Command::Context {
+    let result = (|| -> Result<()> {
+        let (
             query,
             file,
             files,
-            intent,
+            intent_override,
             max_nodes,
             max_edges,
             max_files,
@@ -1570,89 +1621,114 @@ pub fn run_context(cli: &Cli) -> Result<()> {
             tests,
             imports,
             neighbors,
-        } => (
-            query.clone(),
-            file.clone(),
-            files.clone(),
-            intent.clone(),
-            *max_nodes,
-            *max_edges,
-            *max_files,
-            *depth,
-            *code_spans,
-            *tests,
-            *imports,
-            *neighbors,
-        ),
-        _ => unreachable!(),
-    };
+        ) = match &cli.command {
+            Command::Context {
+                query,
+                file,
+                files,
+                intent,
+                max_nodes,
+                max_edges,
+                max_files,
+                depth,
+                code_spans,
+                tests,
+                imports,
+                neighbors,
+            } => (
+                query.clone(),
+                file.clone(),
+                files.clone(),
+                intent.clone(),
+                *max_nodes,
+                *max_edges,
+                *max_files,
+                *depth,
+                *code_spans,
+                *tests,
+                *imports,
+                *neighbors,
+            ),
+            _ => unreachable!(),
+        };
 
-    // Build the base request: parse from free-text query or structured flags.
-    let mut request = if !files.is_empty() {
-        // Explicit changed-file list → review/impact.
-        let intent = parse_intent_override(intent_override.as_deref(), ContextIntent::Review);
-        ContextRequest {
-            intent,
-            target: ContextTarget::ChangedFiles { paths: files },
-            ..ContextRequest::default()
+        // Build the base request: parse from free-text query or structured flags.
+        let mut request = if !files.is_empty() {
+            // Explicit changed-file list → review/impact.
+            let intent = parse_intent_override(intent_override.as_deref(), ContextIntent::Review);
+            ContextRequest {
+                intent,
+                target: ContextTarget::ChangedFiles { paths: files },
+                ..ContextRequest::default()
+            }
+        } else if let Some(path) = file {
+            // Explicit file target.
+            let intent = parse_intent_override(intent_override.as_deref(), ContextIntent::File);
+            ContextRequest {
+                intent,
+                target: ContextTarget::FilePath { path },
+                ..ContextRequest::default()
+            }
+        } else if let Some(q) = query {
+            // Free-text or symbol/qualified name — route through query parser.
+            let mut parsed = query_parser::parse_query(&q);
+            if let Some(intent) = intent_override.as_deref().and_then(parse_intent_str) {
+                parsed.intent = intent;
+            }
+            parsed
+        } else {
+            anyhow::bail!("provide a TARGET query, --file <path>, or --files <paths...>");
+        };
+
+        // Apply explicit limit/depth overrides.
+        if max_nodes.is_some() {
+            request.max_nodes = max_nodes;
         }
-    } else if let Some(path) = file {
-        // Explicit file target.
-        let intent = parse_intent_override(intent_override.as_deref(), ContextIntent::File);
-        ContextRequest {
-            intent,
-            target: ContextTarget::FilePath { path },
-            ..ContextRequest::default()
+        if max_edges.is_some() {
+            request.max_edges = max_edges;
         }
-    } else if let Some(q) = query {
-        // Free-text or symbol/qualified name — route through query parser.
-        let mut parsed = query_parser::parse_query(&q);
-        if let Some(intent) = intent_override.as_deref().and_then(parse_intent_str) {
-            parsed.intent = intent;
+        if max_files.is_some() {
+            request.max_files = max_files;
         }
-        parsed
-    } else {
-        anyhow::bail!("provide a TARGET query, --file <path>, or --files <paths...>");
-    };
+        if depth.is_some() {
+            request.depth = depth;
+        }
+        if code_spans {
+            request.include_code_spans = true;
+        }
+        if tests {
+            request.include_tests = true;
+        }
+        if imports {
+            request.include_imports = true;
+        }
+        if neighbors {
+            request.include_neighbors = true;
+        }
 
-    // Apply explicit limit/depth overrides.
-    if max_nodes.is_some() {
-        request.max_nodes = max_nodes;
-    }
-    if max_edges.is_some() {
-        request.max_edges = max_edges;
-    }
-    if max_files.is_some() {
-        request.max_files = max_files;
-    }
-    if depth.is_some() {
-        request.depth = depth;
-    }
-    if code_spans {
-        request.include_code_spans = true;
-    }
-    if tests {
-        request.include_tests = true;
-    }
-    if imports {
-        request.include_imports = true;
-    }
-    if neighbors {
-        request.include_neighbors = true;
-    }
+        let store =
+            Store::open(&db_path).with_context(|| format!("cannot open database at {db_path}"))?;
+        let engine = ContextEngine::new(&store);
+        let result = engine.build(&request).context("context engine failed")?;
 
-    let store =
-        Store::open(&db_path).with_context(|| format!("cannot open database at {db_path}"))?;
-    let engine = ContextEngine::new(&store);
-    let result = engine.build(&request).context("context engine failed")?;
+        if cli.json {
+            print_json("context", serde_json::to_value(&result)?)?;
+        } else {
+            println!("{}", format_context_output(&result));
+        }
 
-    if cli.json {
-        print_json("context", serde_json::to_value(&result)?)?;
-    } else {
-        println!("{}", format_context_output(&result));
+        Ok(())
+    })();
+
+    if result.is_ok()
+        && let Some(ref mut a) = adapter
+    {
+        a.record(extract_context_event("cli:context", 0));
     }
-
-    Ok(())
+    if let Some(ref mut a) = adapter {
+        a.after_command("context", result.is_ok());
+    }
+    result
 }
 
 fn parse_intent_str(s: &str) -> Option<ContextIntent> {
@@ -2306,164 +2382,191 @@ pub fn run_analyze(cli: &Cli) -> Result<()> {
     use atlas_reasoning::ReasoningEngine;
 
     let repo = resolve_repo(cli)?;
-    let db_path = db_path(cli, &repo);
-    let store =
-        Store::open(&db_path).with_context(|| format!("cannot open database at {db_path}"))?;
-    let engine = ReasoningEngine::new(&store);
-
-    let sub = match &cli.command {
-        Command::Analyze { subcommand } => subcommand,
-        _ => unreachable!(),
+    // Identify the subcommand for event labelling before the closure borrows cli.command.
+    let analyze_label = match &cli.command {
+        Command::Analyze { subcommand } => match subcommand {
+            AnalyzeCommand::Remove { .. } => "analyze:remove",
+            AnalyzeCommand::DeadCode { .. } => "analyze:dead-code",
+            AnalyzeCommand::Safety { .. } => "analyze:safety",
+            AnalyzeCommand::Dependency { .. } => "analyze:dependency",
+        },
+        _ => "analyze",
     };
-
-    match sub {
-        AnalyzeCommand::Remove {
-            symbol,
-            max_depth,
-            max_nodes,
-        } => {
-            let result = engine
-                .analyze_removal(&[symbol.as_str()], Some(*max_depth), Some(*max_nodes))
-                .with_context(|| format!("removal analysis for `{symbol}` failed"))?;
-
-            if cli.json {
-                print_json("analyze_remove", serde_json::to_value(&result)?)?;
-            } else {
-                println!("Removal impact for: {symbol}");
-                println!("  Seed nodes      : {}", result.seed.len());
-                println!("  Impacted symbols: {}", result.impacted_symbols.len());
-                println!("  Impacted files  : {}", result.impacted_files.len());
-                println!("  Impacted tests  : {}", result.impacted_tests.len());
-                for im in result.impacted_symbols.iter().take(20) {
-                    println!(
-                        "  [{:?}] {} {} (depth {})",
-                        im.impact_class,
-                        im.node.kind.as_str(),
-                        im.node.qualified_name,
-                        im.depth,
-                    );
-                }
-                if !result.uncertainty_flags.is_empty() {
-                    println!("\nUncertainty:");
-                    for flag in &result.uncertainty_flags {
-                        println!("  ! {flag}");
-                    }
-                }
-                if !result.warnings.is_empty() {
-                    println!("\nWarnings:");
-                    for w in &result.warnings {
-                        println!("  [{:?}] {}", w.confidence, w.message);
-                    }
-                }
-            }
-        }
-
-        AnalyzeCommand::DeadCode {
-            allowlist,
-            subpath,
-            limit,
-        } => {
-            let allowlist_refs: Vec<&str> = allowlist.iter().map(String::as_str).collect();
-            let candidates = engine
-                .detect_dead_code(&allowlist_refs, subpath.as_deref(), Some(*limit))
-                .context("dead-code detection failed")?;
-
-            if cli.json {
-                print_json("analyze_dead_code", serde_json::to_value(&candidates)?)?;
-            } else if candidates.is_empty() {
-                println!("No dead-code candidates found.");
-            } else {
-                println!("Dead-code candidates ({}):", candidates.len());
-                for c in &candidates {
-                    println!(
-                        "  [{:?}] {} {} ({}:{})",
-                        c.certainty,
-                        c.node.kind.as_str(),
-                        c.node.qualified_name,
-                        c.node.file_path,
-                        c.node.line_start,
-                    );
-                    for r in &c.reasons {
-                        println!("    - {r}");
-                    }
-                    for b in &c.blockers {
-                        println!("    ! blocker: {b}");
-                    }
-                }
-            }
-        }
-
-        AnalyzeCommand::Safety { symbol } => {
-            let result = engine
-                .score_refactor_safety(symbol)
-                .with_context(|| format!("safety scoring for `{symbol}` failed"))?;
-
-            if cli.json {
-                print_json("analyze_safety", serde_json::to_value(&result)?)?;
-            } else {
-                println!("Refactor safety for: {symbol}");
-                println!("  Score  : {:.3}", result.safety.score);
-                println!("  Band   : {:?}", result.safety.band);
-                println!("  Fan-in : {}", result.fan_in);
-                println!("  Fan-out: {}", result.fan_out);
-                println!("  Tests  : {}", result.linked_test_count);
-                if !result.safety.reasons.is_empty() {
-                    println!("\nReasons:");
-                    for r in &result.safety.reasons {
-                        println!("  - {r}");
-                    }
-                }
-                if !result.safety.suggested_validations.is_empty() {
-                    println!("\nSuggested validations:");
-                    for v in &result.safety.suggested_validations {
-                        println!("  - {v}");
-                    }
-                }
-            }
-        }
-
-        AnalyzeCommand::Dependency { symbol } => {
-            let result = engine
-                .check_dependency_removal(symbol)
-                .with_context(|| format!("dependency check for `{symbol}` failed"))?;
-
-            if cli.json {
-                print_json("analyze_dependency", serde_json::to_value(&result)?)?;
-            } else {
-                let verdict = if result.removable {
-                    "REMOVABLE"
-                } else {
-                    "BLOCKED"
-                };
-                println!("Dependency check for: {symbol}");
-                println!("  Verdict   : {verdict}");
-                println!("  Confidence: {:?}", result.confidence);
-                println!("  Blocking  : {}", result.blocking_references.len());
-                for n in &result.blocking_references {
-                    println!(
-                        "  - {} {} ({})",
-                        n.kind.as_str(),
-                        n.qualified_name,
-                        n.file_path
-                    );
-                }
-                if !result.suggested_cleanups.is_empty() {
-                    println!("\nSuggested cleanups:");
-                    for s in &result.suggested_cleanups {
-                        println!("  - {s}");
-                    }
-                }
-                if !result.uncertainty_flags.is_empty() {
-                    println!("\nUncertainty:");
-                    for flag in &result.uncertainty_flags {
-                        println!("  ! {flag}");
-                    }
-                }
-            }
-        }
+    let mut adapter = CliAdapter::open(&repo);
+    if let Some(ref mut a) = adapter {
+        a.before_command(analyze_label);
     }
 
-    Ok(())
+    let result = (|| -> Result<()> {
+        let db_path = db_path(cli, &repo);
+        let store =
+            Store::open(&db_path).with_context(|| format!("cannot open database at {db_path}"))?;
+        let engine = ReasoningEngine::new(&store);
+
+        let sub = match &cli.command {
+            Command::Analyze { subcommand } => subcommand,
+            _ => unreachable!(),
+        };
+
+        match sub {
+            AnalyzeCommand::Remove {
+                symbol,
+                max_depth,
+                max_nodes,
+            } => {
+                let result = engine
+                    .analyze_removal(&[symbol.as_str()], Some(*max_depth), Some(*max_nodes))
+                    .with_context(|| format!("removal analysis for `{symbol}` failed"))?;
+
+                if cli.json {
+                    print_json("analyze_remove", serde_json::to_value(&result)?)?;
+                } else {
+                    println!("Removal impact for: {symbol}");
+                    println!("  Seed nodes      : {}", result.seed.len());
+                    println!("  Impacted symbols: {}", result.impacted_symbols.len());
+                    println!("  Impacted files  : {}", result.impacted_files.len());
+                    println!("  Impacted tests  : {}", result.impacted_tests.len());
+                    for im in result.impacted_symbols.iter().take(20) {
+                        println!(
+                            "  [{:?}] {} {} (depth {})",
+                            im.impact_class,
+                            im.node.kind.as_str(),
+                            im.node.qualified_name,
+                            im.depth,
+                        );
+                    }
+                    if !result.uncertainty_flags.is_empty() {
+                        println!("\nUncertainty:");
+                        for flag in &result.uncertainty_flags {
+                            println!("  ! {flag}");
+                        }
+                    }
+                    if !result.warnings.is_empty() {
+                        println!("\nWarnings:");
+                        for w in &result.warnings {
+                            println!("  [{:?}] {}", w.confidence, w.message);
+                        }
+                    }
+                }
+            }
+
+            AnalyzeCommand::DeadCode {
+                allowlist,
+                subpath,
+                limit,
+            } => {
+                let allowlist_refs: Vec<&str> = allowlist.iter().map(String::as_str).collect();
+                let candidates = engine
+                    .detect_dead_code(&allowlist_refs, subpath.as_deref(), Some(*limit))
+                    .context("dead-code detection failed")?;
+
+                if cli.json {
+                    print_json("analyze_dead_code", serde_json::to_value(&candidates)?)?;
+                } else if candidates.is_empty() {
+                    println!("No dead-code candidates found.");
+                } else {
+                    println!("Dead-code candidates ({}):", candidates.len());
+                    for c in &candidates {
+                        println!(
+                            "  [{:?}] {} {} ({}:{})",
+                            c.certainty,
+                            c.node.kind.as_str(),
+                            c.node.qualified_name,
+                            c.node.file_path,
+                            c.node.line_start,
+                        );
+                        for r in &c.reasons {
+                            println!("    - {r}");
+                        }
+                        for b in &c.blockers {
+                            println!("    ! blocker: {b}");
+                        }
+                    }
+                }
+            }
+
+            AnalyzeCommand::Safety { symbol } => {
+                let result = engine
+                    .score_refactor_safety(symbol)
+                    .with_context(|| format!("safety scoring for `{symbol}` failed"))?;
+
+                if cli.json {
+                    print_json("analyze_safety", serde_json::to_value(&result)?)?;
+                } else {
+                    println!("Refactor safety for: {symbol}");
+                    println!("  Score  : {:.3}", result.safety.score);
+                    println!("  Band   : {:?}", result.safety.band);
+                    println!("  Fan-in : {}", result.fan_in);
+                    println!("  Fan-out: {}", result.fan_out);
+                    println!("  Tests  : {}", result.linked_test_count);
+                    if !result.safety.reasons.is_empty() {
+                        println!("\nReasons:");
+                        for r in &result.safety.reasons {
+                            println!("  - {r}");
+                        }
+                    }
+                    if !result.safety.suggested_validations.is_empty() {
+                        println!("\nSuggested validations:");
+                        for v in &result.safety.suggested_validations {
+                            println!("  - {v}");
+                        }
+                    }
+                }
+            }
+
+            AnalyzeCommand::Dependency { symbol } => {
+                let result = engine
+                    .check_dependency_removal(symbol)
+                    .with_context(|| format!("dependency check for `{symbol}` failed"))?;
+
+                if cli.json {
+                    print_json("analyze_dependency", serde_json::to_value(&result)?)?;
+                } else {
+                    let verdict = if result.removable {
+                        "REMOVABLE"
+                    } else {
+                        "BLOCKED"
+                    };
+                    println!("Dependency check for: {symbol}");
+                    println!("  Verdict   : {verdict}");
+                    println!("  Confidence: {:?}", result.confidence);
+                    println!("  Blocking  : {}", result.blocking_references.len());
+                    for n in &result.blocking_references {
+                        println!(
+                            "  - {} {} ({})",
+                            n.kind.as_str(),
+                            n.qualified_name,
+                            n.file_path
+                        );
+                    }
+                    if !result.suggested_cleanups.is_empty() {
+                        println!("\nSuggested cleanups:");
+                        for s in &result.suggested_cleanups {
+                            println!("  - {s}");
+                        }
+                    }
+                    if !result.uncertainty_flags.is_empty() {
+                        println!("\nUncertainty:");
+                        for flag in &result.uncertainty_flags {
+                            println!("  ! {flag}");
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    })();
+
+    if result.is_ok()
+        && let Some(ref mut a) = adapter
+    {
+        a.record(extract_reasoning_event(None, analyze_label));
+    }
+    if let Some(ref mut a) = adapter {
+        a.after_command(analyze_label, result.is_ok());
+    }
+    result
 }
 
 // ---------------------------------------------------------------------------
@@ -2474,81 +2577,93 @@ pub fn run_refactor(cli: &Cli) -> Result<()> {
     use atlas_refactor::RefactorEngine;
 
     let repo = resolve_repo(cli)?;
-    let repo_root_path =
-        find_repo_root(Utf8Path::new(&repo)).context("cannot find git repo root")?;
-    let repo_root = repo_root_path.as_std_path();
-    let db_path = db_path(cli, &repo);
-    let store =
-        Store::open(&db_path).with_context(|| format!("cannot open database at {db_path}"))?;
-    let engine = RefactorEngine::new(&store, repo_root);
-
-    let sub = match &cli.command {
-        Command::Refactor { subcommand } => subcommand,
-        _ => unreachable!(),
-    };
-
-    match sub {
-        RefactorCommand::Rename {
-            symbol,
-            to,
-            legacy_symbol,
-            legacy_to,
-            dry_run,
-        } => {
-            let symbol = symbol
-                .as_deref()
-                .or(legacy_symbol.as_deref())
-                .context("rename requires --symbol <qualified-name>")?;
-            let new_name = to
-                .as_deref()
-                .or(legacy_to.as_deref())
-                .context("rename requires --to <new-name>")?;
-            let plan = engine
-                .plan_rename(symbol, new_name)
-                .with_context(|| format!("rename plan for `{symbol}` → `{new_name}` failed"))?;
-            let result = engine
-                .apply_rename(&plan, *dry_run)
-                .context("apply rename failed")?;
-
-            if cli.json {
-                print_json("refactor_rename", serde_json::to_value(&result)?)?;
-            } else {
-                print_refactor_result(&result, *dry_run);
-            }
-        }
-
-        RefactorCommand::RemoveDead { symbol, dry_run } => {
-            let plan = engine
-                .plan_dead_code_removal(symbol)
-                .with_context(|| format!("remove-dead plan for `{symbol}` failed"))?;
-            let result = engine
-                .apply_dead_code_removal(&plan, *dry_run)
-                .context("apply dead-code removal failed")?;
-
-            if cli.json {
-                print_json("refactor_remove_dead", serde_json::to_value(&result)?)?;
-            } else {
-                print_refactor_result(&result, *dry_run);
-            }
-        }
-
-        RefactorCommand::CleanImports { file, dry_run } => {
-            let plan = engine
-                .plan_import_cleanup(file)
-                .with_context(|| format!("import-cleanup plan for `{file}` failed"))?;
-            let result = engine
-                .apply_import_cleanup(&plan, *dry_run)
-                .context("apply import cleanup failed")?;
-
-            if cli.json {
-                print_json("refactor_clean_imports", serde_json::to_value(&result)?)?;
-            } else {
-                print_refactor_result(&result, *dry_run);
-            }
-        }
+    let mut adapter = CliAdapter::open(&repo);
+    if let Some(ref mut a) = adapter {
+        a.before_command("refactor");
     }
 
-    Ok(())
+    let result = (|| -> Result<()> {
+        let repo_root_path =
+            find_repo_root(Utf8Path::new(&repo)).context("cannot find git repo root")?;
+        let repo_root = repo_root_path.as_std_path();
+        let db_path = db_path(cli, &repo);
+        let store =
+            Store::open(&db_path).with_context(|| format!("cannot open database at {db_path}"))?;
+        let engine = RefactorEngine::new(&store, repo_root);
+
+        let sub = match &cli.command {
+            Command::Refactor { subcommand } => subcommand,
+            _ => unreachable!(),
+        };
+
+        match sub {
+            RefactorCommand::Rename {
+                symbol,
+                to,
+                legacy_symbol,
+                legacy_to,
+                dry_run,
+            } => {
+                let symbol = symbol
+                    .as_deref()
+                    .or(legacy_symbol.as_deref())
+                    .context("rename requires --symbol <qualified-name>")?;
+                let new_name = to
+                    .as_deref()
+                    .or(legacy_to.as_deref())
+                    .context("rename requires --to <new-name>")?;
+                let plan = engine
+                    .plan_rename(symbol, new_name)
+                    .with_context(|| format!("rename plan for `{symbol}` → `{new_name}` failed"))?;
+                let result = engine
+                    .apply_rename(&plan, *dry_run)
+                    .context("apply rename failed")?;
+
+                if cli.json {
+                    print_json("refactor_rename", serde_json::to_value(&result)?)?;
+                } else {
+                    print_refactor_result(&result, *dry_run);
+                }
+            }
+
+            RefactorCommand::RemoveDead { symbol, dry_run } => {
+                let plan = engine
+                    .plan_dead_code_removal(symbol)
+                    .with_context(|| format!("remove-dead plan for `{symbol}` failed"))?;
+                let result = engine
+                    .apply_dead_code_removal(&plan, *dry_run)
+                    .context("apply dead-code removal failed")?;
+
+                if cli.json {
+                    print_json("refactor_remove_dead", serde_json::to_value(&result)?)?;
+                } else {
+                    print_refactor_result(&result, *dry_run);
+                }
+            }
+
+            RefactorCommand::CleanImports { file, dry_run } => {
+                let plan = engine
+                    .plan_import_cleanup(file)
+                    .with_context(|| format!("import-cleanup plan for `{file}` failed"))?;
+                let result = engine
+                    .apply_import_cleanup(&plan, *dry_run)
+                    .context("apply import cleanup failed")?;
+
+                if cli.json {
+                    print_json("refactor_clean_imports", serde_json::to_value(&result)?)?;
+                } else {
+                    print_refactor_result(&result, *dry_run);
+                }
+            }
+        }
+
+        Ok(())
+    })();
+
+    if let Some(ref mut a) = adapter {
+        a.after_command("refactor", result.is_ok());
+    }
+    result
 }
 
 fn print_refactor_result(result: &atlas_core::RefactorDryRunResult, dry_run: bool) {

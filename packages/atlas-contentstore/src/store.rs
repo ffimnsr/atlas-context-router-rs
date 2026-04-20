@@ -297,14 +297,26 @@ impl ContentStore {
             tx.execute(
                 "INSERT INTO chunks_fts(rowid, title, content, source_id, content_type)
                  VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![rowid, chunk.title, chunk.content, meta.id, chunk.content_type],
+                params![
+                    rowid,
+                    chunk.title,
+                    chunk.content,
+                    meta.id,
+                    chunk.content_type
+                ],
             )
             .map_err(|e| AtlasError::Db(e.to_string()))?;
 
             tx.execute(
                 "INSERT INTO chunks_trigram(rowid, title, content, source_id, content_type)
                  VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![rowid, chunk.title, chunk.content, meta.id, chunk.content_type],
+                params![
+                    rowid,
+                    chunk.title,
+                    chunk.content,
+                    meta.id,
+                    chunk.content_type
+                ],
             )
             .map_err(|e| AtlasError::Db(e.to_string()))?;
         }
@@ -394,11 +406,7 @@ impl ContentStore {
     ///
     /// Enables substring and typo-tolerant matching.  Results are ordered by
     /// descending BM25 score with 10× title weighting, same as `search()`.
-    fn search_trigram(
-        &self,
-        query: &str,
-        filters: &SearchFilters,
-    ) -> Result<Vec<ChunkResult>> {
+    fn search_trigram(&self, query: &str, filters: &SearchFilters) -> Result<Vec<ChunkResult>> {
         // Trigram MATCH expects raw terms; no FTS5 quoting needed.
         let trigram_query = query.to_string();
 
@@ -492,9 +500,9 @@ impl ContentStore {
 
             let dist = levenshtein(&term_low, &candidate);
             if dist <= 2 {
-                let better = best.as_ref().map_or(true, |(_, bf, bd)| {
-                    dist < *bd || (dist == *bd && freq as u32 > *bf)
-                });
+                let better = best
+                    .as_ref()
+                    .is_none_or(|(_, bf, bd)| dist < *bd || (dist == *bd && freq as u32 > *bf));
                 if better {
                     best = Some((candidate, freq as u32, dist));
                 }
@@ -522,7 +530,10 @@ impl ContentStore {
         let needs_fallback = fts_results.len() < self.config.fallback_min_results;
 
         let trigram_results = if needs_fallback {
-            debug!("FTS returned {} results; trying trigram fallback", fts_results.len());
+            debug!(
+                "FTS returned {} results; trying trigram fallback",
+                fts_results.len()
+            );
             self.search_trigram(query, filters).unwrap_or_default()
         } else {
             Vec::new()
@@ -540,7 +551,10 @@ impl ContentStore {
 
         // Vocabulary-based fuzzy correction: retry once if still no results.
         if merged.is_empty() {
-            debug!("no results for '{}'; attempting vocabulary correction", query);
+            debug!(
+                "no results for '{}'; attempting vocabulary correction",
+                query
+            );
             let terms: Vec<&str> = query.split_whitespace().collect();
             let mut corrected_parts: Vec<String> = Vec::new();
             let mut corrected = false;
@@ -556,7 +570,9 @@ impl ContentStore {
                 let corrected_query = corrected_parts.join(" ");
                 debug!("retrying with corrected query: '{}'", corrected_query);
                 let fts2 = self.search(&corrected_query, filters)?;
-                let tri2 = self.search_trigram(&corrected_query, filters).unwrap_or_default();
+                let tri2 = self
+                    .search_trigram(&corrected_query, filters)
+                    .unwrap_or_default();
                 merged = rrf_merge(&fts2, &tri2);
                 if !merged.is_empty() {
                     let cterms: Vec<&str> = corrected_query.split_whitespace().collect();
@@ -710,10 +726,11 @@ fn extract_vocab_terms(text: &str) -> Vec<String> {
     let mut out = Vec::new();
     for word in text.split(|c: char| !c.is_alphanumeric()) {
         let lower = word.to_lowercase();
-        if lower.len() >= 3 && lower.chars().all(|c| c.is_ascii_alphabetic()) {
-            if seen.insert(lower.clone()) {
-                out.push(lower);
-            }
+        if lower.len() >= 3
+            && lower.chars().all(|c| c.is_ascii_alphabetic())
+            && seen.insert(lower.clone())
+        {
+            out.push(lower);
         }
     }
     out
@@ -754,7 +771,7 @@ fn rrf_merge(list_a: &[ChunkResult], list_b: &[ChunkResult]) -> Vec<ChunkResult>
 ///
 /// For each chunk, counts how many term pairs appear within a 50-word window.
 /// Chunks with more co-occurring term pairs are promoted to the front.
-fn proximity_rerank(results: &mut Vec<ChunkResult>, terms: &[&str]) {
+fn proximity_rerank(results: &mut [ChunkResult], terms: &[&str]) {
     let score_chunk = |chunk: &ChunkResult| -> i64 {
         let words: Vec<&str> = chunk.content.split_whitespace().collect();
         let n = words.len();
@@ -804,7 +821,7 @@ fn proximity_rerank(results: &mut Vec<ChunkResult>, terms: &[&str]) {
     };
 
     // Stable sort: higher proximity score first.
-    results.sort_by(|a, b| score_chunk(b).cmp(&score_chunk(a)));
+    results.sort_by_key(|chunk| std::cmp::Reverse(score_chunk(chunk)));
 }
 
 /// Levenshtein edit distance (byte-level; capped at 3 for early exit).
@@ -989,7 +1006,10 @@ mod tests {
         let results = store
             .search_with_fallback("fox", &SearchFilters::default())
             .unwrap();
-        assert!(!results.is_empty(), "search_with_fallback should find 'fox'");
+        assert!(
+            !results.is_empty(),
+            "search_with_fallback should find 'fox'"
+        );
     }
 
     #[test]
@@ -1007,7 +1027,10 @@ mod tests {
         let results = store
             .search_with_fallback("spectrosc", &SearchFilters::default())
             .unwrap();
-        assert!(!results.is_empty(), "trigram fallback should find substring 'spectrosc'");
+        assert!(
+            !results.is_empty(),
+            "trigram fallback should find substring 'spectrosc'"
+        );
     }
 
     #[test]
@@ -1068,12 +1091,18 @@ mod tests {
         store.migrate().unwrap();
 
         // 5 bytes < small_output_bytes=10 → Raw
-        let r = store.route_output(meta("t1"), "hello", "text/plain").unwrap();
+        let r = store
+            .route_output(meta("t1"), "hello", "text/plain")
+            .unwrap();
         assert!(matches!(r, OutputRouting::Raw(_)));
 
         // 30 bytes > 10 but <= 50 → Preview
         let r = store
-            .route_output(meta("t2"), "this is a medium length output text!", "text/plain")
+            .route_output(
+                meta("t2"),
+                "this is a medium length output text!",
+                "text/plain",
+            )
             .unwrap();
         assert!(matches!(r, OutputRouting::Preview { .. }));
 
