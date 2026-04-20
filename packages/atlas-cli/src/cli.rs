@@ -117,6 +117,11 @@ pub enum Command {
         /// Use hybrid FTS + vector search with RRF (requires ATLAS_EMBED_URL).
         #[arg(long)]
         hybrid: bool,
+
+        /// Use semantic (graph-aware) retrieval: expands the result set via
+        /// graph neighbours of the initial FTS hits before re-ranking.
+        #[arg(long)]
+        semantic: bool,
     },
 
     /// Compute the impact radius of changed files.
@@ -342,6 +347,12 @@ pub enum Command {
         /// Include containment-sibling nodes.
         #[arg(long)]
         neighbors: bool,
+
+        /// Route the query through graph-aware semantic expansion before
+        /// building context.  When a session is active, prior-context files
+        /// and symbols from recent events are used to boost relevance.
+        #[arg(long)]
+        semantic: bool,
     },
 
     /// Manage named ordered sequences of graph nodes (flows).

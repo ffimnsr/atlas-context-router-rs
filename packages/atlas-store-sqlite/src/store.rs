@@ -1983,6 +1983,80 @@ impl Store {
         Ok(rows)
     }
 
+    // -------------------------------------------------------------------------
+    // Semantic retrieval helpers (Phase CM9)
+    // -------------------------------------------------------------------------
+
+    /// Edges from other files pointing at symbols defined in `file_path`.
+    ///
+    /// Returns `(referencing_file_path, target_qualified_name)` pairs.
+    /// Bounded by `max_edges` to avoid overwhelming the caller; group in Rust.
+    pub fn files_referencing_symbols_in(
+        &self,
+        file_path: &str,
+        max_edges: usize,
+    ) -> Result<Vec<(String, String)>> {
+        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT ns.file_path, e.target_qualified
+                 FROM   edges e
+                 JOIN   nodes nt ON e.target_qualified = nt.qualified_name
+                              AND  nt.file_path = ?1
+                 JOIN   nodes ns ON e.source_qualified = ns.qualified_name
+                 WHERE  ns.file_path != ?1
+                 ORDER  BY ns.file_path, e.target_qualified
+                 LIMIT  ?2",
+            )
+            .map_err(db_err)?;
+        let rows = stmt
+            .query_map(params![file_path, max_edges as i64], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(db_err)?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(rows)
+    }
+
+    /// Files that share imported/called/referenced targets with `file_path`.
+    ///
+    /// Returns `(co_file_path, shared_target_qualified_name)` pairs.
+    /// Only edges of kind `imports`, `calls`, or `references` are considered.
+    /// Bounded by `max_edges`; the caller groups by co-file in Rust.
+    pub fn files_sharing_references_with(
+        &self,
+        file_path: &str,
+        max_edges: usize,
+    ) -> Result<Vec<(String, String)>> {
+        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT DISTINCT ns2.file_path, e1.target_qualified
+                 FROM   edges e1
+                 JOIN   nodes ns1 ON e1.source_qualified = ns1.qualified_name
+                               AND  ns1.file_path = ?1
+                 JOIN   edges e2  ON e1.target_qualified = e2.target_qualified
+                 JOIN   nodes ns2 ON e2.source_qualified = ns2.qualified_name
+                 WHERE  ns2.file_path != ?1
+                   AND  e1.kind IN ('imports', 'calls', 'references')
+                   AND  e2.kind IN ('imports', 'calls', 'references')
+                 ORDER  BY ns2.file_path, e1.target_qualified
+                 LIMIT  ?2",
+            )
+            .map_err(db_err)?;
+        let rows = stmt
+            .query_map(params![file_path, max_edges as i64], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(db_err)?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(rows)
+    }
+
     /// Return nodes that are dead-code candidates: no inbound semantic edges
     /// (calls, references, imports, extends, implements), not a test, not
     /// public/exported, and of a semantic kind (function, method, class, etc.).

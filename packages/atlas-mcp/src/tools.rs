@@ -11,6 +11,7 @@ use atlas_core::model::{ContextIntent, ContextRequest, ContextTarget};
 use atlas_engine::{BuildOptions, UpdateOptions, UpdateTarget, build_graph, update_graph};
 use atlas_repo::{DiffTarget, changed_files, find_repo_root};
 use atlas_review::{ContextEngine, query_parser};
+use atlas_search::semantic as sem;
 use atlas_store_sqlite::Store;
 use camino::Utf8Path;
 use serde::Serialize;
@@ -46,7 +47,7 @@ pub fn tool_list() -> serde_json::Value {
             },
             {
                 "name": "query_graph",
-                "description": "Full-text search the code graph. Returns a compact, ranked list of matching symbols.",
+                "description": "Full-text search the code graph. Returns a compact, ranked list of matching symbols. Use semantic=true for graph-aware expansion that surfaces conceptually related symbols beyond keyword matches.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -54,6 +55,9 @@ pub fn tool_list() -> serde_json::Value {
                         "kind":     { "type": "string",  "description": "Filter by node kind (e.g. 'function', 'struct')" },
                         "language": { "type": "string",  "description": "Filter by language (e.g. 'rust', 'python')" },
                         "limit":    { "type": "integer", "description": "Maximum results to return (default 20)" },
+                        "semantic": { "type": "boolean", "description": "Use graph-aware semantic expansion: expands via graph neighbours of initial FTS hits before re-ranking (default false)" },
+                        "expand":   { "type": "boolean", "description": "Expand results through graph edges after ranking (default false)" },
+                        "expand_hops": { "type": "integer", "description": "Max edge hops when expand=true (default 1)" },
                         "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
                     },
                     "required": ["text"]
@@ -260,6 +264,45 @@ pub fn tool_list() -> serde_json::Value {
                     },
                     "required": []
                 }
+            },
+            {
+                "name": "symbol_neighbors",
+                "description": "Return the immediate graph neighbourhood of a symbol: callers, callees, test nodes, containment siblings, and import-linked nodes. Useful for understanding a symbol's role and connectivity without a full traversal.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "qname":     { "type": "string",  "description": "Fully-qualified name of the symbol (e.g. 'src/lib.rs::fn::my_func')." },
+                        "limit":     { "type": "integer", "description": "Maximum nodes to return per relationship kind (default 10)." },
+                        "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
+                    },
+                    "required": ["qname"]
+                }
+            },
+            {
+                "name": "cross_file_links",
+                "description": "Find files that reference symbols defined in the given file. Returns semantic links ordered by coupling strength (number of shared symbol references).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "file":  { "type": "string",  "description": "Repo-relative file path to analyse (e.g. 'src/auth.rs')." },
+                        "limit": { "type": "integer", "description": "Maximum links to return (default 20)." },
+                        "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
+                    },
+                    "required": ["file"]
+                }
+            },
+            {
+                "name": "concept_clusters",
+                "description": "Cluster files related to the given seed files by shared symbol references. Returns groups of co-dependent files ordered by coupling density.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "files": { "type": "array", "items": { "type": "string" }, "description": "Seed file paths (repo-relative) to cluster around." },
+                        "limit": { "type": "integer", "description": "Maximum clusters to return (default 10)." },
+                        "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
+                    },
+                    "required": ["files"]
+                }
             }
         ]
     })
@@ -321,6 +364,9 @@ fn call_inner(
         }
         "get_context_stats" => tool_get_context_stats(args, repo_root, db_path, output_format),
         "purge_saved_context" => tool_purge_saved_context(args, repo_root, db_path, output_format),
+        "symbol_neighbors" => tool_symbol_neighbors(args, db_path, output_format),
+        "cross_file_links" => tool_cross_file_links(args, db_path, output_format),
+        "concept_clusters" => tool_concept_clusters(args, db_path, output_format),
         other => Err(anyhow::anyhow!("unknown tool: {other}")),
     }
 }
@@ -350,17 +396,27 @@ fn tool_query_graph(
     let kind = str_arg(args, "kind")?.map(str::to_owned);
     let language = str_arg(args, "language")?.map(str::to_owned);
     let limit = u64_arg(args, "limit").unwrap_or(20) as usize;
+    let semantic = bool_arg(args, "semantic").unwrap_or(false);
+    let expand = bool_arg(args, "expand").unwrap_or(false);
+    let expand_hops = u64_arg(args, "expand_hops").unwrap_or(1) as u32;
 
     let store = open_store(db_path)?;
-    let results = store
-        .search(&SearchQuery {
-            text,
-            kind,
-            language,
-            limit,
-            ..Default::default()
-        })
-        .context("search failed")?;
+
+    let query = SearchQuery {
+        text,
+        kind,
+        language,
+        limit,
+        graph_expand: expand,
+        graph_max_hops: expand_hops,
+        ..Default::default()
+    };
+
+    let results = if semantic {
+        sem::expanded_search(&store, &query).context("semantic search failed")?
+    } else {
+        store.search(&query).context("search failed")?
+    };
 
     // Compact output: strip raw node blob, keep scored compact node.
     #[derive(Serialize)]
@@ -996,6 +1052,115 @@ fn string_array_arg(args: Option<&serde_json::Value>, key: &str) -> Result<Vec<S
 
 fn open_store(db_path: &str) -> Result<Store> {
     Store::open(db_path).with_context(|| format!("cannot open database at {db_path}"))
+}
+
+// ---------------------------------------------------------------------------
+// Semantic neighbourhood tools (CM9 follow-up)
+// ---------------------------------------------------------------------------
+
+fn tool_symbol_neighbors(
+    args: Option<&serde_json::Value>,
+    db_path: &str,
+    output_format: OutputFormat,
+) -> Result<serde_json::Value> {
+    let qname = str_arg(args, "qname")?
+        .ok_or_else(|| anyhow::anyhow!("missing required argument: qname"))?
+        .to_owned();
+    let limit = u64_arg(args, "limit").unwrap_or(10) as usize;
+
+    let store = open_store(db_path)?;
+    let nbhd =
+        sem::symbol_neighborhood(&store, &qname, limit).context("symbol_neighborhood failed")?;
+
+    #[derive(Serialize)]
+    struct NeighborhoodResult<'a> {
+        qname: &'a str,
+        callers: Vec<crate::context::CompactNode<'a>>,
+        callees: Vec<crate::context::CompactNode<'a>>,
+        tests: Vec<crate::context::CompactNode<'a>>,
+        siblings: Vec<crate::context::CompactNode<'a>>,
+        import_neighbors: Vec<crate::context::CompactNode<'a>>,
+    }
+
+    let result = NeighborhoodResult {
+        qname: &qname,
+        callers: nbhd.callers.iter().map(compact_node).collect(),
+        callees: nbhd.callees.iter().map(compact_node).collect(),
+        tests: nbhd.tests.iter().map(compact_node).collect(),
+        siblings: nbhd.siblings.iter().map(compact_node).collect(),
+        import_neighbors: nbhd.import_neighbors.iter().map(compact_node).collect(),
+    };
+
+    tool_result_value(&result, output_format)
+}
+
+fn tool_cross_file_links(
+    args: Option<&serde_json::Value>,
+    db_path: &str,
+    output_format: OutputFormat,
+) -> Result<serde_json::Value> {
+    let file = str_arg(args, "file")?
+        .ok_or_else(|| anyhow::anyhow!("missing required argument: file"))?
+        .to_owned();
+    let limit = u64_arg(args, "limit").unwrap_or(20) as usize;
+
+    let store = open_store(db_path)?;
+    let links = sem::cross_file_links(&store, &file, limit).context("cross_file_links failed")?;
+
+    #[derive(Serialize)]
+    struct LinkResult {
+        from_file: String,
+        to_file: String,
+        via_symbols: Vec<String>,
+        strength: f64,
+    }
+
+    let result: Vec<LinkResult> = links
+        .into_iter()
+        .map(|l| LinkResult {
+            from_file: l.from_file,
+            to_file: l.to_file,
+            via_symbols: l.via_symbols,
+            strength: (l.strength * 10.0).round() / 10.0,
+        })
+        .collect();
+
+    tool_result_value(&result, output_format)
+}
+
+fn tool_concept_clusters(
+    args: Option<&serde_json::Value>,
+    db_path: &str,
+    output_format: OutputFormat,
+) -> Result<serde_json::Value> {
+    let files = string_array_arg(args, "files")?;
+    if files.is_empty() {
+        return Err(anyhow::anyhow!("missing required argument: files"));
+    }
+    let limit = u64_arg(args, "limit").unwrap_or(10) as usize;
+
+    let store = open_store(db_path)?;
+    let seed_refs: Vec<&str> = files.iter().map(String::as_str).collect();
+    let clusters = sem::cluster_by_shared_symbols(&store, &seed_refs, limit)
+        .context("concept_clusters failed")?;
+
+    #[derive(Serialize)]
+    struct ClusterResult {
+        files: Vec<String>,
+        shared_symbols: Vec<String>,
+        density: f64,
+    }
+
+    let result: Vec<ClusterResult> = clusters
+        .into_iter()
+        .map(|c| ClusterResult {
+            files: c.files,
+            shared_symbols: c.shared_symbols,
+            density: (c.density * 1000.0).round() / 1000.0,
+        })
+        .collect();
+
+    tool_result_value(&result, output_format)
 }
 
 /// Wrap structured output in an MCP tool-result content envelope.

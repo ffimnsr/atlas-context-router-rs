@@ -5,6 +5,7 @@ use atlas_store_sqlite::Store;
 use tracing::debug;
 
 pub mod embed;
+pub mod semantic;
 
 // ---------------------------------------------------------------------------
 // Token splitting

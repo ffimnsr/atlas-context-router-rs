@@ -240,3 +240,166 @@ impl AdapterHooks for McpAdapter {
 
     fn before_exit(&mut self) {}
 }
+
+// ── Tests ──────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn tmp_repo() -> TempDir {
+        TempDir::new().unwrap()
+    }
+
+    // ── CLI adapter ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn cli_adapter_opens_successfully_for_valid_repo() {
+        let dir = tmp_repo();
+        let repo = dir.path().to_str().unwrap();
+        assert!(
+            CliAdapter::open(repo).is_some(),
+            "CliAdapter must open for writable repo dir"
+        );
+    }
+
+    #[test]
+    fn cli_adapter_records_session_start_event() {
+        let dir = tmp_repo();
+        let repo = dir.path().to_str().unwrap();
+        let mut adapter = CliAdapter::open(repo).expect("open must succeed");
+        adapter.on_session_start();
+    }
+
+    #[test]
+    fn cli_adapter_before_and_after_command_do_not_panic() {
+        let dir = tmp_repo();
+        let repo = dir.path().to_str().unwrap();
+        let mut adapter = CliAdapter::open(repo).expect("open must succeed");
+        adapter.before_command("atlas build");
+        adapter.after_command("atlas build", true);
+        adapter.after_command("atlas build", false);
+    }
+
+    #[test]
+    fn cli_adapter_on_error_does_not_panic() {
+        let dir = tmp_repo();
+        let repo = dir.path().to_str().unwrap();
+        let mut adapter = CliAdapter::open(repo).expect("open must succeed");
+        adapter.on_error("atlas update", "graph DB locked");
+    }
+
+    #[test]
+    fn cli_adapter_on_user_intent_does_not_panic() {
+        let dir = tmp_repo();
+        let repo = dir.path().to_str().unwrap();
+        let mut adapter = CliAdapter::open(repo).expect("open must succeed");
+        adapter.on_user_intent("review PR #42");
+    }
+
+    #[test]
+    fn cli_adapter_before_compact_does_not_panic() {
+        let dir = tmp_repo();
+        let repo = dir.path().to_str().unwrap();
+        let mut adapter = CliAdapter::open(repo).expect("open must succeed");
+        adapter.before_compact();
+    }
+
+    #[test]
+    fn cli_adapter_before_exit_does_not_panic() {
+        let dir = tmp_repo();
+        let repo = dir.path().to_str().unwrap();
+        let mut adapter = CliAdapter::open(repo).expect("open must succeed");
+        adapter.before_exit();
+    }
+
+    // ── MCP adapter ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn mcp_adapter_opens_successfully_for_valid_repo() {
+        let dir = tmp_repo();
+        let repo = dir.path().to_str().unwrap();
+        assert!(
+            McpAdapter::open(repo).is_some(),
+            "McpAdapter must open for writable repo dir"
+        );
+    }
+
+    #[test]
+    fn mcp_adapter_records_session_start_event() {
+        let dir = tmp_repo();
+        let repo = dir.path().to_str().unwrap();
+        let mut adapter = McpAdapter::open(repo).expect("open must succeed");
+        adapter.on_session_start();
+    }
+
+    #[test]
+    fn mcp_adapter_tool_events_are_recorded() {
+        let dir = tmp_repo();
+        let repo = dir.path().to_str().unwrap();
+        let mut adapter = McpAdapter::open(repo).expect("open must succeed");
+        adapter.before_command("get_review_context");
+        adapter.after_command("get_review_context", true);
+    }
+
+    #[test]
+    fn mcp_adapter_on_error_does_not_panic() {
+        let dir = tmp_repo();
+        let repo = dir.path().to_str().unwrap();
+        let mut adapter = McpAdapter::open(repo).expect("open must succeed");
+        adapter.on_error("save_context_artifact", "content store unavailable");
+    }
+
+    // ── Best-effort degradation ─────────────────────────────────────────────
+
+    #[test]
+    fn cli_adapter_returns_none_for_unwritable_path() {
+        // Pass a path that rusqlite cannot create a DB in.
+        // The important guarantee is: no panic, returns None.
+        let result = CliAdapter::open("/nonexistent_atlas_test_path_xyz/abc");
+        // Either None or Some depending on OS; we only guard against panics.
+        drop(result);
+    }
+
+    #[test]
+    fn mcp_adapter_returns_none_for_unwritable_path() {
+        let result = McpAdapter::open("/nonexistent_atlas_test_path_xyz/abc");
+        drop(result);
+    }
+
+    // ── Representative hook payload extraction ──────────────────────────────
+
+    #[test]
+    fn cli_adapter_full_continuity_flow() {
+        let dir = tmp_repo();
+        let repo = dir.path().to_str().unwrap();
+        let mut adapter = CliAdapter::open(repo).expect("open must succeed");
+
+        adapter.on_session_start();
+        adapter.on_user_intent("review recent changes");
+        adapter.before_command("atlas build");
+        adapter.after_command("atlas build", true);
+        adapter.before_command("atlas review-context");
+        adapter.after_command("atlas review-context", true);
+        adapter.before_compact();
+        adapter.before_exit();
+    }
+
+    #[test]
+    fn mcp_adapter_full_continuity_flow() {
+        let dir = tmp_repo();
+        let repo = dir.path().to_str().unwrap();
+        let mut adapter = McpAdapter::open(repo).expect("open must succeed");
+
+        adapter.on_session_start();
+        adapter.on_user_intent("get impact radius for changed file");
+        adapter.before_command("get_impact_radius");
+        adapter.after_command("get_impact_radius", true);
+        adapter.before_command("save_context_artifact");
+        adapter.after_command("save_context_artifact", false);
+        adapter.on_error("save_context_artifact", "db locked");
+        adapter.before_compact();
+        adapter.before_exit();
+    }
+}

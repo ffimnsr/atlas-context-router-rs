@@ -17,7 +17,7 @@
 //! All three thresholds are configurable so callers with different context
 //! budgets can tune them without recompiling.
 
-use rusqlite::{Connection, OpenFlags, params};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use time::OffsetDateTime;
 use tracing::{debug, info};
 
@@ -86,6 +86,7 @@ pub enum OutputRouting {
 /// - `small_output_bytes` = 512 B — below this, output is returned raw.
 /// - `preview_threshold_bytes` = 4096 B — below this, a 512-char preview is returned.
 /// - `fallback_min_results` = 3 — below this many FTS results, trigram fallback fires.
+/// - `max_db_bytes` = `None` — no size limit unless set.
 #[derive(Debug, Clone)]
 pub struct ContentStoreConfig {
     /// Outputs at or below this size are returned raw without indexing.
@@ -94,6 +95,9 @@ pub struct ContentStoreConfig {
     pub preview_threshold_bytes: usize,
     /// Minimum number of FTS hits before `search_with_fallback` skips trigram search.
     pub fallback_min_results: usize,
+    /// When set, oldest sources are pruned after each index operation to keep the
+    /// content database below this approximate byte limit.  `None` disables enforcement.
+    pub max_db_bytes: Option<u64>,
 }
 
 impl Default for ContentStoreConfig {
@@ -102,14 +106,33 @@ impl Default for ContentStoreConfig {
             small_output_bytes: DEFAULT_SMALL_OUTPUT_BYTES,
             preview_threshold_bytes: DEFAULT_PREVIEW_THRESHOLD_BYTES,
             fallback_min_results: DEFAULT_FALLBACK_MIN_RESULTS,
+            max_db_bytes: None,
         }
     }
+}
+
+/// In-process counters tracking how `route_output` has dispatched artifacts.
+///
+/// Counts and byte totals accumulate over the lifetime of the `ContentStore`
+/// instance and are not persisted to SQLite.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RoutingStats {
+    /// Number of outputs returned raw (not indexed).
+    pub raw_count: u64,
+    /// Number of outputs indexed and returned with a preview.
+    pub preview_count: u64,
+    /// Number of outputs indexed and returned as a pointer only.
+    pub pointer_count: u64,
+    /// Total bytes of output that were routed as preview or pointer (i.e. kept
+    /// out of the prompt context window).
+    pub avoided_bytes: u64,
 }
 
 /// SQLite-backed content store.
 pub struct ContentStore {
     conn: Connection,
     config: ContentStoreConfig,
+    routing_stats: RoutingStats,
 }
 
 impl ContentStore {
@@ -120,13 +143,29 @@ impl ContentStore {
 
     /// Open (or create) the content store database at `path` with custom config.
     pub fn open_with_config(path: &str, config: ContentStoreConfig) -> Result<Self> {
+        match Self::try_open(path, config.clone()) {
+            Ok(store) => Ok(store),
+            Err(e) => {
+                if is_corruption_error(&e) {
+                    quarantine_db(path);
+                }
+                Err(e)
+            }
+        }
+    }
+
+    fn try_open(path: &str, config: ContentStoreConfig) -> Result<Self> {
         let conn = Connection::open_with_flags(
             path,
             OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE,
         )
         .map_err(|e| AtlasError::Db(e.to_string()))?;
 
-        let store = Self { conn, config };
+        let store = Self {
+            conn,
+            config,
+            routing_stats: RoutingStats::default(),
+        };
         store.apply_pragmas()?;
         Ok(store)
     }
@@ -187,6 +226,9 @@ impl ContentStore {
 
     /// Route output: if small, return raw; if large, index it and return routing decision.
     ///
+    /// Routing counters in `routing_stats()` are incremented on each call.
+    /// If `max_db_bytes` is configured, old sources are pruned after indexing.
+    ///
     /// `content_type` should be `"text/plain"`, `"text/markdown"`, or
     /// `"application/json"`.
     pub fn route_output(
@@ -197,20 +239,87 @@ impl ContentStore {
     ) -> Result<OutputRouting> {
         if raw_text.len() <= self.config.small_output_bytes {
             debug!("content routing: small output, returning raw");
+            self.routing_stats.raw_count += 1;
             return Ok(OutputRouting::Raw(raw_text.to_string()));
         }
 
         let source_id = meta.id.clone();
         self.index_artifact(meta, raw_text, content_type)?;
 
+        // Enforce size limit after each index operation (best-effort: errors logged, not propagated).
+        if let Some(limit) = self.config.max_db_bytes
+            && let Err(e) = self.enforce_size_limit(limit)
+        {
+            debug!("content store size limit enforcement failed (best-effort): {e}");
+        }
+
         if raw_text.len() <= self.config.preview_threshold_bytes {
             let preview: String = raw_text.chars().take(512).collect();
             debug!("content routing: medium output, returning preview");
+            self.routing_stats.preview_count += 1;
+            self.routing_stats.avoided_bytes += raw_text.len() as u64;
             Ok(OutputRouting::Preview { source_id, preview })
         } else {
             debug!("content routing: large output, returning pointer");
+            self.routing_stats.pointer_count += 1;
+            self.routing_stats.avoided_bytes += raw_text.len() as u64;
             Ok(OutputRouting::Pointer { source_id })
         }
+    }
+
+    /// Return a snapshot of the in-process routing counters.
+    pub fn routing_stats(&self) -> RoutingStats {
+        self.routing_stats.clone()
+    }
+
+    /// Prune the oldest sources until the content database is under `max_bytes`.
+    ///
+    /// Estimates DB size via `page_count * page_size` SQLite pragmas.
+    /// Best-effort: returns immediately if the estimate cannot be read.
+    pub fn enforce_size_limit(&mut self, max_bytes: u64) -> Result<usize> {
+        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
+        let page_count: i64 = self
+            .conn
+            .query_row("PRAGMA page_count", [], |r| r.get(0))
+            .map_err(db_err)?;
+        let page_size: i64 = self
+            .conn
+            .query_row("PRAGMA page_size", [], |r| r.get(0))
+            .map_err(db_err)?;
+        let db_bytes = (page_count * page_size) as u64;
+
+        if db_bytes <= max_bytes {
+            return Ok(0);
+        }
+
+        // Delete oldest sources one by one until under the limit.
+        let mut removed = 0;
+        loop {
+            let current_page_count: i64 = self
+                .conn
+                .query_row("PRAGMA page_count", [], |r| r.get(0))
+                .map_err(db_err)?;
+            if (current_page_count * page_size) as u64 <= max_bytes {
+                break;
+            }
+            let oldest: Option<String> = self
+                .conn
+                .query_row(
+                    "SELECT id FROM sources ORDER BY created_at ASC LIMIT 1",
+                    [],
+                    |r| r.get::<_, String>(0),
+                )
+                .optional()
+                .map_err(db_err)?;
+            match oldest {
+                Some(ref id) => {
+                    self.delete_source(id)?;
+                    removed += 1;
+                }
+                None => break,
+            }
+        }
+        Ok(removed)
     }
 
     /// Index a raw artifact: chunk it and persist to `sources` + `chunks`.
@@ -928,6 +1037,31 @@ fn levenshtein(a: &str, b: &str) -> usize {
     prev[n]
 }
 
+/// Return `true` when the error string indicates SQLite database corruption.
+fn is_corruption_error(err: &AtlasError) -> bool {
+    let msg = err.to_string().to_lowercase();
+    msg.contains("malformed")
+        || msg.contains("not a database")
+        || msg.contains("disk image is malformed")
+        || msg.contains("database disk image")
+        || msg.contains("file is not a database")
+}
+
+/// Rename the corrupt database file to `{path}.quarantine` so a fresh DB can
+/// be created on the next open.  Best-effort: logs a warning on failure.
+fn quarantine_db(path: &str) {
+    let qpath = format!("{path}.quarantine");
+    if let Err(e) = std::fs::rename(path, &qpath) {
+        debug!("content DB quarantine rename failed: {e}");
+    } else {
+        info!(
+            path = path,
+            quarantine = %qpath,
+            "corrupt content DB quarantined; a fresh store will be created on next open"
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1160,6 +1294,7 @@ mod tests {
                 small_output_bytes: 10,
                 preview_threshold_bytes: 50,
                 fallback_min_results: 1,
+                max_db_bytes: None,
             },
         )
         .unwrap();
@@ -1185,5 +1320,151 @@ mod tests {
         let big = "x".repeat(100);
         let r = store.route_output(meta("t3"), &big, "text/plain").unwrap();
         assert!(matches!(r, OutputRouting::Pointer { .. }));
+    }
+
+    // ── CM8 tests ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn routing_stats_increment_correctly() {
+        let mut store = open_store();
+
+        // Raw
+        store
+            .route_output(meta("rs1"), "tiny", "text/plain")
+            .unwrap();
+        // Preview (6000-char text > DEFAULT_SMALL_OUTPUT_BYTES=512, ≤ DEFAULT_PREVIEW_THRESHOLD=4096 for default)
+        // Use a custom store with lower thresholds to guarantee preview vs pointer split.
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let path = file.path().to_str().unwrap().to_string();
+        std::mem::forget(file);
+        let mut custom = ContentStore::open_with_config(
+            &path,
+            ContentStoreConfig {
+                small_output_bytes: 10,
+                preview_threshold_bytes: 100,
+                fallback_min_results: 3,
+                max_db_bytes: None,
+            },
+        )
+        .unwrap();
+        custom.migrate().unwrap();
+
+        // Raw (< 10 bytes)
+        custom
+            .route_output(meta("rs-a"), "hi", "text/plain")
+            .unwrap();
+        // Preview (11–100 bytes)
+        custom
+            .route_output(meta("rs-b"), "a".repeat(50).as_str(), "text/plain")
+            .unwrap();
+        // Pointer (> 100 bytes)
+        custom
+            .route_output(meta("rs-c"), "b".repeat(200).as_str(), "text/plain")
+            .unwrap();
+
+        let stats = custom.routing_stats();
+        assert_eq!(stats.raw_count, 1);
+        assert_eq!(stats.preview_count, 1);
+        assert_eq!(stats.pointer_count, 1);
+        assert_eq!(
+            stats.avoided_bytes,
+            50 + 200,
+            "both preview and pointer avoided bytes tracked"
+        );
+    }
+
+    #[test]
+    fn size_limit_enforced_by_pruning_oldest_sources() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let path = file.path().to_str().unwrap().to_string();
+        std::mem::forget(file);
+        // Set a very small DB size limit to force pruning.
+        let mut store = ContentStore::open_with_config(
+            &path,
+            ContentStoreConfig {
+                small_output_bytes: 0, // index everything
+                preview_threshold_bytes: 1,
+                fallback_min_results: 3,
+                max_db_bytes: Some(1), // 1 byte — always over limit
+            },
+        )
+        .unwrap();
+        store.migrate().unwrap();
+
+        // Index several artifacts; size limit should prune old ones.
+        for i in 0..5 {
+            store
+                .route_output(
+                    meta(&format!("sl-{i}")),
+                    &"content ".repeat(200),
+                    "text/plain",
+                )
+                .unwrap();
+        }
+
+        // At least some sources must have been pruned.
+        let (src_count, _) = store.stats(None).unwrap();
+        assert!(
+            src_count < 5,
+            "size limit should have pruned old sources; got {src_count}"
+        );
+    }
+
+    #[test]
+    fn routing_stats_default_is_zero() {
+        let store = open_store();
+        let stats = store.routing_stats();
+        assert_eq!(stats, RoutingStats::default());
+    }
+
+    // ── Corrupt DB quarantine ───────────────────────────────────────────────
+
+    #[test]
+    fn corrupt_content_db_is_quarantined_on_open() {
+        use std::path::Path;
+
+        let f = NamedTempFile::new().unwrap();
+        let path = f.path().to_str().unwrap().to_string();
+        // Keep the file but overwrite with garbage so SQLite rejects it.
+        drop(f); // close the NamedTempFile but keep the path
+        std::fs::write(&path, b"not a sqlite database").unwrap();
+
+        let result = ContentStore::open(&path);
+        assert!(result.is_err(), "corrupt DB must return error");
+
+        let quarantine = format!("{path}.quarantine");
+        assert!(
+            Path::new(&quarantine).exists(),
+            "quarantine file must be created: {quarantine}"
+        );
+    }
+
+    #[test]
+    fn quarantine_allows_fresh_content_db_open() {
+        let f = NamedTempFile::new().unwrap();
+        let path = f.path().to_str().unwrap().to_string();
+        drop(f);
+        std::fs::write(&path, b"garbage").unwrap();
+
+        // First open quarantines; original is gone.
+        let _ = ContentStore::open(&path);
+
+        // Second open must succeed with a fresh DB.
+        let mut store =
+            ContentStore::open(&path).expect("fresh open must succeed after quarantine");
+        store.migrate().unwrap();
+    }
+
+    #[test]
+    fn is_corruption_error_detects_known_messages() {
+        let cases = [
+            "database disk image is malformed",
+            "file is not a database",
+            "not a database",
+        ];
+        for msg in cases {
+            let err = AtlasError::Db(msg.to_string());
+            assert!(is_corruption_error(&err), "must match: {msg}");
+        }
     }
 }

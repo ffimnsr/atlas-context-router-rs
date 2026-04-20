@@ -12,6 +12,7 @@
 //! - Restore context through retrieval, not transcript replay.
 
 use anyhow::Result;
+use atlas_adapters::bridge::{BRIDGE_DIR, bridge_file_count, purge_all_bridge_files};
 use atlas_contentstore::{ContentStore, OutputRouting, SearchFilters, SourceMeta};
 use atlas_session::{
     NewSessionEvent, ResumeSnapshot, SessionEventType, SessionId, SessionMeta, SessionStore,
@@ -45,6 +46,17 @@ pub(crate) fn derive_content_db_path(db_path: &str) -> String {
         parent.join("context.db").to_string_lossy().into_owned()
     } else {
         "context.db".to_string()
+    }
+}
+
+/// Derive the bridge artifact directory from the graph DB path.
+///
+/// Graph DB: `.atlas/worldtree.db` → Bridge dir: `.atlas/bridge/`
+pub(crate) fn derive_bridge_dir(db_path: &str) -> std::path::PathBuf {
+    if let Some(parent) = std::path::Path::new(db_path).parent() {
+        parent.join(BRIDGE_DIR)
+    } else {
+        std::path::PathBuf::from(BRIDGE_DIR)
     }
 }
 
@@ -436,6 +448,7 @@ pub fn tool_get_context_stats(
     let session_id = resolve_session_id(args, repo_root);
     let session_db = derive_session_db_path(db_path);
     let content_db = derive_content_db_path(db_path);
+    let bridge_dir = derive_bridge_dir(db_path);
 
     // Session stats (best-effort — store may not exist for brand-new repos).
     let event_count = SessionStore::open(&session_db)
@@ -453,14 +466,19 @@ pub fn tool_get_context_stats(
         })
         .unwrap_or((0, 0));
 
+    // Bridge artifact count.
+    let bridge_file_pending = bridge_file_count(&bridge_dir);
+
     tool_result_value(
         &serde_json::json!({
             "session_id": session_id.as_str(),
             "event_count": event_count,
             "source_count": source_count,
             "chunk_count": chunk_count,
+            "bridge_file_count": bridge_file_pending,
             "content_db_path": content_db,
             "session_db_path": session_db,
+            "bridge_dir_path": bridge_dir.to_string_lossy(),
         }),
         output_format,
     )
@@ -476,6 +494,9 @@ pub fn tool_get_context_stats(
 /// - `session_id` provided → delete all sources for that session.
 /// - `session_id` omitted  → age-based cleanup: delete sources older than
 ///   `keep_days` days (default 30).
+///
+/// Pass `purge_bridge_files: true` to also delete pending bridge artifact
+/// files from `.atlas/bridge/`.
 pub fn tool_purge_saved_context(
     args: Option<&Value>,
     _repo_root: &str,
@@ -490,8 +511,14 @@ pub fn tool_purge_saved_context(
         .and_then(|a| a.get("keep_days"))
         .and_then(|v| v.as_u64())
         .unwrap_or(30) as u32;
+    let purge_bridge = args
+        .and_then(|a| a.get("purge_bridge_files"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
 
     let content_db = derive_content_db_path(db_path);
+    let bridge_dir = derive_bridge_dir(db_path);
+
     let mut cs = ContentStore::open(&content_db)?;
     let _ = cs.migrate();
 
@@ -501,8 +528,18 @@ pub fn tool_purge_saved_context(
         cs.cleanup(keep_days)?
     };
 
+    let deleted_bridge = if purge_bridge {
+        purge_all_bridge_files(&bridge_dir)
+    } else {
+        0
+    };
+
     tool_result_value(
-        &serde_json::json!({"deleted_source_count": deleted, "keep_days": keep_days}),
+        &serde_json::json!({
+            "deleted_source_count": deleted,
+            "deleted_bridge_file_count": deleted_bridge,
+            "keep_days": keep_days,
+        }),
         output_format,
     )
 }
@@ -673,6 +710,9 @@ mod tests {
         assert_eq!(body["source_count"].as_u64().unwrap(), 0);
         assert_eq!(body["chunk_count"].as_u64().unwrap(), 0);
         assert_eq!(body["event_count"].as_u64().unwrap(), 0);
+        // Bridge dir does not exist yet → count must be 0.
+        assert_eq!(body["bridge_file_count"].as_u64().unwrap(), 0);
+        assert!(body["bridge_dir_path"].is_string());
     }
 
     #[test]
@@ -689,6 +729,47 @@ mod tests {
         let content = result["content"][0]["text"].as_str().unwrap();
         let body: Value = serde_json::from_str(content).unwrap();
         assert_eq!(body["deleted_source_count"].as_u64().unwrap(), 0);
+        assert_eq!(body["deleted_bridge_file_count"].as_u64().unwrap(), 0);
+    }
+
+    #[test]
+    fn test_purge_saved_context_purges_bridge_files() {
+        use atlas_adapters::bridge::{BridgeEvent, write_bridge_file};
+        use atlas_session::SessionId;
+
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join(".atlas")).unwrap();
+        let db_path = setup_db_path(&dir);
+        let repo_root = dir.path().to_str().unwrap();
+
+        // Write two bridge files so there is something to purge.
+        let bridge_dir = derive_bridge_dir(&db_path);
+        let sid = SessionId::derive(repo_root, "", "mcp");
+        let ev = BridgeEvent {
+            event_type: "COMMAND_RUN".to_string(),
+            priority: 0,
+            payload_json: r#"{"command":"atlas build"}"#.to_string(),
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+        };
+        write_bridge_file(&bridge_dir, &sid, "mcp", std::slice::from_ref(&ev)).unwrap();
+        write_bridge_file(&bridge_dir, &sid, "mcp", &[ev]).unwrap();
+
+        let args = serde_json::json!({"purge_bridge_files": true, "keep_days": 30});
+        let result =
+            tool_purge_saved_context(Some(&args), repo_root, &db_path, OutputFormat::Json).unwrap();
+        let content = result["content"][0]["text"].as_str().unwrap();
+        let body: Value = serde_json::from_str(content).unwrap();
+        assert_eq!(body["deleted_bridge_file_count"].as_u64().unwrap(), 2);
+    }
+
+    #[test]
+    fn test_derive_bridge_dir() {
+        let dir = derive_bridge_dir("/repo/.atlas/worldtree.db");
+        assert!(dir.ends_with("bridge"), "got: {}", dir.display());
+        assert!(
+            dir.to_string_lossy().contains(".atlas"),
+            "must be inside .atlas"
+        );
     }
 
     #[test]

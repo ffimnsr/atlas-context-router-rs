@@ -8,6 +8,6 @@ mod migrations;
 pub mod store;
 
 pub use store::{
-    ChunkResult, ContentStore, ContentStoreConfig, OutputRouting, SearchFilters, SourceMeta,
-    SourceRow,
+    ChunkResult, ContentStore, ContentStoreConfig, OutputRouting, RoutingStats, SearchFilters,
+    SourceMeta, SourceRow,
 };

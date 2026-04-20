@@ -9,6 +9,8 @@ use sha2::{Digest, Sha256};
 
 use atlas_session::{NewSessionEvent, SessionEventType, SessionId};
 
+use crate::redact::redact_payload;
+
 /// Maximum payload bytes allowed inline.  Matches `MAX_INLINE_EVENT_PAYLOAD_BYTES`
 /// in `atlas-session` so that `SessionStore::append_event` never rejects a payload
 /// produced here because of size.
@@ -56,11 +58,11 @@ pub fn extract_cli_event(command: &str, status: &str, extra: Value) -> PendingEv
     } else {
         SessionEventType::CommandRun
     };
-    let payload = normalize_payload(json!({
+    let payload = normalize_payload(redact_payload(json!({
         "command": command,
         "status": status,
         "extra": extra,
-    }));
+    })));
     PendingEvent {
         event_type,
         priority: 2,
@@ -133,11 +135,11 @@ pub fn extract_tool_event(tool_name: &str, status: &str, extra: Value) -> Pendin
     } else {
         SessionEventType::ContextRequest
     };
-    let payload = normalize_payload(json!({
+    let payload = normalize_payload(redact_payload(json!({
         "tool": tool_name,
         "status": status,
         "extra": extra,
-    }));
+    })));
     PendingEvent {
         event_type,
         priority: 2,
@@ -233,4 +235,128 @@ fn normalize_payload(payload: Value) -> Value {
         "original_bytes": serialized.len(),
         "preview": &serialized[..preview_len],
     })
+}
+
+// ── Tests ──────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use atlas_session::SessionEventType;
+
+    #[test]
+    fn extract_cli_event_redacts_env_var_in_extra() {
+        let extra = serde_json::json!({
+            "PATH": "/usr/bin:/usr/local/bin",
+            "HOME": "/root",
+            "safe_field": "ok",
+        });
+        let event = extract_cli_event("atlas build", "ok", extra);
+        assert_eq!(event.event_type, SessionEventType::CommandRun);
+        // Extra is nested inside payload; env var keys must be redacted.
+        assert_eq!(event.payload["extra"]["PATH"], "[REDACTED]");
+        assert_eq!(event.payload["extra"]["HOME"], "[REDACTED]");
+        assert_eq!(event.payload["extra"]["safe_field"], "ok");
+        // Command and status are top-level — not env-var-like keys.
+        assert_eq!(event.payload["command"], "atlas build");
+        assert_eq!(event.payload["status"], "ok");
+    }
+
+    #[test]
+    fn extract_cli_event_redacts_secret_keys_in_extra() {
+        let extra = serde_json::json!({
+            "api_key": "super-secret-key-1234",
+            "token": "bearer abc123",
+            "message": "no secret here",
+        });
+        let event = extract_cli_event("deploy", "ok", extra);
+        assert_eq!(event.payload["extra"]["api_key"], "[REDACTED]");
+        assert_eq!(event.payload["extra"]["token"], "[REDACTED]");
+        assert_eq!(event.payload["extra"]["message"], "no secret here");
+    }
+
+    #[test]
+    fn extract_cli_fail_event_has_correct_type() {
+        let event = extract_cli_event("atlas build", "fail", serde_json::Value::Null);
+        assert_eq!(event.event_type, SessionEventType::CommandFail);
+        assert_eq!(event.priority, 2);
+    }
+
+    #[test]
+    fn extract_tool_event_redacts_secrets() {
+        let extra = serde_json::json!({ "Authorization": "Bearer sk-secret" });
+        let event = extract_tool_event("search_saved_context", "ok", extra);
+        assert_eq!(event.event_type, SessionEventType::ContextRequest);
+        // "Authorization" matches "auth" substring in SECRET_KEY_PATTERNS.
+        assert_eq!(event.payload["extra"]["Authorization"], "[REDACTED]");
+    }
+
+    #[test]
+    fn extract_tool_fail_event() {
+        let event = extract_tool_event("get_review_context", "fail", serde_json::Value::Null);
+        assert_eq!(event.event_type, SessionEventType::CommandFail);
+    }
+
+    #[test]
+    fn oversized_payload_is_truncated_not_rejected() {
+        // 10 KB of text should be normalized to a truncation marker.
+        let big = "x".repeat(10 * 1024);
+        let event = extract_cli_event("cmd", "ok", serde_json::json!({ "output": big }));
+        // If truncated, the payload must contain the truncation marker.
+        let s = serde_json::to_string(&event.payload).unwrap();
+        assert!(
+            event.payload.get("truncated").is_some() || s.len() <= MAX_EVENT_PAYLOAD_BYTES,
+            "payload must be bounded"
+        );
+    }
+
+    #[test]
+    fn hash_event_is_deterministic() {
+        let h1 = hash_event(&SessionEventType::CommandRun, 2, r#"{"cmd":"build"}"#);
+        let h2 = hash_event(&SessionEventType::CommandRun, 2, r#"{"cmd":"build"}"#);
+        assert_eq!(h1, h2);
+    }
+
+    #[test]
+    fn hash_event_differs_on_type_or_priority() {
+        let h1 = hash_event(&SessionEventType::CommandRun, 2, r#"{"cmd":"build"}"#);
+        let h2 = hash_event(&SessionEventType::CommandFail, 2, r#"{"cmd":"build"}"#);
+        let h3 = hash_event(&SessionEventType::CommandRun, 3, r#"{"cmd":"build"}"#);
+        assert_ne!(h1, h2);
+        assert_ne!(h1, h3);
+    }
+
+    #[test]
+    fn extract_decision_event_has_correct_type_and_priority() {
+        let event = extract_decision_event("prefer composition", Some("simpler design"));
+        assert_eq!(event.event_type, SessionEventType::Decision);
+        assert_eq!(event.priority, 4);
+        assert_eq!(event.payload["summary"], "prefer composition");
+        assert_eq!(event.payload["rationale"], "simpler design");
+    }
+
+    #[test]
+    fn extract_rule_event_captures_all_fields() {
+        let event = extract_rule_event("no_mut", "avoid global mutation", Some("AGENTS.md"));
+        assert_eq!(event.event_type, SessionEventType::RuleInstruction);
+        assert_eq!(event.payload["label"], "no_mut");
+        assert_eq!(event.payload["rule"], "avoid global mutation");
+        assert_eq!(event.payload["source"], "AGENTS.md");
+    }
+
+    #[test]
+    fn extract_user_event_captures_intent() {
+        let event = extract_user_event("review PR");
+        assert_eq!(event.event_type, SessionEventType::UserIntent);
+        assert_eq!(event.payload["intent"], "review PR");
+    }
+
+    #[test]
+    fn bind_produces_new_session_event() {
+        let session_id = SessionId::derive("/repo", "main", "cli");
+        let pending = extract_user_event("refactor");
+        let bound = pending.bind(session_id.clone());
+        assert_eq!(bound.session_id, session_id);
+        assert_eq!(bound.event_type, SessionEventType::UserIntent);
+    }
 }

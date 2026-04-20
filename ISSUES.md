@@ -3265,24 +3265,11 @@ Instrument existing commands and engines only after the session/content services
 - [x] payloads must never embed large stdout blobs
 - [x] continuity write failures must degrade to log-and-continue behavior
 
-#### Event categories to preserve
-
-- [ ] file operations
-- [ ] task state
-- [ ] decisions
-- [ ] rules/instructions
-- [ ] cwd / repo state changes
-- [ ] git actions
-- [ ] environment changes
-- [ ] data references
-- [ ] skills / tool-selection hints
-- [ ] subagent / delegated work state
-
 #### Session bridge artifacts
 
-- [ ] write transient session event markdown bridge file when direct hook payload transport is unavailable
-- [ ] auto-index session bridge markdown into content store
-- [ ] clean up consumed or stale bridge files
+- [x] write transient session event markdown bridge file when direct hook payload transport is unavailable
+- [x] auto-index session bridge markdown into content store
+- [x] clean up consumed or stale bridge files
 
 #### External hooks adapter interfaces
 
@@ -3467,58 +3454,257 @@ Close with the operational guards and tests that keep context-mode safe and main
 
 #### Tests
 
-- [ ] session creation
-- [ ] event deduplication
-- [ ] event eviction
-- [ ] resume snapshot correctness
-- [ ] snapshot consume flow
-- [ ] artifact indexing and retrieval
-- [ ] compression routing
-- [ ] search relevance: BM25, trigram fallback, fuzzy correction, RRF ordering, proximity/title rerank
-- [ ] session extraction from representative hook payloads
-- [ ] CLI continuity
-- [ ] MCP continuity
-- [ ] bridge markdown ingest and cleanup
-- [ ] corrupt DB recovery / quarantine
-- [ ] best-effort continuity failure path
-- [ ] race/concurrency coverage for session writes and snapshot updates
+- [x] session creation
+- [x] event deduplication
+- [x] event eviction
+- [x] resume snapshot correctness
+- [x] snapshot consume flow
+- [x] artifact indexing and retrieval
+- [x] compression routing
+- [x] search relevance: BM25, trigram fallback, fuzzy correction, RRF ordering, proximity/title rerank
+- [x] session extraction from representative hook payloads
+- [x] CLI continuity
+- [x] MCP continuity
+- [x] bridge markdown ingest and cleanup
+- [x] corrupt DB recovery / quarantine
+- [x] best-effort continuity failure path
+- [x] race/concurrency coverage for session writes and snapshot updates
 
 #### Redaction
 
-- [ ] strip environment variables
-- [ ] strip secrets from command arguments
-- [ ] strip tokens from logs and payloads
-- [ ] avoid indexing sensitive bridge payloads or raw secrets into content store
+- [x] strip environment variables
+- [x] strip secrets from command arguments
+- [x] strip tokens from logs and payloads
+- [x] avoid indexing sensitive bridge payloads or raw secrets into content store
 
 #### Limits
 
-- [ ] max events per session
-- [ ] max content DB size
-- [ ] retention TTL
-- [ ] snapshot size cap
-- [ ] stale source cleanup
-- [ ] stale session cleanup
-- [ ] dedup time window for repeated near-identical events
+- [x] max events per session
+- [x] max content DB size
+- [x] retention TTL
+- [x] snapshot size cap
+- [x] stale source cleanup
+- [x] stale session cleanup
+- [x] dedup time window for repeated near-identical events
 
 #### Operational visibility
 
-- [ ] add session stats
-- [ ] add content-store stats
-- [ ] add avoided-context byte counters
-- [ ] add indexed artifact / preview / pointer routing counters
-- [ ] add purge visibility for session DB, content DB, and bridge artifacts
+- [x] add session stats
+- [x] add content-store stats
+- [x] add avoided-context byte counters
+- [x] add indexed artifact / preview / pointer routing counters
+- [x] add purge visibility for session DB, content DB, and bridge artifacts
 
 #### Completion criteria
 
-- [ ] sessions persist across runs
-- [ ] large outputs are stored instead of passed directly
-- [ ] context is restored through retrieval
-- [ ] resume snapshot works correctly
-- [ ] MCP returns pointers instead of blobs
-- [ ] graph DB, content DB, and session DB remain separate systems
-- [ ] retrieval quality is good enough to recover prior topics, tool results, messages, and queries without transcript replay
-- [ ] continuity failures stay best-effort and do not block primary Atlas commands
+- [x] sessions persist across runs
+- [x] large outputs are stored instead of passed directly
+- [x] context is restored through retrieval
+- [x] resume snapshot works correctly
+- [x] MCP returns pointers instead of blobs
+- [x] graph DB, content DB, and session DB remain separate systems
+- [x] retrieval quality is good enough to recover prior topics, tool results, messages, and queries without transcript replay
+- [x] continuity failures stay best-effort and do not block primary Atlas commands
 
 Why last:
 - limits and redaction must validate the final integrated system, not just one crate in isolation
 - completion gate should assert end-to-end continuity behavior across CLI, retrieval, and MCP
+
+---
+
+### Phase CM9 — Semantic Retrieval
+
+#### Goal
+
+Move beyond lexical search (BM25, trigram) into meaning-aware retrieval.
+
+#### Tasks
+
+- [x] add symbol-aware retrieval using graph relationships
+- [x] expand queries using related symbols from graph
+- [x] cluster related artifacts by concept
+- [x] implement cross-file semantic linking
+- [x] add query expansion based on prior context
+
+#### Output
+
+- retrieval can find conceptually related data, not just keyword matches
+
+#### CLI and MCP rollout follow-up
+
+- [x] add `atlas query --semantic` routing to semantic retrieval
+- [x] route `atlas context` through prior-context semantic expansion when session context is available
+- [x] add semantic mode or flag to `query_graph` MCP tool
+- [x] expose symbol neighborhood, cross-file links, and concept clustering through CLI or MCP surface
+
+---
+
+### Phase CM10 — Memory Curation
+
+#### Goal
+
+Reduce noise and improve signal quality in stored memory.
+
+#### Tasks
+
+- [ ] implement event compaction
+- [ ] merge duplicate or similar events
+- [ ] detect repeated actions and summarize
+- [ ] decay low-value events over time
+- [ ] promote high-value events to persistent memory
+- [ ] deduplicate reasoning outputs
+
+#### Output
+
+- cleaner, more meaningful session memory
+- reduced redundancy
+
+#### CLI and MCP rollout follow-up
+
+- [ ] surface curation and compaction stats in `atlas session status` and `get_session_status`
+- [ ] apply curation before resume snapshot build and before saved-context retrieval results are returned
+- [ ] add manual compaction/curation trigger through CLI or MCP if automatic lifecycle hooks are insufficient
+
+---
+
+### Phase CM11 — Cross-Session Intelligence
+
+#### Goal
+
+Enable memory across multiple sessions.
+
+#### Tasks
+
+- [ ] implement cross-session search
+- [ ] create global memory layer
+- [ ] track frequently accessed symbols/files
+- [ ] detect recurring workflows
+- [ ] surface relevant past sessions
+
+#### Output
+
+- system recalls past work across sessions
+
+#### CLI and MCP rollout follow-up
+
+- [ ] add cross-session mode or flag to saved-context search surfaces
+- [ ] route `atlas context` and MCP context/query tools through global memory lookup when cross-session recall is enabled
+- [ ] expose frequently accessed symbols/files and recurring workflows in session or context status surfaces
+
+---
+
+### Phase CM12 — Predictive Context
+
+#### Goal
+
+Make context proactive instead of reactive.
+
+#### Tasks
+
+- [ ] predict next likely user action
+- [ ] prefetch relevant artifacts
+- [ ] preload context based on recent activity
+- [ ] cache frequently accessed context
+
+#### Output
+
+- faster, smarter responses
+- reduced latency for common workflows
+
+#### CLI and MCP rollout follow-up
+
+- [ ] wire predictive prefetch into `atlas context`, `query_graph`, and resume flows rather than leaving it as background-only logic
+- [ ] expose debug or metadata fields showing what was prefetched and why in CLI JSON and MCP responses
+- [ ] ensure predictive caches respect existing session and saved-context boundaries
+
+---
+
+### Phase CM13 — Context Budget Optimization
+
+#### Goal
+
+Select the best possible context within limits.
+
+#### Tasks
+
+- [ ] implement dynamic token budgeting
+- [ ] rank sources:
+  - graph context
+  - saved artifacts
+  - resume snapshot
+- [ ] select optimal mix of context sources
+- [ ] enforce strict token limits
+
+#### Output
+
+- optimal context selection instead of naive inclusion
+
+#### CLI and MCP rollout follow-up
+
+- [ ] apply token budgeting to `atlas context`, `get_review_context`, `get_context`, and related MCP responses
+- [ ] expose budget decisions, dropped-source counts, and selected-source mix in structured output
+- [ ] allow CLI and MCP callers to override or inspect budget caps without bypassing the optimizer
+
+---
+
+### Phase CM14 — Decision Memory
+
+#### Goal
+
+Persist and reuse decisions.
+
+#### Tasks
+
+- [ ] create decision event types
+- [ ] link decisions to artifacts
+- [ ] store reasoning behind decisions
+- [ ] retrieve decisions for future tasks
+- [ ] avoid recomputing prior conclusions
+
+#### Output
+
+- system remembers why decisions were made
+
+#### CLI and MCP rollout follow-up
+
+- [ ] emit decision events from CLI, context, reasoning, and MCP adapter flows
+- [ ] route `atlas context` and saved-context retrieval through decision lookup when relevant prior conclusions exist
+- [ ] expose decision retrieval through CLI or MCP surface with linked evidence and artifact references
+
+---
+
+### Phase CM15 — Agent-Aware Context (Optional)
+
+#### Goal
+
+Support multi-agent workflows.
+
+#### Tasks
+
+- [ ] implement per-agent memory partitions
+- [ ] track delegated tasks
+- [ ] merge outputs across agents
+- [ ] track agent responsibilities
+
+#### Output
+
+- scalable multi-agent memory system
+
+#### CLI and MCP rollout follow-up
+
+- [ ] add agent partition identifiers to session, context, and saved-context APIs
+- [ ] extend MCP tools to read/write per-agent memory partitions and merged views intentionally
+- [ ] expose delegated-task and responsibility summaries through CLI or MCP status/context surfaces
+
+---
+
+#### Completion Criteria
+
+- [ ] memory is curated, not just stored
+- [ ] retrieval is semantic-aware
+- [ ] system can recall past sessions
+- [ ] context selection is optimized
+- [ ] decisions persist and are reused
+- [ ] system improves over time
+
+---

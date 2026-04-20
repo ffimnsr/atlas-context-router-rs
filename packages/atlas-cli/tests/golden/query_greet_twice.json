@@ -8,7 +8,8 @@
     "limit": 20,
     "graph_expand": false,
     "graph_max_hops": 1,
-    "fuzzy_match": false
+    "fuzzy_match": false,
+    "semantic": false
   },
   "results": [
     {

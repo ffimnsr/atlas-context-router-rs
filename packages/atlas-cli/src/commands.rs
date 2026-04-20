@@ -1016,7 +1016,7 @@ pub fn run_query(cli: &Cli) -> Result<()> {
     let store =
         Store::open(&db_path).with_context(|| format!("cannot open database at {db_path}"))?;
 
-    let (text, kind, language, subpath, limit, expand, expand_hops, fuzzy, hybrid) =
+    let (text, kind, language, subpath, limit, expand, expand_hops, fuzzy, hybrid, semantic) =
         match &cli.command {
             Command::Query {
                 text,
@@ -1028,6 +1028,7 @@ pub fn run_query(cli: &Cli) -> Result<()> {
                 expand_hops,
                 fuzzy,
                 hybrid,
+                semantic,
             } => (
                 text.clone(),
                 kind.clone(),
@@ -1038,6 +1039,7 @@ pub fn run_query(cli: &Cli) -> Result<()> {
                 *expand_hops,
                 *fuzzy,
                 *hybrid,
+                *semantic,
             ),
             _ => unreachable!(),
         };
@@ -1056,7 +1058,11 @@ pub fn run_query(cli: &Cli) -> Result<()> {
     };
 
     let t0 = std::time::Instant::now();
-    let results = search::search(&store, &query).context("search failed")?;
+    let results = if semantic {
+        search::semantic::expanded_search(&store, &query).context("semantic search failed")?
+    } else {
+        search::search(&store, &query).context("search failed")?
+    };
     let latency_ms = t0.elapsed().as_millis();
 
     if cli.json {
@@ -1072,6 +1078,7 @@ pub fn run_query(cli: &Cli) -> Result<()> {
                     "graph_expand": query.graph_expand,
                     "graph_max_hops": query.graph_max_hops,
                     "fuzzy_match": query.fuzzy_match,
+                    "semantic": semantic,
                 },
                 "latency_ms": latency_ms,
                 "results": results,
@@ -1623,6 +1630,7 @@ pub fn run_context(cli: &Cli) -> Result<()> {
             tests,
             imports,
             neighbors,
+            semantic,
         ) = match &cli.command {
             Command::Context {
                 query,
@@ -1637,6 +1645,7 @@ pub fn run_context(cli: &Cli) -> Result<()> {
                 tests,
                 imports,
                 neighbors,
+                semantic,
             } => (
                 query.clone(),
                 file.clone(),
@@ -1650,6 +1659,7 @@ pub fn run_context(cli: &Cli) -> Result<()> {
                 *tests,
                 *imports,
                 *neighbors,
+                *semantic,
             ),
             _ => unreachable!(),
         };
@@ -1710,6 +1720,32 @@ pub fn run_context(cli: &Cli) -> Result<()> {
 
         let store =
             Store::open(&db_path).with_context(|| format!("cannot open database at {db_path}"))?;
+
+        // --semantic: when the target is a free-text / symbol query, run a
+        // graph-aware semantic search first to find the best matching qualified
+        // name.  If a session is active, prior-context files from recent
+        // events are used to boost relevance (context_boosted_search).
+        // The context engine then builds around the resolved qualified name
+        // instead of doing a fuzzier name lookup internally.
+        if semantic && let ContextTarget::SymbolName { ref name } = request.target {
+            let sq = SearchQuery {
+                text: name.clone(),
+                limit: 5,
+                graph_expand: true,
+                graph_max_hops: 1,
+                ..Default::default()
+            };
+            let (ctx_files, ctx_symbols) = context_session_hints(&repo, "cli");
+            let hits =
+                search::semantic::context_boosted_search(&store, &sq, &ctx_files, &ctx_symbols)
+                    .unwrap_or_default();
+            if let Some(top) = hits.into_iter().next() {
+                request.target = ContextTarget::QualifiedName {
+                    qname: top.node.qualified_name,
+                };
+            }
+        }
+
         let engine = ContextEngine::new(&store);
         let result = engine.build(&request).context("context engine failed")?;
 
@@ -1750,6 +1786,46 @@ fn parse_intent_str(s: &str) -> Option<ContextIntent> {
 
 fn parse_intent_override(override_str: Option<&str>, default: ContextIntent) -> ContextIntent {
     override_str.and_then(parse_intent_str).unwrap_or(default)
+}
+
+/// Extract prior-context file hints from the active CLI (or MCP) session.
+///
+/// Opens the session store best-effort; returns empty vecs on any failure so
+/// callers can proceed without context boosting.  Scans the most recent 20
+/// events and collects file paths found in `"files"` arrays inside the event
+/// payload JSON (emitted by MCP continuity tools).
+fn context_session_hints(repo: &str, frontend: &str) -> (Vec<String>, Vec<String>) {
+    use atlas_session::{SessionId, SessionStore};
+    use std::path::Path;
+
+    let store = match SessionStore::open_in_repo(Path::new(repo)) {
+        Ok(s) => s,
+        Err(_) => return (vec![], vec![]),
+    };
+    let session_id = SessionId::derive(repo, "", frontend);
+    let events = match store.list_events(&session_id) {
+        Ok(e) => e,
+        Err(_) => return (vec![], vec![]),
+    };
+
+    let mut files: Vec<String> = Vec::new();
+    for event in events.iter().rev().take(20) {
+        let Ok(payload) = serde_json::from_str::<serde_json::Value>(&event.payload_json) else {
+            continue;
+        };
+        if let Some(arr) = payload.get("files").and_then(|v| v.as_array()) {
+            for f in arr {
+                if let Some(s) = f.as_str() {
+                    let owned = s.to_owned();
+                    if !files.contains(&owned) {
+                        files.push(owned);
+                    }
+                }
+            }
+        }
+    }
+
+    (files, vec![])
 }
 
 pub fn run_shell(cli: &Cli) -> Result<()> {

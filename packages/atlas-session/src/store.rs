@@ -18,10 +18,24 @@ pub const DEFAULT_SESSION_DB: &str = "session.db";
 pub const DEFAULT_SESSION_MAX_EVENTS: usize = 256;
 pub const MAX_INLINE_EVENT_PAYLOAD_BYTES: usize = 8 * 1024;
 
+/// Default maximum serialised resume-snapshot size (64 KiB).
+pub const DEFAULT_MAX_SNAPSHOT_BYTES: usize = 64 * 1024;
+/// Default deduplication time window in seconds (0 = hash-only, no window).
+pub const DEFAULT_DEDUP_WINDOW_SECS: u64 = 0;
+
 #[derive(Debug, Clone)]
 pub struct SessionStoreConfig {
     pub max_events_per_session: usize,
     pub max_inline_payload_bytes: usize,
+    /// Maximum serialised size of a resume snapshot in bytes.
+    /// Snapshots exceeding this limit are trimmed bucket-by-bucket before
+    /// persisting.  Set to `usize::MAX` to disable.
+    pub max_snapshot_bytes: usize,
+    /// When > 0, an event is deduplicated if another event of the same
+    /// (type, priority) was written within this many seconds, *regardless*
+    /// of payload differences.  Hash-based exact deduplication is always
+    /// applied in addition to this window.  Set to 0 to disable.
+    pub dedup_window_secs: u64,
 }
 
 impl Default for SessionStoreConfig {
@@ -29,8 +43,21 @@ impl Default for SessionStoreConfig {
         Self {
             max_events_per_session: DEFAULT_SESSION_MAX_EVENTS,
             max_inline_payload_bytes: MAX_INLINE_EVENT_PAYLOAD_BYTES,
+            max_snapshot_bytes: DEFAULT_MAX_SNAPSHOT_BYTES,
+            dedup_window_secs: DEFAULT_DEDUP_WINDOW_SECS,
         }
     }
+}
+
+/// Aggregate statistics returned by [`SessionStore::stats`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionStats {
+    /// Total number of distinct sessions in this store.
+    pub session_count: usize,
+    /// Total number of event rows across all sessions.
+    pub total_events: usize,
+    /// Total number of resume snapshots stored.
+    pub snapshot_count: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -43,6 +70,44 @@ pub struct SessionMeta {
     pub updated_at: String,
     pub last_resume_at: Option<String>,
     pub last_compaction_at: Option<String>,
+}
+
+/// High-level grouping derived from [`SessionEventType`] at runtime.
+///
+/// Never stored in the database — always computed via
+/// [`SessionEventType::category`].  Use for memory cleanup, filtering, and
+/// analytics without adding a column to the event ledger.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum EventCategory {
+    UserIntent,
+    Command,
+    GraphState,
+    Context,
+    Reasoning,
+    Error,
+    FileOperation,
+    SessionLifecycle,
+}
+
+impl EventCategory {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::UserIntent => "USER_INTENT",
+            Self::Command => "COMMAND",
+            Self::GraphState => "GRAPH_STATE",
+            Self::Context => "CONTEXT",
+            Self::Reasoning => "REASONING",
+            Self::Error => "ERROR",
+            Self::FileOperation => "FILE_OPERATION",
+            Self::SessionLifecycle => "SESSION_LIFECYCLE",
+        }
+    }
+}
+
+impl std::fmt::Display for EventCategory {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -69,6 +134,25 @@ pub enum SessionEventType {
 }
 
 impl SessionEventType {
+    /// Derive the high-level [`EventCategory`] for this event type.
+    ///
+    /// Category is never persisted; call this whenever grouping or filtering
+    /// by category is needed (e.g. selective memory cleanup).
+    pub fn category(&self) -> EventCategory {
+        match self {
+            Self::UserIntent | Self::Decision | Self::RuleInstruction => EventCategory::UserIntent,
+            Self::CommandRun | Self::CommandFail => EventCategory::Command,
+            Self::GraphBuild | Self::GraphUpdate => EventCategory::GraphState,
+            Self::ReviewContext | Self::ImpactAnalysis | Self::ContextRequest => {
+                EventCategory::Context
+            }
+            Self::ReasoningResult => EventCategory::Reasoning,
+            Self::Error => EventCategory::Error,
+            Self::FileRead | Self::FileWrite => EventCategory::FileOperation,
+            Self::SessionStart | Self::SessionResume => EventCategory::SessionLifecycle,
+        }
+    }
+
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::FileRead => "FILE_READ",
@@ -175,6 +259,18 @@ impl SessionStore {
             std::fs::create_dir_all(parent)?;
         }
 
+        match Self::try_open(path, config.clone()) {
+            Ok(store) => Ok(store),
+            Err(e) => {
+                if is_corruption_error(&e) {
+                    quarantine_db(path);
+                }
+                Err(e)
+            }
+        }
+    }
+
+    fn try_open(path: &str, config: SessionStoreConfig) -> Result<Self> {
         let conn = Connection::open_with_flags(
             path,
             OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE,
@@ -301,6 +397,32 @@ impl SessionStore {
         self.ensure_payload_fits(&payload_json)?;
         let created_at = event.created_at.unwrap_or_else(format_now);
         let event_hash = hash_event(&event.event_type, event.priority, &payload_json);
+
+        // Time-window deduplication: skip insertion if a same-(type, priority)
+        // event already exists within the configured window.
+        if self.config.dedup_window_secs > 0 {
+            let window_cutoff = format_seconds_ago(self.config.dedup_window_secs);
+            let recent: i64 = self
+                .conn
+                .query_row(
+                    "SELECT COUNT(*) FROM session_events
+                     WHERE session_id = ?1
+                       AND event_type = ?2
+                       AND priority = ?3
+                       AND created_at >= ?4",
+                    params![
+                        event.session_id.as_str(),
+                        event.event_type.as_str(),
+                        event.priority,
+                        window_cutoff,
+                    ],
+                    |row| row.get(0),
+                )
+                .map_err(|e| AtlasError::Db(e.to_string()))?;
+            if recent > 0 {
+                return Ok(None);
+            }
+        }
 
         let tx = self
             .conn
@@ -506,6 +628,44 @@ impl SessionStore {
             )
             .map_err(|e| AtlasError::Db(e.to_string()))?;
         Ok(rows > 0)
+    }
+
+    /// Return aggregate statistics for this store.
+    pub fn stats(&self) -> Result<SessionStats> {
+        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
+        let session_count: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM session_meta", [], |r| r.get(0))
+            .map_err(db_err)?;
+        let total_events: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM session_events", [], |r| r.get(0))
+            .map_err(db_err)?;
+        let snapshot_count: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM session_resume", [], |r| r.get(0))
+            .map_err(db_err)?;
+        Ok(SessionStats {
+            session_count: session_count as usize,
+            total_events: total_events as usize,
+            snapshot_count: snapshot_count as usize,
+        })
+    }
+
+    /// Delete sessions (and their events/snapshots) whose `updated_at` timestamp
+    /// is older than `keep_days` days.
+    ///
+    /// Returns the number of sessions deleted.
+    pub fn cleanup_stale_sessions(&mut self, keep_days: u32) -> Result<usize> {
+        let cutoff = format_days_ago(keep_days);
+        let count = self
+            .conn
+            .execute(
+                "DELETE FROM session_meta WHERE updated_at < ?1",
+                params![cutoff],
+            )
+            .map_err(|e| AtlasError::Db(e.to_string()))?;
+        Ok(count)
     }
 
     /// Build and persist a bounded resume snapshot for `session_id`.
@@ -716,6 +876,13 @@ impl SessionStore {
         let snapshot_str = serde_json::to_string(&snapshot)
             .map_err(|e| AtlasError::Other(format!("cannot serialise resume snapshot: {e}")))?;
 
+        // Enforce snapshot size cap by progressively trimming bulky buckets.
+        let snapshot_str = if snapshot_str.len() > self.config.max_snapshot_bytes {
+            trim_snapshot_to_limit(snapshot, self.config.max_snapshot_bytes)?
+        } else {
+            snapshot_str
+        };
+
         self.put_resume_snapshot(session_id, &snapshot_str, event_count, false)?;
 
         self.get_resume_snapshot(session_id)?
@@ -829,6 +996,76 @@ fn format_now() -> String {
         .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string())
 }
 
+fn format_days_ago(days: u32) -> String {
+    let ts = OffsetDateTime::now_utc() - time::Duration::days(days as i64);
+    ts.format(&time::format_description::well_known::Rfc3339)
+        .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string())
+}
+
+fn format_seconds_ago(secs: u64) -> String {
+    let ts = OffsetDateTime::now_utc() - time::Duration::seconds(secs as i64);
+    ts.format(&time::format_description::well_known::Rfc3339)
+        .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string())
+}
+
+/// Progressively trim bulky snapshot buckets until the serialised JSON fits
+/// within `max_bytes`.  If we still exceed the limit after all trimming,
+/// return an error rather than persisting a corrupt snapshot.
+fn trim_snapshot_to_limit(mut snapshot: serde_json::Value, max_bytes: usize) -> Result<String> {
+    // Buckets trimmed in order from cheapest to most important.
+    let trimable_arrays = [
+        "impacted_symbols",
+        "changed_files",
+        "retrieval_hints",
+        "recent_commands",
+        "unresolved_errors",
+        "recent_reasoning",
+        "recent_decisions",
+        "active_rules",
+        "saved_artifact_refs",
+    ];
+
+    for key in &trimable_arrays {
+        let serialised = serde_json::to_string(&snapshot)
+            .map_err(|e| AtlasError::Other(format!("cannot serialise snapshot: {e}")))?;
+        if serialised.len() <= max_bytes {
+            return Ok(serialised);
+        }
+        // Work with a local copy of the array, truncate it, then put it back.
+        if let Some(arr) = snapshot.get(key).and_then(|v| v.as_array()).cloned() {
+            let mut arr = arr;
+            while arr.len() > 1 {
+                arr.truncate(arr.len() / 2);
+                if let Some(obj) = snapshot.as_object_mut() {
+                    obj.insert((*key).to_string(), serde_json::Value::Array(arr.clone()));
+                }
+                let s = serde_json::to_string(&snapshot).unwrap_or_default();
+                if s.len() <= max_bytes {
+                    return Ok(s);
+                }
+            }
+            // Clear the bucket entirely.
+            if let Some(obj) = snapshot.as_object_mut() {
+                obj.insert((*key).to_string(), serde_json::Value::Array(vec![]));
+            }
+        }
+    }
+
+    // Last resort: drop graph_state.
+    snapshot.as_object_mut().map(|m| m.remove("graph_state"));
+
+    let serialised = serde_json::to_string(&snapshot)
+        .map_err(|e| AtlasError::Other(format!("cannot serialise snapshot: {e}")))?;
+    if serialised.len() > max_bytes {
+        return Err(AtlasError::Other(format!(
+            "resume snapshot {} bytes exceeds limit {} bytes even after trimming",
+            serialised.len(),
+            max_bytes
+        )));
+    }
+    Ok(serialised)
+}
+
 fn hex_encode(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
@@ -840,6 +1077,41 @@ fn path_to_str(path: &Path) -> Result<&str> {
 
 fn to_from_sql_error(error: AtlasError) -> rusqlite::Error {
     rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(error))
+}
+
+/// Return `true` when the error message indicates SQLite database corruption.
+///
+/// Matches rusqlite's mapped error strings for SQLITE_CORRUPT (11),
+/// SQLITE_NOTADB (26), and SQLITE_IOERR (10) sub-codes that arise when a
+/// file is not a valid SQLite database.
+fn is_corruption_error(err: &AtlasError) -> bool {
+    let msg = err.to_string().to_lowercase();
+    msg.contains("malformed")
+        || msg.contains("not a database")
+        || msg.contains("disk image is malformed")
+        || msg.contains("database disk image")
+        || msg.contains("file is not a database")
+}
+
+/// Rename `path` to `{path}.quarantine` so Atlas can start fresh.
+///
+/// Logs a warning on failure but never panics — this is best-effort recovery.
+fn quarantine_db(path: &str) {
+    let qpath = format!("{path}.quarantine");
+    if let Err(e) = std::fs::rename(path, &qpath) {
+        tracing::warn!(
+            path = path,
+            quarantine = %qpath,
+            err = %e,
+            "session DB quarantine rename failed"
+        );
+    } else {
+        tracing::warn!(
+            path = path,
+            quarantine = %qpath,
+            "corrupt session DB quarantined; a fresh store will be created on next open"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -859,6 +1131,7 @@ mod tests {
             SessionStoreConfig {
                 max_events_per_session,
                 max_inline_payload_bytes,
+                ..Default::default()
             },
         )
         .unwrap();
@@ -1188,5 +1461,480 @@ mod tests {
             .find(|r| r["label"] == "no_mut_global")
             .expect("no_mut_global rule missing");
         assert_eq!(no_mut["rule"], "avoid global mutable state (updated)");
+    }
+
+    // ── CM8 tests ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn stats_returns_accurate_counts() {
+        let (_dir, mut store) = open_store(16, 1024);
+        let id_a = SessionId::derive("/repo/a", "", "cli");
+        let id_b = SessionId::derive("/repo/b", "", "mcp");
+
+        store
+            .upsert_session_meta(id_a.clone(), "/repo/a", "cli", None)
+            .unwrap();
+        store
+            .upsert_session_meta(id_b.clone(), "/repo/b", "mcp", None)
+            .unwrap();
+
+        store
+            .append_event(NewSessionEvent {
+                session_id: id_a.clone(),
+                event_type: SessionEventType::CommandRun,
+                priority: 2,
+                payload: serde_json::json!({ "command": "build" }),
+                created_at: None,
+            })
+            .unwrap();
+        store
+            .append_event(NewSessionEvent {
+                session_id: id_b.clone(),
+                event_type: SessionEventType::CommandRun,
+                priority: 2,
+                payload: serde_json::json!({ "command": "update" }),
+                created_at: None,
+            })
+            .unwrap();
+
+        store.put_resume_snapshot(&id_a, "{}", 1, false).unwrap();
+
+        let stats = store.stats().unwrap();
+        assert_eq!(stats.session_count, 2);
+        assert_eq!(stats.total_events, 2);
+        assert_eq!(stats.snapshot_count, 1);
+    }
+
+    #[test]
+    fn cleanup_stale_sessions_removes_old_entries() {
+        let (_dir, mut store) = open_store(16, 1024);
+        let id = SessionId::derive("/repo/stale", "", "cli");
+
+        // Insert session with a very old timestamp directly.
+        store
+            .conn
+            .execute(
+                "INSERT INTO session_meta
+                 (session_id, repo_root, frontend, worktree_id, created_at, updated_at)
+                 VALUES (?1, ?2, 'cli', NULL, ?3, ?3)",
+                params![id.as_str(), "/repo/stale", "2020-01-01T00:00:00Z"],
+            )
+            .unwrap();
+
+        let removed = store.cleanup_stale_sessions(30).unwrap();
+        assert_eq!(removed, 1, "old session should be removed");
+        assert!(store.get_session_meta(&id).unwrap().is_none());
+    }
+
+    #[test]
+    fn cleanup_stale_sessions_keeps_recent_sessions() {
+        let (_dir, mut store) = open_store(16, 1024);
+        let id = SessionId::derive("/repo/fresh", "", "cli");
+        store
+            .upsert_session_meta(id.clone(), "/repo/fresh", "cli", None)
+            .unwrap();
+        let removed = store.cleanup_stale_sessions(30).unwrap();
+        assert_eq!(removed, 0, "recent session must not be removed");
+        assert!(store.get_session_meta(&id).unwrap().is_some());
+    }
+
+    #[test]
+    fn snapshot_size_cap_trims_bulky_buckets() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join(".atlas").join(DEFAULT_SESSION_DB);
+        // Very small cap forces trimming.
+        let mut store = SessionStore::open_with_config(
+            path.to_str().unwrap(),
+            SessionStoreConfig {
+                max_events_per_session: 256,
+                max_inline_payload_bytes: 8192,
+                max_snapshot_bytes: 512,
+                dedup_window_secs: 0,
+            },
+        )
+        .unwrap();
+
+        let session_id = session_id();
+        seed_session(&mut store, &session_id);
+
+        // Push many impacted symbols to bloat the snapshot.
+        for i in 0..50 {
+            store
+                .append_event(NewSessionEvent {
+                    session_id: session_id.clone(),
+                    event_type: SessionEventType::ImpactAnalysis,
+                    priority: 2,
+                    payload: serde_json::json!({
+                        "symbols": (0..20).map(|j| format!("Symbol_{i}_{j}")).collect::<Vec<_>>(),
+                    }),
+                    created_at: None,
+                })
+                .unwrap();
+        }
+
+        let snap = store.build_resume(&session_id).unwrap();
+        assert!(
+            snap.snapshot.len() <= 512,
+            "snapshot len {} exceeds cap 512",
+            snap.snapshot.len()
+        );
+    }
+
+    #[test]
+    fn dedup_window_blocks_same_type_within_window() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join(".atlas").join(DEFAULT_SESSION_DB);
+        let mut store = SessionStore::open_with_config(
+            path.to_str().unwrap(),
+            SessionStoreConfig {
+                max_events_per_session: 64,
+                max_inline_payload_bytes: 8192,
+                max_snapshot_bytes: DEFAULT_MAX_SNAPSHOT_BYTES,
+                // 60-second window
+                dedup_window_secs: 60,
+            },
+        )
+        .unwrap();
+
+        let session_id = session_id();
+        seed_session(&mut store, &session_id);
+
+        let mk = |label: &str| NewSessionEvent {
+            session_id: session_id.clone(),
+            event_type: SessionEventType::CommandRun,
+            priority: 2,
+            payload: serde_json::json!({ "command": label }),
+            created_at: None,
+        };
+
+        // First insertion must succeed.
+        let first = store.append_event(mk("build")).unwrap();
+        assert!(first.is_some(), "first event should be stored");
+
+        // Second within the 60-second window should be suppressed by the window.
+        let second = store.append_event(mk("build-again")).unwrap();
+        assert!(
+            second.is_none(),
+            "same-type event inside window should be deduped"
+        );
+
+        let events = store.list_events(&session_id).unwrap();
+        assert_eq!(events.len(), 1, "only one event should be stored");
+    }
+
+    #[test]
+    fn best_effort_open_in_nonexistent_dir_creates_path() {
+        let dir = TempDir::new().unwrap();
+        // Nested subdirectory that does not exist yet.
+        let nested = dir.path().join("deep").join("nested").join(".atlas");
+        let path = nested.join(DEFAULT_SESSION_DB);
+        // open() must create parent dirs and succeed.
+        let result = SessionStore::open(path.to_str().unwrap());
+        assert!(result.is_ok(), "store open must create missing dirs");
+    }
+
+    // ── Corrupt DB quarantine ───────────────────────────────────────────────
+
+    #[test]
+    fn corrupt_db_is_quarantined_on_open() {
+        let dir = TempDir::new().unwrap();
+        let atlas_dir = dir.path().join(".atlas");
+        std::fs::create_dir_all(&atlas_dir).unwrap();
+        let path = atlas_dir.join(DEFAULT_SESSION_DB);
+
+        // Write garbage bytes so SQLite cannot recognise the file.
+        std::fs::write(&path, b"this is not a sqlite database").unwrap();
+
+        let result = SessionStore::open(path.to_str().unwrap());
+        // Open must fail (corrupt file).
+        assert!(result.is_err(), "corrupt DB must return error");
+
+        // Quarantine file must exist; original must be gone or renamed.
+        let quarantine = atlas_dir.join(format!("{}.quarantine", DEFAULT_SESSION_DB));
+        // Either the original was renamed to quarantine, or the file was removed.
+        // We check that at least the quarantine file was created.
+        assert!(
+            quarantine.exists(),
+            "quarantine file must be created for corrupt DB"
+        );
+    }
+
+    #[test]
+    fn quarantine_allows_fresh_open_after_corruption() {
+        let dir = TempDir::new().unwrap();
+        let atlas_dir = dir.path().join(".atlas");
+        std::fs::create_dir_all(&atlas_dir).unwrap();
+        let path = atlas_dir.join(DEFAULT_SESSION_DB);
+
+        // Write garbage first.
+        std::fs::write(&path, b"not a database").unwrap();
+        let _ = SessionStore::open(path.to_str().unwrap()); // triggers quarantine
+
+        // After quarantine the path is gone; open must succeed with a fresh DB.
+        let store = SessionStore::open(path.to_str().unwrap());
+        assert!(
+            store.is_ok(),
+            "fresh open after quarantine must succeed: {:?}",
+            store.err()
+        );
+    }
+
+    #[test]
+    fn is_corruption_error_matches_known_strings() {
+        let cases = [
+            "database disk image is malformed",
+            "file is not a database",
+            "not a database",
+        ];
+        for msg in cases {
+            let err = AtlasError::Db(msg.to_string());
+            assert!(
+                is_corruption_error(&err),
+                "must detect corruption in: {msg}"
+            );
+        }
+    }
+
+    #[test]
+    fn is_corruption_error_does_not_match_normal_errors() {
+        let err = AtlasError::Db("disk I/O error (SQLITE_IOERR)".to_string());
+        assert!(!is_corruption_error(&err));
+    }
+
+    // ── Race / concurrency coverage ─────────────────────────────────────────
+    //
+    // Each `SessionStore` owns one SQLite connection.  Concurrent safety is
+    // achieved by opening separate connections from separate threads: SQLite WAL
+    // mode serialises writers at the DB level while readers proceed concurrently.
+    // The busy_timeout pragma (5 000 ms) absorbs transient write contention.
+
+    /// Multiple threads each open their own `SessionStore` and write distinct
+    /// events concurrently.  All events must survive without loss or panic.
+    #[test]
+    fn concurrent_writers_to_same_db_all_events_persist() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let dir = TempDir::new().unwrap();
+        let path = Arc::new(
+            dir.path()
+                .join(".atlas")
+                .join(DEFAULT_SESSION_DB)
+                .to_string_lossy()
+                .into_owned(),
+        );
+
+        // Initialise the DB (creates schema) before spawning writers.
+        let session_id = SessionId::derive("concurrent-repo", "", "cli");
+        {
+            let mut store = SessionStore::open(&path).unwrap();
+            store
+                .upsert_session_meta(session_id.clone(), "concurrent-repo", "cli", None)
+                .unwrap();
+        }
+
+        const THREADS: usize = 4;
+        const EVENTS_PER_THREAD: usize = 10;
+
+        let handles: Vec<_> = (0..THREADS)
+            .map(|t| {
+                let p = Arc::clone(&path);
+                let sid = session_id.clone();
+                thread::spawn(move || {
+                    let mut store = SessionStore::open(&p).expect("thread store open");
+                    for i in 0..EVENTS_PER_THREAD {
+                        let event = NewSessionEvent {
+                            session_id: sid.clone(),
+                            event_type: SessionEventType::CommandRun,
+                            priority: 0,
+                            payload: serde_json::json!({
+                                "thread": t,
+                                "step": i,
+                                "unique": format!("t{t}-s{i}"),
+                            }),
+                            created_at: None,
+                        };
+                        // Busy_timeout handles lock contention; errors are soft.
+                        let _ = store.append_event(event);
+                    }
+                })
+            })
+            .collect();
+
+        for h in handles {
+            h.join().expect("writer thread must not panic");
+        }
+
+        // Verify: at least one event per thread survived (dedup may collapse
+        // identical payloads, but each thread uses a unique "unique" field so
+        // all should be distinct).
+        let final_store = SessionStore::open(&path).unwrap();
+        let events = final_store.list_events(&session_id).unwrap();
+        assert!(
+            events.len() >= THREADS,
+            "expected at least {THREADS} events; got {}",
+            events.len()
+        );
+    }
+
+    /// One thread continuously appends events while another builds a resume
+    /// snapshot.  Neither operation must panic or produce a torn read.
+    #[test]
+    fn concurrent_snapshot_build_while_writing_events() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let dir = TempDir::new().unwrap();
+        let path = Arc::new(
+            dir.path()
+                .join(".atlas")
+                .join(DEFAULT_SESSION_DB)
+                .to_string_lossy()
+                .into_owned(),
+        );
+        let session_id = SessionId::derive("snap-race-repo", "", "cli");
+
+        {
+            let mut store = SessionStore::open(&path).unwrap();
+            store
+                .upsert_session_meta(session_id.clone(), "snap-race-repo", "cli", None)
+                .unwrap();
+            // Seed a few events so the snapshot has something to work with.
+            for i in 0..5_u32 {
+                let _ = store.append_event(NewSessionEvent {
+                    session_id: session_id.clone(),
+                    event_type: SessionEventType::UserIntent,
+                    priority: 1,
+                    payload: serde_json::json!({"intent": format!("seed {i}")}),
+                    created_at: None,
+                });
+            }
+        }
+
+        let path_writer = Arc::clone(&path);
+        let sid_writer = session_id.clone();
+        let writer = thread::spawn(move || {
+            let mut store = SessionStore::open(&path_writer).expect("writer open");
+            for i in 0..20_u32 {
+                let _ = store.append_event(NewSessionEvent {
+                    session_id: sid_writer.clone(),
+                    event_type: SessionEventType::CommandRun,
+                    priority: 0,
+                    payload: serde_json::json!({"command": format!("cmd-{i}")}),
+                    created_at: None,
+                });
+            }
+        });
+
+        let path_snap = Arc::clone(&path);
+        let sid_snap = session_id.clone();
+        let snapper = thread::spawn(move || {
+            let mut store = SessionStore::open(&path_snap).expect("snapper open");
+            // build_resume may race with the writer; it must not panic.
+            let result = store.build_resume(&sid_snap);
+            result.is_ok()
+        });
+
+        writer.join().expect("writer must not panic");
+        let snap_ok = snapper.join().expect("snapper must not panic");
+        assert!(snap_ok, "build_resume must succeed under concurrent writes");
+    }
+
+    /// Two threads upsert session metadata for the same session concurrently.
+    /// The final row must be consistent (not torn / half-written).
+    #[test]
+    fn concurrent_upsert_session_meta_is_safe() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let dir = TempDir::new().unwrap();
+        let path = Arc::new(
+            dir.path()
+                .join(".atlas")
+                .join(DEFAULT_SESSION_DB)
+                .to_string_lossy()
+                .into_owned(),
+        );
+        let session_id = SessionId::derive("upsert-race", "", "mcp");
+
+        // Initialise the schema.
+        SessionStore::open(&path).unwrap();
+
+        let handles: Vec<_> = (0..3)
+            .map(|t| {
+                let p = Arc::clone(&path);
+                let sid = session_id.clone();
+                thread::spawn(move || {
+                    let mut store = SessionStore::open(&p).expect("open");
+                    let _ = store.upsert_session_meta(sid, &format!("repo-{t}"), "mcp", None);
+                })
+            })
+            .collect();
+
+        for h in handles {
+            h.join().expect("upsert thread must not panic");
+        }
+
+        let store = SessionStore::open(&path).unwrap();
+        let meta = store.get_session_meta(&session_id).unwrap();
+        assert!(
+            meta.is_some(),
+            "session meta must exist after concurrent upserts"
+        );
+    }
+
+    /// Concurrent snapshot writes (put_resume_snapshot) for the same session
+    /// must not corrupt the stored snapshot — the last writer wins.
+    #[test]
+    fn concurrent_snapshot_writes_last_writer_wins() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let dir = TempDir::new().unwrap();
+        let path = Arc::new(
+            dir.path()
+                .join(".atlas")
+                .join(DEFAULT_SESSION_DB)
+                .to_string_lossy()
+                .into_owned(),
+        );
+        let session_id = SessionId::derive("snap-write-race", "", "cli");
+
+        {
+            let mut store = SessionStore::open(&path).unwrap();
+            store
+                .upsert_session_meta(session_id.clone(), "repo", "cli", None)
+                .unwrap();
+        }
+
+        const THREADS: usize = 4;
+        let handles: Vec<_> = (0..THREADS)
+            .map(|t| {
+                let p = Arc::clone(&path);
+                let sid = session_id.clone();
+                thread::spawn(move || {
+                    let mut store = SessionStore::open(&p).expect("open");
+                    let snapshot = format!(r#"{{"writer":{t}}}"#);
+                    let _ = store.put_resume_snapshot(&sid, &snapshot, t as i64, false);
+                })
+            })
+            .collect();
+
+        for h in handles {
+            h.join().expect("snapshot writer must not panic");
+        }
+
+        // Snapshot must be valid JSON (not torn).
+        let store = SessionStore::open(&path).unwrap();
+        let snap = store
+            .get_resume_snapshot(&session_id)
+            .unwrap()
+            .expect("snapshot must exist");
+        let parsed: serde_json::Value = serde_json::from_str(&snap.snapshot)
+            .expect("snapshot must be valid JSON after concurrent writes");
+        assert!(
+            parsed.get("writer").is_some(),
+            "snapshot payload must have 'writer' key"
+        );
     }
 }
