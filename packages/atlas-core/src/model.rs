@@ -392,6 +392,18 @@ pub enum ContextIntent {
     Review,
     /// Impact context seeded from files or symbol names.
     Impact,
+    /// Breakage / impact analysis — "what breaks if I change X?"
+    ImpactAnalysis,
+    /// Usage lookup — "who calls / uses X?"
+    UsageLookup,
+    /// Refactor safety check — "is it safe to refactor X?"
+    RefactorSafety,
+    /// Dead code check — "is X unused?"
+    DeadCodeCheck,
+    /// Rename preview — "what does renaming X affect?"
+    RenamePreview,
+    /// Dependency removal — "what depends on this dep?"
+    DependencyRemoval,
 }
 
 /// The seed target for a context request.
@@ -406,6 +418,10 @@ pub enum ContextTarget {
     FilePath { path: String },
     /// Set of repo-relative changed file paths (for review/impact intents).
     ChangedFiles { paths: Vec<String> },
+    /// Set of changed symbol qualified names (for symbol-seeded impact).
+    ChangedSymbols { qnames: Vec<String> },
+    /// Seed from a specific edge relationship (source symbol + optional edge kind).
+    EdgeQuerySeed { source_qname: String, edge_kind: Option<String> },
 }
 
 /// Structured request to the context engine.
@@ -427,6 +443,12 @@ pub struct ContextRequest {
     pub include_imports: bool,
     /// Include containment-sibling nodes.
     pub include_neighbors: bool,
+    /// Populate `SelectedFile.line_ranges` with node spans (Slice 8).
+    pub include_code_spans: bool,
+    /// Include direct callers in context (defaults to true).
+    pub include_callers: bool,
+    /// Include direct callees in context (defaults to true).
+    pub include_callees: bool,
 }
 
 impl Default for ContextRequest {
@@ -441,6 +463,9 @@ impl Default for ContextRequest {
             include_tests: false,
             include_imports: true,
             include_neighbors: false,
+            include_code_spans: false,
+            include_callers: true,
+            include_callees: true,
         }
     }
 }
@@ -467,6 +492,21 @@ pub enum SelectionReason {
     ImpactNeighbor,
 }
 
+impl SelectionReason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::DirectTarget => "direct_target",
+            Self::Caller => "caller",
+            Self::Callee => "callee",
+            Self::Importer => "importer",
+            Self::Importee => "importee",
+            Self::ContainmentSibling => "containment_sibling",
+            Self::TestAdjacent => "test_adjacent",
+            Self::ImpactNeighbor => "impact_neighbor",
+        }
+    }
+}
+
 /// A graph node selected for inclusion in a [`ContextResult`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SelectedNode {
@@ -474,6 +514,9 @@ pub struct SelectedNode {
     pub selection_reason: SelectionReason,
     /// Graph-hop distance from the seed node (0 = seed itself).
     pub distance: u32,
+    /// Relevance score assigned by `rank_context` (higher = more relevant).
+    /// Zero before ranking is applied.
+    pub relevance_score: f32,
 }
 
 /// A graph edge selected for inclusion in a [`ContextResult`].
@@ -481,6 +524,11 @@ pub struct SelectedNode {
 pub struct SelectedEdge {
     pub edge: Edge,
     pub selection_reason: SelectionReason,
+    /// Hop depth at which this edge was encountered (None when not tracked).
+    pub depth: Option<u32>,
+    /// Relevance score assigned by `rank_context` (higher = more relevant).
+    /// Zero before ranking is applied.
+    pub relevance_score: f32,
 }
 
 /// A file selected for inclusion in a [`ContextResult`].
@@ -491,6 +539,10 @@ pub struct SelectedFile {
     /// Relevant line ranges within the file (start, end inclusive).
     /// Empty means no span narrowing has been applied yet.
     pub line_ranges: Vec<(u32, u32)>,
+    /// Primary language of the file (derived from the first node in the file).
+    pub language: Option<String>,
+    /// Number of nodes included from this file after trimming.
+    pub node_count_included: usize,
 }
 
 /// Metadata about truncation applied to a [`ContextResult`].
@@ -704,6 +756,9 @@ mod tests {
             include_tests: true,
             include_imports: true,
             include_neighbors: false,
+            include_code_spans: false,
+            include_callers: true,
+            include_callees: true,
         }
     }
 
@@ -816,6 +871,7 @@ mod tests {
             node: sample_node(),
             selection_reason: SelectionReason::Caller,
             distance: 1,
+            relevance_score: 0.0,
         };
         let json = serde_json::to_string(&sn).unwrap();
         let back: SelectedNode = serde_json::from_str(&json).unwrap();
@@ -829,6 +885,8 @@ mod tests {
         let se = SelectedEdge {
             edge: sample_edge(),
             selection_reason: SelectionReason::Callee,
+            depth: None,
+            relevance_score: 0.0,
         };
         let json = serde_json::to_string(&se).unwrap();
         let back: SelectedEdge = serde_json::from_str(&json).unwrap();
@@ -842,6 +900,8 @@ mod tests {
             path: "src/main.rs".to_string(),
             selection_reason: SelectionReason::DirectTarget,
             line_ranges: vec![(10, 20), (35, 50)],
+            language: Some("rust".to_string()),
+            node_count_included: 2,
         };
         let json = serde_json::to_string(&sf).unwrap();
         let back: SelectedFile = serde_json::from_str(&json).unwrap();
@@ -856,6 +916,8 @@ mod tests {
             path: "src/lib.rs".to_string(),
             selection_reason: SelectionReason::ImpactNeighbor,
             line_ranges: vec![],
+            language: None,
+            node_count_included: 0,
         };
         let json = serde_json::to_string(&sf).unwrap();
         let back: SelectedFile = serde_json::from_str(&json).unwrap();
@@ -919,15 +981,20 @@ mod tests {
                 node: sample_node(),
                 selection_reason: SelectionReason::DirectTarget,
                 distance: 0,
+                relevance_score: 0.0,
             }],
             edges: vec![SelectedEdge {
                 edge: sample_edge(),
                 selection_reason: SelectionReason::Caller,
+                depth: None,
+                relevance_score: 0.0,
             }],
             files: vec![SelectedFile {
                 path: "src/lib.rs".to_string(),
                 selection_reason: SelectionReason::DirectTarget,
                 line_ranges: vec![(10, 20)],
+                language: Some("rust".to_string()),
+                node_count_included: 1,
             }],
             truncation: TruncationMeta::none(),
             ambiguity: None,

@@ -6,13 +6,15 @@
 
 use anyhow::{Context, Result};
 use atlas_core::SearchQuery;
+use atlas_core::model::{ContextIntent, ContextRequest, ContextTarget};
 use atlas_engine::{BuildOptions, UpdateOptions, UpdateTarget, build_graph, update_graph};
 use atlas_repo::{DiffTarget, changed_files, find_repo_root};
+use atlas_review::ContextEngine;
 use atlas_store_sqlite::Store;
 use camino::Utf8Path;
 use serde::Serialize;
 
-use crate::context::{compact_node, package_impact, package_review};
+use crate::context::{compact_node, package_context_result, package_impact};
 
 // ---------------------------------------------------------------------------
 // Tool schema list
@@ -233,12 +235,16 @@ fn tool_get_review_context(
     let max_nodes = u64_arg(args, "max_nodes").unwrap_or(200) as usize;
 
     let store = open_store(db_path)?;
-    let file_refs: Vec<&str> = files.iter().map(String::as_str).collect();
-    let impact = store
-        .impact_radius(&file_refs, max_depth, max_nodes)
-        .context("impact_radius query failed")?;
-    let ctx = atlas_review::assemble_review_context(&impact, &files, max_depth, max_nodes);
-    let packaged = package_review(&ctx);
+    let engine = ContextEngine::new(&store);
+    let request = ContextRequest {
+        intent: ContextIntent::Review,
+        target: ContextTarget::ChangedFiles { paths: files },
+        max_nodes: Some(max_nodes),
+        depth: Some(max_depth),
+        ..ContextRequest::default()
+    };
+    let result = engine.build(&request).context("context engine failed")?;
+    let packaged = package_context_result(&result);
     tool_result(serde_json::to_string_pretty(&packaged)?)
 }
 

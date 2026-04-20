@@ -25,6 +25,7 @@ fn main() {
         Command::Doctor => commands::run_doctor(&cli),
         Command::Install { .. } => commands::run_install(&cli),
         Command::Completions { .. } => commands::run_completions(&cli),
+        Command::Context { .. } => commands::run_context(&cli),
     };
 
     if let Err(err) = result {

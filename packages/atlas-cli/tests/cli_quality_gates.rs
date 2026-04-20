@@ -176,30 +176,39 @@ pub fn helper(name: &str) -> String {
         "boundary_violations must be an array"
     );
 
-    let review_context = read_json_data_output(
+    // review-context now emits ContextResult schema (Slice 9 transition).
+    let review_ctx = read_json_data_output(
         "review_context",
         run_atlas(repo.path(), &["--json", "review-context", "--base", "HEAD"]),
     );
-    let review_context = &review_context["review_context"];
-    assert_eq!(review_context["changed_files"], json!(["src/lib.rs"]));
+    // files → array of SelectedFile with path + selection_reason.
     assert!(
-        review_context["changed_symbols"]
+        review_ctx["files"]
             .as_array()
-            .expect("review-context changed_symbols should be an array")
+            .expect("review-context files must be an array")
             .iter()
-            .any(|node| node["file_path"] == json!("src/lib.rs"))
+            .any(|f| f["path"] == json!("src/lib.rs")),
+        "review-context files must include src/lib.rs"
     );
+    // nodes → array of SelectedNode.
     assert!(
-        review_context["changed_symbol_summaries"].is_array(),
-        "review-context changed_symbol_summaries must be an array"
+        review_ctx["nodes"]
+            .as_array()
+            .expect("review-context nodes must be an array")
+            .iter()
+            .any(|n| n["node"]["file_path"] == json!("src/lib.rs")),
+        "review-context nodes must include nodes from src/lib.rs"
     );
+    // truncation metadata must be present.
     assert!(
-        review_context["impact_overview"].is_object(),
-        "review-context impact_overview must be an object"
+        review_ctx["truncation"].is_object(),
+        "review-context truncation must be an object"
     );
-    assert!(
-        review_context["risk_summary"]["cross_package_impact"].is_boolean(),
-        "review-context risk_summary.cross_package_impact must be a boolean"
+    // request must carry the intent.
+    assert_eq!(
+        review_ctx["request"]["intent"],
+        json!("review"),
+        "review-context request.intent must be 'review'"
     );
 
     let status_with_base = read_json_data_output(

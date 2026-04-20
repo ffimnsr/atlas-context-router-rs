@@ -6,7 +6,7 @@
 //! actually needs.
 
 use atlas_core::model::{
-    ChangedSymbolSummary, Edge, ImpactResult, Node, ReviewContext, ReviewImpactOverview,
+    ContextResult, Edge, ImpactResult, Node, SelectedEdge, SelectedNode,
 };
 use serde::Serialize;
 
@@ -121,125 +121,127 @@ pub fn package_impact<'a>(
     }
 }
 
+
+
+
+
 // ---------------------------------------------------------------------------
-// Packaged review context
+// Compact ContextResult packaging (Slice 9 — thin MCP adapter)
 // ---------------------------------------------------------------------------
 
-/// Agent-ready review context with compact nodes.
+/// Agent-optimized compact representation of a [`ContextResult`].
 #[derive(Serialize)]
-pub struct PackagedReview<'a> {
-    pub changed_files: &'a [String],
-    pub changed_symbol_count: usize,
-    pub changed_symbols: Vec<CompactNode<'a>>,
-    pub changed_symbol_summaries: Vec<PackagedChangedSymbolSummary<'a>>,
-    pub impacted_neighbor_count: usize,
-    pub impacted_neighbors: Vec<CompactNode<'a>>,
-    pub critical_edges: Vec<CompactEdge<'a>>,
-    pub impact_overview: PackagedImpactOverview,
-    pub risk: PackagedRisk,
+pub struct PackagedContextResult<'a> {
+    pub intent: &'a str,
+    pub node_count: usize,
+    pub nodes: Vec<PackagedSelectedNode<'a>>,
+    pub edge_count: usize,
+    pub edges: Vec<PackagedSelectedEdge<'a>>,
+    pub file_count: usize,
+    pub files: Vec<PackagedSelectedFile<'a>>,
     pub truncated: bool,
+    pub nodes_dropped: usize,
+    pub edges_dropped: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ambiguity_query: Option<&'a str>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub ambiguity_candidates: Vec<&'a str>,
 }
 
 #[derive(Serialize)]
-pub struct PackagedChangedSymbolSummary<'a> {
+pub struct PackagedSelectedNode<'a> {
+    pub reason: &'a str,
+    pub distance: u32,
+    #[serde(flatten)]
     pub node: CompactNode<'a>,
-    pub callers: Vec<CompactNode<'a>>,
-    pub callees: Vec<CompactNode<'a>>,
-    pub importers: Vec<CompactNode<'a>>,
-    pub tests: Vec<CompactNode<'a>>,
 }
 
 #[derive(Serialize)]
-pub struct PackagedImpactOverview {
-    pub max_depth: u32,
-    pub max_nodes: usize,
-    pub impacted_node_count: usize,
-    pub impacted_file_count: usize,
-    pub relevant_edge_count: usize,
-    pub reached_node_limit: bool,
+pub struct PackagedSelectedEdge<'a> {
+    pub reason: &'a str,
+    pub from: &'a str,
+    pub to: &'a str,
+    pub kind: &'a str,
 }
 
 #[derive(Serialize)]
-pub struct PackagedRisk {
-    pub changed_symbol_count: usize,
-    pub public_api_changes: usize,
-    pub test_adjacent: bool,
-    pub affected_test_count: usize,
-    pub uncovered_changed_symbol_count: usize,
-    pub large_function_touched: bool,
-    pub large_function_count: usize,
-    pub cross_module_impact: bool,
-    pub cross_package_impact: bool,
+pub struct PackagedSelectedFile<'a> {
+    pub path: &'a str,
+    pub reason: &'a str,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub line_ranges: Vec<(u32, u32)>,
 }
 
-pub fn package_review<'a>(ctx: &'a ReviewContext) -> PackagedReview<'a> {
-    let sym_total = ctx.changed_symbols.len();
-    let nbr_total = ctx.impacted_neighbors.len();
-    let edge_total = ctx.critical_edges.len();
+/// Package a [`ContextResult`] into an agent-optimized compact form.
+pub fn package_context_result(result: &ContextResult) -> PackagedContextResult<'_> {
+    let intent_str = match result.request.intent {
+        atlas_core::model::ContextIntent::Symbol => "symbol",
+        atlas_core::model::ContextIntent::File => "file",
+        atlas_core::model::ContextIntent::Review => "review",
+        atlas_core::model::ContextIntent::Impact => "impact",
+        atlas_core::model::ContextIntent::ImpactAnalysis => "impact_analysis",
+        atlas_core::model::ContextIntent::UsageLookup => "usage_lookup",
+        atlas_core::model::ContextIntent::RefactorSafety => "refactor_safety",
+        atlas_core::model::ContextIntent::DeadCodeCheck => "dead_code_check",
+        atlas_core::model::ContextIntent::RenamePreview => "rename_preview",
+        atlas_core::model::ContextIntent::DependencyRemoval => "dependency_removal",
+    };
 
-    let sym_capped = sym_total.min(MAX_NODES);
-    let nbr_capped = nbr_total.min(MAX_NODES);
-    let edge_capped = edge_total.min(MAX_EDGES);
-    let summary_capped = ctx.changed_symbol_summaries.len().min(MAX_NODES);
+    let all_nodes = &result.nodes;
+    let all_edges = &result.edges;
+    let node_count = all_nodes.len();
+    let edge_count = all_edges.len();
 
-    PackagedReview {
-        changed_files: &ctx.changed_files,
-        changed_symbol_count: sym_total,
-        changed_symbols: ctx.changed_symbols[..sym_capped]
-            .iter()
-            .map(compact_node)
-            .collect(),
-        changed_symbol_summaries: ctx.changed_symbol_summaries[..summary_capped]
-            .iter()
-            .map(package_changed_symbol_summary)
-            .collect(),
-        impacted_neighbor_count: nbr_total,
-        impacted_neighbors: ctx.impacted_neighbors[..nbr_capped]
-            .iter()
-            .map(compact_node)
-            .collect(),
-        critical_edges: ctx.critical_edges[..edge_capped]
-            .iter()
-            .map(compact_edge)
-            .collect(),
-        impact_overview: package_impact_overview(&ctx.impact_overview),
-        risk: PackagedRisk {
-            changed_symbol_count: ctx.risk_summary.changed_symbol_count,
-            public_api_changes: ctx.risk_summary.public_api_changes,
-            test_adjacent: ctx.risk_summary.test_adjacent,
-            affected_test_count: ctx.risk_summary.affected_test_count,
-            uncovered_changed_symbol_count: ctx.risk_summary.uncovered_changed_symbol_count,
-            large_function_touched: ctx.risk_summary.large_function_touched,
-            large_function_count: ctx.risk_summary.large_function_count,
-            cross_module_impact: ctx.risk_summary.cross_module_impact,
-            cross_package_impact: ctx.risk_summary.cross_package_impact,
-        },
-        truncated: sym_capped < sym_total
-            || summary_capped < ctx.changed_symbol_summaries.len()
-            || nbr_capped < nbr_total
-            || edge_capped < edge_total,
-    }
-}
+    let node_cap = node_count.min(MAX_NODES);
+    let edge_cap = edge_count.min(MAX_EDGES);
 
-fn package_changed_symbol_summary(
-    summary: &ChangedSymbolSummary,
-) -> PackagedChangedSymbolSummary<'_> {
-    PackagedChangedSymbolSummary {
-        node: compact_node(&summary.node),
-        callers: summary.callers.iter().map(compact_node).collect(),
-        callees: summary.callees.iter().map(compact_node).collect(),
-        importers: summary.importers.iter().map(compact_node).collect(),
-        tests: summary.tests.iter().map(compact_node).collect(),
-    }
-}
+    let nodes: Vec<PackagedSelectedNode<'_>> = all_nodes[..node_cap]
+        .iter()
+        .map(|sn: &SelectedNode| PackagedSelectedNode {
+            reason: sn.selection_reason.as_str(),
+            distance: sn.distance,
+            node: compact_node(&sn.node),
+        })
+        .collect();
 
-fn package_impact_overview(overview: &ReviewImpactOverview) -> PackagedImpactOverview {
-    PackagedImpactOverview {
-        max_depth: overview.max_depth,
-        max_nodes: overview.max_nodes,
-        impacted_node_count: overview.impacted_node_count,
-        impacted_file_count: overview.impacted_file_count,
-        relevant_edge_count: overview.relevant_edge_count,
-        reached_node_limit: overview.reached_node_limit,
+    let edges: Vec<PackagedSelectedEdge<'_>> = all_edges[..edge_cap]
+        .iter()
+        .map(|se: &SelectedEdge| PackagedSelectedEdge {
+            reason: se.selection_reason.as_str(),
+            from: &se.edge.source_qn,
+            to: &se.edge.target_qn,
+            kind: se.edge.kind.as_str(),
+        })
+        .collect();
+
+    let files: Vec<PackagedSelectedFile<'_>> = result
+        .files
+        .iter()
+        .map(|sf| PackagedSelectedFile {
+            path: &sf.path,
+            reason: sf.selection_reason.as_str(),
+            line_ranges: sf.line_ranges.clone(),
+        })
+        .collect();
+
+    let (ambiguity_query, ambiguity_candidates) = if let Some(amb) = &result.ambiguity {
+        (Some(amb.query.as_str()), amb.candidates.iter().map(String::as_str).collect())
+    } else {
+        (None, vec![])
+    };
+
+    PackagedContextResult {
+        intent: intent_str,
+        node_count,
+        nodes,
+        edge_count,
+        edges,
+        file_count: result.files.len(),
+        files,
+        truncated: result.truncation.truncated || node_cap < node_count || edge_cap < edge_count,
+        nodes_dropped: result.truncation.nodes_dropped + node_count.saturating_sub(node_cap),
+        edges_dropped: result.truncation.edges_dropped + edge_count.saturating_sub(edge_cap),
+        ambiguity_query,
+        ambiguity_candidates,
     }
 }

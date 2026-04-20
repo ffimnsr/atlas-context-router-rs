@@ -1,3 +1,8 @@
+pub mod context;
+pub mod query_parser;
+
+pub use context::{ContextEngine, build_context};
+
 use std::collections::{HashMap, HashSet};
 
 use atlas_core::model::{

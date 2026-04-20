@@ -194,6 +194,62 @@ pub enum Command {
         #[arg(value_enum)]
         shell: Shell,
     },
+
+    /// [dev] Build context around a symbol, file, or change-set using the context engine.
+    #[command(hide = true, name = "context")]
+    Context {
+        /// Exact qualified name of the target symbol.
+        #[arg(long)]
+        qname: Option<String>,
+
+        /// Short symbol name (may be ambiguous).
+        #[arg(long)]
+        name: Option<String>,
+
+        /// Repo-relative file path target.
+        #[arg(long)]
+        file: Option<String>,
+
+        /// Changed file paths for review/impact intent.
+        #[arg(long, num_args = 1..)]
+        files: Vec<String>,
+
+        /// Intent: symbol, file, review, impact (default: symbol).
+        #[arg(long, default_value = "symbol")]
+        intent: String,
+
+        /// Maximum nodes to include.
+        #[arg(long)]
+        max_nodes: Option<usize>,
+
+        /// Maximum edges to include.
+        #[arg(long)]
+        max_edges: Option<usize>,
+
+        /// Maximum files to include.
+        #[arg(long)]
+        max_files: Option<usize>,
+
+        /// Traversal depth (graph hops from seed).
+        #[arg(long)]
+        depth: Option<u32>,
+
+        /// Populate code spans (line ranges) in the result.
+        #[arg(long)]
+        code_spans: bool,
+
+        /// Include test adjacency nodes.
+        #[arg(long)]
+        tests: bool,
+
+        /// Include import edges and nodes.
+        #[arg(long)]
+        imports: bool,
+
+        /// Include containment-sibling nodes.
+        #[arg(long)]
+        neighbors: bool,
+    },
 }
 
 #[cfg(test)]

@@ -3,11 +3,13 @@ use std::fs;
 use anyhow::{Context, Result};
 use atlas_core::SearchQuery;
 use atlas_core::model::{
-    ChangeType, ImpactResult, ReviewContext, ReviewImpactOverview, RiskSummary,
+    ChangeType, ContextIntent, ContextRequest, ContextTarget, ImpactResult, ReviewContext,
+    ReviewImpactOverview, RiskSummary,
 };
 use atlas_engine::{BuildOptions, UpdateOptions, UpdateTarget, build_graph, update_graph};
 use atlas_impact::analyze as advanced_impact;
 use atlas_repo::{DiffTarget, changed_files, collect_files, find_repo_root, repo_relative};
+use atlas_review::ContextEngine;
 use atlas_search as search;
 use atlas_store_sqlite::Store;
 use camino::Utf8Path;
@@ -764,22 +766,29 @@ pub fn run_review_context(cli: &Cli) -> Result<()> {
     }
 
     let path_refs: Vec<&str> = target_files.iter().map(String::as_str).collect();
+
+    if cli.json {
+        // JSON path: use context engine → ContextResult (new stable schema).
+        let request = ContextRequest {
+            intent: ContextIntent::Review,
+            target: ContextTarget::ChangedFiles { paths: target_files.clone() },
+            max_nodes: Some(max_nodes),
+            depth: Some(max_depth),
+            ..ContextRequest::default()
+        };
+        let engine = ContextEngine::new(&store);
+        let result = engine.build(&request).context("context engine failed")?;
+        print_json("review_context", serde_json::to_value(&result)?)?;
+        return Ok(());
+    }
+
     let impact = store
         .impact_radius(&path_refs, max_depth, max_nodes)
         .context("impact radius query failed")?;
 
     let ctx = atlas_review::assemble_review_context(&impact, &target_files, max_depth, max_nodes);
 
-    if cli.json {
-        print_json(
-            "review_context",
-            serde_json::json!({
-                "files": target_files,
-                "review_context": ctx,
-            }),
-        )?;
-    } else {
-        println!("Changed files ({}):", ctx.changed_files.len());
+    println!("Changed files ({}):", ctx.changed_files.len());
         for f in &ctx.changed_files {
             println!("  {f}");
         }
@@ -858,6 +867,129 @@ pub fn run_review_context(cli: &Cli) -> Result<()> {
             "  Cross-package impact: {}",
             ctx.risk_summary.cross_package_impact
         );
+
+    Ok(())
+}
+
+pub fn run_context(cli: &Cli) -> Result<()> {
+    use atlas_core::model::SelectionReason;
+
+    let repo = resolve_repo(cli)?;
+    let db_path = db_path(cli, &repo);
+
+    let (qname, name, file, files, intent_str, max_nodes, max_edges, max_files, depth,
+        code_spans, tests, imports, neighbors) = match &cli.command {
+        Command::Context {
+            qname, name, file, files, intent,
+            max_nodes, max_edges, max_files, depth,
+            code_spans, tests, imports, neighbors,
+        } => (
+            qname.clone(), name.clone(), file.clone(), files.clone(), intent.clone(),
+            *max_nodes, *max_edges, *max_files, *depth,
+            *code_spans, *tests, *imports, *neighbors,
+        ),
+        _ => unreachable!(),
+    };
+
+    let intent = match intent_str.as_str() {
+        "review" => ContextIntent::Review,
+        "impact" => ContextIntent::Impact,
+        "file" => ContextIntent::File,
+        _ => ContextIntent::Symbol,
+    };
+
+    let target = if !files.is_empty() {
+        ContextTarget::ChangedFiles { paths: files }
+    } else if let Some(qn) = qname {
+        ContextTarget::QualifiedName { qname: qn }
+    } else if let Some(n) = name {
+        ContextTarget::SymbolName { name: n }
+    } else if let Some(f) = file {
+        ContextTarget::FilePath { path: f }
+    } else {
+        anyhow::bail!("one of --qname, --name, --file, or --files is required");
+    };
+
+    let request = ContextRequest {
+        intent,
+        target,
+        max_nodes,
+        max_edges,
+        max_files,
+        depth,
+        include_code_spans: code_spans,
+        include_tests: tests,
+        include_imports: imports,
+        include_neighbors: neighbors,
+        ..ContextRequest::default()
+    };
+
+    let store =
+        Store::open(&db_path).with_context(|| format!("cannot open database at {db_path}"))?;
+    let engine = ContextEngine::new(&store);
+    let result = engine.build(&request).context("context engine failed")?;
+
+    if cli.json {
+        print_json("context", serde_json::to_value(&result)?)?;
+    } else {
+        if let Some(ambiguity) = &result.ambiguity {
+            println!("Ambiguous target: {}", ambiguity.query);
+            println!("Candidates ({}):", ambiguity.candidates.len());
+            for c in &ambiguity.candidates {
+                println!("  {c}");
+            }
+            return Ok(());
+        }
+
+        println!("Nodes ({}):", result.nodes.len());
+        for sn in result.nodes.iter().take(20) {
+            println!(
+                "  [{:?}] {} {} ({}:{})",
+                sn.selection_reason,
+                sn.node.kind.as_str(),
+                sn.node.qualified_name,
+                sn.node.file_path,
+                sn.node.line_start,
+            );
+        }
+        println!("\nEdges ({}):", result.edges.len());
+        for se in result.edges.iter().take(20) {
+            println!(
+                "  {} --{}--> {}",
+                se.edge.source_qn,
+                se.edge.kind.as_str(),
+                se.edge.target_qn,
+            );
+        }
+        println!("\nFiles ({}):", result.files.len());
+        for sf in &result.files {
+            let ranges: Vec<String> = sf.line_ranges.iter().map(|(s, e)| format!("{s}-{e}")).collect();
+            if ranges.is_empty() {
+                println!("  {} [{:?}]", sf.path, sf.selection_reason);
+            } else {
+                println!("  {} [{:?}] lines {}", sf.path, sf.selection_reason, ranges.join(", "));
+            }
+        }
+        if result.truncation.truncated {
+            println!(
+                "\n[truncated: {} nodes, {} edges, {} files dropped]",
+                result.truncation.nodes_dropped,
+                result.truncation.edges_dropped,
+                result.truncation.files_dropped,
+            );
+        }
+
+        // Print counts for nodes tagged as DirectTarget on their own line
+        let direct_count = result.nodes.iter()
+            .filter(|n| n.selection_reason == SelectionReason::DirectTarget)
+            .count();
+        let caller_count = result.nodes.iter()
+            .filter(|n| n.selection_reason == SelectionReason::Caller)
+            .count();
+        let callee_count = result.nodes.iter()
+            .filter(|n| n.selection_reason == SelectionReason::Callee)
+            .count();
+        println!("\nSummary: {} target, {} callers, {} callees", direct_count, caller_count, callee_count);
     }
 
     Ok(())

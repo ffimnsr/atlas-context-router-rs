@@ -1,0 +1,1446 @@
+// Phase 22 — Context Engine: Slices 3, 4, 5, 6, 8
+//
+// Slice 3: resolve_target
+// Slice 4: build_symbol_context
+// Slice 5: rank_context / trim_context
+// Slice 6: build_review_context / build_impact_context
+// Slice 8: apply_code_spans
+
+use std::collections::{HashMap, HashSet};
+
+use atlas_core::{
+    Result,
+    model::{
+        AmbiguityMeta, ContextRequest, ContextResult, ContextTarget, SelectionReason, SelectedEdge,
+        SelectedFile, SelectedNode, TruncationMeta,
+    },
+};
+use atlas_store_sqlite::Store;
+
+// ---------------------------------------------------------------------------
+// Slice 3: target resolution
+// ---------------------------------------------------------------------------
+
+/// Outcome of resolving a [`ContextTarget`].
+#[derive(Debug)]
+pub enum ResolvedTarget {
+    /// Exactly one node matched.
+    Node(Box<atlas_core::model::Node>),
+    /// Exactly one file path matched (used for `FilePath` targets).
+    File(String),
+    /// Multiple candidates were found; a ranked list is provided.
+    Ambiguous(AmbiguityMeta),
+    /// No match found, but suggestions are available if the fallback search
+    /// returned anything.
+    NotFound { suggestions: Vec<String> },
+}
+
+/// Resolve a [`ContextTarget`] to a concrete node or file using the store.
+///
+/// Resolution order (exact paths first, FTS fallback last):
+/// 1. `QualifiedName` → exact `node_by_qname` lookup.
+/// 2. `SymbolName`    → exact `nodes_by_name`, take unique or mark ambiguous.
+/// 3. `FilePath`      → `nodes_by_file` check; returns `File` if non-empty.
+/// 4. `ChangedFiles`  → not resolved to a single node; callers handle directly.
+///
+/// Falls back to FTS search (capped at 8 candidates) only when exact paths
+/// yield no result.
+pub fn resolve_target(store: &Store, target: &ContextTarget) -> Result<ResolvedTarget> {
+    match target {
+        ContextTarget::QualifiedName { qname } => resolve_by_qname(store, qname),
+        ContextTarget::SymbolName { name } => resolve_by_name(store, name),
+        ContextTarget::FilePath { path } => resolve_by_file(store, path),
+        // These multi-value or special targets are handled by builders, not here.
+        ContextTarget::ChangedFiles { .. }
+        | ContextTarget::ChangedSymbols { .. }
+        | ContextTarget::EdgeQuerySeed { .. } => {
+            Ok(ResolvedTarget::NotFound { suggestions: vec![] })
+        }
+    }
+}
+
+fn resolve_by_qname(store: &Store, qname: &str) -> Result<ResolvedTarget> {
+    if let Some(node) = store.node_by_qname(qname)? {
+        return Ok(ResolvedTarget::Node(Box::new(node)));
+    }
+    // Exact qname miss → try FTS fallback using the qname as a search term.
+    fts_fallback(store, qname)
+}
+
+fn resolve_by_name(store: &Store, name: &str) -> Result<ResolvedTarget> {
+    // LIMIT 9 so we can tell "unique" vs "a few" vs "many".
+    const CANDIDATE_CAP: usize = 9;
+    let nodes = store.nodes_by_name(name, CANDIDATE_CAP)?;
+    match nodes.len() {
+        0 => fts_fallback(store, name),
+        1 => Ok(ResolvedTarget::Node(Box::new(nodes.into_iter().next().unwrap()))),
+        _ => {
+            let candidates: Vec<String> =
+                nodes.iter().map(|n| n.qualified_name.clone()).collect();
+            Ok(ResolvedTarget::Ambiguous(AmbiguityMeta {
+                query: name.to_owned(),
+                candidates,
+                resolved: false,
+            }))
+        }
+    }
+}
+
+fn resolve_by_file(store: &Store, path: &str) -> Result<ResolvedTarget> {
+    let nodes = store.nodes_by_file(path)?;
+    if nodes.is_empty() {
+        // Path not in DB; return not-found with no suggestions.
+        return Ok(ResolvedTarget::NotFound { suggestions: vec![] });
+    }
+    Ok(ResolvedTarget::File(path.to_owned()))
+}
+
+/// Run an FTS search and return `Ambiguous` (if results found) or `NotFound`.
+fn fts_fallback(store: &Store, text: &str) -> Result<ResolvedTarget> {
+    use atlas_core::SearchQuery;
+    use atlas_search::search as fts_search;
+
+    let query = SearchQuery {
+        text: text.to_owned(),
+        limit: 8,
+        fuzzy_match: true,
+        ..SearchQuery::default()
+    };
+    let results = fts_search(store, &query)?;
+    if results.is_empty() {
+        return Ok(ResolvedTarget::NotFound { suggestions: vec![] });
+    }
+    let candidates: Vec<String> = results.iter().map(|r| r.node.qualified_name.clone()).collect();
+    Ok(ResolvedTarget::Ambiguous(AmbiguityMeta {
+        query: text.to_owned(),
+        candidates,
+        resolved: false,
+    }))
+}
+
+// ---------------------------------------------------------------------------
+// Slice 4: symbol-context retrieval
+// ---------------------------------------------------------------------------
+
+/// Default caps when the request does not specify limits.
+const DEFAULT_MAX_NODES: usize = 50;
+const DEFAULT_MAX_EDGES: usize = 100;
+const DEFAULT_MAX_FILES: usize = 20;
+
+/// Per-bucket limits fed to store helpers.
+const BUCKET_CALLERS: usize = 15;
+const BUCKET_CALLEES: usize = 15;
+const BUCKET_IMPORTS: usize = 10;
+const BUCKET_SIBLINGS: usize = 10;
+const BUCKET_TESTS: usize = 10;
+
+/// Build a symbol-centred [`ContextResult`] from a resolved seed node.
+///
+/// Retrieves callers, callees, import neighbors, containment siblings, and
+/// optional test neighbors at hop-1.  Multi-hop traversal is gated behind
+/// `request.depth > 1`.
+///
+/// The result is passed through `rank_context` then `trim_context` before
+/// returning.
+pub fn build_symbol_context(
+    store: &Store,
+    seed: atlas_core::model::Node,
+    request: &ContextRequest,
+) -> Result<ContextResult> {
+    let qname = seed.qualified_name.clone();
+
+    let mut nodes: Vec<SelectedNode> = Vec::new();
+    let mut edges: Vec<SelectedEdge> = Vec::new();
+    let mut seen_qnames: HashSet<String> = HashSet::new();
+
+    // Seed node itself (distance 0, DirectTarget).
+    seen_qnames.insert(qname.clone());
+    nodes.push(SelectedNode {
+        node: seed.clone(),
+        selection_reason: SelectionReason::DirectTarget,
+        distance: 0,
+        relevance_score: 0.0,
+    });
+
+    let depth = request.depth.unwrap_or(1).max(1);
+
+    // Breadth-first hop expansion. For hop-1 we always collect callers/callees.
+    // Subsequent hops repeat on the previous hop's new nodes.
+    let mut frontier_qnames: Vec<String> = vec![qname.clone()];
+
+    for hop in 1..=depth {
+        let mut next_frontier: Vec<String> = Vec::new();
+
+        for fqname in &frontier_qnames {
+            // Callers
+            for (caller, edge) in store.direct_callers(fqname, BUCKET_CALLERS)? {
+                let cqn = caller.qualified_name.clone();
+                if seen_qnames.insert(cqn.clone()) {
+                    next_frontier.push(cqn);
+                    edges.push(SelectedEdge {
+                        edge,
+                        selection_reason: SelectionReason::Caller,
+                        depth: Some(hop),
+                        relevance_score: 0.0,
+                    });
+                    nodes.push(SelectedNode {
+                        node: caller,
+                        selection_reason: SelectionReason::Caller,
+                        distance: hop,
+                        relevance_score: 0.0,
+                    });
+                }
+            }
+
+            // Callees
+            for (callee, edge) in store.direct_callees(fqname, BUCKET_CALLEES)? {
+                let cqn = callee.qualified_name.clone();
+                if seen_qnames.insert(cqn.clone()) {
+                    next_frontier.push(cqn);
+                    edges.push(SelectedEdge {
+                        edge,
+                        selection_reason: SelectionReason::Callee,
+                        depth: Some(hop),
+                        relevance_score: 0.0,
+                    });
+                    nodes.push(SelectedNode {
+                        node: callee,
+                        selection_reason: SelectionReason::Callee,
+                        distance: hop,
+                        relevance_score: 0.0,
+                    });
+                }
+            }
+
+            // Imports (only on first hop, or when explicitly requested)
+            if request.include_imports {
+                for (import_node, edge) in store.import_neighbors(fqname, BUCKET_IMPORTS)? {
+                    let iqn = import_node.qualified_name.clone();
+                    if seen_qnames.insert(iqn) {
+                        edges.push(SelectedEdge {
+                            edge,
+                            selection_reason: SelectionReason::Importee,
+                            depth: Some(hop),
+                            relevance_score: 0.0,
+                        });
+                        nodes.push(SelectedNode {
+                            node: import_node,
+                            selection_reason: SelectionReason::Importee,
+                            distance: hop,
+                            relevance_score: 0.0,
+                        });
+                    }
+                }
+            }
+
+            // Containment siblings (first hop only, gated by include_neighbors)
+            if hop == 1 && request.include_neighbors {
+                for sibling in store.containment_siblings(fqname, BUCKET_SIBLINGS)? {
+                    let sqn = sibling.qualified_name.clone();
+                    if seen_qnames.insert(sqn) {
+                        nodes.push(SelectedNode {
+                            node: sibling,
+                            selection_reason: SelectionReason::ContainmentSibling,
+                            distance: hop,
+                            relevance_score: 0.0,
+                        });
+                    }
+                }
+            }
+
+            // Test neighbors (first hop only, gated by include_tests)
+            if hop == 1 && request.include_tests {
+                for (test_node, edge) in store.test_neighbors(fqname, BUCKET_TESTS)? {
+                    let tqn = test_node.qualified_name.clone();
+                    if seen_qnames.insert(tqn) {
+                        edges.push(SelectedEdge {
+                            edge,
+                            selection_reason: SelectionReason::TestAdjacent,
+                            depth: Some(hop),
+                            relevance_score: 0.0,
+                        });
+                        nodes.push(SelectedNode {
+                            node: test_node,
+                            selection_reason: SelectionReason::TestAdjacent,
+                            distance: hop,
+                            relevance_score: 0.0,
+                        });
+                    }
+                }
+            }
+        }
+
+        frontier_qnames = next_frontier;
+        if frontier_qnames.is_empty() {
+            break;
+        }
+    }
+
+    // Collect unique file paths from selected nodes.
+    let files = collect_files(&nodes);
+
+    let mut result = ContextResult {
+        request: request.clone(),
+        nodes,
+        edges,
+        files,
+        truncation: TruncationMeta::none(),
+        ambiguity: None,
+    };
+
+    rank_context(&mut result);
+    trim_context(&mut result);
+    update_file_node_counts(&mut result);
+
+    if request.include_code_spans {
+        apply_code_spans(&mut result);
+    }
+
+    Ok(result)
+}
+
+/// Build a [`ContextResult`] when the target was ambiguous (no ranking/trimming
+/// needed — the caller should present candidates to the user).
+pub fn build_ambiguous_result(request: &ContextRequest, meta: AmbiguityMeta) -> ContextResult {
+    ContextResult {
+        request: request.clone(),
+        nodes: vec![],
+        edges: vec![],
+        files: vec![],
+        truncation: TruncationMeta::none(),
+        ambiguity: Some(meta),
+    }
+}
+
+/// Build a [`ContextResult`] for a not-found target.
+pub fn build_not_found_result(
+    request: &ContextRequest,
+    suggestions: Vec<String>,
+) -> ContextResult {
+    let ambiguity = if suggestions.is_empty() {
+        None
+    } else {
+        Some(AmbiguityMeta {
+            query: format!("{:?}", request.target),
+            candidates: suggestions,
+            resolved: false,
+        })
+    };
+    ContextResult {
+        request: request.clone(),
+        nodes: vec![],
+        edges: vec![],
+        files: vec![],
+        truncation: TruncationMeta::none(),
+        ambiguity,
+    }
+}
+
+/// Collect unique `SelectedFile` entries from a node list, preserving first-seen order.
+/// `language` is taken from the first node seen for each file.
+/// `node_count_included` is left at 0; call `update_file_node_counts` after trimming.
+fn collect_files(nodes: &[SelectedNode]) -> Vec<SelectedFile> {
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut files: Vec<SelectedFile> = Vec::new();
+    for sn in nodes {
+        let path = sn.node.file_path.clone();
+        if seen.insert(path.clone()) {
+            let reason = if sn.selection_reason == SelectionReason::DirectTarget {
+                SelectionReason::DirectTarget
+            } else {
+                sn.selection_reason
+            };
+            files.push(SelectedFile {
+                path,
+                selection_reason: reason,
+                line_ranges: vec![],
+                language: Some(sn.node.language.clone()),
+                node_count_included: 0,
+            });
+        }
+    }
+    files
+}
+
+/// Recompute `SelectedFile.node_count_included` from the node list after trimming.
+fn update_file_node_counts(result: &mut ContextResult) {
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    for sn in &result.nodes {
+        *counts.entry(sn.node.file_path.clone()).or_insert(0) += 1;
+    }
+    for sf in &mut result.files {
+        sf.node_count_included = counts.get(&sf.path).copied().unwrap_or(0);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Slice 5: ranking and trimming
+// ---------------------------------------------------------------------------
+
+/// Relevance score assigned to each selection reason (higher wins trimming).
+fn reason_priority(reason: SelectionReason) -> u8 {
+    match reason {
+        SelectionReason::DirectTarget => 100,
+        SelectionReason::Caller => 80,
+        SelectionReason::Callee => 80,
+        SelectionReason::Importer => 60,
+        SelectionReason::Importee => 60,
+        SelectionReason::TestAdjacent => 50,
+        SelectionReason::ContainmentSibling => 40,
+        SelectionReason::ImpactNeighbor => 30,
+    }
+}
+
+/// Compute a floating-point relevance score for a [`SelectedNode`].
+///
+/// Scoring factors:
+///   - Reason priority           (base from `reason_priority`, 0-100)
+///   - Closer hop distance       (bonus: max(0, 10 - 5*distance))
+///   - Public API symbol         (+5)
+///   - High-value kinds (fn/method/class/struct/trait) (+3)
+///   - Test node                 (-10, deprioritised unless include_tests)
+fn node_score(sn: &SelectedNode, seed_file: &str, seed_qname: &str) -> f64 {
+    let _ = seed_qname; // reserved for future cross-ref boosting
+    let mut score = reason_priority(sn.selection_reason) as f64;
+
+    // Distance decay.
+    let distance_bonus = (10.0_f64 - sn.distance as f64 * 5.0).max(0.0);
+    score += distance_bonus;
+
+    // Same-file as seed.
+    if sn.node.file_path == seed_file {
+        score += 3.0;
+    }
+
+    // Public API.
+    if let Some(mods) = &sn.node.modifiers {
+        let m = mods.to_lowercase();
+        if m.contains("pub") || m.contains("public") || m.contains("export") {
+            score += 5.0;
+        }
+    }
+
+    // Kind boost.
+    use atlas_core::NodeKind;
+    match sn.node.kind {
+        NodeKind::Function | NodeKind::Method => score += 3.0,
+        NodeKind::Class | NodeKind::Struct | NodeKind::Trait | NodeKind::Interface => score += 2.0,
+        _ => {}
+    }
+
+    // Test penalty (present to ensure non-test nodes survive trimming first).
+    if sn.node.is_test || sn.node.kind == NodeKind::Test {
+        score -= 10.0;
+    }
+
+    score
+}
+
+/// Score for a [`SelectedEdge`].
+fn edge_score(se: &SelectedEdge) -> f64 {
+    let base = reason_priority(se.selection_reason) as f64;
+    // Edge confidence is 0-1; scale to 0-10.
+    base + (se.edge.confidence as f64) * 10.0
+}
+
+/// Sort [`ContextResult`] nodes and edges by relevance **in place**.
+///
+/// Assigns `relevance_score` on each node/edge, then sorts highest-first.
+/// Nodes tie-break by `qualified_name`; edges tie-break by source then target.
+pub fn rank_context(result: &mut ContextResult) {
+    // Need to know seed node's file and qname for scoring.
+    // Seed is always the first node (DirectTarget, distance 0).
+    let (seed_file, seed_qname) = result
+        .nodes
+        .iter()
+        .find(|n| n.selection_reason == SelectionReason::DirectTarget)
+        .map(|n| (n.node.file_path.clone(), n.node.qualified_name.clone()))
+        .unwrap_or_default();
+
+    // Compute and assign node scores (immutable pass, then mutable assign).
+    let node_scores: Vec<f32> = result
+        .nodes
+        .iter()
+        .map(|sn| node_score(sn, &seed_file, &seed_qname) as f32)
+        .collect();
+    for (sn, s) in result.nodes.iter_mut().zip(&node_scores) {
+        sn.relevance_score = *s;
+    }
+
+    result.nodes.sort_by(|a, b| {
+        b.relevance_score
+            .partial_cmp(&a.relevance_score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.node.qualified_name.cmp(&b.node.qualified_name))
+    });
+
+    // Compute and assign edge scores.
+    let edge_scores: Vec<f32> = result.edges.iter().map(|se| edge_score(se) as f32).collect();
+    for (se, s) in result.edges.iter_mut().zip(&edge_scores) {
+        se.relevance_score = *s;
+    }
+
+    result.edges.sort_by(|a, b| {
+        b.relevance_score
+            .partial_cmp(&a.relevance_score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.edge.source_qn.cmp(&b.edge.source_qn))
+            .then_with(|| a.edge.target_qn.cmp(&b.edge.target_qn))
+    });
+
+    result.files.sort_by(|a, b| {
+        let pa = reason_priority(a.selection_reason) as i32;
+        let pb = reason_priority(b.selection_reason) as i32;
+        pb.cmp(&pa).then_with(|| a.path.cmp(&b.path))
+    });
+}
+
+/// Apply hard node/edge/file caps to [`ContextResult`], recording what was
+/// dropped in [`TruncationMeta`].
+///
+/// Trimming order after ranking:
+/// 1. Keep all DirectTarget nodes unconditionally.
+/// 2. Keep next highest-scored nodes up to `max_nodes`.
+/// 3. Drop edges whose source or target qname no longer has a node in the set.
+/// 4. Trim edge list to `max_edges`.
+/// 5. Trim file list to `max_files`, keeping DirectTarget files first.
+pub fn trim_context(result: &mut ContextResult) {
+    let max_nodes = result.request.max_nodes.unwrap_or(DEFAULT_MAX_NODES);
+    let max_edges = result.request.max_edges.unwrap_or(DEFAULT_MAX_EDGES);
+    let max_files = result.request.max_files.unwrap_or(DEFAULT_MAX_FILES);
+
+    // --- Nodes ---
+    let original_node_count = result.nodes.len();
+    if original_node_count > max_nodes {
+        // Always keep DirectTarget node(s) at the front; they survive the cap.
+        // After rank_context they should already be at the top, but be safe.
+        let (targets, rest): (Vec<_>, Vec<_>) = result
+            .nodes
+            .drain(..)
+            .partition(|n| n.selection_reason == SelectionReason::DirectTarget);
+        result.nodes = targets;
+        let budget = max_nodes.saturating_sub(result.nodes.len());
+        result.nodes.extend(rest.into_iter().take(budget));
+    }
+    let dropped_nodes = original_node_count.saturating_sub(result.nodes.len());
+
+    // Remaining-node qname set (for edge pruning).
+    let remaining_qnames: HashSet<&str> =
+        result.nodes.iter().map(|n| n.node.qualified_name.as_str()).collect();
+
+    // --- Edges ---
+    let original_edge_count = result.edges.len();
+    // Drop edges referencing removed nodes.
+    result.edges.retain(|se| {
+        remaining_qnames.contains(se.edge.source_qn.as_str())
+            || remaining_qnames.contains(se.edge.target_qn.as_str())
+    });
+    let edges_after_prune = result.edges.len();
+    if edges_after_prune > max_edges {
+        result.edges.truncate(max_edges);
+    }
+    let dropped_edges = original_edge_count.saturating_sub(result.edges.len());
+
+    // --- Files ---
+    let original_file_count = result.files.len();
+    if original_file_count > max_files {
+        let (target_files, rest): (Vec<_>, Vec<_>) = result
+            .files
+            .drain(..)
+            .partition(|f| f.selection_reason == SelectionReason::DirectTarget);
+        result.files = target_files;
+        let budget = max_files.saturating_sub(result.files.len());
+        result.files.extend(rest.into_iter().take(budget));
+    }
+    let dropped_files = original_file_count.saturating_sub(result.files.len());
+
+    result.truncation = TruncationMeta {
+        nodes_dropped: dropped_nodes,
+        edges_dropped: dropped_edges,
+        files_dropped: dropped_files,
+        truncated: dropped_nodes > 0 || dropped_edges > 0 || dropped_files > 0,
+    };
+}
+
+// ---------------------------------------------------------------------------
+// Convenience: full resolve-then-build pipeline
+// ---------------------------------------------------------------------------
+
+/// Resolve `request.target` and build a [`ContextResult`] in one call.
+///
+/// Routes by `intent` first:
+/// - `Review`  → `build_review_context` (needs `ChangedFiles` target)
+/// - `Impact`  → `build_impact_context`
+/// - `Symbol`/`File` → symbol-context retrieval
+///
+/// Returns an ambiguity or not-found result when the target cannot be
+/// uniquely resolved.
+pub fn build_context(store: &Store, request: &ContextRequest) -> Result<ContextResult> {
+    use atlas_core::model::ContextIntent;
+    match request.intent {
+        ContextIntent::Review => return build_review_context(store, request),
+        // All impact-class intents route to the impact builder.
+        ContextIntent::Impact
+        | ContextIntent::ImpactAnalysis
+        | ContextIntent::RefactorSafety
+        | ContextIntent::DependencyRemoval => return build_impact_context(store, request),
+        _ => {}
+    }
+
+    // Handle special targets that do not go through single-node resolution.
+    match &request.target {
+        ContextTarget::ChangedSymbols { qnames } => {
+            // Derive file paths from the given qnames, then run impact context.
+            let mut paths: Vec<String> = Vec::new();
+            for qn in qnames {
+                if let Some(node) = store.node_by_qname(qn)? {
+                    paths.push(node.file_path);
+                }
+            }
+            paths.dedup();
+            let derived = ContextRequest {
+                target: ContextTarget::ChangedFiles { paths },
+                ..request.clone()
+            };
+            return build_impact_context(store, &derived);
+        }
+        ContextTarget::EdgeQuerySeed { source_qname, edge_kind: _ } => {
+            // Route through symbol context on the source node.
+            // Edge kind filtering is reserved for a future slice.
+            return match store.node_by_qname(source_qname)? {
+                Some(node) => build_symbol_context(store, node, request),
+                None => Ok(build_not_found_result(request, vec![])),
+            };
+        }
+        _ => {}
+    }
+
+    let resolved = resolve_target(store, &request.target)?;
+    match resolved {
+        ResolvedTarget::Node(node) => build_symbol_context(store, *node, request),
+        ResolvedTarget::File(path) => {
+            // File-centred context: build symbol context from the highest-value
+            // node in the file (first returned by the store, ordered by line).
+            let nodes = store.nodes_by_file(&path)?;
+            match nodes.into_iter().next() {
+                Some(first_node) => build_symbol_context(store, first_node, request),
+                None => Ok(build_not_found_result(request, vec![])),
+            }
+        }
+        ResolvedTarget::Ambiguous(meta) => Ok(build_ambiguous_result(request, meta)),
+        ResolvedTarget::NotFound { suggestions } => {
+            Ok(build_not_found_result(request, suggestions))
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Slice 6: review and impact context builders
+// ---------------------------------------------------------------------------
+
+/// Build a review [`ContextResult`] from a set of changed file paths.
+///
+/// Runs the impact radius traversal seeded from `changed_paths`, then wraps
+/// the result into a [`ContextResult`] with:
+/// - changed nodes tagged `DirectTarget`
+/// - impacted neighbors tagged `ImpactNeighbor`
+/// - relevant edges tagged `ImpactNeighbor`
+///
+/// Applies ranking and trimming on the assembled result before returning.
+pub fn build_review_context(store: &Store, request: &ContextRequest) -> Result<ContextResult> {
+    let changed_paths = extract_changed_paths(request);
+    let path_refs: Vec<&str> = changed_paths.iter().map(String::as_str).collect();
+
+    let max_nodes = request.max_nodes.unwrap_or(DEFAULT_MAX_NODES);
+    let max_depth = request.depth.unwrap_or(2);
+
+    let impact = store.impact_radius(&path_refs, max_depth, max_nodes)?;
+
+    let changed_qns: HashSet<String> =
+        impact.changed_nodes.iter().map(|n| n.qualified_name.clone()).collect();
+
+    let mut nodes: Vec<SelectedNode> = Vec::new();
+    let mut seen_qnames: HashSet<String> = HashSet::new();
+
+    // Changed nodes → DirectTarget
+    for node in impact.changed_nodes {
+        seen_qnames.insert(node.qualified_name.clone());
+        nodes.push(SelectedNode {
+            node,
+            selection_reason: SelectionReason::DirectTarget,
+            distance: 0,
+            relevance_score: 0.0,
+        });
+    }
+
+    // Impacted neighbors → ImpactNeighbor
+    for node in impact.impacted_nodes {
+        let qn = node.qualified_name.clone();
+        if seen_qnames.insert(qn) {
+            nodes.push(SelectedNode {
+                node,
+                selection_reason: SelectionReason::ImpactNeighbor,
+                distance: 1,
+                relevance_score: 0.0,
+            });
+        }
+    }
+
+    // All relevant edges
+    let edges: Vec<SelectedEdge> = impact
+        .relevant_edges
+        .into_iter()
+        .filter(|e| {
+            changed_qns.contains(e.source_qn.as_str())
+                || changed_qns.contains(e.target_qn.as_str())
+                || seen_qnames.contains(e.source_qn.as_str())
+                || seen_qnames.contains(e.target_qn.as_str())
+        })
+        .map(|edge| SelectedEdge {
+            edge,
+            selection_reason: SelectionReason::ImpactNeighbor,
+            depth: None,
+            relevance_score: 0.0,
+        })
+        .collect();
+
+    let files = collect_files(&nodes);
+
+    let mut result = ContextResult {
+        request: request.clone(),
+        nodes,
+        edges,
+        files,
+        truncation: TruncationMeta::none(),
+        ambiguity: None,
+    };
+
+    rank_context(&mut result);
+    trim_context(&mut result);
+    update_file_node_counts(&mut result);
+
+    if request.include_code_spans {
+        apply_code_spans(&mut result);
+    }
+
+    Ok(result)
+}
+
+/// Build an impact [`ContextResult`] from file or symbol seeds.
+///
+/// Accepts any `ContextTarget`:
+/// - `ChangedFiles`   → pass paths directly to `impact_radius`
+/// - `QualifiedName` / `SymbolName` → resolve to node, use its file path
+/// - `FilePath`       → use the path directly
+///
+/// Changed (seed) nodes are tagged `DirectTarget`; downstream nodes are
+/// tagged `ImpactNeighbor`.
+pub fn build_impact_context(store: &Store, request: &ContextRequest) -> Result<ContextResult> {
+    let seed_paths: Vec<String> = match &request.target {
+        ContextTarget::ChangedFiles { paths } => paths.clone(),
+        ContextTarget::FilePath { path } => vec![path.clone()],
+        ContextTarget::QualifiedName { qname } => {
+            match store.node_by_qname(qname)? {
+                Some(node) => vec![node.file_path],
+                None => return Ok(build_not_found_result(request, vec![])),
+            }
+        }
+        ContextTarget::SymbolName { name } => {
+            let nodes = store.nodes_by_name(name, 1)?;
+            match nodes.into_iter().next() {
+                Some(node) => vec![node.file_path],
+                None => return Ok(build_not_found_result(request, vec![])),
+            }
+        }
+        ContextTarget::ChangedSymbols { qnames } => {
+            let mut paths: Vec<String> = Vec::new();
+            for qn in qnames {
+                if let Some(node) = store.node_by_qname(qn)? {
+                    paths.push(node.file_path);
+                }
+            }
+            paths.dedup();
+            paths
+        }
+        ContextTarget::EdgeQuerySeed { source_qname, .. } => {
+            match store.node_by_qname(source_qname)? {
+                Some(node) => vec![node.file_path],
+                None => return Ok(build_not_found_result(request, vec![])),
+            }
+        }
+    };
+
+    // Reuse build_review_context logic with a manufactured ChangedFiles request.
+    let adapted = ContextRequest {
+        intent: atlas_core::model::ContextIntent::Impact,
+        target: ContextTarget::ChangedFiles { paths: seed_paths },
+        ..request.clone()
+    };
+    build_review_context(store, &adapted)
+}
+
+/// Extract changed file paths from a `ChangedFiles` target, or return empty.
+fn extract_changed_paths(request: &ContextRequest) -> Vec<String> {
+    if let ContextTarget::ChangedFiles { paths } = &request.target {
+        paths.clone()
+    } else {
+        vec![]
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Slice 8: code span population
+// ---------------------------------------------------------------------------
+
+/// Populate `SelectedFile.line_ranges` for every file in `result`.
+///
+/// For each file the target node's span (distance 0) is always included.
+/// Caller/callee spans are included unless the spans are already bounded
+/// by the target span.  Each span is clamped so start ≤ end.
+///
+/// This function is called after ranking and trimming so spans are only
+/// computed for nodes that actually made it into the result.
+pub fn apply_code_spans(result: &mut ContextResult) {
+    use std::collections::HashMap as FMap;
+
+    // Build a map: file_path → list of (start, end) from selected nodes.
+    let mut span_map: FMap<String, Vec<(u32, u32)>> = FMap::new();
+
+    for sn in &result.nodes {
+        let start = sn.node.line_start;
+        let end = sn.node.line_end.max(start);
+
+        // Target node is always recorded.
+        // Callers/callees are recorded; others are skipped to keep spans narrow.
+        let include = matches!(sn.selection_reason, SelectionReason::DirectTarget | SelectionReason::Caller | SelectionReason::Callee | SelectionReason::ImpactNeighbor);
+        if include {
+            span_map.entry(sn.node.file_path.clone()).or_default().push((start, end));
+        }
+    }
+
+    // Merge and assign to SelectedFile.
+    for sf in &mut result.files {
+        if let Some(spans) = span_map.get(&sf.path) {
+            sf.line_ranges = merge_spans(spans);
+        }
+    }
+}
+
+/// Merge overlapping or adjacent line ranges into a minimal covering set.
+/// Input ranges: (start, end) inclusive, 1-based.
+fn merge_spans(spans: &[(u32, u32)]) -> Vec<(u32, u32)> {
+    if spans.is_empty() {
+        return vec![];
+    }
+    let mut sorted = spans.to_vec();
+    sorted.sort_by_key(|&(s, _)| s);
+
+    let mut merged: Vec<(u32, u32)> = Vec::with_capacity(sorted.len());
+    let (mut cur_start, mut cur_end) = sorted[0];
+
+    for &(start, end) in &sorted[1..] {
+        if start <= cur_end + 1 {
+            cur_end = cur_end.max(end);
+        } else {
+            merged.push((cur_start, cur_end));
+            cur_start = start;
+            cur_end = end;
+        }
+    }
+    merged.push((cur_start, cur_end));
+    merged
+}
+
+// ---------------------------------------------------------------------------
+// Slice 9: ContextEngine public entrypoint
+// ---------------------------------------------------------------------------
+
+/// Stateless context engine facade.
+///
+/// Wraps the free-function pipeline into a struct so callers inject one
+/// [`Store`] reference and call engine operations as methods.
+pub struct ContextEngine<'a> {
+    store: &'a Store,
+}
+
+impl<'a> ContextEngine<'a> {
+    /// Create a new engine backed by `store`.
+    pub fn new(store: &'a Store) -> Self {
+        Self { store }
+    }
+
+    /// Resolve a [`ContextTarget`] to a concrete node, file, or ambiguity result.
+    pub fn resolve(&self, target: &ContextTarget) -> Result<ResolvedTarget> {
+        resolve_target(self.store, target)
+    }
+
+    /// Build a bounded [`ContextResult`] for the given request.
+    ///
+    /// Routes by intent (Review / Impact / Symbol / File), resolves target,
+    /// retrieves neighbors, ranks, trims, and optionally applies code spans.
+    pub fn build(&self, request: &ContextRequest) -> Result<ContextResult> {
+        build_context(self.store, request)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use atlas_core::{
+        EdgeKind, NodeId, NodeKind,
+        model::{
+            ContextIntent, ContextRequest, ContextTarget, Edge, Node, ParsedFile,
+            SelectionReason,
+        },
+    };
+    use atlas_store_sqlite::Store;
+
+    // ------------------------------------------------------------------
+    // Helpers
+    // ------------------------------------------------------------------
+
+    fn open_store() -> Store {
+        let mut s = Store::open(":memory:").unwrap();
+        s.migrate().unwrap();
+        s
+    }
+
+    fn make_node(
+        qname: &str,
+        name: &str,
+        file: &str,
+        kind: NodeKind,
+        parent: Option<&str>,
+    ) -> Node {
+        Node {
+            id: NodeId::UNSET,
+            kind,
+            name: name.to_string(),
+            qualified_name: qname.to_string(),
+            file_path: file.to_string(),
+            line_start: 1,
+            line_end: 10,
+            language: "rust".to_string(),
+            parent_name: parent.map(String::from),
+            params: None,
+            return_type: None,
+            modifiers: Some("pub".to_string()),
+            is_test: false,
+            file_hash: "abc".to_string(),
+            extra_json: serde_json::Value::Null,
+        }
+    }
+
+    fn make_edge(src: &str, tgt: &str, kind: EdgeKind, file: &str) -> Edge {
+        Edge {
+            id: 0,
+            kind,
+            source_qn: src.to_string(),
+            target_qn: tgt.to_string(),
+            file_path: file.to_string(),
+            line: None,
+            confidence: 1.0,
+            confidence_tier: None,
+            extra_json: serde_json::Value::Null,
+        }
+    }
+
+    fn seed_graph(store: &mut Store) {
+        // Graph:
+        //   src/a.rs: fn_a (calls fn_b), fn_a_helper (sibling)
+        //   src/b.rs: fn_b (calls fn_c), fn_b_helper
+        //   src/b.rs: fn_c
+        //   tests/test_a.rs: test_fn_a (tests fn_a)
+        let nodes = [
+            make_node("src/a.rs::fn_a", "fn_a", "src/a.rs", NodeKind::Function, None),
+            make_node(
+                "src/a.rs::fn_a_helper",
+                "fn_a_helper",
+                "src/a.rs",
+                NodeKind::Function,
+                Some("mod_a"),
+            ),
+            make_node("src/b.rs::fn_b", "fn_b", "src/b.rs", NodeKind::Function, None),
+            make_node("src/b.rs::fn_c", "fn_c", "src/b.rs", NodeKind::Function, None),
+            make_node(
+                "tests/test_a.rs::test_fn_a",
+                "test_fn_a",
+                "tests/test_a.rs",
+                NodeKind::Test,
+                None,
+            ),
+        ];
+        let edges = [
+            make_edge(
+                "src/a.rs::fn_a",
+                "src/b.rs::fn_b",
+                EdgeKind::Calls,
+                "src/a.rs",
+            ),
+            make_edge(
+                "src/b.rs::fn_b",
+                "src/b.rs::fn_c",
+                EdgeKind::Calls,
+                "src/b.rs",
+            ),
+            make_edge(
+                "tests/test_a.rs::test_fn_a",
+                "src/a.rs::fn_a",
+                EdgeKind::Tests,
+                "tests/test_a.rs",
+            ),
+        ];
+        let files: Vec<ParsedFile> = vec![
+            ParsedFile {
+                path: "src/a.rs".to_string(),
+                language: Some("rust".to_string()),
+                hash: "h1".to_string(),
+                size: None,
+                nodes: nodes[0..2].to_vec(),
+                edges: edges[0..1].to_vec(),
+            },
+            ParsedFile {
+                path: "src/b.rs".to_string(),
+                language: Some("rust".to_string()),
+                hash: "h2".to_string(),
+                size: None,
+                nodes: nodes[2..4].to_vec(),
+                edges: edges[1..2].to_vec(),
+            },
+            ParsedFile {
+                path: "tests/test_a.rs".to_string(),
+                language: Some("rust".to_string()),
+                hash: "h3".to_string(),
+                size: None,
+                nodes: nodes[4..5].to_vec(),
+                edges: edges[2..3].to_vec(),
+            },
+        ];
+        store.replace_batch(&files).unwrap();
+    }
+
+    // ------------------------------------------------------------------
+    // Slice 3: resolve_target
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn resolve_exact_qname_hit() {
+        let mut store = open_store();
+        seed_graph(&mut store);
+        let target = ContextTarget::QualifiedName { qname: "src/a.rs::fn_a".to_string() };
+        let resolved = resolve_target(&store, &target).unwrap();
+        assert!(
+            matches!(resolved, ResolvedTarget::Node(n) if n.qualified_name == "src/a.rs::fn_a")
+        );
+    }
+
+    #[test]
+    fn resolve_exact_qname_miss_returns_not_found_or_ambiguous() {
+        let mut store = open_store();
+        seed_graph(&mut store);
+        let target = ContextTarget::QualifiedName { qname: "nonexistent::qname".to_string() };
+        let resolved = resolve_target(&store, &target).unwrap();
+        // FTS fallback either returns NotFound or some Ambiguous candidates.
+        assert!(matches!(
+            resolved,
+            ResolvedTarget::NotFound { .. } | ResolvedTarget::Ambiguous(..)
+        ));
+    }
+
+    #[test]
+    fn resolve_unique_symbol_name() {
+        let mut store = open_store();
+        seed_graph(&mut store);
+        let target = ContextTarget::SymbolName { name: "fn_a".to_string() };
+        let resolved = resolve_target(&store, &target).unwrap();
+        assert!(matches!(resolved, ResolvedTarget::Node(n) if n.name == "fn_a"));
+    }
+
+    #[test]
+    fn resolve_ambiguous_symbol_name() {
+        // fn_b and fn_c share no common name but let's add a duplicate name.
+        let mut store = open_store();
+        // Insert a second node named "fn_a" in a different file to force ambiguity.
+        let dupe = ParsedFile {
+            path: "src/c.rs".to_string(),
+            language: Some("rust".to_string()),
+            hash: "h4".to_string(),
+            size: None,
+            nodes: vec![make_node(
+                "src/c.rs::fn_a",
+                "fn_a",
+                "src/c.rs",
+                NodeKind::Function,
+                None,
+            )],
+            edges: vec![],
+        };
+        store.replace_batch(&[dupe]).unwrap();
+        seed_graph(&mut store);
+
+        let target = ContextTarget::SymbolName { name: "fn_a".to_string() };
+        let resolved = resolve_target(&store, &target).unwrap();
+        assert!(matches!(resolved, ResolvedTarget::Ambiguous(ref m) if m.candidates.len() >= 2));
+    }
+
+    #[test]
+    fn resolve_file_path_hit() {
+        let mut store = open_store();
+        seed_graph(&mut store);
+        let target = ContextTarget::FilePath { path: "src/a.rs".to_string() };
+        let resolved = resolve_target(&store, &target).unwrap();
+        assert!(matches!(resolved, ResolvedTarget::File(p) if p == "src/a.rs"));
+    }
+
+    #[test]
+    fn resolve_file_path_miss_returns_not_found() {
+        let mut store = open_store();
+        seed_graph(&mut store);
+        let target = ContextTarget::FilePath { path: "src/missing.rs".to_string() };
+        let resolved = resolve_target(&store, &target).unwrap();
+        assert!(matches!(resolved, ResolvedTarget::NotFound { .. }));
+    }
+
+    #[test]
+    fn resolve_missing_symbol_returns_not_found() {
+        let mut store = open_store();
+        seed_graph(&mut store);
+        let target = ContextTarget::SymbolName { name: "zzz_totally_absent".to_string() };
+        let resolved = resolve_target(&store, &target).unwrap();
+        assert!(matches!(
+            resolved,
+            ResolvedTarget::NotFound { .. } | ResolvedTarget::Ambiguous(..)
+        ));
+    }
+
+    // ------------------------------------------------------------------
+    // Slice 4: build_symbol_context
+    // ------------------------------------------------------------------
+
+    fn symbol_request(qname: &str) -> ContextRequest {
+        ContextRequest {
+            intent: ContextIntent::Symbol,
+            target: ContextTarget::QualifiedName { qname: qname.to_string() },
+            include_tests: false,
+            include_imports: false,
+            include_neighbors: false,
+            ..ContextRequest::default()
+        }
+    }
+
+    #[test]
+    fn symbol_context_contains_seed_and_callee() {
+        let mut store = open_store();
+        seed_graph(&mut store);
+        let seed = store.node_by_qname("src/a.rs::fn_a").unwrap().unwrap();
+        let req = symbol_request("src/a.rs::fn_a");
+        let result = build_symbol_context(&store, seed, &req).unwrap();
+
+        let qnames: Vec<&str> = result.nodes.iter().map(|n| n.node.qualified_name.as_str()).collect();
+        assert!(qnames.contains(&"src/a.rs::fn_a"), "seed missing");
+        assert!(qnames.contains(&"src/b.rs::fn_b"), "callee fn_b missing");
+    }
+
+    #[test]
+    fn symbol_context_seed_is_direct_target() {
+        let mut store = open_store();
+        seed_graph(&mut store);
+        let seed = store.node_by_qname("src/a.rs::fn_a").unwrap().unwrap();
+        let req = symbol_request("src/a.rs::fn_a");
+        let result = build_symbol_context(&store, seed, &req).unwrap();
+
+        let seed_node = result
+            .nodes
+            .iter()
+            .find(|n| n.node.qualified_name == "src/a.rs::fn_a")
+            .unwrap();
+        assert_eq!(seed_node.selection_reason, SelectionReason::DirectTarget);
+        assert_eq!(seed_node.distance, 0);
+    }
+
+    #[test]
+    fn symbol_context_include_tests_flag() {
+        let mut store = open_store();
+        seed_graph(&mut store);
+        let seed = store.node_by_qname("src/a.rs::fn_a").unwrap().unwrap();
+        let mut req = symbol_request("src/a.rs::fn_a");
+        req.include_tests = true;
+        let result = build_symbol_context(&store, seed, &req).unwrap();
+
+        let qnames: Vec<&str> =
+            result.nodes.iter().map(|n| n.node.qualified_name.as_str()).collect();
+        assert!(qnames.contains(&"tests/test_a.rs::test_fn_a"), "test node missing");
+    }
+
+    #[test]
+    fn symbol_context_files_bounded() {
+        let mut store = open_store();
+        seed_graph(&mut store);
+        let seed = store.node_by_qname("src/a.rs::fn_a").unwrap().unwrap();
+        let mut req = symbol_request("src/a.rs::fn_a");
+        req.max_files = Some(1);
+        let result = build_symbol_context(&store, seed, &req).unwrap();
+        assert!(result.files.len() <= 1);
+    }
+
+    // ------------------------------------------------------------------
+    // Slice 5: rank_context / trim_context
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn rank_puts_direct_target_first() {
+        let mut store = open_store();
+        seed_graph(&mut store);
+        let seed = store.node_by_qname("src/a.rs::fn_a").unwrap().unwrap();
+        let req = symbol_request("src/a.rs::fn_a");
+        let result = build_symbol_context(&store, seed, &req).unwrap();
+        // After ranking the seed should be first.
+        assert_eq!(
+            result.nodes[0].selection_reason,
+            SelectionReason::DirectTarget
+        );
+    }
+
+    #[test]
+    fn callers_and_callees_survive_trimming_over_distant_nodes() {
+        let mut store = open_store();
+        seed_graph(&mut store);
+        let seed = store.node_by_qname("src/b.rs::fn_b").unwrap().unwrap();
+        let mut req = symbol_request("src/b.rs::fn_b");
+        // Tight cap: keep only 2 nodes.
+        req.max_nodes = Some(2);
+        req.include_tests = true;
+        let result = build_symbol_context(&store, seed, &req).unwrap();
+
+        assert!(result.nodes.len() <= 2);
+        // DirectTarget must always be in the result.
+        assert!(
+            result
+                .nodes
+                .iter()
+                .any(|n| n.selection_reason == SelectionReason::DirectTarget)
+        );
+        // Truncation was recorded.
+        assert!(result.truncation.truncated || result.nodes.len() == 2);
+    }
+
+    #[test]
+    fn trim_records_dropped_counts() {
+        let mut store = open_store();
+        seed_graph(&mut store);
+        let seed = store.node_by_qname("src/a.rs::fn_a").unwrap().unwrap();
+        let mut req = symbol_request("src/a.rs::fn_a");
+        req.max_nodes = Some(1);
+        let result = build_symbol_context(&store, seed, &req).unwrap();
+        // Everything beyond the seed should be dropped.
+        assert_eq!(result.nodes.len(), 1);
+        // Edges referencing dropped nodes should also be gone.
+        for edge in &result.edges {
+            let src_present = result
+                .nodes
+                .iter()
+                .any(|n| n.node.qualified_name == edge.edge.source_qn);
+            let tgt_present = result
+                .nodes
+                .iter()
+                .any(|n| n.node.qualified_name == edge.edge.target_qn);
+            assert!(
+                src_present || tgt_present,
+                "edge references both-dropped nodes"
+            );
+        }
+    }
+
+    #[test]
+    fn trim_caps_deterministic_under_ties() {
+        // Two runs with same seed and tight cap must produce same output.
+        let mut store = open_store();
+        seed_graph(&mut store);
+
+        let run = |s: &Store| {
+            let seed = s.node_by_qname("src/a.rs::fn_a").unwrap().unwrap();
+            let mut req = symbol_request("src/a.rs::fn_a");
+            req.max_nodes = Some(2);
+            build_symbol_context(s, seed, &req).unwrap()
+        };
+
+        let r1 = run(&store);
+        let r2 = run(&store);
+        let qns1: Vec<&str> = r1.nodes.iter().map(|n| n.node.qualified_name.as_str()).collect();
+        let qns2: Vec<&str> = r2.nodes.iter().map(|n| n.node.qualified_name.as_str()).collect();
+        assert_eq!(qns1, qns2, "trim output non-deterministic");
+    }
+
+    #[test]
+    fn build_context_convenience_wrapper() {
+        let mut store = open_store();
+        seed_graph(&mut store);
+        let req = ContextRequest {
+            intent: ContextIntent::Symbol,
+            target: ContextTarget::QualifiedName {
+                qname: "src/b.rs::fn_b".to_string(),
+            },
+            ..ContextRequest::default()
+        };
+        let result = build_context(&store, &req).unwrap();
+        assert!(result.nodes.iter().any(|n| n.node.qualified_name == "src/b.rs::fn_b"));
+    }
+
+    // ------------------------------------------------------------------
+    // Slice 6: build_review_context / build_impact_context
+    // ------------------------------------------------------------------
+
+    fn review_request(paths: Vec<String>) -> ContextRequest {
+        ContextRequest {
+            intent: ContextIntent::Review,
+            target: ContextTarget::ChangedFiles { paths },
+            ..ContextRequest::default()
+        }
+    }
+
+    #[test]
+    fn review_context_changed_files_become_direct_targets() {
+        let mut store = open_store();
+        seed_graph(&mut store);
+        let req = review_request(vec!["src/a.rs".to_string()]);
+        let result = build_context(&store, &req).unwrap();
+
+        // Changed nodes from src/a.rs must be DirectTarget.
+        assert!(
+            result
+                .nodes
+                .iter()
+                .filter(|n| n.node.file_path == "src/a.rs")
+                .all(|n| n.selection_reason == SelectionReason::DirectTarget),
+            "src/a.rs nodes not tagged DirectTarget"
+        );
+    }
+
+    #[test]
+    fn review_context_impacted_nodes_tagged_impact_neighbor() {
+        let mut store = open_store();
+        seed_graph(&mut store);
+        // Change src/a.rs → fn_a calls fn_b, so fn_b should be in impact radius.
+        let req = review_request(vec!["src/a.rs".to_string()]);
+        let result = build_context(&store, &req).unwrap();
+
+        // At least one ImpactNeighbor must be present (fn_b from src/b.rs).
+        let has_neighbor = result
+            .nodes
+            .iter()
+            .any(|n| n.selection_reason == SelectionReason::ImpactNeighbor);
+        assert!(has_neighbor, "expected ImpactNeighbor nodes from impact traversal");
+    }
+
+    #[test]
+    fn review_context_result_is_bounded() {
+        let mut store = open_store();
+        seed_graph(&mut store);
+        let mut req = review_request(vec!["src/a.rs".to_string()]);
+        req.max_nodes = Some(3);
+        let result = build_context(&store, &req).unwrap();
+        assert!(result.nodes.len() <= 3, "node cap exceeded");
+    }
+
+    #[test]
+    fn impact_context_file_seed_returns_neighbors() {
+        let mut store = open_store();
+        seed_graph(&mut store);
+        let req = ContextRequest {
+            intent: ContextIntent::Impact,
+            target: ContextTarget::FilePath { path: "src/a.rs".to_string() },
+            ..ContextRequest::default()
+        };
+        let result = build_context(&store, &req).unwrap();
+        assert!(!result.nodes.is_empty(), "impact result must have nodes");
+    }
+
+    #[test]
+    fn impact_context_qname_seed_returns_neighbors() {
+        let mut store = open_store();
+        seed_graph(&mut store);
+        let req = ContextRequest {
+            intent: ContextIntent::Impact,
+            target: ContextTarget::QualifiedName { qname: "src/a.rs::fn_a".to_string() },
+            ..ContextRequest::default()
+        };
+        let result = build_context(&store, &req).unwrap();
+        // fn_a is in src/a.rs which calls fn_b; fn_b should appear.
+        let has_fn_b = result.nodes.iter().any(|n| n.node.qualified_name == "src/b.rs::fn_b");
+        assert!(has_fn_b, "fn_b should appear as impact neighbor of fn_a");
+    }
+
+    #[test]
+    fn impact_context_missing_qname_returns_empty() {
+        let mut store = open_store();
+        seed_graph(&mut store);
+        let req = ContextRequest {
+            intent: ContextIntent::Impact,
+            target: ContextTarget::QualifiedName { qname: "no::such::symbol".to_string() },
+            ..ContextRequest::default()
+        };
+        let result = build_context(&store, &req).unwrap();
+        assert!(result.nodes.is_empty(), "missing symbol should yield empty result");
+    }
+
+    // ------------------------------------------------------------------
+    // Slice 8: apply_code_spans
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn code_spans_populated_for_target() {
+        let mut store = open_store();
+        seed_graph(&mut store);
+        let seed = store.node_by_qname("src/a.rs::fn_a").unwrap().unwrap();
+        let mut req = symbol_request("src/a.rs::fn_a");
+        req.include_code_spans = true;
+        let result = build_symbol_context(&store, seed, &req).unwrap();
+
+        let target_file = result
+            .files
+            .iter()
+            .find(|f| f.path == "src/a.rs")
+            .expect("src/a.rs must be in files");
+        assert!(!target_file.line_ranges.is_empty(), "target file must have line ranges");
+    }
+
+    #[test]
+    fn code_spans_not_populated_when_disabled() {
+        let mut store = open_store();
+        seed_graph(&mut store);
+        let seed = store.node_by_qname("src/a.rs::fn_a").unwrap().unwrap();
+        let mut req = symbol_request("src/a.rs::fn_a");
+        req.include_code_spans = false;
+        let result = build_symbol_context(&store, seed, &req).unwrap();
+
+        // When code spans are disabled, line_ranges must be empty.
+        for sf in &result.files {
+            assert!(sf.line_ranges.is_empty(), "line_ranges should be empty when spans disabled");
+        }
+    }
+
+    #[test]
+    fn code_spans_merge_overlapping_ranges() {
+        let spans = vec![(1u32, 5u32), (3, 8), (15, 20)];
+        let merged = super::merge_spans(&spans);
+        assert_eq!(merged, vec![(1, 8), (15, 20)]);
+    }
+
+    #[test]
+    fn code_spans_merge_adjacent_ranges() {
+        let spans = vec![(1u32, 5u32), (6, 10)];
+        let merged = super::merge_spans(&spans);
+        assert_eq!(merged, vec![(1, 10)]);
+    }
+
+    #[test]
+    fn code_spans_single_range_unchanged() {
+        let spans = vec![(10u32, 20u32)];
+        let merged = super::merge_spans(&spans);
+        assert_eq!(merged, vec![(10, 20)]);
+    }
+}

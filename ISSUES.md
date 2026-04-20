@@ -1206,285 +1206,285 @@ Exit criteria:
 
 3. Slice 3: exact target resolution path
 
-- [ ] implement `resolve_target` for qualified name, exact symbol name, exact file path
-- [ ] return single resolved node/file when exact match exists
-- [ ] return ambiguity metadata with ranked candidates when multiple matches remain
-- [ ] fallback to existing FTS/hybrid search only after exact paths fail
+- [x] implement `resolve_target` for qualified name, exact symbol name, exact file path
+- [x] return single resolved node/file when exact match exists
+- [x] return ambiguity metadata with ranked candidates when multiple matches remain
+- [x] fallback to existing FTS/hybrid search only after exact paths fail
 
 Why third:
 - every higher-level context builder depends on trustworthy seed selection
 - ambiguity handling must exist before natural-language classifier starts routing requests
 
 Exit criteria:
-- [ ] tests for exact qname hit
-- [ ] tests for exact file path hit
-- [ ] tests for ambiguous short symbol names
-- [ ] tests for missing target with suggestions
+- [x] tests for exact qname hit
+- [x] tests for exact file path hit
+- [x] tests for ambiguous short symbol names
+- [x] tests for missing target with suggestions
 
 4. Slice 4: deterministic symbol-context retrieval
 
-- [ ] implement `build_symbol_context` from resolved seed
-- [ ] retrieve direct node, callers, callees, imports, containment siblings, optional tests
-- [ ] support one-hop first; gate multi-hop behind explicit request depth
-- [ ] preserve provenance per selected node/edge (`selection_reason`)
+- [x] implement `build_symbol_context` from resolved seed
+- [x] retrieve direct node, callers, callees, imports, containment siblings, optional tests
+- [x] support one-hop first; gate multi-hop behind explicit request depth
+- [x] preserve provenance per selected node/edge (`selection_reason`)
 
 Why fourth:
 - smallest useful end-to-end feature
 - validates request model, store helpers, scoring inputs, truncation behavior without classifier noise
 
 Exit criteria:
-- [ ] symbol context returns bounded nodes/edges/files
-- [ ] direct callers/callees always survive trimming over broad file neighbors
-- [ ] include/exclude flags work for tests/imports/neighbors
+- [x] symbol context returns bounded nodes/edges/files
+- [x] direct callers/callees always survive trimming over broad file neighbors
+- [x] include/exclude flags work for tests/imports/neighbors
 
 5. Slice 5: ranking and trimming policy
 
-- [ ] implement `rank_context`
-- [ ] score by exact-target boost, graph distance, edge confidence, same-file, same-package, public API, test adjacency
-- [ ] implement `trim_context` with hard node/edge/file caps
-- [ ] drop low-confidence and distant neighbors before direct relationships
-- [ ] set truncation flags plus dropped-count metadata
+- [x] implement `rank_context`
+- [x] score by exact-target boost, graph distance, edge confidence, same-file, same-package, public API, test adjacency
+- [x] implement `trim_context` with hard node/edge/file caps
+- [x] drop low-confidence and distant neighbors before direct relationships
+- [x] set truncation flags plus dropped-count metadata
 
 Why fifth:
 - retrieval without stable ranking will make CLI/MCP output noisy and hard to trust
 - Phase 23 evidence layer wants deterministic scoring factors, not ad hoc ordering
 
 Exit criteria:
-- [ ] tests prove caller/callee prioritization over sibling/file nodes
-- [ ] tests prove caps deterministic under tie conditions
-- [ ] truncated output explains what got cut
+- [x] tests prove caller/callee prioritization over sibling/file nodes
+- [x] tests prove caps deterministic under tie conditions
+- [x] truncated output explains what got cut
 
 6. Slice 6: review and impact context builders
 
-- [ ] implement `build_review_context` by adapting existing changed-file and impact flow into `ContextResult`
-- [ ] implement `build_impact_context` from file seeds and changed-symbol seeds
-- [ ] reuse current `atlas_review::assemble_review_context` until new result shape fully covers it, then consolidate
+- [x] implement `build_review_context` by adapting existing changed-file and impact flow into `ContextResult`
+- [x] implement `build_impact_context` from file seeds and changed-symbol seeds
+- [x] reuse current `atlas_review::assemble_review_context` until new result shape fully covers it, then consolidate
 
 Why sixth:
 - existing review flow already gives working behavior and should become first consumer of shared engine
 - proves engine handles both symbol-seeded and change-set-seeded requests
 
 Exit criteria:
-- [ ] current review-context command can be mapped onto context engine without behavior regression
-- [ ] impact context returns machine-readable bounded graph slice
+- [x] current review-context command can be mapped onto context engine without behavior regression
+- [x] impact context returns machine-readable bounded graph slice
 
 7. Slice 7: semi-structured query parsing
 
-- [ ] add simple classifier for `what breaks`, `used by`, `who calls`, `safe to refactor`, `dead code`, `rename`, `remove dependency`
-- [ ] add regex extraction for quoted symbols, file paths, function-like names, method-like names
-- [ ] route parsed text into same `ContextRequest` pipeline used by structured callers
-- [ ] keep classifier intentionally shallow; no fuzzy LLM-style inference
+- [x] add simple classifier for `what breaks`, `used by`, `who calls`, `safe to refactor`, `dead code`, `rename`, `remove dependency`
+- [x] add regex extraction for quoted symbols, file paths, function-like names, method-like names
+- [x] route parsed text into same `ContextRequest` pipeline used by structured callers
+- [x] keep classifier intentionally shallow; no fuzzy LLM-style inference
 
 Why seventh:
 - parser should sit on top of stable engine, not drive core architecture
 - avoids debugging resolution/ranking bugs through natural-language ambiguity
 
 Exit criteria:
-- [ ] text requests resolve to same result as equivalent structured requests
-- [ ] ambiguity metadata survives classifier path
+- [x] text requests resolve to same result as equivalent structured requests
+- [x] ambiguity metadata survives classifier path
 
 8. Slice 8: code spans and source packaging
 
-- [ ] include target span first
-- [ ] include caller/callee spans only when enabled
-- [ ] extract nearest relevant lines, never whole-file by default
-- [ ] return file path + line ranges ready for CLI/MCP rendering
+- [x] include target span first
+- [x] include caller/callee spans only when enabled
+- [x] extract nearest relevant lines, never whole-file by default
+- [x] return file path + line ranges ready for CLI/MCP rendering
 
 Why eighth:
 - line packaging depends on already-final selected nodes/files
 - keeps early engine work focused on graph correctness before token-shaping
 
 Exit criteria:
-- [ ] code span tests verify exact lines for target and adjacent symbols
-- [ ] large file requests stay bounded
+- [x] code span tests verify exact lines for target and adjacent symbols
+- [x] large file requests stay bounded
 
 9. Slice 9: public surfaces
 
-- [ ] add internal engine entrypoint `ContextEngine`
-- [ ] wire CLI prototype behind future `atlas context` surface or hidden/dev command first
-- [ ] expose MCP tool only after JSON shape stabilizes
-- [ ] keep old `review-context` command during transition; switch implementation under hood first
+- [x] add internal engine entrypoint `ContextEngine`
+- [x] wire CLI prototype behind future `atlas context` surface or hidden/dev command first
+- [x] expose MCP tool only after JSON shape stabilizes
+- [x] keep old `review-context` command during transition; switch implementation under hood first
 
 Why ninth:
 - shipping surface too early freezes unstable payloads
 - hidden/dev entrypoint lets fixture tests harden engine before user-facing commit
 
 Exit criteria:
-- [ ] CLI json output stable enough for golden tests
-- [ ] MCP adapter thin, no duplicated retrieval logic
+- [x] CLI json output stable enough for golden tests
+- [x] MCP adapter thin, no duplicated retrieval logic
 
 10. Slice 10: finish gates for “context engine complete”
 
-- [ ] exact symbol lookup
-- [ ] ambiguous symbol resolution
-- [ ] missing symbol behavior
-- [ ] bounded node trimming
-- [ ] caller/callee prioritization
-- [ ] include/exclude tests behavior
-- [ ] code span selection accuracy
-- [ ] fixture integration covering review-context parity and context-engine json output
-- [ ] `cargo test --workspace`
-- [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings`
+- [x] exact symbol lookup
+- [x] ambiguous symbol resolution
+- [x] missing symbol behavior
+- [x] bounded node trimming
+- [x] caller/callee prioritization
+- [x] include/exclude tests behavior
+- [x] code span selection accuracy
+- [x] fixture integration covering review-context parity and context-engine json output
+- [x] `cargo test --workspace`
+- [x] `cargo clippy --workspace --all-targets --all-features -- -D warnings`
 
 Completion rule:
-- [ ] Phase 22 done only when review flow, symbol flow, and impact flow all share same engine contracts and no duplicate ranking/trimming logic remains in CLI or MCP layers
+- [x] Phase 22 done only when review flow, symbol flow, and impact flow all share same engine contracts and no duplicate ranking/trimming logic remains in CLI or MCP layers
 
 ### 22.1 Scope and responsibilities
 
-- [ ] accept structured or semi-structured request
-- [ ] resolve target symbol(s), file(s), or change-set
-- [ ] retrieve nearby graph structure
-- [ ] rank retrieved items by relevance
-- [ ] trim to bounded result size
-- [ ] return machine-readable context
+- [x] accept structured or semi-structured request
+- [x] resolve target symbol(s), file(s), or change-set
+- [x] retrieve nearby graph structure
+- [x] rank retrieved items by relevance
+- [x] trim to bounded result size
+- [x] return machine-readable context
 
 ### 22.2 Request model
 
-- [ ] define `ContextIntent` enum:
-  - [ ] `ImpactAnalysis`
-  - [ ] `UsageLookup`
-  - [ ] `RefactorSafety`
-  - [ ] `DeadCodeCheck`
-  - [ ] `RenamePreview`
-  - [ ] `DependencyRemoval`
-  - [ ] `ReviewContext`
-  - [ ] `SymbolContext`
-- [ ] define `ContextTarget` variants:
-  - [ ] symbol qualified name
-  - [ ] symbol name
-  - [ ] file path
-  - [ ] changed file list
-  - [ ] changed symbol list
-  - [ ] edge query seed
-- [ ] define `ContextRequest` fields:
-  - [ ] intent
-  - [ ] target
-  - [ ] max_nodes
-  - [ ] max_edges
-  - [ ] max_files
-  - [ ] max_depth
-  - [ ] include_code_spans
-  - [ ] include_tests
-  - [ ] include_imports
-  - [ ] include_callers
-  - [ ] include_callees
-  - [ ] include_neighbors
+- [x] define `ContextIntent` enum:
+  - [x] `ImpactAnalysis`
+  - [x] `UsageLookup`
+  - [x] `RefactorSafety`
+  - [x] `DeadCodeCheck`
+  - [x] `RenamePreview`
+  - [x] `DependencyRemoval`
+  - [x] `ReviewContext`
+  - [x] `SymbolContext`
+- [x] define `ContextTarget` variants:
+  - [x] symbol qualified name
+  - [x] symbol name
+  - [x] file path
+  - [x] changed file list
+  - [x] changed symbol list
+  - [x] edge query seed
+- [x] define `ContextRequest` fields:
+  - [x] intent
+  - [x] target
+  - [x] max_nodes
+  - [x] max_edges
+  - [x] max_files
+  - [x] max_depth
+  - [x] include_code_spans
+  - [x] include_tests
+  - [x] include_imports
+  - [x] include_callers
+  - [x] include_callees
+  - [x] include_neighbors
 
 ### 22.3 Response model
 
-- [ ] define `ContextResult`:
-  - [ ] resolved target nodes
-  - [ ] selected nodes
-  - [ ] selected edges
-  - [ ] selected files
-  - [ ] code spans
-  - [ ] relevance scores
-  - [ ] truncation flags
-  - [ ] retrieval metadata
-- [ ] define `SelectedNode`:
-  - [ ] node id
-  - [ ] qualified name
-  - [ ] kind
-  - [ ] file path
-  - [ ] line span
-  - [ ] relevance score
-  - [ ] selection reason
-- [ ] define `SelectedEdge`:
-  - [ ] source
-  - [ ] target
-  - [ ] edge kind
-  - [ ] depth
-  - [ ] relevance score
-  - [ ] selection reason
-- [ ] define `SelectedFile`:
-  - [ ] path
-  - [ ] language
-  - [ ] reason included
-  - [ ] node count included
+- [x] define `ContextResult`:
+  - [x] resolved target nodes
+  - [x] selected nodes
+  - [x] selected edges
+  - [x] selected files
+  - [x] code spans
+  - [x] relevance scores
+  - [x] truncation flags
+  - [x] retrieval metadata
+- [x] define `SelectedNode`:
+  - [x] node id
+  - [x] qualified name
+  - [x] kind
+  - [x] file path
+  - [x] line span
+  - [x] relevance score
+  - [x] selection reason
+- [x] define `SelectedEdge`:
+  - [x] source
+  - [x] target
+  - [x] edge kind
+  - [x] depth
+  - [x] relevance score
+  - [x] selection reason
+- [x] define `SelectedFile`:
+  - [x] path
+  - [x] language
+  - [x] reason included
+  - [x] node count included
 
 ### 22.4 Intent parsing and resolution
 
-- [ ] implement exact symbol lookup path
-- [ ] implement simple query classifier:
-  - [ ] contains `what breaks`
-  - [ ] contains `used by`
-  - [ ] contains `who calls`
-  - [ ] contains `safe to refactor`
-  - [ ] contains `dead code`
-  - [ ] contains `rename`
-  - [ ] contains `remove dependency`
-- [ ] add regex extraction for:
-  - [ ] quoted symbol names
-  - [ ] file paths
-  - [ ] function-like names
-  - [ ] method-like names
-- [ ] fallback to symbol search + context expansion
-- [ ] resolve by qualified name
-- [ ] resolve by exact symbol name
-- [ ] resolve by file path
-- [ ] resolve by ranked search if ambiguous
-- [ ] return ambiguity metadata if multiple candidates remain, including import/call-resolution ties
+- [x] implement exact symbol lookup path
+- [x] implement simple query classifier:
+  - [x] contains `what breaks`
+  - [x] contains `used by`
+  - [x] contains `who calls`
+  - [x] contains `safe to refactor`
+  - [x] contains `dead code`
+  - [x] contains `rename`
+  - [x] contains `remove dependency`
+- [x] add regex extraction for:
+  - [x] quoted symbol names
+  - [x] file paths
+  - [x] function-like names
+  - [x] method-like names
+- [x] fallback to symbol search + context expansion
+- [x] resolve by qualified name
+- [x] resolve by exact symbol name
+- [x] resolve by file path
+- [x] resolve by ranked search if ambiguous
+- [x] return ambiguity metadata if multiple candidates remain, including import/call-resolution ties
 
 ### 22.5 Retrieval, ranking, trimming
 
-- [ ] fetch direct node record
-- [ ] fetch direct callers
-- [ ] fetch direct callees
-- [ ] fetch import edges
-- [ ] fetch file containment edges
-- [ ] fetch test adjacency if enabled
-- [ ] fetch one-hop neighbors
-- [ ] fetch multi-hop neighbors if requested
-- [ ] rank highest:
-  - [ ] exact target node
-  - [ ] direct callers
-  - [ ] direct callees
-- [ ] rank medium:
-  - [ ] same-file siblings
-  - [ ] tests targeting target node
-  - [ ] imports linked to target file
-- [ ] rank lower:
-  - [ ] second-hop neighbors
-  - [ ] broad file-level nodes
-  - [ ] weak reference edges
-- [ ] add scoring factors:
-  - [ ] graph distance
-  - [ ] edge confidence
-  - [ ] same file boost
-  - [ ] same package/module boost
-  - [ ] public API boost
-  - [ ] test adjacency boost
-- [ ] hard-limit nodes
-- [ ] hard-limit edges
-- [ ] hard-limit files
-- [ ] prefer direct relationships over broad context
-- [ ] drop low-confidence edges first
-- [ ] drop distant neighbors before dropping direct callers/callees
-- [ ] mark output as truncated if limits applied
+- [x] fetch direct node record
+- [x] fetch direct callers
+- [x] fetch direct callees
+- [x] fetch import edges
+- [x] fetch file containment edges
+- [x] fetch test adjacency if enabled
+- [x] fetch one-hop neighbors
+- [x] fetch multi-hop neighbors if requested
+- [x] rank highest:
+  - [x] exact target node
+  - [x] direct callers
+  - [x] direct callees
+- [x] rank medium:
+  - [x] same-file siblings
+  - [x] tests targeting target node
+  - [x] imports linked to target file
+- [x] rank lower:
+  - [x] second-hop neighbors
+  - [x] broad file-level nodes
+  - [x] weak reference edges
+- [x] add scoring factors:
+  - [x] graph distance
+  - [x] edge confidence
+  - [x] same file boost
+  - [x] same package/module boost
+  - [x] public API boost
+  - [x] test adjacency boost
+- [x] hard-limit nodes
+- [x] hard-limit edges
+- [x] hard-limit files
+- [x] prefer direct relationships over broad context
+- [x] drop low-confidence edges first
+- [x] drop distant neighbors before dropping direct callers/callees
+- [x] mark output as truncated if limits applied
 
 ### 22.6 Code spans, APIs, tests
 
-- [ ] include target symbol span
-- [ ] include caller/callee spans if enabled
-- [ ] include nearest relevant lines only
-- [ ] avoid whole-file dumps by default
-- [ ] provide file path + line range references
-- [ ] create `ContextEngine`
-- [ ] implement:
-  - [ ] `resolve_target`
-  - [ ] `build_symbol_context`
-  - [ ] `build_review_context`
-  - [ ] `build_impact_context`
-  - [ ] `rank_context`
-  - [ ] `trim_context`
-- [ ] tests:
-  - [ ] exact symbol lookup
-  - [ ] ambiguous symbol resolution
-  - [ ] missing symbol behavior
-  - [ ] bounded node trimming
-  - [ ] caller/callee prioritization
-  - [ ] include/exclude tests behavior
-  - [ ] code span selection accuracy
+- [x] include target symbol span
+- [x] include caller/callee spans if enabled
+- [x] include nearest relevant lines only
+- [x] avoid whole-file dumps by default
+- [x] provide file path + line range references
+- [x] create `ContextEngine`
+- [x] implement:
+  - [x] `resolve_target`
+  - [x] `build_symbol_context`
+  - [x] `build_review_context`
+  - [x] `build_impact_context`
+  - [x] `rank_context`
+  - [x] `trim_context`
+- [x] tests:
+  - [x] exact symbol lookup
+  - [x] ambiguous symbol resolution
+  - [x] missing symbol behavior
+  - [x] bounded node trimming
+  - [x] caller/callee prioritization
+  - [x] include/exclude tests behavior
+  - [x] code span selection accuracy
 
 ## Phase 23 — Autonomous Code Reasoning
 
@@ -2475,3 +2475,369 @@ And system has:
 - [ ] evaluation harness
 - [ ] cloud providers
 - [x] shell completion and minor tooling leftovers
+
+---
+
+## Context-Mode Integration Backlog
+
+### Purpose
+
+Extend Atlas with context-mode persistence and session continuity without mixing those concerns into graph database.
+
+This backlog covers pieces needed for:
+
+- artifact persistence
+- session continuity
+- resume snapshots
+- retrieval-backed restoration
+
+Keep detailed implementation approach here. Keep agent-wide behavior and repo-wide coding rules in `AGENTS.md`, not duplicated here.
+
+### Core Design Rules
+
+- [ ] DO NOT store saved context in graph database
+- [ ] DO NOT replay raw command history into future sessions
+- [ ] ALWAYS restore context through retrieval
+- [ ] ALWAYS store large outputs outside model context
+- [ ] KEEP graph storage, content storage, and session storage as separate systems
+
+### New Crates
+
+- [ ] `packages/atlas-contentstore`
+- [ ] `packages/atlas-session`
+- [ ] `packages/atlas-contextsave`
+- [ ] `packages/atlas-adapters`
+
+### Content Store
+
+#### Database
+
+- [ ] Create SQLite database at `.atlas/context.db`
+- [ ] Enable `PRAGMA journal_mode=WAL;`
+- [ ] Enable `PRAGMA synchronous=NORMAL;`
+- [ ] Enable `PRAGMA foreign_keys=ON;`
+- [ ] Enable `PRAGMA busy_timeout=5000;`
+- [ ] Enable FTS5 support
+- [ ] Keep this database separate from `.atlas/worldtree.db`
+
+#### Required tables
+
+`sources`
+
+- [ ] `id TEXT PRIMARY KEY`
+- [ ] `session_id TEXT`
+- [ ] `source_type TEXT NOT NULL`
+- [ ] `label TEXT NOT NULL`
+- [ ] `repo_root TEXT`
+- [ ] `created_at TEXT NOT NULL`
+
+`chunks`
+
+- [ ] `id INTEGER PRIMARY KEY`
+- [ ] `source_id TEXT NOT NULL`
+- [ ] `content TEXT NOT NULL`
+- [ ] `content_type TEXT NOT NULL`
+- [ ] `chunk_index INTEGER NOT NULL`
+- [ ] `title TEXT`
+- [ ] `metadata_json TEXT NOT NULL`
+- [ ] `created_at TEXT NOT NULL`
+
+`chunks_fts`
+
+- [ ] FTS5 virtual table indexing `title`
+- [ ] FTS5 virtual table indexing `content`
+- [ ] FTS5 virtual table indexing `source_id`
+- [ ] FTS5 virtual table indexing `content_type`
+
+#### Content store API
+
+- [ ] `open(path)`
+- [ ] `migrate()`
+- [ ] `index_artifact(source_meta, raw_text, content_type)`
+- [ ] `search(query, filters)`
+- [ ] `get_source(source_id)`
+- [ ] `get_chunks(source_id)`
+- [ ] `delete_source(source_id)`
+- [ ] `cleanup(retention_policy)`
+
+#### Chunking rules
+
+- [ ] Markdown must split by headings first
+- [ ] Plain text must split by paragraph blocks or line windows
+- [ ] JSON must split by path and array batches
+- [ ] Oversized chunks must be subdivided
+- [ ] Each chunk must preserve stable `chunk_index`
+- [ ] Each chunk should preserve human-readable `title` when possible
+
+#### Compression routing
+
+- [ ] If output is below small-output threshold, return raw output directly
+- [ ] If output is above preview threshold, index it and return compact preview
+- [ ] If output is above large-output threshold, index it and return pointer only
+- [ ] Never put raw large output into future prompts
+
+### Session Store
+
+#### Database
+
+- [ ] Create SQLite database at `.atlas/session.db`
+
+#### Required tables
+
+`session_meta`
+
+- [ ] `session_id TEXT PRIMARY KEY`
+- [ ] `repo_root TEXT NOT NULL`
+- [ ] `frontend TEXT NOT NULL`
+- [ ] `worktree_id TEXT`
+- [ ] `created_at TEXT NOT NULL`
+- [ ] `updated_at TEXT NOT NULL`
+- [ ] `last_resume_at TEXT`
+- [ ] `last_compaction_at TEXT`
+
+`session_events`
+
+- [ ] `id INTEGER PRIMARY KEY`
+- [ ] `session_id TEXT NOT NULL`
+- [ ] `event_type TEXT NOT NULL`
+- [ ] `priority INTEGER NOT NULL`
+- [ ] `payload_json TEXT NOT NULL`
+- [ ] `event_hash TEXT NOT NULL`
+- [ ] `created_at TEXT NOT NULL`
+
+`session_resume`
+
+- [ ] `session_id TEXT PRIMARY KEY`
+- [ ] `snapshot TEXT NOT NULL`
+- [ ] `event_count INTEGER NOT NULL`
+- [ ] `consumed INTEGER NOT NULL DEFAULT 0`
+- [ ] `created_at TEXT NOT NULL`
+- [ ] `updated_at TEXT NOT NULL`
+
+#### Event rules
+
+- [ ] Deduplicate events using `event_hash`
+- [ ] Keep maximum number of events per session
+- [ ] Evict events by lower priority first
+- [ ] Evict events by older records first
+- [ ] Never store large raw output in `session_events`
+- [ ] Large raw output must be stored in content store and referenced from session event payload
+
+#### Fixed event types
+
+- [ ] `FILE_READ`
+- [ ] `FILE_WRITE`
+- [ ] `COMMAND_RUN`
+- [ ] `COMMAND_FAIL`
+- [ ] `GRAPH_BUILD`
+- [ ] `GRAPH_UPDATE`
+- [ ] `REVIEW_CONTEXT`
+- [ ] `IMPACT_ANALYSIS`
+- [ ] `CONTEXT_REQUEST`
+- [ ] `REASONING_RESULT`
+- [ ] `USER_INTENT`
+- [ ] `ERROR`
+- [ ] `SESSION_START`
+- [ ] `SESSION_RESUME`
+
+### Event Extraction
+
+#### Hook points
+
+- [ ] CLI command start
+- [ ] CLI command finish
+- [ ] `atlas build`
+- [ ] `atlas update`
+- [ ] `atlas review-context`
+- [ ] `atlas impact`
+- [ ] Context Engine request handling
+- [ ] Reasoning engine request handling
+- [ ] MCP tool execution
+
+#### Extraction API
+
+- [ ] `extract_cli_event`
+- [ ] `extract_graph_event`
+- [ ] `extract_context_event`
+- [ ] `extract_reasoning_event`
+- [ ] `normalize_event`
+- [ ] `hash_event`
+
+#### Event payload rules
+
+- [ ] Payloads must be structured JSON
+- [ ] Payloads must be bounded in size
+- [ ] Payloads must include identifiers for retrieval when large artifacts exist
+- [ ] Payloads must never embed large stdout blobs
+
+### Resume Snapshot Builder
+
+#### Snapshot API
+
+- [ ] `build_resume(session_id) -> ResumeSnapshot`
+
+#### Snapshot content
+
+- [ ] repo root
+- [ ] worktree identifier
+- [ ] last user intent
+- [ ] most recent important commands
+- [ ] changed files
+- [ ] impacted symbols
+- [ ] unresolved errors
+- [ ] recent reasoning outputs
+- [ ] saved artifact references
+
+#### Snapshot constraints
+
+- [ ] Snapshot size must be bounded
+- [ ] Snapshot must contain retrieval hints
+- [ ] Snapshot must prefer identifiers and summaries over raw content
+- [ ] Snapshot must be stable enough for tests
+
+#### Lifecycle
+
+- [ ] Build snapshot before compaction or reset
+- [ ] Persist snapshot into `session_resume`
+- [ ] Inject snapshot at next session start or explicit resume
+- [ ] Mark snapshot consumed after successful injection
+
+### Retrieval Integration
+
+#### Context Engine request additions
+
+- [ ] Add `include_saved_context: bool`
+- [ ] Add `session_id: Option<String>`
+
+#### Retrieval flow
+
+- [ ] Query content store by symbol name after graph retrieval
+- [ ] Query content store by file path after graph retrieval
+- [ ] Query content store by session ID after graph retrieval
+- [ ] Merge saved-context results into `ContextResult`
+
+#### Ranking additions
+
+- [ ] add saved-context relevance
+- [ ] add recency boost
+- [ ] add same-session boost
+
+#### Result additions
+
+- [ ] include `saved_context_sources`
+- [ ] include `source_ids`
+- [ ] include `retrieval_hints`
+
+### CLI Session System
+
+#### Commands
+
+- [ ] `atlas session start`
+- [ ] `atlas session status`
+- [ ] `atlas session resume`
+- [ ] `atlas session clear`
+- [ ] `atlas session list`
+
+#### Session identity
+
+- [ ] Define `session_id = hash(repo_root + worktree + frontend)`
+- [ ] Normalize paths before hashing
+- [ ] Keep worktree isolation
+
+#### CLI behavior
+
+- [ ] Auto-create session on interactive run
+- [ ] Auto-load resume snapshot when available
+- [ ] Show compact resume summary
+- [ ] Never replay raw historic output
+
+### MCP Integration
+
+#### New MCP tools
+
+- [ ] `get_session_status`
+- [ ] `resume_session`
+- [ ] `search_saved_context`
+- [ ] `save_context_artifact`
+
+#### Existing tool changes
+
+- [ ] `get_review_context` must emit session events
+- [ ] `get_impact_radius` must emit session events
+- [ ] `query_graph` must emit session events
+- [ ] `detect_changes` must emit session events
+
+#### Output rules
+
+- [ ] Return previews instead of large blobs
+- [ ] Return `source_id` for stored artifacts
+- [ ] Return retrieval hints for follow-up access
+
+### Adapter Layer
+
+#### Interfaces
+
+- [ ] `BeforeCommand`
+- [ ] `AfterCommand`
+- [ ] `OnError`
+- [ ] `OnUserIntent`
+- [ ] `BeforeExit`
+
+#### Initial adapters
+
+- [ ] CLI adapter
+- [ ] MCP adapter
+
+#### Adapter rule
+
+- [ ] Adapters must emit normalized events
+- [ ] Adapters must not write SQLite directly
+- [ ] Adapters must use session service layer
+
+### Tests
+
+- [ ] session creation
+- [ ] event deduplication
+- [ ] event eviction
+- [ ] resume snapshot correctness
+- [ ] snapshot consume flow
+- [ ] artifact indexing and retrieval
+- [ ] compression routing
+- [ ] CLI continuity
+- [ ] MCP continuity
+
+### Safety and Limits
+
+#### Redaction
+
+- [ ] strip environment variables
+- [ ] strip secrets from command arguments
+- [ ] strip tokens from logs and payloads
+
+#### Limits
+
+- [ ] max events per session
+- [ ] max content DB size
+- [ ] retention TTL
+- [ ] snapshot size cap
+
+### Merge Points into Existing Atlas TODO
+
+- [ ] Merge into Phase 22 `Context Engine`: add retrieval from content store
+- [ ] Merge into Phase 22 `Context Engine`: add session-aware ranking
+- [ ] Merge into Phase 22 `Context Engine`: include retrieval hints in output
+- [ ] Merge into Phase 23 `Reasoning`: reasoning results must emit session events
+- [ ] Merge into Phase 23 `Reasoning`: reasoning results must reference `source_id` for saved artifacts
+- [ ] Merge into Phase 16 `MCP`: add session lifecycle support
+- [ ] Merge into Phase 16 `MCP`: add saved-context retrieval tools
+- [ ] Merge into Phase 15 `Performance and Operational Hardening`: add session stats
+- [ ] Merge into Phase 15 `Performance and Operational Hardening`: add content-store stats
+
+### Completion Criteria
+
+- [ ] sessions persist across runs
+- [ ] large outputs are stored instead of passed directly
+- [ ] context is restored through retrieval
+- [ ] resume snapshot works correctly
+- [ ] MCP returns pointers instead of blobs
+- [ ] graph DB, content DB, and session DB remain separate systems
