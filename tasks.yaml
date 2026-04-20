@@ -23,3 +23,11 @@ tasks:
     commands:
       - cargo test --workspace
     description: Run workspace tests.
+  install-githooks:
+    commands:
+      - bash -lc 'mkdir -p .githooks && rm -rf .git/hooks && ln -s ../.githooks .git/hooks'
+    description: Replace `.git/hooks` with symlink to repo `.githooks`.
+  uninstall-githooks:
+    commands:
+      - bash -lc 'if [ -L .git/hooks ]; then rm .git/hooks; fi && mkdir -p .git/hooks'
+    description: Remove `.git/hooks` symlink and recreate local hooks directory.

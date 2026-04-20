@@ -3431,35 +3431,35 @@ Expose session continuity to agents only after storage, events, resume, and retr
 
 #### New MCP tools
 
-- [ ] `get_session_status`
-- [ ] `resume_session`
-- [ ] `search_saved_context`
-- [ ] `save_context_artifact`
-- [ ] `get_context_stats`
-- [ ] `purge_saved_context`
-- [ ] add saved-context retrieval tools
+- [x] `get_session_status`
+- [x] `resume_session`
+- [x] `search_saved_context`
+- [x] `save_context_artifact`
+- [x] `get_context_stats`
+- [x] `purge_saved_context`
+- [x] add saved-context retrieval tools
 
 #### Existing tool changes
 
-- [ ] `get_review_context` must emit session events
-- [ ] `get_impact_radius` must emit session events
-- [ ] `query_graph` must emit session events
-- [ ] `detect_changes` must emit session events
+- [x] `get_review_context` must emit session events
+- [x] `get_impact_radius` must emit session events
+- [x] `query_graph` must emit session events
+- [x] `detect_changes` must emit session events
 
 #### Output rules
 
-- [ ] return previews instead of large blobs
-- [ ] return `source_id` for stored artifacts
-- [ ] return retrieval hints for follow-up access
-- [ ] expose compact stats for avoided bytes / stored artifact counts when requested
+- [x] return previews instead of large blobs
+- [x] return `source_id` for stored artifacts
+- [x] return retrieval hints for follow-up access
+- [x] expose compact stats for avoided bytes / stored artifact counts when requested
 
 Why seventh:
 - MCP should stay thin over already-proven services
 - agent-facing session tools are risky to expose before local lifecycle behavior is stable
 
 Exit criteria:
-- [ ] MCP returns pointers and previews instead of raw large payloads
-- [ ] session-aware MCP tools work without duplicating business logic from CLI/services
+- [x] MCP returns pointers and previews instead of raw large payloads
+- [x] session-aware MCP tools work without duplicating business logic from CLI/services
 
 ### Phase CM8 — Safety limits, tests, and completion gate
 

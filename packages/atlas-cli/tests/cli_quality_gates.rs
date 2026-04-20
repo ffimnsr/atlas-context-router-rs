@@ -1194,15 +1194,26 @@ fn serve_command_handles_stdio_jsonrpc_flow_end_to_end() {
     );
 
     assert_eq!(responses[2]["id"], json!(3));
-    assert_eq!(responses[2]["result"]["atlas_output_format"], json!("json"));
+    let query_format = responses[2]["result"]["atlas_output_format"]
+        .as_str()
+        .expect("query_graph output format");
+    assert!(
+        query_format == "toon" || query_format == "json",
+        "query_graph must return toon or JSON fallback"
+    );
     let query_text = responses[2]["result"]["content"][0]["text"]
         .as_str()
         .expect("query_graph text content");
-    let query_value: Value = serde_json::from_str(query_text).expect("query_graph payload json");
-    assert_eq!(
-        query_value[0]["qn"],
-        json!("src/lib.rs::method::Greeter::greet_twice")
-    );
+    if query_format == "json" {
+        let query_value: Value =
+            serde_json::from_str(query_text).expect("query_graph payload json");
+        assert_eq!(
+            query_value[0]["qn"],
+            json!("src/lib.rs::method::Greeter::greet_twice")
+        );
+    } else {
+        assert!(query_text.contains("src/lib.rs::method::Greeter::greet_twice"));
+    }
 
     assert_eq!(responses[3]["id"], json!(4));
     assert_eq!(responses[3]["result"]["atlas_output_format"], json!("toon"));

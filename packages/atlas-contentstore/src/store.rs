@@ -680,6 +680,81 @@ impl ContentStore {
             .map_err(|e| AtlasError::Db(e.to_string()))?;
         Ok(count)
     }
+
+    /// Return `(source_count, chunk_count)` for the given session or globally.
+    pub fn stats(&self, session_id: Option<&str>) -> Result<(usize, usize)> {
+        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
+        let (src, chk) = if let Some(sid) = session_id {
+            let src: i64 = self
+                .conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sources WHERE session_id = ?1",
+                    params![sid],
+                    |r| r.get(0),
+                )
+                .map_err(db_err)?;
+            let chk: i64 = self
+                .conn
+                .query_row(
+                    "SELECT COUNT(*) FROM chunks
+                     WHERE source_id IN (SELECT id FROM sources WHERE session_id = ?1)",
+                    params![sid],
+                    |r| r.get(0),
+                )
+                .map_err(db_err)?;
+            (src, chk)
+        } else {
+            let src: i64 = self
+                .conn
+                .query_row("SELECT COUNT(*) FROM sources", [], |r| r.get(0))
+                .map_err(db_err)?;
+            let chk: i64 = self
+                .conn
+                .query_row("SELECT COUNT(*) FROM chunks", [], |r| r.get(0))
+                .map_err(db_err)?;
+            (src, chk)
+        };
+        Ok((src as usize, chk as usize))
+    }
+
+    /// Delete all sources (and their chunks, via cascade) belonging to `session_id`.
+    ///
+    /// FTS and trigram indexes are cleaned up before the row delete.
+    /// Returns the number of sources deleted.
+    pub fn delete_session_sources(&mut self, session_id: &str) -> Result<usize> {
+        // Bulk FTS cleanup for chunks belonging to this session's sources.
+        let safe_sid = session_id.replace('\'', "''");
+        let fts_cleanup = format!(
+            "INSERT INTO chunks_fts(chunks_fts, rowid, title, content, source_id, content_type)
+             SELECT 'delete', c.id, c.title, c.content, c.source_id, c.content_type
+             FROM chunks c
+             JOIN sources s ON c.source_id = s.id
+             WHERE s.session_id = '{safe_sid}'"
+        );
+        self.conn
+            .execute_batch(&fts_cleanup)
+            .map_err(|e| AtlasError::Db(e.to_string()))?;
+
+        let trigram_cleanup = format!(
+            "INSERT INTO chunks_trigram(chunks_trigram, rowid, title, content, source_id, content_type)
+             SELECT 'delete', c.id, c.title, c.content, c.source_id, c.content_type
+             FROM chunks c
+             JOIN sources s ON c.source_id = s.id
+             WHERE s.session_id = '{safe_sid}'"
+        );
+        self.conn
+            .execute_batch(&trigram_cleanup)
+            .map_err(|e| AtlasError::Db(e.to_string()))?;
+
+        let count = self
+            .conn
+            .execute(
+                "DELETE FROM sources WHERE session_id = ?1",
+                params![session_id],
+            )
+            .map_err(|e| AtlasError::Db(e.to_string()))?;
+        Ok(count)
+    }
 }
 
 /// Retrieved source row from the store.

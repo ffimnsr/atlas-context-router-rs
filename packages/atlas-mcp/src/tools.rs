@@ -17,9 +17,13 @@ use serde::Serialize;
 
 use crate::context::{compact_node, package_context_result, package_impact};
 use crate::output::{OutputFormat, render_serializable, resolve_output_format};
+use crate::session_tools::{
+    derive_content_db_path, tool_get_context_stats, tool_get_session_status,
+    tool_purge_saved_context, tool_resume_session, tool_save_context_artifact,
+    tool_search_saved_context,
+};
 
-const DEFAULT_JSON_OUTPUT_DESCRIPTION: &str = "Response body format: 'json' (default) or 'toon'";
-const DEFAULT_TOON_OUTPUT_DESCRIPTION: &str = "Response body format: 'toon' (default) or 'json'";
+const DEFAULT_OUTPUT_DESCRIPTION: &str = "Response body format: 'toon' (default) or 'json'";
 
 // ---------------------------------------------------------------------------
 // Tool schema list
@@ -35,7 +39,7 @@ pub fn tool_list() -> serde_json::Value {
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "output_format": { "type": "string", "description": DEFAULT_JSON_OUTPUT_DESCRIPTION }
+                        "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
                     },
                     "required": []
                 }
@@ -50,7 +54,7 @@ pub fn tool_list() -> serde_json::Value {
                         "kind":     { "type": "string",  "description": "Filter by node kind (e.g. 'function', 'struct')" },
                         "language": { "type": "string",  "description": "Filter by language (e.g. 'rust', 'python')" },
                         "limit":    { "type": "integer", "description": "Maximum results to return (default 20)" },
-                        "output_format": { "type": "string", "description": DEFAULT_JSON_OUTPUT_DESCRIPTION }
+                        "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
                     },
                     "required": ["text"]
                 }
@@ -64,7 +68,7 @@ pub fn tool_list() -> serde_json::Value {
                         "files":     { "type": "array",   "items": { "type": "string" }, "description": "Repo-relative changed file paths" },
                         "max_depth": { "type": "integer", "description": "Traversal depth limit (default 5)" },
                         "max_nodes": { "type": "integer", "description": "Maximum impacted nodes to return (default 200)" },
-                        "output_format": { "type": "string", "description": DEFAULT_TOON_OUTPUT_DESCRIPTION }
+                        "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
                     },
                     "required": ["files"]
                 }
@@ -78,7 +82,7 @@ pub fn tool_list() -> serde_json::Value {
                         "files": { "type": "array", "items": { "type": "string" }, "description": "Repo-relative changed file paths" },
                         "max_depth": { "type": "integer", "description": "Traversal depth limit (default 3)" },
                         "max_nodes": { "type": "integer", "description": "Maximum impacted nodes to consider (default 200)" },
-                        "output_format": { "type": "string", "description": DEFAULT_TOON_OUTPUT_DESCRIPTION }
+                        "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
                     },
                     "required": ["files"]
                 }
@@ -91,7 +95,7 @@ pub fn tool_list() -> serde_json::Value {
                     "properties": {
                         "base":   { "type": "string",  "description": "Base ref (e.g. 'origin/main'). Omit to diff working tree." },
                         "staged": { "type": "boolean", "description": "Diff staged changes only (default false)" },
-                        "output_format": { "type": "string", "description": DEFAULT_JSON_OUTPUT_DESCRIPTION }
+                        "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
                     },
                     "required": []
                 }
@@ -106,7 +110,7 @@ pub fn tool_list() -> serde_json::Value {
                         "base":   { "type": "string",  "description": "For update: base git ref (e.g. 'origin/main')" },
                         "staged": { "type": "boolean", "description": "For update: diff staged changes only" },
                         "files":  { "type": "array", "items": { "type": "string" }, "description": "For update: explicit list of repo-relative file paths to re-index" },
-                        "output_format": { "type": "string", "description": DEFAULT_JSON_OUTPUT_DESCRIPTION }
+                        "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
                     },
                     "required": []
                 }
@@ -120,7 +124,7 @@ pub fn tool_list() -> serde_json::Value {
                         "from_qn":   { "type": "string",  "description": "Qualified name of the starting node (e.g. 'src/lib.rs::fn::my_func')" },
                         "max_depth": { "type": "integer", "description": "Traversal depth limit (default 3)" },
                         "max_nodes": { "type": "integer", "description": "Maximum nodes to return (default 100)" },
-                        "output_format": { "type": "string", "description": DEFAULT_JSON_OUTPUT_DESCRIPTION }
+                        "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
                     },
                     "required": ["from_qn"]
                 }
@@ -135,7 +139,7 @@ pub fn tool_list() -> serde_json::Value {
                         "staged":    { "type": "boolean", "description": "Diff staged changes only (default false)" },
                         "max_depth": { "type": "integer", "description": "Traversal depth limit (default 2)" },
                         "max_nodes": { "type": "integer", "description": "Maximum impacted nodes (default 50)" },
-                        "output_format": { "type": "string", "description": DEFAULT_JSON_OUTPUT_DESCRIPTION }
+                        "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
                     },
                     "required": []
                 }
@@ -151,7 +155,7 @@ pub fn tool_list() -> serde_json::Value {
                         "staged":    { "type": "boolean", "description": "Diff staged changes only (default false). Used when inferring files from git." },
                         "max_depth": { "type": "integer", "description": "Traversal depth limit for impact (default 5)" },
                         "max_nodes": { "type": "integer", "description": "Maximum impacted nodes (default 200)" },
-                        "output_format": { "type": "string", "description": DEFAULT_TOON_OUTPUT_DESCRIPTION }
+                        "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
                     },
                     "required": []
                 }
@@ -171,7 +175,88 @@ pub fn tool_list() -> serde_json::Value {
                         "max_depth": { "type": "integer", "description": "Traversal depth in graph hops (default 2)" },
                         "include_saved_context": { "type": "boolean", "description": "When true, also query the content store for saved artifacts relevant to this request and include them in the result (default false)." },
                         "session_id": { "type": "string",  "description": "Restrict saved-context retrieval to artifacts from this session and apply a same-session relevance boost." },
-                        "output_format": { "type": "string", "description": DEFAULT_TOON_OUTPUT_DESCRIPTION }
+                        "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
+                    },
+                    "required": []
+                }
+            },
+            {
+                "name": "get_session_status",
+                "description": "Return the status of the current MCP session: identity, event count, and whether a resume snapshot exists.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "session_id":    { "type": "string",  "description": "Explicit session id. Omit to use the derived id for the current repo." },
+                        "output_format": { "type": "string",  "description": DEFAULT_OUTPUT_DESCRIPTION }
+                    },
+                    "required": []
+                }
+            },
+            {
+                "name": "resume_session",
+                "description": "Retrieve and optionally consume the resume snapshot for the current (or specified) session. Builds a snapshot on demand if one does not exist.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "session_id":     { "type": "string",  "description": "Explicit session id. Omit to use the derived id for the current repo." },
+                        "mark_consumed":  { "type": "boolean", "description": "Mark the snapshot consumed after reading (default true)." },
+                        "output_format":  { "type": "string",  "description": DEFAULT_OUTPUT_DESCRIPTION }
+                    },
+                    "required": []
+                }
+            },
+            {
+                "name": "search_saved_context",
+                "description": "Search previously saved artifacts in the content store using BM25 + trigram fallback. Returns previews (first 256 chars) and source_ids for follow-up retrieval.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "query":        { "type": "string",  "description": "Search query text." },
+                        "session_id":   { "type": "string",  "description": "Restrict search to artifacts from this session." },
+                        "source_type":  { "type": "string",  "description": "Filter by source type (e.g. 'review_context', 'mcp_artifact')." },
+                        "limit":        { "type": "integer", "description": "Maximum results to return (default 10)." },
+                        "output_format":{ "type": "string",  "description": DEFAULT_OUTPUT_DESCRIPTION }
+                    },
+                    "required": ["query"]
+                }
+            },
+            {
+                "name": "save_context_artifact",
+                "description": "Index and store a large tool output or context payload. Returns a pointer (source_id) for large content, a preview for medium content, or the raw string for small content.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "content":      { "type": "string",  "description": "The content to store." },
+                        "label":        { "type": "string",  "description": "Human-readable label for display and retrieval." },
+                        "source_type":  { "type": "string",  "description": "Category tag (e.g. 'review_context', 'command_output'). Default: 'mcp_artifact'." },
+                        "session_id":   { "type": "string",  "description": "Associate artifact with this session. Omit to use derived session." },
+                        "content_type": { "type": "string",  "description": "MIME type: 'text/plain' (default), 'text/markdown', or 'application/json'." },
+                        "output_format":{ "type": "string",  "description": DEFAULT_OUTPUT_DESCRIPTION }
+                    },
+                    "required": ["content", "label"]
+                }
+            },
+            {
+                "name": "get_context_stats",
+                "description": "Return storage statistics for the current (or specified) session: event count, saved source count, chunk count, and DB paths.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "session_id":    { "type": "string",  "description": "Explicit session id. Omit to use the derived id for the current repo." },
+                        "output_format": { "type": "string",  "description": DEFAULT_OUTPUT_DESCRIPTION }
+                    },
+                    "required": []
+                }
+            },
+            {
+                "name": "purge_saved_context",
+                "description": "Delete saved artifacts. Provide session_id to delete all artifacts for that session, or omit to apply age-based cleanup (default: keep last 30 days).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "session_id":    { "type": "string",  "description": "Delete all saved artifacts for this session." },
+                        "keep_days":     { "type": "integer", "description": "For age-based cleanup: keep sources newer than this many days (default 30)." },
+                        "output_format": { "type": "string",  "description": DEFAULT_OUTPUT_DESCRIPTION }
                     },
                     "required": []
                 }
@@ -199,6 +284,10 @@ pub fn call(
     if let Some(ref mut a) = adapter {
         a.after_command(name, result.is_ok());
     }
+    // CM7: emit session event best-effort for continuity tools.
+    if result.is_ok() {
+        crate::session_tools::emit_session_event_best_effort(name, args, repo_root, db_path);
+    }
     result
 }
 
@@ -222,17 +311,22 @@ fn call_inner(
         "get_minimal_context" => tool_get_minimal_context(args, repo_root, db_path, output_format),
         "explain_change" => tool_explain_change(args, repo_root, db_path, output_format),
         "get_context" => tool_get_context(args, db_path, output_format),
+        "get_session_status" => tool_get_session_status(args, repo_root, db_path, output_format),
+        "resume_session" => tool_resume_session(args, repo_root, db_path, output_format),
+        "search_saved_context" => {
+            tool_search_saved_context(args, repo_root, db_path, output_format)
+        }
+        "save_context_artifact" => {
+            tool_save_context_artifact(args, repo_root, db_path, output_format)
+        }
+        "get_context_stats" => tool_get_context_stats(args, repo_root, db_path, output_format),
+        "purge_saved_context" => tool_purge_saved_context(args, repo_root, db_path, output_format),
         other => Err(anyhow::anyhow!("unknown tool: {other}")),
     }
 }
 
-fn default_output_format_for_tool(name: &str) -> OutputFormat {
-    match name {
-        "get_impact_radius" | "get_review_context" | "explain_change" | "get_context" => {
-            OutputFormat::Toon
-        }
-        _ => OutputFormat::Json,
-    }
+fn default_output_format_for_tool(_name: &str) -> OutputFormat {
+    OutputFormat::Toon
 }
 
 // ---------------------------------------------------------------------------
@@ -904,18 +998,6 @@ fn open_store(db_path: &str) -> Result<Store> {
     Store::open(db_path).with_context(|| format!("cannot open database at {db_path}"))
 }
 
-/// Derive the content-store DB path from the graph DB path.
-///
-/// Graph DB is typically `.atlas/worldtree.db`; content DB is `.atlas/context.db`
-/// in the same directory.
-fn derive_content_db_path(db_path: &str) -> String {
-    if let Some(parent) = std::path::Path::new(db_path).parent() {
-        parent.join("context.db").to_string_lossy().into_owned()
-    } else {
-        "context.db".to_string()
-    }
-}
-
 /// Wrap structured output in an MCP tool-result content envelope.
 fn tool_result_value<T: Serialize>(
     value: &T,
@@ -1253,28 +1335,19 @@ mod tests {
     }
 
     #[test]
-    fn tool_list_marks_context_heavy_tools_as_toon_default() {
+    fn tool_list_all_tools_default_to_toon() {
         let list = tool_list();
         let tools = list
             .get("tools")
             .and_then(|value| value.as_array())
             .expect("tools array");
 
-        for name in [
-            "get_impact_radius",
-            "get_review_context",
-            "explain_change",
-            "get_context",
-        ] {
-            let tool = tools
-                .iter()
-                .find(|tool| tool.get("name") == Some(&serde_json::Value::String(name.to_owned())))
-                .expect("tool entry");
+        for tool in tools {
             let description = tool
                 .pointer("/inputSchema/properties/output_format/description")
                 .and_then(|value| value.as_str())
                 .expect("output_format description");
-            assert_eq!(description, DEFAULT_TOON_OUTPUT_DESCRIPTION);
+            assert_eq!(description, DEFAULT_OUTPUT_DESCRIPTION);
         }
     }
 
@@ -1491,16 +1564,18 @@ mod tests {
         )
         .expect("query_graph call");
         let query_text = unwrap_tool_text(query_resp.clone());
-        let query_json: serde_json::Value =
-            serde_json::from_str(&query_text).expect("query_graph json response");
-        let query_results = query_json.as_array().expect("query results array");
-        assert_eq!(unwrap_tool_format(&query_resp), "json");
-        assert!(query_resp.get("atlas_fallback_reason").is_none());
+        // query_graph returns a float-scored array; toon may fall back to JSON
+        // when float round-trip validation fails — that's the expected graceful path.
+        let query_format = unwrap_tool_format(&query_resp);
         assert!(
-            !query_results.is_empty(),
+            query_format == "toon" || query_format == "json",
+            "expected toon or json, got {query_format}"
+        );
+        assert!(
+            !query_text.is_empty(),
             "query_graph must return ranked results"
         );
-        assert_eq!(query_results[0]["qn"], "src/service.rs::fn::compute");
+        assert!(query_text.contains("src/service.rs::fn::compute"));
 
         let impact_args = serde_json::json!({ "files": ["src/service.rs"] });
         let impact_resp = call(
