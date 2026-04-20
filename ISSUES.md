@@ -1169,6 +1169,166 @@ These phases extend v1 after core graph/build/update/query path is reliable.
 
 Build deterministic retrieval-and-selection layer over graph. No LLM dependence. Input structured request or simple text. Output bounded, explainable context for CLI, review flow, later agent flow.
 
+### 22.0 Recommended implementation order
+
+Implement Phase 22 in this order so each slice reuses existing store/search/review pieces and leaves Phase 23-25 with stable contracts instead of churn.
+
+1. Slice 1: core types and crate boundary
+
+- [x] decide crate home for context engine (`packages/atlas-review` if scope stays retrieval-only, new crate only if responsibilities outgrow review assembly)
+- [x] add `ContextIntent`, `ContextTarget`, `ContextRequest`, `ContextResult`, `SelectedNode`, `SelectedEdge`, `SelectedFile`
+- [x] add serde/json contracts now so CLI, MCP, later reasoning reuse same payloads
+- [x] keep v1 API small: symbol/file/review/impact requests only
+- [x] define truncation + ambiguity metadata up front to avoid later breaking changes
+
+Why first:
+- existing Phase 22, 23, 25 all depend on stable request/response shapes
+- cheapest place to lock naming, limits, and explainability fields
+
+Exit criteria:
+- [x] model types compile
+- [x] json snapshot tests cover serialize/deserialize round-trip
+
+2. Slice 2: store/query support needed by engine
+
+- [x] audit and expose exact helper queries from SQLite store before engine logic grows
+- [x] add focused store helpers for direct callers, direct callees, import neighbors, containment neighbors, node lookup by qname/name/path
+- [x] keep helpers deterministic and bounded; avoid embedding ranking policy in SQL
+- [x] reuse existing `search`, `impact_radius`, `find_dependents_for_qnames`, review assembly inputs where possible
+
+Why second:
+- engine should compose verified primitives, not hide SQL inside ranking code
+- reduces duplicate traversal logic across context, review, later reasoning
+
+Exit criteria:
+- [x] unit tests for each helper query on small graph fixtures
+- [x] helper outputs stable for missing nodes, ambiguous names, deleted paths
+
+3. Slice 3: exact target resolution path
+
+- [ ] implement `resolve_target` for qualified name, exact symbol name, exact file path
+- [ ] return single resolved node/file when exact match exists
+- [ ] return ambiguity metadata with ranked candidates when multiple matches remain
+- [ ] fallback to existing FTS/hybrid search only after exact paths fail
+
+Why third:
+- every higher-level context builder depends on trustworthy seed selection
+- ambiguity handling must exist before natural-language classifier starts routing requests
+
+Exit criteria:
+- [ ] tests for exact qname hit
+- [ ] tests for exact file path hit
+- [ ] tests for ambiguous short symbol names
+- [ ] tests for missing target with suggestions
+
+4. Slice 4: deterministic symbol-context retrieval
+
+- [ ] implement `build_symbol_context` from resolved seed
+- [ ] retrieve direct node, callers, callees, imports, containment siblings, optional tests
+- [ ] support one-hop first; gate multi-hop behind explicit request depth
+- [ ] preserve provenance per selected node/edge (`selection_reason`)
+
+Why fourth:
+- smallest useful end-to-end feature
+- validates request model, store helpers, scoring inputs, truncation behavior without classifier noise
+
+Exit criteria:
+- [ ] symbol context returns bounded nodes/edges/files
+- [ ] direct callers/callees always survive trimming over broad file neighbors
+- [ ] include/exclude flags work for tests/imports/neighbors
+
+5. Slice 5: ranking and trimming policy
+
+- [ ] implement `rank_context`
+- [ ] score by exact-target boost, graph distance, edge confidence, same-file, same-package, public API, test adjacency
+- [ ] implement `trim_context` with hard node/edge/file caps
+- [ ] drop low-confidence and distant neighbors before direct relationships
+- [ ] set truncation flags plus dropped-count metadata
+
+Why fifth:
+- retrieval without stable ranking will make CLI/MCP output noisy and hard to trust
+- Phase 23 evidence layer wants deterministic scoring factors, not ad hoc ordering
+
+Exit criteria:
+- [ ] tests prove caller/callee prioritization over sibling/file nodes
+- [ ] tests prove caps deterministic under tie conditions
+- [ ] truncated output explains what got cut
+
+6. Slice 6: review and impact context builders
+
+- [ ] implement `build_review_context` by adapting existing changed-file and impact flow into `ContextResult`
+- [ ] implement `build_impact_context` from file seeds and changed-symbol seeds
+- [ ] reuse current `atlas_review::assemble_review_context` until new result shape fully covers it, then consolidate
+
+Why sixth:
+- existing review flow already gives working behavior and should become first consumer of shared engine
+- proves engine handles both symbol-seeded and change-set-seeded requests
+
+Exit criteria:
+- [ ] current review-context command can be mapped onto context engine without behavior regression
+- [ ] impact context returns machine-readable bounded graph slice
+
+7. Slice 7: semi-structured query parsing
+
+- [ ] add simple classifier for `what breaks`, `used by`, `who calls`, `safe to refactor`, `dead code`, `rename`, `remove dependency`
+- [ ] add regex extraction for quoted symbols, file paths, function-like names, method-like names
+- [ ] route parsed text into same `ContextRequest` pipeline used by structured callers
+- [ ] keep classifier intentionally shallow; no fuzzy LLM-style inference
+
+Why seventh:
+- parser should sit on top of stable engine, not drive core architecture
+- avoids debugging resolution/ranking bugs through natural-language ambiguity
+
+Exit criteria:
+- [ ] text requests resolve to same result as equivalent structured requests
+- [ ] ambiguity metadata survives classifier path
+
+8. Slice 8: code spans and source packaging
+
+- [ ] include target span first
+- [ ] include caller/callee spans only when enabled
+- [ ] extract nearest relevant lines, never whole-file by default
+- [ ] return file path + line ranges ready for CLI/MCP rendering
+
+Why eighth:
+- line packaging depends on already-final selected nodes/files
+- keeps early engine work focused on graph correctness before token-shaping
+
+Exit criteria:
+- [ ] code span tests verify exact lines for target and adjacent symbols
+- [ ] large file requests stay bounded
+
+9. Slice 9: public surfaces
+
+- [ ] add internal engine entrypoint `ContextEngine`
+- [ ] wire CLI prototype behind future `atlas context` surface or hidden/dev command first
+- [ ] expose MCP tool only after JSON shape stabilizes
+- [ ] keep old `review-context` command during transition; switch implementation under hood first
+
+Why ninth:
+- shipping surface too early freezes unstable payloads
+- hidden/dev entrypoint lets fixture tests harden engine before user-facing commit
+
+Exit criteria:
+- [ ] CLI json output stable enough for golden tests
+- [ ] MCP adapter thin, no duplicated retrieval logic
+
+10. Slice 10: finish gates for “context engine complete”
+
+- [ ] exact symbol lookup
+- [ ] ambiguous symbol resolution
+- [ ] missing symbol behavior
+- [ ] bounded node trimming
+- [ ] caller/callee prioritization
+- [ ] include/exclude tests behavior
+- [ ] code span selection accuracy
+- [ ] fixture integration covering review-context parity and context-engine json output
+- [ ] `cargo test --workspace`
+- [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings`
+
+Completion rule:
+- [ ] Phase 22 done only when review flow, symbol flow, and impact flow all share same engine contracts and no duplicate ranking/trimming logic remains in CLI or MCP layers
+
 ### 22.1 Scope and responsibilities
 
 - [ ] accept structured or semi-structured request

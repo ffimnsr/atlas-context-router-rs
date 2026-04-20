@@ -376,6 +376,166 @@ pub struct AdvancedImpactResult {
     pub boundary_violations: Vec<BoundaryViolation>,
 }
 
+// ---------------------------------------------------------------------------
+// Phase 22 — Context Engine types (Slice 1)
+// ---------------------------------------------------------------------------
+
+/// What kind of context retrieval is being requested.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContextIntent {
+    /// Context centred on a specific symbol (callers, callees, imports, neighbors).
+    Symbol,
+    /// Context centred on a specific file (symbols defined in it and direct neighbors).
+    File,
+    /// Review context for a set of changed files (impact + risk).
+    Review,
+    /// Impact context seeded from files or symbol names.
+    Impact,
+}
+
+/// The seed target for a context request.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ContextTarget {
+    /// Exact fully-qualified name (`crate::module::fn_name`).
+    QualifiedName { qname: String },
+    /// Short symbol name — may produce ambiguity.
+    SymbolName { name: String },
+    /// Repo-relative file path.
+    FilePath { path: String },
+    /// Set of repo-relative changed file paths (for review/impact intents).
+    ChangedFiles { paths: Vec<String> },
+}
+
+/// Structured request to the context engine.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContextRequest {
+    pub intent: ContextIntent,
+    pub target: ContextTarget,
+    /// Maximum nodes in the result (hard cap; engine trims before returning).
+    pub max_nodes: Option<usize>,
+    /// Maximum edges in the result.
+    pub max_edges: Option<usize>,
+    /// Maximum files in the result.
+    pub max_files: Option<usize>,
+    /// Graph traversal depth (hops from seed). `None` defaults to 1.
+    pub depth: Option<u32>,
+    /// Include test nodes in context.
+    pub include_tests: bool,
+    /// Include import edges/nodes in context.
+    pub include_imports: bool,
+    /// Include containment-sibling nodes.
+    pub include_neighbors: bool,
+}
+
+impl Default for ContextRequest {
+    fn default() -> Self {
+        Self {
+            intent: ContextIntent::Symbol,
+            target: ContextTarget::SymbolName { name: String::new() },
+            max_nodes: None,
+            max_edges: None,
+            max_files: None,
+            depth: None,
+            include_tests: false,
+            include_imports: true,
+            include_neighbors: false,
+        }
+    }
+}
+
+/// Why a node, edge, or file was included in a [`ContextResult`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SelectionReason {
+    /// The primary seed target.
+    DirectTarget,
+    /// Calls the target (caller of seed).
+    Caller,
+    /// Called by the target (callee of seed).
+    Callee,
+    /// Imports the target.
+    Importer,
+    /// Imported by the target.
+    Importee,
+    /// Sibling contained in the same parent scope.
+    ContainmentSibling,
+    /// Adjacent to a test node.
+    TestAdjacent,
+    /// Reached via impact traversal.
+    ImpactNeighbor,
+}
+
+/// A graph node selected for inclusion in a [`ContextResult`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SelectedNode {
+    pub node: Node,
+    pub selection_reason: SelectionReason,
+    /// Graph-hop distance from the seed node (0 = seed itself).
+    pub distance: u32,
+}
+
+/// A graph edge selected for inclusion in a [`ContextResult`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SelectedEdge {
+    pub edge: Edge,
+    pub selection_reason: SelectionReason,
+}
+
+/// A file selected for inclusion in a [`ContextResult`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SelectedFile {
+    pub path: String,
+    pub selection_reason: SelectionReason,
+    /// Relevant line ranges within the file (start, end inclusive).
+    /// Empty means no span narrowing has been applied yet.
+    pub line_ranges: Vec<(u32, u32)>,
+}
+
+/// Metadata about truncation applied to a [`ContextResult`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TruncationMeta {
+    /// Nodes dropped to stay within the cap.
+    pub nodes_dropped: usize,
+    /// Edges dropped to stay within the cap.
+    pub edges_dropped: usize,
+    /// Files dropped to stay within the cap.
+    pub files_dropped: usize,
+    /// `true` when any item was dropped.
+    pub truncated: bool,
+}
+
+impl TruncationMeta {
+    /// No truncation applied.
+    pub fn none() -> Self {
+        Self { nodes_dropped: 0, edges_dropped: 0, files_dropped: 0, truncated: false }
+    }
+}
+
+/// Metadata about target resolution when the seed was ambiguous.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AmbiguityMeta {
+    /// The ambiguous query string that was submitted.
+    pub query: String,
+    /// Ranked candidate qualified names. Empty when `resolved` is `true`.
+    pub candidates: Vec<String>,
+    /// `true` when the engine selected a single candidate automatically.
+    pub resolved: bool,
+}
+
+/// Output of the context engine for a single [`ContextRequest`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContextResult {
+    pub request: ContextRequest,
+    pub nodes: Vec<SelectedNode>,
+    pub edges: Vec<SelectedEdge>,
+    pub files: Vec<SelectedFile>,
+    pub truncation: TruncationMeta,
+    /// Set when the target was ambiguous; contains ranked candidates.
+    pub ambiguity: Option<AmbiguityMeta>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -525,5 +685,284 @@ mod tests {
         let json = serde_json::to_string(&e).unwrap();
         let back: Edge = serde_json::from_str(&json).unwrap();
         assert!(back.confidence_tier.is_none());
+    }
+
+    // -------------------------------------------------------------------------
+    // Phase 22 Slice 1 — ContextRequest / ContextResult serde round-trips
+    // -------------------------------------------------------------------------
+
+    fn sample_context_request_symbol() -> ContextRequest {
+        ContextRequest {
+            intent: ContextIntent::Symbol,
+            target: ContextTarget::QualifiedName {
+                qname: "crate::module::my_fn".to_string(),
+            },
+            max_nodes: Some(50),
+            max_edges: Some(100),
+            max_files: Some(10),
+            depth: Some(1),
+            include_tests: true,
+            include_imports: true,
+            include_neighbors: false,
+        }
+    }
+
+    #[test]
+    fn context_intent_serde_variants() {
+        for (intent, expected) in [
+            (ContextIntent::Symbol, "\"symbol\""),
+            (ContextIntent::File, "\"file\""),
+            (ContextIntent::Review, "\"review\""),
+            (ContextIntent::Impact, "\"impact\""),
+        ] {
+            let json = serde_json::to_string(&intent).unwrap();
+            assert_eq!(json, expected);
+            let back: ContextIntent = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, intent);
+        }
+    }
+
+    #[test]
+    fn context_target_qualified_name_round_trip() {
+        let t = ContextTarget::QualifiedName { qname: "crate::foo::bar".to_string() };
+        let json = serde_json::to_string(&t).unwrap();
+        let back: ContextTarget = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, t);
+        // tag must be present
+        assert!(json.contains("\"kind\":\"qualified_name\""));
+    }
+
+    #[test]
+    fn context_target_symbol_name_round_trip() {
+        let t = ContextTarget::SymbolName { name: "my_func".to_string() };
+        let json = serde_json::to_string(&t).unwrap();
+        let back: ContextTarget = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, t);
+        assert!(json.contains("\"kind\":\"symbol_name\""));
+    }
+
+    #[test]
+    fn context_target_file_path_round_trip() {
+        let t = ContextTarget::FilePath { path: "src/lib.rs".to_string() };
+        let json = serde_json::to_string(&t).unwrap();
+        let back: ContextTarget = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, t);
+        assert!(json.contains("\"kind\":\"file_path\""));
+    }
+
+    #[test]
+    fn context_target_changed_files_round_trip() {
+        let t = ContextTarget::ChangedFiles {
+            paths: vec!["src/a.rs".to_string(), "src/b.rs".to_string()],
+        };
+        let json = serde_json::to_string(&t).unwrap();
+        let back: ContextTarget = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, t);
+        assert!(json.contains("\"kind\":\"changed_files\""));
+    }
+
+    #[test]
+    fn context_request_round_trip() {
+        let req = sample_context_request_symbol();
+        let json = serde_json::to_string(&req).unwrap();
+        let back: ContextRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.intent, req.intent);
+        assert_eq!(back.target, req.target);
+        assert_eq!(back.max_nodes, req.max_nodes);
+        assert_eq!(back.max_edges, req.max_edges);
+        assert_eq!(back.max_files, req.max_files);
+        assert_eq!(back.depth, req.depth);
+        assert_eq!(back.include_tests, req.include_tests);
+        assert_eq!(back.include_imports, req.include_imports);
+        assert_eq!(back.include_neighbors, req.include_neighbors);
+    }
+
+    #[test]
+    fn context_request_default_round_trip() {
+        let req = ContextRequest::default();
+        let json = serde_json::to_string(&req).unwrap();
+        let back: ContextRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.intent, ContextIntent::Symbol);
+        assert!(back.max_nodes.is_none());
+        assert!(back.depth.is_none());
+        assert!(!back.include_tests);
+        assert!(back.include_imports);
+        assert!(!back.include_neighbors);
+    }
+
+    #[test]
+    fn selection_reason_serde_variants() {
+        let reasons = [
+            (SelectionReason::DirectTarget, "\"direct_target\""),
+            (SelectionReason::Caller, "\"caller\""),
+            (SelectionReason::Callee, "\"callee\""),
+            (SelectionReason::Importer, "\"importer\""),
+            (SelectionReason::Importee, "\"importee\""),
+            (SelectionReason::ContainmentSibling, "\"containment_sibling\""),
+            (SelectionReason::TestAdjacent, "\"test_adjacent\""),
+            (SelectionReason::ImpactNeighbor, "\"impact_neighbor\""),
+        ];
+        for (reason, expected) in reasons {
+            let json = serde_json::to_string(&reason).unwrap();
+            assert_eq!(json, expected);
+            let back: SelectionReason = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, reason);
+        }
+    }
+
+    #[test]
+    fn selected_node_round_trip() {
+        let sn = SelectedNode {
+            node: sample_node(),
+            selection_reason: SelectionReason::Caller,
+            distance: 1,
+        };
+        let json = serde_json::to_string(&sn).unwrap();
+        let back: SelectedNode = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.selection_reason, sn.selection_reason);
+        assert_eq!(back.distance, sn.distance);
+        assert_eq!(back.node.qualified_name, sn.node.qualified_name);
+    }
+
+    #[test]
+    fn selected_edge_round_trip() {
+        let se = SelectedEdge {
+            edge: sample_edge(),
+            selection_reason: SelectionReason::Callee,
+        };
+        let json = serde_json::to_string(&se).unwrap();
+        let back: SelectedEdge = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.selection_reason, se.selection_reason);
+        assert_eq!(back.edge.source_qn, se.edge.source_qn);
+    }
+
+    #[test]
+    fn selected_file_round_trip() {
+        let sf = SelectedFile {
+            path: "src/main.rs".to_string(),
+            selection_reason: SelectionReason::DirectTarget,
+            line_ranges: vec![(10, 20), (35, 50)],
+        };
+        let json = serde_json::to_string(&sf).unwrap();
+        let back: SelectedFile = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.path, sf.path);
+        assert_eq!(back.selection_reason, sf.selection_reason);
+        assert_eq!(back.line_ranges, sf.line_ranges);
+    }
+
+    #[test]
+    fn selected_file_empty_ranges_round_trip() {
+        let sf = SelectedFile {
+            path: "src/lib.rs".to_string(),
+            selection_reason: SelectionReason::ImpactNeighbor,
+            line_ranges: vec![],
+        };
+        let json = serde_json::to_string(&sf).unwrap();
+        let back: SelectedFile = serde_json::from_str(&json).unwrap();
+        assert!(back.line_ranges.is_empty());
+    }
+
+    #[test]
+    fn truncation_meta_none_round_trip() {
+        let tm = TruncationMeta::none();
+        let json = serde_json::to_string(&tm).unwrap();
+        let back: TruncationMeta = serde_json::from_str(&json).unwrap();
+        assert!(!back.truncated);
+        assert_eq!(back.nodes_dropped, 0);
+        assert_eq!(back.edges_dropped, 0);
+        assert_eq!(back.files_dropped, 0);
+    }
+
+    #[test]
+    fn truncation_meta_with_drops_round_trip() {
+        let tm = TruncationMeta { nodes_dropped: 5, edges_dropped: 3, files_dropped: 1, truncated: true };
+        let json = serde_json::to_string(&tm).unwrap();
+        let back: TruncationMeta = serde_json::from_str(&json).unwrap();
+        assert!(back.truncated);
+        assert_eq!(back.nodes_dropped, 5);
+        assert_eq!(back.edges_dropped, 3);
+        assert_eq!(back.files_dropped, 1);
+    }
+
+    #[test]
+    fn ambiguity_meta_round_trip() {
+        let am = AmbiguityMeta {
+            query: "my_fn".to_string(),
+            candidates: vec!["crate::a::my_fn".to_string(), "crate::b::my_fn".to_string()],
+            resolved: false,
+        };
+        let json = serde_json::to_string(&am).unwrap();
+        let back: AmbiguityMeta = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.query, am.query);
+        assert_eq!(back.candidates, am.candidates);
+        assert!(!back.resolved);
+    }
+
+    #[test]
+    fn ambiguity_meta_resolved_round_trip() {
+        let am = AmbiguityMeta {
+            query: "my_fn".to_string(),
+            candidates: vec![],
+            resolved: true,
+        };
+        let json = serde_json::to_string(&am).unwrap();
+        let back: AmbiguityMeta = serde_json::from_str(&json).unwrap();
+        assert!(back.resolved);
+        assert!(back.candidates.is_empty());
+    }
+
+    #[test]
+    fn context_result_round_trip() {
+        let result = ContextResult {
+            request: sample_context_request_symbol(),
+            nodes: vec![SelectedNode {
+                node: sample_node(),
+                selection_reason: SelectionReason::DirectTarget,
+                distance: 0,
+            }],
+            edges: vec![SelectedEdge {
+                edge: sample_edge(),
+                selection_reason: SelectionReason::Caller,
+            }],
+            files: vec![SelectedFile {
+                path: "src/lib.rs".to_string(),
+                selection_reason: SelectionReason::DirectTarget,
+                line_ranges: vec![(10, 20)],
+            }],
+            truncation: TruncationMeta::none(),
+            ambiguity: None,
+        };
+        let json = serde_json::to_string(&result).unwrap();
+        let back: ContextResult = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.nodes.len(), 1);
+        assert_eq!(back.edges.len(), 1);
+        assert_eq!(back.files.len(), 1);
+        assert!(back.ambiguity.is_none());
+        assert!(!back.truncation.truncated);
+    }
+
+    #[test]
+    fn context_result_with_ambiguity_round_trip() {
+        let result = ContextResult {
+            request: ContextRequest {
+                intent: ContextIntent::Symbol,
+                target: ContextTarget::SymbolName { name: "parse".to_string() },
+                ..ContextRequest::default()
+            },
+            nodes: vec![],
+            edges: vec![],
+            files: vec![],
+            truncation: TruncationMeta::none(),
+            ambiguity: Some(AmbiguityMeta {
+                query: "parse".to_string(),
+                candidates: vec!["crate::a::parse".to_string(), "crate::b::parse".to_string()],
+                resolved: false,
+            }),
+        };
+        let json = serde_json::to_string(&result).unwrap();
+        let back: ContextResult = serde_json::from_str(&json).unwrap();
+        let amb = back.ambiguity.unwrap();
+        assert_eq!(amb.candidates.len(), 2);
+        assert!(!amb.resolved);
     }
 }

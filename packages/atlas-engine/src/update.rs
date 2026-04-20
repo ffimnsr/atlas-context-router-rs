@@ -15,6 +15,10 @@ use rayon::prelude::*;
 
 use crate::call_resolution::reconcile_call_targets;
 
+type ParseWorkItem = (String, camino::Utf8PathBuf, Option<tree_sitter::Tree>);
+type ParseOutcome = Result<(ParsedFile, Option<tree_sitter::Tree>), String>;
+type ParseResultRow = (String, ParseOutcome);
+
 /// Specifies which set of changes to process.
 pub enum UpdateTarget {
     /// Unstaged working-tree changes.
@@ -244,7 +248,7 @@ pub fn update_graph(
     for chunk in changed_candidates.chunks(opts.batch_size) {
         // Move old trees out of the cache for each file in this chunk so
         // they can be owned by the parallel closure (Tree: Send, not Sync).
-        let mut work: Vec<(String, camino::Utf8PathBuf, Option<tree_sitter::Tree>)> = chunk
+        let mut work: Vec<ParseWorkItem> = chunk
             .iter()
             .map(|(rel_str, abs_path)| {
                 let old_tree = tree_cache.remove(rel_str);
@@ -252,10 +256,7 @@ pub fn update_graph(
             })
             .collect();
 
-        let results: Vec<(
-            String,
-            Result<(ParsedFile, Option<tree_sitter::Tree>), String>,
-        )> = work
+        let results: Vec<ParseResultRow> = work
             .par_iter_mut()
             .map(|(rel_str, abs_path, old_tree)| {
                 let hash = match hash_file(abs_path) {
@@ -327,7 +328,7 @@ pub fn update_graph(
     let mut parsed_deps: Vec<ParsedFile> = Vec::new();
 
     for chunk in dep_candidates.chunks(opts.batch_size) {
-        let mut work: Vec<(String, camino::Utf8PathBuf, Option<tree_sitter::Tree>)> = chunk
+        let mut work: Vec<ParseWorkItem> = chunk
             .iter()
             .map(|(rel_str, abs_path)| {
                 let old_tree = tree_cache.remove(rel_str);
@@ -335,10 +336,7 @@ pub fn update_graph(
             })
             .collect();
 
-        let results: Vec<(
-            String,
-            Result<(ParsedFile, Option<tree_sitter::Tree>), String>,
-        )> = work
+        let results: Vec<ParseResultRow> = work
             .par_iter_mut()
             .map(|(rel_str, abs_path, old_tree)| {
                 let hash = match hash_file(abs_path) {

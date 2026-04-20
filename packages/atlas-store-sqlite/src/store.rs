@@ -1439,6 +1439,303 @@ impl Store {
             .collect();
         Ok(rows)
     }
+
+    // -------------------------------------------------------------------------
+    // Context engine helpers (Phase 22 Slice 2)
+    // -------------------------------------------------------------------------
+
+    /// Return the single node whose `qualified_name` exactly matches `qname`,
+    /// or `None` when no such node exists.
+    pub fn node_by_qname(&self, qname: &str) -> Result<Option<Node>> {
+        use rusqlite::OptionalExtension;
+        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
+        self.conn
+            .query_row(
+                "SELECT id, kind, name, qualified_name, file_path, line_start, line_end,
+                        language, parent_name, params, return_type, modifiers,
+                        is_test, file_hash, extra_json
+                 FROM nodes WHERE qualified_name = ?1",
+                [qname],
+                row_to_node,
+            )
+            .optional()
+            .map_err(db_err)
+    }
+
+    /// Return all nodes whose `name` column exactly matches `name`, bounded by
+    /// `limit`.  Results are ordered by `file_path, line_start` for stability.
+    pub fn nodes_by_name(&self, name: &str, limit: usize) -> Result<Vec<Node>> {
+        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, kind, name, qualified_name, file_path, line_start, line_end,
+                        language, parent_name, params, return_type, modifiers,
+                        is_test, file_hash, extra_json
+                 FROM nodes
+                 WHERE name = ?1
+                 ORDER BY file_path, line_start
+                 LIMIT ?2",
+            )
+            .map_err(db_err)?;
+        let rows = stmt
+            .query_map(params![name, limit as i64], row_to_node)
+            .map_err(db_err)?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(rows)
+    }
+
+    /// Return nodes that call `qname` (i.e. edges of kind `calls` with
+    /// `target_qualified = qname`), paired with their edges, bounded by
+    /// `limit`.  Results ordered by edge confidence descending then
+    /// `source_qualified` for stability.
+    pub fn direct_callers(
+        &self,
+        qname: &str,
+        limit: usize,
+    ) -> Result<Vec<(Node, atlas_core::Edge)>> {
+        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT n.id, n.kind, n.name, n.qualified_name, n.file_path,
+                        n.line_start, n.line_end, n.language, n.parent_name,
+                        n.params, n.return_type, n.modifiers, n.is_test,
+                        n.file_hash, n.extra_json,
+                        e.id, e.kind, e.source_qualified, e.target_qualified,
+                        e.file_path, e.line, e.confidence, e.confidence_tier, e.extra_json
+                 FROM edges e
+                 JOIN nodes n ON n.qualified_name = e.source_qualified
+                 WHERE e.target_qualified = ?1
+                   AND e.kind = 'calls'
+                 ORDER BY e.confidence DESC, e.source_qualified
+                 LIMIT ?2",
+            )
+            .map_err(db_err)?;
+        let rows = stmt
+            .query_map(params![qname, limit as i64], row_to_node_and_edge)
+            .map_err(db_err)?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(rows)
+    }
+
+    /// Return nodes called by `qname` (i.e. edges of kind `calls` with
+    /// `source_qualified = qname`), paired with their edges, bounded by
+    /// `limit`.  Results ordered by edge confidence descending then
+    /// `target_qualified` for stability.
+    pub fn direct_callees(
+        &self,
+        qname: &str,
+        limit: usize,
+    ) -> Result<Vec<(Node, atlas_core::Edge)>> {
+        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT n.id, n.kind, n.name, n.qualified_name, n.file_path,
+                        n.line_start, n.line_end, n.language, n.parent_name,
+                        n.params, n.return_type, n.modifiers, n.is_test,
+                        n.file_hash, n.extra_json,
+                        e.id, e.kind, e.source_qualified, e.target_qualified,
+                        e.file_path, e.line, e.confidence, e.confidence_tier, e.extra_json
+                 FROM edges e
+                 JOIN nodes n ON n.qualified_name = e.target_qualified
+                 WHERE e.source_qualified = ?1
+                   AND e.kind = 'calls'
+                 ORDER BY e.confidence DESC, e.target_qualified
+                 LIMIT ?2",
+            )
+            .map_err(db_err)?;
+        let rows = stmt
+            .query_map(params![qname, limit as i64], row_to_node_and_edge)
+            .map_err(db_err)?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(rows)
+    }
+
+    /// Return nodes connected to `qname` via `imports` edges (either
+    /// direction), paired with their edges, bounded by `limit`.
+    ///
+    /// Covers both "this node imports X" (source = qname) and "X is imported
+    /// by this node" (target = qname).  Results are deduplicated by
+    /// `qualified_name` and ordered by file_path for stability.
+    pub fn import_neighbors(
+        &self,
+        qname: &str,
+        limit: usize,
+    ) -> Result<Vec<(Node, atlas_core::Edge)>> {
+        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
+        // Forward: qname imports something → join on target_qualified.
+        // Backward: something imports qname → join on source_qualified.
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT n.id, n.kind, n.name, n.qualified_name, n.file_path,
+                        n.line_start, n.line_end, n.language, n.parent_name,
+                        n.params, n.return_type, n.modifiers, n.is_test,
+                        n.file_hash, n.extra_json,
+                        e.id, e.kind, e.source_qualified, e.target_qualified,
+                        e.file_path, e.line, e.confidence, e.confidence_tier, e.extra_json
+                 FROM edges e
+                 JOIN nodes n ON (
+                     (e.source_qualified = ?1 AND n.qualified_name = e.target_qualified)
+                     OR
+                     (e.target_qualified = ?1 AND n.qualified_name = e.source_qualified)
+                 )
+                 WHERE e.kind = 'imports'
+                   AND n.qualified_name != ?1
+                 ORDER BY n.file_path, n.qualified_name
+                 LIMIT ?2",
+            )
+            .map_err(db_err)?;
+        let rows = stmt
+            .query_map(params![qname, limit as i64], row_to_node_and_edge)
+            .map_err(db_err)?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(rows)
+    }
+
+    /// Return nodes that share the same `parent_name` and `file_path` as the
+    /// node identified by `qname`, excluding `qname` itself.  Bounded by
+    /// `limit`.  Returns an empty vec when the node has no parent or does not
+    /// exist.
+    pub fn containment_siblings(&self, qname: &str, limit: usize) -> Result<Vec<Node>> {
+        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT s.id, s.kind, s.name, s.qualified_name, s.file_path,
+                        s.line_start, s.line_end, s.language, s.parent_name,
+                        s.params, s.return_type, s.modifiers, s.is_test,
+                        s.file_hash, s.extra_json
+                 FROM nodes seed
+                 JOIN nodes s ON s.file_path = seed.file_path
+                              AND s.parent_name = seed.parent_name
+                              AND s.qualified_name != seed.qualified_name
+                 WHERE seed.qualified_name = ?1
+                   AND seed.parent_name IS NOT NULL
+                 ORDER BY s.line_start
+                 LIMIT ?2",
+            )
+            .map_err(db_err)?;
+        let rows = stmt
+            .query_map(params![qname, limit as i64], row_to_node)
+            .map_err(db_err)?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(rows)
+    }
+
+    /// Return nodes connected to `qname` via `tests` or `tested_by` edges
+    /// (either direction), paired with their edges, bounded by `limit`.
+    ///
+    /// Covers both `qname` tests something and something tests `qname`.
+    pub fn test_neighbors(
+        &self,
+        qname: &str,
+        limit: usize,
+    ) -> Result<Vec<(Node, atlas_core::Edge)>> {
+        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT n.id, n.kind, n.name, n.qualified_name, n.file_path,
+                        n.line_start, n.line_end, n.language, n.parent_name,
+                        n.params, n.return_type, n.modifiers, n.is_test,
+                        n.file_hash, n.extra_json,
+                        e.id, e.kind, e.source_qualified, e.target_qualified,
+                        e.file_path, e.line, e.confidence, e.confidence_tier, e.extra_json
+                 FROM edges e
+                 JOIN nodes n ON (
+                     (e.source_qualified = ?1 AND n.qualified_name = e.target_qualified)
+                     OR
+                     (e.target_qualified = ?1 AND n.qualified_name = e.source_qualified)
+                 )
+                 WHERE e.kind IN ('tests', 'tested_by')
+                   AND n.qualified_name != ?1
+                 ORDER BY n.file_path, n.qualified_name
+                 LIMIT ?2",
+            )
+            .map_err(db_err)?;
+        let rows = stmt
+            .query_map(params![qname, limit as i64], row_to_node_and_edge)
+            .map_err(db_err)?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(rows)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Private row-mapping helpers
+// ---------------------------------------------------------------------------
+
+/// Map a row that contains node columns (0-14) followed by edge columns (15-23)
+/// into a `(Node, Edge)` pair.  Used by the context-engine JOIN helpers.
+///
+/// Node columns: id, kind, name, qualified_name, file_path, line_start,
+///   line_end, language, parent_name, params, return_type, modifiers, is_test,
+///   file_hash, extra_json  (indices 0-14)
+/// Edge columns: id, kind, source_qualified, target_qualified, file_path,
+///   line, confidence, confidence_tier, extra_json  (indices 15-23)
+fn row_to_node_and_edge(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<(Node, atlas_core::Edge)> {
+    // -- node --
+    let node_kind_str: String = row.get(1)?;
+    let node_kind = node_kind_str
+        .parse::<atlas_core::NodeKind>()
+        .unwrap_or(atlas_core::NodeKind::Function);
+    let node_extra_str: Option<String> = row.get(14)?;
+    let node_extra = node_extra_str
+        .as_deref()
+        .and_then(|s| serde_json::from_str(s).ok())
+        .unwrap_or(serde_json::Value::Null);
+    let node = Node {
+        id: atlas_core::NodeId(row.get(0)?),
+        kind: node_kind,
+        name: row.get(2)?,
+        qualified_name: row.get(3)?,
+        file_path: row.get(4)?,
+        line_start: row.get(5)?,
+        line_end: row.get(6)?,
+        language: row.get::<_, Option<String>>(7)?.unwrap_or_default(),
+        parent_name: row.get(8)?,
+        params: row.get(9)?,
+        return_type: row.get(10)?,
+        modifiers: row.get(11)?,
+        is_test: row.get::<_, i32>(12)? != 0,
+        file_hash: row.get::<_, Option<String>>(13)?.unwrap_or_default(),
+        extra_json: node_extra,
+    };
+
+    // -- edge --
+    let edge_kind_str: String = row.get(16)?;
+    let edge_kind = edge_kind_str
+        .parse::<atlas_core::EdgeKind>()
+        .unwrap_or(atlas_core::EdgeKind::References);
+    let edge_extra_str: Option<String> = row.get(23)?;
+    let edge_extra = edge_extra_str
+        .as_deref()
+        .and_then(|s| serde_json::from_str(s).ok())
+        .unwrap_or(serde_json::Value::Null);
+    let edge = atlas_core::Edge {
+        id: row.get(15)?,
+        kind: edge_kind,
+        source_qn: row.get(17)?,
+        target_qn: row.get(18)?,
+        file_path: row.get(19)?,
+        line: row.get(20)?,
+        confidence: row.get(21)?,
+        confidence_tier: row.get(22)?,
+        extra_json: edge_extra,
+    };
+
+    Ok((node, edge))
 }
 
 // ---------------------------------------------------------------------------
@@ -3078,5 +3375,296 @@ mod tests {
             old_results.is_empty(),
             "FTS must not return node at old path"
         );
+    }
+
+    // -------------------------------------------------------------------------
+    // Context engine helpers (Phase 22 Slice 2)
+    // -------------------------------------------------------------------------
+
+    fn setup_call_graph(store: &mut Store) {
+        // a.rs: caller → b.rs: callee
+        let caller = make_node(NodeKind::Function, "caller", "a.rs::fn::caller", "a.rs", "rust");
+        let callee = make_node(NodeKind::Function, "callee", "b.rs::fn::callee", "b.rs", "rust");
+        let edge = make_edge(EdgeKind::Calls, "a.rs::fn::caller", "b.rs::fn::callee", "a.rs");
+        store
+            .replace_file_graph("a.rs", "h1", Some("rust"), None, &[caller], std::slice::from_ref(&edge))
+            .unwrap();
+        store
+            .replace_file_graph("b.rs", "h2", Some("rust"), None, &[callee], &[])
+            .unwrap();
+    }
+
+    // --- node_by_qname -------------------------------------------------------
+
+    #[test]
+    fn node_by_qname_exact_hit() {
+        let mut store = open_in_memory();
+        setup_call_graph(&mut store);
+        let node = store.node_by_qname("a.rs::fn::caller").unwrap();
+        assert!(node.is_some());
+        assert_eq!(node.unwrap().name, "caller");
+    }
+
+    #[test]
+    fn node_by_qname_missing_returns_none() {
+        let store = open_in_memory();
+        let node = store.node_by_qname("nonexistent::fn::missing").unwrap();
+        assert!(node.is_none());
+    }
+
+    // --- nodes_by_name -------------------------------------------------------
+
+    #[test]
+    fn nodes_by_name_single_match() {
+        let mut store = open_in_memory();
+        setup_call_graph(&mut store);
+        let nodes = store.nodes_by_name("caller", 10).unwrap();
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].qualified_name, "a.rs::fn::caller");
+    }
+
+    #[test]
+    fn nodes_by_name_multiple_matches() {
+        let mut store = open_in_memory();
+        let n1 = make_node(NodeKind::Function, "process", "a.rs::fn::process", "a.rs", "rust");
+        let n2 = make_node(NodeKind::Function, "process", "b.rs::fn::process", "b.rs", "rust");
+        store
+            .replace_file_graph("a.rs", "h1", None, None, &[n1], &[])
+            .unwrap();
+        store
+            .replace_file_graph("b.rs", "h2", None, None, &[n2], &[])
+            .unwrap();
+        let nodes = store.nodes_by_name("process", 10).unwrap();
+        assert_eq!(nodes.len(), 2);
+    }
+
+    #[test]
+    fn nodes_by_name_limit_respected() {
+        let mut store = open_in_memory();
+        let n1 = make_node(NodeKind::Function, "process", "a.rs::fn::process", "a.rs", "rust");
+        let n2 = make_node(NodeKind::Function, "process", "b.rs::fn::process", "b.rs", "rust");
+        store
+            .replace_file_graph("a.rs", "h1", None, None, &[n1], &[])
+            .unwrap();
+        store
+            .replace_file_graph("b.rs", "h2", None, None, &[n2], &[])
+            .unwrap();
+        let nodes = store.nodes_by_name("process", 1).unwrap();
+        assert_eq!(nodes.len(), 1);
+    }
+
+    #[test]
+    fn nodes_by_name_missing_returns_empty() {
+        let store = open_in_memory();
+        let nodes = store.nodes_by_name("ghost_fn", 10).unwrap();
+        assert!(nodes.is_empty());
+    }
+
+    // --- direct_callers -------------------------------------------------------
+
+    #[test]
+    fn direct_callers_returns_caller() {
+        let mut store = open_in_memory();
+        setup_call_graph(&mut store);
+        let callers = store.direct_callers("b.rs::fn::callee", 10).unwrap();
+        assert_eq!(callers.len(), 1);
+        let (node, edge) = &callers[0];
+        assert_eq!(node.qualified_name, "a.rs::fn::caller");
+        assert_eq!(edge.target_qn, "b.rs::fn::callee");
+        assert_eq!(edge.kind, EdgeKind::Calls);
+    }
+
+    #[test]
+    fn direct_callers_empty_for_no_callers() {
+        let mut store = open_in_memory();
+        setup_call_graph(&mut store);
+        // caller has no incoming call edges
+        let callers = store.direct_callers("a.rs::fn::caller", 10).unwrap();
+        assert!(callers.is_empty());
+    }
+
+    #[test]
+    fn direct_callers_missing_node_returns_empty() {
+        let store = open_in_memory();
+        let callers = store.direct_callers("does::not::exist", 10).unwrap();
+        assert!(callers.is_empty());
+    }
+
+    // --- direct_callees -------------------------------------------------------
+
+    #[test]
+    fn direct_callees_returns_callee() {
+        let mut store = open_in_memory();
+        setup_call_graph(&mut store);
+        let callees = store.direct_callees("a.rs::fn::caller", 10).unwrap();
+        assert_eq!(callees.len(), 1);
+        let (node, edge) = &callees[0];
+        assert_eq!(node.qualified_name, "b.rs::fn::callee");
+        assert_eq!(edge.source_qn, "a.rs::fn::caller");
+        assert_eq!(edge.kind, EdgeKind::Calls);
+    }
+
+    #[test]
+    fn direct_callees_empty_for_no_callees() {
+        let mut store = open_in_memory();
+        setup_call_graph(&mut store);
+        let callees = store.direct_callees("b.rs::fn::callee", 10).unwrap();
+        assert!(callees.is_empty());
+    }
+
+    #[test]
+    fn direct_callees_missing_node_returns_empty() {
+        let store = open_in_memory();
+        let callees = store.direct_callees("does::not::exist", 10).unwrap();
+        assert!(callees.is_empty());
+    }
+
+    // --- import_neighbors ----------------------------------------------------
+
+    fn setup_import_graph(store: &mut Store) {
+        let importer = make_node(NodeKind::Module, "mod_a", "a.rs::mod::mod_a", "a.rs", "rust");
+        let importee = make_node(NodeKind::Module, "mod_b", "b.rs::mod::mod_b", "b.rs", "rust");
+        let edge = make_edge(EdgeKind::Imports, "a.rs::mod::mod_a", "b.rs::mod::mod_b", "a.rs");
+        store
+            .replace_file_graph("a.rs", "h1", None, None, &[importer], &[edge])
+            .unwrap();
+        store
+            .replace_file_graph("b.rs", "h2", None, None, &[importee], &[])
+            .unwrap();
+    }
+
+    #[test]
+    fn import_neighbors_forward_direction() {
+        let mut store = open_in_memory();
+        setup_import_graph(&mut store);
+        // a imports b → b is a neighbor of a
+        let neighbors = store.import_neighbors("a.rs::mod::mod_a", 10).unwrap();
+        assert_eq!(neighbors.len(), 1);
+        let (node, edge) = &neighbors[0];
+        assert_eq!(node.qualified_name, "b.rs::mod::mod_b");
+        assert_eq!(edge.kind, EdgeKind::Imports);
+    }
+
+    #[test]
+    fn import_neighbors_backward_direction() {
+        let mut store = open_in_memory();
+        setup_import_graph(&mut store);
+        // b is imported by a → a is a neighbor of b
+        let neighbors = store.import_neighbors("b.rs::mod::mod_b", 10).unwrap();
+        assert_eq!(neighbors.len(), 1);
+        let (node, _edge) = &neighbors[0];
+        assert_eq!(node.qualified_name, "a.rs::mod::mod_a");
+    }
+
+    #[test]
+    fn import_neighbors_missing_node_returns_empty() {
+        let store = open_in_memory();
+        let neighbors = store.import_neighbors("no::such::module", 10).unwrap();
+        assert!(neighbors.is_empty());
+    }
+
+    // --- containment_siblings ------------------------------------------------
+
+    fn setup_sibling_graph(store: &mut Store) {
+        let parent_method = |name: &str, qn: &str| -> Node {
+            let mut n = make_node(NodeKind::Method, name, qn, "a.rs", "rust");
+            n.parent_name = Some("MyClass".to_string());
+            n
+        };
+        let n1 = parent_method("method_a", "a.rs::MyClass::method_a");
+        let n2 = parent_method("method_b", "a.rs::MyClass::method_b");
+        let n3 = parent_method("method_c", "a.rs::MyClass::method_c");
+        store
+            .replace_file_graph("a.rs", "h1", None, None, &[n1, n2, n3], &[])
+            .unwrap();
+    }
+
+    #[test]
+    fn containment_siblings_returns_same_parent() {
+        let mut store = open_in_memory();
+        setup_sibling_graph(&mut store);
+        let siblings = store
+            .containment_siblings("a.rs::MyClass::method_a", 10)
+            .unwrap();
+        assert_eq!(siblings.len(), 2);
+        let names: Vec<_> = siblings.iter().map(|n| n.name.as_str()).collect();
+        assert!(names.contains(&"method_b"));
+        assert!(names.contains(&"method_c"));
+        // seed itself must be excluded
+        assert!(!names.contains(&"method_a"));
+    }
+
+    #[test]
+    fn containment_siblings_limit_respected() {
+        let mut store = open_in_memory();
+        setup_sibling_graph(&mut store);
+        let siblings = store
+            .containment_siblings("a.rs::MyClass::method_a", 1)
+            .unwrap();
+        assert_eq!(siblings.len(), 1);
+    }
+
+    #[test]
+    fn containment_siblings_no_parent_returns_empty() {
+        let mut store = open_in_memory();
+        // node with no parent_name
+        let n = make_node(NodeKind::Function, "standalone", "a.rs::fn::standalone", "a.rs", "rust");
+        store
+            .replace_file_graph("a.rs", "h1", None, None, &[n], &[])
+            .unwrap();
+        let siblings = store.containment_siblings("a.rs::fn::standalone", 10).unwrap();
+        assert!(siblings.is_empty());
+    }
+
+    #[test]
+    fn containment_siblings_missing_node_returns_empty() {
+        let store = open_in_memory();
+        let siblings = store.containment_siblings("does::not::exist", 10).unwrap();
+        assert!(siblings.is_empty());
+    }
+
+    // --- test_neighbors ------------------------------------------------------
+
+    fn setup_test_graph(store: &mut Store) {
+        let src = make_node(NodeKind::Function, "parse", "a.rs::fn::parse", "a.rs", "rust");
+        let mut test_node = make_node(NodeKind::Test, "test_parse", "tests.rs::test::test_parse", "tests.rs", "rust");
+        test_node.is_test = true;
+        let edge = make_edge(EdgeKind::Tests, "tests.rs::test::test_parse", "a.rs::fn::parse", "tests.rs");
+        store
+            .replace_file_graph("a.rs", "h1", None, None, &[src], &[])
+            .unwrap();
+        store
+            .replace_file_graph("tests.rs", "h2", None, None, &[test_node], &[edge])
+            .unwrap();
+    }
+
+    #[test]
+    fn test_neighbors_source_node_finds_test() {
+        let mut store = open_in_memory();
+        setup_test_graph(&mut store);
+        // parse is tested by test_parse → test_parse must appear
+        let neighbors = store.test_neighbors("a.rs::fn::parse", 10).unwrap();
+        assert_eq!(neighbors.len(), 1);
+        let (node, edge) = &neighbors[0];
+        assert_eq!(node.qualified_name, "tests.rs::test::test_parse");
+        assert_eq!(edge.kind, EdgeKind::Tests);
+    }
+
+    #[test]
+    fn test_neighbors_test_node_finds_source() {
+        let mut store = open_in_memory();
+        setup_test_graph(&mut store);
+        // test_parse tests parse → parse must appear
+        let neighbors = store.test_neighbors("tests.rs::test::test_parse", 10).unwrap();
+        assert_eq!(neighbors.len(), 1);
+        let (node, _edge) = &neighbors[0];
+        assert_eq!(node.qualified_name, "a.rs::fn::parse");
+    }
+
+    #[test]
+    fn test_neighbors_missing_node_returns_empty() {
+        let store = open_in_memory();
+        let neighbors = store.test_neighbors("no::test::here", 10).unwrap();
+        assert!(neighbors.is_empty());
     }
 }
