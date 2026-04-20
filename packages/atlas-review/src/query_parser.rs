@@ -79,6 +79,7 @@ const INTENT_PHRASES: &[(&str, ContextIntent)] = &[
     ("rename", ContextIntent::RenamePreview),
     // Usage / caller intents.
     ("who calls", ContextIntent::UsageLookup),
+    ("what calls", ContextIntent::UsageLookup),
     ("used by", ContextIntent::UsageLookup),
     ("callers of", ContextIntent::UsageLookup),
     ("usages of", ContextIntent::UsageLookup),
@@ -139,15 +140,143 @@ fn extract_target(text: &str, intent: ContextIntent) -> ContextTarget {
         return ContextTarget::QualifiedName { qname };
     }
 
+    let narrowed = strip_intent_words(text, intent);
+
+    if let Some(path) = extract_file_path(&narrowed) {
+        return match intent {
+            ContextIntent::Review
+            | ContextIntent::Impact
+            | ContextIntent::ImpactAnalysis
+            | ContextIntent::RefactorSafety
+            | ContextIntent::DependencyRemoval => ContextTarget::ChangedFiles { paths: vec![path] },
+            _ => ContextTarget::FilePath { path },
+        };
+    }
+
+    if let Some(qname) = extract_qualified_name(&narrowed) {
+        return ContextTarget::QualifiedName { qname };
+    }
+
     // 4 & 5. Best plain identifier (CamelCase or snake_case).
-    if let Some(name) = extract_best_identifier(text) {
+    if let Some(name) = extract_best_identifier(&narrowed).or_else(|| extract_best_identifier(text))
+    {
+        return ContextTarget::SymbolName { name };
+    }
+
+    if let Some(name) = extract_plain_identifier(&narrowed) {
         return ContextTarget::SymbolName { name };
     }
 
     // Fallback: use the whole trimmed text as a symbol name.
     ContextTarget::SymbolName {
-        name: text.trim().to_string(),
+        name: narrowed.trim().to_string(),
     }
+}
+
+fn strip_intent_words(text: &str, intent: ContextIntent) -> String {
+    let mut narrowed = text.trim().to_string();
+    let lower = narrowed.to_lowercase();
+
+    for phrase in phrases_for_intent(intent) {
+        if let Some(index) = lower.find(phrase) {
+            let start = index + phrase.len();
+            narrowed = narrowed[start..].trim().to_string();
+            break;
+        }
+    }
+
+    let filtered_tokens: Vec<&str> = narrowed
+        .split_whitespace()
+        .map(|token| {
+            token.trim_matches(|c: char| {
+                matches!(c, ',' | '.' | ';' | ':' | '(' | ')' | '[' | ']' | '?' | '!')
+            })
+        })
+        .filter(|token| !token.is_empty())
+        .filter(|token| !is_stopword(token))
+        .collect();
+
+    if filtered_tokens.is_empty() {
+        text.trim().to_string()
+    } else {
+        filtered_tokens.join(" ")
+    }
+}
+
+fn phrases_for_intent(intent: ContextIntent) -> &'static [&'static str] {
+    match intent {
+        ContextIntent::Review => &[
+            "review context",
+            "code review",
+            "what changed",
+            "changed in",
+        ],
+        ContextIntent::Impact | ContextIntent::ImpactAnalysis => &[
+            "what will break",
+            "what breaks",
+            "impact of",
+            "breaking change",
+        ],
+        ContextIntent::RefactorSafety => &["safe to refactor", "safe to remove"],
+        ContextIntent::DependencyRemoval => &["remove dependency"],
+        ContextIntent::DeadCodeCheck => &["dead code", "unused"],
+        ContextIntent::RenamePreview => &["rename"],
+        ContextIntent::UsageLookup => &[
+            "where is",
+            "what calls",
+            "who calls",
+            "used by",
+            "callers of",
+            "usages of",
+            "usage of",
+            "find usages",
+        ],
+        ContextIntent::File => &["show file", "symbols in", "what is in"],
+        ContextIntent::Symbol => &[],
+    }
+}
+
+fn is_stopword(token: &str) -> bool {
+    matches!(
+        token.to_ascii_lowercase().as_str(),
+        "if" | "i"
+            | "change"
+            | "used"
+            | "use"
+            | "calls"
+            | "call"
+            | "of"
+            | "to"
+            | "is"
+            | "it"
+            | "safe"
+            | "dead"
+            | "code"
+            | "remove"
+            | "dependency"
+            | "rename"
+            | "what"
+            | "who"
+            | "where"
+            | "breaks"
+            | "break"
+            | "will"
+            | "by"
+            | "me"
+            | "about"
+            | "tell"
+            | "do"
+            | "does"
+            | "this"
+            | "that"
+    )
+}
+
+fn extract_plain_identifier(text: &str) -> Option<String> {
+    text.split_whitespace()
+        .map(|token| token.trim_end_matches([',', '.', ';', ')', ']', '?', '!']))
+        .find(|token| is_identifier(token) && !is_stopword(token))
+        .map(str::to_string)
 }
 
 /// Classify a quoted substring into a `ContextTarget`.
@@ -305,6 +434,12 @@ mod tests {
     }
 
     #[test]
+    fn classify_what_calls() {
+        let req = parse_query("what calls resolve_target");
+        assert_eq!(req.intent, ContextIntent::UsageLookup);
+    }
+
+    #[test]
     fn classify_safe_to_refactor() {
         let req = parse_query("is it safe to refactor build_context");
         assert_eq!(req.intent, ContextIntent::RefactorSafety);
@@ -398,6 +533,26 @@ mod tests {
         let req = parse_query("what does build_symbol_context do?");
         assert!(
             matches!(&req.target, ContextTarget::SymbolName { name } if name == "build_symbol_context"),
+            "got {:?}",
+            req.target
+        );
+    }
+
+    #[test]
+    fn extract_plain_identifier_from_where_is_used() {
+        let req = parse_query("where is helper used?");
+        assert!(
+            matches!(&req.target, ContextTarget::SymbolName { name } if name == "helper"),
+            "got {:?}",
+            req.target
+        );
+    }
+
+    #[test]
+    fn extract_plain_identifier_from_breakage_query() {
+        let req = parse_query("what breaks if I change helper?");
+        assert!(
+            matches!(&req.target, ContextTarget::SymbolName { name } if name == "helper"),
             "got {:?}",
             req.target
         );

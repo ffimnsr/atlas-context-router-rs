@@ -1,10 +1,13 @@
 use std::fs;
+use std::io::{self, BufRead, IsTerminal, Write};
+use std::process::{Command as ProcessCommand, Stdio};
 
 use anyhow::{Context, Result};
 use atlas_core::SearchQuery;
 use atlas_core::model::{
-    ChangeType, ContextIntent, ContextRequest, ContextTarget, ImpactResult, ReviewContext,
-    ReviewImpactOverview, RiskSummary,
+    ChangeType, ContextIntent, ContextRequest, ContextResult, ContextTarget, ImpactResult,
+    NoiseReductionSummary, ReviewContext, ReviewImpactOverview, RiskSummary, WorkflowCallChain,
+    WorkflowComponent, WorkflowFocusNode,
 };
 use atlas_engine::{BuildOptions, UpdateOptions, UpdateTarget, build_graph, update_graph};
 use atlas_impact::analyze as advanced_impact;
@@ -102,7 +105,7 @@ fn status_payload(
     })
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Default)]
 struct ExplainChangedByKind {
     api_change: usize,
     signature_change: usize,
@@ -141,12 +144,43 @@ struct ExplainChangeSummary {
     changed_file_count: usize,
     changed_symbol_count: usize,
     changed_by_kind: ExplainChangedByKind,
+    diff_summary: ExplainDiffSummary,
     changed_symbols: Vec<ExplainChangedSymbol>,
     impacted_file_count: usize,
     impacted_node_count: usize,
+    high_impact_nodes: Vec<WorkflowFocusNode>,
+    impacted_components: Vec<WorkflowComponent>,
+    call_chains: Vec<WorkflowCallChain>,
+    ripple_effects: Vec<String>,
     boundary_violations: Vec<ExplainBoundaryViolation>,
     test_impact: ExplainTestImpact,
+    noise_reduction: NoiseReductionSummary,
     summary: String,
+}
+
+#[derive(Serialize, Default)]
+struct ExplainDiffCounts {
+    added: usize,
+    modified: usize,
+    deleted: usize,
+    renamed: usize,
+    copied: usize,
+}
+
+#[derive(Serialize)]
+struct ExplainDiffFile {
+    path: String,
+    change_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    old_path: Option<String>,
+    changed_symbol_count: usize,
+    impacted_symbol_count: usize,
+}
+
+#[derive(Serialize, Default)]
+struct ExplainDiffSummary {
+    counts: ExplainDiffCounts,
+    files: Vec<ExplainDiffFile>,
 }
 
 fn normalize_explicit_files(repo_root: &Utf8Path, explicit_files: &[String]) -> Vec<String> {
@@ -170,19 +204,29 @@ fn empty_explain_change_summary() -> ExplainChangeSummary {
         risk_level: "low".to_string(),
         changed_file_count: 0,
         changed_symbol_count: 0,
-        changed_by_kind: ExplainChangedByKind {
-            api_change: 0,
-            signature_change: 0,
-            internal_change: 0,
-        },
+        changed_by_kind: ExplainChangedByKind::default(),
+        diff_summary: ExplainDiffSummary::default(),
         changed_symbols: vec![],
         impacted_file_count: 0,
         impacted_node_count: 0,
+        high_impact_nodes: vec![],
+        impacted_components: vec![],
+        call_chains: vec![],
+        ripple_effects: vec![],
         boundary_violations: vec![],
         test_impact: ExplainTestImpact {
             affected_test_count: 0,
             uncovered_symbol_count: 0,
             uncovered_symbols: vec![],
+        },
+        noise_reduction: NoiseReductionSummary {
+            retained_nodes: 0,
+            retained_edges: 0,
+            retained_files: 0,
+            dropped_nodes: 0,
+            dropped_edges: 0,
+            dropped_files: 0,
+            rules_applied: vec![],
         },
         summary: "No changed files detected.".to_string(),
     }
@@ -213,6 +257,7 @@ fn query_owner_identity(node: &atlas_core::Node) -> Option<String> {
 
 fn build_explain_change_summary(
     store: &Store,
+    changes: &[atlas_core::model::ChangedFile],
     files: &[String],
     max_depth: u32,
     max_nodes: usize,
@@ -222,12 +267,21 @@ fn build_explain_change_summary(
         .impact_radius(&file_refs, max_depth, max_nodes)
         .context("impact radius query failed")?;
     let advanced = advanced_impact(base_impact);
-
-    let mut changed_by_kind = ExplainChangedByKind {
-        api_change: 0,
-        signature_change: 0,
-        internal_change: 0,
+    let workflow_request = ContextRequest {
+        intent: ContextIntent::Review,
+        target: ContextTarget::ChangedFiles {
+            paths: files.to_vec(),
+        },
+        max_nodes: Some(max_nodes),
+        depth: Some(max_depth),
+        ..ContextRequest::default()
     };
+    let workflow_result = ContextEngine::new(store)
+        .build(&workflow_request)
+        .context("workflow summary generation failed")?;
+    let workflow = workflow_result.workflow.clone();
+
+    let mut changed_by_kind = ExplainChangedByKind::default();
 
     let changed_symbols: Vec<ExplainChangedSymbol> = advanced
         .scored_nodes
@@ -284,8 +338,17 @@ fn build_explain_change_summary(
     let risk_level = advanced.risk_level.to_string();
     let impacted_file_count = advanced.base.impacted_files.len();
     let impacted_node_count = advanced.base.impacted_nodes.len();
+    let diff_summary = build_diff_summary(changes, &advanced.base);
 
     let mut summary_parts: Vec<String> = vec![format!("Risk: {}.", risk_level)];
+    summary_parts.push(format!(
+        "{} file change(s): {} modified, {} added, {} deleted, {} renamed.",
+        changes.len(),
+        diff_summary.counts.modified,
+        diff_summary.counts.added,
+        diff_summary.counts.deleted,
+        diff_summary.counts.renamed,
+    ));
     if changed_by_kind.api_change > 0 {
         summary_parts.push(format!("{} api change(s).", changed_by_kind.api_change));
     }
@@ -317,23 +380,117 @@ fn build_explain_change_summary(
             uncovered_symbols.len()
         ));
     }
+    if let Some(workflow) = &workflow {
+        if let Some(headline) = &workflow.headline {
+            summary_parts.push(headline.clone());
+        }
+        if let Some(ripple) = workflow.ripple_effects.first() {
+            summary_parts.push(ripple.clone());
+        }
+    }
 
     Ok(ExplainChangeSummary {
         risk_level,
-        changed_file_count: files.len(),
+        changed_file_count: changes.len(),
         changed_symbol_count: changed_symbols.len(),
         changed_by_kind,
+        diff_summary,
         changed_symbols,
         impacted_file_count,
         impacted_node_count,
+        high_impact_nodes: workflow
+            .as_ref()
+            .map(|workflow| workflow.high_impact_nodes.clone())
+            .unwrap_or_default(),
+        impacted_components: workflow
+            .as_ref()
+            .map(|workflow| workflow.impacted_components.clone())
+            .unwrap_or_default(),
+        call_chains: workflow
+            .as_ref()
+            .map(|workflow| workflow.call_chains.clone())
+            .unwrap_or_default(),
+        ripple_effects: workflow
+            .as_ref()
+            .map(|workflow| workflow.ripple_effects.clone())
+            .unwrap_or_default(),
         boundary_violations,
         test_impact: ExplainTestImpact {
             affected_test_count: advanced.test_impact.affected_tests.len(),
             uncovered_symbol_count: uncovered_symbols.len(),
             uncovered_symbols,
         },
+        noise_reduction: workflow.map(|workflow| workflow.noise_reduction).unwrap_or(
+            NoiseReductionSummary {
+                retained_nodes: 0,
+                retained_edges: 0,
+                retained_files: 0,
+                dropped_nodes: 0,
+                dropped_edges: 0,
+                dropped_files: 0,
+                rules_applied: vec![],
+            },
+        ),
         summary: summary_parts.join(" "),
     })
+}
+
+fn build_diff_summary(
+    changes: &[atlas_core::model::ChangedFile],
+    impact: &atlas_core::ImpactResult,
+) -> ExplainDiffSummary {
+    let changed_by_file: std::collections::HashMap<&str, usize> =
+        impact
+            .changed_nodes
+            .iter()
+            .fold(std::collections::HashMap::new(), |mut acc, node| {
+                *acc.entry(node.file_path.as_str()).or_insert(0) += 1;
+                acc
+            });
+    let impacted_by_file: std::collections::HashMap<&str, usize> = impact
+        .impacted_nodes
+        .iter()
+        .fold(std::collections::HashMap::new(), |mut acc, node| {
+            *acc.entry(node.file_path.as_str()).or_insert(0) += 1;
+            acc
+        });
+
+    let mut counts = ExplainDiffCounts::default();
+    let files = changes
+        .iter()
+        .map(|change| {
+            match change.change_type {
+                ChangeType::Added => counts.added += 1,
+                ChangeType::Modified => counts.modified += 1,
+                ChangeType::Deleted => counts.deleted += 1,
+                ChangeType::Renamed => counts.renamed += 1,
+                ChangeType::Copied => counts.copied += 1,
+            }
+
+            ExplainDiffFile {
+                path: change.path.clone(),
+                change_type: match change.change_type {
+                    ChangeType::Added => "added",
+                    ChangeType::Modified => "modified",
+                    ChangeType::Deleted => "deleted",
+                    ChangeType::Renamed => "renamed",
+                    ChangeType::Copied => "copied",
+                }
+                .to_string(),
+                old_path: change.old_path.clone(),
+                changed_symbol_count: changed_by_file
+                    .get(change.path.as_str())
+                    .copied()
+                    .unwrap_or(0),
+                impacted_symbol_count: impacted_by_file
+                    .get(change.path.as_str())
+                    .copied()
+                    .unwrap_or(0),
+            }
+        })
+        .collect();
+
+    ExplainDiffSummary { counts, files }
 }
 
 pub fn run_init(cli: &Cli) -> Result<()> {
@@ -694,16 +851,25 @@ pub fn run_explain_change(cli: &Cli) -> Result<()> {
         _ => unreachable!(),
     };
 
-    let target_files = if !explicit_files.is_empty() {
+    let changes = if !explicit_files.is_empty() {
         normalize_explicit_files(repo_root, &explicit_files)
+            .into_iter()
+            .map(|path| atlas_core::model::ChangedFile {
+                path,
+                change_type: ChangeType::Modified,
+                old_path: None,
+            })
+            .collect()
     } else {
         changed_files(repo_root, &detect_changes_target(&base, staged))
             .context("cannot detect changed files")?
-            .into_iter()
-            .filter(|cf| cf.change_type != ChangeType::Deleted)
-            .map(|cf| cf.path)
-            .collect()
     };
+
+    let target_files: Vec<String> = changes
+        .iter()
+        .filter(|change| change.change_type != ChangeType::Deleted)
+        .map(|change| change.path.clone())
+        .collect();
 
     if target_files.is_empty() {
         let empty = empty_explain_change_summary();
@@ -717,7 +883,8 @@ pub fn run_explain_change(cli: &Cli) -> Result<()> {
 
     let store =
         Store::open(&db_path).with_context(|| format!("cannot open database at {db_path}"))?;
-    let summary = build_explain_change_summary(&store, &target_files, max_depth, max_nodes)?;
+    let summary =
+        build_explain_change_summary(&store, &changes, &target_files, max_depth, max_nodes)?;
 
     if cli.json {
         print_json("explain_change", serde_json::to_value(&summary)?)?;
@@ -725,6 +892,13 @@ pub fn run_explain_change(cli: &Cli) -> Result<()> {
         println!("Risk level      : {}", summary.risk_level);
         println!("Changed files   : {}", summary.changed_file_count);
         println!("Changed symbols : {}", summary.changed_symbol_count);
+        println!(
+            "Diff summary    : +{} ~{} -{} r{}",
+            summary.diff_summary.counts.added,
+            summary.diff_summary.counts.modified,
+            summary.diff_summary.counts.deleted,
+            summary.diff_summary.counts.renamed
+        );
         println!(
             "Change kinds    : api {} | signature {} | internal {}",
             summary.changed_by_kind.api_change,
@@ -748,6 +922,34 @@ pub fn run_explain_change(cli: &Cli) -> Result<()> {
             println!("\nBoundary violations:");
             for violation in &summary.boundary_violations {
                 println!("  [{}] {}", violation.kind, violation.description);
+            }
+        }
+
+        if !summary.impacted_components.is_empty() {
+            println!("\nImpacted components:");
+            for component in summary.impacted_components.iter().take(8) {
+                println!(
+                    "  [{}] {} | changed {} | impacted {} | files {}",
+                    component.kind,
+                    component.label,
+                    component.changed_node_count,
+                    component.impacted_node_count,
+                    component.file_count
+                );
+            }
+        }
+
+        if !summary.call_chains.is_empty() {
+            println!("\nCall chains:");
+            for chain in summary.call_chains.iter().take(5) {
+                println!("  {}", chain.summary);
+            }
+        }
+
+        if !summary.ripple_effects.is_empty() {
+            println!("\nRipple effects:");
+            for ripple in &summary.ripple_effects {
+                println!("  {ripple}");
             }
         }
 
@@ -777,28 +979,31 @@ pub fn run_query(cli: &Cli) -> Result<()> {
     let store =
         Store::open(&db_path).with_context(|| format!("cannot open database at {db_path}"))?;
 
-    let (text, kind, language, subpath, limit, expand, expand_hops, hybrid) = match &cli.command {
-        Command::Query {
-            text,
-            kind,
-            language,
-            subpath,
-            limit,
-            expand,
-            expand_hops,
-            hybrid,
-        } => (
-            text.clone(),
-            kind.clone(),
-            language.clone(),
-            subpath.clone(),
-            *limit,
-            *expand,
-            *expand_hops,
-            *hybrid,
-        ),
-        _ => unreachable!(),
-    };
+    let (text, kind, language, subpath, limit, expand, expand_hops, fuzzy, hybrid) =
+        match &cli.command {
+            Command::Query {
+                text,
+                kind,
+                language,
+                subpath,
+                limit,
+                expand,
+                expand_hops,
+                fuzzy,
+                hybrid,
+            } => (
+                text.clone(),
+                kind.clone(),
+                language.clone(),
+                subpath.clone(),
+                *limit,
+                *expand,
+                *expand_hops,
+                *fuzzy,
+                *hybrid,
+            ),
+            _ => unreachable!(),
+        };
 
     let query = SearchQuery {
         text,
@@ -808,6 +1013,7 @@ pub fn run_query(cli: &Cli) -> Result<()> {
         limit,
         graph_expand: expand,
         graph_max_hops: expand_hops,
+        fuzzy_match: fuzzy,
         hybrid,
         ..Default::default()
     };
@@ -828,6 +1034,7 @@ pub fn run_query(cli: &Cli) -> Result<()> {
                     "limit": query.limit,
                     "graph_expand": query.graph_expand,
                     "graph_max_hops": query.graph_max_hops,
+                    "fuzzy_match": query.fuzzy_match,
                 },
                 "latency_ms": latency_ms,
                 "results": results,
@@ -1134,21 +1341,21 @@ pub fn run_review_context(cli: &Cli) -> Result<()> {
     }
 
     let path_refs: Vec<&str> = target_files.iter().map(String::as_str).collect();
+    let workflow_request = ContextRequest {
+        intent: ContextIntent::Review,
+        target: ContextTarget::ChangedFiles {
+            paths: target_files.clone(),
+        },
+        max_nodes: Some(max_nodes),
+        depth: Some(max_depth),
+        ..ContextRequest::default()
+    };
+    let workflow_result = ContextEngine::new(&store)
+        .build(&workflow_request)
+        .context("context engine failed")?;
 
     if cli.json {
-        // JSON path: use context engine → ContextResult (new stable schema).
-        let request = ContextRequest {
-            intent: ContextIntent::Review,
-            target: ContextTarget::ChangedFiles {
-                paths: target_files.clone(),
-            },
-            max_nodes: Some(max_nodes),
-            depth: Some(max_depth),
-            ..ContextRequest::default()
-        };
-        let engine = ContextEngine::new(&store);
-        let result = engine.build(&request).context("context engine failed")?;
-        print_json("review_context", serde_json::to_value(&result)?)?;
+        print_json("review_context", serde_json::to_value(&workflow_result)?)?;
         return Ok(());
     }
 
@@ -1238,12 +1445,37 @@ pub fn run_review_context(cli: &Cli) -> Result<()> {
         ctx.risk_summary.cross_package_impact
     );
 
+    if let Some(workflow) = &workflow_result.workflow {
+        if let Some(headline) = &workflow.headline {
+            println!("\nFocus: {headline}");
+        }
+        if !workflow.high_impact_nodes.is_empty() {
+            println!("\nHigh-impact nodes:");
+            for node in workflow.high_impact_nodes.iter().take(5) {
+                println!(
+                    "  [{:.1}] {} {} ({})",
+                    node.relevance_score, node.kind, node.qualified_name, node.file_path
+                );
+            }
+        }
+        if !workflow.call_chains.is_empty() {
+            println!("\nCall chains:");
+            for chain in workflow.call_chains.iter().take(5) {
+                println!("  {}", chain.summary);
+            }
+        }
+        if !workflow.ripple_effects.is_empty() {
+            println!("\nRipple effects:");
+            for ripple in &workflow.ripple_effects {
+                println!("  {ripple}");
+            }
+        }
+    }
+
     Ok(())
 }
 
 pub fn run_context(cli: &Cli) -> Result<()> {
-    use atlas_core::model::SelectionReason;
-
     let repo = resolve_repo(cli)?;
     let db_path = db_path(cli, &repo);
 
@@ -1353,88 +1585,7 @@ pub fn run_context(cli: &Cli) -> Result<()> {
     if cli.json {
         print_json("context", serde_json::to_value(&result)?)?;
     } else {
-        if let Some(ambiguity) = &result.ambiguity {
-            println!("Ambiguous target: {}", ambiguity.query);
-            println!("Candidates ({}):", ambiguity.candidates.len());
-            for c in &ambiguity.candidates {
-                println!("  {c}");
-            }
-            println!("\nUse a qualified name or --file to narrow the target.");
-            return Ok(());
-        }
-
-        if result.nodes.is_empty() && result.files.is_empty() {
-            println!("No context found. Check the target name or path.");
-            return Ok(());
-        }
-
-        println!("Nodes ({}):", result.nodes.len());
-        for sn in result.nodes.iter().take(20) {
-            println!(
-                "  [{:?}] {} {} ({}:{})",
-                sn.selection_reason,
-                sn.node.kind.as_str(),
-                sn.node.qualified_name,
-                sn.node.file_path,
-                sn.node.line_start,
-            );
-        }
-        println!("\nEdges ({}):", result.edges.len());
-        for se in result.edges.iter().take(20) {
-            println!(
-                "  {} --{}--> {}",
-                se.edge.source_qn,
-                se.edge.kind.as_str(),
-                se.edge.target_qn,
-            );
-        }
-        println!("\nFiles ({}):", result.files.len());
-        for sf in &result.files {
-            let ranges: Vec<String> = sf
-                .line_ranges
-                .iter()
-                .map(|(s, e)| format!("{s}-{e}"))
-                .collect();
-            if ranges.is_empty() {
-                println!("  {} [{:?}]", sf.path, sf.selection_reason);
-            } else {
-                println!(
-                    "  {} [{:?}] lines {}",
-                    sf.path,
-                    sf.selection_reason,
-                    ranges.join(", ")
-                );
-            }
-        }
-        if result.truncation.truncated {
-            println!(
-                "\n[truncated: {} nodes, {} edges, {} files dropped]",
-                result.truncation.nodes_dropped,
-                result.truncation.edges_dropped,
-                result.truncation.files_dropped,
-            );
-        }
-
-        // Print counts for nodes tagged as DirectTarget on their own line
-        let direct_count = result
-            .nodes
-            .iter()
-            .filter(|n| n.selection_reason == SelectionReason::DirectTarget)
-            .count();
-        let caller_count = result
-            .nodes
-            .iter()
-            .filter(|n| n.selection_reason == SelectionReason::Caller)
-            .count();
-        let callee_count = result
-            .nodes
-            .iter()
-            .filter(|n| n.selection_reason == SelectionReason::Callee)
-            .count();
-        println!(
-            "\nSummary: {} target, {} callers, {} callees",
-            direct_count, caller_count, callee_count
-        );
+        println!("{}", format_context_output(&result));
     }
 
     Ok(())
@@ -1457,6 +1608,284 @@ fn parse_intent_str(s: &str) -> Option<ContextIntent> {
 
 fn parse_intent_override(override_str: Option<&str>, default: ContextIntent) -> ContextIntent {
     override_str.and_then(parse_intent_str).unwrap_or(default)
+}
+
+pub fn run_shell(cli: &Cli) -> Result<()> {
+    let repo = resolve_repo(cli)?;
+    let db_path = db_path(cli, &repo);
+    let (fuzzy, paging) = match &cli.command {
+        Command::Shell { fuzzy, paging } => (*fuzzy, *paging),
+        _ => unreachable!(),
+    };
+
+    let store =
+        Store::open(&db_path).with_context(|| format!("cannot open database at {db_path}"))?;
+    let engine = ContextEngine::new(&store);
+    let stdin = io::stdin();
+    let mut line = String::new();
+
+    emit_shell_output(
+        &format!(
+            "{}\n{}\n{}",
+            colorize("Atlas shell", "1;36"),
+            "Type natural-language graph questions or `/query <text>`.",
+            "Use `help`, `exit`, or `quit` to leave."
+        ),
+        paging,
+    )?;
+
+    loop {
+        if io::stdout().is_terminal() {
+            print!("{}", colorize("atlas> ", "1;34"));
+            io::stdout().flush().context("flush shell prompt")?;
+        }
+
+        line.clear();
+        if stdin
+            .lock()
+            .read_line(&mut line)
+            .context("read shell line")?
+            == 0
+        {
+            break;
+        }
+
+        let input = line.trim();
+        if input.is_empty() {
+            continue;
+        }
+        if matches!(input, "exit" | "quit") {
+            break;
+        }
+        if input == "help" {
+            emit_shell_output(
+                "Examples:\n  where is greet_twice used\n  what calls helper\n  what breaks if I change helper\n  /query greter",
+                paging,
+            )?;
+            continue;
+        }
+
+        let rendered = if let Some(query_text) = input.strip_prefix("/query ") {
+            render_shell_query_output(&store, query_text.trim(), fuzzy)?
+        } else {
+            let request = query_parser::parse_query(input);
+            let result = engine.build(&request).context("context engine failed")?;
+            format_context_output(&result)
+        };
+
+        emit_shell_output(&rendered, paging)?;
+    }
+
+    Ok(())
+}
+
+fn format_context_output(result: &ContextResult) -> String {
+    use atlas_core::model::SelectionReason;
+
+    if let Some(ambiguity) = &result.ambiguity {
+        let mut out = Vec::new();
+        out.push(colorize(
+            &format!("Ambiguous target: {}", ambiguity.query),
+            "1;33",
+        ));
+        out.push(format!("Candidates ({}):", ambiguity.candidates.len()));
+        out.extend(
+            ambiguity
+                .candidates
+                .iter()
+                .map(|candidate| format!("  {candidate}")),
+        );
+        out.push("Use qualified name or --file to narrow target.".to_string());
+        return out.join("\n");
+    }
+
+    if result.nodes.is_empty() && result.files.is_empty() {
+        return "No context found. Check target name or path.".to_string();
+    }
+
+    let mut out = Vec::new();
+    if let Some(workflow) = &result.workflow {
+        if let Some(headline) = &workflow.headline {
+            out.push(colorize(headline, "1;36"));
+        }
+        if !workflow.high_impact_nodes.is_empty() {
+            out.push(colorize("High-impact nodes:", "1;35"));
+            out.extend(workflow.high_impact_nodes.iter().map(|node| {
+                format!(
+                    "  [{:.1}] {} {} ({})",
+                    node.relevance_score, node.kind, node.qualified_name, node.file_path
+                )
+            }));
+        }
+        if !workflow.call_chains.is_empty() {
+            out.push(colorize("Call chains:", "1;35"));
+            out.extend(
+                workflow
+                    .call_chains
+                    .iter()
+                    .take(5)
+                    .map(|chain| format!("  {}", chain.summary)),
+            );
+        }
+        if !workflow.ripple_effects.is_empty() {
+            out.push(colorize("Ripple effects:", "1;35"));
+            out.extend(
+                workflow
+                    .ripple_effects
+                    .iter()
+                    .map(|ripple| format!("  {ripple}")),
+            );
+        }
+    }
+
+    out.push(colorize(
+        &format!("Nodes ({}):", result.nodes.len()),
+        "1;32",
+    ));
+    out.extend(result.nodes.iter().take(20).map(|node| {
+        format!(
+            "  [{:?}] {} {} ({}:{})",
+            node.selection_reason,
+            node.node.kind.as_str(),
+            node.node.qualified_name,
+            node.node.file_path,
+            node.node.line_start,
+        )
+    }));
+
+    if !result.edges.is_empty() {
+        out.push(colorize(
+            &format!("Edges ({}):", result.edges.len()),
+            "1;32",
+        ));
+        out.extend(result.edges.iter().take(20).map(|edge| {
+            format!(
+                "  {} --{}--> {}",
+                edge.edge.source_qn,
+                edge.edge.kind.as_str(),
+                edge.edge.target_qn,
+            )
+        }));
+    }
+
+    out.push(colorize(
+        &format!("Files ({}):", result.files.len()),
+        "1;32",
+    ));
+    out.extend(result.files.iter().map(|file| {
+        let ranges: Vec<String> = file
+            .line_ranges
+            .iter()
+            .map(|(start, end)| format!("{start}-{end}"))
+            .collect();
+        if ranges.is_empty() {
+            format!("  {} [{:?}]", file.path, file.selection_reason)
+        } else {
+            format!(
+                "  {} [{:?}] lines {}",
+                file.path,
+                file.selection_reason,
+                ranges.join(", ")
+            )
+        }
+    }));
+
+    if result.truncation.truncated {
+        out.push(format!(
+            "[truncated: {} nodes, {} edges, {} files dropped]",
+            result.truncation.nodes_dropped,
+            result.truncation.edges_dropped,
+            result.truncation.files_dropped,
+        ));
+    }
+
+    let direct_count = result
+        .nodes
+        .iter()
+        .filter(|node| node.selection_reason == SelectionReason::DirectTarget)
+        .count();
+    let caller_count = result
+        .nodes
+        .iter()
+        .filter(|node| node.selection_reason == SelectionReason::Caller)
+        .count();
+    let callee_count = result
+        .nodes
+        .iter()
+        .filter(|node| node.selection_reason == SelectionReason::Callee)
+        .count();
+    out.push(format!(
+        "Summary: {} target, {} callers, {} callees",
+        direct_count, caller_count, callee_count
+    ));
+
+    out.join("\n")
+}
+
+fn render_shell_query_output(store: &Store, text: &str, fuzzy: bool) -> Result<String> {
+    let query = SearchQuery {
+        text: text.to_string(),
+        limit: 10,
+        fuzzy_match: fuzzy,
+        ..SearchQuery::default()
+    };
+    let results = search::search(store, &query).context("search failed")?;
+    if results.is_empty() {
+        return Ok("No query results.".to_string());
+    }
+
+    let mut lines = vec![colorize("Query results:", "1;36")];
+    lines.extend(results.iter().map(|result| {
+        format!(
+            "  [{:.3}] {} {} ({}:{})",
+            result.score,
+            result.node.kind.as_str(),
+            result.node.qualified_name,
+            query_display_path(&result.node),
+            result.node.line_start,
+        )
+    }));
+    Ok(lines.join("\n"))
+}
+
+fn emit_shell_output(text: &str, paging: bool) -> Result<()> {
+    if paging && io::stdout().is_terminal() && text.lines().count() > 24 && try_page_output(text)? {
+        return Ok(());
+    }
+    println!("{text}");
+    Ok(())
+}
+
+fn try_page_output(text: &str) -> Result<bool> {
+    let pager = std::env::var("ATLAS_PAGER")
+        .ok()
+        .or_else(|| std::env::var("PAGER").ok())
+        .unwrap_or_else(|| "less".to_string());
+    let mut child = match ProcessCommand::new(&pager)
+        .arg("-R")
+        .stdin(Stdio::piped())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(_) => return Ok(false),
+    };
+    if let Some(stdin) = child.stdin.as_mut() {
+        stdin
+            .write_all(text.as_bytes())
+            .with_context(|| format!("write pager input to {pager}"))?;
+    }
+    child
+        .wait()
+        .with_context(|| format!("wait for pager {pager}"))?;
+    Ok(true)
+}
+
+fn colorize(text: &str, ansi: &str) -> String {
+    if io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none() {
+        format!("\x1b[{ansi}m{text}\x1b[0m")
+    } else {
+        text.to_string()
+    }
 }
 
 /// Structured result for a single doctor check.

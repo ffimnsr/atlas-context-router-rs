@@ -51,6 +51,45 @@ fn fixture_query_output_matches_golden() {
 }
 
 #[test]
+fn query_fuzzy_flag_recovers_close_typo() {
+    let repo = setup_fixture_repo();
+
+    run_atlas(repo.path(), &["init"]);
+    run_atlas(repo.path(), &["build"]);
+
+    let no_fuzzy = read_json_data_output(
+        "query",
+        run_atlas(repo.path(), &["--json", "query", "gret_twice"]),
+    );
+    let no_fuzzy_results = no_fuzzy["results"].as_array().expect("query results array");
+    assert!(
+        !no_fuzzy_results.is_empty(),
+        "baseline typo query should still surface a candidate: {no_fuzzy:?}"
+    );
+    assert_eq!(no_fuzzy_results[0]["node"]["name"], json!("greet_twice"));
+
+    let fuzzy = read_json_data_output(
+        "query",
+        run_atlas(repo.path(), &["--json", "query", "gret_twice", "--fuzzy"]),
+    );
+    let results = fuzzy["results"]
+        .as_array()
+        .expect("query results array with fuzzy enabled");
+    assert!(
+        !results.is_empty(),
+        "fuzzy typo query should recover a close match: {fuzzy:?}"
+    );
+    assert_eq!(fuzzy["query"]["fuzzy_match"], json!(true));
+    assert_eq!(results[0]["node"]["name"], json!("greet_twice"));
+    let no_fuzzy_score = no_fuzzy_results[0]["score"].as_f64().unwrap_or_default();
+    let fuzzy_score = results[0]["score"].as_f64().unwrap_or_default();
+    assert!(
+        fuzzy_score > no_fuzzy_score,
+        "fuzzy query should improve score for close typo: no_fuzzy={no_fuzzy_score} fuzzy={fuzzy_score}"
+    );
+}
+
+#[test]
 fn build_and_update_skip_unsupported_files_without_count_drift() {
     let repo = setup_fixture_repo();
 
@@ -250,12 +289,164 @@ fn explain_change_command_reports_change_summary() {
         "expected api change count in explain-change output: {explain:?}"
     );
     assert_eq!(explain["risk_level"], json!("high"));
+    assert_eq!(
+        explain["diff_summary"]["files"][0]["change_type"],
+        json!("modified")
+    );
+    assert!(
+        explain["impacted_components"]
+            .as_array()
+            .expect("impacted components array")
+            .iter()
+            .any(|component| component["file_count"].as_u64().unwrap_or_default() >= 1),
+        "expected impacted components in explain-change output: {explain:?}"
+    );
+    assert!(
+        explain["ripple_effects"]
+            .as_array()
+            .expect("ripple effects array")
+            .iter()
+            .any(|item| item.as_str().unwrap_or_default().contains("Change")
+                || item.as_str().unwrap_or_default().contains("Impact")
+                || item.as_str().unwrap_or_default().contains("Primary")),
+        "expected ripple effect summary in explain-change output: {explain:?}"
+    );
     assert!(
         explain["summary"]
             .as_str()
             .unwrap_or_default()
             .contains("Risk:"),
         "summary must include risk sentence: {explain:?}"
+    );
+}
+
+#[test]
+fn review_context_includes_workflow_summary_and_call_chains() {
+    let repo = setup_fixture_repo();
+
+    run_atlas(repo.path(), &["init"]);
+    run_atlas(repo.path(), &["build"]);
+    rewrite_fixture_helper(repo.path());
+
+    let review_ctx = read_json_data_output(
+        "review_context",
+        run_atlas(repo.path(), &["--json", "review-context", "--base", "HEAD"]),
+    );
+
+    assert!(review_ctx["workflow"].is_object(), "workflow block missing");
+    assert!(
+        review_ctx["workflow"]["high_impact_nodes"]
+            .as_array()
+            .expect("high impact nodes array")
+            .iter()
+            .any(|node| node["qualified_name"].is_string()),
+        "expected high-impact nodes in workflow summary: {review_ctx:?}"
+    );
+    assert!(
+        review_ctx["workflow"]["call_chains"]
+            .as_array()
+            .expect("call chains array")
+            .iter()
+            .any(|chain| chain["summary"].as_str().unwrap_or_default().contains("->")),
+        "expected call chain summary in review context: {review_ctx:?}"
+    );
+    assert!(
+        review_ctx["workflow"]["noise_reduction"]["rules_applied"].is_array(),
+        "expected noise reduction metadata in review context: {review_ctx:?}"
+    );
+}
+
+#[test]
+fn natural_language_context_queries_map_to_graph_requests() {
+    let repo = setup_fixture_repo();
+
+    run_atlas(repo.path(), &["init"]);
+    run_atlas(repo.path(), &["build"]);
+
+    let usage = read_json_data_output(
+        "context",
+        run_atlas(
+            repo.path(),
+            &["--json", "context", "where is greet_twice used?"],
+        ),
+    );
+    assert_eq!(usage["request"]["intent"], json!("usage_lookup"));
+    assert!(
+        usage["nodes"]
+            .as_array()
+            .expect("usage nodes array")
+            .iter()
+            .all(|node| {
+                matches!(
+                    node["selection_reason"].as_str().unwrap_or_default(),
+                    "direct_target" | "caller" | "importee" | "importer"
+                )
+            }),
+        "usage lookup should not include callee noise: {usage:?}"
+    );
+
+    let what_calls = read_json_data_output(
+        "context",
+        run_atlas(
+            repo.path(),
+            &["--json", "context", "what calls greet_twice?"],
+        ),
+    );
+    assert_eq!(what_calls["request"]["intent"], json!("usage_lookup"));
+
+    let breaks = read_json_data_output(
+        "context",
+        run_atlas(
+            repo.path(),
+            &["--json", "context", "what breaks if I change greet_twice?"],
+        ),
+    );
+    assert_eq!(breaks["request"]["intent"], json!("impact_analysis"));
+    assert!(
+        breaks["workflow"]["headline"].is_string() || breaks["nodes"].is_array(),
+        "impact-analysis query should route to graph context: {breaks:?}"
+    );
+}
+
+#[test]
+fn interactive_shell_accepts_query_and_context_requests() {
+    let repo = setup_fixture_repo();
+
+    run_atlas(repo.path(), &["init"]);
+    run_atlas(repo.path(), &["build"]);
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_atlas"))
+        .args(["shell", "--fuzzy"])
+        .current_dir(repo.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap_or_else(|err| panic!("failed to spawn atlas shell: {err}"));
+
+    child
+        .stdin
+        .as_mut()
+        .expect("shell stdin")
+        .write_all(b"/query greet_twice\nwhat calls greet_twice?\nexit\n")
+        .expect("write shell input");
+
+    let output = child.wait_with_output().expect("wait for atlas shell");
+    assert!(
+        output.status.success(),
+        "atlas shell failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Query results:"),
+        "missing query output: {stdout}"
+    );
+    assert!(
+        stdout.contains("Call chains:") || stdout.contains("Nodes ("),
+        "missing context output: {stdout}"
     );
 }
 

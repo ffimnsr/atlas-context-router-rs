@@ -76,6 +76,10 @@ fn repeat_placeholders(n: usize) -> String {
 /// Wrap a user-provided FTS5 query so special characters don't break syntax.
 /// Simple approach: if the string has FTS5 operators, quote it as a phrase.
 fn fts5_escape(input: &str) -> String {
+    if looks_like_safe_fts_query(input) {
+        return input.to_string();
+    }
+
     // If it looks like a plain word/words without FTS5 syntax, leave it as-is
     // so users can still use operators intentionally.  Otherwise wrap in "".
     let has_special = input
@@ -87,6 +91,16 @@ fn fts5_escape(input: &str) -> String {
     } else {
         input.to_string()
     }
+}
+
+fn looks_like_safe_fts_query(input: &str) -> bool {
+    !input.is_empty()
+        && input.split_whitespace().all(|token| {
+            token == "OR"
+                || token
+                    .chars()
+                    .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '*')
+        })
 }
 
 /// SQLite-backed graph store.
@@ -2709,6 +2723,16 @@ mod tests {
 
     fn cols(names: &[&str]) -> Vec<String> {
         names.iter().map(|name| (*name).to_string()).collect()
+    }
+
+    #[test]
+    fn fts5_escape_preserves_safe_prefix_query() {
+        assert_eq!(fts5_escape("gre* OR tw*"), "gre* OR tw*");
+    }
+
+    #[test]
+    fn fts5_escape_quotes_unsafe_query() {
+        assert_eq!(fts5_escape("gre* OR tw*(foo)"), "\"gre* OR tw*(foo)\"");
     }
 
     fn make_node(kind: NodeKind, name: &str, qn: &str, file_path: &str, language: &str) -> Node {

@@ -148,5 +148,91 @@
     "files_dropped": 0,
     "nodes_dropped": 0,
     "truncated": false
+  },
+  "workflow": {
+    "headline": "3 focused node(s) across 1 component(s)",
+    "high_impact_nodes": [
+      {
+        "qualified_name": "src/lib.rs::fn::helper",
+        "kind": "function",
+        "file_path": "src/lib.rs",
+        "relevance_score": 121.0,
+        "selection_reason": "direct_target"
+      },
+      {
+        "qualified_name": "src/lib.rs::method::Greeter::greet_twice",
+        "kind": "method",
+        "file_path": "src/lib.rs",
+        "relevance_score": 96.0,
+        "selection_reason": "callee"
+      },
+      {
+        "qualified_name": "src/main.rs::fn::main",
+        "kind": "function",
+        "file_path": "src/main.rs",
+        "relevance_score": 88.0,
+        "selection_reason": "caller"
+      }
+    ],
+    "impacted_components": [
+      {
+        "label": "src",
+        "kind": "directory",
+        "changed_node_count": 1,
+        "impacted_node_count": 2,
+        "file_count": 2,
+        "summary": "1 changed, 2 impacted across 2 file(s)"
+      }
+    ],
+    "call_chains": [
+      {
+        "summary": "src/main.rs::fn::main -> src/lib.rs::fn::helper -> src/lib.rs::method::Greeter::greet_twice",
+        "steps": [
+          "src/main.rs::fn::main",
+          "src/lib.rs::fn::helper",
+          "src/lib.rs::method::Greeter::greet_twice"
+        ],
+        "edge_kinds": [
+          "calls",
+          "calls"
+        ]
+      },
+      {
+        "summary": "src/lib.rs::fn::helper -> src/lib.rs::method::Greeter::greet_twice",
+        "steps": [
+          "src/lib.rs::fn::helper",
+          "src/lib.rs::method::Greeter::greet_twice"
+        ],
+        "edge_kinds": [
+          "calls"
+        ]
+      },
+      {
+        "summary": "src/main.rs::fn::main -> src/lib.rs::fn::helper",
+        "steps": [
+          "src/main.rs::fn::main",
+          "src/lib.rs::fn::helper"
+        ],
+        "edge_kinds": [
+          "calls"
+        ]
+      }
+    ],
+    "ripple_effects": [
+      "Primary call chain: src/main.rs::fn::main -> src/lib.rs::fn::helper -> src/lib.rs::method::Greeter::greet_twice",
+      "Change reaches 2 neighboring file(s)."
+    ],
+    "noise_reduction": {
+      "retained_nodes": 3,
+      "retained_edges": 2,
+      "retained_files": 2,
+      "dropped_nodes": 0,
+      "dropped_edges": 0,
+      "dropped_files": 0,
+      "rules_applied": [
+        "omitted containment siblings",
+        "omitted test-only neighbors"
+      ]
+    }
   }
 }

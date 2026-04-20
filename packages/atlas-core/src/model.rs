@@ -678,6 +678,58 @@ pub struct AmbiguityMeta {
     pub resolved: bool,
 }
 
+/// High-signal node surfaced for developer workflow output.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkflowFocusNode {
+    pub qualified_name: String,
+    pub kind: String,
+    pub file_path: String,
+    pub relevance_score: f32,
+    pub selection_reason: String,
+}
+
+/// Grouped impact summary for one component / package / directory.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkflowComponent {
+    pub label: String,
+    pub kind: String,
+    pub changed_node_count: usize,
+    pub impacted_node_count: usize,
+    pub file_count: usize,
+    pub summary: String,
+}
+
+/// One concise call chain or dependency chain relevant to a workflow result.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkflowCallChain {
+    pub summary: String,
+    pub steps: Vec<String>,
+    pub edge_kinds: Vec<String>,
+}
+
+/// Summary of workflow filters and trimming used to keep output focused.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NoiseReductionSummary {
+    pub retained_nodes: usize,
+    pub retained_edges: usize,
+    pub retained_files: usize,
+    pub dropped_nodes: usize,
+    pub dropped_edges: usize,
+    pub dropped_files: usize,
+    pub rules_applied: Vec<String>,
+}
+
+/// Focused metadata for review, explain-change, and interactive workflows.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkflowSummary {
+    pub headline: Option<String>,
+    pub high_impact_nodes: Vec<WorkflowFocusNode>,
+    pub impacted_components: Vec<WorkflowComponent>,
+    pub call_chains: Vec<WorkflowCallChain>,
+    pub ripple_effects: Vec<String>,
+    pub noise_reduction: NoiseReductionSummary,
+}
+
 /// Output of the context engine for a single [`ContextRequest`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContextResult {
@@ -688,6 +740,8 @@ pub struct ContextResult {
     pub truncation: TruncationMeta,
     /// Set when the target was ambiguous; contains ranked candidates.
     pub ambiguity: Option<AmbiguityMeta>,
+    /// Focused workflow metadata for higher-level developer UX.
+    pub workflow: Option<WorkflowSummary>,
 }
 
 // ---------------------------------------------------------------------------
@@ -1447,6 +1501,42 @@ mod tests {
             }],
             truncation: TruncationMeta::none(),
             ambiguity: None,
+            workflow: Some(WorkflowSummary {
+                headline: Some("Focus on helper callers".to_string()),
+                high_impact_nodes: vec![WorkflowFocusNode {
+                    qualified_name: "src/lib.rs::fn::helper".to_string(),
+                    kind: "function".to_string(),
+                    file_path: "src/lib.rs".to_string(),
+                    relevance_score: 42.0,
+                    selection_reason: "direct_target".to_string(),
+                }],
+                impacted_components: vec![WorkflowComponent {
+                    label: "src".to_string(),
+                    kind: "directory".to_string(),
+                    changed_node_count: 1,
+                    impacted_node_count: 1,
+                    file_count: 1,
+                    summary: "1 changed, 1 impacted".to_string(),
+                }],
+                call_chains: vec![WorkflowCallChain {
+                    summary: "caller -> helper".to_string(),
+                    steps: vec![
+                        "src/main.rs::fn::caller".to_string(),
+                        "src/lib.rs::fn::helper".to_string(),
+                    ],
+                    edge_kinds: vec!["calls".to_string()],
+                }],
+                ripple_effects: vec!["Change reaches one dependent component.".to_string()],
+                noise_reduction: NoiseReductionSummary {
+                    retained_nodes: 1,
+                    retained_edges: 1,
+                    retained_files: 1,
+                    dropped_nodes: 0,
+                    dropped_edges: 0,
+                    dropped_files: 0,
+                    rules_applied: vec!["omitted containment siblings".to_string()],
+                },
+            }),
         };
         let json = serde_json::to_string(&result).unwrap();
         let back: ContextResult = serde_json::from_str(&json).unwrap();
@@ -1455,6 +1545,7 @@ mod tests {
         assert_eq!(back.files.len(), 1);
         assert!(back.ambiguity.is_none());
         assert!(!back.truncation.truncated);
+        assert!(back.workflow.is_some());
     }
 
     #[test]
@@ -1476,6 +1567,7 @@ mod tests {
                 candidates: vec!["crate::a::parse".to_string(), "crate::b::parse".to_string()],
                 resolved: false,
             }),
+            workflow: None,
         };
         let json = serde_json::to_string(&result).unwrap();
         let back: ContextResult = serde_json::from_str(&json).unwrap();

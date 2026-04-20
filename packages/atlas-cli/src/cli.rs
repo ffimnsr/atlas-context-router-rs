@@ -110,6 +110,10 @@ pub enum Command {
         #[arg(long, default_value_t = 1)]
         expand_hops: u32,
 
+        /// Enable fuzzy matching boost for near-miss symbol names.
+        #[arg(long)]
+        fuzzy: bool,
+
         /// Use hybrid FTS + vector search with RRF (requires ATLAS_EMBED_URL).
         #[arg(long)]
         hybrid: bool,
@@ -248,6 +252,17 @@ pub enum Command {
         /// Shell to generate completions for.
         #[arg(value_enum)]
         shell: Shell,
+    },
+
+    /// Start interactive developer shell for natural-language graph queries.
+    Shell {
+        /// Enable fuzzy matching for `/query` lookups.
+        #[arg(long)]
+        fuzzy: bool,
+
+        /// Pipe long results through pager when possible.
+        #[arg(long)]
+        paging: bool,
     },
 
     /// Build context around a symbol, file, or change-set using the context engine.
@@ -750,11 +765,23 @@ mod tests {
         if let Command::Query {
             expand,
             expand_hops,
+            fuzzy,
             ..
         } = cli.command
         {
             assert!(expand);
             assert_eq!(expand_hops, 3);
+            assert!(!fuzzy);
+        } else {
+            panic!("expected Query command");
+        }
+    }
+
+    #[test]
+    fn parse_query_fuzzy_flag() {
+        let cli = parse(&["atlas", "query", "greter", "--fuzzy"]);
+        if let Command::Query { fuzzy, .. } = cli.command {
+            assert!(fuzzy);
         } else {
             panic!("expected Query command");
         }
@@ -977,6 +1004,18 @@ mod tests {
     #[test]
     fn completions_missing_shell_fails() {
         assert!(Cli::try_parse_from(["atlas", "completions"]).is_err());
+    }
+
+    #[test]
+    fn parse_shell_with_flags() {
+        let cli = parse(&["atlas", "shell", "--fuzzy", "--paging"]);
+        assert!(matches!(
+            cli.command,
+            Command::Shell {
+                fuzzy: true,
+                paging: true
+            }
+        ));
     }
 
     #[test]

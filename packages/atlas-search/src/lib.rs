@@ -71,6 +71,65 @@ pub fn build_fts_query(text: &str) -> String {
     tokens.join(" OR ")
 }
 
+/// Build a relaxed FTS5 query for typo-tolerant lookup.
+///
+/// Uses short prefix wildcards derived from the original token and any
+/// camelCase / snake_case splits so a typo like `greter` can still retrieve
+/// `greet_twice` candidates before fuzzy ranking runs.
+fn build_relaxed_fts_query(text: &str) -> String {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+
+    let mut prefixes: Vec<String> = Vec::new();
+    let lower = trimmed.to_lowercase();
+    if let Some(prefix) = relaxed_prefix(&lower) {
+        prefixes.push(prefix);
+    }
+
+    let camel_parts = split_camel(trimmed);
+    if camel_parts.len() > 1 {
+        for part in camel_parts {
+            if let Some(prefix) = relaxed_prefix(&part.to_lowercase()) {
+                prefixes.push(prefix);
+            }
+        }
+    }
+
+    let snake_parts: Vec<&str> = trimmed.split('_').filter(|part| !part.is_empty()).collect();
+    if snake_parts.len() > 1 {
+        for part in snake_parts {
+            if let Some(prefix) = relaxed_prefix(&part.to_lowercase()) {
+                prefixes.push(prefix);
+            }
+        }
+    }
+
+    let word_parts: Vec<&str> = trimmed.split_whitespace().collect();
+    if word_parts.len() > 1 {
+        for part in word_parts {
+            if let Some(prefix) = relaxed_prefix(&part.to_lowercase()) {
+                prefixes.push(prefix);
+            }
+        }
+    }
+
+    prefixes.dedup();
+    prefixes.join(" OR ")
+}
+
+fn relaxed_prefix(token: &str) -> Option<String> {
+    let len = token.chars().count();
+    if len < 4 {
+        return None;
+    }
+
+    let prefix_len = if len >= 6 { 3 } else { 2 };
+    let prefix: String = token.chars().take(prefix_len).collect();
+    Some(format!("{prefix}*"))
+}
+
 // ---------------------------------------------------------------------------
 // Fuzzy matching
 // ---------------------------------------------------------------------------
@@ -361,7 +420,31 @@ pub fn search(store: &Store, query: &SearchQuery) -> Result<Vec<ScoredNode>> {
         ..query.clone()
     };
 
-    let fts_results = store.search(&effective_query)?;
+    let mut fts_results = store.search(&effective_query)?;
+
+    if fts_results.is_empty() && query.fuzzy_match {
+        let relaxed_text = build_relaxed_fts_query(&query.text);
+        if !relaxed_text.is_empty() {
+            let relaxed_query = SearchQuery {
+                text: relaxed_text,
+                limit: query.limit.saturating_mul(5).max(25),
+                ..query.clone()
+            };
+            let relaxed_results = store.search(&relaxed_query)?;
+            let fuzzy_cap = fuzzy_threshold(query.text.trim().chars().count());
+            fts_results = relaxed_results
+                .into_iter()
+                .filter(|result| {
+                    fuzzy_cap > 0
+                        && edit_distance(
+                            &query.text.trim().to_lowercase(),
+                            &result.node.name.to_lowercase(),
+                            fuzzy_cap,
+                        ) <= fuzzy_cap
+                })
+                .collect();
+        }
+    }
 
     // Optionally fetch recently indexed file paths for the recent-file boost.
     let recent_set: HashSet<String> = if query.recent_file_boost {
@@ -527,6 +610,19 @@ mod tests {
     fn build_fts_query_plain() {
         let q = build_fts_query("simple");
         assert_eq!(q, "simple");
+    }
+
+    #[test]
+    fn build_relaxed_fts_query_plain() {
+        let q = build_relaxed_fts_query("greter");
+        assert_eq!(q, "gre*");
+    }
+
+    #[test]
+    fn build_relaxed_fts_query_snake() {
+        let q = build_relaxed_fts_query("gret_twice");
+        assert!(q.contains("gre*"), "expected typo prefix token: {q}");
+        assert!(q.contains("tw*"), "expected stable suffix token: {q}");
     }
 
     #[test]

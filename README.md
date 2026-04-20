@@ -284,7 +284,7 @@ atlas --json install --platform claude
 - `.atlas/worldtree.db`
 - `.mcp.json` for Claude Code installs
 - `.vscode/mcp.json` for GitHub Copilot installs
-- `~/.codex/config.toml` entry for Codex installs
+- `.codex/config.toml` entry for Codex installs
 - `.git/hooks/*` for installed git hooks
 
 ## MCP Tools

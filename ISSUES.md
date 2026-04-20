@@ -68,7 +68,7 @@ For terms that are easy to misread in this document:
   - [x] embeddings
   - [x] communities
   - [x] flows
-  - [ ] wiki
+  - [x] wiki
   - [ ] visualization/export
   - [ ] multi-repo registry
   - [x] install hooks
@@ -1184,7 +1184,7 @@ The upstream repo exposes a stdio MCP server, but the report makes clear this sh
 
 - [ ] embeddings
 - [ ] cloud providers
-- [ ] wiki generation
+- [x] wiki generation
 - [ ] visualization
 - [ ] export formats
 - [ ] registry
@@ -1287,29 +1287,29 @@ These phases extend v1 after core graph/build/update/query path is reliable.
 
 ### 21.1 Explain change
 
-- [ ] summarize diff
-- [ ] list impacted components
-- [ ] explain ripple effects
+- [x] summarize diff
+- [x] list impacted components
+- [x] explain ripple effects
 
 ### 21.2 Smart review context
 
-- [ ] prioritize high-impact nodes
-- [ ] include call chains
-- [ ] remove noise
+- [x] prioritize high-impact nodes
+- [x] include call chains
+- [x] remove noise
 
 ### 21.3 Natural-language queries
 
-- [ ] support `where is X used`
-- [ ] support `what calls Y`
-- [ ] support `what breaks if I change Z`
-- [ ] map intent to graph query
+- [x] support `where is X used`
+- [x] support `what calls Y`
+- [x] support `what breaks if I change Z`
+- [x] map intent to graph query
 
 ### 21.4 CLI UX
 
-- [ ] interactive shell (`atlas shell`)
-- [ ] fuzzy search
-- [ ] paging
-- [ ] colored output
+- [x] interactive shell (`atlas shell`)
+- [x] fuzzy search
+- [x] paging
+- [x] colored output
 
 ## Phase 22 — Context Engine
 
@@ -2321,8 +2321,8 @@ Deterministic analytics layer on top of graph + stored metadata. Produce explain
 
 ### 31.1 Wiki / docs generation
 
-- [ ] generate Markdown docs
-- [ ] module pages
+- [x] generate Markdown docs
+- [x] module pages
 - [ ] function pages
 - [ ] static site export
 
@@ -2430,6 +2430,7 @@ And system has:
 - [ ] watch mode for incremental local updates
 - [x] observability/debug tooling for graph integrity and pipeline behavior
 - [ ] performance that scales to large repos
+  - [ ] use the current repo on a new disconnected worktree for testing?
 - [ ] large-repo performance acceptance gate passes on representative repos without memory or latency regressions
 
 ---
