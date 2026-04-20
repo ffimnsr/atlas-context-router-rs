@@ -189,7 +189,7 @@ The current project is fundamentally a code graph persisted in SQLite, with node
 
 ### 2.3 Define `Node`
 
-- [ ] Create `NodeId` type
+- [x] Create `NodeId` type
 - [x] Include:
   - [x] `id: i64`
   - [x] `kind: NodeKind`
@@ -437,7 +437,7 @@ The upstream project’s primary promise includes full build plus incremental up
 - [x] MVP rename behavior:
   - [x] remove old path
   - [x] parse new path as fresh file
-- [ ] preserve stable node identity across rename if hash unchanged
+- [x] preserve stable node identity across rename if hash unchanged
 
 ---
 
@@ -806,7 +806,7 @@ The upstream search layer uses FTS5 and ranking heuristics; embeddings are expli
 - [x] function/method/class boost
 - [x] same-directory boost
 - [x] same-language boost
-- [ ] changed-file boost
+- [x] changed-file boost
 
 ### 11.4 CLI
 
@@ -1070,9 +1070,9 @@ These phases extend v1 after core graph/build/update/query path is reliable.
 
 - [x] exact name boost
 - [x] qualified-name boost
-- [ ] fuzzy match
+- [x] fuzzy match
 - [x] camelCase/snake_case token split
-- [ ] recent-file boost
+- [x] recent-file boost
 - [x] API-level boost
 
 ### 18.3 Graph-aware search
@@ -2023,6 +2023,34 @@ And the system has:
 - [x] review-context assembly
 - [x] FTS5 search
 - [x] CI on Linux
+
+---
+
+## Release 2 Definition
+
+Release 2 is done when this works end-to-end:
+
+- [ ] `atlas install`
+- [ ] `atlas update --base origin/main`
+- [ ] `atlas query "some symbol" --expand`
+- [ ] `atlas review-context --base origin/main`
+- [ ] `atlas explain-change --base origin/main`
+- [ ] `atlas context "what should I read before editing X?"`
+- [ ] `atlas analyze dead-code --subpath <path>`
+- [ ] `atlas refactor rename --symbol <qualified-name> --to <new-name> --dry-run`
+
+And system has:
+
+- [ ] graph-aware search that beats plain grep for symbol lookup
+- [ ] reliable impact scoring with test and boundary signals
+- [ ] smart review context with better ranking and trimming
+- [ ] deterministic context engine with target resolution and code-span selection
+- [ ] reasoning engine for removal impact, dead code, and refactor risk
+- [ ] refactor planning with dry-run patch validation
+- [ ] stable MCP tools usable by agents with token-efficient output
+- [ ] watch mode for incremental local updates
+- [ ] observability/debug tooling for graph integrity and pipeline behavior
+- [ ] performance that scales to large repos
 
 ---
 

@@ -343,6 +343,7 @@ fn tool_build_or_update_graph(
         tool_result(serde_json::to_string_pretty(&serde_json::json!({
             "mode": "update",
             "deleted": summary.deleted,
+            "renamed": summary.renamed,
             "parsed": summary.parsed,
             "skipped_unsupported": summary.skipped_unsupported,
             "parse_errors": summary.parse_errors,

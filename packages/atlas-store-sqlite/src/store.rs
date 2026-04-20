@@ -491,6 +491,134 @@ impl Store {
         Ok(())
     }
 
+    /// Returns the stored content hash for `path`, or `None` if the file has
+    /// not been indexed yet.
+    pub fn file_hash(&self, path: &str) -> Result<Option<String>> {
+        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
+        use rusqlite::OptionalExtension;
+        let result = self
+            .conn
+            .query_row(
+                "SELECT hash FROM files WHERE path = ?1",
+                [path],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(db_err)?;
+        Ok(result)
+    }
+
+    /// Rename a file in the graph, preserving every node's primary-key `id`.
+    ///
+    /// Updates `file_path` on all nodes and edges owned by `old_path`, moves
+    /// the `files` row, and keeps the FTS index consistent.  Used when a git
+    /// rename is detected but the content hash is unchanged — the node graph
+    /// can simply be retargeted to the new path instead of being deleted and
+    /// rebuilt from scratch.
+    pub fn rename_file_graph(&mut self, old_path: &str, new_path: &str) -> Result<()> {
+        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
+
+        self.conn.execute_batch("BEGIN IMMEDIATE").map_err(db_err)?;
+
+        // Read existing nodes so we can update FTS.
+        let old_nodes = {
+            let mut stmt = self
+                .conn
+                .prepare(
+                    "SELECT id, kind, name, qualified_name, file_path, line_start, line_end,
+                            language, parent_name, params, return_type, modifiers,
+                            is_test, file_hash, extra_json
+                     FROM nodes WHERE file_path = ?1",
+                )
+                .map_err(db_err)?;
+            let rows: Vec<Node> = stmt
+                .query_map([old_path], row_to_node)
+                .map_err(db_err)?
+                .filter_map(|r| r.ok())
+                .collect();
+            rows
+        };
+
+        // FTS-unindex old file_path entries.
+        for n in &old_nodes {
+            self.conn
+                .execute(
+                    "INSERT INTO nodes_fts(nodes_fts, rowid,
+                             qualified_name, name, kind, file_path, language,
+                             params, return_type, modifiers)
+                     VALUES('delete', ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                    params![
+                        n.id.0,
+                        n.qualified_name,
+                        n.name,
+                        n.kind.as_str(),
+                        n.file_path,
+                        n.language,
+                        n.params,
+                        n.return_type,
+                        n.modifiers,
+                    ],
+                )
+                .map_err(db_err)?;
+        }
+
+        // Update node file_path references.
+        self.conn
+            .execute(
+                "UPDATE nodes SET file_path = ?1 WHERE file_path = ?2",
+                [new_path, old_path],
+            )
+            .map_err(db_err)?;
+
+        // Update edge file_path references.
+        self.conn
+            .execute(
+                "UPDATE edges SET file_path = ?1 WHERE file_path = ?2",
+                [new_path, old_path],
+            )
+            .map_err(db_err)?;
+
+        // Move the files row (path is the PK so we delete + re-insert).
+        self.conn
+            .execute(
+                "INSERT OR REPLACE INTO files (path, language, hash, size, indexed_at)
+                 SELECT ?1, language, hash, size, datetime('now') FROM files WHERE path = ?2",
+                [new_path, old_path],
+            )
+            .map_err(db_err)?;
+        self.conn
+            .execute("DELETE FROM files WHERE path = ?1", [old_path])
+            .map_err(db_err)?;
+
+        // FTS-reindex with the new file_path.
+        for n in &old_nodes {
+            self.conn
+                .execute(
+                    "INSERT INTO nodes_fts (rowid,
+                             qualified_name, name, kind, file_path, language,
+                             params, return_type, modifiers)
+                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+                    params![
+                        n.id.0,
+                        n.qualified_name,
+                        n.name,
+                        n.kind.as_str(),
+                        new_path,
+                        n.language,
+                        n.params,
+                        n.return_type,
+                        n.modifiers,
+                    ],
+                )
+                .map_err(db_err)?;
+        }
+
+        self.conn.execute_batch("COMMIT").map_err(db_err)?;
+
+        info!(old_path, new_path, nodes = old_nodes.len(), "renamed file graph");
+        Ok(())
+    }
+
     // -------------------------------------------------------------------------
     // Query helpers
     // -------------------------------------------------------------------------
@@ -608,6 +736,25 @@ impl Store {
             .filter_map(|r| r.ok())
             .collect();
         Ok(map)
+    }
+
+    /// Returns the paths of the `n` most recently indexed files (ordered by
+    /// `indexed_at` descending). Used by the search layer when
+    /// `SearchQuery::recent_file_boost` is enabled.
+    pub fn recently_indexed_files(&self, n: usize) -> Result<Vec<String>> {
+        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT path FROM files ORDER BY indexed_at DESC LIMIT ?1",
+            )
+            .map_err(db_err)?;
+        let paths = stmt
+            .query_map([n as i64], |r| r.get::<_, String>(0))
+            .map_err(db_err)?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(paths)
     }
 
     /// Files that have at least one edge pointing **into** a node defined in
@@ -2607,5 +2754,119 @@ mod tests {
             .find_dependents_for_qnames(&["a.rs::fn::foo"])
             .unwrap();
         assert!(deps.is_empty());
+    }
+
+    // -------------------------------------------------------------------------
+    // file_hash
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn file_hash_returns_none_for_unknown_path() {
+        let store = open_in_memory();
+        assert_eq!(store.file_hash("nonexistent.rs").unwrap(), None);
+    }
+
+    #[test]
+    fn file_hash_returns_stored_hash() {
+        let mut store = open_in_memory();
+        let node = make_node(NodeKind::Function, "foo", "a.rs::fn::foo", "a.rs", "rust");
+        store
+            .replace_file_graph("a.rs", "deadbeef", Some("rust"), None, &[node], &[])
+            .unwrap();
+        assert_eq!(
+            store.file_hash("a.rs").unwrap(),
+            Some("deadbeef".to_string())
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // rename_file_graph
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn rename_file_graph_moves_nodes_and_edges() {
+        let mut store = open_in_memory();
+        let node = make_node(NodeKind::Function, "foo", "old.rs::fn::foo", "old.rs", "rust");
+        let edge = make_edge(EdgeKind::Calls, "old.rs::fn::foo", "old.rs::fn::foo", "old.rs");
+        store
+            .replace_file_graph("old.rs", "h1", Some("rust"), None, &[node], &[edge])
+            .unwrap();
+
+        store.rename_file_graph("old.rs", "new.rs").unwrap();
+
+        // old path must be gone
+        assert_eq!(store.nodes_by_file("old.rs").unwrap().len(), 0);
+        assert_eq!(store.file_hash("old.rs").unwrap(), None);
+
+        // new path must have the node and edge
+        let new_nodes = store.nodes_by_file("new.rs").unwrap();
+        assert_eq!(new_nodes.len(), 1);
+        assert_eq!(new_nodes[0].file_path, "new.rs");
+        assert_eq!(new_nodes[0].qualified_name, "old.rs::fn::foo");
+
+        let new_edges = store.edges_by_file("new.rs").unwrap();
+        assert_eq!(new_edges.len(), 1);
+        assert_eq!(new_edges[0].file_path, "new.rs");
+
+        // files row moved
+        assert_eq!(store.file_hash("new.rs").unwrap(), Some("h1".to_string()));
+    }
+
+    #[test]
+    fn rename_file_graph_preserves_node_ids() {
+        let mut store = open_in_memory();
+        let node = make_node(NodeKind::Function, "foo", "a.rs::fn::foo", "a.rs", "rust");
+        store
+            .replace_file_graph("a.rs", "h1", Some("rust"), None, &[node], &[])
+            .unwrap();
+
+        let id_before = store.nodes_by_file("a.rs").unwrap()[0].id;
+        store.rename_file_graph("a.rs", "b.rs").unwrap();
+        let id_after = store.nodes_by_file("b.rs").unwrap()[0].id;
+
+        assert_eq!(id_before, id_after, "node id must be stable across rename");
+    }
+
+    #[test]
+    fn rename_file_graph_updates_fts_index() {
+        let mut store = open_in_memory();
+        let node = make_node(
+            NodeKind::Function,
+            "myfunc",
+            "old.rs::fn::myfunc",
+            "old.rs",
+            "rust",
+        );
+        store
+            .replace_file_graph("old.rs", "h1", Some("rust"), None, &[node], &[])
+            .unwrap();
+
+        store.rename_file_graph("old.rs", "new.rs").unwrap();
+
+        // FTS search by new file_path must return the node.
+        let results = store
+            .search(&atlas_core::SearchQuery {
+                text: "myfunc".to_string(),
+                file_path: Some("new.rs".to_string()),
+                limit: 10,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(results.len(), 1, "FTS must find node at new path");
+        assert_eq!(results[0].node.file_path, "new.rs");
+
+        // FTS search by old file_path must return nothing.
+        let old_results = store
+            .search(&atlas_core::SearchQuery {
+                text: "myfunc".to_string(),
+                file_path: Some("old.rs".to_string()),
+                limit: 10,
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(
+            old_results.is_empty(),
+            "FTS must not return node at old path"
+        );
     }
 }

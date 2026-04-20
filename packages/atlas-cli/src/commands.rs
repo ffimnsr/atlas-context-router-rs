@@ -309,6 +309,7 @@ pub fn run_update(cli: &Cli) -> Result<()> {
             "update",
             serde_json::json!({
                 "deleted": summary.deleted,
+                "renamed": summary.renamed,
                 "parsed": summary.parsed,
                 "skipped_unsupported": summary.skipped_unsupported,
                 "parse_errors": summary.parse_errors,
@@ -320,6 +321,9 @@ pub fn run_update(cli: &Cli) -> Result<()> {
     } else {
         println!("Update complete ({:.2}s)", summary.elapsed_ms as f64 / 1000.0);
         println!("  Deleted  : {}", summary.deleted);
+        if summary.renamed > 0 {
+            println!("  Renamed  : {}", summary.renamed);
+        }
         println!("  Parsed   : {}", summary.parsed);
         if summary.skipped_unsupported > 0 {
             println!("  Unsupported skipped : {}", summary.skipped_unsupported);

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use atlas_core::{NodeKind, Result, ScoredNode, SearchQuery};
 use atlas_store_sqlite::Store;
@@ -70,6 +70,63 @@ pub fn build_fts_query(text: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// Fuzzy matching
+// ---------------------------------------------------------------------------
+
+/// Compute the edit distance (Levenshtein) between two strings, capped at
+/// `cap + 1` so we can bail out early for clearly dissimilar strings.
+fn edit_distance(a: &str, b: &str, cap: usize) -> usize {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    let m = a.len();
+    let n = b.len();
+
+    // Quick bounds check — if length difference alone exceeds cap, bail.
+    if m.abs_diff(n) > cap {
+        return cap + 1;
+    }
+
+    // Two-row DP (space-efficient).
+    let mut prev: Vec<usize> = (0..=n).collect();
+    let mut curr = vec![0usize; n + 1];
+
+    for i in 1..=m {
+        curr[0] = i;
+        let mut row_min = i;
+        for j in 1..=n {
+            curr[j] = if a[i - 1] == b[j - 1] {
+                prev[j - 1]
+            } else {
+                1 + prev[j - 1].min(prev[j]).min(curr[j - 1])
+            };
+            row_min = row_min.min(curr[j]);
+        }
+        // Early exit if entire row exceeds cap.
+        if row_min > cap {
+            return cap + 1;
+        }
+        std::mem::swap(&mut prev, &mut curr);
+    }
+    prev[n]
+}
+
+/// Return the edit-distance threshold for a query of length `len`.
+///
+/// Short queries need tighter matching to avoid noise:
+///   len ≤ 3 → 0 (exact only)
+///   len ≤ 5 → 1
+///   len ≤ 8 → 2
+///   len > 8 → 3
+fn fuzzy_threshold(len: usize) -> usize {
+    match len {
+        0..=3 => 0,
+        4..=5 => 1,
+        6..=8 => 2,
+        _ => 3,
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Post-FTS ranking boosts
 // ---------------------------------------------------------------------------
 
@@ -80,17 +137,24 @@ pub fn build_fts_query(text: &str) -> String {
 ///   1. Exact `name` match           (+20)
 ///   2. `name` prefix match           (+5)
 ///   3. Exact `qualified_name` match (+15)
-///   4. Public / exported symbol      (+2)
-///   5. High-value kinds: fn/method   (+3), class/struct/trait (+2), enum (+1)
-///   6. Same directory as `reference_file` (+3)
-///   7. Same language as `reference_language` (+2)
+///   4. Fuzzy `name` match (opt-in)  (+4, only when no exact/prefix already)
+///   5. Public / exported symbol      (+2)
+///   6. High-value kinds: fn/method   (+3), class/struct/trait (+2), enum (+1)
+///   7. Same directory as `reference_file` (+3)
+///   8. Same language as `reference_language` (+2)
+///   9. Recent-file boost (opt-in)   (+4)
+///  10. Changed-file boost            (+5)
 pub fn apply_ranking_boosts(
     mut results: Vec<ScoredNode>,
     query: &str,
     reference_file: Option<&str>,
     reference_language: Option<&str>,
+    fuzzy_match: bool,
+    recent_files: &HashSet<String>,
+    changed_files: &HashSet<String>,
 ) -> Vec<ScoredNode> {
     let q_lower = query.trim().to_lowercase();
+    let fuzzy_cap = fuzzy_threshold(q_lower.chars().count());
 
     // Pre-compute the directory of the reference file (everything before the
     // last `/`).  An empty reference dir means the root, and every root-level
@@ -104,17 +168,31 @@ pub fn apply_ranking_boosts(
 
     for r in &mut results {
         let n = &r.node;
+        let name_lower = n.name.to_lowercase();
 
         // Exact name match
-        if n.name.to_lowercase() == q_lower {
+        let exact_or_prefix = if name_lower == q_lower {
             r.score += 20.0;
-        } else if n.name.to_lowercase().starts_with(&q_lower) {
+            true
+        } else if name_lower.starts_with(&q_lower) {
             r.score += 5.0;
-        }
+            true
+        } else {
+            false
+        };
 
         // Exact qualified_name match
         if n.qualified_name.to_lowercase() == q_lower {
             r.score += 15.0;
+        }
+
+        // Fuzzy name match — only when no exact/prefix hit already and the
+        // query is long enough to have a non-zero threshold.
+        if fuzzy_match && !exact_or_prefix && fuzzy_cap > 0 {
+            let dist = edit_distance(&q_lower, &name_lower, fuzzy_cap);
+            if dist <= fuzzy_cap {
+                r.score += 4.0;
+            }
         }
 
         // Kind boost
@@ -151,6 +229,17 @@ pub fn apply_ranking_boosts(
             && n.language.to_lowercase() == *rlang
         {
             r.score += 2.0;
+        }
+
+        // Recent-file boost: reward nodes in recently indexed files.
+        if !recent_files.is_empty() && recent_files.contains(&n.file_path) {
+            r.score += 4.0;
+        }
+
+        // Changed-file boost: reward nodes in files that are part of the
+        // current diff, making them rise above unrelated matches.
+        if !changed_files.is_empty() && changed_files.contains(&n.file_path) {
+            r.score += 5.0;
         }
     }
 
@@ -258,6 +347,17 @@ pub fn search(store: &Store, query: &SearchQuery) -> Result<Vec<ScoredNode>> {
 
     let fts_results = store.search(&effective_query)?;
 
+    // Optionally fetch recently indexed file paths for the recent-file boost.
+    let recent_set: HashSet<String> = if query.recent_file_boost {
+        // Top-50 recent files is enough signal without being expensive.
+        store.recently_indexed_files(50)?.into_iter().collect()
+    } else {
+        HashSet::new()
+    };
+
+    // Build the changed-file set from the caller-supplied paths.
+    let changed_set: HashSet<String> = query.changed_files.iter().cloned().collect();
+
     // Apply post-FTS ranking boosts using the original (un-expanded) text so
     // boost comparisons are made against what the user actually typed.
     let boosted = apply_ranking_boosts(
@@ -265,6 +365,9 @@ pub fn search(store: &Store, query: &SearchQuery) -> Result<Vec<ScoredNode>> {
         &query.text,
         query.reference_file.as_deref(),
         query.reference_language.as_deref(),
+        query.fuzzy_match,
+        &recent_set,
+        &changed_set,
     );
 
     if query.graph_expand && !boosted.is_empty() {
@@ -347,7 +450,7 @@ mod tests {
         };
 
         let input = vec![ScoredNode { node, score: 5.0 }];
-        let boosted = apply_ranking_boosts(input, "search", None, None);
+        let boosted = apply_ranking_boosts(input, "search", None, None, false, &HashSet::new(), &HashSet::new());
 
         // Exact name (+20) + fn kind (+3) + pub (+2) = +25 on top of 5.0
         assert!(
@@ -387,7 +490,8 @@ mod tests {
         let diff_dir = make_test_node("foo", "other/lib.rs::fn::foo", "other/lib.rs", "rust");
 
         let input = vec![diff_dir.clone(), same_dir.clone()];
-        let boosted = apply_ranking_boosts(input, "foo", Some("src/main.rs"), None);
+        let boosted =
+            apply_ranking_boosts(input, "foo", Some("src/main.rs"), None, false, &HashSet::new(), &HashSet::new());
 
         let same_score = boosted
             .iter()
@@ -411,7 +515,8 @@ mod tests {
         let go_node = make_test_node("parse", "src/a.go::fn::parse", "src/a.go", "go");
 
         let input = vec![go_node.clone(), rust_node.clone()];
-        let boosted = apply_ranking_boosts(input, "parse", None, Some("rust"));
+        let boosted =
+            apply_ranking_boosts(input, "parse", None, Some("rust"), false, &HashSet::new(), &HashSet::new());
 
         let rust_score = boosted
             .iter()
@@ -437,7 +542,15 @@ mod tests {
         let neither = make_test_node("helper", "lib/c.py::fn::helper", "lib/c.py", "python");
 
         let input = vec![neither.clone(), dir_only.clone(), best.clone()];
-        let boosted = apply_ranking_boosts(input, "helper", Some("src/main.rs"), Some("rust"));
+        let boosted = apply_ranking_boosts(
+            input,
+            "helper",
+            Some("src/main.rs"),
+            Some("rust"),
+            false,
+            &HashSet::new(),
+            &HashSet::new(),
+        );
 
         let best_score = boosted
             .iter()
@@ -471,7 +584,8 @@ mod tests {
         let n2 = make_test_node("f", "lib/b.rs::fn::f", "lib/b.rs", "rust");
 
         let input = vec![n1.clone(), n2.clone()];
-        let boosted = apply_ranking_boosts(input, "f", None, None);
+        let boosted =
+            apply_ranking_boosts(input, "f", None, None, false, &HashSet::new(), &HashSet::new());
 
         // Both same language, no reference → scores should be equal (both
         // start at 1.0 with only the fn-kind +3 applied equally).
@@ -488,6 +602,136 @@ mod tests {
         assert_eq!(
             score_a, score_b,
             "without reference both nodes should score equally"
+        );
+    }
+
+    #[test]
+    fn edit_distance_basic() {
+        assert_eq!(edit_distance("kitten", "sitting", 10), 3);
+        assert_eq!(edit_distance("abc", "abc", 5), 0);
+        assert_eq!(edit_distance("abc", "xyz", 10), 3);
+        // Cap early-exit: length diff > cap
+        assert_eq!(edit_distance("short", "muchlongerstring", 2), 3);
+    }
+
+    #[test]
+    fn fuzzy_match_boost_applied() {
+        // "sarch" is 1 edit away from "search" → should get fuzzy boost.
+        let close = make_test_node("search", "src/lib.rs::fn::search", "src/lib.rs", "rust");
+        let distant = make_test_node(
+            "transform",
+            "src/lib.rs::fn::transform",
+            "src/lib.rs",
+            "rust",
+        );
+
+        let input = vec![distant.clone(), close.clone()];
+        let boosted =
+            apply_ranking_boosts(input, "sarch", None, None, true, &HashSet::new(), &HashSet::new());
+
+        let close_score = boosted
+            .iter()
+            .find(|r| r.node.name == "search")
+            .unwrap()
+            .score;
+        let distant_score = boosted
+            .iter()
+            .find(|r| r.node.name == "transform")
+            .unwrap()
+            .score;
+        assert!(
+            close_score > distant_score,
+            "fuzzy-close name should score higher; close={close_score} distant={distant_score}"
+        );
+    }
+
+    #[test]
+    fn fuzzy_match_off_no_boost() {
+        // Same setup but fuzzy_match=false → no extra boost for "sarch".
+        let close = make_test_node("search", "src/lib.rs::fn::search", "src/lib.rs", "rust");
+        let input = vec![close];
+        let no_fuzzy =
+            apply_ranking_boosts(input.clone(), "sarch", None, None, false, &HashSet::new(), &HashSet::new());
+        let with_fuzzy =
+            apply_ranking_boosts(input, "sarch", None, None, true, &HashSet::new(), &HashSet::new());
+
+        assert!(
+            with_fuzzy[0].score > no_fuzzy[0].score,
+            "fuzzy=true should score higher than fuzzy=false for a close mismatch"
+        );
+    }
+
+    #[test]
+    fn recent_file_boost_applied() {
+        let recent = make_test_node("do_work", "src/fresh.rs::fn::do_work", "src/fresh.rs", "rust");
+        let old = make_test_node("do_work", "src/stale.rs::fn::do_work", "src/stale.rs", "rust");
+
+        let recent_set: HashSet<String> = ["src/fresh.rs".to_string()].into();
+        let input = vec![old.clone(), recent.clone()];
+        let boosted =
+            apply_ranking_boosts(input, "do_work", None, None, false, &recent_set, &HashSet::new());
+
+        let recent_score = boosted
+            .iter()
+            .find(|r| r.node.file_path == "src/fresh.rs")
+            .unwrap()
+            .score;
+        let old_score = boosted
+            .iter()
+            .find(|r| r.node.file_path == "src/stale.rs")
+            .unwrap()
+            .score;
+        assert!(
+            recent_score > old_score,
+            "recent-file node must score higher; recent={recent_score} old={old_score}"
+        );
+    }
+
+    #[test]
+    fn recent_file_boost_empty_set_no_effect() {
+        let n = make_test_node("work", "src/a.rs::fn::work", "src/a.rs", "rust");
+        let base = apply_ranking_boosts(vec![n.clone()], "work", None, None, false, &HashSet::new(), &HashSet::new());
+        let with_empty_recent =
+            apply_ranking_boosts(vec![n], "work", None, None, false, &HashSet::new(), &HashSet::new());
+        assert_eq!(
+            base[0].score, with_empty_recent[0].score,
+            "empty recent set must not change score"
+        );
+    }
+
+    #[test]
+    fn changed_file_boost_applied() {
+        let changed = make_test_node(
+            "do_work",
+            "src/changed.rs::fn::do_work",
+            "src/changed.rs",
+            "rust",
+        );
+        let unchanged = make_test_node(
+            "do_work",
+            "src/stable.rs::fn::do_work",
+            "src/stable.rs",
+            "rust",
+        );
+
+        let changed_set: HashSet<String> = ["src/changed.rs".to_string()].into();
+        let input = vec![unchanged.clone(), changed.clone()];
+        let boosted =
+            apply_ranking_boosts(input, "do_work", None, None, false, &HashSet::new(), &changed_set);
+
+        let changed_score = boosted
+            .iter()
+            .find(|r| r.node.file_path == "src/changed.rs")
+            .unwrap()
+            .score;
+        let stable_score = boosted
+            .iter()
+            .find(|r| r.node.file_path == "src/stable.rs")
+            .unwrap()
+            .score;
+        assert!(
+            changed_score > stable_score,
+            "changed-file node must score higher; changed={changed_score} stable={stable_score}"
         );
     }
 }

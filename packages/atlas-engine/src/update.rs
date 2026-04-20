@@ -51,6 +51,7 @@ impl Default for UpdateOptions {
 #[derive(Debug, Default)]
 pub struct UpdateSummary {
     pub deleted: usize,
+    pub renamed: usize,
     pub parsed: usize,
     pub skipped_unsupported: usize,
     pub parse_errors: usize,
@@ -154,17 +155,45 @@ pub fn update_graph(
 
     let mut to_delete: Vec<String> = Vec::new();
     let mut to_parse_paths: Vec<String> = Vec::new();
+    let mut to_rename: Vec<(String, String)> = Vec::new(); // (old_path, new_path)
 
     for cf in &git_changes {
         match cf.change_type {
             ChangeType::Deleted => to_delete.push(cf.path.clone()),
-            ChangeType::Renamed | ChangeType::Copied => {
+            ChangeType::Renamed => {
+                if let Some(old) = &cf.old_path {
+                    // Check whether content is unchanged: if so, preserve node ids.
+                    let new_abs = repo_root.join(&cf.path);
+                    let new_hash = atlas_repo::hash_file(&new_abs).ok();
+                    let stored_hash = store.file_hash(old).ok().flatten();
+                    if let (Some(nh), Some(sh)) = (&new_hash, &stored_hash)
+                        && nh == sh
+                    {
+                        to_rename.push((old.clone(), cf.path.clone()));
+                        continue;
+                    }
+                    to_delete.push(old.clone());
+                }
+                to_parse_paths.push(cf.path.clone());
+            }
+            ChangeType::Copied => {
                 if let Some(old) = &cf.old_path {
                     to_delete.push(old.clone());
                 }
                 to_parse_paths.push(cf.path.clone());
             }
             _ => to_parse_paths.push(cf.path.clone()),
+        }
+    }
+
+    // ── Stable renames (hash-unchanged) ─────────────────────────────────────
+    let renamed_count = to_rename.len();
+    if !to_rename.is_empty() {
+        let _rename_span = tracing::info_span!("update.rename_stable").entered();
+        for (old, new) in &to_rename {
+            store
+                .rename_file_graph(old, new)
+                .with_context(|| format!("cannot rename graph '{old}' -> '{new}'"))?;
         }
     }
 
@@ -335,6 +364,7 @@ pub fn update_graph(
 
     Ok(UpdateSummary {
         deleted: deleted_count,
+        renamed: renamed_count,
         parsed: parsed_count,
         skipped_unsupported,
         parse_errors,
