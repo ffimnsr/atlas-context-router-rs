@@ -58,9 +58,10 @@ pub fn tool_list() -> serde_json::Value {
                         "semantic": { "type": "boolean", "description": "Use graph-aware semantic expansion: expands via graph neighbours of initial FTS hits before re-ranking (default false)" },
                         "expand":   { "type": "boolean", "description": "Expand results through graph edges after ranking (default false)" },
                         "expand_hops": { "type": "integer", "description": "Max edge hops when expand=true (default 1)" },
+                        "regex":    { "type": "string",  "description": "Post-filter results by regex matched against name and qualified_name. When text is empty, runs a structural scan then applies the regex. Combine with kind/language for narrower sweeps. Must be valid regex crate syntax." },
                         "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
                     },
-                    "required": ["text"]
+                    "required": []
                 }
             },
             {
@@ -391,14 +392,20 @@ fn tool_query_graph(
     output_format: OutputFormat,
 ) -> Result<serde_json::Value> {
     let text = str_arg(args, "text")?
-        .ok_or_else(|| anyhow::anyhow!("missing required argument: text"))?
-        .to_owned();
+        .map(str::to_owned)
+        .unwrap_or_default();
     let kind = str_arg(args, "kind")?.map(str::to_owned);
     let language = str_arg(args, "language")?.map(str::to_owned);
     let limit = u64_arg(args, "limit").unwrap_or(20) as usize;
     let semantic = bool_arg(args, "semantic").unwrap_or(false);
     let expand = bool_arg(args, "expand").unwrap_or(false);
     let expand_hops = u64_arg(args, "expand_hops").unwrap_or(1) as u32;
+    let regex = str_arg(args, "regex")?.map(str::to_owned);
+
+    // Validate regex early so agents get a clear error before wasting a DB round-trip.
+    if let Some(ref pat) = regex {
+        regex::Regex::new(pat).map_err(|e| anyhow::anyhow!("invalid regex pattern: {e}"))?;
+    }
 
     let store = open_store(db_path)?;
 
@@ -409,6 +416,7 @@ fn tool_query_graph(
         limit,
         graph_expand: expand,
         graph_max_hops: expand_hops,
+        regex_pattern: regex,
         ..Default::default()
     };
 
@@ -1728,6 +1736,40 @@ mod tests {
 
         assert_eq!(unwrap_tool_format(&rendered), "json");
         assert!(rendered.get("atlas_fallback_reason").is_some());
+    }
+
+    #[test]
+    fn query_graph_regex_param_filters_results() {
+        let fixture = setup_mcp_fixture();
+        // Empty text + regex: structural scan, filter by name pattern.
+        let args = serde_json::json!({ "regex": "compute", "output_format": "json" });
+        let response = call("query_graph", Some(&args), "/ignored", &fixture.db_path)
+            .expect("query_graph regex call");
+        let text = unwrap_tool_text(response);
+        // All returned symbols must have "compute" in name or qualified_name.
+        let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
+        if let Some(arr) = v.as_array() {
+            for item in arr {
+                let qn = item["qn"].as_str().unwrap_or("");
+                let name = item["name"].as_str().unwrap_or("");
+                assert!(
+                    qn.contains("compute") || name.contains("compute"),
+                    "regex filter should only return matching symbols, got qn={qn} name={name}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn query_graph_invalid_regex_returns_error() {
+        let fixture = setup_mcp_fixture();
+        let args = serde_json::json!({ "regex": "[invalid", "output_format": "json" });
+        let result = call("query_graph", Some(&args), "/ignored", &fixture.db_path);
+        assert!(result.is_err(), "invalid regex must return an error");
+        assert!(
+            result.unwrap_err().to_string().contains("invalid regex"),
+            "error message should mention invalid regex"
+        );
     }
 
     #[test]

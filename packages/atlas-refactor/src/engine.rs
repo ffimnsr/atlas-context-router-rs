@@ -11,7 +11,9 @@ use atlas_core::{
     RefactorEditKind, RefactorOperation, RefactorPatch, RefactorPlan, RefactorValidationResult,
     Result, SafetyBand, SimulatedRefactorImpact,
 };
+use atlas_parser::ParserRegistry;
 use atlas_store_sqlite::Store;
+use sha2::{Digest, Sha256};
 use tracing::debug;
 
 use crate::edits::{apply_edits, check_overlaps, replace_identifier, validate_identifier};
@@ -44,15 +46,20 @@ const ENTRYPOINT_NAMES: &[&str] = &[
 
 /// Provides deterministic refactoring operations backed by the Atlas graph store.
 pub struct RefactorEngine<'s> {
-    store: &'s Store,
+    store: &'s mut Store,
     /// Absolute path to the repository root (used to resolve file paths for I/O).
     repo_root: &'s Path,
+    parser_registry: ParserRegistry,
 }
 
 impl<'s> RefactorEngine<'s> {
     /// Create a new engine.
-    pub fn new(store: &'s Store, repo_root: &'s Path) -> Self {
-        Self { store, repo_root }
+    pub fn new(store: &'s mut Store, repo_root: &'s Path) -> Self {
+        Self {
+            store,
+            repo_root,
+            parser_registry: ParserRegistry::with_defaults(),
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -202,7 +209,11 @@ impl<'s> RefactorEngine<'s> {
     ///
     /// In dry-run mode generates patches but writes nothing. Otherwise applies
     /// edits in reverse line order per file and validates the result.
-    pub fn apply_rename(&self, plan: &RefactorPlan, dry_run: bool) -> Result<RefactorDryRunResult> {
+    pub fn apply_rename(
+        &mut self,
+        plan: &RefactorPlan,
+        dry_run: bool,
+    ) -> Result<RefactorDryRunResult> {
         let (old_qname, new_name) = match &plan.operation {
             RefactorOperation::RenameSymbol {
                 old_qname,
@@ -344,7 +355,7 @@ impl<'s> RefactorEngine<'s> {
 
     /// Execute a dead-code removal plan.
     pub fn apply_dead_code_removal(
-        &self,
+        &mut self,
         plan: &RefactorPlan,
         dry_run: bool,
     ) -> Result<RefactorDryRunResult> {
@@ -447,7 +458,7 @@ impl<'s> RefactorEngine<'s> {
 
     /// Execute an import cleanup plan.
     pub fn apply_import_cleanup(
-        &self,
+        &mut self,
         plan: &RefactorPlan,
         dry_run: bool,
     ) -> Result<RefactorDryRunResult> {
@@ -589,7 +600,7 @@ impl<'s> RefactorEngine<'s> {
     /// patches, optionally writes files, and runs the caller-provided
     /// validation closure.
     fn apply_plan_internal<F>(
-        &self,
+        &mut self,
         plan: &RefactorPlan,
         dry_run: bool,
         validate: F,
@@ -642,7 +653,10 @@ impl<'s> RefactorEngine<'s> {
                 }
             };
 
-            let diff = unified_diff_annotated(&file_path, &old_content, &new_content);
+            let normalized_content =
+                self.normalize_post_edit_content(plan, &file_path, &new_content);
+
+            let diff = unified_diff_annotated(&file_path, &old_content, &normalized_content);
             if !diff.is_empty() {
                 patches.push(RefactorPatch {
                     file_path: file_path.clone(),
@@ -650,14 +664,17 @@ impl<'s> RefactorEngine<'s> {
                 });
             }
 
-            new_contents.insert(file_path, (old_content, new_content));
+            new_contents.insert(file_path, (old_content, normalized_content));
         }
+
+        self.revalidate_parsed_files(&mut validation, &new_contents);
 
         // Run operation-specific validation.
         validate(&mut validation, &new_contents);
 
         // Write files if not dry-run and no errors.
         if !dry_run && validation.valid {
+            let mut written_files: Vec<String> = Vec::new();
             for (file_path, (_, new_content)) in &new_contents {
                 let abs = self.repo_root.join(file_path);
                 if let Err(e) = std::fs::write(&abs, new_content) {
@@ -665,9 +682,20 @@ impl<'s> RefactorEngine<'s> {
                     validation
                         .errors
                         .push(format!("write failed `{}`: {e}", abs.display()));
+                    self.rollback_written_files(&written_files, &new_contents);
+                    break;
                 } else {
+                    written_files.push(file_path.clone());
                     debug!(path = %file_path, "wrote refactored file");
                 }
+            }
+
+            if validation.valid
+                && let Err(e) = self.refresh_graph_slices(&new_contents)
+            {
+                validation.valid = false;
+                validation.errors.push(format!("graph refresh failed: {e}"));
+                self.rollback_written_files(&written_files, &new_contents);
             }
         }
 
@@ -682,6 +710,109 @@ impl<'s> RefactorEngine<'s> {
             edit_count,
             dry_run,
         })
+    }
+
+    fn normalize_post_edit_content(
+        &self,
+        plan: &RefactorPlan,
+        file_path: &str,
+        content: &str,
+    ) -> String {
+        match plan.operation {
+            RefactorOperation::CleanImports { .. } | RefactorOperation::RemoveDeadCode { .. } => {
+                normalize_import_block_layout(file_path, content)
+            }
+            _ => content.to_string(),
+        }
+    }
+
+    fn revalidate_parsed_files(
+        &self,
+        validation: &mut RefactorValidationResult,
+        new_contents: &HashMap<String, (String, String)>,
+    ) {
+        for (file_path, (_, new_content)) in new_contents {
+            let Some((_, tree)) = self.parse_file_content(file_path, new_content, validation)
+            else {
+                continue;
+            };
+
+            if tree
+                .as_ref()
+                .is_some_and(|parsed| parsed.root_node().has_error())
+            {
+                validation.valid = false;
+                validation.errors.push(format!(
+                    "parser revalidation failed for `{file_path}`: syntax errors detected after refactor"
+                ));
+            }
+        }
+    }
+
+    fn refresh_graph_slices(
+        &mut self,
+        new_contents: &HashMap<String, (String, String)>,
+    ) -> Result<()> {
+        let mut parsed_files = Vec::new();
+
+        for (file_path, (_, new_content)) in new_contents {
+            let mut validation = RefactorValidationResult {
+                valid: true,
+                errors: Vec::new(),
+                warnings: Vec::new(),
+                manual_review: Vec::new(),
+            };
+            if let Some((parsed, _)) =
+                self.parse_file_content(file_path, new_content, &mut validation)
+            {
+                parsed_files.push(parsed);
+            }
+        }
+
+        if !parsed_files.is_empty() {
+            self.store.replace_files_transactional(&parsed_files)?;
+        }
+
+        Ok(())
+    }
+
+    fn parse_file_content(
+        &self,
+        file_path: &str,
+        content: &str,
+        validation: &mut RefactorValidationResult,
+    ) -> Option<(atlas_core::ParsedFile, Option<tree_sitter::Tree>)> {
+        if !self.parser_registry.supports(file_path) {
+            return None;
+        }
+
+        let mut hasher = Sha256::new();
+        hasher.update(content.as_bytes());
+        let hash = format!("{:x}", hasher.finalize());
+
+        if content.is_empty() {
+            validation.warnings.push(format!(
+                "skipping parser revalidation for empty file `{file_path}`"
+            ));
+            return None;
+        }
+
+        self.parser_registry
+            .parse(file_path, &hash, content.as_bytes(), None)
+    }
+
+    fn rollback_written_files(
+        &self,
+        written_files: &[String],
+        new_contents: &HashMap<String, (String, String)>,
+    ) {
+        for file_path in written_files {
+            let Some((old_content, _)) = new_contents.get(file_path) else {
+                continue;
+            };
+            let abs = self.repo_root.join(file_path);
+            let _ = std::fs::write(abs, old_content);
+        }
     }
 }
 
@@ -721,6 +852,54 @@ struct ImportInfo<'a> {
     line_no: u32,
     imported_names: Vec<String>,
     raw_line: &'a str,
+}
+
+fn normalize_import_block_layout(file_path: &str, content: &str) -> String {
+    let lang = detect_language(file_path);
+    if matches!(lang, Lang::Other) {
+        return content.to_string();
+    }
+
+    let mut lines: Vec<String> = content.lines().map(str::to_string).collect();
+    let mut idx = 0usize;
+    while idx < lines.len() {
+        if !is_import_line(lines[idx].trim(), lang) {
+            idx += 1;
+            continue;
+        }
+
+        let start = idx;
+        while idx < lines.len() && is_import_line(lines[idx].trim(), lang) {
+            idx += 1;
+        }
+
+        if idx.saturating_sub(start) > 1 {
+            lines[start..idx].sort_by(|a, b| a.trim().cmp(b.trim()));
+        }
+
+        while idx + 1 < lines.len()
+            && lines[idx].trim().is_empty()
+            && lines[idx + 1].trim().is_empty()
+        {
+            lines.remove(idx + 1);
+        }
+    }
+
+    let mut out = lines.join("\n");
+    if content.ends_with('\n') {
+        out.push('\n');
+    }
+    out
+}
+
+fn is_import_line(line: &str, lang: Lang) -> bool {
+    match lang {
+        Lang::Rust => line.starts_with("use "),
+        Lang::Python => line.starts_with("import ") || line.starts_with("from "),
+        Lang::JsTs => line.starts_with("import "),
+        Lang::Go => line.starts_with("import "),
+        Lang::Other => false,
+    }
 }
 
 fn find_imports<'a>(lines: &[&'a str], lang: Lang) -> Vec<ImportInfo<'a>> {

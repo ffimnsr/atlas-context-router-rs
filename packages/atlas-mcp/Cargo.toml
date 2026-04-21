@@ -18,6 +18,7 @@ atlas-session = { path = "../atlas-session" , version = "0.3.3"}
 atlas-store-sqlite = { path = "../atlas-store-sqlite" , version = "0.3.3"}
 anyhow.workspace = true
 camino.workspace = true
+regex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

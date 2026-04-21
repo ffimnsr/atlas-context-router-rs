@@ -240,9 +240,9 @@ pub fn run_refactor(cli: &Cli) -> Result<()> {
             find_repo_root(Utf8Path::new(&repo)).context("cannot find git repo root")?;
         let repo_root = repo_root_path.as_std_path();
         let db_path = db_path(cli, &repo);
-        let store =
+        let mut store =
             Store::open(&db_path).with_context(|| format!("cannot open database at {db_path}"))?;
-        let engine = RefactorEngine::new(&store, repo_root);
+        let mut engine = RefactorEngine::new(&mut store, repo_root);
 
         let sub = match &cli.command {
             Command::Refactor { subcommand } => subcommand,

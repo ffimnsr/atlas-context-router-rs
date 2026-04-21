@@ -64,6 +64,10 @@ pub(crate) fn detect_candidates(
 
         let block_lines = &body[best_start..best_start + best_len];
 
+        if !has_limited_side_effect_boundaries(block_lines) {
+            continue;
+        }
+
         let (proposed_inputs, proposed_outputs) = estimate_io(block_lines, fn_lines);
         let (score, reasons) = score_candidate(
             best_len as u32,
@@ -274,7 +278,55 @@ fn score_candidate(
         reasons.push("repeated block pattern detected".into());
     }
 
+    let control_flow_complexity = estimate_control_flow_complexity(block);
+    if control_flow_complexity <= 1 {
+        score += 1.5;
+        reasons.push("low control-flow complexity".into());
+    } else {
+        reasons.push(format!(
+            "control-flow complexity: {control_flow_complexity}"
+        ));
+    }
+
     (score, reasons)
+}
+
+fn has_limited_side_effect_boundaries(block: &[&str]) -> bool {
+    side_effect_boundary_count(block) <= 1
+}
+
+fn side_effect_boundary_count(block: &[&str]) -> usize {
+    block
+        .iter()
+        .filter(|line| {
+            let trimmed = line.trim();
+            trimmed.starts_with("return ")
+                || trimmed == "return"
+                || trimmed.starts_with("break")
+                || trimmed.starts_with("continue")
+                || trimmed.contains("await")
+                || trimmed.contains("yield")
+                || trimmed.contains("panic!")
+                || trimmed.contains("println!")
+                || trimmed.contains("eprintln!")
+        })
+        .count()
+}
+
+fn estimate_control_flow_complexity(block: &[&str]) -> usize {
+    block
+        .iter()
+        .map(|line| {
+            let trimmed = line.trim();
+            usize::from(trimmed.starts_with("if ") || trimmed.starts_with("if("))
+                + usize::from(trimmed.starts_with("match "))
+                + usize::from(trimmed.starts_with("for "))
+                + usize::from(trimmed.starts_with("while "))
+                + usize::from(trimmed.starts_with("loop"))
+                + trimmed.matches("&&").count()
+                + trimmed.matches("||").count()
+        })
+        .sum()
 }
 
 /// Rough repeated-pattern detection: look for another window in `fn_body`
@@ -333,5 +385,23 @@ mod tests {
         let (score, reasons) = score_candidate(10, &["a".to_string()], &[], &block, &block);
         assert!(score >= 3.0, "score={score}");
         assert!(reasons.iter().any(|r| r.contains("free-variable")));
+    }
+
+    #[test]
+    fn control_flow_complexity_boost_recorded() {
+        let block = ["let total = a + b;", "let output = total * 2;"];
+        let (_, reasons) = score_candidate(8, &["a".to_string()], &[], &block, &block);
+        assert!(
+            reasons
+                .iter()
+                .any(|reason| reason.contains("low control-flow complexity"))
+        );
+    }
+
+    #[test]
+    fn side_effect_boundaries_detected() {
+        let block = ["println!(\"hello\");", "return value;"];
+        assert!(!has_limited_side_effect_boundaries(&block));
+        assert!(side_effect_boundary_count(&block) >= 2);
     }
 }

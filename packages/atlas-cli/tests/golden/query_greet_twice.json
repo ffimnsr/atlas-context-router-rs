@@ -9,7 +9,8 @@
     "graph_expand": false,
     "graph_max_hops": 1,
     "fuzzy_match": false,
-    "semantic": false
+    "semantic": false,
+    "regex_pattern": null
   },
   "results": [
     {

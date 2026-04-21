@@ -1244,14 +1244,33 @@ impl Store {
     ///
     /// Returns nodes ordered by BM25 relevance (best first), capped at
     /// `query.limit`.
+    ///
+    /// When `query.regex_pattern` is `Some`, the compiled regex is applied as a
+    /// Rust-side post-filter against `node.name` OR `node.qualified_name`.
+    /// An invalid pattern returns `AtlasError::Other`.
+    ///
+    /// When `query.text` is empty but `regex_pattern` is set, a structural SQL
+    /// scan over `nodes` (kind / language / subpath / is_test filters) is used
+    /// as the candidate set before the regex post-filter is applied.
     pub fn search(&self, query: &SearchQuery) -> Result<Vec<ScoredNode>> {
-        if query.text.trim().is_empty() {
+        let text_empty = query.text.trim().is_empty();
+
+        // Compile regex once upfront so invalid patterns fail fast.
+        let regex = query
+            .regex_pattern
+            .as_deref()
+            .map(|pat| {
+                regex::Regex::new(pat)
+                    .map_err(|e| AtlasError::Other(format!("invalid regex pattern: {e}")))
+            })
+            .transpose()?;
+
+        // Nothing to search on: no text and no regex.
+        if text_empty && regex.is_none() {
             return Ok(vec![]);
         }
-        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
 
-        // FTS5 expects the MATCH operand to be an unquoted query string.
-        let fts_query = fts5_escape(&query.text);
+        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
 
         // Build a LIKE pattern from the subpath (escape SQLite LIKE wildcards).
         let subpath_like = query.subpath.as_deref().map(|sp| {
@@ -1262,54 +1281,117 @@ impl Store {
             format!("{escaped}%")
         });
 
-        // Build dynamic WHERE clause and a matching params vector so the
-        // number of `?` placeholders always equals the number of bound values.
-        let mut filters: Vec<String> = vec!["nodes_fts MATCH ?".to_string()];
-        let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = vec![Box::new(fts_query)];
+        let results: Vec<ScoredNode> = if text_empty {
+            // Structural scan path: no FTS, apply field filters directly on nodes table.
+            let mut filters: Vec<String> = Vec::new();
+            let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
 
-        if let Some(kind) = &query.kind {
-            filters.push("n.kind = ?".to_string());
-            params.push(Box::new(kind.clone()));
-        }
-        if let Some(lang) = &query.language {
-            filters.push("n.language = ?".to_string());
-            params.push(Box::new(lang.clone()));
-        }
-        if let Some(fp) = &query.file_path {
-            filters.push("n.file_path = ?".to_string());
-            params.push(Box::new(fp.clone()));
-        }
-        if let Some(is_test) = query.is_test {
-            filters.push(format!("n.is_test = {}", is_test as i32));
-        }
-        if let Some(ref like_pat) = subpath_like {
-            filters.push("n.file_path LIKE ? ESCAPE '\\'".to_string());
-            params.push(Box::new(like_pat.clone()));
-        }
+            if let Some(kind) = &query.kind {
+                filters.push("n.kind = ?".to_string());
+                params.push(Box::new(kind.clone()));
+            }
+            if let Some(lang) = &query.language {
+                filters.push("n.language = ?".to_string());
+                params.push(Box::new(lang.clone()));
+            }
+            if let Some(fp) = &query.file_path {
+                filters.push("n.file_path = ?".to_string());
+                params.push(Box::new(fp.clone()));
+            }
+            if let Some(is_test) = query.is_test {
+                filters.push(format!("n.is_test = {}", is_test as i32));
+            }
+            if let Some(ref like_pat) = subpath_like {
+                filters.push("n.file_path LIKE ? ESCAPE '\\'".to_string());
+                params.push(Box::new(like_pat.clone()));
+            }
 
-        // LIMIT is always the last positional parameter.
-        params.push(Box::new(query.limit as i64));
+            let where_clause = if filters.is_empty() {
+                "1=1".to_string()
+            } else {
+                filters.join(" AND ")
+            };
 
-        let where_clause = filters.join(" AND ");
-        let sql = format!(
-            "SELECT n.id, n.kind, n.name, n.qualified_name, n.file_path,
-                    n.line_start, n.line_end, n.language, n.parent_name,
-                    n.params, n.return_type, n.modifiers, n.is_test,
-                    n.file_hash, n.extra_json,
-                    bm25(nodes_fts) AS score
-             FROM   nodes_fts
-             JOIN   nodes n ON n.id = nodes_fts.rowid
-             WHERE  {where_clause}
-             ORDER  BY score
-             LIMIT  ?"
-        );
+            // Use a generous fetch cap; regex post-filter will trim to limit.
+            let fetch_cap = (query.limit * 20).max(500) as i64;
+            params.push(Box::new(fetch_cap));
 
-        let params_ref: Vec<&dyn rusqlite::types::ToSql> =
-            params.iter().map(|b| b.as_ref()).collect();
+            let sql = format!(
+                "SELECT n.id, n.kind, n.name, n.qualified_name, n.file_path,
+                        n.line_start, n.line_end, n.language, n.parent_name,
+                        n.params, n.return_type, n.modifiers, n.is_test,
+                        n.file_hash, n.extra_json
+                 FROM   nodes n
+                 WHERE  {where_clause}
+                 ORDER  BY n.qualified_name
+                 LIMIT  ?"
+            );
 
-        let mut stmt = self.conn.prepare(&sql).map_err(db_err)?;
-        let results = stmt
-            .query_map(params_ref.as_slice(), |row| {
+            let params_ref: Vec<&dyn rusqlite::types::ToSql> =
+                params.iter().map(|b| b.as_ref()).collect();
+            let mut stmt = self.conn.prepare(&sql).map_err(db_err)?;
+            stmt.query_map(params_ref.as_slice(), |row| {
+                let node = row_to_node(row)?;
+                Ok(ScoredNode { node, score: 1.0 })
+            })
+            .map_err(db_err)?
+            .filter_map(|r| r.ok())
+            .collect()
+        } else {
+            // FTS5 path: full-text search with BM25 ranking.
+            let fts_query = fts5_escape(&query.text);
+
+            let mut filters: Vec<String> = vec!["nodes_fts MATCH ?".to_string()];
+            let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = vec![Box::new(fts_query)];
+
+            if let Some(kind) = &query.kind {
+                filters.push("n.kind = ?".to_string());
+                params.push(Box::new(kind.clone()));
+            }
+            if let Some(lang) = &query.language {
+                filters.push("n.language = ?".to_string());
+                params.push(Box::new(lang.clone()));
+            }
+            if let Some(fp) = &query.file_path {
+                filters.push("n.file_path = ?".to_string());
+                params.push(Box::new(fp.clone()));
+            }
+            if let Some(is_test) = query.is_test {
+                filters.push(format!("n.is_test = {}", is_test as i32));
+            }
+            if let Some(ref like_pat) = subpath_like {
+                filters.push("n.file_path LIKE ? ESCAPE '\\'".to_string());
+                params.push(Box::new(like_pat.clone()));
+            }
+
+            // When regex is also set we fetch more candidates so the post-filter
+            // has enough to work with; otherwise restrict to limit directly.
+            let fetch_limit = if regex.is_some() {
+                (query.limit * 20).max(500) as i64
+            } else {
+                query.limit as i64
+            };
+            params.push(Box::new(fetch_limit));
+
+            let where_clause = filters.join(" AND ");
+            let sql = format!(
+                "SELECT n.id, n.kind, n.name, n.qualified_name, n.file_path,
+                        n.line_start, n.line_end, n.language, n.parent_name,
+                        n.params, n.return_type, n.modifiers, n.is_test,
+                        n.file_hash, n.extra_json,
+                        bm25(nodes_fts) AS score
+                 FROM   nodes_fts
+                 JOIN   nodes n ON n.id = nodes_fts.rowid
+                 WHERE  {where_clause}
+                 ORDER  BY score
+                 LIMIT  ?"
+            );
+
+            let params_ref: Vec<&dyn rusqlite::types::ToSql> =
+                params.iter().map(|b| b.as_ref()).collect();
+
+            let mut stmt = self.conn.prepare(&sql).map_err(db_err)?;
+            stmt.query_map(params_ref.as_slice(), |row| {
                 let node = row_to_node(row)?;
                 let score: f64 = row.get(15)?;
                 Ok(ScoredNode {
@@ -1320,7 +1402,19 @@ impl Store {
             })
             .map_err(db_err)?
             .filter_map(|r| r.ok())
-            .collect();
+            .collect()
+        };
+
+        // Apply regex post-filter if present, then enforce the final limit.
+        let results = if let Some(ref re) = regex {
+            results
+                .into_iter()
+                .filter(|r| re.is_match(&r.node.name) || re.is_match(&r.node.qualified_name))
+                .take(query.limit)
+                .collect()
+        } else {
+            results
+        };
 
         Ok(results)
     }
@@ -4108,6 +4202,182 @@ mod tests {
     }
 
     // --- FTS language / file_path / is_test filters --------------------------
+
+    // --- regex post-filter tests ---------------------------------------------
+
+    #[test]
+    fn regex_matches_name() {
+        let mut store = open_in_memory();
+        let f1 = make_node(
+            NodeKind::Function,
+            "handle_request",
+            "a.rs::fn::handle_request",
+            "a.rs",
+            "rust",
+        );
+        let f2 = make_node(
+            NodeKind::Function,
+            "parse_body",
+            "a.rs::fn::parse_body",
+            "a.rs",
+            "rust",
+        );
+        store
+            .replace_file_graph("a.rs", "h", None, None, &[f1, f2], &[])
+            .unwrap();
+
+        let q = SearchQuery {
+            text: "handle".to_string(),
+            regex_pattern: Some(r"handle_\w+".to_string()),
+            limit: 10,
+            ..Default::default()
+        };
+        let results = store.search(&q).unwrap();
+        assert!(!results.is_empty(), "expected at least one result");
+        for r in &results {
+            assert!(r.node.name.contains("handle") || r.node.qualified_name.contains("handle"));
+        }
+    }
+
+    #[test]
+    fn regex_matches_qualified_name() {
+        let mut store = open_in_memory();
+        let f1 = make_node(
+            NodeKind::Function,
+            "foo",
+            "pkg::service::foo",
+            "a.rs",
+            "rust",
+        );
+        let f2 = make_node(
+            NodeKind::Function,
+            "bar",
+            "pkg::service::bar",
+            "a.rs",
+            "rust",
+        );
+        let f3 = make_node(NodeKind::Function, "baz", "pkg::util::baz", "a.rs", "rust");
+        store
+            .replace_file_graph("a.rs", "h", None, None, &[f1, f2, f3], &[])
+            .unwrap();
+
+        // FTS text is empty → structural scan, regex filters qualified name
+        let q = SearchQuery {
+            text: String::new(),
+            regex_pattern: Some(r"::service::".to_string()),
+            limit: 10,
+            ..Default::default()
+        };
+        let results = store.search(&q).unwrap();
+        assert_eq!(results.len(), 2);
+        for r in &results {
+            assert!(r.node.qualified_name.contains("::service::"));
+        }
+    }
+
+    #[test]
+    fn regex_structural_scan_empty_text() {
+        let mut store = open_in_memory();
+        let f1 = make_node(
+            NodeKind::Function,
+            "fn_alpha",
+            "a.rs::fn::fn_alpha",
+            "a.rs",
+            "rust",
+        );
+        let s1 = make_node(
+            NodeKind::Struct,
+            "MyStruct",
+            "a.rs::struct::MyStruct",
+            "a.rs",
+            "rust",
+        );
+        store
+            .replace_file_graph("a.rs", "h", None, None, &[f1, s1], &[])
+            .unwrap();
+
+        // regex matches only lower-case names starting with fn_
+        let q = SearchQuery {
+            text: String::new(),
+            regex_pattern: Some(r"^fn_".to_string()),
+            limit: 10,
+            ..Default::default()
+        };
+        let results = store.search(&q).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].node.name, "fn_alpha");
+    }
+
+    #[test]
+    fn regex_invalid_pattern_returns_error() {
+        let store = open_in_memory();
+        let q = SearchQuery {
+            text: String::new(),
+            regex_pattern: Some("[invalid".to_string()),
+            limit: 10,
+            ..Default::default()
+        };
+        let err = store.search(&q).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("invalid regex"),
+            "expected invalid regex message, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn regex_combined_with_fts_postfilters() {
+        let mut store = open_in_memory();
+        let f1 = make_node(
+            NodeKind::Function,
+            "search_fast",
+            "a.rs::fn::search_fast",
+            "a.rs",
+            "rust",
+        );
+        let f2 = make_node(
+            NodeKind::Function,
+            "search_slow",
+            "a.rs::fn::search_slow",
+            "a.rs",
+            "rust",
+        );
+        let f3 = make_node(
+            NodeKind::Function,
+            "other_fn",
+            "a.rs::fn::other_fn",
+            "a.rs",
+            "rust",
+        );
+        store
+            .replace_file_graph("a.rs", "h", None, None, &[f1, f2, f3], &[])
+            .unwrap();
+
+        let q = SearchQuery {
+            text: "search".to_string(),
+            regex_pattern: Some(r"search_fast".to_string()),
+            limit: 10,
+            ..Default::default()
+        };
+        let results = store.search(&q).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].node.name, "search_fast");
+    }
+
+    #[test]
+    fn regex_none_empty_text_returns_empty() {
+        let store = open_in_memory();
+        let q = SearchQuery {
+            text: String::new(),
+            regex_pattern: None,
+            limit: 10,
+            ..Default::default()
+        };
+        let results = store.search(&q).unwrap();
+        assert!(results.is_empty());
+    }
+
+    // --- FTS language / file_path / is_test filters (existing) --------------
 
     #[test]
     fn fts_search_respects_language_filter() {

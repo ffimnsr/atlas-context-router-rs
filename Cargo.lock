@@ -139,6 +139,7 @@ dependencies = [
  "clap_complete",
  "console",
  "dialoguer",
+ "regex",
  "serde",
  "serde_json",
  "tempfile",
@@ -228,6 +229,7 @@ dependencies = [
  "atlas-session",
  "atlas-store-sqlite",
  "camino",
+ "regex",
  "serde",
  "serde_json",
  "sha2",
@@ -270,10 +272,13 @@ name = "atlas-refactor"
 version = "0.3.3"
 dependencies = [
  "atlas-core",
+ "atlas-parser",
  "atlas-store-sqlite",
  "serde_json",
+ "sha2",
  "tempfile",
  "tracing",
+ "tree-sitter",
 ]
 
 [[package]]
@@ -337,6 +342,7 @@ version = "0.3.3"
 dependencies = [
  "atlas-core",
  "criterion",
+ "regex",
  "rusqlite",
  "serde_json",
  "tempfile",

@@ -24,9 +24,16 @@
 //! | `symbol_neighbors`        | Immediate callers, callees, tests, and nearby nodes      |
 //! | `cross_file_links`        | Files coupled through shared symbol references           |
 //! | `concept_clusters`        | Related file groups around seed files                    |
+//!
+//! MCP prompt templates:
+//! - `review_change`: review-flow guidance for changed files
+//! - `inspect_symbol`: symbol lookup and usage-exploration guidance
+//! - `plan_refactor`: refactor-safety and blast-radius guidance
+//! - `resume_prior_session`: continuity and saved-context retrieval guidance
 
 mod context;
 mod output;
+mod prompts;
 mod session_tools;
 mod tools;
 mod transport;
@@ -52,6 +59,26 @@ mod tests {
             .unwrap()
             .iter()
             .filter_map(|tool| tool["name"].as_str())
+            .map(str::to_owned)
+            .collect::<BTreeSet<_>>();
+
+        assert_eq!(documented, exported);
+    }
+
+    #[test]
+    fn crate_docs_list_current_mcp_prompts() {
+        let documented = include_str!("lib.rs")
+            .lines()
+            .filter_map(|line| line.trim_start().strip_prefix("//! - `"))
+            .filter_map(|line| line.split('`').next())
+            .map(str::to_owned)
+            .collect::<BTreeSet<_>>();
+
+        let exported = crate::prompts::prompt_list()["prompts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|prompt| prompt["name"].as_str())
             .map(str::to_owned)
             .collect::<BTreeSet<_>>();
 

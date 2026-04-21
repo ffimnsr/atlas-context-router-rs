@@ -122,6 +122,12 @@ pub enum Command {
         /// graph neighbours of the initial FTS hits before re-ranking.
         #[arg(long)]
         semantic: bool,
+
+        /// Filter results by regex pattern matched against name and qualified_name.
+        /// When text is empty, runs a structural scan then applies the regex.
+        /// Combine with --kind / --language / --subpath for narrower sweeps.
+        #[arg(long)]
+        regex: Option<String>,
     },
 
     /// Compute the impact radius of changed files.

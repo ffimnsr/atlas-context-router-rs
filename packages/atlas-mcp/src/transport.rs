@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 
-use crate::tools;
+use crate::{prompts, tools};
 
 const MCP_WORKER_THREADS_ENV: &str = "ATLAS_MCP_WORKER_THREADS";
 const MCP_TOOL_TIMEOUT_MS_ENV: &str = "ATLAS_MCP_TOOL_TIMEOUT_MS";
@@ -526,7 +526,10 @@ fn dispatch(
     match method {
         "initialize" => Ok(serde_json::json!({
             "protocolVersion": "2024-11-05",
-            "capabilities": { "tools": {} },
+            "capabilities": {
+                "tools": {},
+                "prompts": { "listChanged": false }
+            },
             "serverInfo": {
                 "name": "atlas",
                 "version": env!("CARGO_PKG_VERSION")
@@ -534,6 +537,17 @@ fn dispatch(
         })),
 
         "tools/list" => Ok(tools::tool_list()),
+
+        "prompts/list" => Ok(prompts::prompt_list()),
+
+        "prompts/get" => {
+            let name = params
+                .and_then(|p| p.get("name"))
+                .and_then(|n| n.as_str())
+                .ok_or_else(|| anyhow::anyhow!("missing prompt name"))?;
+            let args = params.and_then(|p| p.get("arguments"));
+            prompts::prompt_get(name, args)
+        }
 
         "tools/call" => {
             let name = params
@@ -852,8 +866,10 @@ mod tests {
             "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}\n",
             "{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}\n",
             "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\",\"params\":{}}\n",
-            "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"query_graph\",\"arguments\":{\"text\":\"compute\"}}}\n",
-            "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"get_context\",\"arguments\":{\"query\":\"compute\"}}}\n"
+            "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"prompts/list\",\"params\":{}}\n",
+            "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"prompts/get\",\"params\":{\"name\":\"inspect_symbol\",\"arguments\":{\"symbol\":\"compute\"}}}\n",
+            "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"tools/call\",\"params\":{\"name\":\"query_graph\",\"arguments\":{\"text\":\"compute\"}}}\n",
+            "{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"tools/call\",\"params\":{\"name\":\"get_context\",\"arguments\":{\"query\":\"compute\"}}}\n"
         );
         let reader = BufReader::new(Cursor::new(input.as_bytes()));
         let mut writer = Vec::new();
@@ -870,7 +886,7 @@ mod tests {
         let responses = parse_output_lines(writer);
         assert_eq!(
             responses.len(),
-            4,
+            6,
             "initialized notification must not emit a response"
         );
 
@@ -883,6 +899,10 @@ mod tests {
             by_id[&serde_json::json!(1)]["result"]["protocolVersion"],
             "2024-11-05"
         );
+        assert!(
+            by_id[&serde_json::json!(1)]["result"]["capabilities"]["prompts"].is_object(),
+            "initialize must advertise prompts capability"
+        );
 
         let tools = by_id[&serde_json::json!(2)]["result"]["tools"]
             .as_array()
@@ -892,12 +912,29 @@ mod tests {
             "tools/list must expose get_context"
         );
 
+        let prompts = by_id[&serde_json::json!(3)]["result"]["prompts"]
+            .as_array()
+            .expect("prompts/list result prompts array");
+        assert!(
+            prompts
+                .iter()
+                .any(|prompt| prompt["name"] == "inspect_symbol"),
+            "prompts/list must expose inspect_symbol"
+        );
+
+        let prompt_text = by_id[&serde_json::json!(4)]["result"]["messages"][0]["content"]["text"]
+            .as_str()
+            .expect("prompt text");
+        assert!(prompt_text.contains("compute"));
+        assert!(prompt_text.contains("query_graph"));
+        assert!(prompt_text.contains("symbol_neighbors"));
+
         assert_eq!(
-            by_id[&serde_json::json!(3)]["result"]["atlas_output_format"],
+            by_id[&serde_json::json!(5)]["result"]["atlas_output_format"],
             "json",
             "query_graph transport response must preserve JSON default"
         );
-        let query_text = by_id[&serde_json::json!(3)]["result"]["content"][0]["text"]
+        let query_text = by_id[&serde_json::json!(5)]["result"]["content"][0]["text"]
             .as_str()
             .expect("query_graph text content");
         let query_value: serde_json::Value =
@@ -905,11 +942,11 @@ mod tests {
         assert_eq!(query_value[0]["qn"], "src/service.rs::fn::compute");
 
         assert_eq!(
-            by_id[&serde_json::json!(4)]["result"]["atlas_output_format"],
+            by_id[&serde_json::json!(6)]["result"]["atlas_output_format"],
             "toon",
             "get_context transport response must preserve TOON default"
         );
-        let context_text = by_id[&serde_json::json!(4)]["result"]["content"][0]["text"]
+        let context_text = by_id[&serde_json::json!(6)]["result"]["content"][0]["text"]
             .as_str()
             .expect("get_context text content");
         assert!(context_text.contains("intent: symbol"));

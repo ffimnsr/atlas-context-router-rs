@@ -24,7 +24,7 @@ pub fn run_query(cli: &Cli) -> Result<()> {
     let store =
         Store::open(&db_path).with_context(|| format!("cannot open database at {db_path}"))?;
 
-    let (text, kind, language, subpath, limit, expand, expand_hops, fuzzy, hybrid, semantic) =
+    let (text, kind, language, subpath, limit, expand, expand_hops, fuzzy, hybrid, semantic, regex) =
         match &cli.command {
             Command::Query {
                 text,
@@ -37,6 +37,7 @@ pub fn run_query(cli: &Cli) -> Result<()> {
                 fuzzy,
                 hybrid,
                 semantic,
+                regex,
             } => (
                 text.clone(),
                 kind.clone(),
@@ -48,9 +49,15 @@ pub fn run_query(cli: &Cli) -> Result<()> {
                 *fuzzy,
                 *hybrid,
                 *semantic,
+                regex.clone(),
             ),
             _ => unreachable!(),
         };
+
+    // Validate regex early so the error is reported before any DB work.
+    if let Some(ref pat) = regex {
+        regex::Regex::new(pat).with_context(|| format!("invalid --regex pattern: {pat}"))?;
+    }
 
     let query = SearchQuery {
         text,
@@ -62,6 +69,7 @@ pub fn run_query(cli: &Cli) -> Result<()> {
         graph_max_hops: expand_hops,
         fuzzy_match: fuzzy,
         hybrid,
+        regex_pattern: regex,
         ..Default::default()
     };
 
@@ -87,6 +95,7 @@ pub fn run_query(cli: &Cli) -> Result<()> {
                     "graph_max_hops": query.graph_max_hops,
                     "fuzzy_match": query.fuzzy_match,
                     "semantic": semantic,
+                    "regex_pattern": query.regex_pattern,
                 },
                 "latency_ms": latency_ms,
                 "results": results,

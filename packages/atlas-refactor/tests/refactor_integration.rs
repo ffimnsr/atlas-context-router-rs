@@ -90,7 +90,7 @@ fn rename_single_file_symbol() {
     let pf = parsed_file_with_fn(src, "old_name", "src/lib.rs::fn::old_name", 1, 3);
     insert_pf(&mut store, pf);
 
-    let engine = RefactorEngine::new(&store, dir.path());
+    let mut engine = RefactorEngine::new(&mut store, dir.path());
     let plan = engine
         .plan_rename("src/lib.rs::fn::old_name", "new_name")
         .expect("plan");
@@ -173,7 +173,7 @@ fn rename_multi_file_symbol() {
     };
     insert_pf(&mut store, pf_ref);
 
-    let engine = RefactorEngine::new(&store, dir.path());
+    let mut engine = RefactorEngine::new(&mut store, dir.path());
     let plan = engine
         .plan_rename("src/lib.rs::fn::my_func", "renamed_func")
         .unwrap();
@@ -245,7 +245,7 @@ fn rename_collision_rejected() {
     };
     insert_pf(&mut store, pf);
 
-    let engine = RefactorEngine::new(&store, dir.path());
+    let engine = RefactorEngine::new(&mut store, dir.path());
     let err = engine.plan_rename("src/lib.rs::fn::old_name", "new_name");
     assert!(err.is_err(), "collision must be rejected");
     let msg = err.unwrap_err().to_string();
@@ -311,7 +311,7 @@ fn dead_code_removal_private_helper() {
     };
     insert_pf(&mut store, pf);
 
-    let engine = RefactorEngine::new(&store, dir.path());
+    let mut engine = RefactorEngine::new(&mut store, dir.path());
     let plan = engine
         .plan_dead_code_removal("src/util.rs::fn::unused_helper")
         .unwrap();
@@ -339,7 +339,7 @@ fn protected_entrypoint_not_removed() {
     let pf = parsed_file_with_fn(src, "main", "src/main.rs::fn::main", 1, 1);
     insert_pf(&mut store, pf);
 
-    let engine = RefactorEngine::new(&store, dir.path());
+    let engine = RefactorEngine::new(&mut store, dir.path());
     let err = engine.plan_dead_code_removal("src/main.rs::fn::main");
     assert!(err.is_err());
     let msg = err.unwrap_err().to_string();
@@ -363,7 +363,7 @@ fn unused_import_removed() {
         parsed_file_with_fn(src, "foo", "src/lib.rs::fn::foo", 4, 7),
     );
 
-    let engine = RefactorEngine::new(&store, dir.path());
+    let mut engine = RefactorEngine::new(&mut store, dir.path());
     let plan = engine.plan_import_cleanup(src).unwrap();
 
     // `Write` is unused, `Display` is used.
@@ -402,7 +402,7 @@ fn used_import_preserved() {
         parsed_file_with_fn(src, "foo", "src/lib.rs::fn::foo", 2, 2),
     );
 
-    let engine = RefactorEngine::new(&store, dir.path());
+    let engine = RefactorEngine::new(&mut store, dir.path());
     let plan = engine.plan_import_cleanup(src).unwrap();
 
     assert!(
@@ -431,7 +431,7 @@ fn extract_function_candidate_detection_basic() {
     let pf = parsed_file_with_fn(src, "large_fn", "src/compute.rs::fn::large_fn", 1, total);
     insert_pf(&mut store, pf);
 
-    let engine = RefactorEngine::new(&store, dir.path());
+    let engine = RefactorEngine::new(&mut store, dir.path());
     let candidates = engine.detect_extract_function_candidates(src).unwrap();
 
     assert!(!candidates.is_empty(), "expected at least one candidate");
@@ -455,7 +455,7 @@ fn dry_run_output_stable() {
     let pf = parsed_file_with_fn(src, "stable", "src/lib.rs::fn::stable", 1, 1);
     insert_pf(&mut store, pf);
 
-    let engine = RefactorEngine::new(&store, dir.path());
+    let mut engine = RefactorEngine::new(&mut store, dir.path());
     let plan = engine
         .plan_rename("src/lib.rs::fn::stable", "stable_v2")
         .unwrap();
@@ -482,7 +482,7 @@ fn simulate_impact_basic() {
     let pf = parsed_file_with_fn(src, "target", "src/lib.rs::fn::target", 1, 1);
     insert_pf(&mut store, pf);
 
-    let engine = RefactorEngine::new(&store, dir.path());
+    let engine = RefactorEngine::new(&mut store, dir.path());
     let plan = engine
         .plan_rename("src/lib.rs::fn::target", "renamed")
         .unwrap();
@@ -490,4 +490,149 @@ fn simulate_impact_basic() {
 
     // Safety score must be in [0, 1].
     assert!((0.0..=1.0).contains(&sim.safety_score));
+}
+
+#[test]
+fn apply_rename_updates_graph_slice_after_write() {
+    let dir = tmp_dir();
+    let mut store = open_store(dir.path());
+
+    let src = "src/lib.rs";
+    write_file(dir.path(), src, "fn old_name() {}\n");
+    insert_pf(
+        &mut store,
+        parsed_file_with_fn(src, "old_name", "src/lib.rs::fn::old_name", 1, 1),
+    );
+
+    let mut engine = RefactorEngine::new(&mut store, dir.path());
+    let plan = engine
+        .plan_rename("src/lib.rs::fn::old_name", "new_name")
+        .unwrap();
+    let result = engine.apply_rename(&plan, false).unwrap();
+    assert!(result.validation.valid);
+    drop(engine);
+
+    assert!(
+        store
+            .node_by_qname("src/lib.rs::fn::new_name")
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        store
+            .node_by_qname("src/lib.rs::fn::old_name")
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+fn import_cleanup_revalidates_syntax_before_write() {
+    let dir = tmp_dir();
+    let mut store = open_store(dir.path());
+
+    let src = "src/lib.rs";
+    let content = "use std::fmt::Display;\nfn foo() -> impl Display {\n    1\n}\n";
+    write_file(dir.path(), src, content);
+    insert_pf(
+        &mut store,
+        parsed_file_with_fn(src, "foo", "src/lib.rs::fn::foo", 2, 4),
+    );
+
+    let mut engine = RefactorEngine::new(&mut store, dir.path());
+    let invalid_plan = atlas_core::RefactorPlan {
+        operation: atlas_core::RefactorOperation::CleanImports {
+            file_path: src.to_string(),
+        },
+        edits: vec![atlas_core::RefactorEdit {
+            file_path: src.to_string(),
+            line_start: 2,
+            line_end: 2,
+            old_text: "fn foo() -> impl Display {".to_string(),
+            new_text: "fn foo( -> impl Display {".to_string(),
+            edit_kind: RefactorEditKind::RemoveImport,
+        }],
+        affected_files: vec![src.to_string()],
+        manual_review: Vec::new(),
+        estimated_safety: SafetyBand::Risky,
+    };
+
+    let result = engine.apply_import_cleanup(&invalid_plan, false).unwrap();
+    assert!(!result.validation.valid);
+    assert!(
+        result
+            .validation
+            .errors
+            .iter()
+            .any(|error| error.contains("parser revalidation failed"))
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join(src)).unwrap(),
+        content
+    );
+}
+
+#[test]
+fn import_cleanup_normalizes_order_after_removal() {
+    let dir = tmp_dir();
+    let mut store = open_store(dir.path());
+
+    let src = "src/lib.rs";
+    let content = "use zebra::Zed;\nuse std::fmt::Display;\nuse std::io::Write;\n\nfn foo() {\n    let value: Display = todo!();\n    let _ = value;\n    let _ = Zed::default();\n}\n";
+    write_file(dir.path(), src, content);
+    insert_pf(
+        &mut store,
+        parsed_file_with_fn(src, "foo", "src/lib.rs::fn::foo", 5, 9),
+    );
+
+    let mut engine = RefactorEngine::new(&mut store, dir.path());
+    let plan = engine.plan_import_cleanup(src).unwrap();
+    let result = engine.apply_import_cleanup(&plan, true).unwrap();
+    let diff = &result.patches[0].unified_diff;
+    assert!(diff.contains("-use std::io::Write;"));
+    assert!(diff.contains("-use zebra::Zed;"), "diff: {diff}");
+    assert!(diff.contains("+use zebra::Zed;"), "diff: {diff}");
+}
+
+#[test]
+fn extract_function_skips_side_effect_heavy_blocks() {
+    let dir = tmp_dir();
+    let mut store = open_store(dir.path());
+
+    let src = "src/compute.rs";
+    let body = [
+        "    println!(\"step\");",
+        "    return compute();",
+        "    println!(\"never\");",
+        "    return compute();",
+        "    println!(\"step\");",
+        "    return compute();",
+        "    println!(\"step\");",
+        "    return compute();",
+        "    println!(\"step\");",
+        "    return compute();",
+        "    println!(\"step\");",
+        "    return compute();",
+        "    println!(\"step\");",
+        "    return compute();",
+        "    println!(\"step\");",
+        "    return compute();",
+        "    println!(\"step\");",
+        "    return compute();",
+        "    println!(\"step\");",
+        "    return compute();",
+        "    println!(\"step\");",
+        "    return compute();",
+    ]
+    .join("\n");
+    let content = format!("fn large_fn() {{\n{}\n}}\n", body);
+    write_file(dir.path(), src, &content);
+    insert_pf(
+        &mut store,
+        parsed_file_with_fn(src, "large_fn", "src/compute.rs::fn::large_fn", 1, 24),
+    );
+
+    let engine = RefactorEngine::new(&mut store, dir.path());
+    let candidates = engine.detect_extract_function_candidates(src).unwrap();
+    assert!(candidates.is_empty(), "candidates: {candidates:?}");
 }

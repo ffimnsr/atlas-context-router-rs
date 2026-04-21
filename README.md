@@ -243,6 +243,10 @@ Search graph nodes:
 atlas query "AuthService"
 atlas query "login" --kind function --language rust
 atlas query "router" --subpath packages/atlas-cli --expand --expand-hops 2
+
+# regex post-filter: match name/qualified_name against pattern
+atlas query "" --regex "^handle_[a-z]+"
+atlas query "parse" --regex ".*(body|node).*" --kind function
 ```
 
 Inspect changed files:
@@ -344,7 +348,7 @@ The MCP server (`atlas serve`) exposes these tools to agents:
 | Tool | Description |
 |------|-------------|
 | `list_graph_stats` | Node/edge counts and language breakdown |
-| `query_graph` | Keyword search, returns compact symbol list |
+| `query_graph` | Keyword search with optional `regex` post-filter; returns compact symbol list |
 | `get_impact_radius` | Graph traversal from changed files |
 | `get_review_context` | Review bundle: symbols, neighbors, risk summary |
 | `get_context` | General context engine: symbol, file, review, impact |
@@ -362,6 +366,19 @@ The MCP server (`atlas serve`) exposes these tools to agents:
 | `symbol_neighbors` | Immediate callers, callees, tests, and nearby graph nodes |
 | `cross_file_links` | Files semantically linked to a file by shared symbol references |
 | `concept_clusters` | Related file groups around seed files by coupling density |
+
+## MCP Prompts
+
+The MCP server also exposes prompt templates for external LLM clients that support `prompts/list` and `prompts/get`:
+
+| Prompt | Purpose |
+|------|-------------|
+| `review_change` | Guide review flow through `detect_changes`, `get_minimal_context`, `get_review_context`, `explain_change`, and `get_impact_radius` |
+| `inspect_symbol` | Guide symbol lookup through `query_graph`, `symbol_neighbors`, `get_context`, and `traverse_graph` |
+| `plan_refactor` | Guide refactor planning through context, impact, coupling, and safety checks |
+| `resume_prior_session` | Guide continuity recovery through session status, resume snapshot, and saved-context retrieval |
+
+These prompts are guidance only. Atlas still keeps graph, context, impact, and continuity logic in tools rather than hard-coding behavior into prompt text.
 
 Output defaults:
 

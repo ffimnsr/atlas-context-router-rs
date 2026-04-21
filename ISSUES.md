@@ -124,7 +124,7 @@ Read this part in order. It covers initial architecture, storage, parsing, index
   - [x] `packages/atlas-search`
   - [x] `packages/atlas-review`
   - [x] `packages/atlas-impact`
-  - [ ] `packages/atlas-mcp`
+  - [x] `packages/atlas-mcp`
   - [x] `packages/atlas-engine` — shared build/update pipeline crate
 - [x] Keep public API narrow between crates
 
@@ -1873,7 +1873,7 @@ Use this section for MCP-specific rollout, payload design, continuity, and agent
 - [x] wrap blocking work in dedicated worker threads if needed
 - [x] `atlas serve`
 - [x] expose only core tools in first version
-- [ ] add prompts later, not first (MCP prompt templates for external LLMs to use as guidance)
+- [x] add prompts later, not first (MCP prompt templates for external LLMs to use as guidance)
 
 ### MCP2 — Public context surface and schema
 
@@ -2620,7 +2620,7 @@ Deterministic, syntax-aware transforms backed by graph validation. Start with st
   - [x] remove symbol span
   - [x] clean surrounding whitespace/comments if safe
   - [x] run import cleanup on touched file
-  - [ ] update graph slice
+  - [x] update graph slice
 - [x] dead-code validation:
   - [x] symbol definition removed
   - [x] no dangling same-file references
@@ -2631,10 +2631,10 @@ Deterministic, syntax-aware transforms backed by graph validation. Start with st
   - [x] compare imports vs usage
   - [x] mark unused imports
   - [x] remove unused imports
-  - [ ] normalize spacing/order if formatter integration exists later
+  - [x] normalize spacing/order if formatter integration exists later
 - [x] import-cleanup validation:
   - [x] no used import removed
-  - [ ] file remains syntactically valid if parser re-check exists
+  - [x] file remains syntactically valid if parser re-check exists
   - [x] no duplicate imports created
 
 ### 24.4 Extract-function detection, simulation, APIs, tests
@@ -2644,12 +2644,12 @@ Deterministic, syntax-aware transforms backed by graph validation. Start with st
   - [x] repeated block pattern
   - [x] clear input variables
   - [x] clear output variables
-  - [ ] limited side-effect boundaries
+  - [x] limited side-effect boundaries
 - [x] score candidates with:
   - [x] repeated logic boost
   - [x] long block boost
   - [x] low free-variable count boost
-  - [ ] low control-flow complexity boost
+  - [x] low control-flow complexity boost
 - [x] candidate output:
   - [x] span
   - [x] proposed inputs
@@ -2683,7 +2683,7 @@ Deterministic, syntax-aware transforms backed by graph validation. Start with st
 - [x] add safety checks:
   - [x] file write safety
   - [x] edit overlap detection
-  - [ ] parser revalidation hook later
+  - [x] parser revalidation hook later
   - [x] reject unsafe overlapping edits
   - [x] reject ambiguous rename targets
   - [x] reject low-confidence dead code removals by default

@@ -60,6 +60,9 @@ criterion = { version = "0.5", features = ["html_reports"] }
 # HTTP client
 ureq = { version = "2", features = ["json"] }
 
+# regex
+regex = { version = "1", default-features = false, features = ["std", "unicode-perl"] }
+
 # concurrency
 rayon = "1"
 hashbrown = "0.15"

@@ -258,6 +258,13 @@ pub struct SearchQuery {
     pub top_k_vector: usize,
     /// Reciprocal Rank Fusion k constant (default: 60).
     pub rrf_k: u32,
+    /// Optional regex pattern applied as a post-filter against `name` and
+    /// `qualified_name`. When `text` is empty and this is `Some`, the search
+    /// runs a structural SQL scan (no FTS) before applying the regex.
+    ///
+    /// Patterns must be valid `regex` crate syntax. An invalid pattern is
+    /// returned as an error rather than silently skipped.
+    pub regex_pattern: Option<String>,
 }
 
 impl Default for SearchQuery {
@@ -281,6 +288,7 @@ impl Default for SearchQuery {
             top_k_fts: 60,
             top_k_vector: 60,
             rrf_k: 60,
+            regex_pattern: None,
         }
     }
 }
