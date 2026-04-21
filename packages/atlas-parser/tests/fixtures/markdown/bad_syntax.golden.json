@@ -1,0 +1,150 @@
+{
+  "edges": [
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/markdown/bad_syntax.md",
+      "id": 0,
+      "kind": "contains",
+      "line": 1,
+      "source_qn": "fixtures/markdown/bad_syntax.md",
+      "target_qn": "fixtures/markdown/bad_syntax.md::document"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/markdown/bad_syntax.md",
+      "id": 0,
+      "kind": "contains",
+      "line": 1,
+      "source_qn": "fixtures/markdown/bad_syntax.md::document",
+      "target_qn": "fixtures/markdown/bad_syntax.md::heading::document.broken"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/markdown/bad_syntax.md",
+      "id": 0,
+      "kind": "contains",
+      "line": 5,
+      "source_qn": "fixtures/markdown/bad_syntax.md::heading::document.broken",
+      "target_qn": "fixtures/markdown/bad_syntax.md::code::1"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/markdown/bad_syntax.md",
+      "id": 0,
+      "kind": "contains",
+      "line": 5,
+      "source_qn": "fixtures/markdown/bad_syntax.md::heading::document.broken",
+      "target_qn": "fixtures/markdown/bad_syntax.md::code::2"
+    }
+  ],
+  "hash": "fixture-hash",
+  "language": "markdown",
+  "nodes": [
+    {
+      "extra_json": null,
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/markdown/bad_syntax.md",
+      "id": 0,
+      "is_test": false,
+      "kind": "file",
+      "language": "markdown",
+      "line_end": 7,
+      "line_start": 1,
+      "modifiers": null,
+      "name": "bad_syntax.md",
+      "params": null,
+      "parent_name": null,
+      "qualified_name": "fixtures/markdown/bad_syntax.md",
+      "return_type": null
+    },
+    {
+      "extra_json": {
+        "kind": "document"
+      },
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/markdown/bad_syntax.md",
+      "id": 0,
+      "is_test": false,
+      "kind": "module",
+      "language": "markdown",
+      "line_end": 7,
+      "line_start": 1,
+      "modifiers": null,
+      "name": "document",
+      "params": null,
+      "parent_name": "fixtures/markdown/bad_syntax.md",
+      "qualified_name": "fixtures/markdown/bad_syntax.md::document",
+      "return_type": null
+    },
+    {
+      "extra_json": {
+        "level": 1,
+        "path": "document.broken"
+      },
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/markdown/bad_syntax.md",
+      "id": 0,
+      "is_test": false,
+      "kind": "module",
+      "language": "markdown",
+      "line_end": 7,
+      "line_start": 1,
+      "modifiers": null,
+      "name": "Broken",
+      "params": null,
+      "parent_name": "fixtures/markdown/bad_syntax.md::document",
+      "qualified_name": "fixtures/markdown/bad_syntax.md::heading::document.broken",
+      "return_type": null
+    },
+    {
+      "extra_json": {
+        "info_string": "bash",
+        "kind": "fenced_code_block"
+      },
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/markdown/bad_syntax.md",
+      "id": 0,
+      "is_test": false,
+      "kind": "variable",
+      "language": "markdown",
+      "line_end": 7,
+      "line_start": 5,
+      "modifiers": null,
+      "name": "code:bash",
+      "params": null,
+      "parent_name": "fixtures/markdown/bad_syntax.md::heading::document.broken",
+      "qualified_name": "fixtures/markdown/bad_syntax.md::code::1",
+      "return_type": null
+    },
+    {
+      "extra_json": {
+        "info_string": "bash",
+        "kind": "fenced_code_block"
+      },
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/markdown/bad_syntax.md",
+      "id": 0,
+      "is_test": false,
+      "kind": "variable",
+      "language": "markdown",
+      "line_end": 7,
+      "line_start": 5,
+      "modifiers": null,
+      "name": "code:bash",
+      "params": null,
+      "parent_name": "fixtures/markdown/bad_syntax.md::heading::document.broken",
+      "qualified_name": "fixtures/markdown/bad_syntax.md::code::2",
+      "return_type": null
+    }
+  ],
+  "path": "fixtures/markdown/bad_syntax.md",
+  "size": 57
+}

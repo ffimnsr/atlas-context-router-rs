@@ -1,0 +1,263 @@
+{
+  "edges": [
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/markdown/core.md",
+      "id": 0,
+      "kind": "contains",
+      "line": 1,
+      "source_qn": "fixtures/markdown/core.md",
+      "target_qn": "fixtures/markdown/core.md::document"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/markdown/core.md",
+      "id": 0,
+      "kind": "contains",
+      "line": 1,
+      "source_qn": "fixtures/markdown/core.md::document",
+      "target_qn": "fixtures/markdown/core.md::heading::document.intro"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/markdown/core.md",
+      "id": 0,
+      "kind": "contains",
+      "line": 3,
+      "source_qn": "fixtures/markdown/core.md::heading::document.intro",
+      "target_qn": "fixtures/markdown/core.md::link::1"
+    },
+    {
+      "confidence": 0.800000011920929,
+      "confidence_tier": "markdown_link",
+      "extra_json": null,
+      "file_path": "fixtures/markdown/core.md",
+      "id": 0,
+      "kind": "imports",
+      "line": 3,
+      "source_qn": "fixtures/markdown/core.md::heading::document.intro",
+      "target_qn": "fixtures/markdown/core.md::link::1"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/markdown/core.md",
+      "id": 0,
+      "kind": "contains",
+      "line": 3,
+      "source_qn": "fixtures/markdown/core.md::heading::document.intro",
+      "target_qn": "fixtures/markdown/core.md::link::2"
+    },
+    {
+      "confidence": 0.800000011920929,
+      "confidence_tier": "markdown_link",
+      "extra_json": null,
+      "file_path": "fixtures/markdown/core.md",
+      "id": 0,
+      "kind": "imports",
+      "line": 3,
+      "source_qn": "fixtures/markdown/core.md::heading::document.intro",
+      "target_qn": "fixtures/markdown/core.md::link::2"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/markdown/core.md",
+      "id": 0,
+      "kind": "contains",
+      "line": 5,
+      "source_qn": "fixtures/markdown/core.md::heading::document.intro",
+      "target_qn": "fixtures/markdown/core.md::heading::document.intro.usage"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/markdown/core.md",
+      "id": 0,
+      "kind": "contains",
+      "line": 7,
+      "source_qn": "fixtures/markdown/core.md::heading::document.intro.usage",
+      "target_qn": "fixtures/markdown/core.md::code::1"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/markdown/core.md",
+      "id": 0,
+      "kind": "contains",
+      "line": 7,
+      "source_qn": "fixtures/markdown/core.md::heading::document.intro.usage",
+      "target_qn": "fixtures/markdown/core.md::code::2"
+    }
+  ],
+  "hash": "fixture-hash",
+  "language": "markdown",
+  "nodes": [
+    {
+      "extra_json": null,
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/markdown/core.md",
+      "id": 0,
+      "is_test": false,
+      "kind": "file",
+      "language": "markdown",
+      "line_end": 10,
+      "line_start": 1,
+      "modifiers": null,
+      "name": "core.md",
+      "params": null,
+      "parent_name": null,
+      "qualified_name": "fixtures/markdown/core.md",
+      "return_type": null
+    },
+    {
+      "extra_json": {
+        "kind": "document"
+      },
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/markdown/core.md",
+      "id": 0,
+      "is_test": false,
+      "kind": "module",
+      "language": "markdown",
+      "line_end": 10,
+      "line_start": 1,
+      "modifiers": null,
+      "name": "document",
+      "params": null,
+      "parent_name": "fixtures/markdown/core.md",
+      "qualified_name": "fixtures/markdown/core.md::document",
+      "return_type": null
+    },
+    {
+      "extra_json": {
+        "level": 1,
+        "path": "document.intro"
+      },
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/markdown/core.md",
+      "id": 0,
+      "is_test": false,
+      "kind": "module",
+      "language": "markdown",
+      "line_end": 10,
+      "line_start": 1,
+      "modifiers": null,
+      "name": "Intro",
+      "params": null,
+      "parent_name": "fixtures/markdown/core.md::document",
+      "qualified_name": "fixtures/markdown/core.md::heading::document.intro",
+      "return_type": null
+    },
+    {
+      "extra_json": {
+        "destination": "docs/guide.md"
+      },
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/markdown/core.md",
+      "id": 0,
+      "is_test": false,
+      "kind": "import",
+      "language": "markdown",
+      "line_end": 4,
+      "line_start": 3,
+      "modifiers": null,
+      "name": "docs/guide.md",
+      "params": null,
+      "parent_name": "fixtures/markdown/core.md::heading::document.intro",
+      "qualified_name": "fixtures/markdown/core.md::link::1",
+      "return_type": null
+    },
+    {
+      "extra_json": {
+        "destination": "docs/guide.md"
+      },
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/markdown/core.md",
+      "id": 0,
+      "is_test": false,
+      "kind": "import",
+      "language": "markdown",
+      "line_end": 4,
+      "line_start": 3,
+      "modifiers": null,
+      "name": "docs/guide.md",
+      "params": null,
+      "parent_name": "fixtures/markdown/core.md::heading::document.intro",
+      "qualified_name": "fixtures/markdown/core.md::link::2",
+      "return_type": null
+    },
+    {
+      "extra_json": {
+        "level": 2,
+        "path": "document.intro.usage"
+      },
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/markdown/core.md",
+      "id": 0,
+      "is_test": false,
+      "kind": "module",
+      "language": "markdown",
+      "line_end": 10,
+      "line_start": 5,
+      "modifiers": null,
+      "name": "Usage",
+      "params": null,
+      "parent_name": "fixtures/markdown/core.md::heading::document.intro",
+      "qualified_name": "fixtures/markdown/core.md::heading::document.intro.usage",
+      "return_type": null
+    },
+    {
+      "extra_json": {
+        "info_string": "rust",
+        "kind": "fenced_code_block"
+      },
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/markdown/core.md",
+      "id": 0,
+      "is_test": false,
+      "kind": "variable",
+      "language": "markdown",
+      "line_end": 10,
+      "line_start": 7,
+      "modifiers": null,
+      "name": "code:rust",
+      "params": null,
+      "parent_name": "fixtures/markdown/core.md::heading::document.intro.usage",
+      "qualified_name": "fixtures/markdown/core.md::code::1",
+      "return_type": null
+    },
+    {
+      "extra_json": {
+        "info_string": "rust",
+        "kind": "fenced_code_block"
+      },
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/markdown/core.md",
+      "id": 0,
+      "is_test": false,
+      "kind": "variable",
+      "language": "markdown",
+      "line_end": 10,
+      "line_start": 7,
+      "modifiers": null,
+      "name": "code:rust",
+      "params": null,
+      "parent_name": "fixtures/markdown/core.md::heading::document.intro.usage",
+      "qualified_name": "fixtures/markdown/core.md::code::2",
+      "return_type": null
+    }
+  ],
+  "path": "fixtures/markdown/core.md",
+  "size": 73
+}

@@ -1,0 +1,96 @@
+{
+  "edges": [
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/csharp/bad_syntax.cs",
+      "id": 0,
+      "kind": "contains",
+      "line": 1,
+      "source_qn": "fixtures/csharp/bad_syntax.cs",
+      "target_qn": "fixtures/csharp/bad_syntax.cs::import::csharp:1"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "using_directive",
+      "extra_json": null,
+      "file_path": "fixtures/csharp/bad_syntax.cs",
+      "id": 0,
+      "kind": "imports",
+      "line": 1,
+      "source_qn": "fixtures/csharp/bad_syntax.cs",
+      "target_qn": "fixtures/csharp/bad_syntax.cs::import::csharp:1"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/csharp/bad_syntax.cs",
+      "id": 0,
+      "kind": "contains",
+      "line": 3,
+      "source_qn": "fixtures/csharp/bad_syntax.cs",
+      "target_qn": "fixtures/csharp/bad_syntax.cs::namespace::Demo.App"
+    }
+  ],
+  "hash": "fixture-hash",
+  "language": "csharp",
+  "nodes": [
+    {
+      "extra_json": null,
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/csharp/bad_syntax.cs",
+      "id": 0,
+      "is_test": false,
+      "kind": "file",
+      "language": "csharp",
+      "line_end": 9,
+      "line_start": 1,
+      "modifiers": null,
+      "name": "bad_syntax.cs",
+      "params": null,
+      "parent_name": null,
+      "qualified_name": "fixtures/csharp/bad_syntax.cs",
+      "return_type": null
+    },
+    {
+      "extra_json": {
+        "imported": "System.Text"
+      },
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/csharp/bad_syntax.cs",
+      "id": 0,
+      "is_test": false,
+      "kind": "import",
+      "language": "csharp",
+      "line_end": 1,
+      "line_start": 1,
+      "modifiers": null,
+      "name": "System.Text",
+      "params": null,
+      "parent_name": "fixtures/csharp/bad_syntax.cs",
+      "qualified_name": "fixtures/csharp/bad_syntax.cs::import::csharp:1",
+      "return_type": null
+    },
+    {
+      "extra_json": null,
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/csharp/bad_syntax.cs",
+      "id": 0,
+      "is_test": false,
+      "kind": "module",
+      "language": "csharp",
+      "line_end": 3,
+      "line_start": 3,
+      "modifiers": null,
+      "name": "Demo.App",
+      "params": null,
+      "parent_name": "fixtures/csharp/bad_syntax.cs",
+      "qualified_name": "fixtures/csharp/bad_syntax.cs::namespace::Demo.App",
+      "return_type": null
+    }
+  ],
+  "path": "fixtures/csharp/bad_syntax.cs",
+  "size": 96
+}

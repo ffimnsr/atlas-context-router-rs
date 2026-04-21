@@ -1,0 +1,111 @@
+{
+  "edges": [
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/php/bad_syntax.php",
+      "id": 0,
+      "kind": "contains",
+      "line": 2,
+      "source_qn": "fixtures/php/bad_syntax.php",
+      "target_qn": "fixtures/php/bad_syntax.php::namespace::Demo\\App"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/php/bad_syntax.php",
+      "id": 0,
+      "kind": "contains",
+      "line": 4,
+      "source_qn": "fixtures/php/bad_syntax.php",
+      "target_qn": "fixtures/php/bad_syntax.php::class::Broken"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/php/bad_syntax.php",
+      "id": 0,
+      "kind": "contains",
+      "line": 5,
+      "source_qn": "fixtures/php/bad_syntax.php::class::Broken",
+      "target_qn": "fixtures/php/bad_syntax.php::method::Broken.run"
+    }
+  ],
+  "hash": "fixture-hash",
+  "language": "php",
+  "nodes": [
+    {
+      "extra_json": null,
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/php/bad_syntax.php",
+      "id": 0,
+      "is_test": false,
+      "kind": "file",
+      "language": "php",
+      "line_end": 8,
+      "line_start": 1,
+      "modifiers": null,
+      "name": "bad_syntax.php",
+      "params": null,
+      "parent_name": null,
+      "qualified_name": "fixtures/php/bad_syntax.php",
+      "return_type": null
+    },
+    {
+      "extra_json": null,
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/php/bad_syntax.php",
+      "id": 0,
+      "is_test": false,
+      "kind": "module",
+      "language": "php",
+      "line_end": 2,
+      "line_start": 2,
+      "modifiers": null,
+      "name": "Demo\\App",
+      "params": null,
+      "parent_name": "fixtures/php/bad_syntax.php",
+      "qualified_name": "fixtures/php/bad_syntax.php::namespace::Demo\\App",
+      "return_type": null
+    },
+    {
+      "extra_json": null,
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/php/bad_syntax.php",
+      "id": 0,
+      "is_test": false,
+      "kind": "class",
+      "language": "php",
+      "line_end": 7,
+      "line_start": 4,
+      "modifiers": null,
+      "name": "Broken",
+      "params": null,
+      "parent_name": "fixtures/php/bad_syntax.php",
+      "qualified_name": "fixtures/php/bad_syntax.php::class::Broken",
+      "return_type": null
+    },
+    {
+      "extra_json": null,
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/php/bad_syntax.php",
+      "id": 0,
+      "is_test": false,
+      "kind": "method",
+      "language": "php",
+      "line_end": 7,
+      "line_start": 5,
+      "modifiers": null,
+      "name": "run",
+      "params": "(",
+      "parent_name": "fixtures/php/bad_syntax.php::class::Broken",
+      "qualified_name": "fixtures/php/bad_syntax.php::method::Broken.run",
+      "return_type": null
+    }
+  ],
+  "path": "fixtures/php/bad_syntax.php",
+  "size": 93
+}

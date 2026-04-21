@@ -1,0 +1,257 @@
+{
+  "edges": [
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/cpp/core.cpp",
+      "id": 0,
+      "kind": "contains",
+      "line": 1,
+      "source_qn": "fixtures/cpp/core.cpp",
+      "target_qn": "fixtures/cpp/core.cpp::import::cpp:1"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "preproc_include",
+      "extra_json": null,
+      "file_path": "fixtures/cpp/core.cpp",
+      "id": 0,
+      "kind": "imports",
+      "line": 1,
+      "source_qn": "fixtures/cpp/core.cpp",
+      "target_qn": "fixtures/cpp/core.cpp::import::cpp:1"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/cpp/core.cpp",
+      "id": 0,
+      "kind": "contains",
+      "line": 3,
+      "source_qn": "fixtures/cpp/core.cpp",
+      "target_qn": "fixtures/cpp/core.cpp::namespace::demo"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/cpp/core.cpp",
+      "id": 0,
+      "kind": "contains",
+      "line": 6,
+      "source_qn": "fixtures/cpp/core.cpp::namespace::demo",
+      "target_qn": "fixtures/cpp/core.cpp::class::Box"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/cpp/core.cpp",
+      "id": 0,
+      "kind": "contains",
+      "line": 8,
+      "source_qn": "fixtures/cpp/core.cpp::namespace::demo",
+      "target_qn": "fixtures/cpp/core.cpp::class::Runner"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/cpp/core.cpp",
+      "id": 0,
+      "kind": "contains",
+      "line": 10,
+      "source_qn": "fixtures/cpp/core.cpp::class::Runner",
+      "target_qn": "fixtures/cpp/core.cpp::method::Runner.helper"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/cpp/core.cpp",
+      "id": 0,
+      "kind": "contains",
+      "line": 11,
+      "source_qn": "fixtures/cpp/core.cpp::class::Runner",
+      "target_qn": "fixtures/cpp/core.cpp::method::Runner.run"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/cpp/core.cpp",
+      "id": 0,
+      "kind": "contains",
+      "line": 16,
+      "source_qn": "fixtures/cpp/core.cpp::namespace::demo",
+      "target_qn": "fixtures/cpp/core.cpp::fn::free_fn"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "same_file",
+      "extra_json": null,
+      "file_path": "fixtures/cpp/core.cpp",
+      "id": 0,
+      "kind": "calls",
+      "line": 12,
+      "source_qn": "fixtures/cpp/core.cpp::method::Runner.run",
+      "target_qn": "fixtures/cpp/core.cpp::method::Runner.helper"
+    }
+  ],
+  "hash": "fixture-hash",
+  "language": "cpp",
+  "nodes": [
+    {
+      "extra_json": null,
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/cpp/core.cpp",
+      "id": 0,
+      "is_test": false,
+      "kind": "file",
+      "language": "cpp",
+      "line_end": 19,
+      "line_start": 1,
+      "modifiers": null,
+      "name": "core.cpp",
+      "params": null,
+      "parent_name": null,
+      "qualified_name": "fixtures/cpp/core.cpp",
+      "return_type": null
+    },
+    {
+      "extra_json": {
+        "imported": "vector"
+      },
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/cpp/core.cpp",
+      "id": 0,
+      "is_test": false,
+      "kind": "import",
+      "language": "cpp",
+      "line_end": 2,
+      "line_start": 1,
+      "modifiers": null,
+      "name": "vector",
+      "params": null,
+      "parent_name": "fixtures/cpp/core.cpp",
+      "qualified_name": "fixtures/cpp/core.cpp::import::cpp:1",
+      "return_type": null
+    },
+    {
+      "extra_json": null,
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/cpp/core.cpp",
+      "id": 0,
+      "is_test": false,
+      "kind": "module",
+      "language": "cpp",
+      "line_end": 18,
+      "line_start": 3,
+      "modifiers": null,
+      "name": "demo",
+      "params": null,
+      "parent_name": "fixtures/cpp/core.cpp",
+      "qualified_name": "fixtures/cpp/core.cpp::namespace::demo",
+      "return_type": null
+    },
+    {
+      "extra_json": {
+        "templated": true
+      },
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/cpp/core.cpp",
+      "id": 0,
+      "is_test": false,
+      "kind": "class",
+      "language": "cpp",
+      "line_end": 6,
+      "line_start": 6,
+      "modifiers": "template",
+      "name": "Box",
+      "params": null,
+      "parent_name": "fixtures/cpp/core.cpp::namespace::demo",
+      "qualified_name": "fixtures/cpp/core.cpp::class::Box",
+      "return_type": null
+    },
+    {
+      "extra_json": {
+        "templated": false
+      },
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/cpp/core.cpp",
+      "id": 0,
+      "is_test": false,
+      "kind": "class",
+      "language": "cpp",
+      "line_end": 14,
+      "line_start": 8,
+      "modifiers": null,
+      "name": "Runner",
+      "params": null,
+      "parent_name": "fixtures/cpp/core.cpp::namespace::demo",
+      "qualified_name": "fixtures/cpp/core.cpp::class::Runner",
+      "return_type": null
+    },
+    {
+      "extra_json": {
+        "templated": false
+      },
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/cpp/core.cpp",
+      "id": 0,
+      "is_test": false,
+      "kind": "method",
+      "language": "cpp",
+      "line_end": 10,
+      "line_start": 10,
+      "modifiers": null,
+      "name": "helper",
+      "params": "helper",
+      "parent_name": "fixtures/cpp/core.cpp::class::Runner",
+      "qualified_name": "fixtures/cpp/core.cpp::method::Runner.helper",
+      "return_type": "void"
+    },
+    {
+      "extra_json": {
+        "templated": false
+      },
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/cpp/core.cpp",
+      "id": 0,
+      "is_test": false,
+      "kind": "method",
+      "language": "cpp",
+      "line_end": 13,
+      "line_start": 11,
+      "modifiers": null,
+      "name": "run",
+      "params": "run",
+      "parent_name": "fixtures/cpp/core.cpp::class::Runner",
+      "qualified_name": "fixtures/cpp/core.cpp::method::Runner.run",
+      "return_type": "void"
+    },
+    {
+      "extra_json": {
+        "templated": false
+      },
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/cpp/core.cpp",
+      "id": 0,
+      "is_test": false,
+      "kind": "function",
+      "language": "cpp",
+      "line_end": 16,
+      "line_start": 16,
+      "modifiers": null,
+      "name": "free_fn",
+      "params": "free_fn",
+      "parent_name": "fixtures/cpp/core.cpp::namespace::demo",
+      "qualified_name": "fixtures/cpp/core.cpp::fn::free_fn",
+      "return_type": "void"
+    }
+  ],
+  "path": "fixtures/cpp/core.cpp",
+  "size": 184
+}

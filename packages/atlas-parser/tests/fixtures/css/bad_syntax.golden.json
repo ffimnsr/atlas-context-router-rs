@@ -1,0 +1,69 @@
+{
+  "edges": [
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/css/bad_syntax.css",
+      "id": 0,
+      "kind": "contains",
+      "line": 1,
+      "source_qn": "fixtures/css/bad_syntax.css",
+      "target_qn": "fixtures/css/bad_syntax.css::import::css:1"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/css/bad_syntax.css",
+      "id": 0,
+      "kind": "imports",
+      "line": 1,
+      "source_qn": "fixtures/css/bad_syntax.css",
+      "target_qn": "fixtures/css/bad_syntax.css::import::css:1"
+    }
+  ],
+  "hash": "fixture-hash",
+  "language": "css",
+  "nodes": [
+    {
+      "extra_json": null,
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/css/bad_syntax.css",
+      "id": 0,
+      "is_test": false,
+      "kind": "file",
+      "language": "css",
+      "line_end": 5,
+      "line_start": 1,
+      "modifiers": null,
+      "name": "bad_syntax.css",
+      "params": null,
+      "parent_name": null,
+      "qualified_name": "fixtures/css/bad_syntax.css",
+      "return_type": null
+    },
+    {
+      "extra_json": {
+        "source": "broken.css",
+        "statement": "@import 'broken.css'"
+      },
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/css/bad_syntax.css",
+      "id": 0,
+      "is_test": false,
+      "kind": "import",
+      "language": "css",
+      "line_end": 1,
+      "line_start": 1,
+      "modifiers": null,
+      "name": "broken.css",
+      "params": null,
+      "parent_name": "fixtures/css/bad_syntax.css",
+      "qualified_name": "fixtures/css/bad_syntax.css::import::css:1",
+      "return_type": null
+    }
+  ],
+  "path": "fixtures/css/bad_syntax.css",
+  "size": 45
+}

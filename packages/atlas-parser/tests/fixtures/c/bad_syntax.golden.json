@@ -1,0 +1,68 @@
+{
+  "edges": [
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/c/bad_syntax.c",
+      "id": 0,
+      "kind": "contains",
+      "line": 1,
+      "source_qn": "fixtures/c/bad_syntax.c",
+      "target_qn": "fixtures/c/bad_syntax.c::import::c:1"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "preproc_include",
+      "extra_json": null,
+      "file_path": "fixtures/c/bad_syntax.c",
+      "id": 0,
+      "kind": "imports",
+      "line": 1,
+      "source_qn": "fixtures/c/bad_syntax.c",
+      "target_qn": "fixtures/c/bad_syntax.c::import::c:1"
+    }
+  ],
+  "hash": "fixture-hash",
+  "language": "c",
+  "nodes": [
+    {
+      "extra_json": null,
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/c/bad_syntax.c",
+      "id": 0,
+      "is_test": false,
+      "kind": "file",
+      "language": "c",
+      "line_end": 8,
+      "line_start": 1,
+      "modifiers": null,
+      "name": "bad_syntax.c",
+      "params": null,
+      "parent_name": null,
+      "qualified_name": "fixtures/c/bad_syntax.c",
+      "return_type": null
+    },
+    {
+      "extra_json": {
+        "imported": "util.h"
+      },
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/c/bad_syntax.c",
+      "id": 0,
+      "is_test": false,
+      "kind": "import",
+      "language": "c",
+      "line_end": 2,
+      "line_start": 1,
+      "modifiers": null,
+      "name": "util.h",
+      "params": null,
+      "parent_name": "fixtures/c/bad_syntax.c",
+      "qualified_name": "fixtures/c/bad_syntax.c::import::c:1",
+      "return_type": null
+    }
+  ],
+  "path": "fixtures/c/bad_syntax.c",
+  "size": 81
+}

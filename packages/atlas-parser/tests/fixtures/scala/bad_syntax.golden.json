@@ -1,0 +1,85 @@
+{
+  "edges": [
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/scala/bad_syntax.scala",
+      "id": 0,
+      "kind": "contains",
+      "line": 1,
+      "source_qn": "fixtures/scala/bad_syntax.scala",
+      "target_qn": "fixtures/scala/bad_syntax.scala::package::demo.app"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/scala/bad_syntax.scala",
+      "id": 0,
+      "kind": "contains",
+      "line": 3,
+      "source_qn": "fixtures/scala/bad_syntax.scala::package::demo.app",
+      "target_qn": "fixtures/scala/bad_syntax.scala::object::Broken"
+    }
+  ],
+  "hash": "fixture-hash",
+  "language": "scala",
+  "nodes": [
+    {
+      "extra_json": null,
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/scala/bad_syntax.scala",
+      "id": 0,
+      "is_test": false,
+      "kind": "file",
+      "language": "scala",
+      "line_end": 6,
+      "line_start": 1,
+      "modifiers": null,
+      "name": "bad_syntax.scala",
+      "params": null,
+      "parent_name": null,
+      "qualified_name": "fixtures/scala/bad_syntax.scala",
+      "return_type": null
+    },
+    {
+      "extra_json": null,
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/scala/bad_syntax.scala",
+      "id": 0,
+      "is_test": false,
+      "kind": "package",
+      "language": "scala",
+      "line_end": 1,
+      "line_start": 1,
+      "modifiers": null,
+      "name": "demo.app",
+      "params": null,
+      "parent_name": "fixtures/scala/bad_syntax.scala",
+      "qualified_name": "fixtures/scala/bad_syntax.scala::package::demo.app",
+      "return_type": null
+    },
+    {
+      "extra_json": {
+        "kind": "object"
+      },
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/scala/bad_syntax.scala",
+      "id": 0,
+      "is_test": false,
+      "kind": "module",
+      "language": "scala",
+      "line_end": 6,
+      "line_start": 3,
+      "modifiers": null,
+      "name": "Broken",
+      "params": null,
+      "parent_name": "fixtures/scala/bad_syntax.scala::package::demo.app",
+      "qualified_name": "fixtures/scala/bad_syntax.scala::object::Broken",
+      "return_type": null
+    }
+  ],
+  "path": "fixtures/scala/bad_syntax.scala",
+  "size": 60
+}

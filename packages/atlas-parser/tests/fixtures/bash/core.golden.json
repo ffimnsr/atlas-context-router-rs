@@ -1,0 +1,136 @@
+{
+  "edges": [
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/bash/core.sh",
+      "id": 0,
+      "kind": "contains",
+      "line": 1,
+      "source_qn": "fixtures/bash/core.sh",
+      "target_qn": "fixtures/bash/core.sh::import::bash:1"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "shell_source",
+      "extra_json": null,
+      "file_path": "fixtures/bash/core.sh",
+      "id": 0,
+      "kind": "imports",
+      "line": 1,
+      "source_qn": "fixtures/bash/core.sh",
+      "target_qn": "fixtures/bash/core.sh::import::bash:1"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/bash/core.sh",
+      "id": 0,
+      "kind": "contains",
+      "line": 3,
+      "source_qn": "fixtures/bash/core.sh",
+      "target_qn": "fixtures/bash/core.sh::fn::setup"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/bash/core.sh",
+      "id": 0,
+      "kind": "contains",
+      "line": 7,
+      "source_qn": "fixtures/bash/core.sh",
+      "target_qn": "fixtures/bash/core.sh::fn::helper"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "same_file",
+      "extra_json": null,
+      "file_path": "fixtures/bash/core.sh",
+      "id": 0,
+      "kind": "calls",
+      "line": 4,
+      "source_qn": "fixtures/bash/core.sh::fn::setup",
+      "target_qn": "fixtures/bash/core.sh::fn::helper"
+    }
+  ],
+  "hash": "fixture-hash",
+  "language": "bash",
+  "nodes": [
+    {
+      "extra_json": null,
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/bash/core.sh",
+      "id": 0,
+      "is_test": false,
+      "kind": "file",
+      "language": "bash",
+      "line_end": 10,
+      "line_start": 1,
+      "modifiers": null,
+      "name": "core.sh",
+      "params": null,
+      "parent_name": null,
+      "qualified_name": "fixtures/bash/core.sh",
+      "return_type": null
+    },
+    {
+      "extra_json": {
+        "command": "source",
+        "imported": "./env.sh"
+      },
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/bash/core.sh",
+      "id": 0,
+      "is_test": false,
+      "kind": "import",
+      "language": "bash",
+      "line_end": 1,
+      "line_start": 1,
+      "modifiers": null,
+      "name": "./env.sh",
+      "params": null,
+      "parent_name": "fixtures/bash/core.sh",
+      "qualified_name": "fixtures/bash/core.sh::import::bash:1",
+      "return_type": null
+    },
+    {
+      "extra_json": null,
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/bash/core.sh",
+      "id": 0,
+      "is_test": false,
+      "kind": "function",
+      "language": "bash",
+      "line_end": 5,
+      "line_start": 3,
+      "modifiers": null,
+      "name": "setup",
+      "params": null,
+      "parent_name": "fixtures/bash/core.sh",
+      "qualified_name": "fixtures/bash/core.sh::fn::setup",
+      "return_type": null
+    },
+    {
+      "extra_json": null,
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/bash/core.sh",
+      "id": 0,
+      "is_test": false,
+      "kind": "function",
+      "language": "bash",
+      "line_end": 9,
+      "line_start": 7,
+      "modifiers": null,
+      "name": "helper",
+      "params": null,
+      "parent_name": "fixtures/bash/core.sh",
+      "qualified_name": "fixtures/bash/core.sh::fn::helper",
+      "return_type": null
+    }
+  ],
+  "path": "fixtures/bash/core.sh",
+  "size": 62
+}

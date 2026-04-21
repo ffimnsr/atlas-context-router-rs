@@ -1,0 +1,156 @@
+{
+  "edges": [
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/cpp/bad_syntax.cpp",
+      "id": 0,
+      "kind": "contains",
+      "line": 1,
+      "source_qn": "fixtures/cpp/bad_syntax.cpp",
+      "target_qn": "fixtures/cpp/bad_syntax.cpp::import::cpp:1"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "preproc_include",
+      "extra_json": null,
+      "file_path": "fixtures/cpp/bad_syntax.cpp",
+      "id": 0,
+      "kind": "imports",
+      "line": 1,
+      "source_qn": "fixtures/cpp/bad_syntax.cpp",
+      "target_qn": "fixtures/cpp/bad_syntax.cpp::import::cpp:1"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/cpp/bad_syntax.cpp",
+      "id": 0,
+      "kind": "contains",
+      "line": 3,
+      "source_qn": "fixtures/cpp/bad_syntax.cpp",
+      "target_qn": "fixtures/cpp/bad_syntax.cpp::namespace::demo"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/cpp/bad_syntax.cpp",
+      "id": 0,
+      "kind": "contains",
+      "line": 5,
+      "source_qn": "fixtures/cpp/bad_syntax.cpp::namespace::demo",
+      "target_qn": "fixtures/cpp/bad_syntax.cpp::class::Broken"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/cpp/bad_syntax.cpp",
+      "id": 0,
+      "kind": "contains",
+      "line": 7,
+      "source_qn": "fixtures/cpp/bad_syntax.cpp::class::Broken",
+      "target_qn": "fixtures/cpp/bad_syntax.cpp::method::Broken.run"
+    }
+  ],
+  "hash": "fixture-hash",
+  "language": "cpp",
+  "nodes": [
+    {
+      "extra_json": null,
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/cpp/bad_syntax.cpp",
+      "id": 0,
+      "is_test": false,
+      "kind": "file",
+      "language": "cpp",
+      "line_end": 11,
+      "line_start": 1,
+      "modifiers": null,
+      "name": "bad_syntax.cpp",
+      "params": null,
+      "parent_name": null,
+      "qualified_name": "fixtures/cpp/bad_syntax.cpp",
+      "return_type": null
+    },
+    {
+      "extra_json": {
+        "imported": "vector"
+      },
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/cpp/bad_syntax.cpp",
+      "id": 0,
+      "is_test": false,
+      "kind": "import",
+      "language": "cpp",
+      "line_end": 2,
+      "line_start": 1,
+      "modifiers": null,
+      "name": "vector",
+      "params": null,
+      "parent_name": "fixtures/cpp/bad_syntax.cpp",
+      "qualified_name": "fixtures/cpp/bad_syntax.cpp::import::cpp:1",
+      "return_type": null
+    },
+    {
+      "extra_json": null,
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/cpp/bad_syntax.cpp",
+      "id": 0,
+      "is_test": false,
+      "kind": "module",
+      "language": "cpp",
+      "line_end": 10,
+      "line_start": 3,
+      "modifiers": null,
+      "name": "demo",
+      "params": null,
+      "parent_name": "fixtures/cpp/bad_syntax.cpp",
+      "qualified_name": "fixtures/cpp/bad_syntax.cpp::namespace::demo",
+      "return_type": null
+    },
+    {
+      "extra_json": {
+        "templated": false
+      },
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/cpp/bad_syntax.cpp",
+      "id": 0,
+      "is_test": false,
+      "kind": "class",
+      "language": "cpp",
+      "line_end": 10,
+      "line_start": 5,
+      "modifiers": null,
+      "name": "Broken",
+      "params": null,
+      "parent_name": "fixtures/cpp/bad_syntax.cpp::namespace::demo",
+      "qualified_name": "fixtures/cpp/bad_syntax.cpp::class::Broken",
+      "return_type": null
+    },
+    {
+      "extra_json": {
+        "templated": false
+      },
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/cpp/bad_syntax.cpp",
+      "id": 0,
+      "is_test": false,
+      "kind": "method",
+      "language": "cpp",
+      "line_end": 9,
+      "line_start": 7,
+      "modifiers": null,
+      "name": "run",
+      "params": "run",
+      "parent_name": "fixtures/cpp/bad_syntax.cpp::class::Broken",
+      "qualified_name": "fixtures/cpp/bad_syntax.cpp::method::Broken.run",
+      "return_type": "void"
+    }
+  ],
+  "path": "fixtures/cpp/bad_syntax.cpp",
+  "size": 103
+}

@@ -1,0 +1,26 @@
+{
+  "edges": [],
+  "hash": "fixture-hash",
+  "language": "bash",
+  "nodes": [
+    {
+      "extra_json": null,
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/bash/bad_syntax.sh",
+      "id": 0,
+      "is_test": false,
+      "kind": "file",
+      "language": "bash",
+      "line_end": 7,
+      "line_start": 1,
+      "modifiers": null,
+      "name": "bad_syntax.sh",
+      "params": null,
+      "parent_name": null,
+      "qualified_name": "fixtures/bash/bad_syntax.sh",
+      "return_type": null
+    }
+  ],
+  "path": "fixtures/bash/bad_syntax.sh",
+  "size": 43
+}

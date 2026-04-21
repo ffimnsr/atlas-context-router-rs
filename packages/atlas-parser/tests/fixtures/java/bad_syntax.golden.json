@@ -1,0 +1,111 @@
+{
+  "edges": [
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/java/bad_syntax.java",
+      "id": 0,
+      "kind": "contains",
+      "line": 1,
+      "source_qn": "fixtures/java/bad_syntax.java",
+      "target_qn": "fixtures/java/bad_syntax.java::package::demo.app"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/java/bad_syntax.java",
+      "id": 0,
+      "kind": "contains",
+      "line": 3,
+      "source_qn": "fixtures/java/bad_syntax.java::package::demo.app",
+      "target_qn": "fixtures/java/bad_syntax.java::class::Broken"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/java/bad_syntax.java",
+      "id": 0,
+      "kind": "contains",
+      "line": 4,
+      "source_qn": "fixtures/java/bad_syntax.java::class::Broken",
+      "target_qn": "fixtures/java/bad_syntax.java::method::Broken.run"
+    }
+  ],
+  "hash": "fixture-hash",
+  "language": "java",
+  "nodes": [
+    {
+      "extra_json": null,
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/java/bad_syntax.java",
+      "id": 0,
+      "is_test": false,
+      "kind": "file",
+      "language": "java",
+      "line_end": 7,
+      "line_start": 1,
+      "modifiers": null,
+      "name": "bad_syntax.java",
+      "params": null,
+      "parent_name": null,
+      "qualified_name": "fixtures/java/bad_syntax.java",
+      "return_type": null
+    },
+    {
+      "extra_json": null,
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/java/bad_syntax.java",
+      "id": 0,
+      "is_test": false,
+      "kind": "package",
+      "language": "java",
+      "line_end": 1,
+      "line_start": 1,
+      "modifiers": null,
+      "name": "demo.app",
+      "params": null,
+      "parent_name": "fixtures/java/bad_syntax.java",
+      "qualified_name": "fixtures/java/bad_syntax.java::package::demo.app",
+      "return_type": null
+    },
+    {
+      "extra_json": null,
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/java/bad_syntax.java",
+      "id": 0,
+      "is_test": false,
+      "kind": "class",
+      "language": "java",
+      "line_end": 6,
+      "line_start": 3,
+      "modifiers": null,
+      "name": "Broken",
+      "params": null,
+      "parent_name": "fixtures/java/bad_syntax.java::package::demo.app",
+      "qualified_name": "fixtures/java/bad_syntax.java::class::Broken",
+      "return_type": null
+    },
+    {
+      "extra_json": null,
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/java/bad_syntax.java",
+      "id": 0,
+      "is_test": false,
+      "kind": "method",
+      "language": "java",
+      "line_end": 6,
+      "line_start": 4,
+      "modifiers": null,
+      "name": "run",
+      "params": "(",
+      "parent_name": "fixtures/java/bad_syntax.java::class::Broken",
+      "qualified_name": "fixtures/java/bad_syntax.java::method::Broken.run",
+      "return_type": "void"
+    }
+  ],
+  "path": "fixtures/java/bad_syntax.java",
+  "size": 72
+}

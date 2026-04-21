@@ -1,0 +1,193 @@
+{
+  "edges": [
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/html/core.html",
+      "id": 0,
+      "kind": "contains",
+      "line": 1,
+      "source_qn": "fixtures/html/core.html",
+      "target_qn": "fixtures/html/core.html::document"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/html/core.html",
+      "id": 0,
+      "kind": "contains",
+      "line": 2,
+      "source_qn": "fixtures/html/core.html::document",
+      "target_qn": "fixtures/html/core.html::tag::document.html[1]"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/html/core.html",
+      "id": 0,
+      "kind": "contains",
+      "line": 3,
+      "source_qn": "fixtures/html/core.html::tag::document.html[1]",
+      "target_qn": "fixtures/html/core.html::tag::document.html[1].body[1]"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/html/core.html",
+      "id": 0,
+      "kind": "contains",
+      "line": 4,
+      "source_qn": "fixtures/html/core.html::tag::document.html[1].body[1]",
+      "target_qn": "fixtures/html/core.html::tag::document.html[1].body[1].script[1]"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/html/core.html",
+      "id": 0,
+      "kind": "contains",
+      "line": 4,
+      "source_qn": "fixtures/html/core.html::tag::document.html[1].body[1].script[1]",
+      "target_qn": "fixtures/html/core.html::import::html:1"
+    },
+    {
+      "confidence": 0.8999999761581421,
+      "confidence_tier": "attribute",
+      "extra_json": null,
+      "file_path": "fixtures/html/core.html",
+      "id": 0,
+      "kind": "imports",
+      "line": 4,
+      "source_qn": "fixtures/html/core.html::tag::document.html[1].body[1].script[1]",
+      "target_qn": "fixtures/html/core.html::import::html:1"
+    }
+  ],
+  "hash": "fixture-hash",
+  "language": "html",
+  "nodes": [
+    {
+      "extra_json": null,
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/html/core.html",
+      "id": 0,
+      "is_test": false,
+      "kind": "file",
+      "language": "html",
+      "line_end": 8,
+      "line_start": 1,
+      "modifiers": null,
+      "name": "core.html",
+      "params": null,
+      "parent_name": null,
+      "qualified_name": "fixtures/html/core.html",
+      "return_type": null
+    },
+    {
+      "extra_json": {
+        "kind": "document"
+      },
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/html/core.html",
+      "id": 0,
+      "is_test": false,
+      "kind": "module",
+      "language": "html",
+      "line_end": 8,
+      "line_start": 1,
+      "modifiers": null,
+      "name": "document",
+      "params": null,
+      "parent_name": "fixtures/html/core.html",
+      "qualified_name": "fixtures/html/core.html::document",
+      "return_type": null
+    },
+    {
+      "extra_json": {
+        "path": "document.html[1]",
+        "tag": "html"
+      },
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/html/core.html",
+      "id": 0,
+      "is_test": false,
+      "kind": "module",
+      "language": "html",
+      "line_end": 7,
+      "line_start": 2,
+      "modifiers": null,
+      "name": "html",
+      "params": null,
+      "parent_name": "fixtures/html/core.html::document",
+      "qualified_name": "fixtures/html/core.html::tag::document.html[1]",
+      "return_type": null
+    },
+    {
+      "extra_json": {
+        "path": "document.html[1].body[1]",
+        "tag": "body"
+      },
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/html/core.html",
+      "id": 0,
+      "is_test": false,
+      "kind": "module",
+      "language": "html",
+      "line_end": 6,
+      "line_start": 3,
+      "modifiers": null,
+      "name": "body",
+      "params": null,
+      "parent_name": "fixtures/html/core.html::tag::document.html[1]",
+      "qualified_name": "fixtures/html/core.html::tag::document.html[1].body[1]",
+      "return_type": null
+    },
+    {
+      "extra_json": {
+        "path": "document.html[1].body[1].script[1]",
+        "tag": "script"
+      },
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/html/core.html",
+      "id": 0,
+      "is_test": false,
+      "kind": "module",
+      "language": "html",
+      "line_end": 4,
+      "line_start": 4,
+      "modifiers": null,
+      "name": "script",
+      "params": null,
+      "parent_name": "fixtures/html/core.html::tag::document.html[1].body[1]",
+      "qualified_name": "fixtures/html/core.html::tag::document.html[1].body[1].script[1]",
+      "return_type": null
+    },
+    {
+      "extra_json": {
+        "attribute": "src",
+        "imported": "app.js",
+        "tag": "script"
+      },
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/html/core.html",
+      "id": 0,
+      "is_test": false,
+      "kind": "import",
+      "language": "html",
+      "line_end": 4,
+      "line_start": 4,
+      "modifiers": null,
+      "name": "app.js",
+      "params": null,
+      "parent_name": "fixtures/html/core.html::tag::document.html[1].body[1].script[1]",
+      "qualified_name": "fixtures/html/core.html::import::html:1",
+      "return_type": null
+    }
+  ],
+  "path": "fixtures/html/core.html",
+  "size": 112
+}

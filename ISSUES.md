@@ -545,13 +545,13 @@ The upstream parser is both the most important subsystem and the most monolithic
 
 ### 5.3 Language strategy
 
-- [ ] v1 first-class languages:
+- [x] v1 first-class languages:
   - [x] Rust
   - [x] Go
   - [x] Python
   - [x] JavaScript
-  - [ ] TypeScript
-- [ ] v1.1 parser expansion covered in Phase 7.5
+  - [x] TypeScript
+- [x] v1.1 parser expansion covered in Phase 7.5
 - [ ] treat notebooks and framework-specific formats as later work
 
 ### 5.4 Tree-sitter integration
@@ -667,7 +667,7 @@ The upstream parser is both the most important subsystem and the most monolithic
 - [x] Tier 4:
   - [x] resolve imports where practical
 - [x] Never block parse success on perfect call resolution
-- [ ] Next call-resolution edge cases:
+- [x] Next call-resolution edge cases:
   - [x] support non-relative/package-style `tsconfig` `extends` values
   - [x] resolve JS/TS barrel re-export chains for import-based call targets
   - [x] support TypeScript 6 `baseUrl` deprecation handling
@@ -695,131 +695,131 @@ When implementation starts, pin exact grammar source in crate/module docs so par
 
 ### 7.5.1 Java (`tree-sitter/tree-sitter-java`)
 
-- [ ] package node
-- [ ] classes
-- [ ] interfaces
-- [ ] enums
-- [ ] methods
-- [ ] imports
-- [ ] annotations
-- [ ] call edges
-- [ ] qualified-name scheme
-- [ ] parser tests
+- [x] package node
+- [x] classes
+- [x] interfaces
+- [x] enums
+- [x] methods
+- [x] imports
+- [x] annotations
+- [x] call edges
+- [x] qualified-name scheme
+- [x] parser tests
 
 ### 7.5.2 C# (`tree-sitter/tree-sitter-c-sharp`)
 
-- [ ] namespace node
-- [ ] classes
-- [ ] interfaces
-- [ ] enums
-- [ ] structs
-- [ ] methods
-- [ ] using imports
-- [ ] attributes
-- [ ] call edges
-- [ ] qualified-name scheme
-- [ ] parser tests
+- [x] namespace node
+- [x] classes
+- [x] interfaces
+- [x] enums
+- [x] structs
+- [x] methods
+- [x] using imports
+- [x] attributes
+- [x] call edges
+- [x] qualified-name scheme
+- [x] parser tests
 
 ### 7.5.3 PHP (`tree-sitter/tree-sitter-php`)
 
-- [ ] namespace node
-- [ ] classes
-- [ ] interfaces
-- [ ] traits
-- [ ] functions
-- [ ] methods
-- [ ] `use` imports
-- [ ] attributes/annotations where practical
-- [ ] call edges
-- [ ] qualified-name scheme
-- [ ] parser tests
+- [x] namespace node
+- [x] classes
+- [x] interfaces
+- [x] traits
+- [x] functions
+- [x] methods
+- [x] `use` imports
+- [x] attributes/annotations where practical
+- [x] call edges
+- [x] qualified-name scheme
+- [x] parser tests
 
 ### 7.5.4 C (`tree-sitter/tree-sitter-c`)
 
-- [ ] translation-unit / file node
-- [ ] functions
-- [ ] structs
-- [ ] enums
-- [ ] typedefs
-- [ ] macros/preprocessor references where practical
-- [ ] `#include` imports
-- [ ] call edges
-- [ ] qualified-name scheme
-- [ ] parser tests
+- [x] translation-unit / file node
+- [x] functions
+- [x] structs
+- [x] enums
+- [x] typedefs
+- [x] macros/preprocessor references where practical
+- [x] `#include` imports
+- [x] call edges
+- [x] qualified-name scheme
+- [x] parser tests
 
 ### 7.5.5 C++ (`tree-sitter/tree-sitter-cpp`)
 
-- [ ] namespace node
-- [ ] classes
-- [ ] structs
-- [ ] enums
-- [ ] templates where practical
-- [ ] methods
-- [ ] `#include` imports
-- [ ] call edges
-- [ ] qualified-name scheme
-- [ ] parser tests
+- [x] namespace node
+- [x] classes
+- [x] structs
+- [x] enums
+- [x] templates where practical
+- [x] methods
+- [x] `#include` imports
+- [x] call edges
+- [x] qualified-name scheme
+- [x] parser tests
 
 ### 7.5.6 Scala (`tree-sitter/tree-sitter-scala`)
 
-- [ ] package node
-- [ ] objects
-- [ ] classes
-- [ ] traits
-- [ ] case classes
-- [ ] methods
-- [ ] imports
-- [ ] call edges
-- [ ] qualified-name scheme
-- [ ] parser tests
+- [x] package node
+- [x] objects
+- [x] classes
+- [x] traits
+- [x] case classes
+- [x] methods
+- [x] imports
+- [x] call edges
+- [x] qualified-name scheme
+- [x] parser tests
 
 ### 7.5.7 Ruby (`tree-sitter/tree-sitter-ruby`)
 
-- [ ] module node
-- [ ] classes
-- [ ] methods
-- [ ] singleton methods where practical
-- [ ] `require` / `require_relative` imports
-- [ ] mixins/include/extend where practical
-- [ ] call edges
-- [ ] qualified-name scheme
-- [ ] parser tests
+- [x] module node
+- [x] classes
+- [x] methods
+- [x] singleton methods where practical
+- [x] `require` / `require_relative` imports
+- [x] mixins/include/extend where practical
+- [x] call edges
+- [x] qualified-name scheme
+- [x] parser tests
 
 ### 7.5.8 JSON and TOML
 
-- [ ] JSON document node extraction
-- [ ] JSON top-level object/key symbol strategy
-- [ ] TOML document node extraction
-- [ ] TOML table/key symbol strategy
-- [ ] stable qualified-name scheme for config files
-- [ ] parser tests for nested keys and arrays
+- [x] JSON document node extraction
+- [x] JSON top-level object/key symbol strategy
+- [x] TOML document node extraction
+- [x] TOML table/key symbol strategy
+- [x] stable qualified-name scheme for config files
+- [x] parser tests for nested keys and arrays
 
 ### 7.5.9 HTML, CSS, Bash (`tree-sitter/tree-sitter-html`, `tree-sitter/tree-sitter-css`, `tree-sitter/tree-sitter-bash`)
 
-- [ ] HTML document/component node extraction
-- [ ] HTML imports/includes where practical
-- [ ] CSS selector/rule extraction
-- [ ] Bash functions
-- [ ] Bash sourced-file/import handling where practical
-- [ ] language-specific qualified-name scheme
-- [ ] parser tests for representative fixtures
+- [x] HTML document/component node extraction
+- [x] HTML imports/includes where practical
+- [x] CSS selector/rule extraction
+- [x] Bash functions
+- [x] Bash sourced-file/import handling where practical
+- [x] language-specific qualified-name scheme
+- [x] parser tests for representative fixtures
 
 ### 7.5.10 Markdown (`tree-sitter-grammars/tree-sitter-markdown`)
 
-- [ ] document node extraction
-- [ ] heading hierarchy extraction
-- [ ] fenced-code block extraction where practical
-- [ ] link/reference extraction where practical
-- [ ] stable qualified-name scheme by heading path
-- [ ] parser tests for nested heading documents
+- [x] document node extraction
+- [x] heading hierarchy extraction
+- [x] fenced-code block extraction where practical
+- [x] link/reference extraction where practical
+- [x] stable qualified-name scheme by heading path
+- [x] parser tests for nested heading documents
 
 ### 7.5.11 Shared acceptance criteria
 
-- [ ] unsupported constructs degrade gracefully
-- [ ] parser never panic on malformed source
-- [ ] line-span accuracy
-- [ ] file-slice replacement work same as Rust and Go
-- [ ] integration coverage in build/update path
+- [x] unsupported constructs degrade gracefully
+- [x] parser never panic on malformed source
+- [x] line-span accuracy
+- [x] file-slice replacement work same as Rust and Go
+- [x] integration coverage in build/update path
 
 ---
 

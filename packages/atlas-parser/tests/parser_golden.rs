@@ -124,6 +124,25 @@ fn is_fixture_source(path: &Path) -> bool {
 
     matches!(
         path.extension().and_then(|ext| ext.to_str()),
-        Some("rs" | "go" | "py" | "js" | "ts" | "json" | "toml")
+        Some(
+            "rs"
+                | "go"
+                | "py"
+                | "js"
+                | "ts"
+                | "json"
+                | "toml"
+                | "html"
+                | "css"
+                | "sh"
+                | "md"
+                | "java"
+                | "cs"
+                | "php"
+                | "c"
+                | "cpp"
+                | "scala"
+                | "rb"
+        )
     )
 }

@@ -1,0 +1,111 @@
+{
+  "edges": [
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/ruby/bad_syntax.rb",
+      "id": 0,
+      "kind": "contains",
+      "line": 1,
+      "source_qn": "fixtures/ruby/bad_syntax.rb",
+      "target_qn": "fixtures/ruby/bad_syntax.rb::module::Demo"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/ruby/bad_syntax.rb",
+      "id": 0,
+      "kind": "contains",
+      "line": 2,
+      "source_qn": "fixtures/ruby/bad_syntax.rb::module::Demo",
+      "target_qn": "fixtures/ruby/bad_syntax.rb::class::Broken"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/ruby/bad_syntax.rb",
+      "id": 0,
+      "kind": "contains",
+      "line": 3,
+      "source_qn": "fixtures/ruby/bad_syntax.rb::class::Broken",
+      "target_qn": "fixtures/ruby/bad_syntax.rb::method::Broken.run"
+    }
+  ],
+  "hash": "fixture-hash",
+  "language": "ruby",
+  "nodes": [
+    {
+      "extra_json": null,
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/ruby/bad_syntax.rb",
+      "id": 0,
+      "is_test": false,
+      "kind": "file",
+      "language": "ruby",
+      "line_end": 6,
+      "line_start": 1,
+      "modifiers": null,
+      "name": "bad_syntax.rb",
+      "params": null,
+      "parent_name": null,
+      "qualified_name": "fixtures/ruby/bad_syntax.rb",
+      "return_type": null
+    },
+    {
+      "extra_json": null,
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/ruby/bad_syntax.rb",
+      "id": 0,
+      "is_test": false,
+      "kind": "module",
+      "language": "ruby",
+      "line_end": 6,
+      "line_start": 1,
+      "modifiers": null,
+      "name": "Demo",
+      "params": null,
+      "parent_name": "fixtures/ruby/bad_syntax.rb",
+      "qualified_name": "fixtures/ruby/bad_syntax.rb::module::Demo",
+      "return_type": null
+    },
+    {
+      "extra_json": null,
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/ruby/bad_syntax.rb",
+      "id": 0,
+      "is_test": false,
+      "kind": "class",
+      "language": "ruby",
+      "line_end": 6,
+      "line_start": 2,
+      "modifiers": null,
+      "name": "Broken",
+      "params": null,
+      "parent_name": "fixtures/ruby/bad_syntax.rb::module::Demo",
+      "qualified_name": "fixtures/ruby/bad_syntax.rb::class::Broken",
+      "return_type": null
+    },
+    {
+      "extra_json": null,
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/ruby/bad_syntax.rb",
+      "id": 0,
+      "is_test": false,
+      "kind": "method",
+      "language": "ruby",
+      "line_end": 5,
+      "line_start": 3,
+      "modifiers": null,
+      "name": "run",
+      "params": "(\n      helper",
+      "parent_name": "fixtures/ruby/bad_syntax.rb::class::Broken",
+      "qualified_name": "fixtures/ruby/bad_syntax.rb::method::Broken.run",
+      "return_type": null
+    }
+  ],
+  "path": "fixtures/ruby/bad_syntax.rb",
+  "size": 64
+}

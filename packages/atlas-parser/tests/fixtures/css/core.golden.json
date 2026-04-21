@@ -1,0 +1,189 @@
+{
+  "edges": [
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/css/core.css",
+      "id": 0,
+      "kind": "contains",
+      "line": 1,
+      "source_qn": "fixtures/css/core.css",
+      "target_qn": "fixtures/css/core.css::import::css:1"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/css/core.css",
+      "id": 0,
+      "kind": "imports",
+      "line": 1,
+      "source_qn": "fixtures/css/core.css",
+      "target_qn": "fixtures/css/core.css::import::css:1"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/css/core.css",
+      "id": 0,
+      "kind": "contains",
+      "line": 3,
+      "source_qn": "fixtures/css/core.css",
+      "target_qn": "fixtures/css/core.css::rule::1"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/css/core.css",
+      "id": 0,
+      "kind": "contains",
+      "line": 3,
+      "source_qn": "fixtures/css/core.css::rule::1",
+      "target_qn": "fixtures/css/core.css::selector::1:1"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/css/core.css",
+      "id": 0,
+      "kind": "contains",
+      "line": 3,
+      "source_qn": "fixtures/css/core.css::rule::1",
+      "target_qn": "fixtures/css/core.css::selector::1:2"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/css/core.css",
+      "id": 0,
+      "kind": "contains",
+      "line": 4,
+      "source_qn": "fixtures/css/core.css::rule::1",
+      "target_qn": "fixtures/css/core.css::decl::1:1"
+    }
+  ],
+  "hash": "fixture-hash",
+  "language": "css",
+  "nodes": [
+    {
+      "extra_json": null,
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/css/core.css",
+      "id": 0,
+      "is_test": false,
+      "kind": "file",
+      "language": "css",
+      "line_end": 6,
+      "line_start": 1,
+      "modifiers": null,
+      "name": "core.css",
+      "params": null,
+      "parent_name": null,
+      "qualified_name": "fixtures/css/core.css",
+      "return_type": null
+    },
+    {
+      "extra_json": {
+        "source": "base.css",
+        "statement": "@import url('base.css');"
+      },
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/css/core.css",
+      "id": 0,
+      "is_test": false,
+      "kind": "import",
+      "language": "css",
+      "line_end": 1,
+      "line_start": 1,
+      "modifiers": null,
+      "name": "base.css",
+      "params": null,
+      "parent_name": "fixtures/css/core.css",
+      "qualified_name": "fixtures/css/core.css::import::css:1",
+      "return_type": null
+    },
+    {
+      "extra_json": {
+        "selector": ".button, #app"
+      },
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/css/core.css",
+      "id": 0,
+      "is_test": false,
+      "kind": "module",
+      "language": "css",
+      "line_end": 5,
+      "line_start": 3,
+      "modifiers": null,
+      "name": ".button, #app",
+      "params": null,
+      "parent_name": "fixtures/css/core.css",
+      "qualified_name": "fixtures/css/core.css::rule::1",
+      "return_type": null
+    },
+    {
+      "extra_json": {
+        "selector_kind": "class_selector"
+      },
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/css/core.css",
+      "id": 0,
+      "is_test": false,
+      "kind": "class",
+      "language": "css",
+      "line_end": 3,
+      "line_start": 3,
+      "modifiers": null,
+      "name": ".button",
+      "params": null,
+      "parent_name": "fixtures/css/core.css::rule::1",
+      "qualified_name": "fixtures/css/core.css::selector::1:1",
+      "return_type": null
+    },
+    {
+      "extra_json": {
+        "selector_kind": "id_selector"
+      },
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/css/core.css",
+      "id": 0,
+      "is_test": false,
+      "kind": "variable",
+      "language": "css",
+      "line_end": 3,
+      "line_start": 3,
+      "modifiers": null,
+      "name": "#app",
+      "params": null,
+      "parent_name": "fixtures/css/core.css::rule::1",
+      "qualified_name": "fixtures/css/core.css::selector::1:2",
+      "return_type": null
+    },
+    {
+      "extra_json": {
+        "kind": "declaration"
+      },
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/css/core.css",
+      "id": 0,
+      "is_test": false,
+      "kind": "variable",
+      "language": "css",
+      "line_end": 4,
+      "line_start": 4,
+      "modifiers": null,
+      "name": "color",
+      "params": null,
+      "parent_name": "fixtures/css/core.css::rule::1",
+      "qualified_name": "fixtures/css/core.css::decl::1:1",
+      "return_type": null
+    }
+  ],
+  "path": "fixtures/css/core.css",
+  "size": 58
+}

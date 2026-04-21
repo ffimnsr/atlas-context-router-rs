@@ -1,11 +1,22 @@
 use std::path::Path;
 
 use crate::lang::{
+    bash::BashParser,
+    c::CParser,
+    cpp::CppParser,
+    csharp::CSharpParser,
+    css::CssParser,
     go::GoParser,
+    html::HtmlParser,
+    java::JavaParser,
     javascript::{JsParser, TsParser},
     json::JsonParser,
+    markdown::MarkdownParser,
+    php::PhpParser,
     python::PythonParser,
+    ruby::RubyParser,
     rust::RustParser,
+    scala::ScalaParser,
     toml::TomlParser,
 };
 use crate::traits::{LangParser, ParseContext};
@@ -29,6 +40,17 @@ impl ParserRegistry {
         r.register(Box::new(TsParser));
         r.register(Box::new(JsonParser));
         r.register(Box::new(TomlParser));
+        r.register(Box::new(HtmlParser));
+        r.register(Box::new(CssParser));
+        r.register(Box::new(BashParser));
+        r.register(Box::new(MarkdownParser));
+        r.register(Box::new(JavaParser));
+        r.register(Box::new(CSharpParser));
+        r.register(Box::new(PhpParser));
+        r.register(Box::new(CParser));
+        r.register(Box::new(CppParser));
+        r.register(Box::new(ScalaParser));
+        r.register(Box::new(RubyParser));
         r
     }
 
@@ -100,6 +122,17 @@ mod tests {
         assert!(reg.supports("app.tsx"));
         assert!(reg.supports("config.json"));
         assert!(reg.supports("Cargo.toml"));
+        assert!(reg.supports("index.html"));
+        assert!(reg.supports("styles.css"));
+        assert!(reg.supports("script.sh"));
+        assert!(reg.supports("README.md"));
+        assert!(reg.supports("src/Main.java"));
+        assert!(reg.supports("src/App.cs"));
+        assert!(reg.supports("src/index.php"));
+        assert!(reg.supports("src/native.c"));
+        assert!(reg.supports("src/native.cpp"));
+        assert!(reg.supports("src/Main.scala"));
+        assert!(reg.supports("lib/app.rb"));
         assert!(!reg.supports("config.yaml"));
     }
 }
