@@ -1,12 +1,12 @@
 [package]
 name = "atlas-search"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2024"
 description = "FTS-backed graph search and ranking utilities for Atlas"
 
 [dependencies]
 atlas-core.workspace = true
-atlas-store-sqlite = { path = "../atlas-store-sqlite" , version = "0.3.0"}
+atlas-store-sqlite = { path = "../atlas-store-sqlite" , version = "0.3.1"}
 anyhow.workspace = true
 serde_json.workspace = true
 serde.workspace = true
