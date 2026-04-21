@@ -64,6 +64,8 @@ pub struct SearchFilters {
 #[derive(Debug, Clone)]
 pub struct ChunkResult {
     pub source_id: String,
+    /// Stable content-derived identity for this chunk (SHA-256 hex).
+    pub chunk_id: String,
     pub chunk_index: usize,
     pub title: Option<String>,
     pub content: String,
@@ -326,6 +328,11 @@ impl ContentStore {
     /// Index a raw artifact: chunk it and persist to `sources` + `chunks`.
     ///
     /// Also populates `chunks_fts`, `chunks_trigram`, and `vocabulary`.
+    ///
+    /// Deduplication: chunks whose `chunk_id` already exists for this source
+    /// are reused without re-insertion.  Chunks no longer present in the new
+    /// content are removed.  Per-repo `chunks_reused` counter is incremented
+    /// for each reused chunk.
     pub fn index_artifact(
         &mut self,
         meta: SourceMeta,
@@ -333,7 +340,7 @@ impl ContentStore {
         content_type: &str,
     ) -> Result<()> {
         let now = format_now();
-        let chunks = chunk_text(raw_text, content_type);
+        let chunks = chunk_text(&meta.id, raw_text, content_type);
 
         let tx = self
             .conn
@@ -354,37 +361,77 @@ impl ContentStore {
         )
         .map_err(|e| AtlasError::Db(e.to_string()))?;
 
-        // Delete any pre-existing chunks for this source (idempotent re-index).
-        // Remove from both FTS tables before deleting rows.
-        let safe_id = meta.id.replace('\'', "''");
-        {
+        // Collect existing chunk_ids for this source to enable deduplication.
+        let existing_chunk_ids: std::collections::HashSet<String> = {
+            let mut stmt = tx
+                .prepare("SELECT chunk_id FROM chunks WHERE source_id = ?1")
+                .map_err(|e| AtlasError::Db(e.to_string()))?;
+            let mut rows = stmt
+                .query(params![meta.id])
+                .map_err(|e| AtlasError::Db(e.to_string()))?;
+            let mut ids = std::collections::HashSet::new();
+            while let Some(row) = rows.next().map_err(|e| AtlasError::Db(e.to_string()))? {
+                let id: String = row.get(0).map_err(|e| AtlasError::Db(e.to_string()))?;
+                ids.insert(id);
+            }
+            ids
+        };
+
+        let new_chunk_ids: std::collections::HashSet<String> =
+            chunks.iter().map(|c| c.chunk_id.clone()).collect();
+
+        // Remove chunks that are no longer present in the new content.
+        let removed_ids: Vec<&String> = existing_chunk_ids
+            .iter()
+            .filter(|id| !new_chunk_ids.contains(*id))
+            .collect();
+
+        for removed_id in &removed_ids {
+            let safe_id = meta.id.replace('\'', "''");
+            let safe_chunk_id = removed_id.replace('\'', "''");
             let fts_cleanup = format!(
                 "INSERT INTO chunks_fts(chunks_fts, rowid, title, content, source_id, content_type)
                  SELECT 'delete', id, title, content, source_id, content_type
-                 FROM chunks WHERE source_id = '{safe_id}'"
+                 FROM chunks WHERE source_id = '{safe_id}' AND chunk_id = '{safe_chunk_id}'"
             );
             tx.execute_batch(&fts_cleanup)
                 .map_err(|e| AtlasError::Db(e.to_string()))?;
-        }
-        {
             let trigram_cleanup = format!(
                 "INSERT INTO chunks_trigram(chunks_trigram, rowid, title, content, source_id, content_type)
                  SELECT 'delete', id, title, content, source_id, content_type
-                 FROM chunks WHERE source_id = '{safe_id}'"
+                 FROM chunks WHERE source_id = '{safe_id}' AND chunk_id = '{safe_chunk_id}'"
             );
             tx.execute_batch(&trigram_cleanup)
                 .map_err(|e| AtlasError::Db(e.to_string()))?;
-        }
-        tx.execute("DELETE FROM chunks WHERE source_id = ?1", params![meta.id])
+            tx.execute(
+                "DELETE FROM chunks WHERE source_id = ?1 AND chunk_id = ?2",
+                params![meta.id, removed_id],
+            )
             .map_err(|e| AtlasError::Db(e.to_string()))?;
+        }
+
+        let mut chunks_inserted: i64 = 0;
+        let mut chunks_reused: i64 = 0;
 
         for chunk in &chunks {
+            if existing_chunk_ids.contains(&chunk.chunk_id) {
+                // Chunk content unchanged — reuse existing row, update only chunk_index.
+                tx.execute(
+                    "UPDATE chunks SET chunk_index = ?1 WHERE source_id = ?2 AND chunk_id = ?3",
+                    params![chunk.chunk_index as i64, meta.id, chunk.chunk_id],
+                )
+                .map_err(|e| AtlasError::Db(e.to_string()))?;
+                chunks_reused += 1;
+                continue;
+            }
+
             let metadata = serde_json::json!({}).to_string();
             tx.execute(
-                "INSERT INTO chunks (source_id, content, content_type, chunk_index, title, metadata_json, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                "INSERT INTO chunks (source_id, chunk_id, content, content_type, chunk_index, title, metadata_json, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                 params![
                     meta.id,
+                    chunk.chunk_id,
                     chunk.content,
                     chunk.content_type,
                     chunk.chunk_index as i64,
@@ -398,8 +445,8 @@ impl ContentStore {
             // Retrieve the rowid of the just-inserted chunk and update both FTS tables.
             let rowid: i64 = tx
                 .query_row(
-                    "SELECT id FROM chunks WHERE source_id = ?1 AND chunk_index = ?2",
-                    params![meta.id, chunk.chunk_index as i64],
+                    "SELECT id FROM chunks WHERE source_id = ?1 AND chunk_id = ?2",
+                    params![meta.id, chunk.chunk_id],
                     |r| r.get(0),
                 )
                 .map_err(|e| AtlasError::Db(e.to_string()))?;
@@ -429,6 +476,8 @@ impl ContentStore {
                 ],
             )
             .map_err(|e| AtlasError::Db(e.to_string()))?;
+
+            chunks_inserted += 1;
         }
 
         // Populate vocabulary table with unique terms from this artifact.
@@ -449,7 +498,9 @@ impl ContentStore {
         // without requiring an explicit begin_indexing/finish_indexing lifecycle.
         if let Some(ref rr) = meta.repo_root {
             // Best-effort: counter update failure does not fail the index operation.
-            if let Err(e) = self.increment_index_counters(rr, chunks.len() as i64) {
+            if let Err(e) =
+                self.increment_index_counters_with_reuse(rr, chunks_inserted, chunks_reused)
+            {
                 debug!("index counter update failed (best-effort): {e}");
             }
         }
@@ -484,7 +535,7 @@ impl ContentStore {
         }
 
         let sql = format!(
-            "SELECT c.source_id, c.chunk_index, c.title, c.content, c.content_type
+            "SELECT c.source_id, c.chunk_id, c.chunk_index, c.title, c.content, c.content_type
              FROM chunks_fts
              JOIN chunks c ON chunks_fts.rowid = c.id
              JOIN sources s ON c.source_id = s.id
@@ -510,13 +561,14 @@ impl ContentStore {
         while let Some(row) = rows.next().map_err(|e| AtlasError::Db(e.to_string()))? {
             results.push(ChunkResult {
                 source_id: row.get(0).map_err(|e| AtlasError::Db(e.to_string()))?,
+                chunk_id: row.get(1).map_err(|e| AtlasError::Db(e.to_string()))?,
                 chunk_index: row
-                    .get::<_, i64>(1)
+                    .get::<_, i64>(2)
                     .map_err(|e| AtlasError::Db(e.to_string()))?
                     as usize,
-                title: row.get(2).map_err(|e| AtlasError::Db(e.to_string()))?,
-                content: row.get(3).map_err(|e| AtlasError::Db(e.to_string()))?,
-                content_type: row.get(4).map_err(|e| AtlasError::Db(e.to_string()))?,
+                title: row.get(3).map_err(|e| AtlasError::Db(e.to_string()))?,
+                content: row.get(4).map_err(|e| AtlasError::Db(e.to_string()))?,
+                content_type: row.get(5).map_err(|e| AtlasError::Db(e.to_string()))?,
             });
         }
         Ok(results)
@@ -547,7 +599,7 @@ impl ContentStore {
         }
 
         let sql = format!(
-            "SELECT c.source_id, c.chunk_index, c.title, c.content, c.content_type
+            "SELECT c.source_id, c.chunk_id, c.chunk_index, c.title, c.content, c.content_type
              FROM chunks_trigram
              JOIN chunks c ON chunks_trigram.rowid = c.id
              JOIN sources s ON c.source_id = s.id
@@ -572,13 +624,14 @@ impl ContentStore {
         while let Some(row) = rows.next().map_err(|e| AtlasError::Db(e.to_string()))? {
             results.push(ChunkResult {
                 source_id: row.get(0).map_err(|e| AtlasError::Db(e.to_string()))?,
+                chunk_id: row.get(1).map_err(|e| AtlasError::Db(e.to_string()))?,
                 chunk_index: row
-                    .get::<_, i64>(1)
+                    .get::<_, i64>(2)
                     .map_err(|e| AtlasError::Db(e.to_string()))?
                     as usize,
-                title: row.get(2).map_err(|e| AtlasError::Db(e.to_string()))?,
-                content: row.get(3).map_err(|e| AtlasError::Db(e.to_string()))?,
-                content_type: row.get(4).map_err(|e| AtlasError::Db(e.to_string()))?,
+                title: row.get(3).map_err(|e| AtlasError::Db(e.to_string()))?,
+                content: row.get(4).map_err(|e| AtlasError::Db(e.to_string()))?,
+                content_type: row.get(5).map_err(|e| AtlasError::Db(e.to_string()))?,
             });
         }
         Ok(results)
@@ -739,7 +792,7 @@ impl ContentStore {
         let mut stmt = self
             .conn
             .prepare(
-                "SELECT source_id, chunk_index, title, content, content_type
+                "SELECT source_id, chunk_id, chunk_index, title, content, content_type
                  FROM chunks WHERE source_id = ?1
                  ORDER BY chunk_index",
             )
@@ -753,13 +806,14 @@ impl ContentStore {
         while let Some(row) = rows.next().map_err(|e| AtlasError::Db(e.to_string()))? {
             out.push(ChunkResult {
                 source_id: row.get(0).map_err(|e| AtlasError::Db(e.to_string()))?,
+                chunk_id: row.get(1).map_err(|e| AtlasError::Db(e.to_string()))?,
                 chunk_index: row
-                    .get::<_, i64>(1)
+                    .get::<_, i64>(2)
                     .map_err(|e| AtlasError::Db(e.to_string()))?
                     as usize,
-                title: row.get(2).map_err(|e| AtlasError::Db(e.to_string()))?,
-                content: row.get(3).map_err(|e| AtlasError::Db(e.to_string()))?,
-                content_type: row.get(4).map_err(|e| AtlasError::Db(e.to_string()))?,
+                title: row.get(3).map_err(|e| AtlasError::Db(e.to_string()))?,
+                content: row.get(4).map_err(|e| AtlasError::Db(e.to_string()))?,
+                content_type: row.get(5).map_err(|e| AtlasError::Db(e.to_string()))?,
             });
         }
         Ok(out)
@@ -1090,8 +1144,14 @@ impl ContentStore {
     ///
     /// Called automatically from `index_artifact` when `SourceMeta.repo_root`
     /// is set.  Uses `INSERT OR IGNORE` so no explicit `begin_indexing` call
-    /// is required for ad-hoc single-artifact indexing.
-    fn increment_index_counters(&mut self, repo_root: &str, chunk_count: i64) -> Result<()> {
+    /// is required for ad-hoc single-artifact indexing.  Also tracks reused
+    /// chunks separately from newly written chunks.
+    fn increment_index_counters_with_reuse(
+        &mut self,
+        repo_root: &str,
+        chunks_written: i64,
+        chunks_reused: i64,
+    ) -> Result<()> {
         let now = format_now();
         // Ensure a row exists (state defaults to 'indexed' for ad-hoc indexing).
         self.conn
@@ -1108,9 +1168,10 @@ impl ContentStore {
                 "UPDATE retrieval_index_state
                  SET files_indexed  = files_indexed + 1,
                      chunks_written = chunks_written + ?2,
-                     updated_at     = ?3
+                     chunks_reused  = chunks_reused  + ?3,
+                     updated_at     = ?4
                  WHERE repo_root = ?1",
-                params![repo_root, chunk_count, now],
+                params![repo_root, chunks_written, chunks_reused, now],
             )
             .map_err(|e| AtlasError::Db(e.to_string()))?;
         Ok(())
@@ -1486,6 +1547,7 @@ mod tests {
     fn rrf_merge_deduplicates() {
         let make = |source_id: &str, idx: usize, content: &str| ChunkResult {
             source_id: source_id.to_string(),
+            chunk_id: String::new(),
             chunk_index: idx,
             title: None,
             content: content.to_string(),

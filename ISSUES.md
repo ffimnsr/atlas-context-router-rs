@@ -3868,21 +3868,21 @@ Why:
 
 Current chunk storage should have a true stable identity separate from display order.
 
-- [ ] add stable `chunk_id`
-- [ ] define `chunk_id` from content-derived hash over:
-  - [ ] source/file path
-  - [ ] line span or chunk boundary
-  - [ ] normalized content
-- [ ] keep `chunk_index` or display order separately
-- [ ] use `chunk_id` for:
-  - [ ] dedupe
-  - [ ] chunk reuse
+- [x] add stable `chunk_id`
+- [x] define `chunk_id` from content-derived hash over:
+  - [x] source/file path
+  - [x] line span or chunk boundary
+  - [x] normalized content
+- [x] keep `chunk_index` or display order separately
+- [x] use `chunk_id` for:
+  - [x] dedupe
+  - [x] chunk reuse
   - [ ] retrieval cache keys
   - [ ] saved-context references
-- [ ] add tests for:
-  - [ ] same content same `chunk_id`
-  - [ ] moved chunk with changed path policy documented
-  - [ ] changed line span/content produces new `chunk_id`
+- [x] add tests for:
+  - [x] same content same `chunk_id`
+  - [x] moved chunk with changed path policy documented
+  - [x] changed line span/content produces new `chunk_id`
 
 Why:
 - improves deduplication and retrieval consistency across rebuilds
