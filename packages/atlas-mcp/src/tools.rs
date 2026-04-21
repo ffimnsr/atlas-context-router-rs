@@ -452,16 +452,6 @@ fn tool_query_graph(
     response["atlas_usage_edges_included"] = serde_json::Value::Bool(false);
     response["atlas_relationship_tools"] =
         serde_json::json!(["symbol_neighbors", "traverse_graph", "get_context"]);
-    if let Some(content) = response
-        .get_mut("content")
-        .and_then(|value| value.as_array_mut())
-    {
-        content.push(serde_json::json!({
-            "type": "text",
-            "mimeType": "text/plain",
-            "text": "query_graph returns symbol matches only. For callers, callees, or other usage relationships, follow with symbol_neighbors, traverse_graph, or get_context before falling back to rg."
-        }));
-    }
     Ok(response)
 }
 
@@ -1791,12 +1781,7 @@ mod tests {
             response["atlas_relationship_tools"],
             serde_json::json!(["symbol_neighbors", "traverse_graph", "get_context"])
         );
-        assert!(
-            response["content"][1]["text"]
-                .as_str()
-                .expect("query_graph note")
-                .contains("query_graph returns symbol matches only")
-        );
+        assert_eq!(response["content"].as_array().map(Vec::len), Some(1));
     }
 
     #[test]
