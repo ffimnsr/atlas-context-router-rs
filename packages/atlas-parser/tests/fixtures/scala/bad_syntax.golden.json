@@ -34,7 +34,7 @@
       "is_test": false,
       "kind": "file",
       "language": "scala",
-      "line_end": 6,
+      "line_end": 7,
       "line_start": 1,
       "modifiers": null,
       "name": "bad_syntax.scala",
@@ -81,5 +81,5 @@
     }
   ],
   "path": "fixtures/scala/bad_syntax.scala",
-  "size": 60
+  "size": 61
 }

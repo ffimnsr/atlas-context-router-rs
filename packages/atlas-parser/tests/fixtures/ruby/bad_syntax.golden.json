@@ -7,19 +7,8 @@
       "file_path": "fixtures/ruby/bad_syntax.rb",
       "id": 0,
       "kind": "contains",
-      "line": 1,
-      "source_qn": "fixtures/ruby/bad_syntax.rb",
-      "target_qn": "fixtures/ruby/bad_syntax.rb::module::Demo"
-    },
-    {
-      "confidence": 1.0,
-      "confidence_tier": "definite",
-      "extra_json": null,
-      "file_path": "fixtures/ruby/bad_syntax.rb",
-      "id": 0,
-      "kind": "contains",
       "line": 2,
-      "source_qn": "fixtures/ruby/bad_syntax.rb::module::Demo",
+      "source_qn": "fixtures/ruby/bad_syntax.rb",
       "target_qn": "fixtures/ruby/bad_syntax.rb::class::Broken"
     },
     {
@@ -45,30 +34,13 @@
       "is_test": false,
       "kind": "file",
       "language": "ruby",
-      "line_end": 6,
+      "line_end": 7,
       "line_start": 1,
       "modifiers": null,
       "name": "bad_syntax.rb",
       "params": null,
       "parent_name": null,
       "qualified_name": "fixtures/ruby/bad_syntax.rb",
-      "return_type": null
-    },
-    {
-      "extra_json": null,
-      "file_hash": "fixture-hash",
-      "file_path": "fixtures/ruby/bad_syntax.rb",
-      "id": 0,
-      "is_test": false,
-      "kind": "module",
-      "language": "ruby",
-      "line_end": 6,
-      "line_start": 1,
-      "modifiers": null,
-      "name": "Demo",
-      "params": null,
-      "parent_name": "fixtures/ruby/bad_syntax.rb",
-      "qualified_name": "fixtures/ruby/bad_syntax.rb::module::Demo",
       "return_type": null
     },
     {
@@ -84,7 +56,7 @@
       "modifiers": null,
       "name": "Broken",
       "params": null,
-      "parent_name": "fixtures/ruby/bad_syntax.rb::module::Demo",
+      "parent_name": "fixtures/ruby/bad_syntax.rb",
       "qualified_name": "fixtures/ruby/bad_syntax.rb::class::Broken",
       "return_type": null
     },
@@ -107,5 +79,5 @@
     }
   ],
   "path": "fixtures/ruby/bad_syntax.rb",
-  "size": 64
+  "size": 65
 }

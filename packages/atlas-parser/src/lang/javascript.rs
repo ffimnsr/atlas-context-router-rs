@@ -164,6 +164,9 @@ fn visit_toplevel(
         "import_statement" => {
             visit_import(node, ctx, lang, nodes, edges);
         }
+        "lexical_declaration" | "variable_declaration" => {
+            visit_variable_declaration(node, ctx, lang, nodes, edges);
+        }
         // TypeScript-specific top-level declarations.
         "interface_declaration" => {
             visit_ts_interface(node, ctx, lang, nodes, edges);
@@ -348,7 +351,17 @@ fn visit_export(
             "enum_declaration" => {
                 visit_ts_enum(decl, ctx, lang, nodes, edges);
             }
+            "lexical_declaration" | "variable_declaration" => {
+                visit_variable_declaration(decl, ctx, lang, nodes, edges);
+            }
             _ => {}
+        }
+    } else {
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if matches!(child.kind(), "lexical_declaration" | "variable_declaration") {
+                visit_variable_declaration(child, ctx, lang, nodes, edges);
+            }
         }
     }
 }
@@ -532,6 +545,112 @@ fn visit_ts_enum(
     ));
 }
 
+fn visit_variable_declaration(
+    node: TsNode<'_>,
+    ctx: &ParseContext<'_>,
+    lang: &str,
+    nodes: &mut Vec<Node>,
+    edges: &mut Vec<Edge>,
+) {
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if child.kind() == "variable_declarator" {
+            visit_variable_declarator(child, ctx, lang, nodes, edges);
+        }
+    }
+}
+
+fn visit_variable_declarator(
+    node: TsNode<'_>,
+    ctx: &ParseContext<'_>,
+    lang: &str,
+    nodes: &mut Vec<Node>,
+    edges: &mut Vec<Edge>,
+) {
+    let Some(name_node) = node.child_by_field_name("name") else {
+        return;
+    };
+    let name = node_text(name_node, ctx.source);
+    if name.is_empty() || !is_identifier_like(name) {
+        return;
+    }
+    let Some(value) = node.child_by_field_name("value") else {
+        return;
+    };
+    let Some(function_node) = function_value_node(value, ctx.source) else {
+        return;
+    };
+
+    let qn = format!("{}::fn::{}", ctx.rel_path, name);
+    let params = function_node
+        .child_by_field_name("parameters")
+        .map(|n| node_text(n, ctx.source).to_owned());
+    let return_type = function_node
+        .child_by_field_name("return_type")
+        .map(|n| node_text(n, ctx.source).to_owned());
+
+    nodes.push(Node {
+        id: NodeId::UNSET,
+        kind: NodeKind::Function,
+        name: name.to_owned(),
+        qualified_name: qn.clone(),
+        file_path: ctx.rel_path.to_owned(),
+        line_start: start_line(node),
+        line_end: end_line(node),
+        language: lang.to_owned(),
+        parent_name: Some(ctx.rel_path.to_owned()),
+        params,
+        return_type,
+        modifiers: None,
+        is_test: false,
+        file_hash: ctx.file_hash.to_owned(),
+        extra_json: serde_json::Value::Null,
+    });
+    edges.push(contains_edge(
+        ctx.rel_path,
+        &qn,
+        ctx.rel_path,
+        start_line(node),
+    ));
+}
+
+fn function_value_node<'a>(node: TsNode<'a>, source: &[u8]) -> Option<TsNode<'a>> {
+    match node.kind() {
+        "function" | "function_expression" | "arrow_function" => Some(node),
+        "call_expression" => {
+            let function = node.child_by_field_name("function")?;
+            if !matches!(
+                node_text(function, source),
+                "memo" | "forwardRef" | "React.memo"
+            ) {
+                return None;
+            }
+            first_function_argument(node)
+        }
+        _ => None,
+    }
+}
+
+fn first_function_argument(node: TsNode<'_>) -> Option<TsNode<'_>> {
+    let args = node.child_by_field_name("arguments")?;
+    let mut cursor = args.walk();
+    args.children(&mut cursor).find(|child| {
+        matches!(
+            child.kind(),
+            "function" | "function_expression" | "arrow_function"
+        )
+    })
+}
+
+fn is_identifier_like(name: &str) -> bool {
+    name.chars()
+        .next()
+        .is_some_and(|c| c == '_' || c == '$' || c.is_ascii_alphabetic())
+        && name
+            .chars()
+            .all(|c| c == '_' || c == '$' || c.is_ascii_alphanumeric())
+}
+
 // ---------------------------------------------------------------------------
 // Same-file call resolution (JavaScript / TypeScript)
 // ---------------------------------------------------------------------------
@@ -632,6 +751,8 @@ fn walk_js_calls<'a>(
         kind,
         "function_declaration"
             | "function"
+            | "function_expression"
+            | "arrow_function"
             | "method_definition"
             | "function_signature" // TS
             | "method_signature" // TS
@@ -647,6 +768,33 @@ fn walk_js_calls<'a>(
             } else {
                 false
             }
+        } else {
+            false
+        };
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            walk_js_calls(child, source, rel_path, callables, scope, edges);
+        }
+        if pushed {
+            scope.pop();
+        }
+        return;
+    }
+
+    if kind == "variable_declarator"
+        && let (Some(name_node), Some(value_node)) = (
+            node.child_by_field_name("name"),
+            node.child_by_field_name("value"),
+        )
+        && matches!(
+            value_node.kind(),
+            "function" | "function_expression" | "arrow_function" | "call_expression"
+        )
+    {
+        let name = node_text(name_node, source);
+        let pushed = if let Some(qn) = callables.get(name) {
+            scope.push(qn.clone());
+            true
         } else {
             false
         };
@@ -695,6 +843,35 @@ fn walk_js_calls<'a>(
         }
     }
 
+    if matches!(kind, "jsx_opening_element" | "jsx_self_closing_element")
+        && let Some(caller_qn) = scope.last().cloned()
+        && let Some((text, name, receiver)) = jsx_call_target(node, source)
+    {
+        if let Some(callee_qn) = callables.get(&name)
+            && *callee_qn != caller_qn
+        {
+            edges.push(js_call_edge(
+                &caller_qn,
+                callee_qn,
+                rel_path,
+                start_line(node),
+                &text,
+                receiver.as_deref(),
+                true,
+            ));
+        } else {
+            edges.push(js_call_edge(
+                &caller_qn,
+                &text,
+                rel_path,
+                start_line(node),
+                &text,
+                receiver.as_deref(),
+                false,
+            ));
+        }
+    }
+
     // Default recursive walk.
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
@@ -721,6 +898,26 @@ fn js_call_target(node: TsNode<'_>, source: &[u8]) -> Option<(String, String, Op
         }
         _ => None,
     }
+}
+
+fn jsx_call_target(node: TsNode<'_>, source: &[u8]) -> Option<(String, String, Option<String>)> {
+    let name_node = node.child_by_field_name("name").or_else(|| {
+        let mut cursor = node.walk();
+        node.children(&mut cursor).find(|child| {
+            matches!(
+                child.kind(),
+                "identifier" | "nested_identifier" | "member_expression" | "jsx_identifier"
+            )
+        })
+    })?;
+    let text = node_text(name_node, source).to_owned();
+    if text.is_empty() || text.as_bytes().first().is_some_and(u8::is_ascii_lowercase) {
+        return None;
+    }
+    if let Some((receiver, name)) = text.rsplit_once('.') {
+        return Some((text.clone(), name.to_owned(), Some(receiver.to_owned())));
+    }
+    Some((text.clone(), text, None))
 }
 
 fn is_self_call(caller_qn: &str, callee_name: &str, receiver: Option<&str>) -> bool {
@@ -788,6 +985,16 @@ mod tests {
     fn parse_ts(src: &str) -> ParsedFile {
         let (pf, _) = TsParser.parse(&ParseContext {
             rel_path: "src/app.ts",
+            file_hash: "cafebabe",
+            source: src.as_bytes(),
+            old_tree: None,
+        });
+        pf
+    }
+
+    fn parse_tsx(src: &str) -> ParsedFile {
+        let (pf, _) = TsParser.parse(&ParseContext {
+            rel_path: "src/app.tsx",
             file_hash: "cafebabe",
             source: src.as_bytes(),
             old_tree: None,
@@ -951,5 +1158,66 @@ mod tests {
             .expect("call edge");
         assert_eq!(edge.target_qn, "utils.helper");
         assert_eq!(edge.confidence_tier.as_deref(), Some("text"));
+    }
+
+    #[test]
+    fn tsx_const_function_component_is_callable_scope() {
+        let src = "const App = () => <Widget />;\n";
+        let pf = parse_tsx(src);
+        assert!(pf.nodes.iter().any(|n| {
+            n.kind == NodeKind::Function
+                && n.name == "App"
+                && n.qualified_name == "src/app.tsx::fn::App"
+        }));
+        assert!(
+            pf.edges.iter().any(|e| {
+                e.kind == EdgeKind::Calls
+                    && e.source_qn == "src/app.tsx::fn::App"
+                    && e.target_qn == "Widget"
+                    && e.confidence_tier.as_deref() == Some("text")
+            }),
+            "expected JSX component call from App to Widget; edges: {:?}",
+            pf.edges
+        );
+    }
+
+    #[test]
+    fn tsx_memo_named_function_component_calls_imported_jsx_component() {
+        let src = "export const HistoryTab = memo(function HistoryTab() { return <SideFilterControl />; });\n";
+        let pf = parse_tsx(src);
+        assert!(
+            pf.nodes.iter().any(|n| {
+                n.kind == NodeKind::Function
+                    && n.name == "HistoryTab"
+                    && n.qualified_name == "src/app.tsx::fn::HistoryTab"
+            }),
+            "expected HistoryTab function node; nodes: {:?}",
+            pf.nodes
+        );
+        assert!(
+            pf.edges.iter().any(|e| {
+                e.kind == EdgeKind::Calls
+                    && e.source_qn == "src/app.tsx::fn::HistoryTab"
+                    && e.target_qn == "SideFilterControl"
+                    && e.confidence_tier.as_deref() == Some("text")
+            }),
+            "expected JSX component call from HistoryTab to SideFilterControl; edges: {:?}",
+            pf.edges
+        );
+    }
+
+    #[test]
+    fn tsx_ignores_lowercase_jsx_elements() {
+        let src = "const App = () => <div><Widget /></div>;\n";
+        let pf = parse_tsx(src);
+        assert!(
+            !pf.edges.iter().any(|e| {
+                e.kind == EdgeKind::Calls
+                    && e.target_qn == "div"
+                    && e.confidence_tier.as_deref() == Some("text")
+            }),
+            "lowercase intrinsic JSX element should not produce call edge: {:?}",
+            pf.edges
+        );
     }
 }

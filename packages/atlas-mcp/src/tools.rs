@@ -268,7 +268,7 @@ pub fn tool_list() -> serde_json::Value {
             },
             {
                 "name": "symbol_neighbors",
-                "description": "Return the immediate graph neighbourhood of a symbol: callers, callees, test nodes, containment siblings, and import-linked nodes. Useful for understanding a symbol's role and connectivity without a full traversal.",
+                "description": "Return the immediate graph neighbourhood of a symbol: callers, callees, call edge sites with source lines, test nodes, containment siblings, and import-linked nodes. Useful for understanding a symbol's role and exact direct usage sites without a full traversal.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -1169,12 +1169,56 @@ fn tool_symbol_neighbors(
     let store = open_store(db_path)?;
     let nbhd =
         sem::symbol_neighborhood(&store, &qname, limit).context("symbol_neighborhood failed")?;
+    let caller_pairs = store
+        .direct_callers(&qname, limit)
+        .context("direct_callers failed")?;
+    let callee_pairs = store
+        .direct_callees(&qname, limit)
+        .context("direct_callees failed")?;
+
+    #[derive(Serialize)]
+    struct CompactCallEdge<'a> {
+        from: &'a str,
+        to: &'a str,
+        file: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        line: Option<u32>,
+        confidence: f32,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        tier: Option<&'a str>,
+    }
+
+    fn compact_call_edge(edge: &atlas_core::Edge) -> CompactCallEdge<'_> {
+        CompactCallEdge {
+            from: &edge.source_qn,
+            to: &edge.target_qn,
+            file: &edge.file_path,
+            line: edge.line,
+            confidence: edge.confidence,
+            tier: edge.confidence_tier.as_deref(),
+        }
+    }
+
+    fn compact_unique_nodes_from_pairs<'a>(
+        pairs: &'a [(atlas_core::Node, atlas_core::Edge)],
+    ) -> Vec<crate::context::CompactNode<'a>> {
+        let mut seen = std::collections::HashSet::new();
+        let mut nodes = Vec::new();
+        for (node, _) in pairs {
+            if seen.insert(node.qualified_name.as_str()) {
+                nodes.push(compact_node(node));
+            }
+        }
+        nodes
+    }
 
     #[derive(Serialize)]
     struct NeighborhoodResult<'a> {
         qname: &'a str,
         callers: Vec<crate::context::CompactNode<'a>>,
         callees: Vec<crate::context::CompactNode<'a>>,
+        caller_edges: Vec<CompactCallEdge<'a>>,
+        callee_edges: Vec<CompactCallEdge<'a>>,
         tests: Vec<crate::context::CompactNode<'a>>,
         siblings: Vec<crate::context::CompactNode<'a>>,
         import_neighbors: Vec<crate::context::CompactNode<'a>>,
@@ -1182,8 +1226,16 @@ fn tool_symbol_neighbors(
 
     let result = NeighborhoodResult {
         qname: &qname,
-        callers: nbhd.callers.iter().map(compact_node).collect(),
-        callees: nbhd.callees.iter().map(compact_node).collect(),
+        callers: compact_unique_nodes_from_pairs(&caller_pairs),
+        callees: compact_unique_nodes_from_pairs(&callee_pairs),
+        caller_edges: caller_pairs
+            .iter()
+            .map(|(_, edge)| compact_call_edge(edge))
+            .collect(),
+        callee_edges: callee_pairs
+            .iter()
+            .map(|(_, edge)| compact_call_edge(edge))
+            .collect(),
         tests: nbhd.tests.iter().map(compact_node).collect(),
         siblings: nbhd.siblings.iter().map(compact_node).collect(),
         import_neighbors: nbhd.import_neighbors.iter().map(compact_node).collect(),
@@ -1785,6 +1837,95 @@ mod tests {
     }
 
     #[test]
+    fn symbol_neighbors_includes_call_edge_sites() {
+        let fixture = setup_mcp_fixture();
+        let mut store = Store::open(&fixture.db_path).expect("open store");
+        let handle = make_node(
+            NodeKind::Function,
+            "handle_request",
+            "src/api.rs::fn::handle_request",
+            "src/api.rs",
+        );
+        let first_call = make_edge(
+            EdgeKind::Calls,
+            "src/api.rs::fn::handle_request",
+            "src/service.rs::fn::compute",
+            "src/api.rs",
+        );
+        let mut second_call = make_edge(
+            EdgeKind::Calls,
+            "src/api.rs::fn::handle_request",
+            "src/service.rs::fn::compute",
+            "src/api.rs",
+        );
+        second_call.line = Some(2);
+        store
+            .replace_file_graph(
+                "src/api.rs",
+                "hash:src/api.rs",
+                Some("rust"),
+                Some(5),
+                &[handle],
+                &[first_call, second_call],
+            )
+            .expect("replace api graph");
+
+        let args = serde_json::json!({
+            "qname": "src/service.rs::fn::compute",
+            "output_format": "json",
+        });
+
+        let response = call(
+            "symbol_neighbors",
+            Some(&args),
+            "/ignored",
+            &fixture.db_path,
+        )
+        .expect("symbol_neighbors call");
+        let text = unwrap_tool_text(response);
+        let value: serde_json::Value = serde_json::from_str(&text).expect("parse json");
+
+        assert_eq!(
+            value.pointer("/callers/0/qn").and_then(|v| v.as_str()),
+            Some("src/api.rs::fn::handle_request")
+        );
+        assert_eq!(
+            value.pointer("/callers/1").and_then(|v| v.as_object()),
+            None,
+            "caller functions should be de-duplicated"
+        );
+        assert_eq!(
+            value
+                .pointer("/caller_edges/0/from")
+                .and_then(|v| v.as_str()),
+            Some("src/api.rs::fn::handle_request")
+        );
+        assert_eq!(
+            value.pointer("/caller_edges/0/to").and_then(|v| v.as_str()),
+            Some("src/service.rs::fn::compute")
+        );
+        assert_eq!(
+            value
+                .pointer("/caller_edges/0/file")
+                .and_then(|v| v.as_str()),
+            Some("src/api.rs")
+        );
+        assert_eq!(
+            value
+                .pointer("/caller_edges/0/line")
+                .and_then(|v| v.as_u64()),
+            Some(1)
+        );
+        assert_eq!(
+            value
+                .pointer("/caller_edges/1/line")
+                .and_then(|v| v.as_u64()),
+            Some(2),
+            "edge sites should preserve duplicate render/call instances"
+        );
+    }
+
+    #[test]
     fn invalid_output_format_returns_error() {
         let dir = tempfile::tempdir().expect("tempdir");
         let db_path = dir.path().join("atlas.db");
@@ -1893,10 +2034,11 @@ mod tests {
         assert_eq!(query_resp["atlas_result_kind"], "symbol_search");
         assert_eq!(query_resp["atlas_usage_edges_included"], false);
         assert!(
-            query_resp["content"][1]["text"]
-                .as_str()
-                .expect("query_graph note")
-                .contains("symbol_neighbors")
+            query_resp["atlas_relationship_tools"]
+                .as_array()
+                .expect("relationship tools array")
+                .iter()
+                .any(|tool| tool.as_str() == Some("symbol_neighbors"))
         );
 
         let impact_args = serde_json::json!({ "files": ["src/service.rs"] });

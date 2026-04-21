@@ -383,7 +383,7 @@ fn build_and_update_skip_unsupported_files_without_count_drift() {
     let repo = setup_fixture_repo();
 
     run_atlas(repo.path(), &["init"]);
-    write_repo_file(repo.path(), "notes.md", "# atlas notes\n");
+    write_repo_file(repo.path(), "notes.unsupported", "atlas notes\n");
 
     let build = read_json_data_output("build", run_atlas(repo.path(), &["--json", "build"]));
     assert!(build["skipped_unsupported"].as_u64().unwrap_or_default() >= 1);
@@ -391,7 +391,10 @@ fn build_and_update_skip_unsupported_files_without_count_drift() {
 
     let update = read_json_data_output(
         "update",
-        run_atlas(repo.path(), &["--json", "update", "--files", "notes.md"]),
+        run_atlas(
+            repo.path(),
+            &["--json", "update", "--files", "notes.unsupported"],
+        ),
     );
     assert_eq!(update["skipped_unsupported"], json!(1));
     assert_eq!(update["parsed"], json!(0));
@@ -1894,6 +1897,37 @@ fn build_resolves_typescript_reexport_chain_calls() {
                 && edge.confidence_tier.as_deref() == Some("imports")
         }),
         "expected re-export chain call to resolve into src/impl.ts::fn::helper; edges: {edges:?}"
+    );
+}
+
+#[test]
+fn build_resolves_tsx_jsx_component_render_calls() {
+    let repo = setup_repo(&[
+        (
+            "src/history-tab.tsx",
+            "import { memo } from 'react';\nimport { SideFilterControl } from './side-filter-control';\nexport const HistoryTab = memo(function HistoryTab() { return <SideFilterControl />; });\n",
+        ),
+        (
+            "src/side-filter-control.tsx",
+            "export function SideFilterControl() { return <button />; }\n",
+        ),
+    ]);
+
+    run_atlas(repo.path(), &["init"]);
+    run_atlas(repo.path(), &["build"]);
+
+    let store = open_store(repo.path());
+    let edges = store
+        .edges_by_file("src/history-tab.tsx")
+        .expect("history tab edges");
+    assert!(
+        edges.iter().any(|edge| {
+            edge.kind == EdgeKind::Calls
+                && edge.source_qn == "src/history-tab.tsx::fn::HistoryTab"
+                && edge.target_qn == "src/side-filter-control.tsx::fn::SideFilterControl"
+                && edge.confidence_tier.as_deref() == Some("imports")
+        }),
+        "expected JSX render call to resolve into imported SideFilterControl; edges: {edges:?}"
     );
 }
 

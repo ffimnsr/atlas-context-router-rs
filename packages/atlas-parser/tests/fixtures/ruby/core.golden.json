@@ -177,7 +177,7 @@
       "is_test": false,
       "kind": "file",
       "language": "ruby",
-      "line_end": 20,
+      "line_end": 21,
       "line_start": 1,
       "modifiers": null,
       "name": "core.rb",
@@ -359,5 +359,5 @@
     }
   ],
   "path": "fixtures/ruby/core.rb",
-  "size": 221
+  "size": 222
 }

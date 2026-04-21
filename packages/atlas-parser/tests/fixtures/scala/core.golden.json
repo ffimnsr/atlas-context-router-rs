@@ -144,7 +144,7 @@
       "is_test": false,
       "kind": "file",
       "language": "scala",
-      "line_end": 18,
+      "line_end": 19,
       "line_start": 1,
       "modifiers": null,
       "name": "core.scala",
@@ -333,5 +333,5 @@
     }
   ],
   "path": "fixtures/scala/core.scala",
-  "size": 226
+  "size": 227
 }
