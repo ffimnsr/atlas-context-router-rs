@@ -9,3 +9,10 @@ atlas-core.workspace = true
 atlas-store-sqlite = { path = "../atlas-store-sqlite" , version = "0.3.3"}
 tracing.workspace = true
 serde_json.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+
+[[bench]]
+name = "reasoning_bench"
+harness = false

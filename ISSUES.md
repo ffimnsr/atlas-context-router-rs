@@ -2745,11 +2745,11 @@ Shared support for explainability, config, CLI surface, JSON contracts, benchmar
 - [x] stable JSON schema for all analysis commands
 - [x] stable JSON schema for patch previews
 - [x] include evidence and certainty fields
-- [ ] benchmark context retrieval latency
-- [ ] benchmark impact analysis latency
-- [ ] benchmark dead-code scan latency
-- [ ] benchmark rename planning latency
-- [ ] benchmark import-cleanup latency
+- [x] benchmark context retrieval latency
+- [x] benchmark impact analysis latency
+- [x] benchmark dead-code scan latency
+- [x] benchmark rename planning latency
+- [x] benchmark import-cleanup latency
 - [x] completion criteria:
   - [x] context engine resolves and returns bounded symbol/change context
   - [x] removal impact analysis works on representative repos

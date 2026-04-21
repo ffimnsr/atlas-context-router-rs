@@ -263,6 +263,7 @@ version = "0.3.3"
 dependencies = [
  "atlas-core",
  "atlas-store-sqlite",
+ "criterion",
  "serde_json",
  "tracing",
 ]
@@ -274,6 +275,7 @@ dependencies = [
  "atlas-core",
  "atlas-parser",
  "atlas-store-sqlite",
+ "criterion",
  "serde_json",
  "sha2",
  "tempfile",
@@ -304,6 +306,7 @@ dependencies = [
  "atlas-impact",
  "atlas-search",
  "atlas-store-sqlite",
+ "criterion",
  "serde_json",
  "tracing",
 ]
