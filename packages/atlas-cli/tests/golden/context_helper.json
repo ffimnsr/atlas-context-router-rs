@@ -9,7 +9,7 @@
         "extra_json": {
           "callee_name": "greet_twice",
           "callee_text": "Greeter::greet_twice",
-          "receiver_text": null
+          "receiver_text": "Greeter"
         },
         "file_path": "src/lib.rs",
         "id": 0,

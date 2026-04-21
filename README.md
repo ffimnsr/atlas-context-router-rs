@@ -145,7 +145,7 @@ atlas install --dry-run
 
 - write MCP server config for GitHub Copilot, Claude Code, or Codex
 - install git hooks for `pre-commit`, `post-checkout`, `post-merge`, and `post-rewrite`
-- inject graph-first instructions into `AGENTS.md` and `CLAUDE.md`
+- inject graph-first instructions into platform-relevant agent files (`AGENTS.md` for Copilot/Codex, `CLAUDE.md` for Claude)
 
 Hook behavior:
 
@@ -353,6 +353,15 @@ The MCP server (`atlas serve`) exposes these tools to agents:
 | `traverse_graph` | Bi-directional graph traversal from a qualified name |
 | `get_minimal_context` | Auto-detect changes and return compact impact bundle |
 | `explain_change` | Advanced impact: risk, change kinds, boundary/test gaps |
+| `get_session_status` | Current session identity, event count, and resume state |
+| `resume_session` | Retrieve and consume current session snapshot |
+| `search_saved_context` | Search saved artifacts from prior tool outputs |
+| `save_context_artifact` | Store large context payloads for later retrieval |
+| `get_context_stats` | Session/content-store stats and DB paths |
+| `purge_saved_context` | Delete saved artifacts by session or age |
+| `symbol_neighbors` | Immediate callers, callees, tests, and nearby graph nodes |
+| `cross_file_links` | Files semantically linked to a file by shared symbol references |
+| `concept_clusters` | Related file groups around seed files by coupling density |
 
 Output defaults:
 
@@ -361,6 +370,14 @@ Output defaults:
 - explicit `output_format=json` overrides TOON-first behavior
 
 `get_context` accepts free-text query, file, or changed-file list plus intent and limit controls. Response is compact `PackagedContextResult` with counts, selected nodes and edges, files, truncation fields, and optional ambiguity candidates.
+
+Recommended agent workflow:
+
+1. `detect_changes`
+2. `get_minimal_context` or `get_review_context`
+3. `get_impact_radius` or `explain_change`
+4. `query_graph` or `get_context`
+5. fall back to file search only when graph lacks needed fact
 
 ## Contributing
 

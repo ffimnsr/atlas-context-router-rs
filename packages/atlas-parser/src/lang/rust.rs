@@ -449,6 +449,9 @@ fn walk_for_rust_calls<'a>(
                     .child_by_field_name("function")
                     .and_then(|f| rust_call_target(f, source));
                 if let Some((text, name, receiver)) = called {
+                    if !should_emit_rust_call(&name) {
+                        return;
+                    }
                     if is_self_call(caller_qn, &name, receiver.as_deref()) {
                         return;
                     }
@@ -529,15 +532,22 @@ fn rust_call_target(node: TsNode<'_>, source: &[u8]) -> Option<(String, String, 
         "generic_function" => node
             .child_by_field_name("function")
             .and_then(|function| rust_call_target(function, source)),
-        "scoped_identifier" => node.child_by_field_name("name").map(|n| {
-            (
-                node_text(node, source).to_owned(),
-                node_text(n, source).to_owned(),
-                None,
-            )
-        }),
+        "scoped_identifier" => {
+            let text = node_text(node, source).to_owned();
+            let (receiver_text, callee_name) = text.rsplit_once("::")?;
+            let receiver_text = receiver_text.to_owned();
+            let callee_name = callee_name.to_owned();
+            Some((text, callee_name, Some(receiver_text)))
+        }
         _ => None,
     }
+}
+
+fn should_emit_rust_call(callee_name: &str) -> bool {
+    callee_name
+        .chars()
+        .next()
+        .is_some_and(|ch| !ch.is_uppercase())
 }
 
 fn rust_method_call_target(
@@ -1028,6 +1038,37 @@ impl S {
             .expect("call edge");
         assert_eq!(edge.target_qn, "crate::helper");
         assert_eq!(edge.confidence_tier.as_deref(), Some("text"));
+    }
+
+    #[test]
+    fn skips_variant_and_option_constructor_false_positives() {
+        let src = r#"
+enum Value { Object }
+
+fn helper() {}
+
+fn caller() {
+    Value::Object();
+    Some("x");
+    helper();
+}
+"#;
+        let pf = parse(src);
+        assert!(pf.edges.iter().any(|e| {
+            e.kind == EdgeKind::Calls
+                && e.source_qn.contains("caller")
+                && e.target_qn.contains("helper")
+        }));
+        assert!(
+            !pf.edges
+                .iter()
+                .any(|e| { e.kind == EdgeKind::Calls && e.target_qn == "Value::Object" })
+        );
+        assert!(
+            !pf.edges
+                .iter()
+                .any(|e| e.kind == EdgeKind::Calls && e.target_qn == "Some")
+        );
     }
 
     #[test]

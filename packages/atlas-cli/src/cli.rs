@@ -247,7 +247,7 @@ pub enum Command {
         #[arg(long)]
         no_hooks: bool,
 
-        /// Skip injecting graph instructions into AGENTS.md / CLAUDE.md.
+        /// Skip injecting platform-specific graph instructions.
         #[arg(long)]
         no_instructions: bool,
     },

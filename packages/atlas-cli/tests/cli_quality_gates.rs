@@ -1466,6 +1466,38 @@ fn build_resolves_rust_same_package_across_directories_in_standalone_package() {
 }
 
 #[test]
+fn build_resolves_rust_associated_function_by_receiver_hint() {
+    let repo = setup_repo(&[
+        (
+            "src/builder.rs",
+            "pub struct Builder;\nimpl Builder { pub fn new() -> Self { Self } }\n",
+        ),
+        (
+            "src/other.rs",
+            "pub struct Other;\nimpl Other { pub fn new() -> Self { Self } }\n",
+        ),
+        (
+            "src/main.rs",
+            "mod builder;\nmod other;\nuse builder::Builder;\nfn main() { Builder::new(); }\n",
+        ),
+    ]);
+
+    run_atlas(repo.path(), &["init"]);
+    run_atlas(repo.path(), &["build"]);
+
+    let store = open_store(repo.path());
+    let edges = store.edges_by_file("src/main.rs").expect("main edges");
+    assert!(
+        edges.iter().any(|edge| {
+            edge.kind == EdgeKind::Calls
+                && edge.target_qn == "src/builder.rs::method::Builder::new"
+                && edge.confidence_tier.as_deref() == Some("same_package")
+        }),
+        "expected Builder::new to resolve via receiver hint; edges: {edges:?}"
+    );
+}
+
+#[test]
 fn query_includes_owner_identity_for_ambiguous_workspace_results() {
     let repo = setup_repo(&[
         ("Cargo.toml", "[workspace]\nmembers = ['packages/*']\n"),

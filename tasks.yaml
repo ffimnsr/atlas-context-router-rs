@@ -23,6 +23,10 @@ tasks:
     commands:
       - cargo test --workspace
     description: Run workspace tests.
+  install:
+    commands:
+      - cargo install --path packages/atlas-cli
+    description: Install the atlas-cli binary from the local package.
   install-githooks:
     commands:
       - bash -lc 'mkdir -p .githooks && rm -rf .git/hooks && ln -s ../.githooks .git/hooks'

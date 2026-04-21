@@ -70,7 +70,7 @@ pub fn reconcile_call_targets(
                         store,
                         path,
                         &language,
-                        &meta.callee_name,
+                        &meta,
                         &mut candidate_cache,
                         &mut owner_cache,
                     )
@@ -87,7 +87,7 @@ pub fn reconcile_call_targets(
                         store,
                         path,
                         &language,
-                        &meta.callee_name,
+                        &meta,
                         &mut candidate_cache,
                         &mut owner_cache,
                     )
@@ -401,11 +401,22 @@ fn resolve_same_package_target(
     store: &Store,
     path: &str,
     language: &str,
-    callee_name: &str,
+    meta: &CallMeta,
     candidate_cache: &mut HashMap<(String, String), Vec<Node>>,
     owner_cache: &mut HashMap<String, Option<String>>,
 ) -> Option<(String, &'static str, f32)> {
-    let candidates = callable_candidates(store, language, callee_name, candidate_cache).ok()?;
+    let mut candidates =
+        callable_candidates(store, language, &meta.callee_name, candidate_cache).ok()?;
+    if let Some(receiver_hint) = meta.receiver_text.as_deref().and_then(receiver_type_hint) {
+        let receiver_matches: Vec<Node> = candidates
+            .iter()
+            .filter(|node| matches_receiver_hint(node, receiver_hint))
+            .cloned()
+            .collect();
+        if !receiver_matches.is_empty() {
+            candidates = receiver_matches;
+        }
+    }
     let current_owner = cached_owner_id(store, path, owner_cache);
 
     if let Some(current_owner) = current_owner {
@@ -893,6 +904,34 @@ fn callable_candidates(
     let nodes = store.callable_nodes_by_name(language, callee_name)?;
     candidate_cache.insert(key, nodes.clone());
     Ok(nodes)
+}
+
+fn receiver_type_hint(receiver: &str) -> Option<&str> {
+    let receiver = receiver.trim();
+    if receiver.is_empty() {
+        return None;
+    }
+
+    let receiver = receiver
+        .split('<')
+        .next()
+        .unwrap_or(receiver)
+        .trim_matches('&')
+        .trim();
+
+    receiver
+        .rsplit("::")
+        .next()
+        .map(str::trim)
+        .filter(|segment| !segment.is_empty())
+}
+
+fn matches_receiver_hint(node: &Node, receiver_hint: &str) -> bool {
+    node.parent_name
+        .as_deref()
+        .and_then(|parent| parent.rsplit("::impl::").next())
+        .and_then(|tail| tail.rsplit("::").next())
+        .is_some_and(|candidate| candidate == receiver_hint)
 }
 
 fn same_dir(current_dir: &Utf8Path, candidate_path: &str) -> bool {

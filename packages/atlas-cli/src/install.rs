@@ -37,7 +37,7 @@ pub struct InstallSummary {
 /// `platform`  — `"all"`, `"copilot"`, `"claude"`, or `"codex"`.
 /// `dry_run`   — when `true`, describe changes without writing files.
 /// `no_hooks`  — skip git hook installation.
-/// `no_instructions` — skip injecting into AGENTS.md / CLAUDE.md.
+/// `no_instructions` — skip injecting platform-specific agent instructions.
 pub fn run_install(
     repo_root: &Path,
     platform: &str,
@@ -74,7 +74,11 @@ pub fn run_install(
     }
 
     if !no_instructions {
-        let files = inject_instructions(repo_root, dry_run)?;
+        let files = inject_instructions(
+            repo_root,
+            &instruction_targets(platform, repo_root),
+            dry_run,
+        )?;
         summary.instruction_files = files;
     }
 
@@ -276,7 +280,9 @@ fn merge_toml_mcp(
 // Git hooks
 // ---------------------------------------------------------------------------
 
-const HOOK_MARKER: &str = "atlas update # atlas-hook";
+const LEGACY_HOOK_MARKER: &str = "atlas update # atlas-hook";
+const HOOK_START_MARKER: &str = "# atlas-hook start";
+const HOOK_END_MARKER: &str = "# atlas-hook end";
 const PRE_COMMIT_HOOK_SCRIPT: &str = r#"
 # Installed by atlas. Remove these lines to disable atlas graph updates.
 if command -v atlas >/dev/null 2>&1; then
@@ -328,7 +334,8 @@ fn install_git_hook(hook_path: PathBuf, dry_run: bool) -> Result<PathBuf> {
         String::new()
     };
 
-    if existing.contains(HOOK_MARKER) {
+    let next_content = upsert_hook_block(&existing, hook_script);
+    if next_content == existing {
         return Ok(hook_path);
     }
 
@@ -345,18 +352,7 @@ fn install_git_hook(hook_path: PathBuf, dry_run: bool) -> Result<PathBuf> {
             .with_context(|| format!("cannot create {}", parent.display()))?;
     }
 
-    let content = if existing.is_empty() {
-        format!("#!/bin/sh\n{HOOK_MARKER}\n{hook_script}")
-    } else {
-        let prefix = if existing.ends_with('\n') {
-            existing.clone()
-        } else {
-            format!("{existing}\n")
-        };
-        format!("{prefix}{HOOK_MARKER}\n{hook_script}")
-    };
-
-    fs::write(&hook_path, &content)
+    fs::write(&hook_path, &next_content)
         .with_context(|| format!("cannot write {}", hook_path.display()))?;
 
     // Make the hook executable on Unix.
@@ -370,11 +366,64 @@ fn install_git_hook(hook_path: PathBuf, dry_run: bool) -> Result<PathBuf> {
     Ok(hook_path)
 }
 
+fn upsert_hook_block(existing: &str, hook_script: &str) -> String {
+    let managed_block = format!("{HOOK_START_MARKER}\n{hook_script}{HOOK_END_MARKER}\n");
+
+    if let Some((start, end)) = managed_hook_range(existing) {
+        let mut updated = String::new();
+        updated.push_str(&existing[..start]);
+        updated.push_str(&managed_block);
+        updated.push_str(&existing[end..]);
+        return updated;
+    }
+
+    if let Some(start) = legacy_hook_start(existing) {
+        let mut updated = String::new();
+        updated.push_str(&existing[..start]);
+        updated.push_str(&managed_block);
+        return updated;
+    }
+
+    if existing.is_empty() {
+        return format!("#!/bin/sh\n{managed_block}");
+    }
+
+    let prefix = if existing.ends_with('\n') {
+        existing.to_owned()
+    } else {
+        format!("{existing}\n")
+    };
+    format!("{prefix}{managed_block}")
+}
+
+fn managed_hook_range(existing: &str) -> Option<(usize, usize)> {
+    let start = existing.find(HOOK_START_MARKER)?;
+    let mut end = existing[start..]
+        .find(HOOK_END_MARKER)
+        .map(|offset| start + offset + HOOK_END_MARKER.len())?;
+    if existing[end..].starts_with("\r\n") {
+        end += 2;
+    } else if existing[end..].starts_with('\n') {
+        end += 1;
+    }
+    Some((start, end))
+}
+
+fn legacy_hook_start(existing: &str) -> Option<usize> {
+    existing.find(LEGACY_HOOK_MARKER).map(|offset| {
+        existing[..offset]
+            .rfind('\n')
+            .map(|idx| idx + 1)
+            .unwrap_or(0)
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Instruction injection (AGENTS.md / CLAUDE.md)
 // ---------------------------------------------------------------------------
 
 const INSTRUCTIONS_MARKER: &str = "<!-- atlas MCP tools -->";
+const INSTRUCTIONS_END_MARKER: &str = "<!-- /atlas MCP tools -->";
 
 const INSTRUCTIONS_SECTION: &str = r#"<!-- atlas MCP tools -->
 ## MCP Tools: atlas
@@ -386,37 +435,84 @@ The graph is faster, cheaper (fewer tokens), and gives you structural context
 
 ### When to use atlas tools first
 
-- **Exploring code**: `query` instead of Grep/Glob
-- **Understanding impact**: `impact` instead of manually tracing imports
-- **Code review**: `detect-changes` + `review-context` instead of reading entire files
-- **Finding relationships**: graph traversal for callers/callees/tests
+- **Exploring code**: `query_graph` to find candidate symbols, then `symbol_neighbors`, `traverse_graph`, or `get_context` for callers/callees and usage relationships
+- **Understanding impact**: `get_impact_radius` for blast radius, `explain_change` for richer risk analysis
+- **Code review**: `detect_changes` + `get_review_context`, or `get_minimal_context` when tokens matter
+- **Finding relationships**: `symbol_neighbors` for immediate usage edges, `traverse_graph` for broader callers/callees, and `get_context` for intent-aware usage lookup
+- **Repo health**: `list_graph_stats` for graph coverage and language breakdown
+- **Session continuity**: `get_session_status`, `resume_session`, `search_saved_context`, and `save_context_artifact`
 
-Fall back to file tools **only** when the graph does not cover what you need.
+Do not treat `query_graph` as caller/callee search. Fall back to file tools **only** after graph relationship tools do not cover what you need.
 
-### Key tools
+### Tool list
 
 | Tool | Use when |
 | ---- | -------- |
-| `detect_changes` | Reviewing code changes — gives risk-scored analysis |
-| `review_context` | Need source snippets for review — token-efficient |
-| `impact_radius` | Understanding blast radius of a change |
-| `query_graph` | Tracing callers, callees, imports, tests |
-| `graph_stats` | Overall codebase metrics |
+| `list_graph_stats` | Overall graph metrics and language breakdown |
+| `query_graph` | Search graph nodes by keyword, kind, or language; returns symbol matches, not usage edges |
+| `get_impact_radius` | Understand blast radius from a changed file set |
+| `get_review_context` | Build review bundle with symbols, neighbors, edges, and risk summary |
+| `detect_changes` | Ask Atlas for changed files instead of shelling out to git |
+| `build_or_update_graph` | Trigger full graph build or incremental update |
+| `traverse_graph` | Walk callers, callees, and nearby nodes from known qualified name |
+| `get_minimal_context` | Get lower-token review context with auto-detected changes |
+| `explain_change` | Get deterministic risk analysis, change kinds, and test gaps |
+| `get_context` | Build bounded context around symbol, file, or change-set |
+| `get_session_status` | Inspect current session identity, event count, and resume state |
+| `resume_session` | Restore prior session snapshot after reconnect or restart |
+| `search_saved_context` | Search saved artifacts from earlier large outputs |
+| `save_context_artifact` | Persist large context payloads for later retrieval |
+| `get_context_stats` | Inspect session and content-store stats |
+| `purge_saved_context` | Remove saved artifacts by session or age |
+| `symbol_neighbors` | Inspect immediate callers, callees, tests, and local graph neighborhood |
+| `cross_file_links` | Find files coupled to a file through shared symbol references |
+| `concept_clusters` | Group related files around seed files by coupling density |
 
 ### Workflow
 
 1. Start with MCP graph tools to get structural context.
-2. Use `detect_changes` for code review.
-3. Use `impact_radius` to assess change risk.
+2. For usage questions, use `query_graph` to find the qualified name, then `symbol_neighbors`, `traverse_graph`, or `get_context`.
+3. Use `detect_changes` to identify changed files.
+4. Use `get_review_context` or `get_minimal_context` for review.
+5. Use `get_impact_radius` or `explain_change` to assess change risk.
+<!-- /atlas MCP tools -->
 "#;
+
+fn instruction_targets(platform: &str, repo_root: &Path) -> Vec<&'static str> {
+    let mut targets = Vec::new();
+
+    let wants_agents = match platform {
+        "copilot" | "codex" => true,
+        "all" => should_auto_detect("copilot", repo_root) || should_auto_detect("codex", repo_root),
+        _ => false,
+    };
+    let wants_claude = match platform {
+        "claude" => true,
+        "all" => should_auto_detect("claude", repo_root),
+        _ => false,
+    };
+
+    if wants_agents {
+        targets.push("AGENTS.md");
+    }
+    if wants_claude {
+        targets.push("CLAUDE.md");
+    }
+
+    targets
+}
 
 /// Inject atlas instructions into `AGENTS.md` and `CLAUDE.md` if present or
 /// if the repo root directory needs the file created.  Returns the list of
 /// files written or updated.
-pub fn inject_instructions(repo_root: &Path, dry_run: bool) -> Result<Vec<String>> {
+pub fn inject_instructions(
+    repo_root: &Path,
+    filenames: &[&str],
+    dry_run: bool,
+) -> Result<Vec<String>> {
     let mut updated: Vec<String> = Vec::new();
 
-    for filename in &["AGENTS.md", "CLAUDE.md"] {
+    for filename in filenames {
         let path = repo_root.join(filename);
 
         // Only create AGENTS.md / CLAUDE.md when it does not exist yet;
@@ -428,14 +524,16 @@ pub fn inject_instructions(repo_root: &Path, dry_run: bool) -> Result<Vec<String
             String::new()
         };
 
-        if existing.contains(INSTRUCTIONS_MARKER) {
-            // Already injected.
+        let next_content = upsert_instructions_section(&existing);
+        if next_content == existing {
             continue;
         }
 
         if dry_run {
             if existing.is_empty() {
                 println!("  [dry-run] would create {filename}");
+            } else if existing.contains(INSTRUCTIONS_MARKER) {
+                println!("  [dry-run] would refresh atlas instructions in {filename}");
             } else {
                 println!("  [dry-run] would append atlas instructions to {filename}");
             }
@@ -443,24 +541,57 @@ pub fn inject_instructions(repo_root: &Path, dry_run: bool) -> Result<Vec<String
             continue;
         }
 
-        let separator = if existing.is_empty() {
-            ""
-        } else if existing.ends_with('\n') {
-            "\n"
-        } else {
-            "\n\n"
-        };
-
-        fs::write(
-            &path,
-            format!("{existing}{separator}{INSTRUCTIONS_SECTION}"),
-        )
-        .with_context(|| format!("cannot write {}", path.display()))?;
+        fs::write(&path, next_content)
+            .with_context(|| format!("cannot write {}", path.display()))?;
 
         updated.push(filename.to_string());
     }
 
     Ok(updated)
+}
+
+fn upsert_instructions_section(existing: &str) -> String {
+    if let Some((start, end)) = instruction_section_range(existing) {
+        let mut updated = String::new();
+        let prefix = &existing[..start];
+        updated.push_str(prefix);
+        if !prefix.is_empty() && !prefix.ends_with('\n') {
+            updated.push_str("\n\n");
+        }
+        updated.push_str(INSTRUCTIONS_SECTION);
+        let suffix = &existing[end..];
+        if !suffix.is_empty() {
+            if !updated.ends_with('\n') && !suffix.starts_with('\n') {
+                updated.push('\n');
+            }
+            updated.push_str(suffix);
+        }
+        return updated;
+    }
+
+    let separator = if existing.is_empty() {
+        ""
+    } else if existing.ends_with('\n') {
+        "\n"
+    } else {
+        "\n\n"
+    };
+
+    format!("{existing}{separator}{INSTRUCTIONS_SECTION}")
+}
+
+fn instruction_section_range(existing: &str) -> Option<(usize, usize)> {
+    let start = existing.find(INSTRUCTIONS_MARKER)?;
+    let mut end = existing[start..]
+        .find(INSTRUCTIONS_END_MARKER)
+        .map(|offset| start + offset + INSTRUCTIONS_END_MARKER.len())
+        .unwrap_or(existing.len());
+    if existing[end..].starts_with("\r\n") {
+        end += 2;
+    } else if existing[end..].starts_with('\n') {
+        end += 1;
+    }
+    Some((start, end))
 }
 
 // ---------------------------------------------------------------------------
@@ -470,7 +601,9 @@ pub fn inject_instructions(repo_root: &Path, dry_run: bool) -> Result<Vec<String
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeSet;
     use std::fs;
+    use std::path::PathBuf;
     use tempfile::TempDir;
 
     fn repo_with_git(dir: &Path) {
@@ -481,7 +614,7 @@ mod tests {
     fn inject_instructions_creates_agents_md() {
         let tmp = TempDir::new().unwrap();
         // No AGENTS.md file initially.
-        let files = inject_instructions(tmp.path(), false).unwrap();
+        let files = inject_instructions(tmp.path(), &["AGENTS.md"], false).unwrap();
         assert!(files.contains(&"AGENTS.md".to_owned()));
         let content = fs::read_to_string(tmp.path().join("AGENTS.md")).unwrap();
         assert!(content.contains(INSTRUCTIONS_MARKER));
@@ -490,8 +623,8 @@ mod tests {
     #[test]
     fn inject_instructions_idempotent() {
         let tmp = TempDir::new().unwrap();
-        inject_instructions(tmp.path(), false).unwrap();
-        let files2 = inject_instructions(tmp.path(), false).unwrap();
+        inject_instructions(tmp.path(), &["AGENTS.md"], false).unwrap();
+        let files2 = inject_instructions(tmp.path(), &["AGENTS.md"], false).unwrap();
         // Second call should return empty — already injected.
         assert!(!files2.contains(&"AGENTS.md".to_owned()));
     }
@@ -500,10 +633,127 @@ mod tests {
     fn inject_instructions_appends_to_existing() {
         let tmp = TempDir::new().unwrap();
         fs::write(tmp.path().join("AGENTS.md"), b"# Existing content\n").unwrap();
-        inject_instructions(tmp.path(), false).unwrap();
+        inject_instructions(tmp.path(), &["AGENTS.md"], false).unwrap();
         let content = fs::read_to_string(tmp.path().join("AGENTS.md")).unwrap();
         assert!(content.starts_with("# Existing content\n"));
         assert!(content.contains(INSTRUCTIONS_MARKER));
+    }
+
+    #[test]
+    fn instruction_targets_match_platform() {
+        let tmp = TempDir::new().unwrap();
+
+        assert_eq!(instruction_targets("codex", tmp.path()), vec!["AGENTS.md"]);
+        assert_eq!(
+            instruction_targets("copilot", tmp.path()),
+            vec!["AGENTS.md"]
+        );
+        assert_eq!(instruction_targets("claude", tmp.path()), vec!["CLAUDE.md"]);
+    }
+
+    #[test]
+    fn instructions_section_mentions_current_mcp_tools() {
+        let documented = instruction_section_tool_names();
+        let exported = exported_mcp_tool_names();
+
+        assert_eq!(documented, exported);
+    }
+
+    #[test]
+    fn inject_instructions_replaces_stale_section() {
+        let tmp = TempDir::new().unwrap();
+        let stale = format!("# Existing content\n\n{INSTRUCTIONS_MARKER}\nold stale block\n");
+        fs::write(tmp.path().join("AGENTS.md"), stale).unwrap();
+
+        let files = inject_instructions(tmp.path(), &["AGENTS.md"], false).unwrap();
+        let content = fs::read_to_string(tmp.path().join("AGENTS.md")).unwrap();
+
+        assert!(files.contains(&"AGENTS.md".to_owned()));
+        assert!(content.contains(INSTRUCTIONS_END_MARKER));
+        assert!(content.contains("`concept_clusters`"));
+        assert!(!content.contains("old stale block"));
+    }
+
+    #[test]
+    fn inject_instructions_replaces_marked_section_without_touching_suffix() {
+        let tmp = TempDir::new().unwrap();
+        let stale = format!(
+            "# Existing content\n\n{INSTRUCTIONS_MARKER}\nold stale block\n{INSTRUCTIONS_END_MARKER}\n\n## User Notes\nkeep me\n"
+        );
+        fs::write(tmp.path().join("AGENTS.md"), stale).unwrap();
+
+        inject_instructions(tmp.path(), &["AGENTS.md"], false).unwrap();
+        let content = fs::read_to_string(tmp.path().join("AGENTS.md")).unwrap();
+
+        assert!(content.contains("## User Notes\nkeep me\n"));
+        assert!(!content.contains("old stale block"));
+    }
+
+    #[test]
+    fn readme_mcp_tools_match_exported_registry() {
+        let documented = markdown_table_tool_names(&repo_root().join("README.md"), "## MCP Tools");
+
+        assert_eq!(documented, exported_mcp_tool_names());
+    }
+
+    #[test]
+    fn wiki_mcp_reference_tools_match_exported_registry() {
+        let documented = markdown_table_tool_names(
+            &repo_root().join("wiki").join("mcp-reference.md"),
+            "## Tool List",
+        );
+
+        assert_eq!(documented, exported_mcp_tool_names());
+    }
+
+    fn instruction_section_tool_names() -> BTreeSet<String> {
+        INSTRUCTIONS_SECTION
+            .split('`')
+            .enumerate()
+            .filter(|(idx, _)| idx % 2 == 1)
+            .map(|(_, chunk)| chunk.trim())
+            .filter(|chunk| {
+                !chunk.is_empty() && chunk.chars().all(|ch| ch.is_ascii_lowercase() || ch == '_')
+            })
+            .map(str::to_owned)
+            .collect()
+    }
+
+    fn exported_mcp_tool_names() -> BTreeSet<String> {
+        atlas_mcp::tool_list()["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|tool| tool["name"].as_str())
+            .map(str::to_owned)
+            .collect()
+    }
+
+    fn markdown_table_tool_names(path: &Path, heading: &str) -> BTreeSet<String> {
+        let text = fs::read_to_string(path).unwrap();
+        let section = text
+            .split(heading)
+            .nth(1)
+            .unwrap()
+            .split("\n## ")
+            .next()
+            .unwrap();
+
+        section
+            .lines()
+            .filter(|line| line.starts_with("| `"))
+            .filter_map(|line| line.split('`').nth(1))
+            .map(str::to_owned)
+            .collect()
+    }
+
+    fn repo_root() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .to_path_buf()
     }
 
     #[test]
@@ -557,6 +807,30 @@ mod tests {
     }
 
     #[test]
+    fn run_install_codex_creates_only_agents_md() {
+        let tmp = TempDir::new().unwrap();
+
+        let summary = run_install(tmp.path(), "codex", false, true, false).unwrap();
+
+        assert!(summary.instruction_files.contains(&"AGENTS.md".to_owned()));
+        assert!(!summary.instruction_files.contains(&"CLAUDE.md".to_owned()));
+        assert!(tmp.path().join("AGENTS.md").exists());
+        assert!(!tmp.path().join("CLAUDE.md").exists());
+    }
+
+    #[test]
+    fn run_install_claude_creates_only_claude_md() {
+        let tmp = TempDir::new().unwrap();
+
+        let summary = run_install(tmp.path(), "claude", false, true, false).unwrap();
+
+        assert!(summary.instruction_files.contains(&"CLAUDE.md".to_owned()));
+        assert!(!summary.instruction_files.contains(&"AGENTS.md".to_owned()));
+        assert!(tmp.path().join("CLAUDE.md").exists());
+        assert!(!tmp.path().join("AGENTS.md").exists());
+    }
+
+    #[test]
     fn git_hooks_installed_and_executable() {
         let tmp = TempDir::new().unwrap();
         repo_with_git(tmp.path());
@@ -569,7 +843,9 @@ mod tests {
                 .unwrap()
                 .to_owned();
             let content = fs::read_to_string(&hook).unwrap();
-            assert!(content.contains(HOOK_MARKER));
+            assert!(content.contains(HOOK_START_MARKER));
+            assert!(content.contains(HOOK_END_MARKER));
+            assert_eq!(content.matches("atlas update || true").count(), 1);
             if file_name == "pre-commit" {
                 assert!(content.contains("atlas detect-changes || true"));
                 assert!(!content.contains("atlas detect-changes --brief || true"));
@@ -587,8 +863,29 @@ mod tests {
         let hooks = install_git_hooks(tmp.path(), false).unwrap();
         for hook in hooks {
             let content = fs::read_to_string(hook).unwrap();
-            assert_eq!(content.matches(HOOK_MARKER).count(), 1);
+            assert_eq!(content.matches(HOOK_START_MARKER).count(), 1);
+            assert_eq!(content.matches("atlas update || true").count(), 1);
         }
+    }
+
+    #[test]
+    fn install_git_hooks_replaces_legacy_marker_block() {
+        let tmp = TempDir::new().unwrap();
+        repo_with_git(tmp.path());
+        let hook = tmp.path().join(".git/hooks/post-checkout");
+        fs::write(
+            &hook,
+            "#!/bin/sh\natlas update # atlas-hook\n\n# Installed by atlas. Remove these lines to disable atlas graph updates.\nif command -v atlas >/dev/null 2>&1; then\n    atlas update || true\n    atlas detect-changes --brief || true\nfi\n",
+        )
+        .unwrap();
+
+        install_git_hooks(tmp.path(), false).unwrap();
+
+        let content = fs::read_to_string(hook).unwrap();
+        assert!(!content.contains(LEGACY_HOOK_MARKER));
+        assert_eq!(content.matches("atlas update || true").count(), 1);
+        assert!(content.contains(HOOK_START_MARKER));
+        assert!(content.contains(HOOK_END_MARKER));
     }
 
     #[test]
@@ -630,5 +927,6 @@ mod tests {
         run_install(tmp.path(), "claude", true, false, false).unwrap();
         assert!(!tmp.path().join(".mcp.json").exists());
         assert!(!tmp.path().join("AGENTS.md").exists());
+        assert!(!tmp.path().join("CLAUDE.md").exists());
     }
 }

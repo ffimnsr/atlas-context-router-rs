@@ -47,7 +47,7 @@ pub fn tool_list() -> serde_json::Value {
             },
             {
                 "name": "query_graph",
-                "description": "Full-text search the code graph. Returns a compact, ranked list of matching symbols. Use semantic=true for graph-aware expansion that surfaces conceptually related symbols beyond keyword matches.",
+                "description": "Full-text search the code graph. Returns a compact, ranked list of matching symbols only; it does not return caller/callee usage edges. Use semantic=true for graph-aware expansion, then follow with symbol_neighbors, traverse_graph, or get_context when you need relationships.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -434,7 +434,22 @@ fn tool_query_graph(
         })
         .collect();
 
-    tool_result_value(&compact, output_format)
+    let mut response = tool_result_value(&compact, output_format)?;
+    response["atlas_result_kind"] = serde_json::Value::String("symbol_search".to_owned());
+    response["atlas_usage_edges_included"] = serde_json::Value::Bool(false);
+    response["atlas_relationship_tools"] =
+        serde_json::json!(["symbol_neighbors", "traverse_graph", "get_context"]);
+    if let Some(content) = response
+        .get_mut("content")
+        .and_then(|value| value.as_array_mut())
+    {
+        content.push(serde_json::json!({
+            "type": "text",
+            "mimeType": "text/plain",
+            "text": "query_graph returns symbol matches only. For callers, callees, or other usage relationships, follow with symbol_neighbors, traverse_graph, or get_context before falling back to rg."
+        }));
+    }
+    Ok(response)
 }
 
 fn tool_get_impact_radius(
@@ -1716,6 +1731,28 @@ mod tests {
     }
 
     #[test]
+    fn query_graph_response_carries_relationship_guidance() {
+        let fixture = setup_mcp_fixture();
+        let args = serde_json::json!({ "text": "compute", "output_format": "json" });
+
+        let response = call("query_graph", Some(&args), "/ignored", &fixture.db_path)
+            .expect("query_graph call");
+
+        assert_eq!(response["atlas_result_kind"], "symbol_search");
+        assert_eq!(response["atlas_usage_edges_included"], false);
+        assert_eq!(
+            response["atlas_relationship_tools"],
+            serde_json::json!(["symbol_neighbors", "traverse_graph", "get_context"])
+        );
+        assert!(
+            response["content"][1]["text"]
+                .as_str()
+                .expect("query_graph note")
+                .contains("query_graph returns symbol matches only")
+        );
+    }
+
+    #[test]
     fn invalid_output_format_returns_error() {
         let dir = tempfile::tempdir().expect("tempdir");
         let db_path = dir.path().join("atlas.db");
@@ -1821,6 +1858,14 @@ mod tests {
             "query_graph must return ranked results"
         );
         assert!(query_text.contains("src/service.rs::fn::compute"));
+        assert_eq!(query_resp["atlas_result_kind"], "symbol_search");
+        assert_eq!(query_resp["atlas_usage_edges_included"], false);
+        assert!(
+            query_resp["content"][1]["text"]
+                .as_str()
+                .expect("query_graph note")
+                .contains("symbol_neighbors")
+        );
 
         let impact_args = serde_json::json!({ "files": ["src/service.rs"] });
         let impact_resp = call(
