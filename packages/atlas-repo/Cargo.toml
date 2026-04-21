@@ -1,6 +1,6 @@
 [package]
 name = "atlas-repo"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 description = "Repository discovery, file collection, diffing, and path utilities for Atlas"
 

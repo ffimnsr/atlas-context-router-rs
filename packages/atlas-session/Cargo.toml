@@ -1,6 +1,6 @@
 [package]
 name = "atlas-session"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 description = "Session identity, event ledger, and resume snapshots for Atlas context memory"
 

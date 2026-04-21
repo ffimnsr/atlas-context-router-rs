@@ -1,14 +1,14 @@
 [package]
 name = "atlas-engine"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 description = "Shared build and incremental update pipeline for Atlas graphs"
 
 [dependencies]
 atlas-core.workspace = true
-atlas-parser = { path = "../atlas-parser" , version = "0.2.0"}
-atlas-repo = { path = "../atlas-repo" , version = "0.2.0"}
-atlas-store-sqlite = { path = "../atlas-store-sqlite" , version = "0.2.0"}
+atlas-parser = { path = "../atlas-parser" , version = "0.3.0"}
+atlas-repo = { path = "../atlas-repo" , version = "0.3.0"}
+atlas-store-sqlite = { path = "../atlas-store-sqlite" , version = "0.3.0"}
 anyhow.workspace = true
 camino.workspace = true
 notify.workspace = true
