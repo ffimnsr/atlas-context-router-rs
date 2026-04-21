@@ -290,7 +290,7 @@ main() {
   cargo test --workspace
   cargo test -p atlas-cli --test cli_quality_gates sqlite_fts5_smoke_round_trip -- --exact
 
-  git add packages/*/Cargo.toml
+  git add Cargo.lock packages/*/Cargo.toml
   git commit -m "release: $tag_name"
 
   git tag -a "$tag_name" -m "release: $tag_name"
