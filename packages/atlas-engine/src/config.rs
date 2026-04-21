@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 
 /// Default parse-worker batch size.  Can be overridden in `.atlas/config.toml`.
 pub const DEFAULT_PARSE_BATCH_SIZE: usize = 64;
+pub const DEFAULT_MCP_WORKER_THREADS: usize = 2;
+pub const DEFAULT_MCP_TOOL_TIMEOUT_MS: u64 = 300_000;
 
 /// Top-level atlas configuration loaded from `.atlas/config.toml`.
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -18,6 +20,26 @@ pub struct Config {
     pub analysis: AnalysisConfig,
     #[serde(default)]
     pub context: ContextConfig,
+    #[serde(default)]
+    pub mcp: McpConfig,
+}
+
+/// MCP transport configuration.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct McpConfig {
+    /// Number of MCP worker threads (clamped to 1–64).
+    pub worker_threads: usize,
+    /// Hard timeout in milliseconds for each MCP tool request (clamped to 1_000–3_600_000).
+    pub tool_timeout_ms: u64,
+}
+
+impl Default for McpConfig {
+    fn default() -> Self {
+        Self {
+            worker_threads: DEFAULT_MCP_WORKER_THREADS,
+            tool_timeout_ms: DEFAULT_MCP_TOOL_TIMEOUT_MS,
+        }
+    }
 }
 
 /// Search-phase configuration.
@@ -93,6 +115,16 @@ impl Config {
     pub fn parse_batch_size(&self) -> usize {
         self.build.parse_batch_size.clamp(1, 4096)
     }
+
+    /// Return effective MCP worker thread count, clamped to [1, 64].
+    pub fn mcp_worker_threads(&self) -> usize {
+        self.mcp.worker_threads.clamp(1, 64)
+    }
+
+    /// Return effective MCP tool timeout in milliseconds, clamped to [1_000, 3_600_000].
+    pub fn mcp_tool_timeout_ms(&self) -> u64 {
+        self.mcp.tool_timeout_ms.clamp(1_000, 3_600_000)
+    }
 }
 
 /// Analysis-phase configuration (dead-code, refactor safety, impact traversal).
@@ -148,5 +180,31 @@ impl Default for ContextConfig {
             max_context_nodes: 100,
             max_context_depth: 2,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mcp_config_defaults_match_expected_values() {
+        let config = Config::default();
+        assert_eq!(config.mcp_worker_threads(), DEFAULT_MCP_WORKER_THREADS);
+        assert_eq!(config.mcp_tool_timeout_ms(), DEFAULT_MCP_TOOL_TIMEOUT_MS);
+    }
+
+    #[test]
+    fn mcp_config_values_are_clamped() {
+        let mut config = Config::default();
+        config.mcp.worker_threads = 0;
+        config.mcp.tool_timeout_ms = 10;
+        assert_eq!(config.mcp_worker_threads(), 1);
+        assert_eq!(config.mcp_tool_timeout_ms(), 1_000);
+
+        config.mcp.worker_threads = 999;
+        config.mcp.tool_timeout_ms = 9_999_999;
+        assert_eq!(config.mcp_worker_threads(), 64);
+        assert_eq!(config.mcp_tool_timeout_ms(), 3_600_000);
     }
 }

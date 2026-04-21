@@ -4,12 +4,36 @@
 //! writes newline-delimited JSON responses to stdout.  Follows the MCP
 //! 2024-11-05 protocol specification.
 
+use std::collections::HashMap;
 use std::io::BufReader;
 use std::io::{BufRead, Write};
+use std::sync::mpsc;
+use std::thread;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 
 use crate::tools;
+
+const MCP_WORKER_THREADS_ENV: &str = "ATLAS_MCP_WORKER_THREADS";
+const MCP_TOOL_TIMEOUT_MS_ENV: &str = "ATLAS_MCP_TOOL_TIMEOUT_MS";
+const DEFAULT_WORKER_THREADS: usize = 2;
+const DEFAULT_TOOL_TIMEOUT_MS: u64 = 300_000;
+
+#[derive(Clone, Copy, Debug)]
+pub struct ServerOptions {
+    pub worker_threads: usize,
+    pub tool_timeout_ms: u64,
+}
+
+impl Default for ServerOptions {
+    fn default() -> Self {
+        Self {
+            worker_threads: DEFAULT_WORKER_THREADS,
+            tool_timeout_ms: DEFAULT_TOOL_TIMEOUT_MS,
+        }
+    }
+}
 
 /// Run the MCP server until stdin closes.
 ///
@@ -17,75 +41,476 @@ use crate::tools;
 ///   that need git context (e.g. `detect_changes`).
 /// * `db_path`   – path to the Atlas SQLite database.
 pub fn run_server(repo_root: &str, db_path: &str) -> Result<()> {
+    run_server_with_options(repo_root, db_path, ServerOptions::default())
+}
+
+pub fn run_server_with_options(
+    repo_root: &str,
+    db_path: &str,
+    options: ServerOptions,
+) -> Result<()> {
     eprintln!("atlas-mcp: server ready (repo={repo_root}, db={db_path})");
     eprintln!("atlas-mcp: reading JSON-RPC requests from stdin");
 
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();
-    let reader = BufReader::new(stdin.lock());
+    let reader = BufReader::new(stdin);
     let mut writer = std::io::BufWriter::new(stdout.lock());
 
-    run_server_io(reader, &mut writer, repo_root, db_path)
+    run_server_io(reader, &mut writer, repo_root, db_path, options)
 }
 
-fn run_server_io<R: BufRead, W: Write>(
+fn run_server_io<R: BufRead + Send, W: Write>(
     reader: R,
     writer: &mut W,
     repo_root: &str,
     db_path: &str,
+    options: ServerOptions,
 ) -> Result<()> {
-    process_requests(reader, writer, repo_root, db_path)
+    let worker_pool = WorkerPool::from_env("atlas-mcp:tool-worker", options)?;
+    let (event_tx, event_rx) = mpsc::channel::<TransportEvent>();
+
+    thread::scope(|scope| -> Result<()> {
+        let reader_tx = event_tx.clone();
+        scope.spawn(move || read_requests(reader, reader_tx));
+        process_requests(writer, repo_root, db_path, &worker_pool, event_tx, event_rx)
+    })
 }
 
-fn process_requests<R: BufRead, W: Write>(
-    reader: R,
+fn process_requests<W: Write>(
     writer: &mut W,
     repo_root: &str,
     db_path: &str,
+    worker_pool: &WorkerPool,
+    event_tx: mpsc::Sender<TransportEvent>,
+    event_rx: mpsc::Receiver<TransportEvent>,
 ) -> Result<()> {
+    let mut input_closed = false;
+    let mut next_token = 0_u64;
+    let mut pending = HashMap::<u64, PendingRequest>::new();
+    let mut stats = TransportStats::default();
+    let request_ctx = RequestDispatchContext {
+        repo_root,
+        db_path,
+        worker_pool,
+        event_tx: &event_tx,
+    };
+
+    loop {
+        drain_expired_requests(writer, &mut pending, &mut stats)?;
+        if input_closed && pending.is_empty() {
+            break;
+        }
+
+        let recv_result = match next_deadline(&pending) {
+            Some(deadline) => {
+                let now = Instant::now();
+                if deadline <= now {
+                    continue;
+                }
+                event_rx.recv_timeout(deadline.saturating_duration_since(now))
+            }
+            None => event_rx
+                .recv()
+                .map_err(|_| mpsc::RecvTimeoutError::Disconnected),
+        };
+
+        match recv_result {
+            Ok(TransportEvent::InputLine(line)) => handle_input_line(
+                writer,
+                line,
+                &request_ctx,
+                &mut pending,
+                &mut next_token,
+                &mut stats,
+            )?,
+            Ok(TransportEvent::Response {
+                token,
+                response,
+                completion,
+            }) => handle_completion_event(
+                writer,
+                &mut pending,
+                token,
+                response,
+                completion,
+                &mut stats,
+            )?,
+            Ok(TransportEvent::InputClosed) => {
+                input_closed = true;
+            }
+            Ok(TransportEvent::InputError(message)) => {
+                return Err(anyhow::anyhow!(message));
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                if input_closed || pending.is_empty() {
+                    break;
+                }
+                return Err(anyhow::anyhow!(
+                    "transport event channel disconnected unexpectedly"
+                ));
+            }
+        }
+    }
+
+    tracing::info!(
+        received = stats.received,
+        notifications = stats.notifications,
+        parse_errors = stats.parse_errors,
+        async_dispatched = stats.async_dispatched,
+        completed = stats.completed,
+        completed_ok = stats.completed_ok,
+        completed_err = stats.completed_err,
+        timed_out = stats.timed_out,
+        dropped_late = stats.dropped_late,
+        "MCP transport summary"
+    );
+
+    Ok(())
+}
+
+fn read_requests<R: BufRead>(reader: R, event_tx: mpsc::Sender<TransportEvent>) {
     for line in reader.lines() {
-        let line = line.context("stdin read error")?;
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-
-        let request: serde_json::Value = match serde_json::from_str(line) {
-            Ok(v) => v,
-            Err(e) => {
-                let resp =
-                    jsonrpc_error(serde_json::Value::Null, -32700, format!("parse error: {e}"));
-                writeln!(writer, "{resp}")?;
-                writer.flush()?;
-                continue;
+        match line {
+            Ok(line) => {
+                if event_tx.send(TransportEvent::InputLine(line)).is_err() {
+                    return;
+                }
             }
-        };
-
-        let id = request
-            .get("id")
-            .cloned()
-            .unwrap_or(serde_json::Value::Null);
-        let method = request.get("method").and_then(|m| m.as_str()).unwrap_or("");
-        let params = request.get("params");
-
-        // Notifications — no response required.
-        if method == "initialized" || method.starts_with("notifications/") {
-            continue;
-        }
-
-        let response = match dispatch(method, params, repo_root, db_path) {
-            Ok(result) => jsonrpc_ok(id, result),
-            Err(e) => {
-                tracing::warn!("MCP method '{method}' error: {e}");
-                jsonrpc_error(id, -32000, e.to_string())
+            Err(error) => {
+                let _ = event_tx.send(TransportEvent::InputError(format!(
+                    "stdin read error: {error}"
+                )));
+                return;
             }
-        };
+        }
+    }
 
-        writeln!(writer, "{response}")?;
-        writer.flush()?;
+    let _ = event_tx.send(TransportEvent::InputClosed);
+}
+
+fn handle_input_line<W: Write>(
+    writer: &mut W,
+    line: String,
+    ctx: &RequestDispatchContext<'_>,
+    pending: &mut HashMap<u64, PendingRequest>,
+    next_token: &mut u64,
+    stats: &mut TransportStats,
+) -> Result<()> {
+    let line = line.trim();
+    if line.is_empty() {
+        return Ok(());
+    }
+
+    stats.received += 1;
+
+    let request: serde_json::Value = match serde_json::from_str(line) {
+        Ok(v) => v,
+        Err(error) => {
+            stats.parse_errors += 1;
+            let response = jsonrpc_error(
+                serde_json::Value::Null,
+                -32700,
+                format!("parse error: {error}"),
+            );
+            write_response(writer, &response)?;
+            return Ok(());
+        }
+    };
+
+    let id = request
+        .get("id")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let method = request
+        .get("method")
+        .and_then(|m| m.as_str())
+        .unwrap_or("")
+        .to_owned();
+    let params = request.get("params");
+    let request_log = RequestLogContext {
+        request_id: request_id_string(&id),
+        method: method.clone(),
+        tool_name: tool_name_from_request(&method, params),
+    };
+
+    if method == "initialized" || method.starts_with("notifications/") {
+        stats.notifications += 1;
+        return Ok(());
+    }
+
+    if method == "tools/call" {
+        stats.async_dispatched += 1;
+        *next_token += 1;
+        let token = *next_token;
+        let request_id = id.clone();
+        let params = params.cloned();
+        let repo_root = ctx.repo_root.to_owned();
+        let db_path = ctx.db_path.to_owned();
+        let event_tx = ctx.event_tx.clone();
+        let method_name = method.clone();
+        let timeout = ctx.worker_pool.timeout();
+        let queued_at = Instant::now();
+        let request_log_for_worker = request_log.clone();
+        tracing::debug!(
+            request_id = %request_log.request_id,
+            method = %request_log.method,
+            tool = request_log.tool_name.as_deref().unwrap_or("-"),
+            timeout_ms = timeout.as_millis() as u64,
+            "queued MCP request"
+        );
+        pending.insert(
+            token,
+            PendingRequest {
+                id,
+                request: request_log,
+                queued_at,
+                deadline: Instant::now() + timeout,
+                timeout_ms: timeout.as_millis(),
+            },
+        );
+        ctx.worker_pool.submit(move || {
+            let started_at = Instant::now();
+            let queue_wait_ms = started_at.duration_since(queued_at).as_millis();
+            tracing::debug!(
+                request_id = %request_log_for_worker.request_id,
+                method = %request_log_for_worker.method,
+                tool = request_log_for_worker.tool_name.as_deref().unwrap_or("-"),
+                queue_wait_ms = queue_wait_ms as u64,
+                "started MCP request"
+            );
+            let dispatch_started_at = Instant::now();
+            let result = dispatch(&method_name, params.as_ref(), &repo_root, &db_path);
+            let execution_ms = dispatch_started_at.elapsed().as_millis();
+            let success = result.is_ok();
+            let response = match result {
+                Ok(result) => jsonrpc_ok(request_id, result),
+                Err(error) => jsonrpc_error(request_id, -32000, error.to_string()),
+            };
+            let _ = event_tx.send(TransportEvent::Response {
+                token,
+                response,
+                completion: RequestCompletion {
+                    request: request_log_for_worker,
+                    queue_wait_ms,
+                    execution_ms,
+                    success,
+                },
+            });
+        })?;
+        return Ok(());
+    }
+
+    let dispatch_started_at = Instant::now();
+    let response = match dispatch(&method, params, ctx.repo_root, ctx.db_path) {
+        Ok(result) => {
+            log_request_finished(
+                &request_log,
+                true,
+                0,
+                dispatch_started_at.elapsed().as_millis(),
+                dispatch_started_at.elapsed().as_millis(),
+            );
+            jsonrpc_ok(id, result)
+        }
+        Err(error) => {
+            log_request_finished(
+                &request_log,
+                false,
+                0,
+                dispatch_started_at.elapsed().as_millis(),
+                dispatch_started_at.elapsed().as_millis(),
+            );
+            tracing::warn!(
+                request_id = %request_log.request_id,
+                method = %request_log.method,
+                tool = request_log.tool_name.as_deref().unwrap_or("-"),
+                error = %error,
+                "MCP method failed"
+            );
+            jsonrpc_error(id, -32000, error.to_string())
+        }
+    };
+    write_response(writer, &response)
+}
+
+fn write_response<W: Write>(writer: &mut W, response: &str) -> Result<()> {
+    writeln!(writer, "{response}")?;
+    writer.flush()?;
+    Ok(())
+}
+
+fn drain_expired_requests<W: Write>(
+    writer: &mut W,
+    pending: &mut HashMap<u64, PendingRequest>,
+    stats: &mut TransportStats,
+) -> Result<()> {
+    let now = Instant::now();
+    let mut expired_tokens = Vec::new();
+    for (token, request) in pending.iter() {
+        if request.deadline <= now {
+            expired_tokens.push(*token);
+        }
+    }
+
+    for token in expired_tokens {
+        if let Some(request) = pending.remove(&token) {
+            stats.timed_out += 1;
+            tracing::warn!(
+                request_id = %request.request.request_id,
+                method = %request.request.method,
+                tool = request.request.tool_name.as_deref().unwrap_or("-"),
+                total_ms = request.queued_at.elapsed().as_millis() as u64,
+                timeout_ms = request.timeout_ms as u64,
+                "MCP request timed out"
+            );
+            let response = jsonrpc_error(
+                request.id,
+                -32000,
+                format!(
+                    "worker pool timed out after {} ms while handling request",
+                    request.timeout_ms
+                ),
+            );
+            write_response(writer, &response)?;
+        }
     }
 
     Ok(())
+}
+
+fn handle_completion_event<W: Write>(
+    writer: &mut W,
+    pending: &mut HashMap<u64, PendingRequest>,
+    token: u64,
+    response: String,
+    completion: RequestCompletion,
+    stats: &mut TransportStats,
+) -> Result<()> {
+    if let Some(request) = pending.remove(&token) {
+        stats.completed += 1;
+        if completion.success {
+            stats.completed_ok += 1;
+        } else {
+            stats.completed_err += 1;
+        }
+        log_request_finished(
+            &completion.request,
+            completion.success,
+            completion.queue_wait_ms,
+            completion.execution_ms,
+            request.queued_at.elapsed().as_millis(),
+        );
+        write_response(writer, &response)?;
+    } else {
+        stats.dropped_late += 1;
+        tracing::debug!(
+            request_id = %completion.request.request_id,
+            method = %completion.request.method,
+            tool = completion.request.tool_name.as_deref().unwrap_or("-"),
+            queue_wait_ms = completion.queue_wait_ms as u64,
+            execution_ms = completion.execution_ms as u64,
+            success = completion.success,
+            "dropping late MCP response"
+        );
+    }
+
+    Ok(())
+}
+
+fn next_deadline(pending: &HashMap<u64, PendingRequest>) -> Option<Instant> {
+    pending.values().map(|request| request.deadline).min()
+}
+
+struct PendingRequest {
+    id: serde_json::Value,
+    request: RequestLogContext,
+    queued_at: Instant,
+    deadline: Instant,
+    timeout_ms: u128,
+}
+
+struct RequestDispatchContext<'a> {
+    repo_root: &'a str,
+    db_path: &'a str,
+    worker_pool: &'a WorkerPool,
+    event_tx: &'a mpsc::Sender<TransportEvent>,
+}
+
+#[derive(Default)]
+struct TransportStats {
+    received: u64,
+    notifications: u64,
+    parse_errors: u64,
+    async_dispatched: u64,
+    completed: u64,
+    completed_ok: u64,
+    completed_err: u64,
+    timed_out: u64,
+    dropped_late: u64,
+}
+
+enum TransportEvent {
+    InputLine(String),
+    InputClosed,
+    InputError(String),
+    Response {
+        token: u64,
+        response: String,
+        completion: RequestCompletion,
+    },
+}
+
+#[derive(Clone)]
+struct RequestLogContext {
+    request_id: String,
+    method: String,
+    tool_name: Option<String>,
+}
+
+struct RequestCompletion {
+    request: RequestLogContext,
+    queue_wait_ms: u128,
+    execution_ms: u128,
+    success: bool,
+}
+
+fn request_id_string(id: &serde_json::Value) -> String {
+    match id {
+        serde_json::Value::String(value) => value.clone(),
+        _ => id.to_string(),
+    }
+}
+
+fn tool_name_from_request(method: &str, params: Option<&serde_json::Value>) -> Option<String> {
+    if method != "tools/call" {
+        return None;
+    }
+
+    params
+        .and_then(|p| p.get("name"))
+        .and_then(|n| n.as_str())
+        .map(str::to_owned)
+}
+
+fn log_request_finished(
+    request: &RequestLogContext,
+    success: bool,
+    queue_wait_ms: u128,
+    execution_ms: u128,
+    total_ms: u128,
+) {
+    tracing::debug!(
+        request_id = %request.request_id,
+        method = %request.method,
+        tool = request.tool_name.as_deref().unwrap_or("-"),
+        queue_wait_ms = queue_wait_ms as u64,
+        execution_ms = execution_ms as u64,
+        total_ms = total_ms as u64,
+        success,
+        "completed MCP request"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -123,6 +548,173 @@ fn dispatch(
     }
 }
 
+type WorkerTask = Box<dyn RunWorkerTask>;
+
+trait RunWorkerTask: Send {
+    fn run(self: Box<Self>);
+}
+
+impl<F> RunWorkerTask for F
+where
+    F: FnOnce() + Send + 'static,
+{
+    fn run(self: Box<Self>) {
+        (*self)()
+    }
+}
+
+enum WorkerMessage {
+    Run(WorkerTask),
+    Shutdown,
+}
+
+struct WorkerPool {
+    thread_name_prefix: String,
+    timeout: Duration,
+    sender: mpsc::SyncSender<WorkerMessage>,
+    handles: Vec<thread::JoinHandle<()>>,
+}
+
+impl WorkerPool {
+    fn from_env(thread_name_prefix: &str, options: ServerOptions) -> Result<Self> {
+        let worker_count = parse_env_usize(MCP_WORKER_THREADS_ENV, options.worker_threads)?;
+        let timeout_ms = parse_env_u64(MCP_TOOL_TIMEOUT_MS_ENV, options.tool_timeout_ms)?;
+        Self::new(
+            thread_name_prefix,
+            worker_count,
+            Duration::from_millis(timeout_ms),
+        )
+    }
+
+    fn new(thread_name_prefix: &str, worker_count: usize, timeout: Duration) -> Result<Self> {
+        let worker_count = worker_count.max(1);
+        let queue_bound = worker_count.saturating_mul(4).max(1);
+        let (sender, receiver) = mpsc::sync_channel::<WorkerMessage>(queue_bound);
+        let receiver = std::sync::Arc::new(std::sync::Mutex::new(receiver));
+        let mut handles = Vec::with_capacity(worker_count);
+        let thread_name_prefix = thread_name_prefix.to_owned();
+
+        for index in 0..worker_count {
+            let receiver = std::sync::Arc::clone(&receiver);
+            let thread_name = format!("{}-{}", thread_name_prefix, index + 1);
+            let handle = thread::Builder::new()
+                .name(thread_name.clone())
+                .spawn(move || {
+                    loop {
+                        let message = {
+                            let guard = receiver.lock().expect("worker receiver lock poisoned");
+                            guard.recv()
+                        };
+                        match message {
+                            Ok(WorkerMessage::Run(task)) => task.run(),
+                            Ok(WorkerMessage::Shutdown) | Err(_) => break,
+                        }
+                    }
+                })
+                .with_context(|| format!("cannot spawn worker thread '{thread_name}'"))?;
+            handles.push(handle);
+        }
+
+        Ok(Self {
+            thread_name_prefix,
+            timeout,
+            sender,
+            handles,
+        })
+    }
+
+    #[cfg(test)]
+    fn run<T, F>(&self, task: F) -> Result<T>
+    where
+        T: Send + 'static,
+        F: FnOnce() -> Result<T> + Send + 'static,
+    {
+        let (reply_tx, reply_rx) = mpsc::channel::<Result<T>>();
+        let worker_name = self.thread_name_prefix.clone();
+        self.sender
+            .send(WorkerMessage::Run(Box::new(move || {
+                let result = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(task)) {
+                    Ok(result) => result,
+                    Err(payload) => Err(anyhow::anyhow!(
+                        "worker thread '{worker_name}' panicked: {}",
+                        panic_payload_message(&payload)
+                    )),
+                };
+                let _ = reply_tx.send(result);
+            })))
+            .map_err(|_| {
+                anyhow::anyhow!("worker pool '{}' is unavailable", self.thread_name_prefix)
+            })?;
+
+        reply_rx
+            .recv_timeout(self.timeout)
+            .map_err(|err| match err {
+                mpsc::RecvTimeoutError::Timeout => anyhow::anyhow!(
+                    "worker pool '{}' timed out after {} ms while handling task",
+                    self.thread_name_prefix,
+                    self.timeout.as_millis()
+                ),
+                mpsc::RecvTimeoutError::Disconnected => {
+                    anyhow::anyhow!("worker pool '{}' dropped response", self.thread_name_prefix)
+                }
+            })?
+    }
+
+    fn submit<F>(&self, task: F) -> Result<()>
+    where
+        F: FnOnce() + Send + 'static,
+    {
+        self.sender
+            .send(WorkerMessage::Run(Box::new(task)))
+            .map_err(|_| {
+                anyhow::anyhow!("worker pool '{}' is unavailable", self.thread_name_prefix)
+            })
+    }
+
+    fn timeout(&self) -> Duration {
+        self.timeout
+    }
+}
+
+impl Drop for WorkerPool {
+    fn drop(&mut self) {
+        for _ in 0..self.handles.len() {
+            let _ = self.sender.try_send(WorkerMessage::Shutdown);
+        }
+    }
+}
+
+fn parse_env_usize(var: &str, default: usize) -> Result<usize> {
+    match std::env::var(var) {
+        Ok(raw) if !raw.trim().is_empty() => raw
+            .trim()
+            .parse::<usize>()
+            .with_context(|| format!("{var} must be positive integer")),
+        _ => Ok(default),
+    }
+}
+
+fn parse_env_u64(var: &str, default: u64) -> Result<u64> {
+    match std::env::var(var) {
+        Ok(raw) if !raw.trim().is_empty() => raw
+            .trim()
+            .parse::<u64>()
+            .with_context(|| format!("{var} must be non-negative integer")),
+        _ => Ok(default),
+    }
+}
+
+#[cfg(test)]
+fn panic_payload_message(payload: &Box<dyn std::any::Any + Send + 'static>) -> String {
+    if let Some(message) = payload.downcast_ref::<&'static str>() {
+        (*message).to_owned()
+    } else if let Some(message) = payload.downcast_ref::<String>() {
+        message.clone()
+    } else {
+        "unknown panic payload".to_owned()
+    }
+}
+
 // ---------------------------------------------------------------------------
 // JSON-RPC helpers
 // ---------------------------------------------------------------------------
@@ -149,7 +741,11 @@ mod tests {
     use atlas_core::model::{Edge, Node, NodeId};
     use atlas_store_sqlite::Store;
     use std::io::Cursor;
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use tempfile::TempDir;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     struct TransportFixture {
         _dir: TempDir,
@@ -262,7 +858,14 @@ mod tests {
         let reader = BufReader::new(Cursor::new(input.as_bytes()));
         let mut writer = Vec::new();
 
-        run_server_io(reader, &mut writer, "/ignored", &fixture.db_path).expect("run server io");
+        run_server_io(
+            reader,
+            &mut writer,
+            "/ignored",
+            &fixture.db_path,
+            ServerOptions::default(),
+        )
+        .expect("run server io");
 
         let responses = parse_output_lines(writer);
         assert_eq!(
@@ -271,11 +874,17 @@ mod tests {
             "initialized notification must not emit a response"
         );
 
-        assert_eq!(responses[0]["id"], 1);
-        assert_eq!(responses[0]["result"]["protocolVersion"], "2024-11-05");
+        let by_id: std::collections::HashMap<_, _> = responses
+            .into_iter()
+            .map(|response| (response["id"].clone(), response))
+            .collect();
 
-        assert_eq!(responses[1]["id"], 2);
-        let tools = responses[1]["result"]["tools"]
+        assert_eq!(
+            by_id[&serde_json::json!(1)]["result"]["protocolVersion"],
+            "2024-11-05"
+        );
+
+        let tools = by_id[&serde_json::json!(2)]["result"]["tools"]
             .as_array()
             .expect("tools/list result tools array");
         assert!(
@@ -283,24 +892,24 @@ mod tests {
             "tools/list must expose get_context"
         );
 
-        assert_eq!(responses[2]["id"], 3);
         assert_eq!(
-            responses[2]["result"]["atlas_output_format"], "json",
+            by_id[&serde_json::json!(3)]["result"]["atlas_output_format"],
+            "json",
             "query_graph transport response must preserve JSON default"
         );
-        let query_text = responses[2]["result"]["content"][0]["text"]
+        let query_text = by_id[&serde_json::json!(3)]["result"]["content"][0]["text"]
             .as_str()
             .expect("query_graph text content");
         let query_value: serde_json::Value =
             serde_json::from_str(query_text).expect("query_graph payload json");
         assert_eq!(query_value[0]["qn"], "src/service.rs::fn::compute");
 
-        assert_eq!(responses[3]["id"], 4);
         assert_eq!(
-            responses[3]["result"]["atlas_output_format"], "toon",
+            by_id[&serde_json::json!(4)]["result"]["atlas_output_format"],
+            "toon",
             "get_context transport response must preserve TOON default"
         );
-        let context_text = responses[3]["result"]["content"][0]["text"]
+        let context_text = by_id[&serde_json::json!(4)]["result"]["content"][0]["text"]
             .as_str()
             .expect("get_context text content");
         assert!(context_text.contains("intent: symbol"));
@@ -317,7 +926,14 @@ mod tests {
         let reader = BufReader::new(Cursor::new(input.as_bytes()));
         let mut writer = Vec::new();
 
-        run_server_io(reader, &mut writer, "/ignored", &fixture.db_path).expect("run server io");
+        run_server_io(
+            reader,
+            &mut writer,
+            "/ignored",
+            &fixture.db_path,
+            ServerOptions::default(),
+        )
+        .expect("run server io");
 
         let responses = parse_output_lines(writer);
         assert_eq!(responses.len(), 2);
@@ -330,6 +946,285 @@ mod tests {
                 .as_str()
                 .expect("error message")
                 .contains("method not found")
+        );
+    }
+
+    #[test]
+    fn worker_pool_runs_tasks_on_named_threads() {
+        let worker_pool = WorkerPool::new("atlas-mcp:test-worker", 2, Duration::from_secs(1))
+            .expect("spawn workers");
+        let first = worker_pool
+            .run(|| {
+                Ok((
+                    std::thread::current().id(),
+                    std::thread::current()
+                        .name()
+                        .expect("worker thread name")
+                        .to_owned(),
+                ))
+            })
+            .expect("first run");
+        let second = worker_pool
+            .run(|| Ok(std::thread::current().id()))
+            .expect("second run");
+
+        assert!(first.1.starts_with("atlas-mcp:test-worker-"));
+        assert!(first.0 == second || first.1.starts_with("atlas-mcp:test-worker-"));
+    }
+
+    #[test]
+    fn worker_pool_surfaces_panic_message() {
+        let worker_pool = WorkerPool::new("atlas-mcp:panic-worker", 1, Duration::from_secs(1))
+            .expect("spawn workers");
+        let error = worker_pool
+            .run::<(), _>(|| panic!("boom"))
+            .expect_err("panic must surface as error");
+
+        assert!(error.to_string().contains("panic-worker"));
+        assert!(error.to_string().contains("boom"));
+    }
+
+    #[test]
+    fn worker_pool_enforces_timeout() {
+        let worker_pool = WorkerPool::new("atlas-mcp:timeout-worker", 1, Duration::from_millis(10))
+            .expect("spawn workers");
+        let error = worker_pool
+            .run(|| {
+                std::thread::sleep(Duration::from_millis(50));
+                Ok(())
+            })
+            .expect_err("slow task must time out");
+
+        assert!(error.to_string().contains("timed out"));
+        assert!(error.to_string().contains("10 ms"));
+    }
+
+    #[test]
+    fn worker_pool_bounds_thread_count_under_concurrency() {
+        use std::collections::HashSet;
+        use std::sync::{Arc, Barrier, Mutex};
+
+        let worker_pool = Arc::new(
+            WorkerPool::new("atlas-mcp:bounded-worker", 2, Duration::from_secs(1))
+                .expect("spawn workers"),
+        );
+        let barrier = Arc::new(Barrier::new(5));
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let mut callers = Vec::new();
+
+        for _ in 0..4 {
+            let worker_pool = Arc::clone(&worker_pool);
+            let barrier = Arc::clone(&barrier);
+            let seen = Arc::clone(&seen);
+            callers.push(std::thread::spawn(move || {
+                barrier.wait();
+                let thread_id = worker_pool
+                    .run(|| {
+                        std::thread::sleep(Duration::from_millis(20));
+                        Ok(std::thread::current().id())
+                    })
+                    .expect("worker run");
+                seen.lock().expect("seen lock").push(thread_id);
+            }));
+        }
+
+        barrier.wait();
+        for caller in callers {
+            caller.join().expect("caller thread join");
+        }
+
+        let seen = seen.lock().expect("seen lock");
+        let unique: HashSet<_> = seen.iter().copied().collect();
+        assert_eq!(seen.len(), 4);
+        assert!(
+            unique.len() <= 2,
+            "pool must not exceed configured worker count"
+        );
+    }
+
+    #[test]
+    fn worker_pool_survives_burst_load_without_dropping_tasks() {
+        use std::sync::Arc;
+
+        let worker_pool = Arc::new(
+            WorkerPool::new("atlas-mcp:burst-worker", 2, Duration::from_secs(1))
+                .expect("spawn workers"),
+        );
+        let completed = Arc::new(AtomicUsize::new(0));
+        let mut callers = Vec::new();
+
+        for _ in 0..24 {
+            let worker_pool = Arc::clone(&worker_pool);
+            let completed = Arc::clone(&completed);
+            callers.push(std::thread::spawn(move || {
+                worker_pool
+                    .run(move || {
+                        std::thread::sleep(Duration::from_millis(5));
+                        completed.fetch_add(1, Ordering::SeqCst);
+                        Ok(())
+                    })
+                    .expect("worker run under burst load");
+            }));
+        }
+
+        for caller in callers {
+            caller.join().expect("caller thread join");
+        }
+
+        assert_eq!(completed.load(Ordering::SeqCst), 24);
+    }
+
+    #[test]
+    fn worker_pool_from_env_prefers_env_over_server_options() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        // SAFETY: test-scoped env mutation.
+        unsafe {
+            std::env::set_var(MCP_WORKER_THREADS_ENV, "3");
+            std::env::set_var(MCP_TOOL_TIMEOUT_MS_ENV, "2000");
+        }
+
+        let worker_pool = WorkerPool::from_env(
+            "atlas-mcp:env-worker",
+            ServerOptions {
+                worker_threads: 1,
+                tool_timeout_ms: 1000,
+            },
+        )
+        .expect("pool from env");
+
+        assert_eq!(worker_pool.handles.len(), 3);
+        assert_eq!(worker_pool.timeout(), Duration::from_millis(2000));
+
+        // SAFETY: test-scoped env cleanup.
+        unsafe {
+            std::env::remove_var(MCP_WORKER_THREADS_ENV);
+            std::env::remove_var(MCP_TOOL_TIMEOUT_MS_ENV);
+        }
+    }
+
+    #[test]
+    fn worker_pool_from_env_rejects_invalid_values() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        // SAFETY: test-scoped env mutation.
+        unsafe {
+            std::env::set_var(MCP_WORKER_THREADS_ENV, "abc");
+            std::env::remove_var(MCP_TOOL_TIMEOUT_MS_ENV);
+        }
+
+        let error = WorkerPool::from_env("atlas-mcp:bad-env", ServerOptions::default())
+            .err()
+            .expect("invalid worker thread env must fail");
+        assert!(error.to_string().contains(MCP_WORKER_THREADS_ENV));
+
+        // SAFETY: test-scoped env mutation.
+        unsafe {
+            std::env::remove_var(MCP_WORKER_THREADS_ENV);
+            std::env::set_var(MCP_TOOL_TIMEOUT_MS_ENV, "bad-timeout");
+        }
+
+        let error = WorkerPool::from_env("atlas-mcp:bad-env", ServerOptions::default())
+            .err()
+            .expect("invalid timeout env must fail");
+        assert!(error.to_string().contains(MCP_TOOL_TIMEOUT_MS_ENV));
+
+        // SAFETY: test-scoped env cleanup.
+        unsafe {
+            std::env::remove_var(MCP_TOOL_TIMEOUT_MS_ENV);
+        }
+    }
+
+    #[test]
+    fn worker_pool_from_env_uses_server_options_when_env_missing() {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        // SAFETY: test-scoped env cleanup.
+        unsafe {
+            std::env::remove_var(MCP_WORKER_THREADS_ENV);
+            std::env::remove_var(MCP_TOOL_TIMEOUT_MS_ENV);
+        }
+
+        let worker_pool = WorkerPool::from_env(
+            "atlas-mcp:option-worker",
+            ServerOptions {
+                worker_threads: 4,
+                tool_timeout_ms: 4321,
+            },
+        )
+        .expect("pool from options");
+
+        assert_eq!(worker_pool.handles.len(), 4);
+        assert_eq!(worker_pool.timeout(), Duration::from_millis(4321));
+    }
+
+    #[test]
+    fn timed_out_request_emits_single_response_even_if_completion_arrives_late() {
+        let mut pending = HashMap::new();
+        let mut stats = TransportStats::default();
+        let mut writer = Vec::new();
+        let token = 7;
+        let request_id = serde_json::json!(99);
+
+        pending.insert(
+            token,
+            PendingRequest {
+                id: request_id.clone(),
+                request: RequestLogContext {
+                    request_id: "99".to_owned(),
+                    method: "tools/call".to_owned(),
+                    tool_name: Some("slow_tool".to_owned()),
+                },
+                queued_at: Instant::now() - Duration::from_millis(20),
+                deadline: Instant::now() - Duration::from_millis(1),
+                timeout_ms: 10,
+            },
+        );
+
+        drain_expired_requests(&mut writer, &mut pending, &mut stats).expect("expire request");
+        assert!(
+            pending.is_empty(),
+            "timed out request must be removed from pending set"
+        );
+        assert_eq!(stats.timed_out, 1);
+
+        handle_completion_event(
+            &mut writer,
+            &mut pending,
+            token,
+            jsonrpc_ok(request_id.clone(), serde_json::json!({"late": true})),
+            RequestCompletion {
+                request: RequestLogContext {
+                    request_id: "99".to_owned(),
+                    method: "tools/call".to_owned(),
+                    tool_name: Some("slow_tool".to_owned()),
+                },
+                queue_wait_ms: 5,
+                execution_ms: 20,
+                success: true,
+            },
+            &mut stats,
+        )
+        .expect("late completion handling");
+
+        let responses = parse_output_lines(writer);
+        assert_eq!(
+            responses.len(),
+            1,
+            "late completion must not emit duplicate response"
+        );
+        assert_eq!(responses[0]["id"], request_id);
+        assert_eq!(responses[0]["error"]["code"], serde_json::json!(-32000));
+        assert!(
+            responses[0]["error"]["message"]
+                .as_str()
+                .expect("timeout error message")
+                .contains("timed out")
+        );
+        assert_eq!(
+            stats.completed, 0,
+            "late completion must not count as completed response"
+        );
+        assert_eq!(
+            stats.dropped_late, 1,
+            "late completion must be tracked as dropped"
         );
     }
 }

@@ -99,11 +99,28 @@ pub fn run_doctor(cli: &Cli) -> Result<()> {
 
     // 4. Config file
     let config_path = atlas_engine::paths::config_path(&repo);
+    let mut loaded_config: Option<atlas_engine::Config> = None;
     if config_path.exists() {
         checks.push(CheckResult::pass(
             "config_file",
             config_path.display().to_string(),
         ));
+        match atlas_engine::Config::load(&atlas_engine::paths::atlas_dir(&repo)) {
+            Ok(config) => {
+                checks.push(CheckResult::pass(
+                    "mcp_serve_config",
+                    format!(
+                        "workers={} timeout_ms={}",
+                        config.mcp_worker_threads(),
+                        config.mcp_tool_timeout_ms()
+                    ),
+                ));
+                loaded_config = Some(config);
+            }
+            Err(e) => {
+                checks.push(CheckResult::fail("mcp_serve_config", e.to_string()));
+            }
+        }
     } else {
         checks.push(CheckResult::fail(
             "config_file",
@@ -196,6 +213,8 @@ pub fn run_doctor(cli: &Cli) -> Result<()> {
         }
     }
 
+    let _ = loaded_config;
+
     // 7. git ls-files reachable
     match collect_files(Utf8Path::new(&repo), None) {
         Ok(files) => {
@@ -211,12 +230,7 @@ pub fn run_doctor(cli: &Cli) -> Result<()> {
 
     // 8. Content DB retrieval index state (best-effort; missing DB is not fatal).
     {
-        let content_db = {
-            let p = std::path::Path::new(&db_path_str);
-            p.parent()
-                .map(|d| d.join("context.db").to_string_lossy().into_owned())
-                .unwrap_or_else(|| "context.db".to_string())
-        };
+        let content_db = atlas_engine::paths::content_db_path(&db_path_str);
         match ContentStore::open(&content_db) {
             Ok(mut cs) => {
                 let _ = cs.migrate();

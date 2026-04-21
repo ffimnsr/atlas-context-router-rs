@@ -25,4 +25,4 @@ mod session_tools;
 mod tools;
 mod transport;
 
-pub use transport::run_server;
+pub use transport::{ServerOptions, run_server, run_server_with_options};

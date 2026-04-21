@@ -48,6 +48,8 @@ fn sqlite_fts5_smoke_round_trip() {
     run_atlas(repo.path(), &["build"]);
 
     let status = read_json_data_output("status", run_atlas(repo.path(), &["--json", "status"]));
+    assert_eq!(status["mcp"]["worker_threads"], json!(2));
+    assert_eq!(status["mcp"]["tool_timeout_ms"], json!(300000));
     assert!(status["indexed_file_count"].as_u64().unwrap_or_default() >= 2);
     assert!(status["node_count"].as_i64().unwrap_or_default() >= 5);
     assert!(status["edge_count"].as_i64().unwrap_or_default() >= 1);
@@ -63,6 +65,63 @@ fn sqlite_fts5_smoke_round_trip() {
     assert_eq!(results[0]["node"]["name"], json!("greet_twice"));
     assert_eq!(results[0]["node"]["kind"], json!("method"));
     assert_eq!(results[0]["node"]["file_path"], json!("src/lib.rs"));
+}
+
+#[test]
+fn doctor_reports_mcp_serve_config() {
+    let repo = setup_fixture_repo();
+
+    run_atlas(repo.path(), &["init"]);
+
+    let doctor = read_json_data_output("doctor", run_atlas(repo.path(), &["--json", "doctor"]));
+    let checks = doctor["checks"].as_array().expect("doctor checks array");
+    let mcp_check = checks
+        .iter()
+        .find(|item| item["check"] == json!("mcp_serve_config"))
+        .expect("mcp serve config check present");
+
+    assert_eq!(mcp_check["ok"], json!(true));
+    assert_eq!(mcp_check["detail"], json!("workers=2 timeout_ms=300000"));
+}
+
+#[test]
+fn init_creates_graph_content_and_session_databases() {
+    let repo = setup_fixture_repo();
+
+    let data = read_json_data_output("init", run_atlas(repo.path(), &["--json", "init"]));
+
+    let graph_db = repo.path().join(".atlas").join("worldtree.db");
+    let content_db = repo.path().join(".atlas").join("context.db");
+    let session_db = repo.path().join(".atlas").join("session.db");
+
+    assert_eq!(
+        data["db_path"],
+        json!(graph_db.to_string_lossy().into_owned())
+    );
+    assert_eq!(
+        data["content_db_path"],
+        json!(content_db.to_string_lossy().into_owned())
+    );
+    assert_eq!(
+        data["session_db_path"],
+        json!(session_db.to_string_lossy().into_owned())
+    );
+
+    assert!(
+        graph_db.is_file(),
+        "graph db missing: {}",
+        graph_db.display()
+    );
+    assert!(
+        content_db.is_file(),
+        "content db missing: {}",
+        content_db.display()
+    );
+    assert!(
+        session_db.is_file(),
+        "session db missing: {}",
+        session_db.display()
+    );
 }
 
 #[test]
@@ -1205,14 +1264,17 @@ fn serve_command_handles_stdio_jsonrpc_flow_end_to_end() {
         "initialized notification must not emit a response"
     );
 
-    assert_eq!(responses[0]["id"], json!(1));
+    let by_id: std::collections::HashMap<_, _> = responses
+        .into_iter()
+        .map(|response| (response["id"].clone(), response))
+        .collect();
+
     assert_eq!(
-        responses[0]["result"]["protocolVersion"],
+        by_id[&json!(1)]["result"]["protocolVersion"],
         json!("2024-11-05")
     );
 
-    assert_eq!(responses[1]["id"], json!(2));
-    let tools = responses[1]["result"]["tools"]
+    let tools = by_id[&json!(2)]["result"]["tools"]
         .as_array()
         .expect("tools/list result tools array");
     assert!(
@@ -1222,15 +1284,14 @@ fn serve_command_handles_stdio_jsonrpc_flow_end_to_end() {
         "tools/list must expose get_context"
     );
 
-    assert_eq!(responses[2]["id"], json!(3));
-    let query_format = responses[2]["result"]["atlas_output_format"]
+    let query_format = by_id[&json!(3)]["result"]["atlas_output_format"]
         .as_str()
         .expect("query_graph output format");
     assert!(
         query_format == "toon" || query_format == "json",
         "query_graph must return toon or JSON fallback"
     );
-    let query_text = responses[2]["result"]["content"][0]["text"]
+    let query_text = by_id[&json!(3)]["result"]["content"][0]["text"]
         .as_str()
         .expect("query_graph text content");
     if query_format == "json" {
@@ -1244,9 +1305,11 @@ fn serve_command_handles_stdio_jsonrpc_flow_end_to_end() {
         assert!(query_text.contains("src/lib.rs::method::Greeter::greet_twice"));
     }
 
-    assert_eq!(responses[3]["id"], json!(4));
-    assert_eq!(responses[3]["result"]["atlas_output_format"], json!("toon"));
-    let context_text = responses[3]["result"]["content"][0]["text"]
+    assert_eq!(
+        by_id[&json!(4)]["result"]["atlas_output_format"],
+        json!("toon")
+    );
+    let context_text = by_id[&json!(4)]["result"]["content"][0]["text"]
         .as_str()
         .expect("get_context text content");
     assert!(context_text.contains("intent: symbol"));

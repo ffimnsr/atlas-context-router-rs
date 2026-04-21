@@ -1,4 +1,5 @@
 use anyhow::Result;
+use atlas_mcp::ServerOptions;
 
 use crate::cli::{Cli, Command};
 
@@ -8,7 +9,15 @@ use super::{db_path, print_json, resolve_repo};
 pub fn run_serve(cli: &Cli) -> Result<()> {
     let repo = resolve_repo(cli)?;
     let db_path = db_path(cli, &repo);
-    atlas_mcp::run_server(&repo, &db_path)
+    let config = atlas_engine::Config::load(&atlas_engine::paths::atlas_dir(&repo))?;
+    atlas_mcp::run_server_with_options(
+        &repo,
+        &db_path,
+        ServerOptions {
+            worker_threads: config.mcp_worker_threads(),
+            tool_timeout_ms: config.mcp_tool_timeout_ms(),
+        },
+    )
 }
 
 pub fn run_install(cli: &Cli) -> Result<()> {

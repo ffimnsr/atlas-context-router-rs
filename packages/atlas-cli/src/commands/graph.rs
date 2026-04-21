@@ -2,10 +2,12 @@ use std::fs;
 
 use anyhow::{Context, Result};
 use atlas_adapters::{AdapterHooks, CliAdapter};
+use atlas_contentstore::ContentStore;
 use atlas_core::GraphStats;
 use atlas_core::model::ChangedFile;
 use atlas_engine::{BuildOptions, UpdateOptions, UpdateTarget, build_graph, update_graph};
 use atlas_repo::{changed_files, find_repo_root};
+use atlas_session::SessionStore;
 use atlas_store_sqlite::{BuildFinishStats, Store};
 use camino::Utf8Path;
 
@@ -16,16 +18,21 @@ use super::{
     resolve_repo,
 };
 
-fn status_payload(
-    repo: &str,
-    db_path: &str,
-    stats: &GraphStats,
-    base: &Option<String>,
+struct StatusPayloadContext<'a> {
+    repo: &'a str,
+    db_path: &'a str,
+    stats: &'a GraphStats,
+    config: &'a atlas_engine::Config,
+    base: &'a Option<String>,
     staged: bool,
-    changes: &[ChangedFile],
-    store: Option<&Store>,
-) -> serde_json::Value {
-    let build_status = store.and_then(|s| s.get_build_status(repo).ok().flatten());
+    changes: &'a [ChangedFile],
+    store: Option<&'a Store>,
+}
+
+fn status_payload(ctx: StatusPayloadContext<'_>) -> serde_json::Value {
+    let build_status = ctx
+        .store
+        .and_then(|s| s.get_build_status(ctx.repo).ok().flatten());
     let build_state_val = build_status.as_ref().map(|bs| {
         let state_str = match bs.state {
             atlas_store_sqlite::GraphBuildState::Building => "building",
@@ -44,21 +51,25 @@ fn status_payload(
         })
     });
     serde_json::json!({
-        "repo_root": repo,
-        "db_path": db_path,
-        "diff_target": {
-            "base": base,
-            "staged": staged,
-            "kind": if staged { "staged" } else if base.is_some() { "base_ref" } else { "working_tree" },
+        "repo_root": ctx.repo,
+        "db_path": ctx.db_path,
+        "mcp": {
+            "worker_threads": ctx.config.mcp_worker_threads(),
+            "tool_timeout_ms": ctx.config.mcp_tool_timeout_ms(),
         },
-        "indexed_file_count": stats.file_count,
-        "node_count": stats.node_count,
-        "edge_count": stats.edge_count,
-        "nodes_by_kind": stats.nodes_by_kind,
-        "languages": stats.languages,
-        "last_indexed_at": stats.last_indexed_at,
-        "changed_file_count": changes.len(),
-        "changed_files": augment_changes_with_node_counts(changes, store),
+        "diff_target": {
+            "base": ctx.base,
+            "staged": ctx.staged,
+            "kind": if ctx.staged { "staged" } else if ctx.base.is_some() { "base_ref" } else { "working_tree" },
+        },
+        "indexed_file_count": ctx.stats.file_count,
+        "node_count": ctx.stats.node_count,
+        "edge_count": ctx.stats.edge_count,
+        "nodes_by_kind": ctx.stats.nodes_by_kind,
+        "languages": ctx.stats.languages,
+        "last_indexed_at": ctx.stats.last_indexed_at,
+        "changed_file_count": ctx.changes.len(),
+        "changed_files": augment_changes_with_node_counts(ctx.changes, ctx.store),
         "build_status": build_state_val,
     })
 }
@@ -72,6 +83,17 @@ pub fn run_init(cli: &Cli) -> Result<()> {
     let db_path = db_path(cli, &repo);
     Store::open(&db_path).with_context(|| format!("cannot open database at {db_path}"))?;
 
+    let content_db_path = atlas_engine::paths::content_db_path(&db_path);
+    let mut content_store = ContentStore::open(&content_db_path)
+        .with_context(|| format!("cannot open content store at {content_db_path}"))?;
+    content_store
+        .migrate()
+        .with_context(|| format!("cannot migrate content store at {content_db_path}"))?;
+
+    let session_db_path = atlas_engine::paths::session_db_path(&db_path);
+    SessionStore::open(&session_db_path)
+        .with_context(|| format!("cannot open session store at {session_db_path}"))?;
+
     let config_path = atlas_engine::paths::config_path(&repo);
     let config_created = atlas_engine::Config::write_default(&atlas_dir)
         .with_context(|| format!("cannot write config to {}", config_path.display()))?;
@@ -82,6 +104,8 @@ pub fn run_init(cli: &Cli) -> Result<()> {
             serde_json::json!({
                 "atlas_dir": atlas_dir.display().to_string(),
                 "db_path": db_path,
+                "content_db_path": content_db_path,
+                "session_db_path": session_db_path,
                 "config_path": config_path.display().to_string(),
                 "config_created": config_created,
             }),
@@ -89,6 +113,8 @@ pub fn run_init(cli: &Cli) -> Result<()> {
     } else {
         println!("Initialized atlas in {}", atlas_dir.display());
         println!("Database: {db_path}");
+        println!("Content : {content_db_path}");
+        println!("Session : {session_db_path}");
         if config_created {
             println!("Config  : {}", config_path.display());
         }
@@ -110,6 +136,7 @@ pub fn run_status(cli: &Cli) -> Result<()> {
 
     let store =
         Store::open(&db_path).with_context(|| format!("cannot open database at {db_path}"))?;
+    let config = atlas_engine::Config::load(&atlas_engine::paths::atlas_dir(&repo))?;
     let stats = store.stats().context("cannot read stats")?;
     let changes = changed_files(repo_root, &detect_changes_target(&base, staged))
         .context("cannot detect changed files")?;
@@ -117,19 +144,25 @@ pub fn run_status(cli: &Cli) -> Result<()> {
     if cli.json {
         print_json(
             "status",
-            status_payload(
-                &repo,
-                &db_path,
-                &stats,
-                &base,
+            status_payload(StatusPayloadContext {
+                repo: &repo,
+                db_path: &db_path,
+                stats: &stats,
+                config: &config,
+                base: &base,
                 staged,
-                &changes,
-                Some(&store),
-            ),
+                changes: &changes,
+                store: Some(&store),
+            }),
         )?;
     } else {
         println!("Repo root : {repo}");
         println!("Database  : {db_path}");
+        println!(
+            "MCP serve : workers={} timeout_ms={}",
+            config.mcp_worker_threads(),
+            config.mcp_tool_timeout_ms()
+        );
         println!("Files     : {}", stats.file_count);
         println!("Nodes     : {}", stats.node_count);
         println!("Edges     : {}", stats.edge_count);

@@ -1,6 +1,7 @@
 # Ignore environment variable files
 .env
 .codex
+.codex/
 
 # Ignore all markdown files except README.md and ISSUES.md
 *.md

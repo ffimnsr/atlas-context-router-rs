@@ -3,7 +3,7 @@
 //! Supported platforms:
 //! - `copilot`  — `.vscode/mcp.json` (VS Code / GitHub Copilot)
 //! - `claude`   — `.mcp.json` in repo root (Claude Code)
-//! - `codex`    — `~/.codex/config.toml` (OpenAI Codex CLI)
+//! - `codex`    — `.codex/config.toml` in repo root (OpenAI Codex project config)
 //!
 //! Each platform detection check returns `true` when the tool's config
 //! directory already exists, so we never silently clobber a non-user system.
@@ -66,7 +66,6 @@ pub fn run_install(
         match installer(repo_root, dry_run)? {
             PlatformResult::Configured(label) => summary.configured.push(label),
             PlatformResult::AlreadyConfigured(label) => summary.already_configured.push(label),
-            PlatformResult::Skipped => {}
         }
     }
 
@@ -100,9 +99,7 @@ fn should_auto_detect(platform: &str, repo_root: &Path) -> bool {
             // Claude Code is always a reasonable default — writes to repo root.
             true
         }
-        "codex" => home_dir()
-            .map(|h| h.join(".codex").is_dir())
-            .unwrap_or(false),
+        "codex" => repo_root.join(".codex").is_dir(),
         _ => false,
     }
 }
@@ -114,7 +111,6 @@ fn should_auto_detect(platform: &str, repo_root: &Path) -> bool {
 enum PlatformResult {
     Configured(String),
     AlreadyConfigured(String),
-    Skipped,
 }
 
 /// GitHub Copilot — writes `.vscode/mcp.json` in the repo root.
@@ -145,14 +141,9 @@ fn install_claude(repo_root: &Path, dry_run: bool) -> Result<PlatformResult> {
     )
 }
 
-/// OpenAI Codex CLI — writes/appends to `~/.codex/config.toml`.
+/// OpenAI Codex CLI — writes/appends to repo-local `.codex/config.toml`.
 fn install_codex(repo_root: &Path, dry_run: bool) -> Result<PlatformResult> {
-    let _ = repo_root; // Codex config is global, not per-repo.
-    let home = match home_dir() {
-        Some(h) => h,
-        None => return Ok(PlatformResult::Skipped),
-    };
-    let config_path = home.join(".codex").join("config.toml");
+    let config_path = repo_root.join(".codex").join("config.toml");
     merge_toml_mcp(&config_path, "atlas", dry_run, "Codex")
 }
 
@@ -473,17 +464,6 @@ pub fn inject_instructions(repo_root: &Path, dry_run: bool) -> Result<Vec<String
 }
 
 // ---------------------------------------------------------------------------
-// Utilities
-// ---------------------------------------------------------------------------
-
-fn home_dir() -> Option<PathBuf> {
-    // `std::env::home_dir` is deprecated on Windows due to quirks, but it
-    // works correctly on Linux/macOS.  For our purposes this is fine.
-    #[allow(deprecated)]
-    std::env::home_dir()
-}
-
-// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -554,6 +534,26 @@ mod tests {
         assert!(vscode_path.exists());
         let val: Value = serde_json::from_str(&fs::read_to_string(&vscode_path).unwrap()).unwrap();
         assert!(val["servers"]["atlas"]["command"] == "atlas");
+    }
+
+    #[test]
+    fn install_codex_writes_repo_local_config_toml() {
+        let tmp = TempDir::new().unwrap();
+        let result = install_codex(tmp.path(), false).unwrap();
+        assert!(matches!(result, PlatformResult::Configured(_)));
+        let codex_path = tmp.path().join(".codex").join("config.toml");
+        assert!(codex_path.exists());
+        let content = fs::read_to_string(&codex_path).unwrap();
+        assert!(content.contains("[mcp_servers.atlas]"));
+        assert!(content.contains("command = \"atlas\""));
+    }
+
+    #[test]
+    fn install_codex_is_idempotent() {
+        let tmp = TempDir::new().unwrap();
+        install_codex(tmp.path(), false).unwrap();
+        let result = install_codex(tmp.path(), false).unwrap();
+        assert!(matches!(result, PlatformResult::AlreadyConfigured(_)));
     }
 
     #[test]

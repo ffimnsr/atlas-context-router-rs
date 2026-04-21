@@ -1,4 +1,4 @@
-# Atlas — Detailed Rust TODO for a code-review-graph Reimplementation
+# Atlas — Stateful Coding Agent Backend
 
 ## Goal
 
@@ -1148,7 +1148,7 @@ The upstream repo exposes a stdio MCP server, but the report makes clear this sh
 - [x] keep service layer transport-independent
 - [x] add stdio server later
 - [x] avoid long-running tool deadlocks
-- [ ] wrap blocking work in dedicated worker threads if needed
+- [x] wrap blocking work in dedicated worker threads if needed
 
 ### 16.3 Serve command
 
