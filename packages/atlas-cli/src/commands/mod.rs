@@ -109,12 +109,31 @@ pub(crate) fn query_display_path(node: &atlas_core::Node) -> String {
 
 pub(crate) fn resolve_repo(cli: &Cli) -> Result<String> {
     if let Some(r) = &cli.repo {
-        return Ok(r.clone());
+        // Expand leading `~/` or a bare `~` to the home directory.
+        let expanded = if r == "~" {
+            dirs_home()?
+        } else if let Some(rest) = r.strip_prefix("~/") {
+            format!("{}/{rest}", dirs_home()?)
+        } else {
+            r.clone()
+        };
+        return Ok(expanded);
     }
     Ok(std::env::current_dir()
         .context("cannot determine cwd")?
         .to_string_lossy()
         .into_owned())
+}
+
+fn dirs_home() -> Result<String> {
+    std::env::var("HOME")
+        .or_else(|_| {
+            #[allow(deprecated)]
+            std::env::home_dir()
+                .ok_or_else(|| anyhow::anyhow!("cannot determine home directory"))
+                .map(|p| p.to_string_lossy().into_owned())
+        })
+        .context("cannot expand ~: HOME not set and home directory not detectable")
 }
 
 pub(crate) fn db_path(cli: &Cli, repo: &str) -> String {
