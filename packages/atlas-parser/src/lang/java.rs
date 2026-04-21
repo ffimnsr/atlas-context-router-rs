@@ -299,8 +299,11 @@ fn emit_import(
     nodes: &mut Vec<Node>,
     edges: &mut Vec<Edge>,
 ) {
-    let Some(name) = child_name_or_text(node, ctx.source, &["scoped_identifier", "identifier", "asterisk"])
-    else {
+    let Some(name) = child_name_or_text(
+        node,
+        ctx.source,
+        &["scoped_identifier", "identifier", "asterisk"],
+    ) else {
         return;
     };
     *import_index += 1;
@@ -324,7 +327,13 @@ fn emit_import(
         extra_json: serde_json::json!({ "imported": name }),
     });
     edges.push(contains_edge(parent_qn, &qn, ctx.rel_path, line));
-    edges.push(imports_edge(parent_qn, &qn, ctx.rel_path, line, "explicit_import"));
+    edges.push(imports_edge(
+        parent_qn,
+        &qn,
+        ctx.rel_path,
+        line,
+        "explicit_import",
+    ));
 }
 
 fn emit_annotations(
@@ -344,11 +353,16 @@ fn emit_annotations(
         if child.kind() != "annotation" && child.kind() != "marker_annotation" {
             continue;
         }
-        let Some(name) = child_name_or_text(child, ctx.source, &["identifier", "scoped_identifier"]) else {
+        let Some(name) =
+            child_name_or_text(child, ctx.source, &["identifier", "scoped_identifier"])
+        else {
             continue;
         };
         *annotation_index += 1;
-        let qn = format!("{}::annotation::{}#{}", ctx.rel_path, owner_qn, *annotation_index);
+        let qn = format!(
+            "{}::annotation::{}#{}",
+            ctx.rel_path, owner_qn, *annotation_index
+        );
         let line = start_line(child);
         nodes.push(Node {
             id: NodeId::UNSET,
@@ -372,7 +386,8 @@ fn emit_annotations(
 }
 
 fn method_qn_map(nodes: &[Node]) -> HashMap<String, String> {
-    nodes.iter()
+    nodes
+        .iter()
         .filter(|node| node.kind == NodeKind::Method)
         .map(|node| (node.name.clone(), node.qualified_name.clone()))
         .collect()
@@ -397,7 +412,13 @@ fn walk_method_calls(
     {
         let callee = node_text(name_node, ctx.source);
         if let Some(target_qn) = methods.get(callee) {
-            edges.push(call_edge(owner_qn, target_qn, ctx.rel_path, start_line(node), "same_file"));
+            edges.push(call_edge(
+                owner_qn,
+                target_qn,
+                ctx.rel_path,
+                start_line(node),
+                "same_file",
+            ));
         }
     }
 
@@ -498,12 +519,36 @@ mod tests {
         let pf = parse(
             "package demo.app;\nimport java.util.List;\n@Svc\nclass Main {\n  @Trace\n  void run() { helper(); }\n  void helper() {}\n}\ninterface Api { void ping(); }\nenum Mode { ON }\n",
         );
-        assert!(pf.nodes.iter().any(|node| node.qualified_name == "src/Main.java::package::demo.app"));
-        assert!(pf.nodes.iter().any(|node| node.qualified_name == "src/Main.java::class::Main"));
-        assert!(pf.nodes.iter().any(|node| node.qualified_name == "src/Main.java::interface::Api"));
-        assert!(pf.nodes.iter().any(|node| node.qualified_name == "src/Main.java::enum::Mode"));
-        assert!(pf.nodes.iter().any(|node| node.kind == NodeKind::Import && node.name == "java.util.List"));
-        assert!(pf.nodes.iter().any(|node| node.kind == NodeKind::Variable && node.name == "Svc"));
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|node| node.qualified_name == "src/Main.java::package::demo.app")
+        );
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|node| node.qualified_name == "src/Main.java::class::Main")
+        );
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|node| node.qualified_name == "src/Main.java::interface::Api")
+        );
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|node| node.qualified_name == "src/Main.java::enum::Mode")
+        );
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|node| node.kind == NodeKind::Import && node.name == "java.util.List")
+        );
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|node| node.kind == NodeKind::Variable && node.name == "Svc")
+        );
         assert!(pf.edges.iter().any(|edge| {
             edge.kind == EdgeKind::Calls && edge.target_qn == "src/Main.java::method::Main.helper"
         }));

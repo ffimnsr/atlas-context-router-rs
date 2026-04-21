@@ -167,7 +167,13 @@ fn emit_namespace(
     let Some(name) = node
         .child_by_field_name("name")
         .map(|name_node| node_text(name_node, ctx.source).to_owned())
-        .or_else(|| first_named_text(node, ctx.source, &["namespace_name", "qualified_name", "name"]))
+        .or_else(|| {
+            first_named_text(
+                node,
+                ctx.source,
+                &["namespace_name", "qualified_name", "name"],
+            )
+        })
     else {
         return;
     };
@@ -378,7 +384,13 @@ fn emit_use(
             extra_json: serde_json::json!({ "imported": name }),
         });
         edges.push(contains_edge(parent_qn, &qn, ctx.rel_path, line));
-        edges.push(imports_edge(parent_qn, &qn, ctx.rel_path, line, "namespace_use"));
+        edges.push(imports_edge(
+            parent_qn,
+            &qn,
+            ctx.rel_path,
+            line,
+            "namespace_use",
+        ));
     }
 }
 
@@ -402,7 +414,10 @@ fn emit_attributes(
                 continue;
             }
             *attribute_index += 1;
-            let qn = format!("{}::attribute::{}#{}", ctx.rel_path, owner_qn, *attribute_index);
+            let qn = format!(
+                "{}::attribute::{}#{}",
+                ctx.rel_path, owner_qn, *attribute_index
+            );
             let line = start_line(child);
             nodes.push(Node {
                 id: NodeId::UNSET,
@@ -427,7 +442,8 @@ fn emit_attributes(
 }
 
 fn callable_qn_map(nodes: &[Node]) -> HashMap<String, String> {
-    nodes.iter()
+    nodes
+        .iter()
         .filter(|node| matches!(node.kind, NodeKind::Function | NodeKind::Method))
         .map(|node| (node.name.clone(), node.qualified_name.clone()))
         .collect()
@@ -452,7 +468,13 @@ fn walk_calls(
                 && let Some(callee) = call_name(node, ctx.source)
                 && let Some(target_qn) = callables.get(&callee)
             {
-                edges.push(call_edge(owner_qn, target_qn, ctx.rel_path, start_line(node), "same_file"));
+                edges.push(call_edge(
+                    owner_qn,
+                    target_qn,
+                    ctx.rel_path,
+                    start_line(node),
+                    "same_file",
+                ));
             }
         }
         _ => {}
@@ -477,8 +499,13 @@ fn call_name(node: TsNode<'_>, source: &[u8]) -> Option<String> {
                 .next()
                 .unwrap_or_else(|| node_text(name_node, source))
                 .to_owned(),
-            "variable_name" => first_named_text(name_node, source, &["name"])
-                .unwrap_or_else(|| node_text(name_node, source).trim_start_matches('$').to_owned()),
+            "variable_name" => {
+                first_named_text(name_node, source, &["name"]).unwrap_or_else(|| {
+                    node_text(name_node, source)
+                        .trim_start_matches('$')
+                        .to_owned()
+                })
+            }
             _ => node_text(name_node, source)
                 .trim_start_matches('$')
                 .to_owned(),
@@ -576,12 +603,36 @@ mod tests {
         let pf = parse(
             "<?php\nnamespace Demo\\App;\nuse Demo\\Support\\Helper;\n#[Service]\nclass Runner {\n    #[Trace]\n    public function run() { helper(); }\n    private function helper() {}\n}\ntrait UsesLog {}\ninterface RunnerContract {}\nfunction helper() {}\n",
         );
-        assert!(pf.nodes.iter().any(|node| node.qualified_name == "src/index.php::namespace::Demo\\App"));
-        assert!(pf.nodes.iter().any(|node| node.qualified_name == "src/index.php::class::Runner"));
-        assert!(pf.nodes.iter().any(|node| node.qualified_name == "src/index.php::trait::UsesLog"));
-        assert!(pf.nodes.iter().any(|node| node.qualified_name == "src/index.php::interface::RunnerContract"));
-        assert!(pf.nodes.iter().any(|node| node.kind == NodeKind::Import && node.name == "Demo\\Support\\Helper"));
-        assert!(pf.nodes.iter().any(|node| node.kind == NodeKind::Variable && node.name == "Service"));
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|node| node.qualified_name == "src/index.php::namespace::Demo\\App")
+        );
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|node| node.qualified_name == "src/index.php::class::Runner")
+        );
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|node| node.qualified_name == "src/index.php::trait::UsesLog")
+        );
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|node| node.qualified_name == "src/index.php::interface::RunnerContract")
+        );
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|node| node.kind == NodeKind::Import && node.name == "Demo\\Support\\Helper")
+        );
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|node| node.kind == NodeKind::Variable && node.name == "Service")
+        );
         assert!(pf.edges.iter().any(|edge| edge.kind == EdgeKind::Calls));
     }
 }

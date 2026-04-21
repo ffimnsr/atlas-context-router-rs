@@ -345,7 +345,13 @@ fn emit_using(
         extra_json: serde_json::json!({ "imported": name }),
     });
     edges.push(contains_edge(parent_qn, &qn, ctx.rel_path, line));
-    edges.push(imports_edge(parent_qn, &qn, ctx.rel_path, line, "using_directive"));
+    edges.push(imports_edge(
+        parent_qn,
+        &qn,
+        ctx.rel_path,
+        line,
+        "using_directive",
+    ));
 }
 
 fn emit_attributes(
@@ -368,7 +374,10 @@ fn emit_attributes(
                 continue;
             }
             *attribute_index += 1;
-            let qn = format!("{}::attribute::{}#{}", ctx.rel_path, owner_qn, *attribute_index);
+            let qn = format!(
+                "{}::attribute::{}#{}",
+                ctx.rel_path, owner_qn, *attribute_index
+            );
             let line = start_line(child);
             nodes.push(Node {
                 id: NodeId::UNSET,
@@ -393,7 +402,8 @@ fn emit_attributes(
 }
 
 fn method_qn_map(nodes: &[Node]) -> HashMap<String, String> {
-    nodes.iter()
+    nodes
+        .iter()
         .filter(|node| node.kind == NodeKind::Method)
         .map(|node| (node.name.clone(), node.qualified_name.clone()))
         .collect()
@@ -416,8 +426,14 @@ fn walk_calls(
         && let Some(callee) = invocation_name(node, ctx.source)
         && let Some(target_qn) = methods.get(&callee)
     {
-        edges.push(call_edge(owner_qn, target_qn, ctx.rel_path, start_line(node), "same_file"));
-        }
+        edges.push(call_edge(
+            owner_qn,
+            target_qn,
+            ctx.rel_path,
+            start_line(node),
+            "same_file",
+        ));
+    }
 
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
@@ -531,12 +547,36 @@ mod tests {
         let pf = parse(
             "using System.Text;\nnamespace Demo.App;\n[Service]\nclass Runner {\n  [Trace]\n  void Run() { Helper(); }\n  void Helper() {}\n}\ninterface IRunner {}\nstruct Bag {}\nenum Mode { On }\n",
         );
-        assert!(pf.nodes.iter().any(|node| node.qualified_name == "src/App.cs::namespace::Demo.App"));
-        assert!(pf.nodes.iter().any(|node| node.qualified_name == "src/App.cs::class::Runner"));
-        assert!(pf.nodes.iter().any(|node| node.qualified_name == "src/App.cs::interface::IRunner"));
-        assert!(pf.nodes.iter().any(|node| node.qualified_name == "src/App.cs::struct::Bag"));
-        assert!(pf.nodes.iter().any(|node| node.kind == NodeKind::Import && node.name == "System.Text"));
-        assert!(pf.nodes.iter().any(|node| node.kind == NodeKind::Variable && node.name == "Service"));
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|node| node.qualified_name == "src/App.cs::namespace::Demo.App")
+        );
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|node| node.qualified_name == "src/App.cs::class::Runner")
+        );
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|node| node.qualified_name == "src/App.cs::interface::IRunner")
+        );
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|node| node.qualified_name == "src/App.cs::struct::Bag")
+        );
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|node| node.kind == NodeKind::Import && node.name == "System.Text")
+        );
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|node| node.kind == NodeKind::Variable && node.name == "Service")
+        );
         assert!(pf.edges.iter().any(|edge| {
             edge.kind == EdgeKind::Calls && edge.target_qn == "src/App.cs::method::Runner.Helper"
         }));

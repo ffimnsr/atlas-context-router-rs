@@ -31,7 +31,12 @@ impl LangParser for MarkdownParser {
         let mut nodes = Vec::new();
         let mut edges = Vec::new();
         let line_count = ctx.source.iter().filter(|&&b| b == b'\n').count() as u32 + 1;
-        nodes.push(file_node(ctx.rel_path, ctx.file_hash, line_count, "markdown"));
+        nodes.push(file_node(
+            ctx.rel_path,
+            ctx.file_hash,
+            line_count,
+            "markdown",
+        ));
 
         if let Some(ref tree) = tree {
             let document_qn = format!("{}::document", ctx.rel_path);
@@ -118,7 +123,10 @@ fn walk_markdown_blocks(
                 };
                 let level = heading_level(heading, ctx.source);
                 let title = heading_title(heading, ctx.source);
-                while heading_stack.last().is_some_and(|(depth, _, _)| *depth >= level) {
+                while heading_stack
+                    .last()
+                    .is_some_and(|(depth, _, _)| *depth >= level)
+                {
                     heading_stack.pop();
                 }
                 let parent_qn = heading_stack
@@ -157,7 +165,12 @@ fn walk_markdown_blocks(
                     file_hash: ctx.file_hash.to_owned(),
                     extra_json: serde_json::json!({ "level": level, "path": heading_path }),
                 });
-                edges.push(contains_edge(&parent_qn, &heading_qn, ctx.rel_path, start_line(heading)));
+                edges.push(contains_edge(
+                    &parent_qn,
+                    &heading_qn,
+                    ctx.rel_path,
+                    start_line(heading),
+                ));
                 heading_stack.push((level, heading_path, heading_qn.clone()));
                 scan_section_body(
                     child,
@@ -181,7 +194,9 @@ fn walk_markdown_blocks(
                 );
                 heading_stack.pop();
             }
-            "fenced_code_block" => emit_code_block(child, ctx, default_parent_qn, nodes, edges, code_index),
+            "fenced_code_block" => {
+                emit_code_block(child, ctx, default_parent_qn, nodes, edges, code_index)
+            }
             "paragraph" => scan_links(child, ctx, default_parent_qn, nodes, edges, link_index),
             _ => walk_markdown_blocks(
                 child,
@@ -210,7 +225,9 @@ fn scan_section_body(
     let mut cursor = section.walk();
     for child in section.named_children(&mut cursor) {
         match child.kind() {
-            "fenced_code_block" => emit_code_block(child, ctx, container_qn, nodes, edges, code_index),
+            "fenced_code_block" => {
+                emit_code_block(child, ctx, container_qn, nodes, edges, code_index)
+            }
             "paragraph" => scan_links(child, ctx, container_qn, nodes, edges, link_index),
             _ => {}
         }
@@ -232,7 +249,11 @@ fn emit_code_block(
     nodes.push(Node {
         id: NodeId::UNSET,
         kind: NodeKind::Variable,
-        name: if info.is_empty() { "code".to_owned() } else { format!("code:{}", info) },
+        name: if info.is_empty() {
+            "code".to_owned()
+        } else {
+            format!("code:{}", info)
+        },
         qualified_name: qn.clone(),
         file_path: ctx.rel_path.to_owned(),
         line_start: line,
@@ -260,7 +281,10 @@ fn scan_links(
     let inline_link = Regex::new(r"\[[^\]]+\]\(([^)\s]+)[^)]*\)").expect("inline link regex");
     let ref_link = Regex::new(r"(?m)^\[[^\]]+\]:\s*(\S+)").expect("reference link regex");
     let text = node_text(node, ctx.source);
-    for capture in inline_link.captures_iter(text).chain(ref_link.captures_iter(text)) {
+    for capture in inline_link
+        .captures_iter(text)
+        .chain(ref_link.captures_iter(text))
+    {
         let Some(matched) = capture.get(1) else {
             continue;
         };
@@ -315,7 +339,13 @@ fn heading_level(node: TsNode<'_>, source: &[u8]) -> u8 {
             .clamp(1, 6) as u8,
         "setext_heading" => {
             let text = node_text(node, source);
-            if text.lines().nth(1).unwrap_or_default().trim_start().starts_with('=') {
+            if text
+                .lines()
+                .nth(1)
+                .unwrap_or_default()
+                .trim_start()
+                .starts_with('=')
+            {
                 1
             } else {
                 2
@@ -429,10 +459,26 @@ mod tests {
         let pf = parse(
             "# Intro\n\nSee [guide](docs/guide.md).\n\n## Usage\n\n```rust\nfn main() {}\n```\n",
         );
-        assert!(pf.nodes.iter().any(|node| node.qualified_name == "README.md::document"));
-        assert!(pf.nodes.iter().any(|node| node.qualified_name == "README.md::heading::document.intro"));
-        assert!(pf.nodes.iter().any(|node| node.kind == NodeKind::Import && node.name == "docs/guide.md"));
-        assert!(pf.nodes.iter().any(|node| node.qualified_name == "README.md::code::1"));
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|node| node.qualified_name == "README.md::document")
+        );
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|node| node.qualified_name == "README.md::heading::document.intro")
+        );
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|node| node.kind == NodeKind::Import && node.name == "docs/guide.md")
+        );
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|node| node.qualified_name == "README.md::code::1")
+        );
         assert!(pf.edges.iter().any(|edge| edge.kind == EdgeKind::Imports));
     }
 }

@@ -81,12 +81,30 @@ fn visit_ruby_node(
         "module" => emit_module(node, ctx, parent_qn, import_index, nodes, edges),
         "class" => emit_class(node, ctx, parent_qn, import_index, nodes, edges),
         "method" => emit_method(node, ctx, parent_qn, current_owner, nodes, edges),
-        "singleton_method" => emit_singleton_method(node, ctx, parent_qn, current_owner, nodes, edges),
-        "call" => emit_import_like_call(node, ctx, parent_qn, current_owner, import_index, nodes, edges),
+        "singleton_method" => {
+            emit_singleton_method(node, ctx, parent_qn, current_owner, nodes, edges)
+        }
+        "call" => emit_import_like_call(
+            node,
+            ctx,
+            parent_qn,
+            current_owner,
+            import_index,
+            nodes,
+            edges,
+        ),
         _ => {
             let mut cursor = node.walk();
             for child in node.named_children(&mut cursor) {
-                visit_ruby_node(child, ctx, parent_qn, current_owner, import_index, nodes, edges);
+                visit_ruby_node(
+                    child,
+                    ctx,
+                    parent_qn,
+                    current_owner,
+                    import_index,
+                    nodes,
+                    edges,
+                );
             }
         }
     }
@@ -127,7 +145,15 @@ fn emit_module(
     if let Some(body) = node.child_by_field_name("body") {
         let mut cursor = body.walk();
         for child in body.named_children(&mut cursor) {
-            visit_ruby_node(child, ctx, &qn, Some(name.as_str()), import_index, nodes, edges);
+            visit_ruby_node(
+                child,
+                ctx,
+                &qn,
+                Some(name.as_str()),
+                import_index,
+                nodes,
+                edges,
+            );
         }
     }
 }
@@ -167,7 +193,15 @@ fn emit_class(
     if let Some(body) = node.child_by_field_name("body") {
         let mut cursor = body.walk();
         for child in body.named_children(&mut cursor) {
-            visit_ruby_node(child, ctx, &qn, Some(name.as_str()), import_index, nodes, edges);
+            visit_ruby_node(
+                child,
+                ctx,
+                &qn,
+                Some(name.as_str()),
+                import_index,
+                nodes,
+                edges,
+            );
         }
     }
 }
@@ -196,7 +230,9 @@ fn emit_method(
         line_end: end_line(node),
         language: "ruby".to_owned(),
         parent_name: Some(parent_qn.to_owned()),
-        params: node.child_by_field_name("parameters").map(|n| node_text(n, ctx.source).to_owned()),
+        params: node
+            .child_by_field_name("parameters")
+            .map(|n| node_text(n, ctx.source).to_owned()),
         return_type: None,
         modifiers: None,
         is_test: false,
@@ -230,7 +266,9 @@ fn emit_singleton_method(
         line_end: end_line(node),
         language: "ruby".to_owned(),
         parent_name: Some(parent_qn.to_owned()),
-        params: node.child_by_field_name("parameters").map(|n| node_text(n, ctx.source).to_owned()),
+        params: node
+            .child_by_field_name("parameters")
+            .map(|n| node_text(n, ctx.source).to_owned()),
         return_type: None,
         modifiers: Some("singleton".to_owned()),
         is_test: false,
@@ -270,7 +308,9 @@ fn emit_import_like_call(
     let owner_qn = if tier == "mixin" {
         parent_qn.to_owned()
     } else {
-        current_owner.map(|_| parent_qn.to_owned()).unwrap_or_else(|| ctx.rel_path.to_owned())
+        current_owner
+            .map(|_| parent_qn.to_owned())
+            .unwrap_or_else(|| ctx.rel_path.to_owned())
     };
     nodes.push(Node {
         id: NodeId::UNSET,
@@ -294,7 +334,8 @@ fn emit_import_like_call(
 }
 
 fn callable_qn_map(nodes: &[Node]) -> HashMap<String, String> {
-    nodes.iter()
+    nodes
+        .iter()
         .filter(|node| node.kind == NodeKind::Method)
         .map(|node| (node.name.clone(), node.qualified_name.clone()))
         .collect()
@@ -315,10 +356,19 @@ fn walk_calls(
     } else if node.kind() == "call"
         && let Some(owner_qn) = next_callable.as_ref()
         && let Some(callee) = ruby_call_name(node, ctx.source)
-        && !matches!(callee.as_str(), "require" | "require_relative" | "include" | "extend" | "prepend")
+        && !matches!(
+            callee.as_str(),
+            "require" | "require_relative" | "include" | "extend" | "prepend"
+        )
         && let Some(target_qn) = callables.get(&callee)
     {
-        edges.push(call_edge(owner_qn, target_qn, ctx.rel_path, start_line(node), "same_file"));
+        edges.push(call_edge(
+            owner_qn,
+            target_qn,
+            ctx.rel_path,
+            start_line(node),
+            "same_file",
+        ));
     }
 
     let mut cursor = node.walk();
@@ -341,7 +391,10 @@ fn ruby_call_name(node: TsNode<'_>, source: &[u8]) -> Option<String> {
 fn ruby_call_argument(node: TsNode<'_>, source: &[u8]) -> Option<String> {
     let args = node.child_by_field_name("arguments")?;
     let raw = node_text(args, source).trim();
-    Some(raw.trim_matches(|ch| matches!(ch, '(' | ')' | '"' | '\'' | ' ')).to_owned())
+    Some(
+        raw.trim_matches(|ch| matches!(ch, '(' | ')' | '"' | '\'' | ' '))
+            .to_owned(),
+    )
 }
 
 fn singleton_owner(node: TsNode<'_>, source: &[u8], current_owner: Option<&str>) -> String {
@@ -440,12 +493,36 @@ mod tests {
         let pf = parse(
             "require \"json\"\nrequire_relative \"helper\"\n\nmodule Demo\n  class Runner\n    include Logging\n    extend Builders\n\n    def helper\n    end\n\n    def run\n      helper()\n    end\n\n    def self.build\n      helper()\n    end\n  end\nend\n",
         );
-        assert!(pf.nodes.iter().any(|node| node.qualified_name == "lib/app.rb::module::Demo"));
-        assert!(pf.nodes.iter().any(|node| node.qualified_name == "lib/app.rb::class::Runner"));
-        assert!(pf.nodes.iter().any(|node| node.qualified_name == "lib/app.rb::method::Runner.run"));
-        assert!(pf.nodes.iter().any(|node| node.qualified_name == "lib/app.rb::singleton_method::Runner.build"));
-        assert!(pf.nodes.iter().any(|node| node.kind == NodeKind::Import && node.name == "json"));
-        assert!(pf.nodes.iter().any(|node| node.kind == NodeKind::Import && node.name == "Logging"));
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|node| node.qualified_name == "lib/app.rb::module::Demo")
+        );
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|node| node.qualified_name == "lib/app.rb::class::Runner")
+        );
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|node| node.qualified_name == "lib/app.rb::method::Runner.run")
+        );
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|node| node.qualified_name == "lib/app.rb::singleton_method::Runner.build")
+        );
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|node| node.kind == NodeKind::Import && node.name == "json")
+        );
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|node| node.kind == NodeKind::Import && node.name == "Logging")
+        );
         assert!(pf.edges.iter().any(|edge| {
             edge.kind == EdgeKind::Calls && edge.target_qn == "lib/app.rb::method::Runner.helper"
         }));

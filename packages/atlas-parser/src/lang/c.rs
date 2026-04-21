@@ -124,7 +124,13 @@ fn emit_include(
         extra_json: serde_json::json!({ "imported": name }),
     });
     edges.push(contains_edge(ctx.rel_path, &qn, ctx.rel_path, line));
-    edges.push(imports_edge(ctx.rel_path, &qn, ctx.rel_path, line, "preproc_include"));
+    edges.push(imports_edge(
+        ctx.rel_path,
+        &qn,
+        ctx.rel_path,
+        line,
+        "preproc_include",
+    ));
 }
 
 fn emit_function(
@@ -234,7 +240,8 @@ fn emit_typedef(
 }
 
 fn function_qn_map(nodes: &[Node]) -> HashMap<String, String> {
-    nodes.iter()
+    nodes
+        .iter()
         .filter(|node| node.kind == NodeKind::Function)
         .map(|node| (node.name.clone(), node.qualified_name.clone()))
         .collect()
@@ -259,8 +266,14 @@ fn walk_calls(
         && let Some(name) = declarator_name(function_node, ctx.source)
         && let Some(target_qn) = functions.get(&name)
     {
-        edges.push(call_edge(owner_qn, target_qn, ctx.rel_path, start_line(node), "same_file"));
-        }
+        edges.push(call_edge(
+            owner_qn,
+            target_qn,
+            ctx.rel_path,
+            start_line(node),
+            "same_file",
+        ));
+    }
 
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
@@ -270,7 +283,9 @@ fn walk_calls(
 
 fn declarator_name(node: TsNode<'_>, source: &[u8]) -> Option<String> {
     match node.kind() {
-        "identifier" | "field_identifier" | "type_identifier" => Some(node_text(node, source).to_owned()),
+        "identifier" | "field_identifier" | "type_identifier" => {
+            Some(node_text(node, source).to_owned())
+        }
         _ => {
             let mut cursor = node.walk();
             for child in node.named_children(&mut cursor) {
@@ -364,10 +379,28 @@ mod tests {
         let pf = parse(
             "#include \"util.h\"\ntypedef unsigned long size_t;\nstruct widget { int id; };\nenum mode { ON };\nstatic void helper(void) {}\nvoid run(void) { helper(); }\n",
         );
-        assert!(pf.nodes.iter().any(|node| node.kind == NodeKind::Import && node.name == "util.h"));
-        assert!(pf.nodes.iter().any(|node| node.qualified_name == "src/native.c::typedef::size_t"));
-        assert!(pf.nodes.iter().any(|node| node.qualified_name == "src/native.c::struct::widget"));
-        assert!(pf.nodes.iter().any(|node| node.qualified_name == "src/native.c::enum::mode"));
-        assert!(pf.edges.iter().any(|edge| edge.kind == EdgeKind::Calls && edge.target_qn == "src/native.c::fn::helper"));
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|node| node.kind == NodeKind::Import && node.name == "util.h")
+        );
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|node| node.qualified_name == "src/native.c::typedef::size_t")
+        );
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|node| node.qualified_name == "src/native.c::struct::widget")
+        );
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|node| node.qualified_name == "src/native.c::enum::mode")
+        );
+        assert!(pf.edges.iter().any(
+            |edge| edge.kind == EdgeKind::Calls && edge.target_qn == "src/native.c::fn::helper"
+        ));
     }
 }

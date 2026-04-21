@@ -106,7 +106,12 @@ fn walk_html_children(
 
         let entry = counts.entry(tag_name.clone()).or_insert(0);
         *entry += 1;
-        let child_path = format!("{}.{}[{}]", parent_path, sanitize_segment(&tag_name), *entry);
+        let child_path = format!(
+            "{}.{}[{}]",
+            parent_path,
+            sanitize_segment(&tag_name),
+            *entry
+        );
         let child_qn = format!("{}::tag::{}", ctx.rel_path, child_path);
         let line = start_line(child);
         nodes.push(Node {
@@ -133,7 +138,15 @@ fn walk_html_children(
 
         emit_html_imports(child, &child_qn, ctx, nodes, edges, import_index);
         if matches!(child.kind(), "element" | "script_element" | "style_element") {
-            walk_html_children(child, ctx, &child_qn, &child_path, nodes, edges, import_index);
+            walk_html_children(
+                child,
+                ctx,
+                &child_qn,
+                &child_path,
+                nodes,
+                edges,
+                import_index,
+            );
         }
     }
 }
@@ -172,7 +185,10 @@ fn emit_html_imports(
         let Some((name, value)) = parse_html_attribute(child, ctx.source) else {
             continue;
         };
-        if !matches!(name.as_str(), "src" | "href" | "srcset" | "data-src" | "data-href") {
+        if !matches!(
+            name.as_str(),
+            "src" | "href" | "srcset" | "data-src" | "data-href"
+        ) {
             continue;
         }
 
@@ -217,7 +233,8 @@ fn emit_html_imports(
 
 fn find_direct_child<'a>(node: TsNode<'a>, kind: &str) -> Option<TsNode<'a>> {
     let mut cursor = node.walk();
-    node.named_children(&mut cursor).find(|child| child.kind() == kind)
+    node.named_children(&mut cursor)
+        .find(|child| child.kind() == kind)
 }
 
 fn start_tag_name(node: TsNode<'_>, source: &[u8]) -> Option<String> {
@@ -267,7 +284,13 @@ fn trim_quotes(text: &str) -> &str {
 
 fn sanitize_segment(text: &str) -> String {
     text.chars()
-        .map(|ch| if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') { ch } else { '_' })
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
+                ch
+            } else {
+                '_'
+            }
+        })
         .collect()
 }
 
@@ -344,9 +367,17 @@ mod tests {
         let pf = parse(
             "<!doctype html><html><body><script src=\"app.js\"></script><img src=\"hero.png\" /></body></html>",
         );
-        assert!(pf.nodes.iter().any(|node| node.qualified_name == "site/index.html::document"));
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|node| node.qualified_name == "site/index.html::document")
+        );
         assert!(pf.nodes.iter().any(|node| node.name == "script"));
-        assert!(pf.nodes.iter().any(|node| node.kind == NodeKind::Import && node.name == "app.js"));
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|node| node.kind == NodeKind::Import && node.name == "app.js")
+        );
         assert!(pf.edges.iter().any(|edge| edge.kind == EdgeKind::Imports));
     }
 }

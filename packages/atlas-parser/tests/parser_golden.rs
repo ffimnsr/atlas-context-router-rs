@@ -125,8 +125,7 @@ fn is_fixture_source(path: &Path) -> bool {
     matches!(
         path.extension().and_then(|ext| ext.to_str()),
         Some(
-            "rs"
-                | "go"
+            "rs" | "go"
                 | "py"
                 | "js"
                 | "ts"

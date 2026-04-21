@@ -93,7 +93,13 @@ fn emit_css_import(
         extra_json: serde_json::json!({ "source": imported, "statement": raw }),
     });
     edges.push(contains_edge(ctx.rel_path, &qn, ctx.rel_path, line));
-    edges.push(imports_edge(ctx.rel_path, &qn, ctx.rel_path, line, "definite"));
+    edges.push(imports_edge(
+        ctx.rel_path,
+        &qn,
+        ctx.rel_path,
+        line,
+        "definite",
+    ));
 }
 
 fn emit_rule_set(
@@ -136,10 +142,17 @@ fn emit_rule_set(
             }
             selector_index += 1;
             let selector = compact_css_text(node_text(child, ctx.source));
-            let qn = format!("{}::selector::{}:{}", ctx.rel_path, rule_index, selector_index);
+            let qn = format!(
+                "{}::selector::{}:{}",
+                ctx.rel_path, rule_index, selector_index
+            );
             nodes.push(Node {
                 id: NodeId::UNSET,
-                kind: if child.kind() == "class_selector" { NodeKind::Class } else { NodeKind::Variable },
+                kind: if child.kind() == "class_selector" {
+                    NodeKind::Class
+                } else {
+                    NodeKind::Variable
+                },
                 name: selector.clone(),
                 qualified_name: qn.clone(),
                 file_path: ctx.rel_path.to_owned(),
@@ -154,7 +167,12 @@ fn emit_rule_set(
                 file_hash: ctx.file_hash.to_owned(),
                 extra_json: serde_json::json!({ "selector_kind": child.kind() }),
             });
-            edges.push(contains_edge(&rule_qn, &qn, ctx.rel_path, start_line(child)));
+            edges.push(contains_edge(
+                &rule_qn,
+                &qn,
+                ctx.rel_path,
+                start_line(child),
+            ));
         }
     }
 
@@ -170,7 +188,10 @@ fn emit_rule_set(
             };
             declaration_index += 1;
             let name = compact_css_text(node_text(property, ctx.source));
-            let qn = format!("{}::decl::{}:{}", ctx.rel_path, rule_index, declaration_index);
+            let qn = format!(
+                "{}::decl::{}:{}",
+                ctx.rel_path, rule_index, declaration_index
+            );
             nodes.push(Node {
                 id: NodeId::UNSET,
                 kind: NodeKind::Variable,
@@ -188,7 +209,12 @@ fn emit_rule_set(
                 file_hash: ctx.file_hash.to_owned(),
                 extra_json: serde_json::json!({ "kind": "declaration" }),
             });
-            edges.push(contains_edge(&rule_qn, &qn, ctx.rel_path, start_line(child)));
+            edges.push(contains_edge(
+                &rule_qn,
+                &qn,
+                ctx.rel_path,
+                start_line(child),
+            ));
         }
     }
 }
@@ -198,7 +224,13 @@ fn extract_css_import_target(statement: &str) -> Option<String> {
     if let Some(start) = trimmed.find("url(") {
         let rest = &trimmed[start + 4..];
         let end = rest.find(')')?;
-        return Some(rest[..end].trim().trim_matches('"').trim_matches('\'').to_owned());
+        return Some(
+            rest[..end]
+                .trim()
+                .trim_matches('"')
+                .trim_matches('\'')
+                .to_owned(),
+        );
     }
     let quote = trimmed.find('"').or_else(|| trimmed.find('\''))?;
     let quote_char = trimmed.as_bytes()[quote] as char;
@@ -213,7 +245,8 @@ fn compact_css_text(text: &str) -> String {
 
 fn find_direct_child<'a>(node: TsNode<'a>, kind: &str) -> Option<TsNode<'a>> {
     let mut cursor = node.walk();
-    node.named_children(&mut cursor).find(|child| child.kind() == kind)
+    node.named_children(&mut cursor)
+        .find(|child| child.kind() == kind)
 }
 
 fn file_node(rel_path: &str, file_hash: &str, line_end: u32, language: &str) -> Node {
@@ -281,9 +314,21 @@ mod tests {
     #[test]
     fn extracts_rules_selectors_and_imports() {
         let pf = parse("@import url('base.css');\n.button, #app { color: red; }\n");
-        assert!(pf.nodes.iter().any(|node| node.kind == NodeKind::Import && node.name == "base.css"));
-        assert!(pf.nodes.iter().any(|node| node.qualified_name == "assets/app.css::rule::1"));
-        assert!(pf.nodes.iter().any(|node| node.kind == NodeKind::Class && node.name == ".button"));
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|node| node.kind == NodeKind::Import && node.name == "base.css")
+        );
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|node| node.qualified_name == "assets/app.css::rule::1")
+        );
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|node| node.kind == NodeKind::Class && node.name == ".button")
+        );
         assert!(pf.edges.iter().any(|edge| edge.kind == EdgeKind::Imports));
     }
 }

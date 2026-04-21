@@ -143,7 +143,15 @@ fn visit_scala_node(
         _ => {
             let mut cursor = node.walk();
             for child in node.named_children(&mut cursor) {
-                visit_scala_node(child, ctx, parent_qn, current_owner, import_index, nodes, edges);
+                visit_scala_node(
+                    child,
+                    ctx,
+                    parent_qn,
+                    current_owner,
+                    import_index,
+                    nodes,
+                    edges,
+                );
             }
         }
     }
@@ -184,7 +192,15 @@ fn emit_object(
     if let Some(body) = node.child_by_field_name("body") {
         let mut cursor = body.walk();
         for child in body.named_children(&mut cursor) {
-            visit_scala_node(child, ctx, &qn, Some(name.as_str()), import_index, nodes, edges);
+            visit_scala_node(
+                child,
+                ctx,
+                &qn,
+                Some(name.as_str()),
+                import_index,
+                nodes,
+                edges,
+            );
         }
     }
 }
@@ -200,7 +216,9 @@ fn emit_class(
     let Some(name) = field_text(node, "name", ctx.source).map(str::to_owned) else {
         return;
     };
-    let is_case_class = node_text(node, ctx.source).trim_start().starts_with("case class");
+    let is_case_class = node_text(node, ctx.source)
+        .trim_start()
+        .starts_with("case class");
     let qn_prefix = if is_case_class { "case_class" } else { "class" };
     let qn = format!("{}::{}::{}", ctx.rel_path, qn_prefix, name);
     let line = start_line(node);
@@ -214,7 +232,9 @@ fn emit_class(
         line_end: end_line(node),
         language: "scala".to_owned(),
         parent_name: Some(parent_qn.to_owned()),
-        params: node.child_by_field_name("class_parameters").map(|n| node_text(n, ctx.source).to_owned()),
+        params: node
+            .child_by_field_name("class_parameters")
+            .map(|n| node_text(n, ctx.source).to_owned()),
         return_type: None,
         modifiers: scala_modifiers(node, ctx.source),
         is_test: false,
@@ -226,7 +246,15 @@ fn emit_class(
     if let Some(body) = node.child_by_field_name("body") {
         let mut cursor = body.walk();
         for child in body.named_children(&mut cursor) {
-            visit_scala_node(child, ctx, &qn, Some(name.as_str()), import_index, nodes, edges);
+            visit_scala_node(
+                child,
+                ctx,
+                &qn,
+                Some(name.as_str()),
+                import_index,
+                nodes,
+                edges,
+            );
         }
     }
 }
@@ -254,7 +282,9 @@ fn emit_trait(
         line_end: end_line(node),
         language: "scala".to_owned(),
         parent_name: Some(parent_qn.to_owned()),
-        params: node.child_by_field_name("class_parameters").map(|n| node_text(n, ctx.source).to_owned()),
+        params: node
+            .child_by_field_name("class_parameters")
+            .map(|n| node_text(n, ctx.source).to_owned()),
         return_type: None,
         modifiers: scala_modifiers(node, ctx.source),
         is_test: false,
@@ -266,7 +296,15 @@ fn emit_trait(
     if let Some(body) = node.child_by_field_name("body") {
         let mut cursor = body.walk();
         for child in body.named_children(&mut cursor) {
-            visit_scala_node(child, ctx, &qn, Some(name.as_str()), import_index, nodes, edges);
+            visit_scala_node(
+                child,
+                ctx,
+                &qn,
+                Some(name.as_str()),
+                import_index,
+                nodes,
+                edges,
+            );
         }
     }
 }
@@ -288,7 +326,10 @@ fn emit_function(
             format!("{}::method::{}.{}", ctx.rel_path, owner, name),
         )
     } else {
-        (NodeKind::Function, format!("{}::fn::{}", ctx.rel_path, name))
+        (
+            NodeKind::Function,
+            format!("{}::fn::{}", ctx.rel_path, name),
+        )
     };
     let line = start_line(node);
     nodes.push(Node {
@@ -302,7 +343,9 @@ fn emit_function(
         language: "scala".to_owned(),
         parent_name: Some(parent_qn.to_owned()),
         params: collect_scala_parameters(node, ctx.source),
-        return_type: node.child_by_field_name("return_type").map(|n| node_text(n, ctx.source).to_owned()),
+        return_type: node
+            .child_by_field_name("return_type")
+            .map(|n| node_text(n, ctx.source).to_owned()),
         modifiers: scala_modifiers(node, ctx.source),
         is_test: false,
         file_hash: ctx.file_hash.to_owned(),
@@ -341,12 +384,19 @@ fn emit_import(
             extra_json: serde_json::json!({ "imported": target }),
         });
         edges.push(contains_edge(parent_qn, &qn, ctx.rel_path, line));
-        edges.push(imports_edge(parent_qn, &qn, ctx.rel_path, line, "explicit_import"));
+        edges.push(imports_edge(
+            parent_qn,
+            &qn,
+            ctx.rel_path,
+            line,
+            "explicit_import",
+        ));
     }
 }
 
 fn callable_qn_map(nodes: &[Node]) -> HashMap<String, String> {
-    nodes.iter()
+    nodes
+        .iter()
         .filter(|node| matches!(node.kind, NodeKind::Function | NodeKind::Method))
         .map(|node| (node.name.clone(), node.qualified_name.clone()))
         .collect()
@@ -369,7 +419,13 @@ fn walk_calls(
         && let Some(callee) = scala_call_name(node, ctx.source)
         && let Some(target_qn) = callables.get(&callee)
     {
-        edges.push(call_edge(owner_qn, target_qn, ctx.rel_path, start_line(node), "same_file"));
+        edges.push(call_edge(
+            owner_qn,
+            target_qn,
+            ctx.rel_path,
+            start_line(node),
+            "same_file",
+        ));
     }
 
     let mut cursor = node.walk();
@@ -406,7 +462,12 @@ fn scala_modifiers(node: TsNode<'_>, source: &[u8]) -> Option<String> {
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
         if child.kind() == "modifiers" {
-            return Some(node_text(child, source).split_whitespace().collect::<Vec<_>>().join(" "));
+            return Some(
+                node_text(child, source)
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            );
         }
     }
     None
@@ -435,7 +496,11 @@ fn scala_import_targets(raw: &str) -> Vec<String> {
     if spec.contains('{') {
         return vec![spec.to_owned()];
     }
-    spec.split(',').map(str::trim).filter(|part| !part.is_empty()).map(str::to_owned).collect()
+    spec.split(',')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .map(str::to_owned)
+        .collect()
 }
 
 fn package_name(node: TsNode<'_>, source: &[u8]) -> Option<String> {
@@ -524,14 +589,39 @@ mod tests {
         let pf = parse(
             "package demo.app\n\nimport demo.support.Helper\n\nobject Runner {\n  def helper(): Unit = ()\n  def run(): Unit = helper()\n}\n\ncase class Box(value: Int)\nclass Worker { def work(): Unit = () }\ntrait Service { def ping(): Unit }\n",
         );
-        assert!(pf.nodes.iter().any(|node| node.qualified_name == "src/Main.scala::package::demo.app"));
-        assert!(pf.nodes.iter().any(|node| node.qualified_name == "src/Main.scala::object::Runner"));
-        assert!(pf.nodes.iter().any(|node| node.qualified_name == "src/Main.scala::case_class::Box"));
-        assert!(pf.nodes.iter().any(|node| node.qualified_name == "src/Main.scala::class::Worker"));
-        assert!(pf.nodes.iter().any(|node| node.qualified_name == "src/Main.scala::trait::Service"));
-        assert!(pf.nodes.iter().any(|node| node.kind == NodeKind::Import && node.name == "demo.support.Helper"));
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|node| node.qualified_name == "src/Main.scala::package::demo.app")
+        );
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|node| node.qualified_name == "src/Main.scala::object::Runner")
+        );
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|node| node.qualified_name == "src/Main.scala::case_class::Box")
+        );
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|node| node.qualified_name == "src/Main.scala::class::Worker")
+        );
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|node| node.qualified_name == "src/Main.scala::trait::Service")
+        );
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|node| node.kind == NodeKind::Import && node.name == "demo.support.Helper")
+        );
         assert!(pf.edges.iter().any(|edge| {
-            edge.kind == EdgeKind::Calls && edge.target_qn == "src/Main.scala::method::Runner.helper"
+            edge.kind == EdgeKind::Calls
+                && edge.target_qn == "src/Main.scala::method::Runner.helper"
         }));
     }
 }

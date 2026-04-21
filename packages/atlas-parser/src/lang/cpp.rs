@@ -37,7 +37,15 @@ impl LangParser for CppParser {
             let mut import_index = 0usize;
             let mut cursor = root.walk();
             for child in root.named_children(&mut cursor) {
-                visit_node(child, ctx, ctx.rel_path, false, &mut import_index, &mut nodes, &mut edges);
+                visit_node(
+                    child,
+                    ctx,
+                    ctx.rel_path,
+                    false,
+                    &mut import_index,
+                    &mut nodes,
+                    &mut edges,
+                );
             }
 
             let callable_map = callable_qn_map(&nodes);
@@ -72,9 +80,39 @@ fn visit_node(
     match node.kind() {
         "preproc_include" => emit_include(node, ctx, parent_qn, import_index, nodes, edges),
         "namespace_definition" => emit_namespace(node, ctx, import_index, nodes, edges),
-        "class_specifier" => emit_type(node, ctx, parent_qn, "class", NodeKind::Class, templated, import_index, nodes, edges),
-        "struct_specifier" => emit_type(node, ctx, parent_qn, "struct", NodeKind::Struct, templated, import_index, nodes, edges),
-        "enum_specifier" => emit_type(node, ctx, parent_qn, "enum", NodeKind::Enum, templated, import_index, nodes, edges),
+        "class_specifier" => emit_type(
+            node,
+            ctx,
+            parent_qn,
+            "class",
+            NodeKind::Class,
+            templated,
+            import_index,
+            nodes,
+            edges,
+        ),
+        "struct_specifier" => emit_type(
+            node,
+            ctx,
+            parent_qn,
+            "struct",
+            NodeKind::Struct,
+            templated,
+            import_index,
+            nodes,
+            edges,
+        ),
+        "enum_specifier" => emit_type(
+            node,
+            ctx,
+            parent_qn,
+            "enum",
+            NodeKind::Enum,
+            templated,
+            import_index,
+            nodes,
+            edges,
+        ),
         "function_definition" => emit_function(node, ctx, parent_qn, templated, nodes, edges),
         "template_declaration" => {
             let mut cursor = node.walk();
@@ -129,7 +167,13 @@ fn emit_include(
         extra_json: serde_json::json!({ "imported": name }),
     });
     edges.push(contains_edge(parent_qn, &qn, ctx.rel_path, line));
-    edges.push(imports_edge(parent_qn, &qn, ctx.rel_path, line, "preproc_include"));
+    edges.push(imports_edge(
+        parent_qn,
+        &qn,
+        ctx.rel_path,
+        line,
+        "preproc_include",
+    ));
 }
 
 fn emit_namespace(
@@ -273,7 +317,8 @@ fn emit_function(
 }
 
 fn callable_qn_map(nodes: &[Node]) -> HashMap<String, String> {
-    nodes.iter()
+    nodes
+        .iter()
         .filter(|node| matches!(node.kind, NodeKind::Function | NodeKind::Method))
         .map(|node| (node.name.clone(), node.qualified_name.clone()))
         .collect()
@@ -301,7 +346,13 @@ fn walk_calls(
     {
         let lookup = final_segment(&node_text(function_node, ctx.source).replace(' ', ""));
         if let Some(target_qn) = callables.get(&lookup) {
-            edges.push(call_edge(owner_qn, target_qn, ctx.rel_path, start_line(node), "same_file"));
+            edges.push(call_edge(
+                owner_qn,
+                target_qn,
+                ctx.rel_path,
+                start_line(node),
+                "same_file",
+            ));
         }
     }
 
@@ -429,10 +480,28 @@ mod tests {
         let pf = parse(
             "#include <vector>\nnamespace demo {\ntemplate <typename T> class Box {};\nclass Runner { public: void helper() {} void run() { helper(); } };\nvoid free_fn() {}\n}\n",
         );
-        assert!(pf.nodes.iter().any(|node| node.qualified_name == "src/native.cpp::namespace::demo"));
-        assert!(pf.nodes.iter().any(|node| node.qualified_name == "src/native.cpp::class::Box" && node.modifiers.as_deref() == Some("template")));
-        assert!(pf.nodes.iter().any(|node| node.qualified_name == "src/native.cpp::class::Runner"));
-        assert!(pf.nodes.iter().any(|node| node.kind == NodeKind::Import && node.name == "vector"));
-        assert!(pf.edges.iter().any(|edge| edge.kind == EdgeKind::Calls && edge.target_qn == "src/native.cpp::method::Runner.helper"));
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|node| node.qualified_name == "src/native.cpp::namespace::demo")
+        );
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|node| node.qualified_name == "src/native.cpp::class::Box"
+                    && node.modifiers.as_deref() == Some("template"))
+        );
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|node| node.qualified_name == "src/native.cpp::class::Runner")
+        );
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|node| node.kind == NodeKind::Import && node.name == "vector")
+        );
+        assert!(pf.edges.iter().any(|edge| edge.kind == EdgeKind::Calls
+            && edge.target_qn == "src/native.cpp::method::Runner.helper"));
     }
 }

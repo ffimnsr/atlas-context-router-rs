@@ -148,11 +148,18 @@ fn emit_source_command(
         extra_json: serde_json::json!({ "command": command_name, "imported": target }),
     });
     edges.push(contains_edge(parent_qn, &qn, ctx.rel_path, line));
-    edges.push(imports_edge(parent_qn, &qn, ctx.rel_path, line, "shell_source"));
+    edges.push(imports_edge(
+        parent_qn,
+        &qn,
+        ctx.rel_path,
+        line,
+        "shell_source",
+    ));
 }
 
 fn function_qn_map(nodes: &[Node]) -> HashMap<String, String> {
-    nodes.iter()
+    nodes
+        .iter()
         .filter(|node| node.kind == NodeKind::Function)
         .map(|node| (node.name.clone(), node.qualified_name.clone()))
         .collect()
@@ -196,7 +203,14 @@ fn walk_commands(
             });
         }
         if parse_source_command(node, ctx.source).is_some() {
-            emit_source_command(node, ctx, owner_qn, import_nodes, import_edges, import_index);
+            emit_source_command(
+                node,
+                ctx,
+                owner_qn,
+                import_nodes,
+                import_edges,
+                import_index,
+            );
         }
     }
 
@@ -316,9 +330,18 @@ mod tests {
         let pf = parse(
             "source ./env.sh\nsetup() {\n  helper\n  source ./inner.sh\n}\nhelper() {\n  echo hi\n}\n",
         );
-        assert!(pf.nodes.iter().any(|node| node.qualified_name == "scripts/deploy.sh::fn::setup"));
-        assert!(pf.nodes.iter().any(|node| node.kind == NodeKind::Import && node.name == "./env.sh"));
-        assert!(pf.edges.iter().any(|edge| edge.kind == EdgeKind::Calls && edge.target_qn == "scripts/deploy.sh::fn::helper"));
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|node| node.qualified_name == "scripts/deploy.sh::fn::setup")
+        );
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|node| node.kind == NodeKind::Import && node.name == "./env.sh")
+        );
+        assert!(pf.edges.iter().any(|edge| edge.kind == EdgeKind::Calls
+            && edge.target_qn == "scripts/deploy.sh::fn::helper"));
         assert!(pf.edges.iter().any(|edge| edge.kind == EdgeKind::Imports));
     }
 }
