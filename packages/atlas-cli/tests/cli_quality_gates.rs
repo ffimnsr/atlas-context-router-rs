@@ -1719,9 +1719,8 @@ fn build_resolves_typescript_path_alias_calls() {
             "tsconfig.json",
             r#"{
   "compilerOptions": {
-    "baseUrl": ".",
     "paths": {
-      "@utils/*": ["src/utils/*"]
+            "@utils/*": ["./src/utils/*"]
     }
   }
 }
@@ -1756,9 +1755,8 @@ fn build_resolves_nested_typescript_path_alias_calls() {
             "apps/web/tsconfig.json",
             r#"{
   "compilerOptions": {
-    "baseUrl": "src",
     "paths": {
-      "@lib/*": ["lib/*"]
+            "@lib/*": ["./src/lib/*"]
     }
   }
 }
@@ -1792,15 +1790,51 @@ fn build_resolves_nested_typescript_path_alias_calls() {
 }
 
 #[test]
+fn build_resolves_legacy_typescript_baseurl_prefixed_paths_calls() {
+    let repo = setup_repo(&[
+        (
+            "tsconfig.json",
+            r#"{
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@utils/*": ["src/utils/*"]
+    }
+  }
+}
+"#,
+        ),
+        (
+            "src/app.ts",
+            "import * as math from '@utils/math';\nexport function caller(): void { math.helper(); }\n",
+        ),
+        ("src/utils/math.ts", "export function helper(): void {}\n"),
+    ]);
+
+    run_atlas(repo.path(), &["init"]);
+    run_atlas(repo.path(), &["build"]);
+
+    let store = open_store(repo.path());
+    let edges = store.edges_by_file("src/app.ts").expect("app edges");
+    assert!(
+        edges.iter().any(|edge| {
+            edge.kind == EdgeKind::Calls
+                && edge.target_qn == "src/utils/math.ts::fn::helper"
+                && edge.confidence_tier.as_deref() == Some("imports")
+        }),
+        "expected legacy baseUrl-prefixed path alias to keep resolving into src/utils/math.ts::fn::helper; edges: {edges:?}"
+    );
+}
+
+#[test]
 fn build_resolves_typescript_extended_tsconfig_alias_calls() {
     let repo = setup_repo(&[
         (
             "configs/tsconfig.base.json",
             r#"{
   "compilerOptions": {
-        "baseUrl": "..",
     "paths": {
-      "@shared/*": ["src/shared/*"]
+            "@shared/*": ["../src/shared/*"]
     }
   }
 }
@@ -1870,9 +1904,8 @@ fn build_resolves_typescript_package_extends_alias_calls() {
             "node_modules/@atlas/tsconfig/base.json",
             r#"{
   "compilerOptions": {
-    "baseUrl": "../../../",
     "paths": {
-      "@shared/*": ["src/shared/*"]
+            "@shared/*": ["../../../src/shared/*"]
     }
   }
 }
@@ -1906,6 +1939,76 @@ fn build_resolves_typescript_package_extends_alias_calls() {
                 && edge.confidence_tier.as_deref() == Some("imports")
         }),
         "expected package-style tsconfig extends to resolve alias into src/shared/math.ts::fn::helper; edges: {edges:?}"
+    );
+}
+
+#[test]
+fn build_resolves_typescript_catch_all_paths_calls() {
+    let repo = setup_repo(&[
+        (
+            "tsconfig.json",
+            r#"{
+  "compilerOptions": {
+    "paths": {
+      "*": ["./src/*"]
+    }
+  }
+}
+"#,
+        ),
+        (
+            "src/app.ts",
+            "import { helper } from 'utils';\nexport function caller(): void { helper(); }\n",
+        ),
+        ("src/utils.ts", "export function helper(): void {}\n"),
+    ]);
+
+    run_atlas(repo.path(), &["init"]);
+    run_atlas(repo.path(), &["build"]);
+
+    let store = open_store(repo.path());
+    let edges = store.edges_by_file("src/app.ts").expect("app edges");
+    assert!(
+        edges.iter().any(|edge| {
+            edge.kind == EdgeKind::Calls
+                && edge.target_qn == "src/utils.ts::fn::helper"
+                && edge.confidence_tier.as_deref() == Some("imports")
+        }),
+        "expected catch-all paths mapping to resolve bare import into src/utils.ts::fn::helper; edges: {edges:?}"
+    );
+}
+
+#[test]
+fn build_does_not_resolve_typescript_baseurl_only_bare_import_calls() {
+    let repo = setup_repo(&[
+        (
+            "tsconfig.json",
+            r#"{
+  "compilerOptions": {
+    "baseUrl": "./src"
+  }
+}
+"#,
+        ),
+        (
+            "src/app.ts",
+            "import { helper } from 'utils';\nexport function caller(): void { helper(); }\n",
+        ),
+        ("src/utils.ts", "export function helper(): void {}\n"),
+    ]);
+
+    run_atlas(repo.path(), &["init"]);
+    run_atlas(repo.path(), &["build"]);
+
+    let store = open_store(repo.path());
+    let edges = store.edges_by_file("src/app.ts").expect("app edges");
+    assert!(
+        !edges.iter().any(|edge| {
+            edge.kind == EdgeKind::Calls
+                && edge.target_qn == "src/utils.ts::fn::helper"
+                && edge.confidence_tier.as_deref() == Some("imports")
+        }),
+        "expected baseUrl-only config not to resolve bare import under TS6 semantics; edges: {edges:?}"
     );
 }
 

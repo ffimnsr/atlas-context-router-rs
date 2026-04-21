@@ -643,7 +643,7 @@ The upstream parser is both the most important subsystem and the most monolithic
 - [x] classes
 - [x] methods
 - [x] imports
-- [ ] decorators
+- [x] decorators
 - [x] tests
 
 ### 7.3 JavaScript/TypeScript
@@ -668,9 +668,12 @@ The upstream parser is both the most important subsystem and the most monolithic
   - [x] resolve imports where practical
 - [x] Never block parse success on perfect call resolution
 - [ ] Next call-resolution edge cases:
-  - [ ] support non-relative/package-style `tsconfig` `extends` values
-  - [ ] resolve JS/TS barrel re-export chains for import-based call targets
-  - [ ] support latest tsconfig for typescript 6 where it deprecated some fields like baseUrl
+  - [x] support non-relative/package-style `tsconfig` `extends` values
+  - [x] resolve JS/TS barrel re-export chains for import-based call targets
+  - [x] support TypeScript 6 `baseUrl` deprecation handling
+  - [x] stop implicit bare-import fallback through `baseUrl`
+  - [x] support explicit `"*"` catch-all `paths` migration patterns
+  - [x] resolve `paths` targets relative to declaring config while keeping legacy `baseUrl`-prefixed aliases working where possible
 
 ## Phase 7.5 — v1.1 Language Handlers
 

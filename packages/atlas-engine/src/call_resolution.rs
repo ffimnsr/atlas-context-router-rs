@@ -151,8 +151,6 @@ struct TsConfigEntry {
 }
 
 struct TsConfig {
-    base_url: Utf8PathBuf,
-    base_url_explicit: bool,
     paths: Vec<TsPathAlias>,
 }
 
@@ -238,23 +236,16 @@ fn parse_tsconfig_recursive(
         .and_then(|extends| extends.as_str())
         .and_then(|extends| resolve_tsconfig_extends_path(repo_root, &normalized, extends))
         .and_then(|parent_path| parse_tsconfig_recursive(repo_root, &parent_path, visited))
-        .unwrap_or_else(|| TsConfig {
-            base_url: config_dir.to_owned(),
-            base_url_explicit: false,
-            paths: Vec::new(),
-        });
+        .unwrap_or_else(|| TsConfig { paths: Vec::new() });
 
     let options = value
         .get("compilerOptions")
         .and_then(|compiler_options| compiler_options.as_object());
 
-    if let Some(base_url) = options
+    let base_url = options
         .and_then(|compiler_options| compiler_options.get("baseUrl"))
         .and_then(|base_url| base_url.as_str())
-    {
-        config.base_url = normalize_relative_path(config_dir.join(base_url));
-        config.base_url_explicit = true;
-    }
+        .map(|base_url| normalize_relative_path(config_dir.join(base_url)));
 
     if let Some(paths_obj) = options
         .and_then(|compiler_options| compiler_options.get("paths"))
@@ -268,7 +259,7 @@ fn parse_tsconfig_recursive(
             let targets: Vec<String> = items
                 .iter()
                 .filter_map(|item| item.as_str())
-                .map(|item| normalize_relative_path(config.base_url.join(item)).to_string())
+                .flat_map(|item| resolve_ts_path_targets(config_dir, base_url.as_deref(), item))
                 .collect();
             if !targets.is_empty() {
                 paths.push(TsPathAlias {
@@ -282,7 +273,27 @@ fn parse_tsconfig_recursive(
         }
     }
 
-    (config.base_url_explicit || !config.paths.is_empty()).then_some(config)
+    (!config.paths.is_empty()).then_some(config)
+}
+
+fn resolve_ts_path_targets(
+    config_dir: &Utf8Path,
+    base_url: Option<&Utf8Path>,
+    item: &str,
+) -> Vec<String> {
+    let mut targets = Vec::new();
+
+    let direct = normalize_relative_path(config_dir.join(item)).to_string();
+    targets.push(direct);
+
+    if let Some(base_url) = base_url {
+        let legacy = normalize_relative_path(base_url.join(item)).to_string();
+        if !targets.contains(&legacy) {
+            targets.push(legacy);
+        }
+    }
+
+    targets
 }
 
 fn resolve_tsconfig_extends_path(
@@ -651,13 +662,11 @@ fn resolve_tsconfig_import_files(
     language: &str,
 ) -> Option<HashSet<String>> {
     let mut candidates = Vec::new();
-    let mut matched = false;
 
     for alias in &config.paths {
         let Some(wildcard) = match_alias_pattern(&alias.pattern, source) else {
             continue;
         };
-        matched = true;
         for target in &alias.targets {
             let replaced = apply_alias_target(target, wildcard);
             candidates.extend(js_ts_candidates_for_base(
@@ -665,11 +674,6 @@ fn resolve_tsconfig_import_files(
                 language,
             ));
         }
-    }
-
-    if !matched && config.base_url_explicit {
-        let base = join_with_base_url(&config.base_url, source);
-        candidates.extend(js_ts_candidates_for_base(&base, language));
     }
 
     existing_repo_paths(repo_root, candidates)
@@ -757,14 +761,6 @@ fn apply_alias_target(target: &str, wildcard: &str) -> String {
         return format!("{prefix}{wildcard}{suffix}");
     }
     target.to_owned()
-}
-
-fn join_with_base_url(base_url: &Utf8Path, path: &str) -> Utf8PathBuf {
-    if base_url.as_str().is_empty() || base_url == Utf8Path::new(".") {
-        Utf8PathBuf::from(path)
-    } else {
-        base_url.join(path)
-    }
 }
 
 fn existing_repo_paths(

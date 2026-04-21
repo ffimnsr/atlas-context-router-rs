@@ -7,6 +7,11 @@ use crate::traits::{LangParser, ParseContext};
 
 pub struct GoParser;
 
+struct GoPackage {
+    name: String,
+    line: u32,
+}
+
 impl LangParser for GoParser {
     fn language_name(&self) -> &'static str {
         "go"
@@ -31,22 +36,37 @@ impl LangParser for GoParser {
 
         if let Some(ref tree) = tree {
             let root = tree.root_node();
-            let package_name = find_package_name(root, ctx.source);
+            let package = find_package(root, ctx.source);
+            let package_qn = format!("{}::package::{}", ctx.rel_path, package.name);
+
+            nodes.push(package_node(
+                ctx.rel_path,
+                ctx.file_hash,
+                &package.name,
+                &package_qn,
+                package.line,
+            ));
+            edges.push(contains_edge(
+                ctx.rel_path,
+                &package_qn,
+                ctx.rel_path,
+                package.line,
+            ));
 
             let mut cursor = root.walk();
             for child in root.children(&mut cursor) {
                 match child.kind() {
                     "function_declaration" => {
-                        visit_function(child, ctx, &package_name, &mut nodes, &mut edges);
+                        visit_function(child, ctx, &package_qn, &mut nodes, &mut edges);
                     }
                     "method_declaration" => {
-                        visit_method(child, ctx, &package_name, &mut nodes, &mut edges);
+                        visit_method(child, ctx, &package_qn, &mut nodes, &mut edges);
                     }
                     "type_declaration" => {
-                        visit_type_decl(child, ctx, &package_name, &mut nodes, &mut edges);
+                        visit_type_decl(child, ctx, &package_qn, &mut nodes, &mut edges);
                     }
                     "import_declaration" => {
-                        visit_imports(child, ctx, &mut nodes, &mut edges);
+                        visit_imports(child, ctx, &package_qn, &mut nodes, &mut edges);
                     }
                     _ => {}
                 }
@@ -93,6 +113,26 @@ fn file_node(rel_path: &str, file_hash: &str, line_end: u32) -> Node {
     }
 }
 
+fn package_node(rel_path: &str, file_hash: &str, package_name: &str, qn: &str, line: u32) -> Node {
+    Node {
+        id: NodeId::UNSET,
+        kind: NodeKind::Package,
+        name: package_name.to_owned(),
+        qualified_name: qn.to_owned(),
+        file_path: rel_path.to_owned(),
+        line_start: line,
+        line_end: line,
+        language: "go".to_owned(),
+        parent_name: Some(rel_path.to_owned()),
+        params: None,
+        return_type: None,
+        modifiers: None,
+        is_test: false,
+        file_hash: file_hash.to_owned(),
+        extra_json: serde_json::Value::Null,
+    }
+}
+
 fn contains_edge(parent_qn: &str, child_qn: &str, file_path: &str, line: u32) -> Edge {
     Edge {
         id: 0,
@@ -107,7 +147,7 @@ fn contains_edge(parent_qn: &str, child_qn: &str, file_path: &str, line: u32) ->
     }
 }
 
-fn find_package_name(root: TsNode<'_>, source: &[u8]) -> String {
+fn find_package(root: TsNode<'_>, source: &[u8]) -> GoPackage {
     let mut cursor = root.walk();
     for child in root.children(&mut cursor) {
         if child.kind() == "package_clause" {
@@ -115,18 +155,24 @@ fn find_package_name(root: TsNode<'_>, source: &[u8]) -> String {
             let mut cc = child.walk();
             for c in child.children(&mut cc) {
                 if c.kind() == "package_identifier" || c.kind() == "identifier" {
-                    return node_text(c, source).to_owned();
+                    return GoPackage {
+                        name: node_text(c, source).to_owned(),
+                        line: start_line(c),
+                    };
                 }
             }
         }
     }
-    "main".to_owned()
+    GoPackage {
+        name: "main".to_owned(),
+        line: 1,
+    }
 }
 
 fn visit_function(
     node: TsNode<'_>,
     ctx: &ParseContext<'_>,
-    _package: &str,
+    package_qn: &str,
     nodes: &mut Vec<Node>,
     edges: &mut Vec<Edge>,
 ) {
@@ -143,8 +189,6 @@ fn visit_function(
     let qn = format!("{}::{}::{}", ctx.rel_path, type_prefix, name);
     let params = field_text(node, "parameters", ctx.source).map(|s| s.to_owned());
     let ret = field_text(node, "result", ctx.source).map(|s| s.to_owned());
-    let file_qn = ctx.rel_path;
-
     nodes.push(Node {
         id: NodeId::UNSET,
         kind,
@@ -154,7 +198,7 @@ fn visit_function(
         line_start: start_line(node),
         line_end: end_line(node),
         language: "go".to_owned(),
-        parent_name: Some(file_qn.to_owned()),
+        parent_name: Some(package_qn.to_owned()),
         params,
         return_type: ret,
         modifiers: None,
@@ -162,13 +206,18 @@ fn visit_function(
         file_hash: ctx.file_hash.to_owned(),
         extra_json: serde_json::Value::Null,
     });
-    edges.push(contains_edge(file_qn, &qn, ctx.rel_path, start_line(node)));
+    edges.push(contains_edge(
+        package_qn,
+        &qn,
+        ctx.rel_path,
+        start_line(node),
+    ));
 }
 
 fn visit_method(
     node: TsNode<'_>,
     ctx: &ParseContext<'_>,
-    _package: &str,
+    package_qn: &str,
     nodes: &mut Vec<Node>,
     edges: &mut Vec<Edge>,
 ) {
@@ -189,8 +238,6 @@ fn visit_method(
     let qn = format!("{}::method::{}.{}", ctx.rel_path, receiver_type, name);
     let params = field_text(node, "parameters", ctx.source).map(|s| s.to_owned());
     let ret = field_text(node, "result", ctx.source).map(|s| s.to_owned());
-    let file_qn = ctx.rel_path;
-
     nodes.push(Node {
         id: NodeId::UNSET,
         kind: NodeKind::Method,
@@ -200,7 +247,7 @@ fn visit_method(
         line_start: start_line(node),
         line_end: end_line(node),
         language: "go".to_owned(),
-        parent_name: Some(file_qn.to_owned()),
+        parent_name: Some(package_qn.to_owned()),
         params,
         return_type: ret,
         modifiers: None,
@@ -208,21 +255,26 @@ fn visit_method(
         file_hash: ctx.file_hash.to_owned(),
         extra_json: serde_json::Value::Null,
     });
-    edges.push(contains_edge(file_qn, &qn, ctx.rel_path, start_line(node)));
+    edges.push(contains_edge(
+        package_qn,
+        &qn,
+        ctx.rel_path,
+        start_line(node),
+    ));
 }
 
 /// Walk a `type_declaration` which may contain multiple `type_spec` children.
 fn visit_type_decl(
     node: TsNode<'_>,
     ctx: &ParseContext<'_>,
-    _package: &str,
+    package_qn: &str,
     nodes: &mut Vec<Node>,
     edges: &mut Vec<Edge>,
 ) {
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         if child.kind() == "type_spec" {
-            visit_type_spec(child, ctx, nodes, edges);
+            visit_type_spec(child, ctx, package_qn, nodes, edges);
         }
     }
 }
@@ -230,6 +282,7 @@ fn visit_type_decl(
 fn visit_type_spec(
     node: TsNode<'_>,
     ctx: &ParseContext<'_>,
+    package_qn: &str,
     nodes: &mut Vec<Node>,
     edges: &mut Vec<Edge>,
 ) {
@@ -247,8 +300,6 @@ fn visit_type_spec(
         (NodeKind::Class, "type")
     };
     let qn = format!("{}::{}::{}", ctx.rel_path, type_prefix, name);
-    let file_qn = ctx.rel_path;
-
     nodes.push(Node {
         id: NodeId::UNSET,
         kind,
@@ -258,7 +309,7 @@ fn visit_type_spec(
         line_start: start_line(node),
         line_end: end_line(node),
         language: "go".to_owned(),
-        parent_name: Some(file_qn.to_owned()),
+        parent_name: Some(package_qn.to_owned()),
         params: None,
         return_type: None,
         modifiers: None,
@@ -266,16 +317,21 @@ fn visit_type_spec(
         file_hash: ctx.file_hash.to_owned(),
         extra_json: serde_json::Value::Null,
     });
-    edges.push(contains_edge(file_qn, &qn, ctx.rel_path, start_line(node)));
+    edges.push(contains_edge(
+        package_qn,
+        &qn,
+        ctx.rel_path,
+        start_line(node),
+    ));
 }
 
 fn visit_imports(
     node: TsNode<'_>,
     ctx: &ParseContext<'_>,
+    package_qn: &str,
     nodes: &mut Vec<Node>,
     edges: &mut Vec<Edge>,
 ) {
-    let file_qn = ctx.rel_path;
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         if child.kind() == "import_spec" {
@@ -305,7 +361,7 @@ fn visit_imports(
                         line_start: start_line(n),
                         line_end: end_line(n),
                         language: "go".to_owned(),
-                        parent_name: Some(file_qn.to_owned()),
+                        parent_name: Some(package_qn.to_owned()),
                         params: None,
                         return_type: None,
                         modifiers: None,
@@ -325,7 +381,7 @@ fn visit_imports(
                     edges.push(Edge {
                         id: 0,
                         kind: EdgeKind::Imports,
-                        source_qn: file_qn.to_owned(),
+                        source_qn: package_qn.to_owned(),
                         target_qn: qn,
                         file_path: ctx.rel_path.to_owned(),
                         line: Some(start_line(n)),
@@ -520,6 +576,23 @@ mod tests {
     fn file_node_present() {
         let pf = parse("package main\n");
         assert!(pf.nodes.iter().any(|n| n.kind == NodeKind::File));
+    }
+
+    #[test]
+    fn package_node_present() {
+        let pf = parse("package widgets\nfunc Hello() {}\n");
+        let package = pf
+            .nodes
+            .iter()
+            .find(|n| n.kind == NodeKind::Package)
+            .expect("package node");
+        assert_eq!(package.name, "widgets");
+        assert_eq!(package.qualified_name, "cmd/main.go::package::widgets");
+        assert!(pf.edges.iter().any(|e| e.kind == EdgeKind::Contains
+            && e.source_qn == "cmd/main.go"
+            && e.target_qn == package.qualified_name));
+        assert!(pf.nodes.iter().any(|n| n.name == "Hello"
+            && n.parent_name.as_deref() == Some(package.qualified_name.as_str())));
     }
 
     #[test]
