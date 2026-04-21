@@ -65,11 +65,7 @@ jobs:
             target: x86_64-unknown-linux-musl
             archive_ext: tar.gz
             binary_name: atlas
-          - os: macos-13
-            target: x86_64-apple-darwin
-            archive_ext: tar.gz
-            binary_name: atlas
-          - os: macos-14
+          - os: macos-latest
             target: aarch64-apple-darwin
             archive_ext: tar.gz
             binary_name: atlas
