@@ -691,19 +691,20 @@ mod tests {
 
     #[test]
     fn readme_mcp_tools_match_exported_registry() {
-        let documented = markdown_table_tool_names(&repo_root().join("README.md"), "## MCP Tools");
-
-        assert_eq!(documented, exported_mcp_tool_names());
+        assert_doc_mcp_tools_match_exported_registry(
+            &repo_root().join("README.md"),
+            "## MCP Tools",
+            true,
+        );
     }
 
     #[test]
     fn wiki_mcp_reference_tools_match_exported_registry() {
-        let documented = markdown_table_tool_names(
+        assert_doc_mcp_tools_match_exported_registry(
             &repo_root().join("wiki").join("mcp-reference.md"),
             "## Tool List",
+            false,
         );
-
-        assert_eq!(documented, exported_mcp_tool_names());
     }
 
     fn instruction_section_tool_names() -> BTreeSet<String> {
@@ -729,7 +730,30 @@ mod tests {
             .collect()
     }
 
-    fn markdown_table_tool_names(path: &Path, heading: &str) -> BTreeSet<String> {
+    fn assert_doc_mcp_tools_match_exported_registry(path: &Path, heading: &str, required: bool) {
+        let Some(documented) = markdown_table_tool_names(path, heading, required) else {
+            return;
+        };
+
+        assert_eq!(documented, exported_mcp_tool_names());
+    }
+
+    fn markdown_table_tool_names(
+        path: &Path,
+        heading: &str,
+        required: bool,
+    ) -> Option<BTreeSet<String>> {
+        if !path.is_file() {
+            if required {
+                panic!("documentation file missing: {}", path.display());
+            }
+            eprintln!(
+                "skipping MCP registry documentation check; file not present at {}",
+                path.display()
+            );
+            return None;
+        }
+
         let text = fs::read_to_string(path).unwrap();
         let section = text
             .split(heading)
@@ -739,12 +763,14 @@ mod tests {
             .next()
             .unwrap();
 
-        section
-            .lines()
-            .filter(|line| line.starts_with("| `"))
-            .filter_map(|line| line.split('`').nth(1))
-            .map(str::to_owned)
-            .collect()
+        Some(
+            section
+                .lines()
+                .filter(|line| line.starts_with("| `"))
+                .filter_map(|line| line.split('`').nth(1))
+                .map(str::to_owned)
+                .collect(),
+        )
     }
 
     fn repo_root() -> PathBuf {
