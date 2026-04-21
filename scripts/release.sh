@@ -5,6 +5,26 @@ set -euo pipefail
 readonly RELEASE_MANIFEST="packages/atlas-cli/Cargo.toml"
 readonly REMOTE_NAME="origin"
 
+# Topological publish order: dependencies before dependents.
+readonly PUBLISH_ORDER=(
+  atlas-core
+  atlas-contentstore
+  atlas-impact
+  atlas-parser
+  atlas-repo
+  atlas-session
+  atlas-store-sqlite
+  atlas-contextsave
+  atlas-reasoning
+  atlas-refactor
+  atlas-search
+  atlas-review
+  atlas-engine
+  atlas-adapters
+  atlas-mcp
+  atlas-cli
+)
+
 usage() {
   cat <<'EOF'
 Usage: scripts/release.sh [options] [<version>]
@@ -20,7 +40,7 @@ Options:
   --minor      Increment minor version and reset patch to zero.
   --patch      Increment patch version.
   --skip-push  Skip pushing release commit and tag to origin.
-  --publish    Unsupported for this repo. Fails with guidance.
+  --publish    Publish all workspace crates to crates.io in dependency order.
   -h, --help   Show this help message.
 
 Examples:
@@ -131,6 +151,13 @@ update_manifest_version() {
       replaced = 1
       next
     }
+    /path = "\.\.\/atlas-/ {
+      if (/version =/) {
+        sub(/version = "[^"]*"/, "version = \"" version "\"")
+      } else {
+        sub(/\}$/, ", version = \"" version "\"}")
+      }
+    }
     { print }
     END {
       if (!replaced) {
@@ -158,6 +185,15 @@ ensure_remote_exists() {
   git remote get-url "$REMOTE_NAME" >/dev/null 2>&1 || die "git remote '$REMOTE_NAME' is not configured"
 }
 
+publish_workspace() {
+  local pkg
+
+  for pkg in "${PUBLISH_ORDER[@]}"; do
+    printf 'Publishing %s...\n' "$pkg"
+    cargo publish -p "$pkg"
+  done
+}
+
 ensure_tag_absent() {
   local tag_name="$1"
 
@@ -166,12 +202,13 @@ ensure_tag_absent() {
 
   if git remote get-url "$REMOTE_NAME" >/dev/null 2>&1; then
     git ls-remote --exit-code --tags "$REMOTE_NAME" "refs/tags/$tag_name" >/dev/null 2>&1 &&
-      die "tag '$tag_name' already exists on '$REMOTE_NAME'"
+      die "tag '$tag_name' already exists on '$REMOTE_NAME'" || true
   fi
 }
 
 main() {
   local run_push=1
+  local run_publish=0
   local version=""
   local bump_kind=""
 
@@ -187,7 +224,8 @@ main() {
         shift
         ;;
       --publish)
-        die "--publish unsupported in this repo; workspace crates use path-only internal dependencies"
+        run_publish=1
+        shift
         ;;
       -h|--help)
         usage
@@ -260,6 +298,10 @@ main() {
   if (( run_push )); then
     git push "$REMOTE_NAME" HEAD
     git push "$REMOTE_NAME" "$tag_name"
+  fi
+
+  if (( run_publish )); then
+    publish_workspace
   fi
 
   printf 'Released %s -> %s (%s)\n' "$old_version" "$version" "$tag_name"
