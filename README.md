@@ -349,6 +349,7 @@ The MCP server (`atlas serve`) exposes these tools to agents:
 |------|-------------|
 | `list_graph_stats` | Node/edge counts and language breakdown |
 | `query_graph` | Keyword search with optional `regex` SQL-UDF filter; returns compact symbol list |
+| `batch_query_graph` | Run up to 20 `query_graph` searches in a single round-trip |
 | `get_impact_radius` | Graph traversal from changed files |
 | `get_review_context` | Review bundle: symbols, neighbors, risk summary |
 | `get_context` | General context engine: symbol, file, review, impact |

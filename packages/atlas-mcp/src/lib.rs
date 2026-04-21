@@ -7,6 +7,7 @@
 //! |---------------------------|----------------------------------------------------------|
 //! | `list_graph_stats`        | Node/edge counts and language breakdown                  |
 //! | `query_graph`             | FTS5 keyword search, returns compact symbol list only    |
+//! | `batch_query_graph`       | Run up to 20 query_graph searches in one round-trip     |
 //! | `get_impact_radius`       | Graph traversal from changed files                       |
 //! | `get_review_context`      | Review bundle: symbols, neighbors, risk summary          |
 //! | `get_context`             | General context engine: symbol, file, review, impact     |

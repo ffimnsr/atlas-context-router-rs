@@ -47,18 +47,52 @@ pub fn tool_list() -> serde_json::Value {
             },
             {
                 "name": "query_graph",
-                "description": "Full-text search the code graph. Returns a compact, ranked list of matching symbols only; it does not return caller/callee usage edges. Use semantic=true for graph-aware expansion, then follow with symbol_neighbors, traverse_graph, or get_context when you need relationships.",
+                "description": "Full-text search the code graph by symbol name or identifier. Returns a compact, ranked list of matching symbols only; it does not return caller/callee usage edges. IMPORTANT: text is matched against indexed symbol names and qualified names (identifiers like 'BalancesTab', 'useFilteredBalances'), NOT against natural language — use short exact symbol names, not descriptive phrases. Follow up with symbol_neighbors, traverse_graph, or get_context when you need relationships.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "text":     { "type": "string",  "description": "Search query text" },
+                        "text":     { "type": "string",  "description": "Symbol name or identifier to search (e.g. 'BalancesTab', 'useFilteredBalances'). FTS matches against indexed symbol names and qualified names — use short exact identifiers, NOT natural language phrases. Multi-word phrases rarely produce hits." },
                         "kind":     { "type": "string",  "description": "Filter by node kind (e.g. 'function', 'struct')" },
                         "language": { "type": "string",  "description": "Filter by language (e.g. 'rust', 'python')" },
                         "limit":    { "type": "integer", "description": "Maximum results to return (default 20)" },
-                        "semantic": { "type": "boolean", "description": "Use graph-aware semantic expansion: expands via graph neighbours of initial FTS hits before re-ranking (default false)" },
-                        "expand":   { "type": "boolean", "description": "Expand results through graph edges after ranking (default false)" },
+                        "semantic": { "type": "boolean", "description": "Graph-neighbour expansion on top of FTS: re-ranks initial FTS hits using graph edges (default false). NOT vector/embedding search — still requires FTS to find at least one initial symbol-name hit. If FTS returns nothing (e.g. text was a phrase not a symbol name), semantic expansion also returns nothing. Use regex instead for pattern-based fallback." },
+                        "expand":   { "type": "boolean", "description": "Expand results through graph edges after ranking (default false). Subsumed by semantic=true; setting both is redundant." },
                         "expand_hops": { "type": "integer", "description": "Max edge hops when expand=true (default 1)" },
                         "regex":    { "type": "string",  "description": "Regex pattern matched against name and qualified_name via SQL UDF. When text is empty, runs a structural scan filtered by this pattern. When both text and regex are provided, FTS5 runs first then the UDF filters inside SQLite. Supports regex crate alternation syntax (e.g. 'handle|HANDLE|Handle_'). Must be valid regex crate syntax." },
+                        "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
+                    },
+                    "required": []
+                }
+            },
+            {
+                "name": "batch_query_graph",
+                "description": "Run multiple query_graph searches in a single round-trip. Provide EITHER 'text' (a space- or comma-separated list of symbol names that is auto-split into one query per token, e.g. 'BalancesTab, compute, handleRequest') OR 'queries' (an explicit array of query objects). Returns an array of per-query results. Each token/query uses the same symbol-name FTS as query_graph — pass short exact identifiers, not natural-language phrases. Max 20 tokens/queries per call.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "text": {
+                            "type": "string",
+                            "description": "Space- or comma-separated symbol names to look up. Each delimiter-separated token becomes an independent FTS query (e.g. 'BalancesTab, compute, handleRequest' or 'BalancesTab compute handleRequest'). Mutually exclusive with 'queries'; if both are given, 'text' wins."
+                        },
+                        "queries": {
+                            "type": "array",
+                            "description": "Array of query objects (max 20). Each object accepts the same fields as query_graph: text, kind, language, limit, semantic, expand, expand_hops, regex. Use when per-query options differ.",
+                            "maxItems": 20,
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "text":        { "type": "string",  "description": "Symbol name or identifier to search (e.g. 'BalancesTab'). Required unless 'regex' is set." },
+                                    "kind":        { "type": "string",  "description": "Filter by node kind (e.g. 'function', 'struct')" },
+                                    "language":    { "type": "string",  "description": "Filter by language (e.g. 'rust', 'typescript')" },
+                                    "limit":       { "type": "integer", "description": "Maximum results for this query (default 20)" },
+                                    "semantic":    { "type": "boolean", "description": "Graph-neighbour expansion on top of FTS (default false). Requires FTS to find at least one hit first." },
+                                    "expand":      { "type": "boolean", "description": "Expand results through graph edges after ranking (default false)" },
+                                    "expand_hops": { "type": "integer", "description": "Max edge hops when expand=true (default 1)" },
+                                    "regex":       { "type": "string",  "description": "Regex pattern matched against name and qualified_name via SQL UDF. Must be valid regex crate syntax." }
+                                },
+                                "required": []
+                            }
+                        },
                         "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
                     },
                     "required": []
@@ -167,11 +201,11 @@ pub fn tool_list() -> serde_json::Value {
             },
             {
                 "name": "get_context",
-                "description": "Build bounded context around a symbol, file, or change-set using the context engine. Accepts a free-text query (auto-classified), an explicit file path, or a list of changed files. Returns a compact agent-optimized result with ranked nodes, edges, files, and truncation/ambiguity metadata.",
+                "description": "Build bounded context around a symbol, file, or change-set. Provide EITHER 'query' (a symbol name, qualified name, or structured intent phrase like 'who calls MyFunc') OR 'file' (a repo-relative path) OR 'files' (a list of changed paths). Returns ranked nodes, edges, files, and truncation/ambiguity metadata. IMPORTANT: 'query' is matched against indexed symbol names — it does NOT accept natural-language descriptions. Use short exact identifiers or intent phrases.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "query":     { "type": "string",  "description": "Free-text or symbol name query (e.g. 'who calls handle_request', 'AuthService', 'src/lib.rs::fn::foo'). Alternative to file/files." },
+                        "query":     { "type": "string",  "description": "Symbol name, qualified name, or intent phrase. Examples: 'AuthService' (symbol), 'src/lib.rs::fn::foo' (qualified name), 'who calls handle_request' (usage lookup), 'what breaks MyFunc' (impact). Do NOT pass natural-language descriptions — they will not match any graph nodes. Alternative to file/files." },
                         "file":      { "type": "string",  "description": "Repo-relative file path target (file intent). Alternative to query/files." },
                         "files":     { "type": "array", "items": { "type": "string" }, "description": "Changed file paths for review/impact context. Alternative to query/file." },
                         "intent":    { "type": "string",  "description": "Override intent: symbol, file, review, impact, usage_lookup, refactor_safety, dead_code_check, rename_preview, dependency_removal. Inferred when omitted." },
@@ -345,6 +379,7 @@ fn call_inner(
     match name {
         "list_graph_stats" => tool_list_graph_stats(db_path, output_format),
         "query_graph" => tool_query_graph(args, db_path, output_format),
+        "batch_query_graph" => tool_batch_query_graph(args, db_path, output_format),
         "get_impact_radius" => tool_get_impact_radius(args, db_path, output_format),
         "get_review_context" => tool_get_review_context(args, db_path, output_format),
         "detect_changes" => tool_detect_changes(args, repo_root, db_path, output_format),
@@ -452,6 +487,171 @@ fn tool_query_graph(
     response["atlas_usage_edges_included"] = serde_json::Value::Bool(false);
     response["atlas_relationship_tools"] =
         serde_json::json!(["symbol_neighbors", "traverse_graph", "get_context"]);
+    if compact.is_empty() && semantic {
+        // FTS found no symbol names matching the query text; graph expansion
+        // had nothing to seed from. Guide the LLM toward productive next steps.
+        response["atlas_hint"] = serde_json::Value::String(
+            "FTS found no symbol names matching the query text. \
+             FTS searches indexed identifiers, not natural language phrases. \
+             Try: (1) a short exact symbol name like 'BalancesTab'; \
+             (2) the regex param for pattern matching (e.g. regex='Balance'); \
+             (3) get_context with a file path; \
+             (4) list_graph_stats to confirm the graph has been built."
+                .to_owned(),
+        );
+    }
+    Ok(response)
+}
+
+fn tool_batch_query_graph(
+    args: Option<&serde_json::Value>,
+    db_path: &str,
+    output_format: OutputFormat,
+) -> Result<serde_json::Value> {
+    const MAX_QUERIES: usize = 20;
+
+    // If top-level `text` is provided, split by whitespace into per-token queries.
+    // Otherwise fall back to the explicit `queries` array.
+    let text_phrase = str_arg(args, "text")?.filter(|s| !s.trim().is_empty());
+    let synthesized: Vec<serde_json::Value>;
+    let queries_val: &[serde_json::Value] = if let Some(phrase) = text_phrase {
+        synthesized = phrase
+            .split(|c: char| c.is_whitespace() || c == ',')
+            .filter(|tok| !tok.is_empty())
+            .map(|tok| serde_json::json!({ "text": tok }))
+            .collect();
+        &synthesized
+    } else {
+        let arr = args
+            .and_then(|a| a.get("queries"))
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "batch_query_graph requires either a 'text' string \
+                     (space-separated tokens) or a non-empty 'queries' array"
+                )
+            })?;
+        arr.as_slice()
+    };
+
+    if queries_val.is_empty() {
+        anyhow::bail!(
+            "batch_query_graph requires either a 'text' string \
+             (space-separated tokens) or a non-empty 'queries' array"
+        );
+    }
+    if queries_val.len() > MAX_QUERIES {
+        anyhow::bail!(
+            "batch_query_graph exceeds the maximum of {MAX_QUERIES} queries per call; \
+             split into smaller batches"
+        );
+    }
+
+    // Open store once for all queries.
+    let store = open_store(db_path)?;
+
+    #[derive(Serialize)]
+    struct BatchItem {
+        query_index: usize,
+        text: String,
+        items: Vec<BatchResultNode>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        atlas_hint: Option<String>,
+    }
+
+    #[derive(Serialize)]
+    struct BatchResultNode {
+        score: f64,
+        name: String,
+        qualified_name: String,
+        kind: String,
+        file_path: String,
+        line_start: u32,
+        language: String,
+    }
+
+    let mut batch_results: Vec<BatchItem> = Vec::with_capacity(queries_val.len());
+
+    for (idx, q) in queries_val.iter().enumerate() {
+        let q_args = Some(q);
+        let text = str_arg(q_args, "text")?
+            .map(str::to_owned)
+            .unwrap_or_default();
+        let kind = str_arg(q_args, "kind")?.map(str::to_owned);
+        let language = str_arg(q_args, "language")?.map(str::to_owned);
+        let limit = u64_arg(q_args, "limit").unwrap_or(20) as usize;
+        let semantic = bool_arg(q_args, "semantic").unwrap_or(false);
+        let expand = bool_arg(q_args, "expand").unwrap_or(false);
+        let expand_hops = u64_arg(q_args, "expand_hops").unwrap_or(1) as u32;
+        let regex = str_arg(q_args, "regex")?.map(str::to_owned);
+
+        if text.trim().is_empty() && regex.is_none() {
+            anyhow::bail!("query at index {idx} requires non-empty 'text' or a 'regex' pattern");
+        }
+        if let Some(ref pat) = regex {
+            if pat.trim().is_empty() {
+                anyhow::bail!("query at index {idx}: regex pattern must not be empty");
+            }
+            regex::Regex::new(pat)
+                .map_err(|e| anyhow::anyhow!("query at index {idx}: invalid regex pattern: {e}"))?;
+        }
+
+        let query = SearchQuery {
+            text: text.clone(),
+            kind,
+            language,
+            limit,
+            graph_expand: expand,
+            graph_max_hops: expand_hops,
+            regex_pattern: regex,
+            ..Default::default()
+        };
+
+        let results = if semantic {
+            sem::expanded_search(&store, &query).context("semantic search failed")?
+        } else {
+            store.search(&query).context("search failed")?
+        };
+
+        let items: Vec<BatchResultNode> = results
+            .iter()
+            .map(|r| BatchResultNode {
+                score: (r.score * 1000.0).round() / 1000.0,
+                name: r.node.name.clone(),
+                qualified_name: r.node.qualified_name.clone(),
+                kind: r.node.kind.as_str().to_owned(),
+                file_path: r.node.file_path.clone(),
+                line_start: r.node.line_start,
+                language: r.node.language.clone(),
+            })
+            .collect();
+
+        let atlas_hint = if items.is_empty() && semantic {
+            Some(
+                "FTS found no symbol names matching the query text. \
+                 FTS searches indexed identifiers, not natural language phrases. \
+                 Try: (1) a short exact symbol name like 'BalancesTab'; \
+                 (2) the regex param for pattern matching (e.g. regex='Balance'); \
+                 (3) get_context with a file path; \
+                 (4) list_graph_stats to confirm the graph has been built."
+                    .to_owned(),
+            )
+        } else {
+            None
+        };
+
+        batch_results.push(BatchItem {
+            query_index: idx,
+            text,
+            items,
+            atlas_hint,
+        });
+    }
+
+    let mut response = tool_result_value(&batch_results, output_format)?;
+    response["atlas_result_kind"] = serde_json::Value::String("batch_symbol_search".to_owned());
+    response["atlas_query_count"] =
+        serde_json::Value::Number(serde_json::Number::from(batch_results.len()));
     Ok(response)
 }
 
@@ -1117,7 +1317,20 @@ fn tool_get_context(
     };
 
     let packaged = package_context_result(&result);
-    tool_result_value(&packaged, output_format)
+    let mut response = tool_result_value(&packaged, output_format)?;
+    // When the engine returned nothing, guide the LLM toward productive next steps.
+    if result.nodes.is_empty() {
+        response["atlas_hint"] = serde_json::Value::String(
+            "No graph nodes matched this request. Possible causes: \
+             (1) the graph has not been built yet — run build_or_update_graph first; \
+             (2) 'query' contained a natural-language phrase instead of a symbol name or \
+             qualified name — try a short exact identifier (e.g. 'BalancesTab') or \
+             use query_graph with regex for pattern matching; \
+             (3) the file path is wrong or the file has no indexed symbols."
+                .to_owned(),
+        );
+    }
+    Ok(response)
 }
 
 fn str_arg<'a>(args: Option<&'a serde_json::Value>, key: &str) -> Result<Option<&'a str>> {
@@ -1834,6 +2047,201 @@ mod tests {
             serde_json::json!(["symbol_neighbors", "traverse_graph", "get_context"])
         );
         assert_eq!(response["content"].as_array().map(Vec::len), Some(1));
+    }
+
+    #[test]
+    fn semantic_empty_result_includes_hint() {
+        let fixture = setup_mcp_fixture();
+        // Natural-language phrase that won't match any symbol name via FTS.
+        let args = serde_json::json!({ "text": "balances tab portfolio asset balance usd notional", "semantic": true, "output_format": "json" });
+
+        let response = call("query_graph", Some(&args), "/ignored", &fixture.db_path)
+            .expect("query_graph semantic call");
+
+        // Results should be empty because no symbol name matches the phrase.
+        let content = response["content"].as_array().expect("content array");
+        assert_eq!(content.len(), 1);
+        let text = content[0]["text"].as_str().unwrap_or("");
+        // The data payload should be an empty array.
+        assert!(text.contains("[]"), "expected empty results, got: {text}");
+        // The hint field must be present to guide the LLM.
+        assert!(
+            response["atlas_hint"].as_str().is_some(),
+            "expected atlas_hint when semantic returns empty, got none"
+        );
+        let hint = response["atlas_hint"].as_str().unwrap();
+        assert!(
+            hint.contains("FTS found no symbol names"),
+            "hint should explain FTS limitation: {hint}"
+        );
+    }
+
+    #[test]
+    fn batch_query_graph_returns_per_query_results() {
+        let fixture = setup_mcp_fixture();
+        let args = serde_json::json!({
+            "queries": [
+                { "text": "compute", "output_format": "json" },
+                { "text": "handle_request", "output_format": "json" }
+            ],
+            "output_format": "json"
+        });
+
+        let response = call(
+            "batch_query_graph",
+            Some(&args),
+            "/ignored",
+            &fixture.db_path,
+        )
+        .expect("batch_query_graph call");
+
+        assert_eq!(response["atlas_result_kind"], "batch_symbol_search");
+        assert_eq!(response["atlas_query_count"], 2);
+
+        // Extract the JSON array from content text.
+        let text = response["content"][0]["text"].as_str().unwrap();
+        let items: serde_json::Value = serde_json::from_str(text).expect("parse batch result");
+        let arr = items.as_array().expect("array");
+        assert_eq!(arr.len(), 2);
+
+        // First query result: index 0, text = "compute".
+        assert_eq!(arr[0]["query_index"], 0);
+        assert_eq!(arr[0]["text"], "compute");
+        let first_items = arr[0]["items"].as_array().expect("items array");
+        assert!(!first_items.is_empty(), "expected results for 'compute'");
+        assert!(
+            first_items
+                .iter()
+                .any(|n| n["qualified_name"] == "src/service.rs::fn::compute")
+        );
+
+        // Second query result: index 1, text = "handle_request".
+        assert_eq!(arr[1]["query_index"], 1);
+        assert_eq!(arr[1]["text"], "handle_request");
+        let second_items = arr[1]["items"].as_array().expect("items array");
+        assert!(
+            !second_items.is_empty(),
+            "expected results for 'handle_request'"
+        );
+    }
+
+    #[test]
+    fn batch_query_graph_empty_queries_returns_error() {
+        let fixture = setup_mcp_fixture();
+        let args = serde_json::json!({ "queries": [] });
+        let result = call(
+            "batch_query_graph",
+            Some(&args),
+            "/ignored",
+            &fixture.db_path,
+        );
+        assert!(result.is_err(), "expected error for empty queries array");
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("non-empty") || msg.contains("requires"),
+            "error should be descriptive: {msg}"
+        );
+    }
+
+    #[test]
+    fn batch_query_graph_text_phrase_splits_and_queries_each_token() {
+        let fixture = setup_mcp_fixture();
+        // Pass a phrase — handler splits by whitespace into ["compute", "handle_request"].
+        let args = serde_json::json!({
+            "text": "compute handle_request",
+            "output_format": "json"
+        });
+
+        let response = call(
+            "batch_query_graph",
+            Some(&args),
+            "/ignored",
+            &fixture.db_path,
+        )
+        .expect("batch_query_graph with text phrase");
+
+        assert_eq!(response["atlas_result_kind"], "batch_symbol_search");
+        assert_eq!(response["atlas_query_count"], 2);
+
+        let text = response["content"][0]["text"].as_str().unwrap();
+        let arr: serde_json::Value = serde_json::from_str(text).expect("parse batch result");
+        let arr = arr.as_array().expect("array");
+        assert_eq!(arr.len(), 2, "one result per token");
+        assert_eq!(arr[0]["text"], "compute");
+        assert_eq!(arr[1]["text"], "handle_request");
+        assert!(
+            !arr[0]["items"].as_array().unwrap().is_empty(),
+            "compute should have results"
+        );
+    }
+
+    #[test]
+    fn batch_query_graph_over_limit_returns_error() {
+        let fixture = setup_mcp_fixture();
+        // Build 21 query objects.
+        let queries: Vec<serde_json::Value> = (0..21)
+            .map(|i| serde_json::json!({ "text": format!("sym{i}") }))
+            .collect();
+        let args = serde_json::json!({ "queries": queries });
+        let result = call(
+            "batch_query_graph",
+            Some(&args),
+            "/ignored",
+            &fixture.db_path,
+        );
+        assert!(result.is_err(), "expected error for >20 queries");
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("maximum"),
+            "error should mention maximum: {msg}"
+        );
+    }
+
+    #[test]
+    fn batch_query_graph_partial_empty_result_carries_hint() {
+        let fixture = setup_mcp_fixture();
+        let args = serde_json::json!({
+            "queries": [
+                // Valid symbol — will find results.
+                { "text": "compute" },
+                // NL phrase — FTS finds nothing; semantic=true triggers hint.
+                { "text": "balances tab portfolio asset usd notional", "semantic": true }
+            ],
+            "output_format": "json"
+        });
+
+        let response = call(
+            "batch_query_graph",
+            Some(&args),
+            "/ignored",
+            &fixture.db_path,
+        )
+        .expect("batch_query_graph call");
+
+        let text = response["content"][0]["text"].as_str().unwrap();
+        let items: serde_json::Value = serde_json::from_str(text).expect("parse batch result");
+        let arr = items.as_array().expect("array");
+        assert_eq!(arr.len(), 2);
+
+        // First query should have results and no hint.
+        let first_items = arr[0]["items"].as_array().expect("items");
+        assert!(!first_items.is_empty());
+        assert!(
+            arr[0].get("atlas_hint").is_none(),
+            "no hint for successful query"
+        );
+
+        // Second query should have empty items and an atlas_hint.
+        let second_items = arr[1]["items"].as_array().expect("items");
+        assert!(
+            second_items.is_empty(),
+            "expected empty results for NL phrase"
+        );
+        let hint = arr[1]["atlas_hint"].as_str().expect("atlas_hint present");
+        assert!(
+            hint.contains("FTS found no symbol names"),
+            "hint should explain FTS limit: {hint}"
+        );
     }
 
     #[test]

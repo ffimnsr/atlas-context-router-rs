@@ -142,3 +142,66 @@ pub(crate) fn db_path(cli: &Cli, repo: &str) -> String {
     }
     atlas_engine::paths::default_db_path(repo)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cli::{Cli, Command};
+
+    fn cli_with_repo(repo: &str) -> Cli {
+        Cli {
+            repo: Some(repo.to_owned()),
+            db: None,
+            verbose: false,
+            json: false,
+            command: Command::Doctor,
+        }
+    }
+
+    fn cli_no_repo() -> Cli {
+        Cli {
+            repo: None,
+            db: None,
+            verbose: false,
+            json: false,
+            command: Command::Doctor,
+        }
+    }
+
+    #[test]
+    fn resolve_repo_absolute_path_returned_as_is() {
+        let cli = cli_with_repo("/tmp/my-project");
+        assert_eq!(resolve_repo(&cli).unwrap(), "/tmp/my-project");
+    }
+
+    #[test]
+    fn resolve_repo_tilde_expands_to_home() {
+        let home = std::env::var("HOME").expect("HOME must be set for this test");
+        let cli = cli_with_repo("~");
+        assert_eq!(resolve_repo(&cli).unwrap(), home);
+    }
+
+    #[test]
+    fn resolve_repo_tilde_slash_expands_to_home_subpath() {
+        let home = std::env::var("HOME").expect("HOME must be set for this test");
+        let cli = cli_with_repo("~/projects/foo");
+        assert_eq!(resolve_repo(&cli).unwrap(), format!("{home}/projects/foo"));
+    }
+
+    #[test]
+    fn resolve_repo_no_repo_returns_cwd() {
+        let cli = cli_no_repo();
+        let cwd = std::env::current_dir()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(resolve_repo(&cli).unwrap(), cwd);
+    }
+
+    #[test]
+    fn resolve_repo_does_not_expand_tilde_in_middle_of_path() {
+        // A path like "/home/user/~foo" must not be touched.
+        let cli = cli_with_repo("/home/user/~foo");
+        assert_eq!(resolve_repo(&cli).unwrap(), "/home/user/~foo");
+    }
+}

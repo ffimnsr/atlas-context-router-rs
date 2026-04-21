@@ -450,6 +450,7 @@ Do not treat `query_graph` as caller/callee search. Fall back to file tools **on
 | ---- | -------- |
 | `list_graph_stats` | Overall graph metrics and language breakdown |
 | `query_graph` | Search graph nodes by keyword, kind, or language; returns symbol matches, not usage edges |
+| `batch_query_graph` | Run up to 20 query_graph searches in one call |
 | `get_impact_radius` | Understand blast radius from a changed file set |
 | `get_review_context` | Build review bundle with symbols, neighbors, edges, and risk summary |
 | `detect_changes` | Ask Atlas for changed files instead of shelling out to git |
