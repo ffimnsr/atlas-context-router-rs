@@ -6,7 +6,7 @@ use atlas_core::GraphStats;
 use atlas_core::model::ChangedFile;
 use atlas_engine::{BuildOptions, UpdateOptions, UpdateTarget, build_graph, update_graph};
 use atlas_repo::{changed_files, find_repo_root};
-use atlas_store_sqlite::Store;
+use atlas_store_sqlite::{BuildFinishStats, Store};
 use camino::Utf8Path;
 
 use crate::cli::{Cli, Command};
@@ -25,6 +25,24 @@ fn status_payload(
     changes: &[ChangedFile],
     store: Option<&Store>,
 ) -> serde_json::Value {
+    let build_status = store.and_then(|s| s.get_build_status(repo).ok().flatten());
+    let build_state_val = build_status.as_ref().map(|bs| {
+        let state_str = match bs.state {
+            atlas_store_sqlite::GraphBuildState::Building => "building",
+            atlas_store_sqlite::GraphBuildState::Built => "built",
+            atlas_store_sqlite::GraphBuildState::BuildFailed => "build_failed",
+        };
+        serde_json::json!({
+            "state": state_str,
+            "files_discovered": bs.files_discovered,
+            "files_processed": bs.files_processed,
+            "files_failed": bs.files_failed,
+            "nodes_written": bs.nodes_written,
+            "edges_written": bs.edges_written,
+            "last_built_at": bs.last_built_at,
+            "last_error": bs.last_error,
+        })
+    });
     serde_json::json!({
         "repo_root": repo,
         "db_path": db_path,
@@ -41,6 +59,7 @@ fn status_payload(
         "last_indexed_at": stats.last_indexed_at,
         "changed_file_count": changes.len(),
         "changed_files": augment_changes_with_node_counts(changes, store),
+        "build_status": build_state_val,
     })
 }
 
@@ -126,6 +145,17 @@ pub fn run_status(cli: &Cli) -> Result<()> {
         if let Some(ts) = &stats.last_indexed_at {
             println!("Last indexed: {ts}");
         }
+        if let Ok(Some(bs)) = store.get_build_status(&repo) {
+            let state_str = match bs.state {
+                atlas_store_sqlite::GraphBuildState::Building => "building (interrupted?)",
+                atlas_store_sqlite::GraphBuildState::Built => "built",
+                atlas_store_sqlite::GraphBuildState::BuildFailed => "build_failed",
+            };
+            println!("Build state : {state_str}");
+            if let Some(err) = &bs.last_error {
+                println!("Build error : {err}");
+            }
+        }
         if base.is_some() || staged || !changes.is_empty() {
             println!("Changed files: {}", changes.len());
             for cf in &changes {
@@ -164,14 +194,42 @@ pub fn run_build(cli: &Cli) -> Result<()> {
 
         let config = atlas_engine::Config::load(&atlas_engine::paths::atlas_dir(&repo))?;
 
-        let summary = build_graph(
+        // Record lifecycle: building.
+        if let Ok(store) = Store::open(&db_path) {
+            let _ = store.begin_build(repo_root_path.as_str());
+        }
+
+        let build_result = build_graph(
             repo_root_path.as_path(),
             &db_path,
             &BuildOptions {
                 fail_fast,
                 batch_size: config.parse_batch_size(),
             },
-        )?;
+        );
+
+        // Record lifecycle: built or build_failed.
+        if let Ok(store) = Store::open(&db_path) {
+            match &build_result {
+                Ok(s) => {
+                    let _ = store.finish_build(
+                        repo_root_path.as_str(),
+                        BuildFinishStats {
+                            files_discovered: s.scanned as i64,
+                            files_processed: s.parsed as i64,
+                            files_failed: s.parse_errors as i64,
+                            nodes_written: s.nodes_inserted as i64,
+                            edges_written: s.edges_inserted as i64,
+                        },
+                    );
+                }
+                Err(e) => {
+                    let _ = store.fail_build(repo_root_path.as_str(), &e.to_string());
+                }
+            }
+        }
+
+        let summary = build_result?;
 
         if cli.json {
             print_json(
@@ -263,7 +321,12 @@ pub fn run_update(cli: &Cli) -> Result<()> {
             }
         };
 
-        let summary = update_graph(
+        // Record lifecycle: building.
+        if let Ok(store) = Store::open(&db_path) {
+            let _ = store.begin_build(repo_root_path.as_str());
+        }
+
+        let update_result = update_graph(
             repo_root_path.as_path(),
             &db_path,
             &UpdateOptions {
@@ -271,7 +334,30 @@ pub fn run_update(cli: &Cli) -> Result<()> {
                 batch_size: config.parse_batch_size(),
                 target,
             },
-        )?;
+        );
+
+        // Record lifecycle: built or build_failed.
+        if let Ok(store) = Store::open(&db_path) {
+            match &update_result {
+                Ok(s) => {
+                    let _ = store.finish_build(
+                        repo_root_path.as_str(),
+                        BuildFinishStats {
+                            files_discovered: (s.parsed + s.deleted + s.renamed) as i64,
+                            files_processed: s.parsed as i64,
+                            files_failed: s.parse_errors as i64,
+                            nodes_written: s.nodes_updated as i64,
+                            edges_written: s.edges_updated as i64,
+                        },
+                    );
+                }
+                Err(e) => {
+                    let _ = store.fail_build(repo_root_path.as_str(), &e.to_string());
+                }
+            }
+        }
+
+        let summary = update_result?;
 
         if cli.json {
             print_json(

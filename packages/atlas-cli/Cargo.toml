@@ -11,6 +11,7 @@ path = "src/main.rs"
 [dependencies]
 atlas-core.workspace = true
 atlas-adapters = { path = "../atlas-adapters" }
+atlas-contentstore = { path = "../atlas-contentstore" }
 atlas-engine.workspace = true
 atlas-impact = { path = "../atlas-impact" }
 atlas-mcp.workspace = true

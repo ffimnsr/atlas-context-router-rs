@@ -12,7 +12,7 @@ use atlas_engine::{BuildOptions, UpdateOptions, UpdateTarget, build_graph, updat
 use atlas_repo::{DiffTarget, changed_files, find_repo_root};
 use atlas_review::{ContextEngine, query_parser};
 use atlas_search::semantic as sem;
-use atlas_store_sqlite::Store;
+use atlas_store_sqlite::{BuildFinishStats, GraphBuildState, Store};
 use camino::Utf8Path;
 use serde::Serialize;
 
@@ -555,6 +555,32 @@ fn tool_build_or_update_graph(
     let mode = str_arg(args, "mode")?.unwrap_or("build");
     let repo_root_path =
         find_repo_root(Utf8Path::new(repo_root)).context("cannot find git repo root")?;
+    let repo_root_str = repo_root_path.as_str();
+
+    /// Serialize a persisted build status to a JSON value for MCP responses.
+    fn build_status_json(db_path: &str, repo_root: &str) -> serde_json::Value {
+        let Ok(store) = Store::open(db_path) else {
+            return serde_json::Value::Null;
+        };
+        let Ok(Some(bs)) = store.get_build_status(repo_root) else {
+            return serde_json::Value::Null;
+        };
+        let state_str = match bs.state {
+            GraphBuildState::Building => "building",
+            GraphBuildState::Built => "built",
+            GraphBuildState::BuildFailed => "build_failed",
+        };
+        serde_json::json!({
+            "state": state_str,
+            "files_discovered": bs.files_discovered,
+            "files_processed": bs.files_processed,
+            "files_failed": bs.files_failed,
+            "nodes_written": bs.nodes_written,
+            "edges_written": bs.edges_written,
+            "last_built_at": bs.last_built_at,
+            "last_error": bs.last_error,
+        })
+    }
 
     if mode == "update" {
         let base = str_arg(args, "base")?.map(str::to_owned);
@@ -574,7 +600,11 @@ fn tool_build_or_update_graph(
         let config = atlas_engine::Config::load(&atlas_engine::paths::atlas_dir(repo_root))
             .unwrap_or_default();
 
-        let summary = update_graph(
+        if let Ok(s) = Store::open(db_path) {
+            let _ = s.begin_build(repo_root_str);
+        }
+
+        let update_result = update_graph(
             repo_root_path.as_path(),
             db_path,
             &UpdateOptions {
@@ -582,7 +612,29 @@ fn tool_build_or_update_graph(
                 batch_size: config.parse_batch_size(),
                 target,
             },
-        )?;
+        );
+
+        if let Ok(s) = Store::open(db_path) {
+            match &update_result {
+                Ok(sum) => {
+                    let _ = s.finish_build(
+                        repo_root_str,
+                        BuildFinishStats {
+                            files_discovered: (sum.parsed + sum.deleted + sum.renamed) as i64,
+                            files_processed: sum.parsed as i64,
+                            files_failed: sum.parse_errors as i64,
+                            nodes_written: sum.nodes_updated as i64,
+                            edges_written: sum.edges_updated as i64,
+                        },
+                    );
+                }
+                Err(e) => {
+                    let _ = s.fail_build(repo_root_str, &e.to_string());
+                }
+            }
+        }
+
+        let summary = update_result?;
         tool_result_value(
             &serde_json::json!({
                 "mode": "update",
@@ -594,6 +646,7 @@ fn tool_build_or_update_graph(
                 "nodes_updated": summary.nodes_updated,
                 "edges_updated": summary.edges_updated,
                 "elapsed_ms": summary.elapsed_ms,
+                "build_status": build_status_json(db_path, repo_root_str),
             }),
             output_format,
         )
@@ -602,14 +655,40 @@ fn tool_build_or_update_graph(
         let config = atlas_engine::Config::load(&atlas_engine::paths::atlas_dir(repo_root))
             .unwrap_or_default();
 
-        let summary = build_graph(
+        if let Ok(s) = Store::open(db_path) {
+            let _ = s.begin_build(repo_root_str);
+        }
+
+        let build_result = build_graph(
             repo_root_path.as_path(),
             db_path,
             &BuildOptions {
                 fail_fast: false,
                 batch_size: config.parse_batch_size(),
             },
-        )?;
+        );
+
+        if let Ok(s) = Store::open(db_path) {
+            match &build_result {
+                Ok(sum) => {
+                    let _ = s.finish_build(
+                        repo_root_str,
+                        BuildFinishStats {
+                            files_discovered: sum.scanned as i64,
+                            files_processed: sum.parsed as i64,
+                            files_failed: sum.parse_errors as i64,
+                            nodes_written: sum.nodes_inserted as i64,
+                            edges_written: sum.edges_inserted as i64,
+                        },
+                    );
+                }
+                Err(e) => {
+                    let _ = s.fail_build(repo_root_str, &e.to_string());
+                }
+            }
+        }
+
+        let summary = build_result?;
         tool_result_value(
             &serde_json::json!({
                 "mode": "build",
@@ -621,6 +700,7 @@ fn tool_build_or_update_graph(
                 "nodes_inserted": summary.nodes_inserted,
                 "edges_inserted": summary.edges_inserted,
                 "elapsed_ms": summary.elapsed_ms,
+                "build_status": build_status_json(db_path, repo_root_str),
             }),
             output_format,
         )

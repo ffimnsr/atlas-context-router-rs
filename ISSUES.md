@@ -3719,23 +3719,23 @@ They are meant to strengthen Atlas’s retrieval/content sidecar without changin
 
 Atlas already has strong graph build/update state and separate content/session stores, but retrieval/content indexing should also have an explicit lifecycle model so “built”, “indexed”, “searchable”, and “failed” do not drift.
 
-- [ ] add explicit retrieval index state model
-- [ ] create retrieval/content index status table or snapshot
-- [ ] track per repo / per source states:
-  - [ ] `indexing`
-  - [ ] `indexed`
-  - [ ] `index_failed`
-- [ ] persist:
-  - [ ] total files discovered
-  - [ ] files indexed
-  - [ ] total chunks written
-  - [ ] chunks reused
-  - [ ] last successful index time
-  - [ ] last error
-- [ ] expose retrieval index status through CLI
-- [ ] expose retrieval index status through MCP
-- [ ] ensure one source of truth for “searchable now”
-- [ ] ensure interrupted indexing can recover cleanly without manual cleanup
+- [x] add explicit retrieval index state model
+- [x] create retrieval/content index status table or snapshot
+- [x] track per repo / per source states:
+  - [x] `indexing`
+  - [x] `indexed`
+  - [x] `index_failed`
+- [x] persist:
+  - [x] total files discovered
+  - [x] files indexed
+  - [x] total chunks written
+  - [x] chunks reused
+  - [x] last successful index time
+  - [x] last error
+- [x] expose retrieval index status through CLI
+- [x] expose retrieval index status through MCP
+- [x] ensure one source of truth for “searchable now”
+- [x] ensure interrupted indexing can recover cleanly without manual cleanup
 
 Why:
 - prevents state drift between stored content, searchable content, and agent-visible status
@@ -3897,5 +3897,63 @@ This patch is complete when:
 - [ ] stable `chunk_id` exists and is used for dedupe/reuse
 - [ ] retrieval/token-efficiency benchmarks are in place
 - [ ] optional post-retrieval compaction is tracked as a late experiment only
+
+---
+
+## Patch G — Graph Store Build Lifecycle State
+
+Atlas has retrieval index lifecycle state in the content store (Patch R1), but the graph store (`worldtree.db`) has no equivalent. Schema version alone is not enough — a `building` or `build_failed` state cannot be inferred from `metadata.schema_version`.
+
+### Patch G1 — Graph build lifecycle state
+
+- [x] add explicit graph build state model to `atlas-store-sqlite`
+- [x] create migration `006_graph_build_state.sql` in `packages/atlas-store-sqlite/src/migrations/`
+- [x] create `graph_build_state` table with columns:
+  - [x] `repo_root TEXT PRIMARY KEY`
+  - [x] `state TEXT NOT NULL` — `building`, `built`, `build_failed`
+  - [x] `files_discovered INTEGER NOT NULL DEFAULT 0`
+  - [x] `files_processed INTEGER NOT NULL DEFAULT 0`
+  - [x] `files_failed INTEGER NOT NULL DEFAULT 0`
+  - [x] `nodes_written INTEGER NOT NULL DEFAULT 0`
+  - [x] `edges_written INTEGER NOT NULL DEFAULT 0`
+  - [x] `last_built_at TEXT`
+  - [x] `last_error TEXT`
+  - [x] `updated_at TEXT NOT NULL`
+- [x] define `GraphBuildState` enum: `Building`, `Built`, `BuildFailed`
+- [x] define `GraphBuildStatus` struct with all counter and timestamp fields
+- [x] add `Store` methods:
+  - [x] `begin_build(repo_root)`
+  - [x] `finish_build(repo_root, stats)`
+  - [x] `fail_build(repo_root, error)`
+  - [x] `get_build_status(repo_root) -> Option<GraphBuildStatus>`
+  - [x] `list_build_statuses() -> Vec<GraphBuildStatus>`
+- [x] wire `begin_build` and `finish_build` / `fail_build` into `atlas build` command path
+- [x] wire `begin_build` and `finish_build` / `fail_build` into `atlas update` command path
+- [x] expose build status in `atlas status` output
+- [x] expose build status in `atlas doctor` check (flag `state=building` as interrupted, `build_failed` as error)
+- [x] include build status in `build_or_update_graph` MCP tool response
+- [x] export `GraphBuildState`, `GraphBuildStatus` from `atlas-store-sqlite` crate
+- [x] add tests:
+  - [x] `begin_build` sets state to `building`
+  - [x] `finish_build` after `begin_build` sets state to `built` with counters
+  - [x] `fail_build` after `begin_build` sets state to `build_failed` with error
+  - [x] `get_build_status` returns `None` when no row exists
+  - [x] `list_build_statuses` returns all repos
+  - [x] interrupted build (state stays `building`) detected by doctor
+  - [x] counters accumulate correctly across update runs
+
+Why:
+- graph store has no way to distinguish "never built", "currently building", "build done", "build crashed"
+- `atlas status` and `atlas doctor` cannot correctly report graph freshness without explicit state
+- mirrors Patch R1 pattern for consistency across all three stores
+
+### Patch G completion criteria
+
+- [x] graph store has explicit build state separate from schema version
+- [x] `atlas build` and `atlas update` record lifecycle transitions
+- [x] `atlas doctor` flags interrupted or failed builds
+- [x] `atlas status` reports graph build state alongside file/node counts
+- [x] MCP `build_or_update_graph` returns persisted build state
+- [x] tests cover all state transitions
 
 ---

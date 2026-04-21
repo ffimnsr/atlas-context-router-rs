@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
+use atlas_contentstore::{ContentStore, IndexState};
 use atlas_repo::{collect_files, find_repo_root};
-use atlas_store_sqlite::Store;
+use atlas_store_sqlite::{GraphBuildState, Store};
 use camino::Utf8Path;
 
 use crate::cli::{Cli, Command};
@@ -152,6 +153,42 @@ pub fn run_doctor(cli: &Cli) -> Result<()> {
                         checks.push(CheckResult::fail("graph_stats", e.to_string()));
                     }
                 }
+
+                // 6b. Graph build lifecycle state.
+                match store.get_build_status(&repo) {
+                    Ok(Some(bs)) => {
+                        let (state_str, is_ok) = match bs.state {
+                            GraphBuildState::Built => ("built", true),
+                            GraphBuildState::Building => ("building (interrupted?)", false),
+                            GraphBuildState::BuildFailed => ("build_failed", false),
+                        };
+                        if is_ok {
+                            checks.push(CheckResult::pass(
+                                "graph_build_state",
+                                format!(
+                                    "state={state_str} nodes={} edges={}",
+                                    bs.nodes_written, bs.edges_written
+                                ),
+                            ));
+                        } else {
+                            let detail = if let Some(err) = bs.last_error {
+                                format!("state={state_str} error={err}")
+                            } else {
+                                format!("state={state_str}")
+                            };
+                            checks.push(CheckResult::fail("graph_build_state", detail));
+                        }
+                    }
+                    Ok(None) => {
+                        checks.push(CheckResult::pass(
+                            "graph_build_state",
+                            "no build recorded yet",
+                        ));
+                    }
+                    Err(e) => {
+                        checks.push(CheckResult::fail("graph_build_state", e.to_string()));
+                    }
+                }
             }
             Err(e) => {
                 checks.push(CheckResult::fail("db_open", e.to_string()));
@@ -169,6 +206,63 @@ pub fn run_doctor(cli: &Cli) -> Result<()> {
         }
         Err(e) => {
             checks.push(CheckResult::fail("git_ls_files", e.to_string()));
+        }
+    }
+
+    // 8. Content DB retrieval index state (best-effort; missing DB is not fatal).
+    {
+        let content_db = {
+            let p = std::path::Path::new(&db_path_str);
+            p.parent()
+                .map(|d| d.join("context.db").to_string_lossy().into_owned())
+                .unwrap_or_else(|| "context.db".to_string())
+        };
+        match ContentStore::open(&content_db) {
+            Ok(mut cs) => {
+                let _ = cs.migrate();
+                match cs.get_index_status(&repo) {
+                    Ok(Some(status)) => {
+                        let state_str = match status.state {
+                            IndexState::Indexed => "indexed",
+                            IndexState::Indexing => "indexing (interrupted?)",
+                            IndexState::IndexFailed => "index_failed",
+                        };
+                        let searchable = status.state == IndexState::Indexed;
+                        checks.push(if searchable {
+                            CheckResult::pass(
+                                "retrieval_index",
+                                format!(
+                                    "state={state_str} files={} chunks={}",
+                                    status.files_indexed, status.chunks_written
+                                ),
+                            )
+                        } else {
+                            let detail = if let Some(err) = status.last_error {
+                                format!("state={state_str} error={err}")
+                            } else {
+                                format!("state={state_str}")
+                            };
+                            CheckResult::fail("retrieval_index", detail)
+                        });
+                    }
+                    Ok(None) => {
+                        checks.push(CheckResult::pass(
+                            "retrieval_index",
+                            "no index run recorded yet",
+                        ));
+                    }
+                    Err(e) => {
+                        checks.push(CheckResult::fail("retrieval_index", e.to_string()));
+                    }
+                }
+            }
+            // Content DB not yet created — not an error at this point.
+            Err(_) => {
+                checks.push(CheckResult::pass(
+                    "retrieval_index",
+                    "content store not initialised",
+                ));
+            }
         }
     }
 

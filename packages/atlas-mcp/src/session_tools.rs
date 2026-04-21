@@ -457,7 +457,7 @@ pub fn tool_get_context_stats(
         .map(|e| e.len())
         .unwrap_or(0);
 
-    // Content stats (best-effort).
+    // Content stats + retrieval index state (best-effort).
     let (source_count, chunk_count) = ContentStore::open(&content_db)
         .ok()
         .and_then(|mut cs| {
@@ -465,6 +465,27 @@ pub fn tool_get_context_stats(
             cs.stats(Some(session_id.as_str())).ok()
         })
         .unwrap_or((0, 0));
+
+    // Retrieval index status for this repo (best-effort).
+    let retrieval_index = ContentStore::open(&content_db)
+        .ok()
+        .and_then(|mut cs| {
+            let _ = cs.migrate();
+            cs.get_index_status(repo_root).ok().flatten()
+        })
+        .map(|s| {
+            serde_json::json!({
+                "state": s.state,
+                "files_discovered": s.files_discovered,
+                "files_indexed": s.files_indexed,
+                "chunks_written": s.chunks_written,
+                "chunks_reused": s.chunks_reused,
+                "last_indexed_at": s.last_indexed_at,
+                "last_error": s.last_error,
+                "updated_at": s.updated_at,
+                "searchable": s.state == atlas_contentstore::IndexState::Indexed,
+            })
+        });
 
     // Bridge artifact count.
     let bridge_file_pending = bridge_file_count(&bridge_dir);
@@ -479,6 +500,7 @@ pub fn tool_get_context_stats(
             "content_db_path": content_db,
             "session_db_path": session_db,
             "bridge_dir_path": bridge_dir.to_string_lossy(),
+            "retrieval_index": retrieval_index,
         }),
         output_format,
     )

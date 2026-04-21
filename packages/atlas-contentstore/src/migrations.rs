@@ -14,4 +14,8 @@ pub const MIGRATIONS: &[Migration] = &[
         version: 2,
         sql: include_str!("migrations/002_trigram_and_vocabulary.sql"),
     },
+    Migration {
+        version: 3,
+        sql: include_str!("migrations/003_retrieval_index_state.sql"),
+    },
 ];

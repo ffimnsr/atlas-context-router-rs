@@ -18,6 +18,7 @@
 //! budgets can tune them without recompiling.
 
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
+use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use tracing::{debug, info};
 
@@ -443,6 +444,16 @@ impl ContentStore {
         }
 
         tx.commit().map_err(|e| AtlasError::Db(e.to_string()))?;
+
+        // Update per-repo index counters so callers can track indexing progress
+        // without requiring an explicit begin_indexing/finish_indexing lifecycle.
+        if let Some(ref rr) = meta.repo_root {
+            // Best-effort: counter update failure does not fail the index operation.
+            if let Err(e) = self.increment_index_counters(rr, chunks.len() as i64) {
+                debug!("index counter update failed (best-effort): {e}");
+            }
+        }
+
         Ok(())
     }
 
@@ -875,6 +886,235 @@ pub struct SourceRow {
     pub label: String,
     pub repo_root: Option<String>,
     pub created_at: String,
+}
+
+// ---------------------------------------------------------------------------
+// Retrieval index lifecycle state (Patch R1)
+// ---------------------------------------------------------------------------
+
+/// Lifecycle phase of the retrieval/content index for a given repo.
+///
+/// - `Indexing`    — a run is in progress (or was interrupted and not cleaned up).
+/// - `Indexed`     — last run completed successfully; content is searchable.
+/// - `IndexFailed` — last run failed; `last_error` carries the reason.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IndexState {
+    Indexing,
+    Indexed,
+    IndexFailed,
+}
+
+impl IndexState {
+    fn from_str(s: &str) -> Self {
+        match s {
+            "indexing" => Self::Indexing,
+            "index_failed" => Self::IndexFailed,
+            _ => Self::Indexed,
+        }
+    }
+}
+
+/// Persisted status row for the retrieval index of one repo root.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RetrievalIndexStatus {
+    /// Normalized repo root path (primary key).
+    pub repo_root: String,
+    /// Current lifecycle state.
+    pub state: IndexState,
+    /// Number of files discovered during the last `begin_indexing` call.
+    pub files_discovered: i64,
+    /// Number of files successfully indexed in the last run.
+    pub files_indexed: i64,
+    /// Number of chunks written to the store in the last run.
+    pub chunks_written: i64,
+    /// Number of chunks reused from a previous run (content-hash dedup).
+    pub chunks_reused: i64,
+    /// ISO-8601 timestamp of the last successful `finish_indexing` call.
+    pub last_indexed_at: Option<String>,
+    /// Error message from the last `fail_indexing` call, if any.
+    pub last_error: Option<String>,
+    /// ISO-8601 timestamp of the last state change.
+    pub updated_at: String,
+}
+
+/// Progress counters passed to [`ContentStore::finish_indexing`].
+#[derive(Debug, Clone, Default)]
+pub struct IndexingStats {
+    pub files_indexed: i64,
+    pub chunks_written: i64,
+    pub chunks_reused: i64,
+}
+
+impl ContentStore {
+    // ── Index lifecycle API ──────────────────────────────────────────────────
+
+    /// Begin an indexing run for `repo_root`.
+    ///
+    /// Sets state to `indexing` and records `files_discovered`.  If a row
+    /// already exists (e.g. from a previous run) it is overwritten in-place so
+    /// interrupted runs can be cleanly restarted.
+    pub fn begin_indexing(&mut self, repo_root: &str, files_discovered: i64) -> Result<()> {
+        let now = format_now();
+        self.conn
+            .execute(
+                "INSERT INTO retrieval_index_state
+                     (repo_root, state, files_discovered, files_indexed,
+                      chunks_written, chunks_reused, last_indexed_at, last_error, updated_at)
+                 VALUES (?1, 'indexing', ?2, 0, 0, 0, NULL, NULL, ?3)
+                 ON CONFLICT(repo_root) DO UPDATE SET
+                     state            = 'indexing',
+                     files_discovered = ?2,
+                     files_indexed    = 0,
+                     chunks_written   = 0,
+                     chunks_reused    = 0,
+                     last_error       = NULL,
+                     updated_at       = ?3",
+                params![repo_root, files_discovered, now],
+            )
+            .map_err(|e| AtlasError::Db(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Mark an indexing run as successfully completed.
+    ///
+    /// Sets state to `indexed`, records final counters, and stamps
+    /// `last_indexed_at` with the current UTC time.
+    pub fn finish_indexing(&mut self, repo_root: &str, stats: &IndexingStats) -> Result<()> {
+        let now = format_now();
+        self.conn
+            .execute(
+                "INSERT INTO retrieval_index_state
+                     (repo_root, state, files_discovered, files_indexed,
+                      chunks_written, chunks_reused, last_indexed_at, last_error, updated_at)
+                 VALUES (?1, 'indexed', 0, ?2, ?3, ?4, ?5, NULL, ?5)
+                 ON CONFLICT(repo_root) DO UPDATE SET
+                     state           = 'indexed',
+                     files_indexed   = ?2,
+                     chunks_written  = ?3,
+                     chunks_reused   = ?4,
+                     last_indexed_at = ?5,
+                     last_error      = NULL,
+                     updated_at      = ?5",
+                params![
+                    repo_root,
+                    stats.files_indexed,
+                    stats.chunks_written,
+                    stats.chunks_reused,
+                    now,
+                ],
+            )
+            .map_err(|e| AtlasError::Db(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Mark an indexing run as failed, recording the error reason.
+    ///
+    /// Sets state to `index_failed` so callers can surface "not searchable"
+    /// status without inspecting logs.
+    pub fn fail_indexing(&mut self, repo_root: &str, error: &str) -> Result<()> {
+        let now = format_now();
+        self.conn
+            .execute(
+                "INSERT INTO retrieval_index_state
+                     (repo_root, state, files_discovered, files_indexed,
+                      chunks_written, chunks_reused, last_indexed_at, last_error, updated_at)
+                 VALUES (?1, 'index_failed', 0, 0, 0, 0, NULL, ?2, ?3)
+                 ON CONFLICT(repo_root) DO UPDATE SET
+                     state      = 'index_failed',
+                     last_error = ?2,
+                     updated_at = ?3",
+                params![repo_root, error, now],
+            )
+            .map_err(|e| AtlasError::Db(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Return the current index status for `repo_root`, or `None` if no run
+    /// has ever been recorded for that repo.
+    pub fn get_index_status(&self, repo_root: &str) -> Result<Option<RetrievalIndexStatus>> {
+        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT repo_root, state, files_discovered, files_indexed,
+                        chunks_written, chunks_reused, last_indexed_at, last_error, updated_at
+                 FROM retrieval_index_state WHERE repo_root = ?1",
+            )
+            .map_err(db_err)?;
+        let mut rows = stmt.query(params![repo_root]).map_err(db_err)?;
+        if let Some(row) = rows.next().map_err(db_err)? {
+            Ok(Some(Self::row_to_status(row)?))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Return status rows for all repos that have ever been indexed.
+    ///
+    /// Ordered by `updated_at DESC` so the most recently touched repo is first.
+    pub fn list_index_statuses(&self) -> Result<Vec<RetrievalIndexStatus>> {
+        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT repo_root, state, files_discovered, files_indexed,
+                        chunks_written, chunks_reused, last_indexed_at, last_error, updated_at
+                 FROM retrieval_index_state ORDER BY updated_at DESC",
+            )
+            .map_err(db_err)?;
+        let mut rows = stmt.query([]).map_err(db_err)?;
+        let mut out = Vec::new();
+        while let Some(row) = rows.next().map_err(db_err)? {
+            out.push(Self::row_to_status(row)?);
+        }
+        Ok(out)
+    }
+
+    fn row_to_status(row: &rusqlite::Row<'_>) -> Result<RetrievalIndexStatus> {
+        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
+        Ok(RetrievalIndexStatus {
+            repo_root: row.get::<_, String>(0).map_err(db_err)?,
+            state: IndexState::from_str(&row.get::<_, String>(1).map_err(db_err)?),
+            files_discovered: row.get::<_, i64>(2).map_err(db_err)?,
+            files_indexed: row.get::<_, i64>(3).map_err(db_err)?,
+            chunks_written: row.get::<_, i64>(4).map_err(db_err)?,
+            chunks_reused: row.get::<_, i64>(5).map_err(db_err)?,
+            last_indexed_at: row.get::<_, Option<String>>(6).map_err(db_err)?,
+            last_error: row.get::<_, Option<String>>(7).map_err(db_err)?,
+            updated_at: row.get::<_, String>(8).map_err(db_err)?,
+        })
+    }
+
+    /// Increment `chunks_written` and `files_indexed` counters for `repo_root`.
+    ///
+    /// Called automatically from `index_artifact` when `SourceMeta.repo_root`
+    /// is set.  Uses `INSERT OR IGNORE` so no explicit `begin_indexing` call
+    /// is required for ad-hoc single-artifact indexing.
+    fn increment_index_counters(&mut self, repo_root: &str, chunk_count: i64) -> Result<()> {
+        let now = format_now();
+        // Ensure a row exists (state defaults to 'indexed' for ad-hoc indexing).
+        self.conn
+            .execute(
+                "INSERT OR IGNORE INTO retrieval_index_state
+                     (repo_root, state, files_discovered, files_indexed,
+                      chunks_written, chunks_reused, last_indexed_at, last_error, updated_at)
+                 VALUES (?1, 'indexed', 0, 0, 0, 0, NULL, NULL, ?2)",
+                params![repo_root, now],
+            )
+            .map_err(|e| AtlasError::Db(e.to_string()))?;
+        self.conn
+            .execute(
+                "UPDATE retrieval_index_state
+                 SET files_indexed  = files_indexed + 1,
+                     chunks_written = chunks_written + ?2,
+                     updated_at     = ?3
+                 WHERE repo_root = ?1",
+                params![repo_root, chunk_count, now],
+            )
+            .map_err(|e| AtlasError::Db(e.to_string()))?;
+        Ok(())
+    }
 }
 
 fn format_now() -> String {
@@ -1466,5 +1706,132 @@ mod tests {
             let err = AtlasError::Db(msg.to_string());
             assert!(is_corruption_error(&err), "must match: {msg}");
         }
+    }
+
+    // ── Retrieval index lifecycle (Patch R1) ────────────────────────────────
+
+    #[test]
+    fn begin_indexing_sets_state_to_indexing() {
+        let mut store = open_store();
+        store.begin_indexing("/repo/a", 42).unwrap();
+        let status = store.get_index_status("/repo/a").unwrap().unwrap();
+        assert_eq!(status.state, IndexState::Indexing);
+        assert_eq!(status.files_discovered, 42);
+        assert_eq!(status.files_indexed, 0);
+        assert_eq!(status.chunks_written, 0);
+        assert!(status.last_indexed_at.is_none());
+        assert!(status.last_error.is_none());
+    }
+
+    #[test]
+    fn finish_indexing_marks_indexed_and_stamps_time() {
+        let mut store = open_store();
+        store.begin_indexing("/repo/b", 10).unwrap();
+        store
+            .finish_indexing(
+                "/repo/b",
+                &IndexingStats {
+                    files_indexed: 9,
+                    chunks_written: 30,
+                    chunks_reused: 1,
+                },
+            )
+            .unwrap();
+        let status = store.get_index_status("/repo/b").unwrap().unwrap();
+        assert_eq!(status.state, IndexState::Indexed);
+        assert_eq!(status.files_indexed, 9);
+        assert_eq!(status.chunks_written, 30);
+        assert_eq!(status.chunks_reused, 1);
+        assert!(status.last_indexed_at.is_some());
+        assert!(status.last_error.is_none());
+    }
+
+    #[test]
+    fn fail_indexing_sets_error_state() {
+        let mut store = open_store();
+        store.begin_indexing("/repo/c", 5).unwrap();
+        store
+            .fail_indexing("/repo/c", "parse error on main.rs")
+            .unwrap();
+        let status = store.get_index_status("/repo/c").unwrap().unwrap();
+        assert_eq!(status.state, IndexState::IndexFailed);
+        assert_eq!(status.last_error.unwrap(), "parse error on main.rs");
+    }
+
+    #[test]
+    fn missing_repo_returns_none() {
+        let store = open_store();
+        let status = store.get_index_status("/nonexistent/repo").unwrap();
+        assert!(status.is_none());
+    }
+
+    #[test]
+    fn list_index_statuses_returns_all_repos() {
+        let mut store = open_store();
+        store.begin_indexing("/repo/x", 1).unwrap();
+        store
+            .finish_indexing("/repo/x", &IndexingStats::default())
+            .unwrap();
+        store.begin_indexing("/repo/y", 2).unwrap();
+        let statuses = store.list_index_statuses().unwrap();
+        assert_eq!(statuses.len(), 2);
+        let roots: Vec<&str> = statuses.iter().map(|s| s.repo_root.as_str()).collect();
+        assert!(roots.contains(&"/repo/x"));
+        assert!(roots.contains(&"/repo/y"));
+    }
+
+    #[test]
+    fn begin_indexing_resets_counters_on_restart() {
+        let mut store = open_store();
+        // First run
+        store.begin_indexing("/repo/d", 20).unwrap();
+        store
+            .finish_indexing(
+                "/repo/d",
+                &IndexingStats {
+                    files_indexed: 18,
+                    chunks_written: 60,
+                    chunks_reused: 2,
+                },
+            )
+            .unwrap();
+        // Second run — counters must reset.
+        store.begin_indexing("/repo/d", 25).unwrap();
+        let status = store.get_index_status("/repo/d").unwrap().unwrap();
+        assert_eq!(status.state, IndexState::Indexing);
+        assert_eq!(status.files_discovered, 25);
+        assert_eq!(status.files_indexed, 0);
+        assert_eq!(status.chunks_written, 0);
+    }
+
+    #[test]
+    fn index_artifact_auto_increments_index_counters() {
+        let mut store = open_store();
+        // No begin_indexing call — ad-hoc single artifact with repo_root.
+        store
+            .index_artifact(meta("src-ai"), "auto increment test content", "text/plain")
+            .unwrap();
+        // meta() sets repo_root = "/repo", so a row should have been created.
+        let status = store.get_index_status("/repo").unwrap().unwrap();
+        assert_eq!(status.state, IndexState::Indexed);
+        assert!(status.files_indexed >= 1);
+        assert!(status.chunks_written >= 1);
+    }
+
+    #[test]
+    fn interrupted_indexing_visible_as_indexing_state() {
+        let mut store = open_store();
+        // Simulate a run that starts but never finishes (e.g. process crash).
+        store.begin_indexing("/repo/interrupted", 100).unwrap();
+        // Reopen the store (new struct instance, same DB).
+        let status = store
+            .get_index_status("/repo/interrupted")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            status.state,
+            IndexState::Indexing,
+            "interrupted run must show as 'indexing' to signal recovery needed"
+        );
     }
 }

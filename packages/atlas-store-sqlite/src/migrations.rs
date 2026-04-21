@@ -30,4 +30,8 @@ pub const MIGRATIONS: &[Migration] = &[
         version: 5,
         sql: include_str!("migrations/005_file_owners.sql"),
     },
+    Migration {
+        version: 6,
+        sql: include_str!("migrations/006_graph_build_state.sql"),
+    },
 ];
