@@ -110,6 +110,9 @@ pub fn run_init(cli: &Cli) -> Result<()> {
                 "config_created": config_created,
             }),
         )?;
+    } else if super::init_wizard::should_run(cli.json) {
+        let repo_root = std::path::Path::new(&repo);
+        super::init_wizard::run(repo_root)?;
     } else {
         println!("Initialized atlas in {}", atlas_dir.display());
         println!("Database: {db_path}");

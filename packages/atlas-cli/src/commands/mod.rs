@@ -2,6 +2,7 @@ mod changes;
 mod context_cmd;
 mod graph;
 mod graph_objects;
+mod init_wizard;
 mod maintenance;
 mod platform;
 mod query;
