@@ -94,19 +94,6 @@ fn init_creates_graph_content_and_session_databases() {
     let content_db = repo.path().join(".atlas").join("context.db");
     let session_db = repo.path().join(".atlas").join("session.db");
 
-    assert_eq!(
-        data["db_path"],
-        json!(graph_db.to_string_lossy().into_owned())
-    );
-    assert_eq!(
-        data["content_db_path"],
-        json!(content_db.to_string_lossy().into_owned())
-    );
-    assert_eq!(
-        data["session_db_path"],
-        json!(session_db.to_string_lossy().into_owned())
-    );
-
     assert!(
         graph_db.is_file(),
         "graph db missing: {}",
@@ -121,6 +108,16 @@ fn init_creates_graph_content_and_session_databases() {
         session_db.is_file(),
         "session db missing: {}",
         session_db.display()
+    );
+
+    assert_eq!(json_path(&data["db_path"]), canonical_path(&graph_db));
+    assert_eq!(
+        json_path(&data["content_db_path"]),
+        canonical_path(&content_db)
+    );
+    assert_eq!(
+        json_path(&data["session_db_path"]),
+        canonical_path(&session_db)
     );
 }
 
@@ -2589,6 +2586,15 @@ fn tracked_repo_files(repo_root: &Path) -> Vec<String> {
 
 fn run_atlas(repo_root: &Path, args: &[&str]) -> Output {
     run_command(repo_root, env!("CARGO_BIN_EXE_atlas"), args)
+}
+
+fn json_path(value: &Value) -> PathBuf {
+    let raw = value.as_str().expect("json path string");
+    canonical_path(Path::new(raw))
+}
+
+fn canonical_path(path: &Path) -> PathBuf {
+    fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
 fn run_command(repo_root: &Path, program: &str, args: &[&str]) -> Output {
