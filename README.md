@@ -1,14 +1,26 @@
 # Atlas Context Router
 
-Atlas builds a local code graph for your repository, stores it in SQLite, and gives you fast graph-aware commands for search, impact analysis, review context, and MCP-based AI tooling.
+[![CI](https://github.com/ffimnsr/atlas-context-router-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/ffimnsr/atlas-context-router-rs/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/ffimnsr/atlas-context-router-rs)](https://github.com/ffimnsr/atlas-context-router-rs/releases)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-## What Atlas Does
+```text
+     _  _____ _      _   ___
+    / \|_   _| |    / \ / __|
+   / _ \ | | | |__ / _ \\__ \
+  /_/ \_\|_| |____/_/ \_\___/
 
-- scans tracked files in your repository
-- parses supported languages into graph nodes and edges
-- stores graph data in `.atlas/worldtree.db`
-- updates incrementally from git changes
-- answers graph-aware queries from CLI or MCP clients
+  graph-aware code context for CLI and MCP workflows
+```
+
+Atlas scans repository code, builds graph structure, stores it in SQLite, and serves graph-aware context to both CLI workflows and MCP-based coding agents.
+
+| Area | What Atlas gives you |
+|------|----------------------|
+| Graph build | tracked-file scan, parse, persist into `.atlas/worldtree.db` |
+| Incremental update | rebuild only from git or working-tree changes |
+| Search and impact | symbol lookup, call/risk traversal, review context |
+| Agent tooling | MCP server, install helpers, repo hooks, editor integration |
 
 Supported languages in current build:
 
@@ -20,13 +32,47 @@ Supported languages in current build:
 
 ## Install
 
-Build from source:
+### Latest release
+
+Download installer from latest GitHub release assets:
+
+```bash
+curl -fsSLO https://github.com/ffimnsr/atlas-context-router-rs/releases/latest/download/install.sh
+curl -fsSLO https://github.com/ffimnsr/atlas-context-router-rs/releases/latest/download/install.sh.sha256
+
+sha256sum -c install.sh.sha256 2>/dev/null || shasum -a 256 -c install.sh.sha256
+sh install.sh
+```
+
+Release notes:
+
+- `install.sh.sha256` is not stored in repo root; release workflow generates it and publishes it as a release asset
+- `install.sh.sha256` ships with each release
+- `install.sh` verifies downloaded Atlas archive checksums before install
+- release archives are published for Linux musl, macOS x86_64, and macOS arm64
+
+If latest-release URLs are not available yet, use one of these fallback paths:
 
 ```bash
 cargo install --path packages/atlas-cli
 ```
 
-Or run from workspace during development:
+Maintainer-only raw installer fallback:
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/ffimnsr/atlas-context-router-rs/main/install.sh
+sh install.sh
+```
+
+Raw `main` installer is not release-pinned. Prefer release assets once first tagged release exists.
+
+### Build from source
+
+```bash
+cargo install --path packages/atlas-cli
+```
+
+### Run from workspace
 
 ```bash
 cargo run -p atlas-cli -- --help
@@ -34,7 +80,7 @@ cargo run -p atlas-cli -- --help
 
 ## Quick Start
 
-Inside a git repository:
+Inside any git repository:
 
 ```bash
 atlas init
@@ -43,7 +89,7 @@ atlas status
 atlas query "symbol_name"
 ```
 
-Review recent work against a base ref:
+Review recent work against mainline:
 
 ```bash
 atlas update --base origin/main
@@ -52,35 +98,54 @@ atlas impact --base origin/main
 atlas review-context --base origin/main
 ```
 
-## Install For AI Tools
+## LLM Agent Setup
 
-Atlas can install MCP configuration for supported coding tools and add repository hooks.
+Atlas can install MCP configuration for popular AI coding tools and add repo hooks so agents start with graph-aware context.
 
-Configure all detected tools:
+### GitHub Copilot
+
+```bash
+atlas install --platform copilot
+atlas build
+```
+
+Writes MCP config under `.vscode/mcp.json`.
+
+### Claude Code
+
+```bash
+atlas install --platform claude
+atlas build
+```
+
+Writes MCP config under `.mcp.json`.
+
+### Codex
+
+```bash
+atlas install --platform codex
+atlas build
+```
+
+Writes Codex MCP entry into `.codex/config.toml`.
+
+### Auto-detect installed tools
 
 ```bash
 atlas install
 ```
 
-Configure one tool explicitly:
-
-```bash
-atlas install --platform copilot
-atlas install --platform claude
-atlas install --platform codex
-```
-
-Preview without writing files:
+### Preview without writing files
 
 ```bash
 atlas install --dry-run
 ```
 
-What `atlas install` does:
+`atlas install` will:
 
-- writes MCP server config for GitHub Copilot, Claude Code, or Codex
-- installs git hooks for `pre-commit`, `post-checkout`, `post-merge`, and `post-rewrite`
-- injects graph-first instructions into `AGENTS.md` and `CLAUDE.md`
+- write MCP server config for GitHub Copilot, Claude Code, or Codex
+- install git hooks for `pre-commit`, `post-checkout`, `post-merge`, and `post-rewrite`
+- inject graph-first instructions into `AGENTS.md` and `CLAUDE.md`
 
 Hook behavior:
 
@@ -115,6 +180,32 @@ Example for Zsh:
 ```bash
 mkdir -p ~/.zfunc
 atlas completions zsh > ~/.zfunc/_atlas
+```
+
+## Typical Workflows
+
+### Bootstrap graph for a repo
+
+```bash
+atlas init
+atlas build
+atlas status
+```
+
+### Review branch against main
+
+```bash
+atlas update --base origin/main
+atlas detect-changes --base origin/main
+atlas impact --base origin/main
+atlas review-context --base origin/main
+```
+
+### Install editor and hook integration
+
+```bash
+atlas install --platform copilot
+atlas build
 ```
 
 ## Common Commands
@@ -205,68 +296,27 @@ atlas db-check
 
 ## Context Engine (`atlas context`)
 
-Build bounded, machine-readable context around any symbol, file, or change-set.
+`atlas context` builds bounded, machine-readable context around a symbol, file, or change-set.
 
-**Symbol or free-text query** (auto-classified):
+Common forms:
 
 ```bash
 atlas context "AuthService"
 atlas context "who calls handle_request"
-atlas context "safe to remove helper"
-```
-
-**Explicit file target:**
-
-```bash
 atlas context --file src/auth.rs
-```
-
-**Changed-file review context:**
-
-```bash
-atlas context --files src/auth.rs src/session.rs
-atlas context --files src/auth.rs --intent impact
-```
-
-**Machine-readable JSON:**
-
-```bash
-atlas --json context "AuthService"
-atlas --json context --file src/auth.rs
+atlas context --files src/auth.rs src/session.rs --intent impact
 atlas --json context --files src/auth.rs src/session.rs
 ```
 
-**Supported `--intent` values:** `symbol` (default), `file`, `review`, `impact`,
-`usage_lookup`, `refactor_safety`, `dead_code_check`, `rename_preview`,
-`dependency_removal`.
+Key knobs:
 
-**Limit flags:** `--max-nodes`, `--max-edges`, `--max-files`, `--depth`.
-Extra flags: `--code-spans`, `--tests`, `--imports`, `--neighbors`.
+- `--intent`: `symbol`, `file`, `review`, `impact`, `usage_lookup`, `refactor_safety`, `dead_code_check`, `rename_preview`, `dependency_removal`
+- limits: `--max-nodes`, `--max-edges`, `--max-files`, `--depth`
+- extra detail: `--code-spans`, `--tests`, `--imports`, `--neighbors`
 
-**Default limits:** 100 nodes, 100 edges, 20 files, depth 2.
+Default limits: 100 nodes, 100 edges, 20 files, depth 2.
 
-**JSON contract** (`atlas --json context ...`):
-
-```json
-{
-  "schema_version": "atlas_cli.v1",
-  "command": "context",
-  "data": {
-    "intent": "symbol",
-    "request": { "intent": "symbol", "target": { "kind": "symbol_name", "name": "..." }, ... },
-    "nodes": [ { "distance": 0, "selection_reason": "direct_target", "relevance_score": 121.0, "node": { ... } } ],
-    "edges": [ { "depth": 1, "selection_reason": "callee", "edge": { ... } } ],
-    "files": [ { "path": "src/lib.rs", "selection_reason": "direct_target", "line_ranges": [] } ],
-    "truncation": { "truncated": false, "nodes_dropped": 0, "edges_dropped": 0, "files_dropped": 0 },
-    "ambiguity": null
-  }
-}
-```
-
-When the target is ambiguous, `ambiguity` contains `{ "query": "...", "candidates": [...] }` instead of nodes.
-When the target is not found, `nodes` is empty and `ambiguity` is null.
-
-`atlas review-context` remains available as a focused shortcut for change-set review during transition.
+JSON output uses `atlas_cli.v1` and returns request metadata, selected nodes and edges, file spans, truncation info, and optional ambiguity candidates. If target is ambiguous, `ambiguity` is populated instead of direct node results. `atlas review-context` remains available as focused shortcut for review-heavy workflows.
 
 ## Output Modes
 
@@ -304,25 +354,13 @@ The MCP server (`atlas serve`) exposes these tools to agents:
 | `get_minimal_context` | Auto-detect changes and return compact impact bundle |
 | `explain_change` | Advanced impact: risk, change kinds, boundary/test gaps |
 
-All MCP tools accept optional `output_format` with `json` or `toon`. `get_context`, `get_review_context`, `get_impact_radius`, and `explain_change` default to TOON. Other tools default to JSON. Explicit `output_format=json` still overrides TOON-first defaults. TOON uses official `toon-format` crate, stays limited to MCP response bodies, validates encode/decode round-trip, sorts object keys for deterministic output, and falls back to JSON when TOON output would be empty or invalid.
+Output defaults:
 
-**`get_context` schema:**
+- `get_context`, `get_review_context`, `get_impact_radius`, and `explain_change` default to `toon`
+- all other tools default to `json`
+- explicit `output_format=json` overrides TOON-first behavior
 
-```json
-{
-  "query":     "free-text or symbol name (alternative to file/files)",
-  "file":      "repo-relative file path",
-  "files":     ["list", "of", "changed", "paths"],
-  "intent":    "symbol|file|review|impact|usage_lookup|refactor_safety|dead_code_check|rename_preview|dependency_removal",
-  "max_nodes": 100,
-  "max_edges": 100,
-  "max_depth": 2,
-  "output_format": "json|toon"
-}
-```
-
-Response is a compact `PackagedContextResult` with `intent`, `node_count`, `nodes`, `edge_count`, `edges`,
-`file_count`, `files`, `truncated`, `nodes_dropped`, `edges_dropped`, and optional `ambiguity_candidates`.
+`get_context` accepts free-text query, file, or changed-file list plus intent and limit controls. Response is compact `PackagedContextResult` with counts, selected nodes and edges, files, truncation fields, and optional ambiguity candidates.
 
 ## Contributing
 
