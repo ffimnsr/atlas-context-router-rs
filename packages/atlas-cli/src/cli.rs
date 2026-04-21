@@ -123,11 +123,11 @@ pub enum Command {
         #[arg(long)]
         semantic: bool,
 
-        /// Filter results by regex pattern matched against name and qualified_name.
-        /// When text is empty, runs a structural scan then applies the regex.
-        /// Combine with --kind / --language / --subpath for narrower sweeps.
+        /// Treat text as a regex pattern matched against name and qualified_name
+        /// via SQL UDF. Bypasses FTS; uses structural scan with kind/language/subpath filters.
+        /// Use `|` for alternation: `atlas query "handle|HANDLE" --regex`.
         #[arg(long)]
-        regex: Option<String>,
+        regex: bool,
     },
 
     /// Compute the impact radius of changed files.

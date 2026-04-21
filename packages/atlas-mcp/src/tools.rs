@@ -58,7 +58,7 @@ pub fn tool_list() -> serde_json::Value {
                         "semantic": { "type": "boolean", "description": "Use graph-aware semantic expansion: expands via graph neighbours of initial FTS hits before re-ranking (default false)" },
                         "expand":   { "type": "boolean", "description": "Expand results through graph edges after ranking (default false)" },
                         "expand_hops": { "type": "integer", "description": "Max edge hops when expand=true (default 1)" },
-                        "regex":    { "type": "string",  "description": "Post-filter results by regex matched against name and qualified_name. When text is empty, runs a structural scan then applies the regex. Combine with kind/language for narrower sweeps. Must be valid regex crate syntax." },
+                        "regex":    { "type": "string",  "description": "Regex pattern matched against name and qualified_name via SQL UDF. When text is empty, runs a structural scan filtered by this pattern. When both text and regex are provided, FTS5 runs first then the UDF filters inside SQLite. Supports regex crate alternation syntax (e.g. 'handle|HANDLE|Handle_'). Must be valid regex crate syntax." },
                         "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
                     },
                     "required": []
@@ -402,8 +402,13 @@ fn tool_query_graph(
     let expand_hops = u64_arg(args, "expand_hops").unwrap_or(1) as u32;
     let regex = str_arg(args, "regex")?.map(str::to_owned);
 
-    // Validate regex early so agents get a clear error before wasting a DB round-trip.
+    if text.trim().is_empty() && regex.is_none() {
+        anyhow::bail!("query_graph requires non-empty text or a regex pattern");
+    }
     if let Some(ref pat) = regex {
+        if pat.trim().is_empty() {
+            anyhow::bail!("regex pattern must not be empty");
+        }
         regex::Regex::new(pat).map_err(|e| anyhow::anyhow!("invalid regex pattern: {e}"))?;
     }
 

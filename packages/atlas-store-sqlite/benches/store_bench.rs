@@ -183,5 +183,177 @@ criterion_group!(
     bench_fts_query,
     bench_impact_radius,
     bench_find_dependents,
+    // regex UDF benches
+    bench_regex_structural_scan_simple,
+    bench_regex_structural_scan_alternation,
+    bench_regex_fts_plus_udf,
+    bench_regex_structural_scan_vs_fts_baseline,
+    bench_regex_limit_scaling,
 );
 criterion_main!(benches);
+
+// ---------------------------------------------------------------------------
+// Regex UDF bench helpers
+// ---------------------------------------------------------------------------
+
+/// Build a store with `file_count` files of `nodes_per_file` nodes.
+/// Nodes are named with recognisable patterns:
+///   - every 5th: `benchmark_<kind>_latency`
+///   - every 3rd: `handle_<action>`
+///   - rest:      `symbol_<i>`
+fn make_regex_store(file_count: usize, nodes_per_file: usize) -> Store {
+    let mut store = make_store();
+    for fi in 0..file_count {
+        let file = format!("src/module_{fi}.rs");
+        let nodes: Vec<Node> = (0..nodes_per_file)
+            .map(|i| {
+                let global = fi * nodes_per_file + i;
+                let name = if global.is_multiple_of(5) {
+                    let kinds = [
+                        "context_retrieval",
+                        "impact_analysis",
+                        "dead_code_scan",
+                        "rename_planning",
+                        "import_cleanup",
+                    ];
+                    format!("benchmark_{}_latency", kinds[global / 5 % 5])
+                } else if global.is_multiple_of(3) {
+                    let acts = ["request", "response", "auth", "login", "logout"];
+                    format!("handle_{}", acts[global / 3 % 5])
+                } else {
+                    format!("symbol_{global}")
+                };
+                let qn = format!("{file}::fn::{name}");
+                Node {
+                    id: NodeId(0),
+                    kind: NodeKind::Function,
+                    name,
+                    qualified_name: qn,
+                    file_path: file.clone(),
+                    line_start: (i as u32) * 10 + 1,
+                    line_end: (i as u32) * 10 + 5,
+                    language: "rust".to_owned(),
+                    parent_name: None,
+                    params: None,
+                    return_type: None,
+                    modifiers: None,
+                    is_test: false,
+                    file_hash: "abc".to_owned(),
+                    extra_json: serde_json::Value::Null,
+                }
+            })
+            .collect();
+        store
+            .replace_file_graph(&file, "h", Some("rust"), None, &nodes, &[])
+            .expect("seed regex store");
+    }
+    store
+}
+
+// ---------------------------------------------------------------------------
+// Regex UDF benchmarks
+// ---------------------------------------------------------------------------
+
+/// Structural scan (empty text) with a simple anchored pattern.
+/// Baseline: how fast is the UDF itself on N nodes?
+fn bench_regex_structural_scan_simple(c: &mut Criterion) {
+    let mut group = c.benchmark_group("regex/structural_scan_simple");
+    for (files, nodes_per) in [(10usize, 20usize), (50, 20), (100, 20)] {
+        let total = files * nodes_per;
+        let store = make_regex_store(files, nodes_per);
+        group.bench_with_input(BenchmarkId::new("nodes", total), &total, |b, _| {
+            let q = SearchQuery {
+                text: String::new(),
+                regex_pattern: Some(r"^handle_".to_string()),
+                limit: 20,
+                ..Default::default()
+            };
+            b.iter(|| store.search(&q).expect("search"));
+        });
+    }
+    group.finish();
+}
+
+/// Structural scan with a long pipe-alternation pattern (5 terms).
+/// Exercises the cost of alternation matching inside the UDF per row.
+fn bench_regex_structural_scan_alternation(c: &mut Criterion) {
+    let mut group = c.benchmark_group("regex/structural_scan_alternation");
+    for (files, nodes_per) in [(10usize, 20usize), (50, 20), (100, 20)] {
+        let total = files * nodes_per;
+        let store = make_regex_store(files, nodes_per);
+        group.bench_with_input(
+            BenchmarkId::new("nodes", total),
+            &total,
+            |b, _| {
+                let q = SearchQuery {
+                    text: String::new(),
+                    regex_pattern: Some(
+                        r"benchmark_context_retrieval_latency|benchmark_impact_analysis_latency|benchmark_dead_code_scan_latency|benchmark_rename_planning_latency|benchmark_import_cleanup_latency"
+                            .to_string(),
+                    ),
+                    limit: 20,
+                    ..Default::default()
+                };
+                b.iter(|| store.search(&q).expect("search"));
+            },
+        );
+    }
+    group.finish();
+}
+
+/// FTS5 (non-empty text) + UDF filter combined.
+/// Compares against plain FTS (bench_fts_query) to see UDF overhead.
+fn bench_regex_fts_plus_udf(c: &mut Criterion) {
+    let mut group = c.benchmark_group("regex/fts_plus_udf");
+    for (files, nodes_per) in [(10usize, 20usize), (50, 20), (100, 20)] {
+        let total = files * nodes_per;
+        let store = make_regex_store(files, nodes_per);
+        group.bench_with_input(BenchmarkId::new("nodes", total), &total, |b, _| {
+            let q = SearchQuery {
+                text: "handle".to_string(),
+                regex_pattern: Some(r"^handle_re".to_string()),
+                limit: 20,
+                ..Default::default()
+            };
+            b.iter(|| store.search(&q).expect("search"));
+        });
+    }
+    group.finish();
+}
+
+/// Plain FTS baseline (no regex) at the same corpus sizes.
+/// Side-by-side with bench_regex_fts_plus_udf shows the pure UDF overhead.
+fn bench_regex_structural_scan_vs_fts_baseline(c: &mut Criterion) {
+    let mut group = c.benchmark_group("regex/fts_baseline_for_comparison");
+    for (files, nodes_per) in [(10usize, 20usize), (50, 20), (100, 20)] {
+        let total = files * nodes_per;
+        let store = make_regex_store(files, nodes_per);
+        group.bench_with_input(BenchmarkId::new("nodes", total), &total, |b, _| {
+            let q = SearchQuery {
+                text: "handle".to_string(),
+                limit: 20,
+                ..Default::default()
+            };
+            b.iter(|| store.search(&q).expect("search"));
+        });
+    }
+    group.finish();
+}
+
+/// Vary the result limit to check if LIMIT in SQL actually prunes scan early.
+fn bench_regex_limit_scaling(c: &mut Criterion) {
+    let store = make_regex_store(100, 20); // 2000 nodes
+    let mut group = c.benchmark_group("regex/limit_scaling_2000_nodes");
+    for limit in [5usize, 20, 100, 500] {
+        group.bench_with_input(BenchmarkId::new("limit", limit), &limit, |b, &lim| {
+            let q = SearchQuery {
+                text: String::new(),
+                regex_pattern: Some(r".*".to_string()), // matches all — worst case
+                limit: lim,
+                ..Default::default()
+            };
+            b.iter(|| store.search(&q).expect("search"));
+        });
+    }
+    group.finish();
+}

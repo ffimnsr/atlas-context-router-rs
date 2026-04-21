@@ -49,18 +49,27 @@ pub fn run_query(cli: &Cli) -> Result<()> {
                 *fuzzy,
                 *hybrid,
                 *semantic,
-                regex.clone(),
+                *regex,
             ),
             _ => unreachable!(),
         };
 
-    // Validate regex early so the error is reported before any DB work.
-    if let Some(ref pat) = regex {
-        regex::Regex::new(pat).with_context(|| format!("invalid --regex pattern: {pat}"))?;
+    if text.trim().is_empty() {
+        if regex {
+            anyhow::bail!("regex pattern required when --regex is set");
+        } else {
+            anyhow::bail!("search text required; use --regex to treat text as a regex pattern");
+        }
     }
 
+    let (effective_text, regex_pattern) = if regex {
+        (String::new(), Some(text.clone()))
+    } else {
+        (text.clone(), None)
+    };
+
     let query = SearchQuery {
-        text,
+        text: effective_text,
         kind,
         language,
         subpath,
@@ -69,7 +78,7 @@ pub fn run_query(cli: &Cli) -> Result<()> {
         graph_max_hops: expand_hops,
         fuzzy_match: fuzzy,
         hybrid,
-        regex_pattern: regex,
+        regex_pattern,
         ..Default::default()
     };
 

@@ -258,9 +258,10 @@ pub struct SearchQuery {
     pub top_k_vector: usize,
     /// Reciprocal Rank Fusion k constant (default: 60).
     pub rrf_k: u32,
-    /// Optional regex pattern applied as a post-filter against `name` and
-    /// `qualified_name`. When `text` is empty and this is `Some`, the search
-    /// runs a structural SQL scan (no FTS) before applying the regex.
+    /// Optional regex pattern applied as a SQL-layer UDF filter (`atlas_regexp`) against
+    /// `name` and `qualified_name`. When set and `text` is empty, the structural scan path
+    /// is used instead of FTS5. When both `text` and `regex_pattern` are set, FTS5 runs
+    /// first and the UDF filters the results inside SQLite.
     ///
     /// Patterns must be valid `regex` crate syntax. An invalid pattern is
     /// returned as an error rather than silently skipped.

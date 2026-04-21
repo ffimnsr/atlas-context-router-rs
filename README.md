@@ -244,9 +244,9 @@ atlas query "AuthService"
 atlas query "login" --kind function --language rust
 atlas query "router" --subpath packages/atlas-cli --expand --expand-hops 2
 
-# regex post-filter: match name/qualified_name against pattern
-atlas query "" --regex "^handle_[a-z]+"
-atlas query "parse" --regex ".*(body|node).*" --kind function
+# regex filter: text is the pattern, matched against name/qualified_name via SQL UDF
+atlas query "^handle_[a-z]+" --regex
+atlas query "(body|node)" --regex --kind function
 ```
 
 Inspect changed files:
@@ -348,7 +348,7 @@ The MCP server (`atlas serve`) exposes these tools to agents:
 | Tool | Description |
 |------|-------------|
 | `list_graph_stats` | Node/edge counts and language breakdown |
-| `query_graph` | Keyword search with optional `regex` post-filter; returns compact symbol list |
+| `query_graph` | Keyword search with optional `regex` SQL-UDF filter; returns compact symbol list |
 | `get_impact_radius` | Graph traversal from changed files |
 | `get_review_context` | Review bundle: symbols, neighbors, risk summary |
 | `get_context` | General context engine: symbol, file, review, impact |
