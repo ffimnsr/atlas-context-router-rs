@@ -48,6 +48,27 @@ For terms that are easy to misread in this document:
 
 ---
 
+## Roadmap Layout
+
+- Part I. Core delivery roadmap: Phase 0 through Phase 17
+- Part II. Release and interface gates: Release 1, Release 2, MCP and Agent Roadmap
+- Part III. Post-MVP product expansion: Phase 18 through Phase 32
+- Part IV. Context continuity and memory: Phase CM1 through Phase CM15
+- Part V. Focused follow-up patches: Retrieval Follow-Up Patch, Graph Build Lifecycle Patch
+
+## Cross-Cutting Track Map
+
+- MCP and agent surfaces: MCP and Agent Roadmap, Phase 16, Phase 22.0 step 9
+- Retrieval and search: Phase 11, Phase 18, Phase CM6, Phase CM9, Patch R
+- Context and session continuity: Phase 22, Context-Mode and Continuity Roadmap
+- Historical and analytics work: Phase 17, Phase 29, Phase 30, Phase 31
+
+---
+
+## Part I — Core Delivery Roadmap
+
+Read this part in order. It covers initial architecture, storage, parsing, indexing, querying, UX, quality, serve foundations, and historical graph planning.
+
 ## Phase 0 — Core Architecture Decisions
 
 ### 0.1 Freeze release-1 scope
@@ -1130,31 +1151,9 @@ The upstream report highlights parser fidelity and install/hook fragility as the
 
 ## Phase 16 — MCP / Serve Layer
 
-The upstream repo exposes a stdio MCP server, but the report makes clear this should stay a thin wrapper over the domain services rather than becoming the architecture center.
+### 16.1 Status
 
-### 16.1 Core MCP scope
-
-- [x] `build_or_update_graph`
-- [x] `get_minimal_context`
-- [x] `get_impact_radius`
-- [x] `get_review_context`
-- [x] `query_graph`
-- [x] `traverse_graph`
-- [x] `list_graph_stats`
-- [x] `detect_changes`
-
-### 16.2 Transport design
-
-- [x] keep service layer transport-independent
-- [x] add stdio server later
-- [x] avoid long-running tool deadlocks
-- [x] wrap blocking work in dedicated worker threads if needed
-
-### 16.3 Serve command
-
-- [x] `atlas serve`
-- [x] expose only core tools in first version
-- [ ] add prompts later, not first (MCP prompt templates for external LLMs to use as guidance)
+Keep this phase as chronological marker for first MCP/serve work. Detailed MCP checklist now lives in Part II under MCP and Agent Roadmap, especially MCP1.
 
 ---
 
@@ -1777,7 +1776,160 @@ Phase 17 is complete when all of these are true:
 
 ---
 
-## Post-MVP / Atlas v2 Roadmap
+## Part II — Release and Interface Gates
+
+Use this part for release definitions and all MCP / agent-facing rollout work.
+
+## Release Gates
+
+Use these as outcome checkpoints between core roadmap completion and broader post-MVP expansion.
+
+### Release 1 Definition (MVP)
+
+Release 1 is done when this works end-to-end:
+
+- [x] `atlas init`
+- [x] `atlas build`
+- [x] `atlas status`
+- [x] `atlas query "some symbol"`
+- [x] `atlas update --base origin/main`
+- [x] `atlas impact --base origin/main`
+- [x] `atlas review-context --base origin/main`
+
+And the system has:
+
+- [x] multi-language parsing for a small v1 language set
+- [x] SQLite graph persistence
+- [x] file-slice replacement
+- [x] recursive impact-radius SQL traversal
+- [x] review-context assembly
+- [x] FTS5 search
+- [x] CI on Linux
+
+---
+
+### Release 2 Definition
+
+Release 2 is done when this works end-to-end:
+
+- [x] `atlas install`
+- [x] `atlas update --base origin/main`
+- [x] `atlas query "some symbol" --expand`
+- [x] `atlas review-context --base origin/main`
+- [x] `atlas explain-change --base origin/main`
+- [x] `atlas context "what should I read before editing X?"`
+- [x] `atlas analyze dead-code --subpath <path>`
+- [x] `atlas refactor rename --symbol <qualified-name> --to <new-name> --dry-run`
+
+And system has:
+
+- [x] graph-aware search proven against grep baseline for symbol lookup:
+  - [x] exact symbol and qualified-name lookup returns intended definition in top 3 on fixture queries
+  - [x] ambiguous short-name lookup returns ranked candidates with kind and file metadata
+  - [x] caller/callee/import expansion surfaces relevant graph neighbors plain grep cannot infer
+  - [x] fixture evaluation shows better top-1 or top-3 symbol lookup accuracy than plain grep baseline
+- [x] reliable impact scoring with test and boundary signals
+- [x] workspace-aware package/crate boundaries on multi-package repos:
+  - [x] Cargo workspace members resolve into explicit package identities
+  - [x] NPM workspace members resolve into explicit package identities
+  - [x] Go workspace modules resolve into explicit package identities
+  - [x] `cross_package` and related reasoning signals use owning package, not top-level directory name
+  - [x] fixture acceptance passes on repo layouts like `packages/<crate>`, `packages/<app>`, or `go.work` multi-module roots
+- [x] smart review context with better ranking and trimming
+- [x] review-context usefulness acceptance gate passes on fixture repos and changed-file flows
+- [x] deterministic context engine with target resolution and code-span selection
+- [x] reasoning engine for removal impact, dead code, and refactor risk
+- [x] refactor planning with dry-run patch validation
+- [x] stable MCP tools usable by agents with token-efficient output
+- [x] MCP tool usability acceptance gate passes for agent-facing review, impact, query, and context flows
+- [x] watch mode for incremental local updates
+- [x] observability/debug tooling for graph integrity and pipeline behavior
+- [x] performance that scales to large repos
+  - [x] use the current repo on a new disconnected worktree for testing?
+- [x] large-repo performance acceptance gate passes on representative repos without memory or latency regressions
+
+---
+
+## MCP and Agent Roadmap
+
+Use this section for MCP-specific rollout, payload design, continuity, and agent-facing tool work. Other phases should point here instead of repeating MCP checklists.
+
+### MCP1 — Core serve foundation
+
+- [x] `build_or_update_graph`
+- [x] `get_minimal_context`
+- [x] `get_impact_radius`
+- [x] `get_review_context`
+- [x] `query_graph`
+- [x] `traverse_graph`
+- [x] `list_graph_stats`
+- [x] `detect_changes`
+- [x] keep service layer transport-independent
+- [x] add stdio server later
+- [x] avoid long-running tool deadlocks
+- [x] wrap blocking work in dedicated worker threads if needed
+- [x] `atlas serve`
+- [x] expose only core tools in first version
+- [ ] add prompts later, not first (MCP prompt templates for external LLMs to use as guidance)
+
+### MCP2 — Public context surface and schema
+
+- [x] expose MCP tool only after JSON shape stabilizes
+- [x] decide whether MCP public context surface stays review-focused (`get_review_context`) or adds generic `get_context`
+- [x] if generic MCP context tool added, keep it thin over `ContextEngine` with no duplicated ranking/trimming logic
+- [x] document MCP tool schemas and response contracts for public/agent use
+- [x] add `packages/atlas-mcp` tests for `tools/list`, `tools/call`, argument validation, ambiguity, not-found, and truncation cases
+- [x] freeze compact MCP payload contract (`PackagedContextResult` or successor) before broad external use
+- [x] confirm public MCP tools stay token-efficient without hiding critical ambiguity/truncation metadata
+- [x] MCP adapter thin, no duplicated retrieval logic
+
+### MCP3 — Agent-facing tools and response shaping
+
+- [x] `get_review_context`
+- [x] `get_impact_radius`
+- [x] `query_graph`
+- [x] `explain_change`
+- [x] structured JSON
+- [x] stable schemas
+- [x] token-efficient responses
+- [x] return summaries only
+- [x] limit node count
+- [x] prioritize relevance
+
+### MCP4 — Alternate payload modes
+
+- [x] add MCP response mode for TOON text output
+- [x] use TOON first for context-heavy agent-facing tools
+- [x] keep MCP tool contracts stable while swapping payload body format
+- [x] add opt-in selection per tool or global config flag
+
+### MCP5 — Continuity, adapters, and saved-context tools
+
+- [x] MCP tool handler execution boundaries
+- [x] MCP adapter
+- [x] `get_session_status`
+- [x] `resume_session`
+- [x] `search_saved_context`
+- [x] `save_context_artifact`
+- [x] `get_context_stats`
+- [x] `purge_saved_context`
+- [x] add saved-context retrieval tools
+- [x] `get_review_context` must emit session events
+- [x] `get_impact_radius` must emit session events
+- [x] `query_graph` must emit session events
+- [x] `detect_changes` must emit session events
+- [x] return previews instead of large blobs
+- [x] return `source_id` for stored artifacts
+- [x] return retrieval hints for follow-up access
+- [x] expose compact stats for avoided bytes / stored artifact counts when requested
+- [x] include build status in `build_or_update_graph` MCP tool response
+- [x] MCP `build_or_update_graph` returns persisted build state
+
+---
+
+## Part III — Post-MVP Product Expansion
+
+Use this part for advanced retrieval, analysis, refactoring, observability, real-time updates, insights, optional features, and MCP-facing payload optimizations.
 
 These phases extend v1 after core graph/build/update/query path is reliable.
 
@@ -1902,7 +2054,7 @@ Build deterministic retrieval-and-selection layer over graph. No LLM dependence.
 
 Implement Phase 22 in this order so each slice reuses existing store/search/review pieces and leaves Phase 23-25 with stable contracts instead of churn.
 
-1. Core types and crate boundary
+#### 22.0.1 Core types and crate boundary
 
 - [x] decide crate home for context engine (`packages/atlas-review` if scope stays retrieval-only, new crate only if responsibilities outgrow review assembly)
 - [x] add `ContextIntent`, `ContextTarget`, `ContextRequest`, `ContextResult`, `SelectedNode`, `SelectedEdge`, `SelectedFile`
@@ -1918,7 +2070,7 @@ Exit criteria:
 - [x] model types compile
 - [x] json snapshot tests cover serialize/deserialize round-trip
 
-2. Store/query support needed by engine
+#### 22.0.2 Store/query support needed by engine
 
 - [x] audit and expose exact helper queries from SQLite store before engine logic grows
 - [x] add focused store helpers for direct callers, direct callees, import neighbors, containment neighbors, node lookup by qname/name/path
@@ -1933,7 +2085,7 @@ Exit criteria:
 - [x] unit tests for each helper query on small graph fixtures
 - [x] helper outputs stable for missing nodes, ambiguous names, deleted paths
 
-3. Exact target resolution path
+#### 22.0.3 Exact target resolution path
 
 - [x] implement `resolve_target` for qualified name, exact symbol name, exact file path
 - [x] return single resolved node/file when exact match exists
@@ -1950,7 +2102,7 @@ Exit criteria:
 - [x] tests for ambiguous short symbol names
 - [x] tests for missing target with suggestions
 
-4. Deterministic symbol-context retrieval
+#### 22.0.4 Deterministic symbol-context retrieval
 
 - [x] implement `build_symbol_context` from resolved seed
 - [x] retrieve direct node, callers, callees, imports, containment siblings, optional tests
@@ -1966,7 +2118,7 @@ Exit criteria:
 - [x] direct callers/callees always survive trimming over broad file neighbors
 - [x] include/exclude flags work for tests/imports/neighbors
 
-5. Ranking and trimming policy
+#### 22.0.5 Ranking and trimming policy
 
 - [x] implement `rank_context`
 - [x] score by exact-target boost, graph distance, edge confidence, same-file, same-package, public API, test adjacency
@@ -1983,7 +2135,7 @@ Exit criteria:
 - [x] tests prove caps deterministic under tie conditions
 - [x] truncated output explains what got cut
 
-6. Review and impact context builders
+#### 22.0.6 Review and impact context builders
 
 - [x] implement `build_review_context` by adapting existing changed-file and impact flow into `ContextResult`
 - [x] implement `build_impact_context` from file seeds and changed-symbol seeds
@@ -1997,7 +2149,7 @@ Exit criteria:
 - [x] current review-context command can be mapped onto context engine without behavior regression
 - [x] impact context returns machine-readable bounded graph slice
 
-7. Semi-structured query parsing
+#### 22.0.7 Semi-structured query parsing
 
 - [x] add simple classifier for `what breaks`, `used by`, `who calls`, `safe to refactor`, `dead code`, `rename`, `remove dependency`
 - [x] add regex extraction for quoted symbols, file paths, function-like names, method-like names
@@ -2012,7 +2164,7 @@ Exit criteria:
 - [x] text requests resolve to same result as equivalent structured requests
 - [x] ambiguity metadata survives classifier path
 
-8. Code spans and source packaging
+#### 22.0.8 Code spans and source packaging
 
 - [x] include target span first
 - [x] include caller/callee spans only when enabled
@@ -2027,14 +2179,14 @@ Exit criteria:
 - [x] code span tests verify exact lines for target and adjacent symbols
 - [x] large file requests stay bounded
 
-9. Public surfaces
+#### 22.0.9 Public surfaces
 
 - [x] add internal engine entrypoint `ContextEngine`
 - [x] wire CLI prototype behind future `atlas context` surface or hidden/dev command first
-- [x] expose MCP tool only after JSON shape stabilizes
+- [x] track MCP public-surface rollout in dedicated MCP and Agent Roadmap section
 - [x] keep old `review-context` command during transition; switch implementation under hood first
 
-9.1. Public rollout checklist for `atlas context` and MCP context tools
+##### 22.0.9.1 Public rollout checklist for `atlas context` and MCP context tools
 
 - [x] unhide `atlas context` once command shape is frozen
 - [x] replace dev-style `--qname` / `--name` / `--file` targeting UX with stable public CLI contract
@@ -2046,12 +2198,7 @@ Exit criteria:
 - [x] add golden/snapshot coverage for public `atlas context --json` output
 - [x] freeze `ContextResult` compatibility expectations for public CLI consumers
 - [x] document default limits and truncation behavior for public context output
-- [x] decide whether MCP public context surface stays review-focused (`get_review_context`) or adds generic `get_context`
-- [x] if generic MCP context tool added, keep it thin over `ContextEngine` with no duplicated ranking/trimming logic
-- [x] document MCP tool schemas and response contracts for public/agent use
-- [x] add `packages/atlas-mcp` tests for `tools/list`, `tools/call`, argument validation, ambiguity, not-found, and truncation cases
-- [x] freeze compact MCP payload contract (`PackagedContextResult` or successor) before broad external use
-- [x] confirm public MCP tools stay token-efficient without hiding critical ambiguity/truncation metadata
+- [x] MCP-specific public-context checklist consolidated in MCP and Agent Roadmap
 
 Why ninth:
 - shipping surface too early freezes unstable payloads
@@ -2059,9 +2206,8 @@ Why ninth:
 
 Exit criteria:
 - [x] CLI json output stable enough for golden tests
-- [x] MCP adapter thin, no duplicated retrieval logic
 
-10. Finish gates for “context engine complete”
+#### 22.0.10 Finish gates for “context engine complete”
 
 - [x] exact symbol lookup
 - [x] ambiguous symbol resolution
@@ -2074,7 +2220,7 @@ Exit criteria:
 - [x] `cargo test --workspace`
 - [x] `cargo clippy --workspace --all-targets --all-features -- -D warnings`
 
-11. Validate completion rule
+#### 22.0.11 Validate completion rule
 - [x] Phase 22 done only when review flow, symbol flow, and impact flow all share same engine contracts and no duplicate ranking/trimming logic remains in CLI or MCP layers
 
 ### 22.1 Scope and responsibilities
@@ -2615,24 +2761,9 @@ Shared support for explainability, config, CLI surface, JSON contracts, benchmar
 
 ## Phase 26 — MCP / Agent Integration
 
-### 26.1 Core tools
+### 26.1 Status
 
-- [x] `get_review_context`
-- [x] `get_impact_radius`
-- [x] `query_graph`
-- [x] `explain_change`
-
-### 26.2 Output design
-
-- [x] structured JSON
-- [x] stable schemas
-- [x] token-efficient responses
-
-### 26.3 Context optimization
-
-- [x] return summaries only
-- [x] limit node count
-- [x] prioritize relevance
+Detailed MCP tool rollout, schema work, and response shaping now live in Part II under MCP and Agent Roadmap.
 
 ## Phase 27 — Observability
 
@@ -2920,10 +3051,7 @@ TOON for LLM-facing MCP output only. Goal: reduce token usage for review and con
 
 ### 32.3 MCP integration
 
-- [x] add MCP response mode for TOON text output
-- [x] use TOON first for context-heavy agent-facing tools
-- [x] keep MCP tool contracts stable while swapping payload body format
-- [x] add opt-in selection per tool or global config flag
+- [x] tracked in MCP4 under MCP and Agent Roadmap
 
 ### 32.4 Validation and quality gates
 
@@ -2935,75 +3063,15 @@ TOON for LLM-facing MCP output only. Goal: reduce token usage for review and con
 
 ---
 
-## Release 1 Definition (MVP)
+## Part IV — Context Continuity and Memory
 
-Release 1 is done when this works end-to-end:
+Use this part for session persistence, saved artifacts, retrieval-backed resume, and long-lived memory work.
 
-- [x] `atlas init`
-- [x] `atlas build`
-- [x] `atlas status`
-- [x] `atlas query "some symbol"`
-- [x] `atlas update --base origin/main`
-- [x] `atlas impact --base origin/main`
-- [x] `atlas review-context --base origin/main`
+## Context-Mode and Continuity Roadmap
 
-And the system has:
+These phases cover continuity storage, session lifecycle, retrieval-backed restoration, memory quality, and longer-term cross-session intelligence.
 
-- [x] multi-language parsing for a small v1 language set
-- [x] SQLite graph persistence
-- [x] file-slice replacement
-- [x] recursive impact-radius SQL traversal
-- [x] review-context assembly
-- [x] FTS5 search
-- [x] CI on Linux
-
----
-
-## Release 2 Definition
-
-Release 2 is done when this works end-to-end:
-
-- [x] `atlas install`
-- [x] `atlas update --base origin/main`
-- [x] `atlas query "some symbol" --expand`
-- [x] `atlas review-context --base origin/main`
-- [x] `atlas explain-change --base origin/main`
-- [x] `atlas context "what should I read before editing X?"`
-- [x] `atlas analyze dead-code --subpath <path>`
-- [x] `atlas refactor rename --symbol <qualified-name> --to <new-name> --dry-run`
-
-And system has:
-
-- [x] graph-aware search proven against grep baseline for symbol lookup:
-  - [x] exact symbol and qualified-name lookup returns intended definition in top 3 on fixture queries
-  - [x] ambiguous short-name lookup returns ranked candidates with kind and file metadata
-  - [x] caller/callee/import expansion surfaces relevant graph neighbors plain grep cannot infer
-  - [x] fixture evaluation shows better top-1 or top-3 symbol lookup accuracy than plain grep baseline
-- [x] reliable impact scoring with test and boundary signals
-- [x] workspace-aware package/crate boundaries on multi-package repos:
-  - [x] Cargo workspace members resolve into explicit package identities
-  - [x] NPM workspace members resolve into explicit package identities
-  - [x] Go workspace modules resolve into explicit package identities
-  - [x] `cross_package` and related reasoning signals use owning package, not top-level directory name
-  - [x] fixture acceptance passes on repo layouts like `packages/<crate>`, `packages/<app>`, or `go.work` multi-module roots
-- [x] smart review context with better ranking and trimming
-- [x] review-context usefulness acceptance gate passes on fixture repos and changed-file flows
-- [x] deterministic context engine with target resolution and code-span selection
-- [x] reasoning engine for removal impact, dead code, and refactor risk
-- [x] refactor planning with dry-run patch validation
-- [x] stable MCP tools usable by agents with token-efficient output
-- [x] MCP tool usability acceptance gate passes for agent-facing review, impact, query, and context flows
-- [x] watch mode for incremental local updates
-- [x] observability/debug tooling for graph integrity and pipeline behavior
-- [x] performance that scales to large repos
-  - [x] use the current repo on a new disconnected worktree for testing?
-- [x] large-repo performance acceptance gate passes on representative repos without memory or latency regressions
-
----
-
-## Context-Mode Integration Backlog
-
-### Goals
+### Overview
 
 Extend Atlas with context-mode persistence and session continuity without mixing those concerns into graph database.
 
@@ -3414,31 +3482,7 @@ Exit criteria:
 
 ### Phase CM7 — MCP continuity and saved-context tools
 
-Expose session continuity to agents only after storage, events, resume, and retrieval paths are working locally.
-
-#### New MCP tools
-
-- [x] `get_session_status`
-- [x] `resume_session`
-- [x] `search_saved_context`
-- [x] `save_context_artifact`
-- [x] `get_context_stats`
-- [x] `purge_saved_context`
-- [x] add saved-context retrieval tools
-
-#### Existing tool changes
-
-- [x] `get_review_context` must emit session events
-- [x] `get_impact_radius` must emit session events
-- [x] `query_graph` must emit session events
-- [x] `detect_changes` must emit session events
-
-#### Output rules
-
-- [x] return previews instead of large blobs
-- [x] return `source_id` for stored artifacts
-- [x] return retrieval hints for follow-up access
-- [x] expose compact stats for avoided bytes / stored artifact counts when requested
+Expose session continuity to agents only after storage, events, resume, and retrieval paths are working locally. Detailed tool, event, and payload checklist is consolidated in MCP5 under MCP and Agent Roadmap.
 
 Why seventh:
 - MCP should stay thin over already-proven services
@@ -3709,7 +3753,11 @@ Support multi-agent workflows.
 
 ---
 
-## Patch — Remaining Retrieval Improvements Still Worth Adding
+## Part V — Follow-Up Patches
+
+Use these patch sections for focused improvements that cut across existing roadmap phases without rewriting phase scope.
+
+## Retrieval Follow-Up Patch
 
 These are the high-value retrieval/indexing improvements still missing or only partially specified after the current v3 plan.
 
@@ -3900,7 +3948,7 @@ This patch is complete when:
 
 ---
 
-## Patch G — Graph Store Build Lifecycle State
+## Graph Build Lifecycle Patch
 
 Atlas has retrieval index lifecycle state in the content store (Patch R1), but the graph store (`worldtree.db`) has no equivalent. Schema version alone is not enough — a `building` or `build_failed` state cannot be inferred from `metadata.schema_version`.
 
