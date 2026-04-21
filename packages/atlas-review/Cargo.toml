@@ -1,15 +1,15 @@
 [package]
 name = "atlas-review"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "Review context assembly and risk summarization for Atlas code changes"
 
 [dependencies]
 atlas-core.workspace = true
-atlas-contentstore = { path = "../atlas-contentstore" }
-atlas-impact = { path = "../atlas-impact" }
-atlas-store-sqlite = { path = "../atlas-store-sqlite" }
-atlas-search = { path = "../atlas-search" }
+atlas-contentstore = { path = "../atlas-contentstore" , version = "0.2.0"}
+atlas-impact = { path = "../atlas-impact" , version = "0.2.0"}
+atlas-store-sqlite = { path = "../atlas-store-sqlite" , version = "0.2.0"}
+atlas-search = { path = "../atlas-search" , version = "0.2.0"}
 tracing.workspace = true
 
 [dev-dependencies]
