@@ -1,19 +1,52 @@
 {
-  "version": 1,
-  "hooks": [
-    { "event": "SessionStart",        "commands": [{ "command": ".atlas/hooks/atlas-hook copilot session-start" }] },
-    { "event": "UserPromptSubmit",    "commands": [{ "command": ".atlas/hooks/atlas-hook copilot user-prompt" }] },
-    { "event": "PreToolUse",          "commands": [{ "command": ".atlas/hooks/atlas-hook copilot pre-tool-use" }] },
-    { "event": "PostToolUse",         "commands": [{ "command": ".atlas/hooks/atlas-hook copilot post-tool-use" }] },
-    { "event": "PreCompact",          "commands": [{ "command": ".atlas/hooks/atlas-hook copilot pre-compact" }] },
-    { "event": "SubagentStart",       "commands": [{ "command": ".atlas/hooks/atlas-hook copilot subagent-start" }] },
-    { "event": "SubagentStop",        "commands": [{ "command": ".atlas/hooks/atlas-hook copilot subagent-stop" }] },
-    { "event": "Stop",                "commands": [{ "command": ".atlas/hooks/atlas-hook copilot stop" }] },
-    { "event": "sessionStart",        "commands": [{ "command": ".atlas/hooks/atlas-hook copilot session-start" }] },
-    { "event": "userPromptSubmitted", "commands": [{ "command": ".atlas/hooks/atlas-hook copilot user-prompt" }] },
-    { "event": "preToolUse",          "commands": [{ "command": ".atlas/hooks/atlas-hook copilot pre-tool-use" }] },
-    { "event": "postToolUse",         "commands": [{ "command": ".atlas/hooks/atlas-hook copilot post-tool-use" }] },
-    { "event": "sessionEnd",          "commands": [{ "command": ".atlas/hooks/atlas-hook copilot session-end" }] },
-    { "event": "errorOccurred",       "commands": [{ "command": ".atlas/hooks/atlas-hook copilot error" }] }
-  ]
+  "hooks": {
+    "PostToolUse": [
+      {
+        "type": "command",
+        "command": ".atlas/hooks/atlas-hook copilot post-tool-use"
+      }
+    ],
+    "PreCompact": [
+      {
+        "type": "command",
+        "command": ".atlas/hooks/atlas-hook copilot pre-compact"
+      }
+    ],
+    "PreToolUse": [
+      {
+        "type": "command",
+        "command": ".atlas/hooks/atlas-hook copilot pre-tool-use"
+      }
+    ],
+    "SessionStart": [
+      {
+        "type": "command",
+        "command": ".atlas/hooks/atlas-hook copilot session-start"
+      }
+    ],
+    "Stop": [
+      {
+        "type": "command",
+        "command": ".atlas/hooks/atlas-hook copilot stop"
+      }
+    ],
+    "SubagentStart": [
+      {
+        "type": "command",
+        "command": ".atlas/hooks/atlas-hook copilot subagent-start"
+      }
+    ],
+    "SubagentStop": [
+      {
+        "type": "command",
+        "command": ".atlas/hooks/atlas-hook copilot subagent-stop"
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "type": "command",
+        "command": ".atlas/hooks/atlas-hook copilot user-prompt"
+      }
+    ]
+  }
 }

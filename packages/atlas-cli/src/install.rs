@@ -1021,16 +1021,6 @@ const COPILOT_VSCODE_EVENTS: &[(&str, &str, &str)] = &[
     ("Stop", "copilot", "stop"),
 ];
 
-/// Copilot hook events — GitHub cloud agent / CLI camelCase names.
-const COPILOT_CLOUD_EVENTS: &[(&str, &str, &str)] = &[
-    ("sessionStart", "copilot", "session-start"),
-    ("userPromptSubmitted", "copilot", "user-prompt"),
-    ("preToolUse", "copilot", "pre-tool-use"),
-    ("postToolUse", "copilot", "post-tool-use"),
-    ("sessionEnd", "copilot", "session-end"),
-    ("errorOccurred", "copilot", "error"),
-];
-
 /// Claude hook event — name, atlas-hook event arg, and optional matcher.
 const CLAUDE_HOOKS: &[(&str, &str, &str, Option<&str>)] = &[
     ("SessionStart", "claude", "session-start", None),
@@ -1221,17 +1211,17 @@ fn copilot_hooks_value() -> Value {
 }
 
 fn copilot_hooks_value_scoped(install_root: &Path, scope: InstallScope) -> Value {
-    let mut hooks = Vec::new();
-    for (event, frontend, arg) in COPILOT_VSCODE_EVENTS
-        .iter()
-        .chain(COPILOT_CLOUD_EVENTS.iter())
-    {
-        hooks.push(serde_json::json!({
-            "event": event,
-            "commands": [{ "command": atlas_hook_command(install_root, scope, frontend, arg) }]
-        }));
+    let mut hooks = serde_json::Map::new();
+    for (event, frontend, arg) in COPILOT_VSCODE_EVENTS {
+        hooks.insert(
+            (*event).to_owned(),
+            serde_json::json!([{
+                "type": "command",
+                "command": atlas_hook_command(install_root, scope, frontend, arg)
+            }]),
+        );
     }
-    serde_json::json!({ "version": 1, "hooks": hooks })
+    serde_json::json!({ "hooks": Value::Object(hooks) })
 }
 
 /// Install `.github/hooks/atlas-copilot.json`.
@@ -2248,12 +2238,14 @@ mod tests {
             .join("atlas-copilot.json");
         assert!(config.exists());
         let val: Value = serde_json::from_str(&fs::read_to_string(&config).unwrap()).unwrap();
-        assert_eq!(val["version"], 1);
-        let hooks = val["hooks"].as_array().unwrap();
+        let hooks = val["hooks"].as_object().unwrap();
         assert!(!hooks.is_empty());
-        // Every hook must reference the atlas-hook runner.
-        for hook in hooks {
-            let cmd = hook["commands"][0]["command"].as_str().unwrap();
+        assert!(hooks.contains_key("SessionStart"));
+        assert!(hooks.contains_key("PostToolUse"));
+        assert!(hooks.contains_key("Stop"));
+        for entries in hooks.values() {
+            let cmd = entries[0]["command"].as_str().unwrap();
+            assert_eq!(entries[0]["type"], "command");
             assert!(cmd.contains("atlas-hook"), "missing atlas-hook in: {cmd}");
         }
     }
