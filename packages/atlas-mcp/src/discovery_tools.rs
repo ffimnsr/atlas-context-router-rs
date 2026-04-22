@@ -9,6 +9,7 @@ use anyhow::{Context, Result};
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 use grep_regex::RegexMatcherBuilder;
 use grep_searcher::{BinaryDetection, Searcher, SearcherBuilder, Sink, SinkContext, SinkMatch};
+use regex::Regex;
 use serde::Serialize;
 use std::path::Path;
 
@@ -59,6 +60,21 @@ struct ContentMatch {
     /// Present only for context lines: `"before"` or `"after"`.
     #[serde(skip_serializing_if = "Option::is_none")]
     kind: Option<&'static str>,
+}
+
+#[derive(Serialize)]
+struct RichSnippetLine {
+    line: u64,
+    text: String,
+    kind: &'static str,
+}
+
+#[derive(Serialize)]
+struct RichSnippet {
+    file: String,
+    match_line: u64,
+    snippet: String,
+    lines: Vec<RichSnippetLine>,
 }
 
 // ---------------------------------------------------------------------------
@@ -216,6 +232,16 @@ pub(crate) fn tool_search_content(
     let is_regex = bool_arg(args, "is_regex").unwrap_or(false);
     let context_lines = u64_arg(args, "context_lines").unwrap_or(0) as usize;
     let max_results = u64_arg(args, "max_results").unwrap_or(50) as usize;
+    let rich_snippets = bool_arg(args, "rich_snippets").unwrap_or(false);
+    let snippet_context_lines = u64_arg(args, "snippet_context_lines")
+        .map(|value| value as usize)
+        .unwrap_or_else(|| {
+            if rich_snippets {
+                context_lines.max(2)
+            } else {
+                0
+            }
+        });
     let subpath = str_arg(args, "subpath")?.map(str::to_owned);
 
     // Escape for literal search; use as-is for regex.
@@ -230,6 +256,17 @@ pub(crate) fn tool_search_content(
         .case_insensitive(!is_regex)
         .build(&pattern)
         .with_context(|| format!("invalid search pattern: {query}"))?;
+
+    let rich_snippet_regex = if rich_snippets {
+        Some(
+            regex::RegexBuilder::new(&pattern)
+                .case_insensitive(!is_regex)
+                .build()
+                .with_context(|| format!("invalid search pattern: {query}"))?,
+        )
+    } else {
+        None
+    };
 
     let searcher_proto = SearcherBuilder::new()
         .binary_detection(BinaryDetection::quit(b'\x00'))
@@ -282,6 +319,7 @@ pub(crate) fn tool_search_content(
     }
 
     let mut matches: Vec<ContentMatch> = Vec::new();
+    let mut rich_snippet_results: Vec<RichSnippet> = Vec::new();
     let mut truncated = false;
 
     'walk: for entry in walker.build().flatten() {
@@ -342,6 +380,20 @@ pub(crate) fn tool_search_content(
                     truncated = true;
                     break 'walk;
                 }
+                if let Some(ref regex) = rich_snippet_regex {
+                    let remaining_snippets = max_results.saturating_sub(rich_snippet_results.len());
+                    if remaining_snippets > 0
+                        && let Ok(snippets) = collect_rich_snippets(
+                            &full_path,
+                            &rel_path,
+                            regex,
+                            snippet_context_lines,
+                            remaining_snippets,
+                        )
+                    {
+                        rich_snippet_results.extend(snippets);
+                    }
+                }
             }
             // Skip unreadable / binary files silently.
             Err(_) => continue,
@@ -372,6 +424,8 @@ pub(crate) fn tool_search_content(
     #[derive(Serialize)]
     struct SearchContentResult {
         matches: Vec<ContentMatch>,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        rich_snippets: Vec<RichSnippet>,
         result_count: usize,
         truncated: bool,
         atlas_result_kind: &'static str,
@@ -381,6 +435,7 @@ pub(crate) fn tool_search_content(
 
     let result = SearchContentResult {
         matches,
+        rich_snippets: rich_snippet_results,
         result_count,
         truncated,
         atlas_result_kind: "content_matches",
@@ -388,6 +443,59 @@ pub(crate) fn tool_search_content(
     };
 
     render_tool_result(&result, output_format)
+}
+
+fn collect_rich_snippets(
+    path: &std::path::Path,
+    rel_path: &str,
+    regex: &Regex,
+    context_lines: usize,
+    max: usize,
+) -> Result<Vec<RichSnippet>> {
+    let contents = std::fs::read_to_string(path)?;
+    let lines: Vec<&str> = contents.lines().collect();
+    let mut snippets = Vec::new();
+
+    for (index, line) in lines.iter().enumerate() {
+        if snippets.len() >= max {
+            break;
+        }
+        if !regex.is_match(line) {
+            continue;
+        }
+
+        let start = index.saturating_sub(context_lines);
+        let end = (index + context_lines + 1).min(lines.len());
+        let mut snippet_lines = Vec::new();
+        for (line_index, line_text) in lines.iter().enumerate().take(end).skip(start) {
+            let kind = if line_index < index {
+                "before"
+            } else if line_index == index {
+                "match"
+            } else {
+                "after"
+            };
+            snippet_lines.push(RichSnippetLine {
+                line: (line_index + 1) as u64,
+                text: (*line_text).to_owned(),
+                kind,
+            });
+        }
+
+        let snippet = snippet_lines
+            .iter()
+            .map(|entry| entry.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        snippets.push(RichSnippet {
+            file: rel_path.to_owned(),
+            match_line: (index + 1) as u64,
+            snippet,
+            lines: snippet_lines,
+        });
+    }
+
+    Ok(snippets)
 }
 
 // ---------------------------------------------------------------------------
@@ -1120,6 +1228,50 @@ mod tests {
         assert!(
             v["atlas_hint"].as_str().unwrap().contains("query_graph"),
             "hint should mention query_graph: {v}"
+        );
+    }
+
+    #[test]
+    fn search_content_rich_snippets_are_opt_in() {
+        let (_dir, root) = make_repo(&[(
+            "src/lib.rs",
+            "fn before() {}\nfn target() {}\nfn after() {}\n",
+        )]);
+        let args = serde_json::json!({
+            "query": "target",
+            "exclude_generated": false,
+            "rich_snippets": true,
+            "snippet_context_lines": 1
+        });
+        let resp = tool_search_content(Some(&args), &root, OutputFormat::Json).unwrap();
+        let v: serde_json::Value =
+            serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
+        let snippets = v["rich_snippets"].as_array().expect("rich snippets array");
+        assert_eq!(snippets.len(), 1, "expected one grouped snippet: {v}");
+        assert_eq!(snippets[0]["match_line"], 2);
+        assert!(
+            snippets[0]["snippet"]
+                .as_str()
+                .is_some_and(|text| text.contains("fn before()") && text.contains("fn after()"))
+        );
+        let lines = snippets[0]["lines"]
+            .as_array()
+            .expect("snippet lines array");
+        assert_eq!(lines[0]["kind"], "before");
+        assert_eq!(lines[1]["kind"], "match");
+        assert_eq!(lines[2]["kind"], "after");
+    }
+
+    #[test]
+    fn search_content_default_payload_omits_rich_snippets() {
+        let (_dir, root) = make_repo(&[("src/lib.rs", "fn target() {}\n")]);
+        let args = serde_json::json!({ "query": "target", "exclude_generated": false });
+        let resp = tool_search_content(Some(&args), &root, OutputFormat::Json).unwrap();
+        let v: serde_json::Value =
+            serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert!(
+            v.get("rich_snippets").is_none(),
+            "default payload should stay compact: {v}"
         );
     }
 

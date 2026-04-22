@@ -1990,11 +1990,11 @@ Expose CLI health/debug commands through MCP so agents can verify graph health b
 - [x] return compact health summaries by default
 - [x] expose machine-readable failure categories for:
   - [x] missing graph DB
-  - [ ] schema mismatch
+  - [x] schema mismatch
   - [x] interrupted build
   - [x] failed build
-  - [ ] stale index
-  - [ ] retrieval/content index unavailable
+  - [x] stale index
+  - [x] retrieval/content index unavailable
   - [x] corrupt or inconsistent graph rows
 - [x] standardize machine-readable error contract across CLI JSON and MCP:
   - [x] `ok`
@@ -2018,8 +2018,8 @@ Graph search is symbol-oriented. Add first-class MCP search for prompts, Markdow
 - [x] support repo subpath scoping for monorepos
 - [x] apply `.gitignore`, Atlas ignore config, generated/vendor suppression, and binary-file skipping by default
 - [x] return compact path, line, snippet, score, and match-kind fields
-- [ ] expose opt-in richer snippets without bloating default responses
-- [ ] document selection rules for `query_graph` vs file/content/template/text-asset search
+- [x] expose opt-in richer snippets without bloating default responses
+- [x] document selection rules for `query_graph` vs file/content/template/text-asset search
 - [x] add tests for Markdown, prompt files, SQL, config, templates, embedded strings, ignored paths, and generated-file suppression
 
 ### MCP10 — Query graph option parity

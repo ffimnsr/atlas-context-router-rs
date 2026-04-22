@@ -358,6 +358,8 @@ pub fn tool_list() -> serde_json::Value {
                         "exclude_generated":  { "type": "boolean", "description": "Skip generated/vendor files (node_modules, dist, *.min.js, etc.). Default true." },
                         "is_regex":           { "type": "boolean", "description": "Treat query as a regex pattern (default false). Literal queries are case-insensitive by default." },
                         "context_lines":      { "type": "integer", "description": "Lines of context to include before and after each match (default 0)." },
+                        "rich_snippets":      { "type": "boolean", "description": "When true, also return grouped per-match snippets with before/match/after context lines. Default false to keep payloads compact." },
+                        "snippet_context_lines": { "type": "integer", "description": "Context lines per grouped rich snippet (default: max(context_lines, 2) when rich_snippets=true)." },
                         "max_results":        { "type": "integer", "description": "Maximum match lines to return (default 50)." },
                         "subpath":            { "type": "string",  "description": "Scope the walk to a repo sub-directory (e.g. 'services/auth'). Useful for monorepos." },
                         "output_format":      { "type": "string",  "description": DEFAULT_OUTPUT_DESCRIPTION }

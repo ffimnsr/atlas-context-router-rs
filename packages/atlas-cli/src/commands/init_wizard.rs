@@ -51,7 +51,7 @@ pub fn run(repo_root: &Path) -> Result<()> {
 
     let install_hooks = Confirm::with_theme(&theme)
         .with_prompt("Install git hooks for automatic graph updates?")
-        .default(true)
+        .default(false)
         .interact()?;
 
     // ── Step 3: Shell completions ─────────────────────────────────────────────
@@ -60,7 +60,7 @@ pub fn run(repo_root: &Path) -> Result<()> {
 
     let install_completions = Confirm::with_theme(&theme)
         .with_prompt("Install shell completions?")
-        .default(true)
+        .default(false)
         .interact()?;
 
     let chosen_shell: Option<Shell> = if install_completions {

@@ -2,10 +2,15 @@ use std::fs;
 
 use anyhow::{Context, Result};
 use atlas_adapters::{AdapterHooks, CliAdapter};
-use atlas_contentstore::ContentStore;
+use atlas_contentstore::{ContentStore, IndexState};
 use atlas_core::GraphStats;
 use atlas_core::model::ChangedFile;
+use atlas_core::{
+    GraphHealthInput, graph_health_error_message, graph_health_error_suggestions,
+    select_graph_health_error_code,
+};
 use atlas_engine::{BuildOptions, UpdateOptions, UpdateTarget, build_graph, update_graph};
+use atlas_parser::ParserRegistry;
 use atlas_repo::{changed_files, find_repo_root};
 use atlas_session::SessionStore;
 use atlas_store_sqlite::{BuildFinishStats, Store};
@@ -29,10 +34,175 @@ struct StatusPayloadContext<'a> {
     store: Option<&'a Store>,
 }
 
+struct StatusDiagnostics {
+    ok: bool,
+    error_code: &'static str,
+    graph_built: bool,
+    build_state: Option<String>,
+    build_last_error: Option<String>,
+    graph_query_error: Option<String>,
+    pending_graph_changes: Vec<String>,
+    retrieval_index: serde_json::Value,
+}
+
+fn file_has_graph_facts(store: &Store, path: &str) -> bool {
+    store
+        .nodes_by_file(path)
+        .map(|nodes| !nodes.is_empty())
+        .unwrap_or(false)
+}
+
+fn change_can_affect_graph_facts(
+    store: &Store,
+    registry: &ParserRegistry,
+    change: &ChangedFile,
+) -> bool {
+    registry.supports(&change.path)
+        || change
+            .old_path
+            .as_deref()
+            .is_some_and(|old_path| registry.supports(old_path))
+        || file_has_graph_facts(store, &change.path)
+        || change
+            .old_path
+            .as_deref()
+            .is_some_and(|old_path| file_has_graph_facts(store, old_path))
+}
+
+fn graph_relevant_changed_files(store: &Store, changes: &[ChangedFile]) -> Vec<String> {
+    let registry = ParserRegistry::with_defaults();
+    let mut files: Vec<String> = changes
+        .iter()
+        .filter(|change| change_can_affect_graph_facts(store, &registry, change))
+        .flat_map(|change| std::iter::once(change.path.clone()).chain(change.old_path.clone()))
+        .collect();
+    files.sort();
+    files.dedup();
+    files
+}
+
+fn retrieval_index_value(repo: &str, db_path: &str) -> serde_json::Value {
+    let content_db_path = atlas_engine::paths::content_db_path(db_path);
+    let content_db_path_string = content_db_path.clone();
+    match ContentStore::open(&content_db_path) {
+        Ok(mut store) => {
+            let _ = store.migrate();
+            match store.get_index_status(repo) {
+                Ok(Some(status)) => {
+                    let searchable = status.state == IndexState::Indexed;
+                    let state = match status.state {
+                        IndexState::Indexed => "indexed",
+                        IndexState::Indexing => "indexing",
+                        IndexState::IndexFailed => "index_failed",
+                    };
+                    serde_json::json!({
+                        "available": true,
+                        "searchable": searchable,
+                        "state": state,
+                        "files_discovered": status.files_discovered,
+                        "files_indexed": status.files_indexed,
+                        "chunks_written": status.chunks_written,
+                        "chunks_reused": status.chunks_reused,
+                        "last_indexed_at": status.last_indexed_at,
+                        "last_error": status.last_error,
+                        "content_db_path": content_db_path_string,
+                    })
+                }
+                Ok(None) => serde_json::json!({
+                    "available": false,
+                    "searchable": false,
+                    "state": serde_json::Value::Null,
+                    "files_discovered": 0,
+                    "files_indexed": 0,
+                    "chunks_written": 0,
+                    "chunks_reused": 0,
+                    "last_indexed_at": serde_json::Value::Null,
+                    "last_error": "content store has no retrieval index state for this repo",
+                    "content_db_path": content_db_path_string,
+                }),
+                Err(error) => serde_json::json!({
+                    "available": false,
+                    "searchable": false,
+                    "state": serde_json::Value::Null,
+                    "files_discovered": 0,
+                    "files_indexed": 0,
+                    "chunks_written": 0,
+                    "chunks_reused": 0,
+                    "last_indexed_at": serde_json::Value::Null,
+                    "last_error": error.to_string(),
+                    "content_db_path": content_db_path_string,
+                }),
+            }
+        }
+        Err(error) => serde_json::json!({
+            "available": false,
+            "searchable": false,
+            "state": serde_json::Value::Null,
+            "files_discovered": 0,
+            "files_indexed": 0,
+            "chunks_written": 0,
+            "chunks_reused": 0,
+            "last_indexed_at": serde_json::Value::Null,
+            "last_error": error.to_string(),
+            "content_db_path": content_db_path_string,
+        }),
+    }
+}
+
+fn collect_status_diagnostics(ctx: &StatusPayloadContext<'_>) -> StatusDiagnostics {
+    let mut graph_query_error: Option<String> = None;
+    let build_status = match ctx.store.map(|store| store.get_build_status(ctx.repo)) {
+        Some(Ok(status)) => status,
+        Some(Err(error)) => {
+            graph_query_error = Some(error.to_string());
+            None
+        }
+        None => None,
+    };
+    let build_state = build_status.as_ref().map(|bs| match bs.state {
+        atlas_store_sqlite::GraphBuildState::Building => "building",
+        atlas_store_sqlite::GraphBuildState::Built => "built",
+        atlas_store_sqlite::GraphBuildState::BuildFailed => "build_failed",
+    });
+    let graph_built = build_state == Some("built")
+        || (build_state.is_none()
+            && graph_query_error.is_none()
+            && (ctx.stats.node_count > 0 || ctx.stats.edge_count > 0 || ctx.stats.file_count > 0));
+    let pending_graph_changes = ctx
+        .store
+        .map(|store| graph_relevant_changed_files(store, ctx.changes))
+        .unwrap_or_default();
+    let stale_index = graph_built && !pending_graph_changes.is_empty();
+    let retrieval_index = retrieval_index_value(ctx.repo, ctx.db_path);
+    let retrieval_unavailable = graph_built
+        && (!retrieval_index["available"].as_bool().unwrap_or(false)
+            || !retrieval_index["searchable"].as_bool().unwrap_or(false)
+            || retrieval_index["state"].as_str() != Some("indexed"));
+    let error_code = select_graph_health_error_code(GraphHealthInput {
+        db_exists: true,
+        graph_error: graph_query_error.as_deref(),
+        build_state,
+        stale_index,
+        retrieval_unavailable,
+    });
+
+    StatusDiagnostics {
+        ok: error_code == "none" && graph_built,
+        error_code,
+        graph_built,
+        build_state: build_state.map(str::to_owned),
+        build_last_error: build_status.and_then(|status| status.last_error),
+        graph_query_error,
+        pending_graph_changes,
+        retrieval_index,
+    }
+}
+
 fn status_payload(ctx: StatusPayloadContext<'_>) -> serde_json::Value {
     let build_status = ctx
         .store
         .and_then(|s| s.get_build_status(ctx.repo).ok().flatten());
+    let diagnostics = collect_status_diagnostics(&ctx);
     let build_state_val = build_status.as_ref().map(|bs| {
         let state_str = match bs.state {
             atlas_store_sqlite::GraphBuildState::Building => "building",
@@ -51,6 +221,10 @@ fn status_payload(ctx: StatusPayloadContext<'_>) -> serde_json::Value {
         })
     });
     serde_json::json!({
+        "ok": diagnostics.ok,
+        "error_code": diagnostics.error_code,
+        "message": graph_health_error_message(diagnostics.error_code),
+        "suggestions": graph_health_error_suggestions(diagnostics.error_code),
         "repo_root": ctx.repo,
         "db_path": ctx.db_path,
         "mcp": {
@@ -68,6 +242,14 @@ fn status_payload(ctx: StatusPayloadContext<'_>) -> serde_json::Value {
         "nodes_by_kind": ctx.stats.nodes_by_kind,
         "languages": ctx.stats.languages,
         "last_indexed_at": ctx.stats.last_indexed_at,
+        "graph_built": diagnostics.graph_built,
+        "build_state": diagnostics.build_state,
+        "build_last_error": diagnostics.build_last_error,
+        "graph_query_error": diagnostics.graph_query_error,
+        "stale_index": !diagnostics.pending_graph_changes.is_empty(),
+        "pending_graph_change_count": diagnostics.pending_graph_changes.len(),
+        "pending_graph_changes": diagnostics.pending_graph_changes,
+        "retrieval_index": diagnostics.retrieval_index,
         "changed_file_count": ctx.changes.len(),
         "changed_files": augment_changes_with_node_counts(ctx.changes, ctx.store),
         "build_status": build_state_val,

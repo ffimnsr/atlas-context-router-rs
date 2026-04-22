@@ -1,9 +1,13 @@
 use anyhow::{Context, Result};
 use atlas_core::model::ChangedFile;
 use atlas_core::model::ContextIntent;
+use atlas_core::{
+    GraphHealthInput, graph_health_error_message, graph_health_error_suggestions,
+    is_schema_mismatch_error, select_graph_health_error_code,
+};
 use atlas_parser::ParserRegistry;
 use atlas_repo::{DiffTarget, changed_files, find_repo_root};
-use atlas_store_sqlite::{GraphBuildState, Store};
+use atlas_store_sqlite::Store;
 use camino::Utf8Path;
 use serde::Serialize;
 
@@ -59,63 +63,33 @@ pub(super) fn open_store(db_path: &str) -> Result<Store> {
 
 pub(super) fn failure_category(
     db_exists: bool,
-    db_open_ok: bool,
-    build_state: Option<&GraphBuildState>,
+    graph_error: Option<&str>,
+    build_state: Option<&str>,
+    stale_index: bool,
+    retrieval_unavailable: bool,
 ) -> &'static str {
-    if !db_exists {
-        return "missing_graph_db";
-    }
-    if !db_open_ok {
-        return "corrupt_or_inconsistent_graph_rows";
-    }
-    match build_state {
-        Some(GraphBuildState::Building) => "interrupted_build",
-        Some(GraphBuildState::BuildFailed) => "failed_build",
-        _ => "none",
-    }
+    select_graph_health_error_code(GraphHealthInput {
+        db_exists,
+        graph_error,
+        build_state,
+        stale_index,
+        retrieval_unavailable,
+    })
 }
 
 pub(super) fn error_message(error_code: &str) -> &'static str {
-    match error_code {
-        "none" => "Graph is healthy and up-to-date.",
-        "missing_graph_db" => "Graph database not found. Run `atlas build` to create it.",
-        "corrupt_or_inconsistent_graph_rows" => {
-            "Graph database has integrity issues. Run `atlas build` to rebuild from scratch."
-        }
-        "interrupted_build" => {
-            "Previous build was interrupted and did not complete. Run `atlas build` to restart."
-        }
-        "failed_build" => {
-            "Last build failed. Check build_last_error for details, then run `atlas build` to retry."
-        }
-        "node_not_found" => "No graph nodes matched this request.",
-        "checks_failed" => "One or more health checks failed.",
-        _ => "An unknown error occurred.",
-    }
+    graph_health_error_message(error_code)
 }
 
 pub(super) fn error_suggestions(error_code: &str) -> &'static [&'static str] {
-    match error_code {
-        "none" => &[],
-        "missing_graph_db" => &[
-            "run `atlas build` to create the graph",
-            "run `atlas init` if the project is new",
-        ],
-        "corrupt_or_inconsistent_graph_rows" => {
-            &["run `atlas build` to rebuild the graph from scratch"]
-        }
-        "interrupted_build" => &["run `atlas build` to restart the interrupted build"],
-        "failed_build" => &[
-            "check the build_last_error field for details",
-            "run `atlas build` to retry",
-        ],
-        "node_not_found" => &[
-            "verify the symbol name with query_graph or resolve_symbol",
-            "run status to confirm the graph is built",
-            "run build_or_update_graph to index the repo first",
-        ],
-        "checks_failed" => &["inspect the checks array for details"],
-        _ => &[],
+    graph_health_error_suggestions(error_code)
+}
+
+pub(super) fn graph_issue_code(error: &str) -> &'static str {
+    if is_schema_mismatch_error(error) {
+        "schema_mismatch"
+    } else {
+        "corrupt_or_inconsistent_graph_rows"
     }
 }
 
@@ -202,6 +176,27 @@ fn change_can_affect_graph_facts(
             .is_some_and(|old_path| file_has_graph_facts(store, old_path))
 }
 
+pub(super) fn pending_graph_relevant_changes(
+    repo_root: &str,
+    db_path: &str,
+) -> Option<Vec<String>> {
+    let repo_root_path = find_repo_root(Utf8Path::new(repo_root)).ok()?;
+    let changes = changed_files(repo_root_path.as_path(), &DiffTarget::WorkingTree).ok()?;
+    if changes.is_empty() {
+        return Some(Vec::new());
+    }
+
+    let store = Store::open(db_path).ok()?;
+    let registry = ParserRegistry::with_defaults();
+
+    Some(unique_sorted_paths(
+        changes
+            .iter()
+            .filter(|change| change_can_affect_graph_facts(&store, &registry, change))
+            .flat_map(|change| std::iter::once(change.path.clone()).chain(change.old_path.clone())),
+    ))
+}
+
 pub(super) fn compute_freshness_warning(
     repo_root: &str,
     db_path: &str,
@@ -211,21 +206,7 @@ pub(super) fn compute_freshness_warning(
         return None;
     }
 
-    let repo_root_path = find_repo_root(Utf8Path::new(repo_root)).ok()?;
-    let changes = changed_files(repo_root_path.as_path(), &DiffTarget::WorkingTree).ok()?;
-    if changes.is_empty() {
-        return None;
-    }
-
-    let store = Store::open(db_path).ok()?;
-    let registry = ParserRegistry::with_defaults();
-
-    let changed_files = unique_sorted_paths(
-        changes
-            .iter()
-            .filter(|change| change_can_affect_graph_facts(&store, &registry, change))
-            .flat_map(|change| std::iter::once(change.path.clone()).chain(change.old_path.clone())),
-    );
+    let changed_files = pending_graph_relevant_changes(repo_root, db_path)?;
     if changed_files.is_empty() {
         return None;
     }

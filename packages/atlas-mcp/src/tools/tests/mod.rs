@@ -1,5 +1,6 @@
 use super::{call, tool_list};
 use crate::output::OutputFormat;
+use atlas_contentstore::{ContentStore, IndexingStats};
 use atlas_core::EdgeKind;
 use atlas_core::kinds::NodeKind;
 use atlas_core::model::{Edge, Node, NodeId};
@@ -147,6 +148,23 @@ pub(super) fn setup_mcp_fixture() -> McpFixture {
         )
         .expect("replace test graph");
 
+    let content_db_path = atlas_engine::paths::content_db_path(&db_path);
+    let mut content_store = ContentStore::open(&content_db_path).expect("open content store");
+    content_store.migrate().expect("migrate content store");
+    content_store
+        .begin_indexing("/repo", 3)
+        .expect("begin indexing");
+    content_store
+        .finish_indexing(
+            "/repo",
+            &IndexingStats {
+                files_indexed: 3,
+                chunks_written: 3,
+                chunks_reused: 0,
+            },
+        )
+        .expect("finish indexing");
+
     McpFixture { _dir: dir, db_path }
 }
 
@@ -237,6 +255,23 @@ pub(super) fn setup_git_mcp_fixture() -> GitMcpFixture {
             &[test_targets_compute],
         )
         .expect("replace test graph");
+
+    let content_db_path = atlas_engine::paths::content_db_path(&db_path);
+    let mut content_store = ContentStore::open(&content_db_path).expect("open content store");
+    content_store.migrate().expect("migrate content store");
+    content_store
+        .begin_indexing(&root.to_string_lossy(), 3)
+        .expect("begin indexing");
+    content_store
+        .finish_indexing(
+            &root.to_string_lossy(),
+            &IndexingStats {
+                files_indexed: 3,
+                chunks_written: 3,
+                chunks_reused: 0,
+            },
+        )
+        .expect("finish indexing");
 
     GitMcpFixture {
         repo_root: root.to_string_lossy().to_string(),

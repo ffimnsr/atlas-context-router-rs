@@ -1,8 +1,13 @@
 pub mod error;
+pub mod health;
 pub mod kinds;
 pub mod model;
 
 pub use error::{AtlasError, Result};
+pub use health::{
+    GraphHealthInput, graph_health_error_message, graph_health_error_suggestions,
+    is_schema_mismatch_error, select_graph_health_error_code,
+};
 pub use kinds::{EdgeKind, NodeKind};
 pub use model::{
     AdvancedImpactResult, AmbiguityMeta, BoundaryKind, BoundaryViolation, ChangeKind,

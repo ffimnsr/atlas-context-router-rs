@@ -1,5 +1,8 @@
 use anyhow::{Context, Result};
 use atlas_contentstore::{ContentStore, IndexState};
+use atlas_core::{
+    graph_health_error_message, graph_health_error_suggestions, is_schema_mismatch_error,
+};
 use atlas_repo::{collect_files, find_repo_root};
 use atlas_store_sqlite::{GraphBuildState, Store};
 use camino::Utf8Path;
@@ -12,6 +15,7 @@ struct CheckResult {
     name: &'static str,
     ok: bool,
     detail: String,
+    issue_code: Option<&'static str>,
 }
 
 impl CheckResult {
@@ -20,14 +24,28 @@ impl CheckResult {
             name,
             ok: true,
             detail: detail.into(),
+            issue_code: None,
         }
     }
-    fn fail(name: &'static str, detail: impl Into<String>) -> Self {
+    fn fail(
+        name: &'static str,
+        detail: impl Into<String>,
+        issue_code: Option<&'static str>,
+    ) -> Self {
         Self {
             name,
             ok: false,
             detail: detail.into(),
+            issue_code,
         }
+    }
+}
+
+fn graph_issue_code(error: &str) -> &'static str {
+    if is_schema_mismatch_error(error) {
+        "schema_mismatch"
+    } else {
+        "corrupt_or_inconsistent_graph_rows"
     }
 }
 
@@ -40,12 +58,20 @@ fn print_doctor_report(cli: &Cli, checks: &[CheckResult], all_ok: bool) -> Resul
                     "check": c.name,
                     "ok": c.ok,
                     "detail": c.detail,
+                    "issue_code": c.issue_code,
                 })
             })
             .collect();
+        let error_code = if all_ok { "none" } else { "checks_failed" };
         print_json(
             "doctor",
-            serde_json::json!({ "ok": all_ok, "checks": items }),
+            serde_json::json!({
+                "ok": all_ok,
+                "error_code": error_code,
+                "message": graph_health_error_message(error_code),
+                "suggestions": graph_health_error_suggestions(error_code),
+                "checks": items,
+            }),
         )?;
     } else {
         for c in checks {
@@ -72,7 +98,7 @@ pub fn run_doctor(cli: &Cli) -> Result<()> {
             r
         }
         Err(e) => {
-            checks.push(CheckResult::fail("repo_root", e.to_string()));
+            checks.push(CheckResult::fail("repo_root", e.to_string(), None));
             return print_doctor_report(cli, &checks, false);
         }
     };
@@ -80,7 +106,7 @@ pub fn run_doctor(cli: &Cli) -> Result<()> {
     // 2. Git repo root detection
     match find_repo_root(Utf8Path::new(&repo)) {
         Ok(root) => checks.push(CheckResult::pass("git_root", root.as_str())),
-        Err(e) => checks.push(CheckResult::fail("git_root", e.to_string())),
+        Err(e) => checks.push(CheckResult::fail("git_root", e.to_string(), None)),
     }
 
     // 3. .atlas dir
@@ -94,6 +120,7 @@ pub fn run_doctor(cli: &Cli) -> Result<()> {
         checks.push(CheckResult::fail(
             "atlas_dir",
             format!("{} not found — run `atlas init`", atlas_dir.display()),
+            None,
         ));
     }
 
@@ -118,13 +145,14 @@ pub fn run_doctor(cli: &Cli) -> Result<()> {
                 loaded_config = Some(config);
             }
             Err(e) => {
-                checks.push(CheckResult::fail("mcp_serve_config", e.to_string()));
+                checks.push(CheckResult::fail("mcp_serve_config", e.to_string(), None));
             }
         }
     } else {
         checks.push(CheckResult::fail(
             "config_file",
             format!("{} not found — run `atlas init`", config_path.display()),
+            None,
         ));
     }
 
@@ -137,6 +165,7 @@ pub fn run_doctor(cli: &Cli) -> Result<()> {
         checks.push(CheckResult::fail(
             "db_file",
             format!("{db_path_str} not found — run `atlas init`"),
+            None,
         ));
     }
 
@@ -150,10 +179,19 @@ pub fn run_doctor(cli: &Cli) -> Result<()> {
                         checks.push(CheckResult::pass("db_integrity", "ok"));
                     }
                     Ok(issues) => {
-                        checks.push(CheckResult::fail("db_integrity", issues.join("; ")));
+                        checks.push(CheckResult::fail(
+                            "db_integrity",
+                            issues.join("; "),
+                            Some("corrupt_or_inconsistent_graph_rows"),
+                        ));
                     }
                     Err(e) => {
-                        checks.push(CheckResult::fail("db_integrity", e.to_string()));
+                        let detail = e.to_string();
+                        checks.push(CheckResult::fail(
+                            "db_integrity",
+                            &detail,
+                            Some(graph_issue_code(&detail)),
+                        ));
                     }
                 }
                 match store.stats() {
@@ -167,7 +205,12 @@ pub fn run_doctor(cli: &Cli) -> Result<()> {
                         ));
                     }
                     Err(e) => {
-                        checks.push(CheckResult::fail("graph_stats", e.to_string()));
+                        let detail = e.to_string();
+                        checks.push(CheckResult::fail(
+                            "graph_stats",
+                            &detail,
+                            Some(graph_issue_code(&detail)),
+                        ));
                     }
                 }
 
@@ -193,7 +236,16 @@ pub fn run_doctor(cli: &Cli) -> Result<()> {
                             } else {
                                 format!("state={state_str}")
                             };
-                            checks.push(CheckResult::fail("graph_build_state", detail));
+                            let issue_code = if matches!(bs.state, GraphBuildState::Building) {
+                                "interrupted_build"
+                            } else {
+                                "failed_build"
+                            };
+                            checks.push(CheckResult::fail(
+                                "graph_build_state",
+                                detail,
+                                Some(issue_code),
+                            ));
                         }
                     }
                     Ok(None) => {
@@ -203,12 +255,22 @@ pub fn run_doctor(cli: &Cli) -> Result<()> {
                         ));
                     }
                     Err(e) => {
-                        checks.push(CheckResult::fail("graph_build_state", e.to_string()));
+                        let detail = e.to_string();
+                        checks.push(CheckResult::fail(
+                            "graph_build_state",
+                            &detail,
+                            Some(graph_issue_code(&detail)),
+                        ));
                     }
                 }
             }
             Err(e) => {
-                checks.push(CheckResult::fail("db_open", e.to_string()));
+                let detail = e.to_string();
+                checks.push(CheckResult::fail(
+                    "db_open",
+                    &detail,
+                    Some(graph_issue_code(&detail)),
+                ));
             }
         }
     }
@@ -224,8 +286,82 @@ pub fn run_doctor(cli: &Cli) -> Result<()> {
             ));
         }
         Err(e) => {
-            checks.push(CheckResult::fail("git_ls_files", e.to_string()));
+            checks.push(CheckResult::fail("git_ls_files", e.to_string(), None));
         }
+    }
+
+    let graph_freshness = if db_exists {
+        match Store::open(&db_path_str) {
+            Ok(store) => {
+                let registry = atlas_parser::ParserRegistry::with_defaults();
+                match atlas_repo::changed_files(
+                    Utf8Path::new(&repo),
+                    &atlas_repo::DiffTarget::WorkingTree,
+                ) {
+                    Ok(changes) => {
+                        let mut files: Vec<String> = changes
+                            .iter()
+                            .filter(|change| {
+                                registry.supports(&change.path)
+                                    || change
+                                        .old_path
+                                        .as_deref()
+                                        .is_some_and(|old_path| registry.supports(old_path))
+                                    || store
+                                        .nodes_by_file(&change.path)
+                                        .map(|nodes| !nodes.is_empty())
+                                        .unwrap_or(false)
+                                    || change.old_path.as_deref().is_some_and(|old_path| {
+                                        store
+                                            .nodes_by_file(old_path)
+                                            .map(|nodes| !nodes.is_empty())
+                                            .unwrap_or(false)
+                                    })
+                            })
+                            .flat_map(|change| {
+                                std::iter::once(change.path.clone()).chain(change.old_path.clone())
+                            })
+                            .collect();
+                        files.sort();
+                        files.dedup();
+                        files
+                    }
+                    Err(_) => Vec::new(),
+                }
+            }
+            Err(_) => Vec::new(),
+        }
+    } else {
+        Vec::new()
+    };
+    if graph_freshness.is_empty() {
+        checks.push(CheckResult::pass("graph_freshness", "up_to_date"));
+    } else {
+        let preview = graph_freshness
+            .iter()
+            .take(5)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(", ");
+        let detail = if graph_freshness.len() > 5 {
+            format!(
+                "{} pending graph-relevant files: {} (+{} more)",
+                graph_freshness.len(),
+                preview,
+                graph_freshness.len() - 5
+            )
+        } else {
+            format!(
+                "{} pending graph-relevant files: {}",
+                graph_freshness.len(),
+                preview
+            )
+        };
+        checks.push(CheckResult::fail(
+            "graph_freshness",
+            detail,
+            Some("stale_index"),
+        ));
     }
 
     // 8. Content DB retrieval index state (best-effort; missing DB is not fatal).
@@ -256,25 +392,35 @@ pub fn run_doctor(cli: &Cli) -> Result<()> {
                             } else {
                                 format!("state={state_str}")
                             };
-                            CheckResult::fail("retrieval_index", detail)
+                            CheckResult::fail(
+                                "retrieval_index",
+                                detail,
+                                Some("retrieval_index_unavailable"),
+                            )
                         });
                     }
                     Ok(None) => {
-                        checks.push(CheckResult::pass(
+                        checks.push(CheckResult::fail(
                             "retrieval_index",
                             "no index run recorded yet",
+                            Some("retrieval_index_unavailable"),
                         ));
                     }
                     Err(e) => {
-                        checks.push(CheckResult::fail("retrieval_index", e.to_string()));
+                        checks.push(CheckResult::fail(
+                            "retrieval_index",
+                            e.to_string(),
+                            Some("retrieval_index_unavailable"),
+                        ));
                     }
                 }
             }
             // Content DB not yet created — not an error at this point.
             Err(_) => {
-                checks.push(CheckResult::pass(
+                checks.push(CheckResult::fail(
                     "retrieval_index",
                     "content store not initialised",
+                    Some("retrieval_index_unavailable"),
                 ));
             }
         }
@@ -307,7 +453,10 @@ pub fn run_db_check(cli: &Cli) -> Result<()> {
         let result = serde_json::json!({
             "db_path": db_path,
             "ok": ok,
-            "issues": issues,
+            "error_code": if ok { "none" } else { "corrupt_or_inconsistent_graph_rows" },
+            "message": graph_health_error_message(if ok { "none" } else { "corrupt_or_inconsistent_graph_rows" }),
+            "suggestions": graph_health_error_suggestions(if ok { "none" } else { "corrupt_or_inconsistent_graph_rows" }),
+            "integrity_issues": issues,
             "orphan_node_count": orphans.len(),
             "dangling_edge_count": dangling.len(),
         });
@@ -377,6 +526,10 @@ pub fn run_debug_graph(cli: &Cli) -> Result<()> {
         print_json(
             "debug_graph",
             serde_json::json!({
+                "ok": true,
+                "error_code": "none",
+                "message": graph_health_error_message("none"),
+                "suggestions": graph_health_error_suggestions("none"),
                 "nodes": stats.node_count,
                 "edges": stats.edge_count,
                 "files": stats.file_count,

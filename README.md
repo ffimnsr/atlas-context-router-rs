@@ -382,6 +382,14 @@ The MCP server (`atlas serve`) exposes these tools to agents:
 | `cross_file_links` | Files semantically linked to a file by shared symbol references |
 | `concept_clusters` | Related file groups around seed files by coupling density |
 
+Search tool selection rules:
+
+1. `query_graph`: use for symbol names, definitions, and graph-native relationships.
+2. `search_files`: use when filename, extension, or path pattern is known but content is not.
+3. `search_content`: use for literal or regex text such as error strings, comments, config keys, SQL fragments, and embedded constants. Enable `rich_snippets=true` only when grouped before/match/after context is worth extra payload.
+4. `search_templates`: use when looking specifically for template files by engine or extension.
+5. `search_text_assets`: use for SQL, config, `.env`, and prompt files outside graph-symbol lookup.
+
 ## MCP Prompts
 
 The MCP server also exposes prompt templates for external LLM clients that support `prompts/list` and `prompts/get`:

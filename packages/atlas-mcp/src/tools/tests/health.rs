@@ -1,4 +1,5 @@
 use super::*;
+use rusqlite::Connection;
 
 #[test]
 fn status_healthy_repo_returns_ok() {
@@ -90,6 +91,98 @@ fn status_interrupted_build_returns_category() {
 }
 
 #[test]
+fn status_stale_graph_returns_error_code() {
+    let fixture = setup_git_mcp_fixture();
+    write_repo_file(
+        fixture._dir.path(),
+        "src/service.rs",
+        "pub fn compute() -> i32 { 2 }\n",
+    );
+
+    let args = serde_json::json!({ "output_format": "json" });
+    let resp =
+        call("status", Some(&args), &fixture.repo_root, &fixture.db_path).expect("status call");
+    let text = unwrap_tool_text(resp);
+    let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
+
+    assert_eq!(v["ok"].as_bool(), Some(false));
+    assert_eq!(v["error_code"].as_str(), Some("stale_index"));
+    assert_eq!(v["stale_index"].as_bool(), Some(true));
+    assert_eq!(v["pending_graph_change_count"].as_u64(), Some(1));
+    assert_eq!(
+        v["pending_graph_changes"][0].as_str(),
+        Some("src/service.rs")
+    );
+}
+
+#[test]
+fn status_schema_mismatch_returns_error_code() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let db_path = dir.path().join("atlas.db");
+    let conn = Connection::open(&db_path).expect("open malformed db");
+    conn.execute_batch(
+        "
+        CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        INSERT INTO metadata (key, value) VALUES ('schema_version', '6');
+        CREATE TABLE files (
+            path TEXT PRIMARY KEY,
+            hash TEXT NOT NULL,
+            language TEXT,
+            indexed_at TEXT,
+            node_count INTEGER
+        );
+        CREATE TABLE nodes (
+            id INTEGER PRIMARY KEY,
+            kind TEXT NOT NULL,
+            name TEXT NOT NULL,
+            qualified_name TEXT NOT NULL,
+            file_path TEXT NOT NULL,
+            line_start INTEGER NOT NULL,
+            line_end INTEGER NOT NULL,
+            language TEXT,
+            parent_name TEXT,
+            params TEXT,
+            return_type TEXT,
+            modifiers TEXT,
+            is_test INTEGER NOT NULL,
+            file_hash TEXT NOT NULL,
+            extra_json TEXT NOT NULL
+        );
+        CREATE TABLE edges (
+            id INTEGER PRIMARY KEY,
+            kind TEXT NOT NULL,
+            source_qualified TEXT NOT NULL,
+            target_qualified TEXT NOT NULL,
+            file_path TEXT NOT NULL,
+            line INTEGER,
+            confidence REAL NOT NULL,
+            confidence_tier TEXT,
+            extra_json TEXT NOT NULL
+        );
+        CREATE TABLE graph_build_state (
+            repo_root TEXT PRIMARY KEY,
+            state TEXT NOT NULL
+        );
+        ",
+    )
+    .expect("seed malformed schema");
+
+    let db_path = db_path.to_string_lossy().to_string();
+    let args = serde_json::json!({ "output_format": "json" });
+    let resp = call("status", Some(&args), "/repo", &db_path).expect("status call");
+    let text = unwrap_tool_text(resp);
+    let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
+
+    assert_eq!(v["ok"].as_bool(), Some(false));
+    assert_eq!(v["error_code"].as_str(), Some("schema_mismatch"));
+    assert!(
+        v["graph_query_error"]
+            .as_str()
+            .is_some_and(|text| text.contains("graph_build_state"))
+    );
+}
+
+#[test]
 fn doctor_returns_checks_array() {
     let fixture = setup_mcp_fixture();
     let dir_path = fixture._dir.path().to_string_lossy().to_string();
@@ -138,6 +231,30 @@ fn doctor_missing_db_fails_db_check() {
     let db_file_item = checks.iter().find(|c| c["check"] == "db_file");
     assert!(db_file_item.is_some());
     assert_eq!(db_file_item.unwrap()["ok"].as_bool(), Some(false));
+}
+
+#[test]
+fn doctor_retrieval_index_unavailable_sets_issue_code() {
+    let fixture = setup_git_mcp_fixture();
+    let content_db_path = atlas_engine::paths::content_db_path(&fixture.db_path);
+    std::fs::remove_file(&content_db_path).expect("remove content db");
+    let args = serde_json::json!({ "output_format": "json" });
+
+    let resp =
+        call("doctor", Some(&args), &fixture.repo_root, &fixture.db_path).expect("doctor call");
+    let text = unwrap_tool_text(resp);
+    let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
+
+    let checks = v["checks"].as_array().expect("checks array");
+    let retrieval = checks
+        .iter()
+        .find(|item| item["check"] == "retrieval_index")
+        .expect("retrieval check");
+    assert_eq!(retrieval["ok"].as_bool(), Some(false));
+    assert_eq!(
+        retrieval["issue_code"].as_str(),
+        Some("retrieval_index_unavailable")
+    );
 }
 
 #[test]
