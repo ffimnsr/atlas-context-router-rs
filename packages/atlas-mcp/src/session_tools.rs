@@ -12,7 +12,10 @@
 //! - Restore context through retrieval, not transcript replay.
 
 use anyhow::Result;
-use atlas_adapters::bridge::{BRIDGE_DIR, bridge_file_count, purge_all_bridge_files};
+use atlas_adapters::bridge::{bridge_file_count, purge_all_bridge_files};
+use atlas_adapters::{
+    derive_bridge_dir, derive_content_db_path, derive_session_db_path, generate_source_id,
+};
 use atlas_contentstore::{ContentStore, OutputRouting, SearchFilters, SourceMeta};
 use atlas_session::{
     NewSessionEvent, ResumeSnapshot, SessionEventType, SessionId, SessionMeta, SessionStore,
@@ -22,43 +25,6 @@ use serde_json::Value;
 use tracing::warn;
 
 use crate::output::{OutputFormat, render_serializable};
-
-// ---------------------------------------------------------------------------
-// DB path helpers
-// ---------------------------------------------------------------------------
-
-/// Derive session DB path from the graph DB path.
-///
-/// Graph DB: `.atlas/worldtree.db` → Session DB: `.atlas/session.db`
-pub(crate) fn derive_session_db_path(db_path: &str) -> String {
-    if let Some(parent) = std::path::Path::new(db_path).parent() {
-        parent.join("session.db").to_string_lossy().into_owned()
-    } else {
-        "session.db".to_string()
-    }
-}
-
-/// Derive content DB path from the graph DB path.
-///
-/// Graph DB: `.atlas/worldtree.db` → Content DB: `.atlas/context.db`
-pub(crate) fn derive_content_db_path(db_path: &str) -> String {
-    if let Some(parent) = std::path::Path::new(db_path).parent() {
-        parent.join("context.db").to_string_lossy().into_owned()
-    } else {
-        "context.db".to_string()
-    }
-}
-
-/// Derive the bridge artifact directory from the graph DB path.
-///
-/// Graph DB: `.atlas/worldtree.db` → Bridge dir: `.atlas/bridge/`
-pub(crate) fn derive_bridge_dir(db_path: &str) -> std::path::PathBuf {
-    if let Some(parent) = std::path::Path::new(db_path).parent() {
-        parent.join(BRIDGE_DIR)
-    } else {
-        std::path::PathBuf::from(BRIDGE_DIR)
-    }
-}
 
 /// Derive the MCP session id for a given repo root.
 ///
@@ -732,22 +698,6 @@ fn resolve_session_id(args: Option<&Value>, repo_root: &str) -> SessionId {
     }
 }
 
-/// Generate a stable source_id from label + content hash.
-///
-/// Uses SHA-256 over `label\0content` (first 64 KB sampled for speed).
-/// Encoded as 32 lowercase hex chars (first 16 bytes of the digest).
-fn generate_source_id(label: &str, content: &str) -> String {
-    use sha2::{Digest, Sha256};
-    let mut h = Sha256::new();
-    h.update(label.as_bytes());
-    h.update(b"\x00");
-    // Sample at most 64 KB to keep hashing fast for huge inputs.
-    let sample = &content.as_bytes()[..content.len().min(65_536)];
-    h.update(sample);
-    let digest = h.finalize();
-    digest.iter().take(16).map(|b| format!("{b:02x}")).collect()
-}
-
 /// Wrap structured output in an MCP tool-result content envelope.
 pub(crate) fn tool_result_value<T: Serialize>(
     value: &T,
@@ -784,34 +734,6 @@ mod tests {
             .join("worldtree.db")
             .to_string_lossy()
             .into_owned()
-    }
-
-    #[test]
-    fn test_derive_session_db_path() {
-        let p = derive_session_db_path("/repo/.atlas/worldtree.db");
-        assert!(p.ends_with("session.db"), "got: {p}");
-        assert!(p.contains(".atlas"), "got: {p}");
-    }
-
-    #[test]
-    fn test_derive_content_db_path() {
-        let p = derive_content_db_path("/repo/.atlas/worldtree.db");
-        assert!(p.ends_with("context.db"), "got: {p}");
-    }
-
-    #[test]
-    fn test_generate_source_id_deterministic() {
-        let id1 = generate_source_id("my label", "some content");
-        let id2 = generate_source_id("my label", "some content");
-        assert_eq!(id1, id2);
-        assert_eq!(id1.len(), 32);
-    }
-
-    #[test]
-    fn test_generate_source_id_different_for_different_input() {
-        let id1 = generate_source_id("label a", "content a");
-        let id2 = generate_source_id("label b", "content b");
-        assert_ne!(id1, id2);
     }
 
     #[test]
@@ -932,16 +854,6 @@ mod tests {
         let content = result["content"][0]["text"].as_str().unwrap();
         let body: Value = serde_json::from_str(content).unwrap();
         assert_eq!(body["deleted_bridge_file_count"].as_u64().unwrap(), 2);
-    }
-
-    #[test]
-    fn test_derive_bridge_dir() {
-        let dir = derive_bridge_dir("/repo/.atlas/worldtree.db");
-        assert!(dir.ends_with("bridge"), "got: {}", dir.display());
-        assert!(
-            dir.to_string_lossy().contains(".atlas"),
-            "must be inside .atlas"
-        );
     }
 
     #[test]

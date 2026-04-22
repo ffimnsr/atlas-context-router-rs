@@ -12,6 +12,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use serde::Serialize;
 use serde_json::Value;
 
 // ---------------------------------------------------------------------------
@@ -29,41 +30,89 @@ pub struct InstallSummary {
     pub hook_paths: Vec<PathBuf>,
     /// Instruction files that were created or updated.
     pub instruction_files: Vec<String>,
+    /// Platform agent hook config files written or updated.
+    pub platform_hook_files: Vec<String>,
+    /// Validation checks for installed or existing files.
+    pub validation_checks: Vec<InstallValidation>,
+    /// Selected install scope.
+    pub scope: String,
+    /// Whether install ran in validate-only mode.
+    pub validate_only: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct InstallValidation {
+    pub check: String,
+    pub ok: bool,
+    pub detail: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum InstallScope {
+    Repo,
+    User,
+}
+
+impl InstallScope {
+    fn parse(scope: &str) -> Self {
+        match scope {
+            "user" => Self::User,
+            _ => Self::Repo,
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Repo => "repo",
+            Self::User => "user",
+        }
+    }
 }
 
 /// Run the full install flow for the given `platform` target.
 ///
 /// `repo_root` — the repository root directory.
 /// `platform`  — `"all"`, `"copilot"`, `"claude"`, or `"codex"`.
+/// `platform`  — `"all"`, `"copilot"`, `"claude"`, or `"codex"`.
 /// `dry_run`   — when `true`, describe changes without writing files.
-/// `no_hooks`  — skip git hook installation.
+/// `no_hooks`  — skip git hooks and platform agent hook config installation.
 /// `no_instructions` — skip injecting platform-specific agent instructions.
 pub fn run_install(
     repo_root: &Path,
     platform: &str,
+    scope: &str,
     dry_run: bool,
+    validate_only: bool,
     no_hooks: bool,
     no_instructions: bool,
 ) -> Result<InstallSummary> {
     let mut summary = InstallSummary::default();
+    let scope = InstallScope::parse(scope);
+    let scope_root = scope_root(repo_root, scope)?;
+    summary.scope = scope.as_str().to_owned();
+    summary.validate_only = validate_only;
 
-    #[allow(clippy::type_complexity)]
-    let platforms: &[(&str, &dyn Fn(&Path, bool) -> Result<PlatformResult>)] = &[
-        ("copilot", &install_copilot),
-        ("claude", &install_claude),
-        ("codex", &install_codex),
-    ];
-
-    for (name, installer) in platforms {
+    for name in ["copilot", "claude", "codex"] {
         let skip = match platform {
             "all" => !should_auto_detect(name, repo_root),
-            p => p != *name,
+            p => p != name,
         };
         if skip {
             continue;
         }
 
-        match installer(repo_root, dry_run)? {
+        if validate_only {
+            continue;
+        }
+
+        let result = match name {
+            "copilot" => install_copilot_scoped(repo_root, &scope_root, scope, dry_run),
+            "claude" => install_claude_scoped(repo_root, &scope_root, scope, dry_run),
+            "codex" => install_codex_scoped(repo_root, &scope_root, scope, dry_run),
+            _ => unreachable!(),
+        }?;
+
+        match result {
             PlatformResult::Configured(label) => summary.configured.push(label),
             PlatformResult::AlreadyConfigured(label) => summary.already_configured.push(label),
         }
@@ -71,15 +120,35 @@ pub fn run_install(
 
     if !no_hooks {
         summary.hook_paths = install_git_hooks(repo_root, dry_run)?;
+        if !validate_only {
+            summary.platform_hook_files = install_platform_agent_hooks_scoped(
+                repo_root,
+                &scope_root,
+                platform,
+                scope,
+                dry_run,
+            )?;
+        }
     }
 
-    if !no_instructions {
+    if !no_instructions && !validate_only {
         let files = inject_instructions(
             repo_root,
             &instruction_targets(platform, repo_root),
             dry_run,
         )?;
         summary.instruction_files = files;
+    }
+
+    if !dry_run || validate_only {
+        summary.validation_checks = validate_install(
+            repo_root,
+            &scope_root,
+            platform,
+            scope,
+            no_hooks,
+            no_instructions,
+        )?;
     }
 
     Ok(summary)
@@ -108,6 +177,65 @@ fn should_auto_detect(platform: &str, repo_root: &Path) -> bool {
     }
 }
 
+fn scope_root(repo_root: &Path, scope: InstallScope) -> Result<PathBuf> {
+    match scope {
+        InstallScope::Repo => Ok(repo_root.to_path_buf()),
+        InstallScope::User => user_home_dir(),
+    }
+}
+
+fn user_home_dir() -> Result<PathBuf> {
+    std::env::var("HOME")
+        .map(PathBuf::from)
+        .or_else(|_| {
+            #[allow(deprecated)]
+            std::env::home_dir().ok_or(std::env::VarError::NotPresent)
+        })
+        .context("cannot determine home directory")
+}
+
+fn display_scoped_path(
+    path: &Path,
+    repo_root: &Path,
+    scope_root: &Path,
+    scope: InstallScope,
+) -> String {
+    let normalized = match scope {
+        InstallScope::Repo => path
+            .strip_prefix(repo_root)
+            .unwrap_or(path)
+            .to_string_lossy()
+            .into_owned(),
+        InstallScope::User => path
+            .strip_prefix(scope_root)
+            .map(|rest| format!("~/{}", rest.to_string_lossy()))
+            .unwrap_or_else(|_| path.display().to_string()),
+    };
+    normalized.replace('\\', "/")
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+fn atlas_hook_command(
+    install_root: &Path,
+    scope: InstallScope,
+    frontend: &str,
+    arg: &str,
+) -> String {
+    match scope {
+        InstallScope::Repo => format!(".atlas/hooks/atlas-hook {frontend} {arg}"),
+        InstallScope::User => {
+            let runner = install_root.join(".atlas").join("hooks").join("atlas-hook");
+            format!(
+                "{} {frontend} {arg}",
+                shell_quote(&runner.display().to_string())
+            )
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Per-platform installers
 // ---------------------------------------------------------------------------
@@ -118,8 +246,25 @@ enum PlatformResult {
 }
 
 /// GitHub Copilot — writes `.vscode/mcp.json` in the repo root.
+#[cfg(test)]
 fn install_copilot(repo_root: &Path, dry_run: bool) -> Result<PlatformResult> {
-    let config_path = repo_root.join(".vscode").join("mcp.json");
+    install_copilot_scoped(repo_root, repo_root, InstallScope::Repo, dry_run)
+}
+
+fn install_copilot_scoped(
+    repo_root: &Path,
+    scope_root: &Path,
+    scope: InstallScope,
+    dry_run: bool,
+) -> Result<PlatformResult> {
+    let config_path = match scope {
+        InstallScope::Repo => scope_root.join(".vscode").join("mcp.json"),
+        InstallScope::User => scope_root
+            .join(".config")
+            .join("Code")
+            .join("User")
+            .join("mcp.json"),
+    };
     let server_entry = copilot_server_entry(repo_root);
     merge_json_mcp(
         &config_path,
@@ -132,8 +277,21 @@ fn install_copilot(repo_root: &Path, dry_run: bool) -> Result<PlatformResult> {
 }
 
 /// Claude Code — writes `.mcp.json` in the repo root.
+#[cfg(test)]
 fn install_claude(repo_root: &Path, dry_run: bool) -> Result<PlatformResult> {
-    let config_path = repo_root.join(".mcp.json");
+    install_claude_scoped(repo_root, repo_root, InstallScope::Repo, dry_run)
+}
+
+fn install_claude_scoped(
+    repo_root: &Path,
+    scope_root: &Path,
+    scope: InstallScope,
+    dry_run: bool,
+) -> Result<PlatformResult> {
+    let config_path = match scope {
+        InstallScope::Repo => scope_root.join(".mcp.json"),
+        InstallScope::User => scope_root.join(".mcp.json"),
+    };
     let server_entry = stdio_server_entry(repo_root);
     merge_json_mcp(
         &config_path,
@@ -146,8 +304,21 @@ fn install_claude(repo_root: &Path, dry_run: bool) -> Result<PlatformResult> {
 }
 
 /// OpenAI Codex CLI — writes/appends to repo-local `.codex/config.toml`.
+#[cfg(test)]
 fn install_codex(repo_root: &Path, dry_run: bool) -> Result<PlatformResult> {
-    let config_path = repo_root.join(".codex").join("config.toml");
+    install_codex_scoped(repo_root, repo_root, InstallScope::Repo, dry_run)
+}
+
+fn install_codex_scoped(
+    repo_root: &Path,
+    scope_root: &Path,
+    scope: InstallScope,
+    dry_run: bool,
+) -> Result<PlatformResult> {
+    let config_path = match scope {
+        InstallScope::Repo => scope_root.join(".codex").join("config.toml"),
+        InstallScope::User => scope_root.join(".codex").join("config.toml"),
+    };
     merge_toml_mcp(&config_path, repo_root, "atlas", dry_run, "Codex")
 }
 
@@ -803,6 +974,718 @@ fn instruction_section_range(existing: &str) -> Option<(usize, usize)> {
 }
 
 // ---------------------------------------------------------------------------
+// Platform agent hooks
+// ---------------------------------------------------------------------------
+
+/// Atlas hook runner script installed at `.atlas/hooks/atlas-hook`.
+///
+/// Called by platform hook configs with one event argument.
+/// Reads JSON from stdin (capped at 64 KiB), calls atlas CLI commands.
+/// All failures are non-blocking.
+const ATLAS_HOOK_RUNNER_SCRIPT: &str = r#"#!/bin/sh
+# Atlas hook runner — thin launcher for Rust `atlas hook`.
+# Installed by `atlas install` at .atlas/hooks/atlas-hook.
+# All failures are non-blocking.
+
+if [ "$#" -ge 2 ]; then
+    ATLAS_FRONTEND="$1"
+    ATLAS_EVENT="$2"
+else
+    ATLAS_FRONTEND="hook"
+    ATLAS_EVENT="${1:-unknown}"
+fi
+
+# Skip all work when atlas binary is not on PATH.
+command -v atlas >/dev/null 2>&1 || exit 0
+
+if [ -n "$ATLAS_EVENT" ] && [ "$ATLAS_EVENT" != "unknown" ]; then
+    ATLAS_HOOK_FRONTEND="$ATLAS_FRONTEND" \
+    ATLAS_HOOK_SCRIPT_PATH="$0" \
+    atlas hook "$ATLAS_EVENT" >/dev/null 2>&1 || true
+fi
+"#;
+
+/// Marker used to detect whether a platform hook config already has atlas hooks.
+const ATLAS_HOOK_MARKER: &str = "atlas-hook";
+const ATLAS_HOOK_LIB_REL: &str = ".atlas/hooks/lib/";
+
+/// Copilot hook events — VS Code PascalCase names.
+const COPILOT_VSCODE_EVENTS: &[(&str, &str, &str)] = &[
+    ("SessionStart", "copilot", "session-start"),
+    ("UserPromptSubmit", "copilot", "user-prompt"),
+    ("PreToolUse", "copilot", "pre-tool-use"),
+    ("PostToolUse", "copilot", "post-tool-use"),
+    ("PreCompact", "copilot", "pre-compact"),
+    ("SubagentStart", "copilot", "subagent-start"),
+    ("SubagentStop", "copilot", "subagent-stop"),
+    ("Stop", "copilot", "stop"),
+];
+
+/// Copilot hook events — GitHub cloud agent / CLI camelCase names.
+const COPILOT_CLOUD_EVENTS: &[(&str, &str, &str)] = &[
+    ("sessionStart", "copilot", "session-start"),
+    ("userPromptSubmitted", "copilot", "user-prompt"),
+    ("preToolUse", "copilot", "pre-tool-use"),
+    ("postToolUse", "copilot", "post-tool-use"),
+    ("sessionEnd", "copilot", "session-end"),
+    ("errorOccurred", "copilot", "error"),
+];
+
+/// Claude hook event — name, atlas-hook event arg, and optional matcher.
+const CLAUDE_HOOKS: &[(&str, &str, &str, Option<&str>)] = &[
+    ("SessionStart", "claude", "session-start", None),
+    ("UserPromptSubmit", "claude", "user-prompt", None),
+    (
+        "UserPromptExpansion",
+        "claude",
+        "user-prompt-expansion",
+        None,
+    ),
+    (
+        "PreToolUse",
+        "claude",
+        "pre-tool-use",
+        Some("Bash|Edit|Write|MultiEdit"),
+    ),
+    ("PermissionRequest", "claude", "permission-request", None),
+    ("PermissionDenied", "claude", "permission-denied", None),
+    (
+        "PostToolUse",
+        "claude",
+        "post-tool-use",
+        Some("Edit|Write|MultiEdit|Bash"),
+    ),
+    ("PostToolUseFailure", "claude", "tool-failure", None),
+    ("Notification", "claude", "notification", None),
+    ("SubagentStart", "claude", "subagent-start", None),
+    ("SubagentStop", "claude", "subagent-stop", None),
+    ("TaskCreated", "claude", "task-created", None),
+    ("TaskCompleted", "claude", "task-completed", None),
+    ("Stop", "claude", "stop", None),
+    ("StopFailure", "claude", "stop-failure", None),
+    ("InstructionsLoaded", "claude", "instructions-loaded", None),
+    ("ConfigChange", "claude", "config-change", None),
+    ("CwdChanged", "claude", "cwd-changed", None),
+    ("FileChanged", "claude", "file-changed", None),
+    ("WorktreeCreate", "claude", "worktree-create", None),
+    ("WorktreeRemove", "claude", "worktree-remove", None),
+    ("PreCompact", "claude", "pre-compact", None),
+    ("PostCompact", "claude", "post-compact", None),
+    ("Elicitation", "claude", "elicitation", None),
+    ("ElicitationResult", "claude", "elicitation-result", None),
+    ("SessionEnd", "claude", "session-end", None),
+];
+
+/// Codex hook event — name, atlas-hook event arg, and optional matcher.
+const CODEX_HOOKS: &[(&str, &str, &str, Option<&str>)] = &[
+    (
+        "SessionStart",
+        "codex",
+        "session-start",
+        Some("startup|resume"),
+    ),
+    ("UserPromptSubmit", "codex", "user-prompt", None),
+    ("PreToolUse", "codex", "pre-tool-use", Some("Bash")),
+    (
+        "PermissionRequest",
+        "codex",
+        "permission-request",
+        Some("Bash"),
+    ),
+    ("PostToolUse", "codex", "post-tool-use", Some("Bash")),
+    ("Stop", "codex", "stop", None),
+];
+
+/// Install the shared atlas hook runner and all platform-specific hook configs.
+pub fn install_platform_agent_hooks(
+    repo_root: &Path,
+    platform: &str,
+    dry_run: bool,
+) -> Result<Vec<String>> {
+    install_platform_agent_hooks_scoped(repo_root, repo_root, platform, InstallScope::Repo, dry_run)
+}
+
+fn install_platform_agent_hooks_scoped(
+    repo_root: &Path,
+    scope_root: &Path,
+    platform: &str,
+    scope: InstallScope,
+    dry_run: bool,
+) -> Result<Vec<String>> {
+    let mut files = Vec::new();
+
+    let run_for = |name: &str| -> bool {
+        match platform {
+            "all" => should_auto_detect(name, repo_root),
+            p => p == name,
+        }
+    };
+
+    let needs_any = run_for("copilot") || run_for("claude") || run_for("codex");
+    if !needs_any {
+        return Ok(files);
+    }
+
+    // Install the shared hook runner first.
+    if let Some(runner_path) =
+        install_atlas_hook_runner_scoped(repo_root, scope_root, scope, dry_run)?
+    {
+        files.push(runner_path);
+    }
+
+    if run_for("copilot")
+        && let Some(p) = install_copilot_agent_hooks_scoped(repo_root, scope_root, scope, dry_run)?
+    {
+        files.push(p);
+    }
+    if run_for("claude")
+        && let Some(p) = install_claude_agent_hooks_scoped(repo_root, scope_root, scope, dry_run)?
+    {
+        files.push(p);
+    }
+    if run_for("codex")
+        && let Some(p) = install_codex_agent_hooks_scoped(repo_root, scope_root, scope, dry_run)?
+    {
+        files.push(p);
+    }
+
+    Ok(files)
+}
+
+/// Install `.atlas/hooks/atlas-hook` in `repo_root`.
+/// Returns the display path when a write occurred (or dry-run describes it).
+#[cfg(test)]
+fn install_atlas_hook_runner(repo_root: &Path, dry_run: bool) -> Result<Option<String>> {
+    install_atlas_hook_runner_scoped(repo_root, repo_root, InstallScope::Repo, dry_run)
+}
+
+fn install_atlas_hook_runner_scoped(
+    repo_root: &Path,
+    scope_root: &Path,
+    scope: InstallScope,
+    dry_run: bool,
+) -> Result<Option<String>> {
+    let hooks_dir = scope_root.join(".atlas").join("hooks");
+    let hook_lib_dir = hooks_dir.join("lib");
+    let runner_path = hooks_dir.join("atlas-hook");
+
+    let existing = if runner_path.exists() {
+        fs::read_to_string(&runner_path)
+            .with_context(|| format!("cannot read {}", runner_path.display()))?
+    } else {
+        String::new()
+    };
+
+    if !hook_lib_dir.is_dir() {
+        if dry_run {
+            println!("  [dry-run] would create {ATLAS_HOOK_LIB_REL}");
+        } else {
+            fs::create_dir_all(&hook_lib_dir)
+                .with_context(|| format!("cannot create {}", hook_lib_dir.display()))?;
+        }
+    }
+
+    if existing == ATLAS_HOOK_RUNNER_SCRIPT {
+        return Ok(None);
+    }
+
+    let rel = display_scoped_path(&runner_path, repo_root, scope_root, scope);
+    if dry_run {
+        if existing.is_empty() {
+            println!("  [dry-run] would create {rel}");
+        } else {
+            println!("  [dry-run] would update {rel}");
+        }
+        return Ok(Some(rel.to_owned()));
+    }
+
+    fs::create_dir_all(&hooks_dir)
+        .with_context(|| format!("cannot create {}", hooks_dir.display()))?;
+    fs::write(&runner_path, ATLAS_HOOK_RUNNER_SCRIPT)
+        .with_context(|| format!("cannot write {}", runner_path.display()))?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&runner_path, fs::Permissions::from_mode(0o755))
+            .with_context(|| format!("cannot chmod {}", runner_path.display()))?;
+    }
+
+    Ok(Some(rel.to_owned()))
+}
+
+/// Generate the Copilot hook config JSON value.
+#[cfg(test)]
+fn copilot_hooks_value() -> Value {
+    copilot_hooks_value_scoped(Path::new("."), InstallScope::Repo)
+}
+
+fn copilot_hooks_value_scoped(install_root: &Path, scope: InstallScope) -> Value {
+    let mut hooks = Vec::new();
+    for (event, frontend, arg) in COPILOT_VSCODE_EVENTS
+        .iter()
+        .chain(COPILOT_CLOUD_EVENTS.iter())
+    {
+        hooks.push(serde_json::json!({
+            "event": event,
+            "commands": [{ "command": atlas_hook_command(install_root, scope, frontend, arg) }]
+        }));
+    }
+    serde_json::json!({ "version": 1, "hooks": hooks })
+}
+
+/// Install `.github/hooks/atlas-copilot.json`.
+#[cfg(test)]
+fn install_copilot_agent_hooks(repo_root: &Path, dry_run: bool) -> Result<Option<String>> {
+    install_copilot_agent_hooks_scoped(repo_root, repo_root, InstallScope::Repo, dry_run)
+}
+
+fn install_copilot_agent_hooks_scoped(
+    repo_root: &Path,
+    scope_root: &Path,
+    scope: InstallScope,
+    dry_run: bool,
+) -> Result<Option<String>> {
+    let config_dir = match scope {
+        InstallScope::Repo => scope_root.join(".github").join("hooks"),
+        InstallScope::User => scope_root.join(".copilot").join("hooks"),
+    };
+    let config_path = config_dir.join("atlas-copilot.json");
+    let rel = display_scoped_path(&config_path, repo_root, scope_root, scope);
+
+    if config_path.exists() {
+        let existing = fs::read_to_string(&config_path)
+            .with_context(|| format!("cannot read {}", config_path.display()))?;
+        if existing.contains(ATLAS_HOOK_MARKER) {
+            return Ok(None); // already configured
+        }
+    }
+
+    let content = serde_json::to_string_pretty(&copilot_hooks_value_scoped(scope_root, scope))
+        .context("cannot serialise Copilot hook config")?;
+    let content = format!("{content}\n");
+
+    if dry_run {
+        println!("  [dry-run] would write {rel}");
+        return Ok(Some(rel.to_owned()));
+    }
+
+    fs::create_dir_all(&config_dir)
+        .with_context(|| format!("cannot create {}", config_dir.display()))?;
+    fs::write(&config_path, &content)
+        .with_context(|| format!("cannot write {}", config_path.display()))?;
+
+    Ok(Some(rel.to_owned()))
+}
+
+/// Generate the Claude `settings.json` hooks object value.
+#[cfg(test)]
+fn claude_hooks_value() -> Value {
+    claude_hooks_value_scoped(Path::new("."), InstallScope::Repo)
+}
+
+fn claude_hooks_value_scoped(install_root: &Path, scope: InstallScope) -> Value {
+    let mut hooks_map = serde_json::Map::new();
+    for (event, frontend, arg, matcher) in CLAUDE_HOOKS {
+        let cmd = atlas_hook_command(install_root, scope, frontend, arg);
+        let entry = if let Some(m) = matcher {
+            serde_json::json!([{
+                "matcher": m,
+                "hooks": [{ "type": "command", "command": cmd }]
+            }])
+        } else {
+            serde_json::json!([{
+                "hooks": [{ "type": "command", "command": cmd }]
+            }])
+        };
+        hooks_map.insert((*event).to_owned(), entry);
+    }
+    serde_json::json!({ "hooks": Value::Object(hooks_map) })
+}
+
+/// Install or merge atlas hooks into `.claude/settings.json`.
+#[cfg(test)]
+fn install_claude_agent_hooks(repo_root: &Path, dry_run: bool) -> Result<Option<String>> {
+    install_claude_agent_hooks_scoped(repo_root, repo_root, InstallScope::Repo, dry_run)
+}
+
+fn install_claude_agent_hooks_scoped(
+    repo_root: &Path,
+    scope_root: &Path,
+    scope: InstallScope,
+    dry_run: bool,
+) -> Result<Option<String>> {
+    let config_path = scope_root.join(".claude").join("settings.json");
+    let rel = display_scoped_path(&config_path, repo_root, scope_root, scope);
+
+    let mut root: serde_json::Map<String, Value> = if config_path.exists() {
+        let text = fs::read_to_string(&config_path)
+            .with_context(|| format!("cannot read {}", config_path.display()))?;
+        if text.contains(ATLAS_HOOK_MARKER) {
+            return Ok(None); // already configured
+        }
+        match serde_json::from_str::<Value>(&text) {
+            Ok(Value::Object(m)) => m,
+            _ => serde_json::Map::new(),
+        }
+    } else {
+        serde_json::Map::new()
+    };
+
+    // Merge atlas hooks into any existing hooks object.
+    let atlas_hooks = claude_hooks_value_scoped(scope_root, scope);
+    let Value::Object(atlas_obj) = &atlas_hooks else {
+        unreachable!()
+    };
+    let Value::Object(atlas_hooks_map) = atlas_obj.get("hooks").cloned().unwrap_or_default() else {
+        unreachable!()
+    };
+
+    let hooks_entry = root
+        .entry("hooks")
+        .or_insert_with(|| Value::Object(serde_json::Map::new()));
+    if let Value::Object(existing_hooks) = hooks_entry {
+        for (k, v) in atlas_hooks_map {
+            existing_hooks.insert(k, v);
+        }
+    }
+
+    let content = serde_json::to_string_pretty(&Value::Object(root))
+        .context("cannot serialise Claude hooks")?;
+    let content = format!("{content}\n");
+
+    if dry_run {
+        println!("  [dry-run] would write {rel}");
+        return Ok(Some(rel.to_owned()));
+    }
+
+    if let Some(parent) = config_path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("cannot create {}", parent.display()))?;
+    }
+    fs::write(&config_path, &content)
+        .with_context(|| format!("cannot write {}", config_path.display()))?;
+
+    Ok(Some(rel.to_owned()))
+}
+
+/// Generate the Codex `hooks.json` value.
+#[cfg(test)]
+fn codex_hooks_value() -> Value {
+    codex_hooks_value_scoped(Path::new("."), InstallScope::Repo)
+}
+
+fn codex_hooks_value_scoped(install_root: &Path, scope: InstallScope) -> Value {
+    let mut hooks_map = serde_json::Map::new();
+    for (event, frontend, arg, matcher) in CODEX_HOOKS {
+        let cmd = atlas_hook_command(install_root, scope, frontend, arg);
+        let entry = if let Some(m) = matcher {
+            serde_json::json!([{
+                "matcher": m,
+                "commands": [{ "command": cmd }]
+            }])
+        } else {
+            serde_json::json!([{
+                "commands": [{ "command": cmd }]
+            }])
+        };
+        hooks_map.insert((*event).to_owned(), entry);
+    }
+    serde_json::json!({ "hooks": Value::Object(hooks_map) })
+}
+
+/// Install `.codex/hooks.json`.
+#[cfg(test)]
+fn install_codex_agent_hooks(repo_root: &Path, dry_run: bool) -> Result<Option<String>> {
+    install_codex_agent_hooks_scoped(repo_root, repo_root, InstallScope::Repo, dry_run)
+}
+
+fn install_codex_agent_hooks_scoped(
+    repo_root: &Path,
+    scope_root: &Path,
+    scope: InstallScope,
+    dry_run: bool,
+) -> Result<Option<String>> {
+    let config_dir = scope_root.join(".codex");
+    let config_path = config_dir.join("hooks.json");
+    let rel = display_scoped_path(&config_path, repo_root, scope_root, scope);
+
+    if config_path.exists() {
+        let existing = fs::read_to_string(&config_path)
+            .with_context(|| format!("cannot read {}", config_path.display()))?;
+        if existing.contains(ATLAS_HOOK_MARKER) {
+            return Ok(None);
+        }
+    }
+
+    let content = serde_json::to_string_pretty(&codex_hooks_value_scoped(scope_root, scope))
+        .context("cannot serialise Codex hook config")?;
+    let content = format!("{content}\n");
+
+    if dry_run {
+        println!("  [dry-run] would write {rel}");
+        return Ok(Some(rel.to_owned()));
+    }
+
+    fs::create_dir_all(&config_dir)
+        .with_context(|| format!("cannot create {}", config_dir.display()))?;
+    fs::write(&config_path, &content)
+        .with_context(|| format!("cannot write {}", config_path.display()))?;
+
+    Ok(Some(rel.to_owned()))
+}
+
+fn validate_install(
+    repo_root: &Path,
+    scope_root: &Path,
+    platform: &str,
+    scope: InstallScope,
+    no_hooks: bool,
+    no_instructions: bool,
+) -> Result<Vec<InstallValidation>> {
+    let mut checks = Vec::new();
+
+    for name in ["copilot", "claude", "codex"] {
+        let skip = match platform {
+            "all" => !should_auto_detect(name, repo_root),
+            p => p != name,
+        };
+        if skip {
+            continue;
+        }
+
+        checks.push(match name {
+            "copilot" => validate_json_server_entry(
+                "copilot_config",
+                &match scope {
+                    InstallScope::Repo => scope_root.join(".vscode").join("mcp.json"),
+                    InstallScope::User => scope_root
+                        .join(".config")
+                        .join("Code")
+                        .join("User")
+                        .join("mcp.json"),
+                },
+                repo_root,
+                scope_root,
+                scope,
+                "servers",
+            ),
+            "claude" => validate_json_server_entry(
+                "claude_config",
+                &scope_root.join(".mcp.json"),
+                repo_root,
+                scope_root,
+                scope,
+                "mcpServers",
+            ),
+            "codex" => validate_toml_section(
+                "codex_config",
+                &scope_root.join(".codex").join("config.toml"),
+                repo_root,
+                scope_root,
+                scope,
+                "[mcp_servers.atlas]",
+            ),
+            _ => unreachable!(),
+        });
+    }
+
+    if !no_hooks {
+        let runner = scope_root.join(".atlas").join("hooks").join("atlas-hook");
+        checks.push(validate_runner(&runner, repo_root, scope_root, scope));
+
+        for name in ["copilot", "claude", "codex"] {
+            let skip = match platform {
+                "all" => !should_auto_detect(name, repo_root),
+                p => p != name,
+            };
+            if skip {
+                continue;
+            }
+
+            let hook_path = match (name, scope) {
+                ("copilot", InstallScope::Repo) => scope_root
+                    .join(".github")
+                    .join("hooks")
+                    .join("atlas-copilot.json"),
+                ("copilot", InstallScope::User) => scope_root
+                    .join(".copilot")
+                    .join("hooks")
+                    .join("atlas-copilot.json"),
+                ("claude", _) => scope_root.join(".claude").join("settings.json"),
+                ("codex", _) => scope_root.join(".codex").join("hooks.json"),
+                _ => unreachable!(),
+            };
+            checks.push(validate_hook_config(
+                name, &hook_path, repo_root, scope_root, scope,
+            ));
+        }
+
+        if repo_root.join(".git").is_dir() {
+            for hook_name in ["pre-commit", "post-checkout", "post-merge", "post-rewrite"] {
+                let hook_path = repo_root.join(".git").join("hooks").join(hook_name);
+                checks.push(validate_git_hook(&hook_path, hook_name));
+            }
+        }
+    }
+
+    if !no_instructions {
+        for filename in instruction_targets(platform, repo_root) {
+            let path = repo_root.join(filename);
+            checks.push(validate_instruction_file(&path, filename));
+        }
+    }
+
+    Ok(checks)
+}
+
+fn validate_json_server_entry(
+    check: &str,
+    path: &Path,
+    repo_root: &Path,
+    scope_root: &Path,
+    scope: InstallScope,
+    top_key: &str,
+) -> InstallValidation {
+    match fs::read_to_string(path) {
+        Ok(text) => match serde_json::from_str::<Value>(&text) {
+            Ok(Value::Object(root)) => {
+                let ok = root
+                    .get(top_key)
+                    .and_then(Value::as_object)
+                    .is_some_and(|servers| servers.contains_key("atlas"));
+                InstallValidation {
+                    check: check.to_owned(),
+                    ok,
+                    detail: display_scoped_path(path, repo_root, scope_root, scope),
+                }
+            }
+            _ => InstallValidation {
+                check: check.to_owned(),
+                ok: false,
+                detail: format!(
+                    "{} (invalid json)",
+                    display_scoped_path(path, repo_root, scope_root, scope)
+                ),
+            },
+        },
+        Err(_) => InstallValidation {
+            check: check.to_owned(),
+            ok: false,
+            detail: format!(
+                "{} (missing)",
+                display_scoped_path(path, repo_root, scope_root, scope)
+            ),
+        },
+    }
+}
+
+fn validate_toml_section(
+    check: &str,
+    path: &Path,
+    repo_root: &Path,
+    scope_root: &Path,
+    scope: InstallScope,
+    section_header: &str,
+) -> InstallValidation {
+    match fs::read_to_string(path) {
+        Ok(text) => InstallValidation {
+            check: check.to_owned(),
+            ok: text.contains(section_header),
+            detail: display_scoped_path(path, repo_root, scope_root, scope),
+        },
+        Err(_) => InstallValidation {
+            check: check.to_owned(),
+            ok: false,
+            detail: format!(
+                "{} (missing)",
+                display_scoped_path(path, repo_root, scope_root, scope)
+            ),
+        },
+    }
+}
+
+fn validate_runner(
+    path: &Path,
+    repo_root: &Path,
+    scope_root: &Path,
+    scope: InstallScope,
+) -> InstallValidation {
+    match fs::read_to_string(path) {
+        Ok(text) => InstallValidation {
+            check: "atlas_hook_runner".to_owned(),
+            ok: text.contains("atlas hook \"$ATLAS_EVENT\""),
+            detail: display_scoped_path(path, repo_root, scope_root, scope),
+        },
+        Err(_) => InstallValidation {
+            check: "atlas_hook_runner".to_owned(),
+            ok: false,
+            detail: format!(
+                "{} (missing)",
+                display_scoped_path(path, repo_root, scope_root, scope)
+            ),
+        },
+    }
+}
+
+fn validate_hook_config(
+    name: &str,
+    path: &Path,
+    repo_root: &Path,
+    scope_root: &Path,
+    scope: InstallScope,
+) -> InstallValidation {
+    match fs::read_to_string(path) {
+        Ok(text) => {
+            let parses = serde_json::from_str::<Value>(&text).is_ok();
+            InstallValidation {
+                check: format!("{name}_hooks"),
+                ok: parses && text.contains("atlas-hook"),
+                detail: display_scoped_path(path, repo_root, scope_root, scope),
+            }
+        }
+        Err(_) => InstallValidation {
+            check: format!("{name}_hooks"),
+            ok: false,
+            detail: format!(
+                "{} (missing)",
+                display_scoped_path(path, repo_root, scope_root, scope)
+            ),
+        },
+    }
+}
+
+fn validate_git_hook(path: &Path, hook_name: &str) -> InstallValidation {
+    match fs::read_to_string(path) {
+        Ok(text) => InstallValidation {
+            check: format!("git_hook_{hook_name}"),
+            ok: text.contains(HOOK_START_MARKER) && text.contains(HOOK_END_MARKER),
+            detail: path.display().to_string(),
+        },
+        Err(_) => InstallValidation {
+            check: format!("git_hook_{hook_name}"),
+            ok: false,
+            detail: format!("{} (missing)", path.display()),
+        },
+    }
+}
+
+fn validate_instruction_file(path: &Path, filename: &str) -> InstallValidation {
+    match fs::read_to_string(path) {
+        Ok(text) => InstallValidation {
+            check: format!("instruction_{filename}"),
+            ok: text.contains(INSTRUCTIONS_MARKER) && text.contains(INSTRUCTIONS_END_MARKER),
+            detail: filename.to_owned(),
+        },
+        Err(_) => InstallValidation {
+            check: format!("instruction_{filename}"),
+            ok: false,
+            detail: format!("{filename} (missing)"),
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -1180,7 +2063,7 @@ mod tests {
     fn run_install_codex_creates_only_agents_md() {
         let tmp = TempDir::new().unwrap();
 
-        let summary = run_install(tmp.path(), "codex", false, true, false).unwrap();
+        let summary = run_install(tmp.path(), "codex", "repo", false, false, true, false).unwrap();
 
         assert!(summary.instruction_files.contains(&"AGENTS.md".to_owned()));
         assert!(!summary.instruction_files.contains(&"CLAUDE.md".to_owned()));
@@ -1192,7 +2075,7 @@ mod tests {
     fn run_install_claude_creates_only_claude_md() {
         let tmp = TempDir::new().unwrap();
 
-        let summary = run_install(tmp.path(), "claude", false, true, false).unwrap();
+        let summary = run_install(tmp.path(), "claude", "repo", false, false, true, false).unwrap();
 
         assert!(summary.instruction_files.contains(&"CLAUDE.md".to_owned()));
         assert!(!summary.instruction_files.contains(&"AGENTS.md".to_owned()));
@@ -1262,7 +2145,7 @@ mod tests {
     fn install_summary_reports_all_git_hooks() {
         let tmp = TempDir::new().unwrap();
         repo_with_git(tmp.path());
-        let summary = run_install(tmp.path(), "claude", false, false, true).unwrap();
+        let summary = run_install(tmp.path(), "claude", "repo", false, false, false, true).unwrap();
         assert_eq!(summary.hook_paths.len(), 4);
         assert!(
             summary
@@ -1294,9 +2177,363 @@ mod tests {
     fn dry_run_writes_nothing() {
         let tmp = TempDir::new().unwrap();
         repo_with_git(tmp.path());
-        run_install(tmp.path(), "claude", true, false, false).unwrap();
+        run_install(tmp.path(), "claude", "repo", true, false, false, false).unwrap();
         assert!(!tmp.path().join(".mcp.json").exists());
         assert!(!tmp.path().join("AGENTS.md").exists());
         assert!(!tmp.path().join("CLAUDE.md").exists());
+    }
+
+    // ------------------------------------------------------------------
+    // Platform agent hook tests
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn install_atlas_hook_runner_creates_executable_script() {
+        let tmp = TempDir::new().unwrap();
+        let result = install_atlas_hook_runner(tmp.path(), false).unwrap();
+        assert!(result.is_some());
+
+        let runner = tmp.path().join(".atlas").join("hooks").join("atlas-hook");
+        let lib_dir = tmp.path().join(".atlas").join("hooks").join("lib");
+        assert!(runner.exists());
+        assert!(lib_dir.is_dir());
+        let content = fs::read_to_string(&runner).unwrap();
+        assert!(content.starts_with("#!/bin/sh"));
+        assert!(content.contains("atlas-hook"));
+        assert!(content.contains("ATLAS_HOOK_SCRIPT_PATH=\"$0\""));
+        assert!(content.contains("atlas hook \"$ATLAS_EVENT\""));
+        assert!(content.contains("[ -n \"$ATLAS_EVENT\" ]"));
+        assert!(content.contains("[ \"$ATLAS_EVENT\" != \"unknown\" ]"));
+        assert!(!content.contains("ATLAS_REPO_ROOT"));
+        assert!(!content.contains("head -c 65536"));
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(&runner).unwrap().permissions().mode();
+            assert_ne!(mode & 0o111, 0, "runner should be executable");
+        }
+    }
+
+    #[test]
+    fn install_atlas_hook_runner_idempotent() {
+        let tmp = TempDir::new().unwrap();
+        install_atlas_hook_runner(tmp.path(), false).unwrap();
+        // Second call should return None (no change).
+        let result = install_atlas_hook_runner(tmp.path(), false).unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn install_atlas_hook_runner_recreates_missing_lib_dir() {
+        let tmp = TempDir::new().unwrap();
+        install_atlas_hook_runner(tmp.path(), false).unwrap();
+        fs::remove_dir_all(tmp.path().join(".atlas").join("hooks").join("lib")).unwrap();
+
+        let result = install_atlas_hook_runner(tmp.path(), false).unwrap();
+        assert!(result.is_none());
+        assert!(tmp.path().join(".atlas").join("hooks").join("lib").is_dir());
+    }
+
+    #[test]
+    fn install_copilot_agent_hooks_writes_github_hooks_json() {
+        let tmp = TempDir::new().unwrap();
+        let result = install_copilot_agent_hooks(tmp.path(), false).unwrap();
+        assert!(result.is_some());
+
+        let config = tmp
+            .path()
+            .join(".github")
+            .join("hooks")
+            .join("atlas-copilot.json");
+        assert!(config.exists());
+        let val: Value = serde_json::from_str(&fs::read_to_string(&config).unwrap()).unwrap();
+        assert_eq!(val["version"], 1);
+        let hooks = val["hooks"].as_array().unwrap();
+        assert!(!hooks.is_empty());
+        // Every hook must reference the atlas-hook runner.
+        for hook in hooks {
+            let cmd = hook["commands"][0]["command"].as_str().unwrap();
+            assert!(cmd.contains("atlas-hook"), "missing atlas-hook in: {cmd}");
+        }
+    }
+
+    #[test]
+    fn install_copilot_agent_hooks_idempotent() {
+        let tmp = TempDir::new().unwrap();
+        install_copilot_agent_hooks(tmp.path(), false).unwrap();
+        let result = install_copilot_agent_hooks(tmp.path(), false).unwrap();
+        assert!(result.is_none(), "second call should be idempotent");
+    }
+
+    #[test]
+    fn install_claude_agent_hooks_writes_settings_json() {
+        let tmp = TempDir::new().unwrap();
+        let result = install_claude_agent_hooks(tmp.path(), false).unwrap();
+        assert!(result.is_some());
+
+        let config = tmp.path().join(".claude").join("settings.json");
+        assert!(config.exists());
+        let val: Value = serde_json::from_str(&fs::read_to_string(&config).unwrap()).unwrap();
+        let hooks = val["hooks"].as_object().unwrap();
+        // Core lifecycle events.
+        assert!(hooks.contains_key("SessionStart"));
+        assert!(hooks.contains_key("UserPromptSubmit"));
+        assert!(hooks.contains_key("UserPromptExpansion"));
+        assert!(hooks.contains_key("PreToolUse"));
+        assert!(hooks.contains_key("PermissionRequest"));
+        assert!(hooks.contains_key("PermissionDenied"));
+        assert!(hooks.contains_key("PostToolUse"));
+        assert!(hooks.contains_key("PostToolUseFailure"));
+        // Nested-agent and task events.
+        assert!(hooks.contains_key("SubagentStart"));
+        assert!(hooks.contains_key("SubagentStop"));
+        assert!(hooks.contains_key("TaskCreated"));
+        assert!(hooks.contains_key("TaskCompleted"));
+        // Freshness and config events.
+        assert!(hooks.contains_key("ConfigChange"));
+        assert!(hooks.contains_key("CwdChanged"));
+        assert!(hooks.contains_key("FileChanged"));
+        assert!(hooks.contains_key("WorktreeCreate"));
+        assert!(hooks.contains_key("WorktreeRemove"));
+        // Compact / session boundary events.
+        assert!(hooks.contains_key("PreCompact"));
+        assert!(hooks.contains_key("PostCompact"));
+        assert!(hooks.contains_key("Stop"));
+        assert!(hooks.contains_key("StopFailure"));
+        assert!(hooks.contains_key("SessionEnd"));
+    }
+
+    #[test]
+    fn install_claude_agent_hooks_merges_with_existing_settings() {
+        let tmp = TempDir::new().unwrap();
+        fs::create_dir_all(tmp.path().join(".claude")).unwrap();
+        fs::write(
+            tmp.path().join(".claude").join("settings.json"),
+            r#"{"model":"claude-opus-4-5"}"#,
+        )
+        .unwrap();
+
+        install_claude_agent_hooks(tmp.path(), false).unwrap();
+
+        let val: Value = serde_json::from_str(
+            &fs::read_to_string(tmp.path().join(".claude").join("settings.json")).unwrap(),
+        )
+        .unwrap();
+        // Existing key preserved.
+        assert_eq!(val["model"], "claude-opus-4-5");
+        // Atlas hooks added.
+        assert!(val["hooks"].as_object().is_some());
+    }
+
+    #[test]
+    fn install_claude_agent_hooks_idempotent() {
+        let tmp = TempDir::new().unwrap();
+        install_claude_agent_hooks(tmp.path(), false).unwrap();
+        let result = install_claude_agent_hooks(tmp.path(), false).unwrap();
+        assert!(result.is_none(), "second call should be idempotent");
+    }
+
+    #[test]
+    fn install_codex_agent_hooks_writes_hooks_json() {
+        let tmp = TempDir::new().unwrap();
+        let result = install_codex_agent_hooks(tmp.path(), false).unwrap();
+        assert!(result.is_some());
+
+        let config = tmp.path().join(".codex").join("hooks.json");
+        assert!(config.exists());
+        let val: Value = serde_json::from_str(&fs::read_to_string(&config).unwrap()).unwrap();
+        let hooks = val["hooks"].as_object().unwrap();
+        assert!(hooks.contains_key("SessionStart"));
+        assert!(hooks.contains_key("PostToolUse"));
+        assert!(hooks.contains_key("Stop"));
+    }
+
+    #[test]
+    fn install_codex_agent_hooks_idempotent() {
+        let tmp = TempDir::new().unwrap();
+        install_codex_agent_hooks(tmp.path(), false).unwrap();
+        let result = install_codex_agent_hooks(tmp.path(), false).unwrap();
+        assert!(result.is_none(), "second call should be idempotent");
+    }
+
+    #[test]
+    fn platform_hook_configs_are_valid_json() {
+        serde_json::to_string_pretty(&copilot_hooks_value()).unwrap();
+        serde_json::to_string_pretty(&claude_hooks_value()).unwrap();
+        serde_json::to_string_pretty(&codex_hooks_value()).unwrap();
+    }
+
+    #[test]
+    fn platform_hook_fixtures_match_generated_configs() {
+        let cases = [
+            (
+                "copilot",
+                copilot_hooks_value(),
+                "tests/fixtures/hooks/copilot/atlas-copilot.json",
+            ),
+            (
+                "claude",
+                claude_hooks_value(),
+                "tests/fixtures/hooks/claude/settings.json",
+            ),
+            (
+                "codex",
+                codex_hooks_value(),
+                "tests/fixtures/hooks/codex/hooks.json",
+            ),
+        ];
+
+        for (label, generated, relative_path) in cases {
+            let fixture =
+                fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join(relative_path))
+                    .unwrap_or_else(|e| panic!("cannot read {label} fixture: {e}"));
+            let fixture: Value = serde_json::from_str(&fixture)
+                .unwrap_or_else(|e| panic!("cannot parse {label} fixture: {e}"));
+            assert_eq!(generated, fixture, "{label} fixture drifted");
+        }
+    }
+
+    #[test]
+    fn install_platform_agent_hooks_dry_run_writes_nothing() {
+        let tmp = TempDir::new().unwrap();
+        let files = install_platform_agent_hooks(tmp.path(), "claude", true).unwrap();
+        // Dry run should report what it would do but write nothing.
+        assert!(!files.is_empty(), "dry-run should report planned files");
+        assert!(
+            !tmp.path()
+                .join(".atlas")
+                .join("hooks")
+                .join("atlas-hook")
+                .exists()
+        );
+        assert!(!tmp.path().join(".claude").join("settings.json").exists());
+    }
+
+    #[test]
+    fn install_platform_agent_hooks_copilot_creates_files() {
+        let tmp = TempDir::new().unwrap();
+        let files = install_platform_agent_hooks(tmp.path(), "copilot", false).unwrap();
+        assert!(files.contains(&".atlas/hooks/atlas-hook".to_owned()));
+        assert!(files.contains(&".github/hooks/atlas-copilot.json".to_owned()));
+    }
+
+    #[test]
+    fn install_platform_agent_hooks_claude_creates_files() {
+        let tmp = TempDir::new().unwrap();
+        let files = install_platform_agent_hooks(tmp.path(), "claude", false).unwrap();
+        assert!(files.contains(&".atlas/hooks/atlas-hook".to_owned()));
+        assert!(files.contains(&".claude/settings.json".to_owned()));
+    }
+
+    #[test]
+    fn install_platform_agent_hooks_codex_creates_files() {
+        let tmp = TempDir::new().unwrap();
+        let files = install_platform_agent_hooks(tmp.path(), "codex", false).unwrap();
+        assert!(files.contains(&".atlas/hooks/atlas-hook".to_owned()));
+        assert!(files.contains(&".codex/hooks.json".to_owned()));
+    }
+
+    #[test]
+    fn run_install_validate_only_reports_missing_targets_without_writing() {
+        let tmp = TempDir::new().unwrap();
+        repo_with_git(tmp.path());
+
+        let summary = run_install(tmp.path(), "claude", "repo", false, true, false, false).unwrap();
+
+        assert!(summary.validate_only);
+        assert!(summary.configured.is_empty());
+        assert!(summary.already_configured.is_empty());
+        assert!(!tmp.path().join(".mcp.json").exists());
+        assert!(
+            summary
+                .validation_checks
+                .iter()
+                .any(|check| check.check == "claude_config" && !check.ok)
+        );
+    }
+
+    #[test]
+    fn user_scope_installs_platform_files_under_home_root() {
+        let repo = TempDir::new().unwrap();
+        let home = TempDir::new().unwrap();
+
+        let result =
+            install_claude_scoped(repo.path(), home.path(), InstallScope::User, false).unwrap();
+        assert!(matches!(result, PlatformResult::Configured(_)));
+
+        let files = install_platform_agent_hooks_scoped(
+            repo.path(),
+            home.path(),
+            "claude",
+            InstallScope::User,
+            false,
+        )
+        .unwrap();
+
+        assert!(home.path().join(".mcp.json").exists());
+        assert!(home.path().join(".claude").join("settings.json").exists());
+        assert!(
+            home.path()
+                .join(".atlas")
+                .join("hooks")
+                .join("atlas-hook")
+                .exists()
+        );
+        assert!(!repo.path().join(".mcp.json").exists());
+        assert!(!repo.path().join(".claude").join("settings.json").exists());
+        assert!(files.contains(&"~/.atlas/hooks/atlas-hook".to_owned()));
+        assert!(files.contains(&"~/.claude/settings.json".to_owned()));
+
+        let settings =
+            fs::read_to_string(home.path().join(".claude").join("settings.json")).unwrap();
+        assert!(
+            settings.contains(
+                &home
+                    .path()
+                    .join(".atlas")
+                    .join("hooks")
+                    .join("atlas-hook")
+                    .display()
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn user_scope_validation_passes_after_install() {
+        let repo = TempDir::new().unwrap();
+        let home = TempDir::new().unwrap();
+
+        install_codex_scoped(repo.path(), home.path(), InstallScope::User, false).unwrap();
+        install_platform_agent_hooks_scoped(
+            repo.path(),
+            home.path(),
+            "codex",
+            InstallScope::User,
+            false,
+        )
+        .unwrap();
+
+        let checks = validate_install(
+            repo.path(),
+            home.path(),
+            "codex",
+            InstallScope::User,
+            false,
+            true,
+        )
+        .unwrap();
+        assert!(checks.iter().all(|check| check.ok), "checks: {checks:?}");
+        assert!(
+            checks
+                .iter()
+                .any(|check| check.detail == "~/.codex/config.toml")
+        );
+        assert!(
+            checks
+                .iter()
+                .any(|check| check.detail == "~/.codex/hooks.json")
+        );
     }
 }

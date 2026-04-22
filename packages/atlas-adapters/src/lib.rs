@@ -4,11 +4,15 @@
 //! funnel session events and large outputs through the content and session
 //! stores without coupling to transport details.
 
+pub mod artifacts;
 pub mod bridge;
 pub mod events;
 pub mod hooks;
 pub mod redact;
 
+pub use artifacts::{
+    derive_bridge_dir, derive_content_db_path, derive_session_db_path, generate_source_id,
+};
 pub use atlas_contextsave::{ContentStore, OutputRouting, SearchFilters, SessionId, SourceMeta};
 pub use bridge::{
     BRIDGE_DIR, BridgeEvent, DEFAULT_BRIDGE_MAX_AGE_SECS, bridge_file_count,

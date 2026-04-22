@@ -12,6 +12,8 @@ use clap_complete::Shell;
 use console::{Style, Term, style};
 use dialoguer::{Confirm, MultiSelect, Select, theme::ColorfulTheme};
 
+use crate::install::InstallSummary;
+
 /// Returns `true` when the wizard should run.
 pub fn should_run(json: bool) -> bool {
     !json && std::io::stdin().is_terminal()
@@ -98,7 +100,7 @@ pub fn run(repo_root: &Path) -> Result<()> {
     for &idx in &platform_selections {
         let key = PLATFORM_KEYS[idx];
         let display = PLATFORM_NAMES[idx];
-        match crate::install::run_install(repo_root, key, false, true, false) {
+        match install_platform_setup(repo_root, key) {
             Ok(summary) => {
                 for name in &summary.configured {
                     print_tick(&term, name)?;
@@ -109,9 +111,13 @@ pub fn run(repo_root: &Path) -> Result<()> {
                 for f in &summary.instruction_files {
                     print_tick(&term, &format!("Instructions → {f}"))?;
                 }
+                for f in &summary.platform_hook_files {
+                    print_tick(&term, &format!("Agent hooks → {f}"))?;
+                }
                 if summary.configured.is_empty()
                     && summary.already_configured.is_empty()
                     && summary.instruction_files.is_empty()
+                    && summary.platform_hook_files.is_empty()
                 {
                     print_tick(&term, display)?;
                 }
@@ -259,6 +265,14 @@ fn print_cross(term: &Term, msg: &str) -> Result<()> {
     Ok(())
 }
 
+fn install_platform_setup(repo_root: &Path, platform: &str) -> Result<InstallSummary> {
+    let mut summary =
+        crate::install::run_install(repo_root, platform, "repo", false, false, true, false)?;
+    summary.platform_hook_files =
+        crate::install::install_platform_agent_hooks(repo_root, platform, false)?;
+    Ok(summary)
+}
+
 // ---------------------------------------------------------------------------
 // Shell detection
 // ---------------------------------------------------------------------------
@@ -348,4 +362,56 @@ fn completions_path(shell: Shell) -> Result<(std::path::PathBuf, String)> {
 fn home_dir() -> Result<std::path::PathBuf> {
     #[allow(deprecated)]
     std::env::home_dir().context("cannot determine home directory")
+}
+
+#[cfg(test)]
+mod tests {
+    use tempfile::TempDir;
+
+    use super::install_platform_setup;
+
+    #[test]
+    fn install_platform_setup_adds_agent_hooks_for_claude() {
+        let tmp = TempDir::new().unwrap();
+
+        let summary = install_platform_setup(tmp.path(), "claude").unwrap();
+
+        assert!(tmp.path().join(".mcp.json").exists());
+        assert!(tmp.path().join("CLAUDE.md").exists());
+        assert!(
+            tmp.path()
+                .join(".atlas")
+                .join("hooks")
+                .join("atlas-hook")
+                .exists()
+        );
+        assert!(tmp.path().join(".claude").join("settings.json").exists());
+        assert!(
+            summary
+                .platform_hook_files
+                .contains(&".atlas/hooks/atlas-hook".to_owned())
+        );
+        assert!(
+            summary
+                .platform_hook_files
+                .contains(&".claude/settings.json".to_owned())
+        );
+    }
+
+    #[test]
+    fn install_platform_setup_keeps_git_hooks_separate() {
+        let tmp = TempDir::new().unwrap();
+
+        let summary = install_platform_setup(tmp.path(), "codex").unwrap();
+
+        assert!(summary.hook_paths.is_empty());
+        assert!(
+            !tmp.path()
+                .join(".git")
+                .join("hooks")
+                .join("post-commit")
+                .exists()
+        );
+        assert!(tmp.path().join(".codex").join("hooks.json").exists());
+    }
 }

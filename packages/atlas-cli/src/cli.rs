@@ -249,11 +249,19 @@ pub enum Command {
         #[arg(long, default_value = "all")]
         platform: String,
 
+        /// Install platform config and platform hook files into repo or user home.
+        #[arg(long, default_value = "repo", value_parser = ["repo", "user"])]
+        scope: String,
+
         /// Show what would be done without writing any files.
         #[arg(long)]
         dry_run: bool,
 
-        /// Skip installing git hooks.
+        /// Validate existing install targets without writing files.
+        #[arg(long)]
+        validate_only: bool,
+
+        /// Skip installing git hooks and platform agent hook configs.
         #[arg(long)]
         no_hooks: bool,
 
@@ -393,6 +401,13 @@ pub enum Command {
     Session {
         #[command(subcommand)]
         subcommand: SessionCommand,
+    },
+
+    /// Internal hook entrypoint for generated agent hook runners.
+    #[command(hide = true)]
+    Hook {
+        /// Normalized hook event name (for example `session-start`).
+        event: String,
     },
 
     /// Print the CLI version and build commit hash.
@@ -1024,13 +1039,17 @@ mod tests {
         let cli = parse(&["atlas", "install"]);
         if let Command::Install {
             platform,
+            scope,
             dry_run,
+            validate_only,
             no_hooks,
             no_instructions,
         } = cli.command
         {
             assert_eq!(platform, "all");
+            assert_eq!(scope, "repo");
             assert!(!dry_run);
+            assert!(!validate_only);
             assert!(!no_hooks);
             assert!(!no_instructions);
         } else {
@@ -1053,6 +1072,26 @@ mod tests {
         let cli = parse(&["atlas", "install", "--dry-run"]);
         if let Command::Install { dry_run, .. } = cli.command {
             assert!(dry_run);
+        } else {
+            panic!("expected Install command");
+        }
+    }
+
+    #[test]
+    fn parse_install_scope_user() {
+        let cli = parse(&["atlas", "install", "--scope", "user"]);
+        if let Command::Install { scope, .. } = cli.command {
+            assert_eq!(scope, "user");
+        } else {
+            panic!("expected Install command");
+        }
+    }
+
+    #[test]
+    fn parse_install_validate_only() {
+        let cli = parse(&["atlas", "install", "--validate-only"]);
+        if let Command::Install { validate_only, .. } = cli.command {
+            assert!(validate_only);
         } else {
             panic!("expected Install command");
         }
@@ -1196,6 +1235,15 @@ mod tests {
             }
         } else {
             panic!("expected Refactor command");
+        }
+    }
+
+    #[test]
+    fn parse_hidden_hook_command() {
+        let cli = parse(&["atlas", "hook", "session-start"]);
+        match cli.command {
+            Command::Hook { event } => assert_eq!(event, "session-start"),
+            _ => panic!("expected Hook command"),
         }
     }
 }

@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use atlas_adapters::derive_content_db_path;
 use atlas_core::SearchQuery;
 use atlas_core::model::{ChangeType, ChangedFile, ContextIntent, ContextRequest, ContextTarget};
 use atlas_engine::{BuildOptions, UpdateOptions, UpdateTarget, build_graph, update_graph};
@@ -10,13 +11,11 @@ use camino::Utf8Path;
 use serde::Serialize;
 use std::collections::BTreeSet;
 
-use crate::context::{package_context_result, package_impact};
-use crate::session_tools::derive_content_db_path;
-
 use super::shared::{
     bool_arg, error_message, error_suggestions, open_store, parse_mcp_intent, str_arg,
     string_array_arg, tool_result_value, u64_arg,
 };
+use crate::context::{package_context_result, package_impact};
 
 #[derive(Clone, Copy)]
 enum ChangeSourceMode {

@@ -1,0 +1,62 @@
+{
+  "hooks": {
+    "PermissionRequest": [
+      {
+        "matcher": "Bash",
+        "commands": [
+          {
+            "command": ".atlas/hooks/atlas-hook codex permission-request"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "commands": [
+          {
+            "command": ".atlas/hooks/atlas-hook codex post-tool-use"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "commands": [
+          {
+            "command": ".atlas/hooks/atlas-hook codex pre-tool-use"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "startup|resume",
+        "commands": [
+          {
+            "command": ".atlas/hooks/atlas-hook codex session-start"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "commands": [
+          {
+            "command": ".atlas/hooks/atlas-hook codex stop"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "commands": [
+          {
+            "command": ".atlas/hooks/atlas-hook codex user-prompt"
+          }
+        ]
+      }
+    ]
+  }
+}

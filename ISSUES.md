@@ -55,7 +55,7 @@ For terms that are easy to misread in this document:
 - Part II. Release and interface gates: Release 1, Release 2, MCP and Agent Roadmap
 - Part III. Post-MVP product expansion: Phase 18 through Phase 32
 - Part IV. Context continuity and memory: Phase CM1 through Phase CM15
-- Part V. Focused follow-up patches: Retrieval Follow-Up Patch, Retrieval Ranking Evidence Patch, Graph/Content Companion Patch, Ranking and Trimming Primitives Patch, Graph Build Lifecycle Patch, Canonical Path Identity Patch, Graph Readiness Source-of-Truth Patch, Operational Budget Policy Patch, Context Escalation Contract Patch, Graph Store Corruption Recovery Patch
+- Part V. Focused follow-up patches: Retrieval Follow-Up Patch, Retrieval Ranking Evidence Patch, Graph/Content Companion Patch, Runtime Event Enrichment and Graph Linking Patch, Ranking and Trimming Primitives Patch, Graph Build Lifecycle Patch, Canonical Path Identity Patch, Graph Readiness Source-of-Truth Patch, Operational Budget Policy Patch, Context Escalation Contract Patch, Graph Store Corruption Recovery Patch
 
 ## Cross-Cutting Track Map
 
@@ -2127,318 +2127,337 @@ Add first-class hook templates and adapter docs for Copilot, Claude, and Codex s
 
 #### Shared Atlas hook behavior
 
-- [ ] add repo-local hook scripts under `.atlas/hooks/` or generated host-specific locations that call Atlas CLI commands, never write SQLite directly
-- [ ] extend existing `atlas install --platform <platform>` flow to install platform hooks in addition to MCP config
-- [ ] keep supported platform values exactly:
-  - [ ] `copilot`
-  - [ ] `claude`
-  - [ ] `codex`
-  - [ ] `all`
-- [ ] use existing `atlas install --platform <platform> --dry-run` to print files and hook events without writing
-- [ ] add hook validation to `atlas install --platform <platform>` output, or add a narrow `atlas install --platform <platform> --validate-only` flag if validation needs no writes
-- [ ] add hook scripts that parse JSON from stdin with structured APIs, cap payload size, and redact secrets before persistence
-- [ ] use git-root-based paths in generated hook commands so hooks work from subdirectories
-- [ ] keep hook failures non-blocking unless hook purpose is explicit policy enforcement
-- [ ] emit normalized session events through existing session service:
-  - [ ] user prompt / intent
-  - [ ] session start / resume
-  - [ ] tool preflight
-  - [ ] tool result
-  - [ ] permission decision
-  - [ ] compaction boundary
-  - [ ] session stop / end
-  - [ ] error / failure
-- [ ] run `atlas status --json` or equivalent health check on session start / resume
-- [ ] run `atlas update` after file-edit tools when graph-backed answers would otherwise go stale
-- [ ] run `atlas explain-change` or `atlas review-context` after meaningful edits when changed-file count is bounded
-- [ ] save compaction snapshots before host context compaction when host exposes compaction hooks
-- [ ] log denied or risky shell/file operations without storing secret-bearing arguments
+- [x] add repo-local hook scripts under `.atlas/hooks/` or generated host-specific locations that call Atlas CLI commands, never write SQLite directly
+- [x] extend existing `atlas install --platform <platform>` flow to install platform hooks in addition to MCP config
+- [x] keep supported platform values exactly:
+  - [x] `copilot`
+  - [x] `claude`
+  - [x] `codex`
+  - [x] `all`
+- [x] use existing `atlas install --platform <platform> --dry-run` to print files and hook events without writing
+- [x] add hook validation to `atlas install --platform <platform>` output, or add a narrow `atlas install --platform <platform> --validate-only` flag if validation needs no writes
+- [x] keep hook failures non-blocking unless hook purpose is explicit policy enforcement
+- [x] emit normalized session events through existing session service:
+  - [x] user prompt / intent
+  - [x] session start / resume
+  - [x] tool preflight
+  - [x] tool result
+  - [x] permission decision
+  - [x] compaction boundary
+  - [x] session stop / end
+  - [x] error / failure
+- [x] save compaction snapshots before host context compaction when host exposes compaction hooks
+- [x] log denied or risky shell/file operations without storing secret-bearing arguments
 
 #### Hook storage and context routing
 
-- [ ] all hooks write a small normalized event through session service first
-- [ ] session event stores `source_id` when large payload is saved to content store
-- [ ] session-only hooks:
-  - [ ] `SessionStart` / `sessionStart`
-  - [ ] `PreToolUse` / `preToolUse`
-  - [ ] `PermissionRequest`
-  - [ ] `PermissionDenied`
-  - [ ] `PostCompact`
-  - [ ] `ConfigChange`
-  - [ ] `CwdChanged`
-  - [ ] `FileChanged`
-  - [ ] `WorktreeCreate`
-  - [ ] `WorktreeRemove`
-  - [ ] `Notification`
-  - [ ] `SubagentStart`
-  - [ ] `SubagentStop`
-  - [ ] `TaskCreated`
-  - [ ] `TaskCompleted`
-- [ ] session plus content-store hooks when payload exceeds event size cap or should be retrievable later:
-  - [ ] `UserPromptSubmit` / `userPromptSubmitted`
-  - [ ] `PostToolUse` / `postToolUse`
-  - [ ] `PostToolUseFailure`
-  - [ ] `Stop`
-  - [ ] `StopFailure`
-  - [ ] `SessionEnd` / `sessionEnd`
-  - [ ] `errorOccurred` / `error`
-  - [ ] `Elicitation`
-  - [ ] `ElicitationResult`
-  - [ ] `InstructionsLoaded`
-- [ ] context-engine hooks:
-  - [ ] `SessionStart` loads resume and context hints
-  - [ ] `UserPromptSubmit` classifies intent and may retrieve saved context
-  - [ ] `PreCompact` builds resume snapshot from session events and content-store artifacts
-  - [ ] `PostCompact` verifies restore state
-  - [ ] `Stop` / `SessionEnd` persists handoff and resume hints
-- [ ] graph/context refresh hooks:
-  - [ ] `PostToolUse` runs graph update after file edits
-  - [ ] `PostToolUse` refreshes review/impact context after successful tests or builds when bounded
-  - [ ] `FileChanged` marks graph/content freshness stale without storing full file content
+- [x] all hooks write a small normalized event through session service first
+- [x] session event stores `source_id` when large payload is saved to content store
+- [x] session-only hooks:
+  - [x] `SessionStart` / `sessionStart`
+  - [x] `PreToolUse` / `preToolUse`
+  - [x] `PermissionRequest`
+  - [x] `PermissionDenied`
+  - [x] `PostCompact`
+  - [x] `ConfigChange`
+  - [x] `CwdChanged`
+  - [x] `FileChanged`
+  - [x] `WorktreeCreate`
+  - [x] `WorktreeRemove`
+  - [x] `Notification`
+  - [x] `SubagentStart`
+  - [x] `SubagentStop`
+  - [x] `TaskCreated`
+  - [x] `TaskCompleted`
+- [x] session plus content-store hooks when payload exceeds event size cap or should be retrievable later:
+  - [x] `UserPromptSubmit` / `userPromptSubmitted`
+  - [x] `PostToolUse` / `postToolUse`
+  - [x] `PostToolUseFailure`
+  - [x] `Stop`
+  - [x] `StopFailure`
+  - [x] `SessionEnd` / `sessionEnd`
+  - [x] `errorOccurred` / `error`
+  - [x] `Elicitation`
+  - [x] `ElicitationResult`
+  - [x] `InstructionsLoaded`
+- [x] context-engine hooks:
+  - [x] `SessionStart` loads resume and context hints
+  - [x] `UserPromptSubmit` classifies intent and may retrieve saved context
+  - [x] `PreCompact` builds resume snapshot from session events and content-store artifacts
+  - [x] `PostCompact` verifies restore state
+  - [x] `Stop` / `SessionEnd` persists handoff and resume hints
+- [x] graph/context refresh hooks:
+  - [x] `PostToolUse` runs graph update after file edits
+  - [x] `PostToolUse` refreshes review/impact context after successful tests or builds when bounded
+  - [x] `FileChanged` marks graph/content freshness stale without storing full file content
 
 #### Hook install files and directories
 
-- [ ] install one shared Atlas hook runner in repo-local directory:
-  - [ ] `.atlas/hooks/atlas-hook`
-  - [ ] `.atlas/hooks/lib/`
-- [ ] platform hook configs must contain all supported events in one platform config file where host schema allows it
-- [ ] platform hook configs must call shared runner with concrete event argument:
-  - [ ] `.atlas/hooks/atlas-hook session-start`
-  - [ ] `.atlas/hooks/atlas-hook user-prompt`
-  - [ ] `.atlas/hooks/atlas-hook pre-tool-use`
-  - [ ] `.atlas/hooks/atlas-hook permission-request`
-  - [ ] `.atlas/hooks/atlas-hook post-tool-use`
-  - [ ] `.atlas/hooks/atlas-hook tool-failure`
-  - [ ] `.atlas/hooks/atlas-hook pre-compact`
-  - [ ] `.atlas/hooks/atlas-hook post-compact`
-  - [ ] `.atlas/hooks/atlas-hook stop`
-  - [ ] `.atlas/hooks/atlas-hook session-end`
-  - [ ] `.atlas/hooks/atlas-hook error`
-- [ ] install hook output, bridge, and transient state under `.atlas/sessions/` or `.atlas/tmp/`, not host config directories
-- [ ] install Copilot workspace hooks under:
-  - [ ] `.github/hooks/atlas-copilot.json`
-  - [ ] optional custom location from `.vscode/settings.json` via `chat.hookFilesLocations`
-  - [ ] do not write user-level `~/.copilot/hooks` unless `--scope user` is explicit
-- [ ] use same `.github/hooks/atlas-copilot.json` file for VS Code Copilot, GitHub Copilot cloud agent, and Copilot CLI where hook schema allows it
-- [ ] require `.github/hooks/atlas-copilot.json` on default branch for GitHub Copilot cloud agent use
-- [ ] use same file from current working directory for Copilot CLI
-- [ ] install Claude hooks under:
-  - [ ] `.claude/settings.json` for repo-shared hooks
-  - [ ] `.claude/settings.local.json` for machine-local overrides
-  - [ ] Claude hook entries call `.atlas/hooks/atlas-hook <event>`
-  - [ ] do not write `~/.claude/settings.json` unless `--scope user` is explicit
-- [ ] install Codex hooks under:
-  - [ ] `.codex/hooks.json` for repo-local hook config if supported by active Codex config
-  - [ ] Codex hook entries call `.atlas/hooks/atlas-hook <event>`
-  - [ ] update `.codex/config.toml` only when needed to point Codex at repo-local hook config
-  - [ ] do not write user-level Codex config unless `--scope user` is explicit
-- [ ] install wiki/reference files under:
-  - [ ] `wiki/hooks-copilot.md`
-  - [ ] `wiki/hooks-claude.md`
-  - [ ] `wiki/hooks-codex.md`
-  - [ ] update `wiki/_Sidebar.md`
-- [ ] install test fixtures under:
-  - [ ] `packages/atlas-cli/tests/fixtures/hooks/copilot/`
-  - [ ] `packages/atlas-cli/tests/fixtures/hooks/claude/`
-  - [ ] `packages/atlas-cli/tests/fixtures/hooks/codex/`
+- [x] install one shared Atlas hook runner in repo-local directory:
+  - [x] `.atlas/hooks/atlas-hook`
+  - [x] `.atlas/hooks/lib/`
+- [x] platform hook configs must contain all supported events in one platform config file where host schema allows it
+- [x] platform hook configs must call shared runner with concrete event argument:
+  - [x] `.atlas/hooks/atlas-hook session-start`
+  - [x] `.atlas/hooks/atlas-hook user-prompt`
+  - [x] `.atlas/hooks/atlas-hook pre-tool-use`
+  - [x] `.atlas/hooks/atlas-hook permission-request`
+  - [x] `.atlas/hooks/atlas-hook post-tool-use`
+  - [x] `.atlas/hooks/atlas-hook tool-failure`
+  - [x] `.atlas/hooks/atlas-hook pre-compact`
+  - [x] `.atlas/hooks/atlas-hook post-compact`
+  - [x] `.atlas/hooks/atlas-hook stop`
+  - [x] `.atlas/hooks/atlas-hook session-end`
+  - [x] `.atlas/hooks/atlas-hook error`
+- [x] install hook output, bridge, and transient state under `.atlas/sessions/` or `.atlas/tmp/`, not host config directories
+- [x] install Copilot workspace hooks under:
+  - [x] `.github/hooks/atlas-copilot.json`
+  - [x] optional custom location from `.vscode/settings.json` via `chat.hookFilesLocations`
+  - [x] do not write user-level `~/.copilot/hooks` unless `--scope user` is explicit
+- [x] use same `.github/hooks/atlas-copilot.json` file for VS Code Copilot, GitHub Copilot cloud agent, and Copilot CLI where hook schema allows it
+- [x] require `.github/hooks/atlas-copilot.json` on default branch for GitHub Copilot cloud agent use
+- [x] use same file from current working directory for Copilot CLI
+- [x] install Claude hooks under:
+  - [x] `.claude/settings.json` for repo-shared hooks
+  - [x] `.claude/settings.local.json` for machine-local overrides
+  - [x] Claude hook entries call `.atlas/hooks/atlas-hook <event>`
+  - [x] do not write `~/.claude/settings.json` unless `--scope user` is explicit
+- [x] install Codex hooks under:
+  - [x] `.codex/hooks.json` for repo-local hook config if supported by active Codex config
+  - [x] Codex hook entries call `.atlas/hooks/atlas-hook <event>`
+  - [x] update `.codex/config.toml` only when needed to point Codex at repo-local hook config
+  - [x] do not write user-level Codex config unless `--scope user` is explicit
+- [x] install wiki/reference files under:
+  - [x] `wiki/hooks-copilot.md`
+  - [x] `wiki/hooks-claude.md`
+  - [x] `wiki/hooks-codex.md`
+  - [x] update `wiki/_Sidebar.md`
+- [x] install test fixtures under:
+  - [x] `packages/atlas-cli/tests/fixtures/hooks/copilot/`
+  - [x] `packages/atlas-cli/tests/fixtures/hooks/claude/`
+  - [x] `packages/atlas-cli/tests/fixtures/hooks/codex/`
 
 #### Required hooks by platform
 
-- [ ] Copilot must use these VS Code hook names where running in VS Code:
-  - [ ] `SessionStart` for Atlas session start/resume and graph health check
-  - [ ] `UserPromptSubmit` for user-intent capture and optional bounded context injection
-  - [ ] `PreToolUse` for command/file policy checks before tool execution
-  - [ ] `PostToolUse` for graph update, command-result capture, and review/impact refresh
-  - [ ] `PreCompact` for resume snapshot creation before context truncation
-  - [ ] `SubagentStart` and `SubagentStop` for nested-agent boundaries
-  - [ ] `Stop` for final turn state and resume hints
-- [ ] Copilot must use these GitHub cloud agent / Copilot CLI hook names where running in GitHub or CLI:
-  - [ ] `sessionStart` for Atlas session start/resume and graph health check
-  - [ ] `userPromptSubmitted` for user-intent capture
-  - [ ] `preToolUse` for `permissionDecision` allow/deny policy
-  - [ ] `postToolUse` for graph update, command-result capture, and review/impact refresh
-  - [ ] `sessionEnd` for final resume snapshot and transient cleanup
-  - [ ] `errorOccurred` for bounded error capture
-- [ ] Claude must use these hooks:
-  - [ ] `SessionStart` for Atlas session start/resume
-  - [ ] `UserPromptSubmit` for user-intent capture
-  - [ ] `UserPromptExpansion` for expanded prompt validation
-  - [ ] `PreToolUse` with `Bash|Edit|Write|MultiEdit` matcher for preflight policy
-  - [ ] `PermissionRequest` for narrow Atlas maintenance auto-allow decisions
-  - [ ] `PermissionDenied` for denial audit and optional retry guidance
-  - [ ] `PostToolUse` with `Edit|Write|MultiEdit|Bash` matcher for graph update and result capture
-  - [ ] `PostToolUseFailure` for failed tool summaries
-  - [ ] `Notification` for stale-graph or pending-resume notices when enabled
-  - [ ] `SubagentStart` and `SubagentStop` for delegated-work boundaries
-  - [ ] `TaskCreated` and `TaskCompleted` for task lifecycle events
-  - [ ] `Stop` and `StopFailure` for final turn or API-error state
-  - [ ] `InstructionsLoaded` for loaded instruction/rule metadata
-  - [ ] `ConfigChange`, `CwdChanged`, and `FileChanged` for config/root/freshness refresh
-  - [ ] `WorktreeCreate` and `WorktreeRemove` for temporary worktree identity
-  - [ ] `PreCompact` and `PostCompact` for resume snapshot before/after compaction
-  - [ ] `Elicitation` and `ElicitationResult` for MCP user-input flow capture
-  - [ ] `SessionEnd` for final snapshot and cleanup
-- [ ] Codex must use these hooks:
-  - [ ] `SessionStart` with `startup|resume` matcher for Atlas session start/resume and health check
-  - [ ] `UserPromptSubmit` for user-intent capture
-  - [ ] `PreToolUse` with `Bash` matcher for command policy before execution
-  - [ ] `PermissionRequest` with `Bash` matcher for narrow Atlas maintenance auto-allow decisions
-  - [ ] `PostToolUse` with `Bash` matcher for command-result capture and graph refresh
-  - [ ] `Stop` for final turn state and resume hints
+- [x] Copilot must use these VS Code hook names where running in VS Code:
+  - [x] `SessionStart` for Atlas session start/resume and graph health check
+  - [x] `UserPromptSubmit` for user-intent capture and optional bounded context injection
+  - [x] `PreToolUse` for command/file policy checks before tool execution
+  - [x] `PostToolUse` for graph update, command-result capture, and review/impact refresh
+  - [x] `PreCompact` for resume snapshot creation before context truncation
+  - [x] `SubagentStart` and `SubagentStop` for nested-agent boundaries
+  - [x] `Stop` for final turn state and resume hints
+- [x] Copilot must use these GitHub cloud agent / Copilot CLI hook names where running in GitHub or CLI:
+  - [x] `sessionStart` for Atlas session start/resume and graph health check
+  - [x] `userPromptSubmitted` for user-intent capture
+  - [x] `preToolUse` for `permissionDecision` allow/deny policy
+  - [x] `postToolUse` for graph update, command-result capture, and review/impact refresh
+  - [x] `sessionEnd` for final resume snapshot and transient cleanup
+  - [x] `errorOccurred` for bounded error capture
+- [x] Claude must use these hooks:
+  - [x] `SessionStart` for Atlas session start/resume
+  - [x] `UserPromptSubmit` for user-intent capture
+  - [x] `UserPromptExpansion` for expanded prompt validation
+  - [x] `PreToolUse` with `Bash|Edit|Write|MultiEdit` matcher for preflight policy
+  - [x] `PermissionRequest` for narrow Atlas maintenance auto-allow decisions
+  - [x] `PermissionDenied` for denial audit and optional retry guidance
+  - [x] `PostToolUse` with `Edit|Write|MultiEdit|Bash` matcher for graph update and result capture
+  - [x] `PostToolUseFailure` for failed tool summaries
+  - [x] `Notification` for stale-graph or pending-resume notices when enabled
+  - [x] `SubagentStart` and `SubagentStop` for delegated-work boundaries
+  - [x] `TaskCreated` and `TaskCompleted` for task lifecycle events
+  - [x] `Stop` and `StopFailure` for final turn or API-error state
+  - [x] `InstructionsLoaded` for loaded instruction/rule metadata
+  - [x] `ConfigChange`, `CwdChanged`, and `FileChanged` for config/root/freshness refresh
+  - [x] `WorktreeCreate` and `WorktreeRemove` for temporary worktree identity
+  - [x] `PreCompact` and `PostCompact` for resume snapshot before/after compaction
+  - [x] `Elicitation` and `ElicitationResult` for MCP user-input flow capture
+  - [x] `SessionEnd` for final snapshot and cleanup
+- [x] Codex must use these hooks:
+  - [x] `SessionStart` with `startup|resume` matcher for Atlas session start/resume and health check
+  - [x] `UserPromptSubmit` for user-intent capture
+  - [x] `PreToolUse` with `Bash` matcher for command policy before execution
+  - [x] `PermissionRequest` with `Bash` matcher for narrow Atlas maintenance auto-allow decisions
+  - [x] `PostToolUse` with `Bash` matcher for command-result capture and graph refresh
+  - [x] `Stop` for final turn state and resume hints
 
 #### Copilot hooks
 
 Use `.github/hooks/atlas-copilot.json` for Copilot hooks. VS Code uses PascalCase event names; GitHub Copilot cloud agent and Copilot CLI use camelCase event names.
 
-- [ ] generate VS Code-compatible hook config for `SessionStart`
-  - [ ] call `atlas session start` or resume logic
-  - [ ] call `atlas status --json`
-  - [ ] record repo root, cwd, model, and session id when present
-- [ ] generate `UserPromptSubmit`
-  - [ ] call Atlas user-intent capture
-  - [ ] optionally inject compact repo/session guidance when host accepts hook output context
-- [ ] generate `PreToolUse`
-  - [ ] block or ask for dangerous shell/file operations only when configured
-  - [ ] detect operations that need graph freshness after completion
-- [ ] generate `PostToolUse`
-  - [ ] run `atlas update` after edit/write tools
-  - [ ] run targeted context refresh after successful tests, builds, or file changes
-  - [ ] record bounded stdout/stderr summaries, not raw large output
-- [ ] generate `PreCompact`
-  - [ ] call `atlas session snapshot` / resume material writer before context truncation
-- [ ] generate `SubagentStart` and `SubagentStop`
-  - [ ] track nested agent boundaries
-  - [ ] merge subagent summaries into parent session events
-- [ ] generate `Stop`
-  - [ ] record final turn state
-  - [ ] persist resume hints and unresolved errors
-- [ ] document VS Code settings touched:
-  - [ ] `chat.hookFilesLocations`
-  - [ ] `chat.useCustomAgentHooks` when agent-scoped hooks are emitted
+- [x] generate VS Code-compatible hook config for `SessionStart`
+  - [x] call `atlas session start` or resume logic
+  - [x] call `atlas status --json`
+  - [x] record repo root, cwd, model, and session id when present
+- [x] generate `UserPromptSubmit`
+  - [x] call Atlas user-intent capture
+  - [x] optionally inject compact repo/session guidance when host accepts hook output context
+- [x] generate `PreToolUse`
+  - [x] block or ask for dangerous shell/file operations only when configured
+  - [x] detect operations that need graph freshness after completion
+- [x] generate `PostToolUse`
+  - [x] run `atlas update` after edit/write tools
+  - [x] run targeted context refresh after successful tests, builds, or file changes
+  - [x] record bounded stdout/stderr summaries, not raw large output
+- [x] generate `PreCompact`
+  - [x] call `atlas session snapshot` / resume material writer before context truncation
+- [x] generate `SubagentStart` and `SubagentStop`
+  - [x] track nested agent boundaries
+  - [x] merge subagent summaries into parent session events
+- [x] generate `Stop`
+  - [x] record final turn state
+  - [x] persist resume hints and unresolved errors
+- [x] document VS Code settings touched:
+  - [x] `chat.hookFilesLocations`
+  - [x] `chat.useCustomAgentHooks` when agent-scoped hooks are emitted
 
 #### Copilot cloud agent / CLI hooks
 
 Use `.github/hooks/atlas-copilot.json` with `version: 1`; remember cloud agent requires hook config on default branch, while CLI loads hooks from current working directory.
 
-- [ ] generate `sessionStart`
-  - [ ] run Atlas startup health check
-  - [ ] capture `source` values such as `new`, `resume`, or `startup`
-  - [ ] write concise session-start event
-- [ ] generate `userPromptSubmitted`
-  - [ ] capture prompt metadata for continuity
-  - [ ] never persist raw prompt when configured redaction policy rejects it
-- [ ] generate `preToolUse`
-  - [ ] enforce deny/allow policy through `permissionDecision` and `permissionDecisionReason`
-  - [ ] guard dangerous bash, destructive file writes, secret reads, and broad generated-file edits
-- [ ] generate `postToolUse`
-  - [ ] capture `toolName`, parsed `toolArgs`, and `toolResult.resultType`
-  - [ ] trigger `atlas update` after edit/write-like tools
-  - [ ] trigger review/impact refresh after successful build/test commands
-- [ ] generate `sessionEnd`
-  - [ ] persist final resume snapshot and cleanup transient bridge files
-  - [ ] record end reason such as `complete`, `error`, `abort`, `timeout`, or `user_exit`
-- [ ] generate `errorOccurred`
-  - [ ] capture bounded error message/name/stack metadata
-  - [ ] save error event for resume and review triage
-- [ ] support Bash and PowerShell command fields where host allows both
-- [ ] keep default timeout at host default unless Atlas command needs explicit `timeoutSec`
+- [x] generate `sessionStart`
+  - [x] run Atlas startup health check
+  - [x] capture `source` values such as `new`, `resume`, or `startup`
+  - [x] write concise session-start event
+- [x] generate `userPromptSubmitted`
+  - [x] capture prompt metadata for continuity
+  - [x] never persist raw prompt when configured redaction policy rejects it
+- [x] generate `preToolUse`
+  - [x] enforce deny/allow policy through `permissionDecision` and `permissionDecisionReason`
+  - [x] guard dangerous bash, destructive file writes, secret reads, and broad generated-file edits
+- [x] generate `postToolUse`
+  - [x] capture `toolName`, parsed `toolArgs`, and `toolResult.resultType`
+  - [x] trigger `atlas update` after edit/write-like tools
+  - [x] trigger review/impact refresh after successful build/test commands
+- [x] generate `sessionEnd`
+  - [x] persist final resume snapshot and cleanup transient bridge files
+  - [x] record end reason such as `complete`, `error`, `abort`, `timeout`, or `user_exit`
+- [x] generate `errorOccurred`
+  - [x] capture bounded error message/name/stack metadata
+  - [x] save error event for resume and review triage
+- [x] support Bash and PowerShell command fields where host allows both
+- [x] keep default timeout at host default unless Atlas command needs explicit `timeoutSec`
 
 #### Claude hooks
 
 Use `.claude/settings.json` and `.claude/settings.local.json`; keep matchers narrow and prefer command hooks.
 
-- [ ] generate `SessionStart`
-  - [ ] initialize or resume Atlas session
-  - [ ] reload saved context hints
-- [ ] generate `UserPromptSubmit`
-  - [ ] capture user intent
-  - [ ] add bounded additional context only when needed
-- [ ] generate `UserPromptExpansion`
-  - [ ] validate expanded commands before model receives them
-  - [ ] block unsafe expansion when policy requires it
-- [ ] generate `PreToolUse`
-  - [ ] matcher: `Bash|Edit|Write|MultiEdit`
-  - [ ] deny protected paths and dangerous commands with clear reason
-- [ ] generate `PermissionRequest`
-  - [ ] auto-allow only narrow known-safe Atlas maintenance commands
-  - [ ] never broad-match all permission prompts
-- [ ] generate `PermissionDenied`
-  - [ ] record denial
-  - [ ] optionally return retry guidance for safe alternate commands
-- [ ] generate `PostToolUse`
-  - [ ] matcher: `Edit|Write|MultiEdit|Bash`
-  - [ ] run `atlas update` after edits
-  - [ ] capture command/test/build result summaries
-- [ ] generate `PostToolUseFailure`
-  - [ ] capture failure summaries and unresolved errors
-- [ ] generate `Notification`
-  - [ ] optionally notify when Atlas detects stale graph or pending resume state
-- [ ] generate `SubagentStart` and `SubagentStop`
-  - [ ] track delegated work and merge subagent artifacts
-- [ ] generate `TaskCreated` and `TaskCompleted`
-  - [ ] map task lifecycle to Atlas session events
-- [ ] generate `Stop` and `StopFailure`
-  - [ ] persist final turn state or API-error state
-- [ ] generate `InstructionsLoaded`
-  - [ ] record loaded instruction/rule files as session context metadata
-- [ ] generate `ConfigChange`, `CwdChanged`, and `FileChanged`
-  - [ ] refresh repo root, config, and graph freshness signals
-- [ ] generate `WorktreeCreate` and `WorktreeRemove`
-  - [ ] bind Atlas session/worktree identity to temporary worktrees
-- [ ] generate `PreCompact` and `PostCompact`
-  - [ ] save resume snapshot before compaction
-  - [ ] verify snapshot availability after compaction
-- [ ] generate `Elicitation` and `ElicitationResult`
-  - [ ] record MCP user-input requests and responses as bounded events
-- [ ] generate `SessionEnd`
-  - [ ] cleanup transient bridge files and persist final snapshot
+- [x] generate `SessionStart`
+  - [x] initialize or resume Atlas session
+  - [x] reload saved context hints
+- [x] generate `UserPromptSubmit`
+  - [x] capture user intent
+  - [x] add bounded additional context only when needed
+- [x] generate `UserPromptExpansion`
+  - [x] validate expanded commands before model receives them
+  - [x] block unsafe expansion when policy requires it
+- [x] generate `PreToolUse`
+  - [x] matcher: `Bash|Edit|Write|MultiEdit`
+  - [x] deny protected paths and dangerous commands with clear reason
+- [x] generate `PermissionRequest`
+  - [x] auto-allow only narrow known-safe Atlas maintenance commands
+  - [x] never broad-match all permission prompts
+- [x] generate `PermissionDenied`
+  - [x] record denial
+  - [x] optionally return retry guidance for safe alternate commands
+- [x] generate `PostToolUse`
+  - [x] matcher: `Edit|Write|MultiEdit|Bash`
+  - [x] run `atlas update` after edits
+  - [x] capture command/test/build result summaries
+- [x] generate `PostToolUseFailure`
+  - [x] capture failure summaries and unresolved errors
+- [x] generate `Notification`
+  - [x] optionally notify when Atlas detects stale graph or pending resume state
+- [x] generate `SubagentStart` and `SubagentStop`
+  - [x] track delegated work and merge subagent artifacts
+- [x] generate `TaskCreated` and `TaskCompleted`
+  - [x] map task lifecycle to Atlas session events
+- [x] generate `Stop` and `StopFailure`
+  - [x] persist final turn state or API-error state
+- [x] generate `InstructionsLoaded`
+  - [x] record loaded instruction/rule files as session context metadata
+- [x] generate `ConfigChange`, `CwdChanged`, and `FileChanged`
+  - [x] refresh repo root, config, and graph freshness signals
+- [x] generate `WorktreeCreate` and `WorktreeRemove`
+  - [x] bind Atlas session/worktree identity to temporary worktrees
+- [x] generate `PreCompact` and `PostCompact`
+  - [x] save resume snapshot before compaction
+  - [x] verify snapshot availability after compaction
+- [x] generate `Elicitation` and `ElicitationResult`
+  - [x] record MCP user-input requests and responses as bounded events
+- [x] generate `SessionEnd`
+  - [x] cleanup transient bridge files and persist final snapshot
 
 #### Codex hooks
 
 Use Codex hook config with event -> matcher group -> command handlers. Current runtime is Bash-focused for tool hooks, and Windows hook execution is not supported.
 
-- [ ] generate `SessionStart`
-  - [ ] matcher: `startup|resume`
-  - [ ] call Atlas startup/resume capture and `atlas status --json`
-- [ ] generate `UserPromptSubmit`
-  - [ ] capture user intent
-  - [ ] ignore matcher because Codex does not support matching for this event
-- [ ] generate `PreToolUse`
-  - [ ] matcher: `Bash`
-  - [ ] inspect `tool_input.command`
-  - [ ] deny risky shell commands before execution when configured
-- [ ] generate `PermissionRequest`
-  - [ ] matcher: `Bash`
-  - [ ] allow only narrow Atlas maintenance commands
-  - [ ] deny or defer destructive commands to normal approval flow
-- [ ] generate `PostToolUse`
-  - [ ] matcher: `Bash`
-  - [ ] summarize `tool_response`
-  - [ ] trigger `atlas update` after commands known to modify files
-  - [ ] add additional context when command output changes generated files or graph freshness
-- [ ] generate `Stop`
-  - [ ] persist final turn state and resume hints
-  - [ ] ignore matcher because Codex does not support matching for this event
-- [ ] support `statusMessage`, `timeout`, and `timeoutSec`
-- [ ] document unsupported current Codex hook gaps:
-  - [ ] non-Bash tool interception incomplete
-  - [ ] MCP, web, write, and non-shell tools may not trigger `PreToolUse` / `PostToolUse`
-  - [ ] `PostToolUse` cannot undo side effects from completed commands
+- [x] generate `SessionStart`
+  - [x] matcher: `startup|resume`
+- [x] generate `UserPromptSubmit`
+  - [x] capture user intent
+  - [x] ignore matcher because Codex does not support matching for this event
+- [x] generate `PreToolUse`
+  - [x] matcher: `Bash`
+  - [x] inspect `tool_input.command`
+  - [x] deny risky shell commands before execution when configured
+- [x] generate `PermissionRequest`
+  - [x] matcher: `Bash`
+  - [x] allow only narrow Atlas maintenance commands
+  - [x] deny or defer destructive commands to normal approval flow
+- [x] generate `PostToolUse`
+  - [x] matcher: `Bash`
+  - [x] summarize `tool_response`
+  - [x] trigger `atlas update` after commands known to modify files
+  - [x] add additional context when command output changes generated files or graph freshness
+- [x] generate `Stop`
+  - [x] persist final turn state and resume hints
+  - [x] ignore matcher because Codex does not support matching for this event
+- [x] support `statusMessage`, `timeout`, and `timeoutSec`
+- [x] document unsupported current Codex hook gaps:
+  - [x] non-Bash tool interception incomplete
+  - [x] MCP, web, write, and non-shell tools may not trigger `PreToolUse` / `PostToolUse`
+  - [x] `PostToolUse` cannot undo side effects from completed commands
+
+#### MCP14 Patch
+
+- [x] fail closed for unknown hook names instead of silently mapping them to generic `CommandRun`
+- [x] expand `HookPolicy` so policy table owns lifecycle, prompt-routing, freshness, and review-refresh triggers instead of ad hoc event matching
+- [x] persist restore metadata, retrieval hints, and saved artifact refs into stored hook event payloads, not only hook action output
+- [x] validate that resume snapshots carry `saved_artifact_refs` from hook-saved artifacts, not only generic resume state
+- [x] attach bounded retrieval hints and `source_id` summaries to persisted `user-prompt` session events, not only prompt-routing action output
+- [x] add large-payload coverage for `user-prompt` and `stop`
+- [x] route oversized session-only hook payloads through bounded event-plus-`source_id` storage, or trim them before session insertion, so large host events cannot violate session payload caps
+- [x] add dedicated lifecycle coverage for `post-compact`, `session-end`, and `file-changed` freshness-stale behavior
+- [x] implement bounded `review_context` / `explain_change` refresh artifacts after successful build/test `post-tool-use` flows and cover them with tests
+- [x] either add bounded impact-refresh artifacts for successful build/test `post-tool-use` flows, or narrow MCP14 wording that currently says review/impact refresh to match shipped `review_context` plus `explain_change` behavior
+- [x] add dedicated verification metadata coverage for `post-compact`, not only existence of lifecycle branch
+- [x] add dedicated handoff metadata coverage for `session-end`, not only `stop`
+- [x] implement explicit freshness-stale metadata for `file-changed`, and prove no inline file-content persistence in tests
+- [x] expand end-to-end hook contract coverage for large prompt payloads, pre/post compact round-trip, stop plus session-end, and `file-changed` no-inline-content behavior
+- [x] shrink `.atlas/hooks/atlas-hook` to thin launcher only; move stdin read/cap, event normalization, repo resolution, and dispatch policy into Rust `atlas hook` for deterministic behavior and better tests
+
+Expected impact for thin-runner change:
+
+- platform hook config files and installed command paths can stay unchanged if `.atlas/hooks/atlas-hook <frontend> <event>` remains stable
+- installer runner-content tests in `packages/atlas-cli/src/install.rs` will need updates because they currently assert shell-script behavior directly
+- installed-runner end-to-end tests in `packages/atlas-cli/tests/cli_quality_gates/core.rs` should keep passing if launcher argv contract stays stable, but they should gain regression coverage for thin-launcher behavior
+- hook docs in `wiki/hooks-copilot.md`, `wiki/hooks-claude.md`, and `wiki/hooks-codex.md` should describe runner as launcher shim, not primary logic owner
 
 #### Tests and docs
 
-- [ ] add fixture hook configs for all supported hosts
-- [ ] add schema validation tests for generated JSON
-- [ ] add stdin payload tests for each hook script
-- [ ] add redaction tests for command args, prompts, env values, and error output
-- [ ] add idempotent install tests that do not duplicate hooks
-- [ ] add uninstall or disable path for generated hooks
-- [ ] document source references:
-  - [ ] Copilot VS Code hooks: `https://code.visualstudio.com/docs/copilot/customization/hooks`
-  - [ ] GitHub Copilot cloud agent hooks: `https://docs.github.com/en/copilot/how-tos/copilot-on-github/customize-copilot/customize-cloud-agent/use-hooks`
-  - [ ] GitHub Copilot hooks config: `https://docs.github.com/en/copilot/reference/hooks-configuration`
-  - [ ] Claude hooks: `https://code.claude.com/docs/en/hooks-guide`
-  - [ ] Codex hooks: `https://developers.openai.com/codex/hooks`
+- [x] add fixture hook configs for all supported hosts
+- [x] add schema validation tests for generated JSON
+- [x] add stdin payload tests for each hook script
+- [x] add redaction tests for command args, prompts, env values, and error output
+- [x] add idempotent install tests that do not duplicate hooks
+- [x] add uninstall or disable path for generated hooks
+- [x] document source references:
+  - [x] Copilot VS Code hooks: `https://code.visualstudio.com/docs/copilot/customization/hooks`
+  - [x] GitHub Copilot cloud agent hooks: `https://docs.github.com/en/copilot/how-tos/copilot-on-github/customize-copilot/customize-cloud-agent/use-hooks`
+  - [x] GitHub Copilot hooks config: `https://docs.github.com/en/copilot/reference/hooks-configuration`
+  - [x] Claude hooks: `https://code.claude.com/docs/en/hooks-guide`
+  - [x] Codex hooks: `https://developers.openai.com/codex/hooks`
 
 ---
 
@@ -4704,6 +4723,280 @@ Why:
 
 ---
 
+## Runtime Event Enrichment and Graph Linking Patch
+
+Atlas already has session events, adapter extraction helpers, content-store artifact routing, resume snapshots, saved-context retrieval, and context-engine saved-context merge. Do not replace that foundation with a parallel extractor system. Extend it with deterministic enrichment that turns runtime activity into bounded, graph-aware memory while preserving the existing storage boundaries: graph facts stay in `worldtree.db`, large/runtime artifacts stay in `context.db`, and session timelines stay in `session.db`.
+
+### Patch X1 — Scope and crate boundary
+
+- [ ] define this as enrichment over existing `atlas-session`, `atlas-contentstore`, and `atlas-adapters`
+- [ ] avoid creating `packages/atlas-extractor` unless extraction logic grows large enough to justify a separate crate
+- [ ] if a new crate is created later, require it to depend on service APIs, not write SQLite directly
+- [ ] keep extractor pipeline deterministic, local, and non-LLM
+- [ ] keep extractor best-effort; extraction failure must not block primary CLI/MCP tool output
+- [ ] keep raw runtime output out of graph DB
+- [ ] document storage ownership:
+  - [ ] `worldtree.db` stores static code graph facts only
+  - [ ] `session.db` stores bounded event metadata and references
+  - [ ] `context.db` stores large artifacts, chunks, previews, and searchable runtime text
+
+Why:
+- existing continuity architecture already solved session/content boundaries
+- a parallel extractor crate or DB path would duplicate behavior and increase drift
+
+### Patch X2 — Raw input envelope and deterministic event enrichment
+
+- [ ] define a `RuntimeInput` / `RawActivityInput` envelope for enrichment:
+  - [ ] `frontend` (`cli`, `mcp`, adapter host)
+  - [ ] `session_id`
+  - [ ] `repo_root`
+  - [ ] `input_kind`
+  - [ ] `tool_or_command`
+  - [ ] `status`
+  - [ ] `stdout_preview`
+  - [ ] `stderr_preview`
+  - [ ] `artifact_source_id`
+  - [ ] `files`
+  - [ ] `metadata`
+  - [ ] `created_at`
+- [ ] define enriched output that maps onto existing `NewSessionEvent` payloads:
+  - [ ] `event_type`
+  - [ ] `summary`
+  - [ ] `symbols`
+  - [ ] `file_paths`
+  - [ ] `source_ids`
+  - [ ] `classification`
+  - [ ] `confidence`
+  - [ ] `metadata`
+- [ ] enrich existing event constructors rather than bypassing them:
+  - [ ] `extract_cli_event`
+  - [ ] `extract_graph_event`
+  - [ ] `extract_context_event`
+  - [ ] `extract_reasoning_event`
+  - [ ] `extract_user_event`
+  - [ ] `extract_tool_event`
+  - [ ] `normalize_event`
+- [ ] keep outputs canonical JSON so existing event hashing and dedupe remain stable
+- [ ] add tests proving same input produces same enriched event and hash
+
+Why:
+- enrichment should preserve existing event persistence and dedupe semantics
+- deterministic input/output keeps resume snapshots stable
+
+### Patch X3 — Rule-based classification
+
+- [ ] add bounded rule-based classifiers for runtime activity:
+  - [ ] panic
+  - [ ] exception
+  - [ ] stacktrace
+  - [ ] compiler error
+  - [ ] test failure
+  - [ ] test success
+  - [ ] build success
+  - [ ] deprecation warning
+  - [ ] unused/dead-code warning
+  - [ ] permission denied
+  - [ ] command timeout
+  - [ ] graph stale/readiness warning
+  - [ ] retrieval/content-store failure
+- [ ] map classifications to existing `SessionEventType` values where possible:
+  - [ ] `ERROR`
+  - [ ] `COMMAND_RUN`
+  - [ ] `COMMAND_FAIL`
+  - [ ] `CONTEXT_REQUEST`
+  - [ ] `REASONING_RESULT`
+  - [ ] `FILE_READ`
+  - [ ] `FILE_WRITE`
+  - [ ] `GRAPH_BUILD`
+  - [ ] `GRAPH_UPDATE`
+- [ ] add new event types only when existing types cannot represent the event safely
+- [ ] include classification metadata instead of exploding event-type count:
+  - [ ] `classification.kind`
+  - [ ] `classification.severity`
+  - [ ] `classification.rule_id`
+  - [ ] `classification.matched_fields`
+- [ ] add tests for error parsing, warning parsing, test summary parsing, and no-match behavior
+
+Why:
+- event type should stay stable; detailed meaning belongs in structured metadata
+- deterministic classifiers provide useful memory without LLM inference
+
+### Patch X4 — Artifact routing before session insertion
+
+- [ ] run all raw stdout/stderr/tool-result blobs through existing content-store routing before session insertion
+- [ ] define routing thresholds through the central budget policy:
+  - [ ] `small_output_bytes`
+  - [ ] `preview_output_bytes`
+  - [ ] `large_output_bytes`
+  - [ ] `max_runtime_artifact_bytes`
+- [ ] keep session event payloads bounded:
+  - [ ] small output may be stored inline only when safe and redacted
+  - [ ] medium output stores preview plus `source_id`
+  - [ ] large output stores pointer only
+- [ ] use `ContentStore::route_output` / saved-context artifact routing instead of a new artifact path
+- [ ] index routed artifacts with metadata:
+  - [ ] `session_id`
+  - [ ] `source_type`
+  - [ ] `tool_or_command`
+  - [ ] `repo_root`
+  - [ ] `file_paths`
+  - [ ] `symbols`
+  - [ ] `classification`
+- [ ] ensure secrets are redacted before persistence and previews
+- [ ] add tests for small, medium, large, oversized, and secret-bearing outputs
+
+Why:
+- `SessionStore::append_event` already rejects oversized inline payloads
+- content store is the correct place for searchable runtime text
+
+### Patch X5 — Graph linking without storing runtime data in graph DB
+
+- [ ] link enriched events to graph facts by stable identifiers, not raw node IDs alone
+- [ ] store links in session/content side tables, not `worldtree.db`
+- [ ] define link records:
+  - [ ] `event_id`
+  - [ ] `session_id`
+  - [ ] `repo_root`
+  - [ ] `qualified_name`
+  - [ ] `canonical_file_path`
+  - [ ] optional `node_id`
+  - [ ] optional `file_id`
+  - [ ] `link_kind`
+  - [ ] `confidence`
+  - [ ] `graph_last_indexed_at`
+- [ ] prefer canonical identifiers:
+  - [ ] canonical repo path
+  - [ ] qualified name
+  - [ ] kind
+  - [ ] line span when available
+- [ ] treat `node_id` and `file_id` as cache hints only because graph rebuilds can change row IDs
+- [ ] make graph linking best-effort:
+  - [ ] events with no graph target remain valid runtime memory
+  - [ ] ambiguous symbols store candidate list and ambiguity metadata
+  - [ ] stale graph state records `safe_to_answer=false` for link-derived claims when needed
+- [ ] add tests for exact symbol, file path, ambiguous symbol, stale graph, and graph-missing cases
+
+Why:
+- runtime memory should be graph-aware without mutating graph facts
+- stable identifiers survive rebuilds better than SQLite row IDs
+
+### Patch X6 — Readiness, identity, and budget integration
+
+- [ ] run graph linking only through canonical graph readiness state
+- [ ] define behavior by execution state:
+  - [ ] `fresh` -> resolve and link normally
+  - [ ] `stale` -> link with freshness warning and stale metadata
+  - [ ] `partial` -> link only when completeness requirements are met
+  - [ ] `corrupt` -> skip graph linking and store runtime event without graph links
+- [ ] require canonical path identity before any event/file/artifact key hashing
+- [ ] apply central budget policy to:
+  - [ ] classifier input bytes
+  - [ ] number of symbols extracted
+  - [ ] number of file paths extracted
+  - [ ] number of graph lookup candidates
+  - [ ] number of links stored
+  - [ ] artifact preview bytes
+- [ ] emit enrichment budget metadata:
+  - [ ] `budget_hit`
+  - [ ] `partial`
+  - [ ] `safe_to_answer`
+  - [ ] omitted symbol/file/link counts
+- [ ] add tests for stale/partial/corrupt graph behavior and budget truncation
+
+Why:
+- runtime enrichment must follow the same safety rules as graph-backed tools
+- extraction can otherwise become another unbounded path
+
+### Patch X7 — Context-engine integration
+
+- [ ] extend context engine to include enriched runtime events only when requested or relevant
+- [ ] add request controls:
+  - [ ] `include_runtime_events`
+  - [ ] `runtime_event_limit`
+  - [ ] `runtime_artifact_limit`
+  - [ ] `runtime_since`
+  - [ ] `runtime_session_id`
+- [ ] retrieve runtime memory by:
+  - [ ] linked symbol
+  - [ ] canonical file path
+  - [ ] session id
+  - [ ] classification kind
+  - [ ] artifact source id
+- [ ] merge runtime memory under graph/content companion policy
+- [ ] expose source kind:
+  - [ ] `runtime_event`
+  - [ ] `runtime_artifact`
+  - [ ] `saved_context`
+- [ ] include selection reason and ranking evidence:
+  - [ ] same symbol
+  - [ ] same file
+  - [ ] recent error
+  - [ ] same session
+  - [ ] direct artifact reference
+- [ ] keep runtime context bounded and preview-only by default
+- [ ] add tests for context with graph-only, saved-context-only, runtime-event-only, and mixed graph/runtime inputs
+
+Why:
+- runtime memory is useful only when it participates in context selection
+- it must not bypass existing context budgets or ranking rules
+
+### Patch X8 — CLI, MCP, and hook integration
+
+- [ ] integrate enrichment with existing CLI adapter event flow
+- [ ] integrate enrichment with MCP tool handler boundaries
+- [ ] keep MCP session event persistence best-effort and non-blocking
+- [ ] avoid duplicating `save_context_artifact`; reuse existing tool and content routing
+- [ ] update hook integration roadmap so host hooks emit enriched inputs through service APIs
+- [ ] ensure generated hooks never write SQLite directly
+- [ ] add command/tool metadata for:
+  - [ ] command start
+  - [ ] command finish
+  - [ ] tool result
+  - [ ] permission decision
+  - [ ] compaction boundary
+  - [ ] session end
+  - [ ] error/failure
+- [ ] add integration tests for CLI, MCP, and bridge-file fallback event enrichment
+
+Why:
+- runtime memory should come from existing adapters and hooks
+- host-specific capture gaps must reduce enrichment quality, not break commands
+
+### Patch X9 — Resume snapshot enrichment
+
+- [ ] include enriched runtime signals in resume snapshots:
+  - [ ] recent errors
+  - [ ] recent failed commands
+  - [ ] recent successful build/test summaries
+  - [ ] linked symbols
+  - [ ] linked files
+  - [ ] artifact references
+  - [ ] active unresolved runtime issues
+- [ ] group by category and severity
+- [ ] include retrieval hints instead of raw artifact content
+- [ ] cap snapshot contribution by budget policy
+- [ ] make snapshot rendering deterministic
+- [ ] add snapshot tests for enriched errors, artifact references, and linked symbols
+
+Why:
+- resume should recover useful runtime state without replaying history
+- enriched events make snapshots more useful while staying compact
+
+### Patch X completion criteria
+
+- [ ] runtime enrichment extends existing session/content/adapters architecture without replacing it
+- [ ] no runtime data is stored in graph DB
+- [ ] large runtime outputs route through content store before session insertion
+- [ ] enriched events are deterministic, bounded, redacted, and deduplicated
+- [ ] event-to-graph links use stable identifiers and treat row IDs as optional cache hints
+- [ ] graph linking obeys readiness state and budget policy
+- [ ] context engine can merge runtime events/artifacts with graph and saved context under one bounded ranking policy
+- [ ] CLI, MCP, and hook flows feed enrichment best-effort
+- [ ] resume snapshots include compact enriched runtime signals
+- [ ] tests cover classification, artifact routing, graph linking, context integration, and resume enrichment
+
+---
+
 ## Ranking and Trimming Primitives Patch
 
 Atlas already requires MCP/context surfaces to stay thin over the context engine, and Phase 22 checks review/symbol/impact parity. Widen that rule to the whole graph/query core: no CLI, MCP, review, explain-change, impact, analyze, retrieval, or context path should carry its own ad hoc ranking or trimming rules when a shared primitive can own the decision.
@@ -4877,6 +5170,7 @@ Atlas already normalizes many repo paths during scan, diff handling, and some ca
 
 ### Patch P1 — Canonical repo path type and rules
 
+- [ ] state invariant explicitly: ALL path-derived keys MUST derive from canonical repo-relative path identity before hashing, persistence, dedupe, or cross-store ID generation
 - [ ] define a shared `CanonicalRepoPath` / `RepoPathIdentity` type in `atlas-repo` or shared core
 - [ ] enforce canonical form:
   - [ ] repo-relative only
@@ -4925,6 +5219,8 @@ Why:
 - [ ] require canonical path before saved-context references that point to repo files
 - [ ] require canonical path before session resume snapshot file references
 - [ ] require canonical path before adapter bridge `source_id` path hashing
+- [ ] require canonical path before historical graph snapshot keys and file-hash reuse keys
+- [ ] require canonical path before Phase 17 history/diff deduplication keys
 - [ ] keep non-file artifacts explicit:
   - [ ] label/content-derived IDs allowed only when no repo path exists
   - [ ] ID payload must mark identity kind: `repo_path`, `synthetic_path`, `artifact_label`, or `external`
@@ -4950,7 +5246,9 @@ Why:
 ### Patch P completion criteria
 
 - [ ] one canonical repo path identity type exists
+- [ ] ALL path-derived keys are documented as canonical-before-hash/canonical-before-persist
 - [ ] graph store, content store, session snapshots, adapters, and MCP use it before hashing/keying
+- [ ] historical graph snapshots, file-hash reuse, and snapshot dedupe use the same identity
 - [ ] raw path hashing is covered by regression tests
 - [ ] diagnostics detect noncanonical persisted path rows
 - [ ] future sidecar/cache/index keys document canonical path as required seed
@@ -5007,6 +5305,11 @@ Why:
   - [ ] `stale` -> warn and allow graph-backed answers with freshness metadata
   - [ ] `partial` -> allow limited features only; block answers requiring complete graph facts
   - [ ] `corrupt` -> block graph-backed answers and require rebuild/quarantine flow
+- [ ] define explicit override policy:
+  - [ ] stale graph may run only when default policy allows stale reads or caller passes `--allow-stale` / MCP `allow_stale=true`
+  - [ ] partial graph may run only for tools with documented degraded behavior or caller passes `--allow-partial` / MCP `allow_partial=true`
+  - [ ] corrupt graph has no override for graph-backed answers
+  - [ ] every allowed stale/partial response must include `safe_to_answer`, execution state, and freshness/degraded metadata
 - [ ] define which tools are allowed in `partial` state:
   - [ ] status/debug/doctor allowed
   - [ ] direct symbol lookup allowed only when result provenance is complete enough
@@ -5032,8 +5335,8 @@ Why:
   - [ ] fresh graph: full features enabled
   - [ ] missing graph: fail with build suggestion
   - [ ] interrupted/failed build: fail with lifecycle suggestion
-  - [ ] stale graph: allow query with explicit warning or require update by configured policy
-  - [ ] partial graph: allow limited features only with explicit degraded-state metadata
+  - [ ] stale graph: warn + allow only by configured policy or explicit stale override
+  - [ ] partial graph: allow limited features only by documented degraded policy or explicit partial override
   - [ ] corrupt/inconsistent graph: fail closed
 - [ ] add CLI tests proving all graph-backed commands consume same readiness decision
 
@@ -5081,6 +5384,32 @@ Why:
 ## Operational Budget Policy Patch
 
 Atlas already has per-file size caps, parse batch sizing, bounded queues, result node/file caps, session payload caps, and retrieval guardrail backlog items. What is still missing is one explicit operational budget policy across build, query, impact, review, context, and MCP output stages: how much work may be attempted, what happens when a hard budget is hit, and whether each stage fails open, fails closed, or returns degraded partial results.
+
+### Patch B0 — Central budget policy and manager
+
+- [ ] define one shared `BudgetPolicy` / `BudgetManager` model for all bounded work
+- [ ] include budget namespaces:
+  - [ ] build/update
+  - [ ] graph traversal
+  - [ ] query candidates and seeds
+  - [ ] review/context extraction
+  - [ ] content/saved-context lookup
+  - [ ] MCP/CLI payload serialization
+- [ ] make all public graph/query/context/review/analysis paths receive budget policy from one source
+- [ ] support configured defaults plus per-call overrides within safe maximums
+- [ ] emit one shared budget result shape:
+  - [ ] `budget_status`
+  - [ ] `budget_hit`
+  - [ ] `budget_name`
+  - [ ] `budget_limit`
+  - [ ] `budget_observed`
+  - [ ] `partial`
+  - [ ] `safe_to_answer`
+- [ ] add tests proving scattered local caps cannot bypass central policy
+
+Why:
+- a list of limits is not enough if each tool interprets limits differently
+- one budget manager prevents drift across traversal, context, and serialization layers
 
 ### Patch B1 — Build and update budgets
 
@@ -5199,9 +5528,11 @@ Why:
 
 ### Patch B completion criteria
 
+- [ ] one central budget policy/manager exists and all bounded graph/query/context paths consume it
 - [ ] build/update total work budgets exist and are reported
 - [ ] query seed and traversal budgets exist and are reported
 - [ ] review/context byte or token budgets exist and are reported
+- [ ] MCP/CLI payload budgets are enforced by the same budget policy
 - [ ] every budget has explicit fail-open, fail-closed, or degraded behavior
 - [ ] CLI/MCP outputs include machine-readable budget status when limits hit
 - [ ] tests cover budget hits across build, query, impact, review, and MCP serialization
@@ -5255,6 +5586,34 @@ Why:
 - agents follow tool descriptions and prompts more reliably than implicit design intent
 - one workflow description prevents drift across docs and MCP metadata
 
+### Patch E2.5 — Enforce minimal-context-first inside higher-level tools
+
+- [ ] require higher-level tools to start from minimal bounded context internally unless explicitly bypassed:
+  - [ ] `get_review_context`
+  - [ ] `explain_change`
+  - [ ] `get_impact_radius`
+  - [ ] `analyze_safety`
+  - [ ] `analyze_remove`
+  - [ ] `analyze_dead_code`
+  - [ ] `analyze_dependency`
+  - [ ] refactor planning tools
+- [ ] define explicit bypass reasons:
+  - [ ] user requested full context
+  - [ ] minimal context is truncated
+  - [ ] minimal context reports ambiguity
+  - [ ] tool requires full impact graph by contract
+  - [ ] configured safety policy requires broader context
+- [ ] include metadata showing whether minimal context was used, bypassed, or escalated:
+  - [ ] `minimal_context_used`
+  - [ ] `minimal_context_bypassed`
+  - [ ] `escalation_reason`
+  - [ ] `next_tools`
+- [ ] add tests proving review/analyze/impact tools do not over-fetch when minimal context is sufficient
+
+Why:
+- workflow guidance is weaker than internal enforcement
+- higher-level tools should not silently bypass bounded triage
+
 ### Patch E3 — Add escalation metadata and tests where practical
 
 - [ ] include response metadata that helps decide whether to escalate:
@@ -5275,6 +5634,7 @@ Why:
 ### Patch E completion criteria
 
 - [ ] minimal-context-first contract is documented as required workflow
+- [ ] higher-level tools internally start from minimal context or emit explicit bypass metadata
 - [ ] MCP prompts, tool descriptions, README, and installed AGENTS instructions agree
 - [ ] graph/context responses expose enough metadata to justify escalation
 - [ ] tests protect contract wording and escalation metadata
@@ -5313,6 +5673,15 @@ Why:
 ### Patch C2 — Quarantine and rebuild policy for `worldtree.db`
 
 - [ ] define no partial salvage for graph DB corruption unless a future task explicitly adds verified salvage
+- [ ] define recovery modes:
+  - [ ] `manual_rebuild_required` — diagnostics report command; operator runs rebuild
+  - [ ] `auto_quarantine_and_rebuild` — Atlas quarantines DB and rebuilds when command policy allows
+  - [ ] `block_only` — graph-backed tools refuse answers but do not mutate DB
+- [ ] define default recovery mode per entry point:
+  - [ ] `status` / `doctor` / `db_check`: `block_only` diagnostics, no mutation
+  - [ ] explicit `build` / `update`: `auto_quarantine_and_rebuild` when corruption is detected
+  - [ ] graph-backed query/context/analyze tools: `block_only` with rebuild command
+- [ ] require explicit flag for automatic quarantine outside build/update commands
 - [ ] quarantine physically corrupt or logically inconsistent `.atlas/worldtree.db` before rebuilding
 - [ ] use deterministic quarantine path with timestamp or collision-safe suffix
 - [ ] keep quarantined DB for inspection instead of deleting it
@@ -5357,6 +5726,7 @@ Why:
 
 - [ ] graph DB health classes are explicit and shared by CLI/MCP
 - [ ] corrupt graph execution state maps to block + quarantine + rebuild behavior
+- [ ] auto rebuild, manual rebuild, and block-only recovery modes are explicit per command/tool
 - [ ] corrupt or logically inconsistent `worldtree.db` is quarantined before rebuild
 - [ ] rebuild from source is default policy; partial salvage is explicitly out of scope
 - [ ] graph-backed tools fail closed when graph facts are corrupt or inconsistent

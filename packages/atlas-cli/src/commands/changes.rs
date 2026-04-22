@@ -57,7 +57,7 @@ struct ExplainTestImpact {
 }
 
 #[derive(Serialize)]
-struct ExplainChangeSummary {
+pub(crate) struct ExplainChangeSummary {
     risk_level: String,
     changed_file_count: usize,
     changed_symbol_count: usize,
@@ -154,7 +154,7 @@ fn empty_explain_change_summary() -> ExplainChangeSummary {
     }
 }
 
-fn build_explain_change_summary(
+pub(crate) fn build_explain_change_summary(
     store: &Store,
     changes: &[atlas_core::model::ChangedFile],
     files: &[String],

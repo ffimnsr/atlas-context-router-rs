@@ -4,6 +4,62 @@ use crate::SessionId;
 
 use super::{ResumeSnapshot, SessionEventType, SessionStore};
 
+fn push_unique_string(values: &mut Vec<String>, candidate: String, limit: usize) {
+    if values.iter().any(|existing| existing == &candidate) {
+        return;
+    }
+    values.push(candidate);
+    if values.len() > limit {
+        values.remove(0);
+    }
+}
+
+fn push_unique_value(
+    values: &mut Vec<serde_json::Value>,
+    candidate: serde_json::Value,
+    limit: usize,
+) {
+    if values.iter().any(|existing| existing == &candidate) {
+        return;
+    }
+    values.push(candidate);
+    if values.len() > limit {
+        values.remove(0);
+    }
+}
+
+fn collect_hook_saved_artifact_refs(
+    payload: &serde_json::Value,
+    saved_artifact_refs: &mut Vec<String>,
+) {
+    for key in ["source_id", "saved_artifact_refs"] {
+        match payload.get(key) {
+            Some(serde_json::Value::String(source_id)) => {
+                push_unique_string(saved_artifact_refs, source_id.clone(), 30);
+            }
+            Some(serde_json::Value::Array(values)) => {
+                for value in values {
+                    if let Some(source_id) = value.as_str() {
+                        push_unique_string(saved_artifact_refs, source_id.to_owned(), 30);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn collect_hook_retrieval_hints(
+    payload: &serde_json::Value,
+    retrieval_hints: &mut Vec<serde_json::Value>,
+) {
+    if let Some(serde_json::Value::Array(values)) = payload.get("retrieval_hints") {
+        for value in values {
+            push_unique_value(retrieval_hints, value.clone(), 15);
+        }
+    }
+}
+
 pub(super) fn build_resume_snapshot(
     store: &mut SessionStore,
     session_id: &SessionId,
@@ -30,6 +86,13 @@ pub(super) fn build_resume_snapshot(
     for event in &events {
         let payload: serde_json::Value =
             serde_json::from_str(&event.payload_json).unwrap_or(serde_json::Value::Null);
+
+        collect_hook_saved_artifact_refs(&payload, &mut saved_artifact_refs);
+        if let Some(hook_metadata) = payload.get("hook_metadata") {
+            collect_hook_saved_artifact_refs(hook_metadata, &mut saved_artifact_refs);
+            collect_hook_retrieval_hints(hook_metadata, &mut retrieval_hints);
+        }
+        collect_hook_retrieval_hints(&payload, &mut retrieval_hints);
 
         match event.event_type {
             SessionEventType::UserIntent => {
