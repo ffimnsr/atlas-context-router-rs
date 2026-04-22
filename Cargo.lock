@@ -102,7 +102,7 @@ checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
 name = "atlas-adapters"
-version = "0.3.3"
+version = "0.4.0"
 dependencies = [
  "atlas-contentstore",
  "atlas-contextsave",
@@ -117,7 +117,7 @@ dependencies = [
 
 [[package]]
 name = "atlas-cli"
-version = "0.3.3"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "atlas-adapters",
@@ -150,7 +150,7 @@ dependencies = [
 
 [[package]]
 name = "atlas-contentstore"
-version = "0.3.3"
+version = "0.4.0"
 dependencies = [
  "atlas-core",
  "rusqlite",
@@ -164,7 +164,7 @@ dependencies = [
 
 [[package]]
 name = "atlas-contextsave"
-version = "0.3.3"
+version = "0.4.0"
 dependencies = [
  "atlas-contentstore",
  "atlas-core",
@@ -177,7 +177,7 @@ dependencies = [
 
 [[package]]
 name = "atlas-core"
-version = "0.3.3"
+version = "0.4.0"
 dependencies = [
  "camino",
  "serde",
@@ -187,7 +187,7 @@ dependencies = [
 
 [[package]]
 name = "atlas-engine"
-version = "0.3.3"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "atlas-core",
@@ -207,7 +207,7 @@ dependencies = [
 
 [[package]]
 name = "atlas-impact"
-version = "0.3.3"
+version = "0.4.0"
 dependencies = [
  "atlas-core",
  "serde_json",
@@ -216,7 +216,7 @@ dependencies = [
 
 [[package]]
 name = "atlas-mcp"
-version = "0.3.3"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "atlas-adapters",
@@ -249,7 +249,7 @@ dependencies = [
 
 [[package]]
 name = "atlas-parser"
-version = "0.3.3"
+version = "0.4.0"
 dependencies = [
  "atlas-core",
  "criterion",
@@ -279,7 +279,7 @@ dependencies = [
 
 [[package]]
 name = "atlas-reasoning"
-version = "0.3.3"
+version = "0.4.0"
 dependencies = [
  "atlas-core",
  "atlas-store-sqlite",
@@ -290,7 +290,7 @@ dependencies = [
 
 [[package]]
 name = "atlas-refactor"
-version = "0.3.3"
+version = "0.4.0"
 dependencies = [
  "atlas-core",
  "atlas-parser",
@@ -305,7 +305,7 @@ dependencies = [
 
 [[package]]
 name = "atlas-repo"
-version = "0.3.3"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "atlas-core",
@@ -319,7 +319,7 @@ dependencies = [
 
 [[package]]
 name = "atlas-review"
-version = "0.3.3"
+version = "0.4.0"
 dependencies = [
  "atlas-contentstore",
  "atlas-core",
@@ -333,7 +333,7 @@ dependencies = [
 
 [[package]]
 name = "atlas-search"
-version = "0.3.3"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "atlas-core",
@@ -347,7 +347,7 @@ dependencies = [
 
 [[package]]
 name = "atlas-session"
-version = "0.3.3"
+version = "0.4.0"
 dependencies = [
  "atlas-core",
  "rusqlite",
@@ -361,7 +361,7 @@ dependencies = [
 
 [[package]]
 name = "atlas-store-sqlite"
-version = "0.3.3"
+version = "0.4.0"
 dependencies = [
  "atlas-core",
  "criterion",
