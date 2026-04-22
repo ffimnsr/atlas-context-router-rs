@@ -36,8 +36,10 @@ pub const DEFAULT_IGNORE_PATTERNS: &[&str] = &[
 /// - symlinks (skipped — git tracks symlinks as pointer objects, not content)
 /// - paths matched by [`DEFAULT_IGNORE_PATTERNS`]
 /// - paths matched by patterns in `.atlasignore` at the repo root
+/// - uninitialized submodules (skipped with a warning)
 ///
-/// Returned paths are repo-relative, forward-slash separated.
+/// Returned paths are repo-relative, forward-slash separated. Initialized
+/// submodules are scanned recursively and prefixed with their submodule path.
 pub fn collect_files(repo_root: &Utf8Path, max_bytes: Option<u64>) -> Result<Vec<Utf8PathBuf>> {
     let (files, _) = collect_supported_files(repo_root, max_bytes, |_| true)?;
     Ok(files)
@@ -203,6 +205,36 @@ fn glob_match_inner(pat: &[u8], text: &[u8]) -> bool {
 
 /// Run `git ls-files` and return repo-relative paths.
 fn git_ls_files(repo_root: &Utf8Path) -> Result<Vec<Utf8PathBuf>> {
+    let mut paths = git_ls_files_in_repo(repo_root)?;
+
+    for submodule_path in git_submodule_paths(repo_root)? {
+        let submodule_root = repo_root.join(&submodule_path);
+        if !submodule_root.is_dir() {
+            tracing::warn!(
+                "skipping submodule '{}': working tree is not initialized",
+                submodule_path
+            );
+            continue;
+        }
+
+        match git_ls_files(&submodule_root) {
+            Ok(submodule_files) => {
+                paths.extend(
+                    submodule_files
+                        .into_iter()
+                        .map(|path| submodule_path.join(path)),
+                );
+            }
+            Err(error) => {
+                tracing::warn!("skipping submodule '{}': {}", submodule_path, error);
+            }
+        }
+    }
+
+    Ok(paths)
+}
+
+fn git_ls_files_in_repo(repo_root: &Utf8Path) -> Result<Vec<Utf8PathBuf>> {
     let output = Command::new("git")
         .args([
             "ls-files",
@@ -232,6 +264,48 @@ fn git_ls_files(repo_root: &Utf8Path) -> Result<Vec<Utf8PathBuf>> {
         .collect();
 
     Ok(paths)
+}
+
+fn git_submodule_paths(repo_root: &Utf8Path) -> Result<Vec<Utf8PathBuf>> {
+    let gitmodules_path = repo_root.join(".gitmodules");
+    if !gitmodules_path.is_file() {
+        return Ok(Vec::new());
+    }
+
+    let output = Command::new("git")
+        .args([
+            "config",
+            "-z",
+            "--file",
+            ".gitmodules",
+            "--get-regexp",
+            r"^submodule\..*\.path$",
+        ])
+        .current_dir(repo_root)
+        .output()
+        .context("failed to read submodule paths from .gitmodules")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stderr = stderr.trim();
+        if output.status.code() == Some(1) && stderr.is_empty() {
+            return Ok(Vec::new());
+        }
+        anyhow::bail!("git config for submodule paths failed: {stderr}");
+    }
+
+    let stdout =
+        std::str::from_utf8(&output.stdout).context("submodule path output is not valid UTF-8")?;
+    let mut submodules = Vec::new();
+
+    for entry in stdout.split('\0').filter(|entry| !entry.is_empty()) {
+        let Some((_, path)) = entry.split_once('\n') else {
+            anyhow::bail!("malformed submodule path entry: {entry}");
+        };
+        submodules.push(Utf8PathBuf::from(to_forward_slashes(path)));
+    }
+
+    Ok(submodules)
 }
 
 /// Return `true` if the file should be included (exists, small enough, not binary, not a symlink).

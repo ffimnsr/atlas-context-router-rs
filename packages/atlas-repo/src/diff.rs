@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use atlas_core::model::{ChangeType, ChangedFile};
-use camino::Utf8Path;
+use camino::{Utf8Path, Utf8PathBuf};
+use std::collections::HashSet;
 use std::process::Command;
 
 use crate::path::to_forward_slashes;
@@ -33,6 +34,24 @@ impl DiffTarget {
 /// Deleted files have `ChangeType::Deleted`; renamed/copied files carry the
 /// new path in `path` and the old path in `old_path`.
 pub fn changed_files(repo_root: &Utf8Path, target: &DiffTarget) -> Result<Vec<ChangedFile>> {
+    let recursive_changes = collect_recursive_submodule_changes(repo_root, target)?;
+    let known_submodule_paths = known_submodule_paths(repo_root, target)?;
+    let recursive_prefixes: HashSet<&str> = known_submodule_paths
+        .iter()
+        .map(String::as_str)
+        .filter(|submodule_path| {
+            recursive_changes.iter().any(|change| {
+                change.path == *submodule_path
+                    || change
+                        .path
+                        .strip_prefix(submodule_path)
+                        .is_some_and(|suffix| suffix.starts_with('/'))
+            })
+        })
+        .collect();
+    let known_submodule_set: HashSet<&str> =
+        known_submodule_paths.iter().map(String::as_str).collect();
+
     let args = target.git_args();
     let output = Command::new("git")
         .args(&args)
@@ -49,7 +68,559 @@ pub fn changed_files(repo_root: &Utf8Path, target: &DiffTarget) -> Result<Vec<Ch
     let stdout =
         std::str::from_utf8(&output.stdout).context("git diff output is not valid UTF-8")?;
 
-    parse_name_status_z(stdout)
+    let root_changes = parse_name_status_z(stdout)?;
+    let mut results = Vec::new();
+    let mut expanded = Vec::new();
+
+    for change in root_changes {
+        if !is_submodule_marker(&change, &known_submodule_set) {
+            results.push(change);
+            continue;
+        }
+
+        let submodule_expanded = expand_submodule_marker(repo_root, target, &change)?;
+        if !submodule_expanded.is_empty() {
+            expanded.extend(submodule_expanded);
+            continue;
+        }
+
+        if submodule_path_for_change(&change, &known_submodule_set)
+            .is_some_and(|path| recursive_prefixes.contains(path))
+        {
+            continue;
+        }
+
+        results.push(change);
+    }
+
+    results.extend(recursive_changes);
+    results.extend(expanded);
+    Ok(dedup_changes(results))
+}
+
+fn collect_recursive_submodule_changes(
+    repo_root: &Utf8Path,
+    target: &DiffTarget,
+) -> Result<Vec<ChangedFile>> {
+    let mut results = Vec::new();
+    let recursive_target = match target {
+        DiffTarget::BaseRef(_) => DiffTarget::BaseRef("HEAD".to_owned()),
+        DiffTarget::Staged => DiffTarget::Staged,
+        DiffTarget::WorkingTree => DiffTarget::WorkingTree,
+    };
+
+    for submodule_path in known_submodule_paths(repo_root, target)? {
+        let submodule_root = repo_root.join(&submodule_path);
+        if !submodule_root.is_dir() {
+            continue;
+        }
+
+        match changed_files(&submodule_root, &recursive_target) {
+            Ok(changes) => results.extend(changes.into_iter().map(|change| {
+                let path = prefix_rel_path(&submodule_path, &change.path);
+                let old_path = change
+                    .old_path
+                    .as_deref()
+                    .map(|old| prefix_rel_path(&submodule_path, old));
+                ChangedFile {
+                    path,
+                    change_type: change.change_type,
+                    old_path,
+                }
+            })),
+            Err(error) => {
+                tracing::warn!(
+                    "skipping recursive submodule diff '{}': {}",
+                    submodule_path,
+                    error
+                );
+            }
+        }
+    }
+
+    Ok(results)
+}
+
+fn known_submodule_paths(repo_root: &Utf8Path, target: &DiffTarget) -> Result<Vec<String>> {
+    let mut seen = HashSet::new();
+    let mut paths = Vec::new();
+
+    for path in submodule_paths_from_worktree(repo_root)? {
+        if seen.insert(path.clone()) {
+            paths.push(path);
+        }
+    }
+
+    match target {
+        DiffTarget::BaseRef(spec) => {
+            let (old_treeish, new_treeish) = diff_treeish_pair(repo_root, spec)?;
+            for path in submodule_paths_at_treeish(repo_root, &old_treeish)? {
+                if seen.insert(path.clone()) {
+                    paths.push(path);
+                }
+            }
+            for path in submodule_paths_at_treeish(repo_root, &new_treeish)? {
+                if seen.insert(path.clone()) {
+                    paths.push(path);
+                }
+            }
+        }
+        DiffTarget::Staged | DiffTarget::WorkingTree => {
+            for path in submodule_paths_at_treeish(repo_root, "HEAD")? {
+                if seen.insert(path.clone()) {
+                    paths.push(path);
+                }
+            }
+        }
+    }
+
+    Ok(paths)
+}
+
+fn submodule_paths_from_worktree(repo_root: &Utf8Path) -> Result<Vec<String>> {
+    submodule_paths_from_config(repo_root, ConfigSource::Worktree)
+}
+
+fn submodule_paths_at_treeish(repo_root: &Utf8Path, treeish: &str) -> Result<Vec<String>> {
+    submodule_paths_from_config(repo_root, ConfigSource::Treeish(treeish.to_owned()))
+}
+
+enum ConfigSource {
+    Worktree,
+    Treeish(String),
+}
+
+fn submodule_paths_from_config(repo_root: &Utf8Path, source: ConfigSource) -> Result<Vec<String>> {
+    let mut command = Command::new("git");
+    command.arg("config").arg("-z");
+
+    match source {
+        ConfigSource::Worktree => {
+            let gitmodules_path = repo_root.join(".gitmodules");
+            if !gitmodules_path.is_file() {
+                return Ok(Vec::new());
+            }
+            command.args(["--file", ".gitmodules"]);
+        }
+        ConfigSource::Treeish(treeish) => {
+            command.args(["--blob", &format!("{treeish}:.gitmodules")]);
+        }
+    }
+
+    command
+        .args(["--get-regexp", r"^submodule\..*\.path$"])
+        .current_dir(repo_root);
+    let output = command.output().context("failed to read submodule paths")?;
+
+    if !output.status.success() {
+        return Ok(Vec::new());
+    }
+
+    let stdout =
+        std::str::from_utf8(&output.stdout).context("submodule path output is not valid UTF-8")?;
+
+    let mut submodules = Vec::new();
+    for entry in stdout.split('\0').filter(|entry| !entry.is_empty()) {
+        let Some((_, path)) = entry.split_once('\n') else {
+            anyhow::bail!("malformed submodule path entry: {entry}");
+        };
+        submodules.push(to_forward_slashes(path));
+    }
+
+    Ok(submodules)
+}
+
+fn diff_treeish_pair(repo_root: &Utf8Path, spec: &str) -> Result<(String, String)> {
+    if let Some((left, right)) = spec.split_once("...") {
+        let output = Command::new("git")
+            .args(["merge-base", left, right])
+            .current_dir(repo_root)
+            .output()
+            .context("failed to resolve merge-base for diff spec")?;
+        anyhow::ensure!(
+            output.status.success(),
+            "git merge-base failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let base = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+        return Ok((base, right.to_owned()));
+    }
+
+    if let Some((left, right)) = spec.split_once("..") {
+        return Ok((left.to_owned(), right.to_owned()));
+    }
+
+    Ok((spec.to_owned(), "HEAD".to_owned()))
+}
+
+fn is_submodule_marker(change: &ChangedFile, known_submodule_paths: &HashSet<&str>) -> bool {
+    submodule_path_for_change(change, known_submodule_paths).is_some()
+}
+
+fn submodule_path_for_change<'a>(
+    change: &'a ChangedFile,
+    known_submodule_paths: &HashSet<&'a str>,
+) -> Option<&'a str> {
+    if known_submodule_paths.contains(change.path.as_str()) {
+        return Some(change.path.as_str());
+    }
+    change
+        .old_path
+        .as_deref()
+        .filter(|old| known_submodule_paths.contains(old))
+}
+
+fn expand_submodule_marker(
+    repo_root: &Utf8Path,
+    target: &DiffTarget,
+    change: &ChangedFile,
+) -> Result<Vec<ChangedFile>> {
+    match change.change_type {
+        ChangeType::Renamed | ChangeType::Copied => {
+            let Some(old_prefix) = change.old_path.as_deref() else {
+                return Ok(Vec::new());
+            };
+            let old_sha = gitlink_old_sha(repo_root, target, old_prefix)?;
+            let new_sha = gitlink_new_sha(repo_root, target, &change.path)?;
+            expand_submodule_path_change(
+                repo_root,
+                change.change_type,
+                old_prefix,
+                &change.path,
+                old_sha.as_deref(),
+                new_sha.as_deref(),
+            )
+        }
+        _ => {
+            let old_sha = gitlink_old_sha(repo_root, target, &change.path)?;
+            let new_sha = gitlink_new_sha(repo_root, target, &change.path)?;
+            expand_gitlink_delta(
+                repo_root,
+                &change.path,
+                old_sha.as_deref(),
+                new_sha.as_deref(),
+            )
+        }
+    }
+}
+
+fn gitlink_old_sha(
+    repo_root: &Utf8Path,
+    target: &DiffTarget,
+    submodule_path: &str,
+) -> Result<Option<String>> {
+    match target {
+        DiffTarget::BaseRef(spec) => {
+            let (old_treeish, _) = diff_treeish_pair(repo_root, spec)?;
+            gitlink_sha_at_treeish(repo_root, &old_treeish, submodule_path)
+        }
+        DiffTarget::Staged => gitlink_sha_at_treeish(repo_root, "HEAD", submodule_path),
+        DiffTarget::WorkingTree => gitlink_sha_in_index(repo_root, submodule_path),
+    }
+}
+
+fn gitlink_new_sha(
+    repo_root: &Utf8Path,
+    target: &DiffTarget,
+    submodule_path: &str,
+) -> Result<Option<String>> {
+    match target {
+        DiffTarget::BaseRef(spec) => {
+            let (_, new_treeish) = diff_treeish_pair(repo_root, spec)?;
+            gitlink_sha_at_treeish(repo_root, &new_treeish, submodule_path)
+        }
+        DiffTarget::Staged => gitlink_sha_in_index(repo_root, submodule_path),
+        DiffTarget::WorkingTree => gitlink_sha_in_worktree(repo_root, submodule_path),
+    }
+}
+
+fn gitlink_sha_at_treeish(
+    repo_root: &Utf8Path,
+    treeish: &str,
+    submodule_path: &str,
+) -> Result<Option<String>> {
+    let output = Command::new("git")
+        .arg("rev-parse")
+        .arg(format!("{treeish}:{submodule_path}"))
+        .current_dir(repo_root)
+        .output()
+        .context("failed to resolve submodule gitlink from treeish")?;
+
+    if !output.status.success() {
+        return Ok(None);
+    }
+
+    let sha = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    if sha.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(sha))
+    }
+}
+
+fn gitlink_sha_in_index(repo_root: &Utf8Path, submodule_path: &str) -> Result<Option<String>> {
+    let output = Command::new("git")
+        .arg("rev-parse")
+        .arg(format!(":{submodule_path}"))
+        .current_dir(repo_root)
+        .output()
+        .context("failed to resolve staged submodule gitlink")?;
+
+    if !output.status.success() {
+        return Ok(None);
+    }
+
+    let sha = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    if sha.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(sha))
+    }
+}
+
+fn gitlink_sha_in_worktree(repo_root: &Utf8Path, submodule_path: &str) -> Result<Option<String>> {
+    let submodule_root = repo_root.join(submodule_path);
+    if !submodule_root.is_dir() {
+        return Ok(None);
+    }
+
+    let output = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(&submodule_root)
+        .output()
+        .context("failed to resolve submodule HEAD")?;
+
+    if !output.status.success() {
+        return Ok(None);
+    }
+
+    let sha = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    if sha.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(sha))
+    }
+}
+
+fn expand_submodule_path_change(
+    repo_root: &Utf8Path,
+    change_type: ChangeType,
+    old_prefix: &str,
+    new_prefix: &str,
+    old_sha: Option<&str>,
+    new_sha: Option<&str>,
+) -> Result<Vec<ChangedFile>> {
+    match (old_sha, new_sha) {
+        (Some(old_sha), Some(new_sha)) if old_sha == new_sha => {
+            list_tree_paths(repo_root, old_prefix, old_sha)?
+                .into_iter()
+                .map(|rel_path| {
+                    Ok(ChangedFile {
+                        path: prefix_rel_path(new_prefix, &rel_path),
+                        old_path: Some(prefix_rel_path(old_prefix, &rel_path)),
+                        change_type,
+                    })
+                })
+                .collect()
+        }
+        (Some(old_sha), Some(new_sha)) => {
+            let mut expanded =
+                list_tree_changes(repo_root, old_prefix, old_sha, ChangeType::Deleted)?;
+            expanded.extend(list_tree_changes(
+                repo_root,
+                new_prefix,
+                new_sha,
+                ChangeType::Added,
+            )?);
+            Ok(expanded)
+        }
+        (Some(old_sha), None) => {
+            list_tree_changes(repo_root, old_prefix, old_sha, ChangeType::Deleted)
+        }
+        (None, Some(new_sha)) => {
+            list_tree_changes(repo_root, new_prefix, new_sha, ChangeType::Added)
+        }
+        (None, None) => Ok(Vec::new()),
+    }
+}
+
+fn expand_gitlink_delta(
+    repo_root: &Utf8Path,
+    prefix: &str,
+    old_sha: Option<&str>,
+    new_sha: Option<&str>,
+) -> Result<Vec<ChangedFile>> {
+    match (old_sha, new_sha) {
+        (Some(old_sha), Some(new_sha)) if old_sha != new_sha => {
+            diff_submodule_commits(repo_root, prefix, old_sha, new_sha)
+        }
+        (None, Some(new_sha)) => list_tree_changes(repo_root, prefix, new_sha, ChangeType::Added),
+        (Some(old_sha), None) => list_tree_changes(repo_root, prefix, old_sha, ChangeType::Deleted),
+        _ => Ok(Vec::new()),
+    }
+}
+
+fn diff_submodule_commits(
+    repo_root: &Utf8Path,
+    prefix: &str,
+    old_sha: &str,
+    new_sha: &str,
+) -> Result<Vec<ChangedFile>> {
+    let output = submodule_git_output(
+        repo_root,
+        prefix,
+        &["diff", "--name-status", "-z", old_sha, new_sha],
+    )
+    .context("failed to diff submodule commits")?;
+    let Some(output) = output else {
+        return Ok(Vec::new());
+    };
+
+    anyhow::ensure!(
+        output.status.success(),
+        "git diff for submodule failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout =
+        std::str::from_utf8(&output.stdout).context("submodule diff output is not valid UTF-8")?;
+    let changes = parse_name_status_z(stdout)?;
+    Ok(changes
+        .into_iter()
+        .map(|change| ChangedFile {
+            path: prefix_rel_path(prefix, &change.path),
+            old_path: change
+                .old_path
+                .as_deref()
+                .map(|old| prefix_rel_path(prefix, old)),
+            change_type: change.change_type,
+        })
+        .collect())
+}
+
+fn list_tree_changes(
+    repo_root: &Utf8Path,
+    prefix: &str,
+    treeish: &str,
+    change_type: ChangeType,
+) -> Result<Vec<ChangedFile>> {
+    Ok(list_tree_paths(repo_root, prefix, treeish)?
+        .into_iter()
+        .map(|entry| ChangedFile {
+            path: prefix_rel_path(prefix, &entry),
+            old_path: None,
+            change_type,
+        })
+        .collect())
+}
+
+fn list_tree_paths(repo_root: &Utf8Path, prefix: &str, treeish: &str) -> Result<Vec<String>> {
+    let output = submodule_git_output(
+        repo_root,
+        prefix,
+        &["ls-tree", "-r", "--name-only", "-z", treeish],
+    )
+    .context("failed to list submodule tree")?;
+    let Some(output) = output else {
+        return Ok(Vec::new());
+    };
+
+    anyhow::ensure!(
+        output.status.success(),
+        "git ls-tree for submodule failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout =
+        std::str::from_utf8(&output.stdout).context("submodule tree output is not valid UTF-8")?;
+    Ok(stdout
+        .split('\0')
+        .filter(|entry| !entry.is_empty())
+        .map(to_forward_slashes)
+        .collect())
+}
+
+fn submodule_git_output(
+    repo_root: &Utf8Path,
+    prefix: &str,
+    args: &[&str],
+) -> Result<Option<std::process::Output>> {
+    let submodule_root = repo_root.join(prefix);
+    if submodule_root.is_dir() {
+        return Command::new("git")
+            .args(args)
+            .current_dir(&submodule_root)
+            .output()
+            .context("failed to run git in submodule worktree")
+            .map(Some);
+    }
+
+    let Some(git_dir) = submodule_git_dir(repo_root, prefix)? else {
+        return Ok(None);
+    };
+
+    Command::new("git")
+        .arg("-c")
+        .arg("core.worktree=.")
+        .arg(format!("--git-dir={}", git_dir))
+        .arg("--work-tree=.")
+        .args(args)
+        .current_dir(repo_root)
+        .output()
+        .context("failed to run git against submodule git dir")
+        .map(Some)
+}
+
+fn submodule_git_dir(repo_root: &Utf8Path, prefix: &str) -> Result<Option<String>> {
+    let output = Command::new("git")
+        .args(["rev-parse", "--git-path", &format!("modules/{prefix}")])
+        .current_dir(repo_root)
+        .output()
+        .context("failed to resolve submodule git dir")?;
+
+    if !output.status.success() {
+        return Ok(None);
+    }
+
+    let git_dir = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    if git_dir.is_empty() {
+        return Ok(None);
+    }
+
+    let git_dir_path = Utf8PathBuf::from(to_forward_slashes(&git_dir));
+    let resolved_git_dir = if git_dir_path.is_absolute() {
+        git_dir_path
+    } else {
+        repo_root.join(git_dir_path)
+    };
+    if resolved_git_dir.exists() {
+        Ok(Some(resolved_git_dir.to_string()))
+    } else {
+        Ok(None)
+    }
+}
+
+fn prefix_rel_path(prefix: &str, rel_path: &str) -> String {
+    Utf8PathBuf::from(prefix).join(rel_path).to_string()
+}
+
+fn dedup_changes(changes: Vec<ChangedFile>) -> Vec<ChangedFile> {
+    let mut seen = HashSet::new();
+    let mut deduped = Vec::new();
+
+    for change in changes {
+        let key = format!(
+            "{:?}\0{}\0{}",
+            change.change_type,
+            change.path,
+            change.old_path.as_deref().unwrap_or("")
+        );
+        if seen.insert(key) {
+            deduped.push(change);
+        }
+    }
+
+    deduped
 }
 
 /// Parse the NUL-separated `--name-status -z` output from git.

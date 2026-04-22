@@ -94,6 +94,56 @@ fn setup_repo(files: &[(&str, &str)]) -> TempDir {
     temp_dir
 }
 
+fn setup_repo_with_submodule(
+    files: &[(&str, &str)],
+    submodule_path: &str,
+    submodule_files: &[(&str, &str)],
+) -> TempDir {
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    for (relative_path, content) in files {
+        let path = temp_dir.path().join(relative_path);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).expect("create test dir");
+        }
+        fs::write(path, content).expect("write test file");
+    }
+    init_git_repo(temp_dir.path());
+    let _submodule = init_committed_submodule(temp_dir.path(), submodule_path, submodule_files);
+    temp_dir
+}
+
+fn init_committed_submodule(
+    parent: &Path,
+    path: &str,
+    files: &[(&str, &str)],
+) -> TempDir {
+    let submodule_dir = tempfile::tempdir().expect("submodule temp dir");
+    for (relative_path, content) in files {
+        let file_path = submodule_dir.path().join(relative_path);
+        if let Some(parent_dir) = file_path.parent() {
+            fs::create_dir_all(parent_dir).expect("create submodule dir");
+        }
+        fs::write(file_path, content).expect("write submodule file");
+    }
+
+    init_git_repo(submodule_dir.path());
+    run_command(
+        parent,
+        "git",
+        &[
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            submodule_dir.path().to_str().expect("submodule path"),
+            path,
+        ],
+    );
+    run_command(parent, "git", &["commit", "--quiet", "-am", "add submodule"]);
+
+    submodule_dir
+}
+
 struct DetachedWorktree {
     temp_dir: TempDir,
     source_repo: PathBuf,

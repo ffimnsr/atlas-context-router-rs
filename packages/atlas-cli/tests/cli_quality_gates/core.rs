@@ -1441,6 +1441,132 @@ fn update_after_fixture_edit_emits_expected_summary() {
 }
 
 #[test]
+fn staged_submodule_edit_flows_through_detect_changes_and_update() {
+    let repo = setup_repo_with_submodule(
+        &[("README.md", "# atlas fixture\n")],
+        "docs/wiki",
+        &[(
+            "src/lib.rs",
+            "pub fn nested() -> &'static str {\n    \"v1\"\n}\n",
+        )],
+    );
+
+    run_atlas(repo.path(), &["init"]);
+    run_atlas(repo.path(), &["build"]);
+
+    write_repo_file(
+        &repo.path().join("docs/wiki"),
+        "src/lib.rs",
+        "pub fn nested_v2() -> &'static str {\n    \"v2\"\n}\n",
+    );
+    run_command(repo.path().join("docs/wiki").as_path(), "git", &["add", "src/lib.rs"]);
+
+    let changes = read_json_data_output(
+        "detect_changes",
+        run_atlas(repo.path(), &["--json", "detect-changes", "--staged"]),
+    );
+    let changes = changes["changes"]
+        .as_array()
+        .expect("detect-changes changes array");
+    assert!(
+        changes.iter().any(|change| {
+            change["path"] == json!("docs/wiki/src/lib.rs")
+                && change["change_type"] == json!("modified")
+        }),
+        "staged submodule edit should surface child path; got {changes:?}"
+    );
+
+    let update = read_json_data_output(
+        "update",
+        run_atlas(repo.path(), &["--json", "update", "--staged"]),
+    );
+    assert!(update["parsed"].as_u64().unwrap_or_default() >= 1);
+    assert!(update["nodes_updated"].as_u64().unwrap_or_default() >= 1);
+
+    let new_query = read_json_data_output(
+        "query",
+        run_atlas(repo.path(), &["--json", "query", "nested_v2"]),
+    );
+    assert!(
+        new_query["results"]
+            .as_array()
+            .expect("query results array")
+            .iter()
+            .any(|result| result["node"]["qualified_name"] == json!("docs/wiki/src/lib.rs::fn::nested_v2")),
+        "updated query should include renamed submodule function: {new_query:?}"
+    );
+
+    let old_query = read_json_data_output(
+        "query",
+        run_atlas(repo.path(), &["--json", "query", "nested"]),
+    );
+    assert!(
+        old_query["results"]
+            .as_array()
+            .expect("query results array")
+            .iter()
+            .all(|result| result["node"]["qualified_name"] != json!("docs/wiki/src/lib.rs::fn::nested")),
+        "old submodule symbol should be removed after update: {old_query:?}"
+    );
+}
+
+#[test]
+fn base_ref_dirty_submodule_edit_flows_through_detect_changes_and_update() {
+    let repo = setup_repo_with_submodule(
+        &[("README.md", "# atlas fixture\n")],
+        "docs/wiki",
+        &[(
+            "src/lib.rs",
+            "pub fn nested() -> &'static str {\n    \"v1\"\n}\n",
+        )],
+    );
+
+    run_atlas(repo.path(), &["init"]);
+    run_atlas(repo.path(), &["build"]);
+
+    write_repo_file(
+        &repo.path().join("docs/wiki"),
+        "src/lib.rs",
+        "pub fn nested_v2() -> &'static str {\n    \"v2\"\n}\n",
+    );
+
+    let changes = read_json_data_output(
+        "detect_changes",
+        run_atlas(repo.path(), &["--json", "detect-changes", "--base", "HEAD"]),
+    );
+    let changes = changes["changes"]
+        .as_array()
+        .expect("detect-changes changes array");
+    assert!(
+        changes.iter().any(|change| {
+            change["path"] == json!("docs/wiki/src/lib.rs")
+                && change["change_type"] == json!("modified")
+        }),
+        "base-ref dirty submodule edit should surface child path; got {changes:?}"
+    );
+
+    let update = read_json_data_output(
+        "update",
+        run_atlas(repo.path(), &["--json", "update", "--base", "HEAD"]),
+    );
+    assert!(update["parsed"].as_u64().unwrap_or_default() >= 1);
+    assert!(update["nodes_updated"].as_u64().unwrap_or_default() >= 1);
+
+    let new_query = read_json_data_output(
+        "query",
+        run_atlas(repo.path(), &["--json", "query", "nested_v2"]),
+    );
+    assert!(
+        new_query["results"]
+            .as_array()
+            .expect("query results array")
+            .iter()
+            .any(|result| result["node"]["qualified_name"] == json!("docs/wiki/src/lib.rs::fn::nested_v2")),
+        "updated query should include dirty submodule function: {new_query:?}"
+    );
+}
+
+#[test]
 fn impact_review_context_and_query_cover_phase_14_5_cli_flow() {
     let repo = setup_fixture_repo();
 

@@ -44,6 +44,40 @@ fn git_commit(dir: &std::path::Path, msg: &str) {
     assert!(status.success(), "git commit failed");
 }
 
+fn git(dir: &std::path::Path, args: &[&str]) {
+    let status = Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .status()
+        .expect("git command");
+    assert!(status.success(), "git {args:?} failed");
+}
+
+fn init_committed_submodule(parent: &std::path::Path, path: &str) -> tempfile::TempDir {
+    let submodule_dir = tempfile::tempdir().unwrap();
+    let submodule_root = submodule_dir.path();
+    git_init(submodule_root);
+    std::fs::create_dir_all(submodule_root.join("src")).unwrap();
+    std::fs::write(submodule_root.join("src/lib.rs"), "pub fn nested() {}\n").unwrap();
+    git_add_all(submodule_root);
+    git_commit(submodule_root, "initial submodule");
+
+    git(
+        parent,
+        &[
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            submodule_root.to_str().unwrap(),
+            path,
+        ],
+    );
+    git_commit(parent, "add submodule");
+
+    submodule_dir
+}
+
 // ---------------------------------------------------------------------------
 // 14.3 tracked-file collection
 // ---------------------------------------------------------------------------
@@ -153,6 +187,200 @@ fn collect_files_preserves_nested_posix_paths_with_spaces() {
     assert!(
         names.contains(&"scripts/build tool.py"),
         "paths with spaces should be preserved exactly; got {names:?}"
+    );
+}
+
+#[test]
+fn collect_files_recurses_into_initialized_submodules() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    git_init(root);
+    let _submodule_dir = init_committed_submodule(root, "docs/wiki");
+
+    std::fs::write(root.join("docs/wiki/notes.txt"), "draft\n").unwrap();
+
+    let root_utf8 = Utf8Path::from_path(root).unwrap();
+    let files = collect_files(root_utf8, None).unwrap();
+    let names: Vec<&str> = files.iter().map(|p| p.as_str()).collect();
+
+    assert!(
+        names.contains(&"docs/wiki/src/lib.rs"),
+        "tracked submodule file should be collected; got {names:?}"
+    );
+    assert!(
+        names.contains(&"docs/wiki/notes.txt"),
+        "untracked submodule file should be collected with submodule prefix; got {names:?}"
+    );
+}
+
+#[test]
+fn changed_files_working_tree_detects_unstaged_submodule_file_modification() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    git_init(root);
+    let _submodule_dir = init_committed_submodule(root, "docs/wiki");
+
+    std::fs::write(root.join("docs/wiki/src/lib.rs"), "pub fn nested_v2() {}\n").unwrap();
+
+    let root_utf8 = Utf8Path::from_path(root).unwrap();
+    let changes = changed_files(root_utf8, &DiffTarget::WorkingTree).unwrap();
+
+    use atlas_core::model::ChangeType;
+    assert!(
+        changes
+            .iter()
+            .any(|c| c.path == "docs/wiki/src/lib.rs" && c.change_type == ChangeType::Modified),
+        "unstaged submodule file modification should surface child path; got {changes:?}"
+    );
+}
+
+#[test]
+fn changed_files_staged_detects_staged_submodule_file_modification() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    git_init(root);
+    let _submodule_dir = init_committed_submodule(root, "docs/wiki");
+
+    std::fs::write(root.join("docs/wiki/src/lib.rs"), "pub fn nested_v2() {}\n").unwrap();
+    git(root.join("docs/wiki").as_path(), &["add", "src/lib.rs"]);
+
+    let root_utf8 = Utf8Path::from_path(root).unwrap();
+    let changes = changed_files(root_utf8, &DiffTarget::Staged).unwrap();
+
+    use atlas_core::model::ChangeType;
+    assert!(
+        changes
+            .iter()
+            .any(|c| c.path == "docs/wiki/src/lib.rs" && c.change_type == ChangeType::Modified),
+        "staged submodule file modification should surface child path; got {changes:?}"
+    );
+}
+
+#[test]
+fn changed_files_staged_expands_added_submodule_into_child_files() {
+    let submodule_dir = tempfile::tempdir().unwrap();
+    let submodule_root = submodule_dir.path();
+    git_init(submodule_root);
+    std::fs::create_dir_all(submodule_root.join("src")).unwrap();
+    std::fs::write(submodule_root.join("src/lib.rs"), "pub fn nested() {}\n").unwrap();
+    git_add_all(submodule_root);
+    git_commit(submodule_root, "initial submodule");
+
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    git_init(root);
+
+    git(
+        root,
+        &[
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            submodule_root.to_str().unwrap(),
+            "docs/wiki",
+        ],
+    );
+
+    let root_utf8 = Utf8Path::from_path(root).unwrap();
+    let changes = changed_files(root_utf8, &DiffTarget::Staged).unwrap();
+
+    use atlas_core::model::ChangeType;
+    assert!(
+        changes
+            .iter()
+            .any(|c| c.path == "docs/wiki/src/lib.rs" && c.change_type == ChangeType::Added),
+        "staged submodule add should expand into child adds; got {changes:?}"
+    );
+}
+
+#[test]
+fn changed_files_base_ref_expands_submodule_gitlink_delta_into_child_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    git_init(root);
+    let _submodule_dir = init_committed_submodule(root, "docs/wiki");
+
+    std::fs::write(root.join("docs/wiki/src/lib.rs"), "pub fn nested_v2() {}\n").unwrap();
+    git(root.join("docs/wiki").as_path(), &["add", "src/lib.rs"]);
+    git_commit(root.join("docs/wiki").as_path(), "submodule update");
+    git(root, &["add", "docs/wiki"]);
+    git_commit(root, "bump submodule");
+
+    let root_utf8 = Utf8Path::from_path(root).unwrap();
+    let changes = changed_files(root_utf8, &DiffTarget::BaseRef("HEAD~1".to_string())).unwrap();
+
+    use atlas_core::model::ChangeType;
+    assert!(
+        changes
+            .iter()
+            .any(|c| c.path == "docs/wiki/src/lib.rs" && c.change_type == ChangeType::Modified),
+        "base-ref diff should expand gitlink delta into child file changes; got {changes:?}"
+    );
+}
+
+#[test]
+fn changed_files_base_ref_expands_dirty_submodule_worktree_without_gitlink_bump() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    git_init(root);
+    let _submodule_dir = init_committed_submodule(root, "docs/wiki");
+
+    std::fs::write(root.join("docs/wiki/src/lib.rs"), "pub fn nested_v2() {}\n").unwrap();
+
+    let root_utf8 = Utf8Path::from_path(root).unwrap();
+    let changes = changed_files(root_utf8, &DiffTarget::BaseRef("HEAD".to_string())).unwrap();
+
+    use atlas_core::model::ChangeType;
+    assert!(
+        changes
+            .iter()
+            .any(|c| c.path == "docs/wiki/src/lib.rs" && c.change_type == ChangeType::Modified),
+        "base-ref diff should expand dirty submodule worktree into child changes; got {changes:?}"
+    );
+}
+
+#[test]
+fn changed_files_staged_expands_deleted_submodule_into_child_deletes() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    git_init(root);
+    let _submodule_dir = init_committed_submodule(root, "docs/wiki");
+
+    git(root, &["rm", "-f", "docs/wiki"]);
+
+    let root_utf8 = Utf8Path::from_path(root).unwrap();
+    let changes = changed_files(root_utf8, &DiffTarget::Staged).unwrap();
+
+    use atlas_core::model::ChangeType;
+    assert!(
+        changes
+            .iter()
+            .any(|c| c.path == "docs/wiki/src/lib.rs" && c.change_type == ChangeType::Deleted),
+        "staged submodule delete should expand into child deletes; got {changes:?}"
+    );
+}
+
+#[test]
+fn changed_files_staged_expands_renamed_submodule_into_child_renames() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    git_init(root);
+    let _submodule_dir = init_committed_submodule(root, "docs/wiki");
+
+    git(root, &["mv", "docs/wiki", "docs/wiki-renamed"]);
+
+    let root_utf8 = Utf8Path::from_path(root).unwrap();
+    let changes = changed_files(root_utf8, &DiffTarget::Staged).unwrap();
+
+    use atlas_core::model::ChangeType;
+    assert!(
+        changes.iter().any(|c| {
+            c.change_type == ChangeType::Renamed
+                && c.path == "docs/wiki-renamed/src/lib.rs"
+                && c.old_path.as_deref() == Some("docs/wiki/src/lib.rs")
+        }),
+        "staged submodule rename should expand into child renames; got {changes:?}"
     );
 }
 

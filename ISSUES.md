@@ -443,7 +443,7 @@ The upstream project’s primary promise includes full build plus incremental up
 
 - [x] `collect_files(repo_root)`
 - [x] Use `git ls-files`
-- [ ] Optional recursive submodule handling later
+- [x] Optional recursive submodule handling later
 - [x] Skip unsupported extensions
 - [x] skip binary files
 - [x] skip giant files
@@ -2121,6 +2121,325 @@ Add direct full-artifact retrieval by `source_id`; search previews are not enoug
   - [ ] byte count
   - [ ] chunk count
 - [ ] add tests for found artifact, missing artifact, oversized artifact, paged artifact, and cross-session/repo isolation
+
+### MCP14 — Agent hook integrations
+
+Add first-class hook templates and adapter docs for Copilot, Claude, and Codex so Atlas session continuity, graph freshness, review context, and command audit signals work across agent hosts.
+
+#### Shared Atlas hook behavior
+
+- [ ] add repo-local hook scripts under `.atlas/hooks/` or generated host-specific locations that call Atlas CLI commands, never write SQLite directly
+- [ ] extend existing `atlas install --platform <platform>` flow to install platform hooks in addition to MCP config
+- [ ] keep supported platform values exactly:
+  - [ ] `copilot`
+  - [ ] `claude`
+  - [ ] `codex`
+  - [ ] `all`
+- [ ] use existing `atlas install --platform <platform> --dry-run` to print files and hook events without writing
+- [ ] add hook validation to `atlas install --platform <platform>` output, or add a narrow `atlas install --platform <platform> --validate-only` flag if validation needs no writes
+- [ ] add hook scripts that parse JSON from stdin with structured APIs, cap payload size, and redact secrets before persistence
+- [ ] use git-root-based paths in generated hook commands so hooks work from subdirectories
+- [ ] keep hook failures non-blocking unless hook purpose is explicit policy enforcement
+- [ ] emit normalized session events through existing session service:
+  - [ ] user prompt / intent
+  - [ ] session start / resume
+  - [ ] tool preflight
+  - [ ] tool result
+  - [ ] permission decision
+  - [ ] compaction boundary
+  - [ ] session stop / end
+  - [ ] error / failure
+- [ ] run `atlas status --json` or equivalent health check on session start / resume
+- [ ] run `atlas update` after file-edit tools when graph-backed answers would otherwise go stale
+- [ ] run `atlas explain-change` or `atlas review-context` after meaningful edits when changed-file count is bounded
+- [ ] save compaction snapshots before host context compaction when host exposes compaction hooks
+- [ ] log denied or risky shell/file operations without storing secret-bearing arguments
+
+#### Hook storage and context routing
+
+- [ ] all hooks write a small normalized event through session service first
+- [ ] session event stores `source_id` when large payload is saved to content store
+- [ ] session-only hooks:
+  - [ ] `SessionStart` / `sessionStart`
+  - [ ] `PreToolUse` / `preToolUse`
+  - [ ] `PermissionRequest`
+  - [ ] `PermissionDenied`
+  - [ ] `PostCompact`
+  - [ ] `ConfigChange`
+  - [ ] `CwdChanged`
+  - [ ] `FileChanged`
+  - [ ] `WorktreeCreate`
+  - [ ] `WorktreeRemove`
+  - [ ] `Notification`
+  - [ ] `SubagentStart`
+  - [ ] `SubagentStop`
+  - [ ] `TaskCreated`
+  - [ ] `TaskCompleted`
+- [ ] session plus content-store hooks when payload exceeds event size cap or should be retrievable later:
+  - [ ] `UserPromptSubmit` / `userPromptSubmitted`
+  - [ ] `PostToolUse` / `postToolUse`
+  - [ ] `PostToolUseFailure`
+  - [ ] `Stop`
+  - [ ] `StopFailure`
+  - [ ] `SessionEnd` / `sessionEnd`
+  - [ ] `errorOccurred` / `error`
+  - [ ] `Elicitation`
+  - [ ] `ElicitationResult`
+  - [ ] `InstructionsLoaded`
+- [ ] context-engine hooks:
+  - [ ] `SessionStart` loads resume and context hints
+  - [ ] `UserPromptSubmit` classifies intent and may retrieve saved context
+  - [ ] `PreCompact` builds resume snapshot from session events and content-store artifacts
+  - [ ] `PostCompact` verifies restore state
+  - [ ] `Stop` / `SessionEnd` persists handoff and resume hints
+- [ ] graph/context refresh hooks:
+  - [ ] `PostToolUse` runs graph update after file edits
+  - [ ] `PostToolUse` refreshes review/impact context after successful tests or builds when bounded
+  - [ ] `FileChanged` marks graph/content freshness stale without storing full file content
+
+#### Hook install files and directories
+
+- [ ] install one shared Atlas hook runner in repo-local directory:
+  - [ ] `.atlas/hooks/atlas-hook`
+  - [ ] `.atlas/hooks/lib/`
+- [ ] platform hook configs must contain all supported events in one platform config file where host schema allows it
+- [ ] platform hook configs must call shared runner with concrete event argument:
+  - [ ] `.atlas/hooks/atlas-hook session-start`
+  - [ ] `.atlas/hooks/atlas-hook user-prompt`
+  - [ ] `.atlas/hooks/atlas-hook pre-tool-use`
+  - [ ] `.atlas/hooks/atlas-hook permission-request`
+  - [ ] `.atlas/hooks/atlas-hook post-tool-use`
+  - [ ] `.atlas/hooks/atlas-hook tool-failure`
+  - [ ] `.atlas/hooks/atlas-hook pre-compact`
+  - [ ] `.atlas/hooks/atlas-hook post-compact`
+  - [ ] `.atlas/hooks/atlas-hook stop`
+  - [ ] `.atlas/hooks/atlas-hook session-end`
+  - [ ] `.atlas/hooks/atlas-hook error`
+- [ ] install hook output, bridge, and transient state under `.atlas/sessions/` or `.atlas/tmp/`, not host config directories
+- [ ] install Copilot workspace hooks under:
+  - [ ] `.github/hooks/atlas-copilot.json`
+  - [ ] optional custom location from `.vscode/settings.json` via `chat.hookFilesLocations`
+  - [ ] do not write user-level `~/.copilot/hooks` unless `--scope user` is explicit
+- [ ] use same `.github/hooks/atlas-copilot.json` file for VS Code Copilot, GitHub Copilot cloud agent, and Copilot CLI where hook schema allows it
+- [ ] require `.github/hooks/atlas-copilot.json` on default branch for GitHub Copilot cloud agent use
+- [ ] use same file from current working directory for Copilot CLI
+- [ ] install Claude hooks under:
+  - [ ] `.claude/settings.json` for repo-shared hooks
+  - [ ] `.claude/settings.local.json` for machine-local overrides
+  - [ ] Claude hook entries call `.atlas/hooks/atlas-hook <event>`
+  - [ ] do not write `~/.claude/settings.json` unless `--scope user` is explicit
+- [ ] install Codex hooks under:
+  - [ ] `.codex/hooks.json` for repo-local hook config if supported by active Codex config
+  - [ ] Codex hook entries call `.atlas/hooks/atlas-hook <event>`
+  - [ ] update `.codex/config.toml` only when needed to point Codex at repo-local hook config
+  - [ ] do not write user-level Codex config unless `--scope user` is explicit
+- [ ] install wiki/reference files under:
+  - [ ] `wiki/hooks-copilot.md`
+  - [ ] `wiki/hooks-claude.md`
+  - [ ] `wiki/hooks-codex.md`
+  - [ ] update `wiki/_Sidebar.md`
+- [ ] install test fixtures under:
+  - [ ] `packages/atlas-cli/tests/fixtures/hooks/copilot/`
+  - [ ] `packages/atlas-cli/tests/fixtures/hooks/claude/`
+  - [ ] `packages/atlas-cli/tests/fixtures/hooks/codex/`
+
+#### Required hooks by platform
+
+- [ ] Copilot must use these VS Code hook names where running in VS Code:
+  - [ ] `SessionStart` for Atlas session start/resume and graph health check
+  - [ ] `UserPromptSubmit` for user-intent capture and optional bounded context injection
+  - [ ] `PreToolUse` for command/file policy checks before tool execution
+  - [ ] `PostToolUse` for graph update, command-result capture, and review/impact refresh
+  - [ ] `PreCompact` for resume snapshot creation before context truncation
+  - [ ] `SubagentStart` and `SubagentStop` for nested-agent boundaries
+  - [ ] `Stop` for final turn state and resume hints
+- [ ] Copilot must use these GitHub cloud agent / Copilot CLI hook names where running in GitHub or CLI:
+  - [ ] `sessionStart` for Atlas session start/resume and graph health check
+  - [ ] `userPromptSubmitted` for user-intent capture
+  - [ ] `preToolUse` for `permissionDecision` allow/deny policy
+  - [ ] `postToolUse` for graph update, command-result capture, and review/impact refresh
+  - [ ] `sessionEnd` for final resume snapshot and transient cleanup
+  - [ ] `errorOccurred` for bounded error capture
+- [ ] Claude must use these hooks:
+  - [ ] `SessionStart` for Atlas session start/resume
+  - [ ] `UserPromptSubmit` for user-intent capture
+  - [ ] `UserPromptExpansion` for expanded prompt validation
+  - [ ] `PreToolUse` with `Bash|Edit|Write|MultiEdit` matcher for preflight policy
+  - [ ] `PermissionRequest` for narrow Atlas maintenance auto-allow decisions
+  - [ ] `PermissionDenied` for denial audit and optional retry guidance
+  - [ ] `PostToolUse` with `Edit|Write|MultiEdit|Bash` matcher for graph update and result capture
+  - [ ] `PostToolUseFailure` for failed tool summaries
+  - [ ] `Notification` for stale-graph or pending-resume notices when enabled
+  - [ ] `SubagentStart` and `SubagentStop` for delegated-work boundaries
+  - [ ] `TaskCreated` and `TaskCompleted` for task lifecycle events
+  - [ ] `Stop` and `StopFailure` for final turn or API-error state
+  - [ ] `InstructionsLoaded` for loaded instruction/rule metadata
+  - [ ] `ConfigChange`, `CwdChanged`, and `FileChanged` for config/root/freshness refresh
+  - [ ] `WorktreeCreate` and `WorktreeRemove` for temporary worktree identity
+  - [ ] `PreCompact` and `PostCompact` for resume snapshot before/after compaction
+  - [ ] `Elicitation` and `ElicitationResult` for MCP user-input flow capture
+  - [ ] `SessionEnd` for final snapshot and cleanup
+- [ ] Codex must use these hooks:
+  - [ ] `SessionStart` with `startup|resume` matcher for Atlas session start/resume and health check
+  - [ ] `UserPromptSubmit` for user-intent capture
+  - [ ] `PreToolUse` with `Bash` matcher for command policy before execution
+  - [ ] `PermissionRequest` with `Bash` matcher for narrow Atlas maintenance auto-allow decisions
+  - [ ] `PostToolUse` with `Bash` matcher for command-result capture and graph refresh
+  - [ ] `Stop` for final turn state and resume hints
+
+#### Copilot hooks
+
+Use `.github/hooks/atlas-copilot.json` for Copilot hooks. VS Code uses PascalCase event names; GitHub Copilot cloud agent and Copilot CLI use camelCase event names.
+
+- [ ] generate VS Code-compatible hook config for `SessionStart`
+  - [ ] call `atlas session start` or resume logic
+  - [ ] call `atlas status --json`
+  - [ ] record repo root, cwd, model, and session id when present
+- [ ] generate `UserPromptSubmit`
+  - [ ] call Atlas user-intent capture
+  - [ ] optionally inject compact repo/session guidance when host accepts hook output context
+- [ ] generate `PreToolUse`
+  - [ ] block or ask for dangerous shell/file operations only when configured
+  - [ ] detect operations that need graph freshness after completion
+- [ ] generate `PostToolUse`
+  - [ ] run `atlas update` after edit/write tools
+  - [ ] run targeted context refresh after successful tests, builds, or file changes
+  - [ ] record bounded stdout/stderr summaries, not raw large output
+- [ ] generate `PreCompact`
+  - [ ] call `atlas session snapshot` / resume material writer before context truncation
+- [ ] generate `SubagentStart` and `SubagentStop`
+  - [ ] track nested agent boundaries
+  - [ ] merge subagent summaries into parent session events
+- [ ] generate `Stop`
+  - [ ] record final turn state
+  - [ ] persist resume hints and unresolved errors
+- [ ] document VS Code settings touched:
+  - [ ] `chat.hookFilesLocations`
+  - [ ] `chat.useCustomAgentHooks` when agent-scoped hooks are emitted
+
+#### Copilot cloud agent / CLI hooks
+
+Use `.github/hooks/atlas-copilot.json` with `version: 1`; remember cloud agent requires hook config on default branch, while CLI loads hooks from current working directory.
+
+- [ ] generate `sessionStart`
+  - [ ] run Atlas startup health check
+  - [ ] capture `source` values such as `new`, `resume`, or `startup`
+  - [ ] write concise session-start event
+- [ ] generate `userPromptSubmitted`
+  - [ ] capture prompt metadata for continuity
+  - [ ] never persist raw prompt when configured redaction policy rejects it
+- [ ] generate `preToolUse`
+  - [ ] enforce deny/allow policy through `permissionDecision` and `permissionDecisionReason`
+  - [ ] guard dangerous bash, destructive file writes, secret reads, and broad generated-file edits
+- [ ] generate `postToolUse`
+  - [ ] capture `toolName`, parsed `toolArgs`, and `toolResult.resultType`
+  - [ ] trigger `atlas update` after edit/write-like tools
+  - [ ] trigger review/impact refresh after successful build/test commands
+- [ ] generate `sessionEnd`
+  - [ ] persist final resume snapshot and cleanup transient bridge files
+  - [ ] record end reason such as `complete`, `error`, `abort`, `timeout`, or `user_exit`
+- [ ] generate `errorOccurred`
+  - [ ] capture bounded error message/name/stack metadata
+  - [ ] save error event for resume and review triage
+- [ ] support Bash and PowerShell command fields where host allows both
+- [ ] keep default timeout at host default unless Atlas command needs explicit `timeoutSec`
+
+#### Claude hooks
+
+Use `.claude/settings.json` and `.claude/settings.local.json`; keep matchers narrow and prefer command hooks.
+
+- [ ] generate `SessionStart`
+  - [ ] initialize or resume Atlas session
+  - [ ] reload saved context hints
+- [ ] generate `UserPromptSubmit`
+  - [ ] capture user intent
+  - [ ] add bounded additional context only when needed
+- [ ] generate `UserPromptExpansion`
+  - [ ] validate expanded commands before model receives them
+  - [ ] block unsafe expansion when policy requires it
+- [ ] generate `PreToolUse`
+  - [ ] matcher: `Bash|Edit|Write|MultiEdit`
+  - [ ] deny protected paths and dangerous commands with clear reason
+- [ ] generate `PermissionRequest`
+  - [ ] auto-allow only narrow known-safe Atlas maintenance commands
+  - [ ] never broad-match all permission prompts
+- [ ] generate `PermissionDenied`
+  - [ ] record denial
+  - [ ] optionally return retry guidance for safe alternate commands
+- [ ] generate `PostToolUse`
+  - [ ] matcher: `Edit|Write|MultiEdit|Bash`
+  - [ ] run `atlas update` after edits
+  - [ ] capture command/test/build result summaries
+- [ ] generate `PostToolUseFailure`
+  - [ ] capture failure summaries and unresolved errors
+- [ ] generate `Notification`
+  - [ ] optionally notify when Atlas detects stale graph or pending resume state
+- [ ] generate `SubagentStart` and `SubagentStop`
+  - [ ] track delegated work and merge subagent artifacts
+- [ ] generate `TaskCreated` and `TaskCompleted`
+  - [ ] map task lifecycle to Atlas session events
+- [ ] generate `Stop` and `StopFailure`
+  - [ ] persist final turn state or API-error state
+- [ ] generate `InstructionsLoaded`
+  - [ ] record loaded instruction/rule files as session context metadata
+- [ ] generate `ConfigChange`, `CwdChanged`, and `FileChanged`
+  - [ ] refresh repo root, config, and graph freshness signals
+- [ ] generate `WorktreeCreate` and `WorktreeRemove`
+  - [ ] bind Atlas session/worktree identity to temporary worktrees
+- [ ] generate `PreCompact` and `PostCompact`
+  - [ ] save resume snapshot before compaction
+  - [ ] verify snapshot availability after compaction
+- [ ] generate `Elicitation` and `ElicitationResult`
+  - [ ] record MCP user-input requests and responses as bounded events
+- [ ] generate `SessionEnd`
+  - [ ] cleanup transient bridge files and persist final snapshot
+
+#### Codex hooks
+
+Use Codex hook config with event -> matcher group -> command handlers. Current runtime is Bash-focused for tool hooks, and Windows hook execution is not supported.
+
+- [ ] generate `SessionStart`
+  - [ ] matcher: `startup|resume`
+  - [ ] call Atlas startup/resume capture and `atlas status --json`
+- [ ] generate `UserPromptSubmit`
+  - [ ] capture user intent
+  - [ ] ignore matcher because Codex does not support matching for this event
+- [ ] generate `PreToolUse`
+  - [ ] matcher: `Bash`
+  - [ ] inspect `tool_input.command`
+  - [ ] deny risky shell commands before execution when configured
+- [ ] generate `PermissionRequest`
+  - [ ] matcher: `Bash`
+  - [ ] allow only narrow Atlas maintenance commands
+  - [ ] deny or defer destructive commands to normal approval flow
+- [ ] generate `PostToolUse`
+  - [ ] matcher: `Bash`
+  - [ ] summarize `tool_response`
+  - [ ] trigger `atlas update` after commands known to modify files
+  - [ ] add additional context when command output changes generated files or graph freshness
+- [ ] generate `Stop`
+  - [ ] persist final turn state and resume hints
+  - [ ] ignore matcher because Codex does not support matching for this event
+- [ ] support `statusMessage`, `timeout`, and `timeoutSec`
+- [ ] document unsupported current Codex hook gaps:
+  - [ ] non-Bash tool interception incomplete
+  - [ ] MCP, web, write, and non-shell tools may not trigger `PreToolUse` / `PostToolUse`
+  - [ ] `PostToolUse` cannot undo side effects from completed commands
+
+#### Tests and docs
+
+- [ ] add fixture hook configs for all supported hosts
+- [ ] add schema validation tests for generated JSON
+- [ ] add stdin payload tests for each hook script
+- [ ] add redaction tests for command args, prompts, env values, and error output
+- [ ] add idempotent install tests that do not duplicate hooks
+- [ ] add uninstall or disable path for generated hooks
+- [ ] document source references:
+  - [ ] Copilot VS Code hooks: `https://code.visualstudio.com/docs/copilot/customization/hooks`
+  - [ ] GitHub Copilot cloud agent hooks: `https://docs.github.com/en/copilot/how-tos/copilot-on-github/customize-copilot/customize-cloud-agent/use-hooks`
+  - [ ] GitHub Copilot hooks config: `https://docs.github.com/en/copilot/reference/hooks-configuration`
+  - [ ] Claude hooks: `https://code.claude.com/docs/en/hooks-guide`
+  - [ ] Codex hooks: `https://developers.openai.com/codex/hooks`
 
 ---
 
