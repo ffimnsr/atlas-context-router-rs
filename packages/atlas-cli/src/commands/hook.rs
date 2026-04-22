@@ -1,5 +1,5 @@
 use std::collections::BTreeSet;
-use std::io::Read;
+use std::io::{IsTerminal, Read};
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
@@ -1894,8 +1894,18 @@ fn hook_frontend() -> String {
 }
 
 fn read_hook_payload() -> Result<Value> {
+    let stdin = std::io::stdin();
+    let stdin_is_terminal = stdin.is_terminal();
+    read_hook_payload_from(stdin, stdin_is_terminal)
+}
+
+fn read_hook_payload_from<R: Read>(reader: R, stdin_is_terminal: bool) -> Result<Value> {
+    if stdin_is_terminal {
+        return Ok(Value::Null);
+    }
+
     let mut raw = String::new();
-    std::io::stdin()
+    reader
         .take(MAX_HOOK_STDIN_BYTES)
         .read_to_string(&mut raw)
         .context("cannot read hook payload from stdin")?;
@@ -1959,6 +1969,7 @@ fn build_hook_event(session_id: &SessionId, parts: HookEventParts<'_>) -> NewSes
 mod tests {
     use super::*;
 
+    use std::io::{self, Cursor};
     use std::process::Command as ProcessCommand;
 
     use atlas_contentstore::ContentStore;
@@ -1978,11 +1989,37 @@ mod tests {
         }
     }
 
+    struct PanicRead;
+
+    impl Read for PanicRead {
+        fn read(&mut self, _buf: &mut [u8]) -> io::Result<usize> {
+            panic!("reader should not be touched when stdin is a terminal");
+        }
+    }
+
     fn last_hook_payload(graph_db_path: &str, repo: &str, frontend: &str) -> Value {
         let session_store = SessionStore::open(&derive_session_db_path(graph_db_path)).unwrap();
         let session_id = SessionId::derive(repo, "", frontend);
         let events = session_store.list_events(&session_id).unwrap();
         serde_json::from_str(&events.last().unwrap().payload_json).unwrap()
+    }
+
+    #[test]
+    fn read_hook_payload_from_terminal_returns_null_without_reading() {
+        let payload = read_hook_payload_from(PanicRead, true).unwrap();
+        assert_eq!(payload, Value::Null);
+    }
+
+    #[test]
+    fn read_hook_payload_from_parses_json_and_redacts_secrets() {
+        let payload = read_hook_payload_from(
+            Cursor::new(br#"{"token":"secret-value","nested":{"raw":"keep"}}"#),
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(payload["token"], "[REDACTED]");
+        assert_eq!(payload["nested"]["raw"], "keep");
     }
 
     #[test]
