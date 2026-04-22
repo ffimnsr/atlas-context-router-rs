@@ -25,6 +25,41 @@ use super::graph::{
 };
 use super::health::{tool_db_check, tool_debug_graph, tool_doctor, tool_status};
 
+fn response_file_list(response: &serde_json::Value, pointer: &str) -> Vec<String> {
+    response
+        .pointer(pointer)
+        .and_then(|value| value.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|value| value.as_str().map(str::to_owned))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn inject_freshness_warning(
+    response: &mut serde_json::Value,
+    name: &str,
+    repo_root: &str,
+    db_path: &str,
+) {
+    let relevant_files = match name {
+        "query_graph" => response_file_list(response, "/atlas_result_files"),
+        "get_context" => response_file_list(response, "/atlas_context_files"),
+        "get_review_context" | "get_impact_radius" => {
+            response_file_list(response, "/atlas_change_source/resolved_files")
+        }
+        _ => Vec::new(),
+    };
+
+    if let Some(freshness) =
+        super::shared::compute_freshness_warning(repo_root, db_path, &relevant_files)
+    {
+        response["atlas_freshness"] = serde_json::json!(freshness);
+    }
+}
+
 pub fn call(
     name: &str,
     args: Option<&serde_json::Value>,
@@ -56,8 +91,8 @@ fn call_inner(
         "list_graph_stats" => tool_list_graph_stats(db_path, output_format),
         "query_graph" => tool_query_graph(args, db_path, output_format),
         "batch_query_graph" => tool_batch_query_graph(args, db_path, output_format),
-        "get_impact_radius" => tool_get_impact_radius(args, db_path, output_format),
-        "get_review_context" => tool_get_review_context(args, db_path, output_format),
+        "get_impact_radius" => tool_get_impact_radius(args, repo_root, db_path, output_format),
+        "get_review_context" => tool_get_review_context(args, repo_root, db_path, output_format),
         "detect_changes" => tool_detect_changes(args, repo_root, db_path, output_format),
         "build_or_update_graph" => {
             tool_build_or_update_graph(args, repo_root, db_path, output_format)
@@ -97,6 +132,7 @@ fn call_inner(
     }?;
 
     inject_provenance(&mut response, repo_root, db_path);
+    inject_freshness_warning(&mut response, name, repo_root, db_path);
     Ok(response)
 }
 

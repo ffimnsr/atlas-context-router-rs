@@ -1,6 +1,10 @@
 use anyhow::{Context, Result};
+use atlas_core::model::ChangedFile;
 use atlas_core::model::ContextIntent;
+use atlas_parser::ParserRegistry;
+use atlas_repo::{DiffTarget, changed_files, find_repo_root};
 use atlas_store_sqlite::{GraphBuildState, Store};
+use camino::Utf8Path;
 use serde::Serialize;
 
 use crate::output::{OutputFormat, render_serializable};
@@ -156,4 +160,106 @@ pub(super) fn tool_result_value<T: Serialize>(
     }
 
     Ok(response)
+}
+
+#[derive(Serialize)]
+pub(super) struct FreshnessWarning {
+    pub stale: bool,
+    pub changed_files: Vec<String>,
+    pub stale_result_files: Vec<String>,
+    pub warning: String,
+    pub suggested_recovery: Vec<&'static str>,
+}
+
+fn unique_sorted_paths(paths: impl IntoIterator<Item = String>) -> Vec<String> {
+    let mut paths: Vec<String> = paths.into_iter().collect();
+    paths.sort();
+    paths.dedup();
+    paths
+}
+
+fn file_has_graph_facts(store: &Store, path: &str) -> bool {
+    store
+        .nodes_by_file(path)
+        .map(|nodes| !nodes.is_empty())
+        .unwrap_or(false)
+}
+
+fn change_can_affect_graph_facts(
+    store: &Store,
+    registry: &ParserRegistry,
+    change: &ChangedFile,
+) -> bool {
+    registry.supports(&change.path)
+        || change
+            .old_path
+            .as_deref()
+            .is_some_and(|old_path| registry.supports(old_path))
+        || file_has_graph_facts(store, &change.path)
+        || change
+            .old_path
+            .as_deref()
+            .is_some_and(|old_path| file_has_graph_facts(store, old_path))
+}
+
+pub(super) fn compute_freshness_warning(
+    repo_root: &str,
+    db_path: &str,
+    relevant_files: &[String],
+) -> Option<FreshnessWarning> {
+    if relevant_files.is_empty() {
+        return None;
+    }
+
+    let repo_root_path = find_repo_root(Utf8Path::new(repo_root)).ok()?;
+    let changes = changed_files(repo_root_path.as_path(), &DiffTarget::WorkingTree).ok()?;
+    if changes.is_empty() {
+        return None;
+    }
+
+    let store = Store::open(db_path).ok()?;
+    let registry = ParserRegistry::with_defaults();
+
+    let changed_files = unique_sorted_paths(
+        changes
+            .iter()
+            .filter(|change| change_can_affect_graph_facts(&store, &registry, change))
+            .flat_map(|change| std::iter::once(change.path.clone()).chain(change.old_path.clone())),
+    );
+    if changed_files.is_empty() {
+        return None;
+    }
+
+    let stale_result_files = unique_sorted_paths(
+        relevant_files
+            .iter()
+            .filter(|path| changed_files.iter().any(|changed| changed == *path))
+            .cloned(),
+    );
+    if stale_result_files.is_empty() {
+        return None;
+    }
+
+    let warning = if stale_result_files.len() == 1 {
+        format!(
+            "Graph-backed answer may be stale: pending graph-relevant changes affect {}.",
+            stale_result_files[0]
+        )
+    } else {
+        format!(
+            "Graph-backed answer may be stale: pending graph-relevant changes affect {} files in this result.",
+            stale_result_files.len()
+        )
+    };
+
+    Some(FreshnessWarning {
+        stale: true,
+        changed_files,
+        stale_result_files,
+        warning,
+        suggested_recovery: vec![
+            "run build_or_update_graph to refresh the graph",
+            "run detect_changes to inspect pending graph-relevant files",
+        ],
+    })
 }

@@ -72,11 +72,12 @@ impl<'s> RefactorEngine<'s> {
     /// references, checks for local collisions, and builds the full edit set.
     pub fn plan_rename(&self, old_qname: &str, new_name: &str) -> Result<RefactorPlan> {
         validate_identifier(new_name)?;
+        let old_qname = normalize_qn_kind_tokens(old_qname);
 
         // Resolve definition node.
         let target = self
             .store
-            .node_by_qname(old_qname)?
+            .node_by_qname(&old_qname)?
             .ok_or_else(|| AtlasError::Other(format!("symbol not found: `{old_qname}`")))?;
 
         let old_name = &target.name;
@@ -96,7 +97,7 @@ impl<'s> RefactorEngine<'s> {
         }
 
         // Collect inbound references.
-        let inbound = self.store.inbound_edges(old_qname, EDGE_QUERY_LIMIT)?;
+        let inbound = self.store.inbound_edges(&old_qname, EDGE_QUERY_LIMIT)?;
 
         let mut edits: Vec<RefactorEdit> = Vec::new();
         let mut manual_review: Vec<String> = Vec::new();
@@ -195,7 +196,7 @@ impl<'s> RefactorEngine<'s> {
 
         Ok(RefactorPlan {
             operation: RefactorOperation::RenameSymbol {
-                old_qname: old_qname.to_string(),
+                old_qname,
                 new_name: new_name.to_string(),
             },
             edits,
@@ -249,9 +250,10 @@ impl<'s> RefactorEngine<'s> {
     ///
     /// Rejects: insufficient confidence, entrypoint names, unresolved blockers.
     pub fn plan_dead_code_removal(&self, qname: &str) -> Result<RefactorPlan> {
+        let qname = normalize_qn_kind_tokens(qname);
         let node = self
             .store
-            .node_by_qname(qname)?
+            .node_by_qname(&qname)?
             .ok_or_else(|| AtlasError::Other(format!("symbol not found: `{qname}`")))?;
 
         // Reject entrypoints by simple name.
@@ -263,7 +265,7 @@ impl<'s> RefactorEngine<'s> {
         }
 
         // Verify no high-confidence inbound references remain.
-        let inbound = self.store.inbound_edges(qname, EDGE_QUERY_LIMIT)?;
+        let inbound = self.store.inbound_edges(&qname, EDGE_QUERY_LIMIT)?;
         let blocking: Vec<_> = inbound
             .iter()
             .filter(|(_, e)| {
@@ -344,7 +346,7 @@ impl<'s> RefactorEngine<'s> {
 
         Ok(RefactorPlan {
             operation: RefactorOperation::RemoveDeadCode {
-                target_qname: qname.to_string(),
+                target_qname: qname,
             },
             edits,
             affected_files: vec![node.file_path.clone()],
@@ -1106,6 +1108,33 @@ fn contains_word(line: &str, word: &str) -> bool {
         pos += 1;
     }
     false
+}
+
+fn normalize_qn_kind_tokens(qname: &str) -> String {
+    let Some(after_file) = qname.find("::") else {
+        return qname.to_owned();
+    };
+    let (file_part, rest) = qname.split_at(after_file);
+    let rest = &rest[2..];
+
+    let (kind_token, symbol_rest) = if let Some(pos) = rest.find("::") {
+        (&rest[..pos], &rest[pos..])
+    } else {
+        return qname.to_owned();
+    };
+
+    let kind_lower = kind_token.to_ascii_lowercase();
+    let canonical_kind = match kind_lower.as_str() {
+        "function" | "func" => "fn",
+        "meth" => "method",
+        "constant" => "const",
+        other => other,
+    };
+
+    if canonical_kind == kind_token {
+        return qname.to_owned();
+    }
+    format!("{file_part}::{canonical_kind}{symbol_rest}")
 }
 
 #[inline]

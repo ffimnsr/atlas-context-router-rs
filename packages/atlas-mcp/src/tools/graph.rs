@@ -109,6 +109,12 @@ pub(super) fn tool_query_graph(
     response["atlas_relationship_tools"] =
         serde_json::json!(["symbol_neighbors", "traverse_graph", "get_context"]);
     response["atlas_result_count"] = serde_json::json!(compact.len());
+    response["atlas_result_files"] = serde_json::json!(
+        compact
+            .iter()
+            .map(|result| result.node.file.to_owned())
+            .collect::<Vec<_>>()
+    );
     response["atlas_truncated"] = serde_json::json!(compact.len() == limit);
     response["atlas_query_mode"] = serde_json::Value::String(active_query_mode.to_owned());
     if compact.is_empty() && semantic {
@@ -285,9 +291,10 @@ pub(super) fn tool_traverse_graph(
     db_path: &str,
     output_format: crate::output::OutputFormat,
 ) -> Result<serde_json::Value> {
-    let from_qn = str_arg(args, "from_qn")?
-        .ok_or_else(|| anyhow::anyhow!("missing required argument: from_qn"))?
-        .to_owned();
+    let from_qn = normalize_qn_kind_tokens(
+        str_arg(args, "from_qn")?
+            .ok_or_else(|| anyhow::anyhow!("missing required argument: from_qn"))?,
+    );
     let max_depth = u64_arg(args, "max_depth").unwrap_or(3) as u32;
     let max_nodes = u64_arg(args, "max_nodes").unwrap_or(100) as usize;
 
@@ -306,9 +313,10 @@ pub(super) fn tool_symbol_neighbors(
     db_path: &str,
     output_format: crate::output::OutputFormat,
 ) -> Result<serde_json::Value> {
-    let qname = str_arg(args, "qname")?
-        .ok_or_else(|| anyhow::anyhow!("missing required argument: qname"))?
-        .to_owned();
+    let qname = normalize_qn_kind_tokens(
+        str_arg(args, "qname")?
+            .ok_or_else(|| anyhow::anyhow!("missing required argument: qname"))?,
+    );
     let limit = u64_arg(args, "limit").unwrap_or(10) as usize;
 
     let store = open_store(db_path)?;

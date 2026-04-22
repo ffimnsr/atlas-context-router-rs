@@ -80,12 +80,15 @@ pub fn tool_list() -> serde_json::Value {
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "files":     { "type": "array",   "items": { "type": "string" }, "description": "Repo-relative changed file paths" },
+                        "files":     { "type": "array",   "items": { "type": "string" }, "description": "Repo-relative changed file paths. Alternative to base/staged/working_tree." },
+                        "base":      { "type": "string",  "description": "Base git ref (e.g. 'origin/main'). Infers changed files from git diff when files not provided." },
+                        "staged":    { "type": "boolean", "description": "Diff staged changes only (default false). Mutually exclusive with files/base/working_tree." },
+                        "working_tree": { "type": "boolean", "description": "Diff working-tree changes only. Mutually exclusive with files/base/staged." },
                         "max_depth": { "type": "integer", "description": "Traversal depth limit (default 5)" },
                         "max_nodes": { "type": "integer", "description": "Maximum impacted nodes to return (default 200)" },
                         "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
                     },
-                    "required": ["files"]
+                    "required": []
                 }
             },
             {
@@ -94,12 +97,15 @@ pub fn tool_list() -> serde_json::Value {
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "files": { "type": "array", "items": { "type": "string" }, "description": "Repo-relative changed file paths" },
+                        "files": { "type": "array", "items": { "type": "string" }, "description": "Repo-relative changed file paths. Alternative to base/staged/working_tree." },
+                        "base": { "type": "string", "description": "Base git ref (e.g. 'origin/main'). Infers changed files from git diff when files not provided." },
+                        "staged": { "type": "boolean", "description": "Diff staged changes only (default false). Mutually exclusive with files/base/working_tree." },
+                        "working_tree": { "type": "boolean", "description": "Diff working-tree changes only. Mutually exclusive with files/base/staged." },
                         "max_depth": { "type": "integer", "description": "Traversal depth limit (default 3)" },
                         "max_nodes": { "type": "integer", "description": "Maximum impacted nodes to consider (default 200)" },
                         "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
                     },
-                    "required": ["files"]
+                    "required": []
                 }
             },
             {
@@ -110,6 +116,7 @@ pub fn tool_list() -> serde_json::Value {
                     "properties": {
                         "base":   { "type": "string",  "description": "Base ref (e.g. 'origin/main'). Omit to diff working tree." },
                         "staged": { "type": "boolean", "description": "Diff staged changes only (default false)" },
+                        "working_tree": { "type": "boolean", "description": "Diff working-tree changes only. Mutually exclusive with base/staged." },
                         "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
                     },
                     "required": []

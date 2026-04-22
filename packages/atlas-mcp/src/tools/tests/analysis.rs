@@ -46,6 +46,21 @@ fn analyze_safety_includes_provenance() {
 }
 
 #[test]
+fn analyze_safety_normalizes_alias_qname() {
+    let fixture = setup_mcp_fixture();
+    let args = serde_json::json!({
+        "symbol": "src/service.rs::function::compute",
+        "output_format": "json"
+    });
+    let resp = call("analyze_safety", Some(&args), "/repo", &fixture.db_path)
+        .expect("analyze_safety call");
+    let text = unwrap_tool_text(resp);
+    let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
+
+    assert_eq!(v["symbol"], "src/service.rs::fn::compute");
+}
+
+#[test]
 fn analyze_remove_returns_impact_summary() {
     let fixture = setup_mcp_fixture();
     let args =
@@ -98,6 +113,27 @@ fn analyze_remove_includes_provenance() {
     let resp = call("analyze_remove", Some(&args), "/repo", &fixture.db_path)
         .expect("analyze_remove call");
     assert_provenance(&resp, "/repo", &fixture.db_path);
+}
+
+#[test]
+fn analyze_remove_normalizes_alias_qname() {
+    let fixture = setup_mcp_fixture();
+    let args = serde_json::json!({
+        "symbols": ["src/service.rs::function::compute"],
+        "output_format": "json"
+    });
+    let resp = call("analyze_remove", Some(&args), "/repo", &fixture.db_path)
+        .expect("analyze_remove call");
+    let text = unwrap_tool_text(resp);
+    let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
+
+    assert!(
+        v["impacted_symbols"]
+            .as_array()
+            .unwrap_or(&vec![])
+            .iter()
+            .any(|node| node["qn"] == "src/api.rs::fn::handle_request")
+    );
 }
 
 #[test]
@@ -170,4 +206,19 @@ fn analyze_dependency_includes_provenance() {
     let resp = call("analyze_dependency", Some(&args), "/repo", &fixture.db_path)
         .expect("analyze_dependency call");
     assert_provenance(&resp, "/repo", &fixture.db_path);
+}
+
+#[test]
+fn analyze_dependency_normalizes_alias_qname() {
+    let fixture = setup_mcp_fixture();
+    let args = serde_json::json!({
+        "symbol": "src/service.rs::function::compute",
+        "output_format": "json"
+    });
+    let resp = call("analyze_dependency", Some(&args), "/repo", &fixture.db_path)
+        .expect("analyze_dependency call");
+    let text = unwrap_tool_text(resp);
+    let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
+
+    assert_eq!(v["symbol"], "src/service.rs::fn::compute");
 }

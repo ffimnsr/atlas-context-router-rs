@@ -2060,31 +2060,31 @@ Expose CLI analysis commands directly through MCP with compact, agent-oriented d
 
 Make `get_impact_radius` and `get_review_context` accept the same change-source controls as CLI and `detect_changes`.
 
-- [ ] add `base` argument to `get_impact_radius`
-- [ ] add `staged` argument to `get_impact_radius`
-- [ ] add `working_tree` argument to `get_impact_radius`
-- [ ] add `base` argument to `get_review_context`
-- [ ] add `staged` argument to `get_review_context`
-- [ ] add `working_tree` argument to `get_review_context`
-- [ ] keep explicit `files` input supported for direct callers
-- [ ] reject ambiguous combinations with clear validation errors
-- [ ] reuse `detect_changes` change detection logic instead of duplicating git behavior
-- [ ] include resolved changed-file set and source mode in response metadata
-- [ ] add tests for explicit files, base diff, staged diff, working-tree diff, empty diff, and invalid argument combinations
+- [x] add `base` argument to `get_impact_radius`
+- [x] add `staged` argument to `get_impact_radius`
+- [x] add `working_tree` argument to `get_impact_radius`
+- [x] add `base` argument to `get_review_context`
+- [x] add `staged` argument to `get_review_context`
+- [x] add `working_tree` argument to `get_review_context`
+- [x] keep explicit `files` input supported for direct callers
+- [x] reject ambiguous combinations with clear validation errors
+- [x] reuse `detect_changes` change detection logic instead of duplicating git behavior
+- [x] include resolved changed-file set and source mode in response metadata
+- [x] add tests for explicit files, base diff, staged diff, working-tree diff, empty diff, and invalid argument combinations
 
 ### MCP11.1 — Graph freshness warnings
 
 Warn agents when graph-backed answers may be stale for changed code files.
 
-- [ ] compare queried files/symbol files against changed files from `detect_changes`
-- [ ] emit freshness warnings in:
-  - [ ] `query_graph`
-  - [ ] `get_context`
-  - [ ] `get_review_context`
-  - [ ] `get_impact_radius`
-- [ ] warn only for code/path changes that can affect graph facts; do not warn for zero-node files like `.gitignore` unless relevant
-- [ ] include suggested recovery, for example `build_or_update_graph`
-- [ ] add tests for clean repo, changed code file, changed non-code zero-node file, and stale changed symbol
+- [x] compare queried files/symbol files against changed files from `detect_changes`
+- [x] emit freshness warnings in:
+  - [x] `query_graph`
+  - [x] `get_context`
+  - [x] `get_review_context`
+  - [x] `get_impact_radius`
+- [x] warn only for code/path changes that can affect graph facts; do not warn for zero-node files like `.gitignore` unless relevant
+- [x] include suggested recovery, for example `build_or_update_graph`
+- [x] add tests for clean repo, changed code file, changed non-code zero-node file, and stale changed symbol
 
 ### MCP12 — Context detail controls
 
@@ -2521,8 +2521,8 @@ Exit criteria:
   - [x] method-like names
 - [x] fallback to symbol search + context expansion
 - [x] resolve by qualified name
-  - [ ] NOTE: qualified-name resolution exists, but alias normalization must be implemented on existing CLI/MCP tools so `::function::` and other public names work wherever exact QNs are accepted
-  - [ ] NOTE: public resolver tooling is still needed so agents do not memorize internal encoding or retry failed calls manually
+  - [x] NOTE: qualified-name resolution exists, but alias normalization must be implemented on existing CLI/MCP tools so `::function::` and other public names work wherever exact QNs are accepted
+  - [x] NOTE: public resolver tooling is still needed so agents do not memorize internal encoding or retry failed calls manually
 - [x] resolve by exact symbol name
 - [x] resolve by file path
 - [x] resolve by ranked search if ambiguous

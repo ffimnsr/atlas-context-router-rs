@@ -1,11 +1,12 @@
 use anyhow::{Context, Result};
-use atlas_core::model::{ContextIntent, ContextRequest, ContextTarget};
+use atlas_core::model::{ChangeType, ChangedFile, ContextIntent, ContextRequest, ContextTarget};
 use atlas_engine::{BuildOptions, UpdateOptions, UpdateTarget, build_graph, update_graph};
-use atlas_repo::{DiffTarget, changed_files, find_repo_root};
+use atlas_repo::{DiffTarget, changed_files, find_repo_root, repo_relative};
 use atlas_review::{ContextEngine, query_parser};
 use atlas_store_sqlite::{BuildFinishStats, GraphBuildState, Store};
 use camino::Utf8Path;
 use serde::Serialize;
+use std::collections::BTreeSet;
 
 use crate::context::{package_context_result, package_impact};
 use crate::session_tools::derive_content_db_path;
@@ -15,37 +16,192 @@ use super::shared::{
     string_array_arg, tool_result_value, u64_arg,
 };
 
+#[derive(Clone, Copy)]
+enum ChangeSourceMode {
+    ExplicitFiles,
+    BaseRef,
+    Staged,
+    WorkingTree,
+}
+
+impl ChangeSourceMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::ExplicitFiles => "explicit_files",
+            Self::BaseRef => "base_ref",
+            Self::Staged => "staged",
+            Self::WorkingTree => "working_tree",
+        }
+    }
+}
+
+struct ResolvedChangeSource {
+    mode: ChangeSourceMode,
+    files: Vec<String>,
+    changes: Vec<ChangedFile>,
+    deleted_files: Vec<String>,
+    base: Option<String>,
+    staged: bool,
+    working_tree: bool,
+}
+
+fn normalize_explicit_files(repo_root: &Utf8Path, files: Vec<String>) -> Vec<String> {
+    files
+        .into_iter()
+        .map(|path| {
+            let utf8_path = Utf8Path::new(&path);
+            if utf8_path.is_absolute() {
+                repo_relative(repo_root, utf8_path)
+                    .unwrap_or_else(|_| utf8_path.to_owned())
+                    .to_string()
+            } else {
+                path
+            }
+        })
+        .collect()
+}
+
+fn resolve_diff_target(
+    base: Option<String>,
+    staged: bool,
+    working_tree: bool,
+) -> (ChangeSourceMode, DiffTarget) {
+    if staged {
+        (ChangeSourceMode::Staged, DiffTarget::Staged)
+    } else if let Some(base_ref) = base {
+        (ChangeSourceMode::BaseRef, DiffTarget::BaseRef(base_ref))
+    } else {
+        let _ = working_tree;
+        (ChangeSourceMode::WorkingTree, DiffTarget::WorkingTree)
+    }
+}
+
+fn resolve_change_source(
+    args: Option<&serde_json::Value>,
+    repo_root: &str,
+    allow_explicit_files: bool,
+) -> Result<ResolvedChangeSource> {
+    let base = str_arg(args, "base")?.map(str::to_owned);
+    let staged = bool_arg(args, "staged").unwrap_or(false);
+    let working_tree = bool_arg(args, "working_tree").unwrap_or(false);
+    let files = if allow_explicit_files {
+        string_array_arg(args, "files")?
+    } else {
+        Vec::new()
+    };
+
+    if !files.is_empty() && (base.is_some() || staged || working_tree) {
+        return Err(anyhow::anyhow!(
+            "ambiguous change source: provide either files or one of base/staged/working_tree"
+        ));
+    }
+    if staged && working_tree {
+        return Err(anyhow::anyhow!(
+            "ambiguous change source: staged and working_tree cannot be combined"
+        ));
+    }
+    if base.is_some() && staged {
+        return Err(anyhow::anyhow!(
+            "ambiguous change source: base and staged cannot be combined"
+        ));
+    }
+    if base.is_some() && working_tree {
+        return Err(anyhow::anyhow!(
+            "ambiguous change source: base and working_tree cannot be combined"
+        ));
+    }
+
+    if !files.is_empty() {
+        let files = if files.iter().any(|path| Utf8Path::new(path).is_absolute()) {
+            let repo_root_path =
+                find_repo_root(Utf8Path::new(repo_root)).context("cannot find git repo root")?;
+            normalize_explicit_files(repo_root_path.as_path(), files)
+        } else {
+            files
+        };
+        return Ok(ResolvedChangeSource {
+            mode: ChangeSourceMode::ExplicitFiles,
+            files,
+            changes: Vec::new(),
+            deleted_files: Vec::new(),
+            base,
+            staged,
+            working_tree,
+        });
+    }
+
+    let repo_root_path =
+        find_repo_root(Utf8Path::new(repo_root)).context("cannot find git repo root")?;
+    let repo_root_path = repo_root_path.as_path();
+
+    let (mode, diff_target) = resolve_diff_target(base.clone(), staged, working_tree);
+    let changes =
+        changed_files(repo_root_path, &diff_target).context("cannot detect changed files")?;
+    let files: Vec<String> = changes
+        .iter()
+        .filter(|cf| cf.change_type != ChangeType::Deleted)
+        .map(|cf| cf.path.clone())
+        .collect();
+    let deleted_files: Vec<String> = changes
+        .iter()
+        .filter(|cf| cf.change_type == ChangeType::Deleted)
+        .map(|cf| cf.path.clone())
+        .collect();
+
+    Ok(ResolvedChangeSource {
+        mode,
+        files,
+        changes,
+        deleted_files,
+        base,
+        staged,
+        working_tree,
+    })
+}
+
+fn inject_change_source_metadata(
+    response: &mut serde_json::Value,
+    resolved: &ResolvedChangeSource,
+) {
+    response["atlas_change_source"] = serde_json::json!({
+        "mode": resolved.mode.as_str(),
+        "resolved_files": &resolved.files,
+        "deleted_files": &resolved.deleted_files,
+        "base": &resolved.base,
+        "staged": resolved.staged,
+        "working_tree": resolved.working_tree,
+    });
+}
+
 pub(super) fn tool_get_impact_radius(
     args: Option<&serde_json::Value>,
+    repo_root: &str,
     db_path: &str,
     output_format: crate::output::OutputFormat,
 ) -> Result<serde_json::Value> {
-    let files = string_array_arg(args, "files")?;
-    if files.is_empty() {
-        return Err(anyhow::anyhow!("missing required argument: files"));
-    }
+    let resolved = resolve_change_source(args, repo_root, true)?;
     let max_depth = u64_arg(args, "max_depth").unwrap_or(5) as u32;
     let max_nodes = u64_arg(args, "max_nodes").unwrap_or(200) as usize;
 
     let store = open_store(db_path)?;
-    let file_refs: Vec<&str> = files.iter().map(String::as_str).collect();
+    let file_refs: Vec<&str> = resolved.files.iter().map(String::as_str).collect();
     let result = store
         .impact_radius(&file_refs, max_depth, max_nodes)
         .context("impact_radius query failed")?;
 
-    let packaged = package_impact(&result, &files);
-    tool_result_value(&packaged, output_format)
+    let packaged = package_impact(&result, &resolved.files);
+    let mut response = tool_result_value(&packaged, output_format)?;
+    inject_change_source_metadata(&mut response, &resolved);
+    Ok(response)
 }
 
 pub(super) fn tool_get_review_context(
     args: Option<&serde_json::Value>,
+    repo_root: &str,
     db_path: &str,
     output_format: crate::output::OutputFormat,
 ) -> Result<serde_json::Value> {
-    let files = string_array_arg(args, "files")?;
-    if files.is_empty() {
-        return Err(anyhow::anyhow!("missing required argument: files"));
-    }
+    let resolved = resolve_change_source(args, repo_root, true)?;
     let max_depth = u64_arg(args, "max_depth").unwrap_or(3) as u32;
     let max_nodes = u64_arg(args, "max_nodes").unwrap_or(200) as usize;
 
@@ -53,14 +209,18 @@ pub(super) fn tool_get_review_context(
     let engine = ContextEngine::new(&store);
     let request = ContextRequest {
         intent: ContextIntent::Review,
-        target: ContextTarget::ChangedFiles { paths: files },
+        target: ContextTarget::ChangedFiles {
+            paths: resolved.files.clone(),
+        },
         max_nodes: Some(max_nodes),
         depth: Some(max_depth),
         ..ContextRequest::default()
     };
     let result = engine.build(&request).context("context engine failed")?;
     let packaged = package_context_result(&result);
-    tool_result_value(&packaged, output_format)
+    let mut response = tool_result_value(&packaged, output_format)?;
+    inject_change_source_metadata(&mut response, &resolved);
+    Ok(response)
 }
 
 pub(super) fn tool_detect_changes(
@@ -69,22 +229,8 @@ pub(super) fn tool_detect_changes(
     db_path: &str,
     output_format: crate::output::OutputFormat,
 ) -> Result<serde_json::Value> {
-    let base = str_arg(args, "base")?.map(str::to_owned);
-    let staged = bool_arg(args, "staged").unwrap_or(false);
-
-    let repo_root_path =
-        find_repo_root(Utf8Path::new(repo_root)).context("cannot find git repo root")?;
-
-    let target = if staged {
-        DiffTarget::Staged
-    } else if let Some(ref b) = base {
-        DiffTarget::BaseRef(b.clone())
-    } else {
-        DiffTarget::WorkingTree
-    };
-
-    let changes =
-        changed_files(repo_root_path.as_path(), &target).context("cannot detect changed files")?;
+    let resolved = resolve_change_source(args, repo_root, false)?;
+    let changes = &resolved.changes;
     let store_opt = Store::open(db_path).ok();
 
     #[derive(Serialize)]
@@ -119,7 +265,9 @@ pub(super) fn tool_detect_changes(
         })
         .collect();
 
-    tool_result_value(&entries, output_format)
+    let mut response = tool_result_value(&entries, output_format)?;
+    inject_change_source_metadata(&mut response, &resolved);
+    Ok(response)
 }
 
 pub(super) fn tool_build_or_update_graph(
@@ -628,6 +776,18 @@ pub(super) fn tool_get_context(
 
     let packaged = package_context_result(&result);
     let mut response = tool_result_value(&packaged, output_format)?;
+    let context_files: Vec<String> = match &request.target {
+        ContextTarget::ChangedFiles { paths } => paths.clone(),
+        ContextTarget::FilePath { path } => vec![path.clone()],
+        _ => Vec::new(),
+    }
+    .into_iter()
+    .chain(result.files.iter().map(|file| file.path.clone()))
+    .chain(result.nodes.iter().map(|node| node.node.file_path.clone()))
+    .collect::<BTreeSet<_>>()
+    .into_iter()
+    .collect();
+    response["atlas_context_files"] = serde_json::json!(context_files);
     if result.nodes.is_empty() {
         response["atlas_error_code"] = serde_json::Value::String("node_not_found".to_owned());
         response["atlas_message"] =

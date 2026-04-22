@@ -1059,6 +1059,89 @@ fn refactor_rename_named_flags_support_dry_run() {
 }
 
 #[test]
+fn refactor_rename_accepts_alias_qname() {
+    let repo = setup_repo(&[(
+        "src/lib.rs",
+        "pub fn helper() -> i32 {\n    1\n}\n\npub fn caller() -> i32 {\n    helper()\n}\n",
+    )]);
+
+    run_atlas(repo.path(), &["init"]);
+    run_atlas(repo.path(), &["build"]);
+
+    let result = read_json_data_output(
+        "refactor_rename",
+        run_atlas(
+            repo.path(),
+            &[
+                "--json",
+                "refactor",
+                "rename",
+                "--symbol",
+                "src/lib.rs::function::helper",
+                "--to",
+                "helper_renamed",
+                "--dry-run",
+            ],
+        ),
+    );
+
+    assert_eq!(
+        result["plan"]["operation"]["kind"],
+        json!("rename_symbol")
+    );
+    assert_eq!(
+        result["plan"]["operation"]["old_qname"],
+        json!("src/lib.rs::fn::helper")
+    );
+}
+
+#[test]
+fn refactor_remove_dead_accepts_alias_qname() {
+    let repo = setup_repo(&[(
+        "src/lib.rs",
+        "pub fn caller() -> i32 {\n    1\n}\n\nfn unused_helper() -> i32 {\n    2\n}\n",
+    )]);
+
+    run_atlas(repo.path(), &["init"]);
+    run_atlas(repo.path(), &["build"]);
+
+    let result = read_json_data_output(
+        "refactor_remove_dead",
+        run_atlas(
+            repo.path(),
+            &[
+                "--json",
+                "refactor",
+                "remove-dead",
+                "src/lib.rs::function::unused_helper",
+                "--dry-run",
+            ],
+        ),
+    );
+
+    assert_eq!(result["dry_run"], json!(true));
+    assert_eq!(
+        result["plan"]["operation"]["kind"],
+        json!("remove_dead_code")
+    );
+    assert_eq!(
+        result["plan"]["operation"]["target_qname"],
+        json!("src/lib.rs::fn::unused_helper")
+    );
+    assert!(
+        result["patches"]
+            .as_array()
+            .expect("patch array")
+            .iter()
+            .any(|patch| patch["unified_diff"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("unused_helper")),
+        "remove-dead dry-run must include removed symbol in patch: {result:?}"
+    );
+}
+
+#[test]
 fn serve_command_handles_stdio_jsonrpc_flow_end_to_end() {
     let repo = setup_fixture_repo();
 

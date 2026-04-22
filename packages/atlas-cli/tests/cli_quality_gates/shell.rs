@@ -107,6 +107,32 @@ fn shell_traverse_returns_reachable_nodes() {
 }
 
 #[test]
+fn shell_neighbors_accepts_alias_qname() {
+    let repo = setup_fixture_repo();
+    run_atlas(repo.path(), &["init"]);
+    run_atlas(repo.path(), &["build"]);
+
+    let stdout = run_shell_with_input(
+        repo.path(),
+        b"/neighbors src/lib.rs::meth::Greeter::greet_twice\nexit\n",
+    );
+    assert!(stdout.contains("src/lib.rs::method::Greeter::greet_twice"));
+}
+
+#[test]
+fn shell_traverse_accepts_alias_qname() {
+    let repo = setup_fixture_repo();
+    run_atlas(repo.path(), &["init"]);
+    run_atlas(repo.path(), &["build"]);
+
+    let stdout = run_shell_with_input(
+        repo.path(),
+        b"/traverse src/lib.rs::meth::Greeter::greet_twice\nexit\n",
+    );
+    assert!(stdout.contains("src/lib.rs::method::Greeter::greet_twice"));
+}
+
+#[test]
 fn shell_changes_reports_no_changes_on_clean_tree() {
     let repo = setup_fixture_repo();
     run_atlas(repo.path(), &["init"]);

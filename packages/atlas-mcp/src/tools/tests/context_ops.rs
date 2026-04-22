@@ -327,3 +327,326 @@ fn get_context_includes_provenance() {
     let resp = call("get_context", Some(&args), "/repo", &fixture.db_path).expect("get_context");
     assert_provenance(&resp, "/repo", &fixture.db_path);
 }
+
+#[test]
+fn get_context_changed_code_file_emits_freshness_warning() {
+    let fixture = setup_git_mcp_fixture();
+    write_repo_file(
+        std::path::Path::new(&fixture.repo_root),
+        "src/service.rs",
+        "pub fn compute() -> i32 { 42 }\n",
+    );
+    let args = serde_json::json!({ "query": "compute", "output_format": "json" });
+
+    let resp = call(
+        "get_context",
+        Some(&args),
+        &fixture.repo_root,
+        &fixture.db_path,
+    )
+    .expect("get_context");
+
+    assert_eq!(
+        resp.pointer("/atlas_freshness/stale")
+            .and_then(|value| value.as_bool()),
+        Some(true)
+    );
+    assert_eq!(
+        resp.pointer("/atlas_freshness/stale_result_files/0")
+            .and_then(|value| value.as_str()),
+        Some("src/service.rs")
+    );
+}
+
+#[test]
+fn get_review_context_changed_code_file_emits_freshness_warning() {
+    let fixture = setup_git_mcp_fixture();
+    write_repo_file(
+        std::path::Path::new(&fixture.repo_root),
+        "src/service.rs",
+        "pub fn compute() -> i32 { 77 }\n",
+    );
+    let args = serde_json::json!({ "working_tree": true, "output_format": "json" });
+
+    let resp = call(
+        "get_review_context",
+        Some(&args),
+        &fixture.repo_root,
+        &fixture.db_path,
+    )
+    .expect("get_review_context");
+
+    assert_eq!(
+        resp.pointer("/atlas_freshness/stale")
+            .and_then(|value| value.as_bool()),
+        Some(true)
+    );
+    assert_eq!(
+        resp.pointer("/atlas_freshness/stale_result_files/0")
+            .and_then(|value| value.as_str()),
+        Some("src/service.rs")
+    );
+}
+
+#[test]
+fn get_impact_radius_changed_code_file_emits_freshness_warning() {
+    let fixture = setup_git_mcp_fixture();
+    write_repo_file(
+        std::path::Path::new(&fixture.repo_root),
+        "src/service.rs",
+        "pub fn compute() -> i32 { 88 }\n",
+    );
+    let args = serde_json::json!({ "working_tree": true, "output_format": "json" });
+
+    let resp = call(
+        "get_impact_radius",
+        Some(&args),
+        &fixture.repo_root,
+        &fixture.db_path,
+    )
+    .expect("get_impact_radius");
+
+    assert_eq!(
+        resp.pointer("/atlas_freshness/stale")
+            .and_then(|value| value.as_bool()),
+        Some(true)
+    );
+    assert_eq!(
+        resp.pointer("/atlas_freshness/stale_result_files/0")
+            .and_then(|value| value.as_str()),
+        Some("src/service.rs")
+    );
+}
+
+#[test]
+fn get_impact_radius_accepts_explicit_files_and_reports_change_source_metadata() {
+    let fixture = setup_mcp_fixture();
+    let args = serde_json::json!({
+        "files": ["src/service.rs"],
+        "output_format": "json"
+    });
+
+    let resp = call("get_impact_radius", Some(&args), "/repo", &fixture.db_path)
+        .expect("get_impact_radius");
+    let text = unwrap_tool_text(resp.clone());
+    let value: serde_json::Value = serde_json::from_str(&text).expect("parse json");
+
+    assert_eq!(
+        value.get("changed_file_count").and_then(|n| n.as_u64()),
+        Some(1)
+    );
+    assert_eq!(
+        resp.pointer("/atlas_change_source/mode")
+            .and_then(|value| value.as_str()),
+        Some("explicit_files")
+    );
+    assert_eq!(
+        resp.pointer("/atlas_change_source/resolved_files/0")
+            .and_then(|value| value.as_str()),
+        Some("src/service.rs")
+    );
+}
+
+#[test]
+fn get_review_context_accepts_explicit_files_and_reports_change_source_metadata() {
+    let fixture = setup_mcp_fixture();
+    let args = serde_json::json!({
+        "files": ["src/service.rs"],
+        "output_format": "json"
+    });
+
+    let resp = call("get_review_context", Some(&args), "/repo", &fixture.db_path)
+        .expect("get_review_context");
+    let text = unwrap_tool_text(resp.clone());
+    let value: serde_json::Value = serde_json::from_str(&text).expect("parse json");
+
+    assert_eq!(
+        value.get("intent").and_then(|intent| intent.as_str()),
+        Some("review")
+    );
+    assert_eq!(
+        resp.pointer("/atlas_change_source/mode")
+            .and_then(|value| value.as_str()),
+        Some("explicit_files")
+    );
+    assert_eq!(
+        resp.pointer("/atlas_change_source/resolved_files/0")
+            .and_then(|value| value.as_str()),
+        Some("src/service.rs")
+    );
+}
+
+#[test]
+fn get_impact_radius_resolves_base_diff_files() {
+    let fixture = setup_git_mcp_fixture();
+    write_repo_file(
+        std::path::Path::new(&fixture.repo_root),
+        "src/service.rs",
+        "pub fn compute() -> i32 { 2 }\n",
+    );
+    let args = serde_json::json!({ "base": "HEAD", "output_format": "json" });
+
+    let resp = call(
+        "get_impact_radius",
+        Some(&args),
+        &fixture.repo_root,
+        &fixture.db_path,
+    )
+    .expect("get_impact_radius");
+    let text = unwrap_tool_text(resp.clone());
+    let value: serde_json::Value = serde_json::from_str(&text).expect("parse json");
+
+    assert_eq!(
+        value.get("changed_file_count").and_then(|n| n.as_u64()),
+        Some(1)
+    );
+    assert_eq!(
+        resp.pointer("/atlas_change_source/mode")
+            .and_then(|value| value.as_str()),
+        Some("base_ref")
+    );
+    assert_eq!(
+        resp.pointer("/atlas_change_source/resolved_files/0")
+            .and_then(|value| value.as_str()),
+        Some("src/service.rs")
+    );
+}
+
+#[test]
+fn get_review_context_resolves_staged_diff_files() {
+    let fixture = setup_git_mcp_fixture();
+    let repo_root = std::path::Path::new(&fixture.repo_root);
+    write_repo_file(
+        repo_root,
+        "src/service.rs",
+        "pub fn compute() -> i32 { 3 }\n",
+    );
+    git_run(repo_root, &["add", "src/service.rs"]);
+    let args = serde_json::json!({ "staged": true, "output_format": "json" });
+
+    let resp = call(
+        "get_review_context",
+        Some(&args),
+        &fixture.repo_root,
+        &fixture.db_path,
+    )
+    .expect("get_review_context");
+    let text = unwrap_tool_text(resp.clone());
+    let value: serde_json::Value = serde_json::from_str(&text).expect("parse json");
+
+    assert_eq!(
+        value.get("intent").and_then(|intent| intent.as_str()),
+        Some("review")
+    );
+    assert_eq!(
+        resp.pointer("/atlas_change_source/mode")
+            .and_then(|value| value.as_str()),
+        Some("staged")
+    );
+    assert_eq!(
+        resp.pointer("/atlas_change_source/resolved_files/0")
+            .and_then(|value| value.as_str()),
+        Some("src/service.rs")
+    );
+}
+
+#[test]
+fn get_review_context_resolves_working_tree_diff_files() {
+    let fixture = setup_git_mcp_fixture();
+    write_repo_file(
+        std::path::Path::new(&fixture.repo_root),
+        "src/service.rs",
+        "pub fn compute() -> i32 { 4 }\n",
+    );
+    let args = serde_json::json!({ "working_tree": true, "output_format": "json" });
+
+    let resp = call(
+        "get_review_context",
+        Some(&args),
+        &fixture.repo_root,
+        &fixture.db_path,
+    )
+    .expect("get_review_context");
+
+    assert_eq!(
+        resp.pointer("/atlas_change_source/mode")
+            .and_then(|value| value.as_str()),
+        Some("working_tree")
+    );
+    assert_eq!(
+        resp.pointer("/atlas_change_source/resolved_files/0")
+            .and_then(|value| value.as_str()),
+        Some("src/service.rs")
+    );
+}
+
+#[test]
+fn get_impact_radius_empty_diff_returns_empty_result() {
+    let fixture = setup_git_mcp_fixture();
+    let args = serde_json::json!({ "working_tree": true, "output_format": "json" });
+
+    let resp = call(
+        "get_impact_radius",
+        Some(&args),
+        &fixture.repo_root,
+        &fixture.db_path,
+    )
+    .expect("get_impact_radius");
+    let text = unwrap_tool_text(resp.clone());
+    let value: serde_json::Value = serde_json::from_str(&text).expect("parse json");
+
+    assert_eq!(
+        value.get("changed_file_count").and_then(|n| n.as_u64()),
+        Some(0)
+    );
+    assert_eq!(
+        value.get("impacted_file_count").and_then(|n| n.as_u64()),
+        Some(0)
+    );
+    assert_eq!(
+        resp.pointer("/atlas_change_source/mode")
+            .and_then(|value| value.as_str()),
+        Some("working_tree")
+    );
+    assert_eq!(
+        resp.pointer("/atlas_change_source/resolved_files")
+            .and_then(|value| value.as_array())
+            .map(|items| items.len()),
+        Some(0)
+    );
+}
+
+#[test]
+fn change_source_invalid_combinations_return_clear_errors() {
+    let fixture = setup_mcp_fixture();
+
+    let impact_err = call(
+        "get_impact_radius",
+        Some(&serde_json::json!({
+            "files": ["src/service.rs"],
+            "staged": true
+        })),
+        "/repo",
+        &fixture.db_path,
+    )
+    .expect_err("impact must reject ambiguous change source");
+    assert!(impact_err.to_string().contains(
+        "ambiguous change source: provide either files or one of base/staged/working_tree"
+    ));
+
+    let review_err = call(
+        "get_review_context",
+        Some(&serde_json::json!({
+            "base": "HEAD",
+            "working_tree": true
+        })),
+        "/repo",
+        &fixture.db_path,
+    )
+    .expect_err("review must reject ambiguous change source");
+    assert!(
+        review_err
+            .to_string()
+            .contains("ambiguous change source: base and working_tree cannot be combined")
+    );
+}

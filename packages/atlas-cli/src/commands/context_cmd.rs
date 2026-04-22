@@ -8,7 +8,9 @@ use atlas_core::SearchQuery;
 use atlas_core::model::{ContextIntent, ContextRequest, ContextResult, ContextTarget};
 use atlas_impact::analyze as advanced_impact;
 use atlas_repo::{DiffTarget, changed_files, find_repo_root, repo_relative};
-use atlas_review::{ContextEngine, assemble_review_context, query_parser};
+use atlas_review::{
+    ContextEngine, assemble_review_context, normalize_qn_kind_tokens, query_parser,
+};
 use atlas_search as search;
 use atlas_search::semantic as sem;
 use atlas_store_sqlite::Store;
@@ -874,12 +876,13 @@ fn render_shell_review_output(store: &Store, repo: &str, args: &ShellArgs) -> Re
 }
 
 fn render_shell_neighbors_output(store: &Store, qname: &str) -> Result<String> {
-    let nbhd = sem::symbol_neighborhood(store, qname, 10).context("symbol_neighborhood failed")?;
+    let qname = normalize_qn_kind_tokens(qname);
+    let nbhd = sem::symbol_neighborhood(store, &qname, 10).context("symbol_neighborhood failed")?;
     let caller_pairs = store
-        .direct_callers(qname, 10)
+        .direct_callers(&qname, 10)
         .context("direct_callers failed")?;
     let callee_pairs = store
-        .direct_callees(qname, 10)
+        .direct_callees(&qname, 10)
         .context("direct_callees failed")?;
 
     let mut lines = vec![colorize(&format!("Neighbors of `{qname}`:"), "1;36")];
@@ -960,7 +963,7 @@ fn render_shell_neighbors_output(store: &Store, qname: &str) -> Result<String> {
 
 fn render_shell_traverse_output(store: &Store, args: &ShellArgs) -> Result<String> {
     let qname = match args.positionals.first() {
-        Some(q) => q.clone(),
+        Some(q) => normalize_qn_kind_tokens(q),
         None => {
             return Ok("Usage: /traverse <qualified_name> [--depth N] [--max-nodes N]".to_string());
         }

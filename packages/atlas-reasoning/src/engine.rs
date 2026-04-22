@@ -82,11 +82,17 @@ impl<'s> ReasoningEngine<'s> {
         max_depth: Option<u32>,
         max_nodes: Option<usize>,
     ) -> Result<RemovalImpactResult> {
+        let normalized_seed_qnames: Vec<String> = seed_qnames
+            .iter()
+            .map(|qname| normalize_qn_kind_tokens(qname))
+            .collect();
+        let normalized_seed_refs: Vec<&str> =
+            normalized_seed_qnames.iter().map(String::as_str).collect();
         let depth = max_depth.unwrap_or(DEFAULT_IMPACT_DEPTH);
         let cap = max_nodes.unwrap_or(DEFAULT_IMPACT_NODES);
 
         // Load seed nodes.
-        let seed_nodes = self.load_nodes(seed_qnames)?;
+        let seed_nodes = self.load_nodes(&normalized_seed_refs)?;
         if seed_nodes.is_empty() {
             return Ok(RemovalImpactResult {
                 seed: vec![],
@@ -98,7 +104,7 @@ impl<'s> ReasoningEngine<'s> {
                 warnings: vec![ReasoningWarning {
                     message: format!(
                         "none of {} seed qualified names resolved to graph nodes",
-                        seed_qnames.len()
+                        normalized_seed_refs.len()
                     ),
                     confidence: ConfidenceTier::High,
                 }],
@@ -110,9 +116,9 @@ impl<'s> ReasoningEngine<'s> {
         }
 
         // BFS from seeds through inbound & outbound edges up to `depth`.
-        let (impacted, relevant_edges) = self.bfs_impact(seed_qnames, depth, cap)?;
+        let (impacted, relevant_edges) = self.bfs_impact(&normalized_seed_refs, depth, cap)?;
 
-        let seed_set: HashSet<&str> = seed_qnames.iter().copied().collect();
+        let seed_set: HashSet<&str> = normalized_seed_refs.iter().copied().collect();
 
         // Classify each reachable node.
         let impacted_symbols: Vec<ImpactedNode> = impacted
@@ -224,7 +230,8 @@ impl<'s> ReasoningEngine<'s> {
     /// Factors: fan-in, fan-out, visibility (public API), test adjacency,
     /// self-containment, unresolved edges.
     pub fn score_refactor_safety(&self, qname: &str) -> Result<RefactorSafetyResult> {
-        let node = match self.store.node_by_qname(qname)? {
+        let qname = normalize_qn_kind_tokens(qname);
+        let node = match self.store.node_by_qname(&qname)? {
             Some(n) => n,
             None => {
                 return Err(atlas_core::AtlasError::Other(format!(
@@ -233,9 +240,9 @@ impl<'s> ReasoningEngine<'s> {
             }
         };
 
-        let inbound = self.store.inbound_edges(qname, EDGE_QUERY_LIMIT)?;
-        let outbound = self.store.outbound_edges(qname, EDGE_QUERY_LIMIT)?;
-        let tests = self.store.test_neighbors(qname, EDGE_QUERY_LIMIT)?;
+        let inbound = self.store.inbound_edges(&qname, EDGE_QUERY_LIMIT)?;
+        let outbound = self.store.outbound_edges(&qname, EDGE_QUERY_LIMIT)?;
+        let tests = self.store.test_neighbors(&qname, EDGE_QUERY_LIMIT)?;
 
         let fan_in = inbound.len();
         let fan_out = outbound.len();
@@ -313,7 +320,8 @@ impl<'s> ReasoningEngine<'s> {
     /// Verifies zero references in graph. Flags dynamic/reflective uncertainty
     /// for low-confidence inbound edges.
     pub fn check_dependency_removal(&self, qname: &str) -> Result<DependencyRemovalResult> {
-        let inbound = self.store.inbound_edges(qname, EDGE_QUERY_LIMIT)?;
+        let qname = normalize_qn_kind_tokens(qname);
+        let inbound = self.store.inbound_edges(&qname, EDGE_QUERY_LIMIT)?;
 
         // Filter to semantic reference edges only (not test/contains hierarchy).
         let blocking: Vec<Node> = inbound
@@ -374,7 +382,7 @@ impl<'s> ReasoningEngine<'s> {
         }
 
         Ok(DependencyRemovalResult {
-            target_qname: qname.to_owned(),
+            target_qname: qname,
             removable,
             blocking_references: blocking,
             evidence_edges: inbound.into_iter().map(|(_, e)| e).collect(),
@@ -396,7 +404,8 @@ impl<'s> ReasoningEngine<'s> {
         qname: &str,
         new_name: &str,
     ) -> Result<RenamePreviewResult> {
-        let target = match self.store.node_by_qname(qname)? {
+        let qname = normalize_qn_kind_tokens(qname);
+        let target = match self.store.node_by_qname(&qname)? {
             Some(n) => n,
             None => {
                 return Err(atlas_core::AtlasError::Other(format!(
@@ -405,7 +414,7 @@ impl<'s> ReasoningEngine<'s> {
             }
         };
 
-        let inbound = self.store.inbound_edges(qname, EDGE_QUERY_LIMIT)?;
+        let inbound = self.store.inbound_edges(&qname, EDGE_QUERY_LIMIT)?;
 
         let mut affected_references: Vec<RenameReference> = Vec::new();
         let mut affected_files: HashSet<String> = HashSet::new();
@@ -478,7 +487,8 @@ impl<'s> ReasoningEngine<'s> {
 
     /// Estimate test coverage adjacency for `qname`.
     pub fn find_test_adjacency(&self, qname: &str) -> Result<TestAdjacencyResult> {
-        let symbol = match self.store.node_by_qname(qname)? {
+        let qname = normalize_qn_kind_tokens(qname);
+        let symbol = match self.store.node_by_qname(&qname)? {
             Some(n) => n,
             None => {
                 return Err(atlas_core::AtlasError::Other(format!(
@@ -487,7 +497,7 @@ impl<'s> ReasoningEngine<'s> {
             }
         };
 
-        let test_pairs = self.store.test_neighbors(qname, EDGE_QUERY_LIMIT)?;
+        let test_pairs = self.store.test_neighbors(&qname, EDGE_QUERY_LIMIT)?;
         let mut linked_tests: Vec<Node> = test_pairs.into_iter().map(|(n, _)| n).collect();
 
         // If no direct test edge, look for same-file test nodes.
@@ -535,7 +545,8 @@ impl<'s> ReasoningEngine<'s> {
 
     /// Classify the risk of changing `qname` by aggregating graph factors.
     pub fn classify_change_risk(&self, qname: &str) -> Result<ChangeRiskResult> {
-        let node = match self.store.node_by_qname(qname)? {
+        let qname = normalize_qn_kind_tokens(qname);
+        let node = match self.store.node_by_qname(&qname)? {
             Some(n) => n,
             None => {
                 return Err(atlas_core::AtlasError::Other(format!(
@@ -544,9 +555,9 @@ impl<'s> ReasoningEngine<'s> {
             }
         };
 
-        let inbound = self.store.inbound_edges(qname, EDGE_QUERY_LIMIT)?;
-        let outbound = self.store.outbound_edges(qname, EDGE_QUERY_LIMIT)?;
-        let tests = self.store.test_neighbors(qname, EDGE_QUERY_LIMIT)?;
+        let inbound = self.store.inbound_edges(&qname, EDGE_QUERY_LIMIT)?;
+        let outbound = self.store.outbound_edges(&qname, EDGE_QUERY_LIMIT)?;
+        let tests = self.store.test_neighbors(&qname, EDGE_QUERY_LIMIT)?;
 
         let is_public = is_public_node(&node);
         let fan_in = inbound.len();
@@ -603,7 +614,8 @@ impl<'s> ReasoningEngine<'s> {
     fn load_nodes(&self, qnames: &[&str]) -> Result<Vec<Node>> {
         let mut nodes = Vec::new();
         for qn in qnames {
-            if let Some(n) = self.store.node_by_qname(qn)? {
+            let normalized_qn = normalize_qn_kind_tokens(qn);
+            if let Some(n) = self.store.node_by_qname(&normalized_qn)? {
                 nodes.push(n);
             }
         }
@@ -747,6 +759,33 @@ fn file_paths_cross_package(store: &Store, a: &str, b: &str) -> Result<bool> {
         (Some(owner_a), Some(owner_b)) => owner_a != owner_b,
         _ => different_package(a, b),
     })
+}
+
+fn normalize_qn_kind_tokens(qname: &str) -> String {
+    let Some(after_file) = qname.find("::") else {
+        return qname.to_owned();
+    };
+    let (file_part, rest) = qname.split_at(after_file);
+    let rest = &rest[2..];
+
+    let (kind_token, symbol_rest) = if let Some(pos) = rest.find("::") {
+        (&rest[..pos], &rest[pos..])
+    } else {
+        return qname.to_owned();
+    };
+
+    let kind_lower = kind_token.to_ascii_lowercase();
+    let canonical_kind = match kind_lower.as_str() {
+        "function" | "func" => "fn",
+        "meth" => "method",
+        "constant" => "const",
+        other => other,
+    };
+
+    if canonical_kind == kind_token {
+        return qname.to_owned();
+    }
+    format!("{file_part}::{canonical_kind}{symbol_rest}")
 }
 
 fn dead_code_reasons(node: &Node) -> (Vec<String>, ConfidenceTier, Vec<String>) {
@@ -1110,6 +1149,47 @@ mod tests {
         );
     }
 
+    #[test]
+    fn removal_normalizes_function_alias_qname() {
+        let mut store = make_store();
+        let nodes = vec![
+            node(
+                0,
+                "fn_a",
+                "src/a.rs::fn::fn_a",
+                "src/a.rs",
+                NodeKind::Function,
+            ),
+            node(
+                0,
+                "fn_b",
+                "src/b.rs::fn::fn_b",
+                "src/b.rs",
+                NodeKind::Function,
+            ),
+        ];
+        let edges = vec![edge(
+            "src/b.rs::fn::fn_b",
+            "src/a.rs::fn::fn_a",
+            EdgeKind::Calls,
+            "src/b.rs",
+        )];
+        seed_graph(&mut store, nodes, edges);
+
+        let engine = ReasoningEngine::new(&store);
+        let result = engine
+            .analyze_removal(&["src/a.rs::function::fn_a"], None, None)
+            .unwrap();
+
+        assert_eq!(result.seed[0].qualified_name, "src/a.rs::fn::fn_a");
+        assert!(
+            result
+                .impacted_symbols
+                .iter()
+                .any(|im| im.node.qualified_name == "src/b.rs::fn::fn_b")
+        );
+    }
+
     // -----------------------------------------------------------------------
     // detect_dead_code: private function with no callers is flagged
     // -----------------------------------------------------------------------
@@ -1265,6 +1345,47 @@ mod tests {
         );
     }
 
+    #[test]
+    fn rename_radius_normalizes_function_alias_qname() {
+        let mut store = make_store();
+        let nodes = vec![
+            node(
+                0,
+                "fn_a",
+                "src/a.rs::fn::fn_a",
+                "src/a.rs",
+                NodeKind::Function,
+            ),
+            node(
+                0,
+                "fn_caller",
+                "src/a.rs::fn::fn_caller",
+                "src/a.rs",
+                NodeKind::Function,
+            ),
+        ];
+        let edges = vec![edge(
+            "src/a.rs::fn::fn_caller",
+            "src/a.rs::fn::fn_a",
+            EdgeKind::Calls,
+            "src/a.rs",
+        )];
+        seed_graph(&mut store, nodes, edges);
+
+        let engine = ReasoningEngine::new(&store);
+        let result = engine
+            .preview_rename_radius("src/a.rs::function::fn_a", "fn_a_renamed")
+            .unwrap();
+
+        assert_eq!(result.target.qualified_name, "src/a.rs::fn::fn_a");
+        assert!(
+            result
+                .affected_references
+                .iter()
+                .any(|r| r.node.qualified_name == "src/a.rs::fn::fn_caller")
+        );
+    }
+
     // -----------------------------------------------------------------------
     // check_dependency_removal: blocked by reference
     // -----------------------------------------------------------------------
@@ -1304,6 +1425,42 @@ mod tests {
         assert!(!result.blocking_references.is_empty());
     }
 
+    #[test]
+    fn dependency_removal_normalizes_function_alias_qname() {
+        let mut store = make_store();
+        let nodes = vec![
+            node(
+                0,
+                "dep_a",
+                "src/a.rs::fn::dep_a",
+                "src/a.rs",
+                NodeKind::Function,
+            ),
+            node(
+                0,
+                "consumer",
+                "src/b.rs::fn::consumer",
+                "src/b.rs",
+                NodeKind::Function,
+            ),
+        ];
+        let edges = vec![edge(
+            "src/b.rs::fn::consumer",
+            "src/a.rs::fn::dep_a",
+            EdgeKind::Calls,
+            "src/b.rs",
+        )];
+        seed_graph(&mut store, nodes, edges);
+
+        let engine = ReasoningEngine::new(&store);
+        let result = engine
+            .check_dependency_removal("src/a.rs::function::dep_a")
+            .unwrap();
+
+        assert_eq!(result.target_qname, "src/a.rs::fn::dep_a");
+        assert!(!result.blocking_references.is_empty());
+    }
+
     // -----------------------------------------------------------------------
     // find_test_adjacency: missing test signal
     // -----------------------------------------------------------------------
@@ -1323,6 +1480,40 @@ mod tests {
         let result = engine.find_test_adjacency("src/lib.rs::fn_x").unwrap();
         assert_eq!(result.coverage_strength, CoverageStrength::None);
         assert!(result.recommendation.is_some());
+    }
+
+    #[test]
+    fn test_adjacency_normalizes_function_alias_qname() {
+        let mut store = make_store();
+        let target = node(
+            0,
+            "fn_x",
+            "src/lib.rs::fn::fn_x",
+            "src/lib.rs",
+            NodeKind::Function,
+        );
+        let test = node(
+            0,
+            "fn_x_test",
+            "tests/lib.rs::test::fn_x_test",
+            "tests/lib.rs",
+            NodeKind::Test,
+        );
+        let edges = vec![edge(
+            "tests/lib.rs::test::fn_x_test",
+            "src/lib.rs::fn::fn_x",
+            EdgeKind::Tests,
+            "tests/lib.rs",
+        )];
+        seed_graph(&mut store, vec![target, test], edges);
+
+        let engine = ReasoningEngine::new(&store);
+        let result = engine
+            .find_test_adjacency("src/lib.rs::function::fn_x")
+            .unwrap();
+
+        assert_eq!(result.symbol.qualified_name, "src/lib.rs::fn::fn_x");
+        assert_eq!(result.coverage_strength, CoverageStrength::Direct);
     }
 
     // -----------------------------------------------------------------------
@@ -1346,6 +1537,26 @@ mod tests {
         // No callers, no tests → score penalized but stored; band should not be Risky
         // (only ~0.15 deducted for no tests from 1.0 start → 0.85 → Safe).
         assert_eq!(result.safety.band, SafetyBand::Safe);
+    }
+
+    #[test]
+    fn refactor_safety_normalizes_function_alias_qname() {
+        let mut store = make_store();
+        let solo = node(
+            0,
+            "solo_fn",
+            "src/a.rs::fn::solo_fn",
+            "src/a.rs",
+            NodeKind::Function,
+        );
+        seed_graph(&mut store, vec![solo], vec![]);
+
+        let engine = ReasoningEngine::new(&store);
+        let result = engine
+            .score_refactor_safety("src/a.rs::function::solo_fn")
+            .unwrap();
+
+        assert_eq!(result.node.qualified_name, "src/a.rs::fn::solo_fn");
     }
 
     #[test]
@@ -1390,5 +1601,38 @@ mod tests {
             "expected cross-package factor, got {:?}",
             result.contributing_factors
         );
+    }
+
+    #[test]
+    fn classify_change_risk_normalizes_function_alias_qname() {
+        let mut store = make_store();
+        let target = node(
+            0,
+            "helper",
+            "src/lib.rs::fn::helper",
+            "src/lib.rs",
+            NodeKind::Function,
+        );
+        let caller = node(
+            0,
+            "caller",
+            "src/other.rs::fn::caller",
+            "src/other.rs",
+            NodeKind::Function,
+        );
+        let edges = vec![edge(
+            "src/other.rs::fn::caller",
+            "src/lib.rs::fn::helper",
+            EdgeKind::Calls,
+            "src/other.rs",
+        )];
+        seed_graph(&mut store, vec![target, caller], edges);
+
+        let engine = ReasoningEngine::new(&store);
+        let result = engine
+            .classify_change_risk("src/lib.rs::function::helper")
+            .unwrap();
+
+        assert!(!result.contributing_factors.is_empty());
     }
 }

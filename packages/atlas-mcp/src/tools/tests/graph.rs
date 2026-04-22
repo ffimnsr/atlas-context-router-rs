@@ -308,6 +308,50 @@ fn symbol_neighbors_includes_call_edge_sites() {
 }
 
 #[test]
+fn symbol_neighbors_normalizes_alias_qname() {
+    let fixture = setup_mcp_fixture();
+    let args = serde_json::json!({
+        "qname": "src/service.rs::function::compute",
+        "output_format": "json"
+    });
+
+    let response = call(
+        "symbol_neighbors",
+        Some(&args),
+        "/ignored",
+        &fixture.db_path,
+    )
+    .expect("symbol_neighbors call");
+    let text = unwrap_tool_text(response);
+    let value: serde_json::Value = serde_json::from_str(&text).expect("parse json");
+
+    assert_eq!(value["qname"], "src/service.rs::fn::compute");
+    assert_eq!(
+        value.pointer("/callers/0/qn").and_then(|v| v.as_str()),
+        Some("src/api.rs::fn::handle_request")
+    );
+}
+
+#[test]
+fn traverse_graph_normalizes_alias_qname() {
+    let fixture = setup_mcp_fixture();
+    let args = serde_json::json!({
+        "from_qn": "src/service.rs::function::compute",
+        "output_format": "json"
+    });
+
+    let response = call("traverse_graph", Some(&args), "/ignored", &fixture.db_path)
+        .expect("traverse_graph call");
+    let text = unwrap_tool_text(response);
+    let value: serde_json::Value = serde_json::from_str(&text).expect("parse json");
+
+    assert_eq!(
+        value["changed_nodes"][0]["qn"],
+        "src/service.rs::fn::compute"
+    );
+}
+
+#[test]
 fn list_graph_stats_includes_provenance() {
     let fixture = setup_mcp_fixture();
     let resp = call("list_graph_stats", None, "/repo", &fixture.db_path).expect("list_graph_stats");
@@ -323,6 +367,84 @@ fn query_graph_includes_provenance() {
     let args = serde_json::json!({ "text": "compute" });
     let resp = call("query_graph", Some(&args), "/repo", &fixture.db_path).expect("query_graph");
     assert_provenance(&resp, "/repo", &fixture.db_path);
+}
+
+#[test]
+fn query_graph_clean_repo_has_no_freshness_warning() {
+    let fixture = setup_git_mcp_fixture();
+    let args = serde_json::json!({ "text": "compute", "output_format": "json" });
+
+    let resp = call(
+        "query_graph",
+        Some(&args),
+        &fixture.repo_root,
+        &fixture.db_path,
+    )
+    .expect("query_graph");
+
+    assert!(
+        resp.get("atlas_freshness").is_none(),
+        "clean repo should not emit freshness warning"
+    );
+}
+
+#[test]
+fn query_graph_changed_non_code_zero_node_file_has_no_freshness_warning() {
+    let fixture = setup_git_mcp_fixture();
+    write_repo_file(
+        std::path::Path::new(&fixture.repo_root),
+        ".gitignore",
+        "target/\n",
+    );
+    let args = serde_json::json!({ "text": "compute", "output_format": "json" });
+
+    let resp = call(
+        "query_graph",
+        Some(&args),
+        &fixture.repo_root,
+        &fixture.db_path,
+    )
+    .expect("query_graph");
+
+    assert!(
+        resp.get("atlas_freshness").is_none(),
+        "non-code zero-node file changes should not emit freshness warning"
+    );
+}
+
+#[test]
+fn query_graph_stale_changed_symbol_emits_freshness_warning() {
+    let fixture = setup_git_mcp_fixture();
+    write_repo_file(
+        std::path::Path::new(&fixture.repo_root),
+        "src/service.rs",
+        "pub fn compute() -> i32 { 99 }\n",
+    );
+    let args = serde_json::json!({ "text": "compute", "output_format": "json" });
+
+    let resp = call(
+        "query_graph",
+        Some(&args),
+        &fixture.repo_root,
+        &fixture.db_path,
+    )
+    .expect("query_graph");
+
+    assert_eq!(
+        resp.pointer("/atlas_freshness/stale")
+            .and_then(|value| value.as_bool()),
+        Some(true)
+    );
+    assert_eq!(
+        resp.pointer("/atlas_freshness/stale_result_files/0")
+            .and_then(|value| value.as_str()),
+        Some("src/service.rs")
+    );
+    assert!(
+        resp.pointer("/atlas_freshness/warning")
+            .and_then(|value| value.as_str())
+            .is_some_and(|warning| warning.contains("stale"))
+    );
 }
 
 #[test]
