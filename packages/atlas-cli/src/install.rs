@@ -659,6 +659,7 @@ Do not treat `query_graph` as caller/callee search. Fall back to file tools **on
 | `get_session_status` | Inspect current session identity, event count, and resume state |
 | `resume_session` | Restore prior session snapshot after reconnect or restart |
 | `search_saved_context` | Search saved artifacts from earlier large outputs |
+| `read_saved_context` | Retrieve full artifact content by source_id with optional paging |
 | `save_context_artifact` | Persist large context payloads for later retrieval |
 | `get_context_stats` | Inspect session and content-store stats |
 | `purge_saved_context` | Remove saved artifacts by session or age |

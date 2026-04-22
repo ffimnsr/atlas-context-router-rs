@@ -55,7 +55,7 @@ For terms that are easy to misread in this document:
 - Part II. Release and interface gates: Release 1, Release 2, MCP and Agent Roadmap
 - Part III. Post-MVP product expansion: Phase 18 through Phase 32
 - Part IV. Context continuity and memory: Phase CM1 through Phase CM15
-- Part V. Focused follow-up patches: Retrieval Follow-Up Patch, Graph Build Lifecycle Patch
+- Part V. Focused follow-up patches: Retrieval Follow-Up Patch, Retrieval Ranking Evidence Patch, Graph/Content Companion Patch, Ranking and Trimming Primitives Patch, Graph Build Lifecycle Patch, Canonical Path Identity Patch, Graph Readiness Source-of-Truth Patch, Operational Budget Policy Patch, Context Escalation Contract Patch, Graph Store Corruption Recovery Patch
 
 ## Cross-Cutting Track Map
 
@@ -1082,7 +1082,7 @@ The upstream report highlights parser fidelity and install/hook fragility as the
 - [x] delete file graph works
 - [x] FTS search works
 - [x] impact CTE works
-- [ ] lock/retry behavior — **backlog**: requires concurrent SQLite connections or separate processes; cannot be covered with single-connection in-process tests
+- [x] lock/retry behavior — covered by `write_succeeds_while_second_connection_holds_wal_write_lock`: blocker thread holds `BEGIN IMMEDIATE` for 100 ms; store write succeeds within `busy_timeout=5000`
 
 ### 14.3 Repo tests
 
@@ -1128,14 +1128,14 @@ The upstream report highlights parser fidelity and install/hook fragility as the
 - [x] measure files/sec — covered by `store_bench` write-throughput criterion benchmark
 - [x] measure nodes/sec — covered by `store_bench` write-throughput criterion benchmark
 - [x] measure DB writes/sec — covered by `store_bench` write-throughput criterion benchmark
-- [ ] benchmark parser workers vs writer bottleneck — **backlog**: requires full pipeline harness with real repo; out of scope for unit-level benches
-- [ ] tune batch sizes — **backlog**: depends on profiling results from real workloads
+- [x] benchmark parser workers vs writer bottleneck — covered by `pipeline_bench` (parse_only / write_only / full_pipeline groups)
+- [x] tune batch sizes — `pipeline_bench` sweeps batch sizes 16/32/64/128/256; `DEFAULT_PARSE_BATCH_SIZE=64` confirmed reasonable for this repo
 
 ### 15.2 Query performance
 
 - [x] benchmark FTS query latency — covered by `store_bench`
 - [x] benchmark impact-radius latency — covered by `store_bench`
-- [ ] benchmark review-context latency — **backlog**: requires end-to-end integration bench; skipped for now
+- [x] benchmark review-context latency — covered by `context_bench` in `atlas-review` (64 and 256 module variants)
 
 ### 15.3 Memory and reliability
 
@@ -1149,7 +1149,6 @@ The upstream report highlights parser fidelity and install/hook fragility as the
 - [x] `atlas doctor` — implemented: checks repo root, git root, .atlas dir, config, DB file, integrity, graph stats, git ls-files
 - [x] `atlas db check` — implemented
 - [x] tracing spans around build/update phases
-- [ ] optional metrics export — **backlog**: needs external metrics infra (Prometheus/OTEL); not on core path
 
 ---
 
@@ -2106,21 +2105,21 @@ Expose `atlas context` detail toggles through MCP `get_context` so agents can tu
 
 Add direct full-artifact retrieval by `source_id`; search previews are not enough after agents save large context.
 
-- [ ] add MCP `read_saved_context` tool
-- [ ] accept `source_id`
-- [ ] support optional paging or byte/token caps for large artifacts
-- [ ] return full content when within configured limits
-- [ ] return truncation metadata and continuation hints when content exceeds limits
-- [ ] preserve existing preview behavior in `search_saved_context`
-- [ ] enforce session/repo scoping so one session cannot read unrelated saved artifacts accidentally
-- [ ] include artifact metadata:
-  - [ ] `source_id`
-  - [ ] artifact kind
-  - [ ] created time
-  - [ ] session id
-  - [ ] byte count
-  - [ ] chunk count
-- [ ] add tests for found artifact, missing artifact, oversized artifact, paged artifact, and cross-session/repo isolation
+- [x] add MCP `read_saved_context` tool
+- [x] accept `source_id`
+- [x] support optional paging or byte/token caps for large artifacts
+- [x] return full content when within configured limits
+- [x] return truncation metadata and continuation hints when content exceeds limits
+- [x] preserve existing preview behavior in `search_saved_context`
+- [x] enforce session/repo scoping so one session cannot read unrelated saved artifacts accidentally
+- [x] include artifact metadata:
+  - [x] `source_id`
+  - [x] artifact kind
+  - [x] created time
+  - [x] session id
+  - [x] byte count
+  - [x] chunk count
+- [x] add tests for found artifact, missing artifact, oversized artifact, paged artifact, and cross-session/repo isolation
 
 ### MCP14 — Agent hook integrations
 
@@ -4502,6 +4501,318 @@ This patch is complete when:
 
 ---
 
+## Retrieval Ranking Evidence Patch
+
+Atlas already exposes query scores, active query mode, global `explain_query` ranking factors, provenance, and truncation metadata. What is still missing is a first-class retrieval contract that explains why each returned result ranked where it did. A result-level score alone is not enough for agents to distinguish exact matches, fuzzy repairs, package/path boosts, changed-file boosts, graph expansion, and hybrid/vector fusion.
+
+### Patch Q1 — Result-level ranking evidence model
+
+- [ ] add compact `RankingEvidence` / `ScoreEvidence` model for ranked retrieval results
+- [ ] attach evidence to graph/search result structs without replacing numeric score
+- [ ] include fields for:
+  - [ ] base retrieval mode (`fts5`, `regex_structural_scan`, `vector`, `hybrid`, `graph_expand`)
+  - [ ] raw score before boosts when available
+  - [ ] final score
+  - [ ] matched fields (`name`, `qualified_name`, `file_path`, `content`, `embedding`)
+  - [ ] exact name match
+  - [ ] exact qualified-name match
+  - [ ] prefix match
+  - [ ] fuzzy correction and edit distance
+  - [ ] kind boost
+  - [ ] public/exported boost
+  - [ ] same-directory boost
+  - [ ] same-language boost
+  - [ ] recent-file boost
+  - [ ] changed-file boost
+  - [ ] graph expansion hop distance
+  - [ ] hybrid/RRF contributing sources and ranks
+- [ ] keep evidence compact and stable for MCP JSON output
+- [ ] add serde round-trip tests for evidence schema
+
+Why:
+- agents need to know why a result won, not only that it scored higher
+- global `ranking_factors` explain query mode, but not individual result ranking
+
+### Patch Q2 — Capture evidence during ranking
+
+- [ ] update `apply_ranking_boosts` to record which boosts fired per result
+- [ ] update fuzzy relaxed-candidate path to record:
+  - [ ] corrected/matched term
+  - [ ] edit distance
+  - [ ] fuzzy threshold
+- [ ] update exact-hit merge path to preserve exact-match evidence
+- [ ] update graph expansion to record hop distance and seed source
+- [ ] update hybrid/RRF merge to record:
+  - [ ] FTS rank contribution
+  - [ ] vector rank contribution
+  - [ ] RRF score contribution
+- [ ] ensure evidence survives result merging and deduplication
+- [ ] add tests for each evidence source and merge precedence
+
+Why:
+- evidence must be produced at scoring time while the ranking decision is known
+- reconstructing explanation after sorting is lossy and easy to get wrong
+
+### Patch Q3 — Surface evidence in CLI and MCP retrieval outputs
+
+- [ ] include ranking evidence in MCP `query_graph` results
+- [ ] include ranking evidence in MCP `batch_query_graph` per-query results
+- [ ] include ranking evidence in `explain_query` matches
+- [ ] include ranking evidence in CLI `atlas query --json`
+- [ ] keep human CLI output compact:
+  - [ ] show score as today
+  - [ ] optionally show top evidence labels when verbose/debug mode is enabled
+- [ ] document stable evidence labels and meanings
+- [ ] add snapshot tests for MCP output shape
+
+Why:
+- query-mode observability should be part of normal retrieval output, not only debug output
+- downstream tools can make better escalation and trust decisions from structured evidence
+
+### Patch Q4 — Evidence contract for context and review ranking
+
+- [ ] decide whether review/context `relevance_score` also gets evidence
+- [ ] if yes, add context-ranking evidence for:
+  - [ ] direct target
+  - [ ] changed symbol
+  - [ ] caller/callee neighbor
+  - [ ] test adjacency
+  - [ ] impact-score contribution
+  - [ ] saved-context/session boost
+- [ ] surface context-ranking evidence only where payload budget allows
+- [ ] document whether graph search evidence and context relevance evidence are separate contracts
+- [ ] add tests for direct target and changed-file evidence in context results
+
+Why:
+- search ranking and context ranking are related but not identical
+- review flows need evidence for why context was included, not only why a symbol matched search
+
+### Patch Q completion criteria
+
+- [ ] every ranked graph/search result can include compact structured ranking evidence
+- [ ] query boosts, fuzzy correction, graph expansion, and hybrid/RRF all record evidence
+- [ ] MCP `query_graph`, `batch_query_graph`, and `explain_query` expose evidence
+- [ ] CLI JSON exposes evidence without bloating human output
+- [ ] evidence labels are documented and covered by tests
+- [ ] context/review relevance evidence is explicitly included or deferred with documented rationale
+
+---
+
+## Graph/Content Companion Patch
+
+Atlas already has graph search for symbols and relationships plus file/content/template/text-asset search for prompts, docs, config, SQL, and templates. The missing design rule is that these are coordinated retrieval surfaces, not separate universes or a simple fallback chain. Graph answers code structure questions; content lookup answers non-code and context-adjacent questions; the context engine should merge both under one bounded selection, ranking, evidence, and truncation policy.
+
+### Patch N1 — Declare graph/content lookup contract
+
+- [ ] document canonical responsibility split:
+  - [ ] graph search answers symbols, ownership, callers, callees, tests, imports, and structural relationships
+  - [ ] content lookup answers prompts, docs, config, SQL, templates, logs, and embedded text assets
+  - [ ] saved-context lookup answers prior Atlas outputs and session artifacts
+  - [ ] context engine decides how these surfaces combine for a task
+- [ ] define graph/content lookup as companion systems, not fallback-only systems
+- [ ] define when both should be queried for one request:
+  - [ ] review changes touching config or templates
+  - [ ] symbols whose behavior depends on prompts or SQL
+  - [ ] docs/spec questions tied to implementation files
+  - [ ] agent/task questions needing saved context plus graph facts
+- [ ] document anti-patterns:
+  - [ ] broad file search before graph resolution for symbol questions
+  - [ ] graph-only review when changed files include config/templates/prompts
+  - [ ] content-only answers for structural dependency questions
+  - [ ] separate unbounded result lists from graph and content tools
+
+Why:
+- non-code artifacts are first-class context when they affect behavior
+- graph-first should not mean content-blind
+
+### Patch N2 — Unified bounded selection policy
+
+- [ ] define one context selection policy for mixed graph/content results:
+  - [ ] direct graph targets first
+  - [ ] changed files and changed symbols next
+  - [ ] adjacent config/templates/prompts/SQL tied to changed files next
+  - [ ] caller/callee/test evidence next
+  - [ ] saved-session artifacts only when relevant to current task
+- [ ] apply shared budgets across mixed results:
+  - [ ] max graph nodes
+  - [ ] max graph edges
+  - [ ] max content assets
+  - [ ] max saved artifacts
+  - [ ] max total payload bytes/tokens
+- [ ] ensure truncation reports mixed omissions:
+  - [ ] omitted graph nodes
+  - [ ] omitted graph edges
+  - [ ] omitted content assets
+  - [ ] omitted saved artifacts
+  - [ ] omitted bytes/tokens
+- [ ] add deterministic tie-breakers when graph and content scores compete
+- [ ] add tests for mixed graph/content truncation order
+
+Why:
+- separate bounded lists can still create an unbounded combined context
+- agents need one budget story for the final answer context
+
+### Patch N3 — Coordinated ranking and evidence
+
+- [ ] define a mixed-result ranking envelope with source kind:
+  - [ ] `graph_node`
+  - [ ] `graph_edge`
+  - [ ] `file_asset`
+  - [ ] `content_match`
+  - [ ] `template`
+  - [ ] `text_asset`
+  - [ ] `saved_context`
+- [ ] normalize ranking signals across surfaces:
+  - [ ] exact symbol match
+  - [ ] graph distance
+  - [ ] changed-file boost
+  - [ ] same package/directory boost
+  - [ ] BM25/content match score
+  - [ ] trigram/fuzzy correction
+  - [ ] proximity/title/path rerank
+  - [ ] session recency/relevance
+- [ ] expose why each mixed item was selected through ranking evidence
+- [ ] include `selection_reason` for both graph and content assets
+- [ ] add tests proving config/template/prompt matches can be selected with graph evidence when relevant
+
+Why:
+- mixed context should be explainable, not an opaque concatenation of tool outputs
+- ranking evidence must work for content assets as well as graph nodes
+
+### Patch N4 — MCP and prompt workflow integration
+
+- [ ] update MCP tool descriptions to describe graph/content companion rules
+- [ ] update `review_change` prompt to query content assets when changed files include docs/config/templates/prompts/SQL
+- [ ] update `inspect_symbol` prompt to look for context-adjacent assets only when graph evidence suggests dependency
+- [ ] update installed AGENTS instructions:
+  - [ ] graph tools first for structure
+  - [ ] content tools as companion lookup for non-code assets
+  - [ ] context engine should merge both under bounded policy
+- [ ] add prompt/registry snapshot tests for companion-contract wording
+
+Why:
+- agents follow surface contracts more reliably than implicit architecture
+- prompt and install docs should not describe content lookup as mere fallback
+
+### Patch N completion criteria
+
+- [ ] graph/content companion contract is documented as a design rule
+- [ ] mixed graph/content context has one bounded selection policy
+- [ ] mixed results expose source kind, selection reason, ranking evidence, and truncation metadata
+- [ ] MCP prompts, tool descriptions, README, and installed AGENTS instructions agree
+- [ ] tests cover mixed code + config/template/prompt/doc context assembly
+
+---
+
+## Ranking and Trimming Primitives Patch
+
+Atlas already requires MCP/context surfaces to stay thin over the context engine, and Phase 22 checks review/symbol/impact parity. Widen that rule to the whole graph/query core: no CLI, MCP, review, explain-change, impact, analyze, retrieval, or context path should carry its own ad hoc ranking or trimming rules when a shared primitive can own the decision.
+
+### Patch D1 — Inventory and classify all ranking/trimming paths
+
+- [ ] inventory every ranking, scoring, sorting, truncation, and trimming path:
+  - [ ] CLI `query`
+  - [ ] MCP `query_graph`
+  - [ ] MCP `batch_query_graph`
+  - [ ] `explain_query`
+  - [ ] `get_context`
+  - [ ] `get_minimal_context`
+  - [ ] `get_review_context`
+  - [ ] `explain_change`
+  - [ ] `get_impact_radius`
+  - [ ] `analyze_safety`
+  - [ ] `analyze_remove`
+  - [ ] `analyze_dead_code`
+  - [ ] `analyze_dependency`
+  - [ ] saved-context retrieval
+  - [ ] graph expansion
+  - [ ] hybrid/RRF retrieval
+  - [ ] content/file/template/text-asset lookup
+- [ ] classify each path as:
+  - [ ] shared primitive
+  - [ ] domain adapter around shared primitive
+  - [ ] presentation-only sorting
+  - [ ] duplicate logic to remove
+- [ ] document allowed reasons for a separate domain adapter
+- [ ] add a checklist table mapping each public command/tool to its ranking/trimming primitive
+
+Why:
+- duplicated ranking logic hides in small `sort_by` and `truncate` blocks
+- inventory makes drift visible before refactors start
+
+### Patch D2 — Define shared ranking primitives
+
+- [ ] define shared primitives for graph/search ranking:
+  - [ ] exact and qualified-name match boosts
+  - [ ] fuzzy correction boosts
+  - [ ] package/directory/language boosts
+  - [ ] changed-file/recent-file boosts
+  - [ ] graph distance scoring
+  - [ ] hybrid/RRF merging
+- [ ] define shared primitives for context/review ranking:
+  - [ ] direct target priority
+  - [ ] caller/callee/test adjacency
+  - [ ] impact score contribution
+  - [ ] changed-symbol contribution
+  - [ ] saved-context/session contribution
+- [ ] define shared trimming primitives:
+  - [ ] max nodes
+  - [ ] max edges
+  - [ ] max files
+  - [ ] max content assets
+  - [ ] max payload bytes/tokens
+  - [ ] deterministic omission metadata
+- [ ] keep presentation formatting separate from ranking/trimming decisions
+- [ ] add unit tests for each primitive and tie-breaker
+
+Why:
+- query, context, review, and analysis need consistent ordering semantics
+- shared primitives make ranking evidence and budget metadata easier to trust
+
+### Patch D3 — Route public tools through shared primitives
+
+- [ ] update CLI query to use shared graph/search ranking primitive
+- [ ] update MCP `query_graph` and `batch_query_graph` to use same primitive as CLI query
+- [ ] update `explain_query` to explain the same primitive used by actual query execution
+- [ ] update context engine ranking/trimming to use shared context primitives
+- [ ] update review-context assembly to use shared context/review primitives
+- [ ] update explain-change and impact analysis to use shared impact/context primitives
+- [ ] update analyze-* commands to use shared analysis ranking/trimming primitives
+- [ ] update saved-context ranking to use a documented adapter around shared context ranking
+- [ ] remove or quarantine duplicate `sort_by` / `truncate` logic outside approved primitives
+
+Why:
+- public tools should disagree only because inputs differ, not because ranking rules forked
+- `explain_query` must never describe different ranking than `query_graph` uses
+
+### Patch D4 — Guard against future drift
+
+- [ ] add parity tests:
+  - [ ] CLI query versus MCP query for same inputs
+  - [ ] MCP query versus `explain_query` ranking explanation
+  - [ ] review-context versus get-context for shared seed inputs
+  - [ ] impact versus explain-change for shared changed files
+  - [ ] analyze-* output ordering versus underlying primitive ordering
+- [ ] add targeted tests for stable tie-breakers
+- [ ] add snapshot tests for truncation/omission metadata
+- [ ] document review rule: new public graph/query/context tool must name its ranking/trimming primitive
+- [ ] optionally add lint-like test searching for new ad hoc `sort_by`/`truncate` in public tool layers
+
+Why:
+- ranking drift usually returns as small local convenience code
+- parity tests make drift fail loudly
+
+### Patch D completion criteria
+
+- [ ] every public graph/query/context/review/analysis path maps to a shared ranking/trimming primitive or documented adapter
+- [ ] CLI and MCP query paths share ranking semantics
+- [ ] review, context, impact, explain-change, and analyze-* paths share trimming semantics where applicable
+- [ ] duplicate public-layer ranking/trimming logic is removed or documented as presentation-only
+- [ ] parity tests cover query, context, review, impact, explain-change, and analyze-* paths
+- [ ] future tool contract requires naming the ranking/trimming primitive used
+
+---
+
 ## Graph Build Lifecycle Patch
 
 Atlas has retrieval index lifecycle state in the content store (Patch R1), but the graph store (`worldtree.db`) has no equivalent. Schema version alone is not enough — a `building` or `build_failed` state cannot be inferred from `metadata.schema_version`.
@@ -4557,5 +4868,470 @@ Why:
 - [x] `atlas status` reports graph build state alongside file/node counts
 - [x] MCP `build_or_update_graph` returns persisted build state
 - [x] tests cover all state transitions
+
+---
+
+## Canonical Path Identity Patch
+
+Atlas already normalizes many repo paths during scan, diff handling, and some call-resolution flows, but path identity must be stronger than local normalization. Every store key, snapshot key, cache key, `source_id` seed, `chunk_id` seed, graph node/file key, and future sidecar index key must use one canonical repo-relative path identity before hashing or persistence.
+
+### Patch P1 — Canonical repo path type and rules
+
+- [ ] define a shared `CanonicalRepoPath` / `RepoPathIdentity` type in `atlas-repo` or shared core
+- [ ] enforce canonical form:
+  - [ ] repo-relative only
+  - [ ] forward-slash separators only
+  - [ ] no leading `./`
+  - [ ] no empty path
+  - [ ] no `.` components
+  - [ ] no unresolved `..` components
+  - [ ] no trailing slash for files
+  - [ ] platform-aware case policy applied once
+- [ ] provide constructors for:
+  - [ ] absolute path + repo root
+  - [ ] repo-relative path string
+  - [ ] git diff path
+  - [ ] watch event path
+  - [ ] explicit CLI/MCP file argument
+  - [ ] synthetic graph path
+- [ ] make invalid paths return typed errors instead of silently falling back to raw input
+- [ ] add property/unit tests for separators, dot segments, Windows casing, absolute paths, synthetic paths, and invalid escape paths
+
+Why:
+- prevents path-casing and separator drift before hashing
+- makes path identity a contract, not scattered string cleanup
+
+### Patch P2 — Use canonical identity for graph store keys
+
+- [ ] require `CanonicalRepoPath` before writing `files.path`
+- [ ] require canonical path before `replace_file_graph`
+- [ ] require canonical path before `replace_files_transactional`
+- [ ] require canonical path before `nodes.file_path`
+- [ ] require canonical path before qualified-name file prefixes
+- [ ] require canonical path before graph edge file metadata
+- [ ] update build/update/watch/diff paths to normalize once at boundary
+- [ ] add tests proving equivalent raw paths map to one graph file identity
+- [ ] add tests proving case policy is stable on Windows
+
+Why:
+- graph identity depends on file path strings embedded in nodes, edges, QNs, and lookup keys
+- equivalent paths must not create duplicate graph facts
+
+### Patch P3 — Use canonical identity for content, session, and adapter IDs
+
+- [ ] require canonical path before content-store `source_id` when artifact represents a repo file
+- [ ] require canonical path before `chunk_id` source seed when source is file-backed
+- [ ] require canonical path before retrieval cache keys
+- [ ] require canonical path before saved-context references that point to repo files
+- [ ] require canonical path before session resume snapshot file references
+- [ ] require canonical path before adapter bridge `source_id` path hashing
+- [ ] keep non-file artifacts explicit:
+  - [ ] label/content-derived IDs allowed only when no repo path exists
+  - [ ] ID payload must mark identity kind: `repo_path`, `synthetic_path`, `artifact_label`, or `external`
+- [ ] add tests across content store, session store, MCP save/search, and adapter bridge ingestion
+
+Why:
+- cross-store joins and future sidecar indexes break when graph uses one path form and content/session use another
+- hashing raw paths bakes bugs permanently into IDs
+
+### Patch P4 — Audit and migration guardrails
+
+- [ ] audit all hashing/keying call sites for raw path usage
+- [ ] add lint-like tests or targeted regression tests for forbidden raw path hashing
+- [ ] document migration behavior for existing noncanonical rows
+- [ ] add diagnostic to `doctor` / `db_check` for noncanonical path rows
+- [ ] decide whether to rewrite existing rows during rebuild or require clean rebuild
+- [ ] document invariant in AGENTS/install instructions so agents preserve path identity
+
+Why:
+- existing code has multiple local path-normalization helpers
+- future cache/sidebar/retrieval features must not reintroduce raw path keys
+
+### Patch P completion criteria
+
+- [ ] one canonical repo path identity type exists
+- [ ] graph store, content store, session snapshots, adapters, and MCP use it before hashing/keying
+- [ ] raw path hashing is covered by regression tests
+- [ ] diagnostics detect noncanonical persisted path rows
+- [ ] future sidecar/cache/index keys document canonical path as required seed
+
+---
+
+## Graph Readiness Source-of-Truth Patch
+
+Atlas has persisted build state, graph freshness checks, health/debug tools, provenance, and adapter metadata, but there is no explicit invariant that one subsystem owns the answer to: "is the graph ready, searchable, and current enough to use?" That decision must not drift across CLI status, MCP status, query tools, impact analysis, review context, and adapters.
+
+### Patch S1 — Canonical graph readiness record
+
+- [ ] define a canonical `GraphReadiness` / `GraphState` model in shared core or graph service code
+- [ ] include fields:
+  - [ ] `repo_root`
+  - [ ] `db_path`
+  - [ ] `db_exists`
+  - [ ] `db_open_error`
+  - [ ] `build_state`
+  - [ ] `build_last_error`
+  - [ ] `graph_built`
+  - [ ] `graph_queryable`
+  - [ ] `graph_current`
+  - [ ] `stale_index`
+  - [ ] `pending_graph_changes`
+  - [ ] `integrity_state`
+  - [ ] `error_code`
+  - [ ] `message`
+  - [ ] `suggestions`
+  - [ ] `last_indexed_at`
+  - [ ] `indexed_file_count`
+- [ ] distinguish readiness dimensions:
+  - [ ] built versus missing
+  - [ ] queryable versus blocked
+  - [ ] current versus stale
+  - [ ] corrupt/inconsistent versus merely stale
+  - [ ] graph readiness versus retrieval/content index readiness
+- [ ] make this record the only source allowed to decide graph readiness
+- [ ] add tests for every readiness class and field derivation
+
+Why:
+- prevents drift between build lifecycle state, status output, query behavior, and adapter metadata
+- makes readiness a contract instead of scattered boolean logic
+
+### Patch S2 — Route CLI graph tools through canonical readiness
+
+- [ ] update `atlas status` to emit canonical readiness directly
+- [ ] update `atlas doctor` to reference canonical readiness instead of partially recomputing it
+- [ ] update `atlas query` to consult readiness before search
+- [ ] update `atlas impact` to consult readiness before impact traversal
+- [ ] update `atlas review-context` to consult readiness before context assembly
+- [ ] update reasoning/refactor graph-backed commands to consult readiness before graph reads
+- [ ] define command behavior per readiness state:
+  - [ ] missing graph: fail with build suggestion
+  - [ ] interrupted/failed build: fail with lifecycle suggestion
+  - [ ] stale graph: allow query with explicit warning or require update by configured policy
+  - [ ] corrupt/inconsistent graph: fail closed
+- [ ] add CLI tests proving all graph-backed commands consume same readiness decision
+
+Why:
+- query, impact, and review must not infer readiness from `Store::open` alone
+- status output and command behavior must agree
+
+### Patch S3 — Route MCP and adapters through canonical readiness
+
+- [ ] update MCP `status` to surface canonical readiness, not redefine it
+- [ ] add readiness block to graph-backed MCP responses:
+  - [ ] `query_graph`
+  - [ ] `get_context`
+  - [ ] `get_impact_radius`
+  - [ ] `get_review_context`
+  - [ ] `get_minimal_context`
+  - [ ] `symbol_neighbors`
+  - [ ] `traverse_graph`
+  - [ ] reasoning/refactor analysis tools
+- [ ] replace ad hoc provenance/freshness readiness inference with canonical readiness fields
+- [ ] keep provenance as identity metadata only:
+  - [ ] `repo_root`
+  - [ ] `db_path`
+  - [ ] `indexed_file_count`
+  - [ ] `last_indexed_at`
+- [ ] ensure adapters never decide graph readiness independently
+- [ ] add MCP tests proving graph-backed tools surface identical readiness for same repo/db
+
+Why:
+- MCP should surface graph readiness, not become another readiness authority
+- provenance and readiness are related but not the same contract
+
+### Patch S completion criteria
+
+- [ ] one canonical graph readiness model exists
+- [ ] CLI status, doctor, query, impact, and review consume that model
+- [ ] MCP graph-backed tools surface that model and do not redefine readiness
+- [ ] adapters only report or forward readiness, never compute their own
+- [ ] stale/queryable and corrupt/blocked states are distinct
+- [ ] tests prove all graph-backed paths agree on readiness for same repo and DB
+
+---
+
+## Operational Budget Policy Patch
+
+Atlas already has per-file size caps, parse batch sizing, bounded queues, result node/file caps, session payload caps, and retrieval guardrail backlog items. What is still missing is one explicit operational budget policy across build, query, impact, review, context, and MCP output stages: how much work may be attempted, what happens when a hard budget is hit, and whether each stage fails open, fails closed, or returns degraded partial results.
+
+### Patch B1 — Build and update budgets
+
+- [ ] add explicit build/update budget config:
+  - [ ] `max_files_per_run`
+  - [ ] `max_total_bytes_per_run`
+  - [ ] `max_file_bytes`
+  - [ ] `max_parse_failures`
+  - [ ] `max_parse_failure_ratio`
+  - [ ] `max_wall_time_ms`
+- [ ] track budget counters during build/update:
+  - [ ] files discovered
+  - [ ] files accepted
+  - [ ] files skipped by byte budget
+  - [ ] bytes accepted
+  - [ ] bytes skipped
+  - [ ] parse failures
+  - [ ] budget stop reason
+- [ ] define behavior when budgets hit:
+  - [ ] hard fail for invalid config
+  - [ ] degraded partial build when skip budgets hit and policy allows
+  - [ ] fail closed when parse-failure budget is exceeded
+  - [ ] mark graph state as `build_failed` or `degraded` with reason
+- [ ] expose counters and stop reason in CLI/MCP build/update output
+- [ ] add tests for max file budget, max byte budget, parse failure threshold, and partial/degraded result reporting
+
+Why:
+- batch size prevents unbounded queues but does not cap total build work
+- operators need predictable upper bounds for large repos and pathological changes
+
+### Patch B2 — Query, seed, and traversal budgets
+
+- [ ] add explicit query/traversal budget config:
+  - [ ] `max_seed_nodes`
+  - [ ] `max_seed_files`
+  - [ ] `max_traversal_depth`
+  - [ ] `max_traversal_nodes`
+  - [ ] `max_traversal_edges`
+  - [ ] `max_query_candidates`
+  - [ ] `max_query_wall_time_ms`
+- [ ] apply seed budgets before graph expansion, impact analysis, and context assembly
+- [ ] distinguish seed truncation from result truncation
+- [ ] include seed-budget metadata in responses:
+  - [ ] requested seed count
+  - [ ] accepted seed count
+  - [ ] omitted seed count
+  - [ ] budget hit flags
+  - [ ] suggested narrower query
+- [ ] define behavior when seed budgets hit:
+  - [ ] fail closed for ambiguous unbounded seeds
+  - [ ] return partial bounded result for explicit file/symbol lists when policy allows
+  - [ ] require narrower input when omission would make result misleading
+- [ ] add tests for broad query seed explosion, explicit file list truncation, and traversal cap reporting
+
+Why:
+- `max_nodes` caps returned context, not necessarily seed loading or traversal work
+- seed explosion can make bounded output misleading unless reported explicitly
+
+### Patch B3 — Review/context payload budgets
+
+- [ ] add explicit review/context budget config:
+  - [ ] `max_review_source_bytes`
+  - [ ] `max_context_payload_bytes`
+  - [ ] `max_context_tokens_estimate`
+  - [ ] `max_file_excerpt_bytes`
+  - [ ] `max_saved_context_bytes`
+  - [ ] `max_mcp_response_bytes`
+- [ ] apply byte/token budgets before serializing CLI/MCP output
+- [ ] make truncation deterministic:
+  - [ ] preserve direct targets first
+  - [ ] preserve highest-ranked nodes/edges next
+  - [ ] preserve risk/test evidence before low-signal context
+  - [ ] drop saved artifacts before graph essentials unless intent says otherwise
+- [ ] include truncation metadata:
+  - [ ] bytes requested
+  - [ ] bytes emitted
+  - [ ] tokens estimated
+  - [ ] omitted node/file/source counts
+  - [ ] omitted byte counts
+  - [ ] continuation or narrower-query hints
+- [ ] add tests for review-context byte cap, saved-context cap, file excerpt cap, and MCP response cap
+
+Why:
+- node/file caps do not guarantee bounded serialized payload size
+- large excerpts and saved artifacts can bypass graph caps unless independently budgeted
+
+### Patch B4 — Fail-open versus fail-closed policy
+
+- [ ] define budget-hit behavior matrix for each stage:
+  - [ ] build
+  - [ ] update
+  - [ ] query
+  - [ ] impact
+  - [ ] review context
+  - [ ] minimal context
+  - [ ] saved-context retrieval
+  - [ ] MCP response serialization
+- [ ] classify each budget as hard or soft:
+  - [ ] hard budget returns error
+  - [ ] soft budget returns partial result with warning
+  - [ ] degraded budget marks graph/context state degraded
+- [ ] surface machine-readable budget status:
+  - [ ] `budget_status`
+  - [ ] `budget_hit`
+  - [ ] `budget_name`
+  - [ ] `budget_limit`
+  - [ ] `budget_observed`
+  - [ ] `partial`
+  - [ ] `safe_to_answer`
+- [ ] document which budget hits make agent answers unsafe
+- [ ] add tests for fail-open, fail-closed, and degraded cases
+
+Why:
+- budget behavior must be predictable, not inferred from missing rows or truncated arrays
+- agents need to know whether partial context is safe to use
+
+### Patch B completion criteria
+
+- [ ] build/update total work budgets exist and are reported
+- [ ] query seed and traversal budgets exist and are reported
+- [ ] review/context byte or token budgets exist and are reported
+- [ ] every budget has explicit fail-open, fail-closed, or degraded behavior
+- [ ] CLI/MCP outputs include machine-readable budget status when limits hit
+- [ ] tests cover budget hits across build, query, impact, review, and MCP serialization
+
+---
+
+## Context Escalation Contract Patch
+
+Atlas has compact context tools, review context, symbol lookup, neighbor tools, and wider traversal tools, but the preferred order is currently only hinted in prompts and installed instructions. Make the core agent workflow explicit: start with the smallest bounded graph context that can answer the question, then escalate only when evidence says broader context is needed.
+
+### Patch E1 — Define minimal-context-first workflow
+
+- [ ] document canonical escalation order for review/change tasks:
+  - [ ] `detect_changes` when files are unknown
+  - [ ] `get_minimal_context` for first bounded triage
+  - [ ] `get_review_context` only when changed-symbol, neighbor, or risk detail is needed
+  - [ ] `explain_change` when deterministic risk/test-gap explanation is needed
+  - [ ] `get_impact_radius` when explicit blast radius is needed
+- [ ] document canonical escalation order for symbol/usage tasks:
+  - [ ] `query_graph` / `resolve_symbol` first
+  - [ ] `symbol_neighbors` for direct callers/callees/tests
+  - [ ] `get_context` for bounded ranked context
+  - [ ] `traverse_graph` only when one-hop context is insufficient
+- [ ] define allowed reasons to escalate:
+  - [ ] ambiguous symbol resolution
+  - [ ] truncated result
+  - [ ] missing caller/callee/test evidence
+  - [ ] cross-file or cross-package risk
+  - [ ] explicit user request for broader context
+  - [ ] safety-critical uncertainty
+- [ ] define anti-patterns:
+  - [ ] starting review with full review context when minimal context is enough
+  - [ ] using traversal before symbol resolution
+  - [ ] using file search before graph tools answer structural questions
+  - [ ] broad traversal without a bounded max depth and max nodes
+
+Why:
+- reduces token load and noisy context
+- keeps graph workflows deterministic and cheap by default
+
+### Patch E2 — Surface contract in MCP, prompts, and installed instructions
+
+- [ ] update MCP tool descriptions to mention minimal-first escalation where relevant
+- [ ] update `review_change` prompt to make minimal context first a requirement, not just a recommendation
+- [ ] update `inspect_symbol` prompt to require direct-neighbor context before wider traversal
+- [ ] update installed AGENTS instructions to state escalation order clearly
+- [ ] update README MCP workflow section to match same order
+- [ ] ensure wording is consistent across CLI install block, MCP prompts, and README
+
+Why:
+- agents follow tool descriptions and prompts more reliably than implicit design intent
+- one workflow description prevents drift across docs and MCP metadata
+
+### Patch E3 — Add escalation metadata and tests where practical
+
+- [ ] include response metadata that helps decide whether to escalate:
+  - [ ] `truncated`
+  - [ ] `omitted_count`
+  - [ ] `ambiguity`
+  - [ ] `next_tools`
+  - [ ] `recommended_escalation_reason`
+- [ ] ensure `get_minimal_context` reports when review context would add useful detail
+- [ ] ensure `symbol_neighbors` reports when traversal may be needed because caps were hit
+- [ ] add prompt/registry snapshot tests for minimal-first contract wording
+- [ ] add MCP response tests for escalation metadata on truncated/ambiguous outputs
+
+Why:
+- tools should tell agents when more context is justified
+- escalation should be evidence-driven, not habit-driven
+
+### Patch E completion criteria
+
+- [ ] minimal-context-first contract is documented as required workflow
+- [ ] MCP prompts, tool descriptions, README, and installed AGENTS instructions agree
+- [ ] graph/context responses expose enough metadata to justify escalation
+- [ ] tests protect contract wording and escalation metadata
+
+---
+
+## Graph Store Corruption Recovery Patch
+
+Atlas can detect SQLite integrity failures, orphan nodes, dangling edges, stale graph state, and interrupted builds, but the operational policy for a damaged `.atlas/worldtree.db` is not explicit enough. Detection should lead to one clear outcome: quarantine unusable graph data, rebuild from repository source, and block graph-backed answers while stored graph facts are unsafe.
+
+### Patch C1 — Graph DB corruption classification
+
+- [ ] define graph-store health classes:
+  - [ ] `healthy`
+  - [ ] `stale`
+  - [ ] `interrupted_build`
+  - [ ] `failed_build`
+  - [ ] `sqlite_corrupt`
+  - [ ] `schema_mismatch`
+  - [ ] `logical_inconsistency`
+- [ ] classify evidence sources consistently:
+  - [ ] `Store::open` errors
+  - [ ] `PRAGMA integrity_check`
+  - [ ] `PRAGMA foreign_key_check`
+  - [ ] orphan-node scan
+  - [ ] dangling-edge scan
+  - [ ] graph build lifecycle state
+  - [ ] freshness check against changed graph-relevant files
+- [ ] ensure CLI and MCP use the same classification and `error_code` values
+- [ ] add tests for each health class and error-code mapping
+
+Why:
+- makes corruption versus stale data explicit
+- avoids treating dangling/orphan graph rows as a generic diagnostics warning
+
+### Patch C2 — Quarantine and rebuild policy for `worldtree.db`
+
+- [ ] define no partial salvage for graph DB corruption unless a future task explicitly adds verified salvage
+- [ ] quarantine physically corrupt or logically inconsistent `.atlas/worldtree.db` before rebuilding
+- [ ] use deterministic quarantine path with timestamp or collision-safe suffix
+- [ ] keep quarantined DB for inspection instead of deleting it
+- [ ] create fresh `worldtree.db` from migrations after quarantine
+- [ ] run full graph rebuild from repository source after quarantine
+- [ ] record rebuild result in graph build lifecycle state
+- [ ] surface quarantine path, rebuild result, and failure reason in CLI JSON output
+- [ ] surface same fields in MCP `build_or_update_graph`, `status`, `doctor`, and `db_check` where relevant
+- [ ] add tests:
+  - [ ] corrupt SQLite file is quarantined
+  - [ ] logical dangling-edge inconsistency triggers rebuild policy
+  - [ ] rebuild after quarantine creates usable fresh graph DB
+  - [ ] failed rebuild leaves graph unavailable with actionable error
+
+Why:
+- graph data is derived from repo source, so clean rebuild is safer than partial salvage
+- quarantine preserves evidence without serving unsafe facts
+
+### Patch C3 — Block unsafe graph-backed answers
+
+- [ ] block graph-backed query/context tools when health class is `sqlite_corrupt`, `schema_mismatch`, or `logical_inconsistency`
+- [ ] return machine-readable failure with:
+  - [ ] `error_code`
+  - [ ] `health_class`
+  - [ ] `db_path`
+  - [ ] `quarantine_path` when available
+  - [ ] recommended rebuild command
+- [ ] allow non-graph diagnostics tools to keep working:
+  - [ ] `status`
+  - [ ] `doctor`
+  - [ ] `db_check`
+  - [ ] `debug_graph` only when DB can open safely
+- [ ] distinguish stale-but-queryable graph state from corrupt-and-blocked graph state
+- [ ] document agent behavior: do not answer from graph facts when corrupt/inconsistent
+- [ ] add MCP tests that graph-backed tools fail closed on corrupt/inconsistent DB
+
+Why:
+- prevents confident answers from known-bad graph rows
+- keeps diagnostics available while blocking unsafe context
+
+### Patch C completion criteria
+
+- [ ] graph DB health classes are explicit and shared by CLI/MCP
+- [ ] corrupt or logically inconsistent `worldtree.db` is quarantined before rebuild
+- [ ] rebuild from source is default policy; partial salvage is explicitly out of scope
+- [ ] graph-backed tools fail closed when graph facts are corrupt or inconsistent
+- [ ] diagnostics expose exact reason, quarantine path, and next command
+- [ ] tests cover physical corruption, logical inconsistency, rebuild success, rebuild failure, and fail-closed query behavior
 
 ---

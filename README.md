@@ -375,6 +375,7 @@ The MCP server (`atlas serve`) exposes these tools to agents:
 | `get_session_status` | Current session identity, event count, and resume state |
 | `resume_session` | Retrieve and consume current session snapshot |
 | `search_saved_context` | Search saved artifacts from prior tool outputs |
+| `read_saved_context` | Retrieve full artifact content by source_id with optional paging |
 | `save_context_artifact` | Store large context payloads for later retrieval |
 | `get_context_stats` | Session/content-store stats and DB paths |
 | `purge_saved_context` | Delete saved artifacts by session or age |

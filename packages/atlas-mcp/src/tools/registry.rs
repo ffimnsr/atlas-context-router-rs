@@ -251,6 +251,21 @@ pub fn tool_list() -> serde_json::Value {
                 }
             },
             {
+                "name": "read_saved_context",
+                "description": "Retrieve the full content of a saved artifact by source_id. Supports paging via chunk_offset and max_bytes for large artifacts. Enforces session and repository scoping so cross-session reads are blocked.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "source_id":     { "type": "string",  "description": "The source_id returned by save_context_artifact or search_saved_context." },
+                        "session_id":    { "type": "string",  "description": "Optional: restrict access to artifacts owned by this session. Omit to skip session scoping." },
+                        "chunk_offset":  { "type": "integer", "description": "0-based chunk index to start reading from (default 0). Use next_chunk_offset from a prior truncated response for paging." },
+                        "max_bytes":     { "type": "integer", "description": "Byte cap on returned content (default 65536). When content exceeds this the response sets truncated=true and includes next_chunk_offset." },
+                        "output_format": { "type": "string",  "description": DEFAULT_OUTPUT_DESCRIPTION }
+                    },
+                    "required": ["source_id"]
+                }
+            },
+            {
                 "name": "save_context_artifact",
                 "description": "Index and store a large tool output or context payload. Returns a pointer (source_id) for large content, a preview for medium content, or the raw string for small content.",
                 "inputSchema": {

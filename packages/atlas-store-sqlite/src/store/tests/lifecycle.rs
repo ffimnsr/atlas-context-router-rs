@@ -384,3 +384,55 @@ fn orphan_nodes_all_when_no_edges() {
         "all nodes are orphans when there are no edges"
     );
 }
+
+// --- lock/retry behavior -------------------------------------------------
+//
+// Verifies that busy_timeout lets a write succeed even when a second
+// connection holds the WAL write lock momentarily.  Two threads share the
+// same file-backed DB; the blocker holds BEGIN IMMEDIATE for ~100 ms then
+// rolls back.  The store write must succeed within the 5 s busy_timeout.
+
+#[test]
+fn write_succeeds_while_second_connection_holds_wal_write_lock() {
+    use std::sync::{Arc, Barrier};
+    use std::thread;
+
+    let (_dir, path, mut store) = open_file_backed();
+
+    // Barrier: both threads start at the same time.
+    let barrier = Arc::new(Barrier::new(2));
+    let barrier2 = Arc::clone(&barrier);
+    let path2 = path.clone();
+
+    // Blocker thread: opens its own connection, holds a write transaction for
+    // ~100 ms, then rolls back so the store's write can proceed.
+    let blocker = thread::spawn(move || {
+        let conn = rusqlite::Connection::open(&path2).unwrap();
+        // Acquire the WAL write lock.
+        conn.execute_batch("BEGIN IMMEDIATE").unwrap();
+        // Signal that the lock is held, then wait for the writer to start.
+        barrier2.wait();
+        thread::sleep(Duration::from_millis(100));
+        conn.execute_batch("ROLLBACK").unwrap();
+    });
+
+    // Wait until the blocker has the write lock, then try to write.
+    barrier.wait();
+
+    let node = make_node(
+        NodeKind::Function,
+        "fn1",
+        "lock.rs::fn::fn1",
+        "lock.rs",
+        "rust",
+    );
+    store
+        .replace_file_graph("lock.rs", "h1", Some("rust"), None, &[node], &[])
+        .expect("write must succeed within busy_timeout after lock is released");
+
+    blocker.join().unwrap();
+
+    // Confirm the node landed in the DB.
+    let stats = store.stats().unwrap();
+    assert_eq!(stats.node_count, 1);
+}

@@ -19,6 +19,20 @@ pub use query::{run_embed, run_explain_query, run_query};
 pub use reasoning::{run_analyze, run_refactor};
 pub use session::run_session;
 
+pub fn run_version(cli: &Cli) -> Result<()> {
+    const VERSION: &str = env!("CARGO_PKG_VERSION");
+    const GIT_HASH: &str = env!("GIT_HASH");
+    if cli.json {
+        print_json(
+            "version",
+            serde_json::json!({ "version": VERSION, "git_hash": GIT_HASH }),
+        )
+    } else {
+        println!("atlas {VERSION} ({GIT_HASH})");
+        Ok(())
+    }
+}
+
 use std::io;
 use std::io::IsTerminal;
 

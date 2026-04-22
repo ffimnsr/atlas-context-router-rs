@@ -36,6 +36,7 @@ fn main() {
         Command::Flows { .. } => commands::run_flows(&cli),
         Command::Communities { .. } => commands::run_communities(&cli),
         Command::Session { .. } => commands::run_session(&cli),
+        Command::Version => commands::run_version(&cli),
     };
 
     if let Err(err) = result {

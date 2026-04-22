@@ -195,6 +195,7 @@ dependencies = [
  "atlas-repo",
  "atlas-store-sqlite",
  "camino",
+ "criterion",
  "notify",
  "rayon",
  "serde",

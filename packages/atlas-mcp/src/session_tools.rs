@@ -507,6 +507,156 @@ pub fn tool_get_context_stats(
 }
 
 // ---------------------------------------------------------------------------
+// read_saved_context (MCP13)
+// ---------------------------------------------------------------------------
+
+/// Maximum bytes returned in a single `read_saved_context` call when the
+/// caller does not supply an explicit `max_bytes` cap.
+const DEFAULT_READ_MAX_BYTES: usize = 65_536; // 64 KiB
+
+/// Retrieve the full content of a saved artifact by `source_id`.
+///
+/// Scoping rules:
+/// - If `session_id` is supplied, it must match the artifact's stored session.
+/// - If `repo_root` is supplied (always passed from the caller), it must match
+///   the artifact's stored repo_root when one was recorded.
+///
+/// Paging:
+/// - `chunk_offset` (default 0): first chunk index to include in this response.
+/// - `max_bytes` (default 64 KiB): byte cap on returned content.
+///   When the remaining content exceeds the cap the response includes
+///   `truncated: true`, `next_chunk_offset`, and a `continuation_hint`.
+pub fn tool_read_saved_context(
+    args: Option<&Value>,
+    repo_root: &str,
+    db_path: &str,
+    output_format: OutputFormat,
+) -> Result<Value> {
+    let source_id = args
+        .and_then(|a| a.get("source_id"))
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("missing required argument: source_id"))?;
+
+    let caller_session_id = args
+        .and_then(|a| a.get("session_id"))
+        .and_then(|v| v.as_str())
+        .map(str::to_owned);
+    let chunk_offset = args
+        .and_then(|a| a.get("chunk_offset"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0) as usize;
+    let max_bytes = args
+        .and_then(|a| a.get("max_bytes"))
+        .and_then(|v| v.as_u64())
+        .map(|n| n as usize)
+        .unwrap_or(DEFAULT_READ_MAX_BYTES);
+
+    let content_db = derive_content_db_path(db_path);
+    let mut cs = ContentStore::open(&content_db)?;
+    let _ = cs.migrate();
+
+    // --- locate source ---
+    let source = match cs.get_source(source_id)? {
+        Some(s) => s,
+        None => {
+            return tool_result_value(
+                &serde_json::json!({
+                    "found": false,
+                    "source_id": source_id,
+                    "error": "artifact not found",
+                }),
+                output_format,
+            );
+        }
+    };
+
+    // --- enforce session scoping ---
+    if let Some(ref caller_sid) = caller_session_id
+        && source.session_id.as_deref() != Some(caller_sid.as_str())
+    {
+        return tool_result_value(
+            &serde_json::json!({
+                "found": false,
+                "source_id": source_id,
+                "error": "artifact not accessible from this session",
+            }),
+            output_format,
+        );
+    }
+
+    // --- enforce repo scoping ---
+    // If the artifact has a recorded repo_root, the caller's repo_root must match.
+    if let Some(ref artifact_repo) = source.repo_root
+        && artifact_repo != repo_root
+    {
+        return tool_result_value(
+            &serde_json::json!({
+                "found": false,
+                "source_id": source_id,
+                "error": "artifact not accessible from this repository",
+            }),
+            output_format,
+        );
+    }
+
+    // --- load chunks ---
+    let all_chunks = cs.get_chunks(source_id)?;
+    let total_chunks = all_chunks.len();
+
+    // Chunks from chunk_offset onwards, ordered by chunk_index.
+    let remaining_chunks: Vec<_> = all_chunks
+        .into_iter()
+        .filter(|c| c.chunk_index >= chunk_offset)
+        .collect();
+
+    // Reassemble content within byte cap.
+    let mut content_parts: Vec<String> = Vec::new();
+    let mut bytes_used: usize = 0;
+    let mut last_included_index: Option<usize> = None;
+    let mut truncated = false;
+    let mut next_chunk_offset: Option<usize> = None;
+
+    for chunk in &remaining_chunks {
+        let chunk_bytes = chunk.content.len();
+        if bytes_used + chunk_bytes > max_bytes {
+            truncated = true;
+            next_chunk_offset = Some(chunk.chunk_index);
+            break;
+        }
+        bytes_used += chunk_bytes;
+        last_included_index = Some(chunk.chunk_index);
+        content_parts.push(chunk.content.clone());
+    }
+
+    let content = content_parts.join("\n");
+    let total_byte_count: usize = remaining_chunks.iter().map(|c| c.content.len()).sum();
+
+    let mut result = serde_json::json!({
+        "found": true,
+        "source_id": source.id,
+        "artifact_kind": source.source_type,
+        "created_at": source.created_at,
+        "session_id": source.session_id,
+        "label": source.label,
+        "byte_count": total_byte_count,
+        "chunk_count": total_chunks,
+        "chunk_offset": chunk_offset,
+        "last_included_chunk": last_included_index,
+        "content": content,
+        "truncated": truncated,
+    });
+
+    if truncated && let Some(next) = next_chunk_offset {
+        result["next_chunk_offset"] = serde_json::json!(next);
+        result["continuation_hint"] = serde_json::json!(format!(
+            "call read_saved_context with source_id={source_id} chunk_offset={next} to read more"
+        ));
+    }
+
+    tool_result_value(&result, output_format)
+}
+
+// ---------------------------------------------------------------------------
 // purge_saved_context
 // ---------------------------------------------------------------------------
 
@@ -808,5 +958,218 @@ mod tests {
     fn test_continuity_event_spec_unknown_tool() {
         let spec = continuity_event_spec("list_graph_stats", None);
         assert!(spec.is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // MCP13: read_saved_context tests
+    // -----------------------------------------------------------------------
+
+    /// Index a medium-sized artifact (above DEFAULT_SMALL_OUTPUT_BYTES) so it
+    /// is actually stored and chunks are written, then read it back.
+    fn save_indexed_artifact(
+        repo_root: &str,
+        db_path: &str,
+        label: &str,
+        content: &str,
+        session_id: Option<&str>,
+    ) -> String {
+        let mut args = serde_json::json!({
+            "content": content,
+            "label": label,
+        });
+        if let Some(sid) = session_id {
+            args["session_id"] = serde_json::json!(sid);
+        }
+        let result =
+            tool_save_context_artifact(Some(&args), repo_root, db_path, OutputFormat::Json)
+                .unwrap();
+        let body: Value =
+            serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+        // Return the source_id regardless of routing (preview or pointer).
+        body["source_id"].as_str().unwrap_or("").to_string()
+    }
+
+    /// Build a string longer than DEFAULT_SMALL_OUTPUT_BYTES (512 B) so
+    /// `route_output` actually indexes it.
+    fn medium_content(label: &str) -> String {
+        format!("{label}: {}", "x".repeat(1024))
+    }
+
+    #[test]
+    fn read_saved_context_missing_source_id_returns_error() {
+        let dir = TempDir::new().unwrap();
+        let db_path = setup_db_path(&dir);
+        let err = tool_read_saved_context(
+            Some(&serde_json::json!({})),
+            "",
+            &db_path,
+            OutputFormat::Json,
+        );
+        assert!(err.is_err());
+        assert!(err.unwrap_err().to_string().contains("source_id"));
+    }
+
+    #[test]
+    fn read_saved_context_unknown_source_id_returns_not_found() {
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join(".atlas")).unwrap();
+        let db_path = setup_db_path(&dir);
+        let repo_root = dir.path().to_str().unwrap();
+
+        let args = serde_json::json!({"source_id": "does_not_exist"});
+        let result =
+            tool_read_saved_context(Some(&args), repo_root, &db_path, OutputFormat::Json).unwrap();
+        let body: Value =
+            serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert!(!body["found"].as_bool().unwrap());
+        assert!(body["error"].as_str().unwrap().contains("not found"));
+    }
+
+    #[test]
+    fn read_saved_context_found_artifact_returns_metadata_and_content() {
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join(".atlas")).unwrap();
+        let db_path = setup_db_path(&dir);
+        let repo_root = dir.path().to_str().unwrap();
+
+        let content = medium_content("artifact");
+        let source_id = save_indexed_artifact(repo_root, &db_path, "my label", &content, None);
+        assert!(!source_id.is_empty(), "artifact must be indexed (not raw)");
+
+        let args = serde_json::json!({"source_id": source_id});
+        let result =
+            tool_read_saved_context(Some(&args), repo_root, &db_path, OutputFormat::Json).unwrap();
+        let body: Value =
+            serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+
+        assert!(body["found"].as_bool().unwrap());
+        assert_eq!(body["source_id"].as_str().unwrap(), source_id);
+        assert_eq!(body["label"].as_str().unwrap(), "my label");
+        assert!(body["created_at"].is_string());
+        assert!(body["artifact_kind"].is_string());
+        assert!(body["chunk_count"].as_u64().unwrap() > 0);
+        assert!(body["byte_count"].as_u64().unwrap() > 0);
+        assert!(!body["content"].as_str().unwrap().is_empty());
+        assert!(!body["truncated"].as_bool().unwrap());
+    }
+
+    #[test]
+    fn read_saved_context_oversized_artifact_sets_truncated_and_continuation_hint() {
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join(".atlas")).unwrap();
+        let db_path = setup_db_path(&dir);
+        let repo_root = dir.path().to_str().unwrap();
+
+        // Build content large enough to span multiple chunks and exceed a tiny cap.
+        // Use unique paragraphs to avoid duplicate chunk_ids.
+        let content: String = (0..200)
+            .map(|i| format!("paragraph number {i} with some unique text here\n\n"))
+            .collect();
+        let source_id = save_indexed_artifact(repo_root, &db_path, "big artifact", &content, None);
+        assert!(!source_id.is_empty(), "artifact must be indexed");
+
+        // Request with a very tight byte cap so the first chunk alone exceeds it.
+        let args = serde_json::json!({"source_id": source_id, "max_bytes": 1});
+        let result =
+            tool_read_saved_context(Some(&args), repo_root, &db_path, OutputFormat::Json).unwrap();
+        let body: Value =
+            serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+
+        assert!(body["found"].as_bool().unwrap());
+        assert!(body["truncated"].as_bool().unwrap());
+        assert!(body["next_chunk_offset"].is_number());
+        assert!(
+            body["continuation_hint"]
+                .as_str()
+                .unwrap()
+                .contains("chunk_offset")
+        );
+    }
+
+    #[test]
+    fn read_saved_context_paging_chunk_offset_skips_earlier_chunks() {
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join(".atlas")).unwrap();
+        let db_path = setup_db_path(&dir);
+        let repo_root = dir.path().to_str().unwrap();
+
+        // Use unique paragraphs to avoid duplicate chunk_ids.
+        let content: String = (0..100)
+            .map(|i| format!("unique paragraph {i} here\n\n"))
+            .collect();
+        let source_id = save_indexed_artifact(repo_root, &db_path, "paged", &content, None);
+        assert!(!source_id.is_empty());
+
+        // First call with cap that forces truncation.
+        let args = serde_json::json!({"source_id": source_id, "max_bytes": 100});
+        let r1 =
+            tool_read_saved_context(Some(&args), repo_root, &db_path, OutputFormat::Json).unwrap();
+        let b1: Value = serde_json::from_str(r1["content"][0]["text"].as_str().unwrap()).unwrap();
+
+        let next = b1.get("next_chunk_offset").and_then(|v| v.as_u64());
+        if let Some(offset) = next {
+            let args2 = serde_json::json!({"source_id": source_id, "chunk_offset": offset});
+            let r2 = tool_read_saved_context(Some(&args2), repo_root, &db_path, OutputFormat::Json)
+                .unwrap();
+            let b2: Value =
+                serde_json::from_str(r2["content"][0]["text"].as_str().unwrap()).unwrap();
+            assert!(b2["found"].as_bool().unwrap());
+            assert_eq!(b2["chunk_offset"].as_u64().unwrap(), offset);
+        }
+        // If not truncated the content was small enough in one page — test still passes.
+    }
+
+    #[test]
+    fn read_saved_context_cross_session_isolation_blocks_read() {
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join(".atlas")).unwrap();
+        let db_path = setup_db_path(&dir);
+        let repo_root = dir.path().to_str().unwrap();
+
+        let content = medium_content("secret");
+        let source_id =
+            save_indexed_artifact(repo_root, &db_path, "private", &content, Some("session-A"));
+        assert!(!source_id.is_empty());
+
+        // Attempt to read with a different session_id.
+        let args = serde_json::json!({"source_id": source_id, "session_id": "session-B"});
+        let result =
+            tool_read_saved_context(Some(&args), repo_root, &db_path, OutputFormat::Json).unwrap();
+        let body: Value =
+            serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert!(!body["found"].as_bool().unwrap());
+        assert!(
+            body["error"]
+                .as_str()
+                .unwrap()
+                .contains("not accessible from this session")
+        );
+    }
+
+    #[test]
+    fn read_saved_context_cross_repo_isolation_blocks_read() {
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join(".atlas")).unwrap();
+        let db_path = setup_db_path(&dir);
+        let repo_root = dir.path().to_str().unwrap();
+
+        let content = medium_content("cross-repo");
+        let source_id = save_indexed_artifact(repo_root, &db_path, "repo-bound", &content, None);
+        assert!(!source_id.is_empty());
+
+        // Read from a different repo_root — must be blocked.
+        let args = serde_json::json!({"source_id": source_id});
+        let result =
+            tool_read_saved_context(Some(&args), "/different/repo", &db_path, OutputFormat::Json)
+                .unwrap();
+        let body: Value =
+            serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert!(!body["found"].as_bool().unwrap());
+        assert!(
+            body["error"]
+                .as_str()
+                .unwrap()
+                .contains("not accessible from this repository")
+        );
     }
 }

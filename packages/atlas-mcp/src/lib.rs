@@ -20,6 +20,7 @@
 //! | `get_session_status`      | CM7: current session identity and event count            |
 //! | `resume_session`          | CM7: retrieve and consume the resume snapshot            |
 //! | `search_saved_context`    | CM7: FTS + trigram search over saved artifacts           |
+//! | `read_saved_context`      | MCP13: full artifact retrieval by source_id with paging  |
 //! | `save_context_artifact`   | CM7: index and store a large output                      |
 //! | `get_context_stats`       | CM7: storage stats for the current session               |
 //! | `purge_saved_context`     | CM7: delete saved artifacts by session or age            |

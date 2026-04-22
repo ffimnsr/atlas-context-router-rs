@@ -394,6 +394,9 @@ pub enum Command {
         #[command(subcommand)]
         subcommand: SessionCommand,
     },
+
+    /// Print the CLI version and build commit hash.
+    Version,
 }
 
 /// Sub-commands for `atlas session`.

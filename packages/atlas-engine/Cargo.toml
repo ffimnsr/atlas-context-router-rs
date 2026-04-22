@@ -18,3 +18,10 @@ serde_json.workspace = true
 toml.workspace = true
 tracing.workspace = true
 tree-sitter.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+
+[[bench]]
+name = "pipeline_bench"
+harness = false
