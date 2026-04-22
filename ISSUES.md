@@ -4995,6 +4995,31 @@ Why:
 - prevents drift between build lifecycle state, status output, query behavior, and adapter metadata
 - makes readiness a contract instead of scattered boolean logic
 
+### Patch S1.5 — Graph execution safety states
+
+- [ ] define canonical graph execution states:
+  - [ ] `fresh` — graph is built, queryable, current, and integrity-clean
+  - [ ] `stale` — graph is queryable but behind graph-relevant working-tree changes
+  - [ ] `partial` — graph is queryable but build/update/indexing stopped early or degraded
+  - [ ] `corrupt` — graph has SQLite integrity errors, schema mismatch, orphan nodes, or dangling edges
+- [ ] define feature behavior by state:
+  - [ ] `fresh` -> full graph-backed features enabled
+  - [ ] `stale` -> warn and allow graph-backed answers with freshness metadata
+  - [ ] `partial` -> allow limited features only; block answers requiring complete graph facts
+  - [ ] `corrupt` -> block graph-backed answers and require rebuild/quarantine flow
+- [ ] define which tools are allowed in `partial` state:
+  - [ ] status/debug/doctor allowed
+  - [ ] direct symbol lookup allowed only when result provenance is complete enough
+  - [ ] impact/review/analyze flows blocked or degraded unless completeness requirements are met
+  - [ ] traversal blocked when missing edges could make answer unsafe
+- [ ] expose execution state in CLI/MCP readiness output
+- [ ] make query, impact, review, context, and analyze tools consume execution state before graph reads
+- [ ] add tests for each state and allowed/blocked feature behavior
+
+Why:
+- agents need one simple safety state before deciding whether graph facts are usable
+- stale, partial, and corrupt graphs require different behavior
+
 ### Patch S2 — Route CLI graph tools through canonical readiness
 
 - [ ] update `atlas status` to emit canonical readiness directly
@@ -5004,9 +5029,11 @@ Why:
 - [ ] update `atlas review-context` to consult readiness before context assembly
 - [ ] update reasoning/refactor graph-backed commands to consult readiness before graph reads
 - [ ] define command behavior per readiness state:
+  - [ ] fresh graph: full features enabled
   - [ ] missing graph: fail with build suggestion
   - [ ] interrupted/failed build: fail with lifecycle suggestion
   - [ ] stale graph: allow query with explicit warning or require update by configured policy
+  - [ ] partial graph: allow limited features only with explicit degraded-state metadata
   - [ ] corrupt/inconsistent graph: fail closed
 - [ ] add CLI tests proving all graph-backed commands consume same readiness decision
 
@@ -5046,6 +5073,7 @@ Why:
 - [ ] MCP graph-backed tools surface that model and do not redefine readiness
 - [ ] adapters only report or forward readiness, never compute their own
 - [ ] stale/queryable and corrupt/blocked states are distinct
+- [ ] fresh/stale/partial/corrupt execution states map to explicit allowed/blocked features
 - [ ] tests prove all graph-backed paths agree on readiness for same repo and DB
 
 ---
@@ -5328,6 +5356,7 @@ Why:
 ### Patch C completion criteria
 
 - [ ] graph DB health classes are explicit and shared by CLI/MCP
+- [ ] corrupt graph execution state maps to block + quarantine + rebuild behavior
 - [ ] corrupt or logically inconsistent `worldtree.db` is quarantined before rebuild
 - [ ] rebuild from source is default policy; partial salvage is explicitly out of scope
 - [ ] graph-backed tools fail closed when graph facts are corrupt or inconsistent
