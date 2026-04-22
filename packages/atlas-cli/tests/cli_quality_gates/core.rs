@@ -138,6 +138,72 @@ fn query_fuzzy_flag_recovers_close_typo() {
 }
 
 #[test]
+fn query_fuzzy_typo_prefers_code_symbol_over_markdown_noise() {
+    let repo = setup_repo(&[
+        ("go.mod", "module example.com/atlasfixture\n\ngo 1.22\n"),
+        (
+            "internal/requestctx/context.go",
+            "package requestctx\n\nfunc LoadIdentityMessages() {}\n",
+        ),
+        (
+            "docs/load_identity_messages.md",
+            "# Load Identity Messages\n\nContext guide for identity message loading.\n",
+        ),
+    ]);
+
+    run_atlas(repo.path(), &["init"]);
+    run_atlas(repo.path(), &["build"]);
+
+    let fuzzy = read_json_data_output(
+        "query",
+        run_atlas(
+            repo.path(),
+            &["--json", "query", "LoadIdentityMesages", "--fuzzy"],
+        ),
+    );
+    let results = fuzzy["results"].as_array().expect("query results array");
+    assert!(
+        !results.is_empty(),
+        "fuzzy typo query should return code-symbol result: {fuzzy:?}"
+    );
+    assert_eq!(results[0]["node"]["name"], json!("LoadIdentityMessages"));
+    assert_eq!(results[0]["node"]["kind"], json!("function"));
+
+    let with_files = read_json_data_output(
+        "query",
+        run_atlas(
+            repo.path(),
+            &[
+                "--json",
+                "query",
+                "LoadIdentityMesages",
+                "--fuzzy",
+                "--include-files",
+            ],
+        ),
+    );
+    let with_files_results = with_files["results"]
+        .as_array()
+        .expect("query results array with files");
+    assert!(
+        !with_files_results.is_empty(),
+        "include-files fuzzy query should still return code-symbol result: {with_files:?}"
+    );
+    assert_eq!(
+        with_files_results[0]["node"]["name"],
+        json!("LoadIdentityMessages")
+    );
+    assert_eq!(with_files["query"]["include_files"], json!(true));
+    assert!(
+        with_files_results.iter().any(|result| {
+            result["node"]["file_path"] == json!("docs/load_identity_messages.md")
+                || result["node"]["language"] == json!("markdown")
+        }),
+        "include-files query should keep markdown/file noise visible for ranking comparison: {with_files:?}"
+    );
+}
+
+#[test]
 fn query_exact_symbol_and_qname_rank_definition_in_top_three() {
     let repo = setup_fixture_repo();
 

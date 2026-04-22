@@ -94,6 +94,10 @@ pub enum Command {
         #[arg(long)]
         language: Option<String>,
 
+        /// Include file nodes in the result set.
+        #[arg(long)]
+        include_files: bool,
+
         /// Filter by a file path prefix (subpath within the repo).
         #[arg(long)]
         subpath: Option<String>,
@@ -800,6 +804,7 @@ mod tests {
             text,
             kind,
             language,
+            include_files,
             limit,
             ..
         } = cli.command
@@ -807,6 +812,7 @@ mod tests {
             assert_eq!(text, "ReplaceFileGraph");
             assert!(kind.is_none());
             assert!(language.is_none());
+            assert!(!include_files);
             assert_eq!(limit, 20);
         } else {
             panic!("expected Query command");
@@ -862,6 +868,16 @@ mod tests {
         let cli = parse(&["atlas", "query", "greter", "--fuzzy"]);
         if let Command::Query { fuzzy, .. } = cli.command {
             assert!(fuzzy);
+        } else {
+            panic!("expected Query command");
+        }
+    }
+
+    #[test]
+    fn parse_query_include_files_flag() {
+        let cli = parse(&["atlas", "query", "guide", "--include-files"]);
+        if let Command::Query { include_files, .. } = cli.command {
+            assert!(include_files);
         } else {
             panic!("expected Query command");
         }

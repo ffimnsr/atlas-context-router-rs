@@ -1972,8 +1972,8 @@ Use this section for MCP-specific rollout, payload design, continuity, and agent
 - [x] ensure metadata does not bloat heavy context payloads
 - [x] expose same metadata in JSON and TOON output modes
 - [x] add tests that every exported MCP tool returns provenance metadata
-- [ ] document metadata contract in MCP reference and agent instructions
-- [ ] make mismatched repo/db/index state obvious in agent sessions
+- [x] document metadata contract in MCP reference and agent instructions
+- [x] make mismatched repo/db/index state obvious in agent sessions
 
 ### MCP8 — Health and debug command parity
 
@@ -2029,16 +2029,16 @@ Expose CLI query options in MCP `query_graph` so agents can use the same ranking
 - [x] add `subpath` argument
 - [x] add `fuzzy` argument
 - [x] add `hybrid` argument
-- [ ] improve fuzzy symbol typo recovery:
-  - [ ] prefer close symbol-name edit distance over weaker Markdown/docs/content token matches
-  - [ ] regression: `LoadIdentityMesages` should suggest/rank `LoadIdentityMessages` above Markdown nodes
+- [x] improve fuzzy symbol typo recovery:
+  - [x] prefer close symbol-name edit distance over weaker Markdown/docs/content token matches
+  - [x] regression: `LoadIdentityMesages` should suggest/rank `LoadIdentityMessages` above Markdown nodes
 - [x] expose query explanation in MCP `explain_query`:
   - [x] include ranking factors, filters, FTS terms, fuzzy corrections, regex mode, and active query mode
 - [x] clarify `regex` mode behavior in schema docs:
   - [x] regex-only structural scan
   - [x] text + regex post-filter over FTS candidates
   - [x] invalid regex error shape
-- [ ] evaluate and add `include_files` argument if file nodes improve agent workflows
+- [x] evaluate and add `include_files` argument if file nodes improve agent workflows
 - [x] make `subpath` filtering happen before ranking where possible
 - [x] include active query mode in response metadata
 - [x] add tests for monorepo subpath filtering, fuzzy ranking, hybrid mode, regex-only lookup, text+regex filtering, and invalid regex
@@ -2149,7 +2149,7 @@ These phases extend v1 after core graph/build/update/query path is reliable.
 - [x] exact name boost
 - [x] qualified-name boost
 - [x] fuzzy match
-  - [ ] NOTE: current fuzzy behavior still needs symbol-typo recovery hardening; typoed symbols must not lose to docs/config nodes
+  - [x] NOTE: current fuzzy behavior still needs symbol-typo recovery hardening; typoed symbols must not lose to docs/config nodes
 - [x] camelCase/snake_case token split
 - [x] recent-file boost
 - [x] API-level boost

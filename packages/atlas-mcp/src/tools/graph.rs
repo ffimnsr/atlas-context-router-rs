@@ -40,6 +40,7 @@ pub(super) fn tool_query_graph(
     let subpath = str_arg(args, "subpath")?.map(str::to_owned);
     let fuzzy = bool_arg(args, "fuzzy").unwrap_or(false);
     let hybrid = bool_arg(args, "hybrid").unwrap_or(false);
+    let include_files = bool_arg(args, "include_files").unwrap_or(false);
 
     if text.trim().is_empty() && regex.is_none() {
         anyhow::bail!("query_graph requires non-empty text or a regex pattern");
@@ -56,6 +57,7 @@ pub(super) fn tool_query_graph(
         text,
         kind,
         language,
+        include_files,
         limit,
         subpath,
         graph_expand: expand,
@@ -212,6 +214,7 @@ pub(super) fn tool_batch_query_graph(
         let subpath = str_arg(q_args, "subpath")?.map(str::to_owned);
         let fuzzy = bool_arg(q_args, "fuzzy").unwrap_or(false);
         let hybrid = bool_arg(q_args, "hybrid").unwrap_or(false);
+        let include_files = bool_arg(q_args, "include_files").unwrap_or(false);
 
         if text.trim().is_empty() && regex.is_none() {
             anyhow::bail!("query at index {idx} requires non-empty 'text' or a 'regex' pattern");
@@ -228,6 +231,7 @@ pub(super) fn tool_batch_query_graph(
             text: text.clone(),
             kind,
             language,
+            include_files,
             limit,
             subpath,
             graph_expand: expand,
@@ -502,6 +506,7 @@ pub(super) fn tool_explain_query(
     let subpath = str_arg(args, "subpath")?.map(str::to_owned);
     let fuzzy = bool_arg(args, "fuzzy").unwrap_or(false);
     let hybrid = bool_arg(args, "hybrid").unwrap_or(false);
+    let include_files = bool_arg(args, "include_files").unwrap_or(false);
 
     if text.trim().is_empty() && regex.is_none() {
         anyhow::bail!("explain_query requires non-empty text or a regex pattern");
@@ -576,6 +581,7 @@ pub(super) fn tool_explain_query(
                         text: text.clone(),
                         kind: kind.clone(),
                         language: language.clone(),
+                        include_files,
                         limit,
                         subpath: subpath.clone(),
                         regex_pattern: regex.clone(),
@@ -650,6 +656,7 @@ pub(super) fn tool_explain_query(
             "subpath": subpath,
             "fuzzy": fuzzy,
             "hybrid": hybrid,
+            "include_files": include_files,
         },
         "fts_tokens": fts_tokens,
         "fts_phrase": fts_phrase,
@@ -662,6 +669,7 @@ pub(super) fn tool_explain_query(
             "subpath": subpath.is_some(),
             "fuzzy": fuzzy,
             "hybrid": hybrid,
+            "include_files": include_files,
         },
         "indexed_node_count": indexed_node_count,
         "db_exists": db_exists,

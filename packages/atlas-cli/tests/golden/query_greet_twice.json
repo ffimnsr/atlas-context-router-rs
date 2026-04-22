@@ -4,6 +4,7 @@
     "text": "greet_twice",
     "kind": null,
     "language": null,
+    "include_files": false,
     "subpath": null,
     "limit": 20,
     "graph_expand": false,

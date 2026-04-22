@@ -673,6 +673,15 @@ Do not treat `query_graph` as caller/callee search. Fall back to file tools **on
 3. Use `detect_changes` to identify changed files.
 4. Use `get_review_context` or `get_minimal_context` for review.
 5. Use `get_impact_radius` or `explain_change` to assess change risk.
+
+### Trust Metadata
+
+- Every MCP tool response includes `atlas_provenance` with `repo_root`, `db_path`, `indexed_file_count`, and `last_indexed_at`.
+- Some graph-backed tools also include `atlas_freshness` when working-tree edits may make graph results stale.
+- If `atlas_provenance.repo_root` does not match current workspace, stop and verify session wiring.
+- If `atlas_provenance.db_path` points at unexpected database, stop and call `status` or `doctor` before trusting results.
+- If `atlas_freshness.stale` is true, prefer `build_or_update_graph` before making claims about current code.
+- Treat missing optional `atlas_*` fields as "not applicable", not as tool failure.
 <!-- /atlas MCP tools -->
 "#;
 
@@ -858,6 +867,13 @@ mod tests {
     }
 
     #[test]
+    fn instructions_section_documents_trust_metadata() {
+        assert!(INSTRUCTIONS_SECTION.contains("atlas_provenance"));
+        assert!(INSTRUCTIONS_SECTION.contains("atlas_freshness"));
+        assert!(INSTRUCTIONS_SECTION.contains("status` or `doctor"));
+    }
+
+    #[test]
     fn inject_instructions_replaces_stale_section() {
         let tmp = TempDir::new().unwrap();
         let stale = format!("# Existing content\n\n{INSTRUCTIONS_MARKER}\nold stale block\n");
@@ -907,13 +923,9 @@ mod tests {
 
     fn instruction_section_tool_names() -> BTreeSet<String> {
         INSTRUCTIONS_SECTION
-            .split('`')
-            .enumerate()
-            .filter(|(idx, _)| idx % 2 == 1)
-            .map(|(_, chunk)| chunk.trim())
-            .filter(|chunk| {
-                !chunk.is_empty() && chunk.chars().all(|ch| ch.is_ascii_lowercase() || ch == '_')
-            })
+            .lines()
+            .filter(|line| line.starts_with("| `"))
+            .filter_map(|line| line.split('`').nth(1))
             .map(str::to_owned)
             .collect()
     }

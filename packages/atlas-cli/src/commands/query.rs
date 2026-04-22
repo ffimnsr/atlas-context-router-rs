@@ -24,35 +24,49 @@ pub fn run_query(cli: &Cli) -> Result<()> {
     let store =
         Store::open(&db_path).with_context(|| format!("cannot open database at {db_path}"))?;
 
-    let (text, kind, language, subpath, limit, expand, expand_hops, fuzzy, hybrid, semantic, regex) =
-        match &cli.command {
-            Command::Query {
-                text,
-                kind,
-                language,
-                subpath,
-                limit,
-                expand,
-                expand_hops,
-                fuzzy,
-                hybrid,
-                semantic,
-                regex,
-            } => (
-                text.clone(),
-                kind.clone(),
-                language.clone(),
-                subpath.clone(),
-                *limit,
-                *expand,
-                *expand_hops,
-                *fuzzy,
-                *hybrid,
-                *semantic,
-                *regex,
-            ),
-            _ => unreachable!(),
-        };
+    let (
+        text,
+        kind,
+        language,
+        include_files,
+        subpath,
+        limit,
+        expand,
+        expand_hops,
+        fuzzy,
+        hybrid,
+        semantic,
+        regex,
+    ) = match &cli.command {
+        Command::Query {
+            text,
+            kind,
+            language,
+            include_files,
+            subpath,
+            limit,
+            expand,
+            expand_hops,
+            fuzzy,
+            hybrid,
+            semantic,
+            regex,
+        } => (
+            text.clone(),
+            kind.clone(),
+            language.clone(),
+            *include_files,
+            subpath.clone(),
+            *limit,
+            *expand,
+            *expand_hops,
+            *fuzzy,
+            *hybrid,
+            *semantic,
+            *regex,
+        ),
+        _ => unreachable!(),
+    };
 
     if text.trim().is_empty() {
         if regex {
@@ -72,6 +86,7 @@ pub fn run_query(cli: &Cli) -> Result<()> {
         text: effective_text,
         kind,
         language,
+        include_files,
         subpath,
         limit,
         graph_expand: expand,
@@ -98,6 +113,7 @@ pub fn run_query(cli: &Cli) -> Result<()> {
                     "text": query.text,
                     "kind": query.kind,
                     "language": query.language,
+                    "include_files": query.include_files,
                     "subpath": query.subpath,
                     "limit": query.limit,
                     "graph_expand": query.graph_expand,

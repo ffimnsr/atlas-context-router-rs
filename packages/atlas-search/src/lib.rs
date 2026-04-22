@@ -188,6 +188,66 @@ fn fuzzy_threshold(len: usize) -> usize {
     }
 }
 
+fn is_non_code_language(language: &str) -> bool {
+    matches!(
+        language.to_ascii_lowercase().as_str(),
+        "markdown" | "md" | "json" | "toml" | "yaml" | "yml"
+    )
+}
+
+fn fuzzy_typo_bonus(node: &atlas_core::Node, q_lower: &str, fuzzy_cap: usize) -> f64 {
+    if fuzzy_cap == 0 {
+        return 0.0;
+    }
+
+    let dist = edit_distance(q_lower, &node.name.to_lowercase(), fuzzy_cap);
+    if dist > fuzzy_cap {
+        return 0.0;
+    }
+
+    let distance_bonus: f64 = match dist {
+        0 => 24.0,
+        1 => 18.0,
+        2 => 12.0,
+        _ => 8.0,
+    };
+
+    let kind_bonus: f64 = match node.kind {
+        NodeKind::Function | NodeKind::Method => 10.0,
+        NodeKind::Class
+        | NodeKind::Struct
+        | NodeKind::Trait
+        | NodeKind::Interface
+        | NodeKind::Enum
+        | NodeKind::Constant
+        | NodeKind::Variable
+        | NodeKind::Test => 8.0,
+        NodeKind::Module | NodeKind::Package => 5.0,
+        NodeKind::Import => -4.0,
+        NodeKind::File => -8.0,
+    };
+
+    let language_penalty: f64 = if is_non_code_language(&node.language) {
+        -6.0
+    } else {
+        0.0
+    };
+
+    (distance_bonus + kind_bonus + language_penalty).max(0.0_f64)
+}
+
+pub(crate) fn maybe_exclude_file_nodes(
+    mut results: Vec<ScoredNode>,
+    include_files: bool,
+    limit: usize,
+) -> Vec<ScoredNode> {
+    if !include_files {
+        results.retain(|result| result.node.kind != NodeKind::File);
+    }
+    results.truncate(limit);
+    results
+}
+
 // ---------------------------------------------------------------------------
 // Post-FTS ranking boosts
 // ---------------------------------------------------------------------------
@@ -250,11 +310,8 @@ pub fn apply_ranking_boosts(
 
         // Fuzzy name match — only when no exact/prefix hit already and the
         // query is long enough to have a non-zero threshold.
-        if fuzzy_match && !exact_or_prefix && fuzzy_cap > 0 {
-            let dist = edit_distance(&q_lower, &name_lower, fuzzy_cap);
-            if dist <= fuzzy_cap {
-                r.score += 4.0;
-            }
+        if fuzzy_match && !exact_or_prefix {
+            r.score += fuzzy_typo_bonus(n, &q_lower, fuzzy_cap);
         }
 
         // Kind boost
@@ -398,7 +455,9 @@ fn exact_symbol_hits(store: &Store, query: &SearchQuery) -> Result<Vec<ScoredNod
 
     let mut merged: HashMap<String, ScoredNode> = HashMap::new();
 
-    if let Some(node) = store.node_by_qname(trimmed)? {
+    if let Some(node) = store.node_by_qname(trimmed)?
+        && (query.include_files || node.kind != NodeKind::File)
+    {
         merged.insert(
             node.qualified_name.clone(),
             ScoredNode { node, score: 100.0 },
@@ -406,7 +465,11 @@ fn exact_symbol_hits(store: &Store, query: &SearchQuery) -> Result<Vec<ScoredNod
     }
 
     if !trimmed.chars().any(char::is_whitespace) {
-        for node in store.nodes_by_name(trimmed, query.limit.max(25))? {
+        for node in store
+            .nodes_by_name(trimmed, query.limit.max(25))?
+            .into_iter()
+            .filter(|node| query.include_files || node.kind != NodeKind::File)
+        {
             let qn = node.qualified_name.clone();
             let score = if merged.contains_key(&qn) {
                 100.0
@@ -472,7 +535,7 @@ pub fn search(store: &Store, query: &SearchQuery) -> Result<Vec<ScoredNode>> {
 
     let mut fts_results = store.search(&effective_query)?;
 
-    if fts_results.is_empty() && query.fuzzy_match {
+    if query.fuzzy_match {
         let relaxed_text = build_relaxed_fts_query(&query.text);
         if !relaxed_text.is_empty() {
             let relaxed_query = SearchQuery {
@@ -482,7 +545,7 @@ pub fn search(store: &Store, query: &SearchQuery) -> Result<Vec<ScoredNode>> {
             };
             let relaxed_results = store.search(&relaxed_query)?;
             let fuzzy_cap = fuzzy_threshold(query.text.trim().chars().count());
-            fts_results = relaxed_results
+            let relaxed_results: Vec<_> = relaxed_results
                 .into_iter()
                 .filter(|result| {
                     fuzzy_cap > 0
@@ -493,6 +556,7 @@ pub fn search(store: &Store, query: &SearchQuery) -> Result<Vec<ScoredNode>> {
                         ) <= fuzzy_cap
                 })
                 .collect();
+            fts_results = merge_scored_nodes(fts_results, relaxed_results);
         }
     }
 
@@ -521,9 +585,18 @@ pub fn search(store: &Store, query: &SearchQuery) -> Result<Vec<ScoredNode>> {
 
     if query.graph_expand && !boosted.is_empty() {
         let limit = query.limit;
-        graph_expand(store, boosted, query.graph_max_hops, limit)
+        let expanded = graph_expand(store, boosted, query.graph_max_hops, limit)?;
+        Ok(maybe_exclude_file_nodes(
+            expanded,
+            query.include_files,
+            limit,
+        ))
     } else {
-        Ok(boosted)
+        Ok(maybe_exclude_file_nodes(
+            boosted,
+            query.include_files,
+            query.limit,
+        ))
     }
 }
 
@@ -605,12 +678,19 @@ fn search_hybrid(
     // Vector branch — embed query and fetch top_k_vector candidates.
     let query_vec = embed::embed_text(embed_cfg, &query.text)
         .map_err(|e| atlas_core::AtlasError::Other(e.to_string()))?;
-    let vector_results = store.nodes_by_vector_similarity(&query_vec, query.top_k_vector)?;
+    let vector_results = maybe_exclude_file_nodes(
+        store.nodes_by_vector_similarity(&query_vec, query.top_k_vector)?,
+        query.include_files,
+        query.top_k_vector,
+    );
 
     // RRF merge and truncate to requested limit.
-    let mut merged = reciprocal_rank_fusion(&fts_boosted, &vector_results, query.rrf_k);
-    merged.truncate(query.limit);
-    Ok(merged)
+    let merged = reciprocal_rank_fusion(&fts_boosted, &vector_results, query.rrf_k);
+    Ok(maybe_exclude_file_nodes(
+        merged,
+        query.include_files,
+        query.limit,
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -957,6 +1037,186 @@ mod tests {
             with_fuzzy[0].score > no_fuzzy[0].score,
             "fuzzy=true should score higher than fuzzy=false for a close mismatch"
         );
+    }
+
+    #[test]
+    fn fuzzy_typo_bonus_prefers_code_symbol_over_markdown_file() {
+        let function = make_test_node(
+            "LoadIdentityMessages",
+            "internal/requestctx/context.go::fn::LoadIdentityMessages",
+            "internal/requestctx/context.go",
+            "go",
+        );
+        let mut markdown = make_test_node(
+            "Load Identity Messages",
+            "docs/load_identity_messages.md",
+            "docs/load_identity_messages.md",
+            "markdown",
+        );
+        markdown.node.kind = NodeKind::File;
+        markdown.score = 12.0;
+
+        let boosted = apply_ranking_boosts(
+            vec![markdown, function],
+            "LoadIdentityMesages",
+            None,
+            None,
+            true,
+            &HashSet::new(),
+            &HashSet::new(),
+        );
+
+        assert_eq!(boosted[0].node.kind, NodeKind::Function);
+        assert_eq!(boosted[0].node.name, "LoadIdentityMessages");
+    }
+
+    #[test]
+    fn search_fuzzy_typo_recovers_symbol_above_markdown_noise() {
+        use atlas_core::{Node, NodeId};
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db_path = dir.path().join("atlas.db");
+        let db_path = db_path.to_string_lossy().to_string();
+        let mut store = Store::open(&db_path).expect("open store");
+
+        let function = Node {
+            id: NodeId::UNSET,
+            kind: NodeKind::Function,
+            name: "LoadIdentityMessages".to_string(),
+            qualified_name: "internal/requestctx/context.go::fn::LoadIdentityMessages".to_string(),
+            file_path: "internal/requestctx/context.go".to_string(),
+            line_start: 1,
+            line_end: 20,
+            language: "go".to_string(),
+            parent_name: None,
+            params: Some("()".to_string()),
+            return_type: None,
+            modifiers: Some("export".to_string()),
+            is_test: false,
+            file_hash: "h1".to_string(),
+            extra_json: serde_json::json!({}),
+        };
+        store
+            .replace_file_graph(
+                "internal/requestctx/context.go",
+                "h1",
+                Some("go"),
+                Some(20),
+                &[function],
+                &[],
+            )
+            .expect("replace function graph");
+
+        let markdown = Node {
+            id: NodeId::UNSET,
+            kind: NodeKind::File,
+            name: "Load Identity Messages".to_string(),
+            qualified_name: "docs/load_identity_messages.md".to_string(),
+            file_path: "docs/load_identity_messages.md".to_string(),
+            line_start: 1,
+            line_end: 40,
+            language: "markdown".to_string(),
+            parent_name: None,
+            params: None,
+            return_type: None,
+            modifiers: None,
+            is_test: false,
+            file_hash: "h2".to_string(),
+            extra_json: serde_json::json!({}),
+        };
+        store
+            .replace_file_graph(
+                "docs/load_identity_messages.md",
+                "h2",
+                Some("markdown"),
+                Some(40),
+                &[markdown],
+                &[],
+            )
+            .expect("replace markdown graph");
+
+        let query = SearchQuery {
+            text: "LoadIdentityMesages".to_string(),
+            fuzzy_match: true,
+            include_files: true,
+            limit: 10,
+            ..Default::default()
+        };
+
+        let results = search(&store, &query).expect("search results");
+        assert!(!results.is_empty(), "expected fuzzy search results");
+        assert_eq!(results[0].node.kind, NodeKind::Function);
+        assert_eq!(results[0].node.name, "LoadIdentityMessages");
+        assert!(
+            results
+                .iter()
+                .any(|result| result.node.kind == NodeKind::File),
+            "expected file noise to remain available when include_files=true"
+        );
+    }
+
+    #[test]
+    fn search_excludes_file_nodes_by_default() {
+        use atlas_core::{Node, NodeId};
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db_path = dir.path().join("atlas.db");
+        let db_path = db_path.to_string_lossy().to_string();
+        let mut store = Store::open(&db_path).expect("open store");
+
+        let file_node = Node {
+            id: NodeId::UNSET,
+            kind: NodeKind::File,
+            name: "Architecture Notes".to_string(),
+            qualified_name: "docs/architecture.md".to_string(),
+            file_path: "docs/architecture.md".to_string(),
+            line_start: 1,
+            line_end: 10,
+            language: "markdown".to_string(),
+            parent_name: None,
+            params: None,
+            return_type: None,
+            modifiers: None,
+            is_test: false,
+            file_hash: "h".to_string(),
+            extra_json: serde_json::json!({}),
+        };
+        store
+            .replace_file_graph(
+                "docs/architecture.md",
+                "h",
+                Some("markdown"),
+                Some(10),
+                &[file_node],
+                &[],
+            )
+            .expect("replace file graph");
+
+        let no_files = search(
+            &store,
+            &SearchQuery {
+                text: "Architecture Notes".to_string(),
+                limit: 5,
+                ..Default::default()
+            },
+        )
+        .expect("search without files");
+        assert!(
+            no_files.is_empty(),
+            "file nodes should be hidden by default"
+        );
+
+        let with_files = search(
+            &store,
+            &SearchQuery {
+                text: "Architecture Notes".to_string(),
+                include_files: true,
+                limit: 5,
+                ..Default::default()
+            },
+        )
+        .expect("search with files");
+        assert_eq!(with_files[0].node.kind, NodeKind::File);
     }
 
     #[test]

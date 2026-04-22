@@ -230,6 +230,10 @@ pub struct SearchQuery {
     pub text: String,
     pub kind: Option<String>,
     pub language: Option<String>,
+    /// Include file nodes in search results.
+    ///
+    /// Defaults to `false` because most callers want symbol-centric results.
+    pub include_files: bool,
     pub file_path: Option<String>,
     /// Filter results whose `file_path` starts with this subpath prefix.
     pub subpath: Option<String>,
@@ -245,8 +249,9 @@ pub struct SearchQuery {
     /// Reference language for same-language boost. When set, results in the
     /// same language receive a ranking bonus.
     pub reference_language: Option<String>,
-    /// Enable fuzzy (edit-distance) name matching boost (+4). Off by default
-    /// because it adds O(results) edit-distance work.
+    /// Enable fuzzy (edit-distance) typo recovery for near-miss symbol names.
+    /// Off by default because it adds O(results) edit-distance work plus a
+    /// wider relaxed-candidate search.
     pub fuzzy_match: bool,
     /// Boost nodes whose file was among the most recently indexed (+4). Requires
     /// one extra DB read inside `atlas_search::search`; off by default.
@@ -283,6 +288,7 @@ impl Default for SearchQuery {
             text: String::new(),
             kind: None,
             language: None,
+            include_files: false,
             file_path: None,
             subpath: None,
             is_test: None,

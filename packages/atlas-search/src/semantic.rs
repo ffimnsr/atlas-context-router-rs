@@ -11,7 +11,7 @@ use atlas_core::{Node, Result, ScoredNode, SearchQuery};
 use atlas_store_sqlite::Store;
 use tracing::debug;
 
-use crate::{apply_ranking_boosts, build_fts_query, merge_scored_nodes};
+use crate::{apply_ranking_boosts, build_fts_query, maybe_exclude_file_nodes, merge_scored_nodes};
 
 // ---------------------------------------------------------------------------
 // Symbol neighborhood
@@ -159,7 +159,11 @@ pub fn expanded_search(store: &Store, query: &SearchQuery) -> Result<Vec<ScoredN
             &Default::default(),
             &query.changed_files.iter().cloned().collect(),
         );
-        return Ok(boosted);
+        return Ok(maybe_exclude_file_nodes(
+            boosted,
+            query.include_files,
+            query.limit,
+        ));
     }
 
     // Phase 3: second FTS pass with expanded query.
@@ -181,7 +185,7 @@ pub fn expanded_search(store: &Store, query: &SearchQuery) -> Result<Vec<ScoredN
     let merged = merge_scored_nodes(initial, expanded);
     let changed_set: std::collections::HashSet<String> =
         query.changed_files.iter().cloned().collect();
-    let mut boosted = apply_ranking_boosts(
+    let boosted = apply_ranking_boosts(
         merged,
         &query.text,
         query.reference_file.as_deref(),
@@ -190,8 +194,11 @@ pub fn expanded_search(store: &Store, query: &SearchQuery) -> Result<Vec<ScoredN
         &Default::default(),
         &changed_set,
     );
-    boosted.truncate(query.limit);
-    Ok(boosted)
+    Ok(maybe_exclude_file_nodes(
+        boosted,
+        query.include_files,
+        query.limit,
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -411,9 +418,19 @@ pub fn context_boosted_search(
 
     // Graph-expand final seeds.
     if effective_query.graph_expand && !boosted.is_empty() {
-        crate::graph_expand(store, boosted, effective_query.graph_max_hops, query.limit)
+        let expanded =
+            crate::graph_expand(store, boosted, effective_query.graph_max_hops, query.limit)?;
+        Ok(maybe_exclude_file_nodes(
+            expanded,
+            query.include_files,
+            query.limit,
+        ))
     } else {
-        Ok(boosted.into_iter().take(query.limit).collect())
+        Ok(maybe_exclude_file_nodes(
+            boosted,
+            query.include_files,
+            query.limit,
+        ))
     }
 }
 

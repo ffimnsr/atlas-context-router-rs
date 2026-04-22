@@ -33,6 +33,152 @@ fn query_graph_invalid_regex_returns_error() {
 }
 
 #[test]
+fn query_graph_fuzzy_typo_prefers_symbol_over_markdown_file() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let db_path = dir.path().join("atlas.db").to_string_lossy().to_string();
+    let mut store = Store::open(&db_path).expect("open store");
+
+    let function = Node {
+        id: NodeId::UNSET,
+        kind: NodeKind::Function,
+        name: "LoadIdentityMessages".to_owned(),
+        qualified_name: "internal/requestctx/context.go::fn::LoadIdentityMessages".to_owned(),
+        file_path: "internal/requestctx/context.go".to_owned(),
+        line_start: 1,
+        line_end: 20,
+        language: "go".to_owned(),
+        parent_name: None,
+        params: Some("()".to_owned()),
+        return_type: None,
+        modifiers: Some("export".to_owned()),
+        is_test: false,
+        file_hash: "h1".to_owned(),
+        extra_json: serde_json::json!({}),
+    };
+    store
+        .replace_file_graph(
+            "internal/requestctx/context.go",
+            "h1",
+            Some("go"),
+            Some(20),
+            &[function],
+            &[],
+        )
+        .expect("replace function graph");
+
+    let markdown = Node {
+        id: NodeId::UNSET,
+        kind: NodeKind::File,
+        name: "Load Identity Messages".to_owned(),
+        qualified_name: "docs/load_identity_messages.md".to_owned(),
+        file_path: "docs/load_identity_messages.md".to_owned(),
+        line_start: 1,
+        line_end: 40,
+        language: "markdown".to_owned(),
+        parent_name: None,
+        params: None,
+        return_type: None,
+        modifiers: None,
+        is_test: false,
+        file_hash: "h2".to_owned(),
+        extra_json: serde_json::json!({}),
+    };
+    store
+        .replace_file_graph(
+            "docs/load_identity_messages.md",
+            "h2",
+            Some("markdown"),
+            Some(40),
+            &[markdown],
+            &[],
+        )
+        .expect("replace markdown graph");
+
+    let args = serde_json::json!({
+        "text": "LoadIdentityMesages",
+        "fuzzy": true,
+        "include_files": true,
+        "output_format": "json"
+    });
+    let response =
+        call("query_graph", Some(&args), "/ignored", &db_path).expect("query_graph call");
+    let text = unwrap_tool_text(response);
+    let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
+    let items = v.as_array().expect("result array");
+
+    assert!(!items.is_empty(), "expected fuzzy results");
+    assert_eq!(items[0]["kind"].as_str(), Some("function"));
+    assert_eq!(
+        items[0]["qn"].as_str(),
+        Some("internal/requestctx/context.go::fn::LoadIdentityMessages")
+    );
+    assert!(
+        items
+            .iter()
+            .any(|item| item["kind"].as_str() == Some("file")),
+        "include_files=true should keep file nodes visible"
+    );
+}
+
+#[test]
+fn query_graph_include_files_opt_in_controls_file_results() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let db_path = dir.path().join("atlas.db").to_string_lossy().to_string();
+    let mut store = Store::open(&db_path).expect("open store");
+
+    let file_node = Node {
+        id: NodeId::UNSET,
+        kind: NodeKind::File,
+        name: "Architecture Notes".to_owned(),
+        qualified_name: "docs/architecture.md".to_owned(),
+        file_path: "docs/architecture.md".to_owned(),
+        line_start: 1,
+        line_end: 10,
+        language: "markdown".to_owned(),
+        parent_name: None,
+        params: None,
+        return_type: None,
+        modifiers: None,
+        is_test: false,
+        file_hash: "h".to_owned(),
+        extra_json: serde_json::json!({}),
+    };
+    store
+        .replace_file_graph(
+            "docs/architecture.md",
+            "h",
+            Some("markdown"),
+            Some(10),
+            &[file_node],
+            &[],
+        )
+        .expect("replace file graph");
+
+    let no_files = serde_json::json!({ "text": "Architecture Notes", "output_format": "json" });
+    let resp =
+        call("query_graph", Some(&no_files), "/ignored", &db_path).expect("query_graph no files");
+    let text = unwrap_tool_text(resp);
+    let no_files_value: serde_json::Value = serde_json::from_str(&text).expect("parse json");
+    assert!(
+        no_files_value
+            .as_array()
+            .is_some_and(|items| items.is_empty())
+    );
+
+    let with_files = serde_json::json!({
+        "text": "Architecture Notes",
+        "include_files": true,
+        "output_format": "json"
+    });
+    let resp = call("query_graph", Some(&with_files), "/ignored", &db_path)
+        .expect("query_graph with files");
+    let text = unwrap_tool_text(resp);
+    let with_files_value: serde_json::Value = serde_json::from_str(&text).expect("parse json");
+    let items = with_files_value.as_array().expect("result array");
+    assert_eq!(items[0]["kind"].as_str(), Some("file"));
+}
+
+#[test]
 fn query_graph_response_carries_relationship_guidance() {
     let fixture = setup_mcp_fixture();
     let args = serde_json::json!({ "text": "compute", "output_format": "json" });

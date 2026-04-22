@@ -17,7 +17,7 @@ pub fn tool_list() -> serde_json::Value {
             },
             {
                 "name": "query_graph",
-                "description": "Full-text search the code graph by symbol name or identifier. Returns a compact, ranked list of matching symbols only; it does not return caller/callee usage edges. IMPORTANT: text is matched against indexed symbol names and qualified names (identifiers like 'BalancesTab', 'useFilteredBalances'), NOT against natural language — use short exact symbol names, not descriptive phrases. Follow up with symbol_neighbors, traverse_graph, or get_context when you need relationships.",
+                "description": "Full-text search the code graph by symbol name or identifier. Returns a compact, ranked list of matching symbols by default; set include_files=true when file-level hits are also useful. It does not return caller/callee usage edges. IMPORTANT: text is matched against indexed symbol names and qualified names (identifiers like 'BalancesTab', 'useFilteredBalances'), NOT against natural language — use short exact symbol names, not descriptive phrases. Follow up with symbol_neighbors, traverse_graph, or get_context when you need relationships.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -30,8 +30,9 @@ pub fn tool_list() -> serde_json::Value {
                         "expand_hops": { "type": "integer", "description": "Max edge hops when expand=true (default 1)" },
                         "regex":    { "type": "string",  "description": "Regex pattern matched against name and qualified_name via SQL UDF. Three modes: (1) regex-only structural scan when text is empty — filters every node in the DB; (2) text+regex: FTS5 runs first then the UDF post-filters its candidates inside SQLite; (3) invalid pattern returns an error with details. Supports regex crate alternation syntax (e.g. 'handle|HANDLE|Handle_'). Must be valid regex crate syntax." },
                         "subpath":  { "type": "string",  "description": "Restrict results to nodes whose file_path starts with this prefix (e.g. 'src/auth', 'packages/atlas-core'). Filtering happens in SQL before ranking." },
-                        "fuzzy":    { "type": "boolean", "description": "Enable fuzzy (edit-distance) name-matching boost for near-miss symbol names (default false). Adds +4 score to symbols whose name is within edit-distance threshold of the query. Useful for typo recovery; prefer a single short identifier for best results." },
+                        "fuzzy":    { "type": "boolean", "description": "Enable fuzzy (edit-distance) typo recovery for near-miss symbol names (default false). Uses relaxed candidate expansion plus stronger code-symbol ranking so close symbol typos outrank weaker docs/config matches." },
                         "hybrid":   { "type": "boolean", "description": "Enable hybrid FTS + vector retrieval with Reciprocal Rank Fusion (default false). Requires ATLAS_EMBED_URL to be set; falls back to FTS-only when no embedding backend is configured." },
+                        "include_files": { "type": "boolean", "description": "Include file nodes in the result set (default false). Leave disabled for symbol-centric search; enable when a file-level hit is useful." },
                         "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
                     },
                     "required": []
@@ -39,7 +40,7 @@ pub fn tool_list() -> serde_json::Value {
             },
             {
                 "name": "batch_query_graph",
-                "description": "Run multiple query_graph searches in a single round-trip. Provide EITHER 'text' (a space- or comma-separated list of symbol names that is auto-split into one query per token, e.g. 'BalancesTab, compute, handleRequest') OR 'queries' (an explicit array of query objects). Returns an array of per-query results. Each token/query uses the same symbol-name FTS as query_graph — pass short exact identifiers, not natural-language phrases. Max 20 tokens/queries per call.",
+                "description": "Run multiple query_graph searches in a single round-trip. Provide EITHER 'text' (a space- or comma-separated list of symbol names that is auto-split into one query per token, e.g. 'BalancesTab, compute, handleRequest') OR 'queries' (an explicit array of query objects). Returns an array of per-query results. Each token/query uses the same symbol-name FTS as query_graph — pass short exact identifiers, not natural-language phrases. File nodes remain opt-in per query via include_files=true. Max 20 tokens/queries per call.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -63,8 +64,9 @@ pub fn tool_list() -> serde_json::Value {
                                     "expand_hops": { "type": "integer", "description": "Max edge hops when expand=true (default 1)" },
                                     "regex":       { "type": "string",  "description": "Regex pattern matched against name and qualified_name via SQL UDF. Must be valid regex crate syntax." },
                                     "subpath":     { "type": "string",  "description": "Restrict results to nodes whose file_path starts with this prefix." },
-                                    "fuzzy":       { "type": "boolean", "description": "Enable fuzzy name-matching boost (default false)." },
-                                    "hybrid":      { "type": "boolean", "description": "Enable hybrid FTS + vector retrieval (default false). Requires ATLAS_EMBED_URL." }
+                                    "fuzzy":       { "type": "boolean", "description": "Enable fuzzy typo recovery (default false)." },
+                                    "hybrid":      { "type": "boolean", "description": "Enable hybrid FTS + vector retrieval (default false). Requires ATLAS_EMBED_URL." },
+                                    "include_files": { "type": "boolean", "description": "Include file nodes in the result set (default false)." }
                                 },
                                 "required": []
                             }
@@ -458,6 +460,7 @@ pub fn tool_list() -> serde_json::Value {
                         "subpath":       { "type": "string",  "description": "File-path prefix filter — same as query_graph 'subpath'." },
                         "fuzzy":         { "type": "boolean", "description": "Whether fuzzy name-matching boost would be active (default false)." },
                         "hybrid":        { "type": "boolean", "description": "Whether hybrid FTS + vector retrieval would be used (default false). Requires ATLAS_EMBED_URL." },
+                        "include_files": { "type": "boolean", "description": "Whether file nodes would be included in the result set (default false)." },
                         "output_format": { "type": "string",  "description": DEFAULT_OUTPUT_DESCRIPTION }
                     },
                     "required": []
