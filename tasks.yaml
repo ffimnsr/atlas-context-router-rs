@@ -35,3 +35,7 @@ tasks:
     commands:
       - bash -lc 'if [ -L .git/hooks ]; then rm .git/hooks; fi && mkdir -p .git/hooks'
     description: Remove `.git/hooks` symlink and recreate local hooks directory.
+  lf:
+    commands:
+      -  git ls-files -z --recurse-submodules | xargs -0 wc -l | awk '$1 > 1000 && $2 != "total"' | sort -nr
+    description: Check for files with more than 1000 LOC.
