@@ -179,7 +179,7 @@ fn bench_dead_code_scan_latency(c: &mut Criterion) {
                 b.iter(|| {
                     black_box(
                         engine
-                            .detect_dead_code(&[], Some("src/"), Some(module_count * 2))
+                            .detect_dead_code(&[], Some("src/"), Some(module_count * 2), &[])
                             .expect("detect dead code"),
                     );
                 });

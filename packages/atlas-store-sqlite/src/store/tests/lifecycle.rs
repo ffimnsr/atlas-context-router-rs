@@ -299,3 +299,88 @@ fn integrity_check_after_writes() {
         "DB with data should still pass integrity check: {issues:?}"
     );
 }
+
+// --- orphan-node query regression ----------------------------------------
+//
+// Ensures orphan_nodes() uses the correct edge schema column names
+// (source_qualified / target_qualified), not stale aliases like source_qn.
+
+#[test]
+fn orphan_nodes_returns_isolated_nodes() {
+    let mut store = open_in_memory();
+    let isolated = make_node(NodeKind::Function, "lone", "a.rs::fn::lone", "a.rs", "rust");
+    let connected_a = make_node(
+        NodeKind::Function,
+        "caller",
+        "a.rs::fn::caller",
+        "a.rs",
+        "rust",
+    );
+    let connected_b = make_node(
+        NodeKind::Function,
+        "callee",
+        "a.rs::fn::callee",
+        "a.rs",
+        "rust",
+    );
+    let edge = make_edge(
+        EdgeKind::Calls,
+        "a.rs::fn::caller",
+        "a.rs::fn::callee",
+        "a.rs",
+    );
+    store
+        .replace_file_graph(
+            "a.rs",
+            "h",
+            Some("rust"),
+            None,
+            &[isolated.clone(), connected_a, connected_b],
+            &[edge],
+        )
+        .unwrap();
+
+    let orphans = store
+        .orphan_nodes(100)
+        .expect("orphan_nodes must not error");
+    assert_eq!(orphans.len(), 1, "only the lone node should be an orphan");
+    assert_eq!(orphans[0].qualified_name, "a.rs::fn::lone");
+}
+
+#[test]
+fn orphan_nodes_empty_when_all_nodes_connected() {
+    let mut store = open_in_memory();
+    let a = make_node(NodeKind::Function, "a", "a.rs::fn::a", "a.rs", "rust");
+    let b = make_node(NodeKind::Function, "b", "a.rs::fn::b", "a.rs", "rust");
+    let edge = make_edge(EdgeKind::Calls, "a.rs::fn::a", "a.rs::fn::b", "a.rs");
+    store
+        .replace_file_graph("a.rs", "h", Some("rust"), None, &[a, b], &[edge])
+        .unwrap();
+
+    let orphans = store
+        .orphan_nodes(100)
+        .expect("orphan_nodes must not error");
+    assert!(
+        orphans.is_empty(),
+        "no orphans expected when all nodes have edges"
+    );
+}
+
+#[test]
+fn orphan_nodes_all_when_no_edges() {
+    let mut store = open_in_memory();
+    let a = make_node(NodeKind::Function, "a", "a.rs::fn::a", "a.rs", "rust");
+    let b = make_node(NodeKind::Function, "b", "a.rs::fn::b", "a.rs", "rust");
+    store
+        .replace_file_graph("a.rs", "h", Some("rust"), None, &[a, b], &[])
+        .unwrap();
+
+    let orphans = store
+        .orphan_nodes(100)
+        .expect("orphan_nodes must not error");
+    assert_eq!(
+        orphans.len(),
+        2,
+        "all nodes are orphans when there are no edges"
+    );
+}

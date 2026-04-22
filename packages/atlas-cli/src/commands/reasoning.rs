@@ -82,7 +82,15 @@ pub fn run_analyze(cli: &Cli) -> Result<()> {
                     println!("  Impacted symbols: {}", result.impacted_symbols.len());
                     println!("  Impacted files  : {}", result.impacted_files.len());
                     println!("  Impacted tests  : {}", result.impacted_tests.len());
-                    for im in result.impacted_symbols.iter().take(20) {
+
+                    // Primary impacts (Definite/Probable) shown first; containment-noise
+                    // (Weak) demoted to a separate section to reduce output noise.
+                    let (primary, containment): (Vec<_>, Vec<_>) = result
+                        .impacted_symbols
+                        .iter()
+                        .partition(|im| im.impact_class != atlas_core::ImpactClass::Weak);
+
+                    for im in primary.iter().take(20) {
                         println!(
                             "  [{:?}] {} {} (depth {})",
                             im.impact_class,
@@ -91,6 +99,23 @@ pub fn run_analyze(cli: &Cli) -> Result<()> {
                             im.depth,
                         );
                     }
+                    if !containment.is_empty() {
+                        println!(
+                            "\n  Containment/structural ({}): — child nodes of removed symbol",
+                            containment.len()
+                        );
+                        for im in containment.iter().take(10) {
+                            println!(
+                                "  [Weak] {} {}",
+                                im.node.kind.as_str(),
+                                im.node.qualified_name,
+                            );
+                        }
+                        if containment.len() > 10 {
+                            println!("  ... and {} more", containment.len() - 10);
+                        }
+                    }
+
                     if !result.uncertainty_flags.is_empty() {
                         println!("\nUncertainty:");
                         for flag in &result.uncertainty_flags {
@@ -101,6 +126,9 @@ pub fn run_analyze(cli: &Cli) -> Result<()> {
                         println!("\nWarnings:");
                         for w in &result.warnings {
                             println!("  [{:?}] {}", w.confidence, w.message);
+                            for s in &w.suggestions {
+                                println!("    -> {s}");
+                            }
                         }
                     }
                 }
@@ -110,13 +138,27 @@ pub fn run_analyze(cli: &Cli) -> Result<()> {
                 allowlist,
                 subpath,
                 limit,
+                summary,
+                exclude_kind,
+                max_files: _,
+                max_edges: _,
+                code_only: _,
             } => {
                 let allowlist_refs: Vec<&str> = allowlist.iter().map(String::as_str).collect();
+                let exclude_kinds: Vec<atlas_core::NodeKind> =
+                    exclude_kind.iter().filter_map(|k| k.parse().ok()).collect();
                 let candidates = engine
-                    .detect_dead_code(&allowlist_refs, subpath.as_deref(), Some(*limit))
+                    .detect_dead_code(
+                        &allowlist_refs,
+                        subpath.as_deref(),
+                        Some(*limit),
+                        &exclude_kinds,
+                    )
                     .context("dead-code detection failed")?;
 
-                if cli.json {
+                if *summary {
+                    println!("Dead-code candidates: {}", candidates.len());
+                } else if cli.json {
                     print_json("analyze_dead_code", serde_json::to_value(&candidates)?)?;
                 } else if candidates.is_empty() {
                     println!("No dead-code candidates found.");
@@ -150,11 +192,12 @@ pub fn run_analyze(cli: &Cli) -> Result<()> {
                     print_json("analyze_safety", serde_json::to_value(&result)?)?;
                 } else {
                     println!("Refactor safety for: {symbol}");
-                    println!("  Score  : {:.3}", result.safety.score);
-                    println!("  Band   : {:?}", result.safety.band);
-                    println!("  Fan-in : {}", result.fan_in);
-                    println!("  Fan-out: {}", result.fan_out);
-                    println!("  Tests  : {}", result.linked_test_count);
+                    println!("  Score    : {:.3}", result.safety.score);
+                    println!("  Band     : {:?}", result.safety.band);
+                    println!("  Fan-in   : {}", result.fan_in);
+                    println!("  Fan-out  : {}", result.fan_out);
+                    println!("  Tests    : {}", result.linked_test_count);
+                    println!("  Coverage : {:?}", result.coverage_strength);
                     if !result.safety.reasons.is_empty() {
                         println!("\nReasons:");
                         for r in &result.safety.reasons {

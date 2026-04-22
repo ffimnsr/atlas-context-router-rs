@@ -148,7 +148,7 @@ Read this part in order. It covers initial architecture, storage, parsing, index
 
 - [x] CLI:
   - [x] `clap`
-  - [ ] `clap_complete`
+  - [x] `clap_complete`
 - [x] Errors:
   - [x] `thiserror`
   - [x] `anyhow` for CLI layer only
@@ -2090,17 +2090,17 @@ Warn agents when graph-backed answers may be stale for changed code files.
 
 Expose `atlas context` detail toggles through MCP `get_context` so agents can tune token use without changing service internals.
 
-- [ ] add `max_files` argument
-- [ ] add `code_spans` argument
-- [ ] add `tests` argument
-- [ ] add `imports` argument
-- [ ] add `neighbors` argument
-- [ ] add `semantic` argument
-- [ ] keep defaults token-efficient and compatible with current MCP behavior
-- [ ] route all toggles through `ContextEngine` request options
-- [ ] include applied limits, omitted sections, and truncation metadata in responses
-- [ ] document token-use tradeoffs for each toggle in MCP reference
-- [ ] add tests for each toggle, combined toggles, limit enforcement, and JSON/TOON output parity
+- [x] add `max_files` argument
+- [x] add `code_spans` argument
+- [x] add `tests` argument
+- [x] add `imports` argument
+- [x] add `neighbors` argument
+- [x] add `semantic` argument
+- [x] keep defaults token-efficient and compatible with current MCP behavior
+- [x] route all toggles through `ContextEngine` request options
+- [x] include applied limits, omitted sections, and truncation metadata in responses
+- [x] document token-use tradeoffs for each toggle in MCP reference
+- [x] add tests for each toggle, combined toggles, limit enforcement, and JSON/TOON output parity
 
 ### MCP13 — Saved context read-by-id
 
@@ -2642,10 +2642,10 @@ Answer structural questions from graph + parser + store facts only. No unsupport
 - [x] include per-node depth
 - [x] include edge kind per path
 - [x] include impact class
-- [ ] demote containment-only relationships in removal/refactor analysis:
-  - [ ] keep containment siblings as secondary context
-  - [ ] do not count `contains` edges as probable impact unless explicitly requested
-  - [ ] add regression for `analyze remove <symbol>` inflated by file/package containment
+- [x] demote containment-only relationships in removal/refactor analysis:
+  - [x] keep containment siblings as secondary context
+  - [x] do not count `contains` edges as probable impact unless explicitly requested
+  - [x] add regression for `analyze remove <symbol>` inflated by file/package containment
 
 ### 23.3 Dead code, safety, dependency removal
 
@@ -2709,20 +2709,20 @@ Answer structural questions from graph + parser + store facts only. No unsupport
   - [x] blocking references
   - [x] confidence tier
   - [x] suggested cleanup edits
-- [ ] default `analyze dead-code` to code symbols only:
-  - [ ] functions
-  - [ ] methods
-  - [ ] structs/types/classes/interfaces/traits/enums
-  - [ ] exported constants/vars where language supports them
-  - [ ] exclude Markdown, TOML keys, docs/config nodes unless `--include-non-code`
-- [ ] add analysis output controls:
-  - [ ] `--limit`
-  - [ ] `--max-edges`
-  - [ ] `--max-files`
-  - [ ] `--summary`
-  - [ ] `--exclude-kind`
-  - [ ] `--code-only`
-- [ ] enforce compact defaults for MCP analysis wrappers
+- [x] default `analyze dead-code` to code symbols only:
+  - [x] functions
+  - [x] methods
+  - [x] structs/types/classes/interfaces/traits/enums
+  - [x] exported constants/vars where language supports them
+  - [x] exclude Markdown, TOML keys, docs/config nodes unless `--include-non-code`
+- [x] add analysis output controls:
+  - [x] `--limit`
+  - [x] `--max-edges`
+  - [x] `--max-files`
+  - [x] `--summary`
+  - [x] `--exclude-kind`
+  - [x] `--code-only`
+- [x] enforce compact defaults for MCP analysis wrappers
 
 ### 23.4 Rename radius, test adjacency, risk, APIs
 
@@ -2746,7 +2746,7 @@ Answer structural questions from graph + parser + store facts only. No unsupport
   - [x] map changed symbol to same-module tests
   - [x] flag no linked tests
   - [x] flag weak test adjacency only
-  - [ ] NOTE: current safety output can understate coverage; distinguish direct, indirect-through-callers, package-level, and no-known coverage
+  - [x] NOTE: current safety output can understate coverage; distinguish direct, indirect-through-callers, package-level, and no-known coverage
 - [x] test-adjacency output:
   - [x] linked tests
   - [x] coverage strength
@@ -2958,11 +2958,11 @@ Shared support for explainability, config, CLI surface, JSON contracts, benchmar
 
 - [x] `atlas context <symbol>`
 - [x] `atlas analyze remove <symbol>`
-  - [ ] add compact output controls and containment-noise demotion from Phase 23 follow-up
+  - [x] add compact output controls and containment-noise demotion from Phase 23 follow-up
 - [x] `atlas analyze dead-code`
-  - [ ] add code-only default and output limits from Phase 23 follow-up
+  - [x] add code-only default and output limits from Phase 23 follow-up
 - [x] `atlas analyze safety <symbol>`
-  - [ ] distinguish direct, indirect-through-callers, package-level, and missing test coverage
+  - [x] distinguish direct, indirect-through-callers, package-level, and missing test coverage
 - [x] `atlas analyze dependency <symbol-or-import>`
 - [x] `atlas refactor rename <symbol> <new-name> --dry-run`
 - [x] `atlas refactor remove-dead <symbol> --dry-run`
@@ -2971,7 +2971,7 @@ Shared support for explainability, config, CLI surface, JSON contracts, benchmar
 ### 25.5 JSON output, benchmarks, completion criteria
 
 - [x] stable JSON schema for all analysis commands
-  - [ ] NOTE: stable schema exists, but unresolved seeds and warnings need standardized `ok/error_code/message/suggestions` contract
+  - [x] NOTE: stable schema exists, but unresolved seeds and warnings need standardized `ok/error_code/message/suggestions` contract
 - [x] stable JSON schema for patch previews
 - [x] include evidence and certainty fields
 - [x] benchmark context retrieval latency
@@ -3010,14 +3010,14 @@ Detailed MCP tool rollout, schema work, and response shaping now live in Part II
 
 - [x] `atlas doctor`
 - [x] `atlas debug graph`
-  - [ ] NOTE: `debug-graph --json` currently needs schema-mismatch fix for edge columns (`e.source_qn` failure)
+  - [x] NOTE: `debug-graph --json` currently needs schema-mismatch fix for edge columns (`e.source_qn` failure)
 - [x] `atlas explain-query`
-  - [ ] expose same query-explanation details through MCP `explain_query`
+  - [x] expose same query-explanation details through MCP `explain_query`
 
 ### 27.3 Data integrity
 
 - [x] orphan-node detection
-  - [ ] add regression that orphan-node query uses current edge schema column names
+  - [x] add regression that orphan-node query uses current edge schema column names
 - [x] edge validation
 - [x] DB consistency checks
 

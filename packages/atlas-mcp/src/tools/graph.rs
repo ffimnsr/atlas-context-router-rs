@@ -560,13 +560,61 @@ pub(super) fn tool_explain_query(
     }
 
     let db_exists = std::path::Path::new(db_path).exists();
-    let indexed_node_count: Option<i64> = if db_exists {
-        atlas_store_sqlite::Store::open(db_path)
-            .ok()
-            .and_then(|s| s.stats().ok())
-            .map(|st| st.node_count)
+
+    // Open store once; reuse for both node count and actual search execution.
+    let (indexed_node_count, latency_ms, result_count, matches): (
+        Option<i64>,
+        Option<u128>,
+        Option<usize>,
+        Option<Vec<serde_json::Value>>,
+    ) = if db_exists {
+        match atlas_store_sqlite::Store::open(db_path) {
+            Ok(store) => {
+                let count = store.stats().ok().map(|st| st.node_count);
+                if regex_valid {
+                    let query = SearchQuery {
+                        text: text.clone(),
+                        kind: kind.clone(),
+                        language: language.clone(),
+                        limit,
+                        subpath: subpath.clone(),
+                        regex_pattern: regex.clone(),
+                        fuzzy_match: fuzzy,
+                        hybrid,
+                        ..Default::default()
+                    };
+                    let t0 = std::time::Instant::now();
+                    let results = if semantic {
+                        sem::expanded_search(&store, &query).unwrap_or_default()
+                    } else if fuzzy || hybrid {
+                        fts_search(&store, &query).unwrap_or_default()
+                    } else {
+                        store.search(&query).unwrap_or_default()
+                    };
+                    let elapsed = t0.elapsed().as_millis();
+                    let m: Vec<serde_json::Value> = results
+                        .iter()
+                        .map(|r| {
+                            serde_json::json!({
+                                "score": r.score,
+                                "kind": r.node.kind.as_str(),
+                                "qualified_name": r.node.qualified_name,
+                                "file_path": r.node.file_path,
+                                "line_start": r.node.line_start,
+                                "language": r.node.language,
+                            })
+                        })
+                        .collect();
+                    let n = m.len();
+                    (count, Some(elapsed), Some(n), Some(m))
+                } else {
+                    (count, None, None, None)
+                }
+            }
+            Err(_) => (None, None, None, None),
+        }
     } else {
-        None
+        (None, None, None, None)
     };
 
     let warnings: Vec<&str> = {
@@ -618,6 +666,9 @@ pub(super) fn tool_explain_query(
         "indexed_node_count": indexed_node_count,
         "db_exists": db_exists,
         "warnings": warnings,
+        "latency_ms": latency_ms,
+        "result_count": result_count,
+        "matches": matches,
     });
 
     tool_result_value(&result, output_format)

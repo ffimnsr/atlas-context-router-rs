@@ -574,6 +574,28 @@ pub enum AnalyzeCommand {
         /// Maximum number of candidates to return.
         #[arg(long, default_value_t = 100)]
         limit: usize,
+
+        /// Output only counts, not the full candidate list.
+        #[arg(long)]
+        summary: bool,
+
+        /// Exclude candidates of these kinds (e.g. `constant`, `variable`).
+        #[arg(long = "exclude-kind", num_args = 1..)]
+        exclude_kind: Vec<String>,
+
+        /// Restrict output to code symbols only (functions, methods,
+        /// structs/types, traits, enums, interfaces, constants, variables).
+        /// This is the default; provided for explicitness.
+        #[arg(long, default_value_t = true)]
+        code_only: bool,
+
+        /// Maximum number of impacted files to show per candidate.
+        #[arg(long)]
+        max_files: Option<usize>,
+
+        /// Maximum number of edges to show per candidate.
+        #[arg(long)]
+        max_edges: Option<usize>,
     },
 
     /// Score refactor safety for a symbol.

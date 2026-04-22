@@ -192,9 +192,15 @@ pub fn tool_list() -> serde_json::Value {
                         "file":      { "type": "string",  "description": "Repo-relative file path target (file intent). Alternative to query/files." },
                         "files":     { "type": "array", "items": { "type": "string" }, "description": "Changed file paths for review/impact context. Alternative to query/file." },
                         "intent":    { "type": "string",  "description": "Override intent: symbol, file, review, impact, usage_lookup, refactor_safety, dead_code_check, rename_preview, dependency_removal. Inferred when omitted." },
-                        "max_nodes": { "type": "integer", "description": "Maximum nodes to include (default 100)" },
-                        "max_edges": { "type": "integer", "description": "Maximum edges to include (default 100)" },
-                        "max_depth": { "type": "integer", "description": "Traversal depth in graph hops (default 2)" },
+                        "max_nodes": { "type": "integer", "description": "Maximum nodes to include (default 100)." },
+                        "max_edges": { "type": "integer", "description": "Maximum edges to include (default 100)." },
+                        "max_files": { "type": "integer", "description": "Maximum files to include in result. Omit for no cap. Reduces token use when the change-set is large." },
+                        "max_depth": { "type": "integer", "description": "Traversal depth in graph hops (default 2)." },
+                        "code_spans": { "type": "boolean", "description": "Include line-range spans for each selected file node (default false). Adds token cost; useful when you need precise edit coordinates." },
+                        "tests":     { "type": "boolean", "description": "Include test nodes in context (default false). Enable when reviewing test coverage or debugging test failures." },
+                        "imports":   { "type": "boolean", "description": "Include import edges and nodes (default true). Set false to reduce noise when only callers/callees matter." },
+                        "neighbors": { "type": "boolean", "description": "Include containment-sibling nodes — functions/types in the same parent scope (default false)." },
+                        "semantic":  { "type": "boolean", "description": "Run graph-aware semantic search to resolve the best-matching qualified name before building context (default false). Useful when the symbol name is ambiguous or approximate." },
                         "include_saved_context": { "type": "boolean", "description": "When true, also query the content store for saved artifacts relevant to this request and include them in the result (default false)." },
                         "session_id": { "type": "string",  "description": "Restrict saved-context retrieval to artifacts from this session and apply a same-session relevance boost." },
                         "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
@@ -478,6 +484,8 @@ pub fn tool_list() -> serde_json::Value {
                         "symbols":       { "type": "array",   "items": { "type": "string" }, "description": "Fully-qualified symbol names to remove." },
                         "max_depth":     { "type": "integer", "description": "Traversal depth limit (default 3)." },
                         "max_nodes":     { "type": "integer", "description": "Maximum impacted nodes to return (default 200)." },
+                        "max_files":     { "type": "integer", "description": "Maximum impacted files to include in the response (default 20). Raises omitted_file_count when truncated." },
+                        "max_edges":     { "type": "integer", "description": "Maximum relevant edges to include in the response (default 50). Raises omitted_edge_count when truncated." },
                         "output_format": { "type": "string",  "description": DEFAULT_OUTPUT_DESCRIPTION }
                     },
                     "required": ["symbols"]
@@ -485,13 +493,18 @@ pub fn tool_list() -> serde_json::Value {
             },
             {
                 "name": "analyze_dead_code",
-                "description": "Detect dead-code candidates: nodes with no inbound semantic edges that are not public, not tests, and not in the entrypoint allowlist. Returns candidates with certainty tiers and blocker flags.",
+                "description": "Detect dead-code candidates: private/unexported code symbols (functions, methods, structs/types, traits, enums, interfaces, constants, variables) with no inbound semantic edges, not in the entrypoint allowlist, and not tests. Returns candidates with certainty tiers and blocker flags. Defaults to code symbols only.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
                         "allowlist":     { "type": "array",   "items": { "type": "string" }, "description": "Qualified names to exclude from dead-code candidates even when they have no inbound edges." },
                         "subpath":       { "type": "string",  "description": "Restrict scan to nodes whose file_path starts with this prefix (e.g. 'src/internal')." },
-                        "limit":         { "type": "integer", "description": "Maximum candidates to return (default 500)." },
+                        "limit":         { "type": "integer", "description": "Maximum candidates to return (default 50)." },
+                        "summary":       { "type": "boolean", "description": "Return only the candidate count, not the full list. Useful for quick health checks." },
+                        "exclude_kind":  { "type": "array",   "items": { "type": "string" }, "description": "Node kinds to exclude from results (e.g. ['constant', 'variable']). Accepted values: function, method, struct, enum, trait, interface, class, constant, variable." },
+                        "code_only":     { "type": "boolean", "description": "Restrict to code symbols only (default true). Non-code nodes (files, packages, docs) are always excluded in the current implementation." },
+                        "max_files":     { "type": "integer", "description": "Reserved for future per-candidate file-list truncation. No effect in current implementation." },
+                        "max_edges":     { "type": "integer", "description": "Reserved for future per-candidate edge-list truncation. No effect in current implementation." },
                         "output_format": { "type": "string",  "description": DEFAULT_OUTPUT_DESCRIPTION }
                     },
                     "required": []

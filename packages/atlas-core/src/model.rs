@@ -893,6 +893,12 @@ pub struct ReasoningEvidence {
 pub struct ReasoningWarning {
     pub message: String,
     pub confidence: ConfidenceTier,
+    /// Machine-readable error code (e.g. `"seed_not_found"`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<String>,
+    /// Suggested remediation steps for this warning.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub suggestions: Vec<String>,
 }
 
 /// A node enriched with depth, impact class, and the edge kind that introduced it.
@@ -939,6 +945,8 @@ pub struct RefactorSafetyResult {
     pub fan_out: usize,
     pub linked_test_count: usize,
     pub unresolved_edge_count: usize,
+    /// Classified test coverage strength for this symbol.
+    pub coverage_strength: CoverageStrength,
     pub evidence: Vec<ReasoningEvidence>,
 }
 
@@ -992,6 +1000,8 @@ pub struct RenamePreviewResult {
 #[serde(rename_all = "snake_case")]
 pub enum CoverageStrength {
     Direct,
+    /// A caller of this symbol has direct test coverage.
+    IndirectThroughCallers,
     SameFile,
     SameModule,
     None,

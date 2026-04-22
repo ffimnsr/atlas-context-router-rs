@@ -1,7 +1,8 @@
 use anyhow::{Context, Result};
+use atlas_core::NodeKind;
 use atlas_reasoning::ReasoningEngine;
 
-use super::shared::{open_store, str_arg, string_array_arg, tool_result_value, u64_arg};
+use super::shared::{bool_arg, open_store, str_arg, string_array_arg, tool_result_value, u64_arg};
 
 pub(super) fn tool_analyze_safety(
     args: Option<&serde_json::Value>,
@@ -27,6 +28,7 @@ pub(super) fn tool_analyze_safety(
         "fan_in": result.fan_in,
         "fan_out": result.fan_out,
         "linked_tests": result.linked_test_count,
+        "coverage_strength": format!("{:?}", result.coverage_strength),
         "unresolved_edges": result.unresolved_edge_count,
         "reasons": result.safety.reasons,
         "suggested_validations": result.safety.suggested_validations,
@@ -48,6 +50,9 @@ pub(super) fn tool_analyze_remove(
     }
     let max_depth = u64_arg(args, "max_depth").unwrap_or(3) as u32;
     let max_nodes = u64_arg(args, "max_nodes").unwrap_or(200) as usize;
+    // Compact output defaults — caller may raise these.
+    let max_files = u64_arg(args, "max_files").unwrap_or(20) as usize;
+    let max_edges = u64_arg(args, "max_edges").unwrap_or(50) as usize;
 
     let store = open_store(db_path)?;
     let engine = ReasoningEngine::new(&store);
@@ -74,15 +79,25 @@ pub(super) fn tool_analyze_remove(
         })
         .collect();
 
+    let omitted_files = result.impacted_files.len().saturating_sub(max_files);
+    let omitted_edges = result.relevant_edges.len().saturating_sub(max_edges);
+
     let payload = serde_json::json!({
         "seed_count": result.seed.len(),
         "impacted_symbol_count": result.impacted_symbols.len(),
         "impacted_file_count": result.impacted_files.len(),
         "impacted_test_count": result.impacted_tests.len(),
         "impacted_symbols": impacted_preview,
-        "impacted_files": result.impacted_files,
+        "impacted_files": &result.impacted_files[..result.impacted_files.len().min(max_files)],
+        "omitted_file_count": omitted_files,
         "omitted_symbol_count": omitted,
-        "warnings": result.warnings.iter().map(|w| serde_json::json!({ "message": w.message, "confidence": format!("{:?}", w.confidence) })).collect::<Vec<_>>(),
+        "omitted_edge_count": omitted_edges,
+        "warnings": result.warnings.iter().map(|w| serde_json::json!({
+            "message": w.message,
+            "confidence": format!("{:?}", w.confidence),
+            "error_code": w.error_code,
+            "suggestions": w.suggestions,
+        })).collect::<Vec<_>>(),
         "uncertainty_flags": result.uncertainty_flags,
         "evidence": result.evidence.iter().map(|e| serde_json::json!({ "key": e.key, "value": e.value })).collect::<Vec<_>>(),
     });
@@ -96,16 +111,40 @@ pub(super) fn tool_analyze_dead_code(
 ) -> Result<serde_json::Value> {
     let allowlist = string_array_arg(args, "allowlist").unwrap_or_default();
     let subpath = str_arg(args, "subpath")?.map(str::to_owned);
-    let limit = u64_arg(args, "limit").unwrap_or(500) as usize;
+    // Compact default: 50 candidates. Caller may raise with `limit`.
+    let limit = u64_arg(args, "limit").unwrap_or(50) as usize;
+    let summary = bool_arg(args, "summary").unwrap_or(false);
+    let exclude_kind_strs = string_array_arg(args, "exclude_kind").unwrap_or_default();
+    let exclude_kinds: Vec<NodeKind> = exclude_kind_strs
+        .iter()
+        .filter_map(|k| k.parse().ok())
+        .collect();
+    // `code_only` is always true at the store level; the flag is accepted for
+    // forward compatibility but has no effect on the current implementation.
 
     let store = open_store(db_path)?;
     let engine = ReasoningEngine::new(&store);
     let allowlist_refs: Vec<&str> = allowlist.iter().map(String::as_str).collect();
     let candidates = engine
-        .detect_dead_code(&allowlist_refs, subpath.as_deref(), Some(limit))
+        .detect_dead_code(
+            &allowlist_refs,
+            subpath.as_deref(),
+            Some(limit),
+            &exclude_kinds,
+        )
         .context("detect_dead_code failed")?;
 
-    const CANDIDATE_CAP: usize = 100;
+    if summary {
+        let payload = serde_json::json!({
+            "candidate_count": candidates.len(),
+            "applied_limit": limit,
+            "applied_subpath": subpath,
+            "excluded_kinds": exclude_kind_strs,
+        });
+        return tool_result_value(&payload, output_format);
+    }
+
+    const CANDIDATE_CAP: usize = 50;
     let omitted = candidates.len().saturating_sub(CANDIDATE_CAP);
 
     let preview: Vec<_> = candidates
@@ -130,6 +169,7 @@ pub(super) fn tool_analyze_dead_code(
         "candidates": preview,
         "applied_limit": limit,
         "applied_subpath": subpath,
+        "excluded_kinds": exclude_kind_strs,
     });
     tool_result_value(&payload, output_format)
 }

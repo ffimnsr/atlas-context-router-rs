@@ -1,8 +1,10 @@
 use anyhow::{Context, Result};
+use atlas_core::SearchQuery;
 use atlas_core::model::{ChangeType, ChangedFile, ContextIntent, ContextRequest, ContextTarget};
 use atlas_engine::{BuildOptions, UpdateOptions, UpdateTarget, build_graph, update_graph};
 use atlas_repo::{DiffTarget, changed_files, find_repo_root, repo_relative};
 use atlas_review::{ContextEngine, query_parser};
+use atlas_search::semantic as sem;
 use atlas_store_sqlite::{BuildFinishStats, GraphBuildState, Store};
 use camino::Utf8Path;
 use serde::Serialize;
@@ -709,7 +711,13 @@ pub(super) fn tool_get_context(
     let intent_override = str_arg(args, "intent")?.map(str::to_owned);
     let max_nodes = u64_arg(args, "max_nodes").map(|n| n as usize);
     let max_edges = u64_arg(args, "max_edges").map(|n| n as usize);
+    let max_files = u64_arg(args, "max_files").map(|n| n as usize);
     let max_depth = u64_arg(args, "max_depth").map(|n| n as u32);
+    let code_spans = bool_arg(args, "code_spans");
+    let tests = bool_arg(args, "tests");
+    let imports = bool_arg(args, "imports");
+    let neighbors = bool_arg(args, "neighbors");
+    let semantic = bool_arg(args, "semantic").unwrap_or(false);
     let include_saved_context = bool_arg(args, "include_saved_context").unwrap_or(false);
     let session_id = str_arg(args, "session_id")?.map(str::to_owned);
 
@@ -751,13 +759,48 @@ pub(super) fn tool_get_context(
     if max_edges.is_some() {
         request.max_edges = max_edges;
     }
+    if max_files.is_some() {
+        request.max_files = max_files;
+    }
     if max_depth.is_some() {
         request.depth = max_depth;
+    }
+    if let Some(v) = code_spans {
+        request.include_code_spans = v;
+    }
+    if let Some(v) = tests {
+        request.include_tests = v;
+    }
+    if let Some(v) = imports {
+        request.include_imports = v;
+    }
+    if let Some(v) = neighbors {
+        request.include_neighbors = v;
     }
     request.include_saved_context = include_saved_context;
     request.session_id = session_id;
 
     let store = open_store(db_path)?;
+
+    // --semantic: when target is a SymbolName, run graph-aware semantic search
+    // first to resolve the best-matching qualified name, then build context
+    // around the resolved node instead of doing a fuzzier name lookup.
+    if semantic && let ContextTarget::SymbolName { ref name } = request.target {
+        let sq = SearchQuery {
+            text: name.clone(),
+            limit: 5,
+            graph_expand: true,
+            graph_max_hops: 1,
+            ..Default::default()
+        };
+        let hits = sem::context_boosted_search(&store, &sq, &[], &[]).unwrap_or_default();
+        if let Some(top) = hits.into_iter().next() {
+            request.target = ContextTarget::QualifiedName {
+                qname: top.node.qualified_name,
+            };
+        }
+    }
+
     let engine = ContextEngine::new(&store);
 
     let result = if include_saved_context {
@@ -788,6 +831,30 @@ pub(super) fn tool_get_context(
     .into_iter()
     .collect();
     response["atlas_context_files"] = serde_json::json!(context_files);
+
+    // Emit applied-controls metadata so agents can inspect what was included/excluded.
+    let mut omitted: Vec<&str> = Vec::new();
+    if !result.request.include_tests {
+        omitted.push("tests");
+    }
+    if !result.request.include_code_spans {
+        omitted.push("code_spans");
+    }
+    if !result.request.include_neighbors {
+        omitted.push("neighbors");
+    }
+    response["atlas_detail_controls"] = serde_json::json!({
+        "max_files": result.request.max_files,
+        "max_nodes": result.request.max_nodes,
+        "max_edges": result.request.max_edges,
+        "code_spans": result.request.include_code_spans,
+        "tests": result.request.include_tests,
+        "imports": result.request.include_imports,
+        "neighbors": result.request.include_neighbors,
+        "semantic": semantic,
+        "omitted_sections": omitted,
+    });
+
     if result.nodes.is_empty() {
         response["atlas_error_code"] = serde_json::Value::String("node_not_found".to_owned());
         response["atlas_message"] =

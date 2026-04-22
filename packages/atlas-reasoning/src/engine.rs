@@ -107,6 +107,11 @@ impl<'s> ReasoningEngine<'s> {
                         normalized_seed_refs.len()
                     ),
                     confidence: ConfidenceTier::High,
+                    error_code: Some("seed_not_found".to_owned()),
+                    suggestions: vec![
+                        "run `atlas build` to populate the graph".to_owned(),
+                        "verify the qualified name with `atlas query`".to_owned(),
+                    ],
                 }],
                 evidence: vec![],
                 uncertainty_flags: vec![
@@ -185,16 +190,23 @@ impl<'s> ReasoningEngine<'s> {
     ///
     /// The store pre-filters on visibility and edge absence; this method
     /// applies the remaining suppression logic plus certainty assignment.
+    ///
+    /// By default only code symbols are returned (functions, methods,
+    /// structs/types, traits, enums, interfaces, constants, variables) — this
+    /// is enforced at the store query level and matches the `code_only`
+    /// semantic. Pass `exclude_kinds` to further narrow the result set.
     pub fn detect_dead_code(
         &self,
         extra_allowlist: &[&str],
         subpath: Option<&str>,
         limit: Option<usize>,
+        exclude_kinds: &[NodeKind],
     ) -> Result<Vec<DeadCodeCandidate>> {
         let cap = limit.unwrap_or(500);
         let raw = self.store.dead_code_candidates_filtered(subpath, cap)?;
 
         let allowlist_set: HashSet<&str> = extra_allowlist.iter().copied().collect();
+        let exclude_set: HashSet<NodeKind> = exclude_kinds.iter().copied().collect();
 
         let candidates = raw
             .into_iter()
@@ -205,6 +217,10 @@ impl<'s> ReasoningEngine<'s> {
                 }
                 // Suppress caller-provided allowlist.
                 if allowlist_set.contains(node.qualified_name.as_str()) {
+                    return None;
+                }
+                // Suppress caller-excluded kinds.
+                if exclude_set.contains(&node.kind) {
                     return None;
                 }
 
@@ -247,6 +263,24 @@ impl<'s> ReasoningEngine<'s> {
         let fan_in = inbound.len();
         let fan_out = outbound.len();
         let linked_test_count = tests.len();
+
+        // Classify coverage strength: direct → indirect-through-callers → none.
+        let coverage_strength = if linked_test_count > 0 {
+            CoverageStrength::Direct
+        } else {
+            let caller_has_tests = inbound.iter().any(|(caller, _)| {
+                self.store
+                    .test_neighbors(&caller.qualified_name, 1)
+                    .ok()
+                    .map(|ts| !ts.is_empty())
+                    .unwrap_or(false)
+            });
+            if caller_has_tests {
+                CoverageStrength::IndirectThroughCallers
+            } else {
+                CoverageStrength::None
+            }
+        };
 
         let is_public = is_public_node(&node);
         let cross_module_callers = inbound
@@ -307,6 +341,7 @@ impl<'s> ReasoningEngine<'s> {
             fan_out,
             linked_test_count,
             unresolved_edge_count,
+            coverage_strength,
             evidence,
         })
     }
@@ -504,18 +539,39 @@ impl<'s> ReasoningEngine<'s> {
         let coverage_strength = if !linked_tests.is_empty() {
             CoverageStrength::Direct
         } else {
-            // Same-file test scan.
-            let file_nodes = self.store.nodes_by_file(&symbol.file_path)?;
-            let file_tests: Vec<Node> = file_nodes
-                .into_iter()
-                .filter(|n| n.is_test || n.kind == NodeKind::Test)
-                .collect();
+            // Check if any inbound caller has direct test coverage.
+            let callers = self.store.inbound_edges(&qname, EDGE_QUERY_LIMIT)?;
+            let caller_has_tests = callers.iter().any(|(caller, _)| {
+                self.store
+                    .test_neighbors(&caller.qualified_name, 1)
+                    .ok()
+                    .map(|ts| !ts.is_empty())
+                    .unwrap_or(false)
+            });
 
-            if !file_tests.is_empty() {
-                linked_tests = file_tests;
-                CoverageStrength::SameFile
+            if caller_has_tests {
+                // Collect caller test nodes as indirect evidence.
+                for (caller, _) in &callers {
+                    if let Ok(ts) = self.store.test_neighbors(&caller.qualified_name, 4) {
+                        linked_tests.extend(ts.into_iter().map(|(n, _)| n));
+                    }
+                }
+                linked_tests.dedup_by_key(|n| n.qualified_name.clone());
+                CoverageStrength::IndirectThroughCallers
             } else {
-                CoverageStrength::None
+                // Same-file test scan.
+                let file_nodes = self.store.nodes_by_file(&symbol.file_path)?;
+                let file_tests: Vec<Node> = file_nodes
+                    .into_iter()
+                    .filter(|n| n.is_test || n.kind == NodeKind::Test)
+                    .collect();
+
+                if !file_tests.is_empty() {
+                    linked_tests = file_tests;
+                    CoverageStrength::SameFile
+                } else {
+                    CoverageStrength::None
+                }
             }
         };
 
@@ -523,6 +579,10 @@ impl<'s> ReasoningEngine<'s> {
             CoverageStrength::None => {
                 Some("no tests found for this symbol — consider adding a dedicated test".to_owned())
             }
+            CoverageStrength::IndirectThroughCallers => Some(
+                "coverage is indirect through callers — consider adding a direct unit test"
+                    .to_owned(),
+            ),
             CoverageStrength::SameFile => Some(
                 "tests are co-located in the same file but not directly linked via edge — \
                  verify coverage"
@@ -720,7 +780,10 @@ fn classify_impact(_node: &Node, depth: u32, edge_kind: Option<EdgeKind>) -> Imp
         Some(EdgeKind::Implements | EdgeKind::Extends) => ImpactClass::Definite,
         Some(EdgeKind::References) if depth <= 1 => ImpactClass::Definite,
         Some(EdgeKind::References) => ImpactClass::Probable,
-        Some(EdgeKind::Contains | EdgeKind::Defines) => ImpactClass::Probable,
+        // Containment-only relationships (a file/module contains a symbol) are
+        // secondary context in removal analysis — they do not indicate that the
+        // container is broken by the removal.
+        Some(EdgeKind::Contains | EdgeKind::Defines) => ImpactClass::Weak,
         None if depth == 0 => ImpactClass::Definite,
         _ => ImpactClass::Weak,
     }
@@ -1191,6 +1254,49 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
+    // analyze_removal: containment edges do NOT produce Probable impact
+    // Regression: file/package `Contains` relationships must not inflate the
+    // impact set for removal analysis.
+    // -----------------------------------------------------------------------
+    #[test]
+    fn removal_containment_only_edges_are_weak_not_probable() {
+        let mut store = make_store();
+        let nodes = vec![
+            node(0, "fn_a", "src/a.rs::fn_a", "src/a.rs", NodeKind::Function),
+            node(0, "mod_a", "src/a.rs", "src/a.rs", NodeKind::File),
+        ];
+        // The file contains fn_a — a pure containment edge, no call/import.
+        let edges = vec![edge(
+            "src/a.rs",
+            "src/a.rs::fn_a",
+            EdgeKind::Contains,
+            "src/a.rs",
+        )];
+        seed_graph(&mut store, nodes, edges);
+
+        let engine = ReasoningEngine::new(&store);
+        let result = engine
+            .analyze_removal(&["src/a.rs::fn_a"], None, None)
+            .unwrap();
+
+        // The container (file node) may appear but must not be Definite or Probable.
+        for im in &result.impacted_symbols {
+            if im.node.qualified_name == "src/a.rs" {
+                assert_ne!(
+                    im.impact_class,
+                    ImpactClass::Definite,
+                    "containment parent must not be Definite impact"
+                );
+                assert_ne!(
+                    im.impact_class,
+                    ImpactClass::Probable,
+                    "containment parent must not be Probable impact — got inflated result"
+                );
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
     // detect_dead_code: private function with no callers is flagged
     // -----------------------------------------------------------------------
     #[test]
@@ -1207,12 +1313,52 @@ mod tests {
         seed_graph(&mut store, vec![priv_node], vec![]);
 
         let engine = ReasoningEngine::new(&store);
-        let candidates = engine.detect_dead_code(&[], None, None).unwrap();
+        let candidates = engine.detect_dead_code(&[], None, None, &[]).unwrap();
         assert!(
             candidates
                 .iter()
                 .any(|c| c.node.qualified_name == "src/a.rs::unused_fn"),
             "private unused_fn should be dead-code candidate"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // detect_dead_code: exclude_kinds filters out specified kinds
+    // -----------------------------------------------------------------------
+    #[test]
+    fn dead_code_exclude_kinds_removes_matching_candidates() {
+        let mut store = make_store();
+        let mut fn_node = node(
+            0,
+            "unused_fn",
+            "src/a.rs::unused_fn",
+            "src/a.rs",
+            NodeKind::Function,
+        );
+        fn_node.modifiers = None;
+        let mut const_node = node(
+            1,
+            "UNUSED_CONST",
+            "src/a.rs::UNUSED_CONST",
+            "src/a.rs",
+            NodeKind::Constant,
+        );
+        const_node.modifiers = None;
+        seed_graph(&mut store, vec![fn_node, const_node], vec![]);
+
+        let engine = ReasoningEngine::new(&store);
+
+        // With exclude_kinds=[Constant], constant must not appear; function still should.
+        let candidates = engine
+            .detect_dead_code(&[], None, None, &[NodeKind::Constant])
+            .unwrap();
+        assert!(
+            !candidates.iter().any(|c| c.node.kind == NodeKind::Constant),
+            "constants should be filtered out by exclude_kinds"
+        );
+        assert!(
+            candidates.iter().any(|c| c.node.kind == NodeKind::Function),
+            "functions should still appear when only constants are excluded"
         );
     }
 
@@ -1233,7 +1379,7 @@ mod tests {
         seed_graph(&mut store, vec![pub_node], vec![]);
 
         let engine = ReasoningEngine::new(&store);
-        let candidates = engine.detect_dead_code(&[], None, None).unwrap();
+        let candidates = engine.detect_dead_code(&[], None, None, &[]).unwrap();
         assert!(
             !candidates
                 .iter()
@@ -1258,7 +1404,7 @@ mod tests {
         seed_graph(&mut store, vec![main_node], vec![]);
 
         let engine = ReasoningEngine::new(&store);
-        let candidates = engine.detect_dead_code(&[], None, None).unwrap();
+        let candidates = engine.detect_dead_code(&[], None, None, &[]).unwrap();
         assert!(
             !candidates.iter().any(|c| c.node.name == "main"),
             "main entrypoint should be suppressed"
@@ -1516,6 +1662,56 @@ mod tests {
         assert_eq!(result.coverage_strength, CoverageStrength::Direct);
     }
 
+    #[test]
+    fn test_adjacency_indirect_through_caller_tests() {
+        // target fn has no direct test; caller fn does.
+        let mut store = make_store();
+        let target = node(
+            0,
+            "inner",
+            "src/lib.rs::fn::inner",
+            "src/lib.rs",
+            NodeKind::Function,
+        );
+        let caller = node(
+            0,
+            "outer",
+            "src/lib.rs::fn::outer",
+            "src/lib.rs",
+            NodeKind::Function,
+        );
+        let test_fn = node(
+            0,
+            "test_outer",
+            "tests/lib.rs::test::test_outer",
+            "tests/lib.rs",
+            NodeKind::Test,
+        );
+        let edges = vec![
+            edge(
+                "src/lib.rs::fn::outer",
+                "src/lib.rs::fn::inner",
+                EdgeKind::Calls,
+                "src/lib.rs",
+            ),
+            edge(
+                "tests/lib.rs::test::test_outer",
+                "src/lib.rs::fn::outer",
+                EdgeKind::Tests,
+                "tests/lib.rs",
+            ),
+        ];
+        seed_graph(&mut store, vec![target, caller, test_fn], edges);
+
+        let engine = ReasoningEngine::new(&store);
+        let result = engine.find_test_adjacency("src/lib.rs::fn::inner").unwrap();
+        assert_eq!(
+            result.coverage_strength,
+            CoverageStrength::IndirectThroughCallers
+        );
+        assert!(result.recommendation.is_some());
+    }
+
     // -----------------------------------------------------------------------
     // score_refactor_safety: risk scoring sanity
     // -----------------------------------------------------------------------
@@ -1537,6 +1733,7 @@ mod tests {
         // No callers, no tests → score penalized but stored; band should not be Risky
         // (only ~0.15 deducted for no tests from 1.0 start → 0.85 → Safe).
         assert_eq!(result.safety.band, SafetyBand::Safe);
+        assert_eq!(result.coverage_strength, CoverageStrength::None);
     }
 
     #[test]

@@ -15,6 +15,10 @@ fn analyze_safety_returns_score_and_band() {
     assert!(v["fan_in"].as_i64().is_some());
     assert!(v["fan_out"].as_i64().is_some());
     assert!(v["linked_tests"].as_i64().is_some());
+    assert!(
+        v["coverage_strength"].as_str().is_some(),
+        "coverage_strength missing"
+    );
     assert!(v["reasons"].as_array().is_some());
     assert!(v["suggested_validations"].as_array().is_some());
     assert!(v["evidence"].as_array().is_some());
@@ -169,6 +173,86 @@ fn analyze_dead_code_includes_provenance() {
     let resp = call("analyze_dead_code", Some(&args), "/repo", &fixture.db_path)
         .expect("analyze_dead_code call");
     assert_provenance(&resp, "/repo", &fixture.db_path);
+}
+
+#[test]
+fn analyze_dead_code_summary_mode_returns_count_only() {
+    let fixture = setup_mcp_fixture();
+    let args = serde_json::json!({ "summary": true, "output_format": "json" });
+    let resp = call("analyze_dead_code", Some(&args), "/repo", &fixture.db_path)
+        .expect("analyze_dead_code summary call");
+    let text = unwrap_tool_text(resp);
+    let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
+
+    assert!(
+        v["candidate_count"].as_i64().is_some(),
+        "summary must include candidate_count"
+    );
+    assert!(
+        v.get("candidates").is_none(),
+        "summary must NOT include candidates list"
+    );
+}
+
+#[test]
+fn analyze_dead_code_exclude_kind_echoed_in_response() {
+    let fixture = setup_mcp_fixture();
+    let args = serde_json::json!({ "exclude_kind": ["constant"], "output_format": "json" });
+    let resp = call("analyze_dead_code", Some(&args), "/repo", &fixture.db_path)
+        .expect("analyze_dead_code exclude_kind call");
+    let text = unwrap_tool_text(resp);
+    let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
+
+    let excluded = v["excluded_kinds"]
+        .as_array()
+        .expect("excluded_kinds must be array");
+    assert!(
+        excluded.iter().any(|k| k.as_str() == Some("constant")),
+        "excluded_kinds must echo back 'constant'"
+    );
+}
+
+#[test]
+fn analyze_remove_response_includes_compact_file_and_edge_omit_counts() {
+    let fixture = setup_mcp_fixture();
+    let args =
+        serde_json::json!({ "symbols": ["src/service.rs::fn::compute"], "output_format": "json" });
+    let resp = call("analyze_remove", Some(&args), "/repo", &fixture.db_path)
+        .expect("analyze_remove call");
+    let text = unwrap_tool_text(resp);
+    let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
+
+    assert!(
+        v["omitted_file_count"].as_i64().is_some(),
+        "must include omitted_file_count"
+    );
+    assert!(
+        v["omitted_edge_count"].as_i64().is_some(),
+        "must include omitted_edge_count"
+    );
+}
+
+#[test]
+fn analyze_remove_max_files_caps_impacted_files_list() {
+    let fixture = setup_mcp_fixture();
+    // max_files=1 with multiple impacted files should cap the list.
+    let args = serde_json::json!({
+        "symbols": ["src/service.rs::fn::compute"],
+        "max_files": 1,
+        "output_format": "json"
+    });
+    let resp = call("analyze_remove", Some(&args), "/repo", &fixture.db_path)
+        .expect("analyze_remove max_files call");
+    let text = unwrap_tool_text(resp);
+    let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
+
+    let files = v["impacted_files"]
+        .as_array()
+        .expect("impacted_files array");
+    assert!(
+        files.len() <= 1,
+        "max_files=1 must cap impacted_files list to at most 1"
+    );
 }
 
 #[test]
