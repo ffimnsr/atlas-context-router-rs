@@ -12,6 +12,7 @@ The primary behavior to preserve is:
 - query graph structure and impact radius
 - assemble review context from changed files and neighboring nodes
 - expose a CLI first, with MCP later
+- make sure to ALWAYS sync CLI tool and MCP tooling (including its flags)
 
 For terms that are easy to misread in this document:
 
@@ -89,7 +90,7 @@ Read this part in order. It covers initial architecture, storage, parsing, index
   - [x] embeddings
   - [x] communities
   - [x] flows
-  - [x] wiki
+  - [ ] wiki doc generation (CLI command)
   - [ ] visualization/export
   - [ ] multi-repo registry
   - [x] install hooks
@@ -1892,6 +1893,12 @@ Use this section for MCP-specific rollout, payload design, continuity, and agent
 - [x] `get_impact_radius`
 - [x] `query_graph`
 - [x] `explain_change`
+- [x] add MCP `resolve_symbol` tool:
+  - [x] inputs: `name`, optional `kind`, optional `file`, optional `language`
+  - [x] returns exact `qualified_name`, best match, ambiguity list, and suggestions
+  - [x] accepts public kind aliases like `function` -> `fn` where qualified-name parsing uses compact tokens
+  - [x] example: `resolve_symbol({ "name": "LoadIdentityMessages", "kind": "function", "file": "internal/requestctx/context.go" })` returns `internal/requestctx/context.go::fn::LoadIdentityMessages`
+  - [x] resolver removes need for agent workflow: `query_graph` -> copy exact `qualified_name` -> call `symbol_neighbors` / `traverse_graph`
 - [x] structured JSON
 - [x] stable schemas
 - [x] token-efficient responses
@@ -1928,6 +1935,193 @@ Use this section for MCP-specific rollout, payload design, continuity, and agent
 - [x] include build status in `build_or_update_graph` MCP tool response
 - [x] MCP `build_or_update_graph` returns persisted build state
 
+### MCP6 — Content and file discovery
+
+- [x] add MCP tool for file-name/path discovery outside graph-symbol lookup
+  - [x] search_files(pattern, globs)
+- [x] add MCP tool for content search outside graph-symbol lookup
+  - [x] search_content(query, globs, exclude_generated=true)
+- [x] support glob include filters
+- [x] support ignore rules from `.gitignore` and Atlas config
+- [x] exclude or down-rank generated/vendor noise by default
+- [x] exclude or down-rank:
+  - [x] `node_modules`
+  - [x] `package-lock.json`
+  - [x] generated bundles
+  - [x] vendored static assets
+  - [x] minified JS
+- [x] keep graph-first workflow for symbol and relationship questions
+- [x] use content/file search as fallback when graph lookup is wrong tool
+- [x] document when agents should choose `query_graph` vs content/file search
+- [x] add tests for Markdown, prompt, SQL, config, and template file discovery
+- [x] add tests for ignore-rule behavior and generated-file suppression
+- [x] keep response payloads compact and agent-friendly
+- [x] use crates globset, ignore, grep (all crates by ripgrep)
+
+### MCP7 — Response provenance and trust metadata
+
+- [x] include compact repo/index provenance metadata in every MCP tool response
+- [x] include:
+  - [x] `repo_root`
+  - [x] `db_path`
+  - [x] `indexed_file_count`
+  - [x] `last_indexed_at`
+  - [x] `result_count`
+- [x] include tool-local truncation and paging metadata where relevant
+- [x] keep metadata envelope stable across all MCP tools
+- [x] ensure metadata does not bloat heavy context payloads
+- [x] expose same metadata in JSON and TOON output modes
+- [x] add tests that every exported MCP tool returns provenance metadata
+- [ ] document metadata contract in MCP reference and agent instructions
+- [ ] make mismatched repo/db/index state obvious in agent sessions
+
+### MCP8 — Health and debug command parity
+
+Expose CLI health/debug commands through MCP so agents can verify graph health before trusting graph-backed context.
+
+- [x] add MCP `status` tool
+- [x] add MCP `doctor` tool
+- [x] add MCP `db_check` tool
+- [x] add MCP `debug_graph` tool
+- [x] add MCP `explain_query` tool
+- [x] keep MCP implementations thin over existing CLI/service-layer diagnostics
+- [x] fix `debug-graph --json` edge-schema mismatch before exposing MCP `debug_graph`
+  - [x] regression: `atlas db-check --json` OK and `atlas debug-graph --json` must not fail with missing `e.source_qn`
+- [x] return compact health summaries by default
+- [x] expose machine-readable failure categories for:
+  - [x] missing graph DB
+  - [ ] schema mismatch
+  - [x] interrupted build
+  - [x] failed build
+  - [ ] stale index
+  - [ ] retrieval/content index unavailable
+  - [x] corrupt or inconsistent graph rows
+- [x] standardize machine-readable error contract across CLI JSON and MCP:
+  - [x] `ok`
+  - [x] `error_code`
+  - [x] `message`
+  - [x] `suggestions`
+  - [x] unresolved seed and node-not-found cases exit/report consistently
+- [x] include repo/index provenance metadata in every health/debug response
+- [x] document when agents should call health tools before `query_graph`, `get_context`, and review tools
+- [x] add MCP handler tests for healthy repo, missing DB, stale graph, failed build, and schema mismatch
+
+### MCP9 — File and content search expansion
+
+Graph search is symbol-oriented. Add first-class MCP search for prompts, Markdown, SQL templates, config snippets, and embedded text so agents do not need to fall back to `rg`.
+
+- [x] add or verify MCP `search_files`
+- [x] add or verify MCP `search_content`
+- [x] add MCP `search_templates`
+- [x] add MCP `search_text_assets`
+- [x] support include/exclude globs consistently across all file/content search tools
+- [x] support repo subpath scoping for monorepos
+- [x] apply `.gitignore`, Atlas ignore config, generated/vendor suppression, and binary-file skipping by default
+- [x] return compact path, line, snippet, score, and match-kind fields
+- [ ] expose opt-in richer snippets without bloating default responses
+- [ ] document selection rules for `query_graph` vs file/content/template/text-asset search
+- [x] add tests for Markdown, prompt files, SQL, config, templates, embedded strings, ignored paths, and generated-file suppression
+
+### MCP10 — Query graph option parity
+
+Expose CLI query options in MCP `query_graph` so agents can use the same ranking and scope controls as CLI users.
+
+- [x] add `subpath` argument
+- [x] add `fuzzy` argument
+- [x] add `hybrid` argument
+- [ ] improve fuzzy symbol typo recovery:
+  - [ ] prefer close symbol-name edit distance over weaker Markdown/docs/content token matches
+  - [ ] regression: `LoadIdentityMesages` should suggest/rank `LoadIdentityMessages` above Markdown nodes
+- [x] expose query explanation in MCP `explain_query`:
+  - [x] include ranking factors, filters, FTS terms, fuzzy corrections, regex mode, and active query mode
+- [x] clarify `regex` mode behavior in schema docs:
+  - [x] regex-only structural scan
+  - [x] text + regex post-filter over FTS candidates
+  - [x] invalid regex error shape
+- [ ] evaluate and add `include_files` argument if file nodes improve agent workflows
+- [x] make `subpath` filtering happen before ranking where possible
+- [x] include active query mode in response metadata
+- [x] add tests for monorepo subpath filtering, fuzzy ranking, hybrid mode, regex-only lookup, text+regex filtering, and invalid regex
+
+### MCP10.1 — Analysis tool MCP wrappers
+
+Expose CLI analysis commands directly through MCP with compact, agent-oriented defaults.
+
+- [x] add MCP `analyze_safety`
+- [x] add MCP `analyze_remove`
+- [x] add MCP `analyze_dead_code`
+- [x] add MCP `analyze_dependency`
+- [x] keep wrappers thin over `ReasoningEngine`
+- [x] default MCP analysis output to summaries plus bounded evidence
+- [x] include applied limits, omitted counts, and truncation metadata
+- [x] reuse standardized error contract for unresolved seeds and ambiguous symbols
+
+### MCP11 — Review and impact change-source parity
+
+Make `get_impact_radius` and `get_review_context` accept the same change-source controls as CLI and `detect_changes`.
+
+- [ ] add `base` argument to `get_impact_radius`
+- [ ] add `staged` argument to `get_impact_radius`
+- [ ] add `working_tree` argument to `get_impact_radius`
+- [ ] add `base` argument to `get_review_context`
+- [ ] add `staged` argument to `get_review_context`
+- [ ] add `working_tree` argument to `get_review_context`
+- [ ] keep explicit `files` input supported for direct callers
+- [ ] reject ambiguous combinations with clear validation errors
+- [ ] reuse `detect_changes` change detection logic instead of duplicating git behavior
+- [ ] include resolved changed-file set and source mode in response metadata
+- [ ] add tests for explicit files, base diff, staged diff, working-tree diff, empty diff, and invalid argument combinations
+
+### MCP11.1 — Graph freshness warnings
+
+Warn agents when graph-backed answers may be stale for changed code files.
+
+- [ ] compare queried files/symbol files against changed files from `detect_changes`
+- [ ] emit freshness warnings in:
+  - [ ] `query_graph`
+  - [ ] `get_context`
+  - [ ] `get_review_context`
+  - [ ] `get_impact_radius`
+- [ ] warn only for code/path changes that can affect graph facts; do not warn for zero-node files like `.gitignore` unless relevant
+- [ ] include suggested recovery, for example `build_or_update_graph`
+- [ ] add tests for clean repo, changed code file, changed non-code zero-node file, and stale changed symbol
+
+### MCP12 — Context detail controls
+
+Expose `atlas context` detail toggles through MCP `get_context` so agents can tune token use without changing service internals.
+
+- [ ] add `max_files` argument
+- [ ] add `code_spans` argument
+- [ ] add `tests` argument
+- [ ] add `imports` argument
+- [ ] add `neighbors` argument
+- [ ] add `semantic` argument
+- [ ] keep defaults token-efficient and compatible with current MCP behavior
+- [ ] route all toggles through `ContextEngine` request options
+- [ ] include applied limits, omitted sections, and truncation metadata in responses
+- [ ] document token-use tradeoffs for each toggle in MCP reference
+- [ ] add tests for each toggle, combined toggles, limit enforcement, and JSON/TOON output parity
+
+### MCP13 — Saved context read-by-id
+
+Add direct full-artifact retrieval by `source_id`; search previews are not enough after agents save large context.
+
+- [ ] add MCP `read_saved_context` tool
+- [ ] accept `source_id`
+- [ ] support optional paging or byte/token caps for large artifacts
+- [ ] return full content when within configured limits
+- [ ] return truncation metadata and continuation hints when content exceeds limits
+- [ ] preserve existing preview behavior in `search_saved_context`
+- [ ] enforce session/repo scoping so one session cannot read unrelated saved artifacts accidentally
+- [ ] include artifact metadata:
+  - [ ] `source_id`
+  - [ ] artifact kind
+  - [ ] created time
+  - [ ] session id
+  - [ ] byte count
+  - [ ] chunk count
+- [ ] add tests for found artifact, missing artifact, oversized artifact, paged artifact, and cross-session/repo isolation
+
 ---
 
 ## Part III — Post-MVP Product Expansion
@@ -1955,6 +2149,7 @@ These phases extend v1 after core graph/build/update/query path is reliable.
 - [x] exact name boost
 - [x] qualified-name boost
 - [x] fuzzy match
+  - [ ] NOTE: current fuzzy behavior still needs symbol-typo recovery hardening; typoed symbols must not lose to docs/config nodes
 - [x] camelCase/snake_case token split
 - [x] recent-file boost
 - [x] API-level boost
@@ -2091,9 +2286,18 @@ Exit criteria:
 #### 22.0.3 Exact target resolution path
 
 - [x] implement `resolve_target` for qualified name, exact symbol name, exact file path
+  - [x] expose this as first-class public resolver surface instead of forcing agents to copy `qualified_name` from `query_graph`
 - [x] return single resolved node/file when exact match exists
 - [x] return ambiguity metadata with ranked candidates when multiple matches remain
 - [x] fallback to existing FTS/hybrid search only after exact paths fail
+- [x] accept qualified-name kind aliases during resolution:
+  - [x] `::function::` -> `::fn::`
+  - [x] `::method::` -> canonical method token
+  - [x] documented aliases for language-specific compact tokens
+  - [x] normalize user-entered QNs before lookup, for example `internal/requestctx/context.go::function::LoadIdentityMessages` should resolve to `internal/requestctx/context.go::fn::LoadIdentityMessages`
+  - [x] keep canonical examples explicit: `internal/requestctx/context.go::fn::LoadIdentityMessages`, `src/lib.rs::fn::foo`
+  - [x] if alias-normalized QN still misses, return node-not-found with close symbol/file suggestions instead of a bare failed lookup
+- [x] document canonical qualified-name tokens and aliases in CLI/MCP reference
 
 Why third:
 - every higher-level context builder depends on trustworthy seed selection
@@ -2317,6 +2521,8 @@ Exit criteria:
   - [x] method-like names
 - [x] fallback to symbol search + context expansion
 - [x] resolve by qualified name
+  - [ ] NOTE: qualified-name resolution exists, but alias normalization must be implemented on existing CLI/MCP tools so `::function::` and other public names work wherever exact QNs are accepted
+  - [ ] NOTE: public resolver tooling is still needed so agents do not memorize internal encoding or retry failed calls manually
 - [x] resolve by exact symbol name
 - [x] resolve by file path
 - [x] resolve by ranked search if ambiguous
@@ -2436,6 +2642,10 @@ Answer structural questions from graph + parser + store facts only. No unsupport
 - [x] include per-node depth
 - [x] include edge kind per path
 - [x] include impact class
+- [ ] demote containment-only relationships in removal/refactor analysis:
+  - [ ] keep containment siblings as secondary context
+  - [ ] do not count `contains` edges as probable impact unless explicitly requested
+  - [ ] add regression for `analyze remove <symbol>` inflated by file/package containment
 
 ### 23.3 Dead code, safety, dependency removal
 
@@ -2499,6 +2709,20 @@ Answer structural questions from graph + parser + store facts only. No unsupport
   - [x] blocking references
   - [x] confidence tier
   - [x] suggested cleanup edits
+- [ ] default `analyze dead-code` to code symbols only:
+  - [ ] functions
+  - [ ] methods
+  - [ ] structs/types/classes/interfaces/traits/enums
+  - [ ] exported constants/vars where language supports them
+  - [ ] exclude Markdown, TOML keys, docs/config nodes unless `--include-non-code`
+- [ ] add analysis output controls:
+  - [ ] `--limit`
+  - [ ] `--max-edges`
+  - [ ] `--max-files`
+  - [ ] `--summary`
+  - [ ] `--exclude-kind`
+  - [ ] `--code-only`
+- [ ] enforce compact defaults for MCP analysis wrappers
 
 ### 23.4 Rename radius, test adjacency, risk, APIs
 
@@ -2522,6 +2746,7 @@ Answer structural questions from graph + parser + store facts only. No unsupport
   - [x] map changed symbol to same-module tests
   - [x] flag no linked tests
   - [x] flag weak test adjacency only
+  - [ ] NOTE: current safety output can understate coverage; distinguish direct, indirect-through-callers, package-level, and no-known coverage
 - [x] test-adjacency output:
   - [x] linked tests
   - [x] coverage strength
@@ -2733,8 +2958,11 @@ Shared support for explainability, config, CLI surface, JSON contracts, benchmar
 
 - [x] `atlas context <symbol>`
 - [x] `atlas analyze remove <symbol>`
+  - [ ] add compact output controls and containment-noise demotion from Phase 23 follow-up
 - [x] `atlas analyze dead-code`
+  - [ ] add code-only default and output limits from Phase 23 follow-up
 - [x] `atlas analyze safety <symbol>`
+  - [ ] distinguish direct, indirect-through-callers, package-level, and missing test coverage
 - [x] `atlas analyze dependency <symbol-or-import>`
 - [x] `atlas refactor rename <symbol> <new-name> --dry-run`
 - [x] `atlas refactor remove-dead <symbol> --dry-run`
@@ -2743,6 +2971,7 @@ Shared support for explainability, config, CLI surface, JSON contracts, benchmar
 ### 25.5 JSON output, benchmarks, completion criteria
 
 - [x] stable JSON schema for all analysis commands
+  - [ ] NOTE: stable schema exists, but unresolved seeds and warnings need standardized `ok/error_code/message/suggestions` contract
 - [x] stable JSON schema for patch previews
 - [x] include evidence and certainty fields
 - [x] benchmark context retrieval latency
@@ -2781,11 +3010,14 @@ Detailed MCP tool rollout, schema work, and response shaping now live in Part II
 
 - [x] `atlas doctor`
 - [x] `atlas debug graph`
+  - [ ] NOTE: `debug-graph --json` currently needs schema-mismatch fix for edge columns (`e.source_qn` failure)
 - [x] `atlas explain-query`
+  - [ ] expose same query-explanation details through MCP `explain_query`
 
 ### 27.3 Data integrity
 
 - [x] orphan-node detection
+  - [ ] add regression that orphan-node query uses current edge schema column names
 - [x] edge validation
 - [x] DB consistency checks
 
@@ -3019,7 +3251,7 @@ Deterministic analytics layer on top of graph + stored metadata. Produce explain
 
 ## Phase 31 — Lowest Priority
 
-### 31.1 Wiki / docs generation
+### 31.1 Wiki / docs generation (CLI command)
 
 - [ ] generate Markdown docs
 - [ ] module pages

@@ -1,7 +1,9 @@
 pub mod context;
 pub mod query_parser;
 
-pub use context::{ContextEngine, build_context};
+pub use context::{
+    ContextEngine, ResolvedTarget, build_context, normalize_qn_kind_tokens, resolve_target,
+};
 
 use std::collections::{HashMap, HashSet};
 

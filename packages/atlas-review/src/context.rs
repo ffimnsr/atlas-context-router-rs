@@ -66,11 +66,75 @@ pub fn resolve_target(store: &Store, target: &ContextTarget) -> Result<ResolvedT
     }
 }
 
+/// Normalise user-entered kind tokens inside a qualified name so that common
+/// aliases resolve to the canonical token used by the parsers.
+///
+/// The parsers store QNs like `src/lib.rs::fn::foo` or `go/pkg.go::fn::Bar`,
+/// but agents and humans often write `::function::` or `::func::`.  This
+/// function rewrites only the kind segment, leaving the file prefix and symbol
+/// name unchanged.
+///
+/// **Canonical tokens** (from the parser layer):
+/// - Free functions  → `fn`
+/// - Methods         → `method`
+/// - Tests           → `test`
+/// - Constants       → `const`
+/// - Modules         → `module`
+/// - All others are already canonical and pass through unchanged.
+pub fn normalize_qn_kind_tokens(qname: &str) -> String {
+    // A well-formed QN has the shape `<file_path>::<kind>::<rest>`.
+    // We split off just the kind segment and rewrite it, leaving everything
+    // else untouched.
+    //
+    // Strategy: scan for the first `::…::` occurrence that follows the file
+    // portion.  The file portion itself may contain `::` only in the
+    // language-specific segment separator convention, but all parsers use
+    // `::` as the separator between file path, kind token, and symbol name.
+    // We therefore split on the FIRST `::` to isolate the file path, then
+    // take the next token as the kind, and the remainder as the symbol name.
+    let Some(after_file) = qname.find("::") else {
+        // No `::` at all → not a structured QN, pass through.
+        return qname.to_owned();
+    };
+    let (file_part, rest) = qname.split_at(after_file);
+    let rest = &rest[2..]; // strip leading `::`
+
+    // The next `::` separates kind from the symbol name.
+    let (kind_token, symbol_rest) = if let Some(pos) = rest.find("::") {
+        (&rest[..pos], &rest[pos..]) // symbol_rest retains its leading `::`
+    } else {
+        // Only one segment after the file path; treat it as a symbol name with
+        // no kind token to rewrite.
+        return qname.to_owned();
+    };
+
+    let kind_lower = kind_token.to_ascii_lowercase();
+    let canonical_kind = match kind_lower.as_str() {
+        "function" | "func" => "fn",
+        "meth" => "method",
+        "constant" => "const",
+        other => other,
+    };
+
+    if canonical_kind == kind_token {
+        // Nothing changed – avoid an allocation.
+        return qname.to_owned();
+    }
+    format!("{file_part}::{canonical_kind}{symbol_rest}")
+}
+
 fn resolve_by_qname(store: &Store, qname: &str) -> Result<ResolvedTarget> {
     if let Some(node) = store.node_by_qname(qname)? {
         return Ok(ResolvedTarget::Node(Box::new(node)));
     }
-    // Exact qname miss → try FTS fallback using the qname as a search term.
+    // Exact qname miss → try alias-normalised form before FTS fallback.
+    let normalised = normalize_qn_kind_tokens(qname);
+    if normalised != qname
+        && let Some(node) = store.node_by_qname(&normalised)?
+    {
+        return Ok(ResolvedTarget::Node(Box::new(node)));
+    }
+    // Still no hit → FTS fallback with suggestions.
     fts_fallback(store, qname)
 }
 
@@ -1730,6 +1794,97 @@ mod tests {
             resolved,
             ResolvedTarget::NotFound { .. } | ResolvedTarget::Ambiguous(..)
         ));
+    }
+
+    // ------------------------------------------------------------------
+    // Slice 3 — QN kind alias normalisation
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn normalize_qn_kind_tokens_function_alias() {
+        assert_eq!(
+            normalize_qn_kind_tokens("src/lib.rs::function::foo"),
+            "src/lib.rs::fn::foo"
+        );
+        assert_eq!(
+            normalize_qn_kind_tokens("src/lib.rs::func::foo"),
+            "src/lib.rs::fn::foo"
+        );
+        // Already canonical – no rewrite.
+        assert_eq!(
+            normalize_qn_kind_tokens("src/lib.rs::fn::foo"),
+            "src/lib.rs::fn::foo"
+        );
+    }
+
+    #[test]
+    fn normalize_qn_kind_tokens_other_aliases() {
+        assert_eq!(
+            normalize_qn_kind_tokens("pkg/a.go::meth::T.Run"),
+            "pkg/a.go::method::T.Run"
+        );
+        assert_eq!(
+            normalize_qn_kind_tokens("src/a.rs::constant::MAX"),
+            "src/a.rs::const::MAX"
+        );
+        // Unknown token passes through unchanged.
+        assert_eq!(
+            normalize_qn_kind_tokens("src/a.rs::struct::Foo"),
+            "src/a.rs::struct::Foo"
+        );
+        // No `::` at all – pass through.
+        assert_eq!(normalize_qn_kind_tokens("just_a_name"), "just_a_name");
+    }
+
+    #[test]
+    fn resolve_qname_with_function_alias_resolves_via_normalisation() {
+        // Insert a node whose QN uses the canonical `::fn::` token.
+        let mut store = open_store();
+        let canonical_qn = "src/x.rs::fn::my_fn";
+        let file = ParsedFile {
+            path: "src/x.rs".to_string(),
+            language: Some("rust".to_string()),
+            hash: "hx".to_string(),
+            size: None,
+            nodes: vec![make_node(
+                canonical_qn,
+                "my_fn",
+                "src/x.rs",
+                NodeKind::Function,
+                None,
+            )],
+            edges: vec![],
+        };
+        store.replace_batch(&[file]).unwrap();
+
+        // Resolve using the non-canonical `::function::` alias.
+        let target = ContextTarget::QualifiedName {
+            qname: "src/x.rs::function::my_fn".to_string(),
+        };
+        let resolved = resolve_target(&store, &target).unwrap();
+        assert!(
+            matches!(resolved, ResolvedTarget::Node(ref n) if n.qualified_name == canonical_qn),
+            "expected canonical node, got: {resolved:?}"
+        );
+    }
+
+    #[test]
+    fn resolve_qname_alias_miss_returns_not_found_or_suggestions() {
+        // No node in the store – alias normalisation should still end in
+        // NotFound (possibly with FTS suggestions), not a crash.
+        let mut store = open_store();
+        store.migrate().unwrap();
+        let target = ContextTarget::QualifiedName {
+            qname: "no/such/file.rs::function::missing".to_string(),
+        };
+        let resolved = resolve_target(&store, &target).unwrap();
+        assert!(
+            matches!(
+                resolved,
+                ResolvedTarget::NotFound { .. } | ResolvedTarget::Ambiguous(..)
+            ),
+            "unexpected variant: {resolved:?}"
+        );
     }
 
     // ------------------------------------------------------------------

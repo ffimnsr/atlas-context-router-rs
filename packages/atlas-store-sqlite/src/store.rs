@@ -233,6 +233,27 @@ impl Store {
     }
 
     /// Return high-level statistics about the stored graph.
+    /// Return a minimal provenance snapshot: only the two cheapest queries.
+    ///
+    /// Used by MCP7 to attach compact metadata to every tool response without
+    /// the overhead of the full `stats()` call (which groups by kind/language).
+    pub fn provenance_meta(&self) -> Result<atlas_core::ProvenanceMeta> {
+        let indexed_file_count: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM files", [], |r| r.get(0))
+            .map_err(|e| AtlasError::Db(e.to_string()))?;
+
+        let last_indexed_at: Option<String> = self
+            .conn
+            .query_row("SELECT MAX(indexed_at) FROM files", [], |r| r.get(0))
+            .unwrap_or(None);
+
+        Ok(atlas_core::ProvenanceMeta {
+            indexed_file_count,
+            last_indexed_at,
+        })
+    }
+
     pub fn stats(&self) -> Result<GraphStats> {
         let file_count: i64 = self
             .conn
@@ -349,8 +370,8 @@ impl Store {
             FROM nodes n
             WHERE NOT EXISTS (
                 SELECT 1 FROM edges e
-                WHERE e.source_qn = n.qualified_name
-                   OR e.target_qn = n.qualified_name
+                WHERE e.source_qualified = n.qualified_name
+                   OR e.target_qualified = n.qualified_name
             )
             LIMIT ?1
         ";
@@ -374,9 +395,9 @@ impl Store {
         // Dangling source
         {
             let sql = "
-                SELECT e.id, e.source_qn, e.target_qn, e.kind
+                SELECT e.id, e.source_qualified, e.target_qualified, e.kind
                 FROM edges e
-                WHERE NOT EXISTS (SELECT 1 FROM nodes n WHERE n.qualified_name = e.source_qn)
+                WHERE NOT EXISTS (SELECT 1 FROM nodes n WHERE n.qualified_name = e.source_qualified)
                 LIMIT ?1
             ";
             let mut stmt = self.conn.prepare(sql).map_err(db_err)?;
@@ -401,9 +422,9 @@ impl Store {
         if results.len() < limit {
             let remaining = limit - results.len();
             let sql = "
-                SELECT e.id, e.source_qn, e.target_qn, e.kind
+                SELECT e.id, e.source_qualified, e.target_qualified, e.kind
                 FROM edges e
-                WHERE NOT EXISTS (SELECT 1 FROM nodes n WHERE n.qualified_name = e.target_qn)
+                WHERE NOT EXISTS (SELECT 1 FROM nodes n WHERE n.qualified_name = e.target_qualified)
                 LIMIT ?1
             ";
             let mut stmt = self.conn.prepare(sql).map_err(db_err)?;

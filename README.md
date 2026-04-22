@@ -350,6 +350,20 @@ The MCP server (`atlas serve`) exposes these tools to agents:
 | `list_graph_stats` | Node/edge counts and language breakdown |
 | `query_graph` | Keyword search with optional `regex` SQL-UDF filter; returns compact symbol list |
 | `batch_query_graph` | Run up to 20 `query_graph` searches in a single round-trip |
+| `search_files` | File-path discovery for config, templates, SQL, Markdown, and other non-code assets |
+| `search_content` | Literal or regex content search outside graph-symbol lookup |
+| `search_templates` | Discover HTML, Jinja, Handlebars, Tera, and related template files |
+| `search_text_assets` | Discover SQL, config, env, and prompt files |
+| `status` | Compact graph health summary with machine-readable failure state |
+| `doctor` | Full repo health checks: git, config, DB, build, and retrieval index |
+| `db_check` | SQLite integrity plus orphan-node and dangling-edge scan |
+| `debug_graph` | Graph internals: node/edge kinds, top files, and anomalies |
+| `explain_query` | Explain how `query_graph` will tokenize and execute a request |
+| `resolve_symbol` | Resolve a symbol or QN alias to canonical `qualified_name` |
+| `analyze_safety` | Refactor-safety analysis with callers, fan-out, and test adjacency |
+| `analyze_remove` | Removal-impact analysis with bounded evidence |
+| `analyze_dead_code` | Dead-code candidate detection with certainty tiers and blockers |
+| `analyze_dependency` | Dependency-removal validation for a symbol |
 | `get_impact_radius` | Graph traversal from changed files |
 | `get_review_context` | Review bundle: symbols, neighbors, risk summary |
 | `get_context` | General context engine: symbol, file, review, impact |

@@ -1,3 +1,4 @@
+#![recursion_limit = "512"]
 //! Atlas MCP (Model Context Protocol) server.
 //!
 //! Exposes a JSON-RPC 2.0 / MCP stdio transport that agents can connect to.
@@ -25,6 +26,20 @@
 //! | `symbol_neighbors`        | Immediate callers, callees, tests, and nearby nodes      |
 //! | `cross_file_links`        | Files coupled through shared symbol references           |
 //! | `concept_clusters`        | Related file groups around seed files                    |
+//! | `search_files`            | File-path discovery by glob pattern outside graph lookup |
+//! | `search_content`          | Content search by literal string or regex outside graph  |
+//! | `search_templates`        | Template file discovery by engine kind (HTML, Jinja, …)  |
+//! | `search_text_assets`      | SQL, config, env, and prompt file discovery              |
+//! | `status`                  | Compact graph health summary with machine-readable state |
+//! | `doctor`                  | Full repo health checks: git, config, DB, build, index   |
+//! | `db_check`                | SQLite integrity + orphan/dangling edge scan             |
+//! | `debug_graph`             | Graph internals: node/edge kinds, top files, anomalies   |
+//! | `explain_query`           | Explain how query_graph resolves a given search input    |
+//! | `resolve_symbol`          | Resolve symbol name to exact qualified_name with aliases |
+//! | `analyze_safety`          | Refactor-safety score: fan-in, fan-out, test adjacency   |
+//! | `analyze_remove`          | Removal-impact analysis with confidence-tiered results   |
+//! | `analyze_dead_code`       | Dead-code candidates with certainty tiers and blockers   |
+//! | `analyze_dependency`      | Dependency-removal validation: removable verdict and refs |
 //!
 //! MCP prompt templates:
 //! - `review_change`: review-flow guidance for changed files
@@ -33,6 +48,7 @@
 //! - `resume_prior_session`: continuity and saved-context retrieval guidance
 
 mod context;
+mod discovery_tools;
 mod output;
 mod prompts;
 mod session_tools;

@@ -12,6 +12,7 @@ atlas-engine.workspace = true
 atlas-impact = { path = "../atlas-impact" , version = "0.3.3"}
 atlas-parser = { path = "../atlas-parser" , version = "0.3.3"}
 atlas-repo = { path = "../atlas-repo" , version = "0.3.3"}
+atlas-reasoning = { path = "../atlas-reasoning" , version = "0.3.3"}
 atlas-review = { path = "../atlas-review" , version = "0.3.3"}
 atlas-search = { path = "../atlas-search" , version = "0.3.3"}
 atlas-session = { path = "../atlas-session" , version = "0.3.3"}
@@ -24,6 +25,10 @@ serde_json.workspace = true
 sha2.workspace = true
 toon-format = { version = "0.4.5", default-features = false }
 tracing.workspace = true
+ignore = "0.4.25"
+globset = "0.4.18"
+grep-searcher = "0.1.16"
+grep-regex = "0.1.14"
 
 [dev-dependencies]
 tempfile = "3"

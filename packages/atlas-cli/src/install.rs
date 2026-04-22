@@ -120,7 +120,7 @@ enum PlatformResult {
 /// GitHub Copilot — writes `.vscode/mcp.json` in the repo root.
 fn install_copilot(repo_root: &Path, dry_run: bool) -> Result<PlatformResult> {
     let config_path = repo_root.join(".vscode").join("mcp.json");
-    let server_entry = copilot_server_entry();
+    let server_entry = copilot_server_entry(repo_root);
     merge_json_mcp(
         &config_path,
         "servers", // VS Code uses "servers" not "mcpServers"
@@ -134,7 +134,7 @@ fn install_copilot(repo_root: &Path, dry_run: bool) -> Result<PlatformResult> {
 /// Claude Code — writes `.mcp.json` in the repo root.
 fn install_claude(repo_root: &Path, dry_run: bool) -> Result<PlatformResult> {
     let config_path = repo_root.join(".mcp.json");
-    let server_entry = stdio_server_entry();
+    let server_entry = stdio_server_entry(repo_root);
     merge_json_mcp(
         &config_path,
         "mcpServers",
@@ -148,28 +148,162 @@ fn install_claude(repo_root: &Path, dry_run: bool) -> Result<PlatformResult> {
 /// OpenAI Codex CLI — writes/appends to repo-local `.codex/config.toml`.
 fn install_codex(repo_root: &Path, dry_run: bool) -> Result<PlatformResult> {
     let config_path = repo_root.join(".codex").join("config.toml");
-    merge_toml_mcp(&config_path, "atlas", dry_run, "Codex")
+    merge_toml_mcp(&config_path, repo_root, "atlas", dry_run, "Codex")
 }
 
 // ---------------------------------------------------------------------------
 // MCP JSON config helpers
 // ---------------------------------------------------------------------------
 
+fn stdio_server_args(repo_root: &Path) -> Vec<String> {
+    vec![
+        "--repo".to_owned(),
+        repo_root.display().to_string(),
+        "--db".to_owned(),
+        repo_root
+            .join(".atlas")
+            .join("worldtree.db")
+            .display()
+            .to_string(),
+        "serve".to_owned(),
+    ]
+}
+
+fn toml_basic_string(value: &str) -> String {
+    format!(
+        "\"{}\"",
+        value
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('\n', "\\n")
+            .replace('\r', "\\r")
+            .replace('\t', "\\t")
+    )
+}
+
+fn toml_string_array(values: &[String]) -> String {
+    format!(
+        "[{}]",
+        values
+            .iter()
+            .map(|value| toml_basic_string(value))
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
+}
+
+fn is_legacy_json_server_entry(entry: &Value) -> bool {
+    let Value::Object(map) = entry else {
+        return false;
+    };
+    map.get("command").and_then(Value::as_str) == Some("atlas")
+        && map.get("args") == Some(&serde_json::json!(["serve"]))
+}
+
+fn section_range(existing: &str, header: &str) -> Option<(usize, usize)> {
+    let start = existing.find(header)?;
+    let after_header = start + header.len();
+    let rest = &existing[after_header..];
+    let next_section = rest
+        .match_indices('\n')
+        .find(|(idx, _)| {
+            let line = &rest[idx + 1..];
+            line.starts_with('[')
+        })
+        .map(|(idx, _)| after_header + idx + 1)
+        .unwrap_or(existing.len());
+    Some((start, next_section))
+}
+
+fn parse_toml_string_array(value: &str) -> Option<Vec<String>> {
+    let trimmed = value.trim();
+    if !trimmed.starts_with('[') || !trimmed.ends_with(']') {
+        return None;
+    }
+
+    let inner = &trimmed[1..trimmed.len() - 1];
+    if inner.trim().is_empty() {
+        return Some(Vec::new());
+    }
+
+    let mut values = Vec::new();
+    let mut chars = inner.chars().peekable();
+
+    while let Some(ch) = chars.peek() {
+        if ch.is_whitespace() || *ch == ',' {
+            chars.next();
+            continue;
+        }
+        if *ch != '"' {
+            return None;
+        }
+        chars.next();
+
+        let mut value = String::new();
+        while let Some(ch) = chars.next() {
+            match ch {
+                '"' => break,
+                '\\' => {
+                    let escaped = chars.next()?;
+                    value.push(match escaped {
+                        '\\' => '\\',
+                        '"' => '"',
+                        'n' => '\n',
+                        'r' => '\r',
+                        't' => '\t',
+                        _ => return None,
+                    });
+                }
+                other => value.push(other),
+            }
+        }
+        values.push(value);
+    }
+
+    Some(values)
+}
+
+fn is_legacy_toml_section(section: &str) -> bool {
+    let mut command = None;
+    let mut args = None;
+
+    for line in section.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with('[') {
+            continue;
+        }
+        let Some((key, value)) = trimmed.split_once('=') else {
+            continue;
+        };
+        match key.trim() {
+            "command" => {
+                command = Some(value.trim().trim_matches('"').to_owned());
+            }
+            "args" => {
+                args = parse_toml_string_array(value);
+            }
+            _ => {}
+        }
+    }
+
+    command.as_deref() == Some("atlas") && args.as_deref() == Some(&["serve".to_owned()])
+}
+
 /// Server entry for VS Code / GitHub Copilot (uses `"type": "stdio"`).
-fn copilot_server_entry() -> Value {
+fn copilot_server_entry(repo_root: &Path) -> Value {
     serde_json::json!({
         "type": "stdio",
         "command": "atlas",
-        "args": ["serve"]
+        "args": stdio_server_args(repo_root)
     })
 }
 
 /// Generic stdio server entry for other platforms (Claude Code, etc.).
-fn stdio_server_entry() -> Value {
+fn stdio_server_entry(repo_root: &Path) -> Value {
     serde_json::json!({
         "type": "stdio",
         "command": "atlas",
-        "args": ["serve"]
+        "args": stdio_server_args(repo_root)
     })
 }
 
@@ -198,11 +332,27 @@ fn merge_json_mcp(
         .entry(top_key)
         .or_insert_with(|| Value::Object(serde_json::Map::new()));
 
+    let mut changed = false;
+
     if let Value::Object(map) = servers {
-        if map.contains_key(server_name) {
-            return Ok(PlatformResult::AlreadyConfigured(display_name.to_owned()));
+        if let Some(existing) = map.get(server_name) {
+            if existing == &server_entry {
+                return Ok(PlatformResult::AlreadyConfigured(display_name.to_owned()));
+            }
+            if is_legacy_json_server_entry(existing) {
+                map.insert(server_name.to_owned(), server_entry);
+                changed = true;
+            } else {
+                return Ok(PlatformResult::AlreadyConfigured(display_name.to_owned()));
+            }
+        } else {
+            map.insert(server_name.to_owned(), server_entry);
+            changed = true;
         }
-        map.insert(server_name.to_owned(), server_entry);
+    }
+
+    if !changed {
+        return Ok(PlatformResult::AlreadyConfigured(display_name.to_owned()));
     }
 
     if dry_run {
@@ -228,6 +378,7 @@ fn merge_json_mcp(
 
 fn merge_toml_mcp(
     path: &Path,
+    repo_root: &Path,
     server_name: &str,
     dry_run: bool,
     display_name: &str,
@@ -240,12 +391,43 @@ fn merge_toml_mcp(
         String::new()
     };
 
-    if existing.contains(&section_header) {
-        return Ok(PlatformResult::AlreadyConfigured(display_name.to_owned()));
-    }
+    let args = toml_string_array(&stdio_server_args(repo_root));
+    let section = format!(
+        "\n{section_header}\ncommand = \"atlas\"\nargs = {}\ntype = \"stdio\"\n",
+        args
+    );
 
-    let section =
-        format!("\n{section_header}\ncommand = \"atlas\"\nargs = [\"serve\"]\ntype = \"stdio\"\n");
+    if let Some((start, end)) = section_range(&existing, &section_header) {
+        let current_section = &existing[start..end];
+        if !is_legacy_toml_section(current_section) {
+            return Ok(PlatformResult::AlreadyConfigured(display_name.to_owned()));
+        }
+
+        let mut content = String::new();
+        content.push_str(&existing[..start]);
+        content.push_str(section.trim_start_matches('\n'));
+        if end < existing.len() && !existing[end..].starts_with('\n') && !content.ends_with('\n') {
+            content.push('\n');
+        }
+        content.push_str(&existing[end..]);
+
+        if dry_run {
+            println!(
+                "  [dry-run] {display_name}: would update {}",
+                path.display()
+            );
+            return Ok(PlatformResult::Configured(display_name.to_owned()));
+        }
+
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("cannot create directory {}", parent.display()))?;
+        }
+
+        fs::write(path, content).with_context(|| format!("cannot write {}", path.display()))?;
+
+        return Ok(PlatformResult::Configured(display_name.to_owned()));
+    }
 
     if dry_run {
         println!(
@@ -436,10 +618,11 @@ The graph is faster, cheaper (fewer tokens), and gives you structural context
 ### When to use atlas tools first
 
 - **Exploring code**: `query_graph` to find candidate symbols, then `symbol_neighbors`, `traverse_graph`, or `get_context` for callers/callees and usage relationships
+- **Searching non-symbol content**: `search_files`, `search_content`, `search_templates`, and `search_text_assets` when graph lookup is the wrong tool
 - **Understanding impact**: `get_impact_radius` for blast radius, `explain_change` for richer risk analysis
 - **Code review**: `detect_changes` + `get_review_context`, or `get_minimal_context` when tokens matter
 - **Finding relationships**: `symbol_neighbors` for immediate usage edges, `traverse_graph` for broader callers/callees, and `get_context` for intent-aware usage lookup
-- **Repo health**: `list_graph_stats` for graph coverage and language breakdown
+- **Repo health**: `list_graph_stats`, `status`, `doctor`, `db_check`, and `debug_graph` before trusting graph-backed answers
 - **Session continuity**: `get_session_status`, `resume_session`, `search_saved_context`, and `save_context_artifact`
 
 Do not treat `query_graph` as caller/callee search. Fall back to file tools **only** after graph relationship tools do not cover what you need.
@@ -451,6 +634,20 @@ Do not treat `query_graph` as caller/callee search. Fall back to file tools **on
 | `list_graph_stats` | Overall graph metrics and language breakdown |
 | `query_graph` | Search graph nodes by keyword, kind, or language; returns symbol matches, not usage edges |
 | `batch_query_graph` | Run up to 20 query_graph searches in one call |
+| `search_files` | Find config, template, SQL, Markdown, and other files by path or glob |
+| `search_content` | Search file contents when you need text matches instead of graph symbols |
+| `search_templates` | Discover template files by engine or extension |
+| `search_text_assets` | Find SQL, config, env, and prompt files outside graph-symbol lookup |
+| `status` | Check graph health and basic build state before trusting graph-backed answers |
+| `doctor` | Run deeper repo, config, DB, and index health checks |
+| `db_check` | Validate SQLite integrity and detect orphan or dangling graph records |
+| `debug_graph` | Inspect node and edge breakdowns plus structural anomalies |
+| `explain_query` | See how query_graph tokenizes and executes a search |
+| `resolve_symbol` | Resolve a symbol or alias-qualified name to a canonical qualified_name |
+| `analyze_safety` | Score refactor safety using callers, fan-out, and test adjacency |
+| `analyze_remove` | Estimate removal impact with bounded evidence and warnings |
+| `analyze_dead_code` | Find likely dead-code candidates with certainty and blockers |
+| `analyze_dependency` | Check whether a symbol can be removed without remaining references |
 | `get_impact_radius` | Understand blast radius from a changed file set |
 | `get_review_context` | Build review bundle with symbols, neighbors, edges, and risk summary |
 | `detect_changes` | Ask Atlas for changed files instead of shelling out to git |
@@ -792,6 +989,20 @@ mod tests {
         assert!(mcp_path.exists());
         let val: Value = serde_json::from_str(&fs::read_to_string(&mcp_path).unwrap()).unwrap();
         assert!(val["mcpServers"]["atlas"]["command"] == "atlas");
+        assert_eq!(
+            val["mcpServers"]["atlas"]["args"],
+            serde_json::json!([
+                "--repo",
+                tmp.path().display().to_string(),
+                "--db",
+                tmp.path()
+                    .join(".atlas")
+                    .join("worldtree.db")
+                    .display()
+                    .to_string(),
+                "serve"
+            ])
+        );
     }
 
     #[test]
@@ -803,6 +1014,69 @@ mod tests {
     }
 
     #[test]
+    fn install_claude_migrates_legacy_mcp_json() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(
+            tmp.path().join(".mcp.json"),
+            r#"{
+    "mcpServers": {
+        "atlas": {
+            "type": "stdio",
+            "command": "atlas",
+            "args": ["serve"]
+        }
+    }
+}
+"#,
+        )
+        .unwrap();
+
+        let result = install_claude(tmp.path(), false).unwrap();
+        assert!(matches!(result, PlatformResult::Configured(_)));
+
+        let val: Value =
+            serde_json::from_str(&fs::read_to_string(tmp.path().join(".mcp.json")).unwrap())
+                .unwrap();
+        assert_eq!(
+            val["mcpServers"]["atlas"]["args"],
+            serde_json::json!([
+                "--repo",
+                tmp.path().display().to_string(),
+                "--db",
+                tmp.path()
+                    .join(".atlas")
+                    .join("worldtree.db")
+                    .display()
+                    .to_string(),
+                "serve"
+            ])
+        );
+    }
+
+    #[test]
+    fn install_claude_preserves_custom_mcp_json() {
+        let tmp = TempDir::new().unwrap();
+        let custom = r#"{
+    "mcpServers": {
+        "atlas": {
+            "type": "stdio",
+            "command": "atlas",
+            "args": ["--repo", "/custom/repo", "serve"]
+        }
+    }
+}
+"#;
+        fs::write(tmp.path().join(".mcp.json"), custom).unwrap();
+
+        let result = install_claude(tmp.path(), false).unwrap();
+        assert!(matches!(result, PlatformResult::AlreadyConfigured(_)));
+        assert_eq!(
+            fs::read_to_string(tmp.path().join(".mcp.json")).unwrap(),
+            custom
+        );
+    }
+
+    #[test]
     fn install_copilot_writes_vscode_mcp_json() {
         let tmp = TempDir::new().unwrap();
         let result = install_copilot(tmp.path(), false).unwrap();
@@ -811,6 +1085,20 @@ mod tests {
         assert!(vscode_path.exists());
         let val: Value = serde_json::from_str(&fs::read_to_string(&vscode_path).unwrap()).unwrap();
         assert!(val["servers"]["atlas"]["command"] == "atlas");
+        assert_eq!(
+            val["servers"]["atlas"]["args"],
+            serde_json::json!([
+                "--repo",
+                tmp.path().display().to_string(),
+                "--db",
+                tmp.path()
+                    .join(".atlas")
+                    .join("worldtree.db")
+                    .display()
+                    .to_string(),
+                "serve"
+            ])
+        );
     }
 
     #[test]
@@ -823,6 +1111,11 @@ mod tests {
         let content = fs::read_to_string(&codex_path).unwrap();
         assert!(content.contains("[mcp_servers.atlas]"));
         assert!(content.contains("command = \"atlas\""));
+        assert!(content.contains(&format!(
+            "args = [\"--repo\", \"{}\", \"--db\", \"{}\", \"serve\"]",
+            tmp.path().display(),
+            tmp.path().join(".atlas").join("worldtree.db").display()
+        )));
     }
 
     #[test]
@@ -831,6 +1124,43 @@ mod tests {
         install_codex(tmp.path(), false).unwrap();
         let result = install_codex(tmp.path(), false).unwrap();
         assert!(matches!(result, PlatformResult::AlreadyConfigured(_)));
+    }
+
+    #[test]
+    fn install_codex_migrates_legacy_config_toml() {
+        let tmp = TempDir::new().unwrap();
+        fs::create_dir_all(tmp.path().join(".codex")).unwrap();
+        fs::write(
+            tmp.path().join(".codex").join("config.toml"),
+            "[mcp_servers.atlas]\ncommand = \"atlas\"\nargs = [\"serve\"]\ntype = \"stdio\"\n",
+        )
+        .unwrap();
+
+        let result = install_codex(tmp.path(), false).unwrap();
+        assert!(matches!(result, PlatformResult::Configured(_)));
+
+        let content = fs::read_to_string(tmp.path().join(".codex").join("config.toml")).unwrap();
+        assert!(content.contains(&format!(
+            "args = [\"--repo\", \"{}\", \"--db\", \"{}\", \"serve\"]",
+            tmp.path().display(),
+            tmp.path().join(".atlas").join("worldtree.db").display()
+        )));
+        assert_eq!(content.matches("[mcp_servers.atlas]").count(), 1);
+    }
+
+    #[test]
+    fn install_codex_preserves_custom_config_toml() {
+        let tmp = TempDir::new().unwrap();
+        fs::create_dir_all(tmp.path().join(".codex")).unwrap();
+        let custom = "[mcp_servers.atlas]\ncommand = \"atlas\"\nargs = [\"--repo\", \"/custom/repo\", \"serve\"]\ntype = \"stdio\"\n";
+        fs::write(tmp.path().join(".codex").join("config.toml"), custom).unwrap();
+
+        let result = install_codex(tmp.path(), false).unwrap();
+        assert!(matches!(result, PlatformResult::AlreadyConfigured(_)));
+        assert_eq!(
+            fs::read_to_string(tmp.path().join(".codex").join("config.toml")).unwrap(),
+            custom
+        );
     }
 
     #[test]
