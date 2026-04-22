@@ -2,9 +2,8 @@ use anyhow::{Context, Result};
 use atlas_core::model::{ChangeType, ChangedFile};
 use camino::{Utf8Path, Utf8PathBuf};
 use std::collections::HashSet;
-use std::process::Command;
 
-use crate::path::to_forward_slashes;
+use crate::path::{git_cmd, to_forward_slashes};
 
 /// Specification of what to diff against.
 #[derive(Debug, Clone)]
@@ -53,7 +52,7 @@ pub fn changed_files(repo_root: &Utf8Path, target: &DiffTarget) -> Result<Vec<Ch
         known_submodule_paths.iter().map(String::as_str).collect();
 
     let args = target.git_args();
-    let output = Command::new("git")
+    let output = git_cmd()
         .args(&args)
         .current_dir(repo_root)
         .output()
@@ -111,7 +110,7 @@ fn collect_recursive_submodule_changes(
 
     for submodule_path in known_submodule_paths(repo_root, target)? {
         let submodule_root = repo_root.join(&submodule_path);
-        if !submodule_root.is_dir() {
+        if !submodule_root.is_dir() || !submodule_root.join(".git").exists() {
             continue;
         }
 
@@ -191,7 +190,7 @@ enum ConfigSource {
 }
 
 fn submodule_paths_from_config(repo_root: &Utf8Path, source: ConfigSource) -> Result<Vec<String>> {
-    let mut command = Command::new("git");
+    let mut command = git_cmd();
     command.arg("config").arg("-z");
 
     match source {
@@ -232,7 +231,7 @@ fn submodule_paths_from_config(repo_root: &Utf8Path, source: ConfigSource) -> Re
 
 fn diff_treeish_pair(repo_root: &Utf8Path, spec: &str) -> Result<(String, String)> {
     if let Some((left, right)) = spec.split_once("...") {
-        let output = Command::new("git")
+        let output = git_cmd()
             .args(["merge-base", left, right])
             .current_dir(repo_root)
             .output()
@@ -339,7 +338,7 @@ fn gitlink_sha_at_treeish(
     treeish: &str,
     submodule_path: &str,
 ) -> Result<Option<String>> {
-    let output = Command::new("git")
+    let output = git_cmd()
         .arg("rev-parse")
         .arg(format!("{treeish}:{submodule_path}"))
         .current_dir(repo_root)
@@ -359,7 +358,7 @@ fn gitlink_sha_at_treeish(
 }
 
 fn gitlink_sha_in_index(repo_root: &Utf8Path, submodule_path: &str) -> Result<Option<String>> {
-    let output = Command::new("git")
+    let output = git_cmd()
         .arg("rev-parse")
         .arg(format!(":{submodule_path}"))
         .current_dir(repo_root)
@@ -380,11 +379,11 @@ fn gitlink_sha_in_index(repo_root: &Utf8Path, submodule_path: &str) -> Result<Op
 
 fn gitlink_sha_in_worktree(repo_root: &Utf8Path, submodule_path: &str) -> Result<Option<String>> {
     let submodule_root = repo_root.join(submodule_path);
-    if !submodule_root.is_dir() {
+    if !submodule_root.is_dir() || !submodule_root.join(".git").exists() {
         return Ok(None);
     }
 
-    let output = Command::new("git")
+    let output = git_cmd()
         .args(["rev-parse", "HEAD"])
         .current_dir(&submodule_root)
         .output()
@@ -546,8 +545,8 @@ fn submodule_git_output(
     args: &[&str],
 ) -> Result<Option<std::process::Output>> {
     let submodule_root = repo_root.join(prefix);
-    if submodule_root.is_dir() {
-        return Command::new("git")
+    if submodule_root.is_dir() && submodule_root.join(".git").exists() {
+        return git_cmd()
             .args(args)
             .current_dir(&submodule_root)
             .output()
@@ -559,7 +558,7 @@ fn submodule_git_output(
         return Ok(None);
     };
 
-    Command::new("git")
+    git_cmd()
         .arg("-c")
         .arg("core.worktree=.")
         .arg(format!("--git-dir={}", git_dir))
@@ -572,7 +571,7 @@ fn submodule_git_output(
 }
 
 fn submodule_git_dir(repo_root: &Utf8Path, prefix: &str) -> Result<Option<String>> {
-    let output = Command::new("git")
+    let output = git_cmd()
         .args(["rev-parse", "--git-path", &format!("modules/{prefix}")])
         .current_dir(repo_root)
         .output()

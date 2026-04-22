@@ -434,6 +434,7 @@ fn path_is_within_owner(path: &str, root: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::path::git_cmd;
     use std::fs;
 
     fn setup_repo(files: &[(&str, &str)]) -> tempfile::TempDir {
@@ -445,27 +446,27 @@ mod tests {
             }
             fs::write(path, content).expect("write file");
         }
-        std::process::Command::new("git")
+        git_cmd()
             .args(["init", "--quiet"])
             .current_dir(temp_dir.path())
             .output()
             .expect("git init");
-        std::process::Command::new("git")
+        git_cmd()
             .args(["config", "user.name", "Atlas Tests"])
             .current_dir(temp_dir.path())
             .output()
             .expect("git config name");
-        std::process::Command::new("git")
+        git_cmd()
             .args(["config", "user.email", "atlas-tests@example.com"])
             .current_dir(temp_dir.path())
             .output()
             .expect("git config email");
-        std::process::Command::new("git")
+        git_cmd()
             .args(["add", "."])
             .current_dir(temp_dir.path())
             .output()
             .expect("git add");
-        std::process::Command::new("git")
+        git_cmd()
             .args(["commit", "--quiet", "-m", "fixture"])
             .current_dir(temp_dir.path())
             .output()

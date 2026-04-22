@@ -1,8 +1,7 @@
 use anyhow::{Context, Result};
 use camino::{Utf8Path, Utf8PathBuf};
-use std::process::Command;
 
-use crate::path::to_forward_slashes;
+use crate::path::{git_cmd, to_forward_slashes};
 
 /// Default maximum file size in bytes (10 MiB).
 pub const DEFAULT_MAX_FILE_BYTES: u64 = 10 * 1024 * 1024;
@@ -209,7 +208,7 @@ fn git_ls_files(repo_root: &Utf8Path) -> Result<Vec<Utf8PathBuf>> {
 
     for submodule_path in git_submodule_paths(repo_root)? {
         let submodule_root = repo_root.join(&submodule_path);
-        if !submodule_root.is_dir() {
+        if !submodule_root.is_dir() || !submodule_root.join(".git").exists() {
             tracing::warn!(
                 "skipping submodule '{}': working tree is not initialized",
                 submodule_path
@@ -235,7 +234,7 @@ fn git_ls_files(repo_root: &Utf8Path) -> Result<Vec<Utf8PathBuf>> {
 }
 
 fn git_ls_files_in_repo(repo_root: &Utf8Path) -> Result<Vec<Utf8PathBuf>> {
-    let output = Command::new("git")
+    let output = git_cmd()
         .args([
             "ls-files",
             "--cached",
@@ -272,7 +271,7 @@ fn git_submodule_paths(repo_root: &Utf8Path) -> Result<Vec<Utf8PathBuf>> {
         return Ok(Vec::new());
     }
 
-    let output = Command::new("git")
+    let output = git_cmd()
         .args([
             "config",
             "-z",
@@ -375,7 +374,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = Utf8Path::from_path(dir.path()).unwrap();
 
-        let status = Command::new("git")
+        let status = git_cmd()
             .args(["init", "--quiet"])
             .current_dir(root)
             .status()
@@ -400,7 +399,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = Utf8Path::from_path(dir.path()).unwrap();
 
-        let status = Command::new("git")
+        let status = git_cmd()
             .args(["init", "--quiet"])
             .current_dir(root)
             .status()
@@ -416,7 +415,7 @@ mod tests {
         )
         .unwrap();
 
-        let status = Command::new("git")
+        let status = git_cmd()
             .args(["add", "."])
             .current_dir(root)
             .status()

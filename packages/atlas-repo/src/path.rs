@@ -1,5 +1,44 @@
 use anyhow::{Context, Result};
 use camino::{Utf8Path, Utf8PathBuf};
+use std::process::Command;
+
+/// Git environment variables that encode the *caller's* repository context.
+///
+/// These must be stripped when spawning git subprocesses that target a
+/// *different* repository (e.g. a temp repo in a test, or a submodule) so
+/// that git operates on the directory supplied via `current_dir` rather than
+/// the ambient repo referenced by the env vars.
+const GIT_LOCAL_ENV_VARS: &[&str] = &[
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_COMMON_DIR",
+    "GIT_CONFIG",
+    "GIT_CONFIG_COUNT",
+    "GIT_CONFIG_KEY_0",
+    "GIT_CONFIG_VALUE_0",
+    "GIT_DIR",
+    "GIT_GRAFT_FILE",
+    "GIT_IMPLICIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_INTERNAL_SUPER_PREFIX",
+    "GIT_NAMESPACE",
+    "GIT_NO_REPLACE_OBJECTS",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_PREFIX",
+    "GIT_REPLACE_REF_BASE",
+    "GIT_SHALLOW_FILE",
+    "GIT_WORK_TREE",
+];
+
+/// Create a `git` [`Command`] with the ambient repository env vars removed so
+/// that git uses the directory supplied via [`Command::current_dir`] rather
+/// than whatever repository the parent process may be running inside.
+pub(crate) fn git_cmd() -> Command {
+    let mut cmd = Command::new("git");
+    for var in GIT_LOCAL_ENV_VARS {
+        cmd.env_remove(var);
+    }
+    cmd
+}
 
 /// Return `path` relative to `repo_root`, with `/` separators.
 ///

@@ -1,8 +1,7 @@
 use anyhow::{Context, Result};
 use camino::{Utf8Path, Utf8PathBuf};
-use std::process::Command;
 
-use crate::path::to_forward_slashes;
+use crate::path::{git_cmd, to_forward_slashes};
 
 /// Locate the git repository root by first running `git rev-parse --show-toplevel`
 /// and falling back to walking parent directories for a `.git` entry.
@@ -14,7 +13,7 @@ pub fn find_repo_root(start: &Utf8Path) -> Result<Utf8PathBuf> {
 }
 
 fn git_toplevel(cwd: &Utf8Path) -> Result<Utf8PathBuf> {
-    let output = Command::new("git")
+    let output = git_cmd()
         .args(["rev-parse", "--show-toplevel"])
         .current_dir(cwd)
         .output()

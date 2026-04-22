@@ -10,15 +10,46 @@ use std::process::Command;
 // Helpers
 // ---------------------------------------------------------------------------
 
+/// Git env vars that may be inherited from the process that spawned the test
+/// (e.g. a pre-commit hook running inside a real repository).  We strip them
+/// from every git subprocess so that each test works against its own temp repo.
+const GIT_LOCAL_ENV_VARS: &[&str] = &[
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_COMMON_DIR",
+    "GIT_CONFIG",
+    "GIT_CONFIG_COUNT",
+    "GIT_CONFIG_KEY_0",
+    "GIT_CONFIG_VALUE_0",
+    "GIT_DIR",
+    "GIT_GRAFT_FILE",
+    "GIT_IMPLICIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_INTERNAL_SUPER_PREFIX",
+    "GIT_NAMESPACE",
+    "GIT_NO_REPLACE_OBJECTS",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_PREFIX",
+    "GIT_REPLACE_REF_BASE",
+    "GIT_SHALLOW_FILE",
+    "GIT_WORK_TREE",
+];
+
+/// Build a `Command` for git with inherited env vars stripped so tests are
+/// isolated from the ambient git environment (e.g. a pre-commit hook context).
+fn sanitized_git(dir: &std::path::Path) -> Command {
+    let mut cmd = Command::new("git");
+    cmd.current_dir(dir);
+    for var in GIT_LOCAL_ENV_VARS {
+        cmd.env_remove(var);
+    }
+    cmd
+}
+
 /// Initialise a bare git repo in `dir` with a minimal identity config so that
 /// `git commit` works without the user's global config.
 fn git_init(dir: &std::path::Path) {
     let run = |args: &[&str]| {
-        let status = Command::new("git")
-            .args(args)
-            .current_dir(dir)
-            .status()
-            .expect("git command");
+        let status = sanitized_git(dir).args(args).status().expect("git command");
         assert!(status.success(), "git {args:?} failed");
     };
     run(&["init", "--quiet"]);
@@ -27,29 +58,23 @@ fn git_init(dir: &std::path::Path) {
 }
 
 fn git_add_all(dir: &std::path::Path) {
-    let status = Command::new("git")
+    let status = sanitized_git(dir)
         .args(["add", "-A"])
-        .current_dir(dir)
         .status()
         .expect("git add");
     assert!(status.success(), "git add -A failed");
 }
 
 fn git_commit(dir: &std::path::Path, msg: &str) {
-    let status = Command::new("git")
+    let status = sanitized_git(dir)
         .args(["commit", "--quiet", "-m", msg])
-        .current_dir(dir)
         .status()
         .expect("git commit");
     assert!(status.success(), "git commit failed");
 }
 
 fn git(dir: &std::path::Path, args: &[&str]) {
-    let status = Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .status()
-        .expect("git command");
+    let status = sanitized_git(dir).args(args).status().expect("git command");
     assert!(status.success(), "git {args:?} failed");
 }
 
