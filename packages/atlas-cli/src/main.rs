@@ -1,4 +1,5 @@
 mod cli;
+mod cli_paths;
 mod commands;
 mod install;
 mod logging;

@@ -2,14 +2,16 @@ use std::fs::{self, File, OpenOptions};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use camino::Utf8PathBuf;
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::cli_paths::canonicalize_cli_path;
+
 const INSTANCE_DIR_NAME: &str = "mcp";
 const LOCK_FILE_NAME: &str = "mcp.instance.lock";
 const METADATA_FILE_NAME: &str = "mcp.instance.json";
+#[cfg(not(unix))]
 const SOCKET_FILE_NAME: &str = "mcp.sock";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,13 +33,14 @@ impl McpInstance {
         let atlas_dir = atlas_engine::paths::atlas_dir(&repo_root);
         let instance_id = instance_identity(&repo_root, &db_path);
         let instance_dir = atlas_dir.join(INSTANCE_DIR_NAME).join(&instance_id);
+        let socket_path = socket_path_for_instance(&instance_id, &instance_dir);
         Ok(Self {
             instance_id,
             repo_root,
             db_path,
             lock_path: instance_dir.join(LOCK_FILE_NAME),
             metadata_path: instance_dir.join(METADATA_FILE_NAME),
-            socket_path: instance_dir.join(SOCKET_FILE_NAME),
+            socket_path,
             instance_dir,
             atlas_dir,
         })
@@ -198,22 +201,15 @@ pub(crate) enum McpInstanceStaleReason {
     ProcessMissing,
 }
 
-fn canonicalize_cli_path(raw: &str) -> Result<String> {
-    let path = Utf8PathBuf::from_path_buf(resolve_absolute_path(raw)?)
-        .map_err(|path| anyhow::anyhow!("path '{}' is not valid UTF-8", path.display()))?;
-    let canonical =
-        atlas_repo::canonical_absolute_path(path.as_path()).map_err(anyhow::Error::from)?;
-    Ok(canonical.into_string())
-}
+fn socket_path_for_instance(instance_id: &str, _instance_dir: &Path) -> PathBuf {
+    #[cfg(unix)]
+    {
+        Path::new("/tmp").join(format!("atlas-mcp-{instance_id}.sock"))
+    }
 
-fn resolve_absolute_path(raw: &str) -> Result<PathBuf> {
-    let path = Path::new(raw);
-    if path.is_absolute() {
-        Ok(path.to_path_buf())
-    } else {
-        Ok(std::env::current_dir()
-            .context("cannot determine cwd")?
-            .join(path))
+    #[cfg(not(unix))]
+    {
+        instance_dir.join(SOCKET_FILE_NAME)
     }
 }
 
@@ -333,12 +329,13 @@ mod tests {
         let instance =
             McpInstance::for_repo_and_db("repo/./subdir/..", "repo/.atlas/../.atlas/worldtree.db")
                 .unwrap();
+        let expected_repo = canonicalize_cli_path(repo.to_string_lossy().as_ref()).unwrap();
+        let expected_db =
+            canonicalize_cli_path(repo.join(".atlas/worldtree.db").to_string_lossy().as_ref())
+                .unwrap();
 
-        assert_eq!(instance.repo_root, repo.to_string_lossy());
-        assert_eq!(
-            instance.db_path,
-            repo.join(".atlas").join("worldtree.db").to_string_lossy()
-        );
+        assert_eq!(instance.repo_root, expected_repo);
+        assert_eq!(instance.db_path, expected_db);
         let instance_root = repo
             .join(".atlas")
             .join(INSTANCE_DIR_NAME)
@@ -349,6 +346,12 @@ mod tests {
             instance.metadata_path,
             instance_root.join(METADATA_FILE_NAME)
         );
+        #[cfg(unix)]
+        assert_eq!(
+            instance.socket_path,
+            Path::new("/tmp").join(format!("atlas-mcp-{}.sock", instance.instance_id))
+        );
+        #[cfg(not(unix))]
         assert_eq!(instance.socket_path, instance_root.join(SOCKET_FILE_NAME));
     }
 

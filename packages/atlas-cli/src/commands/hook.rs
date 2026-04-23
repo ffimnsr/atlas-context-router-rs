@@ -20,6 +20,7 @@ use atlas_session::{NewSessionEvent, ResumeSnapshot, SessionEventType, SessionId
 use atlas_store_sqlite::{BuildFinishStats, Store};
 
 use crate::cli::{Cli, Command};
+use crate::cli_paths::canonicalize_cli_path;
 
 use super::{db_path, print_json, resolve_repo};
 
@@ -584,7 +585,7 @@ pub fn run_hook(cli: &Cli) -> Result<()> {
 
 fn resolve_hook_repo(cli: &Cli) -> Result<String> {
     if cli.repo.is_some() {
-        return resolve_repo(cli);
+        return canonicalize_cli_path(&resolve_repo(cli)?);
     }
 
     if let Ok(script_path) = std::env::var("ATLAS_HOOK_SCRIPT_PATH") {
@@ -597,17 +598,17 @@ fn resolve_hook_repo(cli: &Cli) -> Result<String> {
                 script_path
             };
             if let Ok(root) = find_repo_root(start) {
-                return Ok(root.into_string());
+                return canonicalize_cli_path(root.as_str());
             }
         }
     }
 
     let cwd = resolve_repo(cli)?;
     if let Ok(root) = find_repo_root(Utf8Path::new(&cwd)) {
-        return Ok(root.into_string());
+        return canonicalize_cli_path(root.as_str());
     }
 
-    Ok(cwd)
+    canonicalize_cli_path(&cwd)
 }
 
 fn execute_hook_actions(
@@ -2117,6 +2118,7 @@ mod tests {
         }
 
         let resolved = resolve_hook_repo(&hook_cli_without_repo()).unwrap();
+        let expected = canonicalize_cli_path(repo.to_string_lossy().as_ref()).unwrap();
 
         if let Some(value) = prior_script {
             unsafe {
@@ -2128,7 +2130,7 @@ mod tests {
             }
         }
 
-        assert_eq!(resolved, repo.to_string_lossy());
+        assert_eq!(resolved, expected);
     }
 
     #[test]
