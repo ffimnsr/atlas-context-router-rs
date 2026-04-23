@@ -1,12 +1,12 @@
 [package]
 name = "atlas-contentstore"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2024"
 description = "Durable artifact content store for Atlas context memory integration"
 
 [dependencies]
 atlas-core.workspace = true
-atlas-repo = { path = "../atlas-repo", version = "0.4.0" }
+atlas-repo = { path = "../atlas-repo", version = "0.5.0" }
 rusqlite.workspace = true
 serde.workspace = true
 serde_json.workspace = true
