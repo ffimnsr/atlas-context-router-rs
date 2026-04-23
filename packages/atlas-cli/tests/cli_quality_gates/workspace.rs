@@ -189,3 +189,94 @@ fn multi_package_workspace_flow_uses_owner_identity_end_to_end() {
         ],
     );
 }
+
+#[test]
+fn ranking_inventory_doc_covers_patch_d1_surfaces() {
+    let root = current_repo_root();
+    let doc = fs::read_to_string(root.join("wiki/ranking-and-trimming-primitives.md"))
+        .expect("read ranking inventory doc");
+    let sidebar =
+        fs::read_to_string(root.join("wiki/_Sidebar.md")).expect("read wiki sidebar");
+
+    assert_contains_all(
+        &doc,
+        &[
+            "# Ranking and Trimming Primitives",
+            "## Shared Primitive Inventory",
+            "## Allowed Reasons For Separate Domain Adapter",
+            "## Public Command And Tool Mapping",
+            "CLI `atlas query`",
+            "CLI `atlas explain-query`",
+            "CLI `atlas review-context --json`",
+            "CLI `atlas review-context` text",
+            "CLI `atlas impact`",
+            "CLI `atlas explain-change`",
+            "CLI `atlas analyze remove`",
+            "CLI `atlas analyze dead-code`",
+            "CLI `atlas analyze safety`",
+            "CLI `atlas analyze dependency`",
+            "MCP `query_graph`",
+            "MCP `batch_query_graph`",
+            "MCP `explain_query`",
+            "`get_context`",
+            "`get_minimal_context`",
+            "`get_review_context`",
+            "`explain_change`",
+            "`get_impact_radius`",
+            "`analyze_safety`",
+            "`analyze_remove`",
+            "`analyze_dead_code`",
+            "`analyze_dependency`",
+            "Saved-context retrieval",
+            "Graph expansion",
+            "Hybrid / RRF retrieval",
+            "Content lookup: `search_content`",
+            "File lookup: `search_files`",
+            "Template lookup: `search_templates`",
+            "Text-asset lookup: `search_text_assets`",
+            "## Patch D4 Review Rule",
+            "new public graph/query/context/review/analysis tool must name the shared ranking/trimming primitive it uses",
+            "Remaining public-layer `truncate` in `packages/atlas-cli/src/commands/hook.rs` is transport-only hook metadata dedupe",
+            "duplicate logic to remove",
+            "domain adapter around shared primitive",
+            "shared primitive",
+        ],
+    );
+
+    assert!(
+        sidebar.contains("[Ranking and Trimming Primitives](ranking-and-trimming-primitives)"),
+        "wiki sidebar must link ranking inventory doc"
+    );
+}
+
+#[test]
+fn public_tool_layers_do_not_add_ad_hoc_sorting_or_truncation() {
+    let root = current_repo_root();
+    let public_layers = [
+        "packages/atlas-cli/src/commands/query.rs",
+        "packages/atlas-cli/src/commands/changes.rs",
+        "packages/atlas-cli/src/commands/context_cmd.rs",
+        "packages/atlas-cli/src/commands/reasoning.rs",
+        "packages/atlas-mcp/src/tools/graph.rs",
+        "packages/atlas-mcp/src/tools/context_ops.rs",
+        "packages/atlas-mcp/src/tools/analysis.rs",
+    ];
+    let forbidden = [
+        ".sort_by(",
+        ".sort_by_key(",
+        ".sort_unstable(",
+        ".sort_unstable_by(",
+        ".truncate(",
+    ];
+
+    for relative_path in public_layers {
+        let content =
+            fs::read_to_string(root.join(relative_path)).unwrap_or_else(|err| panic!("read {relative_path}: {err}"));
+        for needle in forbidden {
+            assert!(
+                !content.contains(needle),
+                "public layer {relative_path} must not contain {needle}; use a named shared primitive instead"
+            );
+        }
+    }
+}

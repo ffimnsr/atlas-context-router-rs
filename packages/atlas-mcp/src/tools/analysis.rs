@@ -1,6 +1,10 @@
 use anyhow::{Context, Result};
 use atlas_core::NodeKind;
-use atlas_reasoning::ReasoningEngine;
+use atlas_reasoning::{
+    AnalysisRankingPrimitives, AnalysisTrimmingPrimitives, ReasoningEngine,
+    sort_dead_code_candidates, sort_dependency_result, sort_refactor_safety_result,
+    sort_removal_result,
+};
 
 use super::shared::{bool_arg, open_store, str_arg, string_array_arg, tool_result_value, u64_arg};
 
@@ -15,9 +19,10 @@ pub(super) fn tool_analyze_safety(
 
     let store = open_store(db_path)?;
     let engine = ReasoningEngine::new(&store);
-    let result = engine
+    let mut result = engine
         .score_refactor_safety(&symbol)
         .with_context(|| format!("safety scoring for `{symbol}` failed"))?;
+    sort_refactor_safety_result(&mut result);
 
     let payload = serde_json::json!({
         "symbol": result.node.qualified_name,
@@ -56,18 +61,23 @@ pub(super) fn tool_analyze_remove(
 
     let store = open_store(db_path)?;
     let engine = ReasoningEngine::new(&store);
+    let ranking = AnalysisRankingPrimitives::default();
+    let trimming = AnalysisTrimmingPrimitives::default();
     let symbol_refs: Vec<&str> = symbols.iter().map(String::as_str).collect();
-    let result = engine
+    let mut result = engine
         .analyze_removal(&symbol_refs, Some(max_depth), Some(max_nodes))
         .context("analyze_removal failed")?;
+    sort_removal_result(&mut result, &ranking);
 
-    const SYMBOL_CAP: usize = 50;
-    let omitted = result.impacted_symbols.len().saturating_sub(SYMBOL_CAP);
+    let omitted = result
+        .impacted_symbols
+        .len()
+        .saturating_sub(trimming.removal_symbol_preview_limit);
 
     let impacted_preview: Vec<_> = result
         .impacted_symbols
         .iter()
-        .take(SYMBOL_CAP)
+        .take(trimming.removal_symbol_preview_limit)
         .map(|im| {
             serde_json::json!({
                 "qn": im.node.qualified_name,
@@ -124,8 +134,10 @@ pub(super) fn tool_analyze_dead_code(
 
     let store = open_store(db_path)?;
     let engine = ReasoningEngine::new(&store);
+    let ranking = AnalysisRankingPrimitives::default();
+    let trimming = AnalysisTrimmingPrimitives::default();
     let allowlist_refs: Vec<&str> = allowlist.iter().map(String::as_str).collect();
-    let candidates = engine
+    let mut candidates = engine
         .detect_dead_code(
             &allowlist_refs,
             subpath.as_deref(),
@@ -133,6 +145,7 @@ pub(super) fn tool_analyze_dead_code(
             &exclude_kinds,
         )
         .context("detect_dead_code failed")?;
+    sort_dead_code_candidates(&mut candidates, &ranking);
 
     if summary {
         let payload = serde_json::json!({
@@ -144,12 +157,13 @@ pub(super) fn tool_analyze_dead_code(
         return tool_result_value(&payload, output_format);
     }
 
-    const CANDIDATE_CAP: usize = 50;
-    let omitted = candidates.len().saturating_sub(CANDIDATE_CAP);
+    let omitted = candidates
+        .len()
+        .saturating_sub(trimming.dead_code_candidate_preview_limit);
 
     let preview: Vec<_> = candidates
         .iter()
-        .take(CANDIDATE_CAP)
+        .take(trimming.dead_code_candidate_preview_limit)
         .map(|c| {
             serde_json::json!({
                 "qn": c.node.qualified_name,
@@ -185,17 +199,22 @@ pub(super) fn tool_analyze_dependency(
 
     let store = open_store(db_path)?;
     let engine = ReasoningEngine::new(&store);
-    let result = engine
+    let ranking = AnalysisRankingPrimitives::default();
+    let trimming = AnalysisTrimmingPrimitives::default();
+    let mut result = engine
         .check_dependency_removal(&symbol)
         .with_context(|| format!("dependency check for `{symbol}` failed"))?;
+    sort_dependency_result(&mut result, &ranking);
 
-    const BLOCKER_CAP: usize = 20;
-    let omitted = result.blocking_references.len().saturating_sub(BLOCKER_CAP);
+    let omitted = result
+        .blocking_references
+        .len()
+        .saturating_sub(trimming.dependency_blocker_preview_limit);
 
     let blocking_preview: Vec<_> = result
         .blocking_references
         .iter()
-        .take(BLOCKER_CAP)
+        .take(trimming.dependency_blocker_preview_limit)
         .map(|n| {
             serde_json::json!({
                 "qn": n.qualified_name,

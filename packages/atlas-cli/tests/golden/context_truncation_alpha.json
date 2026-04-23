@@ -1,0 +1,16 @@
+{
+  "intent": "symbol",
+  "truncation": {
+    "nodes_dropped": 2,
+    "edges_dropped": 2,
+    "files_dropped": 0,
+    "truncated": true
+  },
+  "selected_node_qnames": [
+    "src/lib.rs::fn::alpha"
+  ],
+  "selected_edge_pairs": [],
+  "selected_file_paths": [
+    "src/lib.rs"
+  ]
+}

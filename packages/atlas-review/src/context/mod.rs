@@ -47,6 +47,7 @@ use self::symbol::{
 use self::workflow::build_workflow_summary;
 
 /// Default caps when the request does not specify limits.
+/// Shared trimming primitive lives in `crate::ranking::TrimmingPrimitives`.
 pub(super) const DEFAULT_MAX_NODES: usize = 50;
 pub(super) const DEFAULT_MAX_EDGES: usize = 100;
 pub(super) const DEFAULT_MAX_FILES: usize = 20;

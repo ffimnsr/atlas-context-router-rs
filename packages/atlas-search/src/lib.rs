@@ -2,10 +2,288 @@ use std::collections::{HashMap, HashSet};
 
 use atlas_core::{NodeKind, Result, ScoredNode, SearchQuery};
 use atlas_store_sqlite::Store;
+use serde::Serialize;
 use tracing::debug;
 
 pub mod embed;
+mod ranking;
 pub mod semantic;
+
+use ranking::{GraphSearchRankingPrimitives, sort_scored_nodes};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum QueryExecutionMode {
+    Fts5,
+    RegexStructuralScan,
+    RegexStructuralScanGraphExpand,
+    Fts5VectorHybrid,
+    Fts5GraphExpand,
+    Fts5RegexFilter,
+    Fts5RegexFilterGraphExpand,
+}
+
+impl QueryExecutionMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Fts5 => "fts5",
+            Self::RegexStructuralScan => "regex_structural_scan",
+            Self::RegexStructuralScanGraphExpand => "regex_structural_scan_graph_expand",
+            Self::Fts5VectorHybrid => "fts5_vector_hybrid",
+            Self::Fts5GraphExpand => "fts5_graph_expand",
+            Self::Fts5RegexFilter => "fts5_regex_filter",
+            Self::Fts5RegexFilterGraphExpand => "fts5_regex_filter_graph_expand",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct QueryExplainInput {
+    pub text: String,
+    pub kind: Option<String>,
+    pub language: Option<String>,
+    pub limit: usize,
+    pub semantic: bool,
+    pub expand: bool,
+    pub expand_hops: u32,
+    pub regex: Option<String>,
+    pub subpath: Option<String>,
+    pub fuzzy: bool,
+    pub hybrid: bool,
+    pub include_files: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct QueryExplainFiltersApplied {
+    pub kind: bool,
+    pub language: bool,
+    pub subpath: bool,
+    pub fuzzy: bool,
+    pub hybrid: bool,
+    pub semantic: bool,
+    pub expand: bool,
+    pub include_files: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct QueryExplainMatch {
+    pub score: f64,
+    pub kind: String,
+    pub qualified_name: String,
+    pub file_path: String,
+    pub line_start: u32,
+    pub language: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct QueryExplanation {
+    pub active_query_mode: String,
+    pub search_path: String,
+    pub input: QueryExplainInput,
+    pub fts_tokens: Vec<String>,
+    pub fts_phrase: Option<String>,
+    pub regex_valid: bool,
+    pub regex_error: Option<String>,
+    pub ranking_factors: Vec<String>,
+    pub filters_applied: QueryExplainFiltersApplied,
+    pub indexed_node_count: Option<i64>,
+    pub db_exists: bool,
+    pub warnings: Vec<String>,
+    pub latency_ms: Option<u128>,
+    pub result_count: Option<usize>,
+    pub matches: Option<Vec<QueryExplainMatch>>,
+}
+
+fn query_execution_mode_for(
+    query: &SearchQuery,
+    semantic: bool,
+    _hybrid_backend_available: bool,
+) -> QueryExecutionMode {
+    let graph_aware = semantic || query.graph_expand;
+    match (
+        query.text.trim().is_empty(),
+        query.regex_pattern.is_some(),
+        graph_aware,
+        query.hybrid,
+    ) {
+        (true, true, false, _) => QueryExecutionMode::RegexStructuralScan,
+        (true, true, true, _) => QueryExecutionMode::RegexStructuralScanGraphExpand,
+        (false, false, _, true) => QueryExecutionMode::Fts5VectorHybrid,
+        (false, false, true, false) => QueryExecutionMode::Fts5GraphExpand,
+        (false, true, false, false) => QueryExecutionMode::Fts5RegexFilter,
+        (false, true, true, false) => QueryExecutionMode::Fts5RegexFilterGraphExpand,
+        _ => QueryExecutionMode::Fts5,
+    }
+}
+
+fn ranking_factors_for(
+    query: &SearchQuery,
+    semantic: bool,
+    hybrid_backend_available: bool,
+) -> Vec<String> {
+    let mut ranking_factors = vec!["fts5_bm25".to_string()];
+    if query.fuzzy_match {
+        ranking_factors.push("fuzzy_edit_distance_boost".to_string());
+    }
+    if hybrid_backend_available {
+        ranking_factors.push("vector_rrf_merge".to_string());
+    }
+    if semantic {
+        ranking_factors.push("graph_neighbor_rerank".to_string());
+    }
+    if query.graph_expand {
+        ranking_factors.push("graph_distance_expansion".to_string());
+    }
+    ranking_factors
+}
+
+fn tokenize_fts(text: &str) -> Vec<String> {
+    if text.trim().is_empty() {
+        vec![]
+    } else {
+        text.split(|c: char| !c.is_alphanumeric() && c != '_')
+            .filter(|token| !token.is_empty())
+            .map(str::to_owned)
+            .collect()
+    }
+}
+
+pub fn execute_query(
+    store: &Store,
+    query: &SearchQuery,
+    semantic: bool,
+) -> Result<Vec<ScoredNode>> {
+    let mut results = if semantic {
+        semantic::expanded_search(store, query)?
+    } else {
+        search(store, query)?
+    };
+
+    if semantic && query.graph_expand && !results.is_empty() {
+        results = graph_expand(store, results, query.graph_max_hops, query.limit)?;
+        results = maybe_exclude_file_nodes(results, query.include_files, query.limit);
+    }
+
+    Ok(results)
+}
+
+pub fn explain_query(
+    store: Option<&Store>,
+    db_exists: bool,
+    query: &SearchQuery,
+    semantic: bool,
+) -> QueryExplanation {
+    let fts_tokens = tokenize_fts(&query.text);
+    let fts_phrase = if fts_tokens.is_empty() {
+        None
+    } else if fts_tokens.len() == 1 {
+        Some(format!("\"{}\"", fts_tokens[0]))
+    } else {
+        Some(
+            fts_tokens
+                .iter()
+                .map(|token| format!("\"{token}\""))
+                .collect::<Vec<_>>()
+                .join(" "),
+        )
+    };
+
+    let (regex_valid, regex_error) = if let Some(ref pattern) = query.regex_pattern {
+        match regex::Regex::new(pattern) {
+            Ok(_) => (true, None),
+            Err(err) => (false, Some(err.to_string())),
+        }
+    } else {
+        (true, None)
+    };
+
+    let hybrid_backend_available = query.hybrid && embed::EmbeddingConfig::from_env().is_some();
+    let mode = query_execution_mode_for(query, semantic, hybrid_backend_available);
+    let mut warnings: Vec<String> = Vec::new();
+    if fts_tokens.len() > 1 {
+        warnings.push(
+            "Multi-token text is matched as implicit AND across all tokens; this often returns zero results. Prefer a single short identifier.".to_string(),
+        );
+    }
+    if query.text.contains(' ') && query.regex_pattern.is_none() {
+        warnings.push(
+            "Natural-language phrases rarely match FTS5 symbol names. Use regex for pattern matching or pass a single exact identifier.".to_string(),
+        );
+    }
+    if !regex_valid {
+        warnings.push("regex pattern is invalid; the query would return an error.".to_string());
+    }
+    if query.hybrid && !hybrid_backend_available {
+        warnings.push(
+            "hybrid retrieval requested but ATLAS_EMBED_URL is not configured; execution falls back to FTS-only ranking.".to_string(),
+        );
+    }
+
+    let indexed_node_count =
+        store.and_then(|store| store.stats().ok().map(|stats| stats.node_count));
+    let (latency_ms, result_count, matches) = if regex_valid {
+        if let Some(store) = store {
+            let t0 = std::time::Instant::now();
+            let results = execute_query(store, query, semantic).unwrap_or_default();
+            let latency_ms = t0.elapsed().as_millis();
+            let matches: Vec<QueryExplainMatch> = results
+                .iter()
+                .map(|result| QueryExplainMatch {
+                    score: result.score,
+                    kind: result.node.kind.as_str().to_owned(),
+                    qualified_name: result.node.qualified_name.clone(),
+                    file_path: result.node.file_path.clone(),
+                    line_start: result.node.line_start,
+                    language: result.node.language.clone(),
+                })
+                .collect();
+            (Some(latency_ms), Some(matches.len()), Some(matches))
+        } else {
+            (None, None, None)
+        }
+    } else {
+        (None, None, None)
+    };
+
+    QueryExplanation {
+        active_query_mode: mode.as_str().to_owned(),
+        search_path: mode.as_str().to_owned(),
+        input: QueryExplainInput {
+            text: query.text.clone(),
+            kind: query.kind.clone(),
+            language: query.language.clone(),
+            limit: query.limit,
+            semantic,
+            expand: query.graph_expand,
+            expand_hops: query.graph_max_hops,
+            regex: query.regex_pattern.clone(),
+            subpath: query.subpath.clone(),
+            fuzzy: query.fuzzy_match,
+            hybrid: query.hybrid,
+            include_files: query.include_files,
+        },
+        fts_tokens,
+        fts_phrase,
+        regex_valid,
+        regex_error,
+        ranking_factors: ranking_factors_for(query, semantic, hybrid_backend_available),
+        filters_applied: QueryExplainFiltersApplied {
+            kind: query.kind.is_some(),
+            language: query.language.is_some(),
+            subpath: query.subpath.is_some(),
+            fuzzy: query.fuzzy_match,
+            hybrid: query.hybrid,
+            semantic,
+            expand: query.graph_expand,
+            include_files: query.include_files,
+        },
+        indexed_node_count,
+        db_exists,
+        warnings,
+        latency_ms,
+        result_count,
+        matches,
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Token splitting
@@ -70,6 +348,13 @@ pub fn build_fts_query(text: &str) -> String {
 
     tokens.dedup();
     tokens.join(" OR ")
+}
+
+fn matches_subpath(file_path: &str, subpath: Option<&str>) -> bool {
+    match subpath.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(prefix) => file_path.starts_with(prefix),
+        None => true,
+    }
 }
 
 /// Build a relaxed FTS5 query for typo-tolerant lookup.
@@ -195,7 +480,12 @@ fn is_non_code_language(language: &str) -> bool {
     )
 }
 
-fn fuzzy_typo_bonus(node: &atlas_core::Node, q_lower: &str, fuzzy_cap: usize) -> f64 {
+fn fuzzy_typo_bonus(
+    node: &atlas_core::Node,
+    q_lower: &str,
+    fuzzy_cap: usize,
+    primitives: &GraphSearchRankingPrimitives,
+) -> f64 {
     if fuzzy_cap == 0 {
         return 0.0;
     }
@@ -205,12 +495,7 @@ fn fuzzy_typo_bonus(node: &atlas_core::Node, q_lower: &str, fuzzy_cap: usize) ->
         return 0.0;
     }
 
-    let distance_bonus: f64 = match dist {
-        0 => 24.0,
-        1 => 18.0,
-        2 => 12.0,
-        _ => 8.0,
-    };
+    let distance_bonus = primitives.fuzzy_distance_bonus(dist);
 
     let kind_bonus: f64 = match node.kind {
         NodeKind::Function | NodeKind::Method => 10.0,
@@ -275,6 +560,7 @@ pub fn apply_ranking_boosts(
     recent_files: &HashSet<String>,
     changed_files: &HashSet<String>,
 ) -> Vec<ScoredNode> {
+    let primitives = GraphSearchRankingPrimitives::default();
     let q_lower = query.trim().to_lowercase();
     let fuzzy_cap = fuzzy_threshold(q_lower.chars().count());
 
@@ -294,10 +580,10 @@ pub fn apply_ranking_boosts(
 
         // Exact name match
         let exact_or_prefix = if name_lower == q_lower {
-            r.score += 20.0;
+            r.score += primitives.exact_name_boost;
             true
         } else if name_lower.starts_with(&q_lower) {
-            r.score += 5.0;
+            r.score += primitives.prefix_name_boost;
             true
         } else {
             false
@@ -305,30 +591,23 @@ pub fn apply_ranking_boosts(
 
         // Exact qualified_name match
         if n.qualified_name.to_lowercase() == q_lower {
-            r.score += 15.0;
+            r.score += primitives.exact_qualified_name_boost;
         }
 
         // Fuzzy name match — only when no exact/prefix hit already and the
         // query is long enough to have a non-zero threshold.
         if fuzzy_match && !exact_or_prefix {
-            r.score += fuzzy_typo_bonus(n, &q_lower, fuzzy_cap);
+            r.score += fuzzy_typo_bonus(n, &q_lower, fuzzy_cap, &primitives);
         }
 
         // Kind boost
-        match n.kind {
-            NodeKind::Function | NodeKind::Method => r.score += 3.0,
-            NodeKind::Class | NodeKind::Struct | NodeKind::Trait | NodeKind::Interface => {
-                r.score += 2.0
-            }
-            NodeKind::Enum => r.score += 1.0,
-            _ => {}
-        }
+        r.score += primitives.kind_boost(n.kind);
 
         // Public / exported API boost
         if let Some(mods) = &n.modifiers {
             let m = mods.to_lowercase();
             if m.contains("pub") || m.contains("public") || m.contains("export") {
-                r.score += 2.0;
+                r.score += primitives.public_api_boost;
             }
         }
 
@@ -339,7 +618,7 @@ pub fn apply_ranking_boosts(
                 None => "",
             };
             if node_dir == rdir.as_str() {
-                r.score += 3.0;
+                r.score += primitives.same_directory_boost;
             }
         }
 
@@ -347,26 +626,22 @@ pub fn apply_ranking_boosts(
         if let Some(rlang) = &ref_lang
             && n.language.to_lowercase() == *rlang
         {
-            r.score += 2.0;
+            r.score += primitives.same_language_boost;
         }
 
         // Recent-file boost: reward nodes in recently indexed files.
         if !recent_files.is_empty() && recent_files.contains(&n.file_path) {
-            r.score += 4.0;
+            r.score += primitives.recent_file_boost;
         }
 
         // Changed-file boost: reward nodes in files that are part of the
         // current diff, making them rise above unrelated matches.
         if !changed_files.is_empty() && changed_files.contains(&n.file_path) {
-            r.score += 5.0;
+            r.score += primitives.changed_file_boost;
         }
     }
 
-    results.sort_by(|a, b| {
-        b.score
-            .partial_cmp(&a.score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    sort_scored_nodes(&mut results);
     results
 }
 
@@ -438,11 +713,7 @@ pub fn graph_expand(
     }
 
     let mut results: Vec<ScoredNode> = result_map.into_values().collect();
-    results.sort_by(|a, b| {
-        b.score
-            .partial_cmp(&a.score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    sort_scored_nodes(&mut results);
     results.truncate(limit);
     Ok(results)
 }
@@ -457,6 +728,7 @@ fn exact_symbol_hits(store: &Store, query: &SearchQuery) -> Result<Vec<ScoredNod
 
     if let Some(node) = store.node_by_qname(trimmed)?
         && (query.include_files || node.kind != NodeKind::File)
+        && matches_subpath(&node.file_path, query.subpath.as_deref())
     {
         merged.insert(
             node.qualified_name.clone(),
@@ -469,6 +741,7 @@ fn exact_symbol_hits(store: &Store, query: &SearchQuery) -> Result<Vec<ScoredNod
             .nodes_by_name(trimmed, query.limit.max(25))?
             .into_iter()
             .filter(|node| query.include_files || node.kind != NodeKind::File)
+            .filter(|node| matches_subpath(&node.file_path, query.subpath.as_deref()))
         {
             let qn = node.qualified_name.clone();
             let score = if merged.contains_key(&qn) {
@@ -636,11 +909,7 @@ pub fn reciprocal_rank_fusion(
             n
         })
         .collect();
-    results.sort_by(|a, b| {
-        b.score
-            .partial_cmp(&a.score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    sort_scored_nodes(&mut results);
     results
 }
 

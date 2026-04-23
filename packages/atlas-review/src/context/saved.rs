@@ -1,4 +1,5 @@
 use super::*;
+use crate::ranking::SavedContextRankingPrimitives;
 
 /// Maximum number of saved-context sources to include in a result.
 const MAX_SAVED_SOURCES: usize = 5;
@@ -8,6 +9,7 @@ pub(super) fn retrieve_saved_context(
     request: &ContextRequest,
     result: &ContextResult,
 ) -> Vec<SavedContextSource> {
+    let ranking = SavedContextRankingPrimitives::default();
     let mut terms: Vec<String> = result
         .nodes
         .iter()
@@ -76,17 +78,17 @@ pub(super) fn retrieve_saved_context(
             .map(|c| c.content.chars().take(512).collect())
             .unwrap_or_default();
 
-        let mut score = 10.0_f32 / (rank as f32 + 1.0);
+        let mut score = ranking.rank_score(rank);
 
         if meta.created_at.as_str() >= seven_days_ago.as_str() {
-            score += 5.0;
+            score += ranking.recent_source_bonus;
         }
 
         if let (Some(req_sid), Some(art_sid)) =
             (request.session_id.as_deref(), meta.session_id.as_deref())
             && req_sid == art_sid
         {
-            score += 10.0;
+            score += ranking.same_session_bonus;
         }
 
         let retrieval_hint = format!(
@@ -105,11 +107,7 @@ pub(super) fn retrieve_saved_context(
         });
     }
 
-    scored.sort_by(|a, b| {
-        b.relevance_score
-            .partial_cmp(&a.relevance_score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    ranking.sort_sources(&mut scored);
     scored
 }
 

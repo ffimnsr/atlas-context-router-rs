@@ -11,5 +11,10 @@
 //! ```
 
 mod engine;
+mod ranking;
 
 pub use engine::ReasoningEngine;
+pub use ranking::{
+    AnalysisRankingPrimitives, AnalysisTrimmingPrimitives, sort_dead_code_candidates,
+    sort_dependency_result, sort_refactor_safety_result, sort_removal_result,
+};

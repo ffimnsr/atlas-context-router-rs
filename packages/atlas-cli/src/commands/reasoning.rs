@@ -1,5 +1,10 @@
 use anyhow::{Context, Result};
 use atlas_adapters::{AdapterHooks, CliAdapter, extract_reasoning_event};
+use atlas_reasoning::{
+    AnalysisRankingPrimitives, AnalysisTrimmingPrimitives, ReasoningEngine,
+    sort_dead_code_candidates, sort_dependency_result, sort_refactor_safety_result,
+    sort_removal_result,
+};
 use atlas_store_sqlite::Store;
 use camino::Utf8Path;
 
@@ -35,8 +40,6 @@ fn print_refactor_result(result: &atlas_core::RefactorDryRunResult, dry_run: boo
 }
 
 pub fn run_analyze(cli: &Cli) -> Result<()> {
-    use atlas_reasoning::ReasoningEngine;
-
     let repo = resolve_repo(cli)?;
     // Identify the subcommand for event labelling before the closure borrows cli.command.
     let analyze_label = match &cli.command {
@@ -58,6 +61,8 @@ pub fn run_analyze(cli: &Cli) -> Result<()> {
         let store =
             Store::open(&db_path).with_context(|| format!("cannot open database at {db_path}"))?;
         let engine = ReasoningEngine::new(&store);
+        let ranking = AnalysisRankingPrimitives::default();
+        let trimming = AnalysisTrimmingPrimitives::default();
 
         let sub = match &cli.command {
             Command::Analyze { subcommand } => subcommand,
@@ -70,9 +75,10 @@ pub fn run_analyze(cli: &Cli) -> Result<()> {
                 max_depth,
                 max_nodes,
             } => {
-                let result = engine
+                let mut result = engine
                     .analyze_removal(&[symbol.as_str()], Some(*max_depth), Some(*max_nodes))
                     .with_context(|| format!("removal analysis for `{symbol}` failed"))?;
+                sort_removal_result(&mut result, &ranking);
 
                 if cli.json {
                     print_json("analyze_remove", serde_json::to_value(&result)?)?;
@@ -90,7 +96,7 @@ pub fn run_analyze(cli: &Cli) -> Result<()> {
                         .iter()
                         .partition(|im| im.impact_class != atlas_core::ImpactClass::Weak);
 
-                    for im in primary.iter().take(20) {
+                    for im in primary.iter().take(trimming.removal_primary_preview_limit) {
                         println!(
                             "  [{:?}] {} {} (depth {})",
                             im.impact_class,
@@ -104,15 +110,21 @@ pub fn run_analyze(cli: &Cli) -> Result<()> {
                             "\n  Containment/structural ({}): — child nodes of removed symbol",
                             containment.len()
                         );
-                        for im in containment.iter().take(10) {
+                        for im in containment
+                            .iter()
+                            .take(trimming.removal_containment_preview_limit)
+                        {
                             println!(
                                 "  [Weak] {} {}",
                                 im.node.kind.as_str(),
                                 im.node.qualified_name,
                             );
                         }
-                        if containment.len() > 10 {
-                            println!("  ... and {} more", containment.len() - 10);
+                        if containment.len() > trimming.removal_containment_preview_limit {
+                            println!(
+                                "  ... and {} more",
+                                containment.len() - trimming.removal_containment_preview_limit
+                            );
                         }
                     }
 
@@ -147,7 +159,7 @@ pub fn run_analyze(cli: &Cli) -> Result<()> {
                 let allowlist_refs: Vec<&str> = allowlist.iter().map(String::as_str).collect();
                 let exclude_kinds: Vec<atlas_core::NodeKind> =
                     exclude_kind.iter().filter_map(|k| k.parse().ok()).collect();
-                let candidates = engine
+                let mut candidates = engine
                     .detect_dead_code(
                         &allowlist_refs,
                         subpath.as_deref(),
@@ -155,6 +167,7 @@ pub fn run_analyze(cli: &Cli) -> Result<()> {
                         &exclude_kinds,
                     )
                     .context("dead-code detection failed")?;
+                sort_dead_code_candidates(&mut candidates, &ranking);
 
                 if *summary {
                     println!("Dead-code candidates: {}", candidates.len());
@@ -184,9 +197,10 @@ pub fn run_analyze(cli: &Cli) -> Result<()> {
             }
 
             AnalyzeCommand::Safety { symbol } => {
-                let result = engine
+                let mut result = engine
                     .score_refactor_safety(symbol)
                     .with_context(|| format!("safety scoring for `{symbol}` failed"))?;
+                sort_refactor_safety_result(&mut result);
 
                 if cli.json {
                     print_json("analyze_safety", serde_json::to_value(&result)?)?;
@@ -214,9 +228,10 @@ pub fn run_analyze(cli: &Cli) -> Result<()> {
             }
 
             AnalyzeCommand::Dependency { symbol } => {
-                let result = engine
+                let mut result = engine
                     .check_dependency_removal(symbol)
                     .with_context(|| format!("dependency check for `{symbol}` failed"))?;
+                sort_dependency_result(&mut result, &ranking);
 
                 if cli.json {
                     print_json("analyze_dependency", serde_json::to_value(&result)?)?;

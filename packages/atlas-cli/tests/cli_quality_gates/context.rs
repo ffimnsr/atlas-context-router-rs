@@ -235,3 +235,64 @@ fn context_json_contract_stable_for_golden_snapshot() {
         "context JSON output must match golden snapshot"
     );
 }
+
+#[test]
+fn context_truncation_metadata_matches_snapshot() {
+    let repo = setup_repo(&[
+        (
+            "src/lib.rs",
+            "pub fn alpha() {\n    beta();\n    gamma();\n}\n\npub fn beta() {}\n\npub fn gamma() {}\n",
+        ),
+    ]);
+
+    run_atlas(repo.path(), &["init"]);
+    run_atlas(repo.path(), &["build"]);
+
+    let data = read_json_data_output(
+        "context",
+        run_atlas(
+            repo.path(),
+            &[
+                "--json",
+                "context",
+                "alpha",
+                "--max-nodes",
+                "1",
+                "--max-edges",
+                "0",
+                "--max-files",
+                "1",
+            ],
+        ),
+    );
+
+    let snapshot = json!({
+        "intent": data["request"]["intent"],
+        "truncation": data["truncation"],
+        "selected_node_qnames": data["nodes"]
+            .as_array()
+            .expect("context nodes array")
+            .iter()
+            .filter_map(|node| node["node"]["qualified_name"].as_str())
+            .collect::<Vec<_>>(),
+        "selected_edge_pairs": data["edges"]
+            .as_array()
+            .expect("context edges array")
+            .iter()
+            .map(|edge| format!(
+                "{} -> {}",
+                edge["edge"]["source_qn"].as_str().unwrap_or_default(),
+                edge["edge"]["target_qn"].as_str().unwrap_or_default()
+            ))
+            .collect::<Vec<_>>(),
+        "selected_file_paths": data["files"]
+            .as_array()
+            .expect("context files array")
+            .iter()
+            .filter_map(|file| file["path"].as_str())
+            .collect::<Vec<_>>(),
+    });
+
+    let golden = read_golden_json("context_truncation_alpha.json");
+    assert_eq!(snapshot, golden, "truncation snapshot must stay stable");
+}

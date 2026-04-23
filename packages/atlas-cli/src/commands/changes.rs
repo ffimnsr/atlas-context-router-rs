@@ -1,105 +1,20 @@
+use crate::cli::{Cli, Command};
 use anyhow::{Context, Result};
 use atlas_adapters::{AdapterHooks, CliAdapter};
 use atlas_core::model::{
-    ChangeType, ContextIntent, ContextRequest, ContextTarget, ImpactResult, NoiseReductionSummary,
-    ReviewContext, ReviewImpactOverview, RiskSummary, WorkflowCallChain, WorkflowComponent,
-    WorkflowFocusNode,
+    ChangeType, ContextIntent, ContextRequest, ContextResult, ContextTarget, ImpactResult,
+    ReviewContext, ReviewImpactOverview, RiskSummary, SelectionReason,
 };
 use atlas_impact::analyze as advanced_impact;
 use atlas_repo::{CanonicalRepoPath, DiffTarget, changed_files, find_repo_root};
-use atlas_review::{ContextEngine, assemble_review_context};
+use atlas_review::{ContextEngine, build_explain_change_summary, empty_explain_change_summary};
 use atlas_store_sqlite::Store;
 use camino::Utf8Path;
-use serde::Serialize;
-
-use crate::cli::{Cli, Command};
 
 use super::{
     augment_changes_with_node_counts, change_tag, db_path, detect_changes_target, print_json,
     resolve_repo,
 };
-
-// ---------------------------------------------------------------------------
-// Explain-change structs
-// ---------------------------------------------------------------------------
-
-#[derive(Serialize, Default)]
-struct ExplainChangedByKind {
-    api_change: usize,
-    signature_change: usize,
-    internal_change: usize,
-}
-
-#[derive(Serialize)]
-struct ExplainChangedSymbol {
-    qn: String,
-    kind: String,
-    file: String,
-    line: u32,
-    change_kind: String,
-    lang: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    sig: Option<String>,
-}
-
-#[derive(Serialize)]
-struct ExplainBoundaryViolation {
-    kind: String,
-    description: String,
-    nodes: Vec<String>,
-}
-
-#[derive(Serialize)]
-struct ExplainTestImpact {
-    affected_test_count: usize,
-    uncovered_symbol_count: usize,
-    uncovered_symbols: Vec<String>,
-}
-
-#[derive(Serialize)]
-pub(crate) struct ExplainChangeSummary {
-    risk_level: String,
-    changed_file_count: usize,
-    changed_symbol_count: usize,
-    changed_by_kind: ExplainChangedByKind,
-    diff_summary: ExplainDiffSummary,
-    changed_symbols: Vec<ExplainChangedSymbol>,
-    impacted_file_count: usize,
-    impacted_node_count: usize,
-    high_impact_nodes: Vec<WorkflowFocusNode>,
-    impacted_components: Vec<WorkflowComponent>,
-    call_chains: Vec<WorkflowCallChain>,
-    ripple_effects: Vec<String>,
-    boundary_violations: Vec<ExplainBoundaryViolation>,
-    test_impact: ExplainTestImpact,
-    noise_reduction: NoiseReductionSummary,
-    summary: String,
-}
-
-#[derive(Serialize, Default)]
-struct ExplainDiffCounts {
-    added: usize,
-    modified: usize,
-    deleted: usize,
-    renamed: usize,
-    copied: usize,
-}
-
-#[derive(Serialize)]
-struct ExplainDiffFile {
-    path: String,
-    change_type: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    old_path: Option<String>,
-    changed_symbol_count: usize,
-    impacted_symbol_count: usize,
-}
-
-#[derive(Serialize, Default)]
-struct ExplainDiffSummary {
-    counts: ExplainDiffCounts,
-    files: Vec<ExplainDiffFile>,
-}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -119,275 +34,120 @@ fn normalize_explicit_files(
         .collect()
 }
 
-fn empty_explain_change_summary() -> ExplainChangeSummary {
-    ExplainChangeSummary {
-        risk_level: "low".to_string(),
-        changed_file_count: 0,
-        changed_symbol_count: 0,
-        changed_by_kind: ExplainChangedByKind::default(),
-        diff_summary: ExplainDiffSummary::default(),
-        changed_symbols: vec![],
-        impacted_file_count: 0,
-        impacted_node_count: 0,
-        high_impact_nodes: vec![],
-        impacted_components: vec![],
-        call_chains: vec![],
-        ripple_effects: vec![],
-        boundary_violations: vec![],
-        test_impact: ExplainTestImpact {
-            affected_test_count: 0,
-            uncovered_symbol_count: 0,
-            uncovered_symbols: vec![],
-        },
-        noise_reduction: NoiseReductionSummary {
-            retained_nodes: 0,
-            retained_edges: 0,
-            retained_files: 0,
-            dropped_nodes: 0,
-            dropped_edges: 0,
-            dropped_files: 0,
-            rules_applied: vec![],
-        },
-        summary: "No changed files detected.".to_string(),
+fn print_review_context_text(ctx: &ContextResult, changed_files: &[String]) {
+    println!("Changed files ({}):", changed_files.len());
+    for path in changed_files {
+        println!("  {path}");
     }
-}
 
-pub(crate) fn build_explain_change_summary(
-    store: &Store,
-    changes: &[atlas_core::model::ChangedFile],
-    files: &[String],
-    max_depth: u32,
-    max_nodes: usize,
-) -> Result<ExplainChangeSummary> {
-    let file_refs: Vec<&str> = files.iter().map(String::as_str).collect();
-    let base_impact = store
-        .impact_radius(&file_refs, max_depth, max_nodes)
-        .context("impact radius query failed")?;
-    let advanced = advanced_impact(base_impact);
-    let workflow_request = ContextRequest {
-        intent: ContextIntent::Review,
-        target: ContextTarget::ChangedFiles {
-            paths: files.to_vec(),
-        },
-        max_nodes: Some(max_nodes),
-        depth: Some(max_depth),
-        ..ContextRequest::default()
-    };
-    let workflow_result = ContextEngine::new(store)
-        .build(&workflow_request)
-        .context("workflow summary generation failed")?;
-    let workflow = workflow_result.workflow.clone();
+    println!("\nContext summary:");
+    println!("  Selected nodes   : {}", ctx.nodes.len());
+    println!("  Selected edges   : {}", ctx.edges.len());
+    println!("  Selected files   : {}", ctx.files.len());
+    println!(
+        "  Max depth        : {}",
+        ctx.request.depth.unwrap_or_default()
+    );
+    println!(
+        "  Max nodes        : {}",
+        ctx.request.max_nodes.unwrap_or(ctx.nodes.len())
+    );
 
-    let mut changed_by_kind = ExplainChangedByKind::default();
-
-    let changed_symbols: Vec<ExplainChangedSymbol> = advanced
-        .scored_nodes
+    let changed_symbols: Vec<_> = ctx
+        .nodes
         .iter()
-        .filter_map(|sn| sn.change_kind.map(|ck| (&sn.node, ck)))
-        .map(|(node, change_kind)| {
-            let change_kind = match change_kind {
-                atlas_core::ChangeKind::ApiChange => {
-                    changed_by_kind.api_change += 1;
-                    "api_change"
-                }
-                atlas_core::ChangeKind::SignatureChange => {
-                    changed_by_kind.signature_change += 1;
-                    "signature_change"
-                }
-                atlas_core::ChangeKind::InternalChange => {
-                    changed_by_kind.internal_change += 1;
-                    "internal_change"
-                }
-            };
-            ExplainChangedSymbol {
-                qn: node.qualified_name.clone(),
-                kind: node.kind.as_str().to_string(),
-                file: node.file_path.clone(),
-                line: node.line_start,
-                change_kind: change_kind.to_string(),
-                lang: node.language.clone(),
-                sig: node.params.clone(),
-            }
-        })
+        .filter(|node| node.selection_reason == SelectionReason::DirectTarget)
         .collect();
-
-    let boundary_violations: Vec<ExplainBoundaryViolation> = advanced
-        .boundary_violations
-        .iter()
-        .map(|violation| ExplainBoundaryViolation {
-            kind: match violation.kind {
-                atlas_core::BoundaryKind::CrossModule => "cross_module",
-                atlas_core::BoundaryKind::CrossPackage => "cross_package",
-            }
-            .to_string(),
-            description: violation.description.clone(),
-            nodes: violation.nodes.clone(),
-        })
-        .collect();
-
-    let uncovered_symbols: Vec<String> = advanced
-        .test_impact
-        .uncovered_changed_nodes
-        .iter()
-        .map(|node| node.qualified_name.clone())
-        .collect();
-
-    let risk_level = advanced.risk_level.to_string();
-    let impacted_file_count = advanced.base.impacted_files.len();
-    let impacted_node_count = advanced.base.impacted_nodes.len();
-    let diff_summary = build_diff_summary(changes, &advanced.base);
-
-    let mut summary_parts: Vec<String> = vec![format!("Risk: {}.", risk_level)];
-    summary_parts.push(format!(
-        "{} file change(s): {} modified, {} added, {} deleted, {} renamed.",
-        changes.len(),
-        diff_summary.counts.modified,
-        diff_summary.counts.added,
-        diff_summary.counts.deleted,
-        diff_summary.counts.renamed,
-    ));
-    if changed_by_kind.api_change > 0 {
-        summary_parts.push(format!("{} api change(s).", changed_by_kind.api_change));
-    }
-    if changed_by_kind.signature_change > 0 {
-        summary_parts.push(format!(
-            "{} signature change(s).",
-            changed_by_kind.signature_change
-        ));
-    }
-    if changed_by_kind.internal_change > 0 {
-        summary_parts.push(format!(
-            "{} internal change(s).",
-            changed_by_kind.internal_change
-        ));
-    }
-    summary_parts.push(format!(
-        "Affects {} file(s), {} node(s).",
-        impacted_file_count, impacted_node_count
-    ));
-    if !boundary_violations.is_empty() {
-        summary_parts.push(format!(
-            "{} boundary violation(s).",
-            boundary_violations.len()
-        ));
-    }
-    if !uncovered_symbols.is_empty() {
-        summary_parts.push(format!(
-            "{} changed symbol(s) lack test coverage.",
-            uncovered_symbols.len()
-        ));
-    }
-    if let Some(workflow) = &workflow {
-        if let Some(headline) = &workflow.headline {
-            summary_parts.push(headline.clone());
-        }
-        if let Some(ripple) = workflow.ripple_effects.first() {
-            summary_parts.push(ripple.clone());
-        }
+    println!("\nChanged symbols: {}", changed_symbols.len());
+    for selected in changed_symbols.iter().take(10) {
+        println!(
+            "  {} {} ({}:{})",
+            selected.node.kind.as_str(),
+            selected.node.qualified_name,
+            selected.node.file_path,
+            selected.node.line_start
+        );
     }
 
-    Ok(ExplainChangeSummary {
-        risk_level,
-        changed_file_count: changes.len(),
-        changed_symbol_count: changed_symbols.len(),
-        changed_by_kind,
-        diff_summary,
-        changed_symbols,
-        impacted_file_count,
-        impacted_node_count,
-        high_impact_nodes: workflow
-            .as_ref()
-            .map(|workflow| workflow.high_impact_nodes.clone())
-            .unwrap_or_default(),
-        impacted_components: workflow
-            .as_ref()
-            .map(|workflow| workflow.impacted_components.clone())
-            .unwrap_or_default(),
-        call_chains: workflow
-            .as_ref()
-            .map(|workflow| workflow.call_chains.clone())
-            .unwrap_or_default(),
-        ripple_effects: workflow
-            .as_ref()
-            .map(|workflow| workflow.ripple_effects.clone())
-            .unwrap_or_default(),
-        boundary_violations,
-        test_impact: ExplainTestImpact {
-            affected_test_count: advanced.test_impact.affected_tests.len(),
-            uncovered_symbol_count: uncovered_symbols.len(),
-            uncovered_symbols,
-        },
-        noise_reduction: workflow.map(|workflow| workflow.noise_reduction).unwrap_or(
-            NoiseReductionSummary {
-                retained_nodes: 0,
-                retained_edges: 0,
-                retained_files: 0,
-                dropped_nodes: 0,
-                dropped_edges: 0,
-                dropped_files: 0,
-                rules_applied: vec![],
-            },
-        ),
-        summary: summary_parts.join(" "),
-    })
-}
-
-fn build_diff_summary(
-    changes: &[atlas_core::model::ChangedFile],
-    impact: &atlas_core::ImpactResult,
-) -> ExplainDiffSummary {
-    let changed_by_file: std::collections::HashMap<&str, usize> =
-        impact
-            .changed_nodes
+    if let Some(workflow) = &ctx.workflow {
+        let cross_package_impact = workflow
+            .impacted_components
             .iter()
-            .fold(std::collections::HashMap::new(), |mut acc, node| {
-                *acc.entry(node.file_path.as_str()).or_insert(0) += 1;
-                acc
-            });
-    let impacted_by_file: std::collections::HashMap<&str, usize> = impact
-        .impacted_nodes
-        .iter()
-        .fold(std::collections::HashMap::new(), |mut acc, node| {
-            *acc.entry(node.file_path.as_str()).or_insert(0) += 1;
-            acc
-        });
-
-    let mut counts = ExplainDiffCounts::default();
-    let files = changes
-        .iter()
-        .map(|change| {
-            match change.change_type {
-                ChangeType::Added => counts.added += 1,
-                ChangeType::Modified => counts.modified += 1,
-                ChangeType::Deleted => counts.deleted += 1,
-                ChangeType::Renamed => counts.renamed += 1,
-                ChangeType::Copied => counts.copied += 1,
+            .filter(|component| component.kind == "package")
+            .count()
+            > 1;
+        println!("\nRisk summary:");
+        println!("  Cross-package impact: {cross_package_impact}");
+        if let Some(headline) = &workflow.headline {
+            println!("\nFocus: {headline}");
+        }
+        if !workflow.high_impact_nodes.is_empty() {
+            println!("\nHigh-impact nodes:");
+            for node in workflow.high_impact_nodes.iter().take(5) {
+                println!(
+                    "  [{:.1}] {} {} ({})",
+                    node.relevance_score, node.kind, node.qualified_name, node.file_path
+                );
             }
-
-            ExplainDiffFile {
-                path: change.path.clone(),
-                change_type: match change.change_type {
-                    ChangeType::Added => "added",
-                    ChangeType::Modified => "modified",
-                    ChangeType::Deleted => "deleted",
-                    ChangeType::Renamed => "renamed",
-                    ChangeType::Copied => "copied",
-                }
-                .to_string(),
-                old_path: change.old_path.clone(),
-                changed_symbol_count: changed_by_file
-                    .get(change.path.as_str())
-                    .copied()
-                    .unwrap_or(0),
-                impacted_symbol_count: impacted_by_file
-                    .get(change.path.as_str())
-                    .copied()
-                    .unwrap_or(0),
+        }
+        if !workflow.impacted_components.is_empty() {
+            println!("\nImpacted components:");
+            for component in workflow.impacted_components.iter().take(5) {
+                println!(
+                    "  [{}] {} | changed {} | impacted {} | files {}",
+                    component.kind,
+                    component.label,
+                    component.changed_node_count,
+                    component.impacted_node_count,
+                    component.file_count
+                );
             }
-        })
-        .collect();
+        }
+        if !workflow.call_chains.is_empty() {
+            println!("\nCall chains:");
+            for chain in workflow.call_chains.iter().take(5) {
+                println!("  {}", chain.summary);
+            }
+        }
+        if !workflow.ripple_effects.is_empty() {
+            println!("\nRipple effects:");
+            for ripple in &workflow.ripple_effects {
+                println!("  {ripple}");
+            }
+        }
+        println!("\nNoise reduction:");
+        println!(
+            "  Retained nodes   : {}",
+            workflow.noise_reduction.retained_nodes
+        );
+        println!(
+            "  Retained edges   : {}",
+            workflow.noise_reduction.retained_edges
+        );
+        println!(
+            "  Retained files   : {}",
+            workflow.noise_reduction.retained_files
+        );
+        println!(
+            "  Dropped nodes    : {}",
+            workflow.noise_reduction.dropped_nodes
+        );
+        println!(
+            "  Dropped edges    : {}",
+            workflow.noise_reduction.dropped_edges
+        );
+        println!(
+            "  Dropped files    : {}",
+            workflow.noise_reduction.dropped_files
+        );
+    }
 
-    ExplainDiffSummary { counts, files }
+    if ctx.truncation.truncated {
+        println!("\nTruncation:");
+        println!("  Nodes dropped    : {}", ctx.truncation.nodes_dropped);
+        println!("  Edges dropped    : {}", ctx.truncation.edges_dropped);
+        println!("  Files dropped    : {}", ctx.truncation.files_dropped);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -846,7 +606,6 @@ pub fn run_review_context(cli: &Cli) -> Result<()> {
             return Ok(());
         }
 
-        let path_refs: Vec<&str> = target_files.iter().map(String::as_str).collect();
         let workflow_request = ContextRequest {
             intent: ContextIntent::Review,
             target: ContextTarget::ChangedFiles {
@@ -865,118 +624,7 @@ pub fn run_review_context(cli: &Cli) -> Result<()> {
             return Ok(());
         }
 
-        let impact = store
-            .impact_radius(&path_refs, max_depth, max_nodes)
-            .context("impact radius query failed")?;
-
-        let ctx = assemble_review_context(&impact, &target_files, max_depth, max_nodes);
-
-        println!("Changed files ({}):", ctx.changed_files.len());
-        for f in &ctx.changed_files {
-            println!("  {f}");
-        }
-        println!("\nImpact radius:");
-        println!("  Max depth         : {}", ctx.impact_overview.max_depth);
-        println!("  Max nodes         : {}", ctx.impact_overview.max_nodes);
-        println!(
-            "  Impacted nodes    : {}",
-            ctx.impact_overview.impacted_node_count
-        );
-        println!(
-            "  Impacted files    : {}",
-            ctx.impact_overview.impacted_file_count
-        );
-        println!(
-            "  Relevant edges    : {}",
-            ctx.impact_overview.relevant_edge_count
-        );
-        println!(
-            "  Node limit reached: {}",
-            ctx.impact_overview.reached_node_limit
-        );
-        println!(
-            "\nChanged symbols: {}",
-            ctx.risk_summary.changed_symbol_count
-        );
-        for summary in ctx.changed_symbol_summaries.iter().take(10) {
-            println!(
-                "  {} {} ({}:{}) | callers {} | callees {} | importers {} | tests {}",
-                summary.node.kind.as_str(),
-                summary.node.qualified_name,
-                summary.node.file_path,
-                summary.node.line_start,
-                summary.callers.len(),
-                summary.callees.len(),
-                summary.importers.len(),
-                summary.tests.len()
-            );
-        }
-        println!(
-            "\nImpacted neighbors (top {}):",
-            ctx.impacted_neighbors.len().min(20)
-        );
-        for n in ctx.impacted_neighbors.iter().take(20) {
-            println!(
-                "  {} {} ({}:{})",
-                n.kind.as_str(),
-                n.qualified_name,
-                n.file_path,
-                n.line_start
-            );
-        }
-        println!("\nRisk summary:");
-        println!(
-            "  Public API changes : {}",
-            ctx.risk_summary.public_api_changes
-        );
-        println!(
-            "  Affected tests     : {}",
-            ctx.risk_summary.affected_test_count
-        );
-        println!(
-            "  Uncovered changes  : {}",
-            ctx.risk_summary.uncovered_changed_symbol_count
-        );
-        println!(
-            "  Large functions    : {}",
-            ctx.risk_summary.large_function_count
-        );
-        println!("  Test adjacent      : {}", ctx.risk_summary.test_adjacent);
-        println!(
-            "  Cross-module impact: {}",
-            ctx.risk_summary.cross_module_impact
-        );
-        println!(
-            "  Cross-package impact: {}",
-            ctx.risk_summary.cross_package_impact
-        );
-
-        if let Some(workflow) = &workflow_result.workflow {
-            if let Some(headline) = &workflow.headline {
-                println!("\nFocus: {headline}");
-            }
-            if !workflow.high_impact_nodes.is_empty() {
-                println!("\nHigh-impact nodes:");
-                for node in workflow.high_impact_nodes.iter().take(5) {
-                    println!(
-                        "  [{:.1}] {} {} ({})",
-                        node.relevance_score, node.kind, node.qualified_name, node.file_path
-                    );
-                }
-            }
-            if !workflow.call_chains.is_empty() {
-                println!("\nCall chains:");
-                for chain in workflow.call_chains.iter().take(5) {
-                    println!("  {}", chain.summary);
-                }
-            }
-            if !workflow.ripple_effects.is_empty() {
-                println!("\nRipple effects:");
-                for ripple in &workflow.ripple_effects {
-                    println!("  {ripple}");
-                }
-            }
-        }
+        print_review_context_text(&workflow_result, &target_files);
 
         Ok(())
     })();

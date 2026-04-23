@@ -334,6 +334,7 @@ dependencies = [
  "atlas-search",
  "atlas-store-sqlite",
  "criterion",
+ "serde",
  "serde_json",
  "tracing",
 ]
@@ -345,6 +346,7 @@ dependencies = [
  "anyhow",
  "atlas-core",
  "atlas-store-sqlite",
+ "regex",
  "serde",
  "serde_json",
  "tempfile",

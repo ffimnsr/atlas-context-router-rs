@@ -15,12 +15,11 @@ use atlas_core::model::{ChangeType, ContextIntent, ContextRequest, ContextTarget
 use atlas_engine::{Config, UpdateOptions, UpdateTarget, update_graph};
 use atlas_impact::analyze as advanced_impact;
 use atlas_repo::find_repo_root;
-use atlas_review::{ContextEngine, query_parser};
+use atlas_review::{ContextEngine, build_explain_change_summary, query_parser};
 use atlas_session::{NewSessionEvent, ResumeSnapshot, SessionEventType, SessionId, SessionStore};
 use atlas_store_sqlite::{BuildFinishStats, Store};
 
 use crate::cli::{Cli, Command};
-use crate::commands::changes::build_explain_change_summary;
 
 use super::{db_path, print_json, resolve_repo};
 
@@ -721,6 +720,8 @@ fn compute_prompt_routing(
 }
 
 fn push_unique_string(values: &mut Vec<String>, candidate: String, limit: usize) {
+    // Transport-only dedupe/truncation for hook metadata. Not part of search,
+    // review, or reasoning ranking primitives.
     if values.iter().any(|existing| existing == &candidate) {
         return;
     }
@@ -731,6 +732,8 @@ fn push_unique_string(values: &mut Vec<String>, candidate: String, limit: usize)
 }
 
 fn push_unique_value(values: &mut Vec<Value>, candidate: Value, limit: usize) {
+    // Transport-only dedupe/truncation for hook metadata. Not part of search,
+    // review, or reasoning ranking primitives.
     if values.iter().any(|existing| existing == &candidate) {
         return;
     }

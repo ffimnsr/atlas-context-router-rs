@@ -10,6 +10,7 @@ atlas-contentstore = { path = "../atlas-contentstore" , version = "0.4.0"}
 atlas-impact = { path = "../atlas-impact" , version = "0.4.0"}
 atlas-store-sqlite = { path = "../atlas-store-sqlite" , version = "0.4.0"}
 atlas-search = { path = "../atlas-search" , version = "0.4.0"}
+serde.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]

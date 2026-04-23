@@ -513,177 +513,24 @@ pub(super) fn tool_explain_change(
     }
 
     if files.is_empty() {
-        return tool_result_value(
-            &serde_json::json!({
-                "risk_level": "low",
-                "changed_file_count": 0,
-                "changed_symbol_count": 0,
-                "changed_by_kind": { "api_change": 0, "signature_change": 0, "internal_change": 0 },
-                "changed_symbols": [],
-                "impacted_file_count": 0,
-                "impacted_node_count": 0,
-                "boundary_violations": [],
-                "test_impact": { "affected_test_count": 0, "uncovered_symbol_count": 0, "uncovered_symbols": [] },
-                "summary": "No changed files detected."
-            }),
-            output_format,
-        );
+        return tool_result_value(&atlas_review::empty_explain_change_summary(), output_format);
     }
 
     let store = open_store(db_path)?;
-    let file_refs: Vec<&str> = files.iter().map(String::as_str).collect();
-    let base_impact = store
-        .impact_radius(&file_refs, max_depth, max_nodes)
-        .context("impact_radius query failed")?;
-
-    let advanced = atlas_impact::analyze(base_impact);
-    let mut api_count = 0usize;
-    let mut sig_count = 0usize;
-    let mut internal_count = 0usize;
-
-    #[derive(Serialize)]
-    struct ChangedSymbol<'a> {
-        qn: &'a str,
-        kind: &'a str,
-        file: &'a str,
-        line: u32,
-        change_kind: &'a str,
-        lang: &'a str,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        sig: Option<&'a str>,
-    }
-
-    let changed_symbols: Vec<ChangedSymbol<'_>> = advanced
-        .scored_nodes
+    let changes: Vec<atlas_core::model::ChangedFile> = files
         .iter()
-        .filter_map(|sn| sn.change_kind.map(|ck| (&sn.node, ck)))
-        .map(|(n, ck)| {
-            let ck_str = match ck {
-                atlas_core::ChangeKind::ApiChange => {
-                    api_count += 1;
-                    "api_change"
-                }
-                atlas_core::ChangeKind::SignatureChange => {
-                    sig_count += 1;
-                    "signature_change"
-                }
-                atlas_core::ChangeKind::InternalChange => {
-                    internal_count += 1;
-                    "internal_change"
-                }
-            };
-            ChangedSymbol {
-                qn: &n.qualified_name,
-                kind: n.kind.as_str(),
-                file: &n.file_path,
-                line: n.line_start,
-                change_kind: ck_str,
-                lang: &n.language,
-                sig: n.params.as_deref(),
-            }
+        .cloned()
+        .map(|path| atlas_core::model::ChangedFile {
+            path,
+            change_type: atlas_core::ChangeType::Modified,
+            old_path: None,
         })
         .collect();
+    let summary =
+        atlas_review::build_explain_change_summary(&store, &changes, &files, max_depth, max_nodes)
+            .context("explain_change summary generation failed")?;
 
-    let changed_symbol_count = changed_symbols.len();
-
-    #[derive(Serialize)]
-    struct BoundaryViolationCompact<'a> {
-        kind: &'a str,
-        description: &'a str,
-        nodes: &'a [String],
-    }
-
-    let boundary_violations: Vec<BoundaryViolationCompact<'_>> = advanced
-        .boundary_violations
-        .iter()
-        .map(|bv| BoundaryViolationCompact {
-            kind: match bv.kind {
-                atlas_core::BoundaryKind::CrossModule => "cross_module",
-                atlas_core::BoundaryKind::CrossPackage => "cross_package",
-            },
-            description: &bv.description,
-            nodes: &bv.nodes,
-        })
-        .collect();
-
-    let affected_test_count = advanced.test_impact.affected_tests.len();
-    let uncovered: Vec<&str> = advanced
-        .test_impact
-        .uncovered_changed_nodes
-        .iter()
-        .map(|n| n.qualified_name.as_str())
-        .collect();
-    let uncovered_count = uncovered.len();
-
-    let risk_str = advanced.risk_level.to_string();
-    let impacted_file_count = advanced.base.impacted_files.len();
-    let impacted_node_count = advanced.base.impacted_nodes.len();
-
-    let mut summary_parts: Vec<String> = Vec::new();
-    summary_parts.push(format!("Risk: {}.", risk_str));
-    if api_count > 0 {
-        summary_parts.push(format!("{} api change(s).", api_count));
-    }
-    if sig_count > 0 {
-        summary_parts.push(format!("{} signature change(s).", sig_count));
-    }
-    if internal_count > 0 {
-        summary_parts.push(format!("{} internal change(s).", internal_count));
-    }
-    summary_parts.push(format!(
-        "Affects {} file(s), {} node(s).",
-        impacted_file_count, impacted_node_count
-    ));
-    if !boundary_violations.is_empty() {
-        summary_parts.push(format!(
-            "{} boundary violation(s).",
-            boundary_violations.len()
-        ));
-    }
-    if uncovered_count > 0 {
-        summary_parts.push(format!(
-            "{} changed symbol(s) lack test coverage.",
-            uncovered_count
-        ));
-    }
-    let summary = summary_parts.join(" ");
-
-    #[derive(Serialize)]
-    struct ExplainChangeResult<'a> {
-        risk_level: &'a str,
-        changed_file_count: usize,
-        changed_symbol_count: usize,
-        changed_by_kind: serde_json::Value,
-        changed_symbols: Vec<ChangedSymbol<'a>>,
-        impacted_file_count: usize,
-        impacted_node_count: usize,
-        boundary_violations: Vec<BoundaryViolationCompact<'a>>,
-        test_impact: serde_json::Value,
-        summary: &'a str,
-    }
-
-    let result = ExplainChangeResult {
-        risk_level: &risk_str,
-        changed_file_count: files.len(),
-        changed_symbol_count,
-        changed_by_kind: serde_json::json!({
-            "api_change": api_count,
-            "signature_change": sig_count,
-            "internal_change": internal_count,
-        }),
-        changed_symbols,
-        impacted_file_count,
-        impacted_node_count,
-        boundary_violations,
-        test_impact: serde_json::json!({
-            "affected_test_count": affected_test_count,
-            "uncovered_symbol_count": uncovered_count,
-            "uncovered_symbols": uncovered,
-        }),
-        summary: &summary,
-    };
-
-    tool_result_value(&result, output_format)
+    tool_result_value(&summary, output_format)
 }
 
 pub(super) fn tool_get_context(

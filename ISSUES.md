@@ -2683,7 +2683,7 @@ Exit criteria:
 
 - [x] implement `build_review_context` by adapting existing changed-file and impact flow into `ContextResult`
 - [x] implement `build_impact_context` from file seeds and changed-symbol seeds
-- [x] reuse current `atlas_review::assemble_review_context` until new result shape fully covers it, then consolidate
+- [x] consolidate old `atlas_review::assemble_review_context` review assembly into context-engine-backed review surfaces
 
 Why sixth:
 - existing review flow already gives working behavior and should become first consumer of shared engine
@@ -5100,31 +5100,31 @@ Atlas already requires MCP/context surfaces to stay thin over the context engine
 
 ### Patch D1 — Inventory and classify all ranking/trimming paths
 
-- [ ] inventory every ranking, scoring, sorting, truncation, and trimming path:
-  - [ ] CLI `query`
-  - [ ] MCP `query_graph`
-  - [ ] MCP `batch_query_graph`
-  - [ ] `explain_query`
-  - [ ] `get_context`
-  - [ ] `get_minimal_context`
-  - [ ] `get_review_context`
-  - [ ] `explain_change`
-  - [ ] `get_impact_radius`
-  - [ ] `analyze_safety`
-  - [ ] `analyze_remove`
-  - [ ] `analyze_dead_code`
-  - [ ] `analyze_dependency`
-  - [ ] saved-context retrieval
-  - [ ] graph expansion
-  - [ ] hybrid/RRF retrieval
-  - [ ] content/file/template/text-asset lookup
-- [ ] classify each path as:
-  - [ ] shared primitive
-  - [ ] domain adapter around shared primitive
-  - [ ] presentation-only sorting
-  - [ ] duplicate logic to remove
-- [ ] document allowed reasons for a separate domain adapter
-- [ ] add a checklist table mapping each public command/tool to its ranking/trimming primitive
+- [x] inventory every ranking, scoring, sorting, truncation, and trimming path:
+  - [x] CLI `query`
+  - [x] MCP `query_graph`
+  - [x] MCP `batch_query_graph`
+  - [x] `explain_query`
+  - [x] `get_context`
+  - [x] `get_minimal_context`
+  - [x] `get_review_context`
+  - [x] `explain_change`
+  - [x] `get_impact_radius`
+  - [x] `analyze_safety`
+  - [x] `analyze_remove`
+  - [x] `analyze_dead_code`
+  - [x] `analyze_dependency`
+  - [x] saved-context retrieval
+  - [x] graph expansion
+  - [x] hybrid/RRF retrieval
+  - [x] content/file/template/text-asset lookup
+- [x] classify each path as:
+  - [x] shared primitive
+  - [x] domain adapter around shared primitive
+  - [x] presentation-only sorting
+  - [x] duplicate logic to remove
+- [x] document allowed reasons for a separate domain adapter
+- [x] add a checklist table mapping each public command/tool to its ranking/trimming primitive
 
 Why:
 - duplicated ranking logic hides in small `sort_by` and `truncate` blocks
@@ -5132,28 +5132,28 @@ Why:
 
 ### Patch D2 — Define shared ranking primitives
 
-- [ ] define shared primitives for graph/search ranking:
-  - [ ] exact and qualified-name match boosts
-  - [ ] fuzzy correction boosts
-  - [ ] package/directory/language boosts
-  - [ ] changed-file/recent-file boosts
-  - [ ] graph distance scoring
-  - [ ] hybrid/RRF merging
-- [ ] define shared primitives for context/review ranking:
-  - [ ] direct target priority
-  - [ ] caller/callee/test adjacency
-  - [ ] impact score contribution
-  - [ ] changed-symbol contribution
-  - [ ] saved-context/session contribution
-- [ ] define shared trimming primitives:
-  - [ ] max nodes
-  - [ ] max edges
-  - [ ] max files
-  - [ ] max content assets
-  - [ ] max payload bytes/tokens
-  - [ ] deterministic omission metadata
-- [ ] keep presentation formatting separate from ranking/trimming decisions
-- [ ] add unit tests for each primitive and tie-breaker
+- [x] define shared primitives for graph/search ranking:
+  - [x] exact and qualified-name match boosts
+  - [x] fuzzy correction boosts
+  - [x] package/directory/language boosts
+  - [x] changed-file/recent-file boosts
+  - [x] graph distance scoring
+  - [x] hybrid/RRF merging
+- [x] define shared primitives for context/review ranking:
+  - [x] direct target priority
+  - [x] caller/callee/test adjacency
+  - [x] impact score contribution
+  - [x] changed-symbol contribution
+  - [x] saved-context/session contribution
+- [x] define shared trimming primitives:
+  - [x] max nodes
+  - [x] max edges
+  - [x] max files
+  - [x] max content assets
+  - [x] max payload bytes/tokens
+  - [x] deterministic omission metadata
+- [x] keep presentation formatting separate from ranking/trimming decisions
+- [x] add unit tests for each primitive and tie-breaker
 
 Why:
 - query, context, review, and analysis need consistent ordering semantics
@@ -5161,15 +5161,15 @@ Why:
 
 ### Patch D3 — Route public tools through shared primitives
 
-- [ ] update CLI query to use shared graph/search ranking primitive
-- [ ] update MCP `query_graph` and `batch_query_graph` to use same primitive as CLI query
-- [ ] update `explain_query` to explain the same primitive used by actual query execution
-- [ ] update context engine ranking/trimming to use shared context primitives
-- [ ] update review-context assembly to use shared context/review primitives
-- [ ] update explain-change and impact analysis to use shared impact/context primitives
-- [ ] update analyze-* commands to use shared analysis ranking/trimming primitives
-- [ ] update saved-context ranking to use a documented adapter around shared context ranking
-- [ ] remove or quarantine duplicate `sort_by` / `truncate` logic outside approved primitives
+- [x] update CLI query to use shared graph/search ranking primitive
+- [x] update MCP `query_graph` and `batch_query_graph` to use same primitive as CLI query
+- [x] update `explain_query` to explain the same primitive used by actual query execution
+- [x] update context engine ranking/trimming to use shared context primitives
+- [x] update review-context assembly to use shared context/review primitives
+- [x] update explain-change and impact analysis to use shared impact/context primitives
+- [x] update analyze-* commands to use shared analysis ranking/trimming primitives
+- [x] update saved-context ranking to use a documented adapter around shared context ranking
+- [x] remove or quarantine duplicate `sort_by` / `truncate` logic outside approved primitives
 
 Why:
 - public tools should disagree only because inputs differ, not because ranking rules forked
@@ -5177,16 +5177,16 @@ Why:
 
 ### Patch D4 — Guard against future drift
 
-- [ ] add parity tests:
-  - [ ] CLI query versus MCP query for same inputs
-  - [ ] MCP query versus `explain_query` ranking explanation
-  - [ ] review-context versus get-context for shared seed inputs
-  - [ ] impact versus explain-change for shared changed files
-  - [ ] analyze-* output ordering versus underlying primitive ordering
-- [ ] add targeted tests for stable tie-breakers
-- [ ] add snapshot tests for truncation/omission metadata
-- [ ] document review rule: new public graph/query/context tool must name its ranking/trimming primitive
-- [ ] optionally add lint-like test searching for new ad hoc `sort_by`/`truncate` in public tool layers
+- [x] add parity tests:
+  - [x] CLI query versus MCP query for same inputs
+  - [x] MCP query versus `explain_query` ranking explanation
+  - [x] review-context versus get-context for shared seed inputs
+  - [x] impact versus explain-change for shared changed files
+  - [x] analyze-* output ordering versus underlying primitive ordering
+- [x] add targeted tests for stable tie-breakers
+- [x] add snapshot tests for truncation/omission metadata
+- [x] document review rule: new public graph/query/context tool must name its ranking/trimming primitive
+- [x] optionally add lint-like test searching for new ad hoc `sort_by`/`truncate` in public tool layers
 
 Why:
 - ranking drift usually returns as small local convenience code
@@ -5194,12 +5194,12 @@ Why:
 
 ### Patch D completion criteria
 
-- [ ] every public graph/query/context/review/analysis path maps to a shared ranking/trimming primitive or documented adapter
-- [ ] CLI and MCP query paths share ranking semantics
-- [ ] review, context, impact, explain-change, and analyze-* paths share trimming semantics where applicable
-- [ ] duplicate public-layer ranking/trimming logic is removed or documented as presentation-only
-- [ ] parity tests cover query, context, review, impact, explain-change, and analyze-* paths
-- [ ] future tool contract requires naming the ranking/trimming primitive used
+- [x] every public graph/query/context/review/analysis path maps to a shared ranking/trimming primitive or documented adapter
+- [x] CLI and MCP query paths share ranking semantics
+- [x] review, context, impact, explain-change, and analyze-* paths share trimming semantics where applicable
+- [x] duplicate public-layer ranking/trimming logic is removed or documented as presentation-only
+- [x] parity tests cover query, context, review, impact, explain-change, and analyze-* paths
+- [x] future tool contract requires naming the ranking/trimming primitive used
 
 ---
 
@@ -5260,6 +5260,7 @@ Why:
 - [x] tests cover all state transitions
 
 ---
+
 
 ## Canonical Path Identity Patch
 

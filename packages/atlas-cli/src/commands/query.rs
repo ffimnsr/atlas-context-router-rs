@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use atlas_core::SearchQuery;
 use atlas_search as search;
+use atlas_search::QueryExplanation;
 use atlas_store_sqlite::Store;
 
 use crate::cli::{Cli, Command};
@@ -98,11 +99,7 @@ pub fn run_query(cli: &Cli) -> Result<()> {
     };
 
     let t0 = std::time::Instant::now();
-    let results = if semantic {
-        search::semantic::expanded_search(&store, &query).context("semantic search failed")?
-    } else {
-        search::search(&store, &query).context("search failed")?
-    };
+    let results = search::execute_query(&store, &query, semantic).context("search failed")?;
     let latency_ms = t0.elapsed().as_millis();
 
     if cli.json {
@@ -230,67 +227,40 @@ pub fn run_explain_query(cli: &Cli) -> Result<()> {
         ..Default::default()
     };
 
-    let t0 = std::time::Instant::now();
-    let results = search::search(&store, &query).context("search failed")?;
-    let latency_ms = t0.elapsed().as_millis();
-
-    let matches: Vec<serde_json::Value> = results
-        .iter()
-        .map(|r| {
-            serde_json::json!({
-                "score": r.score,
-                "kind": r.node.kind.as_str(),
-                "qualified_name": r.node.qualified_name,
-                "file_path": r.node.file_path,
-                "line_start": r.node.line_start,
-                "language": r.node.language,
-            })
-        })
-        .collect();
+    let explanation = search::explain_query(Some(&store), true, &query, false);
 
     if cli.json {
-        print_json(
-            "explain_query",
-            serde_json::json!({
-                "query": {
-                    "text": text,
-                    "kind": kind,
-                    "language": language,
-                    "subpath": subpath,
-                    "limit": limit,
-                },
-                "latency_ms": latency_ms,
-                "result_count": results.len(),
-                "matches": matches,
-            }),
-        )?;
+        print_json("explain_query", serde_json::to_value(&explanation)?)?;
     } else {
+        let QueryExplanation {
+            input,
+            latency_ms,
+            result_count,
+            matches,
+            ..
+        } = explanation;
         println!("Query explanation");
-        println!("  Text     : {text}");
-        if let Some(k) = &kind {
+        println!("  Text     : {}", input.text);
+        if let Some(k) = &input.kind {
             println!("  Kind     : {k}");
         }
-        if let Some(l) = &language {
+        if let Some(l) = &input.language {
             println!("  Language : {l}");
         }
-        if let Some(s) = &subpath {
+        if let Some(s) = &input.subpath {
             println!("  Subpath  : {s}");
         }
-        println!("  Limit    : {limit}");
-        println!("  Latency  : {latency_ms}ms");
-        println!("  Results  : {}", results.len());
-        if results.is_empty() {
+        println!("  Limit    : {}", input.limit);
+        println!("  Latency  : {}ms", latency_ms.unwrap_or_default());
+        println!("  Results  : {}", result_count.unwrap_or_default());
+        if matches.as_ref().is_none_or(|items| items.is_empty()) {
             println!("\nNo matches.");
         } else {
             println!("\nMatches (score / kind / qualified_name):");
-            for r in &results {
+            for item in matches.as_ref().into_iter().flatten() {
                 println!(
                     "  [{:.4}] {} {} @ {}:{}",
-                    r.score,
-                    r.node.kind.as_str(),
-                    r.node.qualified_name,
-                    r.node.file_path,
-                    r.node.line_start,
+                    item.score, item.kind, item.qualified_name, item.file_path, item.line_start,
                 );
             }
         }

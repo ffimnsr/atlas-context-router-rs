@@ -2,7 +2,6 @@ use anyhow::{Context, Result};
 use atlas_core::SearchQuery;
 use atlas_core::model::ContextTarget;
 use atlas_review::{ResolvedTarget, normalize_qn_kind_tokens, resolve_target};
-use atlas_search::search as fts_search;
 use atlas_search::semantic as sem;
 use serde::Serialize;
 
@@ -68,27 +67,8 @@ pub(super) fn tool_query_graph(
         ..Default::default()
     };
 
-    let results = if semantic {
-        sem::expanded_search(&store, &query).context("semantic search failed")?
-    } else if fuzzy || hybrid {
-        fts_search(&store, &query).context("search failed")?
-    } else {
-        store.search(&query).context("search failed")?
-    };
-
-    let active_query_mode = match (
-        query.text.trim().is_empty(),
-        query.regex_pattern.is_some(),
-        semantic,
-        hybrid,
-    ) {
-        (true, true, _, _) => "regex_structural_scan",
-        (false, false, false, true) => "fts5_vector_hybrid",
-        (false, false, true, _) => "fts5_graph_expand",
-        (false, true, false, _) => "fts5_regex_filter",
-        (false, true, true, _) => "fts5_regex_filter_graph_expand",
-        _ => "fts5",
-    };
+    let results = atlas_search::execute_query(&store, &query, semantic).context("search failed")?;
+    let explanation = atlas_search::explain_query(Some(&store), true, &query, semantic);
 
     #[derive(Serialize)]
     struct CompactResult<'a> {
@@ -118,7 +98,7 @@ pub(super) fn tool_query_graph(
             .collect::<Vec<_>>()
     );
     response["atlas_truncated"] = serde_json::json!(compact.len() == limit);
-    response["atlas_query_mode"] = serde_json::Value::String(active_query_mode.to_owned());
+    response["atlas_query_mode"] = serde_json::Value::String(explanation.active_query_mode);
     if compact.is_empty() && semantic {
         response["atlas_hint"] = serde_json::Value::String(
             "FTS found no symbol names matching the query text. \
@@ -242,11 +222,8 @@ pub(super) fn tool_batch_query_graph(
             ..Default::default()
         };
 
-        let results = if semantic {
-            sem::expanded_search(&store, &query).context("semantic search failed")?
-        } else {
-            store.search(&query).context("search failed")?
-        };
+        let results =
+            atlas_search::execute_query(&store, &query, semantic).context("search failed")?;
 
         let items: Vec<BatchResultNode> = results
             .iter()
@@ -512,172 +489,25 @@ pub(super) fn tool_explain_query(
         anyhow::bail!("explain_query requires non-empty text or a regex pattern");
     }
 
-    let fts_tokens: Vec<String> = if text.trim().is_empty() {
-        vec![]
-    } else {
-        text.split(|c: char| !c.is_alphanumeric() && c != '_')
-            .filter(|t| !t.is_empty())
-            .map(str::to_owned)
-            .collect()
-    };
-
-    let fts_phrase = if fts_tokens.is_empty() {
-        None
-    } else if fts_tokens.len() == 1 {
-        Some(format!("\"{}\"", fts_tokens[0]))
-    } else {
-        Some(
-            fts_tokens
-                .iter()
-                .map(|t| format!("\"{t}\""))
-                .collect::<Vec<_>>()
-                .join(" "),
-        )
-    };
-
-    let (regex_valid, regex_error) = if let Some(ref pat) = regex {
-        match regex::Regex::new(pat) {
-            Ok(_) => (true, None),
-            Err(e) => (false, Some(e.to_string())),
-        }
-    } else {
-        (true, None)
-    };
-
-    let search_path = match (text.trim().is_empty(), regex.is_some(), semantic, hybrid) {
-        (true, true, _, _) => "regex_structural_scan",
-        (false, false, false, true) => "fts5_vector_hybrid",
-        (false, false, true, _) => "fts5_graph_expand",
-        (false, true, false, _) => "fts5_regex_filter",
-        (false, true, true, _) => "fts5_regex_filter_graph_expand",
-        _ => "fts5",
-    };
-
-    let mut ranking_factors: Vec<&str> = vec!["fts5_bm25"];
-    if fuzzy {
-        ranking_factors.push("fuzzy_edit_distance_boost");
-    }
-    if hybrid {
-        ranking_factors.push("vector_rrf_merge");
-    }
-    if semantic {
-        ranking_factors.push("graph_neighbor_rerank");
-    }
-
     let db_exists = std::path::Path::new(db_path).exists();
-
-    // Open store once; reuse for both node count and actual search execution.
-    let (indexed_node_count, latency_ms, result_count, matches): (
-        Option<i64>,
-        Option<u128>,
-        Option<usize>,
-        Option<Vec<serde_json::Value>>,
-    ) = if db_exists {
-        match atlas_store_sqlite::Store::open(db_path) {
-            Ok(store) => {
-                let count = store.stats().ok().map(|st| st.node_count);
-                if regex_valid {
-                    let query = SearchQuery {
-                        text: text.clone(),
-                        kind: kind.clone(),
-                        language: language.clone(),
-                        include_files,
-                        limit,
-                        subpath: subpath.clone(),
-                        regex_pattern: regex.clone(),
-                        fuzzy_match: fuzzy,
-                        hybrid,
-                        ..Default::default()
-                    };
-                    let t0 = std::time::Instant::now();
-                    let results = if semantic {
-                        sem::expanded_search(&store, &query).unwrap_or_default()
-                    } else if fuzzy || hybrid {
-                        fts_search(&store, &query).unwrap_or_default()
-                    } else {
-                        store.search(&query).unwrap_or_default()
-                    };
-                    let elapsed = t0.elapsed().as_millis();
-                    let m: Vec<serde_json::Value> = results
-                        .iter()
-                        .map(|r| {
-                            serde_json::json!({
-                                "score": r.score,
-                                "kind": r.node.kind.as_str(),
-                                "qualified_name": r.node.qualified_name,
-                                "file_path": r.node.file_path,
-                                "line_start": r.node.line_start,
-                                "language": r.node.language,
-                            })
-                        })
-                        .collect();
-                    let n = m.len();
-                    (count, Some(elapsed), Some(n), Some(m))
-                } else {
-                    (count, None, None, None)
-                }
-            }
-            Err(_) => (None, None, None, None),
-        }
+    let query = SearchQuery {
+        text,
+        kind,
+        language,
+        include_files,
+        limit,
+        subpath,
+        regex_pattern: regex,
+        fuzzy_match: fuzzy,
+        hybrid,
+        ..Default::default()
+    };
+    let store = if db_exists {
+        atlas_store_sqlite::Store::open(db_path).ok()
     } else {
-        (None, None, None, None)
+        None
     };
-
-    let warnings: Vec<&str> = {
-        let mut w = vec![];
-        if fts_tokens.len() > 1 {
-            w.push(
-                "Multi-token text is matched as implicit AND across all tokens; \
-                 this often returns zero results. Prefer a single short identifier.",
-            );
-        }
-        if text.contains(' ') && regex.is_none() {
-            w.push(
-                "Natural-language phrases rarely match FTS5 symbol names. \
-                 Use regex for pattern matching or pass a single exact identifier.",
-            );
-        }
-        if !regex_valid {
-            w.push("regex pattern is invalid; the query would return an error.");
-        }
-        w
-    };
-
-    let result = serde_json::json!({
-        "active_query_mode": search_path,
-        "search_path": search_path,
-        "input": {
-            "text": text,
-            "kind": kind,
-            "language": language,
-            "limit": limit,
-            "semantic": semantic,
-            "regex": regex,
-            "subpath": subpath,
-            "fuzzy": fuzzy,
-            "hybrid": hybrid,
-            "include_files": include_files,
-        },
-        "fts_tokens": fts_tokens,
-        "fts_phrase": fts_phrase,
-        "regex_valid": regex_valid,
-        "regex_error": regex_error,
-        "ranking_factors": ranking_factors,
-        "filters_applied": {
-            "kind": kind.is_some(),
-            "language": language.is_some(),
-            "subpath": subpath.is_some(),
-            "fuzzy": fuzzy,
-            "hybrid": hybrid,
-            "include_files": include_files,
-        },
-        "indexed_node_count": indexed_node_count,
-        "db_exists": db_exists,
-        "warnings": warnings,
-        "latency_ms": latency_ms,
-        "result_count": result_count,
-        "matches": matches,
-    });
+    let result = atlas_search::explain_query(store.as_ref(), db_exists, &query, semantic);
 
     tool_result_value(&result, output_format)
 }
@@ -801,8 +631,7 @@ pub(super) fn tool_resolve_symbol(
         limit: fetch_limit,
         ..Default::default()
     };
-    let results = store
-        .search(&query)
+    let results = atlas_search::execute_query(&store, &query, false)
         .context("resolve_symbol search failed")?;
 
     let filtered: Vec<_> = if let Some(ref file_pat) = file_filter {
@@ -814,16 +643,8 @@ pub(super) fn tool_resolve_symbol(
         results
     };
 
-    let name_lower = name.to_ascii_lowercase();
-    let mut ranked: Vec<_> = filtered.into_iter().enumerate().collect();
-    ranked.sort_by(|(ai, a), (bi, b)| {
-        let a_exact = a.node.name.to_ascii_lowercase() == name_lower;
-        let b_exact = b.node.name.to_ascii_lowercase() == name_lower;
-        b_exact.cmp(&a_exact).then_with(|| ai.cmp(bi))
-    });
-
-    let total_before_limit = ranked.len();
-    let ranked: Vec<_> = ranked.into_iter().map(|(_, r)| r).take(limit).collect();
+    let total_before_limit = filtered.len();
+    let ranked: Vec<_> = filtered.into_iter().take(limit).collect();
     let truncated = total_before_limit > ranked.len();
 
     let best_qn = ranked.first().map(|r| r.node.qualified_name.as_str());

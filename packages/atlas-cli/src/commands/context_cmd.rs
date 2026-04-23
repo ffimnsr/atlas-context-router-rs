@@ -5,12 +5,12 @@ use std::process::{Command as ProcessCommand, Stdio};
 use anyhow::{Context, Result};
 use atlas_adapters::{AdapterHooks, CliAdapter, extract_context_event};
 use atlas_core::SearchQuery;
-use atlas_core::model::{ContextIntent, ContextRequest, ContextResult, ContextTarget};
+use atlas_core::model::{
+    ContextIntent, ContextRequest, ContextResult, ContextTarget, SelectionReason,
+};
 use atlas_impact::analyze as advanced_impact;
 use atlas_repo::{CanonicalRepoPath, DiffTarget, changed_files, find_repo_root};
-use atlas_review::{
-    ContextEngine, assemble_review_context, normalize_qn_kind_tokens, query_parser,
-};
+use atlas_review::{ContextEngine, normalize_qn_kind_tokens, query_parser};
 use atlas_search as search;
 use atlas_search::semantic as sem;
 use atlas_store_sqlite::Store;
@@ -784,54 +784,48 @@ fn render_shell_review_output(store: &Store, repo: &str, args: &ShellArgs) -> Re
         return Ok("No changed files detected.".to_string());
     }
 
-    let path_refs: Vec<&str> = target_files.iter().map(String::as_str).collect();
-    let impact = store
-        .impact_radius(&path_refs, max_depth, max_nodes)
-        .context("impact radius query failed")?;
-    let ctx = assemble_review_context(&impact, &target_files, max_depth, max_nodes);
+    let request = ContextRequest {
+        intent: ContextIntent::Review,
+        target: ContextTarget::ChangedFiles {
+            paths: target_files.clone(),
+        },
+        max_nodes: Some(max_nodes),
+        depth: Some(max_depth),
+        ..ContextRequest::default()
+    };
+    let ctx = ContextEngine::new(store)
+        .build(&request)
+        .context("context engine failed")?;
 
     let mut lines = vec![colorize("Review context:", "1;36")];
     lines.push(colorize(
-        &format!("  Changed files ({}):", ctx.changed_files.len()),
+        &format!("  Changed files ({}):", target_files.len()),
         "1;32",
     ));
-    for f in &ctx.changed_files {
+    for f in &target_files {
         lines.push(format!("    {f}"));
     }
 
-    let risk = &ctx.risk_summary;
-    lines.push(colorize("  Risk summary:", "1;33"));
     lines.push(format!(
-        "    Changed symbols: {} | Public API changes: {}",
-        risk.changed_symbol_count, risk.public_api_changes
-    ));
-    lines.push(format!(
-        "    Affected tests : {} | Uncovered: {}",
-        risk.affected_test_count, risk.uncovered_changed_symbol_count
-    ));
-    lines.push(format!(
-        "    Cross-module: {} | Cross-package: {}",
-        risk.cross_module_impact, risk.cross_package_impact
+        "  Context: {} nodes, {} files, {} edges (depth {})",
+        ctx.nodes.len(),
+        ctx.files.len(),
+        ctx.edges.len(),
+        ctx.request.depth.unwrap_or(max_depth)
     ));
 
-    let overview = &ctx.impact_overview;
-    lines.push(format!(
-        "  Impact: {} nodes, {} files, {} edges (depth {})",
-        overview.impacted_node_count,
-        overview.impacted_file_count,
-        overview.relevant_edge_count,
-        overview.max_depth
-    ));
+    let changed_symbols: Vec<_> = ctx
+        .nodes
+        .iter()
+        .filter(|node| node.selection_reason == SelectionReason::DirectTarget)
+        .collect();
 
-    if !ctx.changed_symbol_summaries.is_empty() {
+    if !changed_symbols.is_empty() {
         lines.push(colorize(
-            &format!(
-                "  Changed symbols ({}):",
-                ctx.changed_symbol_summaries.len()
-            ),
+            &format!("  Changed symbols ({}):", changed_symbols.len()),
             "1;32",
         ));
-        for sym in ctx.changed_symbol_summaries.iter().take(10) {
+        for sym in changed_symbols.iter().take(10) {
             lines.push(format!(
                 "    {} {} ({}:{})",
                 sym.node.kind.as_str(),
@@ -839,31 +833,85 @@ fn render_shell_review_output(store: &Store, repo: &str, args: &ShellArgs) -> Re
                 sym.node.file_path,
                 sym.node.line_start
             ));
-            if !sym.callers.is_empty() {
-                lines.push(format!(
-                    "      callers: {}",
-                    sym.callers
-                        .iter()
-                        .take(3)
-                        .map(|n| n.qualified_name.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ));
-            }
         }
     }
 
-    if !ctx.impacted_neighbors.is_empty() {
+    if let Some(workflow) = &ctx.workflow {
+        let cross_package_impact = workflow
+            .impacted_components
+            .iter()
+            .filter(|component| component.kind == "package")
+            .count()
+            > 1;
+        if let Some(headline) = &workflow.headline {
+            lines.push(colorize(&format!("  Focus: {headline}"), "1;33"));
+        }
+        lines.push(colorize("  Risk summary:", "1;33"));
+        lines.push(format!("    Cross-package impact: {cross_package_impact}"));
+        if !workflow.high_impact_nodes.is_empty() {
+            lines.push(colorize(
+                &format!(
+                    "  High-impact nodes ({}):",
+                    workflow.high_impact_nodes.len()
+                ),
+                "1;32",
+            ));
+            for node in workflow.high_impact_nodes.iter().take(10) {
+                lines.push(format!(
+                    "    [{:.1}] {} {} ({})",
+                    node.relevance_score, node.kind, node.qualified_name, node.file_path
+                ));
+            }
+        }
+        if !workflow.call_chains.is_empty() {
+            lines.push(colorize("  Call chains:", "1;35"));
+            for chain in workflow.call_chains.iter().take(5) {
+                lines.push(format!("    {}", chain.summary));
+            }
+        }
+        if !workflow.ripple_effects.is_empty() {
+            lines.push(colorize("  Ripple effects:", "1;35"));
+            for ripple in workflow.ripple_effects.iter().take(5) {
+                lines.push(format!("    {ripple}"));
+            }
+        }
+        lines.push(colorize("  Noise reduction:", "1;33"));
+        lines.push(format!(
+            "    Retained nodes: {} | Dropped nodes: {}",
+            workflow.noise_reduction.retained_nodes, workflow.noise_reduction.dropped_nodes
+        ));
+        lines.push(format!(
+            "    Retained edges: {} | Dropped edges: {}",
+            workflow.noise_reduction.retained_edges, workflow.noise_reduction.dropped_edges
+        ));
+        lines.push(format!(
+            "    Retained files: {} | Dropped files: {}",
+            workflow.noise_reduction.retained_files, workflow.noise_reduction.dropped_files
+        ));
+    }
+
+    if ctx.truncation.truncated {
+        lines.push(colorize("  Truncation:", "1;33"));
+        lines.push(format!(
+            "    Nodes dropped: {} | Edges dropped: {} | Files dropped: {}",
+            ctx.truncation.nodes_dropped,
+            ctx.truncation.edges_dropped,
+            ctx.truncation.files_dropped
+        ));
+    }
+
+    if !ctx.files.is_empty() {
         lines.push(colorize(
-            &format!("  Impacted neighbors ({}):", ctx.impacted_neighbors.len()),
+            &format!("  Selected files ({}):", ctx.files.len()),
             "1;32",
         ));
-        for n in ctx.impacted_neighbors.iter().take(15) {
+        for file in ctx.files.iter().take(15) {
             lines.push(format!(
-                "    {} {} ({})",
-                n.kind.as_str(),
-                n.qualified_name,
-                n.file_path
+                "    {} [{}] nodes={} reason={}",
+                file.path,
+                file.language.as_deref().unwrap_or("unknown"),
+                file.node_count_included,
+                file.selection_reason.as_str()
             ));
         }
     }
