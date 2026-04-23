@@ -296,7 +296,7 @@ fn list_mcp_instance_metadata(repo_root: &Path) -> Vec<Value> {
 fn pid_exists(pid: u32) -> bool {
     #[cfg(target_os = "linux")]
     {
-        return Path::new("/proc").join(pid.to_string()).exists();
+        Path::new("/proc").join(pid.to_string()).exists()
     }
 
     #[cfg(all(unix, not(target_os = "linux")))]
