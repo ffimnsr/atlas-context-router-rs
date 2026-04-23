@@ -1,7 +1,7 @@
 #![recursion_limit = "512"]
 //! Atlas MCP (Model Context Protocol) server.
 //!
-//! Exposes a JSON-RPC 2.0 / MCP stdio transport that agents can connect to.
+//! Exposes a JSON-RPC 2.0 / MCP server over stdio and Unix socket transports.
 //! The server implements the following MCP tools:
 //!
 //! | Tool                      | Description                                              |
@@ -57,7 +57,10 @@ mod tools;
 mod transport;
 
 pub use tools::tool_list;
-pub use transport::{ServerOptions, run_server, run_server_with_options};
+pub use transport::{
+    MCP_PROTOCOL_VERSION, ServerOptions, run_server, run_server_with_options,
+    run_socket_server_with_options,
+};
 
 #[cfg(test)]
 mod tests {

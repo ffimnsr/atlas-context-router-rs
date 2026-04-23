@@ -16,7 +16,7 @@ pub use graph::{run_build, run_init, run_status, run_update, run_watch};
 pub use graph_objects::{run_communities, run_flows};
 pub use hook::run_hook;
 pub use maintenance::{run_db_check, run_debug_graph, run_doctor, run_purge_noncanonical};
-pub use platform::{run_completions, run_install, run_serve};
+pub use platform::{run_completions, run_install, run_serve, run_serve_daemon};
 pub use query::{run_embed, run_explain_query, run_query};
 pub use reasoning::{run_analyze, run_refactor};
 pub use session::run_session;

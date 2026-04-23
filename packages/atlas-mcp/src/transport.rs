@@ -7,18 +7,26 @@
 use std::collections::HashMap;
 use std::io::BufReader;
 use std::io::{BufRead, Write};
+use std::path::Path;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
 
 use crate::{prompts, tools};
+
+#[cfg(unix)]
+use std::os::unix::net::{UnixListener, UnixStream};
 
 const MCP_WORKER_THREADS_ENV: &str = "ATLAS_MCP_WORKER_THREADS";
 const MCP_TOOL_TIMEOUT_MS_ENV: &str = "ATLAS_MCP_TOOL_TIMEOUT_MS";
 const DEFAULT_WORKER_THREADS: usize = 2;
 const DEFAULT_TOOL_TIMEOUT_MS: u64 = 300_000;
+pub const MCP_PROTOCOL_VERSION: &str = "2024-11-05";
 
 #[derive(Clone, Copy, Debug)]
 pub struct ServerOptions {
@@ -60,6 +68,66 @@ pub fn run_server_with_options(
     run_server_io(reader, &mut writer, repo_root, db_path, options)
 }
 
+#[cfg(unix)]
+pub fn run_socket_server_with_options(
+    socket_path: &Path,
+    repo_root: &str,
+    db_path: &str,
+    options: ServerOptions,
+) -> Result<()> {
+    if let Some(parent) = socket_path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("cannot create {}", parent.display()))?;
+    }
+    if socket_path.exists() {
+        std::fs::remove_file(socket_path)
+            .with_context(|| format!("cannot remove stale {}", socket_path.display()))?;
+    }
+
+    let listener = UnixListener::bind(socket_path)
+        .with_context(|| format!("cannot bind {}", socket_path.display()))?;
+    let worker_pool = Arc::new(WorkerPool::from_env("atlas-mcp:tool-worker", options)?);
+    let next_connection = AtomicUsize::new(0);
+
+    eprintln!(
+        "atlas-mcp: daemon ready (repo={repo_root}, db={db_path}, socket={})",
+        socket_path.display()
+    );
+
+    for stream in listener.incoming() {
+        let stream = stream
+            .with_context(|| format!("cannot accept connection on {}", socket_path.display()))?;
+        let repo_root = repo_root.to_owned();
+        let db_path = db_path.to_owned();
+        let worker_pool = Arc::clone(&worker_pool);
+        let connection_id = next_connection.fetch_add(1, Ordering::Relaxed) + 1;
+        let thread_name = format!("atlas-mcp:daemon-client-{connection_id}");
+        let log_thread_name = thread_name.clone();
+        thread::Builder::new()
+            .name(thread_name.clone())
+            .spawn(move || {
+                if let Err(error) = serve_socket_connection(stream, &repo_root, &db_path, worker_pool) {
+                    tracing::warn!(error = %error, client = %log_thread_name, "daemon client failed");
+                }
+            })
+            .with_context(|| format!("cannot spawn '{thread_name}'"))?;
+    }
+
+    Ok(())
+}
+
+#[cfg(not(unix))]
+pub fn run_socket_server_with_options(
+    _socket_path: &Path,
+    _repo_root: &str,
+    _db_path: &str,
+    _options: ServerOptions,
+) -> Result<()> {
+    Err(anyhow::anyhow!(
+        "Unix socket MCP daemon transport is unsupported on this platform"
+    ))
+}
+
 fn run_server_io<R: BufRead + Send, W: Write>(
     reader: R,
     writer: &mut W,
@@ -67,14 +135,105 @@ fn run_server_io<R: BufRead + Send, W: Write>(
     db_path: &str,
     options: ServerOptions,
 ) -> Result<()> {
-    let worker_pool = WorkerPool::from_env("atlas-mcp:tool-worker", options)?;
+    let worker_pool = Arc::new(WorkerPool::from_env("atlas-mcp:tool-worker", options)?);
+    serve_connection(reader, writer, repo_root, db_path, worker_pool)
+}
+
+fn serve_connection<R: BufRead + Send, W: Write>(
+    reader: R,
+    writer: &mut W,
+    repo_root: &str,
+    db_path: &str,
+    worker_pool: Arc<WorkerPool>,
+) -> Result<()> {
     let (event_tx, event_rx) = mpsc::channel::<TransportEvent>();
 
     thread::scope(|scope| -> Result<()> {
         let reader_tx = event_tx.clone();
         scope.spawn(move || read_requests(reader, reader_tx));
-        process_requests(writer, repo_root, db_path, &worker_pool, event_tx, event_rx)
+        process_requests(
+            writer,
+            repo_root,
+            db_path,
+            worker_pool.as_ref(),
+            event_tx,
+            event_rx,
+        )
     })
+}
+
+#[cfg(unix)]
+fn serve_socket_connection(
+    stream: UnixStream,
+    repo_root: &str,
+    db_path: &str,
+    worker_pool: Arc<WorkerPool>,
+) -> Result<()> {
+    let reader_stream = stream.try_clone().context("cannot clone daemon stream")?;
+    let mut reader = BufReader::new(reader_stream);
+    let mut writer = std::io::BufWriter::new(stream);
+
+    perform_socket_handshake(&mut reader, &mut writer, repo_root, db_path)?;
+    serve_connection(reader, &mut writer, repo_root, db_path, worker_pool)
+}
+
+fn perform_socket_handshake<R: BufRead, W: Write>(
+    reader: &mut R,
+    writer: &mut W,
+    repo_root: &str,
+    db_path: &str,
+) -> Result<()> {
+    let mut line = String::new();
+    let bytes = reader.read_line(&mut line)?;
+    if bytes == 0 {
+        return Err(anyhow::anyhow!("daemon handshake missing"));
+    }
+
+    let request: DaemonHandshakeRequest =
+        serde_json::from_str(line.trim()).context("invalid daemon handshake")?;
+    let response = if request.protocol_version != MCP_PROTOCOL_VERSION {
+        DaemonHandshakeResponse::err(
+            MCP_PROTOCOL_VERSION,
+            repo_root,
+            db_path,
+            format!(
+                "protocol mismatch: client={} server={}",
+                request.protocol_version, MCP_PROTOCOL_VERSION
+            ),
+        )
+    } else if request.repo_root != repo_root {
+        DaemonHandshakeResponse::err(
+            MCP_PROTOCOL_VERSION,
+            repo_root,
+            db_path,
+            format!(
+                "repo mismatch: client={} server={repo_root}",
+                request.repo_root
+            ),
+        )
+    } else if request.db_path != db_path {
+        DaemonHandshakeResponse::err(
+            MCP_PROTOCOL_VERSION,
+            repo_root,
+            db_path,
+            format!("db mismatch: client={} server={db_path}", request.db_path),
+        )
+    } else {
+        DaemonHandshakeResponse::ok(MCP_PROTOCOL_VERSION, repo_root, db_path)
+    };
+
+    writeln!(writer, "{}", serde_json::to_string(&response)?)?;
+    writer.flush()?;
+
+    if response.ok {
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!(
+            response
+                .error
+                .unwrap_or_else(|| "daemon handshake failed".to_owned())
+        ))
+    }
 }
 
 fn process_requests<W: Write>(
@@ -525,7 +684,7 @@ fn dispatch(
 ) -> Result<serde_json::Value> {
     match method {
         "initialize" => Ok(serde_json::json!({
-            "protocolVersion": "2024-11-05",
+            "protocolVersion": MCP_PROTOCOL_VERSION,
             "capabilities": {
                 "tools": {},
                 "prompts": { "listChanged": false }
@@ -746,6 +905,44 @@ fn jsonrpc_error(id: serde_json::Value, code: i32, message: String) -> String {
     .to_string()
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct DaemonHandshakeRequest {
+    protocol_version: String,
+    repo_root: String,
+    db_path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct DaemonHandshakeResponse {
+    ok: bool,
+    protocol_version: String,
+    repo_root: String,
+    db_path: String,
+    error: Option<String>,
+}
+
+impl DaemonHandshakeResponse {
+    fn ok(protocol_version: &str, repo_root: &str, db_path: &str) -> Self {
+        Self {
+            ok: true,
+            protocol_version: protocol_version.to_owned(),
+            repo_root: repo_root.to_owned(),
+            db_path: db_path.to_owned(),
+            error: None,
+        }
+    }
+
+    fn err(protocol_version: &str, repo_root: &str, db_path: &str, error: String) -> Self {
+        Self {
+            ok: false,
+            protocol_version: protocol_version.to_owned(),
+            repo_root: repo_root.to_owned(),
+            db_path: db_path.to_owned(),
+            error: Some(error),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -754,10 +951,15 @@ mod tests {
     use atlas_core::kinds::NodeKind;
     use atlas_core::model::{Edge, Node, NodeId};
     use atlas_store_sqlite::Store;
-    use std::io::Cursor;
+    use std::io::{Cursor, Read, Write};
+    #[cfg(unix)]
+    use std::net::Shutdown;
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tempfile::TempDir;
+
+    #[cfg(unix)]
+    use std::os::unix::net::UnixStream;
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
@@ -897,7 +1099,7 @@ mod tests {
 
         assert_eq!(
             by_id[&serde_json::json!(1)]["result"]["protocolVersion"],
-            "2024-11-05"
+            MCP_PROTOCOL_VERSION
         );
         assert!(
             by_id[&serde_json::json!(1)]["result"]["capabilities"]["prompts"].is_object(),
@@ -983,6 +1185,146 @@ mod tests {
                 .as_str()
                 .expect("error message")
                 .contains("method not found")
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn socket_transport_handles_handshake_and_tool_calls() {
+        let fixture = setup_fixture();
+        let (server_stream, mut client_stream) = UnixStream::pair().expect("unix pair");
+        let worker_pool = Arc::new(
+            WorkerPool::new("atlas-mcp:socket-test", 2, Duration::from_secs(1))
+                .expect("spawn workers"),
+        );
+        let db_path = fixture.db_path.clone();
+        let expected_db_path = fixture.db_path.clone();
+        let server = std::thread::spawn(move || {
+            serve_socket_connection(server_stream, "/repo", &db_path, worker_pool)
+        });
+
+        writeln!(
+            client_stream,
+            "{}",
+            serde_json::to_string(&DaemonHandshakeRequest {
+                protocol_version: MCP_PROTOCOL_VERSION.to_owned(),
+                repo_root: "/repo".to_owned(),
+                db_path: fixture.db_path.clone(),
+            })
+            .expect("serialize handshake")
+        )
+        .expect("write handshake");
+        client_stream
+            .write_all(
+            concat!(
+                "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}\n",
+                "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\",\"params\":{}}\n",
+                "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"query_graph\",\"arguments\":{\"text\":\"compute\"}}}\n",
+                "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"get_context\",\"arguments\":{\"query\":\"compute\"}}}\n"
+            )
+            .as_bytes(),
+        )
+        .expect("write requests");
+        client_stream.flush().expect("flush requests");
+        client_stream
+            .shutdown(Shutdown::Write)
+            .expect("shutdown write");
+
+        let mut output = String::new();
+        client_stream
+            .read_to_string(&mut output)
+            .expect("read responses");
+        let server_result = server.join().expect("server join");
+        assert!(
+            server_result.is_ok(),
+            "socket serve failed: {server_result:?}"
+        );
+
+        let mut lines = output.lines();
+        let handshake: DaemonHandshakeResponse =
+            serde_json::from_str(lines.next().expect("handshake line"))
+                .expect("parse handshake response");
+        assert_eq!(
+            handshake,
+            DaemonHandshakeResponse::ok(MCP_PROTOCOL_VERSION, "/repo", &expected_db_path)
+        );
+
+        let responses = parse_output_lines(lines.collect::<Vec<_>>().join("\n").into_bytes());
+        assert_eq!(responses.len(), 4);
+
+        let by_id: std::collections::HashMap<_, _> = responses
+            .into_iter()
+            .map(|response| (response["id"].clone(), response))
+            .collect();
+
+        assert_eq!(
+            by_id[&serde_json::json!(1)]["result"]["protocolVersion"],
+            MCP_PROTOCOL_VERSION
+        );
+        let tools = by_id[&serde_json::json!(2)]["result"]["tools"]
+            .as_array()
+            .expect("tools/list result tools array");
+        assert!(tools.iter().any(|tool| tool["name"] == "get_context"));
+
+        let query_text = by_id[&serde_json::json!(3)]["result"]["content"][0]["text"]
+            .as_str()
+            .expect("query_graph text content");
+        let query_value: serde_json::Value =
+            serde_json::from_str(query_text).expect("query_graph payload json");
+        assert_eq!(query_value[0]["qn"], "src/service.rs::fn::compute");
+
+        let context_text = by_id[&serde_json::json!(4)]["result"]["content"][0]["text"]
+            .as_str()
+            .expect("get_context text content");
+        assert!(context_text.contains("src/service.rs::fn::compute"));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn socket_transport_rejects_handshake_mismatch() {
+        let fixture = setup_fixture();
+        let (server_stream, mut client_stream) = UnixStream::pair().expect("unix pair");
+        let worker_pool = Arc::new(
+            WorkerPool::new("atlas-mcp:socket-test", 1, Duration::from_secs(1))
+                .expect("spawn workers"),
+        );
+        let db_path = fixture.db_path.clone();
+        let server = std::thread::spawn(move || {
+            serve_socket_connection(server_stream, "/repo", &db_path, worker_pool)
+        });
+
+        writeln!(
+            client_stream,
+            "{}",
+            serde_json::to_string(&DaemonHandshakeRequest {
+                protocol_version: "bad-version".to_owned(),
+                repo_root: "/repo".to_owned(),
+                db_path: fixture.db_path.clone(),
+            })
+            .expect("serialize handshake")
+        )
+        .expect("write handshake");
+        client_stream.flush().expect("flush handshake");
+        client_stream
+            .shutdown(Shutdown::Write)
+            .expect("shutdown write");
+
+        let mut output = String::new();
+        client_stream
+            .read_to_string(&mut output)
+            .expect("read responses");
+        let server_result = server.join().expect("server join");
+        assert!(server_result.is_err(), "bad handshake must fail");
+
+        let response: DaemonHandshakeResponse =
+            serde_json::from_str(output.trim()).expect("parse handshake response");
+        assert!(!response.ok);
+        assert_eq!(response.protocol_version, MCP_PROTOCOL_VERSION);
+        assert!(
+            response
+                .error
+                .unwrap_or_default()
+                .contains("protocol mismatch")
         );
     }
 

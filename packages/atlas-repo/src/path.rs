@@ -155,6 +155,12 @@ pub fn repo_relative(repo_root: &Utf8Path, abs_path: &Utf8Path) -> Result<Utf8Pa
         .with_context(|| format!("cannot derive canonical repo-relative path from '{abs_path}'"))
 }
 
+/// Return canonical absolute path identity using the same separator, casing,
+/// and dot-segment rules used by [`CanonicalRepoPath::from_absolute_path`].
+pub fn canonical_absolute_path(path: &Utf8Path) -> std::result::Result<Utf8PathBuf, RepoPathError> {
+    normalize_absolute(path, AbsoluteRole::InputPath)
+}
+
 fn canonicalize_relative(raw: &str) -> std::result::Result<CanonicalRepoPath, RepoPathError> {
     let raw = raw.trim();
     if raw.is_empty() {
@@ -385,6 +391,21 @@ mod tests {
         let root = Utf8Path::new("/repo");
         let abs = Utf8Path::new("/repo/src/./nested/../lib.rs");
         assert_eq!(repo_relative(root, abs).unwrap().as_str(), "src/lib.rs");
+    }
+
+    #[test]
+    fn canonical_absolute_path_normalizes_dot_segments() {
+        let path = canonical_absolute_path(Utf8Path::new("/repo/src/./nested/../lib.rs")).unwrap();
+        assert_eq!(path.as_str(), "/repo/src/lib.rs");
+    }
+
+    #[test]
+    fn canonical_absolute_path_rejects_relative_input() {
+        let err = canonical_absolute_path(Utf8Path::new("src/lib.rs")).unwrap_err();
+        assert_eq!(
+            err,
+            RepoPathError::AbsoluteInputNotAbsolute("src/lib.rs".to_string())
+        );
     }
 
     #[test]

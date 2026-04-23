@@ -55,7 +55,7 @@ For terms that are easy to misread in this document:
 - Part II. Release and interface gates: Release 1, Release 2, MCP and Agent Roadmap
 - Part III. Post-MVP product expansion: Phase 18 through Phase 32
 - Part IV. Context continuity and memory: Phase CM1 through Phase CM15
-- Part V. Focused follow-up patches: Retrieval Follow-Up Patch, Retrieval Ranking Evidence Patch, Graph/Content Companion Patch, Parity Surface Patch, Runtime Event Enrichment and Graph Linking Patch, Ranking and Trimming Primitives Patch, Graph Build Lifecycle Patch, Canonical Path Identity Patch, Graph Readiness Source-of-Truth Patch, Operational Budget Policy Patch, Context Escalation Contract Patch, Graph Store Corruption Recovery Patch
+- Part V. Focused follow-up patches: Retrieval Follow-Up Patch, Retrieval Ranking Evidence Patch, Graph/Content Companion Patch, Parity Surface Patch, Runtime Event Enrichment and Graph Linking Patch, Ranking and Trimming Primitives Patch, Graph Build Lifecycle Patch, Canonical Path Identity Patch, Graph Readiness Source-of-Truth Patch, Operational Budget Policy Patch, Context Escalation Contract Patch, Graph Store Corruption Recovery Patch, Repo-Scoped MCP Singleton Patch
 
 ## Cross-Cutting Track Map
 
@@ -94,7 +94,7 @@ Read this part in order. It covers initial architecture, storage, parsing, index
   - [ ] visualization/export
   - [ ] multi-repo registry
   - [x] install hooks
-  - [ ] auto-watch mode
+  - [x] auto-watch mode
   - [x] refactor/apply-refactor
   - [ ] evaluation harness
   - [ ] cloud providers
@@ -3594,6 +3594,7 @@ Deterministic analytics layer on top of graph + stored metadata. Produce explain
 - [ ] module pages
 - [ ] function pages
 - [ ] static site export
+- [ ] visualization/export
 
 ## Phase 32 — TOON Output
 
@@ -5828,5 +5829,104 @@ Why:
 - [ ] graph-backed tools fail closed when graph facts are corrupt or inconsistent
 - [ ] diagnostics expose exact reason, quarantine path, and next command
 - [ ] tests cover physical corruption, logical inconsistency, rebuild success, rebuild failure, and fail-closed query behavior
+
+---
+
+## Repo-Scoped MCP Singleton Patch
+
+Atlas currently exposes MCP over stdio, which means each client session owns its own server process even when multiple clients target the same repo and the same `.atlas/worldtree.db`. Add one backend instance per canonical repo root plus DB path, with `atlas serve` acting as stdio broker that attaches to or starts that backend. This preserves current client config shape while preventing duplicate MCP server spawns and redundant runtime state.
+
+### Patch M1 — Repo-scoped singleton identity and coordination
+
+- [x] define singleton identity as canonical repo root plus canonical DB path
+- [x] reuse canonical path rules from `atlas-repo` instead of adding local normalization helpers
+- [x] define repo-local coordination artifacts under `.atlas/`:
+  - [x] `mcp.instance.lock`
+  - [x] `mcp.instance.json`
+  - [x] `mcp.sock` on Unix
+- [x] define metadata fields:
+  - [x] `repo_root`
+  - [x] `db_path`
+  - [x] `socket_path`
+  - [x] `pid`
+  - [x] `protocol_version`
+  - [x] `started_at`
+- [x] define stale-instance cleanup rules for dead pid, missing socket, and mismatched repo or DB
+- [x] add unit tests for identity derivation, metadata parsing, and stale cleanup decisions
+
+Why:
+- one MCP backend must be keyed by exact repo-plus-DB identity, not cwd or repo name
+- lock and metadata contract must be explicit before broker or daemon work starts
+
+### Patch M2 — Shared serving core and daemon transport
+
+- [x] extract transport-agnostic request-serving core from MCP stdio transport
+- [x] preserve current JSON-RPC behavior, worker-pool semantics, timeouts, and tool outputs
+- [x] add daemon transport over Unix domain socket for Linux
+- [x] define broker-to-daemon readiness handshake that validates:
+  - [x] protocol compatibility
+  - [x] `repo_root` match
+  - [x] `db_path` match
+- [x] keep initial daemon DB lifecycle conservative:
+  - [x] allow current per-request `Store::open` path inside daemon
+  - [x] defer connection pooling unless profiling proves need
+- [x] add transport tests proving stdio and socket paths return identical responses for `initialize`, `tools/list`, `query_graph`, and `get_context`
+
+Why:
+- spawn dedupe alone is not enough; clients need attachable long-lived backend transport
+- transport refactor must not change MCP-visible behavior
+
+### Patch M3 — Stdio broker attach-or-spawn path
+
+- [x] change `atlas serve` from direct stdio server to stdio broker or proxy
+- [x] under exclusive lock:
+  - [x] inspect existing metadata
+  - [x] validate live daemon
+  - [x] attach when healthy
+  - [x] clean stale state and spawn when unhealthy or absent
+- [x] relay stdin and stdout traffic between MCP client and daemon socket
+- [x] fail closed with clear error when readiness handshake fails
+- [x] ensure same repo plus same DB starts only one daemon even under concurrent `atlas serve` invocations
+- [x] ensure same repo plus different DB paths may start separate daemon instances
+- [x] add integration tests:
+  - [x] two concurrent brokers for same repo plus DB create exactly one daemon
+  - [x] same repo with different DB paths creates separate daemons
+  - [x] stale socket or dead pid recovers on next attach attempt
+
+Why:
+- current clients still expect stdio, so broker compatibility is required for Copilot, Codex, and Claude installs
+- attach-or-spawn behavior is core feature, not optional polish
+
+### Patch M4 — Install, diagnostics, and behavior guarantees
+
+- [x] keep generated Copilot, Claude, and Codex config shape unchanged:
+  - [x] `type` remains `stdio`
+  - [x] `command` remains `atlas`
+  - [x] `args` still route through `atlas serve`
+- [x] update install tests to confirm config shape stays stable
+- [x] add concise diagnostics for attach-versus-spawn outcome, socket path, and stale cleanup
+- [x] audit session, saved-context, and adapter flows so daemon mode preserves existing semantics
+- [x] update README and MCP/setup docs to describe:
+  - [x] repo-scoped singleton behavior
+  - [x] repo-local coordination artifacts
+  - [x] Linux-first Unix socket support
+  - [x] stale-instance recovery behavior
+  - [x] unchanged client config surface
+- [x] add CLI quality-gate coverage for singleton serve behavior
+
+Why:
+- rollout should be transparent to existing MCP clients and install surfaces
+- diagnostics and docs are necessary for debugging duplicate spawn or wrong-instance attachment
+
+### Patch M completion criteria
+
+- [x] one MCP backend instance exists per canonical repo root plus canonical DB path
+- [x] `atlas serve` remains stdio-compatible for existing clients
+- [x] broker attaches to running daemon or starts one under lock
+- [x] same repo plus same DB cannot spawn duplicate daemons under race
+- [x] same repo plus different DB paths can run separate daemons
+- [x] daemon and stdio paths preserve identical MCP tool behavior
+- [x] install outputs remain compatible with current Copilot, Claude, and Codex configs
+- [x] tests cover identity, transport parity, concurrent attach-or-spawn, stale recovery, and install stability
 
 ---

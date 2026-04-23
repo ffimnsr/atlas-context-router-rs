@@ -2,6 +2,7 @@ mod cli;
 mod commands;
 mod install;
 mod logging;
+mod mcp_instance;
 
 use clap::Parser;
 use cli::{Cli, Command};
@@ -21,6 +22,7 @@ fn main() {
         Command::Impact { .. } => commands::run_impact(&cli),
         Command::ReviewContext { .. } => commands::run_review_context(&cli),
         Command::Serve => commands::run_serve(&cli),
+        Command::ServeDaemon => commands::run_serve_daemon(&cli),
         Command::DbCheck => commands::run_db_check(&cli),
         Command::Doctor => commands::run_doctor(&cli),
         Command::PurgeNoncanonical => commands::run_purge_noncanonical(&cli),

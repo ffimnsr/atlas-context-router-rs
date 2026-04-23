@@ -269,6 +269,58 @@ fn parse_jsonrpc_lines(stdout: &[u8]) -> Vec<Value> {
         .collect()
 }
 
+fn list_mcp_instance_metadata(repo_root: &Path) -> Vec<Value> {
+    let instances_dir = repo_root.join(".atlas").join("mcp");
+    let mut entries = Vec::new();
+    if !instances_dir.exists() {
+        return entries;
+    }
+
+    for entry in fs::read_dir(&instances_dir).expect("mcp instances dir") {
+        let entry = entry.expect("mcp instance entry");
+        let metadata_path = entry.path().join("mcp.instance.json");
+        if !metadata_path.exists() {
+            continue;
+        }
+        let value: Value = serde_json::from_str(
+            &fs::read_to_string(&metadata_path).expect("mcp instance metadata text"),
+        )
+        .expect("mcp instance metadata json");
+        entries.push(value);
+    }
+
+    entries.sort_by(|left, right| left["db_path"].as_str().cmp(&right["db_path"].as_str()));
+    entries
+}
+
+fn pid_exists(pid: u32) -> bool {
+    Path::new("/proc").join(pid.to_string()).exists()
+}
+
+fn kill_pid(pid: u32) {
+    let output = sanitized_command("kill")
+        .args(["-9", &pid.to_string()])
+        .output()
+        .unwrap_or_else(|err| panic!("failed to kill pid {pid}: {err}"));
+    assert!(
+        output.status.success(),
+        "kill -9 {pid} failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+}
+
+fn wait_until(timeout: Duration, mut predicate: impl FnMut() -> bool) {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if predicate() {
+            return;
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+    assert!(predicate(), "condition did not become true within {timeout:?}");
+}
+
 fn read_json_data_output(command: &str, output: Output) -> Value {
     let value = read_json_output(output);
     assert_eq!(value["schema_version"], json!("atlas_cli.v1"));

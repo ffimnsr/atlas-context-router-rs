@@ -20,7 +20,7 @@ Atlas scans repository code, builds graph structure, stores it in SQLite, and se
 | Graph build | tracked-file scan, parse, persist into `.atlas/worldtree.db` |
 | Incremental update | rebuild only from git or working-tree changes |
 | Search and impact | symbol lookup, call/risk traversal, review context |
-| Agent tooling | MCP server, install helpers, repo hooks, editor integration |
+| Agent tooling | MCP broker/daemon server, install helpers, repo hooks, editor integration |
 
 Supported languages in current build:
 
@@ -98,9 +98,39 @@ atlas impact --base origin/main
 atlas review-context --base origin/main
 ```
 
+## Benchmarks
+
+Local smoke benchmark on this repository, using `target/release/atlas` with a
+prebuilt `.atlas/worldtree.db` graph. Host: Linux 6.19, AMD Ryzen 5 5600X,
+12 logical CPUs. Numbers are best read as order-of-magnitude guidance, not a
+portable guarantee.
+
+Symbol lookup for `WatchRunner`, 30 warm runs:
+
+| Tool | Command shape | Avg wall time | Output size |
+|------|---------------|---------------|-------------|
+| `grep` | `grep -RIn --include='*.rs' WatchRunner .` with build dirs excluded | 6.8 ms | 1.3 KiB |
+| `rg` | `rg -n WatchRunner --glob '*.rs'` | 6.8 ms | 1.3 KiB |
+| `atlas query` | `atlas --json query WatchRunner --limit 20` | 9.1 ms | 20.4 KiB |
+
+Context gathering for `WatchRunner`, comparing raw nearby text against bounded
+graph context:
+
+| Tool | Command shape | Avg wall time | Context payload | Compression vs raw text |
+|------|---------------|---------------|-----------------|-------------------------|
+| `grep` | related-symbol regex with `-C 8` over known watch files | 3.3 ms | 47.8 KiB | baseline |
+| `rg` | related-symbol regex with `-C 8` over known watch files | 5.6 ms | 47.8 KiB | baseline |
+| `atlas context` | `atlas --json context WatchRunner --max-nodes 20 --max-edges 20 --max-files 10` | 35.5 ms | 3.1 KiB | 93.5% smaller |
+
+Use `grep` or `rg` for raw text search. Use Atlas when caller/callee links,
+impact, review context, or MCP token budget matter more than the fastest line
+scan.
+
 ## LLM Agent Setup
 
 Atlas can install MCP configuration for popular AI coding tools and add repo hooks so agents start with graph-aware context.
+
+`atlas serve` remains a stdio MCP entrypoint for editors and agents, but on Linux it now acts as a repo-scoped broker: it attaches to one live daemon per canonical repo root plus DB path or starts one under lock when absent. Generated editor config stays `type = "stdio"`, `command = "atlas"`, `args = ["--repo", ..., "--db", ..., "serve"]`.
 
 ### GitHub Copilot
 
@@ -157,6 +187,14 @@ After install, restart your editor or coding tool, then run:
 ```bash
 atlas build
 ```
+
+Repo-local MCP coordination state lives under `.atlas/mcp/<instance-id>/`:
+
+- `mcp.instance.lock`
+- `mcp.instance.json`
+- `mcp.sock` on Unix
+
+`instance-id` is derived from canonical repo root plus canonical DB path, so same repo with different DBs can run separate daemons while same repo plus same DB reuses one backend.
 
 ## Canonical Path Migration
 

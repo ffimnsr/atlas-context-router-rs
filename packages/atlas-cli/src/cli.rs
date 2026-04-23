@@ -182,6 +182,10 @@ pub enum Command {
     /// Start a JSON-RPC / MCP stdio server.
     Serve,
 
+    /// Internal repo-scoped MCP daemon entrypoint.
+    #[command(name = "serve-daemon", hide = true)]
+    ServeDaemon,
+
     /// Run an integrity check on the atlas database (SQLite + orphan/dangling checks).
     DbCheck,
 

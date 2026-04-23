@@ -1875,6 +1875,26 @@ mod tests {
             .to_path_buf()
     }
 
+    fn expected_stdio_args(repo_root: &Path) -> Value {
+        serde_json::json!([
+            "--repo",
+            repo_root.display().to_string(),
+            "--db",
+            repo_root
+                .join(".atlas")
+                .join("worldtree.db")
+                .display()
+                .to_string(),
+            "serve"
+        ])
+    }
+
+    fn assert_json_stdio_server_entry(server: &Value, repo_root: &Path) {
+        assert_eq!(server["type"], serde_json::json!("stdio"));
+        assert_eq!(server["command"], serde_json::json!("atlas"));
+        assert_eq!(server["args"], expected_stdio_args(repo_root));
+    }
+
     #[test]
     fn install_claude_writes_mcp_json() {
         let tmp = TempDir::new().unwrap();
@@ -1883,21 +1903,7 @@ mod tests {
         let mcp_path = tmp.path().join(".mcp.json");
         assert!(mcp_path.exists());
         let val: Value = serde_json::from_str(&fs::read_to_string(&mcp_path).unwrap()).unwrap();
-        assert!(val["mcpServers"]["atlas"]["command"] == "atlas");
-        assert_eq!(
-            val["mcpServers"]["atlas"]["args"],
-            serde_json::json!([
-                "--repo",
-                tmp.path().display().to_string(),
-                "--db",
-                tmp.path()
-                    .join(".atlas")
-                    .join("worldtree.db")
-                    .display()
-                    .to_string(),
-                "serve"
-            ])
-        );
+        assert_json_stdio_server_entry(&val["mcpServers"]["atlas"], tmp.path());
     }
 
     #[test]
@@ -1932,20 +1938,7 @@ mod tests {
         let val: Value =
             serde_json::from_str(&fs::read_to_string(tmp.path().join(".mcp.json")).unwrap())
                 .unwrap();
-        assert_eq!(
-            val["mcpServers"]["atlas"]["args"],
-            serde_json::json!([
-                "--repo",
-                tmp.path().display().to_string(),
-                "--db",
-                tmp.path()
-                    .join(".atlas")
-                    .join("worldtree.db")
-                    .display()
-                    .to_string(),
-                "serve"
-            ])
-        );
+        assert_json_stdio_server_entry(&val["mcpServers"]["atlas"], tmp.path());
     }
 
     #[test]
@@ -1979,21 +1972,7 @@ mod tests {
         let vscode_path = tmp.path().join(".vscode").join("mcp.json");
         assert!(vscode_path.exists());
         let val: Value = serde_json::from_str(&fs::read_to_string(&vscode_path).unwrap()).unwrap();
-        assert!(val["servers"]["atlas"]["command"] == "atlas");
-        assert_eq!(
-            val["servers"]["atlas"]["args"],
-            serde_json::json!([
-                "--repo",
-                tmp.path().display().to_string(),
-                "--db",
-                tmp.path()
-                    .join(".atlas")
-                    .join("worldtree.db")
-                    .display()
-                    .to_string(),
-                "serve"
-            ])
-        );
+        assert_json_stdio_server_entry(&val["servers"]["atlas"], tmp.path());
     }
 
     #[test]
@@ -2006,6 +1985,7 @@ mod tests {
         let content = fs::read_to_string(&codex_path).unwrap();
         assert!(content.contains("[mcp_servers.atlas]"));
         assert!(content.contains("command = \"atlas\""));
+        assert!(content.contains("type = \"stdio\""));
         assert!(content.contains(&format!(
             "args = [\"--repo\", \"{}\", \"--db\", \"{}\", \"serve\"]",
             tmp.path().display(),
@@ -2035,6 +2015,8 @@ mod tests {
         assert!(matches!(result, PlatformResult::Configured(_)));
 
         let content = fs::read_to_string(tmp.path().join(".codex").join("config.toml")).unwrap();
+        assert!(content.contains("type = \"stdio\""));
+        assert!(content.contains("command = \"atlas\""));
         assert!(content.contains(&format!(
             "args = [\"--repo\", \"{}\", \"--db\", \"{}\", \"serve\"]",
             tmp.path().display(),
