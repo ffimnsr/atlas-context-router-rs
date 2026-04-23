@@ -26,7 +26,7 @@ pub use self::types::{
 use self::resume::build_resume_snapshot;
 use self::util::{
     canonical_json, enforce_event_limit, format_days_ago, format_now, format_seconds_ago,
-    is_corruption_error, path_to_str, quarantine_db, row_to_event,
+    is_corruption_error, normalize_event_payload_paths, path_to_str, quarantine_db, row_to_event,
 };
 
 pub struct SessionStore {
@@ -183,7 +183,11 @@ impl SessionStore {
     }
 
     pub fn append_event(&mut self, event: NewSessionEvent) -> Result<Option<SessionEventRow>> {
-        let payload_json = canonical_json(&event.payload);
+        let mut payload = event.payload;
+        if let Some(meta) = self.get_session_meta(&event.session_id)? {
+            normalize_event_payload_paths(&meta.repo_root, &mut payload);
+        }
+        let payload_json = canonical_json(&payload);
         self.ensure_payload_fits(&payload_json)?;
         let created_at = event.created_at.unwrap_or_else(format_now);
         let event_hash = util::hash_event(&event.event_type, event.priority, &payload_json);

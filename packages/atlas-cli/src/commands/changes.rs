@@ -6,7 +6,7 @@ use atlas_core::model::{
     WorkflowFocusNode,
 };
 use atlas_impact::analyze as advanced_impact;
-use atlas_repo::{DiffTarget, changed_files, find_repo_root, repo_relative};
+use atlas_repo::{CanonicalRepoPath, DiffTarget, changed_files, find_repo_root};
 use atlas_review::{ContextEngine, assemble_review_context};
 use atlas_store_sqlite::Store;
 use camino::Utf8Path;
@@ -105,18 +105,16 @@ struct ExplainDiffSummary {
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn normalize_explicit_files(repo_root: &Utf8Path, explicit_files: &[String]) -> Vec<String> {
+fn normalize_explicit_files(
+    repo_root: &Utf8Path,
+    explicit_files: &[String],
+) -> Result<Vec<String>> {
     explicit_files
         .iter()
-        .map(|p| {
-            let abs = Utf8Path::new(p);
-            if abs.is_absolute() {
-                repo_relative(repo_root, abs)
-                    .unwrap_or_else(|_| abs.to_owned())
-                    .to_string()
-            } else {
-                p.clone()
-            }
+        .map(|path| {
+            CanonicalRepoPath::from_cli_argument(repo_root, Utf8Path::new(path))
+                .with_context(|| format!("invalid explicit file path '{path}'"))
+                .map(|path| path.as_str().to_owned())
         })
         .collect()
 }
@@ -500,7 +498,7 @@ pub fn run_explain_change(cli: &Cli) -> Result<()> {
         };
 
         let changes = if !explicit_files.is_empty() {
-            normalize_explicit_files(repo_root, &explicit_files)
+            normalize_explicit_files(repo_root, &explicit_files)?
                 .into_iter()
                 .map(|path| atlas_core::model::ChangedFile {
                     path,
@@ -653,19 +651,7 @@ pub fn run_impact(cli: &Cli) -> Result<()> {
         };
 
         let target_files: Vec<String> = if !explicit_files.is_empty() {
-            explicit_files
-                .iter()
-                .map(|p| {
-                    let abs = Utf8Path::new(p);
-                    if abs.is_absolute() {
-                        repo_relative(repo_root, abs)
-                            .unwrap_or_else(|_| abs.to_owned())
-                            .to_string()
-                    } else {
-                        p.clone()
-                    }
-                })
-                .collect()
+            normalize_explicit_files(repo_root, &explicit_files)?
         } else {
             let diff_target = if let Some(base_ref) = &base {
                 DiffTarget::BaseRef(base_ref.clone())
@@ -804,19 +790,7 @@ pub fn run_review_context(cli: &Cli) -> Result<()> {
         };
 
         let target_files: Vec<String> = if !explicit_files.is_empty() {
-            explicit_files
-                .iter()
-                .map(|p| {
-                    let abs = Utf8Path::new(p);
-                    if abs.is_absolute() {
-                        repo_relative(repo_root, abs)
-                            .unwrap_or_else(|_| abs.to_owned())
-                            .to_string()
-                    } else {
-                        p.clone()
-                    }
-                })
-                .collect()
+            normalize_explicit_files(repo_root, &explicit_files)?
         } else {
             let diff_target = if let Some(base_ref) = &base {
                 DiffTarget::BaseRef(base_ref.clone())

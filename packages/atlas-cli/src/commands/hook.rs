@@ -7,8 +7,8 @@ use camino::Utf8Path;
 use serde_json::{Map, Value, json};
 
 use atlas_adapters::{
-    derive_content_db_path, derive_session_db_path, generate_source_id, normalize_event,
-    redact_payload,
+    ArtifactIdentity, derive_content_db_path, derive_session_db_path, generate_source_id,
+    normalize_event, redact_payload,
 };
 use atlas_contentstore::{ContentStore, OutputRouting, SearchFilters, SourceMeta};
 use atlas_core::model::{ChangeType, ContextIntent, ContextRequest, ContextTarget};
@@ -932,10 +932,8 @@ fn persist_handoff_artifact(
         }
     };
 
-    let source_id = generate_source_id(
-        &format!("{repo}:{frontend}:{trigger}:handoff"),
-        &artifact_json,
-    );
+    let identity = ArtifactIdentity::artifact_label(format!("{repo}:{frontend}:{trigger}:handoff"));
+    let source_id = generate_source_id(&identity, &artifact_json);
     let mut content_store = match ContentStore::open(&derive_content_db_path(graph_db_path)) {
         Ok(store) => store,
         Err(error) => {
@@ -960,6 +958,8 @@ fn persist_handoff_artifact(
         source_type: "hook_handoff".to_owned(),
         label: format!("hook:{frontend}:{trigger}:handoff"),
         repo_root: Some(repo.to_owned()),
+        identity_kind: identity.kind_str().to_owned(),
+        identity_value: identity.value().to_owned(),
     };
 
     if let Err(error) = content_store.index_artifact(meta, &artifact_json, "application/json") {
@@ -1346,7 +1346,8 @@ fn persist_named_hook_artifact(
             .collect::<Vec<_>>()
             .join("\n")
     );
-    let source_id = generate_source_id(&format!("{repo}:{trigger}:{kind}"), &artifact_text);
+    let identity = ArtifactIdentity::artifact_label(format!("{repo}:{trigger}:{kind}"));
+    let source_id = generate_source_id(&identity, &artifact_text);
     let mut content_store = ContentStore::open(&derive_content_db_path(graph_db_path))
         .context("cannot open hook artifact content store")?;
     content_store
@@ -1360,6 +1361,8 @@ fn persist_named_hook_artifact(
                 source_type: kind.to_owned(),
                 label: format!("hook:{trigger}:{kind}"),
                 repo_root: Some(repo.to_owned()),
+                identity_kind: identity.kind_str().to_owned(),
+                identity_value: identity.value().to_owned(),
             },
             &artifact_text,
             "text/plain",
@@ -1858,12 +1861,15 @@ fn route_hook_payload(
         .migrate()
         .context("cannot migrate hook content store")?;
 
+    let identity = ArtifactIdentity::artifact_label(format!("{repo}:{label}"));
     let meta = SourceMeta {
-        id: generate_source_id(&format!("{repo}:{label}"), &raw_payload),
+        id: generate_source_id(&identity, &raw_payload),
         session_id: Some(session_id.as_str().to_owned()),
         source_type: "hook_event".to_owned(),
         label,
         repo_root: Some(repo.to_owned()),
+        identity_kind: identity.kind_str().to_owned(),
+        identity_value: identity.value().to_owned(),
     };
 
     match content_store.route_output(meta, &raw_payload, "application/json")? {
@@ -2368,7 +2374,8 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let repo = dir.path().to_string_lossy().into_owned();
         let graph_db_path = format!("{repo}/.atlas/worldtree.db");
-        let source_id = generate_source_id("review-context", "BillingService review context");
+        let identity = ArtifactIdentity::artifact_label("review-context");
+        let source_id = generate_source_id(&identity, "BillingService review context");
 
         std::fs::create_dir_all(dir.path().join(".atlas")).unwrap();
 
@@ -2383,6 +2390,8 @@ mod tests {
                     source_type: "review_context".to_owned(),
                     label: "review context".to_owned(),
                     repo_root: Some(repo.clone()),
+                    identity_kind: identity.kind_str().to_owned(),
+                    identity_value: identity.value().to_owned(),
                 },
                 "BillingService review context and call graph",
                 "text/plain",

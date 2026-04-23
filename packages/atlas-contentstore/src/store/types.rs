@@ -10,7 +10,8 @@ const DEFAULT_FALLBACK_MIN_RESULTS: usize = 3;
 /// Metadata describing an artifact being stored.
 #[derive(Debug, Clone)]
 pub struct SourceMeta {
-    /// Caller-assigned stable id (e.g. a UUID or content hash).
+    /// Caller-assigned stable id derived from a structured identity seed.
+    /// File-backed seeds must use canonical repo-path identity before hashing.
     pub id: String,
     /// Session this artifact belongs to (optional).
     pub session_id: Option<String>,
@@ -20,6 +21,12 @@ pub struct SourceMeta {
     pub label: String,
     /// Repo root at time of indexing (optional, for scoped queries).
     pub repo_root: Option<String>,
+    /// Identity kind used to derive `id`.
+    pub identity_kind: String,
+    /// Canonical identity payload used to derive `id`.
+    /// For `identity_kind=repo_path`, this must already be the
+    /// `CanonicalRepoPath` string form.
+    pub identity_value: String,
 }
 
 /// Filters for content search.
@@ -35,6 +42,8 @@ pub struct SearchFilters {
 pub struct ChunkResult {
     pub source_id: String,
     /// Stable content-derived identity for this chunk (SHA-256 hex).
+    /// Because `chunk_id` is seeded from `source_id`, canonical file-backed
+    /// chunk identity depends on canonical file-backed `source_id`.
     pub chunk_id: String,
     pub chunk_index: usize,
     pub title: Option<String>,
@@ -99,6 +108,8 @@ pub struct SourceRow {
     pub source_type: String,
     pub label: String,
     pub repo_root: Option<String>,
+    pub identity_kind: String,
+    pub identity_value: String,
     pub created_at: String,
 }
 

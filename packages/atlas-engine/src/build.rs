@@ -65,6 +65,9 @@ pub fn build_graph(
 
     let _scan_span = tracing::info_span!("build.scan").entered();
 
+    // `file_hashes()` returns canonical graph file identities, so unchanged-file
+    // reuse in full builds stays aligned with persisted graph keys and later
+    // historical snapshot/file-hash reuse.
     let stored_hashes: HashMap<String, String> =
         store.file_hashes().context("cannot read stored hashes")?;
 

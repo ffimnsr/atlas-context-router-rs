@@ -158,6 +158,28 @@ After install, restart your editor or coding tool, then run:
 atlas build
 ```
 
+## Canonical Path Migration
+
+Atlas treats repo-relative paths as canonical identity for persisted graph rows, content source IDs, chunk seeds, and session file references.
+
+Audit coverage:
+
+- graph store persistence and lookup keys go through canonical `files.path` / `nodes.file_path` identity before reuse or persistence
+- file-hash reuse in full and incremental build paths uses the same canonical graph file keys
+- content `source_id` and `chunk_id` seeds require canonical repo-path identity for file-backed artifacts
+- session payload normalization and resume snapshot file references canonicalize repo-file paths before persistence
+- MCP explicit `files` inputs canonicalize repo-relative paths before change-source resolution
+- future sidecar/cache/index keys, including parser tree-cache entries, must reuse the same canonical repo-path spelling
+
+If `atlas doctor` or `atlas db-check` reports `noncanonical_path_rows`, rebuild from clean canonical inputs instead of trying to rewrite stale rows in place:
+
+```bash
+atlas purge-noncanonical
+atlas build
+```
+
+`atlas purge-noncanonical` removes repo-local `context.db` and `session.db` state, keeps `worldtree.db`, and leaves rebuild plus session bootstrap explicit.
+
 ## Shell Completion
 
 Generate completion script to stdout:

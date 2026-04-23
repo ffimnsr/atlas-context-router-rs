@@ -55,7 +55,7 @@ For terms that are easy to misread in this document:
 - Part II. Release and interface gates: Release 1, Release 2, MCP and Agent Roadmap
 - Part III. Post-MVP product expansion: Phase 18 through Phase 32
 - Part IV. Context continuity and memory: Phase CM1 through Phase CM15
-- Part V. Focused follow-up patches: Retrieval Follow-Up Patch, Retrieval Ranking Evidence Patch, Graph/Content Companion Patch, Runtime Event Enrichment and Graph Linking Patch, Ranking and Trimming Primitives Patch, Graph Build Lifecycle Patch, Canonical Path Identity Patch, Graph Readiness Source-of-Truth Patch, Operational Budget Policy Patch, Context Escalation Contract Patch, Graph Store Corruption Recovery Patch
+- Part V. Focused follow-up patches: Retrieval Follow-Up Patch, Retrieval Ranking Evidence Patch, Graph/Content Companion Patch, Parity Surface Patch, Runtime Event Enrichment and Graph Linking Patch, Ranking and Trimming Primitives Patch, Graph Build Lifecycle Patch, Canonical Path Identity Patch, Graph Readiness Source-of-Truth Patch, Operational Budget Policy Patch, Context Escalation Contract Patch, Graph Store Corruption Recovery Patch
 
 ## Cross-Cutting Track Map
 
@@ -4723,6 +4723,102 @@ Why:
 
 ---
 
+## Parity Surface Patch
+
+Atlas already has pieces of the upstream parity surface: Markdown heading graph nodes, content search over docs, large-function risk flags in review summaries, and explicit build/update plus flows/communities commands. Missing work is to turn those pieces into first-class CLI/MCP surfaces with shared service logic, compact output, and parity tests.
+
+### Patch PS1 — Docs section lookup parity
+
+- [ ] add docs-section lookup service over indexed project docs:
+  - [ ] resolve doc by canonical repo path
+  - [ ] resolve section by Markdown heading path / slug
+  - [ ] return section body with bounded child-heading context
+  - [ ] include heading level, line range, file hash, and truncation metadata
+  - [ ] reuse existing Markdown parser heading nodes and content-store/file reads where possible
+- [ ] add CLI surface:
+  - [ ] `atlas docs-section <path> --heading <heading-path-or-slug>`
+  - [ ] `atlas docs-section <path> --line <line>`
+  - [ ] `--json`, `--max-bytes`, and stable not-found errors
+- [ ] add MCP `get_docs_section`:
+  - [ ] same inputs and defaults as CLI JSON
+  - [ ] TOON/JSON output parity
+  - [ ] provenance and freshness metadata
+- [ ] add CLI/MCP parity tests:
+  - [ ] nested headings
+  - [ ] duplicate heading slugs
+  - [ ] missing file / missing heading
+  - [ ] max-byte truncation
+  - [ ] stale graph warning when doc file changed
+
+Why:
+- current docs support can find files and headings, but cannot fetch one section as a stable agent-facing unit
+- review/query workflows need precise docs excerpts without broad file scans
+
+### Patch PS2 — Large-function finder parity
+
+- [ ] add large-function analysis service:
+  - [ ] scan function/method graph nodes by line span
+  - [ ] configurable threshold with default matching review risk summary
+  - [ ] rank by line count, fan-in/fan-out, changed-file relevance, and package/module boundary when available
+  - [ ] return file path, qualified name, kind, line range, LOC, and ranking reason
+  - [ ] support repo-wide and file-scoped modes
+- [ ] add CLI surface:
+  - [ ] `atlas find-large-functions`
+  - [ ] `atlas find-large-functions --files ...`
+  - [ ] `--threshold`, `--limit`, `--include-tests`, and `--json`
+- [ ] add MCP `find_large_functions`:
+  - [ ] same inputs and defaults as CLI JSON
+  - [ ] compact defaults suitable for agent review
+  - [ ] provenance and freshness metadata
+- [ ] add CLI/MCP parity tests:
+  - [ ] default threshold matches review large-function flag
+  - [ ] file-scoped filtering
+  - [ ] threshold and limit behavior
+  - [ ] test-node include/exclude behavior
+  - [ ] stable sort ties
+
+Why:
+- current review code only flags large changed functions; agents need direct repo/file discovery and ranked evidence
+- one service prevents review, CLI, and MCP thresholds from drifting
+
+### Patch PS3 — Explicit postprocess command parity
+
+- [ ] define postprocess orchestration service for derived graph analytics:
+  - [ ] run after build/update without reparsing source files
+  - [ ] refresh derived analytics such as flows, communities, architecture metrics, query hints, and large-function summaries
+  - [ ] support full and changed-only modes where data dependencies allow
+  - [ ] record started/finished/failed state and per-stage counts/durations
+  - [ ] keep failures bounded and machine-readable
+- [ ] add CLI surface:
+  - [ ] `atlas postprocess`
+  - [ ] `atlas postprocess --changed-only`
+  - [ ] `atlas postprocess --stage <name>`
+  - [ ] `--json`, `--dry-run`, and stable error contract
+- [ ] add MCP `postprocess_graph`:
+  - [ ] same stage/mode controls as CLI JSON
+  - [ ] compact stage summary by default
+  - [ ] provenance, readiness, and freshness metadata
+- [ ] add CLI/MCP parity tests:
+  - [ ] no-op repo with no graph
+  - [ ] full postprocess after build
+  - [ ] changed-only postprocess after update
+  - [ ] single-stage execution
+  - [ ] stage failure surfaces same error code in CLI JSON and MCP
+
+Why:
+- build/update should stay focused on scan, parse, and persistence
+- derived analytics need explicit orchestration instead of hidden side effects or ad hoc commands
+
+### Patch PS completion criteria
+
+- [ ] `get_docs_section`, `find_large_functions`, and `postprocess_graph` exist as MCP tools with matching CLI surfaces
+- [ ] all three surfaces share service-layer implementations with no duplicated ranking, truncation, or error rules
+- [ ] CLI JSON and MCP JSON are parity-tested for representative fixtures
+- [ ] README, MCP reference, installed AGENTS instructions, and prompt workflows document the new surfaces consistently
+- [ ] graph freshness/readiness metadata appears on every new graph-backed MCP response
+
+---
+
 ## Runtime Event Enrichment and Graph Linking Patch
 
 Atlas already has session events, adapter extraction helpers, content-store artifact routing, resume snapshots, saved-context retrieval, and context-engine saved-context merge. Do not replace that foundation with a parallel extractor system. Extend it with deterministic enrichment that turns runtime activity into bounded, graph-aware memory while preserving the existing storage boundaries: graph facts stay in `worldtree.db`, large/runtime artifacts stay in `context.db`, and session timelines stay in `session.db`.
@@ -5170,26 +5266,26 @@ Atlas already normalizes many repo paths during scan, diff handling, and some ca
 
 ### Patch P1 — Canonical repo path type and rules
 
-- [ ] state invariant explicitly: ALL path-derived keys MUST derive from canonical repo-relative path identity before hashing, persistence, dedupe, or cross-store ID generation
-- [ ] define a shared `CanonicalRepoPath` / `RepoPathIdentity` type in `atlas-repo` or shared core
-- [ ] enforce canonical form:
-  - [ ] repo-relative only
-  - [ ] forward-slash separators only
-  - [ ] no leading `./`
-  - [ ] no empty path
-  - [ ] no `.` components
-  - [ ] no unresolved `..` components
-  - [ ] no trailing slash for files
-  - [ ] platform-aware case policy applied once
-- [ ] provide constructors for:
-  - [ ] absolute path + repo root
-  - [ ] repo-relative path string
-  - [ ] git diff path
-  - [ ] watch event path
-  - [ ] explicit CLI/MCP file argument
-  - [ ] synthetic graph path
-- [ ] make invalid paths return typed errors instead of silently falling back to raw input
-- [ ] add property/unit tests for separators, dot segments, Windows casing, absolute paths, synthetic paths, and invalid escape paths
+- [x] state invariant explicitly: ALL path-derived keys MUST derive from canonical repo-relative path identity before hashing, persistence, dedupe, or cross-store ID generation
+- [x] define a shared `CanonicalRepoPath` / `RepoPathIdentity` type in `atlas-repo` or shared core
+- [x] enforce canonical form:
+  - [x] repo-relative only
+  - [x] forward-slash separators only
+  - [x] no leading `./`
+  - [x] no empty path
+  - [x] no `.` components
+  - [x] no unresolved `..` components
+  - [x] no trailing slash for files
+  - [x] platform-aware case policy applied once
+- [x] provide constructors for:
+  - [x] absolute path + repo root
+  - [x] repo-relative path string
+  - [x] git diff path
+  - [x] watch event path
+  - [x] explicit CLI/MCP file argument
+  - [x] synthetic graph path
+- [x] make invalid paths return typed errors instead of silently falling back to raw input
+- [x] add property/unit tests for separators, dot segments, Windows casing, absolute paths, synthetic paths, and invalid escape paths
 
 Why:
 - prevents path-casing and separator drift before hashing
@@ -5197,15 +5293,15 @@ Why:
 
 ### Patch P2 — Use canonical identity for graph store keys
 
-- [ ] require `CanonicalRepoPath` before writing `files.path`
-- [ ] require canonical path before `replace_file_graph`
-- [ ] require canonical path before `replace_files_transactional`
-- [ ] require canonical path before `nodes.file_path`
-- [ ] require canonical path before qualified-name file prefixes
-- [ ] require canonical path before graph edge file metadata
-- [ ] update build/update/watch/diff paths to normalize once at boundary
-- [ ] add tests proving equivalent raw paths map to one graph file identity
-- [ ] add tests proving case policy is stable on Windows
+- [x] require `CanonicalRepoPath` before writing `files.path`
+- [x] require canonical path before `replace_file_graph`
+- [x] require canonical path before `replace_files_transactional`
+- [x] require canonical path before `nodes.file_path`
+- [x] require canonical path before qualified-name file prefixes
+- [x] require canonical path before graph edge file metadata
+- [x] update build/update/watch/diff paths to normalize once at boundary
+- [x] add tests proving equivalent raw paths map to one graph file identity
+- [x] add tests proving case policy is stable on Windows
 
 Why:
 - graph identity depends on file path strings embedded in nodes, edges, QNs, and lookup keys
@@ -5213,18 +5309,18 @@ Why:
 
 ### Patch P3 — Use canonical identity for content, session, and adapter IDs
 
-- [ ] require canonical path before content-store `source_id` when artifact represents a repo file
-- [ ] require canonical path before `chunk_id` source seed when source is file-backed
-- [ ] require canonical path before retrieval cache keys
-- [ ] require canonical path before saved-context references that point to repo files
-- [ ] require canonical path before session resume snapshot file references
-- [ ] require canonical path before adapter bridge `source_id` path hashing
-- [ ] require canonical path before historical graph snapshot keys and file-hash reuse keys
-- [ ] require canonical path before Phase 17 history/diff deduplication keys
-- [ ] keep non-file artifacts explicit:
-  - [ ] label/content-derived IDs allowed only when no repo path exists
-  - [ ] ID payload must mark identity kind: `repo_path`, `synthetic_path`, `artifact_label`, or `external`
-- [ ] add tests across content store, session store, MCP save/search, and adapter bridge ingestion
+- [x] require canonical path before content-store `source_id` when artifact represents a repo file
+- [x] require canonical path before `chunk_id` source seed when source is file-backed
+- [x] require canonical path before retrieval cache keys
+- [x] require canonical path before saved-context references that point to repo files
+- [x] require canonical path before session resume snapshot file references
+- [x] require canonical path before adapter bridge `source_id` path hashing
+- [x] require canonical path before historical graph snapshot keys and file-hash reuse keys
+- [x] require canonical path before Phase 17 history/diff deduplication keys
+- [x] keep non-file artifacts explicit:
+  - [x] label/content-derived IDs allowed only when no repo path exists
+  - [x] ID payload must mark identity kind: `repo_path`, `synthetic_path`, `artifact_label`, or `external`
+- [x] add tests across content store, session store, MCP save/search, and adapter bridge ingestion
 
 Why:
 - cross-store joins and future sidecar indexes break when graph uses one path form and content/session use another
@@ -5232,12 +5328,12 @@ Why:
 
 ### Patch P4 — Audit and migration guardrails
 
-- [ ] audit all hashing/keying call sites for raw path usage
-- [ ] add lint-like tests or targeted regression tests for forbidden raw path hashing
-- [ ] document migration behavior for existing noncanonical rows
-- [ ] add diagnostic to `doctor` / `db_check` for noncanonical path rows
-- [ ] decide whether to rewrite existing rows during rebuild or require clean rebuild
-- [ ] document invariant in AGENTS/install instructions so agents preserve path identity
+- [x] audit all hashing/keying call sites for raw path usage
+- [x] add lint-like tests or targeted regression tests for forbidden raw path hashing
+- [x] document migration behavior for existing noncanonical rows
+- [x] add diagnostic to `doctor` / `db_check` for noncanonical path rows
+- [x] decide whether to rewrite existing rows during rebuild or require clean rebuild
+- [x] document invariant in AGENTS/install instructions so agents preserve path identity
 
 Why:
 - existing code has multiple local path-normalization helpers
@@ -5245,13 +5341,13 @@ Why:
 
 ### Patch P completion criteria
 
-- [ ] one canonical repo path identity type exists
-- [ ] ALL path-derived keys are documented as canonical-before-hash/canonical-before-persist
-- [ ] graph store, content store, session snapshots, adapters, and MCP use it before hashing/keying
-- [ ] historical graph snapshots, file-hash reuse, and snapshot dedupe use the same identity
-- [ ] raw path hashing is covered by regression tests
-- [ ] diagnostics detect noncanonical persisted path rows
-- [ ] future sidecar/cache/index keys document canonical path as required seed
+- [x] one canonical repo path identity type exists
+- [x] ALL path-derived keys are documented as canonical-before-hash/canonical-before-persist
+- [x] graph store, content store, session snapshots, adapters, and MCP use it before hashing/keying
+- [x] historical graph snapshots, file-hash reuse, and snapshot dedupe use the same identity
+- [x] raw path hashing is covered by regression tests
+- [x] diagnostics detect noncanonical persisted path rows
+- [x] future sidecar/cache/index keys document canonical path as required seed
 
 ---
 

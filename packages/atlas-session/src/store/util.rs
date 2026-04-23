@@ -6,6 +6,8 @@ use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
 
 use atlas_core::{AtlasError, Result};
+use atlas_repo::CanonicalRepoPath;
+use camino::Utf8Path;
 
 use crate::SessionId;
 
@@ -102,6 +104,70 @@ pub(super) fn canonical_json(value: &Value) -> String {
             format!("{{{items}}}")
         }
     }
+}
+
+pub(super) fn normalize_event_payload_paths(repo_root: &str, value: &mut Value) {
+    match value {
+        Value::Array(values) => {
+            for nested in values {
+                normalize_event_payload_paths(repo_root, nested);
+            }
+        }
+        Value::Object(map) => {
+            for (key, nested) in map.iter_mut() {
+                if is_repo_path_key(key) {
+                    normalize_path_value(repo_root, nested);
+                }
+                normalize_event_payload_paths(repo_root, nested);
+            }
+        }
+        _ => {}
+    }
+}
+
+pub(super) fn normalize_repo_path_string(repo_root: &str, candidate: &str) -> Option<String> {
+    let trimmed = candidate.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    // Resume snapshots and normalized session payloads persist repo-file
+    // references with the same canonical path identity used by graph/content
+    // stores so cross-store lookup does not drift.
+    CanonicalRepoPath::from_cli_argument(Utf8Path::new(repo_root), Utf8Path::new(trimmed))
+        .ok()
+        .map(|path| path.as_str().to_owned())
+}
+
+fn normalize_path_value(repo_root: &str, value: &mut Value) {
+    match value {
+        Value::String(text) => {
+            if let Some(normalized) = normalize_repo_path_string(repo_root, text) {
+                *text = normalized;
+            }
+        }
+        Value::Array(values) => {
+            for nested in values {
+                normalize_path_value(repo_root, nested);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn is_repo_path_key(key: &str) -> bool {
+    matches!(
+        key,
+        "file"
+            | "filePath"
+            | "file_path"
+            | "files"
+            | "path"
+            | "paths"
+            | "changed_files"
+            | "changedFiles"
+            | "target_file"
+            | "targetPath"
+    )
 }
 
 pub(super) fn format_now() -> String {

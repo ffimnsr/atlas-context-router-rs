@@ -4,14 +4,14 @@ use anyhow::{Context, Result};
 use atlas_adapters::{AdapterHooks, CliAdapter};
 use atlas_contentstore::{ContentStore, IndexState};
 use atlas_core::GraphStats;
-use atlas_core::model::ChangedFile;
+use atlas_core::model::{ChangeType, ChangedFile};
 use atlas_core::{
     GraphHealthInput, graph_health_error_message, graph_health_error_suggestions,
     select_graph_health_error_code,
 };
 use atlas_engine::{BuildOptions, UpdateOptions, UpdateTarget, build_graph, update_graph};
 use atlas_parser::ParserRegistry;
-use atlas_repo::{changed_files, find_repo_root};
+use atlas_repo::{changed_files, find_repo_root, hash_file};
 use atlas_session::SessionStore;
 use atlas_store_sqlite::{BuildFinishStats, Store};
 use camino::Utf8Path;
@@ -52,6 +52,20 @@ fn file_has_graph_facts(store: &Store, path: &str) -> bool {
         .unwrap_or(false)
 }
 
+fn graph_contains_file_state(store: &Store, path: &str) -> bool {
+    store.file_hash(path).ok().flatten().is_some() || file_has_graph_facts(store, path)
+}
+
+fn graph_matches_worktree_path(store: &Store, repo_root: &Utf8Path, path: &str) -> bool {
+    let worktree_hash = hash_file(&repo_root.join(path));
+    let indexed_hash = store.file_hash(path).ok().flatten();
+
+    match worktree_hash {
+        Ok(current_hash) => indexed_hash.as_deref() == Some(current_hash.as_str()),
+        Err(_) => !graph_contains_file_state(store, path),
+    }
+}
+
 fn change_can_affect_graph_facts(
     store: &Store,
     registry: &ParserRegistry,
@@ -69,11 +83,41 @@ fn change_can_affect_graph_facts(
             .is_some_and(|old_path| file_has_graph_facts(store, old_path))
 }
 
-fn graph_relevant_changed_files(store: &Store, changes: &[ChangedFile]) -> Vec<String> {
+fn change_is_pending_in_graph(
+    store: &Store,
+    registry: &ParserRegistry,
+    repo_root: &Utf8Path,
+    change: &ChangedFile,
+) -> bool {
+    if !change_can_affect_graph_facts(store, registry, change) {
+        return false;
+    }
+
+    match change.change_type {
+        ChangeType::Added | ChangeType::Modified => {
+            !graph_matches_worktree_path(store, repo_root, &change.path)
+        }
+        ChangeType::Deleted => graph_contains_file_state(store, &change.path),
+        ChangeType::Renamed | ChangeType::Copied => {
+            let new_path_pending = !graph_matches_worktree_path(store, repo_root, &change.path);
+            let old_path_pending = change
+                .old_path
+                .as_deref()
+                .is_some_and(|old_path| graph_contains_file_state(store, old_path));
+            new_path_pending || old_path_pending
+        }
+    }
+}
+
+fn graph_relevant_changed_files(
+    store: &Store,
+    repo_root: &Utf8Path,
+    changes: &[ChangedFile],
+) -> Vec<String> {
     let registry = ParserRegistry::with_defaults();
     let mut files: Vec<String> = changes
         .iter()
-        .filter(|change| change_can_affect_graph_facts(store, &registry, change))
+        .filter(|change| change_is_pending_in_graph(store, &registry, repo_root, change))
         .flat_map(|change| std::iter::once(change.path.clone()).chain(change.old_path.clone()))
         .collect();
     files.sort();
@@ -170,7 +214,7 @@ fn collect_status_diagnostics(ctx: &StatusPayloadContext<'_>) -> StatusDiagnosti
             && (ctx.stats.node_count > 0 || ctx.stats.edge_count > 0 || ctx.stats.file_count > 0));
     let pending_graph_changes = ctx
         .store
-        .map(|store| graph_relevant_changed_files(store, ctx.changes))
+        .map(|store| graph_relevant_changed_files(store, Utf8Path::new(ctx.repo), ctx.changes))
         .unwrap_or_default();
     let stale_index = graph_built && !pending_graph_changes.is_empty();
     let retrieval_index = retrieval_index_value(ctx.repo, ctx.db_path);

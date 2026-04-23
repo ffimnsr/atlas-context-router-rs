@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
-use camino::{Utf8Path, Utf8PathBuf};
+use camino::{Utf8Component, Utf8Path, Utf8PathBuf};
 use std::process::Command;
+use thiserror::Error;
 
 /// Git environment variables that encode the *caller's* repository context.
 ///
@@ -40,36 +41,198 @@ pub(crate) fn git_cmd() -> Command {
     cmd
 }
 
+/// Canonical repo-relative path identity.
+///
+/// Invariant: ALL path-derived keys MUST derive from canonical repo-relative
+/// path identity before hashing, persistence, dedupe, or cross-store ID
+/// generation.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct CanonicalRepoPath(Utf8PathBuf);
+
+impl CanonicalRepoPath {
+    pub fn from_absolute_path(
+        repo_root: &Utf8Path,
+        abs_path: &Utf8Path,
+    ) -> std::result::Result<Self, RepoPathError> {
+        let canonical_root = normalize_absolute(repo_root, AbsoluteRole::RepoRoot)?;
+        let canonical_abs = normalize_absolute(abs_path, AbsoluteRole::InputPath)?;
+        let relative = canonical_abs
+            .strip_prefix(canonical_root.as_path())
+            .map_err(|_| RepoPathError::NotUnderRepoRoot {
+                repo_root: canonical_root.to_string(),
+                path: canonical_abs.to_string(),
+            })?;
+        Self::from_repo_relative(relative.as_str())
+    }
+
+    pub fn from_repo_relative(path: impl AsRef<str>) -> std::result::Result<Self, RepoPathError> {
+        canonicalize_relative(path.as_ref())
+    }
+
+    pub fn from_git_diff_path(path: impl AsRef<str>) -> std::result::Result<Self, RepoPathError> {
+        Self::from_repo_relative(path)
+    }
+
+    pub fn from_watch_event_path(
+        repo_root: &Utf8Path,
+        path: &Utf8Path,
+    ) -> std::result::Result<Self, RepoPathError> {
+        Self::from_boundary_input(repo_root, path)
+    }
+
+    pub fn from_cli_argument(
+        repo_root: &Utf8Path,
+        path: &Utf8Path,
+    ) -> std::result::Result<Self, RepoPathError> {
+        Self::from_boundary_input(repo_root, path)
+    }
+
+    pub fn from_synthetic_path(path: impl AsRef<str>) -> std::result::Result<Self, RepoPathError> {
+        Self::from_repo_relative(path)
+    }
+
+    pub fn as_path(&self) -> &Utf8Path {
+        self.0.as_path()
+    }
+
+    pub fn as_str(&self) -> &str {
+        self.0.as_str()
+    }
+
+    pub fn into_path_buf(self) -> Utf8PathBuf {
+        self.0
+    }
+
+    fn from_boundary_input(
+        repo_root: &Utf8Path,
+        path: &Utf8Path,
+    ) -> std::result::Result<Self, RepoPathError> {
+        if path.is_absolute() {
+            Self::from_absolute_path(repo_root, path)
+        } else {
+            Self::from_repo_relative(path.as_str())
+        }
+    }
+}
+
+impl AsRef<Utf8Path> for CanonicalRepoPath {
+    fn as_ref(&self) -> &Utf8Path {
+        self.as_path()
+    }
+}
+
+#[derive(Debug, Clone, Error, PartialEq, Eq)]
+pub enum RepoPathError {
+    #[error("canonical repo path must not be empty")]
+    Empty,
+    #[error("repo root '{0}' must be absolute")]
+    RepoRootNotAbsolute(String),
+    #[error("absolute path input '{0}' must be absolute")]
+    AbsoluteInputNotAbsolute(String),
+    #[error("repo-relative path '{0}' must not be absolute")]
+    AbsoluteNotAllowed(String),
+    #[error("path '{path}' is not under repo root '{repo_root}'")]
+    NotUnderRepoRoot { repo_root: String, path: String },
+    #[error("path '{0}' escapes repo root")]
+    EscapesRepoRoot(String),
+    #[error("path '{0}' must not end with '/'")]
+    TrailingSlash(String),
+}
+
+#[derive(Clone, Copy)]
+enum AbsoluteRole {
+    RepoRoot,
+    InputPath,
+}
+
 /// Return `path` relative to `repo_root`, with `/` separators.
 ///
 /// Both paths must be absolute. The result is a clean relative path with no
 /// leading `./`.
 pub fn repo_relative(repo_root: &Utf8Path, abs_path: &Utf8Path) -> Result<Utf8PathBuf> {
-    let rel = abs_path
-        .strip_prefix(repo_root)
-        .with_context(|| format!("'{abs_path}' is not under repo root '{repo_root}'"))?;
-
-    // camino always uses `/`; just normalise `.` and `..` components.
-    let normalised = normalise_components(rel);
-    Ok(normalised)
+    CanonicalRepoPath::from_absolute_path(repo_root, abs_path)
+        .map(CanonicalRepoPath::into_path_buf)
+        .with_context(|| format!("cannot derive canonical repo-relative path from '{abs_path}'"))
 }
 
-/// Collapse `.` and `..` components without hitting the filesystem.
-fn normalise_components(path: &Utf8Path) -> Utf8PathBuf {
+fn canonicalize_relative(raw: &str) -> std::result::Result<CanonicalRepoPath, RepoPathError> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Err(RepoPathError::Empty);
+    }
+
+    let slashed = to_forward_slashes(raw);
+    let path = Utf8Path::new(&slashed);
+    if path.is_absolute() {
+        return Err(RepoPathError::AbsoluteNotAllowed(slashed));
+    }
+
     let mut parts: Vec<&str> = Vec::new();
     for component in path.components() {
-        use camino::Utf8Component::*;
         match component {
-            CurDir => {}
-            ParentDir => {
-                parts.pop();
+            Utf8Component::CurDir => {}
+            Utf8Component::ParentDir => {
+                if parts.pop().is_none() {
+                    return Err(RepoPathError::EscapesRepoRoot(slashed));
+                }
             }
-            Normal(s) => parts.push(s),
-            // Prefix / RootDir shouldn't appear in a stripped relative path.
-            other => parts.push(other.as_str()),
+            Utf8Component::Normal(part) => parts.push(part),
+            Utf8Component::RootDir | Utf8Component::Prefix(_) => {
+                return Err(RepoPathError::AbsoluteNotAllowed(slashed));
+            }
         }
     }
-    Utf8PathBuf::from(parts.join("/"))
+
+    if parts.is_empty() {
+        return Err(RepoPathError::Empty);
+    }
+
+    if slashed.ends_with('/') {
+        return Err(RepoPathError::TrailingSlash(slashed));
+    }
+
+    Ok(CanonicalRepoPath(Utf8PathBuf::from(normalize_case(
+        &parts.join("/"),
+    ))))
+}
+
+fn normalize_absolute(
+    path: &Utf8Path,
+    role: AbsoluteRole,
+) -> std::result::Result<Utf8PathBuf, RepoPathError> {
+    let slashed = to_forward_slashes(path.as_str());
+    let cased = normalize_case(&slashed);
+    let utf8_path = Utf8Path::new(&cased);
+    if !utf8_path.is_absolute() {
+        return Err(match role {
+            AbsoluteRole::RepoRoot => RepoPathError::RepoRootNotAbsolute(path.to_string()),
+            AbsoluteRole::InputPath => RepoPathError::AbsoluteInputNotAbsolute(path.to_string()),
+        });
+    }
+
+    let mut prefix: Option<String> = None;
+    let mut parts: Vec<&str> = Vec::new();
+    for component in utf8_path.components() {
+        match component {
+            Utf8Component::Prefix(value) => prefix = Some(value.as_str().to_owned()),
+            Utf8Component::RootDir => {}
+            Utf8Component::CurDir => {}
+            Utf8Component::ParentDir => {
+                if parts.pop().is_none() {
+                    return Err(RepoPathError::EscapesRepoRoot(cased));
+                }
+            }
+            Utf8Component::Normal(part) => parts.push(part),
+        }
+    }
+
+    let mut canonical = String::new();
+    if let Some(prefix) = prefix {
+        canonical.push_str(&prefix);
+    }
+    canonical.push('/');
+    canonical.push_str(&parts.join("/"));
+    Ok(Utf8PathBuf::from(canonical))
 }
 
 /// Ensure separators are `/` (matters on Windows where camino may receive `\`).
@@ -107,15 +270,15 @@ mod tests {
     }
 
     #[test]
-    fn dotdot_normalised() {
-        let p = Utf8Path::new("src/../src/lib.rs");
-        assert_eq!(normalise_components(p).as_str(), "src/lib.rs");
+    fn canonical_repo_relative_strips_dot_components() {
+        let path = CanonicalRepoPath::from_repo_relative("./src/../src/lib.rs").unwrap();
+        assert_eq!(path.as_str(), "src/lib.rs");
     }
 
     #[test]
-    fn dot_stripped() {
-        let p = Utf8Path::new("./src/lib.rs");
-        assert_eq!(normalise_components(p).as_str(), "src/lib.rs");
+    fn canonical_repo_relative_converts_backslashes() {
+        let path = CanonicalRepoPath::from_repo_relative("src\\main\\lib.rs").unwrap();
+        assert_eq!(path.as_str(), "src/main/lib.rs");
     }
 
     #[test]
@@ -142,15 +305,45 @@ mod tests {
     }
 
     #[test]
-    fn multiple_consecutive_dotdots() {
-        let p = Utf8Path::new("a/b/../../c/d.rs");
-        assert_eq!(normalise_components(p).as_str(), "c/d.rs");
+    fn canonical_repo_relative_rejects_empty() {
+        let err = CanonicalRepoPath::from_repo_relative("").unwrap_err();
+        assert_eq!(err, RepoPathError::Empty);
     }
 
     #[test]
-    fn deep_nesting_normalised() {
-        let p = Utf8Path::new("a/./b/./c/../d.rs");
-        assert_eq!(normalise_components(p).as_str(), "a/b/d.rs");
+    fn canonical_repo_relative_rejects_escape() {
+        let err = CanonicalRepoPath::from_repo_relative("../Cargo.toml").unwrap_err();
+        assert_eq!(
+            err,
+            RepoPathError::EscapesRepoRoot("../Cargo.toml".to_string())
+        );
+    }
+
+    #[test]
+    fn canonical_repo_relative_rejects_absolute() {
+        let err = CanonicalRepoPath::from_repo_relative("/repo/src/lib.rs").unwrap_err();
+        assert_eq!(
+            err,
+            RepoPathError::AbsoluteNotAllowed("/repo/src/lib.rs".to_string())
+        );
+    }
+
+    #[test]
+    fn canonical_repo_relative_rejects_trailing_slash() {
+        let err = CanonicalRepoPath::from_repo_relative("src/").unwrap_err();
+        assert_eq!(err, RepoPathError::TrailingSlash("src/".to_string()));
+    }
+
+    #[test]
+    fn canonical_repo_relative_collapses_multiple_parent_segments() {
+        let path = CanonicalRepoPath::from_repo_relative("a/b/../../c/d.rs").unwrap();
+        assert_eq!(path.as_str(), "c/d.rs");
+    }
+
+    #[test]
+    fn canonical_repo_relative_normalizes_deep_nesting() {
+        let path = CanonicalRepoPath::from_repo_relative("a/./b/./c/../d.rs").unwrap();
+        assert_eq!(path.as_str(), "a/b/d.rs");
     }
 
     // --- normalize_case (Windows casing policy) ------------------------------
@@ -194,6 +387,76 @@ mod tests {
         assert_eq!(repo_relative(root, abs).unwrap().as_str(), "src/lib.rs");
     }
 
+    #[test]
+    fn absolute_constructor_rejects_outside_repo_root() {
+        let root = Utf8Path::new("/repo");
+        let abs = Utf8Path::new("/other/src/lib.rs");
+        let err = CanonicalRepoPath::from_absolute_path(root, abs).unwrap_err();
+        assert_eq!(
+            err,
+            RepoPathError::NotUnderRepoRoot {
+                repo_root: "/repo".to_string(),
+                path: "/other/src/lib.rs".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn absolute_constructor_rejects_non_absolute_repo_root() {
+        let err = CanonicalRepoPath::from_absolute_path(
+            Utf8Path::new("repo"),
+            Utf8Path::new("/repo/src/lib.rs"),
+        )
+        .unwrap_err();
+        assert_eq!(err, RepoPathError::RepoRootNotAbsolute("repo".to_string()));
+    }
+
+    #[test]
+    fn absolute_constructor_rejects_non_absolute_input() {
+        let err = CanonicalRepoPath::from_absolute_path(
+            Utf8Path::new("/repo"),
+            Utf8Path::new("src/lib.rs"),
+        )
+        .unwrap_err();
+        assert_eq!(
+            err,
+            RepoPathError::AbsoluteInputNotAbsolute("src/lib.rs".to_string())
+        );
+    }
+
+    #[test]
+    fn git_diff_constructor_uses_same_canonical_rules() {
+        let path = CanonicalRepoPath::from_git_diff_path("./src\\main.rs").unwrap();
+        assert_eq!(path.as_str(), "src/main.rs");
+    }
+
+    #[test]
+    fn cli_argument_constructor_accepts_absolute_and_relative_inputs() {
+        let root = Utf8Path::new("/repo");
+        let absolute =
+            CanonicalRepoPath::from_cli_argument(root, Utf8Path::new("/repo/src/main.rs")).unwrap();
+        let relative =
+            CanonicalRepoPath::from_cli_argument(root, Utf8Path::new("./src/../src/main.rs"))
+                .unwrap();
+        assert_eq!(absolute.as_str(), "src/main.rs");
+        assert_eq!(relative.as_str(), "src/main.rs");
+    }
+
+    #[test]
+    fn watch_event_constructor_accepts_absolute_input() {
+        let root = Utf8Path::new("/repo");
+        let path =
+            CanonicalRepoPath::from_watch_event_path(root, Utf8Path::new("/repo/src/lib.rs"))
+                .unwrap();
+        assert_eq!(path.as_str(), "src/lib.rs");
+    }
+
+    #[test]
+    fn synthetic_path_constructor_reuses_relative_rules() {
+        let path = CanonicalRepoPath::from_synthetic_path("generated/schema.graph.json").unwrap();
+        assert_eq!(path.as_str(), "generated/schema.graph.json");
+    }
+
     /// Linux and macOS share the Unix path policy: separators are normalized,
     /// but case is preserved.
     #[test]
@@ -202,5 +465,19 @@ mod tests {
         let raw = "Packages\\Atlas-Core\\Src\\Lib.rs";
         let canonical = normalize_case(&to_forward_slashes(raw));
         assert_eq!(canonical, "Packages/Atlas-Core/Src/Lib.rs");
+    }
+
+    #[test]
+    #[cfg(not(target_os = "windows"))]
+    fn canonical_repo_relative_preserves_case_on_unix() {
+        let path = CanonicalRepoPath::from_repo_relative("Src/Lib.rs").unwrap();
+        assert_eq!(path.as_str(), "Src/Lib.rs");
+    }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn canonical_repo_relative_lowercases_on_windows() {
+        let path = CanonicalRepoPath::from_repo_relative("Src\\Lib.rs").unwrap();
+        assert_eq!(path.as_str(), "src/lib.rs");
     }
 }

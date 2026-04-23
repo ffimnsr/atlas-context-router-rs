@@ -114,14 +114,17 @@ impl ContentStore {
             .map_err(|e| AtlasError::Db(e.to_string()))?;
 
         tx.execute(
-            "INSERT OR REPLACE INTO sources (id, session_id, source_type, label, repo_root, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            "INSERT OR REPLACE INTO sources (
+                 id, session_id, source_type, label, repo_root, identity_kind, identity_value, created_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
                 meta.id,
                 meta.session_id,
                 meta.source_type,
                 meta.label,
                 meta.repo_root,
+                meta.identity_kind,
+                meta.identity_value,
                 now,
             ],
         )
@@ -269,7 +272,7 @@ impl ContentStore {
         let mut stmt = self
             .conn
             .prepare(
-                "SELECT id, session_id, source_type, label, repo_root, created_at
+                "SELECT id, session_id, source_type, label, repo_root, identity_kind, identity_value, created_at
                  FROM sources WHERE id = ?1",
             )
             .map_err(|e| AtlasError::Db(e.to_string()))?;
@@ -285,7 +288,9 @@ impl ContentStore {
                 source_type: row.get(2).map_err(|e| AtlasError::Db(e.to_string()))?,
                 label: row.get(3).map_err(|e| AtlasError::Db(e.to_string()))?,
                 repo_root: row.get(4).map_err(|e| AtlasError::Db(e.to_string()))?,
-                created_at: row.get(5).map_err(|e| AtlasError::Db(e.to_string()))?,
+                identity_kind: row.get(5).map_err(|e| AtlasError::Db(e.to_string()))?,
+                identity_value: row.get(6).map_err(|e| AtlasError::Db(e.to_string()))?,
+                created_at: row.get(7).map_err(|e| AtlasError::Db(e.to_string()))?,
             }))
         } else {
             Ok(None)

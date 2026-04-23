@@ -11,7 +11,8 @@ pub mod hooks;
 pub mod redact;
 
 pub use artifacts::{
-    derive_bridge_dir, derive_content_db_path, derive_session_db_path, generate_source_id,
+    ArtifactIdentity, ArtifactIdentityKind, derive_bridge_dir, derive_content_db_path,
+    derive_session_db_path, generate_source_id,
 };
 pub use atlas_contextsave::{ContentStore, OutputRouting, SearchFilters, SessionId, SourceMeta};
 pub use bridge::{

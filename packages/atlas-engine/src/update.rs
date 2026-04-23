@@ -11,7 +11,9 @@ use atlas_core::{
     model::{ChangeType, ParsedFile},
 };
 use atlas_parser::{ParserRegistry, TreeCache};
-use atlas_repo::{DiffTarget, changed_files, discover_package_owners, hash_file, repo_relative};
+use atlas_repo::{
+    CanonicalRepoPath, DiffTarget, changed_files, discover_package_owners, hash_file,
+};
 use atlas_store_sqlite::Store;
 use camino::Utf8Path;
 use rayon::prelude::*;
@@ -22,6 +24,27 @@ use crate::owner_graph::refresh_owner_graphs;
 type ParseWorkItem = (String, camino::Utf8PathBuf, Option<tree_sitter::Tree>);
 type ParseOutcome = Result<(ParsedFile, Option<tree_sitter::Tree>), String>;
 type ParseResultRow = (String, ParseOutcome);
+
+fn canonicalize_batch_change(
+    change: &atlas_core::model::ChangedFile,
+) -> Result<atlas_core::model::ChangedFile> {
+    let path = CanonicalRepoPath::from_repo_relative(&change.path)
+        .with_context(|| format!("invalid batch update path '{}'", change.path))?;
+    let old_path = change
+        .old_path
+        .as_deref()
+        .map(|old| {
+            CanonicalRepoPath::from_repo_relative(old)
+                .with_context(|| format!("invalid batch update old_path '{old}'"))
+                .map(|path| path.as_str().to_owned())
+        })
+        .transpose()?;
+    Ok(atlas_core::model::ChangedFile {
+        path: path.as_str().to_owned(),
+        change_type: change.change_type,
+        old_path,
+    })
+}
 
 /// Specifies which set of changes to process.
 pub enum UpdateTarget {
@@ -139,20 +162,19 @@ pub fn update_graph(
         UpdateTarget::Files(paths) => paths
             .iter()
             .map(|p| {
-                let abs = Utf8Path::new(p);
-                let rel = if abs.is_absolute() {
-                    repo_relative(repo_root, abs).unwrap_or_else(|_| abs.to_owned())
-                } else {
-                    abs.to_owned()
-                };
-                atlas_core::model::ChangedFile {
-                    path: rel.to_string(),
+                let rel = CanonicalRepoPath::from_cli_argument(repo_root, Utf8Path::new(p))
+                    .with_context(|| format!("invalid explicit update path '{p}'"))?;
+                Ok(atlas_core::model::ChangedFile {
+                    path: rel.as_str().to_owned(),
                     change_type: ChangeType::Modified,
                     old_path: None,
-                }
+                })
             })
-            .collect(),
-        UpdateTarget::Batch(changes) => changes.clone(),
+            .collect::<Result<Vec<_>>>()?,
+        UpdateTarget::Batch(changes) => changes
+            .iter()
+            .map(canonicalize_batch_change)
+            .collect::<Result<Vec<_>>>()?,
         other => {
             let diff_target = match other {
                 UpdateTarget::Staged => DiffTarget::Staged,

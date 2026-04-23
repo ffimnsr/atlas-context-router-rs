@@ -79,6 +79,32 @@ fn duplicate_events_deduplicate_by_hash() {
 }
 
 #[test]
+fn duplicate_events_deduplicate_after_path_canonicalization() {
+    let (_dir, mut store) = open_store(16, 1024);
+    let session_id = session_id();
+    seed_session(&mut store, &session_id);
+
+    let first = NewSessionEvent {
+        session_id: session_id.clone(),
+        event_type: SessionEventType::FileRead,
+        priority: 5,
+        payload: serde_json::json!({"path":"src/lib.rs","line":12}),
+        created_at: Some("2026-01-01T00:00:00Z".into()),
+    };
+    let second = NewSessionEvent {
+        session_id: session_id.clone(),
+        event_type: SessionEventType::FileRead,
+        priority: 5,
+        payload: serde_json::json!({"path":"/repo/src/lib.rs","line":12}),
+        created_at: Some("2026-01-01T00:00:00Z".into()),
+    };
+
+    assert!(store.append_event(first).unwrap().is_some());
+    assert!(store.append_event(second).unwrap().is_none());
+    assert_eq!(store.list_events(&session_id).unwrap().len(), 1);
+}
+
+#[test]
 fn retention_evicts_lower_priority_then_older() {
     let (_dir, mut store) = open_store(2, 1024);
     let session_id = session_id();
@@ -341,6 +367,29 @@ fn build_resume_captures_decisions_and_deduplicates_rules_by_label() {
         .find(|r| r["label"] == "no_mut_global")
         .expect("no_mut_global rule missing");
     assert_eq!(no_mut["rule"], "avoid global mutable state (updated)");
+}
+
+#[test]
+fn build_resume_canonicalizes_changed_files() {
+    let (_dir, mut store) = open_store(64, 8192);
+    let session_id = session_id();
+    seed_session(&mut store, &session_id);
+
+    store
+        .append_event(NewSessionEvent {
+            session_id: session_id.clone(),
+            event_type: SessionEventType::ReviewContext,
+            priority: 3,
+            payload: serde_json::json!({
+                "files": ["/repo/src/lib.rs", "src/lib.rs", "./src/../src/lib.rs"]
+            }),
+            created_at: None,
+        })
+        .unwrap();
+
+    let snap = store.build_resume(&session_id).unwrap();
+    let inner: serde_json::Value = serde_json::from_str(&snap.snapshot).unwrap();
+    assert_eq!(inner["changed_files"], serde_json::json!(["src/lib.rs"]));
 }
 
 #[test]

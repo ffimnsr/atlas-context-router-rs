@@ -188,6 +188,10 @@ pub enum Command {
     /// Run a health check on the atlas setup (repo, config, database).
     Doctor,
 
+    /// Purge repo-local context/session stores after noncanonical path identity drift.
+    #[command(name = "purge-noncanonical")]
+    PurgeNoncanonical,
+
     /// Show detailed graph structure for debugging.
     #[command(name = "debug-graph")]
     DebugGraph {
@@ -764,6 +768,12 @@ mod tests {
     fn parse_doctor_command() {
         let cli = parse(&["atlas", "doctor"]);
         assert!(matches!(cli.command, Command::Doctor));
+    }
+
+    #[test]
+    fn parse_purge_noncanonical_command() {
+        let cli = parse(&["atlas", "purge-noncanonical"]);
+        assert!(matches!(cli.command, Command::PurgeNoncanonical));
     }
 
     // -------------------------------------------------------------------------

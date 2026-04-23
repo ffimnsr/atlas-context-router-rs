@@ -2,6 +2,7 @@ use atlas_core::{AtlasError, Result};
 
 use crate::SessionId;
 
+use super::util::normalize_repo_path_string;
 use super::{ResumeSnapshot, SessionEventType, SessionStore};
 
 fn push_unique_string(values: &mut Vec<String>, candidate: String, limit: usize) {
@@ -126,7 +127,8 @@ pub(super) fn build_resume_snapshot(
                 if let Some(files) = payload.get("files").and_then(|v| v.as_array()) {
                     for f in files {
                         if let Some(s) = f.as_str() {
-                            let owned = s.to_string();
+                            let owned = normalize_repo_path_string(&meta.repo_root, s)
+                                .unwrap_or_else(|| s.to_string());
                             if !changed_files.contains(&owned) {
                                 changed_files.push(owned);
                             }

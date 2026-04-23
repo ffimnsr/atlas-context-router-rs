@@ -53,6 +53,9 @@ pub fn graph_health_error_message(error_code: &str) -> &'static str {
     match error_code {
         "none" => "Graph is healthy and up-to-date.",
         "missing_graph_db" => "Graph database not found. Run `atlas build` to create it.",
+        "noncanonical_path_rows" => {
+            "Persisted path rows are not canonical. Rebuild graph/content state from clean canonical inputs."
+        }
         "schema_mismatch" => {
             "Graph database schema does not match this Atlas build. Rebuild the graph to refresh the schema."
         }
@@ -83,6 +86,11 @@ pub fn graph_health_error_suggestions(error_code: &str) -> &'static [&'static st
         "missing_graph_db" => &[
             "run `atlas build` to create the graph",
             "run `atlas init` if the project is new",
+        ],
+        "noncanonical_path_rows" => &[
+            "run `atlas build` to rebuild canonical graph rows",
+            "run `atlas purge-noncanonical` to remove stale repo-local context/session stores",
+            "delete stale context/session artifacts that still reference raw repo paths",
         ],
         "schema_mismatch" => &[
             "run `atlas build` to rebuild the graph with the current schema",

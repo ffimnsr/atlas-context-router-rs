@@ -3,11 +3,15 @@ use rusqlite::params;
 
 use super::{
     Store,
-    helpers::{repeat_placeholders, row_to_edge, row_to_node},
+    helpers::{
+        canonicalize_graph_slice, canonicalize_repo_path, repeat_placeholders, row_to_edge,
+        row_to_node,
+    },
 };
 
 impl Store {
     pub fn nodes_by_file(&self, path: &str) -> Result<Vec<Node>> {
+        let path = canonicalize_repo_path(path)?;
         let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
         let mut stmt = self
             .conn
@@ -29,6 +33,7 @@ impl Store {
 
     /// All edges whose `file_path` column matches `path`.
     pub fn edges_by_file(&self, path: &str) -> Result<Vec<atlas_core::Edge>> {
+        let path = canonicalize_repo_path(path)?;
         let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
         let mut stmt = self
             .conn
@@ -49,12 +54,13 @@ impl Store {
     /// Replace only the stored edges for `path`, leaving nodes and file
     /// metadata untouched.
     pub fn rewrite_file_edges(&mut self, path: &str, edges: &[atlas_core::Edge]) -> Result<()> {
+        let normalized = canonicalize_graph_slice(path, &[], edges)?;
         let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
         self.conn.execute_batch("BEGIN IMMEDIATE").map_err(db_err)?;
         self.conn
-            .execute("DELETE FROM edges WHERE file_path = ?1", [path])
+            .execute("DELETE FROM edges WHERE file_path = ?1", [&normalized.path])
             .map_err(db_err)?;
-        for edge in edges {
+        for edge in &normalized.edges {
             let extra = serde_json::to_string(&edge.extra_json).map_err(AtlasError::Serde)?;
             self.conn
                 .execute(
@@ -106,7 +112,9 @@ impl Store {
     /// Returns a map of `file_path → stored_hash` for all indexed files.
     ///
     /// Used by the build command to skip re-parsing files whose content has not
-    /// changed since the last indexed pass.
+    /// changed since the last indexed pass. The map keys are the canonical
+    /// `files.path` identities stored in the graph DB, so file-hash reuse and
+    /// later historical snapshot keys operate on the same path spelling.
     pub fn file_hashes(&self) -> Result<std::collections::HashMap<String, String>> {
         let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
         let mut stmt = self

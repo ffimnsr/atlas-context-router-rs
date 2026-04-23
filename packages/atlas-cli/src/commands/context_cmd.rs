@@ -7,7 +7,7 @@ use atlas_adapters::{AdapterHooks, CliAdapter, extract_context_event};
 use atlas_core::SearchQuery;
 use atlas_core::model::{ContextIntent, ContextRequest, ContextResult, ContextTarget};
 use atlas_impact::analyze as advanced_impact;
-use atlas_repo::{DiffTarget, changed_files, find_repo_root, repo_relative};
+use atlas_repo::{CanonicalRepoPath, DiffTarget, changed_files, find_repo_root};
 use atlas_review::{
     ContextEngine, assemble_review_context, normalize_qn_kind_tokens, query_parser,
 };
@@ -536,20 +536,15 @@ fn resolve_shell_files(repo: &str, args: &ShellArgs) -> Result<Vec<String>> {
         let repo_root_path =
             find_repo_root(Utf8Path::new(repo)).context("cannot find git repo root")?;
         let repo_root = repo_root_path.as_path();
-        return Ok(args
+        return args
             .positionals
             .iter()
-            .map(|p| {
-                let abs = Utf8Path::new(p);
-                if abs.is_absolute() {
-                    repo_relative(repo_root, abs)
-                        .unwrap_or_else(|_| abs.to_owned())
-                        .to_string()
-                } else {
-                    p.clone()
-                }
+            .map(|path| {
+                CanonicalRepoPath::from_cli_argument(repo_root, Utf8Path::new(path))
+                    .with_context(|| format!("invalid explicit file path '{path}'"))
+                    .map(|path| path.as_str().to_owned())
             })
-            .collect());
+            .collect();
     }
 
     let repo_root_path =

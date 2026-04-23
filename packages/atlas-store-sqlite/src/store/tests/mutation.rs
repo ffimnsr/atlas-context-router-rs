@@ -93,6 +93,60 @@ fn replace_file_graph_updates_nodes() {
     assert_eq!(got[0].name, "new_fn");
 }
 
+#[test]
+fn replace_file_graph_canonicalizes_equivalent_raw_paths() {
+    let mut store = open_in_memory();
+    let nodes = vec![make_node(
+        NodeKind::Function,
+        "foo",
+        "src\\module.rs::fn::foo",
+        "src\\module.rs",
+        "rust",
+    )];
+    let edges = vec![make_edge(
+        EdgeKind::Calls,
+        "src\\module.rs::fn::foo",
+        "src\\module.rs::fn::foo",
+        "src\\module.rs",
+    )];
+
+    store
+        .replace_file_graph(
+            "./src/feature/../module.rs",
+            "hash1",
+            Some("rust"),
+            Some(200),
+            &nodes,
+            &edges,
+        )
+        .unwrap();
+
+    let stored_nodes = store.nodes_by_file("src/module.rs").unwrap();
+    assert_eq!(stored_nodes.len(), 1);
+    assert_eq!(stored_nodes[0].file_path, "src/module.rs");
+    assert_eq!(stored_nodes[0].qualified_name, "src/module.rs::fn::foo");
+
+    let stored_edges = store.edges_by_file("src/module.rs").unwrap();
+    assert_eq!(stored_edges.len(), 1);
+    assert_eq!(stored_edges[0].file_path, "src/module.rs");
+    assert_eq!(stored_edges[0].source_qn, "src/module.rs::fn::foo");
+    assert_eq!(stored_edges[0].target_qn, "src/module.rs::fn::foo");
+
+    let file_count: i64 = store
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM files WHERE path = 'src/module.rs'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(file_count, 1);
+    assert_eq!(
+        store.file_hash("src/module.rs").unwrap(),
+        Some("hash1".to_string())
+    );
+}
+
 // --- delete_file_graph ---------------------------------------------------
 
 #[test]
@@ -403,6 +457,70 @@ fn replace_files_transactional_rolls_back_all_files_on_error() {
     assert_eq!(stats.edge_count, 0);
     assert!(store.nodes_by_file("src/a.rs").unwrap().is_empty());
     assert!(store.nodes_by_file("src/b.rs").unwrap().is_empty());
+}
+
+#[test]
+fn replace_files_transactional_canonicalizes_path_identity() {
+    let mut store = open_in_memory();
+    let files = vec![ParsedFile {
+        path: "./src/../src/lib.rs".to_string(),
+        language: Some("rust".to_string()),
+        hash: "h1".to_string(),
+        size: Some(10),
+        nodes: vec![make_node(
+            NodeKind::Function,
+            "good",
+            "src\\lib.rs::fn::good",
+            "src\\lib.rs",
+            "rust",
+        )],
+        edges: vec![make_edge(
+            EdgeKind::Calls,
+            "src\\lib.rs::fn::good",
+            "external::fn::target",
+            "src\\lib.rs",
+        )],
+    }];
+
+    store.replace_files_transactional(&files).unwrap();
+
+    let nodes = store.nodes_by_file("src/lib.rs").unwrap();
+    assert_eq!(nodes.len(), 1);
+    assert_eq!(nodes[0].qualified_name, "src/lib.rs::fn::good");
+
+    let edges = store.edges_by_file("src/lib.rs").unwrap();
+    assert_eq!(edges.len(), 1);
+    assert_eq!(edges[0].file_path, "src/lib.rs");
+    assert_eq!(edges[0].source_qn, "src/lib.rs::fn::good");
+
+    let files_count = store.stats().unwrap().file_count;
+    assert_eq!(files_count, 1);
+}
+
+#[test]
+#[cfg(target_os = "windows")]
+fn replace_file_graph_uses_stable_windows_case_policy() {
+    let mut store = open_in_memory();
+    let nodes = vec![make_node(
+        NodeKind::Function,
+        "foo",
+        "SRC\\Module.RS::fn::foo",
+        "SRC\\Module.RS",
+        "rust",
+    )];
+
+    store
+        .replace_file_graph("SRC\\Module.RS", "hash1", Some("rust"), None, &nodes, &[])
+        .unwrap();
+
+    let stored = store.nodes_by_file("src/module.rs").unwrap();
+    assert_eq!(stored.len(), 1);
+    assert_eq!(stored[0].file_path, "src/module.rs");
+    assert_eq!(stored[0].qualified_name, "src/module.rs::fn::foo");
+    assert_eq!(
+        store.file_hash("src/module.rs").unwrap(),
+        Some("hash1".to_string())
+    );
 }
 
 #[test]

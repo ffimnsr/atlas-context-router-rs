@@ -4,7 +4,12 @@ use atlas_core::{AtlasError, Node, PackageOwner, PackageOwnerKind, ParsedFile, R
 use rusqlite::{Connection, params};
 use tracing::info;
 
-use super::{Store, helpers::row_to_node};
+use super::{
+    Store,
+    helpers::{
+        canonicalize_graph_slice, canonicalize_parsed_file, canonicalize_repo_path, row_to_node,
+    },
+};
 
 fn do_replace_file_graph(
     conn: &Connection,
@@ -169,15 +174,24 @@ impl Store {
         nodes: &[Node],
         edges: &[atlas_core::Edge],
     ) -> Result<()> {
+        let normalized = canonicalize_graph_slice(path, nodes, edges)?;
         let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
         self.conn.execute_batch("BEGIN IMMEDIATE").map_err(db_err)?;
-        match do_replace_file_graph(&self.conn, path, hash, language, size, nodes, edges) {
+        match do_replace_file_graph(
+            &self.conn,
+            &normalized.path,
+            hash,
+            language,
+            size,
+            &normalized.nodes,
+            &normalized.edges,
+        ) {
             Ok(()) => {
                 self.conn.execute_batch("COMMIT").map_err(db_err)?;
                 info!(
-                    path,
-                    nodes = nodes.len(),
-                    edges = edges.len(),
+                    path = normalized.path.as_str(),
+                    nodes = normalized.nodes.len(),
+                    edges = normalized.edges.len(),
                     "replaced file graph"
                 );
                 Ok(())
@@ -200,12 +214,16 @@ impl Store {
         if files.is_empty() {
             return Ok((0, 0));
         }
+        let normalized_files = files
+            .iter()
+            .map(canonicalize_parsed_file)
+            .collect::<Result<Vec<_>>>()?;
         let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
         self.conn.execute_batch("BEGIN IMMEDIATE").map_err(db_err)?;
 
         let mut total_nodes = 0usize;
         let mut total_edges = 0usize;
-        for f in files {
+        for f in &normalized_files {
             match do_replace_file_graph(
                 &self.conn,
                 &f.path,
@@ -260,6 +278,7 @@ impl Store {
     /// intentionally — moving a function within a file does not change its
     /// interface and must not trigger unnecessary dependent reparsing.
     pub fn node_signatures_by_file(&self, path: &str) -> Result<HashMap<String, String>> {
+        let path = canonicalize_repo_path(path)?;
         let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
         let mut stmt = self
             .conn
@@ -269,7 +288,7 @@ impl Store {
             )
             .map_err(db_err)?;
         let map = stmt
-            .query_map([path], |row| {
+            .query_map([path.as_str()], |row| {
                 let qn: String = row.get(0)?;
                 let kind: String = row.get(1)?;
                 let params: Option<String> = row.get(2)?;
@@ -292,6 +311,7 @@ impl Store {
 
     /// Atomically remove every node, edge and FTS row for `path`.
     pub fn delete_file_graph(&mut self, path: &str) -> Result<()> {
+        let path = canonicalize_repo_path(path)?;
         let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
 
         self.conn.execute_batch("BEGIN IMMEDIATE").map_err(db_err)?;
@@ -308,7 +328,7 @@ impl Store {
                 )
                 .map_err(db_err)?;
             let rows: Vec<Node> = stmt
-                .query_map([path], row_to_node)
+                .query_map([path.as_str()], row_to_node)
                 .map_err(db_err)?
                 .filter_map(|r| r.ok())
                 .collect();
@@ -338,7 +358,7 @@ impl Store {
         }
 
         self.conn
-            .execute("DELETE FROM edges WHERE file_path = ?1", [path])
+            .execute("DELETE FROM edges WHERE file_path = ?1", [path.as_str()])
             .map_err(db_err)?;
         // Also remove dangling cross-file edges whose source or target
         // qualified name belongs to a node in the deleted file.  These edges
@@ -349,32 +369,35 @@ impl Store {
                 "DELETE FROM edges
                  WHERE source_qualified IN (SELECT qualified_name FROM nodes WHERE file_path = ?1)
                     OR target_qualified IN (SELECT qualified_name FROM nodes WHERE file_path = ?1)",
-                [path],
+                [path.as_str()],
             )
             .map_err(db_err)?;
         self.conn
-            .execute("DELETE FROM nodes WHERE file_path = ?1", [path])
+            .execute("DELETE FROM nodes WHERE file_path = ?1", [path.as_str()])
             .map_err(db_err)?;
         self.conn
-            .execute("DELETE FROM files WHERE path = ?1", [path])
+            .execute("DELETE FROM files WHERE path = ?1", [path.as_str()])
             .map_err(db_err)?;
 
         self.conn.execute_batch("COMMIT").map_err(db_err)?;
 
-        info!(path, "deleted file graph");
+        info!(path = path.as_str(), "deleted file graph");
         Ok(())
     }
 
     /// Returns the stored content hash for `path`, or `None` if the file has
     /// not been indexed yet.
     pub fn file_hash(&self, path: &str) -> Result<Option<String>> {
+        let path = canonicalize_repo_path(path)?;
         let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
         use rusqlite::OptionalExtension;
         let result = self
             .conn
-            .query_row("SELECT hash FROM files WHERE path = ?1", [path], |row| {
-                row.get::<_, String>(0)
-            })
+            .query_row(
+                "SELECT hash FROM files WHERE path = ?1",
+                [path.as_str()],
+                |row| row.get::<_, String>(0),
+            )
             .optional()
             .map_err(db_err)?;
         Ok(result)
@@ -382,6 +405,7 @@ impl Store {
 
     /// Returns the stored owner metadata for `path`, if present.
     pub fn file_owner(&self, path: &str) -> Result<Option<PackageOwner>> {
+        let path = canonicalize_repo_path(path)?;
         let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
         use rusqlite::OptionalExtension;
         let result = self
@@ -389,7 +413,7 @@ impl Store {
             .query_row(
                 "SELECT owner_id, owner_kind, owner_root, owner_manifest_path, owner_name
                  FROM files WHERE path = ?1",
-                [path],
+                [path.as_str()],
                 |row| {
                     let owner_id: Option<String> = row.get(0)?;
                     let owner_kind: Option<String> = row.get(1)?;
@@ -445,6 +469,7 @@ impl Store {
 
     /// Upsert owner metadata for a stored file row.
     pub fn upsert_file_owner(&mut self, path: &str, owner: Option<&PackageOwner>) -> Result<()> {
+        let path = canonicalize_repo_path(path)?;
         let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
         let (owner_id, owner_kind, owner_root, owner_manifest_path, owner_name) = match owner {
             Some(owner) => (
@@ -466,7 +491,7 @@ impl Store {
                      owner_name = ?6
                  WHERE path = ?1",
                 params![
-                    path,
+                    path.as_str(),
                     owner_id,
                     owner_kind,
                     owner_root,
@@ -486,6 +511,11 @@ impl Store {
     /// can simply be retargeted to the new path instead of being deleted and
     /// rebuilt from scratch.
     pub fn rename_file_graph(&mut self, old_path: &str, new_path: &str) -> Result<()> {
+        let old_path = canonicalize_repo_path(old_path)?;
+        let new_path = canonicalize_repo_path(new_path)?;
+        if old_path == new_path {
+            return Ok(());
+        }
         let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
 
         self.conn.execute_batch("BEGIN IMMEDIATE").map_err(db_err)?;
@@ -502,7 +532,7 @@ impl Store {
                 )
                 .map_err(db_err)?;
             let rows: Vec<Node> = stmt
-                .query_map([old_path], row_to_node)
+                .query_map([old_path.as_str()], row_to_node)
                 .map_err(db_err)?
                 .filter_map(|r| r.ok())
                 .collect();
@@ -536,7 +566,7 @@ impl Store {
         self.conn
             .execute(
                 "UPDATE nodes SET file_path = ?1 WHERE file_path = ?2",
-                [new_path, old_path],
+                [new_path.as_str(), old_path.as_str()],
             )
             .map_err(db_err)?;
 
@@ -544,7 +574,7 @@ impl Store {
         self.conn
             .execute(
                 "UPDATE edges SET file_path = ?1 WHERE file_path = ?2",
-                [new_path, old_path],
+                [new_path.as_str(), old_path.as_str()],
             )
             .map_err(db_err)?;
 
@@ -557,11 +587,11 @@ impl Store {
                  SELECT ?1, language, hash, size, datetime('now'), owner_id, owner_kind,
                         owner_root, owner_manifest_path, owner_name
                  FROM files WHERE path = ?2",
-                [new_path, old_path],
+                [new_path.as_str(), old_path.as_str()],
             )
             .map_err(db_err)?;
         self.conn
-            .execute("DELETE FROM files WHERE path = ?1", [old_path])
+            .execute("DELETE FROM files WHERE path = ?1", [old_path.as_str()])
             .map_err(db_err)?;
 
         // FTS-reindex with the new file_path.
@@ -577,7 +607,7 @@ impl Store {
                         n.qualified_name,
                         n.name,
                         n.kind.as_str(),
-                        new_path,
+                        new_path.as_str(),
                         n.language,
                         n.params,
                         n.return_type,
@@ -590,8 +620,8 @@ impl Store {
         self.conn.execute_batch("COMMIT").map_err(db_err)?;
 
         info!(
-            old_path,
-            new_path,
+            old_path = old_path.as_str(),
+            new_path = new_path.as_str(),
             nodes = old_nodes.len(),
             "renamed file graph"
         );

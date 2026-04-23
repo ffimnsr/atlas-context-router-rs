@@ -107,7 +107,9 @@ dependencies = [
  "atlas-contentstore",
  "atlas-contextsave",
  "atlas-core",
+ "atlas-repo",
  "atlas-session",
+ "camino",
  "serde",
  "serde_json",
  "sha2",
@@ -153,6 +155,7 @@ name = "atlas-contentstore"
 version = "0.4.0"
 dependencies = [
  "atlas-core",
+ "atlas-repo",
  "rusqlite",
  "serde",
  "serde_json",
@@ -313,6 +316,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "tempfile",
+ "thiserror 2.0.18",
  "toml",
  "tracing",
 ]
@@ -350,6 +354,8 @@ name = "atlas-session"
 version = "0.4.0"
 dependencies = [
  "atlas-core",
+ "atlas-repo",
+ "camino",
  "rusqlite",
  "serde",
  "serde_json",
@@ -364,6 +370,7 @@ name = "atlas-store-sqlite"
 version = "0.4.0"
 dependencies = [
  "atlas-core",
+ "atlas-repo",
  "criterion",
  "regex",
  "rusqlite",

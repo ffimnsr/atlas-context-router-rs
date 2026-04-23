@@ -92,6 +92,19 @@ fn collect_retrieval_index_summary(repo_root: &str, db_path: &str) -> RetrievalI
     }
 }
 
+fn integrity_issue_code(issues: &[String], structural_problem: bool) -> &'static str {
+    if structural_problem {
+        "corrupt_or_inconsistent_graph_rows"
+    } else if issues
+        .iter()
+        .any(|issue| issue.starts_with("noncanonical_path:"))
+    {
+        "noncanonical_path_rows"
+    } else {
+        "corrupt_or_inconsistent_graph_rows"
+    }
+}
+
 pub(super) fn tool_status(
     repo_root: &str,
     db_path: &str,
@@ -305,7 +318,7 @@ pub(super) fn tool_doctor(
                     Ok(issues) => checks.push(fail!(
                         "db_integrity",
                         issues.join("; "),
-                        "corrupt_or_inconsistent_graph_rows"
+                        integrity_issue_code(&issues, false)
                     )),
                     Err(e) => checks.push(fail!(
                         "db_integrity",
@@ -450,6 +463,22 @@ pub(super) fn tool_doctor(
                         "retrieval_index_unavailable"
                     )),
                 }
+
+                match cs.noncanonical_repo_path_sources(100) {
+                    Ok(issues) if issues.is_empty() => {
+                        checks.push(pass!("content_path_identity", "ok"));
+                    }
+                    Ok(issues) => checks.push(fail!(
+                        "content_path_identity",
+                        issues.join("; "),
+                        "noncanonical_path_rows"
+                    )),
+                    Err(e) => checks.push(fail!(
+                        "content_path_identity",
+                        e.to_string(),
+                        "noncanonical_path_rows"
+                    )),
+                }
             }
             Err(_) => checks.push(fail!(
                 "retrieval_index",
@@ -485,10 +514,10 @@ pub(super) fn tool_db_check(
     let dangling = store.dangling_edges(limit).unwrap_or_default();
 
     let ok = issues.is_empty() && orphans.is_empty() && dangling.is_empty();
-    let ec = if !issues.is_empty() {
-        "corrupt_or_inconsistent_graph_rows"
-    } else {
+    let ec = if ok {
         "none"
+    } else {
+        integrity_issue_code(&issues, !orphans.is_empty() || !dangling.is_empty())
     };
 
     #[derive(Serialize)]

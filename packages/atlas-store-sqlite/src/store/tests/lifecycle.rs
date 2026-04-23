@@ -300,6 +300,26 @@ fn integrity_check_after_writes() {
     );
 }
 
+#[test]
+fn integrity_check_reports_noncanonical_path_rows() {
+    let store = open_in_memory();
+    store
+        .conn
+        .execute(
+            "INSERT INTO files (path, hash, language, indexed_at)
+             VALUES (?1, 'h1', 'rust', '2025-01-01T00:00:00Z')",
+            ["./src/lib.rs"],
+        )
+        .unwrap();
+
+    let issues = store.integrity_check().expect("integrity_check should run");
+    assert!(issues.iter().any(|issue| {
+        issue.contains("noncanonical_path:")
+            && issue.contains("table=files")
+            && issue.contains("canonical=src/lib.rs")
+    }));
+}
+
 // --- orphan-node query regression ----------------------------------------
 //
 // Ensures orphan_nodes() uses the correct edge schema column names

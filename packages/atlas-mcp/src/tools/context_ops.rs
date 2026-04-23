@@ -3,7 +3,7 @@ use atlas_adapters::derive_content_db_path;
 use atlas_core::SearchQuery;
 use atlas_core::model::{ChangeType, ChangedFile, ContextIntent, ContextRequest, ContextTarget};
 use atlas_engine::{BuildOptions, UpdateOptions, UpdateTarget, build_graph, update_graph};
-use atlas_repo::{DiffTarget, changed_files, find_repo_root, repo_relative};
+use atlas_repo::{CanonicalRepoPath, DiffTarget, changed_files, find_repo_root};
 use atlas_review::{ContextEngine, query_parser};
 use atlas_search::semantic as sem;
 use atlas_store_sqlite::{BuildFinishStats, GraphBuildState, Store};
@@ -46,18 +46,13 @@ struct ResolvedChangeSource {
     working_tree: bool,
 }
 
-fn normalize_explicit_files(repo_root: &Utf8Path, files: Vec<String>) -> Vec<String> {
+fn normalize_explicit_files(files: Vec<String>) -> Result<Vec<String>> {
     files
         .into_iter()
         .map(|path| {
-            let utf8_path = Utf8Path::new(&path);
-            if utf8_path.is_absolute() {
-                repo_relative(repo_root, utf8_path)
-                    .unwrap_or_else(|_| utf8_path.to_owned())
-                    .to_string()
-            } else {
-                path
-            }
+            CanonicalRepoPath::from_repo_relative(&path)
+                .with_context(|| format!("invalid explicit file path '{path}'"))
+                .map(|path| path.as_str().to_owned())
         })
         .collect()
 }
@@ -113,13 +108,7 @@ fn resolve_change_source(
     }
 
     if !files.is_empty() {
-        let files = if files.iter().any(|path| Utf8Path::new(path).is_absolute()) {
-            let repo_root_path =
-                find_repo_root(Utf8Path::new(repo_root)).context("cannot find git repo root")?;
-            normalize_explicit_files(repo_root_path.as_path(), files)
-        } else {
-            files
-        };
+        let files = normalize_explicit_files(files)?;
         return Ok(ResolvedChangeSource {
             mode: ChangeSourceMode::ExplicitFiles,
             files,

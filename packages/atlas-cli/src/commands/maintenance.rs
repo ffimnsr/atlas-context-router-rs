@@ -4,8 +4,10 @@ use atlas_core::{
     graph_health_error_message, graph_health_error_suggestions, is_schema_mismatch_error,
 };
 use atlas_repo::{collect_files, find_repo_root};
+use atlas_session::DEFAULT_SESSION_DB;
 use atlas_store_sqlite::{GraphBuildState, Store};
 use camino::Utf8Path;
+use std::path::{Path, PathBuf};
 
 use crate::cli::{Cli, Command};
 
@@ -49,6 +51,19 @@ fn graph_issue_code(error: &str) -> &'static str {
     }
 }
 
+fn integrity_issue_code(issues: &[String], structural_problem: bool) -> &'static str {
+    if structural_problem {
+        "corrupt_or_inconsistent_graph_rows"
+    } else if issues
+        .iter()
+        .any(|issue| issue.starts_with("noncanonical_path:"))
+    {
+        "noncanonical_path_rows"
+    } else {
+        "corrupt_or_inconsistent_graph_rows"
+    }
+}
+
 fn print_doctor_report(cli: &Cli, checks: &[CheckResult], all_ok: bool) -> Result<()> {
     if cli.json {
         let items: Vec<serde_json::Value> = checks
@@ -85,6 +100,111 @@ fn print_doctor_report(cli: &Cli, checks: &[CheckResult], all_ok: bool) -> Resul
             eprintln!("Some checks failed.");
         }
     }
+    Ok(())
+}
+
+#[derive(Debug, Clone)]
+struct PurgeTargetResult {
+    label: &'static str,
+    path: String,
+    removed: bool,
+    existed: bool,
+    removed_artifacts: Vec<String>,
+}
+
+fn sqlite_artifact_paths(path: &Path) -> Vec<PathBuf> {
+    let base = path.to_path_buf();
+    vec![
+        base.clone(),
+        PathBuf::from(format!("{}.wal", base.display())),
+        PathBuf::from(format!("{}.shm", base.display())),
+    ]
+}
+
+fn purge_sqlite_artifacts(label: &'static str, path: PathBuf) -> Result<PurgeTargetResult> {
+    let mut existed = false;
+    let mut removed_artifacts = Vec::new();
+
+    for artifact_path in sqlite_artifact_paths(&path) {
+        if !artifact_path.exists() {
+            continue;
+        }
+        existed = true;
+        std::fs::remove_file(&artifact_path)
+            .with_context(|| format!("cannot remove {}", artifact_path.display()))?;
+        removed_artifacts.push(artifact_path.display().to_string());
+    }
+
+    Ok(PurgeTargetResult {
+        label,
+        path: path.display().to_string(),
+        removed: !removed_artifacts.is_empty(),
+        existed,
+        removed_artifacts,
+    })
+}
+
+pub fn run_purge_noncanonical(cli: &Cli) -> Result<()> {
+    let repo = resolve_repo(cli)?;
+    let db_path_str = db_path(cli, &repo);
+    let context_db = PathBuf::from(atlas_engine::paths::content_db_path(&db_path_str));
+    let session_db = atlas_engine::paths::atlas_dir(&repo).join(DEFAULT_SESSION_DB);
+
+    let context_result = purge_sqlite_artifacts("context_db", context_db)?;
+    let session_result = purge_sqlite_artifacts("session_db", session_db)?;
+    let graph_db = PathBuf::from(&db_path_str);
+
+    if cli.json {
+        print_json(
+            "purge_noncanonical",
+            serde_json::json!({
+                "repo_root": repo,
+                "error_code": "none",
+                "message": "Repo-local context/session stores purged for canonical path recovery.",
+                "context_db": {
+                    "path": context_result.path,
+                    "removed": context_result.removed,
+                    "existed": context_result.existed,
+                    "removed_artifacts": context_result.removed_artifacts,
+                },
+                "session_db": {
+                    "path": session_result.path,
+                    "removed": session_result.removed,
+                    "existed": session_result.existed,
+                    "removed_artifacts": session_result.removed_artifacts,
+                },
+                "graph_db": {
+                    "path": graph_db.display().to_string(),
+                    "preserved": graph_db.exists(),
+                },
+                "next_steps": [
+                    "atlas build",
+                    "atlas session start"
+                ],
+            }),
+        )?;
+        return Ok(());
+    }
+
+    println!("Purged repo-local derived stores for canonical path recovery.");
+    for result in [&context_result, &session_result] {
+        let status = if result.removed {
+            "removed"
+        } else if result.existed {
+            "present"
+        } else {
+            "not found"
+        };
+        println!("  {}: {} ({status})", result.label, result.path);
+        for artifact in &result.removed_artifacts {
+            println!("    removed {artifact}");
+        }
+    }
+    println!("  graph_db: {} (preserved)", graph_db.display());
+    println!();
+    println!("Next:");
+    println!("  atlas build");
+    println!("  atlas session start");
     Ok(())
 }
 
@@ -179,10 +299,11 @@ pub fn run_doctor(cli: &Cli) -> Result<()> {
                         checks.push(CheckResult::pass("db_integrity", "ok"));
                     }
                     Ok(issues) => {
+                        let issue_code = integrity_issue_code(&issues, false);
                         checks.push(CheckResult::fail(
                             "db_integrity",
                             issues.join("; "),
-                            Some("corrupt_or_inconsistent_graph_rows"),
+                            Some(issue_code),
                         ));
                     }
                     Err(e) => {
@@ -414,6 +535,26 @@ pub fn run_doctor(cli: &Cli) -> Result<()> {
                         ));
                     }
                 }
+
+                match cs.noncanonical_repo_path_sources(100) {
+                    Ok(issues) if issues.is_empty() => {
+                        checks.push(CheckResult::pass("content_path_identity", "ok"));
+                    }
+                    Ok(issues) => {
+                        checks.push(CheckResult::fail(
+                            "content_path_identity",
+                            issues.join("; "),
+                            Some("noncanonical_path_rows"),
+                        ));
+                    }
+                    Err(e) => {
+                        checks.push(CheckResult::fail(
+                            "content_path_identity",
+                            e.to_string(),
+                            Some("noncanonical_path_rows"),
+                        ));
+                    }
+                }
             }
             // Content DB not yet created — not an error at this point.
             Err(_) => {
@@ -448,14 +589,19 @@ pub fn run_db_check(cli: &Cli) -> Result<()> {
     let dangling = store.dangling_edges(ORPHAN_LIMIT).unwrap_or_default();
 
     let ok = issues.is_empty() && orphans.is_empty() && dangling.is_empty();
+    let error_code = if ok {
+        "none"
+    } else {
+        integrity_issue_code(&issues, !orphans.is_empty() || !dangling.is_empty())
+    };
 
     if cli.json {
         let result = serde_json::json!({
             "db_path": db_path,
             "ok": ok,
-            "error_code": if ok { "none" } else { "corrupt_or_inconsistent_graph_rows" },
-            "message": graph_health_error_message(if ok { "none" } else { "corrupt_or_inconsistent_graph_rows" }),
-            "suggestions": graph_health_error_suggestions(if ok { "none" } else { "corrupt_or_inconsistent_graph_rows" }),
+            "error_code": error_code,
+            "message": graph_health_error_message(error_code),
+            "suggestions": graph_health_error_suggestions(error_code),
             "integrity_issues": issues,
             "orphan_node_count": orphans.len(),
             "dangling_edge_count": dangling.len(),

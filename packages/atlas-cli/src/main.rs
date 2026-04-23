@@ -23,6 +23,7 @@ fn main() {
         Command::Serve => commands::run_serve(&cli),
         Command::DbCheck => commands::run_db_check(&cli),
         Command::Doctor => commands::run_doctor(&cli),
+        Command::PurgeNoncanonical => commands::run_purge_noncanonical(&cli),
         Command::DebugGraph { .. } => commands::run_debug_graph(&cli),
         Command::ExplainQuery { .. } => commands::run_explain_query(&cli),
         Command::ExplainChange { .. } => commands::run_explain_change(&cli),

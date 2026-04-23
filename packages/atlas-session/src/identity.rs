@@ -13,9 +13,12 @@ pub struct SessionId(pub String);
 impl SessionId {
     /// Derive a session id from the three anchors.
     ///
-    /// `repo_root` and `worktree_id` should be normalized repo-relative or
-    /// absolute paths represented as UTF-8 strings.  `frontend` identifies the
-    /// calling surface (e.g. `"cli"`, `"mcp"`, `"vscode"`).
+    /// `repo_root` and `worktree_id` are path-derived hash seeds and must be
+    /// normalized before hashing. They are repo/worktree anchors rather than
+    /// repo-relative file identities; file-backed snapshot references are
+    /// canonicalized separately through `CanonicalRepoPath` before persistence.
+    /// `frontend` identifies the calling surface (e.g. `"cli"`, `"mcp"`,
+    /// `"vscode"`).
     pub fn derive(repo_root: &str, worktree_id: &str, frontend: &str) -> Self {
         let normalized_root = normalize_path(repo_root);
         let normalized_wt = normalize_path(worktree_id);

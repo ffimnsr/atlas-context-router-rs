@@ -1,6 +1,7 @@
 use rusqlite::params;
 
 use atlas_core::{AtlasError, Result};
+use atlas_repo::CanonicalRepoPath;
 
 use super::util::format_now;
 use super::{ContentStore, IndexState, IndexingStats, RetrievalIndexStatus};
@@ -159,5 +160,47 @@ impl ContentStore {
             )
             .map_err(|e| AtlasError::Db(e.to_string()))?;
         Ok(())
+    }
+
+    /// Return `sources` rows whose `repo_path` identity is not canonical.
+    pub fn noncanonical_repo_path_sources(&self, limit: usize) -> Result<Vec<String>> {
+        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT rowid, id, identity_value
+                 FROM sources
+                 WHERE identity_kind = 'repo_path'
+                   AND (
+                                                instr(identity_value, char(92)) > 0
+                     OR identity_value LIKE './%'
+                     OR identity_value LIKE '../%'
+                     OR identity_value LIKE '%/./%'
+                     OR identity_value LIKE '%/../%'
+                     OR identity_value LIKE '/%'
+                     OR identity_value LIKE '%//%'
+                     OR identity_value LIKE '%/'
+                   )
+                 LIMIT ?1",
+            )
+            .map_err(db_err)?;
+        let mut rows = stmt.query(params![limit as i64]).map_err(db_err)?;
+        let mut issues = Vec::new();
+        while let Some(row) = rows.next().map_err(db_err)? {
+            let rowid: i64 = row.get(0).map_err(db_err)?;
+            let source_id: String = row.get(1).map_err(db_err)?;
+            let identity_value: String = row.get(2).map_err(db_err)?;
+            match CanonicalRepoPath::from_repo_relative(&identity_value) {
+                Ok(canonical) if canonical.as_str() == identity_value => {}
+                Ok(canonical) => issues.push(format!(
+                    "noncanonical_path: table=sources rowid={rowid} source_id={source_id} identity_value={identity_value} canonical={}",
+                    canonical.as_str()
+                )),
+                Err(error) => issues.push(format!(
+                    "noncanonical_path: table=sources rowid={rowid} source_id={source_id} identity_value={identity_value} error={error}"
+                )),
+            }
+        }
+        Ok(issues)
     }
 }

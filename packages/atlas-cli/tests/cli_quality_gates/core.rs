@@ -127,6 +127,87 @@ fn doctor_reports_retrieval_index_unavailable_issue_code() {
 }
 
 #[test]
+fn doctor_reports_noncanonical_content_path_identity() {
+    let repo = setup_fixture_repo();
+
+    run_atlas(repo.path(), &["init"]);
+
+    let context_db = repo.path().join(".atlas").join("context.db");
+    let conn = Connection::open(&context_db).expect("open context db");
+    conn.execute(
+        "INSERT INTO sources (
+             id, session_id, source_type, label, repo_root, identity_kind, identity_value, created_at
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        rusqlite::params![
+            "bad-source",
+            "sess1",
+            "review_context",
+            "bad source",
+            repo.path().to_string_lossy().to_string(),
+            "repo_path",
+            "./src/lib.rs",
+            "2025-01-01T00:00:00Z"
+        ],
+    )
+    .expect("seed noncanonical source row");
+
+    let output = sanitized_command(env!("CARGO_BIN_EXE_atlas"))
+        .args(["--json", "doctor"])
+        .current_dir(repo.path())
+        .output()
+        .expect("run atlas doctor");
+    assert!(
+        !output.status.success(),
+        "doctor should fail when content path identity is noncanonical"
+    );
+
+    let doctor = read_json_data_output("doctor", output);
+    let content_check = doctor["checks"]
+        .as_array()
+        .expect("doctor checks array")
+        .iter()
+        .find(|item| item["check"] == json!("content_path_identity"))
+        .expect("content path identity check present");
+
+    assert_eq!(content_check["ok"], json!(false));
+    assert_eq!(content_check["issue_code"], json!("noncanonical_path_rows"));
+    assert!(content_check["detail"]
+        .as_str()
+        .is_some_and(|text| text.contains("canonical=src/lib.rs")));
+}
+
+#[test]
+fn purge_noncanonical_removes_context_and_session_but_keeps_graph_db() {
+    let repo = setup_fixture_repo();
+
+    run_atlas(repo.path(), &["init"]);
+
+    let atlas_dir = repo.path().join(".atlas");
+    let graph_db = atlas_dir.join("worldtree.db");
+    let context_db = atlas_dir.join("context.db");
+    let session_db = atlas_dir.join("session.db");
+
+    assert!(graph_db.exists(), "graph db should exist after init");
+    assert!(context_db.exists(), "context db should exist after init");
+    assert!(session_db.exists(), "session db should exist after init");
+
+    let purge = read_json_data_output(
+        "purge_noncanonical",
+        run_atlas(repo.path(), &["--json", "purge-noncanonical"]),
+    );
+
+    assert_eq!(purge["context_db"]["removed"], json!(true));
+    assert_eq!(purge["session_db"]["removed"], json!(true));
+    assert_eq!(purge["graph_db"]["preserved"], json!(true));
+    assert_eq!(purge["next_steps"][0], json!("atlas build"));
+    assert_eq!(purge["next_steps"][1], json!("atlas session start"));
+
+    assert!(graph_db.exists(), "graph db should be preserved");
+    assert!(!context_db.exists(), "context db should be removed");
+    assert!(!session_db.exists(), "session db should be removed");
+}
+
+#[test]
 fn installed_hook_runner_executes_lifecycle_restore_and_handoff_end_to_end() {
     let repo = setup_repo(&[
         (
@@ -222,6 +303,49 @@ fn installed_hook_runner_refreshes_graph_after_file_edit_end_to_end() {
 }
 
 #[test]
+fn installed_hook_runner_clears_stale_status_after_file_edit_end_to_end() {
+    let repo = setup_repo(&[
+        (
+            "Cargo.toml",
+            "[package]\nname = \"runner-refresh-status\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        ),
+        ("src/lib.rs", "pub fn alpha() {}\n"),
+    ]);
+
+    run_atlas(repo.path(), &["init"]);
+    run_atlas(repo.path(), &["build"]);
+    run_atlas(repo.path(), &["install", "--platform", "codex"]);
+
+    write_repo_file(repo.path(), "src/lib.rs", "pub fn alpha() {}\npub fn beta() {}\n");
+
+    let stale_before = read_json_data_output("status", run_atlas(repo.path(), &["--json", "status"]));
+    assert_eq!(stale_before["error_code"], json!("stale_index"), "status={stale_before:?}");
+    assert_eq!(stale_before["stale_index"], json!(true), "status={stale_before:?}");
+
+    run_installed_hook(
+        repo.path(),
+        "codex",
+        "post-tool-use",
+        r#"{"tool_name":"Write","changed_files":["src/lib.rs"]}"#,
+    );
+
+    let nodes = open_store(repo.path())
+        .nodes_by_file("src/lib.rs")
+        .expect("nodes by file after installed hook refresh");
+    assert!(
+        nodes
+            .iter()
+            .any(|node| node.qualified_name.ends_with("::fn::beta")),
+        "installed runner should refresh graph after file edit"
+    );
+
+    let stale_after = read_json_data_output("status", run_atlas(repo.path(), &["--json", "status"]));
+    assert_ne!(stale_after["error_code"], json!("stale_index"), "status={stale_after:?}");
+    assert_eq!(stale_after["stale_index"], json!(false), "status={stale_after:?}");
+    assert_eq!(stale_after["pending_graph_change_count"], json!(0), "status={stale_after:?}");
+}
+
+#[test]
 fn status_marks_stale_index_when_graph_relevant_file_changes() {
     let repo = setup_fixture_repo();
 
@@ -240,6 +364,22 @@ fn status_marks_stale_index_when_graph_relevant_file_changes() {
             .is_some_and(|files| files.iter().any(|path| path == "src/lib.rs")),
         "pending graph changes should mention modified source file: {status:?}"
     );
+}
+
+#[test]
+fn status_clears_stale_index_after_update_indexes_dirty_worktree() {
+    let repo = setup_fixture_repo();
+
+    run_atlas(repo.path(), &["init"]);
+    run_atlas(repo.path(), &["build"]);
+
+    rewrite_fixture_helper(repo.path());
+    run_atlas(repo.path(), &["update"]);
+
+    let status = read_json_data_output("status", run_atlas(repo.path(), &["--json", "status"]));
+    assert_ne!(status["error_code"], json!("stale_index"), "status={status:?}");
+    assert_eq!(status["stale_index"], json!(false), "status={status:?}");
+    assert_eq!(status["pending_graph_change_count"], json!(0), "status={status:?}");
 }
 
 #[test]

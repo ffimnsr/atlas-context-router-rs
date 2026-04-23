@@ -22,11 +22,10 @@ use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::{Context, Result};
 use atlas_core::model::{ChangeType, ChangedFile};
+use atlas_repo::{CanonicalRepoPath, DEFAULT_IGNORE_PATTERNS};
+use camino::Utf8Path;
 use notify::event::{ModifyKind, RenameMode};
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher, recommended_watcher};
-
-use atlas_repo::DEFAULT_IGNORE_PATTERNS;
-use camino::Utf8Path;
 
 // ── Public types ─────────────────────────────────────────────────────────────
 
@@ -152,12 +151,11 @@ impl FileWatcher {
     /// Convert an absolute path to a repo-relative forward-slash string,
     /// returning `None` if the path is outside `repo_root` or is the root itself.
     fn repo_rel(&self, abs: &Path) -> Option<String> {
-        let rel = abs.strip_prefix(&self.repo_root).ok()?;
-        if rel.as_os_str().is_empty() {
-            return None;
-        }
-        // Normalise Windows back-slashes to forward slashes on all platforms.
-        Some(rel.to_string_lossy().replace('\\', "/"))
+        let repo_root = Utf8Path::from_path(&self.repo_root)?;
+        let abs = Utf8Path::from_path(abs)?;
+        CanonicalRepoPath::from_watch_event_path(repo_root, abs)
+            .ok()
+            .map(|path| path.as_str().to_owned())
     }
 
     /// Return true if a repo-relative path should be ignored.
@@ -736,5 +734,14 @@ mod tests {
         assert_eq!(changes.len(), 1);
         assert_eq!(changes[0].path, "src/new.rs");
         assert!(matches!(changes[0].change_type, ChangeType::Renamed));
+    }
+
+    #[test]
+    fn repo_rel_canonicalizes_dot_segments() {
+        let root = Path::new("/repo");
+        let watcher = watcher_for_root(root);
+        let abs = Path::new("/repo/src/./nested/../lib.rs");
+
+        assert_eq!(watcher.repo_rel(abs).as_deref(), Some("src/lib.rs"));
     }
 }

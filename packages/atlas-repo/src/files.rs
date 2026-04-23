@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use camino::{Utf8Path, Utf8PathBuf};
 
-use crate::path::{git_cmd, to_forward_slashes};
+use crate::path::{CanonicalRepoPath, git_cmd};
 
 /// Default maximum file size in bytes (10 MiB).
 pub const DEFAULT_MAX_FILE_BYTES: u64 = 10 * 1024 * 1024;
@@ -259,8 +259,8 @@ fn git_ls_files_in_repo(repo_root: &Utf8Path) -> Result<Vec<Utf8PathBuf>> {
     let paths = stdout
         .split('\0')
         .filter(|s| !s.is_empty())
-        .map(|s| Utf8PathBuf::from(to_forward_slashes(s)))
-        .collect();
+        .map(|s| CanonicalRepoPath::from_git_diff_path(s).map(CanonicalRepoPath::into_path_buf))
+        .collect::<std::result::Result<Vec<Utf8PathBuf>, _>>()?;
 
     Ok(paths)
 }
@@ -301,7 +301,7 @@ fn git_submodule_paths(repo_root: &Utf8Path) -> Result<Vec<Utf8PathBuf>> {
         let Some((_, path)) = entry.split_once('\n') else {
             anyhow::bail!("malformed submodule path entry: {entry}");
         };
-        submodules.push(Utf8PathBuf::from(to_forward_slashes(path)));
+        submodules.push(CanonicalRepoPath::from_git_diff_path(path)?.into_path_buf());
     }
 
     Ok(submodules)

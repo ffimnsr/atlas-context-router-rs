@@ -19,6 +19,8 @@ fn meta(id: &str) -> SourceMeta {
         source_type: "review_context".into(),
         label: "test artifact".into(),
         repo_root: Some("/repo".into()),
+        identity_kind: "artifact_label".into(),
+        identity_value: "test artifact".into(),
     }
 }
 
@@ -28,8 +30,9 @@ fn index_and_retrieve_by_source_id() {
     store
         .index_artifact(meta("src-1"), "hello world", "text/plain")
         .unwrap();
-    let src = store.get_source("src-1").unwrap();
-    assert!(src.is_some());
+    let src = store.get_source("src-1").unwrap().unwrap();
+    assert_eq!(src.identity_kind, "artifact_label");
+    assert_eq!(src.identity_value, "test artifact");
     let chunks = store.get_chunks("src-1").unwrap();
     assert!(!chunks.is_empty());
 }
@@ -135,6 +138,36 @@ fn vocabulary_populated_on_index() {
         )
         .unwrap();
     assert_eq!(count, 1, "vocabulary should contain indexed terms");
+}
+
+#[test]
+fn noncanonical_repo_path_sources_are_reported() {
+    let store = open_store();
+    store
+        .conn
+        .execute(
+            "INSERT INTO sources (
+                 id, session_id, source_type, label, repo_root, identity_kind, identity_value, created_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            rusqlite::params![
+                "bad-source",
+                "sess1",
+                "review_context",
+                "bad source",
+                "/repo",
+                "repo_path",
+                "./src/lib.rs",
+                "2025-01-01T00:00:00Z"
+            ],
+        )
+        .unwrap();
+
+    let issues = store.noncanonical_repo_path_sources(100).unwrap();
+    assert!(issues.iter().any(|issue| {
+        issue.contains("noncanonical_path:")
+            && issue.contains("source_id=bad-source")
+            && issue.contains("canonical=src/lib.rs")
+    }));
 }
 
 #[test]

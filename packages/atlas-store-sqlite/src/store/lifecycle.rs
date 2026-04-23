@@ -1,4 +1,5 @@
 use atlas_core::{AtlasError, GraphStats, Node, Result};
+use atlas_repo::CanonicalRepoPath;
 use rusqlite::{Connection, OpenFlags, params};
 use tracing::{debug, info};
 
@@ -7,6 +8,8 @@ use crate::migrations::MIGRATIONS;
 use super::{DanglingEdge, Store, helpers::row_to_node};
 
 impl Store {
+    const NONCANONICAL_PATH_LIMIT: usize = 100;
+
     pub fn open(path: &str) -> Result<Self> {
         let conn = Connection::open_with_flags(
             path,
@@ -239,6 +242,56 @@ impl Store {
                 issues.push(format!(
                     "foreign_key_check: table={table} rowid={rowid:?} parent={parent} fkid={fkid}"
                 ));
+            }
+        }
+
+        issues.extend(self.noncanonical_path_rows(Self::NONCANONICAL_PATH_LIMIT)?);
+
+        Ok(issues)
+    }
+
+    /// Return persisted graph path rows that are not in canonical repo-relative form.
+    pub fn noncanonical_path_rows(&self, limit: usize) -> Result<Vec<String>> {
+        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
+        let mut issues = Vec::new();
+
+        for (table, column) in [
+            ("files", "path"),
+            ("nodes", "file_path"),
+            ("edges", "file_path"),
+        ] {
+            if issues.len() >= limit {
+                break;
+            }
+            let remaining = (limit - issues.len()) as i64;
+            let sql = format!(
+                "SELECT rowid, {column}
+                 FROM {table}
+                 WHERE instr({column}, char(92)) > 0
+                    OR {column} LIKE './%'
+                    OR {column} LIKE '../%'
+                    OR {column} LIKE '%/./%'
+                    OR {column} LIKE '%/../%'
+                    OR {column} LIKE '/%'
+                    OR {column} LIKE '%//%'
+                    OR {column} LIKE '%/'
+                 LIMIT ?1"
+            );
+            let mut stmt = self.conn.prepare(&sql).map_err(db_err)?;
+            let mut rows = stmt.query(params![remaining]).map_err(db_err)?;
+            while let Some(row) = rows.next().map_err(db_err)? {
+                let rowid: i64 = row.get(0).map_err(db_err)?;
+                let path: String = row.get(1).map_err(db_err)?;
+                match CanonicalRepoPath::from_repo_relative(&path) {
+                    Ok(canonical) if canonical.as_str() == path => {}
+                    Ok(canonical) => issues.push(format!(
+                        "noncanonical_path: table={table} rowid={rowid} path={path} canonical={}",
+                        canonical.as_str()
+                    )),
+                    Err(error) => issues.push(format!(
+                        "noncanonical_path: table={table} rowid={rowid} path={path} error={error}"
+                    )),
+                }
             }
         }
 

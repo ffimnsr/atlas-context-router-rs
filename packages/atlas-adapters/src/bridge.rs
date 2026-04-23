@@ -32,6 +32,7 @@ use tracing::warn;
 use atlas_contentstore::{ContentStore, SourceMeta};
 use atlas_session::{NewSessionEvent, SessionEventType, SessionId, SessionStore};
 
+use crate::artifacts::{ArtifactIdentity, generate_source_id};
 use crate::redact::redact_payload;
 
 // ── Constants ───────────────────────────────────────────────────────────────
@@ -223,8 +224,8 @@ pub fn ingest_bridge_file(
     }
 
     // Index the bridge markdown in the content store for retrieval.
-    // Use the file path as the source id (hash of path + session_id).
-    let source_id = source_id_for_bridge(path, &envelope.session_id);
+    let bridge_identity = ArtifactIdentity::synthetic_path(path.to_string_lossy().into_owned());
+    let source_id = generate_source_id(&bridge_identity, &raw);
     let meta = SourceMeta {
         id: source_id,
         session_id: Some(envelope.session_id.clone()),
@@ -236,6 +237,8 @@ pub fn ingest_bridge_file(
             envelope.created_at,
         ),
         repo_root: None,
+        identity_kind: bridge_identity.kind_str().to_owned(),
+        identity_value: bridge_identity.value().to_owned(),
     };
 
     if let Err(e) = content_store.route_output(meta, &raw, "text/markdown") {
@@ -321,17 +324,6 @@ fn parse_bridge_envelope(markdown: &str) -> Option<BridgeEnvelope> {
     let end = markdown[after..].find("\n```")?;
     let json_str = &markdown[after..after + end];
     serde_json::from_str(json_str).ok()
-}
-
-/// Generate a stable source id for a bridge file based on its path.
-fn source_id_for_bridge(path: &Path, session_id: &str) -> String {
-    use sha2::{Digest, Sha256};
-    let mut h = Sha256::new();
-    h.update(path.to_string_lossy().as_bytes());
-    h.update(b"\x00");
-    h.update(session_id.as_bytes());
-    let digest = h.finalize();
-    digest.iter().take(16).map(|b| format!("{b:02x}")).collect()
 }
 
 fn format_now_rfc3339() -> String {
@@ -485,6 +477,13 @@ mod tests {
         let appended = ingest_bridge_file(&path, &mut ss, &mut cs);
         assert_eq!(appended, 2, "both events must be appended");
         assert!(!path.exists(), "bridge file must be removed after ingest");
+
+        let hits = cs
+            .search_with_fallback("atlas build", &atlas_contentstore::SearchFilters::default())
+            .unwrap();
+        let source = cs.get_source(&hits[0].source_id).unwrap().unwrap();
+        assert_eq!(source.identity_kind, "synthetic_path");
+        assert!(source.identity_value.contains("bridge-"));
     }
 
     #[test]

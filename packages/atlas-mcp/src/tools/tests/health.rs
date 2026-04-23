@@ -116,6 +116,41 @@ fn status_stale_graph_returns_error_code() {
 }
 
 #[test]
+fn status_dirty_file_is_not_stale_after_update_indexes_worktree() {
+    let fixture = setup_git_mcp_fixture();
+    write_repo_file(
+        fixture._dir.path(),
+        "src/service.rs",
+        "pub fn compute() -> i32 { 2 }\n",
+    );
+
+    atlas_engine::update_graph(
+        camino::Utf8Path::new(&fixture.repo_root),
+        &fixture.db_path,
+        &atlas_engine::UpdateOptions::default(),
+    )
+    .expect("update graph");
+
+    let args = serde_json::json!({ "output_format": "json" });
+    let resp =
+        call("status", Some(&args), &fixture.repo_root, &fixture.db_path).expect("status call");
+    let text = unwrap_tool_text(resp);
+    let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
+
+    assert_ne!(
+        v["error_code"].as_str(),
+        Some("stale_index"),
+        "status={v:?}"
+    );
+    assert_eq!(v["stale_index"].as_bool(), Some(false), "status={v:?}");
+    assert_eq!(
+        v["pending_graph_change_count"].as_u64(),
+        Some(0),
+        "status={v:?}"
+    );
+}
+
+#[test]
 fn status_schema_mismatch_returns_error_code() {
     let dir = tempfile::tempdir().expect("tempdir");
     let db_path = dir.path().join("atlas.db");
@@ -254,6 +289,35 @@ fn doctor_retrieval_index_unavailable_sets_issue_code() {
     assert_eq!(
         retrieval["issue_code"].as_str(),
         Some("retrieval_index_unavailable")
+    );
+}
+
+#[test]
+fn db_check_reports_noncanonical_path_rows() {
+    let fixture = setup_mcp_fixture();
+    let conn = Connection::open(&fixture.db_path).expect("open db");
+    conn.execute(
+        "INSERT INTO files (path, language, hash, size, indexed_at)
+         VALUES (?1, 'rust', 'h1', 0, '2025-01-01T00:00:00Z')",
+        ["./src/lib.rs"],
+    )
+    .expect("seed noncanonical file row");
+
+    let args = serde_json::json!({ "output_format": "json" });
+    let resp = call("db_check", Some(&args), "/repo", &fixture.db_path).expect("db_check call");
+    let text = unwrap_tool_text(resp);
+    let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
+
+    assert_eq!(v["ok"].as_bool(), Some(false));
+    assert_eq!(v["error_code"].as_str(), Some("noncanonical_path_rows"));
+    assert!(
+        v["integrity_issues"]
+            .as_array()
+            .expect("integrity_issues array")
+            .iter()
+            .any(|issue| issue
+                .as_str()
+                .is_some_and(|text| text.contains("noncanonical_path:")))
     );
 }
 

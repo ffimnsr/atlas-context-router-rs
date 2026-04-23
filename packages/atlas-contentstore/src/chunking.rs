@@ -31,7 +31,9 @@ pub struct Chunk {
 ///
 /// The hash is SHA-256 over `source_id + NUL + content.trim()`.  Moving a
 /// chunk to a different index does not change its `chunk_id`; only a change
-/// to the source path or the chunk's own content produces a new id.
+/// to the source path or the chunk's own content produces a new id. File-backed
+/// callers must therefore seed `source_id` from canonical repo-path identity
+/// first, not from raw path strings.
 pub fn compute_chunk_id(source_id: &str, content: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(source_id.as_bytes());

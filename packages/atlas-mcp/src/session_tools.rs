@@ -14,7 +14,8 @@
 use anyhow::Result;
 use atlas_adapters::bridge::{bridge_file_count, purge_all_bridge_files};
 use atlas_adapters::{
-    derive_bridge_dir, derive_content_db_path, derive_session_db_path, generate_source_id,
+    ArtifactIdentity, derive_bridge_dir, derive_content_db_path, derive_session_db_path,
+    generate_source_id,
 };
 use atlas_contentstore::{ContentStore, OutputRouting, SearchFilters, SourceMeta};
 use atlas_session::{
@@ -292,6 +293,14 @@ pub fn tool_search_saved_context(
         chunk_index: usize,
         #[serde(skip_serializing_if = "Option::is_none")]
         title: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        label: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        source_type: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        identity_kind: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        identity_value: Option<String>,
         /// First 256 chars only — full content available via source_id.
         preview: String,
         content_type: String,
@@ -300,12 +309,19 @@ pub fn tool_search_saved_context(
     let results: Vec<ChunkPreview> = chunks
         .into_iter()
         .take(limit)
-        .map(|c| ChunkPreview {
-            source_id: c.source_id,
-            chunk_index: c.chunk_index,
-            title: c.title,
-            preview: c.content.chars().take(256).collect(),
-            content_type: c.content_type,
+        .map(|c| {
+            let source = cs.get_source(&c.source_id).ok().flatten();
+            ChunkPreview {
+                source_id: c.source_id,
+                chunk_index: c.chunk_index,
+                title: c.title,
+                label: source.as_ref().map(|row| row.label.clone()),
+                source_type: source.as_ref().map(|row| row.source_type.clone()),
+                identity_kind: source.as_ref().map(|row| row.identity_kind.clone()),
+                identity_value: source.as_ref().map(|row| row.identity_value.clone()),
+                preview: c.content.chars().take(256).collect(),
+                content_type: c.content_type,
+            }
         })
         .collect();
 
@@ -327,8 +343,8 @@ pub fn tool_search_saved_context(
 /// - Medium (≤ 4 KB) → indexed, preview returned.
 /// - Large           → indexed, pointer (`source_id`) returned only.
 ///
-/// The `source_id` is derived from `label` + content hash so identical
-/// content is deduplicated automatically.
+/// The `source_id` is derived from a structured identity seed plus content
+/// hash so identical logical artifacts are deduplicated automatically.
 pub fn tool_save_context_artifact(
     args: Option<&Value>,
     repo_root: &str,
@@ -358,7 +374,8 @@ pub fn tool_save_context_artifact(
         .map(str::to_owned)
         .unwrap_or_else(|| mcp_session_id(repo_root).as_str().to_string());
 
-    let source_id = generate_source_id(label, content);
+    let identity = ArtifactIdentity::artifact_label(label);
+    let source_id = generate_source_id(&identity, content);
 
     let content_db = derive_content_db_path(db_path);
     let mut cs = ContentStore::open(&content_db)?;
@@ -370,6 +387,8 @@ pub fn tool_save_context_artifact(
         source_type: source_type.to_string(),
         label: label.to_string(),
         repo_root: Some(repo_root.to_string()),
+        identity_kind: identity.kind_str().to_owned(),
+        identity_value: identity.value().to_owned(),
     };
 
     let routing = cs.route_output(meta, content, content_type)?;
@@ -601,6 +620,8 @@ pub fn tool_read_saved_context(
         "found": true,
         "source_id": source.id,
         "artifact_kind": source.source_type,
+        "identity_kind": source.identity_kind,
+        "identity_value": source.identity_value,
         "created_at": source.created_at,
         "session_id": source.session_id,
         "label": source.label,
@@ -789,6 +810,27 @@ mod tests {
     }
 
     #[test]
+    fn search_saved_context_returns_identity_metadata() {
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join(".atlas")).unwrap();
+        let db_path = setup_db_path(&dir);
+        let repo_root = dir.path().to_str().unwrap();
+
+        let content = medium_content("identity");
+        let _source_id = save_indexed_artifact(repo_root, &db_path, "my label", &content, None);
+
+        let args = serde_json::json!({"query": "identity"});
+        let result =
+            tool_search_saved_context(Some(&args), repo_root, &db_path, OutputFormat::Json)
+                .unwrap();
+        let body: Value =
+            serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+        let hit = &body["results"].as_array().unwrap()[0];
+        assert_eq!(hit["identity_kind"].as_str().unwrap(), "artifact_label");
+        assert_eq!(hit["identity_value"].as_str().unwrap(), "my label");
+    }
+
+    #[test]
     fn test_get_context_stats_empty() {
         let dir = TempDir::new().unwrap();
         let db_path = setup_db_path(&dir);
@@ -957,6 +999,8 @@ mod tests {
         assert!(body["found"].as_bool().unwrap());
         assert_eq!(body["source_id"].as_str().unwrap(), source_id);
         assert_eq!(body["label"].as_str().unwrap(), "my label");
+        assert_eq!(body["identity_kind"].as_str().unwrap(), "artifact_label");
+        assert_eq!(body["identity_value"].as_str().unwrap(), "my label");
         assert!(body["created_at"].is_string());
         assert!(body["artifact_kind"].is_string());
         assert!(body["chunk_count"].as_u64().unwrap() > 0);

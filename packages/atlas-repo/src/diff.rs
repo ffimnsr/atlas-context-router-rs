@@ -3,7 +3,7 @@ use atlas_core::model::{ChangeType, ChangedFile};
 use camino::{Utf8Path, Utf8PathBuf};
 use std::collections::HashSet;
 
-use crate::path::{git_cmd, to_forward_slashes};
+use crate::path::{CanonicalRepoPath, git_cmd, to_forward_slashes};
 
 /// Specification of what to diff against.
 #[derive(Debug, Clone)]
@@ -640,7 +640,7 @@ fn parse_name_status_z(raw: &str) -> Result<Vec<ChangedFile>> {
 
         match status_char {
             'A' => {
-                let path = to_forward_slashes(consume(&mut i, &parts)?);
+                let path = canonical_git_diff_path(consume(&mut i, &parts)?)?;
                 results.push(ChangedFile {
                     path,
                     change_type: ChangeType::Added,
@@ -648,7 +648,7 @@ fn parse_name_status_z(raw: &str) -> Result<Vec<ChangedFile>> {
                 });
             }
             'M' => {
-                let path = to_forward_slashes(consume(&mut i, &parts)?);
+                let path = canonical_git_diff_path(consume(&mut i, &parts)?)?;
                 results.push(ChangedFile {
                     path,
                     change_type: ChangeType::Modified,
@@ -656,7 +656,7 @@ fn parse_name_status_z(raw: &str) -> Result<Vec<ChangedFile>> {
                 });
             }
             'D' => {
-                let path = to_forward_slashes(consume(&mut i, &parts)?);
+                let path = canonical_git_diff_path(consume(&mut i, &parts)?)?;
                 results.push(ChangedFile {
                     path,
                     change_type: ChangeType::Deleted,
@@ -664,8 +664,8 @@ fn parse_name_status_z(raw: &str) -> Result<Vec<ChangedFile>> {
                 });
             }
             'R' => {
-                let old_path = to_forward_slashes(consume(&mut i, &parts)?);
-                let new_path = to_forward_slashes(consume(&mut i, &parts)?);
+                let old_path = canonical_git_diff_path(consume(&mut i, &parts)?)?;
+                let new_path = canonical_git_diff_path(consume(&mut i, &parts)?)?;
                 results.push(ChangedFile {
                     path: new_path,
                     change_type: ChangeType::Renamed,
@@ -673,8 +673,8 @@ fn parse_name_status_z(raw: &str) -> Result<Vec<ChangedFile>> {
                 });
             }
             'C' => {
-                let old_path = to_forward_slashes(consume(&mut i, &parts)?);
-                let new_path = to_forward_slashes(consume(&mut i, &parts)?);
+                let old_path = canonical_git_diff_path(consume(&mut i, &parts)?)?;
+                let new_path = canonical_git_diff_path(consume(&mut i, &parts)?)?;
                 results.push(ChangedFile {
                     path: new_path,
                     change_type: ChangeType::Copied,
@@ -692,6 +692,12 @@ fn parse_name_status_z(raw: &str) -> Result<Vec<ChangedFile>> {
     }
 
     Ok(results)
+}
+
+fn canonical_git_diff_path(path: &str) -> Result<String> {
+    Ok(CanonicalRepoPath::from_git_diff_path(path)?
+        .as_str()
+        .to_owned())
 }
 
 fn consume<'a>(i: &mut usize, parts: &[&'a str]) -> Result<&'a str> {

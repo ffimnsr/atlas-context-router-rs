@@ -854,6 +854,13 @@ Do not treat `query_graph` as caller/callee search. Fall back to file tools **on
 - If `atlas_provenance.db_path` points at unexpected database, stop and call `status` or `doctor` before trusting results.
 - If `atlas_freshness.stale` is true, prefer `build_or_update_graph` before making claims about current code.
 - Treat missing optional `atlas_*` fields as "not applicable", not as tool failure.
+
+### Path Identity Invariant
+
+- Canonicalize repo paths before hashing, persistence, dedupe, cache keys, source IDs, chunk IDs, snapshot file references, or qualified-name prefixes.
+- Apply same rule to future sidecar/cache/index keys, including in-memory parser caches and retrieval sidecars keyed by repo files.
+- Use `atlas_repo::CanonicalRepoPath` or helper APIs built on it. Do not add local path-normalization helpers for path-derived identity.
+- If `doctor` or `db_check` reports `noncanonical_path_rows`, prefer rebuild from clean canonical inputs instead of in-place row rewrites.
 <!-- /atlas MCP tools -->
 "#;
 
@@ -1745,6 +1752,8 @@ mod tests {
         assert!(INSTRUCTIONS_SECTION.contains("atlas_provenance"));
         assert!(INSTRUCTIONS_SECTION.contains("atlas_freshness"));
         assert!(INSTRUCTIONS_SECTION.contains("status` or `doctor"));
+        assert!(INSTRUCTIONS_SECTION.contains("Canonicalize repo paths before hashing"));
+        assert!(INSTRUCTIONS_SECTION.contains("noncanonical_path_rows"));
     }
 
     #[test]
