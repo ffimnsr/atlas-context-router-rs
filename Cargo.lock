@@ -142,6 +142,7 @@ dependencies = [
  "console",
  "dialoguer",
  "fs2",
+ "libc",
  "regex",
  "rusqlite",
  "serde",

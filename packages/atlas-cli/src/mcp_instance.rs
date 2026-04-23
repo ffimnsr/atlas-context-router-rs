@@ -230,7 +230,26 @@ fn process_exists(pid: u32) -> bool {
     {
         Path::new("/proc").join(pid.to_string()).exists()
     }
-    #[cfg(not(target_os = "linux"))]
+
+    #[cfg(all(unix, not(target_os = "linux")))]
+    {
+        if pid == 0 || pid > i32::MAX as u32 {
+            return false;
+        }
+
+        let result = unsafe { libc::kill(pid as i32, 0) };
+        if result == 0 {
+            return true;
+        }
+
+        match std::io::Error::last_os_error().raw_os_error() {
+            Some(libc::EPERM) => true,
+            Some(libc::ESRCH) => false,
+            _ => false,
+        }
+    }
+
+    #[cfg(not(unix))]
     {
         let _ = pid;
         true
@@ -336,7 +355,7 @@ mod tests {
 
         assert_eq!(instance.repo_root, expected_repo);
         assert_eq!(instance.db_path, expected_db);
-        let instance_root = repo
+        let instance_root = PathBuf::from(&instance.repo_root)
             .join(".atlas")
             .join(INSTANCE_DIR_NAME)
             .join(&instance.instance_id);
