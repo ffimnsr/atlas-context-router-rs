@@ -1,12 +1,15 @@
 use anyhow::{Context, Result};
-use atlas_core::NodeKind;
+use atlas_core::{BudgetManager, BudgetPolicy, BudgetStatus, NodeKind};
 use atlas_reasoning::{
     AnalysisRankingPrimitives, AnalysisTrimmingPrimitives, ReasoningEngine,
     sort_dead_code_candidates, sort_dependency_result, sort_refactor_safety_result,
     sort_removal_result,
 };
 
-use super::shared::{bool_arg, open_store, str_arg, string_array_arg, tool_result_value, u64_arg};
+use super::shared::{
+    bool_arg, inject_budget_metadata, open_store, str_arg, string_array_arg, tool_result_value,
+    u64_arg,
+};
 
 pub(super) fn tool_analyze_safety(
     args: Option<&serde_json::Value>,
@@ -39,7 +42,9 @@ pub(super) fn tool_analyze_safety(
         "suggested_validations": result.safety.suggested_validations,
         "evidence": result.evidence.iter().map(|e| serde_json::json!({ "key": e.key, "value": e.value })).collect::<Vec<_>>(),
     });
-    tool_result_value(&payload, output_format)
+    let mut response = tool_result_value(&payload, output_format)?;
+    inject_budget_metadata(&mut response, &result.budget);
+    Ok(response)
 }
 
 pub(super) fn tool_analyze_remove(
@@ -56,11 +61,23 @@ pub(super) fn tool_analyze_remove(
     let max_depth = u64_arg(args, "max_depth").unwrap_or(3) as u32;
     let max_nodes = u64_arg(args, "max_nodes").unwrap_or(200) as usize;
     // Compact output defaults — caller may raise these.
-    let max_files = u64_arg(args, "max_files").unwrap_or(20) as usize;
-    let max_edges = u64_arg(args, "max_edges").unwrap_or(50) as usize;
+    let requested_max_files = u64_arg(args, "max_files").unwrap_or(20) as usize;
+    let requested_max_edges = u64_arg(args, "max_edges").unwrap_or(50) as usize;
 
     let store = open_store(db_path)?;
     let engine = ReasoningEngine::new(&store);
+    let policy = BudgetPolicy::default();
+    let mut budgets = BudgetManager::new();
+    let max_files = budgets.resolve_limit(
+        policy.review_context_extraction.files,
+        "review_context_extraction.max_files",
+        Some(requested_max_files),
+    );
+    let max_edges = budgets.resolve_limit(
+        policy.mcp_cli_payload_serialization.edges,
+        "mcp_cli_payload_serialization.max_edges",
+        Some(requested_max_edges),
+    );
     let ranking = AnalysisRankingPrimitives::default();
     let trimming = AnalysisTrimmingPrimitives::default();
     let symbol_refs: Vec<&str> = symbols.iter().map(String::as_str).collect();
@@ -111,7 +128,24 @@ pub(super) fn tool_analyze_remove(
         "uncertainty_flags": result.uncertainty_flags,
         "evidence": result.evidence.iter().map(|e| serde_json::json!({ "key": e.key, "value": e.value })).collect::<Vec<_>>(),
     });
-    tool_result_value(&payload, output_format)
+    let mut response = tool_result_value(&payload, output_format)?;
+    let budget = if result.budget.budget_hit {
+        result.budget.clone()
+    } else {
+        let local_budget =
+            budgets.summary("review_context_extraction.max_files", max_files, max_files);
+        if matches!(local_budget.budget_status, BudgetStatus::WithinBudget) {
+            budgets.summary(
+                "mcp_cli_payload_serialization.max_edges",
+                max_edges,
+                max_edges,
+            )
+        } else {
+            local_budget
+        }
+    };
+    inject_budget_metadata(&mut response, &budget);
+    Ok(response)
 }
 
 pub(super) fn tool_analyze_dead_code(
@@ -122,7 +156,7 @@ pub(super) fn tool_analyze_dead_code(
     let allowlist = string_array_arg(args, "allowlist").unwrap_or_default();
     let subpath = str_arg(args, "subpath")?.map(str::to_owned);
     // Compact default: 50 candidates. Caller may raise with `limit`.
-    let limit = u64_arg(args, "limit").unwrap_or(50) as usize;
+    let requested_limit = u64_arg(args, "limit").unwrap_or(50) as usize;
     let summary = bool_arg(args, "summary").unwrap_or(false);
     let exclude_kind_strs = string_array_arg(args, "exclude_kind").unwrap_or_default();
     let exclude_kinds: Vec<NodeKind> = exclude_kind_strs
@@ -134,6 +168,13 @@ pub(super) fn tool_analyze_dead_code(
 
     let store = open_store(db_path)?;
     let engine = ReasoningEngine::new(&store);
+    let policy = BudgetPolicy::default();
+    let mut budgets = BudgetManager::new();
+    let limit = budgets.resolve_limit(
+        policy.query_candidates_and_seeds.candidates,
+        "query_candidates_and_seeds.max_candidates",
+        Some(requested_limit),
+    );
     let ranking = AnalysisRankingPrimitives::default();
     let trimming = AnalysisTrimmingPrimitives::default();
     let allowlist_refs: Vec<&str> = allowlist.iter().map(String::as_str).collect();
@@ -154,7 +195,16 @@ pub(super) fn tool_analyze_dead_code(
             "applied_subpath": subpath,
             "excluded_kinds": exclude_kind_strs,
         });
-        return tool_result_value(&payload, output_format);
+        let mut response = tool_result_value(&payload, output_format)?;
+        inject_budget_metadata(
+            &mut response,
+            &budgets.summary(
+                "query_candidates_and_seeds.max_candidates",
+                limit,
+                candidates.len(),
+            ),
+        );
+        return Ok(response);
     }
 
     let omitted = candidates
@@ -185,7 +235,16 @@ pub(super) fn tool_analyze_dead_code(
         "applied_subpath": subpath,
         "excluded_kinds": exclude_kind_strs,
     });
-    tool_result_value(&payload, output_format)
+    let mut response = tool_result_value(&payload, output_format)?;
+    inject_budget_metadata(
+        &mut response,
+        &budgets.summary(
+            "query_candidates_and_seeds.max_candidates",
+            limit,
+            candidates.len(),
+        ),
+    );
+    Ok(response)
 }
 
 pub(super) fn tool_analyze_dependency(
@@ -235,5 +294,7 @@ pub(super) fn tool_analyze_dependency(
         "uncertainty_flags": result.uncertainty_flags,
         "evidence": result.evidence.iter().map(|e| serde_json::json!({ "key": e.key, "value": e.value })).collect::<Vec<_>>(),
     });
-    tool_result_value(&payload, output_format)
+    let mut response = tool_result_value(&payload, output_format)?;
+    inject_budget_metadata(&mut response, &result.budget);
+    Ok(response)
 }

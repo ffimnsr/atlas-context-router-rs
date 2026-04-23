@@ -8,6 +8,7 @@ use super::Store;
 pub enum GraphBuildState {
     Building,
     Built,
+    Degraded,
     BuildFailed,
 }
 
@@ -15,6 +16,7 @@ impl GraphBuildState {
     fn from_str(s: &str) -> Self {
         match s {
             "building" => Self::Building,
+            "degraded" => Self::Degraded,
             "build_failed" => Self::BuildFailed,
             _ => Self::Built,
         }
@@ -28,21 +30,41 @@ pub struct GraphBuildStatus {
     pub state: GraphBuildState,
     pub files_discovered: i64,
     pub files_processed: i64,
+    pub files_accepted: i64,
+    pub files_skipped_by_byte_budget: i64,
     pub files_failed: i64,
+    pub bytes_accepted: i64,
+    pub bytes_skipped: i64,
     pub nodes_written: i64,
     pub edges_written: i64,
+    pub budget_stop_reason: Option<String>,
     pub last_built_at: Option<String>,
     pub last_error: Option<String>,
     pub updated_at: String,
 }
 
-/// Counters provided when finishing a successful build.
+/// Counters provided when finishing a successful or degraded build.
 pub struct BuildFinishStats {
+    pub state: GraphBuildState,
     pub files_discovered: i64,
     pub files_processed: i64,
+    pub files_accepted: i64,
+    pub files_skipped_by_byte_budget: i64,
     pub files_failed: i64,
+    pub bytes_accepted: i64,
+    pub bytes_skipped: i64,
     pub nodes_written: i64,
     pub edges_written: i64,
+    pub budget_stop_reason: Option<String>,
+}
+
+fn state_as_str(state: &GraphBuildState) -> &'static str {
+    match state {
+        GraphBuildState::Building => "building",
+        GraphBuildState::Built => "built",
+        GraphBuildState::Degraded => "degraded",
+        GraphBuildState::BuildFailed => "build_failed",
+    }
 }
 
 fn row_to_build_status(row: &Row<'_>) -> rusqlite::Result<GraphBuildStatus> {
@@ -52,12 +74,17 @@ fn row_to_build_status(row: &Row<'_>) -> rusqlite::Result<GraphBuildStatus> {
         state: GraphBuildState::from_str(&state_str),
         files_discovered: row.get(2)?,
         files_processed: row.get(3)?,
-        files_failed: row.get(4)?,
-        nodes_written: row.get(5)?,
-        edges_written: row.get(6)?,
-        last_built_at: row.get(7)?,
-        last_error: row.get(8)?,
-        updated_at: row.get(9)?,
+        files_accepted: row.get(4)?,
+        files_skipped_by_byte_budget: row.get(5)?,
+        files_failed: row.get(6)?,
+        bytes_accepted: row.get(7)?,
+        bytes_skipped: row.get(8)?,
+        nodes_written: row.get(9)?,
+        edges_written: row.get(10)?,
+        budget_stop_reason: row.get(11)?,
+        last_built_at: row.get(12)?,
+        last_error: row.get(13)?,
+        updated_at: row.get(14)?,
     })
 }
 
@@ -67,16 +94,23 @@ impl Store {
         self.conn
             .execute(
                 "INSERT INTO graph_build_state
-                    (repo_root, state, files_discovered, files_processed, files_failed,
-                     nodes_written, edges_written, last_built_at, last_error, updated_at)
-                 VALUES (?1, 'building', 0, 0, 0, 0, 0, NULL, NULL, datetime('now'))
+                    (repo_root, state, files_discovered, files_processed, files_accepted,
+                     files_skipped_by_byte_budget, files_failed, bytes_accepted, bytes_skipped,
+                     nodes_written, edges_written, budget_stop_reason, last_built_at, last_error,
+                     updated_at)
+                 VALUES (?1, 'building', 0, 0, 0, 0, 0, 0, 0, 0, 0, NULL, NULL, NULL, datetime('now'))
                  ON CONFLICT(repo_root) DO UPDATE SET
                     state            = 'building',
                     files_discovered = 0,
                     files_processed  = 0,
+                    files_accepted   = 0,
+                    files_skipped_by_byte_budget = 0,
                     files_failed     = 0,
+                    bytes_accepted   = 0,
+                    bytes_skipped    = 0,
                     nodes_written    = 0,
                     edges_written    = 0,
+                    budget_stop_reason = NULL,
                     last_error       = NULL,
                     updated_at       = datetime('now')",
                 params![repo_root],
@@ -90,26 +124,39 @@ impl Store {
         self.conn
             .execute(
                 "INSERT INTO graph_build_state
-                    (repo_root, state, files_discovered, files_processed, files_failed,
-                     nodes_written, edges_written, last_built_at, last_error, updated_at)
-                 VALUES (?1, 'built', ?2, ?3, ?4, ?5, ?6, datetime('now'), NULL, datetime('now'))
+                    (repo_root, state, files_discovered, files_processed, files_accepted,
+                     files_skipped_by_byte_budget, files_failed, bytes_accepted, bytes_skipped,
+                     nodes_written, edges_written, budget_stop_reason, last_built_at, last_error,
+                     updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, datetime('now'), NULL, datetime('now'))
                  ON CONFLICT(repo_root) DO UPDATE SET
-                    state            = 'built',
-                    files_discovered = ?2,
-                    files_processed  = ?3,
-                    files_failed     = ?4,
-                    nodes_written    = ?5,
-                    edges_written    = ?6,
+                    state            = ?2,
+                    files_discovered = ?3,
+                    files_processed  = ?4,
+                    files_accepted   = ?5,
+                    files_skipped_by_byte_budget = ?6,
+                    files_failed     = ?7,
+                    bytes_accepted   = ?8,
+                    bytes_skipped    = ?9,
+                    nodes_written    = ?10,
+                    edges_written    = ?11,
+                    budget_stop_reason = ?12,
                     last_built_at    = datetime('now'),
                     last_error       = NULL,
                     updated_at       = datetime('now')",
                 params![
                     repo_root,
+                    state_as_str(&stats.state),
                     stats.files_discovered,
                     stats.files_processed,
+                    stats.files_accepted,
+                    stats.files_skipped_by_byte_budget,
                     stats.files_failed,
+                    stats.bytes_accepted,
+                    stats.bytes_skipped,
                     stats.nodes_written,
                     stats.edges_written,
+                    stats.budget_stop_reason,
                 ],
             )
             .map_err(|e| AtlasError::Db(e.to_string()))?;
@@ -139,8 +186,10 @@ impl Store {
         let mut stmt = self
             .conn
             .prepare(
-                "SELECT repo_root, state, files_discovered, files_processed, files_failed,
-                        nodes_written, edges_written, last_built_at, last_error, updated_at
+                "SELECT repo_root, state, files_discovered, files_processed,
+                    files_accepted, files_skipped_by_byte_budget, files_failed,
+                    bytes_accepted, bytes_skipped, nodes_written, edges_written,
+                    budget_stop_reason, last_built_at, last_error, updated_at
                  FROM graph_build_state
                  WHERE repo_root = ?1",
             )
@@ -160,8 +209,10 @@ impl Store {
         let mut stmt = self
             .conn
             .prepare(
-                "SELECT repo_root, state, files_discovered, files_processed, files_failed,
-                        nodes_written, edges_written, last_built_at, last_error, updated_at
+                "SELECT repo_root, state, files_discovered, files_processed,
+                    files_accepted, files_skipped_by_byte_budget, files_failed,
+                    bytes_accepted, bytes_skipped, nodes_written, edges_written,
+                    budget_stop_reason, last_built_at, last_error, updated_at
                  FROM graph_build_state
                  ORDER BY repo_root",
             )

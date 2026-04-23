@@ -206,6 +206,7 @@ fn collect_status_diagnostics(ctx: &StatusPayloadContext<'_>) -> StatusDiagnosti
     let build_state = build_status.as_ref().map(|bs| match bs.state {
         atlas_store_sqlite::GraphBuildState::Building => "building",
         atlas_store_sqlite::GraphBuildState::Built => "built",
+        atlas_store_sqlite::GraphBuildState::Degraded => "degraded",
         atlas_store_sqlite::GraphBuildState::BuildFailed => "build_failed",
     });
     let graph_built = build_state == Some("built")
@@ -251,15 +252,21 @@ fn status_payload(ctx: StatusPayloadContext<'_>) -> serde_json::Value {
         let state_str = match bs.state {
             atlas_store_sqlite::GraphBuildState::Building => "building",
             atlas_store_sqlite::GraphBuildState::Built => "built",
+            atlas_store_sqlite::GraphBuildState::Degraded => "degraded",
             atlas_store_sqlite::GraphBuildState::BuildFailed => "build_failed",
         };
         serde_json::json!({
             "state": state_str,
             "files_discovered": bs.files_discovered,
             "files_processed": bs.files_processed,
+            "files_accepted": bs.files_accepted,
+            "files_skipped_by_byte_budget": bs.files_skipped_by_byte_budget,
             "files_failed": bs.files_failed,
+            "bytes_accepted": bs.bytes_accepted,
+            "bytes_skipped": bs.bytes_skipped,
             "nodes_written": bs.nodes_written,
             "edges_written": bs.edges_written,
+            "budget_stop_reason": bs.budget_stop_reason,
             "last_built_at": bs.last_built_at,
             "last_error": bs.last_error,
         })
@@ -411,6 +418,7 @@ pub fn run_status(cli: &Cli) -> Result<()> {
             let state_str = match bs.state {
                 atlas_store_sqlite::GraphBuildState::Building => "building (interrupted?)",
                 atlas_store_sqlite::GraphBuildState::Built => "built",
+                atlas_store_sqlite::GraphBuildState::Degraded => "degraded",
                 atlas_store_sqlite::GraphBuildState::BuildFailed => "build_failed",
             };
             println!("Build state : {state_str}");
@@ -455,6 +463,7 @@ pub fn run_build(cli: &Cli) -> Result<()> {
         let db_path = db_path(cli, &repo);
 
         let config = atlas_engine::Config::load(&atlas_engine::paths::atlas_dir(&repo))?;
+        let build_budget = config.build_run_budget()?;
 
         // Record lifecycle: building.
         if let Ok(store) = Store::open(&db_path) {
@@ -467,6 +476,7 @@ pub fn run_build(cli: &Cli) -> Result<()> {
             &BuildOptions {
                 fail_fast,
                 batch_size: config.parse_batch_size(),
+                budget: build_budget,
             },
         );
 
@@ -474,14 +484,31 @@ pub fn run_build(cli: &Cli) -> Result<()> {
         if let Ok(store) = Store::open(&db_path) {
             match &build_result {
                 Ok(s) => {
+                    let state =
+                        if matches!(s.budget.budget_status, atlas_core::BudgetStatus::Blocked) {
+                            atlas_store_sqlite::GraphBuildState::BuildFailed
+                        } else if s.budget.partial {
+                            atlas_store_sqlite::GraphBuildState::Degraded
+                        } else {
+                            atlas_store_sqlite::GraphBuildState::Built
+                        };
                     let _ = store.finish_build(
                         repo_root_path.as_str(),
                         BuildFinishStats {
+                            state,
                             files_discovered: s.scanned as i64,
                             files_processed: s.parsed as i64,
+                            files_accepted: s.budget_counters.files_accepted as i64,
+                            files_skipped_by_byte_budget: s
+                                .budget_counters
+                                .files_skipped_by_byte_budget
+                                as i64,
                             files_failed: s.parse_errors as i64,
+                            bytes_accepted: s.budget_counters.bytes_accepted as i64,
+                            bytes_skipped: s.budget_counters.bytes_skipped as i64,
                             nodes_written: s.nodes_inserted as i64,
                             edges_written: s.edges_inserted as i64,
+                            budget_stop_reason: s.budget_counters.budget_stop_reason.clone(),
                         },
                     );
                 }
@@ -504,6 +531,8 @@ pub fn run_build(cli: &Cli) -> Result<()> {
                     "parse_errors": summary.parse_errors,
                     "nodes_inserted": summary.nodes_inserted,
                     "edges_inserted": summary.edges_inserted,
+                    "budget": summary.budget,
+                    "budget_counters": summary.budget_counters,
                     "elapsed_ms": summary.elapsed_ms,
                     "nodes_per_sec": if summary.elapsed_ms > 0 {
                         (summary.nodes_inserted as f64 / summary.elapsed_ms as f64 * 1000.0).round() as u64
@@ -530,8 +559,21 @@ pub fn run_build(cli: &Cli) -> Result<()> {
             if summary.parse_errors > 0 {
                 println!("  Errors              : {}", summary.parse_errors);
             }
+            println!(
+                "  Files accepted      : {}",
+                summary.budget_counters.files_accepted
+            );
+            if summary.budget_counters.files_skipped_by_byte_budget > 0 {
+                println!(
+                    "  Byte-budget skipped : {}",
+                    summary.budget_counters.files_skipped_by_byte_budget
+                );
+            }
             println!("  Nodes inserted      : {}", summary.nodes_inserted);
             println!("  Edges inserted      : {}", summary.edges_inserted);
+            if let Some(reason) = &summary.budget_counters.budget_stop_reason {
+                println!("  Budget stop reason  : {reason}");
+            }
         }
 
         Ok(())
@@ -560,6 +602,7 @@ pub fn run_update(cli: &Cli) -> Result<()> {
         let db_path = db_path(cli, &repo);
 
         let config = atlas_engine::Config::load(&atlas_engine::paths::atlas_dir(&repo))?;
+        let build_budget = config.build_run_budget()?;
 
         let explicit_files: Vec<String> = match &cli.command {
             Command::Update { files, .. } => files.clone(),
@@ -595,6 +638,7 @@ pub fn run_update(cli: &Cli) -> Result<()> {
                 fail_fast,
                 batch_size: config.parse_batch_size(),
                 target,
+                budget: build_budget,
             },
         );
 
@@ -602,14 +646,31 @@ pub fn run_update(cli: &Cli) -> Result<()> {
         if let Ok(store) = Store::open(&db_path) {
             match &update_result {
                 Ok(s) => {
+                    let state =
+                        if matches!(s.budget.budget_status, atlas_core::BudgetStatus::Blocked) {
+                            atlas_store_sqlite::GraphBuildState::BuildFailed
+                        } else if s.budget.partial {
+                            atlas_store_sqlite::GraphBuildState::Degraded
+                        } else {
+                            atlas_store_sqlite::GraphBuildState::Built
+                        };
                     let _ = store.finish_build(
                         repo_root_path.as_str(),
                         BuildFinishStats {
+                            state,
                             files_discovered: (s.parsed + s.deleted + s.renamed) as i64,
                             files_processed: s.parsed as i64,
+                            files_accepted: s.budget_counters.files_accepted as i64,
+                            files_skipped_by_byte_budget: s
+                                .budget_counters
+                                .files_skipped_by_byte_budget
+                                as i64,
                             files_failed: s.parse_errors as i64,
+                            bytes_accepted: s.budget_counters.bytes_accepted as i64,
+                            bytes_skipped: s.budget_counters.bytes_skipped as i64,
                             nodes_written: s.nodes_updated as i64,
                             edges_written: s.edges_updated as i64,
+                            budget_stop_reason: s.budget_counters.budget_stop_reason.clone(),
                         },
                     );
                 }
@@ -632,6 +693,8 @@ pub fn run_update(cli: &Cli) -> Result<()> {
                     "parse_errors": summary.parse_errors,
                     "nodes_updated": summary.nodes_updated,
                     "edges_updated": summary.edges_updated,
+                    "budget": summary.budget,
+                    "budget_counters": summary.budget_counters,
                     "elapsed_ms": summary.elapsed_ms,
                     "nodes_per_sec": if summary.elapsed_ms > 0 {
                         (summary.nodes_updated as f64 / summary.elapsed_ms as f64 * 1000.0).round() as u64
@@ -659,11 +722,24 @@ pub fn run_update(cli: &Cli) -> Result<()> {
             if summary.skipped_unsupported > 0 {
                 println!("  Unsupported skipped : {}", summary.skipped_unsupported);
             }
+            println!(
+                "  Files accepted      : {}",
+                summary.budget_counters.files_accepted
+            );
+            if summary.budget_counters.files_skipped_by_byte_budget > 0 {
+                println!(
+                    "  Byte-budget skipped : {}",
+                    summary.budget_counters.files_skipped_by_byte_budget
+                );
+            }
             if summary.parse_errors > 0 {
                 println!("  Errors   : {}", summary.parse_errors);
             }
             println!("  Nodes    : {}", summary.nodes_updated);
             println!("  Edges    : {}", summary.edges_updated);
+            if let Some(reason) = &summary.budget_counters.budget_stop_reason {
+                println!("  Budget stop reason  : {reason}");
+            }
         }
 
         Ok(())

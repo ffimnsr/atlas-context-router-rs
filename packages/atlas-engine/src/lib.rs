@@ -1,5 +1,6 @@
 //! Atlas engine — shared build/update pipeline usable by CLI and MCP.
 
+mod build_budget;
 mod call_resolution;
 pub mod config;
 pub mod lang_policy;
@@ -11,7 +12,7 @@ mod update;
 pub mod watch;
 
 pub use build::{BuildOptions, BuildSummary, build_graph};
-pub use config::Config;
+pub use config::{BuildRunBudget, Config};
 pub use lang_policy::{Feature, LangEntry, LanguagePolicy, Maturity};
 pub use update::{UpdateOptions, UpdateSummary, UpdateTarget, update_graph};
 pub use watch::{FileWatcher, WatchBatchResult, WatchEvent, WatchRunner, WatchState};

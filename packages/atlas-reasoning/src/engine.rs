@@ -6,10 +6,11 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use atlas_core::{
-    ChangeRiskResult, ConfidenceTier, CoverageStrength, DeadCodeCandidate, DependencyRemovalResult,
-    Edge, EdgeKind, ImpactClass, ImpactedNode, Node, NodeKind, ReasoningEvidence, ReasoningWarning,
-    RefactorSafetyResult, ReferenceScope, RemovalImpactResult, RenamePreviewResult,
-    RenameReference, Result, RiskLevel, SafetyBand, SafetyScore, TestAdjacencyResult,
+    BudgetManager, BudgetPolicy, BudgetReport, ChangeRiskResult, ConfidenceTier, CoverageStrength,
+    DeadCodeCandidate, DependencyRemovalResult, Edge, EdgeKind, ImpactClass, ImpactedNode, Node,
+    NodeKind, ReasoningEvidence, ReasoningWarning, RefactorSafetyResult, ReferenceScope,
+    RemovalImpactResult, RenamePreviewResult, RenameReference, Result, RiskLevel, SafetyBand,
+    SafetyScore, TestAdjacencyResult,
 };
 use atlas_store_sqlite::Store;
 
@@ -17,10 +18,6 @@ use atlas_store_sqlite::Store;
 // Constants
 // ---------------------------------------------------------------------------
 
-/// Default traversal depth for removal impact.
-const DEFAULT_IMPACT_DEPTH: u32 = 3;
-/// Default node cap for impact traversal.
-const DEFAULT_IMPACT_NODES: usize = 200;
 /// Edge query cap for per-node lookups.
 const EDGE_QUERY_LIMIT: usize = 500;
 
@@ -82,14 +79,24 @@ impl<'s> ReasoningEngine<'s> {
         max_depth: Option<u32>,
         max_nodes: Option<usize>,
     ) -> Result<RemovalImpactResult> {
+        let policy = BudgetPolicy::default();
+        let mut budgets = BudgetManager::new();
         let normalized_seed_qnames: Vec<String> = seed_qnames
             .iter()
             .map(|qname| normalize_qn_kind_tokens(qname))
             .collect();
         let normalized_seed_refs: Vec<&str> =
             normalized_seed_qnames.iter().map(String::as_str).collect();
-        let depth = max_depth.unwrap_or(DEFAULT_IMPACT_DEPTH);
-        let cap = max_nodes.unwrap_or(DEFAULT_IMPACT_NODES);
+        let depth = budgets.resolve_limit(
+            policy.graph_traversal.depth,
+            "graph_traversal.max_depth",
+            max_depth.map(|depth| depth as usize),
+        ) as u32;
+        let cap = budgets.resolve_limit(
+            policy.graph_traversal.nodes,
+            "graph_traversal.max_nodes",
+            max_nodes,
+        );
 
         // Load seed nodes.
         let seed_nodes = self.load_nodes(&normalized_seed_refs)?;
@@ -117,6 +124,7 @@ impl<'s> ReasoningEngine<'s> {
                 uncertainty_flags: vec![
                     "seed qualified names not found in graph — run `atlas build` first".to_owned(),
                 ],
+                budget: budgets.summary("graph_traversal.max_nodes", cap, 0),
             });
         }
 
@@ -168,6 +176,15 @@ impl<'s> ReasoningEngine<'s> {
             },
         ];
 
+        let observed_nodes = seed_nodes.len() + impacted_symbols.len();
+        budgets.record_usage(
+            policy.graph_traversal.nodes,
+            "graph_traversal.max_nodes",
+            cap,
+            observed_nodes,
+            observed_nodes >= cap,
+        );
+
         Ok(RemovalImpactResult {
             seed: seed_nodes,
             impacted_symbols,
@@ -178,6 +195,7 @@ impl<'s> ReasoningEngine<'s> {
             warnings: vec![],
             evidence,
             uncertainty_flags: vec![],
+            budget: budgets.summary("graph_traversal.max_nodes", cap, observed_nodes),
         })
     }
 
@@ -343,6 +361,11 @@ impl<'s> ReasoningEngine<'s> {
             unresolved_edge_count,
             coverage_strength,
             evidence,
+            budget: BudgetReport::within_budget(
+                "analysis.refactor_safety",
+                EDGE_QUERY_LIMIT,
+                fan_in + fan_out,
+            ),
         })
     }
 
@@ -384,7 +407,8 @@ impl<'s> ReasoningEngine<'s> {
             ConfidenceTier::Low
         };
 
-        let removable = blocking.is_empty();
+        let blocking_count = blocking.len();
+        let removable = blocking_count == 0;
 
         let mut suggested_cleanups: Vec<String> = blocking
             .iter()
@@ -425,6 +449,11 @@ impl<'s> ReasoningEngine<'s> {
             suggested_cleanups,
             evidence,
             uncertainty_flags,
+            budget: BudgetReport::within_budget(
+                "analysis.dependency_removal",
+                EDGE_QUERY_LIMIT,
+                blocking_count,
+            ),
         })
     }
 

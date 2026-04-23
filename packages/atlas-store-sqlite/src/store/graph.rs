@@ -1,4 +1,4 @@
-use atlas_core::{AtlasError, ImpactResult, Node, Result};
+use atlas_core::{AtlasError, BudgetManager, BudgetPolicy, ImpactResult, Node, Result};
 use rusqlite::params;
 
 use super::{
@@ -234,13 +234,49 @@ impl Store {
         changed_paths: &[&str],
         max_depth: u32,
         max_nodes: usize,
+        max_edges: usize,
     ) -> Result<ImpactResult> {
+        let policy = BudgetPolicy::default();
+        let mut budgets = BudgetManager::new();
+        let requested_depth = max_depth;
+        let requested_nodes = max_nodes;
+        let requested_edges = max_edges;
+        let max_depth = budgets.resolve_limit(
+            policy.graph_traversal.depth,
+            "graph_traversal.max_depth",
+            Some(max_depth as usize),
+        ) as u32;
+        let max_nodes = budgets.resolve_limit(
+            policy.graph_traversal.nodes,
+            "graph_traversal.max_nodes",
+            Some(max_nodes),
+        );
+        let max_edges = budgets.resolve_limit(
+            policy.graph_traversal.edges,
+            "graph_traversal.max_edges",
+            Some(max_edges),
+        );
         if changed_paths.is_empty() {
             return Ok(ImpactResult {
                 changed_nodes: vec![],
                 impacted_nodes: vec![],
                 impacted_files: vec![],
                 relevant_edges: vec![],
+                seed_budgets: vec![],
+                traversal_budget: Some(atlas_core::model::TraversalBudgetMeta {
+                    requested_depth,
+                    accepted_depth: max_depth,
+                    requested_node_budget: requested_nodes,
+                    accepted_node_budget: max_nodes,
+                    requested_edge_budget: requested_edges,
+                    accepted_edge_budget: max_edges,
+                    emitted_node_count: 0,
+                    emitted_edge_count: 0,
+                    omitted_edge_count: 0,
+                    budget_hit: false,
+                    suggested_narrower_query: None,
+                }),
+                budget: budgets.summary("graph_traversal.max_nodes", max_nodes, 0),
             });
         }
         let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
@@ -344,7 +380,7 @@ impl Store {
         };
 
         // Edges within the full impacted set.
-        let relevant_edges = if all_qns.is_empty() {
+        let mut relevant_edges = if all_qns.is_empty() {
             vec![]
         } else {
             let ph = repeat_placeholders(all_qns.len());
@@ -366,11 +402,55 @@ impl Store {
                 .collect()
         };
 
+        let observed_nodes = changed_nodes.len() + impacted_nodes.len();
+        budgets.record_usage(
+            policy.graph_traversal.nodes,
+            "graph_traversal.max_nodes",
+            max_nodes,
+            observed_nodes,
+            observed_nodes >= max_nodes,
+        );
+
+        let original_edge_count = relevant_edges.len();
+        if original_edge_count > max_edges {
+            budgets.record_usage(
+                policy.graph_traversal.edges,
+                "graph_traversal.max_edges",
+                max_edges,
+                original_edge_count,
+                true,
+            );
+            relevant_edges.truncate(max_edges);
+        }
+
         Ok(ImpactResult {
             changed_nodes,
             impacted_nodes,
             impacted_files,
             relevant_edges,
+            seed_budgets: vec![],
+            traversal_budget: Some(atlas_core::model::TraversalBudgetMeta {
+                requested_depth,
+                accepted_depth: max_depth,
+                requested_node_budget: requested_nodes,
+                accepted_node_budget: max_nodes,
+                requested_edge_budget: requested_edges,
+                accepted_edge_budget: max_edges,
+                emitted_node_count: observed_nodes,
+                emitted_edge_count: original_edge_count.min(max_edges),
+                omitted_edge_count: original_edge_count.saturating_sub(max_edges),
+                budget_hit: requested_depth != max_depth
+                    || requested_nodes != max_nodes
+                    || requested_edges != max_edges
+                    || original_edge_count > max_edges,
+                suggested_narrower_query: (original_edge_count > max_edges).then(|| {
+                    format!(
+                        "reduce changed-file seed set or traversal depth so edge count stays within {}",
+                        max_edges
+                    )
+                }),
+            }),
+            budget: budgets.summary("graph_traversal.max_nodes", max_nodes, observed_nodes),
         })
     }
 }

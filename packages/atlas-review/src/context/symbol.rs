@@ -138,9 +138,12 @@ pub(super) fn build_symbol_context(
         edges,
         files,
         truncation: TruncationMeta::none(),
+        seed_budgets: vec![],
+        traversal_budget: None,
         ambiguity: None,
         workflow: None,
         saved_context_sources: vec![],
+        budget: BudgetReport::not_applicable(),
     };
 
     rank_context(&mut result);
@@ -166,9 +169,12 @@ pub(super) fn build_ambiguous_result(
         edges: vec![],
         files: vec![],
         truncation: TruncationMeta::none(),
+        seed_budgets: vec![],
+        traversal_budget: None,
         ambiguity: Some(meta),
         workflow: None,
         saved_context_sources: vec![],
+        budget: BudgetReport::not_applicable(),
     }
 }
 
@@ -191,9 +197,12 @@ pub(super) fn build_not_found_result(
         edges: vec![],
         files: vec![],
         truncation: TruncationMeta::none(),
+        seed_budgets: vec![],
+        traversal_budget: None,
         ambiguity,
         workflow: None,
         saved_context_sources: vec![],
+        budget: BudgetReport::not_applicable(),
     }
 }
 

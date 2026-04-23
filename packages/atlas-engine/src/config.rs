@@ -2,6 +2,8 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use atlas_core::{BudgetLimitRule, BudgetPolicy};
+use atlas_repo::DEFAULT_MAX_FILE_BYTES;
 use serde::{Deserialize, Serialize};
 
 /// Default parse-worker batch size.  Can be overridden in `.atlas/config.toml`.
@@ -54,6 +56,10 @@ pub struct SearchConfig {
     pub top_k_vector: usize,
     /// RRF k constant (higher = less rank-position sensitivity, default 60).
     pub rrf_k: u32,
+    /// Maximum seed candidates accepted before graph expansion or semantic rerank.
+    pub max_query_candidates: usize,
+    /// Maximum wall time for one query path before Atlas reports a budget hit.
+    pub max_query_wall_time_ms: u64,
 }
 
 impl Default for SearchConfig {
@@ -63,6 +69,14 @@ impl Default for SearchConfig {
             top_k_fts: 60,
             top_k_vector: 60,
             rrf_k: 60,
+            max_query_candidates: BudgetPolicy::default()
+                .query_candidates_and_seeds
+                .candidates
+                .default_limit,
+            max_query_wall_time_ms: BudgetPolicy::default()
+                .query_candidates_and_seeds
+                .wall_time_ms
+                .default_limit as u64,
         }
     }
 }
@@ -72,13 +86,132 @@ impl Default for SearchConfig {
 pub struct BuildConfig {
     /// Number of files parsed in parallel per batch (clamped to 1–4096).
     pub parse_batch_size: usize,
+    /// Maximum accepted files in one build/update run.
+    pub max_files_per_run: usize,
+    /// Maximum accepted total bytes in one build/update run.
+    pub max_total_bytes_per_run: u64,
+    /// Maximum accepted bytes for a single file.
+    pub max_file_bytes: u64,
+    /// Maximum parse failures tolerated before the run becomes build_failed.
+    pub max_parse_failures: usize,
+    /// Maximum tolerated parse failure ratio in the range [0.0, 1.0].
+    pub max_parse_failure_ratio: f64,
+    /// Maximum wall-clock time in milliseconds before the run becomes degraded.
+    pub max_wall_time_ms: u64,
 }
 
 impl Default for BuildConfig {
     fn default() -> Self {
+        let policy = BudgetPolicy::default();
         Self {
             parse_batch_size: DEFAULT_PARSE_BATCH_SIZE,
+            max_files_per_run: policy.build_update.files_per_run.default_limit,
+            max_total_bytes_per_run: policy.build_update.total_bytes_per_run.default_limit as u64,
+            max_file_bytes: DEFAULT_MAX_FILE_BYTES,
+            max_parse_failures: policy.build_update.parse_failures.default_limit,
+            max_parse_failure_ratio: policy.build_update.parse_failure_ratio_bps.default_limit
+                as f64
+                / 10_000.0,
+            max_wall_time_ms: policy.build_update.wall_time_ms.default_limit as u64,
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct BuildRunBudget {
+    pub max_files_per_run: usize,
+    pub max_total_bytes_per_run: u64,
+    pub max_file_bytes: u64,
+    pub max_parse_failures: usize,
+    pub max_parse_failure_ratio_bps: usize,
+    pub max_wall_time_ms: u64,
+}
+
+impl Default for BuildRunBudget {
+    fn default() -> Self {
+        let policy = BudgetPolicy::default();
+        Self {
+            max_files_per_run: policy.build_update.files_per_run.default_limit,
+            max_total_bytes_per_run: policy.build_update.total_bytes_per_run.default_limit as u64,
+            max_file_bytes: policy.build_update.file_bytes.default_limit as u64,
+            max_parse_failures: policy.build_update.parse_failures.default_limit,
+            max_parse_failure_ratio_bps: policy.build_update.parse_failure_ratio_bps.default_limit,
+            max_wall_time_ms: policy.build_update.wall_time_ms.default_limit as u64,
+        }
+    }
+}
+
+fn validate_usize_limit(name: &str, value: usize, max: usize) -> Result<usize> {
+    if value == 0 {
+        anyhow::bail!("invalid config: {name} must be greater than 0");
+    }
+    if value > max {
+        anyhow::bail!("invalid config: {name}={value} exceeds safe maximum {max}");
+    }
+    Ok(value)
+}
+
+fn validate_u64_limit(name: &str, value: u64, max: usize) -> Result<u64> {
+    if value == 0 {
+        anyhow::bail!("invalid config: {name} must be greater than 0");
+    }
+    if value > max as u64 {
+        anyhow::bail!("invalid config: {name}={value} exceeds safe maximum {max}");
+    }
+    Ok(value)
+}
+
+impl BuildConfig {
+    pub fn run_budget(&self) -> Result<BuildRunBudget> {
+        let policy = BudgetPolicy::default();
+        if !(0.0..=1.0).contains(&self.max_parse_failure_ratio) {
+            anyhow::bail!(
+                "invalid config: build.max_parse_failure_ratio={} must be within [0.0, 1.0]",
+                self.max_parse_failure_ratio
+            );
+        }
+
+        if self.max_parse_failures > policy.build_update.parse_failures.max_limit {
+            anyhow::bail!(
+                "invalid config: build.max_parse_failures={} exceeds safe maximum {}",
+                self.max_parse_failures,
+                policy.build_update.parse_failures.max_limit
+            );
+        }
+
+        let ratio_bps = (self.max_parse_failure_ratio * 10_000.0).round() as usize;
+        if ratio_bps > policy.build_update.parse_failure_ratio_bps.max_limit {
+            anyhow::bail!(
+                "invalid config: build.max_parse_failure_ratio={} exceeds safe maximum {}",
+                self.max_parse_failure_ratio,
+                policy.build_update.parse_failure_ratio_bps.max_limit as f64 / 10_000.0
+            );
+        }
+
+        Ok(BuildRunBudget {
+            max_files_per_run: validate_usize_limit(
+                "build.max_files_per_run",
+                self.max_files_per_run,
+                policy.build_update.files_per_run.max_limit,
+            )?,
+            max_total_bytes_per_run: validate_u64_limit(
+                "build.max_total_bytes_per_run",
+                self.max_total_bytes_per_run,
+                policy.build_update.total_bytes_per_run.max_limit,
+            )?,
+            max_file_bytes: validate_u64_limit(
+                "build.max_file_bytes",
+                self.max_file_bytes,
+                policy.build_update.file_bytes.max_limit,
+            )?,
+            max_parse_failures: self.max_parse_failures,
+            max_parse_failure_ratio_bps: ratio_bps,
+            max_wall_time_ms: validate_u64_limit(
+                "build.max_wall_time_ms",
+                self.max_wall_time_ms,
+                policy.build_update.wall_time_ms.max_limit,
+            )?,
+        })
     }
 }
 
@@ -114,6 +247,10 @@ impl Config {
     /// Return the effective parse batch size, clamped to [1, 4096].
     pub fn parse_batch_size(&self) -> usize {
         self.build.parse_batch_size.clamp(1, 4096)
+    }
+
+    pub fn build_run_budget(&self) -> Result<BuildRunBudget> {
+        self.build.run_budget()
     }
 
     /// Return effective MCP worker thread count, clamped to [1, 64].
@@ -172,6 +309,16 @@ pub struct ContextConfig {
     pub max_context_nodes: usize,
     /// Default maximum traversal depth for context queries (default: 2).
     pub max_context_depth: u32,
+    /// Maximum accepted changed-symbol or query seed nodes before expansion.
+    pub max_seed_nodes: usize,
+    /// Maximum accepted changed-file seeds before impact/review context assembly.
+    pub max_seed_files: usize,
+    /// Maximum traversal depth for graph-backed context/impact work.
+    pub max_traversal_depth: u32,
+    /// Maximum traversal nodes for graph-backed context/impact work.
+    pub max_traversal_nodes: usize,
+    /// Maximum traversal edges for graph-backed context/impact work.
+    pub max_traversal_edges: usize,
 }
 
 impl Default for ContextConfig {
@@ -179,7 +326,103 @@ impl Default for ContextConfig {
         Self {
             max_context_nodes: 100,
             max_context_depth: 2,
+            max_seed_nodes: BudgetPolicy::default()
+                .graph_traversal
+                .seed_nodes
+                .default_limit,
+            max_seed_files: BudgetPolicy::default()
+                .graph_traversal
+                .seed_files
+                .default_limit,
+            max_traversal_depth: BudgetPolicy::default().graph_traversal.depth.default_limit as u32,
+            max_traversal_nodes: BudgetPolicy::default().graph_traversal.nodes.default_limit,
+            max_traversal_edges: BudgetPolicy::default().graph_traversal.edges.default_limit,
         }
+    }
+}
+
+impl Config {
+    pub fn budget_policy(&self) -> Result<BudgetPolicy> {
+        let mut policy = BudgetPolicy::default();
+
+        policy.query_candidates_and_seeds.candidates = BudgetLimitRule::new(
+            validate_usize_limit(
+                "search.max_query_candidates",
+                self.search.max_query_candidates,
+                policy.query_candidates_and_seeds.candidates.max_limit,
+            )?,
+            policy.query_candidates_and_seeds.candidates.max_limit,
+            policy.query_candidates_and_seeds.candidates.hit_behavior,
+            policy
+                .query_candidates_and_seeds
+                .candidates
+                .safe_to_answer_on_hit,
+        );
+        policy.query_candidates_and_seeds.wall_time_ms = BudgetLimitRule::new(
+            validate_u64_limit(
+                "search.max_query_wall_time_ms",
+                self.search.max_query_wall_time_ms,
+                policy.query_candidates_and_seeds.wall_time_ms.max_limit,
+            )? as usize,
+            policy.query_candidates_and_seeds.wall_time_ms.max_limit,
+            policy.query_candidates_and_seeds.wall_time_ms.hit_behavior,
+            policy
+                .query_candidates_and_seeds
+                .wall_time_ms
+                .safe_to_answer_on_hit,
+        );
+        policy.graph_traversal.seed_nodes = BudgetLimitRule::new(
+            validate_usize_limit(
+                "context.max_seed_nodes",
+                self.context.max_seed_nodes,
+                policy.graph_traversal.seed_nodes.max_limit,
+            )?,
+            policy.graph_traversal.seed_nodes.max_limit,
+            policy.graph_traversal.seed_nodes.hit_behavior,
+            policy.graph_traversal.seed_nodes.safe_to_answer_on_hit,
+        );
+        policy.graph_traversal.seed_files = BudgetLimitRule::new(
+            validate_usize_limit(
+                "context.max_seed_files",
+                self.context.max_seed_files,
+                policy.graph_traversal.seed_files.max_limit,
+            )?,
+            policy.graph_traversal.seed_files.max_limit,
+            policy.graph_traversal.seed_files.hit_behavior,
+            policy.graph_traversal.seed_files.safe_to_answer_on_hit,
+        );
+        policy.graph_traversal.depth = BudgetLimitRule::new(
+            validate_usize_limit(
+                "context.max_traversal_depth",
+                self.context.max_traversal_depth as usize,
+                policy.graph_traversal.depth.max_limit,
+            )?,
+            policy.graph_traversal.depth.max_limit,
+            policy.graph_traversal.depth.hit_behavior,
+            policy.graph_traversal.depth.safe_to_answer_on_hit,
+        );
+        policy.graph_traversal.nodes = BudgetLimitRule::new(
+            validate_usize_limit(
+                "context.max_traversal_nodes",
+                self.context.max_traversal_nodes,
+                policy.graph_traversal.nodes.max_limit,
+            )?,
+            policy.graph_traversal.nodes.max_limit,
+            policy.graph_traversal.nodes.hit_behavior,
+            policy.graph_traversal.nodes.safe_to_answer_on_hit,
+        );
+        policy.graph_traversal.edges = BudgetLimitRule::new(
+            validate_usize_limit(
+                "context.max_traversal_edges",
+                self.context.max_traversal_edges,
+                policy.graph_traversal.edges.max_limit,
+            )?,
+            policy.graph_traversal.edges.max_limit,
+            policy.graph_traversal.edges.hit_behavior,
+            policy.graph_traversal.edges.safe_to_answer_on_hit,
+        );
+
+        Ok(policy)
     }
 }
 

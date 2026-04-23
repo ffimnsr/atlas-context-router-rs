@@ -1,15 +1,16 @@
 use anyhow::{Context, Result};
-use atlas_core::SearchQuery;
 use atlas_core::model::ContextTarget;
+use atlas_core::{BudgetManager, BudgetStatus, SearchQuery};
 use atlas_review::{ResolvedTarget, normalize_qn_kind_tokens, resolve_target};
 use atlas_search::semantic as sem;
 use serde::Serialize;
+use std::time::Instant;
 
 use crate::context::{compact_node, package_impact};
 
 use super::shared::{
-    bool_arg, error_message, error_suggestions, open_store, resolve_kind_alias, str_arg,
-    string_array_arg, tool_result_value, u64_arg,
+    bool_arg, error_message, error_suggestions, inject_budget_metadata, load_budget_policy,
+    open_store, resolve_kind_alias, str_arg, string_array_arg, tool_result_value, u64_arg,
 };
 
 pub(super) fn tool_list_graph_stats(
@@ -23,6 +24,7 @@ pub(super) fn tool_list_graph_stats(
 
 pub(super) fn tool_query_graph(
     args: Option<&serde_json::Value>,
+    repo_root: &str,
     db_path: &str,
     output_format: crate::output::OutputFormat,
 ) -> Result<serde_json::Value> {
@@ -31,7 +33,7 @@ pub(super) fn tool_query_graph(
         .unwrap_or_default();
     let kind = str_arg(args, "kind")?.map(str::to_owned);
     let language = str_arg(args, "language")?.map(str::to_owned);
-    let limit = u64_arg(args, "limit").unwrap_or(20) as usize;
+    let requested_limit = u64_arg(args, "limit").unwrap_or(20) as usize;
     let semantic = bool_arg(args, "semantic").unwrap_or(false);
     let expand = bool_arg(args, "expand").unwrap_or(false);
     let expand_hops = u64_arg(args, "expand_hops").unwrap_or(1) as u32;
@@ -52,6 +54,13 @@ pub(super) fn tool_query_graph(
     }
 
     let store = open_store(db_path)?;
+    let policy = load_budget_policy(repo_root)?;
+    let mut budgets = BudgetManager::new();
+    let limit = budgets.resolve_limit(
+        policy.query_candidates_and_seeds.candidates,
+        "query_candidates_and_seeds.max_candidates",
+        Some(requested_limit),
+    );
     let query = SearchQuery {
         text,
         kind,
@@ -67,7 +76,16 @@ pub(super) fn tool_query_graph(
         ..Default::default()
     };
 
+    let started_at = Instant::now();
     let results = atlas_search::execute_query(&store, &query, semantic).context("search failed")?;
+    let elapsed_ms = started_at.elapsed().as_millis() as usize;
+    budgets.record_usage(
+        policy.query_candidates_and_seeds.wall_time_ms,
+        "query_candidates_and_seeds.max_query_wall_time_ms",
+        policy.query_candidates_and_seeds.wall_time_ms.default_limit,
+        elapsed_ms,
+        elapsed_ms > policy.query_candidates_and_seeds.wall_time_ms.default_limit,
+    );
     let explanation = atlas_search::explain_query(Some(&store), true, &query, semantic);
 
     #[derive(Serialize)]
@@ -110,11 +128,19 @@ pub(super) fn tool_query_graph(
                 .to_owned(),
         );
     }
+    response["atlas_query_elapsed_ms"] = serde_json::json!(elapsed_ms);
+    let budget = budgets.summary(
+        "query_candidates_and_seeds.max_candidates",
+        limit,
+        compact.len(),
+    );
+    inject_budget_metadata(&mut response, &budget);
     Ok(response)
 }
 
 pub(super) fn tool_batch_query_graph(
     args: Option<&serde_json::Value>,
+    repo_root: &str,
     db_path: &str,
     output_format: crate::output::OutputFormat,
 ) -> Result<serde_json::Value> {
@@ -156,6 +182,7 @@ pub(super) fn tool_batch_query_graph(
     }
 
     let store = open_store(db_path)?;
+    let policy = load_budget_policy(repo_root)?;
 
     #[derive(Serialize)]
     struct BatchItem {
@@ -178,6 +205,7 @@ pub(super) fn tool_batch_query_graph(
     }
 
     let mut batch_results: Vec<BatchItem> = Vec::with_capacity(queries_val.len());
+    let mut batch_budget_reports = Vec::with_capacity(queries_val.len());
 
     for (idx, q) in queries_val.iter().enumerate() {
         let q_args = Some(q);
@@ -186,7 +214,7 @@ pub(super) fn tool_batch_query_graph(
             .unwrap_or_default();
         let kind = str_arg(q_args, "kind")?.map(str::to_owned);
         let language = str_arg(q_args, "language")?.map(str::to_owned);
-        let limit = u64_arg(q_args, "limit").unwrap_or(20) as usize;
+        let requested_limit = u64_arg(q_args, "limit").unwrap_or(20) as usize;
         let semantic = bool_arg(q_args, "semantic").unwrap_or(false);
         let expand = bool_arg(q_args, "expand").unwrap_or(false);
         let expand_hops = u64_arg(q_args, "expand_hops").unwrap_or(1) as u32;
@@ -195,6 +223,14 @@ pub(super) fn tool_batch_query_graph(
         let fuzzy = bool_arg(q_args, "fuzzy").unwrap_or(false);
         let hybrid = bool_arg(q_args, "hybrid").unwrap_or(false);
         let include_files = bool_arg(q_args, "include_files").unwrap_or(false);
+
+        let mut budgets = BudgetManager::new();
+        let budget_name = format!("query_candidates_and_seeds.max_candidates[{idx}]");
+        let limit = budgets.resolve_limit(
+            policy.query_candidates_and_seeds.candidates,
+            budget_name.clone(),
+            Some(requested_limit),
+        );
 
         if text.trim().is_empty() && regex.is_none() {
             anyhow::bail!("query at index {idx} requires non-empty 'text' or a 'regex' pattern");
@@ -222,8 +258,17 @@ pub(super) fn tool_batch_query_graph(
             ..Default::default()
         };
 
+        let started_at = Instant::now();
         let results =
             atlas_search::execute_query(&store, &query, semantic).context("search failed")?;
+        let elapsed_ms = started_at.elapsed().as_millis() as usize;
+        budgets.record_usage(
+            policy.query_candidates_and_seeds.wall_time_ms,
+            format!("query_candidates_and_seeds.max_query_wall_time_ms[{idx}]"),
+            policy.query_candidates_and_seeds.wall_time_ms.default_limit,
+            elapsed_ms,
+            elapsed_ms > policy.query_candidates_and_seeds.wall_time_ms.default_limit,
+        );
 
         let items: Vec<BatchResultNode> = results
             .iter()
@@ -258,17 +303,53 @@ pub(super) fn tool_batch_query_graph(
             items,
             atlas_hint,
         });
+        batch_budget_reports.push(
+            budgets.summary(
+                budget_name,
+                limit,
+                batch_results
+                    .last()
+                    .map(|item| item.items.len())
+                    .unwrap_or(0),
+            ),
+        );
     }
 
     let mut response = tool_result_value(&batch_results, output_format)?;
     response["atlas_result_kind"] = serde_json::Value::String("batch_symbol_search".to_owned());
     response["atlas_query_count"] =
         serde_json::Value::Number(serde_json::Number::from(batch_results.len()));
+    let worst_budget = batch_budget_reports
+        .into_iter()
+        .max_by(|left, right| {
+            let left_rank = match left.budget_status {
+                BudgetStatus::WithinBudget => 0,
+                BudgetStatus::OverrideClamped => 1,
+                BudgetStatus::PartialResult => 2,
+                BudgetStatus::Blocked => 3,
+            };
+            let right_rank = match right.budget_status {
+                BudgetStatus::WithinBudget => 0,
+                BudgetStatus::OverrideClamped => 1,
+                BudgetStatus::PartialResult => 2,
+                BudgetStatus::Blocked => 3,
+            };
+            left_rank.cmp(&right_rank)
+        })
+        .unwrap_or_else(|| {
+            atlas_core::BudgetReport::within_budget(
+                "query_candidates_and_seeds.max_candidates",
+                0,
+                0,
+            )
+        });
+    inject_budget_metadata(&mut response, &worst_budget);
     Ok(response)
 }
 
 pub(super) fn tool_traverse_graph(
     args: Option<&serde_json::Value>,
+    repo_root: &str,
     db_path: &str,
     output_format: crate::output::OutputFormat,
 ) -> Result<serde_json::Value> {
@@ -280,8 +361,14 @@ pub(super) fn tool_traverse_graph(
     let max_nodes = u64_arg(args, "max_nodes").unwrap_or(100) as usize;
 
     let store = open_store(db_path)?;
+    let policy = load_budget_policy(repo_root)?;
     let result = store
-        .traverse_from_qnames(&[from_qn.as_str()], max_depth, max_nodes)
+        .traverse_from_qnames(
+            &[from_qn.as_str()],
+            max_depth,
+            max_nodes,
+            policy.graph_traversal.edges.default_limit,
+        )
         .context("traverse_from_qnames failed")?;
 
     let seeds = vec![from_qn];

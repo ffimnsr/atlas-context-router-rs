@@ -1,8 +1,13 @@
+pub mod budget;
 pub mod error;
 pub mod health;
 pub mod kinds;
 pub mod model;
 
+pub use budget::{
+    BudgetHitBehavior, BudgetLimitRule, BudgetManager, BudgetNamespace, BudgetPolicy, BudgetReport,
+    BudgetStatus, BuildUpdateBudgetCounters,
+};
 pub use error::{AtlasError, Result};
 pub use health::{
     GraphHealthInput, graph_health_error_message, graph_health_error_suggestions,

@@ -90,18 +90,18 @@ fn call_inner(
     let output_format = resolve_output_format(args, default_output_format_for_tool(name))?;
     let mut response = match name {
         "list_graph_stats" => tool_list_graph_stats(db_path, output_format),
-        "query_graph" => tool_query_graph(args, db_path, output_format),
-        "batch_query_graph" => tool_batch_query_graph(args, db_path, output_format),
+        "query_graph" => tool_query_graph(args, repo_root, db_path, output_format),
+        "batch_query_graph" => tool_batch_query_graph(args, repo_root, db_path, output_format),
         "get_impact_radius" => tool_get_impact_radius(args, repo_root, db_path, output_format),
         "get_review_context" => tool_get_review_context(args, repo_root, db_path, output_format),
         "detect_changes" => tool_detect_changes(args, repo_root, db_path, output_format),
         "build_or_update_graph" => {
             tool_build_or_update_graph(args, repo_root, db_path, output_format)
         }
-        "traverse_graph" => tool_traverse_graph(args, db_path, output_format),
+        "traverse_graph" => tool_traverse_graph(args, repo_root, db_path, output_format),
         "get_minimal_context" => tool_get_minimal_context(args, repo_root, db_path, output_format),
         "explain_change" => tool_explain_change(args, repo_root, db_path, output_format),
-        "get_context" => tool_get_context(args, db_path, output_format),
+        "get_context" => tool_get_context(args, repo_root, db_path, output_format),
         "get_session_status" => tool_get_session_status(args, repo_root, db_path, output_format),
         "resume_session" => tool_resume_session(args, repo_root, db_path, output_format),
         "search_saved_context" => {

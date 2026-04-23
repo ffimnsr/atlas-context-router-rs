@@ -331,6 +331,14 @@ fn execute_graph_refresh_action(
         UpdateTarget::Files(changed_files.clone())
     };
     let config = Config::load(&atlas_engine::paths::atlas_dir(repo)).unwrap_or_default();
+    let Ok(build_budget) = config.build_run_budget() else {
+        return json!({
+            "status": "error",
+            "tool_name": tool_name,
+            "changed_files": changed_files,
+            "error": "invalid build budget config",
+        });
+    };
     if let Ok(store) = Store::open(graph_db_path) {
         let _ = store.begin_build(repo);
     }
@@ -342,21 +350,41 @@ fn execute_graph_refresh_action(
             fail_fast: false,
             batch_size: config.parse_batch_size(),
             target,
+            budget: build_budget,
         },
     );
 
     match result {
         Ok(summary) => {
             if let Ok(store) = Store::open(graph_db_path) {
+                let state = if matches!(
+                    summary.budget.budget_status,
+                    atlas_core::BudgetStatus::Blocked
+                ) {
+                    atlas_store_sqlite::GraphBuildState::BuildFailed
+                } else if summary.budget.partial {
+                    atlas_store_sqlite::GraphBuildState::Degraded
+                } else {
+                    atlas_store_sqlite::GraphBuildState::Built
+                };
                 let _ = store.finish_build(
                     repo,
                     BuildFinishStats {
+                        state,
                         files_discovered: (summary.parsed + summary.deleted + summary.renamed)
                             as i64,
                         files_processed: summary.parsed as i64,
+                        files_accepted: summary.budget_counters.files_accepted as i64,
+                        files_skipped_by_byte_budget: summary
+                            .budget_counters
+                            .files_skipped_by_byte_budget
+                            as i64,
                         files_failed: summary.parse_errors as i64,
+                        bytes_accepted: summary.budget_counters.bytes_accepted as i64,
+                        bytes_skipped: summary.budget_counters.bytes_skipped as i64,
                         nodes_written: summary.nodes_updated as i64,
                         edges_written: summary.edges_updated as i64,
+                        budget_stop_reason: summary.budget_counters.budget_stop_reason.clone(),
                     },
                 );
             }
@@ -369,6 +397,8 @@ fn execute_graph_refresh_action(
                 "parsed": summary.parsed,
                 "nodes_updated": summary.nodes_updated,
                 "edges_updated": summary.edges_updated,
+                "budget": summary.budget,
+                "budget_counters": summary.budget_counters,
             })
         }
         Err(error) => {
@@ -496,6 +526,10 @@ fn build_review_refresh_artifacts(
                 &bounded_files.iter().map(String::as_str).collect::<Vec<_>>(),
                 MAX_HOOK_REVIEW_REFRESH_DEPTH,
                 MAX_HOOK_REVIEW_REFRESH_NODES,
+                atlas_core::BudgetPolicy::default()
+                    .graph_traversal
+                    .edges
+                    .default_limit,
             )
             .context("impact radius generation failed")?,
     );

@@ -5,14 +5,18 @@ use std::fs;
 use std::time::Instant;
 
 use anyhow::{Context, Result};
-use atlas_core::{PackageOwner, model::ParsedFile};
+use atlas_core::{BudgetReport, BuildUpdateBudgetCounters, PackageOwner, model::ParsedFile};
 use atlas_parser::ParserRegistry;
-use atlas_repo::{collect_supported_files, discover_package_owners, find_repo_root, hash_file};
+use atlas_repo::{
+    collect_supported_files_with_stats, discover_package_owners, find_repo_root, hash_file,
+};
 use atlas_store_sqlite::Store;
 use camino::Utf8Path;
 use rayon::prelude::*;
 
+use crate::build_budget::{BuildBudgetDecision, BuildBudgetTracker};
 use crate::call_resolution::reconcile_call_targets;
+use crate::config::BuildRunBudget;
 use crate::owner_graph::refresh_owner_graphs;
 
 /// Options controlling the build pipeline.
@@ -21,6 +25,8 @@ pub struct BuildOptions {
     pub fail_fast: bool,
     /// Number of files parsed per parallel batch.
     pub batch_size: usize,
+    /// Centralized operational budget for build work.
+    pub budget: BuildRunBudget,
 }
 
 impl Default for BuildOptions {
@@ -28,6 +34,7 @@ impl Default for BuildOptions {
         Self {
             fail_fast: false,
             batch_size: crate::config::DEFAULT_PARSE_BATCH_SIZE,
+            budget: BuildRunBudget::default(),
         }
     }
 }
@@ -42,6 +49,8 @@ pub struct BuildSummary {
     pub parse_errors: usize,
     pub nodes_inserted: usize,
     pub edges_inserted: usize,
+    pub budget_counters: BuildUpdateBudgetCounters,
+    pub budget: BudgetReport,
     pub elapsed_ms: u128,
 }
 
@@ -56,6 +65,7 @@ pub fn build_graph(
     opts: &BuildOptions,
 ) -> Result<BuildSummary> {
     let started = Instant::now();
+    let mut budget = BuildBudgetTracker::new(opts.budget);
 
     let mut store =
         Store::open(db_path).with_context(|| format!("cannot open database at {db_path}"))?;
@@ -80,13 +90,17 @@ pub fn build_graph(
     let stored_hashes: HashMap<String, String> =
         store.file_hashes().context("cannot read stored hashes")?;
 
-    let (all_files, mut skipped_unsupported) =
-        collect_supported_files(repo_root, None, |rel_path| {
-            registry.supports(rel_path.as_str())
-        })
-        .context("cannot collect tracked files")?;
+    let (all_files, scan_stats) = collect_supported_files_with_stats(
+        repo_root,
+        Some(opts.budget.max_file_bytes),
+        |rel_path| registry.supports(rel_path.as_str()),
+    )
+    .context("cannot collect tracked files")?;
 
-    let scanned = all_files.len() + skipped_unsupported;
+    let mut skipped_unsupported = scan_stats.skipped_unsupported;
+    let scanned = all_files.len() + skipped_unsupported + scan_stats.skipped_by_size;
+    budget.set_files_discovered(all_files.len());
+    budget.note_scanned_file_byte_skips(scan_stats.skipped_by_size);
     let mut skipped_unchanged = 0usize;
     let mut parse_errors = 0usize;
 
@@ -94,8 +108,36 @@ pub fn build_graph(
     let mut candidates: Vec<Candidate> = Vec::new();
 
     for rel_path in &all_files {
+        if matches!(
+            budget.maybe_stop_for_time(started),
+            BuildBudgetDecision::Degraded
+        ) {
+            break;
+        }
+
         let rel_str = rel_path.as_str().to_owned();
         let abs_path = repo_root.join(rel_path);
+        let file_bytes = match fs::metadata(abs_path.as_std_path()) {
+            Ok(meta) => meta.len(),
+            Err(e) => {
+                tracing::warn!("stat '{}' failed: {e}", rel_str);
+                parse_errors += 1;
+                if opts.fail_fast {
+                    return Err(anyhow::Error::from(e)
+                        .context(format!("stat '{rel_str}' failed (--fail-fast)")));
+                }
+                continue;
+            }
+        };
+
+        match budget.try_accept_file(file_bytes) {
+            BuildBudgetDecision::Continue => {}
+            BuildBudgetDecision::Degraded => break,
+            BuildBudgetDecision::Blocked => {
+                unreachable!("build file acceptance does not hard-block")
+            }
+        }
+
         let hash = match hash_file(&abs_path) {
             Ok(h) => h,
             Err(e) => {
@@ -124,8 +166,17 @@ pub fn build_graph(
     let mut total_nodes = 0usize;
     let mut total_edges = 0usize;
     let mut resolved_paths: Vec<String> = Vec::new();
+    let mut attempted_files = 0usize;
+    let mut budget_blocked = false;
 
     for chunk in candidates.chunks(opts.batch_size) {
+        if matches!(
+            budget.maybe_stop_for_time(started),
+            BuildBudgetDecision::Degraded
+        ) {
+            break;
+        }
+
         let results: Vec<(String, Result<ParsedFile, String>)> = chunk
             .par_iter()
             .map(|(rel_str, abs_path, hash)| {
@@ -145,6 +196,7 @@ pub fn build_graph(
 
         let mut parsed_files: Vec<ParsedFile> = Vec::with_capacity(chunk.len());
         for (rel_str, outcome) in results {
+            attempted_files += 1;
             match outcome {
                 Ok(pf) => {
                     parsed_count += 1;
@@ -157,12 +209,22 @@ pub fn build_graph(
                 Err(msg) => {
                     tracing::warn!("parsing '{}' failed: {msg}", rel_str);
                     parse_errors += 1;
+                    if matches!(
+                        budget.note_parse_failure(attempted_files),
+                        BuildBudgetDecision::Blocked
+                    ) {
+                        budget_blocked = true;
+                    }
                     if opts.fail_fast {
                         return Err(anyhow::anyhow!(
                             "parsing '{rel_str}' failed: {msg} (--fail-fast)"
                         ));
                     }
                 }
+            }
+
+            if budget_blocked {
+                break;
             }
         }
 
@@ -189,6 +251,10 @@ pub fn build_graph(
                 }
             }
         }
+
+        if budget_blocked {
+            break;
+        }
     }
 
     drop(_parse_span);
@@ -202,6 +268,8 @@ pub fn build_graph(
         tracing::warn!("late call-target resolution failed during build: {err:#}");
     }
 
+    let (budget_counters, budget_report) = budget.finish();
+
     Ok(BuildSummary {
         scanned,
         skipped_unsupported,
@@ -210,6 +278,8 @@ pub fn build_graph(
         parse_errors,
         nodes_inserted: total_nodes,
         edges_inserted: total_edges,
+        budget_counters,
+        budget: budget_report,
         elapsed_ms: started.elapsed().as_millis(),
     })
 }
@@ -257,7 +327,7 @@ fn annotate_parsed_file_owner(parsed_file: &mut ParsedFile, owner: Option<&Packa
 #[cfg(test)]
 mod tests {
     use super::*;
-    use atlas_core::{Node, NodeId, NodeKind};
+    use atlas_core::{BudgetStatus, Node, NodeId, NodeKind};
     use atlas_store_sqlite::Store;
     use std::process::Command;
 
@@ -327,6 +397,7 @@ mod tests {
             &BuildOptions {
                 fail_fast: true,
                 batch_size: 16,
+                budget: BuildRunBudget::default(),
             },
         )
         .unwrap();
@@ -343,5 +414,83 @@ mod tests {
         assert!(qnames.contains_key("lib.rs::struct::Greeter"));
         assert!(qnames.contains_key("lib.rs::method::Greeter::greet"));
         assert!(refreshed.dangling_edges(20).unwrap().is_empty());
+    }
+
+    #[test]
+    fn build_graph_marks_partial_when_max_files_per_run_hit() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo_root = dir.path();
+
+        git(repo_root, &["init", "--quiet"]);
+        std::fs::write(repo_root.join("a.rs"), "pub fn a() {}\n").unwrap();
+        std::fs::write(repo_root.join("b.rs"), "pub fn b() {}\n").unwrap();
+        git(repo_root, &["add", "a.rs", "b.rs"]);
+        git(repo_root, &["commit", "--quiet", "-m", "init"]);
+
+        let budget = BuildRunBudget {
+            max_files_per_run: 1,
+            max_parse_failure_ratio_bps: 10_000,
+            ..BuildRunBudget::default()
+        };
+        let db_path = repo_root.join("worldtree.db");
+
+        let summary = build_graph(
+            Utf8Path::from_path(repo_root).unwrap(),
+            db_path.to_str().unwrap(),
+            &BuildOptions {
+                fail_fast: true,
+                batch_size: 16,
+                budget,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(summary.budget.budget_status, BudgetStatus::PartialResult);
+        assert_eq!(summary.budget_counters.files_accepted, 1);
+        assert_eq!(
+            summary.budget_counters.budget_stop_reason.as_deref(),
+            Some("max_files_per_run")
+        );
+        assert_eq!(summary.parsed, 1);
+    }
+
+    #[test]
+    fn build_graph_marks_partial_when_total_byte_budget_hit() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo_root = dir.path();
+
+        git(repo_root, &["init", "--quiet"]);
+        std::fs::write(repo_root.join("a.rs"), "pub fn a() { let _x = 1; }\n").unwrap();
+        std::fs::write(repo_root.join("b.rs"), "pub fn b() { let _y = 2; }\n").unwrap();
+        git(repo_root, &["add", "a.rs", "b.rs"]);
+        git(repo_root, &["commit", "--quiet", "-m", "init"]);
+
+        let first_size = std::fs::metadata(repo_root.join("a.rs")).unwrap().len();
+        let budget = BuildRunBudget {
+            max_total_bytes_per_run: first_size,
+            max_parse_failure_ratio_bps: 10_000,
+            ..BuildRunBudget::default()
+        };
+        let db_path = repo_root.join("worldtree.db");
+
+        let summary = build_graph(
+            Utf8Path::from_path(repo_root).unwrap(),
+            db_path.to_str().unwrap(),
+            &BuildOptions {
+                fail_fast: true,
+                batch_size: 16,
+                budget,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(summary.budget.budget_status, BudgetStatus::PartialResult);
+        assert_eq!(summary.budget_counters.files_accepted, 1);
+        assert_eq!(summary.budget_counters.files_skipped_by_byte_budget, 1);
+        assert_eq!(summary.budget_counters.bytes_accepted, first_size);
+        assert_eq!(
+            summary.budget_counters.budget_stop_reason.as_deref(),
+            Some("max_total_bytes_per_run")
+        );
     }
 }

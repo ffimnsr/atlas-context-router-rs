@@ -37,6 +37,7 @@ pub fn select_graph_health_error_code(input: GraphHealthInput<'_>) -> &'static s
     }
     match input.build_state {
         Some("building") => return "interrupted_build",
+        Some("degraded") => return "degraded_build",
         Some("build_failed") => return "failed_build",
         _ => {}
     }
@@ -64,6 +65,9 @@ pub fn graph_health_error_message(error_code: &str) -> &'static str {
         }
         "interrupted_build" => {
             "Previous build was interrupted and did not complete. Run `atlas build` to restart."
+        }
+        "degraded_build" => {
+            "Last build finished in degraded mode because an operational budget was hit. Check build_status for counters and stop reason, then run `atlas build` with narrower scope or higher safe limits."
         }
         "failed_build" => {
             "Last build failed. Check build_last_error for details, then run `atlas build` to retry."
@@ -100,6 +104,10 @@ pub fn graph_health_error_suggestions(error_code: &str) -> &'static [&'static st
             &["run `atlas build` to rebuild the graph from scratch"]
         }
         "interrupted_build" => &["run `atlas build` to restart the interrupted build"],
+        "degraded_build" => &[
+            "check the build_status counters and budget_stop_reason fields",
+            "rerun `atlas build` or `atlas update` with narrower scope or adjusted safe limits",
+        ],
         "failed_build" => &[
             "check the build_last_error field for details",
             "run `atlas build` to retry",

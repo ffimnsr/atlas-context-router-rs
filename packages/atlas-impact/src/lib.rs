@@ -445,6 +445,7 @@ fn compute_risk_level(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use atlas_core::BudgetReport;
     use atlas_core::{Edge, EdgeKind, ImpactResult, Node, NodeId, NodeKind};
 
     fn make_node(kind: NodeKind, qn: &str, file_path: &str, is_test: bool) -> Node {
@@ -498,6 +499,9 @@ mod tests {
             impacted_nodes: impacted,
             impacted_files,
             relevant_edges: edges,
+            seed_budgets: vec![],
+            traversal_budget: None,
+            budget: BudgetReport::not_applicable(),
         }
     }
 
@@ -718,6 +722,9 @@ mod tests {
             impacted_nodes: vec![],
             impacted_files: vec![],
             relevant_edges: vec![],
+            seed_budgets: vec![],
+            traversal_budget: None,
+            budget: BudgetReport::not_applicable(),
         };
         let result = analyze(base);
         assert!(result.scored_nodes.is_empty());

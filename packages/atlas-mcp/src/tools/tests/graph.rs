@@ -263,6 +263,24 @@ fn batch_query_graph_returns_per_query_results() {
 }
 
 #[test]
+fn query_graph_limit_is_clamped_by_central_budget_policy() {
+    let fixture = setup_mcp_fixture();
+    let args = serde_json::json!({
+        "text": "compute",
+        "limit": 9999,
+        "output_format": "json"
+    });
+
+    let response =
+        call("query_graph", Some(&args), "/ignored", &fixture.db_path).expect("query_graph call");
+
+    assert_eq!(response["budget_status"], "override_clamped");
+    assert_eq!(response["budget_hit"], true);
+    assert_eq!(response["budget_limit"], 200);
+    assert_eq!(response["budget_observed"], 9999);
+}
+
+#[test]
 fn batch_query_graph_empty_queries_returns_error() {
     let fixture = setup_mcp_fixture();
     let args = serde_json::json!({ "queries": [] });

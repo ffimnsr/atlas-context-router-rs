@@ -1,4 +1,23 @@
 {
+  "request": {
+    "intent": "symbol",
+    "target": {
+      "kind": "symbol_name",
+      "name": "helper"
+    },
+    "max_nodes": 50,
+    "max_edges": 100,
+    "max_files": 20,
+    "depth": 3,
+    "include_tests": false,
+    "include_imports": true,
+    "include_neighbors": false,
+    "include_code_spans": false,
+    "include_callers": true,
+    "include_callees": true,
+    "include_saved_context": false,
+    "session_id": null
+  },
   "ambiguity": null,
   "edges": [
     {
@@ -126,25 +145,6 @@
       "selection_reason": "caller"
     }
   ],
-  "request": {
-    "depth": null,
-    "include_callees": true,
-    "include_callers": true,
-    "include_code_spans": false,
-    "include_imports": true,
-    "include_neighbors": false,
-    "include_saved_context": false,
-    "include_tests": false,
-    "intent": "symbol",
-    "max_edges": null,
-    "max_files": null,
-    "max_nodes": null,
-    "session_id": null,
-    "target": {
-      "kind": "symbol_name",
-      "name": "helper"
-    }
-  },
   "truncation": {
     "edges_dropped": 0,
     "files_dropped": 0,
@@ -237,5 +237,12 @@
       ]
     }
   },
-  "saved_context_sources": []
+  "saved_context_sources": [],
+  "budget_status": "within_budget",
+  "budget_hit": false,
+  "budget_name": "review_context_extraction.max_nodes",
+  "budget_limit": 50,
+  "budget_observed": 3,
+  "partial": false,
+  "safe_to_answer": true
 }

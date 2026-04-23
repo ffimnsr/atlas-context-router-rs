@@ -175,6 +175,7 @@ fn compare_edges(left: &Edge, right: &Edge) -> std::cmp::Ordering {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use atlas_core::BudgetReport;
     use atlas_core::{
         EdgeKind, ImpactedNode, Node, NodeId, NodeKind, ReasoningEvidence, ReasoningWarning,
     };
@@ -254,6 +255,7 @@ mod tests {
                 },
             ],
             uncertainty_flags: vec![],
+            budget: BudgetReport::not_applicable(),
         };
 
         sort_removal_result(&mut result, &AnalysisRankingPrimitives::default());
@@ -342,6 +344,7 @@ mod tests {
             suggested_cleanups: vec!["z".to_owned(), "a".to_owned()],
             evidence: vec![],
             uncertainty_flags: vec!["b".to_owned(), "a".to_owned()],
+            budget: BudgetReport::not_applicable(),
         };
 
         sort_dependency_result(&mut result, &AnalysisRankingPrimitives::default());

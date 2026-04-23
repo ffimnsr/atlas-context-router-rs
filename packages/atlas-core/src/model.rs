@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+use crate::budget::BudgetReport;
 use crate::kinds::{EdgeKind, NodeKind};
 
 /// Opaque primary key for a graph node.
@@ -180,6 +181,12 @@ pub struct ImpactResult {
     pub impacted_nodes: Vec<Node>,
     pub impacted_files: Vec<String>,
     pub relevant_edges: Vec<Edge>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub seed_budgets: Vec<SeedBudgetMeta>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub traversal_budget: Option<TraversalBudgetMeta>,
+    #[serde(flatten)]
+    pub budget: BudgetReport,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -701,6 +708,57 @@ impl TruncationMeta {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SeedBudgetMeta {
+    pub seed_kind: String,
+    pub requested_seed_count: usize,
+    pub accepted_seed_count: usize,
+    pub omitted_seed_count: usize,
+    pub budget_hit: bool,
+    pub partial: bool,
+    pub safe_to_answer: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suggested_narrower_query: Option<String>,
+}
+
+impl SeedBudgetMeta {
+    pub fn new(
+        seed_kind: impl Into<String>,
+        requested_seed_count: usize,
+        accepted_seed_count: usize,
+        safe_to_answer: bool,
+        suggested_narrower_query: Option<String>,
+    ) -> Self {
+        let omitted_seed_count = requested_seed_count.saturating_sub(accepted_seed_count);
+        Self {
+            seed_kind: seed_kind.into(),
+            requested_seed_count,
+            accepted_seed_count,
+            omitted_seed_count,
+            budget_hit: omitted_seed_count > 0,
+            partial: omitted_seed_count > 0 && accepted_seed_count > 0,
+            safe_to_answer,
+            suggested_narrower_query,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TraversalBudgetMeta {
+    pub requested_depth: u32,
+    pub accepted_depth: u32,
+    pub requested_node_budget: usize,
+    pub accepted_node_budget: usize,
+    pub requested_edge_budget: usize,
+    pub accepted_edge_budget: usize,
+    pub emitted_node_count: usize,
+    pub emitted_edge_count: usize,
+    pub omitted_edge_count: usize,
+    pub budget_hit: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suggested_narrower_query: Option<String>,
+}
+
 /// Metadata about target resolution when the seed was ambiguous.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AmbiguityMeta {
@@ -798,6 +856,10 @@ pub struct ContextResult {
     pub edges: Vec<SelectedEdge>,
     pub files: Vec<SelectedFile>,
     pub truncation: TruncationMeta,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub seed_budgets: Vec<SeedBudgetMeta>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub traversal_budget: Option<TraversalBudgetMeta>,
     /// Set when the target was ambiguous; contains ranked candidates.
     pub ambiguity: Option<AmbiguityMeta>,
     /// Focused workflow metadata for higher-level developer UX.
@@ -808,6 +870,8 @@ pub struct ContextResult {
     /// content store is provided to the engine.  Ordered by descending
     /// `relevance_score`.
     pub saved_context_sources: Vec<SavedContextSource>,
+    #[serde(flatten)]
+    pub budget: BudgetReport,
 }
 
 // ---------------------------------------------------------------------------
@@ -930,6 +994,8 @@ pub struct RemovalImpactResult {
     pub evidence: Vec<ReasoningEvidence>,
     /// Uncertainty flags: qualitative reasons the result may be incomplete.
     pub uncertainty_flags: Vec<String>,
+    #[serde(flatten)]
+    pub budget: BudgetReport,
 }
 
 /// A dead code candidate with its flagging reasons (23.3).
@@ -954,6 +1020,8 @@ pub struct RefactorSafetyResult {
     /// Classified test coverage strength for this symbol.
     pub coverage_strength: CoverageStrength,
     pub evidence: Vec<ReasoningEvidence>,
+    #[serde(flatten)]
+    pub budget: BudgetReport,
 }
 
 /// Dependency-removal validation result (23.3).
@@ -969,6 +1037,8 @@ pub struct DependencyRemovalResult {
     pub evidence: Vec<ReasoningEvidence>,
     /// Uncertainty flags: qualitative reasons the result may be incomplete.
     pub uncertainty_flags: Vec<String>,
+    #[serde(flatten)]
+    pub budget: BudgetReport,
 }
 
 /// Scope of a reference relative to the definition.
@@ -1578,6 +1648,8 @@ mod tests {
                 node_count_included: 1,
             }],
             truncation: TruncationMeta::none(),
+            seed_budgets: vec![],
+            traversal_budget: None,
             ambiguity: None,
             workflow: Some(WorkflowSummary {
                 headline: Some("Focus on helper callers".to_string()),
@@ -1616,6 +1688,7 @@ mod tests {
                 },
             }),
             saved_context_sources: vec![],
+            budget: BudgetReport::within_budget("review_context_extraction.max_nodes", 50, 1),
         };
         let json = serde_json::to_string(&result).unwrap();
         let back: ContextResult = serde_json::from_str(&json).unwrap();
@@ -1641,6 +1714,8 @@ mod tests {
             edges: vec![],
             files: vec![],
             truncation: TruncationMeta::none(),
+            seed_budgets: vec![],
+            traversal_budget: None,
             ambiguity: Some(AmbiguityMeta {
                 query: "parse".to_string(),
                 candidates: vec!["crate::a::parse".to_string(), "crate::b::parse".to_string()],
@@ -1648,6 +1723,7 @@ mod tests {
             }),
             workflow: None,
             saved_context_sources: vec![],
+            budget: BudgetReport::within_budget("review_context_extraction.max_nodes", 50, 0),
         };
         let json = serde_json::to_string(&result).unwrap();
         let back: ContextResult = serde_json::from_str(&json).unwrap();

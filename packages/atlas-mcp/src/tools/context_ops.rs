@@ -12,8 +12,8 @@ use serde::Serialize;
 use std::collections::BTreeSet;
 
 use super::shared::{
-    bool_arg, error_message, error_suggestions, open_store, parse_mcp_intent, str_arg,
-    string_array_arg, tool_result_value, u64_arg,
+    bool_arg, error_message, error_suggestions, inject_budget_metadata, load_budget_policy,
+    open_store, parse_mcp_intent, str_arg, string_array_arg, tool_result_value, u64_arg,
 };
 use crate::context::{package_context_result, package_impact};
 
@@ -174,9 +174,15 @@ pub(super) fn tool_get_impact_radius(
     let max_nodes = u64_arg(args, "max_nodes").unwrap_or(200) as usize;
 
     let store = open_store(db_path)?;
+    let policy = load_budget_policy(repo_root)?;
     let file_refs: Vec<&str> = resolved.files.iter().map(String::as_str).collect();
     let result = store
-        .impact_radius(&file_refs, max_depth, max_nodes)
+        .impact_radius(
+            &file_refs,
+            max_depth,
+            max_nodes,
+            policy.graph_traversal.edges.default_limit,
+        )
         .context("impact_radius query failed")?;
 
     let packaged = package_impact(&result, &resolved.files);
@@ -196,7 +202,8 @@ pub(super) fn tool_get_review_context(
     let max_nodes = u64_arg(args, "max_nodes").unwrap_or(200) as usize;
 
     let store = open_store(db_path)?;
-    let engine = ContextEngine::new(&store);
+    let policy = load_budget_policy(repo_root)?;
+    let engine = ContextEngine::new(&store).with_budget_policy(policy);
     let request = ContextRequest {
         intent: ContextIntent::Review,
         target: ContextTarget::ChangedFiles {
@@ -281,15 +288,21 @@ pub(super) fn tool_build_or_update_graph(
         let state_str = match bs.state {
             GraphBuildState::Building => "building",
             GraphBuildState::Built => "built",
+            GraphBuildState::Degraded => "degraded",
             GraphBuildState::BuildFailed => "build_failed",
         };
         serde_json::json!({
             "state": state_str,
             "files_discovered": bs.files_discovered,
             "files_processed": bs.files_processed,
+            "files_accepted": bs.files_accepted,
+            "files_skipped_by_byte_budget": bs.files_skipped_by_byte_budget,
             "files_failed": bs.files_failed,
+            "bytes_accepted": bs.bytes_accepted,
+            "bytes_skipped": bs.bytes_skipped,
             "nodes_written": bs.nodes_written,
             "edges_written": bs.edges_written,
+            "budget_stop_reason": bs.budget_stop_reason,
             "last_built_at": bs.last_built_at,
             "last_error": bs.last_error,
         })
@@ -312,6 +325,7 @@ pub(super) fn tool_build_or_update_graph(
 
         let config = atlas_engine::Config::load(&atlas_engine::paths::atlas_dir(repo_root))
             .unwrap_or_default();
+        let build_budget = config.build_run_budget()?;
 
         if let Ok(s) = Store::open(db_path) {
             let _ = s.begin_build(repo_root_str);
@@ -324,20 +338,38 @@ pub(super) fn tool_build_or_update_graph(
                 fail_fast: false,
                 batch_size: config.parse_batch_size(),
                 target,
+                budget: build_budget,
             },
         );
 
         if let Ok(s) = Store::open(db_path) {
             match &update_result {
                 Ok(sum) => {
+                    let state =
+                        if matches!(sum.budget.budget_status, atlas_core::BudgetStatus::Blocked) {
+                            GraphBuildState::BuildFailed
+                        } else if sum.budget.partial {
+                            GraphBuildState::Degraded
+                        } else {
+                            GraphBuildState::Built
+                        };
                     let _ = s.finish_build(
                         repo_root_str,
                         BuildFinishStats {
+                            state,
                             files_discovered: (sum.parsed + sum.deleted + sum.renamed) as i64,
                             files_processed: sum.parsed as i64,
+                            files_accepted: sum.budget_counters.files_accepted as i64,
+                            files_skipped_by_byte_budget: sum
+                                .budget_counters
+                                .files_skipped_by_byte_budget
+                                as i64,
                             files_failed: sum.parse_errors as i64,
+                            bytes_accepted: sum.budget_counters.bytes_accepted as i64,
+                            bytes_skipped: sum.budget_counters.bytes_skipped as i64,
                             nodes_written: sum.nodes_updated as i64,
                             edges_written: sum.edges_updated as i64,
+                            budget_stop_reason: sum.budget_counters.budget_stop_reason.clone(),
                         },
                     );
                 }
@@ -358,6 +390,8 @@ pub(super) fn tool_build_or_update_graph(
                 "parse_errors": summary.parse_errors,
                 "nodes_updated": summary.nodes_updated,
                 "edges_updated": summary.edges_updated,
+                "budget": summary.budget,
+                "budget_counters": summary.budget_counters,
                 "elapsed_ms": summary.elapsed_ms,
                 "build_status": build_status_json(db_path, repo_root_str),
             }),
@@ -366,6 +400,7 @@ pub(super) fn tool_build_or_update_graph(
     } else {
         let config = atlas_engine::Config::load(&atlas_engine::paths::atlas_dir(repo_root))
             .unwrap_or_default();
+        let build_budget = config.build_run_budget()?;
 
         if let Ok(s) = Store::open(db_path) {
             let _ = s.begin_build(repo_root_str);
@@ -377,20 +412,38 @@ pub(super) fn tool_build_or_update_graph(
             &BuildOptions {
                 fail_fast: false,
                 batch_size: config.parse_batch_size(),
+                budget: build_budget,
             },
         );
 
         if let Ok(s) = Store::open(db_path) {
             match &build_result {
                 Ok(sum) => {
+                    let state =
+                        if matches!(sum.budget.budget_status, atlas_core::BudgetStatus::Blocked) {
+                            GraphBuildState::BuildFailed
+                        } else if sum.budget.partial {
+                            GraphBuildState::Degraded
+                        } else {
+                            GraphBuildState::Built
+                        };
                     let _ = s.finish_build(
                         repo_root_str,
                         BuildFinishStats {
+                            state,
                             files_discovered: sum.scanned as i64,
                             files_processed: sum.parsed as i64,
+                            files_accepted: sum.budget_counters.files_accepted as i64,
+                            files_skipped_by_byte_budget: sum
+                                .budget_counters
+                                .files_skipped_by_byte_budget
+                                as i64,
                             files_failed: sum.parse_errors as i64,
+                            bytes_accepted: sum.budget_counters.bytes_accepted as i64,
+                            bytes_skipped: sum.budget_counters.bytes_skipped as i64,
                             nodes_written: sum.nodes_inserted as i64,
                             edges_written: sum.edges_inserted as i64,
+                            budget_stop_reason: sum.budget_counters.budget_stop_reason.clone(),
                         },
                     );
                 }
@@ -411,6 +464,8 @@ pub(super) fn tool_build_or_update_graph(
                 "parse_errors": summary.parse_errors,
                 "nodes_inserted": summary.nodes_inserted,
                 "edges_inserted": summary.edges_inserted,
+                "budget": summary.budget,
+                "budget_counters": summary.budget_counters,
                 "elapsed_ms": summary.elapsed_ms,
                 "build_status": build_status_json(db_path, repo_root_str),
             }),
@@ -451,9 +506,15 @@ pub(super) fn tool_get_minimal_context(
         .collect();
 
     let store = open_store(db_path)?;
+    let policy = load_budget_policy(repo_root)?;
     let file_refs: Vec<&str> = changed_file_paths.iter().map(String::as_str).collect();
     let impact = store
-        .impact_radius(&file_refs, max_depth, max_nodes)
+        .impact_radius(
+            &file_refs,
+            max_depth,
+            max_nodes,
+            policy.graph_traversal.edges.default_limit,
+        )
         .context("impact_radius failed")?;
 
     let packaged = package_impact(&impact, &changed_file_paths);
@@ -478,7 +539,9 @@ pub(super) fn tool_get_minimal_context(
         impact: packaged,
     };
 
-    tool_result_value(&ctx, output_format)
+    let mut response = tool_result_value(&ctx, output_format)?;
+    inject_budget_metadata(&mut response, &impact.budget);
+    Ok(response)
 }
 
 pub(super) fn tool_explain_change(
@@ -535,6 +598,7 @@ pub(super) fn tool_explain_change(
 
 pub(super) fn tool_get_context(
     args: Option<&serde_json::Value>,
+    repo_root: &str,
     db_path: &str,
     output_format: crate::output::OutputFormat,
 ) -> Result<serde_json::Value> {
@@ -616,6 +680,7 @@ pub(super) fn tool_get_context(
     request.session_id = session_id;
 
     let store = open_store(db_path)?;
+    let policy = load_budget_policy(repo_root)?;
 
     // --semantic: when target is a SymbolName, run graph-aware semantic search
     // first to resolve the best-matching qualified name, then build context
@@ -636,7 +701,7 @@ pub(super) fn tool_get_context(
         }
     }
 
-    let engine = ContextEngine::new(&store);
+    let engine = ContextEngine::new(&store).with_budget_policy(policy);
 
     let result = if include_saved_context {
         let content_db = derive_content_db_path(db_path);

@@ -443,6 +443,7 @@ impl WatchRunner {
             fail_fast: false,
             batch_size: self.batch_size,
             target: crate::update::UpdateTarget::Batch(changes),
+            budget: crate::config::BuildRunBudget::default(),
         };
 
         let (nodes_updated, errors) =

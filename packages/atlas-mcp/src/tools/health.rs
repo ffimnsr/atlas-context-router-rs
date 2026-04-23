@@ -192,6 +192,7 @@ pub(super) fn tool_status(
     let build_state_str = build_status.as_ref().map(|bs| match bs.state {
         atlas_store_sqlite::GraphBuildState::Building => "building",
         atlas_store_sqlite::GraphBuildState::Built => "built",
+        atlas_store_sqlite::GraphBuildState::Degraded => "degraded",
         atlas_store_sqlite::GraphBuildState::BuildFailed => "build_failed",
     });
 
@@ -234,6 +235,26 @@ pub(super) fn tool_status(
         "graph_built": graph_built,
         "build_state": build_state_str,
         "build_last_error": build_status.as_ref().and_then(|bs| bs.last_error.as_deref()),
+        "build_budget_stop_reason": build_status
+            .as_ref()
+            .and_then(|bs| bs.budget_stop_reason.as_deref()),
+        "build_status": build_status.as_ref().map(|bs| {
+            serde_json::json!({
+                "state": build_state_str,
+                "files_discovered": bs.files_discovered,
+                "files_processed": bs.files_processed,
+                "files_accepted": bs.files_accepted,
+                "files_skipped_by_byte_budget": bs.files_skipped_by_byte_budget,
+                "files_failed": bs.files_failed,
+                "bytes_accepted": bs.bytes_accepted,
+                "bytes_skipped": bs.bytes_skipped,
+                "nodes_written": bs.nodes_written,
+                "edges_written": bs.edges_written,
+                "budget_stop_reason": bs.budget_stop_reason,
+                "last_built_at": bs.last_built_at,
+                "last_error": bs.last_error,
+            })
+        }),
         "node_count": node_count,
         "edge_count": edge_count,
         "file_count": file_count,
@@ -377,6 +398,7 @@ pub(super) fn tool_doctor(
                     Ok(Some(bs)) => {
                         let (state_str, is_ok) = match bs.state {
                             GraphBuildState::Built => ("built", true),
+                            GraphBuildState::Degraded => ("degraded", false),
                             GraphBuildState::Building => ("building (interrupted?)", false),
                             GraphBuildState::BuildFailed => ("build_failed", false),
                         };
@@ -393,10 +415,10 @@ pub(super) fn tool_doctor(
                         if is_ok {
                             checks.push(pass!("graph_build_state", detail));
                         } else {
-                            let issue_code = if matches!(bs.state, GraphBuildState::Building) {
-                                "interrupted_build"
-                            } else {
-                                "failed_build"
+                            let issue_code = match bs.state {
+                                GraphBuildState::Building => "interrupted_build",
+                                GraphBuildState::Degraded => "degraded_build",
+                                _ => "failed_build",
                             };
                             checks.push(fail!("graph_build_state", detail, issue_code));
                         }

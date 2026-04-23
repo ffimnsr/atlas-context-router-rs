@@ -9,11 +9,17 @@ fn status_healthy_repo_returns_ok() {
         .finish_build(
             "/repo",
             atlas_store_sqlite::BuildFinishStats {
+                state: atlas_store_sqlite::GraphBuildState::Built,
                 files_discovered: 3,
                 files_processed: 3,
+                files_accepted: 3,
+                files_skipped_by_byte_budget: 0,
                 files_failed: 0,
+                bytes_accepted: 300,
+                bytes_skipped: 0,
                 nodes_written: 3,
                 edges_written: 2,
+                budget_stop_reason: None,
             },
         )
         .expect("finish_build");
@@ -28,6 +34,7 @@ fn status_healthy_repo_returns_ok() {
     assert!(v["message"].as_str().is_some());
     assert!(v["suggestions"].as_array().is_some());
     assert_eq!(v["build_state"].as_str(), Some("built"));
+    assert_eq!(v["build_status"]["files_accepted"].as_i64(), Some(3));
     assert!(v["node_count"].as_i64().unwrap_or(0) > 0);
 }
 

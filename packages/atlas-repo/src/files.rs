@@ -12,6 +12,18 @@ const BINARY_SNIFF_BYTES: usize = 8 * 1024;
 /// Atlas-specific ignore file name.
 const ATLASIGNORE_FILE: &str = ".atlasignore";
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CollectFilesStats {
+    pub skipped_unsupported: usize,
+    pub skipped_by_size: usize,
+}
+
+enum CheckFileOutcome {
+    Accept,
+    SkipBySize,
+    SkipOther,
+}
+
 /// Directory/path patterns that are always ignored regardless of `.atlasignore`.
 ///
 /// These cover well-known build artefact and dependency directories that should
@@ -57,6 +69,19 @@ pub fn collect_supported_files<F>(
 where
     F: FnMut(&Utf8Path) -> bool,
 {
+    let (results, stats) =
+        collect_supported_files_with_stats(repo_root, max_bytes, |path| supports_path(path))?;
+    Ok((results, stats.skipped_unsupported))
+}
+
+pub fn collect_supported_files_with_stats<F>(
+    repo_root: &Utf8Path,
+    max_bytes: Option<u64>,
+    mut supports_path: F,
+) -> Result<(Vec<Utf8PathBuf>, CollectFilesStats)>
+where
+    F: FnMut(&Utf8Path) -> bool,
+{
     let threshold = max_bytes.unwrap_or(DEFAULT_MAX_FILE_BYTES);
     let raw = git_ls_files(repo_root)?;
     let default_patterns: Vec<String> = DEFAULT_IGNORE_PATTERNS
@@ -65,7 +90,7 @@ where
         .collect();
     let ignore_patterns = load_atlasignore(repo_root);
     let mut results = Vec::with_capacity(raw.len());
-    let mut skipped_unsupported = 0usize;
+    let mut stats = CollectFilesStats::default();
 
     for rel_path in raw {
         if should_ignore(rel_path.as_str(), &default_patterns) {
@@ -77,14 +102,18 @@ where
             continue;
         }
         if !supports_path(rel_path.as_path()) {
-            skipped_unsupported += 1;
+            stats.skipped_unsupported += 1;
             tracing::debug!("skipping '{}': unsupported extension", rel_path);
             continue;
         }
         let abs = repo_root.join(&rel_path);
         match check_file(&abs, threshold) {
-            Ok(true) => results.push(rel_path),
-            Ok(false) => {
+            Ok(CheckFileOutcome::Accept) => results.push(rel_path),
+            Ok(CheckFileOutcome::SkipBySize) => {
+                stats.skipped_by_size += 1;
+                tracing::debug!("skipping '{}': size budget", rel_path);
+            }
+            Ok(CheckFileOutcome::SkipOther) => {
                 tracing::debug!("skipping '{}': too large, binary, or symlink", rel_path);
             }
             Err(e) => {
@@ -93,7 +122,7 @@ where
         }
     }
 
-    Ok((results, skipped_unsupported))
+    Ok((results, stats))
 }
 
 /// Read `.atlasignore` from the repo root and return non-empty, non-comment
@@ -313,7 +342,7 @@ fn git_submodule_paths(repo_root: &Utf8Path) -> Result<Vec<Utf8PathBuf>> {
 /// objects; reading the target's bytes would produce content that does not match
 /// what git indexes, and following symlinks outside the repo root is a security
 /// concern. If a symlink target should be analysed, it should be tracked directly.
-fn check_file(abs: &Utf8Path, max_bytes: u64) -> Result<bool> {
+fn check_file(abs: &Utf8Path, max_bytes: u64) -> Result<CheckFileOutcome> {
     // Use symlink_metadata so we can detect symlinks without following them.
     let sym_meta = abs
         .as_std_path()
@@ -322,18 +351,18 @@ fn check_file(abs: &Utf8Path, max_bytes: u64) -> Result<bool> {
 
     if sym_meta.file_type().is_symlink() {
         tracing::debug!("skipping '{}': symlink", abs);
-        return Ok(false);
+        return Ok(CheckFileOutcome::SkipOther);
     }
     if !sym_meta.is_file() {
-        return Ok(false);
+        return Ok(CheckFileOutcome::SkipOther);
     }
     if sym_meta.len() > max_bytes {
-        return Ok(false);
+        return Ok(CheckFileOutcome::SkipBySize);
     }
     if is_binary(abs)? {
-        return Ok(false);
+        return Ok(CheckFileOutcome::SkipOther);
     }
-    Ok(true)
+    Ok(CheckFileOutcome::Accept)
 }
 
 /// Sniff first `BINARY_SNIFF_BYTES` for null bytes.
@@ -536,10 +565,16 @@ mod tests {
         symlink(&target, &link).unwrap();
         let link_utf8 = Utf8Path::from_path(&link).unwrap();
         // Symlinks must be rejected.
-        assert!(!check_file(link_utf8, DEFAULT_MAX_FILE_BYTES).unwrap());
+        assert!(matches!(
+            check_file(link_utf8, DEFAULT_MAX_FILE_BYTES).unwrap(),
+            CheckFileOutcome::SkipOther
+        ));
         // The real file is accepted.
         let target_utf8 = Utf8Path::from_path(&target).unwrap();
-        assert!(check_file(target_utf8, DEFAULT_MAX_FILE_BYTES).unwrap());
+        assert!(matches!(
+            check_file(target_utf8, DEFAULT_MAX_FILE_BYTES).unwrap(),
+            CheckFileOutcome::Accept
+        ));
     }
 
     #[test]

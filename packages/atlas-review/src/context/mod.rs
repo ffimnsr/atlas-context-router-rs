@@ -15,11 +15,12 @@ pub(super) use atlas_contentstore::{
     store::{SearchFilters, SourceRow},
 };
 pub(super) use atlas_core::{
-    Result,
+    BudgetManager, BudgetPolicy, BudgetReport, Result,
     model::{
         AmbiguityMeta, ContextRequest, ContextResult, ContextTarget, NoiseReductionSummary,
-        SavedContextSource, SelectedEdge, SelectedFile, SelectedNode, SelectionReason,
-        TruncationMeta, WorkflowCallChain, WorkflowComponent, WorkflowFocusNode, WorkflowSummary,
+        SavedContextSource, SeedBudgetMeta, SelectedEdge, SelectedFile, SelectedNode,
+        SelectionReason, TruncationMeta, WorkflowCallChain, WorkflowComponent, WorkflowFocusNode,
+        WorkflowSummary,
     },
 };
 pub(super) use atlas_store_sqlite::Store;
@@ -68,6 +69,7 @@ pub struct ContextEngine<'a> {
     store: &'a Store,
     /// Optional content store for CM6 retrieval-backed restoration.
     content_store: Option<&'a ContentStore>,
+    budget_policy: BudgetPolicy,
 }
 
 impl<'a> ContextEngine<'a> {
@@ -76,6 +78,7 @@ impl<'a> ContextEngine<'a> {
         Self {
             store,
             content_store: None,
+            budget_policy: BudgetPolicy::default(),
         }
     }
 
@@ -86,6 +89,11 @@ impl<'a> ContextEngine<'a> {
     /// retrieval and merges them into `ContextResult::saved_context_sources`.
     pub fn with_content_store(mut self, cs: &'a ContentStore) -> Self {
         self.content_store = Some(cs);
+        self
+    }
+
+    pub fn with_budget_policy(mut self, policy: BudgetPolicy) -> Self {
+        self.budget_policy = policy;
         self
     }
 
@@ -101,12 +109,71 @@ impl<'a> ContextEngine<'a> {
     /// When `request.include_saved_context` is `true` and a content store is
     /// attached, also populates `saved_context_sources` (CM6).
     pub fn build(&self, request: &ContextRequest) -> Result<ContextResult> {
-        let mut result = build_context(self.store, request)?;
-        if request.include_saved_context
+        let mut budgets = BudgetManager::new();
+        let mut effective_request = request.clone();
+        effective_request.max_nodes = Some(budgets.resolve_limit(
+            self.budget_policy.review_context_extraction.nodes,
+            "review_context_extraction.max_nodes",
+            effective_request.max_nodes,
+        ));
+        effective_request.max_edges = Some(budgets.resolve_limit(
+            self.budget_policy.review_context_extraction.edges,
+            "review_context_extraction.max_edges",
+            effective_request.max_edges,
+        ));
+        effective_request.max_files = Some(budgets.resolve_limit(
+            self.budget_policy.review_context_extraction.files,
+            "review_context_extraction.max_files",
+            effective_request.max_files,
+        ));
+        effective_request.depth = Some(budgets.resolve_limit(
+            self.budget_policy.graph_traversal.depth,
+            "graph_traversal.max_depth",
+            effective_request.depth.map(|depth| depth as usize),
+        ) as u32);
+
+        let saved_source_limit = budgets.resolve_limit(
+            self.budget_policy.content_saved_context_lookup.sources,
+            "content_saved_context_lookup.max_sources",
+            None,
+        );
+
+        let mut result = build_context(self.store, &effective_request, &self.budget_policy)?;
+        if effective_request.include_saved_context
             && let Some(cs) = self.content_store
         {
-            result.saved_context_sources = retrieve_saved_context(cs, request, &result);
+            result.saved_context_sources =
+                retrieve_saved_context(cs, &effective_request, &result, saved_source_limit);
         }
+        let node_limit = result.request.max_nodes.unwrap_or(DEFAULT_MAX_NODES);
+        let edge_limit = result.request.max_edges.unwrap_or(DEFAULT_MAX_EDGES);
+        let file_limit = result.request.max_files.unwrap_or(DEFAULT_MAX_FILES);
+        budgets.record_usage(
+            self.budget_policy.review_context_extraction.nodes,
+            "review_context_extraction.max_nodes",
+            node_limit,
+            result.nodes.len() + result.truncation.nodes_dropped,
+            result.truncation.nodes_dropped > 0,
+        );
+        budgets.record_usage(
+            self.budget_policy.review_context_extraction.edges,
+            "review_context_extraction.max_edges",
+            edge_limit,
+            result.edges.len() + result.truncation.edges_dropped,
+            result.truncation.edges_dropped > 0,
+        );
+        budgets.record_usage(
+            self.budget_policy.review_context_extraction.files,
+            "review_context_extraction.max_files",
+            file_limit,
+            result.files.len() + result.truncation.files_dropped,
+            result.truncation.files_dropped > 0,
+        );
+        result.budget = budgets.summary(
+            "review_context_extraction.max_nodes",
+            node_limit,
+            result.nodes.len(),
+        );
         Ok(result)
     }
 }

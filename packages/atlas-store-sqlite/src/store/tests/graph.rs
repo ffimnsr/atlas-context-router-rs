@@ -115,7 +115,7 @@ fn impact_radius_one_hop() {
         .replace_file_graph("b.rs", "h", None, None, &[nb], &[])
         .unwrap();
 
-    let result = store.impact_radius(&["a.rs"], 3, 200).unwrap();
+    let result = store.impact_radius(&["a.rs"], 3, 200, 400).unwrap();
     assert_eq!(result.changed_nodes.len(), 1);
     assert!(
         result
@@ -142,7 +142,7 @@ fn impact_radius_cyclic_graph_terminates() {
         .unwrap();
 
     // Must not loop forever and must return both nodes.
-    let result = store.impact_radius(&["a.rs"], 5, 200).unwrap();
+    let result = store.impact_radius(&["a.rs"], 5, 200, 400).unwrap();
     let all_qns: Vec<&str> = result
         .changed_nodes
         .iter()
@@ -156,7 +156,7 @@ fn impact_radius_cyclic_graph_terminates() {
 #[test]
 fn impact_radius_empty_input_returns_empty() {
     let store = open_in_memory();
-    let result = store.impact_radius(&[], 3, 200).unwrap();
+    let result = store.impact_radius(&[], 3, 200, 400).unwrap();
     assert!(result.changed_nodes.is_empty());
     assert!(result.impacted_nodes.is_empty());
 }
@@ -179,7 +179,7 @@ fn impact_radius_disconnected_graph() {
         .replace_file_graph("c.rs", "h", None, None, &[nc], &[])
         .unwrap();
 
-    let result = store.impact_radius(&["a.rs"], 5, 200).unwrap();
+    let result = store.impact_radius(&["a.rs"], 5, 200, 400).unwrap();
     // b.rs is reachable; c.rs is disconnected and must not appear.
     let all_qns: Vec<&str> = result
         .changed_nodes
@@ -226,7 +226,7 @@ fn impact_radius_depth_cap() {
         .unwrap();
 
     // max_depth=1: only b should be reachable beyond the seed.
-    let result = store.impact_radius(&["a.rs"], 1, 200).unwrap();
+    let result = store.impact_radius(&["a.rs"], 1, 200, 400).unwrap();
     let impacted_qns: Vec<&str> = result
         .impacted_nodes
         .iter()
@@ -275,7 +275,7 @@ fn impact_radius_max_node_cap() {
 
     // Cap at 2 total nodes; seed a.rs has 1 node, so at most 1 impacted node
     // should be returned regardless of star size.
-    let result = store.impact_radius(&["a.rs"], 5, 2).unwrap();
+    let result = store.impact_radius(&["a.rs"], 5, 2, 400).unwrap();
     let total = result.changed_nodes.len() + result.impacted_nodes.len();
     assert!(
         total <= 2,
@@ -299,7 +299,7 @@ fn impact_radius_deleted_seed_file_returns_empty() {
     // Delete the seed file before querying impact.
     store.delete_file_graph("a.rs").unwrap();
 
-    let result = store.impact_radius(&["a.rs"], 5, 200).unwrap();
+    let result = store.impact_radius(&["a.rs"], 5, 200, 400).unwrap();
     assert!(
         result.changed_nodes.is_empty(),
         "deleted seed file must yield no changed nodes"
@@ -318,7 +318,7 @@ fn impact_radius_seed_file_with_no_nodes() {
         .replace_file_graph("empty.rs", "h", None, None, &[], &[])
         .unwrap();
 
-    let result = store.impact_radius(&["empty.rs"], 5, 200).unwrap();
+    let result = store.impact_radius(&["empty.rs"], 5, 200, 400).unwrap();
     assert!(
         result.changed_nodes.is_empty(),
         "file with no nodes must yield no changed nodes"
@@ -416,7 +416,7 @@ fn impact_radius_respects_depth_limit() {
         .replace_file_graph("d.rs", "h", None, None, &[nd], &[])
         .unwrap();
 
-    let result = store.impact_radius(&["a.rs"], 1, 200).unwrap();
+    let result = store.impact_radius(&["a.rs"], 1, 200, 400).unwrap();
     let all_files: Vec<&str> = result
         .changed_nodes
         .iter()
@@ -459,12 +459,49 @@ fn impact_radius_respects_node_count_limit() {
         .unwrap();
 
     // Limit to 2 total nodes — should stop before visiting all of b/c/d.
-    let result = store.impact_radius(&["a.rs"], 5, 2).unwrap();
+    let result = store.impact_radius(&["a.rs"], 5, 2, 400).unwrap();
     let total = result.changed_nodes.len() + result.impacted_nodes.len();
     assert!(
         total <= 2,
         "node count limit must be respected; got {total}"
     );
+}
+
+#[test]
+fn impact_radius_reports_traversal_edge_cap() {
+    let mut store = open_in_memory();
+    let na = make_node(NodeKind::Function, "a", "a.rs::fn::a", "a.rs", "rust");
+    let nb = make_node(NodeKind::Function, "b", "b.rs::fn::b", "b.rs", "rust");
+    let nc = make_node(NodeKind::Function, "c", "c.rs::fn::c", "c.rs", "rust");
+    let nd = make_node(NodeKind::Function, "d", "d.rs::fn::d", "d.rs", "rust");
+    let e1 = make_edge(EdgeKind::Calls, "a.rs::fn::a", "b.rs::fn::b", "a.rs");
+    let e2 = make_edge(EdgeKind::Calls, "a.rs::fn::a", "c.rs::fn::c", "a.rs");
+    let e3 = make_edge(EdgeKind::Calls, "a.rs::fn::a", "d.rs::fn::d", "a.rs");
+    store
+        .replace_file_graph("a.rs", "h", None, None, &[na], &[e1, e2, e3])
+        .unwrap();
+    store
+        .replace_file_graph("b.rs", "h", None, None, &[nb], &[])
+        .unwrap();
+    store
+        .replace_file_graph("c.rs", "h", None, None, &[nc], &[])
+        .unwrap();
+    store
+        .replace_file_graph("d.rs", "h", None, None, &[nd], &[])
+        .unwrap();
+
+    let result = store.impact_radius(&["a.rs"], 5, 200, 1).unwrap();
+
+    assert_eq!(result.relevant_edges.len(), 1);
+    let traversal = result
+        .traversal_budget
+        .expect("expected traversal metadata");
+    assert_eq!(traversal.requested_edge_budget, 1);
+    assert_eq!(traversal.accepted_edge_budget, 1);
+    assert_eq!(traversal.emitted_edge_count, 1);
+    assert_eq!(traversal.omitted_edge_count, 2);
+    assert!(traversal.budget_hit);
+    assert!(traversal.suggested_narrower_query.is_some());
 }
 
 // -------------------------------------------------------------------------

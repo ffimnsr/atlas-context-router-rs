@@ -22,11 +22,17 @@ fn finish_build_after_begin_sets_built_with_counters() {
         .finish_build(
             "/repo",
             BuildFinishStats {
+                state: GraphBuildState::Built,
                 files_discovered: 10,
                 files_processed: 9,
+                files_accepted: 9,
+                files_skipped_by_byte_budget: 1,
                 files_failed: 1,
+                bytes_accepted: 1024,
+                bytes_skipped: 2048,
                 nodes_written: 50,
                 edges_written: 30,
+                budget_stop_reason: Some("max_file_bytes".to_owned()),
             },
         )
         .unwrap();
@@ -34,9 +40,14 @@ fn finish_build_after_begin_sets_built_with_counters() {
     assert_eq!(status.state, GraphBuildState::Built);
     assert_eq!(status.files_discovered, 10);
     assert_eq!(status.files_processed, 9);
+    assert_eq!(status.files_accepted, 9);
+    assert_eq!(status.files_skipped_by_byte_budget, 1);
     assert_eq!(status.files_failed, 1);
+    assert_eq!(status.bytes_accepted, 1024);
+    assert_eq!(status.bytes_skipped, 2048);
     assert_eq!(status.nodes_written, 50);
     assert_eq!(status.edges_written, 30);
+    assert_eq!(status.budget_stop_reason.as_deref(), Some("max_file_bytes"));
     assert!(status.last_built_at.is_some());
     assert!(status.last_error.is_none());
 }
@@ -67,11 +78,17 @@ fn list_build_statuses_returns_all_repos() {
         .finish_build(
             "/repo/b",
             BuildFinishStats {
+                state: GraphBuildState::Built,
                 files_discovered: 5,
                 files_processed: 5,
+                files_accepted: 5,
+                files_skipped_by_byte_budget: 0,
                 files_failed: 0,
+                bytes_accepted: 500,
+                bytes_skipped: 0,
                 nodes_written: 20,
                 edges_written: 10,
+                budget_stop_reason: None,
             },
         )
         .unwrap();
@@ -102,11 +119,17 @@ fn counters_overwritten_on_repeated_finish() {
         .finish_build(
             "/repo",
             BuildFinishStats {
+                state: GraphBuildState::Built,
                 files_discovered: 5,
                 files_processed: 5,
+                files_accepted: 5,
+                files_skipped_by_byte_budget: 0,
                 files_failed: 0,
+                bytes_accepted: 500,
+                bytes_skipped: 0,
                 nodes_written: 10,
                 edges_written: 5,
+                budget_stop_reason: None,
             },
         )
         .unwrap();
@@ -116,15 +139,54 @@ fn counters_overwritten_on_repeated_finish() {
         .finish_build(
             "/repo",
             BuildFinishStats {
+                state: GraphBuildState::Built,
                 files_discovered: 20,
                 files_processed: 18,
+                files_accepted: 18,
+                files_skipped_by_byte_budget: 2,
                 files_failed: 2,
+                bytes_accepted: 1800,
+                bytes_skipped: 200,
                 nodes_written: 80,
                 edges_written: 40,
+                budget_stop_reason: Some("max_total_bytes_per_run".to_owned()),
             },
         )
         .unwrap();
     let status = store.get_build_status("/repo").unwrap().unwrap();
     assert_eq!(status.files_discovered, 20);
+    assert_eq!(status.files_accepted, 18);
     assert_eq!(status.nodes_written, 80);
+}
+
+#[test]
+fn finish_build_persists_degraded_state_and_stop_reason() {
+    let store = open_in_memory();
+    store.begin_build("/repo").unwrap();
+    store
+        .finish_build(
+            "/repo",
+            BuildFinishStats {
+                state: GraphBuildState::Degraded,
+                files_discovered: 6,
+                files_processed: 4,
+                files_accepted: 4,
+                files_skipped_by_byte_budget: 2,
+                files_failed: 0,
+                bytes_accepted: 400,
+                bytes_skipped: 200,
+                nodes_written: 12,
+                edges_written: 8,
+                budget_stop_reason: Some("max_total_bytes_per_run".to_owned()),
+            },
+        )
+        .unwrap();
+
+    let status = store.get_build_status("/repo").unwrap().unwrap();
+    assert_eq!(status.state, GraphBuildState::Degraded);
+    assert_eq!(
+        status.budget_stop_reason.as_deref(),
+        Some("max_total_bytes_per_run")
+    );
+    assert_eq!(status.files_skipped_by_byte_budget, 2);
 }

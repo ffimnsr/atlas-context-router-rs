@@ -2,7 +2,7 @@ use atlas_core::model::{
     ChangeType, ChangedFile, ContextIntent, ContextRequest, ContextTarget, NoiseReductionSummary,
     WorkflowCallChain, WorkflowComponent, WorkflowFocusNode,
 };
-use atlas_core::{ImpactResult, Result};
+use atlas_core::{BudgetReport, ImpactResult, Result};
 use atlas_impact::analyze as advanced_impact;
 use atlas_store_sqlite::Store;
 use serde::Serialize;
@@ -85,6 +85,8 @@ pub struct ExplainChangeSummary {
     pub test_impact: ExplainTestImpact,
     pub noise_reduction: NoiseReductionSummary,
     pub summary: String,
+    #[serde(flatten)]
+    pub budget: BudgetReport,
 }
 
 pub fn empty_explain_change_summary() -> ExplainChangeSummary {
@@ -117,6 +119,7 @@ pub fn empty_explain_change_summary() -> ExplainChangeSummary {
             rules_applied: vec![],
         },
         summary: "No changed files detected.".to_string(),
+        budget: BudgetReport::not_applicable(),
     }
 }
 
@@ -128,7 +131,15 @@ pub fn build_explain_change_summary(
     max_nodes: usize,
 ) -> Result<ExplainChangeSummary> {
     let file_refs: Vec<&str> = files.iter().map(String::as_str).collect();
-    let base_impact = store.impact_radius(&file_refs, max_depth, max_nodes)?;
+    let base_impact = store.impact_radius(
+        &file_refs,
+        max_depth,
+        max_nodes,
+        atlas_core::BudgetPolicy::default()
+            .graph_traversal
+            .edges
+            .default_limit,
+    )?;
     let advanced = advanced_impact(base_impact);
     let workflow_request = ContextRequest {
         intent: ContextIntent::Review,
@@ -298,6 +309,7 @@ pub fn build_explain_change_summary(
             },
         ),
         summary: summary_parts.join(" "),
+        budget: workflow_result.budget.clone(),
     })
 }
 

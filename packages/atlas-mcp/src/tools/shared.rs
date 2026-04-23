@@ -2,8 +2,8 @@ use anyhow::{Context, Result};
 use atlas_core::model::ContextIntent;
 use atlas_core::model::{ChangeType, ChangedFile};
 use atlas_core::{
-    GraphHealthInput, graph_health_error_message, graph_health_error_suggestions,
-    is_schema_mismatch_error, select_graph_health_error_code,
+    BudgetPolicy, BudgetReport, GraphHealthInput, graph_health_error_message,
+    graph_health_error_suggestions, is_schema_mismatch_error, select_graph_health_error_code,
 };
 use atlas_parser::ParserRegistry;
 use atlas_repo::{DiffTarget, changed_files, find_repo_root, hash_file};
@@ -59,6 +59,12 @@ pub(super) fn string_array_arg(args: Option<&serde_json::Value>, key: &str) -> R
 
 pub(super) fn open_store(db_path: &str) -> Result<Store> {
     Store::open(db_path).with_context(|| format!("cannot open database at {db_path}"))
+}
+
+pub(super) fn load_budget_policy(repo_root: &str) -> Result<BudgetPolicy> {
+    let config =
+        atlas_engine::Config::load(&atlas_engine::paths::atlas_dir(repo_root)).unwrap_or_default();
+    config.budget_policy()
 }
 
 pub(super) fn failure_category(
@@ -134,6 +140,16 @@ pub(super) fn tool_result_value<T: Serialize>(
     }
 
     Ok(response)
+}
+
+pub(super) fn inject_budget_metadata(response: &mut serde_json::Value, budget: &BudgetReport) {
+    response["budget_status"] = serde_json::json!(budget.budget_status);
+    response["budget_hit"] = serde_json::json!(budget.budget_hit);
+    response["budget_name"] = serde_json::json!(&budget.budget_name);
+    response["budget_limit"] = serde_json::json!(budget.budget_limit);
+    response["budget_observed"] = serde_json::json!(budget.budget_observed);
+    response["partial"] = serde_json::json!(budget.partial);
+    response["safe_to_answer"] = serde_json::json!(budget.safe_to_answer);
 }
 
 #[derive(Serialize)]

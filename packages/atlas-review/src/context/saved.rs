@@ -2,12 +2,11 @@ use super::*;
 use crate::ranking::SavedContextRankingPrimitives;
 
 /// Maximum number of saved-context sources to include in a result.
-const MAX_SAVED_SOURCES: usize = 5;
-
 pub(super) fn retrieve_saved_context(
     content_store: &ContentStore,
     request: &ContextRequest,
     result: &ContextResult,
+    max_saved_sources: usize,
 ) -> Vec<SavedContextSource> {
     let ranking = SavedContextRankingPrimitives::default();
     let mut terms: Vec<String> = result
@@ -41,7 +40,7 @@ pub(super) fn retrieve_saved_context(
     for chunk in &chunks {
         if !seen_ids.contains(&chunk.source_id) {
             seen_ids.push(chunk.source_id.clone());
-            if seen_ids.len() >= MAX_SAVED_SOURCES {
+            if seen_ids.len() >= max_saved_sources {
                 break;
             }
         }

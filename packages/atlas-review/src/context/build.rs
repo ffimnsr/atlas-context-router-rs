@@ -1,13 +1,17 @@
 use super::*;
 
-pub fn build_context(store: &Store, request: &ContextRequest) -> Result<ContextResult> {
+pub fn build_context(
+    store: &Store,
+    request: &ContextRequest,
+    policy: &BudgetPolicy,
+) -> Result<ContextResult> {
     use atlas_core::model::ContextIntent;
     match request.intent {
-        ContextIntent::Review => return build_review_context(store, request),
+        ContextIntent::Review => return build_review_context(store, request, policy),
         ContextIntent::Impact
         | ContextIntent::ImpactAnalysis
         | ContextIntent::RefactorSafety
-        | ContextIntent::DependencyRemoval => return build_impact_context(store, request),
+        | ContextIntent::DependencyRemoval => return build_impact_context(store, request, policy),
         _ => {}
     }
 
@@ -24,7 +28,7 @@ pub fn build_context(store: &Store, request: &ContextRequest) -> Result<ContextR
                 target: ContextTarget::ChangedFiles { paths },
                 ..request.clone()
             };
-            return build_impact_context(store, &derived);
+            return build_impact_context(store, &derived, policy);
         }
         ContextTarget::EdgeQuerySeed {
             source_qname,
@@ -58,15 +62,28 @@ pub fn build_context(store: &Store, request: &ContextRequest) -> Result<ContextR
 pub(super) fn build_review_context(
     store: &Store,
     request: &ContextRequest,
+    policy: &BudgetPolicy,
 ) -> Result<ContextResult> {
     let changed_paths = extract_changed_paths(request);
-    let path_refs: Vec<&str> = changed_paths.iter().map(String::as_str).collect();
+    let accepted_paths: Vec<String> = changed_paths
+        .iter()
+        .take(policy.graph_traversal.seed_files.default_limit)
+        .cloned()
+        .collect();
 
-    let max_nodes = request.max_nodes.unwrap_or(DEFAULT_MAX_NODES);
     let max_depth = request.depth.unwrap_or(2);
-    let traversal_max_nodes = max_nodes.saturating_add(max_nodes.min(16));
+    let traversal_max_nodes = policy.graph_traversal.nodes.default_limit;
+    let traversal_max_edges = policy.graph_traversal.edges.default_limit;
 
-    let impact = store.impact_radius(&path_refs, max_depth, traversal_max_nodes)?;
+    let impact = store.impact_radius(
+        &accepted_paths
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        max_depth,
+        traversal_max_nodes,
+        traversal_max_edges,
+    )?;
     let advanced = atlas_impact::analyze(impact.clone());
     let impact_scores: HashMap<String, f64> = advanced
         .scored_nodes
@@ -130,9 +147,23 @@ pub(super) fn build_review_context(
         edges,
         files,
         truncation: TruncationMeta::none(),
+        seed_budgets: vec![SeedBudgetMeta::new(
+            "changed_files",
+            changed_paths.len(),
+            accepted_paths.len(),
+            true,
+            (changed_paths.len() > accepted_paths.len()).then(|| {
+                format!(
+                    "narrow changed file list to {} file(s) or query one package/path",
+                    accepted_paths.len()
+                )
+            }),
+        )],
+        traversal_budget: impact.traversal_budget.clone(),
         ambiguity: None,
         workflow: None,
         saved_context_sources: vec![],
+        budget: BudgetReport::not_applicable(),
     };
 
     rank_context(&mut result);
@@ -152,16 +183,25 @@ pub(super) fn build_review_context(
 pub(super) fn build_impact_context(
     store: &Store,
     request: &ContextRequest,
+    policy: &BudgetPolicy,
 ) -> Result<ContextResult> {
-    let seed_paths: Vec<String> = match &request.target {
-        ContextTarget::ChangedFiles { paths } => paths.clone(),
-        ContextTarget::FilePath { path } => vec![path.clone()],
+    let (seed_paths, seed_budgets): (Vec<String>, Vec<SeedBudgetMeta>) = match &request.target {
+        ContextTarget::ChangedFiles { paths } => (paths.clone(), vec![]),
+        ContextTarget::FilePath { path } => (vec![path.clone()], vec![]),
         ContextTarget::QualifiedName { .. } | ContextTarget::SymbolName { .. } => {
             match resolve_target(store, &request.target)? {
-                ResolvedTarget::Node(node) => vec![node.file_path.clone()],
-                ResolvedTarget::File(path) => vec![path],
+                ResolvedTarget::Node(node) => (vec![node.file_path.clone()], vec![]),
+                ResolvedTarget::File(path) => (vec![path], vec![]),
                 ResolvedTarget::Ambiguous(meta) => {
-                    return Ok(build_ambiguous_result(request, meta));
+                    let mut result = build_ambiguous_result(request, meta);
+                    result.seed_budgets.push(SeedBudgetMeta::new(
+                        "symbol_resolution",
+                        0,
+                        0,
+                        false,
+                        Some("narrow symbol query to exact qualified name or file path".to_owned()),
+                    ));
+                    return Ok(result);
                 }
                 ResolvedTarget::NotFound { suggestions } => {
                     return Ok(build_not_found_result(request, suggestions));
@@ -169,18 +209,37 @@ pub(super) fn build_impact_context(
             }
         }
         ContextTarget::ChangedSymbols { qnames } => {
+            let accepted_qnames: Vec<String> = qnames
+                .iter()
+                .take(policy.graph_traversal.seed_nodes.default_limit)
+                .cloned()
+                .collect();
             let mut paths: Vec<String> = Vec::new();
-            for qn in qnames {
+            for qn in &accepted_qnames {
                 if let Some(node) = store.node_by_qname(qn)? {
                     paths.push(node.file_path);
                 }
             }
             paths.dedup();
-            paths
+            (
+                paths,
+                vec![SeedBudgetMeta::new(
+                    "changed_symbols",
+                    qnames.len(),
+                    accepted_qnames.len(),
+                    true,
+                    (qnames.len() > accepted_qnames.len()).then(|| {
+                        format!(
+                            "narrow changed symbol list to {} symbol(s) or split request",
+                            accepted_qnames.len()
+                        )
+                    }),
+                )],
+            )
         }
         ContextTarget::EdgeQuerySeed { source_qname, .. } => {
             match store.node_by_qname(source_qname)? {
-                Some(node) => vec![node.file_path],
+                Some(node) => (vec![node.file_path], vec![]),
                 None => return Ok(build_not_found_result(request, vec![])),
             }
         }
@@ -191,7 +250,9 @@ pub(super) fn build_impact_context(
         target: ContextTarget::ChangedFiles { paths: seed_paths },
         ..request.clone()
     };
-    build_review_context(store, &adapted)
+    let mut result = build_review_context(store, &adapted, policy)?;
+    result.seed_budgets.extend(seed_budgets);
+    Ok(result)
 }
 
 fn extract_changed_paths(request: &ContextRequest) -> Vec<String> {

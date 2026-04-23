@@ -1,4 +1,5 @@
 use super::*;
+use std::os::unix::fs::PermissionsExt;
 
 #[test]
 fn sqlite_fts5_smoke_round_trip() {
@@ -256,7 +257,6 @@ fn build_and_update_skip_unsupported_files_without_count_drift() {
     let build = read_json_data_output("build", run_atlas(repo.path(), &["--json", "build"]));
     assert!(build["skipped_unsupported"].as_u64().unwrap_or_default() >= 1);
     assert!(build["parsed"].as_u64().unwrap_or_default() >= 2);
-
     let update = read_json_data_output(
         "update",
         run_atlas(
@@ -267,6 +267,90 @@ fn build_and_update_skip_unsupported_files_without_count_drift() {
     assert_eq!(update["skipped_unsupported"], json!(1));
     assert_eq!(update["parsed"], json!(0));
     assert_eq!(update["parse_errors"], json!(0));
+}
+
+#[test]
+fn build_budget_degraded_case_surfaces_in_cli_json_and_status() {
+    let repo = setup_repo(&[("a.rs", "pub fn a() {}\n"), ("b.rs", "pub fn b() {}\n")]);
+
+    run_atlas(repo.path(), &["init"]);
+    fs::write(
+        repo.path().join(".atlas").join("config.toml"),
+        r#"[build]
+parse_batch_size = 16
+max_files_per_run = 1
+max_total_bytes_per_run = 1048576
+max_file_bytes = 1048576
+max_parse_failures = 10
+max_parse_failure_ratio = 1.0
+max_wall_time_ms = 30000
+"#,
+    )
+    .expect("write config");
+
+    let build = read_json_data_output("build", run_atlas(repo.path(), &["--json", "build"]));
+    assert_eq!(build["budget"]["budget_status"], json!("partial_result"));
+    assert_eq!(
+        build["budget_counters"]["budget_stop_reason"],
+        json!("max_files_per_run")
+    );
+    assert_eq!(build["budget_counters"]["files_accepted"], json!(1));
+    assert_eq!(build["parsed"], json!(1));
+
+    let status = read_json_data_output("status", run_atlas(repo.path(), &["--json", "status"]));
+    assert_eq!(status["error_code"], json!("degraded_build"));
+    assert_eq!(status["build_state"], json!("degraded"));
+    assert_eq!(status["build_status"]["budget_stop_reason"], json!("max_files_per_run"));
+    assert_eq!(status["build_status"]["files_accepted"], json!(1));
+}
+
+#[test]
+fn build_budget_fail_closed_case_surfaces_build_failed_state() {
+    let repo = setup_repo(&[("lib.rs", "pub fn ok() {}\n")]);
+
+    run_atlas(repo.path(), &["init"]);
+    run_atlas(repo.path(), &["build"]);
+    fs::write(
+        repo.path().join(".atlas").join("config.toml"),
+        r#"[build]
+parse_batch_size = 16
+max_files_per_run = 10
+max_total_bytes_per_run = 1048576
+max_file_bytes = 1048576
+max_parse_failures = 0
+max_parse_failure_ratio = 1.0
+max_wall_time_ms = 30000
+"#,
+    )
+    .expect("write config");
+
+    let lib_path = repo.path().join("lib.rs");
+    let original_mode = fs::metadata(&lib_path)
+        .expect("metadata")
+        .permissions()
+        .mode();
+
+    let mut perms = fs::metadata(&lib_path).expect("metadata").permissions();
+    perms.set_mode(0o000);
+    fs::set_permissions(&lib_path, perms).expect("set unreadable permissions");
+
+    let update = read_json_data_output("update", run_atlas(repo.path(), &["--json", "update"]));
+
+    let mut restore = fs::metadata(&lib_path).expect("metadata").permissions();
+    restore.set_mode(original_mode);
+    fs::set_permissions(&lib_path, restore).expect("restore file permissions");
+
+    assert_eq!(update["budget"]["budget_status"], json!("blocked"));
+    assert_eq!(
+        update["budget_counters"]["budget_stop_reason"],
+        json!("max_parse_failures")
+    );
+    assert_eq!(update["parse_errors"], json!(1));
+
+    let status = read_json_data_output("status", run_atlas(repo.path(), &["--json", "status"]));
+    assert_eq!(status["error_code"], json!("failed_build"));
+    assert_eq!(status["build_state"], json!("build_failed"));
+    assert_eq!(status["build_status"]["budget_stop_reason"], json!("max_parse_failures"));
 }
 
 #[test]

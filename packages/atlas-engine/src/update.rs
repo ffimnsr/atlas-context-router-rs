@@ -7,7 +7,7 @@ use std::time::Instant;
 
 use anyhow::{Context, Result};
 use atlas_core::{
-    PackageOwner,
+    BudgetReport, BuildUpdateBudgetCounters, PackageOwner,
     model::{ChangeType, ParsedFile},
 };
 use atlas_parser::{ParserRegistry, TreeCache};
@@ -18,7 +18,9 @@ use atlas_store_sqlite::Store;
 use camino::Utf8Path;
 use rayon::prelude::*;
 
+use crate::build_budget::{BuildBudgetDecision, BuildBudgetTracker};
 use crate::call_resolution::reconcile_call_targets;
+use crate::config::BuildRunBudget;
 use crate::owner_graph::refresh_owner_graphs;
 
 type ParseWorkItem = (String, camino::Utf8PathBuf, Option<tree_sitter::Tree>);
@@ -68,6 +70,8 @@ pub struct UpdateOptions {
     pub batch_size: usize,
     /// Which changes to process.
     pub target: UpdateTarget,
+    /// Centralized operational budget for update work.
+    pub budget: BuildRunBudget,
 }
 
 impl Default for UpdateOptions {
@@ -76,6 +80,7 @@ impl Default for UpdateOptions {
             fail_fast: false,
             batch_size: crate::config::DEFAULT_PARSE_BATCH_SIZE,
             target: UpdateTarget::WorkingTree,
+            budget: BuildRunBudget::default(),
         }
     }
 }
@@ -90,6 +95,8 @@ pub struct UpdateSummary {
     pub parse_errors: usize,
     pub nodes_updated: usize,
     pub edges_updated: usize,
+    pub budget_counters: BuildUpdateBudgetCounters,
+    pub budget: BudgetReport,
     pub elapsed_ms: u128,
 }
 
@@ -150,6 +157,7 @@ pub fn update_graph(
     opts: &UpdateOptions,
 ) -> Result<UpdateSummary> {
     let started = Instant::now();
+    let mut budget = BuildBudgetTracker::new(opts.budget);
 
     let mut store =
         Store::open(db_path).with_context(|| format!("cannot open database at {db_path}"))?;
@@ -184,6 +192,7 @@ pub fn update_graph(
             changed_files(repo_root, &diff_target).context("cannot detect changed files")?
         }
     };
+    budget.set_files_discovered(git_changes.len());
 
     drop(_diff_span);
 
@@ -192,6 +201,13 @@ pub fn update_graph(
     let mut to_rename: Vec<(String, String)> = Vec::new(); // (old_path, new_path)
 
     for cf in &git_changes {
+        if matches!(
+            budget.maybe_stop_for_time(started),
+            BuildBudgetDecision::Degraded
+        ) {
+            break;
+        }
+
         match cf.change_type {
             ChangeType::Deleted => to_delete.push(cf.path.clone()),
             ChangeType::Renamed => {
@@ -282,8 +298,44 @@ pub fn update_graph(
 
     let _parse_span = tracing::info_span!("update.parse_changed").entered();
     let mut parsed_changed: Vec<ParsedFile> = Vec::new();
+    let mut changed_budgeted: Vec<(String, camino::Utf8PathBuf)> = Vec::new();
+    let mut budget_blocked = false;
+    let mut attempted_files = 0usize;
 
-    for chunk in changed_candidates.chunks(opts.batch_size) {
+    for (rel_str, abs_path) in changed_candidates {
+        let file_bytes = match fs::metadata(abs_path.as_std_path()) {
+            Ok(meta) => meta.len(),
+            Err(e) => {
+                tracing::warn!("stat '{}' failed: {e}", rel_str);
+                parse_errors += 1;
+                if opts.fail_fast {
+                    return Err(anyhow::Error::from(e)
+                        .context(format!("stat '{rel_str}' failed (--fail-fast)")));
+                }
+                continue;
+            }
+        };
+        if file_bytes > opts.budget.max_file_bytes {
+            budget.note_skipped_by_file_bytes(file_bytes);
+            continue;
+        }
+        match budget.try_accept_file(file_bytes) {
+            BuildBudgetDecision::Continue => changed_budgeted.push((rel_str, abs_path)),
+            BuildBudgetDecision::Degraded => break,
+            BuildBudgetDecision::Blocked => {
+                unreachable!("update file acceptance does not hard-block")
+            }
+        }
+    }
+
+    for chunk in changed_budgeted.chunks(opts.batch_size) {
+        if matches!(
+            budget.maybe_stop_for_time(started),
+            BuildBudgetDecision::Degraded
+        ) {
+            break;
+        }
+
         // Move old trees out of the cache for each file in this chunk so
         // they can be owned by the parallel closure (Tree: Send, not Sync).
         let mut work: Vec<ParseWorkItem> = chunk
@@ -316,6 +368,7 @@ pub fn update_graph(
             .collect();
 
         for (rel_str, outcome) in results {
+            attempted_files += 1;
             match outcome {
                 Ok((pf, tree)) => {
                     if let Some(t) = tree {
@@ -327,6 +380,12 @@ pub fn update_graph(
                 Err(msg) => {
                     tracing::warn!("processing '{}' failed: {msg}", rel_str);
                     parse_errors += 1;
+                    if matches!(
+                        budget.note_parse_failure(attempted_files),
+                        BuildBudgetDecision::Blocked
+                    ) {
+                        budget_blocked = true;
+                    }
                     if opts.fail_fast {
                         return Err(anyhow::anyhow!(
                             "processing '{rel_str}' failed: {msg} (--fail-fast)"
@@ -334,6 +393,14 @@ pub fn update_graph(
                     }
                 }
             }
+
+            if budget_blocked {
+                break;
+            }
+        }
+
+        if budget_blocked {
+            break;
         }
     }
     drop(_parse_span);
@@ -367,8 +434,42 @@ pub fn update_graph(
     // ── Phase 2: parse dependent files ───────────────────────────────────────
     let _dep_parse_span = tracing::info_span!("update.parse_dependents").entered();
     let mut parsed_deps: Vec<ParsedFile> = Vec::new();
+    let mut dep_budgeted: Vec<(String, camino::Utf8PathBuf)> = Vec::new();
 
-    for chunk in dep_candidates.chunks(opts.batch_size) {
+    for (rel_str, abs_path) in dep_candidates {
+        let file_bytes = match fs::metadata(abs_path.as_std_path()) {
+            Ok(meta) => meta.len(),
+            Err(e) => {
+                tracing::warn!("stat dependent '{}' failed: {e}", rel_str);
+                parse_errors += 1;
+                if opts.fail_fast {
+                    return Err(anyhow::Error::from(e)
+                        .context(format!("stat dependent '{rel_str}' failed (--fail-fast)")));
+                }
+                continue;
+            }
+        };
+        if file_bytes > opts.budget.max_file_bytes {
+            budget.note_skipped_by_file_bytes(file_bytes);
+            continue;
+        }
+        match budget.try_accept_file(file_bytes) {
+            BuildBudgetDecision::Continue => dep_budgeted.push((rel_str, abs_path)),
+            BuildBudgetDecision::Degraded => break,
+            BuildBudgetDecision::Blocked => {
+                unreachable!("update file acceptance does not hard-block")
+            }
+        }
+    }
+
+    for chunk in dep_budgeted.chunks(opts.batch_size) {
+        if matches!(
+            budget.maybe_stop_for_time(started),
+            BuildBudgetDecision::Degraded
+        ) {
+            break;
+        }
+
         let mut work: Vec<ParseWorkItem> = chunk
             .iter()
             .map(|(rel_str, abs_path)| {
@@ -399,6 +500,7 @@ pub fn update_graph(
             .collect();
 
         for (rel_str, outcome) in results {
+            attempted_files += 1;
             match outcome {
                 Ok((pf, tree)) => {
                     if let Some(t) = tree {
@@ -410,6 +512,12 @@ pub fn update_graph(
                 Err(msg) => {
                     tracing::warn!("processing dependent '{}' failed: {msg}", rel_str);
                     parse_errors += 1;
+                    if matches!(
+                        budget.note_parse_failure(attempted_files),
+                        BuildBudgetDecision::Blocked
+                    ) {
+                        budget_blocked = true;
+                    }
                     if opts.fail_fast {
                         return Err(anyhow::anyhow!(
                             "processing dependent '{rel_str}' failed: {msg} (--fail-fast)"
@@ -417,6 +525,14 @@ pub fn update_graph(
                     }
                 }
             }
+
+            if budget_blocked {
+                break;
+            }
+        }
+
+        if budget_blocked {
+            break;
         }
     }
     drop(_dep_parse_span);
@@ -466,6 +582,8 @@ pub fn update_graph(
 
     let parsed_count = parsed_changed.len() + parsed_deps.len();
 
+    let (budget_counters, budget_report) = budget.finish();
+
     Ok(UpdateSummary {
         deleted: deleted_count,
         renamed: renamed_count,
@@ -474,6 +592,8 @@ pub fn update_graph(
         parse_errors,
         nodes_updated: total_nodes,
         edges_updated: total_edges,
+        budget_counters,
+        budget: budget_report,
         elapsed_ms: started.elapsed().as_millis(),
     })
 }
@@ -507,5 +627,80 @@ fn annotate_parsed_file_owner(parsed_file: &mut ParsedFile, owner: Option<&Packa
             );
         }
         node.extra_json = serde_json::Value::Object(extra);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{BuildOptions, BuildRunBudget, build_graph};
+    use atlas_core::BudgetStatus;
+    use std::os::unix::fs::PermissionsExt;
+    use std::process::Command;
+
+    fn git(dir: &std::path::Path, args: &[&str]) {
+        let status = Command::new("git")
+            .current_dir(dir)
+            .args(args)
+            .env("GIT_AUTHOR_NAME", "Atlas Test")
+            .env("GIT_AUTHOR_EMAIL", "test@atlas")
+            .env("GIT_COMMITTER_NAME", "Atlas Test")
+            .env("GIT_COMMITTER_EMAIL", "test@atlas")
+            .status()
+            .expect("git command");
+        assert!(status.success(), "git {args:?} failed");
+    }
+
+    #[test]
+    fn update_graph_blocks_when_parse_failure_budget_is_exceeded() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo_root = dir.path();
+
+        git(repo_root, &["init", "--quiet"]);
+        std::fs::write(repo_root.join("lib.rs"), "pub fn ok() {}\n").unwrap();
+        git(repo_root, &["add", "lib.rs"]);
+        git(repo_root, &["commit", "--quiet", "-m", "init"]);
+
+        let db_path = repo_root.join("worldtree.db");
+        build_graph(
+            Utf8Path::from_path(repo_root).unwrap(),
+            db_path.to_str().unwrap(),
+            &BuildOptions {
+                fail_fast: true,
+                batch_size: 16,
+                budget: BuildRunBudget::default(),
+            },
+        )
+        .unwrap();
+
+        let lib_path = repo_root.join("lib.rs");
+        let mut perms = std::fs::metadata(&lib_path).unwrap().permissions();
+        perms.set_mode(0o000);
+        std::fs::set_permissions(&lib_path, perms).unwrap();
+
+        let budget = BuildRunBudget {
+            max_parse_failures: 0,
+            max_parse_failure_ratio_bps: 10_000,
+            ..BuildRunBudget::default()
+        };
+
+        let summary = update_graph(
+            Utf8Path::from_path(repo_root).unwrap(),
+            db_path.to_str().unwrap(),
+            &UpdateOptions {
+                fail_fast: false,
+                batch_size: 16,
+                target: UpdateTarget::WorkingTree,
+                budget,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(summary.budget.budget_status, BudgetStatus::Blocked);
+        assert_eq!(summary.parse_errors, 1);
+        assert_eq!(
+            summary.budget_counters.budget_stop_reason.as_deref(),
+            Some("max_parse_failures")
+        );
     }
 }

@@ -372,6 +372,7 @@ pub fn run_doctor(cli: &Cli) -> Result<()> {
                     Ok(Some(bs)) => {
                         let (state_str, is_ok) = match bs.state {
                             GraphBuildState::Built => ("built", true),
+                            GraphBuildState::Degraded => ("degraded", false),
                             GraphBuildState::Building => ("building (interrupted?)", false),
                             GraphBuildState::BuildFailed => ("build_failed", false),
                         };
@@ -389,10 +390,10 @@ pub fn run_doctor(cli: &Cli) -> Result<()> {
                             } else {
                                 format!("state={state_str}")
                             };
-                            let issue_code = if matches!(bs.state, GraphBuildState::Building) {
-                                "interrupted_build"
-                            } else {
-                                "failed_build"
+                            let issue_code = match bs.state {
+                                GraphBuildState::Building => "interrupted_build",
+                                GraphBuildState::Degraded => "degraded_build",
+                                _ => "failed_build",
                             };
                             checks.push(CheckResult::fail(
                                 "graph_build_state",

@@ -159,7 +159,19 @@ fn bench_impact_radius(c: &mut Criterion) {
 
     c.bench_function("store/impact_radius_450_nodes", |b| {
         let seed: Vec<&str> = paths[..3].iter().map(String::as_str).collect();
-        b.iter(|| store.impact_radius(&seed, 5, 200).expect("impact"));
+        b.iter(|| {
+            store
+                .impact_radius(
+                    &seed,
+                    5,
+                    200,
+                    atlas_core::BudgetPolicy::default()
+                        .graph_traversal
+                        .edges
+                        .default_limit,
+                )
+                .expect("impact")
+        });
     });
 }
 

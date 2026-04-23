@@ -5,8 +5,10 @@
 //! fields to reduce token overhead while keeping the information an agent
 //! actually needs.
 
+use atlas_core::BudgetReport;
 use atlas_core::model::{
-    ContextResult, Edge, ImpactResult, Node, SavedContextSource, SelectedEdge, SelectedNode,
+    ContextResult, Edge, ImpactResult, Node, SavedContextSource, SeedBudgetMeta, SelectedEdge,
+    SelectedNode, TraversalBudgetMeta,
 };
 use serde::Serialize;
 
@@ -84,6 +86,12 @@ pub struct PackagedImpact<'a> {
     pub relevant_edges: Vec<CompactEdge<'a>>,
     /// True when any list was capped.
     pub truncated: bool,
+    #[serde(skip_serializing_if = "<[SeedBudgetMeta]>::is_empty")]
+    pub seed_budgets: &'a [SeedBudgetMeta],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub traversal_budget: Option<&'a TraversalBudgetMeta>,
+    #[serde(flatten)]
+    pub budget: BudgetReport,
 }
 
 pub fn package_impact<'a>(
@@ -118,6 +126,9 @@ pub fn package_impact<'a>(
             .map(compact_edge)
             .collect(),
         truncated: cn_capped < cn_total || inp_capped < inp_total || edge_capped < edge_total,
+        seed_budgets: &result.seed_budgets,
+        traversal_budget: result.traversal_budget.as_ref(),
+        budget: result.budget.clone(),
     }
 }
 
@@ -146,6 +157,12 @@ pub struct PackagedContextResult<'a> {
     /// Only present when `include_saved_context` was `true` in the request.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub saved_context_sources: Vec<PackagedSavedSource<'a>>,
+    #[serde(skip_serializing_if = "<[SeedBudgetMeta]>::is_empty")]
+    pub seed_budgets: &'a [SeedBudgetMeta],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub traversal_budget: Option<&'a TraversalBudgetMeta>,
+    #[serde(flatten)]
+    pub budget: BudgetReport,
 }
 
 /// Compact representation of a [`SavedContextSource`].
@@ -272,5 +289,8 @@ pub fn package_context_result(result: &ContextResult) -> PackagedContextResult<'
                 relevance_score: s.relevance_score,
             })
             .collect(),
+        seed_budgets: &result.seed_budgets,
+        traversal_budget: result.traversal_budget.as_ref(),
+        budget: result.budget.clone(),
     }
 }

@@ -1,6 +1,7 @@
 use crate::cli::{Cli, Command};
 use anyhow::{Context, Result};
 use atlas_adapters::{AdapterHooks, CliAdapter};
+use atlas_core::BudgetReport;
 use atlas_core::model::{
     ChangeType, ContextIntent, ContextRequest, ContextResult, ContextTarget, ImpactResult,
     ReviewContext, ReviewImpactOverview, RiskSummary, SelectionReason,
@@ -214,7 +215,15 @@ pub fn run_detect_changes(cli: &Cli) -> Result<()> {
                 .map(|cf| cf.path.as_str())
                 .collect();
             if !non_deleted.is_empty()
-                && let Ok(impact) = store.impact_radius(&non_deleted, 5, 200)
+                && let Ok(impact) = store.impact_radius(
+                    &non_deleted,
+                    5,
+                    200,
+                    atlas_core::BudgetPolicy::default()
+                        .graph_traversal
+                        .edges
+                        .default_limit,
+                )
             {
                 println!("\nGraph impact summary:");
                 println!("  Changed symbols : {}", impact.changed_nodes.len());
@@ -437,6 +446,9 @@ pub fn run_impact(cli: &Cli) -> Result<()> {
                             impacted_nodes: vec![],
                             impacted_files: vec![],
                             relevant_edges: vec![],
+                            seed_budgets: vec![],
+                            traversal_budget: None,
+                            budget: BudgetReport::not_applicable(),
                         }
                     }),
                 )?;
@@ -449,7 +461,15 @@ pub fn run_impact(cli: &Cli) -> Result<()> {
         let path_refs: Vec<&str> = target_files.iter().map(String::as_str).collect();
         let t0 = std::time::Instant::now();
         let result = store
-            .impact_radius(&path_refs, max_depth, max_nodes)
+            .impact_radius(
+                &path_refs,
+                max_depth,
+                max_nodes,
+                atlas_core::BudgetPolicy::default()
+                    .graph_traversal
+                    .edges
+                    .default_limit,
+            )
             .context("impact radius query failed")?;
         let latency_ms = t0.elapsed().as_millis();
 

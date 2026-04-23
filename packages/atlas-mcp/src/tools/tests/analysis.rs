@@ -256,6 +256,23 @@ fn analyze_remove_max_files_caps_impacted_files_list() {
 }
 
 #[test]
+fn analyze_remove_max_nodes_is_clamped_by_central_budget_policy() {
+    let fixture = setup_mcp_fixture();
+    let args = serde_json::json!({
+        "symbols": ["src/service.rs::fn::compute"],
+        "max_nodes": 9999,
+        "output_format": "json"
+    });
+    let resp = call("analyze_remove", Some(&args), "/repo", &fixture.db_path)
+        .expect("analyze_remove call");
+
+    assert_eq!(resp["budget_status"], "override_clamped");
+    assert_eq!(resp["budget_hit"], true);
+    assert_eq!(resp["budget_limit"], 1000);
+    assert_eq!(resp["budget_observed"], 9999);
+}
+
+#[test]
 fn analyze_dependency_returns_removable_verdict() {
     let fixture = setup_mcp_fixture();
     let args =

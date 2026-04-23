@@ -4236,7 +4236,7 @@ Make context proactive instead of reactive.
 
 ---
 
-### Phase CM13 — Context Budget Optimization
+### Phase CM13 — Context Budget Optimization (depends on Operational Budget Policy Patch)
 
 #### Goal
 
@@ -5485,25 +5485,25 @@ Atlas already has per-file size caps, parse batch sizing, bounded queues, result
 
 ### Patch B0 — Central budget policy and manager
 
-- [ ] define one shared `BudgetPolicy` / `BudgetManager` model for all bounded work
-- [ ] include budget namespaces:
-  - [ ] build/update
-  - [ ] graph traversal
-  - [ ] query candidates and seeds
-  - [ ] review/context extraction
-  - [ ] content/saved-context lookup
-  - [ ] MCP/CLI payload serialization
-- [ ] make all public graph/query/context/review/analysis paths receive budget policy from one source
-- [ ] support configured defaults plus per-call overrides within safe maximums
-- [ ] emit one shared budget result shape:
-  - [ ] `budget_status`
-  - [ ] `budget_hit`
-  - [ ] `budget_name`
-  - [ ] `budget_limit`
-  - [ ] `budget_observed`
-  - [ ] `partial`
-  - [ ] `safe_to_answer`
-- [ ] add tests proving scattered local caps cannot bypass central policy
+- [x] define one shared `BudgetPolicy` / `BudgetManager` model for all bounded work
+- [x] include budget namespaces:
+  - [x] build/update
+  - [x] graph traversal
+  - [x] query candidates and seeds
+  - [x] review/context extraction
+  - [x] content/saved-context lookup
+  - [x] MCP/CLI payload serialization
+- [x] make all public graph/query/context/review/analysis paths receive budget policy from one source
+- [x] support configured defaults plus per-call overrides within safe maximums
+- [x] emit one shared budget result shape:
+  - [x] `budget_status`
+  - [x] `budget_hit`
+  - [x] `budget_name`
+  - [x] `budget_limit`
+  - [x] `budget_observed`
+  - [x] `partial`
+  - [x] `safe_to_answer`
+- [x] add tests proving scattered local caps cannot bypass central policy
 
 Why:
 - a list of limits is not enough if each tool interprets limits differently
@@ -5511,28 +5511,28 @@ Why:
 
 ### Patch B1 — Build and update budgets
 
-- [ ] add explicit build/update budget config:
-  - [ ] `max_files_per_run`
-  - [ ] `max_total_bytes_per_run`
-  - [ ] `max_file_bytes`
-  - [ ] `max_parse_failures`
-  - [ ] `max_parse_failure_ratio`
-  - [ ] `max_wall_time_ms`
-- [ ] track budget counters during build/update:
-  - [ ] files discovered
-  - [ ] files accepted
-  - [ ] files skipped by byte budget
-  - [ ] bytes accepted
-  - [ ] bytes skipped
-  - [ ] parse failures
-  - [ ] budget stop reason
-- [ ] define behavior when budgets hit:
-  - [ ] hard fail for invalid config
-  - [ ] degraded partial build when skip budgets hit and policy allows
-  - [ ] fail closed when parse-failure budget is exceeded
-  - [ ] mark graph state as `build_failed` or `degraded` with reason
-- [ ] expose counters and stop reason in CLI/MCP build/update output
-- [ ] add tests for max file budget, max byte budget, parse failure threshold, and partial/degraded result reporting
+- [x] add explicit build/update budget config:
+  - [x] `max_files_per_run`
+  - [x] `max_total_bytes_per_run`
+  - [x] `max_file_bytes`
+  - [x] `max_parse_failures`
+  - [x] `max_parse_failure_ratio`
+  - [x] `max_wall_time_ms`
+- [x] track budget counters during build/update:
+  - [x] files discovered
+  - [x] files accepted
+  - [x] files skipped by byte budget
+  - [x] bytes accepted
+  - [x] bytes skipped
+  - [x] parse failures
+  - [x] budget stop reason
+- [x] define behavior when budgets hit:
+  - [x] hard fail for invalid config
+  - [x] degraded partial build when skip budgets hit and policy allows
+  - [x] fail closed when parse-failure budget is exceeded
+  - [x] mark graph state as `build_failed` or `degraded` with reason
+- [x] expose counters and stop reason in CLI/MCP build/update output
+- [x] add tests for max file budget, max byte budget, parse failure threshold, and partial/degraded result reporting
 
 Why:
 - batch size prevents unbounded queues but does not cap total build work
@@ -5540,27 +5540,27 @@ Why:
 
 ### Patch B2 — Query, seed, and traversal budgets
 
-- [ ] add explicit query/traversal budget config:
-  - [ ] `max_seed_nodes`
-  - [ ] `max_seed_files`
-  - [ ] `max_traversal_depth`
-  - [ ] `max_traversal_nodes`
-  - [ ] `max_traversal_edges`
-  - [ ] `max_query_candidates`
-  - [ ] `max_query_wall_time_ms`
-- [ ] apply seed budgets before graph expansion, impact analysis, and context assembly
-- [ ] distinguish seed truncation from result truncation
-- [ ] include seed-budget metadata in responses:
-  - [ ] requested seed count
-  - [ ] accepted seed count
-  - [ ] omitted seed count
-  - [ ] budget hit flags
-  - [ ] suggested narrower query
-- [ ] define behavior when seed budgets hit:
-  - [ ] fail closed for ambiguous unbounded seeds
-  - [ ] return partial bounded result for explicit file/symbol lists when policy allows
-  - [ ] require narrower input when omission would make result misleading
-- [ ] add tests for broad query seed explosion, explicit file list truncation, and traversal cap reporting
+- [x] add explicit query/traversal budget config:
+  - [x] `max_seed_nodes`
+  - [x] `max_seed_files`
+  - [x] `max_traversal_depth`
+  - [x] `max_traversal_nodes`
+  - [x] `max_traversal_edges`
+  - [x] `max_query_candidates`
+  - [x] `max_query_wall_time_ms`
+- [x] apply seed budgets before graph expansion, impact analysis, and context assembly
+- [x] distinguish seed truncation from result truncation
+- [x] include seed-budget metadata in responses:
+  - [x] requested seed count
+  - [x] accepted seed count
+  - [x] omitted seed count
+  - [x] budget hit flags
+  - [x] suggested narrower query
+- [x] define behavior when seed budgets hit:
+  - [x] fail closed for ambiguous unbounded seeds
+  - [x] return partial bounded result for explicit file/symbol lists when policy allows
+  - [x] require narrower input when omission would make result misleading
+- [x] add tests for broad query seed explosion, explicit file list truncation, and traversal cap reporting
 
 Why:
 - `max_nodes` caps returned context, not necessarily seed loading or traversal work

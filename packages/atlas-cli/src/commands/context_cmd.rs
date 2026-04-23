@@ -617,7 +617,15 @@ fn render_shell_impact_output(store: &Store, repo: &str, args: &ShellArgs) -> Re
 
     let path_refs: Vec<&str> = target_files.iter().map(String::as_str).collect();
     let result = store
-        .impact_radius(&path_refs, max_depth, max_nodes)
+        .impact_radius(
+            &path_refs,
+            max_depth,
+            max_nodes,
+            atlas_core::BudgetPolicy::default()
+                .graph_traversal
+                .edges
+                .default_limit,
+        )
         .context("impact radius query failed")?;
     let advanced = advanced_impact(result);
 
@@ -679,7 +687,15 @@ fn render_shell_explain_output(store: &Store, repo: &str, args: &ShellArgs) -> R
 
     let path_refs: Vec<&str> = target_files.iter().map(String::as_str).collect();
     let result = store
-        .impact_radius(&path_refs, max_depth, max_nodes)
+        .impact_radius(
+            &path_refs,
+            max_depth,
+            max_nodes,
+            atlas_core::BudgetPolicy::default()
+                .graph_traversal
+                .edges
+                .default_limit,
+        )
         .context("impact radius query failed")?;
     let advanced = advanced_impact(result);
 
@@ -1015,7 +1031,15 @@ fn render_shell_traverse_output(store: &Store, args: &ShellArgs) -> Result<Strin
     let max_nodes = args.flag_usize("max-nodes", 100);
 
     let result = store
-        .traverse_from_qnames(&[qname.as_str()], max_depth, max_nodes)
+        .traverse_from_qnames(
+            &[qname.as_str()],
+            max_depth,
+            max_nodes,
+            atlas_core::BudgetPolicy::default()
+                .graph_traversal
+                .edges
+                .default_limit,
+        )
         .context("traverse_from_qnames failed")?;
 
     let mut lines = vec![colorize(&format!("Traverse from `{qname}`:"), "1;36")];
