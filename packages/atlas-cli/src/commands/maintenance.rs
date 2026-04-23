@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use atlas_contentstore::{ContentStore, IndexState};
 use atlas_core::{
-    graph_health_error_message, graph_health_error_suggestions, is_schema_mismatch_error,
+    NodeKind, graph_health_error_message, graph_health_error_suggestions, is_schema_mismatch_error,
 };
 use atlas_repo::{collect_files, find_repo_root};
 use atlas_session::DEFAULT_SESSION_DB;
@@ -62,6 +62,38 @@ fn integrity_issue_code(issues: &[String], structural_problem: bool) -> &'static
     } else {
         "corrupt_or_inconsistent_graph_rows"
     }
+}
+
+fn structural_orphans(store: &Store, limit: usize) -> Vec<atlas_core::Node> {
+    store
+        .orphan_nodes(limit)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|node| node.kind != NodeKind::File)
+        .collect()
+}
+
+fn structural_dangling_edges(
+    store: &Store,
+    limit: usize,
+) -> Vec<(i64, String, String, String, &'static str)> {
+    store
+        .dangling_edges(limit)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|(_, _, _, kind, _)| {
+            matches!(
+                kind.as_str(),
+                "contains"
+                    | "defines"
+                    | "implements"
+                    | "extends"
+                    | "imports"
+                    | "tests"
+                    | "tested_by"
+            )
+        })
+        .collect()
 }
 
 fn print_doctor_report(cli: &Cli, checks: &[CheckResult], all_ok: bool) -> Result<()> {
@@ -585,8 +617,8 @@ pub fn run_db_check(cli: &Cli) -> Result<()> {
     let issues = store.integrity_check().context("integrity check failed")?;
 
     const ORPHAN_LIMIT: usize = 100;
-    let orphans = store.orphan_nodes(ORPHAN_LIMIT).unwrap_or_default();
-    let dangling = store.dangling_edges(ORPHAN_LIMIT).unwrap_or_default();
+    let orphans = structural_orphans(&store, ORPHAN_LIMIT);
+    let dangling = structural_dangling_edges(&store, ORPHAN_LIMIT);
 
     let ok = issues.is_empty() && orphans.is_empty() && dangling.is_empty();
     let error_code = if ok {
@@ -759,4 +791,86 @@ pub fn run_debug_graph(cli: &Cli) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use atlas_core::{Edge, EdgeKind, Node, NodeId};
+
+    fn open_store() -> Store {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.sqlite");
+        Store::open(db_path.to_str().unwrap()).unwrap()
+    }
+
+    fn source_node(qn: &str) -> Node {
+        Node {
+            id: NodeId::UNSET,
+            kind: NodeKind::Function,
+            name: "source".to_owned(),
+            qualified_name: qn.to_owned(),
+            file_path: "src/lib.rs".to_owned(),
+            line_start: 1,
+            line_end: 1,
+            language: "rust".to_owned(),
+            parent_name: Some("src/lib.rs".to_owned()),
+            params: Some("()".to_owned()),
+            return_type: None,
+            modifiers: None,
+            is_test: false,
+            file_hash: "hash".to_owned(),
+            extra_json: serde_json::Value::Null,
+        }
+    }
+
+    fn dangling_edge(kind: EdgeKind, target_qn: &str) -> Edge {
+        Edge {
+            id: 0,
+            kind,
+            source_qn: "src/lib.rs::fn::source".to_owned(),
+            target_qn: target_qn.to_owned(),
+            file_path: "src/lib.rs".to_owned(),
+            line: Some(1),
+            confidence: 1.0,
+            confidence_tier: None,
+            extra_json: serde_json::Value::Null,
+        }
+    }
+
+    #[test]
+    fn structural_dangling_edges_ignores_nonstructural_calls() {
+        let mut store = open_store();
+        store
+            .replace_file_graph(
+                "src/lib.rs",
+                "hash",
+                Some("rust"),
+                None,
+                &[source_node("src/lib.rs::fn::source")],
+                &[dangling_edge(EdgeKind::Calls, "Path::new")],
+            )
+            .unwrap();
+
+        assert!(structural_dangling_edges(&store, 100).is_empty());
+    }
+
+    #[test]
+    fn structural_dangling_edges_keeps_structural_contains() {
+        let mut store = open_store();
+        store
+            .replace_file_graph(
+                "src/lib.rs",
+                "hash",
+                Some("rust"),
+                None,
+                &[source_node("src/lib.rs::fn::source")],
+                &[dangling_edge(EdgeKind::Contains, "src/lib.rs::fn::missing")],
+            )
+            .unwrap();
+
+        let dangling = structural_dangling_edges(&store, 100);
+        assert_eq!(dangling.len(), 1);
+        assert_eq!(dangling[0].3, "contains");
+    }
 }

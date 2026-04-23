@@ -1871,8 +1871,8 @@ fn build_on_sample_repo_emits_expected_summary() {
             "Scanned             :",
             "Unsupported skipped : 0",
             "Parsed              : 2",
-            "Nodes inserted      : 6",
-            "Edges inserted      : 7",
+            "Nodes inserted      : 7",
+            "Edges inserted      : 8",
         ],
     );
 }

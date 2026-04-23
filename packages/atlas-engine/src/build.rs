@@ -60,6 +60,15 @@ pub fn build_graph(
     let mut store =
         Store::open(db_path).with_context(|| format!("cannot open database at {db_path}"))?;
 
+    for path in store
+        .file_paths_with_prefix("")
+        .context("cannot list existing graph files")?
+    {
+        store
+            .delete_file_graph(&path)
+            .with_context(|| format!("cannot clear stale graph for '{path}'"))?;
+    }
+
     let registry = ParserRegistry::with_defaults();
     let owners = discover_package_owners(repo_root).context("cannot discover package owners")?;
 
@@ -242,5 +251,97 @@ fn annotate_parsed_file_owner(parsed_file: &mut ParsedFile, owner: Option<&Packa
             );
         }
         node.extra_json = serde_json::Value::Object(extra);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use atlas_core::{Node, NodeId, NodeKind};
+    use atlas_store_sqlite::Store;
+    use std::process::Command;
+
+    fn git(dir: &std::path::Path, args: &[&str]) {
+        let status = Command::new("git")
+            .current_dir(dir)
+            .args(args)
+            .env("GIT_AUTHOR_NAME", "Atlas Test")
+            .env("GIT_AUTHOR_EMAIL", "test@atlas")
+            .env("GIT_COMMITTER_NAME", "Atlas Test")
+            .env("GIT_COMMITTER_EMAIL", "test@atlas")
+            .status()
+            .expect("git command");
+        assert!(status.success(), "git {args:?} failed");
+    }
+
+    #[test]
+    fn build_graph_replaces_same_hash_stale_file_graphs() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo_root = dir.path();
+
+        git(repo_root, &["init", "--quiet"]);
+        std::fs::write(
+            repo_root.join("lib.rs"),
+            "pub struct Greeter;\nimpl Greeter { pub fn greet(&self) {} }\n",
+        )
+        .unwrap();
+        git(repo_root, &["add", "lib.rs"]);
+        git(repo_root, &["commit", "--quiet", "-m", "init"]);
+
+        let db_path = repo_root.join("worldtree.db");
+        let lib_path = repo_root.join("lib.rs");
+        let file_path = Utf8Path::from_path(&lib_path).unwrap();
+        let file_hash = atlas_repo::hash_file(file_path).unwrap();
+
+        let mut store = Store::open(db_path.to_str().unwrap()).unwrap();
+        store
+            .replace_file_graph(
+                "lib.rs",
+                &file_hash,
+                Some("rust"),
+                None,
+                &[Node {
+                    id: NodeId::UNSET,
+                    kind: NodeKind::Function,
+                    name: "stale".to_owned(),
+                    qualified_name: "lib.rs::fn::stale".to_owned(),
+                    file_path: "lib.rs".to_owned(),
+                    line_start: 1,
+                    line_end: 1,
+                    language: "rust".to_owned(),
+                    parent_name: Some("lib.rs".to_owned()),
+                    params: Some("()".to_owned()),
+                    return_type: None,
+                    modifiers: None,
+                    is_test: false,
+                    file_hash: file_hash.clone(),
+                    extra_json: serde_json::Value::Null,
+                }],
+                &[],
+            )
+            .unwrap();
+
+        let summary = build_graph(
+            Utf8Path::from_path(repo_root).unwrap(),
+            db_path.to_str().unwrap(),
+            &BuildOptions {
+                fail_fast: true,
+                batch_size: 16,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            summary.skipped_unchanged, 0,
+            "full build must not skip stored hashes"
+        );
+        assert_eq!(summary.parsed, 1, "full build must reparse tracked files");
+
+        let refreshed = Store::open(db_path.to_str().unwrap()).unwrap();
+        let qnames = refreshed.node_signatures_by_file("lib.rs").unwrap();
+        assert!(!qnames.contains_key("lib.rs::fn::stale"));
+        assert!(qnames.contains_key("lib.rs::struct::Greeter"));
+        assert!(qnames.contains_key("lib.rs::method::Greeter::greet"));
+        assert!(refreshed.dangling_edges(20).unwrap().is_empty());
     }
 }

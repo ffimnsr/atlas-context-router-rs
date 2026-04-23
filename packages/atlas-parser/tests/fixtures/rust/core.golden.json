@@ -40,6 +40,17 @@
       "file_path": "fixtures/rust/core.rs",
       "id": 0,
       "kind": "contains",
+      "line": 13,
+      "source_qn": "fixtures/rust/core.rs",
+      "target_qn": "fixtures/rust/core.rs::impl::Greeter"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/rust/core.rs",
+      "id": 0,
+      "kind": "contains",
       "line": 14,
       "source_qn": "fixtures/rust/core.rs::impl::Greeter",
       "target_qn": "fixtures/rust/core.rs::method::Greeter::greet"
@@ -119,7 +130,7 @@
       "id": 0,
       "kind": "references",
       "line": 13,
-      "source_qn": "fixtures/rust/core.rs",
+      "source_qn": "fixtures/rust/core.rs::impl::Greeter",
       "target_qn": "fixtures/rust/core.rs::struct::Greeter"
     }
   ],
@@ -192,6 +203,27 @@
       "params": null,
       "parent_name": "fixtures/rust/core.rs",
       "qualified_name": "fixtures/rust/core.rs::struct::Greeter",
+      "return_type": null
+    },
+    {
+      "extra_json": {
+        "scope_kind": "impl",
+        "trait_name": null,
+        "type_name": "Greeter"
+      },
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/rust/core.rs",
+      "id": 0,
+      "is_test": false,
+      "kind": "module",
+      "language": "rust",
+      "line_end": 17,
+      "line_start": 13,
+      "modifiers": null,
+      "name": "impl Greeter",
+      "params": null,
+      "parent_name": "fixtures/rust/core.rs",
+      "qualified_name": "fixtures/rust/core.rs::impl::Greeter",
       "return_type": null
     },
     {

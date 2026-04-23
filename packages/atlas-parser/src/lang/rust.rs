@@ -95,6 +95,27 @@ impl<'s, 'o> Walker<'s, 'o> {
             .unwrap_or(self.rel_path)
     }
 
+    fn local_type_qn(&self, name: &str) -> Option<String> {
+        self.nodes
+            .iter()
+            .rev()
+            .find(|node| {
+                matches!(
+                    node.kind,
+                    NodeKind::Struct | NodeKind::Enum | NodeKind::Trait
+                ) && node.name == name
+            })
+            .map(|node| node.qualified_name.clone())
+    }
+
+    fn local_trait_qn(&self, name: &str) -> Option<String> {
+        self.nodes
+            .iter()
+            .rev()
+            .find(|node| node.kind == NodeKind::Trait && node.name == name)
+            .map(|node| node.qualified_name.clone())
+    }
+
     /// Walk all children of a block/source_file.
     fn walk_block(&mut self, node: TsNode<'_>) {
         let mut cursor = node.walk();
@@ -254,11 +275,44 @@ impl<'s, 'o> Walker<'s, 'o> {
             return;
         };
         let trait_name = field_text(node, "trait", self.source);
+        let parent_qn = self.current_parent_qn().to_owned();
+        let impl_scope = format!("{}::impl::{}", self.rel_path, type_name);
+
+        self.nodes.push(Node {
+            id: NodeId::UNSET,
+            kind: NodeKind::Module,
+            name: format!("impl {type_name}"),
+            qualified_name: impl_scope.clone(),
+            file_path: self.rel_path.to_owned(),
+            line_start: start_line(node),
+            line_end: end_line(node),
+            language: "rust".to_owned(),
+            parent_name: Some(parent_qn.clone()),
+            params: None,
+            return_type: None,
+            modifiers: None,
+            is_test: self.in_test_mod,
+            file_hash: self.file_hash.to_owned(),
+            extra_json: serde_json::json!({
+                "scope_kind": "impl",
+                "type_name": type_name,
+                "trait_name": trait_name,
+            }),
+        });
+        self.edges.push(contains_edge(
+            &parent_qn,
+            &impl_scope,
+            self.rel_path,
+            start_line(node),
+        ));
 
         // Emit an `Implements` edge if this is `impl Trait for Type`.
-        if let Some(trait_name) = trait_name {
-            let type_qn = format!("{}::struct::{}", self.rel_path, type_name);
-            let trait_qn = format!("{}::trait::{}", self.rel_path, trait_name);
+        if let Some(trait_name) = trait_name
+            && let (Some(type_qn), Some(trait_qn)) = (
+                self.local_type_qn(type_name),
+                self.local_trait_qn(trait_name),
+            )
+        {
             self.edges.push(Edge {
                 id: 0,
                 kind: EdgeKind::Implements,
@@ -274,8 +328,6 @@ impl<'s, 'o> Walker<'s, 'o> {
 
         // Walk methods in the impl body.
         if let Some(body) = node.child_by_field_name("body") {
-            // Push an impl-scope name for method qualified names.
-            let impl_scope = format!("{}::impl::{}", self.rel_path, type_name);
             self.scope_stack.push(impl_scope);
             let mut cursor = body.walk();
             for child in body.children(&mut cursor) {
@@ -908,15 +960,41 @@ mod tests {
         assert!(
             pf.nodes
                 .iter()
+                .any(|n| n.kind == NodeKind::Module && n.qualified_name == "src/lib.rs::impl::Foo")
+        );
+        assert!(
+            pf.nodes
+                .iter()
                 .any(|n| n.kind == NodeKind::Method && n.name == "bar")
         );
+        assert!(pf.edges.iter().any(|e| e.kind == EdgeKind::Contains
+            && e.source_qn == "src/lib.rs::impl::Foo"
+            && e.target_qn == "src/lib.rs::method::Foo::bar"));
     }
 
     #[test]
     fn implements_edge_for_trait_impl() {
         let src = "trait Greet {} struct Hi; impl Greet for Hi {}";
         let pf = parse(src);
-        assert!(pf.edges.iter().any(|e| e.kind == EdgeKind::Implements));
+        assert!(pf.edges.iter().any(|e| e.kind == EdgeKind::Implements
+            && e.source_qn == "src/lib.rs::struct::Hi"
+            && e.target_qn == "src/lib.rs::trait::Greet"));
+    }
+
+    #[test]
+    fn implements_edge_uses_enum_qn_when_impl_targets_enum() {
+        let src = "trait Render {} enum Mode { Fast } impl Render for Mode {}";
+        let pf = parse(src);
+        assert!(pf.edges.iter().any(|e| e.kind == EdgeKind::Implements
+            && e.source_qn == "src/lib.rs::enum::Mode"
+            && e.target_qn == "src/lib.rs::trait::Render"));
+    }
+
+    #[test]
+    fn external_trait_impl_does_not_emit_dangling_implements_edge() {
+        let src = "struct Foo; impl std::fmt::Display for Foo {}";
+        let pf = parse(src);
+        assert!(!pf.edges.iter().any(|e| e.kind == EdgeKind::Implements));
     }
 
     #[test]
