@@ -34,6 +34,9 @@ const GIT_LOCAL_ENV_VARS: &[&str] = &[
     "GIT_WORK_TREE",
 ];
 
+const GIT_TEST_NAME: &str = "Atlas Test";
+const GIT_TEST_EMAIL: &str = "test@atlas";
+
 /// Build a `Command` for git with inherited env vars stripped so tests are
 /// isolated from the ambient git environment (e.g. a pre-commit hook context).
 fn sanitized_git(dir: &std::path::Path) -> Command {
@@ -42,6 +45,10 @@ fn sanitized_git(dir: &std::path::Path) -> Command {
     for var in GIT_LOCAL_ENV_VARS {
         cmd.env_remove(var);
     }
+    cmd.env("GIT_AUTHOR_NAME", GIT_TEST_NAME);
+    cmd.env("GIT_AUTHOR_EMAIL", GIT_TEST_EMAIL);
+    cmd.env("GIT_COMMITTER_NAME", GIT_TEST_NAME);
+    cmd.env("GIT_COMMITTER_EMAIL", GIT_TEST_EMAIL);
     cmd
 }
 
@@ -53,8 +60,8 @@ fn git_init(dir: &std::path::Path) {
         assert!(status.success(), "git {args:?} failed");
     };
     run(&["init", "--quiet"]);
-    run(&["config", "user.email", "test@atlas"]);
-    run(&["config", "user.name", "Atlas Test"]);
+    run(&["config", "user.email", GIT_TEST_EMAIL]);
+    run(&["config", "user.name", GIT_TEST_NAME]);
 }
 
 fn git_add_all(dir: &std::path::Path) {
