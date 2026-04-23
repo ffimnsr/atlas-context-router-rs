@@ -15,6 +15,7 @@ cargo +stable clippy --workspace --all-targets --all-features -- -D warnings
 
 echo "[pre-commit] test"
 cargo test --workspace
+echo "[pre-commit] test passed"
 
 # atlas-hook start
 
@@ -23,4 +24,5 @@ if command -v atlas >/dev/null 2>&1; then
     atlas update || true
     atlas detect-changes || true
 fi
+echo "[pre-commit] complete"
 # atlas-hook end
