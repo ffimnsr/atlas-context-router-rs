@@ -294,7 +294,33 @@ fn list_mcp_instance_metadata(repo_root: &Path) -> Vec<Value> {
 }
 
 fn pid_exists(pid: u32) -> bool {
-    Path::new("/proc").join(pid.to_string()).exists()
+    #[cfg(target_os = "linux")]
+    {
+        return Path::new("/proc").join(pid.to_string()).exists();
+    }
+
+    #[cfg(all(unix, not(target_os = "linux")))]
+    {
+        if pid == 0 || pid > i32::MAX as u32 {
+            return false;
+        }
+
+        let result = unsafe { libc::kill(pid as i32, 0) };
+        if result == 0 {
+            return true;
+        }
+
+        return matches!(
+            std::io::Error::last_os_error().raw_os_error(),
+            Some(libc::EPERM)
+        );
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = pid;
+        false
+    }
 }
 
 fn kill_pid(pid: u32) {
