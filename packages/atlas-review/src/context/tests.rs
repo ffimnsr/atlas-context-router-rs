@@ -1,8 +1,10 @@
 use super::*;
+use atlas_contentstore::SourceMeta;
 use atlas_core::{
     BudgetLimitRule, BudgetPolicy, BudgetStatus, EdgeKind, NodeId, NodeKind,
     model::{
-        ContextIntent, ContextRequest, ContextTarget, Edge, Node, ParsedFile, SelectionReason,
+        ContextIntent, ContextRequest, ContextTarget, Edge, Node, ParsedFile, SavedContextSource,
+        SelectionReason, TruncationMeta,
     },
 };
 use atlas_store_sqlite::Store;
@@ -132,6 +134,18 @@ fn seed_graph(store: &mut Store) {
         },
     ];
     store.replace_batch(&files).unwrap();
+}
+
+fn saved_source_meta(id: &str) -> SourceMeta {
+    SourceMeta {
+        id: id.to_owned(),
+        session_id: Some("sess-1".into()),
+        source_type: "review_context".into(),
+        label: format!("artifact-{id}"),
+        repo_root: Some("/repo".into()),
+        identity_kind: "artifact_label".into(),
+        identity_value: format!("artifact-{id}"),
+    }
 }
 
 #[test]
@@ -667,6 +681,9 @@ fn review_context_reports_explicit_file_seed_truncation() {
     assert!(meta.partial);
     assert!(meta.safe_to_answer);
     assert!(meta.suggested_narrower_query.is_some());
+    assert_eq!(result.budget.budget_status, BudgetStatus::PartialResult);
+    assert_eq!(result.budget.budget_name, "graph_traversal.max_seed_files");
+    assert!(result.budget.safe_to_answer);
 }
 
 #[test]
@@ -706,9 +723,16 @@ fn impact_context_fails_closed_for_ambiguous_symbol_seed() {
     assert_eq!(meta.seed_kind, "symbol_resolution");
     assert_eq!(meta.requested_seed_count, 0);
     assert_eq!(meta.accepted_seed_count, 0);
+    assert!(meta.budget_hit);
     assert!(!meta.safe_to_answer);
     assert!(!meta.partial);
     assert!(meta.suggested_narrower_query.is_some());
+    assert_eq!(result.budget.budget_status, BudgetStatus::Blocked);
+    assert_eq!(
+        result.budget.budget_name,
+        "query_candidates_and_seeds.symbol_resolution"
+    );
+    assert!(!result.budget.safe_to_answer);
 }
 
 #[test]
@@ -767,4 +791,141 @@ fn code_spans_single_range_unchanged() {
     let spans = vec![(10u32, 20u32)];
     let merged = super::spans::merge_spans(&spans);
     assert_eq!(merged, vec![(10, 20)]);
+}
+
+#[test]
+fn review_context_payload_byte_cap_keeps_direct_targets() {
+    let mut store = open_store();
+    seed_graph(&mut store);
+
+    let mut policy = BudgetPolicy::default();
+    policy.mcp_cli_payload_serialization.context_payload_bytes =
+        BudgetLimitRule::new(1400, 1400, atlas_core::BudgetHitBehavior::Partial, true);
+
+    let req = ContextRequest {
+        intent: ContextIntent::Review,
+        target: ContextTarget::ChangedFiles {
+            paths: vec!["src/a.rs".to_owned()],
+        },
+        max_nodes: Some(10),
+        max_edges: Some(10),
+        max_files: Some(10),
+        ..ContextRequest::default()
+    };
+
+    let result = ContextEngine::new(&store)
+        .with_budget_policy(policy)
+        .build(&req)
+        .expect("build review context");
+
+    assert!(
+        result.truncation.truncated,
+        "payload cap must truncate result"
+    );
+    assert!(
+        result
+            .nodes
+            .iter()
+            .any(|node| node.selection_reason == SelectionReason::DirectTarget),
+        "payload trimming must retain direct target"
+    );
+    let payload = result
+        .truncation
+        .payload
+        .as_ref()
+        .expect("payload truncation metadata");
+    assert!(
+        payload.bytes_requested > payload.bytes_emitted,
+        "payload cap must reduce emitted bytes"
+    );
+    assert!(
+        payload.omitted_byte_count > 0,
+        "payload cap must omit bytes"
+    );
+}
+
+#[test]
+fn file_excerpt_cap_clears_line_ranges() {
+    let mut store = open_store();
+    seed_graph(&mut store);
+
+    let mut policy = BudgetPolicy::default();
+    policy.mcp_cli_payload_serialization.file_excerpt_bytes =
+        BudgetLimitRule::new(4, 4, atlas_core::BudgetHitBehavior::Partial, true);
+
+    let mut req = symbol_request("src/a.rs::fn_a");
+    req.include_code_spans = true;
+
+    let result = ContextEngine::new(&store)
+        .with_budget_policy(policy)
+        .build(&req)
+        .expect("build symbol context");
+
+    assert!(
+        result.files.iter().all(|file| file.line_ranges.is_empty()),
+        "excerpt cap must clear line ranges when over budget"
+    );
+    assert!(
+        result.truncation.payload.is_some(),
+        "excerpt trimming must surface payload metadata"
+    );
+}
+
+#[test]
+fn saved_context_cap_drops_low_ranked_sources() {
+    let mut store = open_store();
+    seed_graph(&mut store);
+
+    let seed = store.node_by_qname("src/a.rs::fn_a").unwrap().unwrap();
+    let req = ContextRequest {
+        intent: ContextIntent::Symbol,
+        target: ContextTarget::QualifiedName {
+            qname: "src/a.rs::fn_a".to_owned(),
+        },
+        include_saved_context: true,
+        session_id: Some("sess-1".to_owned()),
+        ..ContextRequest::default()
+    };
+    let mut result = build_symbol_context(&store, seed, &req).expect("build symbol context");
+    result.truncation = TruncationMeta::none();
+    result.saved_context_sources = vec![
+        SavedContextSource {
+            source_id: "src-1".to_owned(),
+            label: saved_source_meta("src-1").label,
+            source_type: "review_context".to_owned(),
+            session_id: Some("sess-1".to_owned()),
+            preview: "A".repeat(200),
+            retrieval_hint: "source_id=src-1".to_owned(),
+            relevance_score: 10.0,
+        },
+        SavedContextSource {
+            source_id: "src-2".to_owned(),
+            label: saved_source_meta("src-2").label,
+            source_type: "review_context".to_owned(),
+            session_id: Some("sess-1".to_owned()),
+            preview: "B".repeat(200),
+            retrieval_hint: "source_id=src-2".to_owned(),
+            relevance_score: 1.0,
+        },
+    ];
+
+    let mut policy = BudgetPolicy::default();
+    policy.mcp_cli_payload_serialization.saved_context_bytes =
+        BudgetLimitRule::new(120, 120, atlas_core::BudgetHitBehavior::Partial, true);
+
+    super::payload::apply_payload_budgets(&mut result, &policy);
+
+    let payload = result
+        .truncation
+        .payload
+        .as_ref()
+        .expect("payload truncation metadata");
+    assert!(
+        payload.omitted_source_count > 0,
+        "saved-context budget must omit some sources"
+    );
+    assert!(
+        result.saved_context_sources.len() < 2,
+        "saved-context cap must reduce retained sources"
+    );
 }

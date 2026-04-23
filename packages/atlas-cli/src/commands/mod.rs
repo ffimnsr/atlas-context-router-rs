@@ -39,6 +39,7 @@ use std::io;
 use std::io::IsTerminal;
 
 use anyhow::{Context, Result};
+use atlas_core::BudgetPolicy;
 use atlas_core::model::ChangeType;
 use atlas_repo::DiffTarget;
 use atlas_store_sqlite::Store;
@@ -61,6 +62,12 @@ pub(crate) fn print_json(command: &str, data: serde_json::Value) -> Result<()> {
         serde_json::to_string_pretty(&json_envelope(command, data))?
     );
     Ok(())
+}
+
+pub(crate) fn load_budget_policy(repo_root: &str) -> Result<BudgetPolicy> {
+    let config =
+        atlas_engine::Config::load(&atlas_engine::paths::atlas_dir(repo_root)).unwrap_or_default();
+    config.budget_policy()
 }
 
 pub(crate) fn detect_changes_target(base: &Option<String>, staged: bool) -> DiffTarget {

@@ -7,10 +7,13 @@
 
 use atlas_core::BudgetReport;
 use atlas_core::model::{
-    ContextResult, Edge, ImpactResult, Node, SavedContextSource, SeedBudgetMeta, SelectedEdge,
-    SelectedNode, TraversalBudgetMeta,
+    ContextResult, Edge, ImpactResult, Node, PayloadTruncationMeta, SavedContextSource,
+    SeedBudgetMeta, SelectedEdge, SelectedNode, TraversalBudgetMeta,
 };
 use serde::Serialize;
+use serde_json::{Map, Value};
+
+use crate::output::{OutputFormat, render_value};
 
 // ---------------------------------------------------------------------------
 // Compact node
@@ -149,6 +152,7 @@ pub struct PackagedContextResult<'a> {
     pub truncated: bool,
     pub nodes_dropped: usize,
     pub edges_dropped: usize,
+    pub files_dropped: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ambiguity_query: Option<&'a str>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -161,6 +165,8 @@ pub struct PackagedContextResult<'a> {
     pub seed_budgets: &'a [SeedBudgetMeta],
     #[serde(skip_serializing_if = "Option::is_none")]
     pub traversal_budget: Option<&'a TraversalBudgetMeta>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub payload_truncation: Option<&'a PayloadTruncationMeta>,
     #[serde(flatten)]
     pub budget: BudgetReport,
 }
@@ -274,6 +280,7 @@ pub fn package_context_result(result: &ContextResult) -> PackagedContextResult<'
         truncated: result.truncation.truncated || node_cap < node_count || edge_cap < edge_count,
         nodes_dropped: result.truncation.nodes_dropped + node_count.saturating_sub(node_cap),
         edges_dropped: result.truncation.edges_dropped + edge_count.saturating_sub(edge_cap),
+        files_dropped: result.truncation.files_dropped,
         ambiguity_query,
         ambiguity_candidates,
         saved_context_sources: result
@@ -291,6 +298,236 @@ pub fn package_context_result(result: &ContextResult) -> PackagedContextResult<'
             .collect(),
         seed_budgets: &result.seed_budgets,
         traversal_budget: result.traversal_budget.as_ref(),
+        payload_truncation: result.truncation.payload.as_ref(),
         budget: result.budget.clone(),
     }
+}
+
+pub fn enforce_mcp_response_budget(
+    value: &mut Value,
+    output_format: OutputFormat,
+    max_bytes: usize,
+) -> anyhow::Result<Option<BudgetReport>> {
+    let requested_bytes = rendered_response_bytes(value, output_format)?;
+
+    while rendered_response_bytes(value, output_format)? > max_bytes {
+        if !trim_packaged_context_once(value) {
+            break;
+        }
+    }
+
+    let emitted_bytes = rendered_response_bytes(value, output_format)?;
+    if emitted_bytes > max_bytes {
+        anyhow::bail!(
+            "MCP response exceeds max_mcp_response_bytes after trimming (emitted={emitted_bytes}, limit={max_bytes})"
+        );
+    }
+
+    if emitted_bytes < requested_bytes {
+        let payload = ensure_payload_truncation(value);
+        payload.insert(
+            "bytes_requested".to_owned(),
+            Value::from(requested_bytes as u64),
+        );
+        payload.insert(
+            "bytes_emitted".to_owned(),
+            Value::from(emitted_bytes as u64),
+        );
+        payload.insert(
+            "tokens_estimated".to_owned(),
+            Value::from(estimate_tokens(emitted_bytes) as u64),
+        );
+        let omitted_bytes = requested_bytes.saturating_sub(emitted_bytes);
+        payload.insert(
+            "omitted_byte_count".to_owned(),
+            Value::from(omitted_bytes as u64),
+        );
+        payload.insert(
+            "continuation_hint".to_owned(),
+            Value::from("narrow query, lower depth, or request JSON with fewer saved artifacts"),
+        );
+        value["truncated"] = Value::Bool(true);
+        return Ok(Some(BudgetReport::partial_result(
+            "mcp_cli_payload_serialization.max_mcp_response_bytes",
+            max_bytes,
+            requested_bytes,
+            true,
+        )));
+    }
+
+    Ok(None)
+}
+
+fn rendered_response_bytes(value: &Value, output_format: OutputFormat) -> anyhow::Result<usize> {
+    let rendered = render_value(value, output_format)?;
+    let mut response = serde_json::json!({
+        "content": [{
+            "type": "text",
+            "text": rendered.text,
+            "mimeType": rendered.actual_format.mime_type(),
+        }],
+        "atlas_output_format": rendered.actual_format.as_str(),
+        "atlas_requested_output_format": rendered.requested_format.as_str(),
+    });
+
+    if let Some(reason) = rendered.fallback_reason {
+        response["atlas_fallback_reason"] = Value::String(reason);
+    }
+
+    Ok(serde_json::to_vec(&response)?.len())
+}
+
+fn trim_packaged_context_once(value: &mut Value) -> bool {
+    if drop_array_entry(value, "saved_context_sources", |entry| {
+        (
+            0_u8,
+            score_value(entry.get("relevance_score")),
+            string_key(entry, "source_id"),
+            "",
+        )
+    }) {
+        increment_u64(value, "payload_truncation", "omitted_source_count", 1);
+        return true;
+    }
+    if drop_array_entry(value, "files", |entry| {
+        (
+            keep_priority(entry.get("reason").and_then(Value::as_str)),
+            score_value(entry.get("path").map(|_| &Value::Null)),
+            string_key(entry, "path"),
+            "",
+        )
+    }) {
+        increment_u64(value, "files_dropped", "", 1);
+        increment_u64(value, "payload_truncation", "omitted_file_count", 1);
+        return true;
+    }
+    if drop_array_entry(value, "edges", |entry| {
+        (
+            keep_priority(entry.get("reason").and_then(Value::as_str)),
+            0.0,
+            string_key(entry, "from"),
+            string_key(entry, "to"),
+        )
+    }) {
+        increment_u64(value, "edges_dropped", "", 1);
+        return true;
+    }
+    if drop_array_entry(value, "nodes", |entry| {
+        let reason = entry.get("reason").and_then(Value::as_str);
+        let qn = entry
+            .get("qn")
+            .and_then(Value::as_str)
+            .or_else(|| {
+                entry
+                    .get("node")
+                    .and_then(|node| node.get("qn"))
+                    .and_then(Value::as_str)
+            })
+            .unwrap_or("");
+        (
+            keep_priority(reason),
+            score_value(entry.get("distance")),
+            qn,
+            "",
+        )
+    }) {
+        increment_u64(value, "nodes_dropped", "", 1);
+        increment_u64(value, "payload_truncation", "omitted_node_count", 1);
+        return true;
+    }
+    false
+}
+
+fn drop_array_entry<F>(value: &mut Value, key: &str, score: F) -> bool
+where
+    F: Fn(&Map<String, Value>) -> (u8, f64, &str, &str),
+{
+    let Some(array) = value.get_mut(key).and_then(Value::as_array_mut) else {
+        return false;
+    };
+    let candidate = array
+        .iter()
+        .enumerate()
+        .filter_map(|(index, entry)| entry.as_object().map(|entry| (index, score(entry))))
+        .min_by(|left, right| {
+            left.1
+                .0
+                .cmp(&right.1.0)
+                .then_with(|| {
+                    left.1
+                        .1
+                        .partial_cmp(&right.1.1)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .then_with(|| left.1.2.cmp(right.1.2))
+                .then_with(|| left.1.3.cmp(right.1.3))
+        })
+        .map(|(index, _)| index);
+
+    if let Some(index) = candidate {
+        array.remove(index);
+        return true;
+    }
+    false
+}
+
+fn ensure_payload_truncation(value: &mut Value) -> &mut Map<String, Value> {
+    if !value
+        .get("payload_truncation")
+        .is_some_and(Value::is_object)
+    {
+        value["payload_truncation"] = serde_json::json!({
+            "bytes_requested": 0,
+            "bytes_emitted": 0,
+            "tokens_estimated": 0,
+            "omitted_node_count": 0,
+            "omitted_file_count": 0,
+            "omitted_source_count": 0,
+            "omitted_byte_count": 0,
+        });
+    }
+    value
+        .get_mut("payload_truncation")
+        .and_then(Value::as_object_mut)
+        .expect("payload_truncation object")
+}
+
+fn increment_u64(value: &mut Value, root_key: &str, nested_key: &str, amount: u64) {
+    if nested_key.is_empty() {
+        let current = value.get(root_key).and_then(Value::as_u64).unwrap_or(0);
+        value[root_key] = Value::from(current + amount);
+        value["truncated"] = Value::Bool(true);
+        return;
+    }
+
+    let object = ensure_payload_truncation(value);
+    let current = object.get(nested_key).and_then(Value::as_u64).unwrap_or(0);
+    object.insert(nested_key.to_owned(), Value::from(current + amount));
+    value["truncated"] = Value::Bool(true);
+}
+
+fn keep_priority(reason: Option<&str>) -> u8 {
+    match reason.unwrap_or_default() {
+        "direct_target" => 6,
+        "test_adjacent" => 5,
+        "impact_neighbor" => 4,
+        "caller" | "callee" => 3,
+        "importer" | "importee" => 2,
+        _ => 1,
+    }
+}
+
+fn score_value(value: Option<&Value>) -> f64 {
+    value
+        .and_then(Value::as_f64)
+        .or_else(|| value.and_then(Value::as_u64).map(|value| value as f64))
+        .unwrap_or(0.0)
+}
+
+fn string_key<'a>(entry: &'a Map<String, Value>, key: &str) -> &'a str {
+    entry.get(key).and_then(Value::as_str).unwrap_or("")
+}
+
+fn estimate_tokens(bytes: usize) -> usize {
+    bytes.div_ceil(4)
 }

@@ -127,5 +127,6 @@ pub(super) fn trim_context(result: &mut ContextResult) {
         edges_dropped: dropped_edges,
         files_dropped: dropped_files,
         truncated: dropped_nodes > 0 || dropped_edges > 0 || dropped_files > 0,
+        payload: None,
     };
 }

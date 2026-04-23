@@ -373,7 +373,9 @@ pub(super) fn tool_traverse_graph(
 
     let seeds = vec![from_qn];
     let packaged = package_impact(&result, &seeds);
-    tool_result_value(&packaged, output_format)
+    let mut response = tool_result_value(&packaged, output_format)?;
+    inject_budget_metadata(&mut response, &result.budget);
+    Ok(response)
 }
 
 pub(super) fn tool_symbol_neighbors(

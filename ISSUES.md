@@ -5568,27 +5568,27 @@ Why:
 
 ### Patch B3 — Review/context payload budgets
 
-- [ ] add explicit review/context budget config:
-  - [ ] `max_review_source_bytes`
-  - [ ] `max_context_payload_bytes`
-  - [ ] `max_context_tokens_estimate`
-  - [ ] `max_file_excerpt_bytes`
-  - [ ] `max_saved_context_bytes`
-  - [ ] `max_mcp_response_bytes`
-- [ ] apply byte/token budgets before serializing CLI/MCP output
-- [ ] make truncation deterministic:
-  - [ ] preserve direct targets first
-  - [ ] preserve highest-ranked nodes/edges next
-  - [ ] preserve risk/test evidence before low-signal context
-  - [ ] drop saved artifacts before graph essentials unless intent says otherwise
-- [ ] include truncation metadata:
-  - [ ] bytes requested
-  - [ ] bytes emitted
-  - [ ] tokens estimated
-  - [ ] omitted node/file/source counts
-  - [ ] omitted byte counts
-  - [ ] continuation or narrower-query hints
-- [ ] add tests for review-context byte cap, saved-context cap, file excerpt cap, and MCP response cap
+- [x] add explicit review/context budget config:
+  - [x] `max_review_source_bytes`
+  - [x] `max_context_payload_bytes`
+  - [x] `max_context_tokens_estimate`
+  - [x] `max_file_excerpt_bytes`
+  - [x] `max_saved_context_bytes`
+  - [x] `max_mcp_response_bytes`
+- [x] apply byte/token budgets before serializing CLI/MCP output
+- [x] make truncation deterministic:
+  - [x] preserve direct targets first
+  - [x] preserve highest-ranked nodes/edges next
+  - [x] preserve risk/test evidence before low-signal context
+  - [x] drop saved artifacts before graph essentials unless intent says otherwise
+- [x] include truncation metadata:
+  - [x] bytes requested
+  - [x] bytes emitted
+  - [x] tokens estimated
+  - [x] omitted node/file/source counts
+  - [x] omitted byte counts
+  - [x] continuation or narrower-query hints
+- [x] add tests for review-context byte cap, saved-context cap, file excerpt cap, and MCP response cap
 
 Why:
 - node/file caps do not guarantee bounded serialized payload size
@@ -5596,29 +5596,29 @@ Why:
 
 ### Patch B4 — Fail-open versus fail-closed policy
 
-- [ ] define budget-hit behavior matrix for each stage:
-  - [ ] build
-  - [ ] update
-  - [ ] query
-  - [ ] impact
-  - [ ] review context
-  - [ ] minimal context
-  - [ ] saved-context retrieval
-  - [ ] MCP response serialization
-- [ ] classify each budget as hard or soft:
-  - [ ] hard budget returns error
-  - [ ] soft budget returns partial result with warning
-  - [ ] degraded budget marks graph/context state degraded
-- [ ] surface machine-readable budget status:
-  - [ ] `budget_status`
-  - [ ] `budget_hit`
-  - [ ] `budget_name`
-  - [ ] `budget_limit`
-  - [ ] `budget_observed`
-  - [ ] `partial`
-  - [ ] `safe_to_answer`
-- [ ] document which budget hits make agent answers unsafe
-- [ ] add tests for fail-open, fail-closed, and degraded cases
+- [x] define budget-hit behavior matrix for each stage:
+  - [x] build
+  - [x] update
+  - [x] query
+  - [x] impact
+  - [x] review context
+  - [x] minimal context
+  - [x] saved-context retrieval
+  - [x] MCP response serialization
+- [x] classify each budget as hard or soft:
+  - [x] hard budget returns error
+  - [x] soft budget returns partial result with warning
+  - [x] degraded budget marks graph/context state degraded
+- [x] surface machine-readable budget status:
+  - [x] `budget_status`
+  - [x] `budget_hit`
+  - [x] `budget_name`
+  - [x] `budget_limit`
+  - [x] `budget_observed`
+  - [x] `partial`
+  - [x] `safe_to_answer`
+- [x] document which budget hits make agent answers unsafe
+- [x] add tests for fail-open, fail-closed, and degraded cases
 
 Why:
 - budget behavior must be predictable, not inferred from missing rows or truncated arrays

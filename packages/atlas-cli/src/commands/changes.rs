@@ -13,8 +13,8 @@ use atlas_store_sqlite::Store;
 use camino::Utf8Path;
 
 use super::{
-    augment_changes_with_node_counts, change_tag, db_path, detect_changes_target, print_json,
-    resolve_repo,
+    augment_changes_with_node_counts, change_tag, db_path, detect_changes_target,
+    load_budget_policy, print_json, resolve_repo,
 };
 
 // ---------------------------------------------------------------------------
@@ -636,6 +636,7 @@ pub fn run_review_context(cli: &Cli) -> Result<()> {
             ..ContextRequest::default()
         };
         let workflow_result = ContextEngine::new(&store)
+            .with_budget_policy(load_budget_policy(repo_root.as_str())?)
             .build(&workflow_request)
             .context("context engine failed")?;
 

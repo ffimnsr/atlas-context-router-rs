@@ -52,6 +52,222 @@ impl BudgetStatus {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BudgetStage {
+    Build,
+    Update,
+    Query,
+    Impact,
+    ReviewContext,
+    MinimalContext,
+    SavedContextRetrieval,
+    McpResponseSerialization,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BudgetOutcomeClass {
+    HardError,
+    SoftPartial,
+    DegradedState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BudgetStageRule {
+    pub stage: BudgetStage,
+    pub budget_name: &'static str,
+    pub outcome: BudgetOutcomeClass,
+    pub safe_to_answer: bool,
+}
+
+pub fn budget_stage_rules() -> &'static [BudgetStageRule] {
+    const RULES: &[BudgetStageRule] = &[
+        BudgetStageRule {
+            stage: BudgetStage::Build,
+            budget_name: "build_update.max_files_per_run",
+            outcome: BudgetOutcomeClass::DegradedState,
+            safe_to_answer: false,
+        },
+        BudgetStageRule {
+            stage: BudgetStage::Build,
+            budget_name: "build_update.max_total_bytes_per_run",
+            outcome: BudgetOutcomeClass::DegradedState,
+            safe_to_answer: false,
+        },
+        BudgetStageRule {
+            stage: BudgetStage::Build,
+            budget_name: "build_update.max_file_bytes",
+            outcome: BudgetOutcomeClass::DegradedState,
+            safe_to_answer: false,
+        },
+        BudgetStageRule {
+            stage: BudgetStage::Build,
+            budget_name: "build_update.max_parse_failures",
+            outcome: BudgetOutcomeClass::HardError,
+            safe_to_answer: false,
+        },
+        BudgetStageRule {
+            stage: BudgetStage::Build,
+            budget_name: "build_update.max_parse_failure_ratio",
+            outcome: BudgetOutcomeClass::HardError,
+            safe_to_answer: false,
+        },
+        BudgetStageRule {
+            stage: BudgetStage::Build,
+            budget_name: "build_update.max_wall_time_ms",
+            outcome: BudgetOutcomeClass::DegradedState,
+            safe_to_answer: false,
+        },
+        BudgetStageRule {
+            stage: BudgetStage::Update,
+            budget_name: "build_update.max_files_per_run",
+            outcome: BudgetOutcomeClass::DegradedState,
+            safe_to_answer: false,
+        },
+        BudgetStageRule {
+            stage: BudgetStage::Update,
+            budget_name: "build_update.max_total_bytes_per_run",
+            outcome: BudgetOutcomeClass::DegradedState,
+            safe_to_answer: false,
+        },
+        BudgetStageRule {
+            stage: BudgetStage::Update,
+            budget_name: "build_update.max_file_bytes",
+            outcome: BudgetOutcomeClass::DegradedState,
+            safe_to_answer: false,
+        },
+        BudgetStageRule {
+            stage: BudgetStage::Update,
+            budget_name: "build_update.max_parse_failures",
+            outcome: BudgetOutcomeClass::HardError,
+            safe_to_answer: false,
+        },
+        BudgetStageRule {
+            stage: BudgetStage::Update,
+            budget_name: "build_update.max_parse_failure_ratio",
+            outcome: BudgetOutcomeClass::HardError,
+            safe_to_answer: false,
+        },
+        BudgetStageRule {
+            stage: BudgetStage::Update,
+            budget_name: "build_update.max_wall_time_ms",
+            outcome: BudgetOutcomeClass::DegradedState,
+            safe_to_answer: false,
+        },
+        BudgetStageRule {
+            stage: BudgetStage::Query,
+            budget_name: "query_candidates_and_seeds.max_candidates",
+            outcome: BudgetOutcomeClass::SoftPartial,
+            safe_to_answer: true,
+        },
+        BudgetStageRule {
+            stage: BudgetStage::Query,
+            budget_name: "query_candidates_and_seeds.max_query_wall_time_ms",
+            outcome: BudgetOutcomeClass::SoftPartial,
+            safe_to_answer: true,
+        },
+        BudgetStageRule {
+            stage: BudgetStage::Impact,
+            budget_name: "graph_traversal.max_seed_nodes",
+            outcome: BudgetOutcomeClass::SoftPartial,
+            safe_to_answer: true,
+        },
+        BudgetStageRule {
+            stage: BudgetStage::Impact,
+            budget_name: "query_candidates_and_seeds.symbol_resolution",
+            outcome: BudgetOutcomeClass::HardError,
+            safe_to_answer: false,
+        },
+        BudgetStageRule {
+            stage: BudgetStage::Impact,
+            budget_name: "graph_traversal.max_depth",
+            outcome: BudgetOutcomeClass::SoftPartial,
+            safe_to_answer: true,
+        },
+        BudgetStageRule {
+            stage: BudgetStage::Impact,
+            budget_name: "graph_traversal.max_nodes",
+            outcome: BudgetOutcomeClass::SoftPartial,
+            safe_to_answer: true,
+        },
+        BudgetStageRule {
+            stage: BudgetStage::Impact,
+            budget_name: "graph_traversal.max_edges",
+            outcome: BudgetOutcomeClass::SoftPartial,
+            safe_to_answer: true,
+        },
+        BudgetStageRule {
+            stage: BudgetStage::ReviewContext,
+            budget_name: "graph_traversal.max_seed_files",
+            outcome: BudgetOutcomeClass::SoftPartial,
+            safe_to_answer: true,
+        },
+        BudgetStageRule {
+            stage: BudgetStage::ReviewContext,
+            budget_name: "review_context_extraction.max_nodes",
+            outcome: BudgetOutcomeClass::SoftPartial,
+            safe_to_answer: true,
+        },
+        BudgetStageRule {
+            stage: BudgetStage::ReviewContext,
+            budget_name: "review_context_extraction.max_edges",
+            outcome: BudgetOutcomeClass::SoftPartial,
+            safe_to_answer: true,
+        },
+        BudgetStageRule {
+            stage: BudgetStage::ReviewContext,
+            budget_name: "review_context_extraction.max_files",
+            outcome: BudgetOutcomeClass::SoftPartial,
+            safe_to_answer: true,
+        },
+        BudgetStageRule {
+            stage: BudgetStage::ReviewContext,
+            budget_name: "mcp_cli_payload_serialization.max_context_payload_bytes",
+            outcome: BudgetOutcomeClass::SoftPartial,
+            safe_to_answer: true,
+        },
+        BudgetStageRule {
+            stage: BudgetStage::ReviewContext,
+            budget_name: "mcp_cli_payload_serialization.max_context_tokens_estimate",
+            outcome: BudgetOutcomeClass::SoftPartial,
+            safe_to_answer: true,
+        },
+        BudgetStageRule {
+            stage: BudgetStage::MinimalContext,
+            budget_name: "graph_traversal.max_depth",
+            outcome: BudgetOutcomeClass::SoftPartial,
+            safe_to_answer: true,
+        },
+        BudgetStageRule {
+            stage: BudgetStage::MinimalContext,
+            budget_name: "graph_traversal.max_nodes",
+            outcome: BudgetOutcomeClass::SoftPartial,
+            safe_to_answer: true,
+        },
+        BudgetStageRule {
+            stage: BudgetStage::MinimalContext,
+            budget_name: "graph_traversal.max_edges",
+            outcome: BudgetOutcomeClass::SoftPartial,
+            safe_to_answer: true,
+        },
+        BudgetStageRule {
+            stage: BudgetStage::SavedContextRetrieval,
+            budget_name: "content_saved_context_lookup.max_sources",
+            outcome: BudgetOutcomeClass::SoftPartial,
+            safe_to_answer: true,
+        },
+        BudgetStageRule {
+            stage: BudgetStage::McpResponseSerialization,
+            budget_name: "mcp_cli_payload_serialization.max_mcp_response_bytes",
+            outcome: BudgetOutcomeClass::SoftPartial,
+            safe_to_answer: true,
+        },
+    ];
+
+    RULES
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BudgetLimitRule {
     pub default_limit: usize,
@@ -102,6 +318,61 @@ impl BudgetReport {
 
     pub fn not_applicable() -> Self {
         Self::within_budget("none", 0, 0)
+    }
+
+    pub fn override_clamped(name: impl Into<String>, limit: usize, observed: usize) -> Self {
+        Self {
+            budget_status: BudgetStatus::OverrideClamped,
+            budget_hit: true,
+            budget_name: name.into(),
+            budget_limit: limit,
+            budget_observed: observed,
+            partial: false,
+            safe_to_answer: true,
+        }
+    }
+
+    pub fn partial_result(
+        name: impl Into<String>,
+        limit: usize,
+        observed: usize,
+        safe_to_answer: bool,
+    ) -> Self {
+        Self {
+            budget_status: BudgetStatus::PartialResult,
+            budget_hit: true,
+            budget_name: name.into(),
+            budget_limit: limit,
+            budget_observed: observed,
+            partial: true,
+            safe_to_answer,
+        }
+    }
+
+    pub fn blocked(name: impl Into<String>, limit: usize, observed: usize) -> Self {
+        Self {
+            budget_status: BudgetStatus::Blocked,
+            budget_hit: true,
+            budget_name: name.into(),
+            budget_limit: limit,
+            budget_observed: observed,
+            partial: false,
+            safe_to_answer: false,
+        }
+    }
+
+    pub fn is_worse_than(&self, other: &Self) -> bool {
+        self.budget_status.severity() > other.budget_status.severity()
+            || (self.budget_status.severity() == other.budget_status.severity()
+                && self.budget_observed > other.budget_observed)
+    }
+
+    pub fn merge(self, other: Self) -> Self {
+        if other.is_worse_than(&self) {
+            other
+        } else {
+            self
+        }
     }
 }
 
@@ -165,6 +436,12 @@ pub struct PayloadSerializationBudgetPolicy {
     pub nodes: BudgetLimitRule,
     pub edges: BudgetLimitRule,
     pub bytes: BudgetLimitRule,
+    pub review_source_bytes: BudgetLimitRule,
+    pub context_payload_bytes: BudgetLimitRule,
+    pub context_tokens_estimate: BudgetLimitRule,
+    pub file_excerpt_bytes: BudgetLimitRule,
+    pub saved_context_bytes: BudgetLimitRule,
+    pub mcp_response_bytes: BudgetLimitRule,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -242,6 +519,42 @@ impl Default for BudgetPolicy {
                 nodes: BudgetLimitRule::new(100, 200, BudgetHitBehavior::Clamp, true),
                 edges: BudgetLimitRule::new(100, 200, BudgetHitBehavior::Clamp, true),
                 bytes: BudgetLimitRule::new(64 * 1024, 256 * 1024, BudgetHitBehavior::Clamp, true),
+                review_source_bytes: BudgetLimitRule::new(
+                    12 * 1024,
+                    128 * 1024,
+                    BudgetHitBehavior::Partial,
+                    true,
+                ),
+                context_payload_bytes: BudgetLimitRule::new(
+                    32 * 1024,
+                    256 * 1024,
+                    BudgetHitBehavior::Partial,
+                    true,
+                ),
+                context_tokens_estimate: BudgetLimitRule::new(
+                    8_000,
+                    64_000,
+                    BudgetHitBehavior::Partial,
+                    true,
+                ),
+                file_excerpt_bytes: BudgetLimitRule::new(
+                    4 * 1024,
+                    64 * 1024,
+                    BudgetHitBehavior::Partial,
+                    true,
+                ),
+                saved_context_bytes: BudgetLimitRule::new(
+                    2 * 1024,
+                    32 * 1024,
+                    BudgetHitBehavior::Partial,
+                    true,
+                ),
+                mcp_response_bytes: BudgetLimitRule::new(
+                    48 * 1024,
+                    256 * 1024,
+                    BudgetHitBehavior::Partial,
+                    true,
+                ),
             },
         }
     }
@@ -272,36 +585,25 @@ impl BudgetManager {
         }
 
         let report = match rule.hit_behavior {
-            BudgetHitBehavior::Clamp => BudgetReport {
-                budget_status: BudgetStatus::OverrideClamped,
-                budget_hit: true,
-                budget_name: name,
-                budget_limit: rule.max_limit,
-                budget_observed: observed,
-                partial: false,
-                safe_to_answer: true,
-            },
-            BudgetHitBehavior::Partial => BudgetReport {
-                budget_status: BudgetStatus::PartialResult,
-                budget_hit: true,
-                budget_name: name,
-                budget_limit: rule.max_limit,
-                budget_observed: observed,
-                partial: true,
-                safe_to_answer: rule.safe_to_answer_on_hit,
-            },
-            BudgetHitBehavior::FailClosed => BudgetReport {
-                budget_status: BudgetStatus::Blocked,
-                budget_hit: true,
-                budget_name: name,
-                budget_limit: rule.max_limit,
-                budget_observed: observed,
-                partial: false,
-                safe_to_answer: false,
-            },
+            BudgetHitBehavior::Clamp => {
+                BudgetReport::override_clamped(name, rule.max_limit, observed)
+            }
+            BudgetHitBehavior::Partial => BudgetReport::partial_result(
+                name,
+                rule.max_limit,
+                observed,
+                rule.safe_to_answer_on_hit,
+            ),
+            BudgetHitBehavior::FailClosed => BudgetReport::blocked(name, rule.max_limit, observed),
         };
         self.reports.push(report);
         rule.max_limit
+    }
+
+    pub fn record_report(&mut self, report: BudgetReport) {
+        if report.budget_hit {
+            self.reports.push(report);
+        }
     }
 
     pub fn record_usage(
@@ -318,24 +620,10 @@ impl BudgetManager {
 
         let name = name.into();
         let report = match rule.hit_behavior {
-            BudgetHitBehavior::FailClosed => BudgetReport {
-                budget_status: BudgetStatus::Blocked,
-                budget_hit: true,
-                budget_name: name,
-                budget_limit: limit,
-                budget_observed: observed,
-                partial,
-                safe_to_answer: false,
-            },
-            BudgetHitBehavior::Clamp | BudgetHitBehavior::Partial => BudgetReport {
-                budget_status: BudgetStatus::PartialResult,
-                budget_hit: true,
-                budget_name: name,
-                budget_limit: limit,
-                budget_observed: observed,
-                partial,
-                safe_to_answer: rule.safe_to_answer_on_hit,
-            },
+            BudgetHitBehavior::FailClosed => BudgetReport::blocked(name, limit, observed),
+            BudgetHitBehavior::Clamp | BudgetHitBehavior::Partial => {
+                BudgetReport::partial_result(name, limit, observed, rule.safe_to_answer_on_hit)
+            }
         };
         self.reports.push(report);
     }
@@ -401,5 +689,49 @@ mod tests {
         assert_eq!(summary.budget_status, BudgetStatus::PartialResult);
         assert!(summary.partial);
         assert!(summary.safe_to_answer);
+    }
+
+    #[test]
+    fn record_report_merges_with_worst_status() {
+        let mut manager = BudgetManager::new();
+        manager.record_report(BudgetReport::partial_result(
+            "review_context_extraction.max_nodes",
+            50,
+            75,
+            true,
+        ));
+        manager.record_report(BudgetReport::blocked(
+            "query_candidates_and_seeds.symbol_resolution",
+            1,
+            2,
+        ));
+
+        let summary = manager.summary("none", 0, 0);
+        assert_eq!(summary.budget_status, BudgetStatus::Blocked);
+        assert_eq!(
+            summary.budget_name,
+            "query_candidates_and_seeds.symbol_resolution"
+        );
+        assert!(!summary.safe_to_answer);
+    }
+
+    #[test]
+    fn budget_stage_rules_cover_b4_stages() {
+        let stages: std::collections::BTreeSet<_> =
+            budget_stage_rules().iter().map(|rule| rule.stage).collect();
+        assert!(stages.contains(&BudgetStage::Build));
+        assert!(stages.contains(&BudgetStage::Update));
+        assert!(stages.contains(&BudgetStage::Query));
+        assert!(stages.contains(&BudgetStage::Impact));
+        assert!(stages.contains(&BudgetStage::ReviewContext));
+        assert!(stages.contains(&BudgetStage::MinimalContext));
+        assert!(stages.contains(&BudgetStage::SavedContextRetrieval));
+        assert!(stages.contains(&BudgetStage::McpResponseSerialization));
+        assert!(
+            budget_stage_rules()
+                .iter()
+                .any(|rule| matches!(rule.outcome, BudgetOutcomeClass::HardError)
+                    && !rule.safe_to_answer)
+        );
     }
 }

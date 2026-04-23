@@ -694,6 +694,23 @@ pub struct TruncationMeta {
     pub files_dropped: usize,
     /// `true` when any item was dropped.
     pub truncated: bool,
+    /// Payload-level trimming metadata applied after graph selection.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub payload: Option<PayloadTruncationMeta>,
+}
+
+/// Metadata about byte/token trimming applied to a serialized context payload.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PayloadTruncationMeta {
+    pub bytes_requested: usize,
+    pub bytes_emitted: usize,
+    pub tokens_estimated: usize,
+    pub omitted_node_count: usize,
+    pub omitted_file_count: usize,
+    pub omitted_source_count: usize,
+    pub omitted_byte_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub continuation_hint: Option<String>,
 }
 
 impl TruncationMeta {
@@ -704,6 +721,7 @@ impl TruncationMeta {
             edges_dropped: 0,
             files_dropped: 0,
             truncated: false,
+            payload: None,
         }
     }
 }
@@ -735,8 +753,8 @@ impl SeedBudgetMeta {
             requested_seed_count,
             accepted_seed_count,
             omitted_seed_count,
-            budget_hit: omitted_seed_count > 0,
-            partial: omitted_seed_count > 0 && accepted_seed_count > 0,
+            budget_hit: omitted_seed_count > 0 || !safe_to_answer,
+            partial: omitted_seed_count > 0 && accepted_seed_count > 0 && safe_to_answer,
             safe_to_answer,
             suggested_narrower_query,
         }
@@ -1588,6 +1606,7 @@ mod tests {
             edges_dropped: 3,
             files_dropped: 1,
             truncated: true,
+            payload: None,
         };
         let json = serde_json::to_string(&tm).unwrap();
         let back: TruncationMeta = serde_json::from_str(&json).unwrap();

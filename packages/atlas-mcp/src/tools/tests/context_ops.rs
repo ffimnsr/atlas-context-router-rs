@@ -49,7 +49,7 @@ fn get_context_query_returns_packaged_result() {
 
     let args = serde_json::json!({ "query": "compute", "output_format": "json" });
     let resp = call("get_context", Some(&args), "/ignored", &db_path).expect("call");
-    let text = unwrap_tool_text(resp);
+    let text = unwrap_tool_text(resp.clone());
     let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
 
     assert!(v.get("intent").is_some(), "result must have intent");
@@ -73,7 +73,7 @@ fn get_context_files_returns_review_intent() {
 
     let args = serde_json::json!({ "files": ["src/main.rs"], "output_format": "json" });
     let resp = call("get_context", Some(&args), "/ignored", &db_path).expect("call");
-    let text = unwrap_tool_text(resp);
+    let text = unwrap_tool_text(resp.clone());
     let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
 
     assert_eq!(
@@ -928,5 +928,72 @@ fn get_context_json_and_toon_output_both_include_controls() {
     assert!(
         toon_resp.get("atlas_detail_controls").is_some(),
         "toon: controls present"
+    );
+}
+
+#[test]
+fn get_context_applies_mcp_response_byte_cap() {
+    let fixture = setup_mcp_fixture();
+    let atlas_dir = fixture._dir.path().join(".atlas");
+    std::fs::create_dir_all(&atlas_dir).expect("create atlas dir");
+    std::fs::write(
+        atlas_dir.join("config.toml"),
+        "[mcp]\nworker_threads = 2\ntool_timeout_ms = 300000\nmax_mcp_response_bytes = 2500\n",
+    )
+    .expect("write config");
+
+    let repo_root = fixture._dir.path().to_string_lossy().to_string();
+    let args = serde_json::json!({
+        "query": "compute",
+        "tests": true,
+        "neighbors": true,
+        "output_format": "json"
+    });
+    let resp = call("get_context", Some(&args), &repo_root, &fixture.db_path).expect("call");
+
+    let text = unwrap_tool_text(resp.clone());
+    let value: serde_json::Value = serde_json::from_str(&text).expect("parse tool body");
+    assert_eq!(value["truncated"].as_bool(), Some(true));
+    assert!(
+        value["nodes"]
+            .as_array()
+            .is_some_and(|nodes| !nodes.is_empty()),
+        "response cap must still retain some context nodes"
+    );
+    assert!(
+        value["payload_truncation"]["omitted_byte_count"]
+            .as_u64()
+            .is_some_and(|count| count > 0),
+        "response cap must report omitted bytes"
+    );
+    assert_eq!(resp["budget_status"], "partial_result");
+    assert_eq!(
+        resp["budget_name"],
+        "mcp_cli_payload_serialization.max_mcp_response_bytes"
+    );
+    assert_eq!(resp["safe_to_answer"], true);
+}
+
+#[test]
+fn get_context_fails_closed_when_mcp_response_budget_is_impossible() {
+    let fixture = setup_mcp_fixture();
+    let atlas_dir = fixture._dir.path().join(".atlas");
+    std::fs::create_dir_all(&atlas_dir).expect("create atlas dir");
+    std::fs::write(
+        atlas_dir.join("config.toml"),
+        "[mcp]\nworker_threads = 2\ntool_timeout_ms = 300000\nmax_mcp_response_bytes = 64\n",
+    )
+    .expect("write config");
+
+    let repo_root = fixture._dir.path().to_string_lossy().to_string();
+    let args = serde_json::json!({
+        "query": "compute",
+        "output_format": "json"
+    });
+    let err = call("get_context", Some(&args), &repo_root, &fixture.db_path)
+        .expect_err("response budget under impossible cap must fail closed");
+    assert!(
+        err.to_string().contains("max_mcp_response_bytes"),
+        "unexpected error: {err:#}"
     );
 }

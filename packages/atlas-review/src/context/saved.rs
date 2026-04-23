@@ -1,13 +1,18 @@
 use super::*;
 use crate::ranking::SavedContextRankingPrimitives;
 
+pub(super) struct SavedContextRetrieval {
+    pub sources: Vec<SavedContextSource>,
+    pub matched_source_count: usize,
+}
+
 /// Maximum number of saved-context sources to include in a result.
 pub(super) fn retrieve_saved_context(
     content_store: &ContentStore,
     request: &ContextRequest,
     result: &ContextResult,
     max_saved_sources: usize,
-) -> Vec<SavedContextSource> {
+) -> SavedContextRetrieval {
     let ranking = SavedContextRankingPrimitives::default();
     let mut terms: Vec<String> = result
         .nodes
@@ -22,7 +27,10 @@ pub(super) fn retrieve_saved_context(
     terms.dedup();
 
     if terms.is_empty() {
-        return vec![];
+        return SavedContextRetrieval {
+            sources: vec![],
+            matched_source_count: 0,
+        };
     }
 
     let query = terms.join(" ");
@@ -33,11 +41,20 @@ pub(super) fn retrieve_saved_context(
 
     let chunks = match content_store.search_with_fallback(&query, &filters) {
         Ok(c) => c,
-        Err(_) => return vec![],
+        Err(_) => {
+            return SavedContextRetrieval {
+                sources: vec![],
+                matched_source_count: 0,
+            };
+        }
     };
 
     let mut seen_ids: Vec<String> = Vec::new();
+    let mut matched_ids: Vec<String> = Vec::new();
     for chunk in &chunks {
+        if !matched_ids.contains(&chunk.source_id) {
+            matched_ids.push(chunk.source_id.clone());
+        }
         if !seen_ids.contains(&chunk.source_id) {
             seen_ids.push(chunk.source_id.clone());
             if seen_ids.len() >= max_saved_sources {
@@ -107,7 +124,10 @@ pub(super) fn retrieve_saved_context(
     }
 
     ranking.sort_sources(&mut scored);
-    scored
+    SavedContextRetrieval {
+        sources: scored,
+        matched_source_count: matched_ids.len(),
+    }
 }
 
 fn epoch_days_to_ymd(days: u64) -> (u64, u8, u8) {

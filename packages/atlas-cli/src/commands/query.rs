@@ -1,12 +1,12 @@
 use anyhow::{Context, Result};
-use atlas_core::SearchQuery;
+use atlas_core::{BudgetManager, SearchQuery};
 use atlas_search as search;
 use atlas_search::QueryExplanation;
 use atlas_store_sqlite::Store;
 
 use crate::cli::{Cli, Command};
 
-use super::{db_path, print_json, query_display_path, resolve_repo};
+use super::{db_path, load_budget_policy, print_json, query_display_path, resolve_repo};
 
 fn query_owner_identity(node: &atlas_core::Node) -> Option<String> {
     node.extra_json.as_object().and_then(|extra| {
@@ -24,6 +24,7 @@ pub fn run_query(cli: &Cli) -> Result<()> {
 
     let store =
         Store::open(&db_path).with_context(|| format!("cannot open database at {db_path}"))?;
+    let policy = load_budget_policy(&repo)?;
 
     let (
         text,
@@ -83,13 +84,20 @@ pub fn run_query(cli: &Cli) -> Result<()> {
         (text.clone(), None)
     };
 
+    let mut budgets = BudgetManager::new();
+    let effective_limit = budgets.resolve_limit(
+        policy.query_candidates_and_seeds.candidates,
+        "query_candidates_and_seeds.max_candidates",
+        Some(limit),
+    );
+
     let query = SearchQuery {
         text: effective_text,
         kind,
         language,
         include_files,
         subpath,
-        limit,
+        limit: effective_limit,
         graph_expand: expand,
         graph_max_hops: expand_hops,
         fuzzy_match: fuzzy,
@@ -101,6 +109,18 @@ pub fn run_query(cli: &Cli) -> Result<()> {
     let t0 = std::time::Instant::now();
     let results = search::execute_query(&store, &query, semantic).context("search failed")?;
     let latency_ms = t0.elapsed().as_millis();
+    budgets.record_usage(
+        policy.query_candidates_and_seeds.wall_time_ms,
+        "query_candidates_and_seeds.max_query_wall_time_ms",
+        policy.query_candidates_and_seeds.wall_time_ms.default_limit,
+        latency_ms as usize,
+        latency_ms as usize > policy.query_candidates_and_seeds.wall_time_ms.default_limit,
+    );
+    let budget = budgets.summary(
+        "query_candidates_and_seeds.max_candidates",
+        effective_limit,
+        results.len(),
+    );
 
     if cli.json {
         print_json(
@@ -121,6 +141,7 @@ pub fn run_query(cli: &Cli) -> Result<()> {
                 },
                 "latency_ms": latency_ms,
                 "results": results,
+                "budget": budget,
             }),
         )?;
     } else if results.is_empty() {

@@ -26,6 +26,7 @@ pub(super) use atlas_core::{
 pub(super) use atlas_store_sqlite::Store;
 
 mod build;
+mod payload;
 mod rank;
 mod resolve;
 mod saved;
@@ -38,6 +39,7 @@ mod workflow;
 pub use self::build::build_context;
 pub use self::resolve::{ResolvedTarget, normalize_qn_kind_tokens, resolve_target};
 
+use self::payload::apply_payload_budgets;
 use self::rank::{rank_context, trim_context};
 use self::saved::retrieve_saved_context;
 use self::spans::apply_code_spans;
@@ -139,12 +141,22 @@ impl<'a> ContextEngine<'a> {
         );
 
         let mut result = build_context(self.store, &effective_request, &self.budget_policy)?;
+        budgets.record_report(result.budget.clone());
         if effective_request.include_saved_context
             && let Some(cs) = self.content_store
         {
-            result.saved_context_sources =
+            let retrieval =
                 retrieve_saved_context(cs, &effective_request, &result, saved_source_limit);
+            budgets.record_usage(
+                self.budget_policy.content_saved_context_lookup.sources,
+                "content_saved_context_lookup.max_sources",
+                saved_source_limit,
+                retrieval.matched_source_count,
+                retrieval.matched_source_count > saved_source_limit,
+            );
+            result.saved_context_sources = retrieval.sources;
         }
+        apply_payload_budgets(&mut result, &self.budget_policy);
         let node_limit = result.request.max_nodes.unwrap_or(DEFAULT_MAX_NODES);
         let edge_limit = result.request.max_edges.unwrap_or(DEFAULT_MAX_EDGES);
         let file_limit = result.request.max_files.unwrap_or(DEFAULT_MAX_FILES);
@@ -169,11 +181,83 @@ impl<'a> ContextEngine<'a> {
             result.files.len() + result.truncation.files_dropped,
             result.truncation.files_dropped > 0,
         );
+        record_seed_budget_reports(&mut budgets, &result);
+        record_payload_budget_reports(&mut budgets, &result, &self.budget_policy);
         result.budget = budgets.summary(
             "review_context_extraction.max_nodes",
             node_limit,
             result.nodes.len(),
         );
         Ok(result)
+    }
+}
+
+fn record_seed_budget_reports(budgets: &mut BudgetManager, result: &ContextResult) {
+    for seed in &result.seed_budgets {
+        if !seed.budget_hit {
+            continue;
+        }
+
+        let budget_name = match seed.seed_kind.as_str() {
+            "changed_files" => "graph_traversal.max_seed_files",
+            "changed_symbols" => "graph_traversal.max_seed_nodes",
+            "symbol_resolution" => "query_candidates_and_seeds.symbol_resolution",
+            other => other,
+        };
+        let limit = seed.accepted_seed_count.max(1);
+        let observed = seed.requested_seed_count.max(seed.accepted_seed_count);
+        let report = if !seed.safe_to_answer {
+            BudgetReport::blocked(budget_name, limit, observed)
+        } else {
+            BudgetReport::partial_result(budget_name, limit, observed, true)
+        };
+        budgets.record_report(report);
+    }
+}
+
+fn record_payload_budget_reports(
+    budgets: &mut BudgetManager,
+    result: &ContextResult,
+    policy: &BudgetPolicy,
+) {
+    let Some(payload) = result.truncation.payload.as_ref() else {
+        return;
+    };
+
+    if payload.bytes_requested
+        > policy
+            .mcp_cli_payload_serialization
+            .context_payload_bytes
+            .default_limit
+    {
+        budgets.record_usage(
+            policy.mcp_cli_payload_serialization.context_payload_bytes,
+            "mcp_cli_payload_serialization.max_context_payload_bytes",
+            policy
+                .mcp_cli_payload_serialization
+                .context_payload_bytes
+                .default_limit,
+            payload.bytes_requested,
+            true,
+        );
+    }
+
+    let requested_tokens = payload.bytes_requested.div_ceil(4);
+    if requested_tokens
+        > policy
+            .mcp_cli_payload_serialization
+            .context_tokens_estimate
+            .default_limit
+    {
+        budgets.record_usage(
+            policy.mcp_cli_payload_serialization.context_tokens_estimate,
+            "mcp_cli_payload_serialization.max_context_tokens_estimate",
+            policy
+                .mcp_cli_payload_serialization
+                .context_tokens_estimate
+                .default_limit,
+            requested_tokens,
+            true,
+        );
     }
 }

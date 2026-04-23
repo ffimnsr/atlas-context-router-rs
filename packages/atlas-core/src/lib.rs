@@ -5,8 +5,9 @@ pub mod kinds;
 pub mod model;
 
 pub use budget::{
-    BudgetHitBehavior, BudgetLimitRule, BudgetManager, BudgetNamespace, BudgetPolicy, BudgetReport,
-    BudgetStatus, BuildUpdateBudgetCounters,
+    BudgetHitBehavior, BudgetLimitRule, BudgetManager, BudgetNamespace, BudgetOutcomeClass,
+    BudgetPolicy, BudgetReport, BudgetStage, BudgetStageRule, BudgetStatus,
+    BuildUpdateBudgetCounters, budget_stage_rules,
 };
 pub use error::{AtlasError, Result};
 pub use health::{
@@ -20,12 +21,13 @@ pub use model::{
     ConfidenceTier, ContextIntent, ContextRequest, ContextResult, ContextTarget, CoverageStrength,
     DeadCodeCandidate, DependencyRemovalResult, Edge, ExtractFunctionCandidate, FileRecord, Flow,
     FlowMembership, GraphStats, ImpactClass, ImpactResult, ImpactedNode, Node, NodeId,
-    NoiseReductionSummary, PackageOwner, PackageOwnerKind, ParsedFile, ProvenanceMeta,
-    ReasoningEvidence, ReasoningWarning, RefactorDryRunResult, RefactorEdit, RefactorEditKind,
-    RefactorOperation, RefactorPatch, RefactorPlan, RefactorSafetyResult, RefactorValidationResult,
-    ReferenceScope, RemovalImpactResult, RenamePreviewResult, RenameReference, ReviewContext,
-    ReviewImpactOverview, RiskLevel, RiskSummary, SafetyBand, SafetyScore, SavedContextSource,
-    ScoredImpactNode, ScoredNode, SearchQuery, SelectedEdge, SelectedFile, SelectedNode,
-    SelectionReason, SimulatedRefactorImpact, TestAdjacencyResult, TestImpactResult,
-    TruncationMeta, WorkflowCallChain, WorkflowComponent, WorkflowFocusNode, WorkflowSummary,
+    NoiseReductionSummary, PackageOwner, PackageOwnerKind, ParsedFile, PayloadTruncationMeta,
+    ProvenanceMeta, ReasoningEvidence, ReasoningWarning, RefactorDryRunResult, RefactorEdit,
+    RefactorEditKind, RefactorOperation, RefactorPatch, RefactorPlan, RefactorSafetyResult,
+    RefactorValidationResult, ReferenceScope, RemovalImpactResult, RenamePreviewResult,
+    RenameReference, ReviewContext, ReviewImpactOverview, RiskLevel, RiskSummary, SafetyBand,
+    SafetyScore, SavedContextSource, ScoredImpactNode, ScoredNode, SearchQuery, SelectedEdge,
+    SelectedFile, SelectedNode, SelectionReason, SimulatedRefactorImpact, TestAdjacencyResult,
+    TestImpactResult, TruncationMeta, WorkflowCallChain, WorkflowComponent, WorkflowFocusNode,
+    WorkflowSummary,
 };

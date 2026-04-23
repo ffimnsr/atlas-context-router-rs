@@ -15,7 +15,7 @@ use super::shared::{
     bool_arg, error_message, error_suggestions, inject_budget_metadata, load_budget_policy,
     open_store, parse_mcp_intent, str_arg, string_array_arg, tool_result_value, u64_arg,
 };
-use crate::context::{package_context_result, package_impact};
+use crate::context::{enforce_mcp_response_budget, package_context_result, package_impact};
 
 #[derive(Clone, Copy)]
 enum ChangeSourceMode {
@@ -163,6 +163,128 @@ fn inject_change_source_metadata(
     });
 }
 
+fn metadata_reserve_bytes(value: &serde_json::Value) -> usize {
+    serde_json::to_vec(value)
+        .map(|bytes| bytes.len() + 256)
+        .unwrap_or(256)
+}
+
+fn trim_context_response_metadata(response: &mut serde_json::Value, max_bytes: usize) {
+    while serde_json::to_vec(response)
+        .map(|bytes| bytes.len())
+        .unwrap_or(0)
+        > max_bytes
+    {
+        let removed_context_file = response
+            .get_mut("atlas_context_files")
+            .and_then(serde_json::Value::as_array_mut)
+            .is_some_and(|files| {
+                if files.is_empty() {
+                    false
+                } else {
+                    files.pop();
+                    true
+                }
+            });
+        if removed_context_file {
+            continue;
+        }
+
+        let removed_omitted_section = response
+            .get_mut("atlas_detail_controls")
+            .and_then(serde_json::Value::as_object_mut)
+            .and_then(|controls| controls.get_mut("omitted_sections"))
+            .and_then(serde_json::Value::as_array_mut)
+            .is_some_and(|sections| {
+                if sections.is_empty() {
+                    false
+                } else {
+                    sections.pop();
+                    true
+                }
+            });
+        if removed_omitted_section {
+            continue;
+        }
+
+        if response.get("atlas_context_files").is_some() {
+            response
+                .as_object_mut()
+                .expect("response object")
+                .remove("atlas_context_files");
+            continue;
+        }
+
+        if response.get("atlas_detail_controls").is_some() {
+            response
+                .as_object_mut()
+                .expect("response object")
+                .remove("atlas_detail_controls");
+            continue;
+        }
+
+        let removed_change_source_file = response
+            .get_mut("atlas_change_source")
+            .and_then(serde_json::Value::as_object_mut)
+            .and_then(|source| source.get_mut("resolved_files"))
+            .and_then(serde_json::Value::as_array_mut)
+            .is_some_and(|files| {
+                if files.is_empty() {
+                    false
+                } else {
+                    files.pop();
+                    true
+                }
+            });
+        if removed_change_source_file {
+            continue;
+        }
+
+        let removed_deleted_file = response
+            .get_mut("atlas_change_source")
+            .and_then(serde_json::Value::as_object_mut)
+            .and_then(|source| source.get_mut("deleted_files"))
+            .and_then(serde_json::Value::as_array_mut)
+            .is_some_and(|files| {
+                if files.is_empty() {
+                    false
+                } else {
+                    files.pop();
+                    true
+                }
+            });
+        if removed_deleted_file {
+            continue;
+        }
+
+        if response.get("atlas_change_source").is_some() {
+            response
+                .as_object_mut()
+                .expect("response object")
+                .remove("atlas_change_source");
+            continue;
+        }
+
+        break;
+    }
+}
+
+fn ensure_final_response_budget(
+    response: &mut serde_json::Value,
+    max_bytes: usize,
+) -> Result<usize> {
+    trim_context_response_metadata(response, max_bytes);
+    let emitted_bytes = serde_json::to_vec(response)
+        .map(|bytes| bytes.len())
+        .unwrap_or(0);
+    if emitted_bytes > max_bytes {
+        anyhow::bail!(
+            "MCP response exceeds max_mcp_response_bytes after metadata trimming (emitted={emitted_bytes}, limit={max_bytes})"
+        );
+    }
+    Ok(emitted_bytes)
+}
+
 pub(super) fn tool_get_impact_radius(
     args: Option<&serde_json::Value>,
     repo_root: &str,
@@ -187,6 +309,7 @@ pub(super) fn tool_get_impact_radius(
 
     let packaged = package_impact(&result, &resolved.files);
     let mut response = tool_result_value(&packaged, output_format)?;
+    inject_budget_metadata(&mut response, &result.budget);
     inject_change_source_metadata(&mut response, &resolved);
     Ok(response)
 }
@@ -215,8 +338,39 @@ pub(super) fn tool_get_review_context(
     };
     let result = engine.build(&request).context("context engine failed")?;
     let packaged = package_context_result(&result);
-    let mut response = tool_result_value(&packaged, output_format)?;
+    let mut packaged_value = serde_json::to_value(&packaged)?;
+    let response_budget_limit = policy
+        .mcp_cli_payload_serialization
+        .mcp_response_bytes
+        .default_limit;
+    let response_budget_limit =
+        response_budget_limit.saturating_sub(metadata_reserve_bytes(&serde_json::json!({
+            "atlas_change_source": {
+                "mode": resolved.mode.as_str(),
+                "resolved_files": &resolved.files,
+                "deleted_files": &resolved.deleted_files,
+                "base": &resolved.base,
+                "staged": resolved.staged,
+                "working_tree": resolved.working_tree,
+            }
+        })));
+    let stage_budget = if let Some(response_budget) =
+        enforce_mcp_response_budget(&mut packaged_value, output_format, response_budget_limit)?
+    {
+        result.budget.clone().merge(response_budget)
+    } else {
+        result.budget.clone()
+    };
+    let mut response = tool_result_value(&packaged_value, output_format)?;
+    inject_budget_metadata(&mut response, &stage_budget);
     inject_change_source_metadata(&mut response, &resolved);
+    let _ = ensure_final_response_budget(
+        &mut response,
+        policy
+            .mcp_cli_payload_serialization
+            .mcp_response_bytes
+            .default_limit,
+    )?;
     Ok(response)
 }
 
@@ -718,7 +872,7 @@ pub(super) fn tool_get_context(
     };
 
     let packaged = package_context_result(&result);
-    let mut response = tool_result_value(&packaged, output_format)?;
+    let mut packaged_value = serde_json::to_value(&packaged)?;
     let context_files: Vec<String> = match &request.target {
         ContextTarget::ChangedFiles { paths } => paths.clone(),
         ContextTarget::FilePath { path } => vec![path.clone()],
@@ -730,9 +884,7 @@ pub(super) fn tool_get_context(
     .collect::<BTreeSet<_>>()
     .into_iter()
     .collect();
-    response["atlas_context_files"] = serde_json::json!(context_files);
 
-    // Emit applied-controls metadata so agents can inspect what was included/excluded.
     let mut omitted: Vec<&str> = Vec::new();
     if !result.request.include_tests {
         omitted.push("tests");
@@ -743,6 +895,37 @@ pub(super) fn tool_get_context(
     if !result.request.include_neighbors {
         omitted.push("neighbors");
     }
+
+    let response_budget_limit = policy
+        .mcp_cli_payload_serialization
+        .mcp_response_bytes
+        .default_limit;
+    let response_budget_limit =
+        response_budget_limit.saturating_sub(metadata_reserve_bytes(&serde_json::json!({
+            "atlas_context_files": &context_files,
+            "atlas_detail_controls": {
+                "max_files": result.request.max_files,
+                "max_nodes": result.request.max_nodes,
+                "max_edges": result.request.max_edges,
+                "code_spans": result.request.include_code_spans,
+                "tests": result.request.include_tests,
+                "imports": result.request.include_imports,
+                "neighbors": result.request.include_neighbors,
+                "semantic": semantic,
+                "omitted_sections": &omitted,
+            }
+        })));
+    let mut stage_budget = if let Some(response_budget) =
+        enforce_mcp_response_budget(&mut packaged_value, output_format, response_budget_limit)?
+    {
+        result.budget.clone().merge(response_budget)
+    } else {
+        result.budget.clone()
+    };
+    let mut response = tool_result_value(&packaged_value, output_format)?;
+    response["atlas_context_files"] = serde_json::json!(context_files);
+
+    // Emit applied-controls metadata so agents can inspect what was included/excluded.
     response["atlas_detail_controls"] = serde_json::json!({
         "max_files": result.request.max_files,
         "max_nodes": result.request.max_nodes,
@@ -754,6 +937,31 @@ pub(super) fn tool_get_context(
         "semantic": semantic,
         "omitted_sections": omitted,
     });
+    let response_bytes_before_trim = serde_json::to_vec(&response)
+        .map(|bytes| bytes.len())
+        .unwrap_or(0);
+    trim_context_response_metadata(
+        &mut response,
+        policy
+            .mcp_cli_payload_serialization
+            .mcp_response_bytes
+            .default_limit,
+    );
+    let response_bytes_after_trim = serde_json::to_vec(&response)
+        .map(|bytes| bytes.len())
+        .unwrap_or(0);
+    if response_bytes_after_trim < response_bytes_before_trim {
+        stage_budget = stage_budget.merge(atlas_core::BudgetReport::partial_result(
+            "mcp_cli_payload_serialization.max_mcp_response_bytes",
+            policy
+                .mcp_cli_payload_serialization
+                .mcp_response_bytes
+                .default_limit,
+            response_bytes_before_trim,
+            true,
+        ));
+    }
+    inject_budget_metadata(&mut response, &stage_budget);
 
     if result.nodes.is_empty() {
         response["atlas_error_code"] = serde_json::Value::String("node_not_found".to_owned());
@@ -770,5 +978,12 @@ pub(super) fn tool_get_context(
                 .to_owned(),
         );
     }
+    let _ = ensure_final_response_budget(
+        &mut response,
+        policy
+            .mcp_cli_payload_serialization
+            .mcp_response_bytes
+            .default_limit,
+    )?;
     Ok(response)
 }

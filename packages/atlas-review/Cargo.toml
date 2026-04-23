@@ -11,11 +11,12 @@ atlas-impact = { path = "../atlas-impact" , version = "0.5.0"}
 atlas-store-sqlite = { path = "../atlas-store-sqlite" , version = "0.5.0"}
 atlas-search = { path = "../atlas-search" , version = "0.5.0"}
 serde.workspace = true
+serde_json.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true
-serde_json.workspace = true
+tempfile = "3"
 
 [[bench]]
 name = "context_bench"

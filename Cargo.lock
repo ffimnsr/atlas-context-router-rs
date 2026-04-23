@@ -337,6 +337,7 @@ dependencies = [
  "criterion",
  "serde",
  "serde_json",
+ "tempfile",
  "tracing",
 ]
 

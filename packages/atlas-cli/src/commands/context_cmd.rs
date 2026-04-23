@@ -19,8 +19,8 @@ use camino::Utf8Path;
 use crate::cli::{Cli, Command};
 
 use super::{
-    change_tag, colorize, db_path, detect_changes_target, print_json, query_display_path,
-    resolve_repo,
+    change_tag, colorize, db_path, detect_changes_target, load_budget_policy, print_json,
+    query_display_path, resolve_repo,
 };
 
 fn parse_intent_str(s: &str) -> Option<ContextIntent> {
@@ -421,7 +421,7 @@ pub fn run_context(cli: &Cli) -> Result<()> {
             }
         }
 
-        let engine = ContextEngine::new(&store);
+        let engine = ContextEngine::new(&store).with_budget_policy(load_budget_policy(&repo)?);
         let result = engine.build(&request).context("context engine failed")?;
 
         if cli.json {
@@ -1280,7 +1280,7 @@ pub fn run_shell(cli: &Cli) -> Result<()> {
 
     let store =
         Store::open(&db_path).with_context(|| format!("cannot open database at {db_path}"))?;
-    let engine = ContextEngine::new(&store);
+    let engine = ContextEngine::new(&store).with_budget_policy(load_budget_policy(&repo)?);
     let stdin = io::stdin();
     let mut line = String::new();
 

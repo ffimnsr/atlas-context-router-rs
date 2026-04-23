@@ -1,5 +1,14 @@
 {
   "latency_ms": 0,
+  "budget": {
+    "budget_status": "within_budget",
+    "budget_hit": false,
+    "budget_name": "query_candidates_and_seeds.max_candidates",
+    "budget_limit": 20,
+    "budget_observed": 1,
+    "partial": false,
+    "safe_to_answer": true
+  },
   "query": {
     "text": "greet_twice",
     "kind": null,

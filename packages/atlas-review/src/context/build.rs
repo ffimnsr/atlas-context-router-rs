@@ -163,7 +163,7 @@ pub(super) fn build_review_context(
         ambiguity: None,
         workflow: None,
         saved_context_sources: vec![],
-        budget: BudgetReport::not_applicable(),
+        budget: impact.budget.clone(),
     };
 
     rank_context(&mut result);
@@ -176,7 +176,6 @@ pub(super) fn build_review_context(
     }
 
     result.workflow = Some(build_workflow_summary(&result));
-
     Ok(result)
 }
 

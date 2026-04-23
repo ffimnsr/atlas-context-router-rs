@@ -28,11 +28,14 @@ pub struct Config {
 
 /// MCP transport configuration.
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(default)]
 pub struct McpConfig {
     /// Number of MCP worker threads (clamped to 1–64).
     pub worker_threads: usize,
     /// Hard timeout in milliseconds for each MCP tool request (clamped to 1_000–3_600_000).
     pub tool_timeout_ms: u64,
+    /// Maximum serialized MCP tool response size in bytes.
+    pub max_mcp_response_bytes: u64,
 }
 
 impl Default for McpConfig {
@@ -40,12 +43,17 @@ impl Default for McpConfig {
         Self {
             worker_threads: DEFAULT_MCP_WORKER_THREADS,
             tool_timeout_ms: DEFAULT_MCP_TOOL_TIMEOUT_MS,
+            max_mcp_response_bytes: BudgetPolicy::default()
+                .mcp_cli_payload_serialization
+                .mcp_response_bytes
+                .default_limit as u64,
         }
     }
 }
 
 /// Search-phase configuration.
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(default)]
 pub struct SearchConfig {
     /// Enable hybrid (FTS + vector) retrieval when an embedding backend is configured.
     /// Falls back to FTS-only when no backend is available regardless of this flag.
@@ -83,6 +91,7 @@ impl Default for SearchConfig {
 
 /// Build-phase configuration.
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(default)]
 pub struct BuildConfig {
     /// Number of files parsed in parallel per batch (clamped to 1–4096).
     pub parse_batch_size: usize,
@@ -266,6 +275,7 @@ impl Config {
 
 /// Analysis-phase configuration (dead-code, refactor safety, impact traversal).
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(default)]
 pub struct AnalysisConfig {
     /// Minimum certainty tier for dead-code candidates to surface.
     /// Accepted values: `"high"`, `"medium"`, `"low"` (default: `"low"`).
@@ -304,6 +314,7 @@ impl Default for AnalysisConfig {
 
 /// Context-engine configuration (symbol/file/review context bounds).
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ContextConfig {
     /// Default maximum nodes returned by the context engine (default: 100).
     pub max_context_nodes: usize,
@@ -319,6 +330,16 @@ pub struct ContextConfig {
     pub max_traversal_nodes: usize,
     /// Maximum traversal edges for graph-backed context/impact work.
     pub max_traversal_edges: usize,
+    /// Maximum serialized bytes retained for file/review-source sections.
+    pub max_review_source_bytes: usize,
+    /// Maximum serialized bytes retained for one context payload before CLI/MCP rendering.
+    pub max_context_payload_bytes: usize,
+    /// Maximum estimated tokens retained for one context payload before rendering.
+    pub max_context_tokens_estimate: usize,
+    /// Maximum serialized bytes retained for file excerpt/code-span metadata.
+    pub max_file_excerpt_bytes: usize,
+    /// Maximum serialized bytes retained for saved-context sources.
+    pub max_saved_context_bytes: usize,
 }
 
 impl Default for ContextConfig {
@@ -337,6 +358,26 @@ impl Default for ContextConfig {
             max_traversal_depth: BudgetPolicy::default().graph_traversal.depth.default_limit as u32,
             max_traversal_nodes: BudgetPolicy::default().graph_traversal.nodes.default_limit,
             max_traversal_edges: BudgetPolicy::default().graph_traversal.edges.default_limit,
+            max_review_source_bytes: BudgetPolicy::default()
+                .mcp_cli_payload_serialization
+                .review_source_bytes
+                .default_limit,
+            max_context_payload_bytes: BudgetPolicy::default()
+                .mcp_cli_payload_serialization
+                .context_payload_bytes
+                .default_limit,
+            max_context_tokens_estimate: BudgetPolicy::default()
+                .mcp_cli_payload_serialization
+                .context_tokens_estimate
+                .default_limit,
+            max_file_excerpt_bytes: BudgetPolicy::default()
+                .mcp_cli_payload_serialization
+                .file_excerpt_bytes
+                .default_limit,
+            max_saved_context_bytes: BudgetPolicy::default()
+                .mcp_cli_payload_serialization
+                .saved_context_bytes
+                .default_limit,
         }
     }
 }
@@ -421,6 +462,138 @@ impl Config {
             policy.graph_traversal.edges.hit_behavior,
             policy.graph_traversal.edges.safe_to_answer_on_hit,
         );
+        policy.mcp_cli_payload_serialization.review_source_bytes = BudgetLimitRule::new(
+            validate_usize_limit(
+                "context.max_review_source_bytes",
+                self.context.max_review_source_bytes,
+                policy
+                    .mcp_cli_payload_serialization
+                    .review_source_bytes
+                    .max_limit,
+            )?,
+            policy
+                .mcp_cli_payload_serialization
+                .review_source_bytes
+                .max_limit,
+            policy
+                .mcp_cli_payload_serialization
+                .review_source_bytes
+                .hit_behavior,
+            policy
+                .mcp_cli_payload_serialization
+                .review_source_bytes
+                .safe_to_answer_on_hit,
+        );
+        policy.mcp_cli_payload_serialization.context_payload_bytes = BudgetLimitRule::new(
+            validate_usize_limit(
+                "context.max_context_payload_bytes",
+                self.context.max_context_payload_bytes,
+                policy
+                    .mcp_cli_payload_serialization
+                    .context_payload_bytes
+                    .max_limit,
+            )?,
+            policy
+                .mcp_cli_payload_serialization
+                .context_payload_bytes
+                .max_limit,
+            policy
+                .mcp_cli_payload_serialization
+                .context_payload_bytes
+                .hit_behavior,
+            policy
+                .mcp_cli_payload_serialization
+                .context_payload_bytes
+                .safe_to_answer_on_hit,
+        );
+        policy.mcp_cli_payload_serialization.context_tokens_estimate = BudgetLimitRule::new(
+            validate_usize_limit(
+                "context.max_context_tokens_estimate",
+                self.context.max_context_tokens_estimate,
+                policy
+                    .mcp_cli_payload_serialization
+                    .context_tokens_estimate
+                    .max_limit,
+            )?,
+            policy
+                .mcp_cli_payload_serialization
+                .context_tokens_estimate
+                .max_limit,
+            policy
+                .mcp_cli_payload_serialization
+                .context_tokens_estimate
+                .hit_behavior,
+            policy
+                .mcp_cli_payload_serialization
+                .context_tokens_estimate
+                .safe_to_answer_on_hit,
+        );
+        policy.mcp_cli_payload_serialization.file_excerpt_bytes = BudgetLimitRule::new(
+            validate_usize_limit(
+                "context.max_file_excerpt_bytes",
+                self.context.max_file_excerpt_bytes,
+                policy
+                    .mcp_cli_payload_serialization
+                    .file_excerpt_bytes
+                    .max_limit,
+            )?,
+            policy
+                .mcp_cli_payload_serialization
+                .file_excerpt_bytes
+                .max_limit,
+            policy
+                .mcp_cli_payload_serialization
+                .file_excerpt_bytes
+                .hit_behavior,
+            policy
+                .mcp_cli_payload_serialization
+                .file_excerpt_bytes
+                .safe_to_answer_on_hit,
+        );
+        policy.mcp_cli_payload_serialization.saved_context_bytes = BudgetLimitRule::new(
+            validate_usize_limit(
+                "context.max_saved_context_bytes",
+                self.context.max_saved_context_bytes,
+                policy
+                    .mcp_cli_payload_serialization
+                    .saved_context_bytes
+                    .max_limit,
+            )?,
+            policy
+                .mcp_cli_payload_serialization
+                .saved_context_bytes
+                .max_limit,
+            policy
+                .mcp_cli_payload_serialization
+                .saved_context_bytes
+                .hit_behavior,
+            policy
+                .mcp_cli_payload_serialization
+                .saved_context_bytes
+                .safe_to_answer_on_hit,
+        );
+        policy.mcp_cli_payload_serialization.mcp_response_bytes = BudgetLimitRule::new(
+            validate_u64_limit(
+                "mcp.max_mcp_response_bytes",
+                self.mcp.max_mcp_response_bytes,
+                policy
+                    .mcp_cli_payload_serialization
+                    .mcp_response_bytes
+                    .max_limit,
+            )? as usize,
+            policy
+                .mcp_cli_payload_serialization
+                .mcp_response_bytes
+                .max_limit,
+            policy
+                .mcp_cli_payload_serialization
+                .mcp_response_bytes
+                .hit_behavior,
+            policy
+                .mcp_cli_payload_serialization
+                .mcp_response_bytes
+                .safe_to_answer_on_hit,
+        );
 
         Ok(policy)
     }
@@ -429,12 +602,20 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
 
     #[test]
     fn mcp_config_defaults_match_expected_values() {
         let config = Config::default();
         assert_eq!(config.mcp_worker_threads(), DEFAULT_MCP_WORKER_THREADS);
         assert_eq!(config.mcp_tool_timeout_ms(), DEFAULT_MCP_TOOL_TIMEOUT_MS);
+        assert_eq!(
+            config.mcp.max_mcp_response_bytes,
+            BudgetPolicy::default()
+                .mcp_cli_payload_serialization
+                .mcp_response_bytes
+                .default_limit as u64
+        );
     }
 
     #[test]
@@ -449,5 +630,78 @@ mod tests {
         config.mcp.tool_timeout_ms = 9_999_999;
         assert_eq!(config.mcp_worker_threads(), 64);
         assert_eq!(config.mcp_tool_timeout_ms(), 3_600_000);
+    }
+
+    #[test]
+    fn budget_policy_maps_payload_budget_fields() {
+        let mut config = Config::default();
+        config.context.max_review_source_bytes = 2048;
+        config.context.max_context_payload_bytes = 4096;
+        config.context.max_context_tokens_estimate = 512;
+        config.context.max_file_excerpt_bytes = 256;
+        config.context.max_saved_context_bytes = 128;
+        config.mcp.max_mcp_response_bytes = 8192;
+
+        let policy = config.budget_policy().expect("budget policy");
+
+        assert_eq!(
+            policy
+                .mcp_cli_payload_serialization
+                .review_source_bytes
+                .default_limit,
+            2048
+        );
+        assert_eq!(
+            policy
+                .mcp_cli_payload_serialization
+                .context_payload_bytes
+                .default_limit,
+            4096
+        );
+        assert_eq!(
+            policy
+                .mcp_cli_payload_serialization
+                .context_tokens_estimate
+                .default_limit,
+            512
+        );
+        assert_eq!(
+            policy
+                .mcp_cli_payload_serialization
+                .file_excerpt_bytes
+                .default_limit,
+            256
+        );
+        assert_eq!(
+            policy
+                .mcp_cli_payload_serialization
+                .saved_context_bytes
+                .default_limit,
+            128
+        );
+        assert_eq!(
+            policy
+                .mcp_cli_payload_serialization
+                .mcp_response_bytes
+                .default_limit,
+            8192
+        );
+    }
+
+    #[test]
+    fn load_accepts_partial_nested_sections() {
+        let dir = tempdir().expect("tempdir");
+        let atlas_dir = dir.path();
+        fs::write(
+            atlas_dir.join(crate::paths::ATLAS_CONFIG),
+            "[mcp]\nmax_mcp_response_bytes = 4096\n\n[context]\nmax_saved_context_bytes = 256\n",
+        )
+        .expect("write config");
+
+        let config = Config::load(atlas_dir).expect("load config");
+
+        assert_eq!(config.mcp.max_mcp_response_bytes, 4096);
+        assert_eq!(config.context.max_saved_context_bytes, 256);
+        assert_eq!(config.mcp.worker_threads, DEFAULT_MCP_WORKER_THREADS);
     }
 }

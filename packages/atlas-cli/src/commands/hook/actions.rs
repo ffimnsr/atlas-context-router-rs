@@ -6,6 +6,7 @@ use atlas_adapters::{
     ArtifactIdentity, derive_content_db_path, derive_session_db_path, generate_source_id,
 };
 use atlas_contentstore::{ContentStore, SourceMeta};
+use atlas_core::BudgetPolicy;
 use atlas_core::model::{ChangeType, ContextIntent, ContextRequest, ContextTarget};
 use atlas_engine::{Config, UpdateOptions, UpdateTarget, update_graph};
 use atlas_impact::analyze as advanced_impact;
@@ -509,7 +510,12 @@ fn build_review_refresh_artifacts(
         depth: Some(MAX_HOOK_REVIEW_REFRESH_DEPTH),
         ..ContextRequest::default()
     };
+    let review_policy = Config::load(&atlas_engine::paths::atlas_dir(repo))
+        .unwrap_or_default()
+        .budget_policy()
+        .unwrap_or_else(|_| BudgetPolicy::default());
     let review_context = ContextEngine::new(&store)
+        .with_budget_policy(review_policy)
         .build(&review_request)
         .context("review context generation failed")?;
     let explain_change = build_explain_change_summary(
