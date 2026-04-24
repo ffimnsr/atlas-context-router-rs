@@ -12,7 +12,7 @@ pub use budget::{
 pub use error::{AtlasError, Result};
 pub use health::{
     GraphHealthInput, graph_health_error_message, graph_health_error_suggestions,
-    is_schema_mismatch_error, select_graph_health_error_code,
+    is_schema_mismatch_error, select_graph_health_error_code, user_facing_error_message,
 };
 pub use kinds::{EdgeKind, NodeKind};
 pub use model::{

@@ -15,6 +15,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
+use atlas_core::user_facing_error_message;
 use serde::{Deserialize, Serialize};
 
 use crate::{prompts, tools};
@@ -445,7 +446,7 @@ fn handle_input_line<W: Write>(
             let success = result.is_ok();
             let response = match result {
                 Ok(result) => jsonrpc_ok(request_id, result),
-                Err(error) => jsonrpc_error(request_id, -32000, error.to_string()),
+                Err(error) => jsonrpc_error(request_id, -32000, user_visible_error_message(&error)),
             };
             let _ = event_tx.send(TransportEvent::Response {
                 token,
@@ -488,7 +489,7 @@ fn handle_input_line<W: Write>(
                 error = %error,
                 "MCP method failed"
             );
-            jsonrpc_error(id, -32000, error.to_string())
+            jsonrpc_error(id, -32000, user_visible_error_message(&error))
         }
     };
     write_response(writer, &response)
@@ -896,6 +897,10 @@ fn jsonrpc_ok(id: serde_json::Value, result: serde_json::Value) -> String {
     serde_json::json!({ "jsonrpc": "2.0", "id": id, "result": result }).to_string()
 }
 
+fn user_visible_error_message(error: &anyhow::Error) -> String {
+    user_facing_error_message(&error.to_string(), &format!("{error:#}"))
+}
+
 fn jsonrpc_error(id: serde_json::Value, code: i32, message: String) -> String {
     serde_json::json!({
         "jsonrpc": "2.0",
@@ -951,6 +956,7 @@ mod tests {
     use atlas_core::kinds::NodeKind;
     use atlas_core::model::{Edge, Node, NodeId};
     use atlas_store_sqlite::Store;
+    use rusqlite::Connection;
     use std::io::{Cursor, Read, Write};
     #[cfg(unix)]
     use std::net::Shutdown;
@@ -1185,6 +1191,59 @@ mod tests {
                 .as_str()
                 .expect("error message")
                 .contains("method not found")
+        );
+    }
+
+    #[test]
+    fn stdio_transport_redacts_internal_sql_errors_from_tool_failures() {
+        let fixture = setup_fixture();
+        let conn = Connection::open(&fixture.db_path).expect("open fixture db");
+        conn.execute_batch("DROP TABLE nodes;")
+            .expect("drop nodes table to force internal db error");
+        drop(conn);
+
+        let input = concat!(
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}\n",
+            "{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}\n",
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"query_graph\",\"arguments\":{\"text\":\"compute\"}}}\n"
+        );
+        let reader = BufReader::new(Cursor::new(input.as_bytes()));
+        let mut writer = Vec::new();
+
+        run_server_io(
+            reader,
+            &mut writer,
+            "/ignored",
+            &fixture.db_path,
+            ServerOptions::default(),
+        )
+        .expect("run server io");
+
+        let responses = parse_output_lines(writer);
+        let response = responses
+            .into_iter()
+            .find(|value| value["id"] == serde_json::json!(2))
+            .expect("query_graph response");
+        let message = response["error"]["message"]
+            .as_str()
+            .expect("error message");
+
+        assert_eq!(response["error"]["code"], -32000);
+        assert!(
+            message.contains("Graph database schema does not match this Atlas build."),
+            "message should be user friendly: {message}"
+        );
+        assert!(
+            !message.to_ascii_lowercase().contains("sqlite"),
+            "message must not leak sqlite internals: {message}"
+        );
+        assert!(
+            !message.to_ascii_lowercase().contains("sql"),
+            "message must not leak sql internals: {message}"
+        );
+        assert!(
+            !message.contains("no such table"),
+            "message must not leak raw schema failure: {message}"
         );
     }
 

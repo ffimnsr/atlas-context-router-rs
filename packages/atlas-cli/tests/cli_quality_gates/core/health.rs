@@ -229,6 +229,46 @@ fn status_reports_schema_mismatch_for_malformed_build_state_table() {
 }
 
 #[test]
+fn update_redacts_internal_sql_errors_from_stderr() {
+    let repo = setup_fixture_repo();
+
+    run_atlas(repo.path(), &["init"]);
+    run_atlas(repo.path(), &["build"]);
+    rewrite_fixture_helper(repo.path());
+
+    let db_path = repo.path().join(".atlas").join("worldtree.db");
+    let conn = Connection::open(&db_path).expect("open atlas db");
+    conn.execute_batch("DROP TABLE files;")
+        .expect("drop files table to force schema mismatch");
+    drop(conn);
+
+    let output = sanitized_command(env!("CARGO_BIN_EXE_atlas"))
+        .args(["update"])
+        .current_dir(repo.path())
+        .output()
+        .expect("run atlas update");
+    assert!(!output.status.success(), "update should fail on broken schema");
+
+    let stderr = String::from_utf8(output.stderr).expect("stderr utf-8");
+    assert!(
+        stderr.contains("Graph database schema does not match this Atlas build."),
+        "stderr should contain friendly graph message\nstderr:\n{stderr}"
+    );
+    assert!(
+        !stderr.to_ascii_lowercase().contains("sqlite"),
+        "stderr must not leak sqlite internals\nstderr:\n{stderr}"
+    );
+    assert!(
+        !stderr.to_ascii_lowercase().contains("sql"),
+        "stderr must not leak sql internals\nstderr:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("no such table"),
+        "stderr must not leak raw schema failure\nstderr:\n{stderr}"
+    );
+}
+
+#[test]
 fn init_creates_graph_content_and_session_databases() {
     let repo = setup_fixture_repo();
 

@@ -129,3 +129,129 @@ pub fn graph_health_error_suggestions(error_code: &str) -> &'static [&'static st
         _ => &[],
     }
 }
+
+pub fn user_facing_error_message(primary_error: &str, detail: &str) -> String {
+    if let Some(error_code) = internal_error_code(detail) {
+        return graph_health_error_message(error_code).to_owned();
+    }
+
+    primary_error
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("An unknown error occurred.")
+        .to_owned()
+}
+
+fn internal_error_code(detail: &str) -> Option<&'static str> {
+    if detail.trim().is_empty() {
+        return None;
+    }
+
+    let lower = detail.to_ascii_lowercase();
+
+    if is_schema_mismatch_error(detail) {
+        return Some("schema_mismatch");
+    }
+    if looks_like_missing_graph_db(&lower) {
+        return Some("missing_graph_db");
+    }
+    if looks_like_internal_storage_error(&lower) {
+        return Some("corrupt_or_inconsistent_graph_rows");
+    }
+
+    None
+}
+
+fn looks_like_missing_graph_db(lower: &str) -> bool {
+    (lower.contains("cannot open database at")
+        || lower.contains("unable to open database file")
+        || lower.contains("cannot open database"))
+        && (lower.contains("no such file or directory") || lower.contains("os error 2"))
+}
+
+fn looks_like_internal_storage_error(lower: &str) -> bool {
+    [
+        "sqlite",
+        "rusqlite",
+        "fts5",
+        "database disk image is malformed",
+        "readonly database",
+        "constraint failed",
+        "failed to prepare",
+        "failed to execute",
+        "cannot execute",
+        "execute returned results",
+        "no such table",
+        "no such column",
+        "has no column named",
+        "duplicate column name",
+        "table graph_build_state has",
+        "table edges has",
+        "table nodes has",
+        "table files has",
+        "table retrieval_index_state has",
+        "worldtree.db",
+        "context.db",
+        "session.db",
+        "wal",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
+        || contains_sql_statement(lower)
+}
+
+fn contains_sql_statement(lower: &str) -> bool {
+    [
+        "select ",
+        "insert into ",
+        "delete from ",
+        "create table ",
+        "drop table ",
+        "alter table ",
+        "pragma ",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{graph_health_error_message, user_facing_error_message};
+
+    #[test]
+    fn user_facing_error_message_redacts_schema_mismatch_details() {
+        let primary = "cannot open database at /repo/.atlas/worldtree.db";
+        let detail = concat!(
+            "cannot open database at /repo/.atlas/worldtree.db: no such table: nodes\n",
+            "SELECT qualified_name FROM nodes"
+        );
+
+        assert_eq!(
+            user_facing_error_message(primary, detail),
+            graph_health_error_message("schema_mismatch")
+        );
+    }
+
+    #[test]
+    fn user_facing_error_message_redacts_internal_sql_details() {
+        let primary = "atlas update failed";
+        let detail = concat!(
+            "rusqlite error: database disk image is malformed\n",
+            "pragma integrity_check"
+        );
+
+        assert_eq!(
+            user_facing_error_message(primary, detail),
+            graph_health_error_message("corrupt_or_inconsistent_graph_rows")
+        );
+    }
+
+    #[test]
+    fn user_facing_error_message_preserves_plain_validation_errors() {
+        assert_eq!(
+            user_facing_error_message("missing tool name", "missing tool name"),
+            "missing tool name"
+        );
+    }
+}

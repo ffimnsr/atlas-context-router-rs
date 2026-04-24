@@ -5,6 +5,7 @@ mod install;
 mod logging;
 mod mcp_instance;
 
+use atlas_core::user_facing_error_message;
 use clap::Parser;
 use cli::{Cli, Command};
 
@@ -46,7 +47,10 @@ fn main() {
     };
 
     if let Err(err) = result {
-        eprintln!("error: {err:#}");
+        eprintln!(
+            "error: {}",
+            user_facing_error_message(&err.to_string(), &format!("{err:#}"))
+        );
         std::process::exit(1);
     }
 }
