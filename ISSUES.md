@@ -1584,7 +1584,7 @@ Why:
   - [ ] `file_paths`
   - [ ] `symbols`
   - [ ] `classification`
-- [ ] ensure secrets are redacted before persistence and previews
+- [x] ensure secrets are redacted before persistence and previews
 - [ ] add tests for small, medium, large, oversized, and secret-bearing outputs
 
 Why:
@@ -1729,7 +1729,7 @@ Why:
 - [ ] runtime enrichment extends existing session/content/adapters architecture without replacing it
 - [ ] no runtime data is stored in graph DB
 - [ ] large runtime outputs route through content store before session insertion
-- [ ] enriched events are deterministic, bounded, redacted, and deduplicated
+- [x] enriched events are deterministic, bounded, redacted, and deduplicated
 - [ ] event-to-graph links use stable identifiers and treat row IDs as optional cache hints
 - [ ] graph linking obeys readiness state and budget policy
 - [ ] context engine can merge runtime events/artifacts with graph and saved context under one bounded ranking policy

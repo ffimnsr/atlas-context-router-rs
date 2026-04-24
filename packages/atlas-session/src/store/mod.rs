@@ -208,12 +208,14 @@ impl SessionStore {
                      WHERE session_id = ?1
                        AND event_type = ?2
                        AND priority = ?3
-                       AND created_at >= ?4",
+                       AND created_at >= ?4
+                       AND event_hash = ?5",
                     params![
                         event.session_id.as_str(),
                         event.event_type.as_str(),
                         event.priority,
                         window_cutoff,
+                        event_hash,
                     ],
                     |row| row.get(0),
                 )

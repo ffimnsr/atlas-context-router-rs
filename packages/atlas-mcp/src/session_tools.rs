@@ -36,6 +36,11 @@ fn mcp_session_id(repo_root: &str) -> SessionId {
     SessionId::derive(repo_root, "", "mcp")
 }
 
+fn open_session_store_best_effort(db_path: &str) -> Option<SessionStore> {
+    let session_db = derive_session_db_path(db_path);
+    SessionStore::open(&session_db).ok()
+}
+
 pub(crate) fn search_decisions_best_effort(
     repo_root: &str,
     db_path: &str,
@@ -43,11 +48,35 @@ pub(crate) fn search_decisions_best_effort(
     query: &str,
     limit: usize,
 ) -> Vec<DecisionSearchHit> {
-    let session_db = derive_session_db_path(db_path);
-    let store = match SessionStore::open(&session_db) {
-        Ok(store) => store,
-        Err(_) => return Vec::new(),
+    let Some(store) = open_session_store_best_effort(db_path) else {
+        return Vec::new();
     };
+
+    if let Some(session_id) = session_id {
+        let current = store
+            .search_decisions(repo_root, query, Some(session_id), limit)
+            .unwrap_or_default();
+        if !current.is_empty() {
+            return current;
+        }
+    }
+
+    store
+        .search_decisions(repo_root, query, None, limit)
+        .unwrap_or_default()
+}
+
+pub(crate) fn search_decisions_strict_best_effort(
+    repo_root: &str,
+    db_path: &str,
+    session_id: Option<&str>,
+    query: &str,
+    limit: usize,
+) -> Vec<DecisionSearchHit> {
+    let Some(store) = open_session_store_best_effort(db_path) else {
+        return Vec::new();
+    };
+
     store
         .search_decisions(repo_root, query, session_id, limit)
         .unwrap_or_default()
@@ -547,8 +576,13 @@ pub fn tool_search_decisions(
         .and_then(|v| v.as_u64())
         .unwrap_or(10) as usize;
 
-    let hits =
-        search_decisions_best_effort(repo_root, db_path, session_id.as_deref(), query, limit);
+    let hits = search_decisions_strict_best_effort(
+        repo_root,
+        db_path,
+        session_id.as_deref(),
+        query,
+        limit,
+    );
     tool_result_value(
         &serde_json::json!({
             "query": query,
@@ -1443,7 +1477,7 @@ mod tests {
             .unwrap();
         store
             .append_event(NewSessionEvent {
-                session_id,
+                session_id: session_id.clone(),
                 event_type: SessionEventType::Decision,
                 priority: 4,
                 payload: serde_json::json!({
@@ -1459,7 +1493,11 @@ mod tests {
             .unwrap();
 
         let result = tool_search_decisions(
-            Some(&serde_json::json!({"query": "src/lib.rs", "output_format": "json"})),
+            Some(&serde_json::json!({
+                "query": "src/lib.rs",
+                "session_id": session_id.as_str(),
+                "output_format": "json"
+            })),
             repo_root,
             &db_path,
             OutputFormat::Json,
@@ -1467,10 +1505,60 @@ mod tests {
         .unwrap();
         let body: Value =
             serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(body["query"], "src/lib.rs");
+        assert_eq!(body["session_id"], session_id.as_str());
+        assert_eq!(body["total"], 1);
         let hit = &body["results"][0];
         assert_eq!(hit["decision"]["summary"], "reuse prior review context");
         assert_eq!(hit["decision"]["source_ids"][0], "src-123");
         assert_eq!(hit["decision"]["evidence"][0]["kind"], "saved_context");
+        assert_eq!(hit["decision"]["evidence"][0]["source_id"], "src-123");
+    }
+
+    #[test]
+    fn linked_decision_lookup_falls_back_to_repo_scope_when_session_misses() {
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join(".atlas")).unwrap();
+        let db_path = setup_db_path(&dir);
+        let repo_root = dir.path().to_str().unwrap();
+        let session_db = derive_session_db_path(&db_path);
+        let mut store = SessionStore::open(&session_db).unwrap();
+        let mcp_session = SessionId::derive(repo_root, "", "mcp");
+        let other_session = SessionId::derive(repo_root, "", "cli");
+
+        store
+            .upsert_session_meta(mcp_session.clone(), repo_root, "mcp", None)
+            .unwrap();
+        store
+            .upsert_session_meta(other_session.clone(), repo_root, "cli", None)
+            .unwrap();
+        store
+            .append_event(NewSessionEvent {
+                session_id: other_session,
+                event_type: SessionEventType::Decision,
+                priority: 4,
+                payload: serde_json::json!({
+                    "summary": "reuse repo-wide decision",
+                    "conclusion": "fallback matched repo memory",
+                    "query": "verify_token",
+                    "source_id": "artifact-42",
+                    "evidence": [{"kind": "saved_context", "source_id": "artifact-42"}],
+                }),
+                created_at: None,
+            })
+            .unwrap();
+
+        let hits = search_decisions_best_effort(
+            repo_root,
+            &db_path,
+            Some(mcp_session.as_str()),
+            "verify_token",
+            5,
+        );
+
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].decision.summary, "reuse repo-wide decision");
+        assert_eq!(hits[0].decision.source_ids, vec!["artifact-42"]);
     }
 
     #[test]

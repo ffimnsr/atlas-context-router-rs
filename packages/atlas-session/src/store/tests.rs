@@ -57,6 +57,41 @@ fn session_meta_persists_across_reopen() {
 }
 
 #[test]
+fn decision_memory_lookup_index_exists() {
+    let (_dir, store) = open_store(16, 1024);
+
+    let sql: String = store
+        .conn
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?1",
+            params!["idx_decision_memory_repo_session_updated"],
+            |row| row.get(0),
+        )
+        .unwrap();
+
+    assert_eq!(
+        sql,
+        "CREATE INDEX idx_decision_memory_repo_session_updated\n    ON decision_memory(repo_root, session_id, updated_at DESC, created_at DESC)"
+    );
+}
+
+#[test]
+fn decision_memory_fts_table_exists() {
+    let (_dir, store) = open_store(16, 1024);
+
+    let sql: String = store
+        .conn
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?1",
+            params!["decision_memory_fts"],
+            |row| row.get(0),
+        )
+        .unwrap();
+
+    assert!(sql.contains("USING fts5"));
+}
+
+#[test]
 fn duplicate_events_deduplicate_by_hash() {
     let (_dir, mut store) = open_store(16, 1024);
     let session_id = session_id();
@@ -449,6 +484,77 @@ fn decision_lookup_matches_conclusion_and_query_text() {
 }
 
 #[test]
+fn decision_lookup_fts_ranks_summary_match_first() {
+    let (_dir, mut store) = open_store(64, 8192);
+    let session_id = session_id();
+    seed_session(&mut store, &session_id);
+
+    store
+        .append_event(NewSessionEvent {
+            session_id: session_id.clone(),
+            event_type: SessionEventType::Decision,
+            priority: 4,
+            payload: serde_json::json!({
+                "summary": "verify token rollout plan",
+                "rationale": "migration sequence for auth service",
+            }),
+            created_at: Some("2026-01-01T00:00:00Z".into()),
+        })
+        .unwrap();
+    store
+        .append_event(NewSessionEvent {
+            session_id: session_id.clone(),
+            event_type: SessionEventType::Decision,
+            priority: 4,
+            payload: serde_json::json!({
+                "summary": "auth migration plan",
+                "rationale": "verify token fallback compatibility",
+            }),
+            created_at: Some("2026-01-01T00:01:00Z".into()),
+        })
+        .unwrap();
+
+    let hits = store
+        .search_decisions("/repo", "verify token", None, 10)
+        .unwrap();
+    assert_eq!(hits.len(), 2);
+    assert_eq!(hits[0].decision.summary, "verify token rollout plan");
+}
+
+#[test]
+fn decision_lookup_falls_back_to_sql_prefilter_when_fts_missing() {
+    let (_dir, mut store) = open_store(64, 8192);
+    let session_id = session_id();
+    seed_session(&mut store, &session_id);
+
+    store
+        .append_event(NewSessionEvent {
+            session_id: session_id.clone(),
+            event_type: SessionEventType::Decision,
+            priority: 4,
+            payload: serde_json::json!({
+                "summary": "reuse saved review context",
+                "conclusion": "use saved review for src/lib.rs",
+                "query": "review src/lib.rs",
+                "files": ["src/lib.rs"],
+            }),
+            created_at: Some("2026-01-01T00:00:00Z".into()),
+        })
+        .unwrap();
+
+    store
+        .conn
+        .execute_batch("DROP TABLE decision_memory_fts")
+        .unwrap();
+
+    let hits = store
+        .search_decisions("/repo", "src/lib.rs", Some(session_id.as_str()), 10)
+        .unwrap();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].decision.summary, "reuse saved review context");
+}
+
+#[test]
 fn build_resume_canonicalizes_changed_files() {
     let (_dir, mut store) = open_store(64, 8192);
     let session_id = session_id();
@@ -584,7 +690,7 @@ fn snapshot_size_cap_trims_bulky_buckets() {
 }
 
 #[test]
-fn dedup_window_blocks_same_type_within_window() {
+fn dedup_window_blocks_same_hash_within_window() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join(".atlas").join(DEFAULT_SESSION_DB);
     let mut store = SessionStore::open_with_config(
@@ -612,14 +718,47 @@ fn dedup_window_blocks_same_type_within_window() {
     let first = store.append_event(mk("build")).unwrap();
     assert!(first.is_some(), "first event should be stored");
 
-    let second = store.append_event(mk("build-again")).unwrap();
+    let second = store.append_event(mk("build")).unwrap();
     assert!(
         second.is_none(),
-        "same-type event inside window should be deduped"
+        "same event hash inside window should be deduped"
     );
 
     let events = store.list_events(&session_id).unwrap();
     assert_eq!(events.len(), 1, "only one event should be stored");
+}
+
+#[test]
+fn dedup_window_keeps_different_payloads_within_window() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join(".atlas").join(DEFAULT_SESSION_DB);
+    let mut store = SessionStore::open_with_config(
+        path.to_str().unwrap(),
+        SessionStoreConfig {
+            max_events_per_session: 64,
+            max_inline_payload_bytes: 8192,
+            max_snapshot_bytes: DEFAULT_MAX_SNAPSHOT_BYTES,
+            dedup_window_secs: 60,
+        },
+    )
+    .unwrap();
+
+    let session_id = session_id();
+    seed_session(&mut store, &session_id);
+
+    let mk = |label: &str| NewSessionEvent {
+        session_id: session_id.clone(),
+        event_type: SessionEventType::CommandRun,
+        priority: 2,
+        payload: serde_json::json!({ "command": label }),
+        created_at: None,
+    };
+
+    assert!(store.append_event(mk("build")).unwrap().is_some());
+    assert!(store.append_event(mk("build-again")).unwrap().is_some());
+
+    let events = store.list_events(&session_id).unwrap();
+    assert_eq!(events.len(), 2, "distinct payloads should not be dropped");
 }
 
 #[test]

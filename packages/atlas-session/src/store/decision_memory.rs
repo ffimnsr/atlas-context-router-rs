@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use rusqlite::{Connection, Transaction, params};
+use rusqlite::{Connection, ToSql, Transaction, params};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
@@ -10,6 +10,11 @@ use crate::SessionId;
 
 use super::types::{DecisionRecord, DecisionSearchHit};
 use super::util::{hex_encode, normalize_repo_path_string};
+
+const DECISION_FTS_CANDIDATE_MULTIPLIER: usize = 8;
+const DECISION_PREFILTER_MULTIPLIER: usize = 4;
+const DECISION_PREFILTER_MIN_ROWS: usize = 25;
+const DECISION_RECENT_MIN_ROWS: usize = 10;
 
 struct DecisionDraft {
     summary: String,
@@ -103,39 +108,166 @@ pub(super) fn search_decisions(
         return Ok(Vec::new());
     }
 
-    let mut stmt = if session_id.is_some() {
-        conn.prepare(
-            "SELECT decision_id, session_id, repo_root, summary, rationale, conclusion,
-                    query_text, source_ids_json, evidence_json, related_files_json,
-                    related_symbols_json, created_at, updated_at
-             FROM decision_memory
-             WHERE repo_root = ?1 AND session_id = ?2
-             ORDER BY updated_at DESC, created_at DESC",
-        )
-    } else {
-        conn.prepare(
-            "SELECT decision_id, session_id, repo_root, summary, rationale, conclusion,
-                    query_text, source_ids_json, evidence_json, related_files_json,
-                    related_symbols_json, created_at, updated_at
-             FROM decision_memory
-             WHERE repo_root = ?1
-             ORDER BY updated_at DESC, created_at DESC",
-        )
-    }
-    .map_err(|e| AtlasError::Db(e.to_string()))?;
-
-    let rows = if let Some(session_id) = session_id {
-        stmt.query_map(params![repo_root, session_id], row_to_decision)
-    } else {
-        stmt.query_map(params![repo_root], row_to_decision)
-    }
-    .map_err(|e| AtlasError::Db(e.to_string()))?;
-
     let tokens = query_tokens(&normalized_query);
+
+    if let Some(fts_query) = build_fts_query(&normalized_query, &tokens) {
+        let fts_limit = candidate_limit(limit, DECISION_FTS_CANDIDATE_MULTIPLIER, limit);
+        match search_decisions_fts(
+            conn,
+            repo_root,
+            session_id,
+            &fts_query,
+            &normalized_query,
+            &tokens,
+            fts_limit,
+        ) {
+            Ok(hits) if !hits.is_empty() => return Ok(finalize_fts_hits(hits, limit)),
+            Ok(_) => {}
+            Err(error) if is_fts_fallback_error(&error) => {}
+            Err(error) => return Err(error),
+        }
+    }
+
+    search_decisions_prefilter(
+        conn,
+        repo_root,
+        session_id,
+        &normalized_query,
+        &tokens,
+        limit,
+    )
+}
+
+fn search_decisions_fts(
+    conn: &Connection,
+    repo_root: &str,
+    session_id: Option<&str>,
+    fts_query: &str,
+    normalized_query: &str,
+    tokens: &[String],
+    limit: usize,
+) -> Result<Vec<FtsDecisionHit>> {
+    let phrase_pattern = like_pattern(normalized_query);
+    let (sql, params): (String, Vec<Box<dyn ToSql>>) = if let Some(session_id) = session_id {
+        (
+            "SELECT d.decision_id, d.session_id, d.repo_root, d.summary, d.rationale, d.conclusion,
+                    d.query_text, d.source_ids_json, d.evidence_json, d.related_files_json,
+                    d.related_symbols_json, d.created_at, d.updated_at,
+                    CASE
+                        WHEN LOWER(d.summary) = ?4 THEN 0
+                        WHEN LOWER(d.summary) LIKE ?5 ESCAPE '\\' THEN 1
+                        WHEN LOWER(COALESCE(d.conclusion, '')) LIKE ?5 ESCAPE '\\' THEN 2
+                        WHEN LOWER(COALESCE(d.query_text, '')) LIKE ?5 ESCAPE '\\' THEN 3
+                        WHEN LOWER(COALESCE(d.rationale, '')) LIKE ?5 ESCAPE '\\' THEN 4
+                        ELSE 5
+                    END AS field_bucket,
+                    bm25(decision_memory_fts, 8.0, 2.0, 5.0, 4.0, 1.0, 1.0, 1.0) AS fts_rank
+             FROM decision_memory_fts
+             JOIN decision_memory d ON d.decision_id = decision_memory_fts.decision_id
+             WHERE decision_memory_fts MATCH ?1
+               AND d.repo_root = ?2
+               AND d.session_id = ?3
+             ORDER BY field_bucket ASC, fts_rank ASC, d.updated_at DESC, d.created_at DESC
+             LIMIT ?6"
+                .to_string(),
+            vec![
+                Box::new(fts_query.to_owned()),
+                Box::new(repo_root.to_owned()),
+                Box::new(session_id.to_owned()),
+                Box::new(normalized_query.to_owned()),
+                Box::new(phrase_pattern.clone()),
+                Box::new(limit as i64),
+            ],
+        )
+    } else {
+        (
+            "SELECT d.decision_id, d.session_id, d.repo_root, d.summary, d.rationale, d.conclusion,
+                    d.query_text, d.source_ids_json, d.evidence_json, d.related_files_json,
+                    d.related_symbols_json, d.created_at, d.updated_at,
+                    CASE
+                        WHEN LOWER(d.summary) = ?3 THEN 0
+                        WHEN LOWER(d.summary) LIKE ?4 ESCAPE '\\' THEN 1
+                        WHEN LOWER(COALESCE(d.conclusion, '')) LIKE ?4 ESCAPE '\\' THEN 2
+                        WHEN LOWER(COALESCE(d.query_text, '')) LIKE ?4 ESCAPE '\\' THEN 3
+                        WHEN LOWER(COALESCE(d.rationale, '')) LIKE ?4 ESCAPE '\\' THEN 4
+                        ELSE 5
+                    END AS field_bucket,
+                    bm25(decision_memory_fts, 8.0, 2.0, 5.0, 4.0, 1.0, 1.0, 1.0) AS fts_rank
+             FROM decision_memory_fts
+             JOIN decision_memory d ON d.decision_id = decision_memory_fts.decision_id
+             WHERE decision_memory_fts MATCH ?1
+               AND d.repo_root = ?2
+             ORDER BY field_bucket ASC, fts_rank ASC, d.updated_at DESC, d.created_at DESC
+             LIMIT ?5"
+                .to_string(),
+            vec![
+                Box::new(fts_query.to_owned()),
+                Box::new(repo_root.to_owned()),
+                Box::new(normalized_query.to_owned()),
+                Box::new(phrase_pattern.clone()),
+                Box::new(limit as i64),
+            ],
+        )
+    };
+
+    let mut stmt = conn
+        .prepare(&sql)
+        .map_err(|e| AtlasError::Db(e.to_string()))?;
+    let param_refs: Vec<&dyn ToSql> = params.iter().map(|value| value.as_ref()).collect();
+    let rows = stmt
+        .query_map(rusqlite::params_from_iter(param_refs), |row| {
+            let decision = row_to_decision(row)?;
+            let field_bucket: i64 = row.get(13)?;
+            let fts_rank: f64 = row.get(14)?;
+            Ok(FtsDecisionHit {
+                decision,
+                field_bucket,
+                fts_rank,
+                rust_score: 0.0,
+                matched_terms: Vec::new(),
+            })
+        })
+        .map_err(|e| AtlasError::Db(e.to_string()))?;
+
     let mut hits = Vec::new();
     for row in rows {
-        let decision = row.map_err(|e| AtlasError::Db(e.to_string()))?;
-        let (score, matched_terms) = score_decision(&decision, &normalized_query, &tokens);
+        let hit = row.map_err(|e| AtlasError::Db(e.to_string()))?;
+        let (rust_score, matched_terms) = score_decision(&hit.decision, normalized_query, tokens);
+        hits.push(FtsDecisionHit {
+            rust_score,
+            matched_terms,
+            ..hit
+        });
+    }
+    Ok(hits)
+}
+
+fn search_decisions_prefilter(
+    conn: &Connection,
+    repo_root: &str,
+    session_id: Option<&str>,
+    normalized_query: &str,
+    tokens: &[String],
+    limit: usize,
+) -> Result<Vec<DecisionSearchHit>> {
+    let terms = search_terms(normalized_query, tokens);
+    let prefilter_limit = candidate_limit(
+        limit,
+        DECISION_PREFILTER_MULTIPLIER,
+        DECISION_PREFILTER_MIN_ROWS,
+    );
+    let recent_limit = candidate_limit(limit, 2, DECISION_RECENT_MIN_ROWS);
+
+    let mut candidates =
+        prefilter_like_candidates(conn, repo_root, session_id, &terms, prefilter_limit)?;
+    if candidates.len() < prefilter_limit {
+        let recent = recent_candidates(conn, repo_root, session_id, recent_limit)?;
+        merge_candidates(&mut candidates, recent);
+    }
+
+    let mut hits = Vec::new();
+    for decision in candidates {
+        let (score, matched_terms) = score_decision(&decision, normalized_query, tokens);
         if score <= 0.0 {
             continue;
         }
@@ -155,6 +287,250 @@ pub(super) fn search_decisions(
     });
     hits.truncate(limit);
     Ok(hits)
+}
+
+fn prefilter_like_candidates(
+    conn: &Connection,
+    repo_root: &str,
+    session_id: Option<&str>,
+    terms: &[String],
+    limit: usize,
+) -> Result<Vec<DecisionRecord>> {
+    if terms.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let columns = [
+        "summary",
+        "COALESCE(rationale, '')",
+        "COALESCE(conclusion, '')",
+        "COALESCE(query_text, '')",
+        "related_files_json",
+        "related_symbols_json",
+        "source_ids_json",
+    ];
+
+    let mut predicates = Vec::new();
+    let mut params: Vec<Box<dyn ToSql>> = vec![Box::new(repo_root.to_owned())];
+    let mut next_index = 2;
+    if let Some(session_id) = session_id {
+        params.push(Box::new(session_id.to_owned()));
+        next_index += 1;
+    }
+
+    for term in terms {
+        let pattern = like_pattern(term);
+        for column in columns {
+            predicates.push(format!("{column} LIKE ?{next_index} ESCAPE '\\'"));
+            params.push(Box::new(pattern.clone()));
+            next_index += 1;
+        }
+    }
+
+    params.push(Box::new(limit as i64));
+    let limit_index = next_index;
+    let base_where = if session_id.is_some() {
+        "repo_root = ?1 AND session_id = ?2"
+    } else {
+        "repo_root = ?1"
+    };
+    let sql = format!(
+        "SELECT decision_id, session_id, repo_root, summary, rationale, conclusion,
+                query_text, source_ids_json, evidence_json, related_files_json,
+                related_symbols_json, created_at, updated_at
+         FROM decision_memory
+         WHERE {base_where} AND ({})
+         ORDER BY updated_at DESC, created_at DESC
+         LIMIT ?{limit_index}",
+        predicates.join(" OR ")
+    );
+
+    query_candidates(conn, &sql, params)
+}
+
+fn recent_candidates(
+    conn: &Connection,
+    repo_root: &str,
+    session_id: Option<&str>,
+    limit: usize,
+) -> Result<Vec<DecisionRecord>> {
+    let (sql, params): (String, Vec<Box<dyn ToSql>>) = if let Some(session_id) = session_id {
+        (
+            "SELECT decision_id, session_id, repo_root, summary, rationale, conclusion,
+                    query_text, source_ids_json, evidence_json, related_files_json,
+                    related_symbols_json, created_at, updated_at
+             FROM decision_memory
+             WHERE repo_root = ?1 AND session_id = ?2
+             ORDER BY updated_at DESC, created_at DESC
+             LIMIT ?3"
+                .to_string(),
+            vec![
+                Box::new(repo_root.to_owned()),
+                Box::new(session_id.to_owned()),
+                Box::new(limit as i64),
+            ],
+        )
+    } else {
+        (
+            "SELECT decision_id, session_id, repo_root, summary, rationale, conclusion,
+                    query_text, source_ids_json, evidence_json, related_files_json,
+                    related_symbols_json, created_at, updated_at
+             FROM decision_memory
+             WHERE repo_root = ?1
+             ORDER BY updated_at DESC, created_at DESC
+             LIMIT ?2"
+                .to_string(),
+            vec![Box::new(repo_root.to_owned()), Box::new(limit as i64)],
+        )
+    };
+
+    query_candidates(conn, &sql, params)
+}
+
+fn query_candidates(
+    conn: &Connection,
+    sql: &str,
+    params: Vec<Box<dyn ToSql>>,
+) -> Result<Vec<DecisionRecord>> {
+    let mut stmt = conn
+        .prepare(sql)
+        .map_err(|e| AtlasError::Db(e.to_string()))?;
+    let param_refs: Vec<&dyn ToSql> = params.iter().map(|value| value.as_ref()).collect();
+    let rows = stmt
+        .query_map(rusqlite::params_from_iter(param_refs), row_to_decision)
+        .map_err(|e| AtlasError::Db(e.to_string()))?;
+
+    let mut decisions = Vec::new();
+    for row in rows {
+        decisions.push(row.map_err(|e| AtlasError::Db(e.to_string()))?);
+    }
+    Ok(decisions)
+}
+
+fn merge_candidates(into: &mut Vec<DecisionRecord>, more: Vec<DecisionRecord>) {
+    let mut seen = into
+        .iter()
+        .map(|decision| decision.decision_id.clone())
+        .collect::<BTreeSet<_>>();
+    for decision in more {
+        if seen.insert(decision.decision_id.clone()) {
+            into.push(decision);
+        }
+    }
+}
+
+fn finalize_fts_hits(mut hits: Vec<FtsDecisionHit>, limit: usize) -> Vec<DecisionSearchHit> {
+    hits.sort_by(|left, right| {
+        left.field_bucket
+            .cmp(&right.field_bucket)
+            .then_with(|| left.fts_rank.total_cmp(&right.fts_rank))
+            .then_with(|| right.rust_score.total_cmp(&left.rust_score))
+            .then_with(|| right.decision.updated_at.cmp(&left.decision.updated_at))
+            .then_with(|| left.decision.decision_id.cmp(&right.decision.decision_id))
+    });
+    hits.truncate(limit);
+    hits.into_iter()
+        .map(|hit| DecisionSearchHit {
+            decision: hit.decision,
+            relevance_score: hit.rust_score.max(1.0),
+            matched_terms: hit.matched_terms,
+        })
+        .collect()
+}
+
+fn search_terms(normalized_query: &str, tokens: &[String]) -> Vec<String> {
+    let mut terms = Vec::new();
+    push_term(&mut terms, normalized_query);
+    for token in tokens {
+        push_term(&mut terms, token);
+    }
+    terms
+}
+
+fn candidate_limit(limit: usize, multiplier: usize, floor: usize) -> usize {
+    limit.saturating_mul(multiplier).max(floor)
+}
+
+fn build_fts_query(normalized_query: &str, tokens: &[String]) -> Option<String> {
+    let mut terms = search_terms(normalized_query, tokens)
+        .into_iter()
+        .flat_map(|term| tokenize_search_term(&term))
+        .collect::<Vec<_>>();
+    terms.sort();
+    terms.dedup();
+    if terms.is_empty() {
+        return None;
+    }
+
+    Some(
+        terms
+            .into_iter()
+            .map(|term| fts_term_query(&term))
+            .collect::<Vec<_>>()
+            .join(" AND "),
+    )
+}
+
+fn tokenize_search_term(term: &str) -> Vec<String> {
+    term.split(|ch: char| !ch.is_alphanumeric() && ch != '_' && ch != '-')
+        .map(str::trim)
+        .filter(|part| part.len() >= 2)
+        .map(str::to_lowercase)
+        .collect()
+}
+
+fn fts_term_query(term: &str) -> String {
+    let safe = term
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || ch == '_');
+    if safe {
+        if term.len() >= 3 {
+            format!("{term}*")
+        } else {
+            term.to_owned()
+        }
+    } else {
+        fts5_escape(term)
+    }
+}
+
+fn fts5_escape(input: &str) -> String {
+    let has_special = input
+        .chars()
+        .any(|ch| matches!(ch, '"' | '(' | ')' | '^' | '-' | '*'));
+    if has_special {
+        format!("\"{}\"", input.replace('"', "\"\""))
+    } else {
+        input.to_owned()
+    }
+}
+
+fn like_pattern(term: &str) -> String {
+    let escaped = term
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_");
+    format!("%{escaped}%")
+}
+
+fn is_fts_fallback_error(error: &AtlasError) -> bool {
+    match error {
+        AtlasError::Db(message) => {
+            message.contains("no such table: decision_memory_fts")
+                || message.contains("no such module: fts5")
+                || message.contains("unable to use function MATCH")
+                || message.contains("malformed MATCH expression")
+        }
+        _ => false,
+    }
+}
+
+struct FtsDecisionHit {
+    decision: DecisionRecord,
+    field_bucket: i64,
+    fts_rank: f64,
+    rust_score: f32,
+    matched_terms: Vec<String>,
 }
 
 impl DecisionDraft {

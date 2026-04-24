@@ -13,6 +13,7 @@ mod hooks;
 mod postprocess;
 mod query;
 mod review;
+mod session;
 mod serve;
 mod worktree;
 

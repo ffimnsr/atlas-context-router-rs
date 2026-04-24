@@ -170,7 +170,7 @@ pub fn extract_decision_event_with_details(
             payload_obj.insert(key.clone(), value.clone());
         }
     }
-    let payload = normalize_payload(payload);
+    let payload = normalize_payload(redact_payload(payload));
     PendingEvent {
         event_type: SessionEventType::Decision,
         priority: 4,
@@ -362,6 +362,22 @@ mod tests {
         assert_eq!(event.payload["summary"], "reuse prior context");
         assert_eq!(event.payload["query"], "src/lib.rs");
         assert_eq!(event.payload["source_ids"][0], "src-1");
+    }
+
+    #[test]
+    fn extract_decision_event_redacts_secret_fields() {
+        let event = extract_decision_event_with_details(
+            "reuse prior context",
+            Some("matched prior decision"),
+            serde_json::json!({
+                "token": "Bearer sk-secret-token-value",
+                "password": "hunter2",
+                "query": "src/lib.rs",
+            }),
+        );
+        assert_eq!(event.payload["token"], "[REDACTED]");
+        assert_eq!(event.payload["password"], "[REDACTED]");
+        assert_eq!(event.payload["query"], "src/lib.rs");
     }
 
     #[test]
