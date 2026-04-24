@@ -385,6 +385,7 @@ pub fn tool_search_saved_context(
     #[derive(Serialize)]
     struct ChunkPreview {
         source_id: String,
+        chunk_id: String,
         chunk_index: usize,
         #[serde(skip_serializing_if = "Option::is_none")]
         title: Option<String>,
@@ -409,6 +410,7 @@ pub fn tool_search_saved_context(
             let source = cs.get_source(&c.source_id).ok().flatten();
             ChunkPreview {
                 source_id: c.source_id,
+                chunk_id: c.chunk_id,
                 chunk_index: c.chunk_index,
                 title: c.title,
                 label: source.as_ref().map(|row| row.label.clone()),
@@ -759,20 +761,26 @@ pub fn tool_read_saved_context(
 
     // Reassemble content within byte cap.
     let mut content_parts: Vec<String> = Vec::new();
+    let mut returned_chunk_ids: Vec<String> = Vec::new();
     let mut bytes_used: usize = 0;
     let mut last_included_index: Option<usize> = None;
+    let mut last_included_chunk_id: Option<String> = None;
     let mut truncated = false;
     let mut next_chunk_offset: Option<usize> = None;
+    let mut next_chunk_id: Option<String> = None;
 
     for chunk in &remaining_chunks {
         let chunk_bytes = chunk.content.len();
         if bytes_used + chunk_bytes > max_bytes {
             truncated = true;
             next_chunk_offset = Some(chunk.chunk_index);
+            next_chunk_id = Some(chunk.chunk_id.clone());
             break;
         }
         bytes_used += chunk_bytes;
         last_included_index = Some(chunk.chunk_index);
+        last_included_chunk_id = Some(chunk.chunk_id.clone());
+        returned_chunk_ids.push(chunk.chunk_id.clone());
         content_parts.push(chunk.content.clone());
     }
 
@@ -792,12 +800,15 @@ pub fn tool_read_saved_context(
         "chunk_count": total_chunks,
         "chunk_offset": chunk_offset,
         "last_included_chunk": last_included_index,
+        "last_included_chunk_id": last_included_chunk_id,
+        "returned_chunk_ids": returned_chunk_ids,
         "content": content,
         "truncated": truncated,
     });
 
     if truncated && let Some(next) = next_chunk_offset {
         result["next_chunk_offset"] = serde_json::json!(next);
+        result["next_chunk_id"] = serde_json::json!(next_chunk_id);
         result["continuation_hint"] = serde_json::json!(format!(
             "call read_saved_context with source_id={source_id} chunk_offset={next} to read more"
         ));
@@ -950,6 +961,7 @@ pub fn tool_cross_session_search(
     #[derive(Serialize)]
     struct CrossSessionResult {
         source_id: String,
+        chunk_id: String,
         chunk_index: usize,
         #[serde(skip_serializing_if = "Option::is_none")]
         session_id: Option<String>,
@@ -971,6 +983,7 @@ pub fn tool_cross_session_search(
             let source = cs.get_source(&c.source_id).ok().flatten();
             CrossSessionResult {
                 source_id: c.source_id,
+                chunk_id: c.chunk_id,
                 chunk_index: c.chunk_index,
                 session_id: source.as_ref().and_then(|s| s.session_id.clone()),
                 title: c.title,
@@ -1300,6 +1313,7 @@ mod tests {
         let body: Value =
             serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
         let hit = &body["results"].as_array().unwrap()[0];
+        assert!(hit["chunk_id"].as_str().is_some());
         assert_eq!(hit["identity_kind"].as_str().unwrap(), "artifact_label");
         assert_eq!(hit["identity_value"].as_str().unwrap(), "my label");
     }
@@ -1516,6 +1530,7 @@ mod tests {
         assert!(body["artifact_kind"].is_string());
         assert!(body["chunk_count"].as_u64().unwrap() > 0);
         assert!(body["byte_count"].as_u64().unwrap() > 0);
+        assert!(body["returned_chunk_ids"].as_array().is_some());
         assert!(!body["content"].as_str().unwrap().is_empty());
         assert!(!body["truncated"].as_bool().unwrap());
     }
@@ -1545,6 +1560,7 @@ mod tests {
         assert!(body["found"].as_bool().unwrap());
         assert!(body["truncated"].as_bool().unwrap());
         assert!(body["next_chunk_offset"].is_number());
+        assert!(body["next_chunk_id"].as_str().is_some());
         assert!(
             body["continuation_hint"]
                 .as_str()
@@ -1560,8 +1576,13 @@ mod tests {
         let db_path = setup_db_path(&dir);
         let repo_root = dir.path().to_str().unwrap();
 
-        let content: String = (0..1_200)
-            .map(|i| format!("chunk paragraph {i} with unique payload data\n\n"))
+        let content: String = (0..200)
+            .map(|i| {
+                format!(
+                    "chunk paragraph {i} with unique payload data {}\n\n",
+                    "x".repeat(256)
+                )
+            })
             .collect();
         let source_id = save_indexed_artifact(repo_root, &db_path, "very large", &content, None);
         assert!(!source_id.is_empty(), "artifact must be indexed");
@@ -1613,6 +1634,7 @@ mod tests {
                 serde_json::from_str(r2["content"][0]["text"].as_str().unwrap()).unwrap();
             assert!(b2["found"].as_bool().unwrap());
             assert_eq!(b2["chunk_offset"].as_u64().unwrap(), offset);
+            assert!(b2["returned_chunk_ids"].as_array().is_some());
         }
         // If not truncated the content was small enough in one page — test still passes.
     }

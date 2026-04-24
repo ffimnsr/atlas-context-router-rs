@@ -6,6 +6,26 @@ const DEFAULT_SMALL_OUTPUT_BYTES: usize = 512;
 const DEFAULT_PREVIEW_THRESHOLD_BYTES: usize = 4096;
 /// Minimum FTS result count before trigram fallback is attempted.
 const DEFAULT_FALLBACK_MIN_RESULTS: usize = 3;
+/// Default max chunks processed per retrieval/index flush batch.
+const DEFAULT_RETRIEVAL_BATCH_SIZE: usize = 100;
+/// Default max chunks sent to an embedding provider per batch.
+const DEFAULT_EMBEDDING_BATCH_SIZE: usize = 32;
+/// Hard cap on total chunks written across one indexing run.
+const DEFAULT_MAX_CHUNKS_PER_INDEX_RUN: usize = 50_000;
+/// Hard cap on chunks produced from a single file.
+const DEFAULT_MAX_CHUNKS_PER_FILE: usize = 500;
+
+/// Policy applied when an artifact or run exceeds a chunk cap.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OversizedPolicy {
+    /// Return an error immediately; no chunks are written.
+    FailFast,
+    /// Truncate chunks to the cap, emit a `warn!` log, and continue.
+    PartialWithWarning,
+    /// Skip the file entirely with a `warn!` log; no chunks are written.
+    SkipFile,
+}
 
 /// Metadata describing an artifact being stored.
 #[derive(Debug, Clone)]
@@ -74,6 +94,18 @@ pub struct ContentStoreConfig {
     /// When set, oldest sources are pruned after each index operation to keep the
     /// content database below this approximate byte limit. `None` disables enforcement.
     pub max_db_bytes: Option<u64>,
+    /// Maximum chunks processed per flush batch during indexing.
+    /// Controls transaction granularity and `batch_flush_count` tracking.
+    pub retrieval_batch_size: usize,
+    /// Maximum chunks sent to an embedding provider per batch call.
+    pub embedding_batch_size: usize,
+    /// Hard cap on total chunks written across one indexing run.
+    /// Tracked cumulatively via [`ContentStore::run_stats`].
+    pub max_chunks_per_index_run: usize,
+    /// Hard cap on chunks produced from a single file/artifact.
+    pub max_chunks_per_file: usize,
+    /// Policy applied when a cap is exceeded.
+    pub oversized_policy: OversizedPolicy,
 }
 
 impl Default for ContentStoreConfig {
@@ -83,8 +115,31 @@ impl Default for ContentStoreConfig {
             preview_threshold_bytes: DEFAULT_PREVIEW_THRESHOLD_BYTES,
             fallback_min_results: DEFAULT_FALLBACK_MIN_RESULTS,
             max_db_bytes: None,
+            retrieval_batch_size: DEFAULT_RETRIEVAL_BATCH_SIZE,
+            embedding_batch_size: DEFAULT_EMBEDDING_BATCH_SIZE,
+            max_chunks_per_index_run: DEFAULT_MAX_CHUNKS_PER_INDEX_RUN,
+            max_chunks_per_file: DEFAULT_MAX_CHUNKS_PER_FILE,
+            oversized_policy: OversizedPolicy::PartialWithWarning,
         }
     }
+}
+
+/// In-process counters tracking chunk throughput for the current indexing run.
+///
+/// Reset by [`ContentStore::reset_run_stats`] at the start of each run.
+/// Read via [`ContentStore::run_stats`].
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct IndexRunStats {
+    /// Total chunks buffered (queued for flush) since last reset.
+    pub buffered_chunk_count: u64,
+    /// Total bytes of chunk content buffered since last reset.
+    pub buffered_bytes: u64,
+    /// Total bytes of chunk content staged for vector/embedding indexing since last reset.
+    pub staged_vector_bytes: u64,
+    /// Number of batch flushes committed since last reset.
+    pub batch_flush_count: u64,
+    /// Cumulative chunks written to the store this run (used to enforce `max_chunks_per_index_run`).
+    pub chunks_this_run: u64,
 }
 
 /// In-process counters tracking how `route_output` has dispatched artifacts.

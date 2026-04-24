@@ -1,6 +1,6 @@
 # Atlas — Stateful Coding Agent Backend
 
-Instruction for items in this section:
+Instruction for all the items in this file:
 - Keep each checklist item scoped to one small workable chunk.
 - Describe exact code, command, schema field, validation rule, or test to add/change.
 - Do not combine multiple implementation steps into one checklist item if they can be merged separately.
@@ -78,312 +78,266 @@ This part now tracks the remaining core delivery work: historical graph planning
 
 ### Phase 17 — Historical Graphs (Atlas v3 / Phase 1.1)
 
-Add time dimension to Atlas so system can answer historical questions, compare architectural evolution, and reason about how symbols, dependencies, and risks changed over time.
+Implement commit-linked historical graph storage and querying. Atlas should index selected git commits, persist graph snapshots for those commits, reuse unchanged file graph state, diff any two snapshots, and answer deterministic history questions about symbols, files, modules, dependencies, churn, and architectural evolution.
 
-This phase should make Atlas capable of answering questions like:
+This phase must answer:
 
 - when was this symbol introduced?
 - how did this function evolve?
-- when did this dependency appear?
+- when did this dependency appear or disappear?
 - which commits changed this module most often?
 - what architectural edges were added or removed between two points in time?
 - what did the graph look like at a given commit?
 
-This phase must:
-
-- remain deterministic
-- build on existing SQLite graph model
-- avoid any LLM dependency
-- support commit-based historical inspection
-- keep storage and indexing costs bounded
-
-Core Design Rules:
+Core design rules:
 
 - correctness before optimization
+- no LLM dependency
+- deterministic, machine-parseable git operations
+- exact commit SHA evidence in every historical result
+- no branch name as durable identity
 - reuse unchanged file graphs across history
-- prefer explicit evidence over inferred continuity
-- keep history queries deterministic
+- prefer add/remove over false continuity when identity is uncertain
+- keep storage and indexing costs bounded by measurable policy
 
-#### 17.1 Scope
+Scope:
 
-Historical Graphs means Atlas can persist and query graph state across multiple commits or snapshots.
-
-This phase is not:
-
-- a full git hosting integration
-- a PR review UI
-- a wiki/history summarizer
-- a blame replacement
-- a cloud history service
-
-This phase is:
-
-- graph snapshotting
-- graph diffing
+- graph snapshotting per commit
 - commit-linked graph metadata
-- symbol/file/edge history queries
-- architectural evolution analysis
+- compact snapshot membership using reusable file graph state
+- graph diffing across commits
+- symbol, file, module, and dependency history queries
+- architectural evolution and churn analysis
+- CLI surfaces for build, update, status, diff, query, and prune
 
-#### 17.2 Core capabilities
+Non-goals:
 
-- [ ] store graph snapshots per commit
-- [ ] associate graph snapshots with repository + branch metadata
-- [ ] diff two graph snapshots
-- [ ] track node lifecycle:
-  - [ ] introduced
-  - [ ] modified
-  - [ ] removed
-- [ ] track edge lifecycle:
-  - [ ] added
-  - [ ] removed
-  - [ ] changed confidence
-- [ ] answer history queries for:
-  - [ ] symbol
-  - [ ] file
-  - [ ] module
-  - [ ] dependency
-- [ ] expose historical graph queries through CLI
-- [ ] keep retention and storage policies configurable
+- full git hosting integration
+- PR review UI
+- wiki/history summarizer
+- blame replacement
+- cloud history service
+- rename-aware symbol lineage in first pass
 
-#### 17.3 Historical model choice
+For storage model use a hybrid model:
 
-##### Design principle
+- current graph remains optimized for live queries
+- historical layer stores snapshot metadata and compact graph state references
+- file graph state is keyed by canonical repo path + file hash
+- unchanged file graphs are reused across commits
+- snapshot membership records which file hashes, nodes, and edges are active at each commit
 
-Do not duplicate entire live schema blindly for every commit if it explodes storage.
+#### 17.4 Slice 1 — Metadata foundation
 
-Start with hybrid design:
+Implement schema, deterministic git metadata ingestion, and `atlas history status` first. This slice creates durable history identity before parsing historical file contents.
 
-- current graph stays optimized for live queries
-- historical layer stores snapshot metadata + compact graph state references
-- initial version may store full per-commit graph slices for affected files only
-- later version may deduplicate unchanged file graphs across commits
+Schema:
 
-##### Recommended first implementation
+- [ ] `repos` if not already present
+- [ ] `commits`
+- [ ] `graph_snapshots`
+- [ ] `snapshot_files`
+- [ ] indexes and uniqueness constraints for repo, commit, snapshot, and file membership lookups
 
-- [ ] persist commit-level snapshot records
-- [ ] persist file-graph state keyed by file hash
-- [ ] map each commit snapshot to set of file hashes active at that commit
-- [ ] reconstruct graph for commit from file-hash references
-- [ ] avoid duplicating unchanged file graphs across commits
+`commits` columns:
 
-This provides historical power without storing same file graph repeatedly.
+- [ ] `commit_sha`
+- [ ] `repo_id`
+- [ ] `parent_sha`
+- [ ] `author_name`
+- [ ] `author_email`
+- [ ] `author_time`
+- [ ] `committer_time`
+- [ ] `subject`
+- [ ] `message`
+- [ ] `indexed_at`
 
-#### 17.4 Git metadata ingestion
+`graph_snapshots` columns:
 
-##### Commit discovery
+- [ ] `snapshot_id`
+- [ ] `repo_id`
+- [ ] `commit_sha`
+- [ ] `root_tree_hash` if available
+- [ ] `node_count`
+- [ ] `edge_count`
+- [ ] `file_count`
+- [ ] `created_at`
+- [ ] `completeness`
+- [ ] `parse_error_count`
 
-- [ ] implement commit enumeration:
-  - [ ] latest commit only
-  - [ ] bounded history window
-  - [ ] explicit commit list
-  - [ ] commit range
-- [ ] support:
-  - [ ] HEAD
-  - [ ] branch ref
-  - [ ] commit SHA
-  - [ ] tag
-  - [ ] merge base ranges later
+`snapshot_files` columns:
 
-##### Commit metadata
-
-- [ ] collect and store:
-  - [ ] commit SHA
-  - [ ] parent SHA(s)
-  - [ ] author name
-  - [ ] author email
-  - [ ] author time
-  - [ ] committer time
-  - [ ] commit message subject
-  - [ ] full message later
-  - [ ] branch/ref used during indexing
-- [ ] normalize timestamps
-- [ ] define canonical repo-relative commit identity
-
-##### Git commands
-
-- [ ] implement helper wrappers for:
-  - [ ] `git rev-parse`
-  - [ ] `git log`
-  - [ ] `git show`
-  - [ ] `git diff-tree`
-  - [ ] `git cat-file`
-- [ ] ensure commands are deterministic and machine-parseable
-- [ ] add robust error handling for:
-  - [ ] shallow clones
-  - [ ] detached HEAD
-  - [ ] missing refs
-  - [ ] rewritten history
-  - [ ] submodules later
-
-#### 17.5 Snapshot data model
-
-##### New tables
-
-- [ ] create `repos` table if not already present
-- [ ] create `commits` table
-- [ ] create `graph_snapshots` table
-- [ ] create `snapshot_files` table
-- [ ] create `historical_nodes` table or reuse content-addressed node storage
-- [ ] create `historical_edges` table or reuse content-addressed edge storage
-- [ ] create `node_history` table
-- [ ] create `edge_history` table
-
-##### `commits` table
-
-- [ ] columns:
-  - [ ] `commit_sha`
-  - [ ] `repo_id`
-  - [ ] `parent_sha`
-  - [ ] `author_name`
-  - [ ] `author_email`
-  - [ ] `author_time`
-  - [ ] `committer_time`
-  - [ ] `subject`
-  - [ ] `message`
-  - [ ] `indexed_at`
-
-##### `graph_snapshots` table
-
-- [ ] columns:
-  - [ ] `snapshot_id`
-  - [ ] `repo_id`
-  - [ ] `commit_sha`
-  - [ ] `root_tree_hash` if available
-  - [ ] `node_count`
-  - [ ] `edge_count`
-  - [ ] `file_count`
-  - [ ] `created_at`
-
-##### `snapshot_files` table
-
-- [ ] columns:
-  - [ ] `snapshot_id`
-  - [ ] `file_path`
-  - [ ] `file_hash`
-  - [ ] `language`
-  - [ ] `size`
+- [ ] `snapshot_id`
+- [ ] `file_path`
+- [ ] `file_hash`
+- [ ] `language`
+- [ ] `size`
 - [ ] enforce uniqueness on `(snapshot_id, file_path)`
 
-##### Node/edge history model
+Git wrappers:
 
-Recommended first pass:
+- [ ] `git rev-parse`
+- [ ] `git log`
+- [ ] `git show`
+- [ ] `git ls-tree`
+- [ ] `git diff-tree`
+- [ ] `git cat-file`
 
-- [ ] keep canonical live-style nodes/edges keyed by content hash or stable synthetic identity
-- [ ] record snapshot membership separately
-- [ ] record history rows mapping:
-  - [ ] snapshot -> node ids
-  - [ ] snapshot -> edge ids
+Commit selection:
 
-Alternative first pass if simpler:
+- [ ] latest commit only
+- [ ] bounded history window
+- [ ] explicit commit list
+- [ ] commit range
+- [ ] `HEAD`
+- [ ] branch ref
+- [ ] commit SHA
+- [ ] tag
+- [ ] merge base ranges later
 
-- [ ] duplicate per-snapshot nodes/edges for correctness first
-- [ ] optimize storage later
+Commit metadata:
 
-##### Lifecycle tables
+- [ ] commit SHA
+- [ ] parent SHA(s)
+- [ ] author name
+- [ ] author email
+- [ ] author time
+- [ ] committer time
+- [ ] commit message subject
+- [ ] full message later
+- [ ] branch/ref used during indexing
+- [ ] normalized timestamps
+- [ ] canonical repo-relative commit identity
 
-- [ ] `node_history` should support:
-  - [ ] first_seen_snapshot
-  - [ ] last_seen_snapshot
-  - [ ] first_seen_commit
-  - [ ] last_seen_commit
-  - [ ] introduction_commit
-  - [ ] removal_commit
-- [ ] `edge_history` should support same lifecycle fields
+Status command:
 
-#### 17.6 Identity strategy
+- [ ] implement `atlas history status`
+- [ ] report indexed commit count
+- [ ] report latest indexed commit
+- [ ] report snapshot count
+- [ ] report shallow clone or missing ref warnings
 
-##### Symbol identity
+Tests:
 
-This is hardest design problem in historical graphs.
+- [ ] commit metadata stored correctly
+- [ ] deterministic parsing of git metadata
+- [ ] missing refs produce clear error
 
-Need stable way to say whether symbol in commit A is same symbol in commit B.
+Safeguards:
 
-##### First-pass identity rules
+- [ ] shallow clones
+- [ ] detached HEAD
+- [ ] missing refs
+- [ ] rewritten history
+- [ ] submodules later
 
-- [ ] use qualified name as primary identity key
-- [ ] pair with file path and kind
-- [ ] include signature hash where helpful
-- [ ] treat changed qualified name as remove + add unless explicit rename tracking exists
-- [ ] document this behavior clearly
+#### 17.5 Slice 2 — File graph reuse and historical build
 
-##### Later improvement
+Implement checkout-free file reconstruction, reusable file graph storage, and `atlas history build` for bounded commit ranges.
 
-- [ ] add rename-aware symbol lineage
-- [ ] add content-based similarity matching for moved/renamed symbols
-- [ ] add signature-aware continuity heuristics
+Historical graph storage:
 
-##### Edge identity
+- [ ] persist file graph state keyed by file hash
+- [ ] persist or reuse content-addressed historical node state
+- [ ] persist or reuse content-addressed historical edge state
+- [ ] create `snapshot_nodes` if membership is stored separately
+- [ ] create `snapshot_edges` if membership is stored separately
+- [ ] map each commit snapshot to active file hashes
+- [ ] map each commit snapshot to active node/edge ids
+- [ ] avoid duplicating unchanged file graphs across commits
+- [ ] duplicate per-snapshot nodes/edges only if required for correctness, then optimize later
 
-- [ ] use:
-  - [ ] edge kind
-  - [ ] source qualified name
-  - [ ] target qualified name
-  - [ ] file path
-- [ ] optionally include line number bucket or hash
+Checkout-free source access:
 
-#### 17.7 Historical indexing pipeline
-
-##### Initial historical build
-
-- [ ] implement `atlas history build`
-- [ ] accept:
-  - [ ] `--since`
-  - [ ] `--until`
-  - [ ] `--max-commits`
-  - [ ] `--branch`
-  - [ ] `--commits`
-- [ ] for each commit:
-  - [ ] checkout-free file access using git object reads where possible
-  - [ ] enumerate tracked files at that commit
-  - [ ] compute file hash
-  - [ ] reuse existing parsed file graph if identical hash already indexed
-  - [ ] parse only new file hashes
-  - [ ] write snapshot metadata
-  - [ ] attach file hash membership
-  - [ ] attach node/edge membership
-- [ ] summarize:
-  - [ ] commits processed
-  - [ ] files reused
-  - [ ] files newly parsed
-  - [ ] nodes reused
-  - [ ] elapsed time
-
-##### Incremental historical update
-
-- [ ] implement `atlas history update`
-- [ ] detect commits not yet indexed
-- [ ] only process missing commits
-- [ ] support appending new commits on branch
-- [ ] guard against rewritten history
-- [ ] detect force-push divergence and require explicit repair mode
-
-#### 17.8 Commit-time file reconstruction
-
-##### Source retrieval
-
-- [ ] support reading file contents from commit without checkout
-- [ ] use:
-  - [ ] `git show <sha>:<path>`
-  - [ ] or tree/blob plumbing commands for efficiency later
-- [ ] ensure binary detection still applies
+- [ ] read file contents from commit using `git show <sha>:<path>` first
+- [ ] allow tree/blob plumbing optimization later
+- [ ] keep binary detection behavior
 - [ ] handle deleted paths correctly
+- [ ] canonicalize repo paths before hashing or identity use
 
-##### File list reconstruction
+Tracked file reconstruction:
 
 - [ ] reconstruct tracked file list for each commit
-- [ ] support:
-  - [ ] `git ls-tree`
-  - [ ] or `git diff-tree` for incremental file-set changes
-- [ ] decide whether to full-enumerate per commit or replay diffs
-- [ ] first version may prefer correctness over speed
+- [ ] use `git ls-tree` for first version
+- [ ] use `git diff-tree` for incremental file-set replay later
+- [ ] prefer full enumeration correctness before diff replay speed
 
-#### 17.9 Graph diff engine
+Build command:
 
-##### Goal
+- [ ] accept `--since`
+- [ ] accept `--until`
+- [ ] accept `--max-commits`
+- [ ] accept `--branch`
+- [ ] accept `--commits`
+- [ ] enumerate selected commits
+- [ ] enumerate tracked files at each commit
+- [ ] compute file hash
+- [ ] reuse parsed file graph if identical hash already indexed
+- [ ] parse only new file hashes
+- [ ] write commit and snapshot metadata
+- [ ] attach file hash membership
+- [ ] attach node/edge membership
+- [ ] summarize commits processed, files reused, files parsed, nodes reused, elapsed time
 
-Compare two graph snapshots and describe structural differences.
+Tests:
 
-##### Diff scopes
+- [ ] snapshot membership stored correctly
+- [ ] unchanged file graph reused across commits
+- [ ] modified file graph creates new membership state
+- [ ] binary file handling matches live indexing behavior
+- [ ] deleted path handled correctly
+
+#### 17.6 Slice 3 — Incremental update, identity, lifecycle, reconstruction, and diff
+
+Implement missing-commit updates, first-pass symbol/edge identity, lifecycle tables, graph reconstruction, and `atlas history diff`.
+
+Update command:
+
+- [ ] detect commits not yet indexed
+- [ ] process only missing commits
+- [ ] support appending new commits on branch
+- [ ] detect rewritten history
+- [ ] detect force-push divergence
+- [ ] require explicit repair mode for divergent history
+
+Identity:
+
+- [ ] use qualified name as primary identity key
+- [ ] pair with canonical file path and symbol kind
+- [ ] include signature hash where helpful
+- [ ] treat changed qualified name as remove + add
+- [ ] document lack of rename continuity
+- [ ] edge kind
+- [ ] source qualified name
+- [ ] target qualified name
+- [ ] canonical file path
+- [ ] optional line bucket or metadata hash
+
+Lifecycle tables:
+
+- [ ] create `node_history`
+- [ ] create `edge_history`
+- [ ] `node_history` supports first/last snapshot, first/last commit, introduction commit, removal commit
+- [ ] `edge_history` supports first/last snapshot, first/last commit, introduction commit, removal commit
+
+Lifecycle computation:
+
+- [ ] compute first/last seen snapshots
+- [ ] compute first/last seen commits
+- [ ] compute introduction/removal commits
+- [ ] record confidence/evidence for changed nodes and edges
+
+Snapshot reconstruction:
+
+- [ ] reconstruct graph state for any indexed commit
+- [ ] reconstruct from file-hash references and snapshot membership
+- [ ] expose partial snapshot completeness and parse error counts
+
+Diff command:
+
+- [ ] implement `atlas history diff <commit-a> <commit-b>`
+
+Diff scopes:
 
 - [ ] file diff
 - [ ] node diff
@@ -391,152 +345,171 @@ Compare two graph snapshots and describe structural differences.
 - [ ] module diff
 - [ ] architecture diff
 
-##### Node diff
+Node diff detects:
 
-- [ ] detect:
-  - [ ] added nodes
-  - [ ] removed nodes
-  - [ ] changed nodes
-- [ ] changed criteria:
-  - [ ] line span changed
-  - [ ] signature changed
-  - [ ] modifiers changed
-  - [ ] test status changed
-  - [ ] extra metadata changed
+- [ ] added nodes
+- [ ] removed nodes
+- [ ] changed nodes
+- [ ] line span changes
+- [ ] signature changes
+- [ ] modifier changes
+- [ ] test status changes
+- [ ] extra metadata changes
 
-##### Edge diff
+Edge diff detects:
 
-- [ ] detect:
-  - [ ] added edges
-  - [ ] removed edges
-  - [ ] changed confidence tier
-  - [ ] changed metadata
+- [ ] added edges
+- [ ] removed edges
+- [ ] changed confidence tier
+- [ ] changed metadata
 
-##### File diff
+File diff detects:
 
-- [ ] detect:
-  - [ ] added files
-  - [ ] removed files
-  - [ ] modified files
-  - [ ] renamed files if git reports them
-- [ ] expose language and size changes
+- [ ] added files
+- [ ] removed files
+- [ ] modified files
+- [ ] renamed files if git reports them
+- [ ] language and size changes
 
-##### Architecture diff
+Architecture diff detects:
 
-- [ ] detect:
-  - [ ] new dependency paths
-  - [ ] removed dependency paths
-  - [ ] new cycles
-  - [ ] broken cycles
-  - [ ] changed central hubs
-  - [ ] changed coupling between modules
+- [ ] new dependency paths
+- [ ] removed dependency paths
+- [ ] new cycles
+- [ ] broken cycles
+- [ ] changed central hubs
+- [ ] changed coupling between modules
 
-#### 17.10 History query layer
+Tests:
 
-##### Symbol history
+- [ ] node add/remove/change diff
+- [ ] edge add/remove diff
+- [ ] architecture diff detects new cycle
+- [ ] architecture diff detects broken cycle
+- [ ] rewritten history requires explicit repair mode
 
-- [ ] implement query:
-  - [ ] show first/last appearance
-  - [ ] show commits where changed
-  - [ ] show signature evolution
-  - [ ] show file path changes
+#### 17.7 Slice 4 — History queries and output contracts
 
-##### File history
+Implement symbol, file, dependency, and module history query commands after snapshot reconstruction and lifecycle data exist.
 
-- [ ] implement query:
-  - [ ] show all commits touching file
-  - [ ] show node count over time
-  - [ ] show edge count over time
-  - [ ] show symbol additions/removals
+Commands:
 
-##### Dependency history
-
-- [ ] implement query:
-  - [ ] when edge first appeared
-  - [ ] when edge disappeared
-  - [ ] which commits added/removed dependency
-  - [ ] how long edge persisted
-
-##### Module history
-
-- [ ] implement query:
-  - [ ] node growth over time
-  - [ ] dependency growth over time
-  - [ ] test adjacency over time later
-  - [ ] coupling trend over time
-
-#### 17.11 Evolution analytics
-
-##### Churn metrics
-
-- [ ] compute per symbol:
-  - [ ] change count
-  - [ ] lifetime
-  - [ ] add/remove frequency
-- [ ] compute per file:
-  - [ ] commits touched
-  - [ ] graph delta size
-- [ ] compute per module:
-  - [ ] dependency churn
-  - [ ] symbol churn
-
-##### Stability indicators
-
-- [ ] identify:
-  - [ ] stable symbols
-  - [ ] unstable symbols
-  - [ ] frequently changing dependencies
-  - [ ] architectural hotspots
-
-##### Trend metrics
-
-- [ ] track:
-  - [ ] file count growth
-  - [ ] node count growth
-  - [ ] edge count growth
-  - [ ] module coupling trend
-  - [ ] cycle count trend
-
-#### 17.12 Snapshot storage efficiency
-
-##### Deduplication
-
-- [ ] reuse parsed file graph when file hash repeats across commits
-- [ ] avoid duplicate node/edge rows when content-identical
-- [ ] deduplicate snapshot membership rows where possible
-
-##### Retention controls
-
-- [ ] support pruning policies:
-  - [ ] keep all commits
-  - [ ] keep latest N
-  - [ ] keep tagged releases only
-  - [ ] keep weekly snapshots
-- [ ] implement `atlas history prune`
-
-##### Storage diagnostics
-
-- [ ] report:
-  - [ ] commits stored
-  - [ ] unique file hashes
-  - [ ] deduplication ratio
-  - [ ] DB size
-  - [ ] snapshot density
-
-#### 17.13 CLI surfaces
-
-##### New commands
-
-- [ ] `atlas history build`
-- [ ] `atlas history update`
-- [ ] `atlas history status`
-- [ ] `atlas history diff <commit-a> <commit-b>`
 - [ ] `atlas history symbol <qualified-name>`
 - [ ] `atlas history file <path>`
 - [ ] `atlas history dependency <source> <target>`
+
+Symbol history query:
+
+- [ ] show first/last appearance
+- [ ] show commits where changed
+- [ ] show signature evolution
+- [ ] show file path changes
+
+File history query:
+
+- [ ] show all commits touching file
+- [ ] show node count over time
+- [ ] show edge count over time
+- [ ] show symbol additions/removals
+
+Dependency history query:
+
+- [ ] show when edge first appeared
+- [ ] show when edge disappeared
+- [ ] show commits that added/removed dependency
+- [ ] show persistence duration
+
+Module history query:
+
+- [ ] show node growth over time
+- [ ] show dependency growth over time
+- [ ] show coupling trend over time
+- [ ] show test adjacency over time later
+
+Output structures:
+
+- [ ] `HistoricalSnapshot`
+- [ ] `GraphDiffReport`
+- [ ] `NodeHistoryReport`
+- [ ] `EdgeHistoryReport`
+- [ ] `FileHistoryReport`
+- [ ] `ModuleHistoryReport`
+
+Every output includes:
+
+- [ ] summary fields
+- [ ] detailed findings
+- [ ] evidence snapshot ids
+- [ ] evidence commit SHAs
+- [ ] evidence node/edge identifiers
+- [ ] evidence canonical file paths
+
+Tests:
+
+- [ ] symbol history query
+- [ ] file history query
+- [ ] dependency history query
+- [ ] module history trend query
+- [ ] JSON outputs include required evidence fields
+
+#### 17.8 Slice 5 — Analytics, retention, and diagnostics
+
+Implement churn/stability/trend reports, storage diagnostics, and pruning after core history queries work.
+
+Churn metrics:
+
+- [ ] compute per-symbol change count, lifetime, add/remove frequency
+- [ ] compute per-file commits touched and graph delta size
+- [ ] compute per-module dependency churn and symbol churn
+
+Stability indicators:
+
+- [ ] stable symbols
+- [ ] unstable symbols
+- [ ] frequently changing dependencies
+- [ ] architectural hotspots
+
+Trend metrics:
+
+- [ ] file count growth
+- [ ] node count growth
+- [ ] edge count growth
+- [ ] module coupling trend
+- [ ] cycle count trend
+
+Output structure:
+
+- [ ] `ChurnReport`
+
+Retention controls:
+
+- [ ] keep all commits
+- [ ] keep latest N
+- [ ] keep tagged releases only
+- [ ] keep weekly snapshots
+- [ ] implement `atlas history prune`
+
+Storage diagnostics:
+
+- [ ] commits stored
+- [ ] unique file hashes
+- [ ] deduplication ratio
+- [ ] DB size
+- [ ] snapshot density
+- [ ] storage growth with and without deduplication
+
+Commands:
+
 - [ ] `atlas history prune`
 
-##### Flags
+Tests:
+
+- [ ] prune latest N
+- [ ] prune by age
+- [ ] prune by release/tag policy later
+- [ ] storage diagnostics report deduplication ratio
+
+#### 17.9 CLI flags
 
 - [ ] `--repo`
 - [ ] `--db`
@@ -549,36 +522,13 @@ Compare two graph snapshots and describe structural differences.
 - [ ] `--full`
 - [ ] `--follow-renames` later
 
-#### 17.14 Output structures
+#### 17.10 Correctness and safeguards
 
-- [ ] define `HistoricalSnapshot`
-- [ ] define `GraphDiffReport`
-- [ ] define `NodeHistoryReport`
-- [ ] define `EdgeHistoryReport`
-- [ ] define `FileHistoryReport`
-- [ ] define `ModuleHistoryReport`
-- [ ] define `ChurnReport`
-
-Each should include:
-
-- [ ] summary fields
-- [ ] detailed findings
-- [ ] evidence:
-  - [ ] snapshot ids
-  - [ ] commit SHAs
-  - [ ] node/edge identifiers
-  - [ ] file paths
-
-#### 17.15 Compatibility and correctness rules
-
-- [ ] if symbol identity cannot be confidently linked across commits, prefer add/remove over false continuity
+- [ ] keep historical indexing reproducible for same commit range
 - [ ] preserve exact commit SHA references
 - [ ] never rely on branch name as identity
 - [ ] make rewritten-history behavior explicit
-- [ ] keep historical indexing reproducible for same commit range
-
-#### 17.16 Failure modes and safeguards
-
+- [ ] prefer add/remove over false continuity when symbol identity is uncertain
 - [ ] handle missing commits in shallow clones
 - [ ] handle corrupted snapshot membership rows
 - [ ] handle parser failures at historical commits without aborting full run
@@ -586,55 +536,25 @@ Each should include:
 - [ ] mark snapshots with parse errors
 - [ ] allow reindex/rebuild of individual snapshots
 
-#### 17.17 Tests
+#### 17.11 Git history fixtures
 
-##### Git history fixtures
+- [ ] symbol introduced
+- [ ] symbol removed
+- [ ] symbol modified
+- [ ] dependency introduced
+- [ ] dependency removed
+- [ ] file renamed
+- [ ] module split/merge later
 
-- [ ] repo with:
-  - [ ] symbol introduced
-  - [ ] symbol removed
-  - [ ] symbol modified
-  - [ ] dependency introduced
-  - [ ] dependency removed
-  - [ ] file renamed
-  - [ ] module split/merge later
+#### 17.12 Performance checks
 
-##### Snapshot tests
+- [ ] commits/sec
+- [ ] snapshot reconstruction speed
+- [ ] graph diff speed
+- [ ] symbol history query latency
+- [ ] storage growth with and without deduplication
 
-- [ ] commit metadata stored correctly
-- [ ] snapshot membership stored correctly
-- [ ] unchanged file graph reused across commits
-- [ ] modified file graph creates new membership state
-
-##### Diff tests
-
-- [ ] node add/remove/change diff
-- [ ] edge add/remove diff
-- [ ] architecture diff detects new cycle
-- [ ] architecture diff detects broken cycle
-
-##### Query tests
-
-- [ ] symbol history query
-- [ ] file history query
-- [ ] dependency history query
-- [ ] module history trend query
-
-##### Retention tests
-
-- [ ] prune latest N
-- [ ] prune by age
-- [ ] prune by release/tag policy later
-
-#### 17.18 Performance and scaling
-
-- [ ] benchmark commits/sec
-- [ ] benchmark snapshot reconstruction speed
-- [ ] benchmark graph diff speed
-- [ ] benchmark symbol history query latency
-- [ ] measure storage growth with and without deduplication
-
-##### Optimization backlog
+#### 17.13 Later optimization backlog
 
 - [ ] commit-to-commit diff replay instead of full file enumeration
 - [ ] blob-level cache
@@ -642,53 +562,16 @@ Each should include:
 - [ ] compressed membership encoding
 - [ ] partial snapshot materialization
 
-#### 17.19 Recommended implementation order
-
-##### Slice 1 — metadata foundation
-
-- [ ] commits table
-- [ ] graph_snapshots table
-- [ ] snapshot_files table
-- [ ] git metadata ingestion
-- [ ] `atlas history status`
-
-##### Slice 2 — reusable file-hash historical storage
-
-- [ ] file hash reuse model
-- [ ] snapshot membership mapping
-- [ ] historical build for bounded commit range
-
-##### Slice 3 — snapshot reconstruction and diff
-
-- [ ] reconstruct graph for commit
-- [ ] node diff
-- [ ] edge diff
-- [ ] file diff
-- [ ] `atlas history diff`
-
-##### Slice 4 — history queries
-
-- [ ] symbol history
-- [ ] file history
-- [ ] dependency history
-- [ ] module history
-
-##### Slice 5 — analytics and retention
-
-- [ ] churn metrics
-- [ ] stability metrics
-- [ ] prune policies
-- [ ] storage diagnostics
-
-#### 17.20 Completion criteria
+#### 17.14 Completion criteria
 
 Phase 17 is complete when all of these are true:
 
 - [ ] Atlas can persist commit-linked graph snapshots
 - [ ] unchanged file graphs are reused across commits
+- [ ] Atlas can reconstruct graph state for any indexed commit
 - [ ] Atlas can diff two snapshots structurally
-- [ ] Atlas can answer symbol/file/dependency history queries
-- [ ] Atlas can report churn/stability metrics
+- [ ] Atlas can answer symbol/file/module/dependency history queries
+- [ ] Atlas can report churn/stability/trend metrics
 - [ ] storage growth is measurable and bounded by policy
 - [ ] all historical outputs are deterministic and evidence-backed
 
@@ -1124,23 +1007,23 @@ Why:
 
 Current plan has chunking and retrieval, but operational safety limits should be explicit.
 
-- [ ] add configurable `retrieval_batch_size`
-- [ ] add configurable `embedding_batch_size`
-- [ ] add hard `max_chunks_per_index_run`
-- [ ] add hard `max_chunks_per_file`
-- [ ] add policy for oversized indexing runs:
-  - [ ] fail fast
-  - [ ] partial index with warning
-  - [ ] skip pathological file with error entry
-- [ ] measure and log:
-  - [ ] buffered chunk count
-  - [ ] buffered bytes
-  - [ ] staged vector bytes
-  - [ ] batch flush count
-- [ ] add tests for:
-  - [ ] chunk explosion from large file
-  - [ ] recursive fallback chunk explosion
-  - [ ] partial indexing recovery after hard cap hit
+- [x] add configurable `retrieval_batch_size`
+- [x] add configurable `embedding_batch_size`
+- [x] add hard `max_chunks_per_index_run`
+- [x] add hard `max_chunks_per_file`
+- [x] add policy for oversized indexing runs:
+  - [x] fail fast
+  - [x] partial index with warning
+  - [x] skip pathological file with error entry
+- [x] measure and log:
+  - [x] buffered chunk count
+  - [x] buffered bytes
+  - [x] staged vector bytes
+  - [x] batch flush count
+- [x] add tests for:
+  - [x] chunk explosion from large file
+  - [x] recursive fallback chunk explosion
+  - [x] partial indexing recovery after hard cap hit
 
 Why:
 - protects retrieval layer from pathological files and runaway indexing cost
@@ -1208,8 +1091,8 @@ Current chunk storage should have a true stable identity separate from display o
 - [x] use `chunk_id` for:
   - [x] dedupe
   - [x] chunk reuse
-  - [ ] retrieval cache keys
-  - [ ] saved-context references
+  - [x] retrieval cache keys
+  - [x] saved-context references
 - [x] add tests for:
   - [x] same content same `chunk_id`
   - [x] moved chunk with changed path policy documented
@@ -1223,26 +1106,26 @@ Why:
 
 Atlas already measures correctness and performance in many places, but retrieval should also be evaluated as a context-efficiency system.
 
-- [ ] add retrieval benchmark metrics:
-  - [ ] `recall_at_k`
-  - [ ] `mrr`
-  - [ ] exact target hit rate
-  - [ ] retrieved tokens per query
-  - [ ] emitted tokens per query
-  - [ ] tool calls per task
-- [ ] benchmark:
-  - [ ] graph-only context
-  - [ ] lexical retrieval only
-  - [ ] hybrid retrieval
-  - [ ] hybrid retrieval + graph expansion
-- [ ] add fixed-budget evaluation:
-  - [ ] quality under small context budget
-  - [ ] quality under medium context budget
-- [ ] track whether retrieval actually reduces:
-  - [ ] payload size
-  - [ ] repeated search calls
-  - [ ] context noise
-- [ ] add acceptance thresholds before enabling hybrid retrieval by default
+- [x] add retrieval benchmark metrics:
+  - [x] `recall_at_k`
+  - [x] `mrr`
+  - [x] exact target hit rate
+  - [x] retrieved tokens per query
+  - [x] emitted tokens per query
+  - [x] tool calls per task
+- [x] benchmark:
+  - [x] graph-only context
+  - [x] lexical retrieval only
+  - [x] hybrid retrieval
+  - [x] hybrid retrieval + graph expansion
+- [x] add fixed-budget evaluation:
+  - [x] quality under small context budget
+  - [x] quality under medium context budget
+- [x] track whether retrieval actually reduces:
+  - [x] payload size
+  - [x] repeated search calls
+  - [x] context noise
+- [x] add acceptance thresholds before enabling hybrid retrieval by default
 
 Why:
 - keeps retrieval improvements aligned with actual user value

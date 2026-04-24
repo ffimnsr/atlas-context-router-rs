@@ -202,6 +202,7 @@ pub(crate) fn search_saved_context_previews(
         let source = content_store.get_source(&chunk.source_id).ok().flatten();
         previews.push(json!({
             "source_id": chunk.source_id,
+            "chunk_id": chunk.chunk_id,
             "label": source.as_ref().map(|row| row.label.clone()),
             "source_type": source.as_ref().map(|row| row.source_type.clone()),
             "preview": excerpt(&chunk.content, 256),

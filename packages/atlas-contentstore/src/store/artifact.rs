@@ -1,14 +1,17 @@
 use std::collections::HashSet;
 
 use rusqlite::{OptionalExtension, params};
-use tracing::debug;
+use tracing::{debug, warn};
 
 use atlas_core::{AtlasError, Result};
 
 use crate::chunking::chunk_text;
 
 use super::util::{extract_vocab_terms, format_days_ago, format_now};
-use super::{ChunkResult, ContentStore, OutputRouting, RoutingStats, SourceMeta, SourceRow};
+use super::{
+    ChunkResult, ContentStore, IndexRunStats, OutputRouting, OversizedPolicy, RoutingStats,
+    SourceMeta, SourceRow,
+};
 
 impl ContentStore {
     /// Route output: if small, return raw; if large, index it and return routing decision.
@@ -27,12 +30,6 @@ impl ContentStore {
         let source_id = meta.id.clone();
         self.index_artifact(meta, raw_text, content_type)?;
 
-        if let Some(limit) = self.config.max_db_bytes
-            && let Err(e) = self.enforce_size_limit(limit)
-        {
-            debug!("content store size limit enforcement failed (best-effort): {e}");
-        }
-
         if raw_text.len() <= self.config.preview_threshold_bytes {
             let preview: String = raw_text.chars().take(512).collect();
             debug!("content routing: medium output, returning preview");
@@ -50,6 +47,16 @@ impl ContentStore {
     /// Return a snapshot of the in-process routing counters.
     pub fn routing_stats(&self) -> RoutingStats {
         self.routing_stats.clone()
+    }
+
+    /// Return a snapshot of the in-process run stats (chunk throughput, batch flushes, etc.).
+    pub fn run_stats(&self) -> IndexRunStats {
+        self.run_stats.clone()
+    }
+
+    /// Reset run-level counters. Call before starting a new indexing run.
+    pub fn reset_run_stats(&mut self) {
+        self.run_stats = IndexRunStats::default();
     }
 
     /// Prune the oldest sources until the content database is under `max_bytes`.
@@ -99,6 +106,10 @@ impl ContentStore {
     }
 
     /// Index a raw artifact: chunk it and persist to `sources` + `chunks`.
+    ///
+    /// Enforces `max_chunks_per_file` and `max_chunks_per_index_run` guardrails via
+    /// the configured [`OversizedPolicy`]. Chunks are flushed in batches of
+    /// `retrieval_batch_size`; each flush increments [`IndexRunStats::batch_flush_count`].
     pub fn index_artifact(
         &mut self,
         meta: SourceMeta,
@@ -106,145 +117,260 @@ impl ContentStore {
         content_type: &str,
     ) -> Result<()> {
         let now = format_now();
-        let chunks = chunk_text(&meta.id, raw_text, content_type);
+        let mut chunks = chunk_text(&meta.id, raw_text, content_type);
 
-        let tx = self
-            .conn
-            .transaction()
-            .map_err(|e| AtlasError::Db(e.to_string()))?;
-
-        tx.execute(
-            "INSERT OR REPLACE INTO sources (
-                 id, session_id, source_type, label, repo_root, identity_kind, identity_value, created_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![
-                meta.id,
-                meta.session_id,
-                meta.source_type,
-                meta.label,
-                meta.repo_root,
-                meta.identity_kind,
-                meta.identity_value,
-                now,
-            ],
-        )
-        .map_err(|e| AtlasError::Db(e.to_string()))?;
-
-        let existing_chunk_ids: HashSet<String> = {
-            let mut stmt = tx
-                .prepare("SELECT chunk_id FROM chunks WHERE source_id = ?1")
-                .map_err(|e| AtlasError::Db(e.to_string()))?;
-            let mut rows = stmt
-                .query(params![meta.id])
-                .map_err(|e| AtlasError::Db(e.to_string()))?;
-            let mut ids = HashSet::new();
-            while let Some(row) = rows.next().map_err(|e| AtlasError::Db(e.to_string()))? {
-                let id: String = row.get(0).map_err(|e| AtlasError::Db(e.to_string()))?;
-                ids.insert(id);
+        // --- per-file chunk cap ---
+        let max_per_file = self.config.max_chunks_per_file;
+        if chunks.len() > max_per_file {
+            match self.config.oversized_policy {
+                OversizedPolicy::FailFast => {
+                    return Err(AtlasError::ChunkCapExceeded(format!(
+                        "source '{}' produced {} chunks, max_chunks_per_file={}",
+                        meta.id,
+                        chunks.len(),
+                        max_per_file
+                    )));
+                }
+                OversizedPolicy::PartialWithWarning => {
+                    warn!(
+                        source_id = %meta.id,
+                        chunk_count = chunks.len(),
+                        cap = max_per_file,
+                        "chunk cap per file exceeded; truncating to cap (partial_with_warning)"
+                    );
+                    chunks.truncate(max_per_file);
+                }
+                OversizedPolicy::SkipFile => {
+                    warn!(
+                        source_id = %meta.id,
+                        chunk_count = chunks.len(),
+                        cap = max_per_file,
+                        "chunk cap per file exceeded; skipping file (skip_file)"
+                    );
+                    return Ok(());
+                }
             }
-            ids
-        };
-
-        let new_chunk_ids: HashSet<String> =
-            chunks.iter().map(|chunk| chunk.chunk_id.clone()).collect();
-
-        let removed_ids: Vec<&String> = existing_chunk_ids
-            .iter()
-            .filter(|id| !new_chunk_ids.contains(*id))
-            .collect();
-
-        for removed_id in &removed_ids {
-            let safe_id = meta.id.replace('\'', "''");
-            let safe_chunk_id = removed_id.replace('\'', "''");
-            let fts_cleanup = format!(
-                "INSERT INTO chunks_fts(chunks_fts, rowid, title, content, source_id, content_type)
-                 SELECT 'delete', id, title, content, source_id, content_type
-                 FROM chunks WHERE source_id = '{safe_id}' AND chunk_id = '{safe_chunk_id}'"
-            );
-            tx.execute_batch(&fts_cleanup)
-                .map_err(|e| AtlasError::Db(e.to_string()))?;
-            let trigram_cleanup = format!(
-                "INSERT INTO chunks_trigram(chunks_trigram, rowid, title, content, source_id, content_type)
-                 SELECT 'delete', id, title, content, source_id, content_type
-                 FROM chunks WHERE source_id = '{safe_id}' AND chunk_id = '{safe_chunk_id}'"
-            );
-            tx.execute_batch(&trigram_cleanup)
-                .map_err(|e| AtlasError::Db(e.to_string()))?;
-            tx.execute(
-                "DELETE FROM chunks WHERE source_id = ?1 AND chunk_id = ?2",
-                params![meta.id, removed_id],
-            )
-            .map_err(|e| AtlasError::Db(e.to_string()))?;
         }
 
-        let mut chunks_inserted: i64 = 0;
-        let mut chunks_reused: i64 = 0;
-
-        for chunk in &chunks {
-            if existing_chunk_ids.contains(&chunk.chunk_id) {
-                tx.execute(
-                    "UPDATE chunks SET chunk_index = ?1 WHERE source_id = ?2 AND chunk_id = ?3",
-                    params![chunk.chunk_index as i64, meta.id, chunk.chunk_id],
-                )
-                .map_err(|e| AtlasError::Db(e.to_string()))?;
-                chunks_reused += 1;
-                continue;
+        // --- per-run chunk cap ---
+        let max_per_run = self.config.max_chunks_per_index_run;
+        let remaining_run_capacity =
+            max_per_run.saturating_sub(self.run_stats.chunks_this_run as usize);
+        if chunks.len() > remaining_run_capacity {
+            match self.config.oversized_policy {
+                OversizedPolicy::FailFast => {
+                    return Err(AtlasError::ChunkCapExceeded(format!(
+                        "source '{}' would exceed max_chunks_per_index_run={} \
+                         (run total so far={}, this file={})",
+                        meta.id,
+                        max_per_run,
+                        self.run_stats.chunks_this_run,
+                        chunks.len(),
+                    )));
+                }
+                OversizedPolicy::PartialWithWarning => {
+                    warn!(
+                        source_id = %meta.id,
+                        chunk_count = chunks.len(),
+                        remaining_cap = remaining_run_capacity,
+                        run_total = self.run_stats.chunks_this_run,
+                        "run chunk cap would be exceeded; truncating this file's chunks (partial_with_warning)"
+                    );
+                    chunks.truncate(remaining_run_capacity);
+                }
+                OversizedPolicy::SkipFile => {
+                    warn!(
+                        source_id = %meta.id,
+                        chunk_count = chunks.len(),
+                        remaining_cap = remaining_run_capacity,
+                        run_total = self.run_stats.chunks_this_run,
+                        "run chunk cap would be exceeded; skipping file (skip_file)"
+                    );
+                    return Ok(());
+                }
             }
+        }
 
-            let metadata = serde_json::json!({}).to_string();
+        // --- update run stats: buffering ---
+        let buffered_bytes: u64 = chunks.iter().map(|c| c.content.len() as u64).sum();
+        self.run_stats.buffered_chunk_count += chunks.len() as u64;
+        self.run_stats.buffered_bytes += buffered_bytes;
+        // staged_vector_bytes tracks bytes staged for embedding (all chunk bytes queued here)
+        self.run_stats.staged_vector_bytes += buffered_bytes;
+
+        debug!(
+            source_id = %meta.id,
+            chunk_count = chunks.len(),
+            buffered_bytes,
+            "indexing artifact"
+        );
+
+        // --- upsert source row and remove stale chunks (single transaction) ---
+        let existing_chunk_ids: HashSet<String> = {
+            let tx = self
+                .conn
+                .transaction()
+                .map_err(|e| AtlasError::Db(e.to_string()))?;
+
             tx.execute(
-                "INSERT INTO chunks (source_id, chunk_id, content, content_type, chunk_index, title, metadata_json, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                "INSERT OR REPLACE INTO sources (
+                     id, session_id, source_type, label, repo_root, identity_kind, identity_value, created_at
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                 params![
                     meta.id,
-                    chunk.chunk_id,
-                    chunk.content,
-                    chunk.content_type,
-                    chunk.chunk_index as i64,
-                    chunk.title,
-                    metadata,
+                    meta.session_id,
+                    meta.source_type,
+                    meta.label,
+                    meta.repo_root,
+                    meta.identity_kind,
+                    meta.identity_value,
                     now,
                 ],
             )
             .map_err(|e| AtlasError::Db(e.to_string()))?;
 
-            let rowid: i64 = tx
-                .query_row(
-                    "SELECT id FROM chunks WHERE source_id = ?1 AND chunk_id = ?2",
-                    params![meta.id, chunk.chunk_id],
-                    |r| r.get(0),
+            let existing: HashSet<String> = {
+                let mut stmt = tx
+                    .prepare("SELECT chunk_id FROM chunks WHERE source_id = ?1")
+                    .map_err(|e| AtlasError::Db(e.to_string()))?;
+                let mut rows = stmt
+                    .query(params![meta.id])
+                    .map_err(|e| AtlasError::Db(e.to_string()))?;
+                let mut ids = HashSet::new();
+                while let Some(row) = rows.next().map_err(|e| AtlasError::Db(e.to_string()))? {
+                    let id: String = row.get(0).map_err(|e| AtlasError::Db(e.to_string()))?;
+                    ids.insert(id);
+                }
+                ids
+            };
+
+            let new_chunk_ids: HashSet<String> =
+                chunks.iter().map(|c| c.chunk_id.clone()).collect();
+            let removed_ids: Vec<&String> = existing
+                .iter()
+                .filter(|id| !new_chunk_ids.contains(*id))
+                .collect();
+
+            for removed_id in &removed_ids {
+                let safe_id = meta.id.replace('\'', "''");
+                let safe_chunk_id = removed_id.replace('\'', "''");
+                let fts_cleanup = format!(
+                    "INSERT INTO chunks_fts(chunks_fts, rowid, title, content, source_id, content_type)
+                     SELECT 'delete', id, title, content, source_id, content_type
+                     FROM chunks WHERE source_id = '{safe_id}' AND chunk_id = '{safe_chunk_id}'"
+                );
+                tx.execute_batch(&fts_cleanup)
+                    .map_err(|e| AtlasError::Db(e.to_string()))?;
+                let trigram_cleanup = format!(
+                    "INSERT INTO chunks_trigram(chunks_trigram, rowid, title, content, source_id, content_type)
+                     SELECT 'delete', id, title, content, source_id, content_type
+                     FROM chunks WHERE source_id = '{safe_id}' AND chunk_id = '{safe_chunk_id}'"
+                );
+                tx.execute_batch(&trigram_cleanup)
+                    .map_err(|e| AtlasError::Db(e.to_string()))?;
+                tx.execute(
+                    "DELETE FROM chunks WHERE source_id = ?1 AND chunk_id = ?2",
+                    params![meta.id, removed_id],
+                )
+                .map_err(|e| AtlasError::Db(e.to_string()))?;
+            }
+
+            tx.commit().map_err(|e| AtlasError::Db(e.to_string()))?;
+            existing
+        };
+
+        // --- flush chunk batches ---
+        let batch_size = self.config.retrieval_batch_size.max(1);
+        let mut chunks_inserted: i64 = 0;
+        let mut chunks_reused: i64 = 0;
+
+        for batch in chunks.chunks(batch_size) {
+            let tx = self
+                .conn
+                .transaction()
+                .map_err(|e| AtlasError::Db(e.to_string()))?;
+
+            for chunk in batch {
+                if existing_chunk_ids.contains(&chunk.chunk_id) {
+                    tx.execute(
+                        "UPDATE chunks SET chunk_index = ?1 WHERE source_id = ?2 AND chunk_id = ?3",
+                        params![chunk.chunk_index as i64, meta.id, chunk.chunk_id],
+                    )
+                    .map_err(|e| AtlasError::Db(e.to_string()))?;
+                    chunks_reused += 1;
+                    continue;
+                }
+
+                let metadata = serde_json::json!({}).to_string();
+                tx.execute(
+                    "INSERT INTO chunks (source_id, chunk_id, content, content_type, chunk_index, title, metadata_json, created_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                    params![
+                        meta.id,
+                        chunk.chunk_id,
+                        chunk.content,
+                        chunk.content_type,
+                        chunk.chunk_index as i64,
+                        chunk.title,
+                        metadata,
+                        now,
+                    ],
                 )
                 .map_err(|e| AtlasError::Db(e.to_string()))?;
 
-            tx.execute(
-                "INSERT INTO chunks_fts(rowid, title, content, source_id, content_type)
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![
-                    rowid,
-                    chunk.title,
-                    chunk.content,
-                    meta.id,
-                    chunk.content_type
-                ],
-            )
-            .map_err(|e| AtlasError::Db(e.to_string()))?;
+                let rowid: i64 = tx
+                    .query_row(
+                        "SELECT id FROM chunks WHERE source_id = ?1 AND chunk_id = ?2",
+                        params![meta.id, chunk.chunk_id],
+                        |r| r.get(0),
+                    )
+                    .map_err(|e| AtlasError::Db(e.to_string()))?;
 
-            tx.execute(
-                "INSERT INTO chunks_trigram(rowid, title, content, source_id, content_type)
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![
-                    rowid,
-                    chunk.title,
-                    chunk.content,
-                    meta.id,
-                    chunk.content_type
-                ],
-            )
-            .map_err(|e| AtlasError::Db(e.to_string()))?;
+                tx.execute(
+                    "INSERT INTO chunks_fts(rowid, title, content, source_id, content_type)
+                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![
+                        rowid,
+                        chunk.title,
+                        chunk.content,
+                        meta.id,
+                        chunk.content_type
+                    ],
+                )
+                .map_err(|e| AtlasError::Db(e.to_string()))?;
 
-            chunks_inserted += 1;
+                tx.execute(
+                    "INSERT INTO chunks_trigram(rowid, title, content, source_id, content_type)
+                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![
+                        rowid,
+                        chunk.title,
+                        chunk.content,
+                        meta.id,
+                        chunk.content_type
+                    ],
+                )
+                .map_err(|e| AtlasError::Db(e.to_string()))?;
+
+                chunks_inserted += 1;
+            }
+
+            tx.commit().map_err(|e| AtlasError::Db(e.to_string()))?;
+            self.run_stats.batch_flush_count += 1;
+
+            debug!(
+                source_id = %meta.id,
+                batch_chunks = batch.len(),
+                batch_flush_count = self.run_stats.batch_flush_count,
+                "flushed chunk batch"
+            );
         }
 
+        // --- vocabulary terms ---
+        let tx = self
+            .conn
+            .transaction()
+            .map_err(|e| AtlasError::Db(e.to_string()))?;
         let terms = extract_vocab_terms(raw_text);
         for term in terms {
             tx.execute(
@@ -254,14 +380,22 @@ impl ContentStore {
             )
             .map_err(|e| AtlasError::Db(e.to_string()))?;
         }
-
         tx.commit().map_err(|e| AtlasError::Db(e.to_string()))?;
+
+        // --- update per-run counters ---
+        self.run_stats.chunks_this_run += chunks_inserted as u64;
 
         if let Some(ref repo_root) = meta.repo_root
             && let Err(e) =
                 self.increment_index_counters_with_reuse(repo_root, chunks_inserted, chunks_reused)
         {
             debug!("index counter update failed (best-effort): {e}");
+        }
+
+        if let Some(limit) = self.config.max_db_bytes
+            && let Err(e) = self.enforce_size_limit(limit)
+        {
+            debug!("content store size limit enforcement failed (best-effort): {e}");
         }
 
         Ok(())

@@ -6,6 +6,7 @@ use serde::Serialize;
 use tracing::debug;
 
 pub mod embed;
+pub mod eval;
 mod ranking;
 pub mod semantic;
 

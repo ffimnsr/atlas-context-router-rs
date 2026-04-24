@@ -52,16 +52,16 @@ pub(super) fn extract_vocab_terms(text: &str) -> Vec<String> {
 
 /// Reciprocal-Rank Fusion of two ranked result lists.
 pub(super) fn rrf_merge(list_a: &[ChunkResult], list_b: &[ChunkResult]) -> Vec<ChunkResult> {
-    let mut scores: HashMap<(String, usize), f64> = HashMap::new();
-    let mut items: HashMap<(String, usize), &ChunkResult> = HashMap::new();
+    let mut scores: HashMap<String, f64> = HashMap::new();
+    let mut items: HashMap<String, &ChunkResult> = HashMap::new();
 
     for (rank, chunk) in list_a.iter().enumerate() {
-        let key = (chunk.source_id.clone(), chunk.chunk_index);
+        let key = chunk.chunk_id.clone();
         *scores.entry(key.clone()).or_default() += 1.0 / (RRF_K + rank as f64 + 1.0);
         items.entry(key).or_insert(chunk);
     }
     for (rank, chunk) in list_b.iter().enumerate() {
-        let key = (chunk.source_id.clone(), chunk.chunk_index);
+        let key = chunk.chunk_id.clone();
         *scores.entry(key.clone()).or_default() += 1.0 / (RRF_K + rank as f64 + 1.0);
         items.entry(key).or_insert(chunk);
     }

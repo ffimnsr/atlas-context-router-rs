@@ -15,4 +15,9 @@ tracing.workspace = true
 ureq.workspace = true
 
 [dev-dependencies]
+criterion.workspace = true
 tempfile = "3"
+
+[[bench]]
+name = "retrieval_eval_bench"
+harness = false

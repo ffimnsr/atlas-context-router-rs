@@ -23,8 +23,8 @@ use crate::migrations::MIGRATIONS;
 use util::{is_corruption_error, quarantine_db};
 
 pub use types::{
-    ChunkResult, ContentStoreConfig, IndexState, IndexingStats, OutputRouting,
-    RetrievalIndexStatus, RoutingStats, SearchFilters, SourceMeta, SourceRow,
+    ChunkResult, ContentStoreConfig, IndexRunStats, IndexState, IndexingStats, OutputRouting,
+    OversizedPolicy, RetrievalIndexStatus, RoutingStats, SearchFilters, SourceMeta, SourceRow,
 };
 
 /// SQLite-backed content store.
@@ -32,6 +32,7 @@ pub struct ContentStore {
     pub(super) conn: Connection,
     pub(super) config: ContentStoreConfig,
     pub(super) routing_stats: RoutingStats,
+    pub(super) run_stats: IndexRunStats,
 }
 
 impl ContentStore {
@@ -64,6 +65,7 @@ impl ContentStore {
             conn,
             config,
             routing_stats: RoutingStats::default(),
+            run_stats: IndexRunStats::default(),
         };
         store.apply_pragmas()?;
         Ok(store)

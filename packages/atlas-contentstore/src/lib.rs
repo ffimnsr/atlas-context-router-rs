@@ -8,6 +8,7 @@ mod migrations;
 pub mod store;
 
 pub use store::{
-    ChunkResult, ContentStore, ContentStoreConfig, IndexState, IndexingStats, OutputRouting,
-    RetrievalIndexStatus, RoutingStats, SearchFilters, SourceMeta, SourceRow,
+    ChunkResult, ContentStore, ContentStoreConfig, IndexRunStats, IndexState, IndexingStats,
+    OutputRouting, OversizedPolicy, RetrievalIndexStatus, RoutingStats, SearchFilters, SourceMeta,
+    SourceRow,
 };

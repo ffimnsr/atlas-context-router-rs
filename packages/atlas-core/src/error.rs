@@ -23,6 +23,9 @@ pub enum AtlasError {
     #[error("database not initialized; run `atlas init` first")]
     DbNotInitialized,
 
+    #[error("chunk cap exceeded: {0}")]
+    ChunkCapExceeded(String),
+
     #[error("{0}")]
     Other(String),
 }

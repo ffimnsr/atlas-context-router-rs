@@ -348,6 +348,7 @@ dependencies = [
  "anyhow",
  "atlas-core",
  "atlas-store-sqlite",
+ "criterion",
  "regex",
  "serde",
  "serde_json",
