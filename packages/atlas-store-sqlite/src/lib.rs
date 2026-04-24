@@ -2,6 +2,6 @@ mod migrations;
 pub mod store;
 
 pub use store::{
-    BuildFinishStats, GraphBuildState, GraphBuildStatus, HistoryStatusSummary, Store, StoredCommit,
-    StoredSnapshot, StoredSnapshotFile,
+    BuildFinishStats, GraphBuildState, GraphBuildStatus, HistoricalEdge, HistoricalNode,
+    HistoryStatusSummary, Store, StoredCommit, StoredSnapshot, StoredSnapshotFile,
 };

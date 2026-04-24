@@ -218,6 +218,8 @@ name = "atlas-history"
 version = "0.5.0"
 dependencies = [
  "anyhow",
+ "atlas-core",
+ "atlas-parser",
  "atlas-store-sqlite",
  "rusqlite",
  "serde",

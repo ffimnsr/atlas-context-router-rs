@@ -1,4 +1,4 @@
-use crate::store::history::{StoredCommit, StoredSnapshotFile};
+use crate::store::history::{HistoricalEdge, HistoricalNode, StoredCommit, StoredSnapshotFile};
 use crate::store::tests::open_in_memory;
 
 #[test]
@@ -181,4 +181,241 @@ fn history_status_counts_correctly_after_ingest() {
     // latest by author_time desc — sha "00..02" has highest time
     let latest = status.latest_commit_sha.unwrap();
     assert_eq!(&latest, &format!("{:040}", 2u8));
+}
+
+// ── Slice 2 — content-addressed historical file graph ─────────────────────────
+
+fn make_node(file_hash: &str, qn: &str) -> HistoricalNode {
+    HistoricalNode {
+        file_hash: file_hash.to_owned(),
+        qualified_name: qn.to_owned(),
+        kind: "function".to_owned(),
+        name: qn.to_owned(),
+        file_path: "src/lib.rs".to_owned(),
+        line_start: Some(1),
+        line_end: Some(10),
+        language: Some("rust".to_owned()),
+        parent_name: None,
+        params: None,
+        return_type: None,
+        modifiers: None,
+        is_test: false,
+        extra_json: None,
+    }
+}
+
+fn make_edge(file_hash: &str, src: &str, tgt: &str) -> HistoricalEdge {
+    HistoricalEdge {
+        file_hash: file_hash.to_owned(),
+        source_qn: src.to_owned(),
+        target_qn: tgt.to_owned(),
+        kind: "calls".to_owned(),
+        file_path: "src/lib.rs".to_owned(),
+        line: Some(5),
+        confidence: 1.0,
+        confidence_tier: None,
+        extra_json: None,
+    }
+}
+
+#[test]
+fn has_historical_file_graph_returns_false_when_empty() {
+    let store = open_in_memory();
+    let hash = "a".repeat(40);
+    assert!(!store.has_historical_file_graph(&hash).unwrap());
+}
+
+#[test]
+fn insert_historical_nodes_and_has_file_graph() {
+    let store = open_in_memory();
+    let hash = "b".repeat(40);
+    let node = make_node(&hash, "my_crate::foo");
+    store.insert_historical_nodes(&[node]).unwrap();
+    assert!(store.has_historical_file_graph(&hash).unwrap());
+}
+
+#[test]
+fn insert_historical_nodes_idempotent() {
+    let store = open_in_memory();
+    let hash = "c".repeat(40);
+    let node = make_node(&hash, "my_crate::bar");
+    store
+        .insert_historical_nodes(std::slice::from_ref(&node))
+        .unwrap();
+    // Second insert must not error (INSERT OR IGNORE).
+    store
+        .insert_historical_nodes(std::slice::from_ref(&node))
+        .unwrap();
+    assert_eq!(store.count_historical_nodes(&hash).unwrap(), 1);
+}
+
+#[test]
+fn count_historical_nodes_and_edges() {
+    let store = open_in_memory();
+    let hash = "d".repeat(40);
+    let nodes = vec![make_node(&hash, "crate::a"), make_node(&hash, "crate::b")];
+    let edges = vec![make_edge(&hash, "crate::a", "crate::b")];
+    store.insert_historical_nodes(&nodes).unwrap();
+    store.insert_historical_edges(&edges).unwrap();
+    assert_eq!(store.count_historical_nodes(&hash).unwrap(), 2);
+    assert_eq!(store.count_historical_edges(&hash).unwrap(), 1);
+}
+
+#[test]
+fn list_historical_node_qns_returns_all() {
+    let store = open_in_memory();
+    let hash = "e".repeat(40);
+    let nodes = vec![make_node(&hash, "crate::x"), make_node(&hash, "crate::y")];
+    store.insert_historical_nodes(&nodes).unwrap();
+    let mut qns = store.list_historical_node_qns(&hash).unwrap();
+    qns.sort();
+    assert_eq!(qns, vec!["crate::x", "crate::y"]);
+}
+
+#[test]
+fn list_historical_edge_keys_returns_all() {
+    let store = open_in_memory();
+    let hash = "f".repeat(40);
+    let edges = vec![
+        make_edge(&hash, "crate::a", "crate::b"),
+        make_edge(&hash, "crate::b", "crate::c"),
+    ];
+    store.insert_historical_edges(&edges).unwrap();
+    let mut keys = store.list_historical_edge_keys(&hash).unwrap();
+    keys.sort();
+    assert_eq!(keys.len(), 2);
+    assert_eq!(
+        keys[0],
+        ("crate::a".into(), "crate::b".into(), "calls".into())
+    );
+}
+
+#[test]
+fn get_historical_file_language_returns_language() {
+    let store = open_in_memory();
+    let hash = "1".repeat(40);
+    let node = make_node(&hash, "crate::hello");
+    store.insert_historical_nodes(&[node]).unwrap();
+    let lang = store.get_historical_file_language(&hash).unwrap();
+    assert_eq!(lang.as_deref(), Some("rust"));
+}
+
+#[test]
+fn get_historical_file_language_none_for_unknown_hash() {
+    let store = open_in_memory();
+    let lang = store.get_historical_file_language("no_such_hash").unwrap();
+    assert!(lang.is_none());
+}
+
+#[test]
+fn snapshot_membership_stored_correctly() {
+    let store = open_in_memory();
+    let repo_id = store.upsert_repo("/repos/snap-test").unwrap();
+    let sha = "a0".repeat(20);
+    let sid = store
+        .insert_snapshot(repo_id, &sha, None, 2, 1, 1, 1.0, 0)
+        .unwrap();
+
+    let hash = "aa".repeat(20);
+    let qns = vec!["crate::alpha".to_owned(), "crate::beta".to_owned()];
+    let edges = vec![("crate::alpha".into(), "crate::beta".into(), "calls".into())];
+
+    store.attach_snapshot_nodes(sid, &hash, &qns).unwrap();
+    store.attach_snapshot_edges(sid, &hash, &edges).unwrap();
+
+    assert_eq!(store.count_snapshot_nodes(sid).unwrap(), 2);
+    assert_eq!(store.count_snapshot_edges(sid).unwrap(), 1);
+}
+
+#[test]
+fn snapshot_node_membership_idempotent() {
+    let store = open_in_memory();
+    let repo_id = store.upsert_repo("/repos/idempotent").unwrap();
+    let sha = "b0".repeat(20);
+    let sid = store
+        .insert_snapshot(repo_id, &sha, None, 1, 0, 1, 1.0, 0)
+        .unwrap();
+    let hash = "bb".repeat(20);
+    let qns = vec!["crate::only".to_owned()];
+    store.attach_snapshot_nodes(sid, &hash, &qns).unwrap();
+    store.attach_snapshot_nodes(sid, &hash, &qns).unwrap(); // duplicate, must not fail
+    assert_eq!(store.count_snapshot_nodes(sid).unwrap(), 1);
+}
+
+#[test]
+fn unchanged_file_graph_reused_across_snapshots() {
+    // Simulate two commits with the same file blob.
+    let store = open_in_memory();
+    let repo_id = store.upsert_repo("/repos/reuse").unwrap();
+    let file_hash = "cc".repeat(20);
+
+    let node = make_node(&file_hash, "crate::stable");
+    store.insert_historical_nodes(&[node]).unwrap();
+
+    // Snapshot 1.
+    let sha1 = "10".repeat(20);
+    let sid1 = store
+        .insert_snapshot(repo_id, &sha1, None, 1, 0, 1, 1.0, 0)
+        .unwrap();
+    store
+        .attach_snapshot_nodes(sid1, &file_hash, &["crate::stable".into()])
+        .unwrap();
+
+    // Snapshot 2 reuses same node rows — no second insert needed.
+    let sha2 = "20".repeat(20);
+    let sid2 = store
+        .insert_snapshot(repo_id, &sha2, None, 1, 0, 1, 1.0, 0)
+        .unwrap();
+    store
+        .attach_snapshot_nodes(sid2, &file_hash, &["crate::stable".into()])
+        .unwrap();
+
+    // Both snapshots reference the same underlying node data.
+    assert_eq!(store.count_snapshot_nodes(sid1).unwrap(), 1);
+    assert_eq!(store.count_snapshot_nodes(sid2).unwrap(), 1);
+    assert_eq!(store.count_historical_nodes(&file_hash).unwrap(), 1);
+}
+
+#[test]
+fn modified_file_creates_new_membership_state() {
+    let store = open_in_memory();
+    let repo_id = store.upsert_repo("/repos/modified").unwrap();
+
+    let hash_v1 = "d1".repeat(20);
+    let hash_v2 = "d2".repeat(20);
+
+    store
+        .insert_historical_nodes(&[make_node(&hash_v1, "crate::func")])
+        .unwrap();
+    store
+        .insert_historical_nodes(&[
+            make_node(&hash_v2, "crate::func"),
+            make_node(&hash_v2, "crate::new_func"),
+        ])
+        .unwrap();
+
+    let sha1 = "c1".repeat(20);
+    let sid1 = store
+        .insert_snapshot(repo_id, &sha1, None, 1, 0, 1, 1.0, 0)
+        .unwrap();
+    store
+        .attach_snapshot_nodes(sid1, &hash_v1, &["crate::func".into()])
+        .unwrap();
+
+    let sha2 = "c2".repeat(20);
+    let sid2 = store
+        .insert_snapshot(repo_id, &sha2, None, 2, 0, 1, 1.0, 0)
+        .unwrap();
+    store
+        .attach_snapshot_nodes(
+            sid2,
+            &hash_v2,
+            &["crate::func".into(), "crate::new_func".into()],
+        )
+        .unwrap();
+
+    assert_eq!(store.count_snapshot_nodes(sid1).unwrap(), 1);
+    assert_eq!(store.count_snapshot_nodes(sid2).unwrap(), 2);
+    assert_eq!(store.count_historical_nodes(&hash_v1).unwrap(), 1);
+    assert_eq!(store.count_historical_nodes(&hash_v2).unwrap(), 2);
 }

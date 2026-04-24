@@ -237,55 +237,55 @@ Implement checkout-free file reconstruction, reusable file graph storage, and `a
 
 Historical graph storage:
 
-- [ ] persist file graph state keyed by file hash
-- [ ] persist or reuse content-addressed historical node state
-- [ ] persist or reuse content-addressed historical edge state
-- [ ] create `snapshot_nodes` if membership is stored separately
-- [ ] create `snapshot_edges` if membership is stored separately
-- [ ] map each commit snapshot to active file hashes
-- [ ] map each commit snapshot to active node/edge ids
-- [ ] avoid duplicating unchanged file graphs across commits
-- [ ] duplicate per-snapshot nodes/edges only if required for correctness, then optimize later
+- [x] persist file graph state keyed by file hash
+- [x] persist or reuse content-addressed historical node state
+- [x] persist or reuse content-addressed historical edge state
+- [x] create `snapshot_nodes` if membership is stored separately
+- [x] create `snapshot_edges` if membership is stored separately
+- [x] map each commit snapshot to active file hashes
+- [x] map each commit snapshot to active node/edge ids
+- [x] avoid duplicating unchanged file graphs across commits
+- [x] duplicate per-snapshot nodes/edges only if required for correctness, then optimize later
 
 Checkout-free source access:
 
-- [ ] read file contents from commit using `git show <sha>:<path>` first
-- [ ] allow tree/blob plumbing optimization later
-- [ ] keep binary detection behavior
-- [ ] handle deleted paths correctly
-- [ ] canonicalize repo paths before hashing or identity use
+- [x] read file contents from commit using `git show <sha>:<path>` first
+- [x] allow tree/blob plumbing optimization later
+- [x] keep binary detection behavior
+- [x] handle deleted paths correctly
+- [x] canonicalize repo paths before hashing or identity use
 
 Tracked file reconstruction:
 
-- [ ] reconstruct tracked file list for each commit
-- [ ] use `git ls-tree` for first version
+- [x] reconstruct tracked file list for each commit
+- [x] use `git ls-tree` for first version
 - [ ] use `git diff-tree` for incremental file-set replay later
-- [ ] prefer full enumeration correctness before diff replay speed
+- [x] prefer full enumeration correctness before diff replay speed
 
 Build command:
 
-- [ ] accept `--since`
-- [ ] accept `--until`
-- [ ] accept `--max-commits`
-- [ ] accept `--branch`
-- [ ] accept `--commits`
-- [ ] enumerate selected commits
-- [ ] enumerate tracked files at each commit
-- [ ] compute file hash
-- [ ] reuse parsed file graph if identical hash already indexed
-- [ ] parse only new file hashes
-- [ ] write commit and snapshot metadata
-- [ ] attach file hash membership
-- [ ] attach node/edge membership
-- [ ] summarize commits processed, files reused, files parsed, nodes reused, elapsed time
+- [x] accept `--since`
+- [x] accept `--until`
+- [x] accept `--max-commits`
+- [x] accept `--branch`
+- [x] accept `--commits`
+- [x] enumerate selected commits
+- [x] enumerate tracked files at each commit
+- [x] compute file hash
+- [x] reuse parsed file graph if identical hash already indexed
+- [x] parse only new file hashes
+- [x] write commit and snapshot metadata
+- [x] attach file hash membership
+- [x] attach node/edge membership
+- [x] summarize commits processed, files reused, files parsed, nodes reused, elapsed time
 
 Tests:
 
-- [ ] snapshot membership stored correctly
-- [ ] unchanged file graph reused across commits
-- [ ] modified file graph creates new membership state
-- [ ] binary file handling matches live indexing behavior
-- [ ] deleted path handled correctly
+- [x] snapshot membership stored correctly
+- [x] unchanged file graph reused across commits
+- [x] modified file graph creates new membership state
+- [x] binary file handling matches live indexing behavior
+- [x] deleted path handled correctly
 
 #### 17.6 Slice 3 — Incremental update, identity, lifecycle, reconstruction, and diff
 

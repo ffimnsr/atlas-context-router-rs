@@ -281,4 +281,33 @@ pub enum HistoryCommand {
     /// Show historical indexing status: commit count, snapshot count, latest
     /// indexed commit, and any shallow-clone or missing-ref warnings.
     Status,
+
+    /// Build historical graph snapshots for a bounded commit range.
+    ///
+    /// Parses each commit's tracked files checkout-free (via `git show`),
+    /// reuses parsed graphs for unchanged blobs, and stores snapshot
+    /// membership.  Prints a summary of commits, files, and nodes processed.
+    Build {
+        /// Only include commits after this date or commit SHA (e.g.
+        /// `2024-01-01` or a 40-char SHA).
+        #[arg(long)]
+        since: Option<String>,
+
+        /// Only include commits before this date or commit SHA.
+        #[arg(long)]
+        until: Option<String>,
+
+        /// Maximum number of commits to index in one run.
+        #[arg(long)]
+        max_commits: Option<usize>,
+
+        /// Branch or ref to walk (defaults to `HEAD`).
+        #[arg(long)]
+        branch: Option<String>,
+
+        /// Explicit comma-separated list of full 40-char commit SHAs to
+        /// index instead of walking the branch history.
+        #[arg(long, value_delimiter = ',')]
+        commits: Vec<String>,
+    },
 }

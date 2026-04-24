@@ -337,3 +337,239 @@ fn days_to_ymd(mut days: u64) -> (u64, u64, u64) {
 fn is_leap(y: u64) -> bool {
     (y.is_multiple_of(4) && !y.is_multiple_of(100)) || y.is_multiple_of(400)
 }
+
+// ── Slice 2 types ─────────────────────────────────────────────────────────────
+
+/// One node persisted in the content-addressed historical node store.
+#[derive(Debug, Clone)]
+pub struct HistoricalNode {
+    pub file_hash: String,
+    pub qualified_name: String,
+    pub kind: String,
+    pub name: String,
+    pub file_path: String,
+    pub line_start: Option<i64>,
+    pub line_end: Option<i64>,
+    pub language: Option<String>,
+    pub parent_name: Option<String>,
+    pub params: Option<String>,
+    pub return_type: Option<String>,
+    pub modifiers: Option<String>,
+    pub is_test: bool,
+    pub extra_json: Option<String>,
+}
+
+/// One edge persisted in the content-addressed historical edge store.
+#[derive(Debug, Clone)]
+pub struct HistoricalEdge {
+    pub file_hash: String,
+    pub source_qn: String,
+    pub target_qn: String,
+    pub kind: String,
+    pub file_path: String,
+    pub line: Option<i64>,
+    pub confidence: f64,
+    pub confidence_tier: Option<String>,
+    pub extra_json: Option<String>,
+}
+
+impl Store {
+    // ── historical file graph (content-addressed) ──────────────────────────────
+
+    /// Return `true` when at least one node row exists for `file_hash`.
+    ///
+    /// Used to determine whether parsing can be skipped for this blob.
+    pub fn has_historical_file_graph(&self, file_hash: &str) -> Result<bool> {
+        let count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM historical_nodes WHERE file_hash = ?1 LIMIT 1",
+            params![file_hash],
+            |r| r.get(0),
+        )?;
+        Ok(count > 0)
+    }
+
+    /// Bulk-insert nodes for a file blob into the content-addressed store.
+    ///
+    /// Uses `INSERT OR IGNORE` so re-indexing the same hash is a no-op.
+    pub fn insert_historical_nodes(&self, nodes: &[HistoricalNode]) -> Result<()> {
+        let mut stmt = self.conn.prepare_cached(
+            "INSERT OR IGNORE INTO historical_nodes
+                (file_hash, qualified_name, kind, name, file_path,
+                 line_start, line_end, language, parent_name, params,
+                 return_type, modifiers, is_test, extra_json)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
+        )?;
+        for n in nodes {
+            stmt.execute(params![
+                n.file_hash,
+                n.qualified_name,
+                n.kind,
+                n.name,
+                n.file_path,
+                n.line_start,
+                n.line_end,
+                n.language,
+                n.parent_name,
+                n.params,
+                n.return_type,
+                n.modifiers,
+                n.is_test as i64,
+                n.extra_json,
+            ])?;
+        }
+        Ok(())
+    }
+
+    /// Bulk-insert edges for a file blob into the content-addressed store.
+    ///
+    /// Uses `INSERT OR IGNORE` so re-indexing the same hash is a no-op.
+    pub fn insert_historical_edges(&self, edges: &[HistoricalEdge]) -> Result<()> {
+        let mut stmt = self.conn.prepare_cached(
+            "INSERT OR IGNORE INTO historical_edges
+                (file_hash, source_qn, target_qn, kind, file_path,
+                 line, confidence, confidence_tier, extra_json)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+        )?;
+        for e in edges {
+            stmt.execute(params![
+                e.file_hash,
+                e.source_qn,
+                e.target_qn,
+                e.kind,
+                e.file_path,
+                e.line,
+                e.confidence,
+                e.confidence_tier,
+                e.extra_json,
+            ])?;
+        }
+        Ok(())
+    }
+
+    /// Count nodes stored for `file_hash`.
+    pub fn count_historical_nodes(&self, file_hash: &str) -> Result<i64> {
+        let count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM historical_nodes WHERE file_hash = ?1",
+            params![file_hash],
+            |r| r.get(0),
+        )?;
+        Ok(count)
+    }
+
+    /// Count edges stored for `file_hash`.
+    pub fn count_historical_edges(&self, file_hash: &str) -> Result<i64> {
+        let count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM historical_edges WHERE file_hash = ?1",
+            params![file_hash],
+            |r| r.get(0),
+        )?;
+        Ok(count)
+    }
+
+    // ── snapshot node/edge membership ──────────────────────────────────────────
+
+    /// Attach node membership rows to a snapshot.
+    ///
+    /// Each row references a node in `historical_nodes` by `(file_hash,
+    /// qualified_name)`.  Uses `INSERT OR IGNORE` for idempotency.
+    pub fn attach_snapshot_nodes(
+        &self,
+        snapshot_id: i64,
+        file_hash: &str,
+        qualified_names: &[String],
+    ) -> Result<()> {
+        let mut stmt = self.conn.prepare_cached(
+            "INSERT OR IGNORE INTO snapshot_nodes
+                (snapshot_id, file_hash, qualified_name)
+             VALUES (?1,?2,?3)",
+        )?;
+        for qn in qualified_names {
+            stmt.execute(params![snapshot_id, file_hash, qn])?;
+        }
+        Ok(())
+    }
+
+    /// Attach edge membership rows to a snapshot.
+    ///
+    /// Each row references an edge in `historical_edges` by
+    /// `(file_hash, source_qn, target_qn, kind)`.  Uses `INSERT OR IGNORE`.
+    pub fn attach_snapshot_edges(
+        &self,
+        snapshot_id: i64,
+        file_hash: &str,
+        edges: &[(String, String, String)], // (source_qn, target_qn, kind)
+    ) -> Result<()> {
+        let mut stmt = self.conn.prepare_cached(
+            "INSERT OR IGNORE INTO snapshot_edges
+                (snapshot_id, file_hash, source_qn, target_qn, kind)
+             VALUES (?1,?2,?3,?4,?5)",
+        )?;
+        for (src, tgt, kind) in edges {
+            stmt.execute(params![snapshot_id, file_hash, src, tgt, kind])?;
+        }
+        Ok(())
+    }
+
+    /// Count node membership rows for a snapshot.
+    pub fn count_snapshot_nodes(&self, snapshot_id: i64) -> Result<i64> {
+        let n: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM snapshot_nodes WHERE snapshot_id = ?1",
+            params![snapshot_id],
+            |r| r.get(0),
+        )?;
+        Ok(n)
+    }
+
+    /// Count edge membership rows for a snapshot.
+    pub fn count_snapshot_edges(&self, snapshot_id: i64) -> Result<i64> {
+        let n: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM snapshot_edges WHERE snapshot_id = ?1",
+            params![snapshot_id],
+            |r| r.get(0),
+        )?;
+        Ok(n)
+    }
+
+    /// Return the `language` column for the first node stored under `file_hash`,
+    /// or `None` when no rows exist.
+    pub fn get_historical_file_language(&self, file_hash: &str) -> Result<Option<String>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT language FROM historical_nodes WHERE file_hash = ?1 LIMIT 1")?;
+        let mut rows = stmt.query(params![file_hash])?;
+        if let Some(r) = rows.next()? {
+            Ok(r.get(0)?)
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Return all qualified names stored for `file_hash`.
+    pub fn list_historical_node_qns(&self, file_hash: &str) -> Result<Vec<String>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT qualified_name FROM historical_nodes WHERE file_hash = ?1")?;
+        let rows = stmt.query_map(params![file_hash], |r| r.get(0))?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .context("list historical node qns")
+    }
+
+    /// Return `(source_qn, target_qn, kind)` tuples stored for `file_hash`.
+    pub fn list_historical_edge_keys(
+        &self,
+        file_hash: &str,
+    ) -> Result<Vec<(String, String, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT source_qn, target_qn, kind FROM historical_edges WHERE file_hash = ?1",
+        )?;
+        let rows = stmt.query_map(params![file_hash], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+            ))
+        })?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .context("list historical edge keys")
+    }
+}
