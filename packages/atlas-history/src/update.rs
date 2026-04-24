@@ -6,7 +6,7 @@ use atlas_parser::ParserRegistry;
 use atlas_store_sqlite::Store;
 use serde::Serialize;
 
-use crate::build::{BuildSummary, build_historical_graph};
+use crate::build::{BuildProgressEvent, BuildSummary, build_historical_graph_with_progress};
 use crate::git;
 use crate::lifecycle::{LifecycleSummary, recompute_lifecycle};
 use crate::select::CommitSelector;
@@ -35,6 +35,32 @@ pub fn update_historical_graph(
     max_commits: Option<usize>,
     registry: &ParserRegistry,
 ) -> Result<HistoryUpdateSummary> {
+    update_historical_graph_with_progress(
+        repo,
+        canonical_root,
+        store,
+        branch,
+        repair,
+        max_commits,
+        registry,
+        |_| {},
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn update_historical_graph_with_progress<P>(
+    repo: &Path,
+    canonical_root: &str,
+    store: &Store,
+    branch: Option<&str>,
+    repair: bool,
+    max_commits: Option<usize>,
+    registry: &ParserRegistry,
+    progress: P,
+) -> Result<HistoryUpdateSummary>
+where
+    P: FnMut(BuildProgressEvent),
+{
     let started = Instant::now();
     let branch = branch.unwrap_or("HEAD").to_owned();
     let mut warnings = Vec::new();
@@ -90,13 +116,14 @@ pub fn update_historical_graph(
         let selector = CommitSelector::Explicit {
             shas: missing.into_iter().map(|meta| meta.sha).collect(),
         };
-        build_historical_graph(
+        build_historical_graph_with_progress(
             repo,
             canonical_root,
             store,
             &selector,
             registry,
             Some(&branch),
+            progress,
         )
         .context("build missing history commits")?
     };
@@ -119,83 +146,13 @@ pub fn update_historical_graph(
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
-    use std::path::Path;
-    use std::process::Command;
-
     use atlas_parser::ParserRegistry;
     use atlas_store_sqlite::Store;
 
     use super::*;
     use crate::build_historical_graph;
     use crate::select::CommitSelector;
-
-    const GIT_TEST_NAME: &str = "Atlas Test";
-    const GIT_TEST_EMAIL: &str = "test@atlas";
-    const GIT_LOCAL_ENV_VARS: &[&str] = &[
-        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-        "GIT_COMMON_DIR",
-        "GIT_CONFIG",
-        "GIT_CONFIG_COUNT",
-        "GIT_CONFIG_KEY_0",
-        "GIT_CONFIG_VALUE_0",
-        "GIT_DIR",
-        "GIT_GRAFT_FILE",
-        "GIT_IMPLICIT_WORK_TREE",
-        "GIT_INDEX_FILE",
-        "GIT_INTERNAL_SUPER_PREFIX",
-        "GIT_NAMESPACE",
-        "GIT_NO_REPLACE_OBJECTS",
-        "GIT_OBJECT_DIRECTORY",
-        "GIT_PREFIX",
-        "GIT_REPLACE_REF_BASE",
-        "GIT_SHALLOW_FILE",
-        "GIT_WORK_TREE",
-    ];
-
-    fn sanitized_git(dir: &Path) -> Command {
-        let mut cmd = Command::new("git");
-        cmd.current_dir(dir);
-        for var in GIT_LOCAL_ENV_VARS {
-            cmd.env_remove(var);
-        }
-        cmd.env("GIT_AUTHOR_NAME", GIT_TEST_NAME);
-        cmd.env("GIT_AUTHOR_EMAIL", GIT_TEST_EMAIL);
-        cmd.env("GIT_COMMITTER_NAME", GIT_TEST_NAME);
-        cmd.env("GIT_COMMITTER_EMAIL", GIT_TEST_EMAIL);
-        cmd
-    }
-
-    fn git(dir: &Path, args: &[&str]) {
-        let status = sanitized_git(dir).args(args).status().expect("git command");
-        assert!(status.success(), "git {args:?} failed");
-    }
-
-    fn git_output(dir: &Path, args: &[&str]) -> String {
-        let output = sanitized_git(dir).args(args).output().expect("git output");
-        assert!(output.status.success(), "git {args:?} failed");
-        String::from_utf8(output.stdout).expect("utf8")
-    }
-
-    fn git_init(dir: &Path) {
-        git(dir, &["init", "--quiet"]);
-        git(dir, &["config", "user.email", GIT_TEST_EMAIL]);
-        git(dir, &["config", "user.name", GIT_TEST_NAME]);
-    }
-
-    fn write_file(root: &Path, rel: &str, content: &str) {
-        let path = root.join(rel);
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).expect("mkdirs");
-        }
-        fs::write(path, content).expect("write file");
-    }
-
-    fn commit_all(root: &Path, message: &str) -> String {
-        git(root, &["add", "-A"]);
-        git(root, &["commit", "--quiet", "-m", message]);
-        git_output(root, &["rev-parse", "HEAD"]).trim().to_owned()
-    }
+    use crate::test_support::{commit_all, git, git_clone_shallow, git_init, write_file};
 
     fn open_store(temp: &tempfile::TempDir) -> (String, Store) {
         let db_path = temp.path().join("history.sqlite");
@@ -338,13 +295,7 @@ mod tests {
         commit_all(source.path(), "second");
 
         let clone = tempfile::tempdir().expect("clone tempdir");
-        let source_url = format!("file://{}", source.path().display());
-        let output = Command::new("git")
-            .args(["clone", "--quiet", "--depth", "1", &source_url])
-            .arg(clone.path())
-            .output()
-            .expect("git clone --depth 1");
-        assert!(output.status.success(), "git clone failed: {output:?}");
+        git_clone_shallow(source.path(), clone.path());
 
         let db_dir = tempfile::tempdir().expect("db tempdir");
         let (_db, store) = open_store(&db_dir);

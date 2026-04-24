@@ -12,6 +12,7 @@
 //!   reused, and elapsed time.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
 use std::path::Path;
 use std::time::Instant;
 
@@ -59,7 +60,7 @@ struct SnapshotFileMembership {
     edge_keys: Vec<EdgeKey>,
 }
 
-struct BuildContext<'a> {
+struct BuildContext<'a, P: FnMut(BuildProgressEvent)> {
     repo: &'a Path,
     repo_id: i64,
     store: &'a Store,
@@ -67,6 +68,61 @@ struct BuildContext<'a> {
     indexed_ref: Option<&'a str>,
     cache: &'a mut BuildRunCache,
     summary: &'a mut BuildSummary,
+    progress: &'a mut P,
+    commit_index: usize,
+    total_commits: usize,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum BuildFileProgressKind {
+    Reused,
+    Parsed,
+    SkippedUnsupported,
+    SkippedBinary,
+    SkippedMissing,
+    SkippedNoParserOutput,
+    PersistError,
+}
+
+impl fmt::Display for BuildFileProgressKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Reused => "reused",
+            Self::Parsed => "parsed",
+            Self::SkippedUnsupported => "skipped unsupported",
+            Self::SkippedBinary => "skipped binary",
+            Self::SkippedMissing => "skipped missing",
+            Self::SkippedNoParserOutput => "skipped empty-parse",
+            Self::PersistError => "persist error",
+        })
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum BuildProgressEvent {
+    RunStarted {
+        total_commits: usize,
+    },
+    CommitStarted {
+        commit_index: usize,
+        total_commits: usize,
+        commit_sha: String,
+        total_files: usize,
+    },
+    CommitSkipped {
+        commit_index: usize,
+        total_commits: usize,
+        commit_sha: String,
+    },
+    FileProcessed {
+        commit_index: usize,
+        total_commits: usize,
+        commit_sha: String,
+        file_index: usize,
+        total_files: usize,
+        file_path: String,
+        outcome: BuildFileProgressKind,
+    },
 }
 
 /// Summary produced by [`build_historical_graph`].
@@ -126,6 +182,29 @@ pub fn build_historical_graph(
     registry: &ParserRegistry,
     indexed_ref: Option<&str>,
 ) -> Result<BuildSummary> {
+    build_historical_graph_with_progress(
+        repo,
+        canonical_root,
+        store,
+        selector,
+        registry,
+        indexed_ref,
+        |_| {},
+    )
+}
+
+pub fn build_historical_graph_with_progress<P>(
+    repo: &Path,
+    canonical_root: &str,
+    store: &Store,
+    selector: &CommitSelector,
+    registry: &ParserRegistry,
+    indexed_ref: Option<&str>,
+    mut progress: P,
+) -> Result<BuildSummary>
+where
+    P: FnMut(BuildProgressEvent),
+{
     let started = Instant::now();
     let mut summary = BuildSummary::default();
     let mut cache = BuildRunCache::default();
@@ -144,16 +223,25 @@ pub fn build_historical_graph(
         return Ok(summary);
     }
 
+    let total_commits = commits.len();
+    progress(BuildProgressEvent::RunStarted { total_commits });
+
     let repo_id = store
         .upsert_repo(canonical_root)
         .context("upsert repo row")?;
 
-    for meta in &commits {
+    for (index, meta) in commits.iter().enumerate() {
+        let commit_index = index + 1;
         summary.commits_processed += 1;
 
         // Skip already-indexed commits.
         if store.find_snapshot(repo_id, &meta.sha)?.is_some() {
             summary.commits_already_indexed += 1;
+            progress(BuildProgressEvent::CommitSkipped {
+                commit_index,
+                total_commits,
+                commit_sha: meta.sha.clone(),
+            });
             debug!(sha = %meta.sha, "snapshot already indexed, skipping");
             continue;
         }
@@ -167,6 +255,9 @@ pub fn build_historical_graph(
             indexed_ref: indexed_ref.or(selector_indexed_ref.as_deref()),
             cache: &mut cache,
             summary: &mut summary,
+            progress: &mut progress,
+            commit_index,
+            total_commits,
         };
         if let Err(e) = process_commit(&mut ctx, meta) {
             warn!("error processing commit {}: {e:#}", meta.sha);
@@ -189,6 +280,29 @@ pub fn rebuild_historical_snapshot(
     registry: &ParserRegistry,
     indexed_ref: Option<&str>,
 ) -> Result<SnapshotRebuildSummary> {
+    rebuild_historical_snapshot_with_progress(
+        repo,
+        canonical_root,
+        store,
+        commit_sha,
+        registry,
+        indexed_ref,
+        |_| {},
+    )
+}
+
+pub fn rebuild_historical_snapshot_with_progress<P>(
+    repo: &Path,
+    canonical_root: &str,
+    store: &Store,
+    commit_sha: &str,
+    registry: &ParserRegistry,
+    indexed_ref: Option<&str>,
+    mut progress: P,
+) -> Result<SnapshotRebuildSummary>
+where
+    P: FnMut(BuildProgressEvent),
+{
     let repo_id = store.find_repo_id(canonical_root)?.ok_or_else(|| {
         anyhow::anyhow!("history not initialized; run `atlas history build` first")
     })?;
@@ -211,6 +325,7 @@ pub fn rebuild_historical_snapshot(
         ..BuildSummary::default()
     };
     let mut cache = BuildRunCache::default();
+    progress(BuildProgressEvent::RunStarted { total_commits: 1 });
     let mut ctx = BuildContext {
         repo,
         repo_id,
@@ -219,6 +334,9 @@ pub fn rebuild_historical_snapshot(
         indexed_ref,
         cache: &mut cache,
         summary: &mut build,
+        progress: &mut progress,
+        commit_index: 1,
+        total_commits: 1,
     };
     process_commit(&mut ctx, &meta).with_context(|| format!("rebuild snapshot {commit_sha}"))?;
 
@@ -253,13 +371,23 @@ fn shallow_build_warning(repo: &Path, selector: &CommitSelector) -> Option<Strin
     }
 }
 
-fn process_commit(ctx: &mut BuildContext<'_>, meta: &git::GitCommitMeta) -> Result<()> {
+fn process_commit<P>(ctx: &mut BuildContext<'_, P>, meta: &git::GitCommitMeta) -> Result<()>
+where
+    P: FnMut(BuildProgressEvent),
+{
     // Resolve the root tree hash for this commit.
     let tree_ref = format!("{}^{{tree}}", meta.sha);
     let root_tree_hash = git::rev_parse(ctx.repo, &tree_ref).ok();
 
     let tracked_files = replay_snapshot_files(ctx.repo, ctx.repo_id, ctx.store, meta, ctx.summary)?
         .unwrap_or(full_snapshot_files(ctx.repo, &meta.sha, ctx.summary)?);
+    let total_files = tracked_files.len();
+    (ctx.progress)(BuildProgressEvent::CommitStarted {
+        commit_index: ctx.commit_index,
+        total_commits: ctx.total_commits,
+        commit_sha: meta.sha.clone(),
+        total_files,
+    });
 
     let mut snapshot_files: Vec<StoredSnapshotFile> = Vec::new();
     let mut file_memberships: Vec<SnapshotFileMembership> = Vec::new();
@@ -267,13 +395,22 @@ fn process_commit(ctx: &mut BuildContext<'_>, meta: &git::GitCommitMeta) -> Resu
     let mut total_edge_count: i64 = 0;
     let mut parse_error_count: i64 = 0;
 
-    for tracked_file in tracked_files {
+    for (file_offset, tracked_file) in tracked_files.into_iter().enumerate() {
+        let file_index = file_offset + 1;
         let rel_path = &tracked_file.file_path;
         let file_hash = &tracked_file.file_hash;
 
         // Try to detect language early via parser support.
         if !ctx.registry.supports(rel_path) {
             ctx.summary.files_skipped += 1;
+            emit_file_progress(
+                ctx,
+                meta,
+                total_files,
+                file_index,
+                rel_path,
+                BuildFileProgressKind::SkippedUnsupported,
+            );
             debug!(path = %rel_path, "no parser support, skipping");
             continue;
         }
@@ -305,12 +442,28 @@ fn process_commit(ctx: &mut BuildContext<'_>, meta: &git::GitCommitMeta) -> Resu
                 qualified_names: cached_graph.qualified_names.clone(),
                 edge_keys: cached_graph.edge_keys.clone(),
             });
+            emit_file_progress(
+                ctx,
+                meta,
+                total_files,
+                file_index,
+                rel_path,
+                BuildFileProgressKind::Reused,
+            );
             continue;
         }
 
         let Some(bytes) = load_blob_bytes(ctx.cache, ctx.repo, &meta.sha, rel_path, file_hash)?
         else {
             ctx.summary.files_skipped += 1;
+            emit_file_progress(
+                ctx,
+                meta,
+                total_files,
+                file_index,
+                rel_path,
+                BuildFileProgressKind::SkippedMissing,
+            );
             continue;
         };
 
@@ -318,6 +471,14 @@ fn process_commit(ctx: &mut BuildContext<'_>, meta: &git::GitCommitMeta) -> Resu
         if ctx.cache.binary_blobs.contains(file_hash) || is_binary_bytes(&bytes) {
             ctx.cache.binary_blobs.insert(file_hash.clone());
             ctx.summary.files_skipped += 1;
+            emit_file_progress(
+                ctx,
+                meta,
+                total_files,
+                file_index,
+                rel_path,
+                BuildFileProgressKind::SkippedBinary,
+            );
             debug!(path = %rel_path, "binary file, skipping");
             continue;
         }
@@ -327,6 +488,14 @@ fn process_commit(ctx: &mut BuildContext<'_>, meta: &git::GitCommitMeta) -> Resu
             Some((pf, _tree)) => pf,
             None => {
                 ctx.summary.files_skipped += 1;
+                emit_file_progress(
+                    ctx,
+                    meta,
+                    total_files,
+                    file_index,
+                    rel_path,
+                    BuildFileProgressKind::SkippedNoParserOutput,
+                );
                 continue;
             }
         };
@@ -344,6 +513,14 @@ fn process_commit(ctx: &mut BuildContext<'_>, meta: &git::GitCommitMeta) -> Resu
                 commit_sha: Some(meta.sha.clone()),
                 message: format!("persist {rel_path}: {e:#}"),
             });
+            emit_file_progress(
+                ctx,
+                meta,
+                total_files,
+                file_index,
+                rel_path,
+                BuildFileProgressKind::PersistError,
+            );
             continue;
         }
 
@@ -394,6 +571,14 @@ fn process_commit(ctx: &mut BuildContext<'_>, meta: &git::GitCommitMeta) -> Resu
             qualified_names: qns,
             edge_keys,
         });
+        emit_file_progress(
+            ctx,
+            meta,
+            total_files,
+            file_index,
+            rel_path,
+            BuildFileProgressKind::Parsed,
+        );
     }
 
     let file_count = snapshot_files.len() as i64;
@@ -480,6 +665,27 @@ fn process_commit(ctx: &mut BuildContext<'_>, meta: &git::GitCommitMeta) -> Resu
         .context("insert snapshot membership blobs")?;
 
     Ok(())
+}
+
+fn emit_file_progress<P>(
+    ctx: &mut BuildContext<'_, P>,
+    meta: &git::GitCommitMeta,
+    total_files: usize,
+    file_index: usize,
+    file_path: &str,
+    outcome: BuildFileProgressKind,
+) where
+    P: FnMut(BuildProgressEvent),
+{
+    (ctx.progress)(BuildProgressEvent::FileProcessed {
+        commit_index: ctx.commit_index,
+        total_commits: ctx.total_commits,
+        commit_sha: meta.sha.clone(),
+        file_index,
+        total_files,
+        file_path: file_path.to_owned(),
+        outcome,
+    });
 }
 
 fn load_blob_bytes(
@@ -747,99 +953,13 @@ fn is_binary_bytes(bytes: &[u8]) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
-    use std::path::Path;
-    use std::process::Command;
-
     use atlas_parser::ParserRegistry;
     use atlas_store_sqlite::Store;
 
     use crate::diff::reconstruct_snapshot;
+    use crate::test_support::{commit_all, git_clone_shallow, git_init, write_file};
 
     use super::*;
-
-    const GIT_TEST_NAME: &str = "Atlas Test";
-    const GIT_TEST_EMAIL: &str = "test@atlas";
-    const GIT_LOCAL_ENV_VARS: &[&str] = &[
-        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-        "GIT_COMMON_DIR",
-        "GIT_CONFIG",
-        "GIT_CONFIG_COUNT",
-        "GIT_CONFIG_KEY_0",
-        "GIT_CONFIG_VALUE_0",
-        "GIT_DIR",
-        "GIT_GRAFT_FILE",
-        "GIT_IMPLICIT_WORK_TREE",
-        "GIT_INDEX_FILE",
-        "GIT_INTERNAL_SUPER_PREFIX",
-        "GIT_NAMESPACE",
-        "GIT_NO_REPLACE_OBJECTS",
-        "GIT_OBJECT_DIRECTORY",
-        "GIT_PREFIX",
-        "GIT_REPLACE_REF_BASE",
-        "GIT_SHALLOW_FILE",
-        "GIT_WORK_TREE",
-    ];
-
-    fn sanitized_git(dir: &Path) -> Command {
-        let mut cmd = Command::new("git");
-        cmd.current_dir(dir);
-        for var in GIT_LOCAL_ENV_VARS {
-            cmd.env_remove(var);
-        }
-        cmd.env("GIT_AUTHOR_NAME", GIT_TEST_NAME);
-        cmd.env("GIT_AUTHOR_EMAIL", GIT_TEST_EMAIL);
-        cmd.env("GIT_COMMITTER_NAME", GIT_TEST_NAME);
-        cmd.env("GIT_COMMITTER_EMAIL", GIT_TEST_EMAIL);
-        cmd
-    }
-
-    fn git(dir: &Path, args: &[&str]) {
-        let status = sanitized_git(dir).args(args).status().expect("git command");
-        assert!(status.success(), "git {args:?} failed");
-    }
-
-    fn git_output(dir: &Path, args: &[&str]) -> String {
-        let output = sanitized_git(dir).args(args).output().expect("git output");
-        assert!(output.status.success(), "git {args:?} failed");
-        String::from_utf8(output.stdout).expect("utf8")
-    }
-
-    fn git_init(dir: &Path) {
-        git(dir, &["init", "--quiet"]);
-        git(dir, &["config", "user.email", GIT_TEST_EMAIL]);
-        git(dir, &["config", "user.name", GIT_TEST_NAME]);
-        git(dir, &["branch", "-M", "main"]);
-    }
-
-    fn git_clone_shallow(source: &Path, dest: &Path) {
-        let source_url = format!("file://{}", source.display());
-        let output = Command::new("git")
-            .args(["clone", "--quiet", "--depth", "1", &source_url])
-            .arg(dest)
-            .output()
-            .expect("git clone --depth 1");
-        assert!(
-            output.status.success(),
-            "git clone failed\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-
-    fn write_file(root: &Path, rel: &str, content: &str) {
-        let path = root.join(rel);
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).expect("mkdirs");
-        }
-        fs::write(path, content).expect("write file");
-    }
-
-    fn commit_all(root: &Path, message: &str) -> String {
-        git(root, &["add", "-A"]);
-        git(root, &["commit", "--quiet", "-m", message]);
-        git_output(root, &["rev-parse", "HEAD"]).trim().to_owned()
-    }
 
     fn open_store(temp: &tempfile::TempDir) -> Store {
         let db_path = temp.path().join("history.sqlite");
@@ -973,6 +1093,68 @@ mod tests {
                 .any(|warning| warning.contains("shallow clone detected")),
             "expected shallow warning, got {summary:?}"
         );
+    }
+
+    #[test]
+    fn build_progress_reports_current_commit_and_file() {
+        let repo = tempfile::tempdir().expect("tempdir");
+        git_init(repo.path());
+        write_file(repo.path(), "src/lib.rs", "pub fn alpha() -> i32 { 1 }\n");
+        write_file(repo.path(), "notes.xyz", "atlas fixture\n");
+        let first = commit_all(repo.path(), "first");
+
+        let store_dir = tempfile::tempdir().expect("store dir");
+        let store = open_store(&store_dir);
+        let registry = ParserRegistry::with_defaults();
+        let canonical_root = std::fs::canonicalize(repo.path())
+            .expect("canonical root")
+            .to_string_lossy()
+            .into_owned();
+
+        let mut events = Vec::new();
+        let summary = build_historical_graph_with_progress(
+            repo.path(),
+            &canonical_root,
+            &store,
+            &CommitSelector::Explicit {
+                shas: vec![first.clone()],
+            },
+            &registry,
+            Some(&first),
+            |event| events.push(event),
+        )
+        .expect("build with progress");
+
+        assert_eq!(summary.commits_processed, 1);
+        assert!(matches!(
+            events.first(),
+            Some(BuildProgressEvent::RunStarted { total_commits: 1 })
+        ));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            BuildProgressEvent::CommitStarted {
+                commit_index: 1,
+                total_commits: 1,
+                commit_sha,
+                total_files,
+            } if commit_sha == &first && *total_files >= 2
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            BuildProgressEvent::FileProcessed {
+                file_path,
+                outcome: BuildFileProgressKind::Parsed,
+                ..
+            } if file_path == "src/lib.rs"
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            BuildProgressEvent::FileProcessed {
+                file_path,
+                outcome: BuildFileProgressKind::SkippedUnsupported,
+                ..
+            } if file_path == "notes.xyz"
+        )));
     }
 
     #[test]

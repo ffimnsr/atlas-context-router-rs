@@ -96,6 +96,23 @@ fn history_build_json_reports_shallow_clone_warning() {
     );
 }
 
+#[test]
+fn history_build_human_output_emits_progress_updates() {
+    let repo = setup_fixture_repo();
+
+    run_atlas(repo.path(), &["init"]);
+
+    let output = run_atlas(repo.path(), &["history", "build"]);
+    let stderr = String::from_utf8(output.stderr).expect("stderr should be utf-8");
+
+    assert!(
+        stderr.contains("progress start:")
+            && stderr.contains("progress 1/")
+            && stderr.contains("src/lib.rs"),
+        "expected progress output on stderr\nstderr:\n{stderr}"
+    );
+}
+
 fn commit_with_time(repo_root: &Path, message: &str, epoch_secs: i64) -> String {
     let output = sanitized_command("git")
         .args(["add", "."])
@@ -156,6 +173,31 @@ fn history_update_human_output_includes_summary_fields() {
 }
 
 #[test]
+fn history_update_human_output_emits_progress_updates() {
+    let repo = setup_fixture_repo();
+
+    run_atlas(repo.path(), &["init"]);
+    let first_sha = head_sha(repo.path());
+    run_atlas(
+        repo.path(),
+        &["history", "build", "--commits", first_sha.as_str()],
+    );
+
+    rewrite_fixture_helper(repo.path());
+    commit_repo_change(repo.path(), "history update progress fixture");
+
+    let output = run_atlas(repo.path(), &["history", "update"]);
+    let stderr = String::from_utf8(output.stderr).expect("stderr should be utf-8");
+
+    assert!(
+        stderr.contains("progress start:")
+            && stderr.contains("progress 1/")
+            && stderr.contains("src/lib.rs"),
+        "expected update progress output on stderr\nstderr:\n{stderr}"
+    );
+}
+
+#[test]
 fn history_rebuild_json_replaces_single_snapshot() {
     let repo = setup_fixture_repo();
 
@@ -187,6 +229,36 @@ fn history_rebuild_json_replaces_single_snapshot() {
     assert!(report["rebuilt_snapshot_id"].as_i64().unwrap_or_default() > 0);
     assert_eq!(report["build"]["commits_processed"], json!(1));
     assert_eq!(report["lifecycle"]["snapshot_count"], json!(2));
+}
+
+#[test]
+fn history_rebuild_human_output_emits_progress_updates() {
+    let repo = setup_fixture_repo();
+
+    run_atlas(repo.path(), &["init"]);
+    let first_sha = head_sha(repo.path());
+    rewrite_fixture_helper(repo.path());
+    let second_sha = commit_repo_change(repo.path(), "history rebuild progress fixture");
+
+    run_atlas(
+        repo.path(),
+        &[
+            "history",
+            "build",
+            "--commits",
+            format!("{first_sha},{second_sha}").as_str(),
+        ],
+    );
+
+    let output = run_atlas(repo.path(), &["history", "rebuild", second_sha.as_str()]);
+    let stderr = String::from_utf8(output.stderr).expect("stderr should be utf-8");
+
+    assert!(
+        stderr.contains("progress start:")
+            && stderr.contains("progress 1/")
+            && stderr.contains("src/lib.rs"),
+        "expected rebuild progress output on stderr\nstderr:\n{stderr}"
+    );
 }
 
 #[test]

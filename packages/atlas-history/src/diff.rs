@@ -10,6 +10,7 @@ use sha2::{Digest, Sha256};
 
 use crate::git;
 use crate::reports::{HistoryEvidence, build_evidence, edge_identifier_for, node_identifier_for};
+use crate::scc::strongly_connected_components;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct HistoricalSnapshotSummary {
@@ -747,8 +748,8 @@ fn architecture_diff(before: &HistoricalSnapshot, after: &HistoricalSnapshot) ->
 
     let graph_before = adjacency_from_counts(&deps_before);
     let graph_after = adjacency_from_counts(&deps_after);
-    let cycles_before = strongly_connected_components(&graph_before);
-    let cycles_after = strongly_connected_components(&graph_after);
+    let cycles_before = strongly_connected_components(&graph_before, true);
+    let cycles_after = strongly_connected_components(&graph_after, true);
     let cycles_before_set = cycles_before.iter().cloned().collect::<BTreeSet<_>>();
     let cycles_after_set = cycles_after.iter().cloned().collect::<BTreeSet<_>>();
 
@@ -838,82 +839,6 @@ fn module_degrees(graph: &BTreeMap<String, BTreeSet<String>>) -> BTreeMap<String
         }
     }
     degrees
-}
-
-fn strongly_connected_components(graph: &BTreeMap<String, BTreeSet<String>>) -> Vec<Vec<String>> {
-    struct TarjanState {
-        index: usize,
-        stack: Vec<String>,
-        on_stack: BTreeSet<String>,
-        indices: BTreeMap<String, usize>,
-        lowlinks: BTreeMap<String, usize>,
-        components: Vec<Vec<String>>,
-    }
-
-    fn strong_connect(
-        node: &str,
-        graph: &BTreeMap<String, BTreeSet<String>>,
-        state: &mut TarjanState,
-    ) {
-        let index = state.index;
-        state.indices.insert(node.to_owned(), index);
-        state.lowlinks.insert(node.to_owned(), index);
-        state.index += 1;
-        state.stack.push(node.to_owned());
-        state.on_stack.insert(node.to_owned());
-
-        for target in graph
-            .get(node)
-            .into_iter()
-            .flat_map(|targets| targets.iter())
-        {
-            if !state.indices.contains_key(target) {
-                strong_connect(target, graph, state);
-                let target_low = *state.lowlinks.get(target).expect("lowlink");
-                let lowlink = state.lowlinks.get_mut(node).expect("node lowlink");
-                *lowlink = (*lowlink).min(target_low);
-            } else if state.on_stack.contains(target) {
-                let target_index = *state.indices.get(target).expect("target index");
-                let lowlink = state.lowlinks.get_mut(node).expect("node lowlink");
-                *lowlink = (*lowlink).min(target_index);
-            }
-        }
-
-        if state.lowlinks.get(node) == state.indices.get(node) {
-            let mut component = Vec::new();
-            while let Some(entry) = state.stack.pop() {
-                state.on_stack.remove(&entry);
-                component.push(entry.clone());
-                if entry == node {
-                    break;
-                }
-            }
-            component.sort();
-            if component.len() > 1
-                || graph
-                    .get(node)
-                    .is_some_and(|targets| targets.contains(node))
-            {
-                state.components.push(component);
-            }
-        }
-    }
-
-    let mut state = TarjanState {
-        index: 0,
-        stack: Vec::new(),
-        on_stack: BTreeSet::new(),
-        indices: BTreeMap::new(),
-        lowlinks: BTreeMap::new(),
-        components: Vec::new(),
-    };
-    for node in graph.keys() {
-        if !state.indices.contains_key(node) {
-            strong_connect(node, graph, &mut state);
-        }
-    }
-    state.components.sort();
-    state.components
 }
 
 pub(crate) fn module_key(path: &str) -> String {

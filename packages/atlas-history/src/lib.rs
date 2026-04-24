@@ -38,8 +38,11 @@ pub mod lifecycle;
 pub mod prune;
 pub mod query;
 pub mod reports;
+pub(crate) mod scc;
 pub mod select;
 pub mod status;
+#[cfg(test)]
+pub(crate) mod test_support;
 pub mod update;
 
 pub use analytics::{
@@ -47,7 +50,9 @@ pub use analytics::{
     ModuleChurnRecord, StorageDiagnostics, TrendMetrics, compute_churn_report,
 };
 pub use build::{
-    BuildSummary, SnapshotRebuildSummary, build_historical_graph, rebuild_historical_snapshot,
+    BuildFileProgressKind, BuildProgressEvent, BuildSummary, SnapshotRebuildSummary,
+    build_historical_graph, build_historical_graph_with_progress, rebuild_historical_snapshot,
+    rebuild_historical_snapshot_with_progress,
 };
 pub use diff::{GraphDiffReport, HistoricalSnapshot, diff_snapshots, reconstruct_snapshot};
 pub use ingest::IngestError;
@@ -61,4 +66,6 @@ pub use query::{
 pub use reports::HistoryEvidence;
 pub use select::CommitSelector;
 pub use status::HistoryStatus;
-pub use update::{HistoryUpdateSummary, update_historical_graph};
+pub use update::{
+    HistoryUpdateSummary, update_historical_graph, update_historical_graph_with_progress,
+};

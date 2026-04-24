@@ -7,6 +7,7 @@ use serde::Serialize;
 use crate::diff::module_key;
 use crate::query::{SnapshotState, load_snapshot_states, sorted_strings};
 use crate::reports::{HistoryEvidence, build_evidence, edge_identifier_for, node_identifier_for};
+use crate::scc::strongly_connected_components;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ChurnSummary {
@@ -482,7 +483,7 @@ fn build_module_and_trend_metrics(
     let mut timeline = Vec::new();
 
     for (state, maps) in states.iter().zip(state_maps.iter()) {
-        let cycles = strongly_connected_components(&maps.module_graph);
+        let cycles = strongly_connected_components(&maps.module_graph, false);
         let cycle_modules = cycles
             .iter()
             .flat_map(|cycle| cycle.iter().cloned())
@@ -813,88 +814,6 @@ fn growth_for(points: &[TrendPoint], selector: impl Fn(&TrendPoint) -> usize) ->
         return 0;
     };
     selector(last) as i64 - selector(first) as i64
-}
-
-fn strongly_connected_components(graph: &BTreeMap<String, BTreeSet<String>>) -> Vec<Vec<String>> {
-    let mut adjacency = graph.clone();
-    for targets in graph.values() {
-        for target in targets {
-            adjacency.entry(target.clone()).or_default();
-        }
-    }
-
-    let mut index = 0usize;
-    let mut index_map = BTreeMap::<String, usize>::new();
-    let mut lowlink = BTreeMap::<String, usize>::new();
-    let mut stack = Vec::<String>::new();
-    let mut on_stack = BTreeSet::<String>::new();
-    let mut components = Vec::<Vec<String>>::new();
-
-    for node in adjacency.keys() {
-        if !index_map.contains_key(node) {
-            strong_connect(
-                node,
-                &adjacency,
-                &mut index,
-                &mut index_map,
-                &mut lowlink,
-                &mut stack,
-                &mut on_stack,
-                &mut components,
-            );
-        }
-    }
-
-    components
-        .into_iter()
-        .filter(|component| component.len() > 1)
-        .collect()
-}
-
-#[allow(clippy::too_many_arguments)]
-fn strong_connect(
-    node: &str,
-    graph: &BTreeMap<String, BTreeSet<String>>,
-    index: &mut usize,
-    index_map: &mut BTreeMap<String, usize>,
-    lowlink: &mut BTreeMap<String, usize>,
-    stack: &mut Vec<String>,
-    on_stack: &mut BTreeSet<String>,
-    components: &mut Vec<Vec<String>>,
-) {
-    index_map.insert(node.to_owned(), *index);
-    lowlink.insert(node.to_owned(), *index);
-    *index += 1;
-    stack.push(node.to_owned());
-    on_stack.insert(node.to_owned());
-
-    for neighbor in graph.get(node).into_iter().flatten() {
-        if !index_map.contains_key(neighbor) {
-            strong_connect(
-                neighbor, graph, index, index_map, lowlink, stack, on_stack, components,
-            );
-            let neighbor_lowlink = lowlink[neighbor];
-            let current = lowlink[node];
-            lowlink.insert(node.to_owned(), current.min(neighbor_lowlink));
-        } else if on_stack.contains(neighbor) {
-            let neighbor_index = index_map[neighbor];
-            let current = lowlink[node];
-            lowlink.insert(node.to_owned(), current.min(neighbor_index));
-        }
-    }
-
-    if lowlink[node] == index_map[node] {
-        let mut component = Vec::new();
-        while let Some(entry) = stack.pop() {
-            on_stack.remove(&entry);
-            component.push(entry.clone());
-            if entry == node {
-                break;
-            }
-        }
-        component.sort();
-        components.push(component);
-    }
 }
 
 #[cfg(test)]
