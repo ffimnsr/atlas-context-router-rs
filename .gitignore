@@ -38,3 +38,6 @@ coverage/
 # Atlas specific ignores
 .atlas/
 /.github/hooks/atlas-copilot.json
+
+
+.patches
