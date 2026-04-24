@@ -30,6 +30,9 @@ fn parity_args(tool_name: &str, source_id: &str) -> Value {
         "build_or_update_graph" => {
             json!({ "mode": "update", "files": ["src/service.rs"], "output_format": "json" })
         }
+        "postprocess_graph" => {
+            json!({ "changed_only": true, "stage": "flows", "dry_run": true, "output_format": "json" })
+        }
         "traverse_graph" => {
             json!({ "from_qn": "src/service.rs::fn::compute", "output_format": "json" })
         }

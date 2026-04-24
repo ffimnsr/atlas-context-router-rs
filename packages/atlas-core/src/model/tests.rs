@@ -97,6 +97,84 @@ fn node_is_test_flag_preserved() {
     assert_eq!(back.kind, NodeKind::Test);
 }
 
+#[test]
+fn ranking_evidence_serde_round_trip() {
+    let evidence = RankingEvidence {
+        base_mode: RetrievalMode::Hybrid,
+        raw_score: Some(12.5),
+        final_score: 18.75,
+        matched_fields: vec![
+            SearchMatchedField::Name,
+            SearchMatchedField::QualifiedName,
+            SearchMatchedField::Embedding,
+        ],
+        exact_name_match: true,
+        exact_qualified_name_match: false,
+        prefix_match: true,
+        fuzzy: Some(FuzzyCorrectionEvidence {
+            corrected_term: Some("compute".to_string()),
+            edit_distance: Some(1),
+            fuzzy_threshold: Some(2),
+        }),
+        kind_boost: Some(3.0),
+        public_exported_boost: Some(2.0),
+        same_directory_boost: Some(3.0),
+        same_language_boost: Some(2.0),
+        recent_file_boost: Some(4.0),
+        changed_file_boost: Some(5.0),
+        graph_expansion: Some(GraphExpansionEvidence {
+            hop_distance: 2,
+            seed_qualified_name: Some("src/lib.rs::fn::compute".to_string()),
+        }),
+        hybrid_rrf: Some(HybridRrfEvidence {
+            sources: vec![
+                HybridRankContribution {
+                    source: HybridRankingSource::Fts5,
+                    rank: 1,
+                    score_contribution: 0.5,
+                },
+                HybridRankContribution {
+                    source: HybridRankingSource::Vector,
+                    rank: 3,
+                    score_contribution: 0.25,
+                },
+            ],
+        }),
+    };
+
+    let json = serde_json::to_string(&evidence).unwrap();
+    let back: RankingEvidence = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, evidence);
+
+    let alias_back: ScoreEvidence = serde_json::from_str(&json).unwrap();
+    assert_eq!(alias_back, evidence);
+}
+
+#[test]
+fn scored_node_ranking_evidence_round_trip() {
+    let scored = ScoredNode {
+        node: sample_node(),
+        score: 33.0,
+        ranking_evidence: Some(
+            RankingEvidence::new(RetrievalMode::Fts5, 33.0)
+                .with_raw_score(8.0)
+                .with_matched_field(SearchMatchedField::QualifiedName),
+        ),
+    };
+
+    let json = serde_json::to_string(&scored).unwrap();
+    let back: ScoredNode = serde_json::from_str(&json).unwrap();
+    assert_eq!(back.score, 33.0);
+    let evidence = back.ranking_evidence.expect("ranking evidence");
+    assert_eq!(evidence.base_mode, RetrievalMode::Fts5);
+    assert_eq!(evidence.raw_score, Some(8.0));
+    assert_eq!(evidence.final_score, 33.0);
+    assert_eq!(
+        evidence.matched_fields,
+        vec![SearchMatchedField::QualifiedName]
+    );
+}
+
 // -------------------------------------------------------------------------
 // Edge serialization
 // -------------------------------------------------------------------------
@@ -292,12 +370,24 @@ fn selected_node_round_trip() {
         selection_reason: SelectionReason::Caller,
         distance: 1,
         relevance_score: 0.0,
+        context_ranking_evidence: Some(ContextRankingEvidence {
+            caller_neighbor: true,
+            base_score: Some(80.0),
+            final_score: Some(80.0),
+            ..ContextRankingEvidence::default()
+        }),
     };
     let json = serde_json::to_string(&sn).unwrap();
     let back: SelectedNode = serde_json::from_str(&json).unwrap();
     assert_eq!(back.selection_reason, sn.selection_reason);
     assert_eq!(back.distance, sn.distance);
     assert_eq!(back.node.qualified_name, sn.node.qualified_name);
+    assert_eq!(
+        back.context_ranking_evidence
+            .as_ref()
+            .and_then(|e| e.base_score),
+        Some(80.0)
+    );
 }
 
 #[test]
@@ -307,11 +397,42 @@ fn selected_edge_round_trip() {
         selection_reason: SelectionReason::Callee,
         depth: None,
         relevance_score: 0.0,
+        context_ranking_evidence: Some(ContextRankingEvidence {
+            callee_neighbor: true,
+            base_score: Some(80.0),
+            final_score: Some(80.0),
+            ..ContextRankingEvidence::default()
+        }),
     };
     let json = serde_json::to_string(&se).unwrap();
     let back: SelectedEdge = serde_json::from_str(&json).unwrap();
     assert_eq!(back.selection_reason, se.selection_reason);
     assert_eq!(back.edge.source_qn, se.edge.source_qn);
+    assert_eq!(
+        back.context_ranking_evidence
+            .as_ref()
+            .and_then(|e| e.final_score),
+        Some(80.0)
+    );
+}
+
+#[test]
+fn context_ranking_evidence_round_trip() {
+    let evidence = ContextRankingEvidence {
+        base_score: Some(90.0),
+        final_score: Some(120.0),
+        direct_target: true,
+        changed_symbol: true,
+        impact_score_contribution: Some(30.0),
+        ..ContextRankingEvidence::default()
+    };
+    let json = serde_json::to_string(&evidence).unwrap();
+    let back: ContextRankingEvidence = serde_json::from_str(&json).unwrap();
+    assert_eq!(back.base_score, Some(90.0));
+    assert_eq!(back.final_score, Some(120.0));
+    assert!(back.direct_target);
+    assert!(back.changed_symbol);
+    assert_eq!(back.impact_score_contribution, Some(30.0));
 }
 
 #[test]
@@ -408,12 +529,24 @@ fn context_result_round_trip() {
             selection_reason: SelectionReason::DirectTarget,
             distance: 0,
             relevance_score: 0.0,
+            context_ranking_evidence: Some(ContextRankingEvidence {
+                direct_target: true,
+                base_score: Some(100.0),
+                final_score: Some(100.0),
+                ..ContextRankingEvidence::default()
+            }),
         }],
         edges: vec![SelectedEdge {
             edge: sample_edge(),
             selection_reason: SelectionReason::Caller,
             depth: None,
             relevance_score: 0.0,
+            context_ranking_evidence: Some(ContextRankingEvidence {
+                caller_neighbor: true,
+                base_score: Some(80.0),
+                final_score: Some(80.0),
+                ..ContextRankingEvidence::default()
+            }),
         }],
         files: vec![SelectedFile {
             path: "src/lib.rs".to_string(),
@@ -462,7 +595,22 @@ fn context_result_round_trip() {
                 rules_applied: vec!["omitted containment siblings".to_string()],
             },
         }),
-        saved_context_sources: vec![],
+        saved_context_sources: vec![SavedContextSource {
+            source_id: "saved-1".to_string(),
+            label: "prior review".to_string(),
+            source_type: "review_context".to_string(),
+            session_id: Some("sess-1".to_string()),
+            preview: "preview".to_string(),
+            retrieval_hint: "source_id=saved-1".to_string(),
+            relevance_score: 14.0,
+            context_ranking_evidence: Some(ContextRankingEvidence {
+                saved_context_rank_score: Some(4.0),
+                same_session_boost: Some(10.0),
+                base_score: Some(4.0),
+                final_score: Some(14.0),
+                ..ContextRankingEvidence::default()
+            }),
+        }],
         budget: BudgetReport::within_budget("review_context_extraction.max_nodes", 50, 1),
     };
     let json = serde_json::to_string(&result).unwrap();
@@ -473,6 +621,7 @@ fn context_result_round_trip() {
     assert!(back.ambiguity.is_none());
     assert!(!back.truncation.truncated);
     assert!(back.workflow.is_some());
+    assert_eq!(back.saved_context_sources.len(), 1);
 }
 
 #[test]

@@ -260,6 +260,21 @@ fn query_cli_and_mcp_share_ranked_results() {
         .collect();
 
     assert_eq!(cli_qnames, mcp_qnames);
+    assert!(cli_query["ranking_evidence_legend"].is_object());
+    assert!(
+        cli_query["results"]
+            .as_array()
+            .and_then(|results| results.first())
+            .and_then(|result| result.get("ranking_evidence"))
+            .is_some()
+    );
+    assert!(
+        mcp_query
+            .as_array()
+            .and_then(|results| results.first())
+            .and_then(|result| result.get("ranking_evidence"))
+            .is_some()
+    );
 
     cleanup_mcp_daemons(repo.path());
 }
@@ -305,6 +320,13 @@ fn mcp_query_and_explain_query_share_match_order() {
         .collect();
 
     assert_eq!(query_qnames, explain_qnames);
+    assert!(
+        explain["matches"]
+            .as_array()
+            .and_then(|matches| matches.first())
+            .and_then(|result| result.get("ranking_evidence"))
+            .is_some()
+    );
 
     cleanup_mcp_daemons(repo.path());
 }

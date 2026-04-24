@@ -18,6 +18,9 @@ pub(super) fn build_symbol_context(
         selection_reason: SelectionReason::DirectTarget,
         distance: 0,
         relevance_score: 0.0,
+        context_ranking_evidence: Some(ContextRankingEvidence::from_selection_reason(
+            SelectionReason::DirectTarget,
+        )),
     });
 
     let depth = request.depth.unwrap_or(1).max(1);
@@ -37,12 +40,22 @@ pub(super) fn build_symbol_context(
                             selection_reason: SelectionReason::Caller,
                             depth: Some(hop),
                             relevance_score: 0.0,
+                            context_ranking_evidence: Some(
+                                ContextRankingEvidence::from_selection_reason(
+                                    SelectionReason::Caller,
+                                ),
+                            ),
                         });
                         nodes.push(SelectedNode {
                             node: caller,
                             selection_reason: SelectionReason::Caller,
                             distance: hop,
                             relevance_score: 0.0,
+                            context_ranking_evidence: Some(
+                                ContextRankingEvidence::from_selection_reason(
+                                    SelectionReason::Caller,
+                                ),
+                            ),
                         });
                     }
                 }
@@ -58,12 +71,22 @@ pub(super) fn build_symbol_context(
                             selection_reason: SelectionReason::Callee,
                             depth: Some(hop),
                             relevance_score: 0.0,
+                            context_ranking_evidence: Some(
+                                ContextRankingEvidence::from_selection_reason(
+                                    SelectionReason::Callee,
+                                ),
+                            ),
                         });
                         nodes.push(SelectedNode {
                             node: callee,
                             selection_reason: SelectionReason::Callee,
                             distance: hop,
                             relevance_score: 0.0,
+                            context_ranking_evidence: Some(
+                                ContextRankingEvidence::from_selection_reason(
+                                    SelectionReason::Callee,
+                                ),
+                            ),
                         });
                     }
                 }
@@ -78,12 +101,22 @@ pub(super) fn build_symbol_context(
                             selection_reason: SelectionReason::Importee,
                             depth: Some(hop),
                             relevance_score: 0.0,
+                            context_ranking_evidence: Some(
+                                ContextRankingEvidence::from_selection_reason(
+                                    SelectionReason::Importee,
+                                ),
+                            ),
                         });
                         nodes.push(SelectedNode {
                             node: import_node,
                             selection_reason: SelectionReason::Importee,
                             distance: hop,
                             relevance_score: 0.0,
+                            context_ranking_evidence: Some(
+                                ContextRankingEvidence::from_selection_reason(
+                                    SelectionReason::Importee,
+                                ),
+                            ),
                         });
                     }
                 }
@@ -98,6 +131,11 @@ pub(super) fn build_symbol_context(
                             selection_reason: SelectionReason::ContainmentSibling,
                             distance: hop,
                             relevance_score: 0.0,
+                            context_ranking_evidence: Some(
+                                ContextRankingEvidence::from_selection_reason(
+                                    SelectionReason::ContainmentSibling,
+                                ),
+                            ),
                         });
                     }
                 }
@@ -112,12 +150,22 @@ pub(super) fn build_symbol_context(
                             selection_reason: SelectionReason::TestAdjacent,
                             depth: Some(hop),
                             relevance_score: 0.0,
+                            context_ranking_evidence: Some(
+                                ContextRankingEvidence::from_selection_reason(
+                                    SelectionReason::TestAdjacent,
+                                ),
+                            ),
                         });
                         nodes.push(SelectedNode {
                             node: test_node,
                             selection_reason: SelectionReason::TestAdjacent,
                             distance: hop,
                             relevance_score: 0.0,
+                            context_ranking_evidence: Some(
+                                ContextRankingEvidence::from_selection_reason(
+                                    SelectionReason::TestAdjacent,
+                                ),
+                            ),
                         });
                     }
                 }

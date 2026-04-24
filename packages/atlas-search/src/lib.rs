@@ -1,6 +1,9 @@
 use std::collections::{HashMap, HashSet};
 
-use atlas_core::{NodeKind, Result, ScoredNode, SearchQuery};
+use atlas_core::{
+    GraphExpansionEvidence, HybridRankContribution, HybridRankingSource, HybridRrfEvidence,
+    NodeKind, RankingEvidence, Result, RetrievalMode, ScoredNode, SearchMatchedField, SearchQuery,
+};
 use atlas_store_sqlite::Store;
 use serde::Serialize;
 use tracing::debug;
@@ -73,6 +76,8 @@ pub struct QueryExplainMatch {
     pub file_path: String,
     pub line_start: u32,
     pub language: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ranking_evidence: Option<RankingEvidence>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -235,6 +240,7 @@ pub fn explain_query(
                     file_path: result.node.file_path.clone(),
                     line_start: result.node.line_start,
                     language: result.node.language.clone(),
+                    ranking_evidence: result.ranking_evidence.clone(),
                 })
                 .collect();
             (Some(latency_ms), Some(matches.len()), Some(matches))
@@ -481,19 +487,19 @@ fn is_non_code_language(language: &str) -> bool {
     )
 }
 
-fn fuzzy_typo_bonus(
+fn fuzzy_typo_details(
     node: &atlas_core::Node,
     q_lower: &str,
     fuzzy_cap: usize,
     primitives: &GraphSearchRankingPrimitives,
-) -> f64 {
+) -> Option<(usize, f64)> {
     if fuzzy_cap == 0 {
-        return 0.0;
+        return None;
     }
 
     let dist = edit_distance(q_lower, &node.name.to_lowercase(), fuzzy_cap);
     if dist > fuzzy_cap {
-        return 0.0;
+        return None;
     }
 
     let distance_bonus = primitives.fuzzy_distance_bonus(dist);
@@ -519,7 +525,47 @@ fn fuzzy_typo_bonus(
         0.0
     };
 
-    (distance_bonus + kind_bonus + language_penalty).max(0.0_f64)
+    Some((
+        dist,
+        (distance_bonus + kind_bonus + language_penalty).max(0.0_f64),
+    ))
+}
+
+fn scoring_base_mode(result: &ScoredNode) -> RetrievalMode {
+    result
+        .ranking_evidence
+        .as_ref()
+        .map(|e| e.base_mode.clone())
+        .unwrap_or(RetrievalMode::Fts5)
+}
+
+fn ensure_ranking_evidence(result: &mut ScoredNode) -> &mut RankingEvidence {
+    let base_mode = scoring_base_mode(result);
+    result.ranking_evidence.get_or_insert_with(|| {
+        RankingEvidence::new(base_mode, result.score).with_raw_score(result.score)
+    })
+}
+
+fn annotate_graph_seed(result: &mut ScoredNode, hop_distance: u32, seed_qualified_name: String) {
+    let evidence = ensure_ranking_evidence(result);
+    evidence.graph_expansion = Some(GraphExpansionEvidence {
+        hop_distance,
+        seed_qualified_name: Some(seed_qualified_name),
+    });
+    result.sync_ranking_score();
+}
+
+fn merge_result_evidence(preferred: &mut ScoredNode, discarded: &ScoredNode) {
+    match (&mut preferred.ranking_evidence, &discarded.ranking_evidence) {
+        (Some(preferred_evidence), Some(discarded_evidence)) => {
+            preferred_evidence.merge_from(discarded_evidence);
+        }
+        (None, Some(discarded_evidence)) => {
+            preferred.ranking_evidence = Some(discarded_evidence.clone());
+        }
+        _ => {}
+    }
+    preferred.sync_ranking_score();
 }
 
 pub(crate) fn maybe_exclude_file_nodes(
@@ -576,70 +622,139 @@ pub fn apply_ranking_boosts(
     let ref_lang: Option<String> = reference_language.map(|l| l.to_lowercase());
 
     for r in &mut results {
-        let n = &r.node;
-        let name_lower = n.name.to_lowercase();
+        let raw_score = r.score;
+        let name_lower = r.node.name.to_lowercase();
+        let qualified_name_lower = r.node.qualified_name.to_lowercase();
+        let file_path = r.node.file_path.clone();
+        let language_lower = r.node.language.to_lowercase();
+        let name = r.node.name.clone();
+        let kind = r.node.kind;
+        let public_exported = r
+            .node
+            .modifiers
+            .as_ref()
+            .map(|mods| {
+                let mods = mods.to_lowercase();
+                mods.contains("pub") || mods.contains("public") || mods.contains("export")
+            })
+            .unwrap_or(false);
 
         // Exact name match
-        let exact_or_prefix = if name_lower == q_lower {
-            r.score += primitives.exact_name_boost;
-            true
-        } else if name_lower.starts_with(&q_lower) {
-            r.score += primitives.prefix_name_boost;
-            true
-        } else {
-            false
-        };
+        let exact_name_match = name_lower == q_lower;
+        let prefix_match = !exact_name_match && name_lower.starts_with(&q_lower);
+        let exact_or_prefix = exact_name_match || prefix_match;
 
         // Exact qualified_name match
-        if n.qualified_name.to_lowercase() == q_lower {
-            r.score += primitives.exact_qualified_name_boost;
-        }
+        let exact_qualified_name_match = qualified_name_lower == q_lower;
 
         // Fuzzy name match — only when no exact/prefix hit already and the
         // query is long enough to have a non-zero threshold.
-        if fuzzy_match && !exact_or_prefix {
-            r.score += fuzzy_typo_bonus(n, &q_lower, fuzzy_cap, &primitives);
-        }
+        let fuzzy = if fuzzy_match && !exact_or_prefix {
+            fuzzy_typo_details(&r.node, &q_lower, fuzzy_cap, &primitives)
+        } else {
+            None
+        };
 
         // Kind boost
-        r.score += primitives.kind_boost(n.kind);
-
-        // Public / exported API boost
-        if let Some(mods) = &n.modifiers {
-            let m = mods.to_lowercase();
-            if m.contains("pub") || m.contains("public") || m.contains("export") {
-                r.score += primitives.public_api_boost;
-            }
-        }
+        let kind_boost = primitives.kind_boost(kind);
 
         // Same-directory boost
-        if let Some(rdir) = &ref_dir {
-            let node_dir = match n.file_path.rfind('/') {
-                Some(idx) => &n.file_path[..idx],
+        let same_directory = ref_dir.as_ref().is_some_and(|rdir| {
+            let node_dir = match file_path.rfind('/') {
+                Some(idx) => &file_path[..idx],
                 None => "",
             };
-            if node_dir == rdir.as_str() {
-                r.score += primitives.same_directory_boost;
-            }
-        }
+            node_dir == rdir.as_str()
+        });
 
         // Same-language boost
-        if let Some(rlang) = &ref_lang
-            && n.language.to_lowercase() == *rlang
-        {
-            r.score += primitives.same_language_boost;
-        }
+        let same_language = ref_lang
+            .as_ref()
+            .is_some_and(|rlang| language_lower == *rlang);
 
         // Recent-file boost: reward nodes in recently indexed files.
-        if !recent_files.is_empty() && recent_files.contains(&n.file_path) {
-            r.score += primitives.recent_file_boost;
-        }
+        let recent_file_match = !recent_files.is_empty() && recent_files.contains(&file_path);
 
         // Changed-file boost: reward nodes in files that are part of the
         // current diff, making them rise above unrelated matches.
-        if !changed_files.is_empty() && changed_files.contains(&n.file_path) {
-            r.score += primitives.changed_file_boost;
+        let changed_file_match = !changed_files.is_empty() && changed_files.contains(&file_path);
+
+        let mut score_delta = 0.0;
+        if exact_name_match {
+            score_delta += primitives.exact_name_boost;
         }
+        if prefix_match {
+            score_delta += primitives.prefix_name_boost;
+        }
+        if exact_qualified_name_match {
+            score_delta += primitives.exact_qualified_name_boost;
+        }
+        if let Some((_, bonus)) = fuzzy {
+            score_delta += bonus;
+        }
+        score_delta += kind_boost;
+        if public_exported {
+            score_delta += primitives.public_api_boost;
+        }
+        if same_directory {
+            score_delta += primitives.same_directory_boost;
+        }
+        if same_language {
+            score_delta += primitives.same_language_boost;
+        }
+        if recent_file_match {
+            score_delta += primitives.recent_file_boost;
+        }
+        if changed_file_match {
+            score_delta += primitives.changed_file_boost;
+        }
+
+        r.score += score_delta;
+
+        let evidence = ensure_ranking_evidence(r);
+        if evidence.raw_score.is_none() {
+            evidence.raw_score = Some(raw_score);
+        }
+        if exact_name_match {
+            evidence.exact_name_match = true;
+            evidence.add_matched_field(SearchMatchedField::Name);
+        }
+        if prefix_match {
+            evidence.prefix_match = true;
+            evidence.add_matched_field(SearchMatchedField::Name);
+        }
+        if exact_qualified_name_match {
+            evidence.exact_qualified_name_match = true;
+            evidence.add_matched_field(SearchMatchedField::QualifiedName);
+        }
+        if let Some((distance, _)) = fuzzy {
+            evidence.fuzzy = Some(atlas_core::FuzzyCorrectionEvidence {
+                corrected_term: Some(name),
+                edit_distance: Some(distance as u8),
+                fuzzy_threshold: Some(fuzzy_cap as u8),
+            });
+            evidence.add_matched_field(SearchMatchedField::Name);
+        }
+        if kind_boost > 0.0 {
+            evidence.kind_boost = Some(kind_boost);
+        }
+        if public_exported {
+            evidence.public_exported_boost = Some(primitives.public_api_boost);
+        }
+        if same_directory {
+            evidence.same_directory_boost = Some(primitives.same_directory_boost);
+        }
+        if same_language {
+            evidence.same_language_boost = Some(primitives.same_language_boost);
+        }
+        if recent_file_match {
+            evidence.recent_file_boost = Some(primitives.recent_file_boost);
+        }
+        if changed_file_match {
+            evidence.changed_file_boost = Some(primitives.changed_file_boost);
+        }
+
+        r.sync_ranking_score();
     }
 
     sort_scored_nodes(&mut results);
@@ -667,9 +782,11 @@ pub fn graph_expand(
     let mut result_map: HashMap<String, ScoredNode> = HashMap::new();
 
     for s in &seeds {
+        let mut seeded = s.clone();
+        annotate_graph_seed(&mut seeded, 0, s.node.qualified_name.clone());
         result_map
-            .entry(s.node.qualified_name.clone())
-            .or_insert_with(|| s.clone());
+            .entry(seeded.node.qualified_name.clone())
+            .or_insert(seeded);
     }
 
     let max_seed_score = seeds
@@ -678,9 +795,9 @@ pub fn graph_expand(
         .fold(0.0_f64, f64::max)
         .max(1.0);
 
-    let mut frontier: Vec<String> = seeds
+    let mut frontier: Vec<(String, String)> = seeds
         .iter()
-        .map(|s| s.node.qualified_name.clone())
+        .map(|s| (s.node.qualified_name.clone(), s.node.qualified_name.clone()))
         .collect();
 
     for hop in 1..=max_hops {
@@ -688,25 +805,31 @@ pub fn graph_expand(
             break;
         }
 
-        let frontier_refs: Vec<&str> = frontier.iter().map(String::as_str).collect();
-        let neighbors = store.nodes_connected_to(&frontier_refs)?;
-
-        debug!(hop, neighbors = neighbors.len(), "graph expansion hop");
-
         let hop_score = max_seed_score / (hop as f64 + 1.0);
-        let mut next_frontier = Vec::new();
+        let mut next_frontier: Vec<(String, String)> = Vec::new();
 
-        for neighbor in neighbors {
-            let qn = neighbor.qualified_name.clone();
-            if !result_map.contains_key(&qn) {
-                result_map.insert(
-                    qn.clone(),
-                    ScoredNode {
-                        node: neighbor,
-                        score: hop_score,
-                    },
-                );
-                next_frontier.push(qn);
+        for (frontier_qn, seed_qn) in frontier {
+            let neighbors = store.nodes_connected_to(&[frontier_qn.as_str()])?;
+            debug!(
+                hop,
+                frontier = frontier_qn,
+                neighbors = neighbors.len(),
+                "graph expansion hop"
+            );
+
+            for neighbor in neighbors {
+                let qn = neighbor.qualified_name.clone();
+                if !result_map.contains_key(&qn) {
+                    let mut expanded = ScoredNode::with_ranking_evidence(
+                        neighbor,
+                        hop_score,
+                        RankingEvidence::new(RetrievalMode::GraphExpand, hop_score)
+                            .with_raw_score(hop_score),
+                    );
+                    annotate_graph_seed(&mut expanded, hop, seed_qn.clone());
+                    result_map.insert(qn.clone(), expanded);
+                    next_frontier.push((qn, seed_qn.clone()));
+                }
             }
         }
 
@@ -733,7 +856,12 @@ fn exact_symbol_hits(store: &Store, query: &SearchQuery) -> Result<Vec<ScoredNod
     {
         merged.insert(
             node.qualified_name.clone(),
-            ScoredNode { node, score: 100.0 },
+            ScoredNode::with_ranking_evidence(node, 100.0, {
+                let mut evidence = RankingEvidence::new(RetrievalMode::Fts5, 100.0)
+                    .with_matched_field(SearchMatchedField::QualifiedName);
+                evidence.exact_qualified_name_match = true;
+                evidence
+            }),
         );
     }
 
@@ -750,7 +878,18 @@ fn exact_symbol_hits(store: &Store, query: &SearchQuery) -> Result<Vec<ScoredNod
             } else {
                 80.0
             };
-            merged.entry(qn).or_insert(ScoredNode { node, score });
+            let scored = ScoredNode::with_ranking_evidence(node, score, {
+                let mut evidence = RankingEvidence::new(RetrievalMode::Fts5, score)
+                    .with_matched_field(SearchMatchedField::Name);
+                evidence.exact_name_match = true;
+                evidence
+            });
+            match merged.get_mut(&qn) {
+                Some(existing) => merge_result_evidence(existing, &scored),
+                None => {
+                    merged.insert(qn, scored);
+                }
+            }
         }
     }
 
@@ -763,8 +902,14 @@ fn merge_scored_nodes(primary: Vec<ScoredNode>, secondary: Vec<ScoredNode>) -> V
     for result in primary.into_iter().chain(secondary) {
         let qn = result.node.qualified_name.clone();
         match merged.get_mut(&qn) {
-            Some(existing) if result.score > existing.score => *existing = result,
-            Some(_) => {}
+            Some(existing) if result.score > existing.score => {
+                let mut replacement = result;
+                merge_result_evidence(&mut replacement, existing);
+                *existing = replacement;
+            }
+            Some(existing) => {
+                merge_result_evidence(existing, &result);
+            }
             None => {
                 merged.insert(qn, result);
             }
@@ -821,13 +966,28 @@ pub fn search(store: &Store, query: &SearchQuery) -> Result<Vec<ScoredNode>> {
             let fuzzy_cap = fuzzy_threshold(query.text.trim().chars().count());
             let relaxed_results: Vec<_> = relaxed_results
                 .into_iter()
-                .filter(|result| {
-                    fuzzy_cap > 0
-                        && edit_distance(
-                            &query.text.trim().to_lowercase(),
-                            &result.node.name.to_lowercase(),
-                            fuzzy_cap,
-                        ) <= fuzzy_cap
+                .filter_map(|mut result| {
+                    if fuzzy_cap == 0 {
+                        return None;
+                    }
+                    let distance = edit_distance(
+                        &query.text.trim().to_lowercase(),
+                        &result.node.name.to_lowercase(),
+                        fuzzy_cap,
+                    );
+                    if distance > fuzzy_cap {
+                        return None;
+                    }
+                    let corrected_term = result.node.name.clone();
+                    let evidence = ensure_ranking_evidence(&mut result);
+                    evidence.fuzzy = Some(atlas_core::FuzzyCorrectionEvidence {
+                        corrected_term: Some(corrected_term),
+                        edit_distance: Some(distance as u8),
+                        fuzzy_threshold: Some(fuzzy_cap as u8),
+                    });
+                    evidence.add_matched_field(SearchMatchedField::Name);
+                    result.sync_ranking_score();
+                    Some(result)
                 })
                 .collect();
             fts_results = merge_scored_nodes(fts_results, relaxed_results);
@@ -888,25 +1048,50 @@ pub fn reciprocal_rank_fusion(
     vector: &[ScoredNode],
     k: u32,
 ) -> Vec<ScoredNode> {
-    let mut acc: HashMap<String, (ScoredNode, f64)> = HashMap::new();
+    let mut acc: HashMap<String, (ScoredNode, f64, Vec<HybridRankContribution>)> = HashMap::new();
 
     for (rank, n) in fts.iter().enumerate() {
+        let contribution = 1.0 / (k as f64 + rank as f64 + 1.0);
         let entry = acc
             .entry(n.node.qualified_name.clone())
-            .or_insert_with(|| (n.clone(), 0.0));
-        entry.1 += 1.0 / (k as f64 + rank as f64 + 1.0);
+            .or_insert_with(|| (n.clone(), 0.0, Vec::new()));
+        entry.1 += contribution;
+        merge_result_evidence(&mut entry.0, n);
+        entry.2.push(HybridRankContribution {
+            source: HybridRankingSource::Fts5,
+            rank: rank as u32 + 1,
+            score_contribution: contribution,
+        });
     }
     for (rank, n) in vector.iter().enumerate() {
+        let contribution = 1.0 / (k as f64 + rank as f64 + 1.0);
         let entry = acc
             .entry(n.node.qualified_name.clone())
-            .or_insert_with(|| (n.clone(), 0.0));
-        entry.1 += 1.0 / (k as f64 + rank as f64 + 1.0);
+            .or_insert_with(|| (n.clone(), 0.0, Vec::new()));
+        entry.1 += contribution;
+        merge_result_evidence(&mut entry.0, n);
+        entry.2.push(HybridRankContribution {
+            source: HybridRankingSource::Vector,
+            rank: rank as u32 + 1,
+            score_contribution: contribution,
+        });
     }
 
     let mut results: Vec<ScoredNode> = acc
         .into_values()
-        .map(|(mut n, score)| {
+        .map(|(mut n, score, sources)| {
             n.score = score;
+            let mut ranking_evidence = n
+                .ranking_evidence
+                .clone()
+                .unwrap_or_else(|| RankingEvidence::new(RetrievalMode::Hybrid, score));
+            ranking_evidence.base_mode = RetrievalMode::Hybrid;
+            if ranking_evidence.raw_score.is_none() {
+                ranking_evidence.raw_score = Some(score);
+            }
+            ranking_evidence.final_score = score;
+            ranking_evidence.hybrid_rrf = Some(HybridRrfEvidence { sources });
+            n.ranking_evidence = Some(ranking_evidence);
             n
         })
         .collect();
@@ -970,6 +1155,8 @@ fn search_hybrid(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use atlas_core::{Edge, EdgeKind, Node, NodeId};
+    use atlas_core::{HybridRankingSource, SearchMatchedField};
 
     #[test]
     fn split_camel_basic() {
@@ -1047,7 +1234,7 @@ mod tests {
             extra_json: serde_json::Value::Null,
         };
 
-        let input = vec![ScoredNode { node, score: 5.0 }];
+        let input = vec![ScoredNode::new(node, 5.0)];
         let boosted = apply_ranking_boosts(
             input,
             "search",
@@ -1068,8 +1255,8 @@ mod tests {
 
     fn make_test_node(name: &str, qn: &str, file_path: &str, language: &str) -> ScoredNode {
         use atlas_core::{Node, NodeId, NodeKind};
-        ScoredNode {
-            node: Node {
+        ScoredNode::new(
+            Node {
                 id: NodeId::UNSET,
                 kind: NodeKind::Function,
                 name: name.to_string(),
@@ -1086,8 +1273,8 @@ mod tests {
                 file_hash: "h".to_string(),
                 extra_json: serde_json::Value::Null,
             },
-            score: 1.0,
-        }
+            1.0,
+        )
     }
 
     #[test]
@@ -1600,5 +1787,278 @@ mod tests {
             changed_score > stable_score,
             "changed-file node must score higher; changed={changed_score} stable={stable_score}"
         );
+    }
+
+    #[test]
+    fn apply_ranking_boosts_records_evidence_fields() {
+        let mut boosted_node = make_test_node(
+            "search",
+            "src/search.rs::fn::search",
+            "src/search.rs",
+            "rust",
+        );
+        boosted_node.node.modifiers = Some("pub".to_string());
+
+        let recent_set: HashSet<String> = ["src/search.rs".to_string()].into();
+        let changed_set: HashSet<String> = ["src/search.rs".to_string()].into();
+        let boosted = apply_ranking_boosts(
+            vec![boosted_node],
+            "search",
+            Some("src/main.rs"),
+            Some("rust"),
+            false,
+            &recent_set,
+            &changed_set,
+        );
+
+        let evidence = boosted[0]
+            .ranking_evidence
+            .as_ref()
+            .expect("ranking evidence");
+        assert!(evidence.exact_name_match);
+        assert_eq!(evidence.kind_boost, Some(3.0));
+        assert_eq!(evidence.public_exported_boost, Some(2.0));
+        assert_eq!(evidence.same_directory_boost, Some(3.0));
+        assert_eq!(evidence.same_language_boost, Some(2.0));
+        assert_eq!(evidence.recent_file_boost, Some(4.0));
+        assert_eq!(evidence.changed_file_boost, Some(5.0));
+        assert!(evidence.matched_fields.contains(&SearchMatchedField::Name));
+    }
+
+    #[test]
+    fn search_relaxed_fuzzy_records_term_distance_and_threshold() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db_path = dir.path().join("atlas.db");
+        let db_path = db_path.to_string_lossy().to_string();
+        let mut store = Store::open(&db_path).expect("open store");
+
+        let node = Node {
+            id: NodeId::UNSET,
+            kind: NodeKind::Function,
+            name: "search".to_string(),
+            qualified_name: "src/lib.rs::fn::search".to_string(),
+            file_path: "src/lib.rs".to_string(),
+            line_start: 1,
+            line_end: 5,
+            language: "rust".to_string(),
+            parent_name: None,
+            params: None,
+            return_type: None,
+            modifiers: None,
+            is_test: false,
+            file_hash: "h".to_string(),
+            extra_json: serde_json::Value::Null,
+        };
+        store
+            .replace_file_graph("src/lib.rs", "h", Some("rust"), Some(5), &[node], &[])
+            .expect("replace file graph");
+
+        let results = search(
+            &store,
+            &SearchQuery {
+                text: "serch".to_string(),
+                fuzzy_match: true,
+                ..Default::default()
+            },
+        )
+        .expect("search results");
+
+        let evidence = results[0]
+            .ranking_evidence
+            .as_ref()
+            .expect("ranking evidence");
+        let fuzzy = evidence.fuzzy.as_ref().expect("fuzzy evidence");
+        assert_eq!(fuzzy.corrected_term.as_deref(), Some("search"));
+        assert_eq!(fuzzy.edit_distance, Some(1));
+        assert_eq!(fuzzy.fuzzy_threshold, Some(1));
+    }
+
+    #[test]
+    fn merge_scored_nodes_preserves_exact_evidence() {
+        let mut exact = make_test_node("compute", "src/lib.rs::fn::compute", "src/lib.rs", "rust");
+        exact.ranking_evidence = Some({
+            let mut evidence = RankingEvidence::new(RetrievalMode::Fts5, 80.0);
+            evidence.exact_name_match = true;
+            evidence.add_matched_field(SearchMatchedField::Name);
+            evidence
+        });
+        exact.score = 80.0;
+
+        let mut fuzzy = make_test_node("compute", "src/lib.rs::fn::compute", "src/lib.rs", "rust");
+        fuzzy.ranking_evidence = Some(RankingEvidence {
+            base_mode: RetrievalMode::Fts5,
+            raw_score: Some(90.0),
+            final_score: 90.0,
+            matched_fields: vec![SearchMatchedField::Name],
+            exact_name_match: false,
+            exact_qualified_name_match: false,
+            prefix_match: false,
+            fuzzy: Some(atlas_core::FuzzyCorrectionEvidence {
+                corrected_term: Some("compute".to_string()),
+                edit_distance: Some(1),
+                fuzzy_threshold: Some(1),
+            }),
+            kind_boost: None,
+            public_exported_boost: None,
+            same_directory_boost: None,
+            same_language_boost: None,
+            recent_file_boost: None,
+            changed_file_boost: None,
+            graph_expansion: None,
+            hybrid_rrf: None,
+        });
+        fuzzy.score = 90.0;
+
+        let merged = merge_scored_nodes(vec![exact], vec![fuzzy]);
+        let evidence = merged[0]
+            .ranking_evidence
+            .as_ref()
+            .expect("ranking evidence");
+        assert!(
+            evidence.exact_name_match,
+            "exact evidence should survive merge"
+        );
+        assert!(
+            evidence.fuzzy.is_some(),
+            "fuzzy evidence should survive merge"
+        );
+    }
+
+    #[test]
+    fn graph_expand_records_hop_distance_and_seed_source() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db_path = dir.path().join("atlas.db");
+        let db_path = db_path.to_string_lossy().to_string();
+        let mut store = Store::open(&db_path).expect("open store");
+
+        let node_a = Node {
+            id: NodeId::UNSET,
+            kind: NodeKind::Function,
+            name: "a".to_string(),
+            qualified_name: "src/a.rs::fn::a".to_string(),
+            file_path: "src/a.rs".to_string(),
+            line_start: 1,
+            line_end: 5,
+            language: "rust".to_string(),
+            parent_name: None,
+            params: None,
+            return_type: None,
+            modifiers: None,
+            is_test: false,
+            file_hash: "ha".to_string(),
+            extra_json: serde_json::Value::Null,
+        };
+        let node_b = Node {
+            id: NodeId::UNSET,
+            kind: NodeKind::Function,
+            name: "b".to_string(),
+            qualified_name: "src/b.rs::fn::b".to_string(),
+            file_path: "src/b.rs".to_string(),
+            line_start: 1,
+            line_end: 5,
+            language: "rust".to_string(),
+            parent_name: None,
+            params: None,
+            return_type: None,
+            modifiers: None,
+            is_test: false,
+            file_hash: "hb".to_string(),
+            extra_json: serde_json::Value::Null,
+        };
+        let edge_ab = Edge {
+            id: 0,
+            kind: EdgeKind::Calls,
+            source_qn: "src/a.rs::fn::a".to_string(),
+            target_qn: "src/b.rs::fn::b".to_string(),
+            file_path: "src/a.rs".to_string(),
+            line: Some(1),
+            confidence: 1.0,
+            confidence_tier: Some("high".to_string()),
+            extra_json: serde_json::Value::Null,
+        };
+        store
+            .replace_file_graph(
+                "src/a.rs",
+                "ha",
+                Some("rust"),
+                Some(5),
+                &[node_a],
+                &[edge_ab],
+            )
+            .expect("replace a graph");
+        store
+            .replace_file_graph("src/b.rs", "hb", Some("rust"), Some(5), &[node_b], &[])
+            .expect("replace b graph");
+
+        let expanded = graph_expand(
+            &store,
+            vec![make_test_node("a", "src/a.rs::fn::a", "src/a.rs", "rust")],
+            1,
+            10,
+        )
+        .expect("expanded results");
+
+        let neighbor = expanded
+            .iter()
+            .find(|result| result.node.qualified_name == "src/b.rs::fn::b")
+            .expect("neighbor result");
+        let graph = neighbor
+            .ranking_evidence
+            .as_ref()
+            .and_then(|e| e.graph_expansion.as_ref())
+            .expect("graph expansion evidence");
+        assert_eq!(graph.hop_distance, 1);
+        assert_eq!(
+            graph.seed_qualified_name.as_deref(),
+            Some("src/a.rs::fn::a")
+        );
+    }
+
+    #[test]
+    fn reciprocal_rank_fusion_records_rank_and_score_contributions() {
+        let mut fts = make_test_node("compute", "src/lib.rs::fn::compute", "src/lib.rs", "rust");
+        fts.ranking_evidence = Some({
+            let mut evidence = RankingEvidence::new(RetrievalMode::Fts5, 10.0);
+            evidence.exact_name_match = true;
+            evidence.add_matched_field(SearchMatchedField::Name);
+            evidence
+        });
+        fts.score = 10.0;
+
+        let mut vector = make_test_node("compute", "src/lib.rs::fn::compute", "src/lib.rs", "rust");
+        vector.ranking_evidence = Some(
+            RankingEvidence::new(RetrievalMode::Vector, 0.9)
+                .with_matched_field(SearchMatchedField::Embedding),
+        );
+        vector.score = 0.9;
+
+        let fused = reciprocal_rank_fusion(&[fts], &[vector], 60);
+        let evidence = fused[0]
+            .ranking_evidence
+            .as_ref()
+            .expect("ranking evidence");
+        let hybrid = evidence.hybrid_rrf.as_ref().expect("hybrid evidence");
+        assert_eq!(evidence.base_mode, RetrievalMode::Hybrid);
+        assert!(
+            evidence.exact_name_match,
+            "fts evidence should survive fusion"
+        );
+        assert!(
+            evidence
+                .matched_fields
+                .contains(&SearchMatchedField::Embedding),
+            "vector evidence should survive fusion"
+        );
+        assert_eq!(hybrid.sources.len(), 2);
+        assert!(hybrid.sources.iter().any(|source| {
+            source.source == HybridRankingSource::Fts5
+                && source.rank == 1
+                && source.score_contribution > 0.0
+        }));
+        assert!(hybrid.sources.iter().any(|source| {
+            source.source == HybridRankingSource::Vector
+                && source.rank == 1
+                && source.score_contribution > 0.0
+        }));
     }
 }

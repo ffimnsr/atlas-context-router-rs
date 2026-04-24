@@ -80,6 +80,15 @@ fn context_symbol_flow_returns_bounded_json() {
         "truncation metadata must be present"
     );
     assert_eq!(data["request"]["intent"], json!("symbol"));
+    assert!(data["context_ranking_evidence_legend"].is_object());
+    assert!(
+        data["nodes"]
+            .as_array()
+            .and_then(|nodes| nodes.first())
+            .and_then(|node| node.get("context_ranking_evidence"))
+            .is_some(),
+        "context JSON must expose context ranking evidence on nodes"
+    );
 }
 
 #[test]

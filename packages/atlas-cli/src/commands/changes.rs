@@ -644,7 +644,14 @@ pub fn run_review_context(cli: &Cli) -> Result<()> {
             .context("context engine failed")?;
 
         if cli.json {
-            print_json("review_context", serde_json::to_value(&workflow_result)?)?;
+            let mut value = serde_json::to_value(&workflow_result)?;
+            if let Some(object) = value.as_object_mut() {
+                object.insert(
+                    "context_ranking_evidence_legend".to_owned(),
+                    atlas_core::context_ranking_evidence_legend(),
+                );
+            }
+            print_json("review_context", value)?;
             return Ok(());
         }
 

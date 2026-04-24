@@ -141,6 +141,20 @@ pub fn tool_list() -> serde_json::Value {
                 }
             },
             {
+                "name": "postprocess_graph",
+                "description": "Run explicit derived-analytics postprocessing after build/update without reparsing source files. Supports full or changed-only mode, optional single-stage execution, and dry-run lifecycle preview.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "changed_only": { "type": "boolean", "description": "Restrict postprocess to files currently changed in the working tree when stage dependencies allow." },
+                        "stage": { "type": "string", "description": "Optional stage name: flows, communities, architecture_metrics, query_hints, or large_function_summaries." },
+                        "dry_run": { "type": "boolean", "description": "Compute the stage summary without recording lifecycle state." },
+                        "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
+                    },
+                    "required": []
+                }
+            },
+            {
                 "name": "traverse_graph",
                 "description": "Bi-directional graph traversal from a specific symbol (qualified name). Returns all nodes reachable within depth hops.",
                 "inputSchema": {

@@ -10,6 +10,7 @@ mod analysis;
 mod health;
 mod history;
 mod hooks;
+mod postprocess;
 mod query;
 mod review;
 mod serve;

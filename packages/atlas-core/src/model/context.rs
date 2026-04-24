@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 
 use crate::budget::BudgetReport;
 
@@ -117,6 +118,10 @@ impl Default for ContextRequest {
     }
 }
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 /// Why a node, edge, or file was included in a [`ContextResult`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -154,6 +159,92 @@ impl SelectionReason {
     }
 }
 
+/// Structured explanation for why a node, edge, or saved artifact ranked where
+/// it did inside bounded context assembly.
+///
+/// This contract is intentionally separate from search ranking evidence.
+/// Search ranking evidence explains why a symbol or file matched retrieval.
+/// Context ranking evidence explains why an item was included and ranked within
+/// a context/review result after graph expansion, impact analysis, and
+/// saved-context scoring.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ContextRankingEvidence {
+    /// Initial relevance score before context-specific additive boosts.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base_score: Option<f32>,
+    /// Final relevance score after all context-specific contributions.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub final_score: Option<f32>,
+    /// Item is the direct target of the context request.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub direct_target: bool,
+    /// Item is a changed symbol in review / impact context.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub changed_symbol: bool,
+    /// Item was included as a caller neighbor.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub caller_neighbor: bool,
+    /// Item was included as a callee neighbor.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub callee_neighbor: bool,
+    /// Item was included through test adjacency.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub test_adjacent: bool,
+    /// Additive score contributed by impact analysis weighting.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub impact_score_contribution: Option<f32>,
+    /// Base lexical retrieval rank contribution for saved-context sources.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub saved_context_rank_score: Option<f32>,
+    /// Additive boost for recently created saved-context sources.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recent_source_boost: Option<f32>,
+    /// Additive boost for saved-context sources from the active session.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub same_session_boost: Option<f32>,
+}
+
+pub type ContextScoreEvidence = ContextRankingEvidence;
+
+impl ContextRankingEvidence {
+    pub fn from_selection_reason(reason: SelectionReason) -> Self {
+        let mut evidence = Self::default();
+        match reason {
+            SelectionReason::DirectTarget => evidence.direct_target = true,
+            SelectionReason::Caller => evidence.caller_neighbor = true,
+            SelectionReason::Callee => evidence.callee_neighbor = true,
+            SelectionReason::TestAdjacent => evidence.test_adjacent = true,
+            SelectionReason::Importer
+            | SelectionReason::Importee
+            | SelectionReason::ContainmentSibling
+            | SelectionReason::ImpactNeighbor => {}
+        }
+        evidence
+    }
+
+    pub fn sync_score(&mut self, score: f32) {
+        self.base_score.get_or_insert(score);
+        self.final_score = Some(score);
+    }
+}
+
+pub fn context_ranking_evidence_legend() -> serde_json::Value {
+    json!({
+        "contract_scope": "Separate from retrieval ranking evidence: retrieval evidence explains why a result matched search, while context ranking evidence explains why a node, edge, or saved artifact was included and ranked inside a bounded context or review result.",
+        "base_score": "Initial context relevance score before impact or saved-context additive boosts.",
+        "final_score": "Final context relevance score after all recorded contributions.",
+        "direct_target": "Item is the primary target resolved from the request.",
+        "changed_symbol": "Item is a changed symbol selected from changed-file or impact review seeds.",
+        "caller_neighbor": "Item was included as a caller of the target or neighbor.",
+        "callee_neighbor": "Item was included as a callee of the target or neighbor.",
+        "test_adjacent": "Item was included because of test adjacency.",
+        "impact_score_contribution": "Additive contribution from impact analysis weighting in review or impact context.",
+        "saved_context_rank_score": "Base saved-context ranking contribution derived from retrieval rank.",
+        "recent_source_boost": "Additive boost for recently created saved-context artifacts.",
+        "same_session_boost": "Additive boost for saved-context artifacts from the active session."
+    })
+}
+
 /// A graph node selected for inclusion in a [`ContextResult`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SelectedNode {
@@ -164,6 +255,8 @@ pub struct SelectedNode {
     /// Relevance score assigned by `rank_context` (higher = more relevant).
     /// Zero before ranking is applied.
     pub relevance_score: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_ranking_evidence: Option<ContextRankingEvidence>,
 }
 
 /// A graph edge selected for inclusion in a [`ContextResult`].
@@ -176,6 +269,8 @@ pub struct SelectedEdge {
     /// Relevance score assigned by `rank_context` (higher = more relevant).
     /// Zero before ranking is applied.
     pub relevance_score: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_ranking_evidence: Option<ContextRankingEvidence>,
 }
 
 /// A file selected for inclusion in a [`ContextResult`].
@@ -397,6 +492,8 @@ pub struct SavedContextSource {
     pub retrieval_hint: String,
     /// Relevance score for ranking within this result (higher = more relevant).
     pub relevance_score: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_ranking_evidence: Option<ContextRankingEvidence>,
 }
 
 /// Output of the context engine for a single [`ContextRequest`].

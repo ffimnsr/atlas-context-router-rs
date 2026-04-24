@@ -94,10 +94,18 @@ pub(super) fn retrieve_saved_context(
             .map(|c| c.content.chars().take(512).collect())
             .unwrap_or_default();
 
-        let mut score = ranking.rank_score(rank);
+        let rank_score = ranking.rank_score(rank);
+        let mut score = rank_score;
+        let mut evidence = ContextRankingEvidence {
+            saved_context_rank_score: Some(rank_score),
+            base_score: Some(rank_score),
+            final_score: Some(rank_score),
+            ..ContextRankingEvidence::default()
+        };
 
         if meta.created_at.as_str() >= seven_days_ago.as_str() {
             score += ranking.recent_source_bonus;
+            evidence.recent_source_boost = Some(ranking.recent_source_bonus);
         }
 
         if let (Some(req_sid), Some(art_sid)) =
@@ -105,7 +113,10 @@ pub(super) fn retrieve_saved_context(
             && req_sid == art_sid
         {
             score += ranking.same_session_bonus;
+            evidence.same_session_boost = Some(ranking.same_session_bonus);
         }
+
+        evidence.final_score = Some(score);
 
         let retrieval_hint = format!(
             "source_id={} label={:?} type={}",
@@ -120,6 +131,7 @@ pub(super) fn retrieve_saved_context(
             preview,
             retrieval_hint,
             relevance_score: score,
+            context_ranking_evidence: Some(evidence),
         });
     }
 

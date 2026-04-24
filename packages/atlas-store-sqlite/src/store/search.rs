@@ -1,5 +1,6 @@
 use atlas_core::{
-    AtlasError, BudgetManager, BudgetPolicy, ImpactResult, Node, Result, ScoredNode, SearchQuery,
+    AtlasError, BudgetManager, BudgetPolicy, ImpactResult, Node, RankingEvidence, Result,
+    RetrievalMode, ScoredNode, SearchQuery,
 };
 
 use super::{
@@ -99,7 +100,11 @@ impl Store {
             let mut stmt = self.conn.prepare_cached(&sql).map_err(db_err)?;
             stmt.query_map(params_ref.as_slice(), |row| {
                 let node = row_to_node(row)?;
-                Ok(ScoredNode { node, score: 1.0 })
+                Ok(ScoredNode::with_ranking_evidence(
+                    node,
+                    1.0,
+                    RankingEvidence::new(RetrievalMode::RegexStructuralScan, 1.0),
+                ))
             })
             .map_err(db_err)?
             .filter_map(|r| r.ok())
@@ -166,11 +171,12 @@ impl Store {
             stmt.query_map(params_ref.as_slice(), |row| {
                 let node = row_to_node(row)?;
                 let score: f64 = row.get(15)?;
-                Ok(ScoredNode {
+                let score = -score;
+                Ok(ScoredNode::with_ranking_evidence(
                     node,
-                    // BM25 returns negative values; negate for ascending score.
-                    score: -score,
-                })
+                    score,
+                    RankingEvidence::new(RetrievalMode::Fts5, score).with_raw_score(score),
+                ))
             })
             .map_err(db_err)?
             .filter_map(|r| r.ok())

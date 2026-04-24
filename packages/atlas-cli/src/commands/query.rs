@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use atlas_core::{BudgetManager, SearchQuery};
+use atlas_core::{BudgetManager, RankingEvidence, SearchQuery};
 use atlas_search as search;
 use atlas_search::QueryExplanation;
 use atlas_store_sqlite::Store;
@@ -16,6 +16,47 @@ fn query_owner_identity(node: &atlas_core::Node) -> Option<String> {
             .and_then(|value| value.as_str())
             .map(str::to_owned)
     })
+}
+
+fn ranking_evidence_labels(evidence: &RankingEvidence) -> Vec<&'static str> {
+    let mut labels = Vec::new();
+    if evidence.exact_name_match {
+        labels.push("exact_name");
+    }
+    if evidence.exact_qualified_name_match {
+        labels.push("exact_qname");
+    }
+    if evidence.prefix_match {
+        labels.push("prefix");
+    }
+    if evidence.fuzzy.is_some() {
+        labels.push("fuzzy");
+    }
+    if evidence.kind_boost.is_some() {
+        labels.push("kind_boost");
+    }
+    if evidence.public_exported_boost.is_some() {
+        labels.push("public_api");
+    }
+    if evidence.same_directory_boost.is_some() {
+        labels.push("same_directory");
+    }
+    if evidence.same_language_boost.is_some() {
+        labels.push("same_language");
+    }
+    if evidence.recent_file_boost.is_some() {
+        labels.push("recent_file");
+    }
+    if evidence.changed_file_boost.is_some() {
+        labels.push("changed_file");
+    }
+    if evidence.graph_expansion.is_some() {
+        labels.push("graph_expand");
+    }
+    if evidence.hybrid_rrf.is_some() {
+        labels.push("hybrid_rrf");
+    }
+    labels
 }
 
 pub fn run_query(cli: &Cli) -> Result<()> {
@@ -141,6 +182,7 @@ pub fn run_query(cli: &Cli) -> Result<()> {
                 },
                 "latency_ms": latency_ms,
                 "results": results,
+                "ranking_evidence_legend": atlas_core::ranking_evidence_legend(),
                 "budget": budget,
             }),
         )?;
@@ -150,6 +192,11 @@ pub fn run_query(cli: &Cli) -> Result<()> {
         for r in &results {
             let n = &r.node;
             let display_path = query_display_path(n);
+            let labels = r
+                .ranking_evidence
+                .as_ref()
+                .map(ranking_evidence_labels)
+                .unwrap_or_default();
             println!(
                 "[{:.3}] {} {} ({}:{}){}",
                 r.score,
@@ -161,6 +208,9 @@ pub fn run_query(cli: &Cli) -> Result<()> {
                     .map(|owner| format!(" [owner {owner}]"))
                     .unwrap_or_default(),
             );
+            if cli.verbose && !labels.is_empty() {
+                println!("        evidence: {}", labels.join(", "));
+            }
         }
         println!("\n{} result(s). ({latency_ms}ms)", results.len());
     }

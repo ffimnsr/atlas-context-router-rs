@@ -429,6 +429,7 @@ The MCP server (`atlas serve`) exposes these tools to agents:
 | `get_context` | General context engine: symbol, file, review, impact |
 | `detect_changes` | Git diff → changed-file list with node counts |
 | `build_or_update_graph` | Full scan or incremental graph update |
+| `postprocess_graph` | Refresh derived graph analytics after build/update without reparsing |
 | `traverse_graph` | Bi-directional graph traversal from a qualified name |
 | `get_minimal_context` | Auto-detect changes and return compact impact bundle |
 | `explain_change` | Advanced impact: risk, change kinds, boundary/test gaps |

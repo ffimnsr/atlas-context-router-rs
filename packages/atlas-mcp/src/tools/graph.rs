@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use atlas_core::model::ContextTarget;
-use atlas_core::{BudgetManager, BudgetStatus, SearchQuery};
+use atlas_core::{BudgetManager, BudgetStatus, RankingEvidence, SearchQuery};
 use atlas_review::{ResolvedTarget, normalize_qn_kind_tokens, resolve_target};
 use atlas_search::semantic as sem;
 use serde::Serialize;
@@ -12,6 +12,10 @@ use super::shared::{
     bool_arg, error_message, error_suggestions, inject_budget_metadata, load_budget_policy,
     open_store, resolve_kind_alias, str_arg, string_array_arg, tool_result_value, u64_arg,
 };
+
+fn ranking_evidence_legend_json() -> serde_json::Value {
+    atlas_core::ranking_evidence_legend()
+}
 
 pub(super) fn tool_list_graph_stats(
     db_path: &str,
@@ -91,6 +95,8 @@ pub(super) fn tool_query_graph(
     #[derive(Serialize)]
     struct CompactResult<'a> {
         score: f64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        ranking_evidence: Option<RankingEvidence>,
         #[serde(flatten)]
         node: crate::context::CompactNode<'a>,
     }
@@ -99,6 +105,7 @@ pub(super) fn tool_query_graph(
         .iter()
         .map(|r| CompactResult {
             score: (r.score * 1000.0).round() / 1000.0,
+            ranking_evidence: r.ranking_evidence.clone(),
             node: compact_node(&r.node),
         })
         .collect();
@@ -117,6 +124,7 @@ pub(super) fn tool_query_graph(
     );
     response["atlas_truncated"] = serde_json::json!(compact.len() == limit);
     response["atlas_query_mode"] = serde_json::Value::String(explanation.active_query_mode);
+    response["atlas_ranking_evidence_legend"] = ranking_evidence_legend_json();
     if compact.is_empty() && semantic {
         response["atlas_hint"] = serde_json::Value::String(
             "FTS found no symbol names matching the query text. \
@@ -196,6 +204,8 @@ pub(super) fn tool_batch_query_graph(
     #[derive(Serialize)]
     struct BatchResultNode {
         score: f64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        ranking_evidence: Option<RankingEvidence>,
         name: String,
         qualified_name: String,
         kind: String,
@@ -274,6 +284,7 @@ pub(super) fn tool_batch_query_graph(
             .iter()
             .map(|r| BatchResultNode {
                 score: (r.score * 1000.0).round() / 1000.0,
+                ranking_evidence: r.ranking_evidence.clone(),
                 name: r.node.name.clone(),
                 qualified_name: r.node.qualified_name.clone(),
                 kind: r.node.kind.as_str().to_owned(),
@@ -319,6 +330,7 @@ pub(super) fn tool_batch_query_graph(
     response["atlas_result_kind"] = serde_json::Value::String("batch_symbol_search".to_owned());
     response["atlas_query_count"] =
         serde_json::Value::Number(serde_json::Number::from(batch_results.len()));
+    response["atlas_ranking_evidence_legend"] = ranking_evidence_legend_json();
     let worst_budget = batch_budget_reports
         .into_iter()
         .max_by(|left, right| {
@@ -665,6 +677,7 @@ pub(super) fn tool_explain_query(
     let result = atlas_search::explain_query(store.as_ref(), db_exists, &query, semantic);
 
     let mut response = tool_result_value(&result, output_format)?;
+    response["atlas_ranking_evidence_legend"] = ranking_evidence_legend_json();
     inject_budget_metadata(
         &mut response,
         &budgets.summary(

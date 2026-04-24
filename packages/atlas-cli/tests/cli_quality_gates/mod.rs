@@ -240,6 +240,10 @@ fn normalize_query_results(value: &mut Value) {
         result["score"] = json!(0.0);
         result["node"]["id"] = json!(0);
         result["node"]["file_hash"] = json!("<hash>");
+        if let Some(evidence) = result["ranking_evidence"].as_object_mut() {
+            evidence.insert("raw_score".to_string(), json!(0.0));
+            evidence.insert("final_score".to_string(), json!(0.0));
+        }
     }
 }
 

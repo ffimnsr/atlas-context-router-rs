@@ -390,10 +390,7 @@ pub fn context_boosted_search(
             let qn = n.qualified_name.clone();
             // Score context nodes lower than FTS hits so they don't dominate.
             if !fts_seeds.iter().any(|s| s.node.qualified_name == qn) {
-                fts_seeds.push(ScoredNode {
-                    node: n,
-                    score: 1.0,
-                });
+                fts_seeds.push(ScoredNode::new(n, 1.0));
             }
         }
     }

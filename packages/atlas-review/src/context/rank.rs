@@ -23,6 +23,11 @@ pub(super) fn rank_context(result: &mut ContextResult) {
         .collect();
     for (sn, s) in result.nodes.iter_mut().zip(&node_scores) {
         sn.relevance_score = *s;
+        let reason = sn.selection_reason;
+        let evidence = sn
+            .context_ranking_evidence
+            .get_or_insert_with(|| ContextRankingEvidence::from_selection_reason(reason));
+        evidence.sync_score(*s);
     }
 
     result.nodes.sort_by(|a, b| {
@@ -41,6 +46,11 @@ pub(super) fn rank_context(result: &mut ContextResult) {
         .collect();
     for (se, s) in result.edges.iter_mut().zip(&edge_scores) {
         se.relevance_score = *s;
+        let reason = se.selection_reason;
+        let evidence = se
+            .context_ranking_evidence
+            .get_or_insert_with(|| ContextRankingEvidence::from_selection_reason(reason));
+        evidence.sync_score(*s);
     }
 
     result.edges.sort_by(|a, b| {

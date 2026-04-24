@@ -410,6 +410,22 @@ pub enum Command {
         subcommand: CommunitiesCommand,
     },
 
+    /// Refresh derived graph analytics without reparsing source files.
+    #[command(name = "postprocess")]
+    Postprocess {
+        /// Restrict refresh to files currently changed in the working tree.
+        #[arg(long)]
+        changed_only: bool,
+
+        /// Run only one postprocess stage.
+        #[arg(long)]
+        stage: Option<String>,
+
+        /// Compute the summary without recording lifecycle state.
+        #[arg(long)]
+        dry_run: bool,
+    },
+
     /// Analyse a symbol or the whole graph for removal impact, dead code, safety, or dependencies.
     Analyze {
         #[command(subcommand)]

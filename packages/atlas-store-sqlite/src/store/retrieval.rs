@@ -1,4 +1,6 @@
-use atlas_core::{AtlasError, Node, Result, ScoredNode};
+use atlas_core::{
+    AtlasError, Node, RankingEvidence, Result, RetrievalMode, ScoredNode, SearchMatchedField,
+};
 use rusqlite::params;
 
 use super::{
@@ -155,7 +157,13 @@ impl Store {
                     .get(n.qualified_name.as_str())
                     .copied()
                     .unwrap_or(0.0);
-                ScoredNode { node: n, score }
+                ScoredNode::with_ranking_evidence(
+                    n,
+                    score,
+                    RankingEvidence::new(RetrievalMode::Vector, score)
+                        .with_raw_score(score)
+                        .with_matched_field(SearchMatchedField::Embedding),
+                )
             })
             .collect();
 

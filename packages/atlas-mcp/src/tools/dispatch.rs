@@ -26,6 +26,7 @@ use super::graph::{
     tool_traverse_graph,
 };
 use super::health::{tool_db_check, tool_debug_graph, tool_doctor, tool_status};
+use super::postprocess::tool_postprocess_graph;
 
 fn response_file_list(response: &serde_json::Value, pointer: &str) -> Vec<String> {
     response
@@ -99,6 +100,7 @@ fn call_inner(
         "build_or_update_graph" => {
             tool_build_or_update_graph(args, repo_root, db_path, output_format)
         }
+        "postprocess_graph" => tool_postprocess_graph(args, repo_root, db_path, output_format),
         "traverse_graph" => tool_traverse_graph(args, repo_root, db_path, output_format),
         "get_minimal_context" => tool_get_minimal_context(args, repo_root, db_path, output_format),
         "explain_change" => tool_explain_change(args, repo_root, db_path, output_format),

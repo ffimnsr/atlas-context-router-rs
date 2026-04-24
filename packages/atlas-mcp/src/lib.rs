@@ -14,6 +14,7 @@
 //! | `get_context`             | General context engine: symbol, file, review, impact     |
 //! | `detect_changes`          | Git diff → changed-file list with per-file node counts   |
 //! | `build_or_update_graph`   | Full graph build or incremental graph update             |
+//! | `postprocess_graph`       | Explicit derived-analytics refresh after build/update    |
 //! | `traverse_graph`          | Reachability walk from qualified name                    |
 //! | `get_minimal_context`     | Compact auto-detected review context                     |
 //! | `explain_change`          | Advanced impact: risk, change kinds, boundary/test gaps  |

@@ -7,6 +7,7 @@ mod helpers;
 mod history;
 mod lifecycle;
 mod mutation;
+mod postprocess;
 mod retrieval;
 mod search;
 mod taxonomy;

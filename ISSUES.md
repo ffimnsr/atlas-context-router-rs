@@ -1169,27 +1169,27 @@ Atlas already exposes query scores, active query mode, global `explain_query` ra
 
 #### Patch Q1 — Result-level ranking evidence model
 
-- [ ] add compact `RankingEvidence` / `ScoreEvidence` model for ranked retrieval results
-- [ ] attach evidence to graph/search result structs without replacing numeric score
+- [x] add compact `RankingEvidence` / `ScoreEvidence` model for ranked retrieval results
+- [x] attach evidence to graph/search result structs without replacing numeric score
 - [ ] include fields for:
-  - [ ] base retrieval mode (`fts5`, `regex_structural_scan`, `vector`, `hybrid`, `graph_expand`)
-  - [ ] raw score before boosts when available
-  - [ ] final score
-  - [ ] matched fields (`name`, `qualified_name`, `file_path`, `content`, `embedding`)
-  - [ ] exact name match
-  - [ ] exact qualified-name match
-  - [ ] prefix match
-  - [ ] fuzzy correction and edit distance
-  - [ ] kind boost
-  - [ ] public/exported boost
-  - [ ] same-directory boost
-  - [ ] same-language boost
-  - [ ] recent-file boost
-  - [ ] changed-file boost
-  - [ ] graph expansion hop distance
-  - [ ] hybrid/RRF contributing sources and ranks
-- [ ] keep evidence compact and stable for MCP JSON output
-- [ ] add serde round-trip tests for evidence schema
+  - [x] base retrieval mode (`fts5`, `regex_structural_scan`, `vector`, `hybrid`, `graph_expand`)
+  - [x] raw score before boosts when available
+  - [x] final score
+  - [x] matched fields (`name`, `qualified_name`, `file_path`, `content`, `embedding`)
+  - [x] exact name match
+  - [x] exact qualified-name match
+  - [x] prefix match
+  - [x] fuzzy correction and edit distance
+  - [x] kind boost
+  - [x] public/exported boost
+  - [x] same-directory boost
+  - [x] same-language boost
+  - [x] recent-file boost
+  - [x] changed-file boost
+  - [x] graph expansion hop distance
+  - [x] hybrid/RRF contributing sources and ranks
+- [x] keep evidence compact and stable for MCP JSON output
+- [x] add serde round-trip tests for evidence schema
 
 Why:
 - agents need to know why a result won, not only that it scored higher
@@ -1197,19 +1197,19 @@ Why:
 
 #### Patch Q2 — Capture evidence during ranking
 
-- [ ] update `apply_ranking_boosts` to record which boosts fired per result
-- [ ] update fuzzy relaxed-candidate path to record:
-  - [ ] corrected/matched term
-  - [ ] edit distance
-  - [ ] fuzzy threshold
-- [ ] update exact-hit merge path to preserve exact-match evidence
-- [ ] update graph expansion to record hop distance and seed source
-- [ ] update hybrid/RRF merge to record:
-  - [ ] FTS rank contribution
-  - [ ] vector rank contribution
-  - [ ] RRF score contribution
-- [ ] ensure evidence survives result merging and deduplication
-- [ ] add tests for each evidence source and merge precedence
+- [x] update `apply_ranking_boosts` to record which boosts fired per result
+- [x] update fuzzy relaxed-candidate path to record:
+  - [x] corrected/matched term
+  - [x] edit distance
+  - [x] fuzzy threshold
+- [x] update exact-hit merge path to preserve exact-match evidence
+- [x] update graph expansion to record hop distance and seed source
+- [x] update hybrid/RRF merge to record:
+  - [x] FTS rank contribution
+  - [x] vector rank contribution
+  - [x] RRF score contribution
+- [x] ensure evidence survives result merging and deduplication
+- [x] add tests for each evidence source and merge precedence
 
 Why:
 - evidence must be produced at scoring time while the ranking decision is known
@@ -1217,15 +1217,15 @@ Why:
 
 #### Patch Q3 — Surface evidence in CLI and MCP retrieval outputs
 
-- [ ] include ranking evidence in MCP `query_graph` results
-- [ ] include ranking evidence in MCP `batch_query_graph` per-query results
-- [ ] include ranking evidence in `explain_query` matches
-- [ ] include ranking evidence in CLI `atlas query --json`
-- [ ] keep human CLI output compact:
-  - [ ] show score as today
-  - [ ] optionally show top evidence labels when verbose/debug mode is enabled
-- [ ] document stable evidence labels and meanings
-- [ ] add snapshot tests for MCP output shape
+- [x] include ranking evidence in MCP `query_graph` results
+- [x] include ranking evidence in MCP `batch_query_graph` per-query results
+- [x] include ranking evidence in `explain_query` matches
+- [x] include ranking evidence in CLI `atlas query --json`
+- [x] keep human CLI output compact:
+  - [x] show score as today
+  - [x] optionally show top evidence labels when verbose/debug mode is enabled
+- [x] document stable evidence labels and meanings
+- [x] add snapshot tests for MCP output shape
 
 Why:
 - query-mode observability should be part of normal retrieval output, not only debug output
@@ -1233,17 +1233,17 @@ Why:
 
 #### Patch Q4 — Evidence contract for context and review ranking
 
-- [ ] decide whether review/context `relevance_score` also gets evidence
-- [ ] if yes, add context-ranking evidence for:
-  - [ ] direct target
-  - [ ] changed symbol
-  - [ ] caller/callee neighbor
-  - [ ] test adjacency
-  - [ ] impact-score contribution
-  - [ ] saved-context/session boost
-- [ ] surface context-ranking evidence only where payload budget allows
-- [ ] document whether graph search evidence and context relevance evidence are separate contracts
-- [ ] add tests for direct target and changed-file evidence in context results
+- [x] decide whether review/context `relevance_score` also gets evidence
+- [x] if yes, add context-ranking evidence for:
+  - [x] direct target
+  - [x] changed symbol
+  - [x] caller/callee neighbor
+  - [x] test adjacency
+  - [x] impact-score contribution
+  - [x] saved-context/session boost
+- [x] surface context-ranking evidence only where payload budget allows
+- [x] document whether graph search evidence and context relevance evidence are separate contracts
+- [x] add tests for direct target and changed-file evidence in context results
 
 Why:
 - search ranking and context ranking are related but not identical
@@ -1251,12 +1251,12 @@ Why:
 
 #### Patch Q completion criteria
 
-- [ ] every ranked graph/search result can include compact structured ranking evidence
-- [ ] query boosts, fuzzy correction, graph expansion, and hybrid/RRF all record evidence
-- [ ] MCP `query_graph`, `batch_query_graph`, and `explain_query` expose evidence
-- [ ] CLI JSON exposes evidence without bloating human output
-- [ ] evidence labels are documented and covered by tests
-- [ ] context/review relevance evidence is explicitly included or deferred with documented rationale
+- [x] every ranked graph/search result can include compact structured ranking evidence
+- [x] query boosts, fuzzy correction, graph expansion, and hybrid/RRF all record evidence
+- [x] MCP `query_graph`, `batch_query_graph`, and `explain_query` expose evidence
+- [x] CLI JSON exposes evidence without bloating human output
+- [x] evidence labels are documented and covered by tests
+- [x] context/review relevance evidence is explicitly included or deferred with documented rationale
 
 ---
 
@@ -1426,27 +1426,27 @@ Why:
 
 #### Patch PS3 — Explicit postprocess command parity
 
-- [ ] define postprocess orchestration service for derived graph analytics:
-  - [ ] run after build/update without reparsing source files
-  - [ ] refresh derived analytics such as flows, communities, architecture metrics, query hints, and large-function summaries
-  - [ ] support full and changed-only modes where data dependencies allow
-  - [ ] record started/finished/failed state and per-stage counts/durations
-  - [ ] keep failures bounded and machine-readable
-- [ ] add CLI surface:
-  - [ ] `atlas postprocess`
-  - [ ] `atlas postprocess --changed-only`
-  - [ ] `atlas postprocess --stage <name>`
-  - [ ] `--json`, `--dry-run`, and stable error contract
-- [ ] add MCP `postprocess_graph`:
-  - [ ] same stage/mode controls as CLI JSON
-  - [ ] compact stage summary by default
-  - [ ] provenance, readiness, and freshness metadata
-- [ ] add CLI/MCP parity tests:
-  - [ ] no-op repo with no graph
-  - [ ] full postprocess after build
-  - [ ] changed-only postprocess after update
-  - [ ] single-stage execution
-  - [ ] stage failure surfaces same error code in CLI JSON and MCP
+- [x] define postprocess orchestration service for derived graph analytics:
+  - [x] run after build/update without reparsing source files
+  - [x] refresh derived analytics such as flows, communities, architecture metrics, query hints, and large-function summaries
+  - [x] support full and changed-only modes where data dependencies allow
+  - [x] record started/finished/failed state and per-stage counts/durations
+  - [x] keep failures bounded and machine-readable
+- [x] add CLI surface:
+  - [x] `atlas postprocess`
+  - [x] `atlas postprocess --changed-only`
+  - [x] `atlas postprocess --stage <name>`
+  - [x] `--json`, `--dry-run`, and stable error contract
+- [x] add MCP `postprocess_graph`:
+  - [x] same stage/mode controls as CLI JSON
+  - [x] compact stage summary by default
+  - [x] provenance, readiness, and freshness metadata
+- [x] add CLI/MCP parity tests:
+  - [x] no-op repo with no graph
+  - [x] full postprocess after build
+  - [x] changed-only postprocess after update
+  - [x] single-stage execution
+  - [x] stage failure surfaces same error code in CLI JSON and MCP
 
 Why:
 - build/update should stay focused on scan, parse, and persistence

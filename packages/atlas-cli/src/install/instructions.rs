@@ -53,6 +53,7 @@ Do not treat `query_graph` as caller/callee search. Fall back to file tools **on
 | `get_review_context` | Build review bundle with symbols, neighbors, edges, and risk summary |
 | `detect_changes` | Ask Atlas for changed files instead of shelling out to git |
 | `build_or_update_graph` | Trigger full graph build or incremental update |
+| `postprocess_graph` | Refresh derived graph analytics after build/update without reparsing |
 | `traverse_graph` | Walk callers, callees, and nearby nodes from known qualified name |
 | `get_minimal_context` | Get lower-token review context with auto-detected changes |
 | `explain_change` | Get deterministic risk analysis, change kinds, and test gaps |

@@ -431,7 +431,14 @@ pub fn run_context(cli: &Cli) -> Result<()> {
         let result = engine.build(&request).context("context engine failed")?;
 
         if cli.json {
-            print_json("context", serde_json::to_value(&result)?)?;
+            let mut value = serde_json::to_value(&result)?;
+            if let Some(object) = value.as_object_mut() {
+                object.insert(
+                    "context_ranking_evidence_legend".to_owned(),
+                    atlas_core::context_ranking_evidence_legend(),
+                );
+            }
+            print_json("context", value)?;
         } else {
             println!("{}", format_context_output(&result));
         }

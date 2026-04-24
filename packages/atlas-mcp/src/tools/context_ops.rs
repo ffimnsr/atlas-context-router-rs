@@ -17,6 +17,10 @@ use super::shared::{
 };
 use crate::context::{enforce_mcp_response_budget, package_context_result, package_impact};
 
+fn context_ranking_evidence_legend_json() -> serde_json::Value {
+    atlas_core::context_ranking_evidence_legend()
+}
+
 #[derive(Clone, Copy)]
 enum ChangeSourceMode {
     ExplicitFiles,
@@ -175,6 +179,17 @@ fn trim_context_response_metadata(response: &mut serde_json::Value, max_bytes: u
         .unwrap_or(0)
         > max_bytes
     {
+        if response
+            .get("atlas_context_ranking_evidence_legend")
+            .is_some()
+        {
+            response
+                .as_object_mut()
+                .expect("response object")
+                .remove("atlas_context_ranking_evidence_legend");
+            continue;
+        }
+
         let removed_context_file = response
             .get_mut("atlas_context_files")
             .and_then(serde_json::Value::as_array_mut)
@@ -339,7 +354,8 @@ pub(super) fn tool_get_review_context(
         ..ContextRequest::default()
     };
     let result = engine.build(&request).context("context engine failed")?;
-    let packaged = package_context_result(&result);
+    let include_context_ranking_evidence = output_format == crate::output::OutputFormat::Json;
+    let packaged = package_context_result(&result, include_context_ranking_evidence);
     let mut packaged_value = serde_json::to_value(&packaged)?;
     let response_budget_limit = policy
         .mcp_cli_payload_serialization
@@ -364,6 +380,9 @@ pub(super) fn tool_get_review_context(
         result.budget.clone()
     };
     let mut response = tool_result_value(&packaged_value, output_format)?;
+    if include_context_ranking_evidence {
+        response["atlas_context_ranking_evidence_legend"] = context_ranking_evidence_legend_json();
+    }
     inject_budget_metadata(&mut response, &stage_budget);
     inject_change_source_metadata(&mut response, &resolved);
     let _ = ensure_final_response_budget(
@@ -879,7 +898,8 @@ pub(super) fn tool_get_context(
         engine.build(&request).context("context engine failed")?
     };
 
-    let packaged = package_context_result(&result);
+    let include_context_ranking_evidence = output_format == crate::output::OutputFormat::Json;
+    let packaged = package_context_result(&result, include_context_ranking_evidence);
     let mut packaged_value = serde_json::to_value(&packaged)?;
     let context_files: Vec<String> = match &request.target {
         ContextTarget::ChangedFiles { paths } => paths.clone(),
@@ -931,6 +951,9 @@ pub(super) fn tool_get_context(
         result.budget.clone()
     };
     let mut response = tool_result_value(&packaged_value, output_format)?;
+    if include_context_ranking_evidence {
+        response["atlas_context_ranking_evidence_legend"] = context_ranking_evidence_legend_json();
+    }
     response["atlas_context_files"] = serde_json::json!(context_files);
 
     // Emit applied-controls metadata so agents can inspect what was included/excluded.

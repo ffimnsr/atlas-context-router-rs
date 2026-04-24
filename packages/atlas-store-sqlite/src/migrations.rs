@@ -58,4 +58,8 @@ pub const MIGRATIONS: &[Migration] = &[
         version: 12,
         sql: include_str!("migrations/012_snapshot_membership_blobs.sql"),
     },
+    Migration {
+        version: 13,
+        sql: include_str!("migrations/013_postprocess_state.sql"),
+    },
 ];

@@ -369,6 +369,13 @@ fn symbol_context_seed_is_direct_target() {
         .unwrap();
     assert_eq!(seed_node.selection_reason, SelectionReason::DirectTarget);
     assert_eq!(seed_node.distance, 0);
+    let evidence = seed_node
+        .context_ranking_evidence
+        .as_ref()
+        .expect("direct target evidence");
+    assert!(evidence.direct_target);
+    assert_eq!(evidence.base_score, Some(seed_node.relevance_score));
+    assert_eq!(evidence.final_score, Some(seed_node.relevance_score));
 }
 
 #[test]
@@ -388,6 +395,58 @@ fn symbol_context_include_tests_flag() {
     assert!(
         qnames.contains(&"tests/test_a.rs::test_fn_a"),
         "test node missing"
+    );
+    let test_node = result
+        .nodes
+        .iter()
+        .find(|n| n.node.qualified_name == "tests/test_a.rs::test_fn_a")
+        .expect("test node");
+    assert!(
+        test_node
+            .context_ranking_evidence
+            .as_ref()
+            .is_some_and(|e| e.test_adjacent),
+        "test-adjacent node must record context ranking evidence"
+    );
+}
+
+#[test]
+fn review_context_records_changed_symbol_and_impact_evidence() {
+    let mut store = open_store();
+    seed_graph(&mut store);
+
+    let req = ContextRequest {
+        intent: ContextIntent::Review,
+        target: ContextTarget::ChangedFiles {
+            paths: vec!["src/a.rs".to_string()],
+        },
+        ..ContextRequest::default()
+    };
+
+    let result =
+        super::build::build_review_context(&store, &req, &BudgetPolicy::default()).unwrap();
+    let changed = result
+        .nodes
+        .iter()
+        .find(|node| node.node.qualified_name == "src/a.rs::fn_a")
+        .expect("changed symbol in review context");
+    let changed_evidence = changed
+        .context_ranking_evidence
+        .as_ref()
+        .expect("changed symbol evidence");
+    assert!(changed_evidence.direct_target);
+    assert!(changed_evidence.changed_symbol);
+    assert!(
+        changed_evidence
+            .impact_score_contribution
+            .unwrap_or_default()
+            > 0.0,
+        "changed symbol must record impact contribution"
+    );
+    assert!(
+        changed_evidence.final_score.unwrap_or_default()
+            >= changed_evidence.base_score.unwrap_or_default(),
+        "impact contribution must not decrease final score"
     );
 }
 
@@ -897,6 +956,7 @@ fn saved_context_cap_drops_low_ranked_sources() {
             preview: "A".repeat(200),
             retrieval_hint: "source_id=src-1".to_owned(),
             relevance_score: 10.0,
+            context_ranking_evidence: None,
         },
         SavedContextSource {
             source_id: "src-2".to_owned(),
@@ -906,6 +966,7 @@ fn saved_context_cap_drops_low_ranked_sources() {
             preview: "B".repeat(200),
             retrieval_hint: "source_id=src-2".to_owned(),
             relevance_score: 1.0,
+            context_ranking_evidence: None,
         },
     ];
 
@@ -1067,6 +1128,7 @@ fn source_mix_lists_saved_artifacts_when_present() {
         preview: "preview".to_owned(),
         retrieval_hint: "source_id=s1".to_owned(),
         relevance_score: 5.0,
+        context_ranking_evidence: None,
     }];
     super::payload::apply_payload_budgets(&mut result, &BudgetPolicy::default());
 

@@ -224,6 +224,7 @@ mod tests {
             selection_reason: reason,
             distance: 0,
             relevance_score: 0.0,
+            context_ranking_evidence: None,
         }
     }
 
@@ -281,6 +282,7 @@ mod tests {
                 preview: String::new(),
                 retrieval_hint: String::new(),
                 relevance_score: primitives.rank_score(0),
+                context_ranking_evidence: None,
             },
             SavedContextSource {
                 source_id: "a".to_string(),
@@ -290,6 +292,7 @@ mod tests {
                 preview: String::new(),
                 retrieval_hint: String::new(),
                 relevance_score: primitives.rank_score(0) + primitives.same_session_bonus,
+                context_ranking_evidence: None,
             },
         ];
 
@@ -309,6 +312,7 @@ mod tests {
                 preview: String::new(),
                 retrieval_hint: String::new(),
                 relevance_score: 10.0,
+                context_ranking_evidence: None,
             },
             SavedContextSource {
                 source_id: "a".to_string(),
@@ -318,6 +322,7 @@ mod tests {
                 preview: String::new(),
                 retrieval_hint: String::new(),
                 relevance_score: 10.0,
+                context_ranking_evidence: None,
             },
         ];
 

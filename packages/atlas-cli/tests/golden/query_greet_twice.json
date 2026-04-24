@@ -41,7 +41,36 @@
         "file_hash": "<hash>",
         "extra_json": null
       },
+      "ranking_evidence": {
+        "base_mode": "fts5",
+        "raw_score": 0.0,
+        "final_score": 0.0,
+        "matched_fields": [
+          "name"
+        ],
+        "exact_name_match": true,
+        "kind_boost": 3.0,
+        "public_exported_boost": 2.0
+      },
       "score": 0.0
     }
-  ]
+  ],
+  "ranking_evidence_legend": {
+    "base_mode": "Base retrieval path that produced initial score: fts5, regex_structural_scan, vector, hybrid, or graph_expand.",
+    "changed_file_boost": "Boost from current changed-file membership.",
+    "exact_name_match": "Result name exactly matched query text.",
+    "exact_qualified_name_match": "Result qualified_name exactly matched query text.",
+    "final_score": "Final score after boosts, graph expansion, or hybrid fusion.",
+    "fuzzy": "Fuzzy correction metadata: corrected_term, edit_distance, and fuzzy_threshold.",
+    "graph_expansion": "Graph expansion metadata: hop_distance and seed_qualified_name.",
+    "hybrid_rrf": "Hybrid fusion metadata: per-source rank and reciprocal-rank score contribution.",
+    "kind_boost": "Boost from preferred symbol kind ranking.",
+    "matched_fields": "Fields that directly matched query evidence such as name, qualified_name, file_path, content, or embedding.",
+    "prefix_match": "Result name matched query text as prefix.",
+    "public_exported_boost": "Boost from public/exported API visibility.",
+    "raw_score": "Score before later ranking boosts or merges when available.",
+    "recent_file_boost": "Boost from recently indexed file status.",
+    "same_directory_boost": "Boost from same-directory proximity to reference file.",
+    "same_language_boost": "Boost from same-language proximity to reference language."
+  }
 }

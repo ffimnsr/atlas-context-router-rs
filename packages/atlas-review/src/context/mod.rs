@@ -17,10 +17,10 @@ pub(super) use atlas_contentstore::{
 pub(super) use atlas_core::{
     BudgetManager, BudgetPolicy, BudgetReport, Result,
     model::{
-        AmbiguityMeta, ContextRequest, ContextResult, ContextTarget, NoiseReductionSummary,
-        SavedContextSource, SeedBudgetMeta, SelectedEdge, SelectedFile, SelectedNode,
-        SelectionReason, TruncationMeta, WorkflowCallChain, WorkflowComponent, WorkflowFocusNode,
-        WorkflowSummary,
+        AmbiguityMeta, ContextRankingEvidence, ContextRequest, ContextResult, ContextTarget,
+        NoiseReductionSummary, SavedContextSource, SeedBudgetMeta, SelectedEdge, SelectedFile,
+        SelectedNode, SelectionReason, TruncationMeta, WorkflowCallChain, WorkflowComponent,
+        WorkflowFocusNode, WorkflowSummary,
     },
 };
 pub(super) use atlas_store_sqlite::Store;

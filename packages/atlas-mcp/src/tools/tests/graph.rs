@@ -978,6 +978,43 @@ fn query_graph_response_includes_query_mode() {
 }
 
 #[test]
+fn query_graph_json_includes_ranking_evidence_and_legend() {
+    let fixture = setup_mcp_fixture();
+    let args = serde_json::json!({ "text": "compute", "output_format": "json" });
+    let resp =
+        call("query_graph", Some(&args), "/repo", &fixture.db_path).expect("query_graph call");
+    let text = unwrap_tool_text(resp.clone());
+    let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
+    let first = v
+        .as_array()
+        .and_then(|items| items.first())
+        .expect("first result");
+    assert!(first.get("ranking_evidence").is_some());
+    assert_eq!(
+        first["ranking_evidence"]["base_mode"].as_str(),
+        Some("fts5")
+    );
+    assert!(resp.get("atlas_ranking_evidence_legend").is_some());
+    assert!(resp["atlas_ranking_evidence_legend"]["exact_name_match"].is_string());
+}
+
+#[test]
+fn batch_query_graph_json_includes_ranking_evidence() {
+    let fixture = setup_mcp_fixture();
+    let args = serde_json::json!({
+        "queries": [{ "text": "compute" }],
+        "output_format": "json"
+    });
+    let resp = call("batch_query_graph", Some(&args), "/repo", &fixture.db_path)
+        .expect("batch_query_graph call");
+    let text = unwrap_tool_text(resp.clone());
+    let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
+    let first = &v.as_array().expect("batch results")[0]["items"][0];
+    assert!(first.get("ranking_evidence").is_some());
+    assert!(resp.get("atlas_ranking_evidence_legend").is_some());
+}
+
+#[test]
 fn explain_query_reports_active_query_mode_and_ranking_factors() {
     let fixture = setup_mcp_fixture();
     let args = serde_json::json!({ "text": "compute", "fuzzy": true, "output_format": "json" });
@@ -994,6 +1031,19 @@ fn explain_query_reports_active_query_mode_and_ranking_factors() {
             .iter()
             .any(|f| f.as_str() == Some("fuzzy_edit_distance_boost"))
     );
+}
+
+#[test]
+fn explain_query_matches_include_ranking_evidence() {
+    let fixture = setup_mcp_fixture();
+    let args = serde_json::json!({ "text": "compute", "output_format": "json" });
+    let resp =
+        call("explain_query", Some(&args), "/repo", &fixture.db_path).expect("explain_query call");
+    let text = unwrap_tool_text(resp.clone());
+    let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
+    let first = &v["matches"].as_array().expect("matches")[0];
+    assert!(first.get("ranking_evidence").is_some());
+    assert!(resp.get("atlas_ranking_evidence_legend").is_some());
 }
 
 #[test]

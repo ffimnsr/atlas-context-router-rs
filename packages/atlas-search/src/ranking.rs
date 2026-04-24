@@ -79,8 +79,8 @@ mod tests {
     use atlas_core::{Node, NodeId};
 
     fn scored_node(name: &str, qn: &str) -> ScoredNode {
-        ScoredNode {
-            node: Node {
+        ScoredNode::new(
+            Node {
                 id: NodeId::UNSET,
                 kind: NodeKind::Function,
                 name: name.to_string(),
@@ -97,8 +97,8 @@ mod tests {
                 file_hash: String::new(),
                 extra_json: serde_json::Value::Null,
             },
-            score: 1.0,
-        }
+            1.0,
+        )
     }
 
     #[test]

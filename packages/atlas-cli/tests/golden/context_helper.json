@@ -20,8 +20,27 @@
     "token_budget": null
   },
   "ambiguity": null,
+  "context_ranking_evidence_legend": {
+    "base_score": "Initial context relevance score before impact or saved-context additive boosts.",
+    "callee_neighbor": "Item was included as a callee of the target or neighbor.",
+    "caller_neighbor": "Item was included as a caller of the target or neighbor.",
+    "changed_symbol": "Item is a changed symbol selected from changed-file or impact review seeds.",
+    "contract_scope": "Separate from retrieval ranking evidence: retrieval evidence explains why a result matched search, while context ranking evidence explains why a node, edge, or saved artifact was included and ranked inside a bounded context or review result.",
+    "direct_target": "Item is the primary target resolved from the request.",
+    "final_score": "Final context relevance score after all recorded contributions.",
+    "impact_score_contribution": "Additive contribution from impact analysis weighting in review or impact context.",
+    "recent_source_boost": "Additive boost for recently created saved-context artifacts.",
+    "same_session_boost": "Additive boost for saved-context artifacts from the active session.",
+    "saved_context_rank_score": "Base saved-context ranking contribution derived from retrieval rank.",
+    "test_adjacent": "Item was included because of test adjacency."
+  },
   "edges": [
     {
+      "context_ranking_evidence": {
+        "base_score": 88.0,
+        "callee_neighbor": true,
+        "final_score": 88.0
+      },
       "depth": 1,
       "edge": {
         "confidence": 0.800000011920929,
@@ -42,6 +61,11 @@
       "selection_reason": "callee"
     },
     {
+      "context_ranking_evidence": {
+        "base_score": 86.5,
+        "caller_neighbor": true,
+        "final_score": 86.5
+      },
       "depth": 1,
       "edge": {
         "confidence": 0.6499999761581421,
@@ -80,6 +104,11 @@
   ],
   "nodes": [
     {
+      "context_ranking_evidence": {
+        "base_score": 121.0,
+        "direct_target": true,
+        "final_score": 121.0
+      },
       "distance": 0,
       "node": {
         "extra_json": null,
@@ -102,6 +131,11 @@
       "selection_reason": "direct_target"
     },
     {
+      "context_ranking_evidence": {
+        "base_score": 96.0,
+        "callee_neighbor": true,
+        "final_score": 96.0
+      },
       "distance": 1,
       "node": {
         "extra_json": null,
@@ -124,6 +158,11 @@
       "selection_reason": "callee"
     },
     {
+      "context_ranking_evidence": {
+        "base_score": 88.0,
+        "caller_neighbor": true,
+        "final_score": 88.0
+      },
       "distance": 1,
       "node": {
         "extra_json": null,

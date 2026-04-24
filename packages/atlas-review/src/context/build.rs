@@ -102,11 +102,15 @@ pub(super) fn build_review_context(
 
     for node in impact.changed_nodes {
         seen_qnames.insert(node.qualified_name.clone());
+        let mut evidence =
+            ContextRankingEvidence::from_selection_reason(SelectionReason::DirectTarget);
+        evidence.changed_symbol = true;
         nodes.push(SelectedNode {
             node,
             selection_reason: SelectionReason::DirectTarget,
             distance: 0,
             relevance_score: 0.0,
+            context_ranking_evidence: Some(evidence),
         });
     }
 
@@ -118,6 +122,9 @@ pub(super) fn build_review_context(
                 selection_reason: SelectionReason::ImpactNeighbor,
                 distance: 1,
                 relevance_score: 0.0,
+                context_ranking_evidence: Some(ContextRankingEvidence::from_selection_reason(
+                    SelectionReason::ImpactNeighbor,
+                )),
             });
         }
     }
@@ -131,11 +138,21 @@ pub(super) fn build_review_context(
                 || seen_qnames.contains(e.source_qn.as_str())
                 || seen_qnames.contains(e.target_qn.as_str())
         })
-        .map(|edge| SelectedEdge {
-            edge,
-            selection_reason: SelectionReason::ImpactNeighbor,
-            depth: None,
-            relevance_score: 0.0,
+        .map(|edge| {
+            let mut evidence =
+                ContextRankingEvidence::from_selection_reason(SelectionReason::ImpactNeighbor);
+            if changed_qns.contains(edge.source_qn.as_str())
+                || changed_qns.contains(edge.target_qn.as_str())
+            {
+                evidence.changed_symbol = true;
+            }
+            SelectedEdge {
+                edge,
+                selection_reason: SelectionReason::ImpactNeighbor,
+                depth: None,
+                relevance_score: 0.0,
+                context_ranking_evidence: Some(evidence),
+            }
         })
         .collect();
 
@@ -265,7 +282,15 @@ fn extract_changed_paths(request: &ContextRequest) -> Vec<String> {
 fn apply_impact_focus_scores(result: &mut ContextResult, impact_scores: &HashMap<String, f64>) {
     for node in &mut result.nodes {
         if let Some(score) = impact_scores.get(&node.node.qualified_name) {
-            node.relevance_score += (*score as f32) * 20.0;
+            let contribution = (*score as f32) * 20.0;
+            node.relevance_score += contribution;
+            let reason = node.selection_reason;
+            let evidence = node
+                .context_ranking_evidence
+                .get_or_insert_with(|| ContextRankingEvidence::from_selection_reason(reason));
+            evidence.impact_score_contribution =
+                Some(evidence.impact_score_contribution.unwrap_or(0.0) + contribution);
+            evidence.final_score = Some(node.relevance_score);
         }
     }
 
@@ -278,7 +303,15 @@ fn apply_impact_focus_scores(result: &mut ContextResult, impact_scores: &HashMap
             .get(&edge.edge.target_qn)
             .copied()
             .unwrap_or(0.0);
-        edge.relevance_score += ((source + target) as f32) * 5.0;
+        let contribution = ((source + target) as f32) * 5.0;
+        edge.relevance_score += contribution;
+        let reason = edge.selection_reason;
+        let evidence = edge
+            .context_ranking_evidence
+            .get_or_insert_with(|| ContextRankingEvidence::from_selection_reason(reason));
+        evidence.impact_score_contribution =
+            Some(evidence.impact_score_contribution.unwrap_or(0.0) + contribution);
+        evidence.final_score = Some(edge.relevance_score);
     }
 
     result.nodes.sort_by(|a, b| {

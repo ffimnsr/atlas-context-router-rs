@@ -7,8 +7,9 @@
 
 use atlas_core::BudgetReport;
 use atlas_core::model::{
-    ContextResult, ContextSourceMix, Edge, ImpactResult, Node, PayloadTruncationMeta,
-    SavedContextSource, SeedBudgetMeta, SelectedEdge, SelectedNode, TraversalBudgetMeta,
+    ContextRankingEvidence, ContextResult, ContextSourceMix, Edge, ImpactResult, Node,
+    PayloadTruncationMeta, SavedContextSource, SeedBudgetMeta, SelectedEdge, SelectedNode,
+    TraversalBudgetMeta,
 };
 use serde::Serialize;
 use serde_json::{Map, Value};
@@ -190,12 +191,16 @@ pub struct PackagedSavedSource<'a> {
     pub preview: &'a str,
     pub retrieval_hint: &'a str,
     pub relevance_score: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_ranking_evidence: Option<ContextRankingEvidence>,
 }
 
 #[derive(Serialize)]
 pub struct PackagedSelectedNode<'a> {
     pub reason: &'a str,
     pub distance: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_ranking_evidence: Option<ContextRankingEvidence>,
     #[serde(flatten)]
     pub node: CompactNode<'a>,
 }
@@ -203,6 +208,8 @@ pub struct PackagedSelectedNode<'a> {
 #[derive(Serialize)]
 pub struct PackagedSelectedEdge<'a> {
     pub reason: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_ranking_evidence: Option<ContextRankingEvidence>,
     pub from: &'a str,
     pub to: &'a str,
     pub kind: &'a str,
@@ -217,7 +224,10 @@ pub struct PackagedSelectedFile<'a> {
 }
 
 /// Package a [`ContextResult`] into an agent-optimized compact form.
-pub fn package_context_result(result: &ContextResult) -> PackagedContextResult<'_> {
+pub fn package_context_result(
+    result: &ContextResult,
+    include_ranking_evidence: bool,
+) -> PackagedContextResult<'_> {
     let intent_str = match result.request.intent {
         atlas_core::model::ContextIntent::Symbol => "symbol",
         atlas_core::model::ContextIntent::File => "file",
@@ -244,6 +254,9 @@ pub fn package_context_result(result: &ContextResult) -> PackagedContextResult<'
         .map(|sn: &SelectedNode| PackagedSelectedNode {
             reason: sn.selection_reason.as_str(),
             distance: sn.distance,
+            context_ranking_evidence: include_ranking_evidence
+                .then(|| sn.context_ranking_evidence.clone())
+                .flatten(),
             node: compact_node(&sn.node),
         })
         .collect();
@@ -252,6 +265,9 @@ pub fn package_context_result(result: &ContextResult) -> PackagedContextResult<'
         .iter()
         .map(|se: &SelectedEdge| PackagedSelectedEdge {
             reason: se.selection_reason.as_str(),
+            context_ranking_evidence: include_ranking_evidence
+                .then(|| se.context_ranking_evidence.clone())
+                .flatten(),
             from: &se.edge.source_qn,
             to: &se.edge.target_qn,
             kind: se.edge.kind.as_str(),
@@ -302,6 +318,9 @@ pub fn package_context_result(result: &ContextResult) -> PackagedContextResult<'
                 preview: &s.preview,
                 retrieval_hint: &s.retrieval_hint,
                 relevance_score: s.relevance_score,
+                context_ranking_evidence: include_ranking_evidence
+                    .then(|| s.context_ranking_evidence.clone())
+                    .flatten(),
             })
             .collect(),
         seed_budgets: &result.seed_budgets,
