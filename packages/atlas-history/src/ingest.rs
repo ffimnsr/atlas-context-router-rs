@@ -4,6 +4,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use atlas_store_sqlite::{Store, StoredCommit};
+use serde::Serialize;
 use tracing::warn;
 
 use crate::git::{self, GitCommitMeta};
@@ -11,7 +12,7 @@ use crate::select::CommitSelector;
 
 /// Error wrapper for ingest operations that want to continue on partial
 /// failures rather than aborting the whole run.
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize)]
 pub struct IngestError {
     pub commit_sha: Option<String>,
     pub message: String,
@@ -45,6 +46,7 @@ pub fn ingest_commits(
     canonical_root: &str,
     store: &Store,
     selector: &CommitSelector,
+    indexed_ref: Option<&str>,
 ) -> Result<IngestSummary> {
     let mut summary = IngestSummary::default();
 
@@ -71,7 +73,7 @@ pub fn ingest_commits(
 
     for meta in commits {
         summary.commits_processed += 1;
-        if let Err(e) = ingest_one(store, repo_id, &meta) {
+        if let Err(e) = ingest_one(store, repo_id, &meta, indexed_ref) {
             warn!("failed to ingest commit {}: {e}", meta.sha);
             summary.errors.push(IngestError {
                 commit_sha: Some(meta.sha.clone()),
@@ -83,11 +85,17 @@ pub fn ingest_commits(
     Ok(summary)
 }
 
-fn ingest_one(store: &Store, repo_id: i64, meta: &GitCommitMeta) -> Result<()> {
+fn ingest_one(
+    store: &Store,
+    repo_id: i64,
+    meta: &GitCommitMeta,
+    indexed_ref: Option<&str>,
+) -> Result<()> {
     let stored = StoredCommit {
         commit_sha: meta.sha.clone(),
         repo_id,
         parent_sha: meta.parent_sha.clone(),
+        indexed_ref: indexed_ref.map(str::to_owned),
         author_name: Some(meta.author_name.clone()),
         author_email: Some(meta.author_email.clone()),
         author_time: meta.author_time,

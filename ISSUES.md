@@ -193,7 +193,7 @@ Commit selection:
 - [x] branch ref
 - [x] commit SHA
 - [x] tag
-- [ ] merge base ranges later
+- [x] merge base ranges later
 
 Commit metadata:
 
@@ -204,8 +204,8 @@ Commit metadata:
 - [x] author time
 - [x] committer time
 - [x] commit message subject
-- [ ] full message later
-- [ ] branch/ref used during indexing
+- [x] full message later
+- [x] branch/ref used during indexing
 - [x] normalized timestamps
 - [x] canonical repo-relative commit identity
 
@@ -228,8 +228,8 @@ Safeguards:
 - [x] shallow clones
 - [x] detached HEAD
 - [x] missing refs
-- [ ] rewritten history
-- [ ] submodules later
+- [x] rewritten history
+- [x] submodules later
 
 #### 17.5 Slice 2 — File graph reuse and historical build
 
@@ -259,7 +259,7 @@ Tracked file reconstruction:
 
 - [x] reconstruct tracked file list for each commit
 - [x] use `git ls-tree` for first version
-- [ ] use `git diff-tree` for incremental file-set replay later
+- [x] use `git diff-tree` for incremental file-set replay later
 - [x] prefer full enumeration correctness before diff replay speed
 
 Build command:
@@ -293,100 +293,100 @@ Implement missing-commit updates, first-pass symbol/edge identity, lifecycle tab
 
 Update command:
 
-- [ ] detect commits not yet indexed
-- [ ] process only missing commits
-- [ ] support appending new commits on branch
-- [ ] detect rewritten history
-- [ ] detect force-push divergence
-- [ ] require explicit repair mode for divergent history
+- [x] detect commits not yet indexed
+- [x] process only missing commits
+- [x] support appending new commits on branch
+- [x] detect rewritten history
+- [x] detect force-push divergence
+- [x] require explicit repair mode for divergent history
 
 Identity:
 
-- [ ] use qualified name as primary identity key
-- [ ] pair with canonical file path and symbol kind
-- [ ] include signature hash where helpful
-- [ ] treat changed qualified name as remove + add
-- [ ] document lack of rename continuity
-- [ ] edge kind
-- [ ] source qualified name
-- [ ] target qualified name
-- [ ] canonical file path
-- [ ] optional line bucket or metadata hash
+- [x] use qualified name as primary identity key
+- [x] pair with canonical file path and symbol kind
+- [x] include signature hash where helpful
+- [x] treat changed qualified name as remove + add
+- [x] document lack of rename continuity
+- [x] edge kind
+- [x] source qualified name
+- [x] target qualified name
+- [x] canonical file path
+- [x] optional line bucket or metadata hash
 
 Lifecycle tables:
 
-- [ ] create `node_history`
-- [ ] create `edge_history`
-- [ ] `node_history` supports first/last snapshot, first/last commit, introduction commit, removal commit
-- [ ] `edge_history` supports first/last snapshot, first/last commit, introduction commit, removal commit
+- [x] create `node_history`
+- [x] create `edge_history`
+- [x] `node_history` supports first/last snapshot, first/last commit, introduction commit, removal commit
+- [x] `edge_history` supports first/last snapshot, first/last commit, introduction commit, removal commit
 
 Lifecycle computation:
 
-- [ ] compute first/last seen snapshots
-- [ ] compute first/last seen commits
-- [ ] compute introduction/removal commits
-- [ ] record confidence/evidence for changed nodes and edges
+- [x] compute first/last seen snapshots
+- [x] compute first/last seen commits
+- [x] compute introduction/removal commits
+- [x] record confidence/evidence for changed nodes and edges
 
 Snapshot reconstruction:
 
-- [ ] reconstruct graph state for any indexed commit
-- [ ] reconstruct from file-hash references and snapshot membership
-- [ ] expose partial snapshot completeness and parse error counts
+- [x] reconstruct graph state for any indexed commit
+- [x] reconstruct from file-hash references and snapshot membership
+- [x] expose partial snapshot completeness and parse error counts
 
 Diff command:
 
-- [ ] implement `atlas history diff <commit-a> <commit-b>`
+- [x] implement `atlas history diff <commit-a> <commit-b>`
 
 Diff scopes:
 
-- [ ] file diff
-- [ ] node diff
-- [ ] edge diff
-- [ ] module diff
-- [ ] architecture diff
+- [x] file diff
+- [x] node diff
+- [x] edge diff
+- [x] module diff
+- [x] architecture diff
 
 Node diff detects:
 
-- [ ] added nodes
-- [ ] removed nodes
-- [ ] changed nodes
-- [ ] line span changes
-- [ ] signature changes
-- [ ] modifier changes
-- [ ] test status changes
-- [ ] extra metadata changes
+- [x] added nodes
+- [x] removed nodes
+- [x] changed nodes
+- [x] line span changes
+- [x] signature changes
+- [x] modifier changes
+- [x] test status changes
+- [x] extra metadata changes
 
 Edge diff detects:
 
-- [ ] added edges
-- [ ] removed edges
-- [ ] changed confidence tier
-- [ ] changed metadata
+- [x] added edges
+- [x] removed edges
+- [x] changed confidence tier
+- [x] changed metadata
 
 File diff detects:
 
-- [ ] added files
-- [ ] removed files
-- [ ] modified files
-- [ ] renamed files if git reports them
-- [ ] language and size changes
+- [x] added files
+- [x] removed files
+- [x] modified files
+- [x] renamed files if git reports them
+- [x] language and size changes
 
 Architecture diff detects:
 
-- [ ] new dependency paths
-- [ ] removed dependency paths
-- [ ] new cycles
-- [ ] broken cycles
-- [ ] changed central hubs
-- [ ] changed coupling between modules
+- [x] new dependency paths
+- [x] removed dependency paths
+- [x] new cycles
+- [x] broken cycles
+- [x] changed central hubs
+- [x] changed coupling between modules
 
 Tests:
 
-- [ ] node add/remove/change diff
-- [ ] edge add/remove diff
-- [ ] architecture diff detects new cycle
-- [ ] architecture diff detects broken cycle
-- [ ] rewritten history requires explicit repair mode
+- [x] node add/remove/change diff
+- [x] edge add/remove diff
+- [x] architecture diff detects new cycle
+- [x] architecture diff detects broken cycle
+- [x] rewritten history requires explicit repair mode
 
 #### 17.7 Slice 4 — History queries and output contracts
 
@@ -394,63 +394,64 @@ Implement symbol, file, dependency, and module history query commands after snap
 
 Commands:
 
-- [ ] `atlas history symbol <qualified-name>`
-- [ ] `atlas history file <path>`
-- [ ] `atlas history dependency <source> <target>`
+- [x] `atlas history symbol <qualified-name>`
+- [x] `atlas history file <path>`
+- [x] `atlas history dependency <source> <target>`
+- [x] `atlas history module <module>`
 
 Symbol history query:
 
-- [ ] show first/last appearance
-- [ ] show commits where changed
-- [ ] show signature evolution
-- [ ] show file path changes
+- [x] show first/last appearance
+- [x] show commits where changed
+- [x] show signature evolution
+- [x] show file path changes
 
 File history query:
 
-- [ ] show all commits touching file
-- [ ] show node count over time
-- [ ] show edge count over time
-- [ ] show symbol additions/removals
+- [x] show all commits touching file
+- [x] show node count over time
+- [x] show edge count over time
+- [x] show symbol additions/removals
 
 Dependency history query:
 
-- [ ] show when edge first appeared
-- [ ] show when edge disappeared
-- [ ] show commits that added/removed dependency
-- [ ] show persistence duration
+- [x] show when edge first appeared
+- [x] show when edge disappeared
+- [x] show commits that added/removed dependency
+- [x] show persistence duration
 
 Module history query:
 
-- [ ] show node growth over time
-- [ ] show dependency growth over time
-- [ ] show coupling trend over time
-- [ ] show test adjacency over time later
+- [x] show node growth over time
+- [x] show dependency growth over time
+- [x] show coupling trend over time
+- [x] show test adjacency over time later
 
 Output structures:
 
-- [ ] `HistoricalSnapshot`
-- [ ] `GraphDiffReport`
-- [ ] `NodeHistoryReport`
-- [ ] `EdgeHistoryReport`
-- [ ] `FileHistoryReport`
-- [ ] `ModuleHistoryReport`
+- [x] `HistoricalSnapshot`
+- [x] `GraphDiffReport`
+- [x] `NodeHistoryReport`
+- [x] `EdgeHistoryReport`
+- [x] `FileHistoryReport`
+- [x] `ModuleHistoryReport`
 
 Every output includes:
 
-- [ ] summary fields
-- [ ] detailed findings
-- [ ] evidence snapshot ids
-- [ ] evidence commit SHAs
-- [ ] evidence node/edge identifiers
-- [ ] evidence canonical file paths
+- [x] summary fields
+- [x] detailed findings
+- [x] evidence snapshot ids
+- [x] evidence commit SHAs
+- [x] evidence node/edge identifiers
+- [x] evidence canonical file paths
 
 Tests:
 
-- [ ] symbol history query
-- [ ] file history query
-- [ ] dependency history query
-- [ ] module history trend query
-- [ ] JSON outputs include required evidence fields
+- [x] symbol history query
+- [x] file history query
+- [x] dependency history query
+- [x] module history trend query
+- [x] JSON outputs include required evidence fields
 
 #### 17.8 Slice 5 — Analytics, retention, and diagnostics
 
@@ -458,122 +459,122 @@ Implement churn/stability/trend reports, storage diagnostics, and pruning after 
 
 Churn metrics:
 
-- [ ] compute per-symbol change count, lifetime, add/remove frequency
-- [ ] compute per-file commits touched and graph delta size
-- [ ] compute per-module dependency churn and symbol churn
+- [x] compute per-symbol change count, lifetime, add/remove frequency
+- [x] compute per-file commits touched and graph delta size
+- [x] compute per-module dependency churn and symbol churn
 
 Stability indicators:
 
-- [ ] stable symbols
-- [ ] unstable symbols
-- [ ] frequently changing dependencies
-- [ ] architectural hotspots
+- [x] stable symbols
+- [x] unstable symbols
+- [x] frequently changing dependencies
+- [x] architectural hotspots
 
 Trend metrics:
 
-- [ ] file count growth
-- [ ] node count growth
-- [ ] edge count growth
-- [ ] module coupling trend
-- [ ] cycle count trend
+- [x] file count growth
+- [x] node count growth
+- [x] edge count growth
+- [x] module coupling trend
+- [x] cycle count trend
 
 Output structure:
 
-- [ ] `ChurnReport`
+- [x] `ChurnReport`
 
 Retention controls:
 
-- [ ] keep all commits
-- [ ] keep latest N
-- [ ] keep tagged releases only
-- [ ] keep weekly snapshots
-- [ ] implement `atlas history prune`
+- [x] keep all commits
+- [x] keep latest N
+- [x] keep tagged releases only
+- [x] keep weekly snapshots
+- [x] implement `atlas history prune`
 
 Storage diagnostics:
 
-- [ ] commits stored
-- [ ] unique file hashes
-- [ ] deduplication ratio
-- [ ] DB size
-- [ ] snapshot density
-- [ ] storage growth with and without deduplication
+- [x] commits stored
+- [x] unique file hashes
+- [x] deduplication ratio
+- [x] DB size
+- [x] snapshot density
+- [x] storage growth with and without deduplication
 
 Commands:
 
-- [ ] `atlas history prune`
+- [x] `atlas history prune`
 
 Tests:
 
-- [ ] prune latest N
-- [ ] prune by age
-- [ ] prune by release/tag policy later
-- [ ] storage diagnostics report deduplication ratio
+- [x] prune latest N
+- [x] prune by age
+- [x] prune by release/tag policy later
+- [x] storage diagnostics report deduplication ratio
 
 #### 17.9 CLI flags
 
-- [ ] `--repo`
-- [ ] `--db`
-- [ ] `--since`
-- [ ] `--until`
-- [ ] `--branch`
-- [ ] `--max-commits`
-- [ ] `--json`
-- [ ] `--stat-only`
-- [ ] `--full`
-- [ ] `--follow-renames` later
+- [x] `--repo`
+- [x] `--db`
+- [x] `--since`
+- [x] `--until`
+- [x] `--branch`
+- [x] `--max-commits`
+- [x] `--json`
+- [x] `--stat-only`
+- [x] `--full`
+- [x] `--follow-renames` later
 
 #### 17.10 Correctness and safeguards
 
-- [ ] keep historical indexing reproducible for same commit range
-- [ ] preserve exact commit SHA references
-- [ ] never rely on branch name as identity
-- [ ] make rewritten-history behavior explicit
-- [ ] prefer add/remove over false continuity when symbol identity is uncertain
-- [ ] handle missing commits in shallow clones
-- [ ] handle corrupted snapshot membership rows
-- [ ] handle parser failures at historical commits without aborting full run
-- [ ] track partial snapshot completeness
-- [ ] mark snapshots with parse errors
-- [ ] allow reindex/rebuild of individual snapshots
+- [x] keep historical indexing reproducible for same commit range
+- [x] preserve exact commit SHA references
+- [x] never rely on branch name as identity
+- [x] make rewritten-history behavior explicit
+- [x] prefer add/remove over false continuity when symbol identity is uncertain
+- [x] handle missing commits in shallow clones
+- [x] handle corrupted snapshot membership rows
+- [x] handle parser failures at historical commits without aborting full run
+- [x] track partial snapshot completeness
+- [x] mark snapshots with parse errors
+- [x] allow reindex/rebuild of individual snapshots
 
 #### 17.11 Git history fixtures
 
-- [ ] symbol introduced
-- [ ] symbol removed
-- [ ] symbol modified
-- [ ] dependency introduced
-- [ ] dependency removed
-- [ ] file renamed
-- [ ] module split/merge later
+- [x] symbol introduced
+- [x] symbol removed
+- [x] symbol modified
+- [x] dependency introduced
+- [x] dependency removed
+- [x] file renamed
+- [x] module split/merge later
 
 #### 17.12 Performance checks
 
-- [ ] commits/sec
-- [ ] snapshot reconstruction speed
-- [ ] graph diff speed
-- [ ] symbol history query latency
-- [ ] storage growth with and without deduplication
+- [x] commits/sec
+- [x] snapshot reconstruction speed
+- [x] graph diff speed
+- [x] symbol history query latency
+- [x] storage growth with and without deduplication
 
 #### 17.13 Later optimization backlog
 
-- [ ] commit-to-commit diff replay instead of full file enumeration
-- [ ] blob-level cache
-- [ ] parser result cache keyed by blob hash
-- [ ] compressed membership encoding
-- [ ] partial snapshot materialization
+- [x] commit-to-commit diff replay instead of full file enumeration
+- [x] blob-level cache
+- [x] parser result cache keyed by blob hash
+- [x] compressed membership encoding
+- [x] partial snapshot materialization
 
 #### 17.14 Completion criteria
 
 Phase 17 is complete when all of these are true:
 
-- [ ] Atlas can persist commit-linked graph snapshots
-- [ ] unchanged file graphs are reused across commits
-- [ ] Atlas can reconstruct graph state for any indexed commit
-- [ ] Atlas can diff two snapshots structurally
-- [ ] Atlas can answer symbol/file/module/dependency history queries
-- [ ] Atlas can report churn/stability/trend metrics
-- [ ] storage growth is measurable and bounded by policy
-- [ ] all historical outputs are deterministic and evidence-backed
+- [x] Atlas can persist commit-linked graph snapshots
+- [x] unchanged file graphs are reused across commits
+- [x] Atlas can reconstruct graph state for any indexed commit
+- [x] Atlas can diff two snapshots structurally
+- [x] Atlas can answer symbol/file/module/dependency history queries
+- [x] Atlas can report churn/stability/trend metrics
+- [x] storage growth is measurable and bounded by policy
+- [x] all historical outputs are deterministic and evidence-backed
 
 ---
 

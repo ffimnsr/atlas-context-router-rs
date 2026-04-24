@@ -13,8 +13,8 @@ mod taxonomy;
 
 pub use self::build_state::{BuildFinishStats, GraphBuildState, GraphBuildStatus};
 pub use self::history::{
-    HistoricalEdge, HistoricalNode, HistoryStatusSummary, StoredCommit, StoredSnapshot,
-    StoredSnapshotFile,
+    HistoricalEdge, HistoricalNode, HistoryStatusSummary, StoredCommit, StoredEdgeHistory,
+    StoredNodeHistory, StoredSnapshot, StoredSnapshotFile, StoredSnapshotMembershipBlob,
 };
 
 type DanglingEdge = (i64, String, String, String, &'static str);

@@ -8,9 +8,12 @@ use serde::Serialize;
 pub struct HistoryStatus {
     pub indexed_commit_count: i64,
     pub snapshot_count: i64,
+    pub partial_snapshot_count: i64,
+    pub parse_error_snapshot_count: i64,
     pub latest_commit_sha: Option<String>,
     pub latest_commit_subject: Option<String>,
     pub latest_author_time: Option<i64>,
+    pub latest_indexed_ref: Option<String>,
     /// Non-empty when the repo has not been registered yet.
     pub warnings: Vec<String>,
 }
@@ -30,9 +33,12 @@ impl HistoryStatus {
         HistoryStatus {
             indexed_commit_count: summary.indexed_commit_count,
             snapshot_count: summary.snapshot_count,
+            partial_snapshot_count: summary.partial_snapshot_count,
+            parse_error_snapshot_count: summary.parse_error_snapshot_count,
             latest_commit_sha: summary.latest_commit_sha,
             latest_commit_subject: summary.latest_commit_subject,
             latest_author_time: summary.latest_author_time,
+            latest_indexed_ref: summary.latest_indexed_ref,
             warnings,
         }
     }

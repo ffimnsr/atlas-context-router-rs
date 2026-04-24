@@ -8,6 +8,7 @@ use std::process::{Output, Stdio};
 
 mod analysis;
 mod health;
+mod history;
 mod hooks;
 mod query;
 mod review;

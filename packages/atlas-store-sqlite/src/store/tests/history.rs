@@ -1,5 +1,7 @@
-use crate::store::history::{HistoricalEdge, HistoricalNode, StoredCommit, StoredSnapshotFile};
-use crate::store::tests::open_in_memory;
+use crate::store::history::{
+    HistoricalEdge, HistoricalNode, StoredCommit, StoredSnapshotFile, StoredSnapshotMembershipBlob,
+};
+use crate::store::tests::{open_file_backed, open_in_memory};
 
 #[test]
 fn upsert_repo_is_idempotent() {
@@ -27,6 +29,7 @@ fn commit_metadata_stored_and_retrieved_correctly() {
         commit_sha: sha.clone(),
         repo_id,
         parent_sha: Some(parent.clone()),
+        indexed_ref: Some("refs/heads/main".into()),
         author_name: Some("Alice".into()),
         author_email: Some("alice@example.com".into()),
         author_time: 1_700_000_000,
@@ -43,11 +46,16 @@ fn commit_metadata_stored_and_retrieved_correctly() {
         .expect("commit must exist");
     assert_eq!(found.commit_sha, sha);
     assert_eq!(found.parent_sha.as_deref(), Some(parent.as_str()));
+    assert_eq!(found.indexed_ref.as_deref(), Some("refs/heads/main"));
     assert_eq!(found.author_name.as_deref(), Some("Alice"));
     assert_eq!(found.author_email.as_deref(), Some("alice@example.com"));
     assert_eq!(found.author_time, 1_700_000_000);
     assert_eq!(found.committer_time, 1_700_000_001);
     assert_eq!(found.subject, "feat: add widget");
+    assert_eq!(
+        found.message.as_deref(),
+        Some("feat: add widget\n\nLonger body.")
+    );
 }
 
 #[test]
@@ -60,6 +68,7 @@ fn commit_upsert_replaces_on_duplicate_key() {
         commit_sha: sha.clone(),
         repo_id,
         parent_sha: None,
+        indexed_ref: None,
         author_name: Some("Alice".into()),
         author_email: None,
         author_time: 1_000,
@@ -135,8 +144,35 @@ fn snapshot_files_stored_and_keyed_by_snapshot_id() {
         },
     ];
     store.insert_snapshot_files(&files).unwrap();
-    // No assertion on read-back — write must not error. Full read-back is
-    // added when Slice 2 implements snapshot_files queries.
+    let found = store.list_snapshot_files(sid).unwrap();
+    assert_eq!(found.len(), 2);
+    assert_eq!(found[0].file_path, "src/lib.rs");
+    assert_eq!(found[1].file_path, "src/main.rs");
+}
+
+#[test]
+fn snapshot_membership_blobs_round_trip() {
+    let store = open_in_memory();
+    let repo_id = store.upsert_repo("/repos/blob-membership").unwrap();
+    let sha = "ab".repeat(20);
+    let snapshot_id = store
+        .insert_snapshot(repo_id, &sha, None, 1, 1, 1, 1.0, 0)
+        .unwrap();
+
+    store
+        .insert_snapshot_membership_blobs(&[StoredSnapshotMembershipBlob {
+            snapshot_id,
+            file_path: "src/lib.rs".into(),
+            file_hash: "cd".repeat(20),
+            node_membership: "crate::alpha\ncrate::beta".into(),
+            edge_membership: "crate::alpha\tcrate::beta\tcalls".into(),
+        }])
+        .unwrap();
+
+    let blobs = store.list_snapshot_membership_blobs(snapshot_id).unwrap();
+    assert_eq!(blobs.len(), 1);
+    assert_eq!(blobs[0].file_path, "src/lib.rs");
+    assert!(blobs[0].node_membership.contains("crate::alpha"));
 }
 
 #[test]
@@ -146,6 +182,8 @@ fn history_status_returns_zeroes_for_unknown_repo() {
     assert!(status.repo_id.is_none());
     assert_eq!(status.indexed_commit_count, 0);
     assert_eq!(status.snapshot_count, 0);
+    assert_eq!(status.partial_snapshot_count, 0);
+    assert_eq!(status.parse_error_snapshot_count, 0);
     assert!(status.latest_commit_sha.is_none());
 }
 
@@ -161,6 +199,7 @@ fn history_status_counts_correctly_after_ingest() {
             commit_sha: sha.clone(),
             repo_id,
             parent_sha: None,
+            indexed_ref: Some("HEAD".into()),
             author_name: None,
             author_email: None,
             author_time: i as i64 * 1000,
@@ -170,14 +209,27 @@ fn history_status_counts_correctly_after_ingest() {
             indexed_at: String::new(),
         };
         store.upsert_commit(&commit).unwrap();
+        let (completeness, parse_error_count) = if i == 1 { (0.5, 2) } else { (1.0, 0) };
         store
-            .insert_snapshot(repo_id, &sha, None, 0, 0, 0, 1.0, 0)
+            .insert_snapshot(
+                repo_id,
+                &sha,
+                None,
+                0,
+                0,
+                0,
+                completeness,
+                parse_error_count,
+            )
             .unwrap();
     }
 
     let status = store.history_status(root).unwrap();
     assert_eq!(status.indexed_commit_count, 3);
     assert_eq!(status.snapshot_count, 3);
+    assert_eq!(status.partial_snapshot_count, 1);
+    assert_eq!(status.parse_error_snapshot_count, 1);
+    assert_eq!(status.latest_indexed_ref.as_deref(), Some("HEAD"));
     // latest by author_time desc — sha "00..02" has highest time
     let latest = status.latest_commit_sha.unwrap();
     assert_eq!(&latest, &format!("{:040}", 2u8));
@@ -291,6 +343,28 @@ fn list_historical_edge_keys_returns_all() {
 }
 
 #[test]
+fn list_historical_nodes_and_edges_for_hash_round_trip() {
+    let store = open_in_memory();
+    let hash = "ef".repeat(20);
+    let nodes = vec![
+        make_node(&hash, "crate::alpha"),
+        make_node(&hash, "crate::beta"),
+    ];
+    let edges = vec![make_edge(&hash, "crate::alpha", "crate::beta")];
+    store.insert_historical_nodes(&nodes).unwrap();
+    store.insert_historical_edges(&edges).unwrap();
+
+    assert_eq!(
+        store.list_historical_nodes_for_hash(&hash).unwrap().len(),
+        2
+    );
+    assert_eq!(
+        store.list_historical_edges_for_hash(&hash).unwrap().len(),
+        1
+    );
+}
+
+#[test]
 fn get_historical_file_language_returns_language() {
     let store = open_in_memory();
     let hash = "1".repeat(40);
@@ -377,6 +451,47 @@ fn unchanged_file_graph_reused_across_snapshots() {
 }
 
 #[test]
+fn database_size_bytes_reports_non_zero_for_file_backed_store() {
+    let (_dir, _path, store) = open_file_backed();
+    assert!(store.database_size_bytes().unwrap() > 0);
+}
+
+#[test]
+fn prune_orphan_historical_file_graphs_removes_unreferenced_hashes() {
+    let store = open_in_memory();
+    let repo_id = store.upsert_repo("/repos/prune-history").unwrap();
+    let sha = "ff".repeat(20);
+    let snapshot_id = store
+        .insert_snapshot(repo_id, &sha, None, 1, 0, 1, 1.0, 0)
+        .unwrap();
+
+    let kept_hash = "11".repeat(20);
+    let orphan_hash = "22".repeat(20);
+    store
+        .insert_historical_nodes(&[
+            make_node(&kept_hash, "crate::kept"),
+            make_node(&orphan_hash, "crate::orphan"),
+        ])
+        .unwrap();
+    store
+        .insert_snapshot_files(&[StoredSnapshotFile {
+            snapshot_id,
+            file_path: "src/lib.rs".into(),
+            file_hash: kept_hash.clone(),
+            language: Some("rust".into()),
+            size: Some(16),
+        }])
+        .unwrap();
+
+    let (hashes, nodes, edges) = store.prune_orphan_historical_file_graphs().unwrap();
+    assert_eq!(hashes, 1);
+    assert_eq!(nodes, 1);
+    assert_eq!(edges, 0);
+    assert_eq!(store.count_historical_nodes(&kept_hash).unwrap(), 1);
+    assert_eq!(store.count_historical_nodes(&orphan_hash).unwrap(), 0);
+}
+
+#[test]
 fn modified_file_creates_new_membership_state() {
     let store = open_in_memory();
     let repo_id = store.upsert_repo("/repos/modified").unwrap();
@@ -418,4 +533,90 @@ fn modified_file_creates_new_membership_state() {
     assert_eq!(store.count_snapshot_nodes(sid2).unwrap(), 2);
     assert_eq!(store.count_historical_nodes(&hash_v1).unwrap(), 1);
     assert_eq!(store.count_historical_nodes(&hash_v2).unwrap(), 2);
+}
+
+#[test]
+fn node_and_edge_history_round_trip() {
+    let store = open_in_memory();
+    let repo_id = store.upsert_repo("/repos/history-round-trip").unwrap();
+    let first_commit = "a".repeat(40);
+    let second_commit = "b".repeat(40);
+    let removal_commit = "c".repeat(40);
+
+    for (sha, time) in [
+        (&first_commit, 1_i64),
+        (&second_commit, 2_i64),
+        (&removal_commit, 3_i64),
+    ] {
+        store
+            .upsert_commit(&StoredCommit {
+                commit_sha: sha.clone(),
+                repo_id,
+                parent_sha: None,
+                indexed_ref: None,
+                author_name: None,
+                author_email: None,
+                author_time: time,
+                committer_time: time,
+                subject: sha.clone(),
+                message: None,
+                indexed_at: String::new(),
+            })
+            .unwrap();
+    }
+    let first_snapshot_id = store
+        .insert_snapshot(repo_id, &first_commit, None, 0, 0, 0, 1.0, 0)
+        .unwrap();
+    let second_snapshot_id = store
+        .insert_snapshot(repo_id, &second_commit, None, 0, 0, 0, 1.0, 0)
+        .unwrap();
+
+    store
+        .replace_node_history(
+            repo_id,
+            &[crate::store::history::StoredNodeHistory {
+                repo_id,
+                qualified_name: "crate::alpha".into(),
+                file_path: "src/lib.rs".into(),
+                kind: "function".into(),
+                signature_hash: Some("sig".into()),
+                first_snapshot_id,
+                last_snapshot_id: second_snapshot_id,
+                first_commit_sha: first_commit.clone(),
+                last_commit_sha: second_commit.clone(),
+                introduction_commit_sha: first_commit.clone(),
+                removal_commit_sha: Some(removal_commit.clone()),
+                confidence: 1.0,
+                evidence_json: Some("{}".into()),
+            }],
+        )
+        .unwrap();
+    store
+        .replace_edge_history(
+            repo_id,
+            &[crate::store::history::StoredEdgeHistory {
+                repo_id,
+                source_qn: "crate::alpha".into(),
+                target_qn: "crate::beta".into(),
+                kind: "calls".into(),
+                file_path: "src/lib.rs".into(),
+                metadata_hash: Some("meta".into()),
+                first_snapshot_id,
+                last_snapshot_id: second_snapshot_id,
+                first_commit_sha: first_commit,
+                last_commit_sha: second_commit,
+                introduction_commit_sha: "a".repeat(40),
+                removal_commit_sha: None,
+                confidence: 1.0,
+                evidence_json: Some("{}".into()),
+            }],
+        )
+        .unwrap();
+
+    let nodes = store.list_node_history(repo_id).unwrap();
+    let edges = store.list_edge_history(repo_id).unwrap();
+    assert_eq!(nodes.len(), 1);
+    assert_eq!(edges.len(), 1);
+    assert_eq!(nodes[0].qualified_name, "crate::alpha");
+    assert_eq!(edges[0].target_qn, "crate::beta");
 }

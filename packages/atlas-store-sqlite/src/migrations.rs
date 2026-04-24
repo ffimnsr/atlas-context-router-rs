@@ -46,4 +46,16 @@ pub const MIGRATIONS: &[Migration] = &[
         version: 9,
         sql: include_str!("migrations/009_historical_file_graphs.sql"),
     },
+    Migration {
+        version: 10,
+        sql: include_str!("migrations/010_history_lifecycle.sql"),
+    },
+    Migration {
+        version: 11,
+        sql: include_str!("migrations/011_history_indexed_ref.sql"),
+    },
+    Migration {
+        version: 12,
+        sql: include_str!("migrations/012_snapshot_membership_blobs.sql"),
+    },
 ];

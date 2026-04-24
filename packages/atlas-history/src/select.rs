@@ -6,7 +6,7 @@
 
 use std::path::Path;
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 
 use crate::git::{self, GitCommitMeta};
 
@@ -33,6 +33,20 @@ pub enum CommitSelector {
 }
 
 impl CommitSelector {
+    pub fn source_ref_label(&self) -> Option<String> {
+        match self {
+            CommitSelector::Latest { start_ref } | CommitSelector::Bounded { start_ref, .. } => {
+                Some(start_ref.clone())
+            }
+            CommitSelector::Range { range } => Some(range.clone()),
+            CommitSelector::Explicit { .. } => None,
+        }
+    }
+
+    pub fn prefers_oldest_first(&self) -> bool {
+        !matches!(self, CommitSelector::Explicit { .. })
+    }
+
     /// Resolve the selector to an ordered list of commit metadata.
     ///
     /// "Ordered" is most-recent-first, matching `git log` defaults, except
@@ -68,17 +82,33 @@ impl CommitSelector {
             }
 
             CommitSelector::Range { range } => {
-                // Reject ranges that look like shell injection attempts.
-                if range
-                    .chars()
-                    .any(|c| matches!(c, '&' | '|' | ';' | '$' | '`' | '\n' | '\r'))
-                {
-                    bail!("unsafe characters in commit range: {:?}", range);
+                validate_range(range)?;
+                if let Some((left, right)) = range.split_once("...") {
+                    let left = left.trim();
+                    let right = right.trim();
+                    if left.is_empty() || right.is_empty() {
+                        bail!("invalid merge-base range: {:?}", range);
+                    }
+                    let base = git::merge_base(repo, left, right).with_context(|| {
+                        format!("resolve merge base for range {left}...{right}")
+                    })?;
+                    let log_range = format!("{base}..{right}");
+                    return git::log_commits(repo, &log_range, None, None, None);
                 }
                 git::log_commits(repo, range, None, None, None)
             }
         }
     }
+}
+
+fn validate_range(range: &str) -> Result<()> {
+    if range
+        .chars()
+        .any(|c| matches!(c, '&' | '|' | ';' | '$' | '`' | '\n' | '\r'))
+    {
+        bail!("unsafe characters in commit range: {:?}", range);
+    }
+    Ok(())
 }
 
 #[cfg(test)]

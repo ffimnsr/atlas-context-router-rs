@@ -38,6 +38,12 @@ pub struct TreeEntry {
     pub file_path: String,
 }
 
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct TagRef {
+    pub name: String,
+    pub commit_sha: String,
+}
+
 // ── internal helpers ──────────────────────────────────────────────────────────
 
 fn run(repo: &Path, args: &[&str]) -> Result<Output> {
@@ -70,6 +76,14 @@ pub fn rev_parse(repo: &Path, r#ref: &str) -> Result<String> {
     Ok(sha)
 }
 
+/// Resolve merge base of two refs to a full 40-char SHA.
+pub fn merge_base(repo: &Path, left: &str, right: &str) -> Result<String> {
+    let out = run(repo, &["merge-base", left, right])?;
+    let sha = ok_stdout(out, "merge-base")?.trim().to_owned();
+    validate_sha(&sha).context("merge-base returned invalid SHA")?;
+    Ok(sha)
+}
+
 /// Check if the repo is a shallow clone.
 pub fn is_shallow(repo: &Path) -> Result<bool> {
     let out = run(repo, &["rev-parse", "--is-shallow-repository"])?;
@@ -93,7 +107,7 @@ pub fn log_commits(
 ) -> Result<Vec<GitCommitMeta>> {
     // Format: RS-delimited records, each field separated by NUL.
     // %H  %P  %an  %ae  %at  %ct  %s  %b
-    let format = "--format=\x1e%H\x00%P\x00%an\x00%ae\x00%at\x00%ct\x00%s\x00%b";
+    let format = "--format=%x1e%H%x00%P%x00%an%x00%ae%x00%at%x00%ct%x00%s%x00%b";
     let mut args: Vec<String> = vec!["log".into(), format.into()];
 
     if let Some(n) = max_count {
@@ -119,7 +133,7 @@ pub fn log_commits_explicit(repo: &Path, shas: &[String]) -> Result<Vec<GitCommi
     let mut result = Vec::with_capacity(shas.len());
     for sha in shas {
         validate_sha(sha).with_context(|| format!("invalid SHA in explicit list: {sha}"))?;
-        let format = "--format=\x1e%H\x00%P\x00%an\x00%ae\x00%at\x00%ct\x00%s\x00%b";
+        let format = "--format=%x1e%H%x00%P%x00%an%x00%ae%x00%at%x00%ct%x00%s%x00%b";
         let out = run(repo, &["log", "-1", format, sha])?;
         let raw = ok_stdout(out, "log -1")?;
         let mut commits = parse_log_output(&raw)?;
@@ -209,6 +223,26 @@ pub fn show_file(repo: &Path, commit_sha: &str, path: &str) -> Result<Option<Vec
 pub fn ls_tree(repo: &Path, commit_sha: &str) -> Result<Vec<TreeEntry>> {
     validate_sha(commit_sha)?;
     let out = run(repo, &["ls-tree", "-r", "--full-tree", commit_sha])?;
+    let raw = ok_stdout(out, "ls-tree")?;
+    parse_ls_tree(&raw)
+}
+
+/// List tracked entries for selected repo-relative paths at `commit_sha`.
+pub fn ls_tree_paths(repo: &Path, commit_sha: &str, paths: &[String]) -> Result<Vec<TreeEntry>> {
+    validate_sha(commit_sha)?;
+    if paths.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut args = vec![
+        "ls-tree".to_owned(),
+        "-r".to_owned(),
+        "--full-tree".to_owned(),
+        commit_sha.to_owned(),
+        "--".to_owned(),
+    ];
+    args.extend(paths.iter().cloned());
+    let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
+    let out = run(repo, &arg_refs)?;
     let raw = ok_stdout(out, "ls-tree")?;
     parse_ls_tree(&raw)
 }
@@ -313,6 +347,42 @@ pub fn commit_tree_hash(repo: &Path, commit_sha: &str) -> Result<String> {
         }
     }
     bail!("no tree line in cat-file output for {commit_sha}");
+}
+
+/// List all tag refs resolved to commit SHAs.
+///
+/// Annotated tags are dereferenced via `show-ref --tags -d`; lightweight tags
+/// are included as-is. Duplicate commit/name pairs are removed.
+pub fn list_tag_refs(repo: &Path) -> Result<Vec<TagRef>> {
+    let out = run(repo, &["show-ref", "--tags", "-d"])?;
+    let raw = ok_stdout(out, "show-ref --tags -d")?;
+    let mut seen = std::collections::BTreeSet::new();
+    let mut tags = Vec::new();
+    for line in raw.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let mut parts = line.split_whitespace();
+        let Some(sha) = parts.next() else {
+            continue;
+        };
+        validate_sha(sha).with_context(|| format!("invalid tag SHA in show-ref output: {sha}"))?;
+        let Some(raw_ref) = parts.next() else {
+            continue;
+        };
+        let name = raw_ref
+            .trim_start_matches("refs/tags/")
+            .trim_end_matches("^{}")
+            .to_owned();
+        if seen.insert((name.clone(), sha.to_owned())) {
+            tags.push(TagRef {
+                name,
+                commit_sha: sha.to_owned(),
+            });
+        }
+    }
+    Ok(tags)
 }
 
 // ── SHA validation ─────────────────────────────────────────────────────────────

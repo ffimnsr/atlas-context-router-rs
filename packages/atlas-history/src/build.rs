@@ -11,24 +11,66 @@
 //! - Summarize commits processed, files reused, files parsed, nodes/edges
 //!   reused, and elapsed time.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::time::Instant;
 
 use anyhow::{Context, Result};
 use atlas_core::ParsedFile;
 use atlas_parser::ParserRegistry;
-use atlas_store_sqlite::{HistoricalEdge, HistoricalNode, Store, StoredSnapshotFile};
+use atlas_store_sqlite::{
+    HistoricalEdge, HistoricalNode, Store, StoredSnapshotFile, StoredSnapshotMembershipBlob,
+};
+use serde::Serialize;
 use tracing::{debug, warn};
 
 use crate::git;
 use crate::ingest::IngestError;
+use crate::lifecycle::{LifecycleSummary, recompute_lifecycle};
 use crate::select::CommitSelector;
 
 /// Number of bytes inspected for binary detection.
 const BINARY_SNIFF_BYTES: usize = 8 * 1024;
 
+type EdgeKey = (String, String, String);
+
+#[derive(Debug, Clone)]
+struct CachedFileGraph {
+    language: Option<String>,
+    size: Option<i64>,
+    node_count: usize,
+    edge_count: usize,
+    qualified_names: Vec<String>,
+    edge_keys: Vec<EdgeKey>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct BuildRunCache {
+    blob_bytes: BTreeMap<String, Vec<u8>>,
+    blob_graphs: BTreeMap<String, CachedFileGraph>,
+    binary_blobs: BTreeSet<String>,
+}
+
+#[derive(Debug, Clone)]
+struct SnapshotFileMembership {
+    file_path: String,
+    file_hash: String,
+    qualified_names: Vec<String>,
+    edge_keys: Vec<EdgeKey>,
+}
+
+struct BuildContext<'a> {
+    repo: &'a Path,
+    repo_id: i64,
+    store: &'a Store,
+    registry: &'a ParserRegistry,
+    indexed_ref: Option<&'a str>,
+    cache: &'a mut BuildRunCache,
+    summary: &'a mut BuildSummary,
+}
+
 /// Summary produced by [`build_historical_graph`].
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct BuildSummary {
     /// Total commits enumerated from the selector.
     pub commits_processed: usize,
@@ -48,8 +90,22 @@ pub struct BuildSummary {
     pub files_skipped: usize,
     /// Per-commit or per-file errors that did not abort the run.
     pub errors: Vec<IngestError>,
+    /// Non-fatal diagnostics the caller should surface to the user.
+    pub warnings: Vec<String>,
     /// Wall-clock duration for the entire build.
     pub elapsed_secs: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct SnapshotRebuildSummary {
+    pub commit_sha: String,
+    pub replaced_snapshot_id: i64,
+    pub rebuilt_snapshot_id: i64,
+    pub reclaimed_file_hashes: u64,
+    pub reclaimed_historical_nodes: u64,
+    pub reclaimed_historical_edges: u64,
+    pub build: BuildSummary,
+    pub lifecycle: LifecycleSummary,
 }
 
 /// Build historical graph snapshots for every commit selected by `selector`.
@@ -68,11 +124,20 @@ pub fn build_historical_graph(
     store: &Store,
     selector: &CommitSelector,
     registry: &ParserRegistry,
+    indexed_ref: Option<&str>,
 ) -> Result<BuildSummary> {
     let started = Instant::now();
     let mut summary = BuildSummary::default();
+    let mut cache = BuildRunCache::default();
 
-    let commits = selector.resolve(repo).context("resolve commit selector")?;
+    if let Some(warning) = shallow_build_warning(repo, selector) {
+        summary.warnings.push(warning);
+    }
+
+    let mut commits = selector.resolve(repo).context("resolve commit selector")?;
+    if selector.prefers_oldest_first() && commits.len() > 1 {
+        commits.reverse();
+    }
 
     if commits.is_empty() {
         summary.elapsed_secs = started.elapsed().as_secs_f64();
@@ -93,7 +158,17 @@ pub fn build_historical_graph(
             continue;
         }
 
-        if let Err(e) = process_commit(repo, repo_id, store, registry, meta, &mut summary) {
+        let selector_indexed_ref = selector.source_ref_label();
+        let mut ctx = BuildContext {
+            repo,
+            repo_id,
+            store,
+            registry,
+            indexed_ref: indexed_ref.or(selector_indexed_ref.as_deref()),
+            cache: &mut cache,
+            summary: &mut summary,
+        };
+        if let Err(e) = process_commit(&mut ctx, meta) {
             warn!("error processing commit {}: {e:#}", meta.sha);
             summary.errors.push(IngestError {
                 commit_sha: Some(meta.sha.clone()),
@@ -106,103 +181,152 @@ pub fn build_historical_graph(
     Ok(summary)
 }
 
-fn process_commit(
+pub fn rebuild_historical_snapshot(
     repo: &Path,
-    repo_id: i64,
+    canonical_root: &str,
     store: &Store,
+    commit_sha: &str,
     registry: &ParserRegistry,
-    meta: &git::GitCommitMeta,
-    summary: &mut BuildSummary,
-) -> Result<()> {
+    indexed_ref: Option<&str>,
+) -> Result<SnapshotRebuildSummary> {
+    let repo_id = store.find_repo_id(canonical_root)?.ok_or_else(|| {
+        anyhow::anyhow!("history not initialized; run `atlas history build` first")
+    })?;
+    let existing = store
+        .find_snapshot(repo_id, commit_sha)?
+        .ok_or_else(|| anyhow::anyhow!("snapshot not indexed for commit {commit_sha}"))?;
+
+    let mut commits = git::log_commits_explicit(repo, &[commit_sha.to_owned()])
+        .with_context(|| format!("resolve commit {commit_sha} for rebuild"))?;
+    let meta = commits
+        .pop()
+        .ok_or_else(|| anyhow::anyhow!("commit metadata missing for {commit_sha}"))?;
+
+    store.delete_history_snapshots(&[existing.snapshot_id])?;
+    let (reclaimed_file_hashes, reclaimed_historical_nodes, reclaimed_historical_edges) =
+        store.prune_orphan_historical_file_graphs()?;
+
+    let mut build = BuildSummary {
+        commits_processed: 1,
+        ..BuildSummary::default()
+    };
+    let mut cache = BuildRunCache::default();
+    let mut ctx = BuildContext {
+        repo,
+        repo_id,
+        store,
+        registry,
+        indexed_ref,
+        cache: &mut cache,
+        summary: &mut build,
+    };
+    process_commit(&mut ctx, &meta).with_context(|| format!("rebuild snapshot {commit_sha}"))?;
+
+    let rebuilt_snapshot_id = store
+        .find_snapshot(repo_id, commit_sha)?
+        .map(|snapshot| snapshot.snapshot_id)
+        .ok_or_else(|| anyhow::anyhow!("rebuilt snapshot missing for {commit_sha}"))?;
+    let lifecycle = recompute_lifecycle(canonical_root, store).context("recompute lifecycle")?;
+
+    Ok(SnapshotRebuildSummary {
+        commit_sha: commit_sha.to_owned(),
+        replaced_snapshot_id: existing.snapshot_id,
+        rebuilt_snapshot_id,
+        reclaimed_file_hashes,
+        reclaimed_historical_nodes,
+        reclaimed_historical_edges,
+        build,
+        lifecycle,
+    })
+}
+
+fn shallow_build_warning(repo: &Path, selector: &CommitSelector) -> Option<String> {
+    match git::is_shallow(repo) {
+        Ok(true) => match selector {
+            CommitSelector::Explicit { .. } => None,
+            _ => Some(
+                "shallow clone detected; build may omit older commits beyond fetched history. Fetch more history or use --commits with reachable SHAs.".to_owned(),
+            ),
+        },
+        Ok(false) => None,
+        Err(_) => None,
+    }
+}
+
+fn process_commit(ctx: &mut BuildContext<'_>, meta: &git::GitCommitMeta) -> Result<()> {
     // Resolve the root tree hash for this commit.
     let tree_ref = format!("{}^{{tree}}", meta.sha);
-    let root_tree_hash = git::rev_parse(repo, &tree_ref).ok();
+    let root_tree_hash = git::rev_parse(ctx.repo, &tree_ref).ok();
 
-    // List all blobs tracked at this commit.
-    let entries =
-        git::ls_tree(repo, &meta.sha).with_context(|| format!("ls-tree for {}", meta.sha))?;
+    let tracked_files = replay_snapshot_files(ctx.repo, ctx.repo_id, ctx.store, meta, ctx.summary)?
+        .unwrap_or(full_snapshot_files(ctx.repo, &meta.sha, ctx.summary)?);
 
     let mut snapshot_files: Vec<StoredSnapshotFile> = Vec::new();
-    type EdgeKey = (String, String, String);
-    let mut file_node_qns: Vec<(String, Vec<String>)> = Vec::new(); // (file_hash, [qn])
-    #[allow(clippy::type_complexity)]
-    let mut file_edge_keys: Vec<(String, Vec<EdgeKey>)> = Vec::new(); // (file_hash, [(src, tgt, kind)])
+    let mut file_memberships: Vec<SnapshotFileMembership> = Vec::new();
     let mut total_node_count: i64 = 0;
     let mut total_edge_count: i64 = 0;
     let mut parse_error_count: i64 = 0;
 
-    for entry in &entries {
-        if entry.object_type != "blob" {
-            continue;
-        }
-
-        // Canonicalize the repo-relative file path.
-        let rel_path = &entry.file_path;
-        let file_hash = &entry.object_hash;
+    for tracked_file in tracked_files {
+        let rel_path = &tracked_file.file_path;
+        let file_hash = &tracked_file.file_hash;
 
         // Try to detect language early via parser support.
-        if !registry.supports(rel_path) {
-            summary.files_skipped += 1;
+        if !ctx.registry.supports(rel_path) {
+            ctx.summary.files_skipped += 1;
             debug!(path = %rel_path, "no parser support, skipping");
             continue;
         }
 
-        let already_indexed = store
+        let already_indexed = ctx
+            .store
             .has_historical_file_graph(file_hash)
             .with_context(|| format!("has_historical_file_graph for {file_hash}"))?;
 
         if already_indexed {
-            // Count existing nodes/edges for summary.
-            let n = store.count_historical_nodes(file_hash)?;
-            let e = store.count_historical_edges(file_hash)?;
-            summary.files_reused += 1;
-            summary.nodes_reused += n as usize;
-            total_node_count += n;
-            total_edge_count += e;
-
-            // Determine language from existing node rows (best effort).
-            let lang: Option<String> = store.get_historical_file_language(file_hash)?;
+            let cached_graph = load_cached_file_graph(ctx.store, ctx.cache, file_hash)?;
+            ctx.summary.files_reused += 1;
+            ctx.summary.nodes_reused += cached_graph.node_count;
+            total_node_count += cached_graph.node_count as i64;
+            total_edge_count += cached_graph.edge_count as i64;
 
             snapshot_files.push(StoredSnapshotFile {
                 snapshot_id: 0, // filled after snapshot insert
                 file_path: rel_path.clone(),
                 file_hash: file_hash.clone(),
-                language: lang,
-                size: None,
+                language: tracked_file
+                    .language
+                    .or_else(|| cached_graph.language.clone()),
+                size: tracked_file.size.or(cached_graph.size),
             });
-
-            // Collect QNs for membership attachment.
-            let qns = store.list_historical_node_qns(file_hash)?;
-            let edges = store.list_historical_edge_keys(file_hash)?;
-            file_node_qns.push((file_hash.clone(), qns));
-            file_edge_keys.push((file_hash.clone(), edges));
+            file_memberships.push(SnapshotFileMembership {
+                file_path: rel_path.clone(),
+                file_hash: file_hash.clone(),
+                qualified_names: cached_graph.qualified_names.clone(),
+                edge_keys: cached_graph.edge_keys.clone(),
+            });
             continue;
         }
 
-        // Fetch file bytes from git object store.
-        let bytes = match git::show_file(repo, &meta.sha, rel_path)
-            .with_context(|| format!("git show {}:{}", meta.sha, rel_path))?
-        {
-            Some(b) => b,
-            None => {
-                // File was deleted or not present; skip gracefully.
-                summary.files_skipped += 1;
-                continue;
-            }
+        let Some(bytes) = load_blob_bytes(ctx.cache, ctx.repo, &meta.sha, rel_path, file_hash)?
+        else {
+            ctx.summary.files_skipped += 1;
+            continue;
         };
 
         // Binary detection: null byte in first BINARY_SNIFF_BYTES.
-        if is_binary_bytes(&bytes) {
-            summary.files_skipped += 1;
+        if ctx.cache.binary_blobs.contains(file_hash) || is_binary_bytes(&bytes) {
+            ctx.cache.binary_blobs.insert(file_hash.clone());
+            ctx.summary.files_skipped += 1;
             debug!(path = %rel_path, "binary file, skipping");
             continue;
         }
 
         // Parse the file.
-        let parsed = match registry.parse(rel_path, file_hash, &bytes, None) {
+        let parsed = match ctx.registry.parse(rel_path, file_hash, &bytes, None) {
             Some((pf, _tree)) => pf,
             None => {
-                summary.files_skipped += 1;
+                ctx.summary.files_skipped += 1;
                 continue;
             }
         };
@@ -213,19 +337,19 @@ fn process_commit(
         let language = parsed.language.clone();
 
         // Persist content-addressed nodes + edges.
-        if let Err(e) = persist_parsed_file(store, file_hash, rel_path, &parsed) {
+        if let Err(e) = persist_parsed_file(ctx.store, file_hash, rel_path, &parsed) {
             warn!("parse persist error for {rel_path} at {}: {e:#}", meta.sha);
             parse_error_count += 1;
-            summary.errors.push(IngestError {
+            ctx.summary.errors.push(IngestError {
                 commit_sha: Some(meta.sha.clone()),
                 message: format!("persist {rel_path}: {e:#}"),
             });
             continue;
         }
 
-        summary.files_parsed += 1;
-        summary.nodes_written += node_count;
-        summary.edges_written += edge_count;
+        ctx.summary.files_parsed += 1;
+        ctx.summary.nodes_written += node_count;
+        ctx.summary.edges_written += edge_count;
         total_node_count += node_count as i64;
         total_edge_count += edge_count as i64;
 
@@ -233,7 +357,7 @@ fn process_commit(
             snapshot_id: 0,
             file_path: rel_path.clone(),
             file_hash: file_hash.clone(),
-            language,
+            language: language.clone(),
             size: Some(size),
         });
 
@@ -253,8 +377,23 @@ fn process_commit(
                 )
             })
             .collect();
-        file_node_qns.push((file_hash.clone(), qns));
-        file_edge_keys.push((file_hash.clone(), edge_keys));
+        ctx.cache.blob_graphs.insert(
+            file_hash.clone(),
+            CachedFileGraph {
+                language,
+                size: Some(size),
+                node_count,
+                edge_count,
+                qualified_names: qns.clone(),
+                edge_keys: edge_keys.clone(),
+            },
+        );
+        file_memberships.push(SnapshotFileMembership {
+            file_path: rel_path.clone(),
+            file_hash: file_hash.clone(),
+            qualified_names: qns,
+            edge_keys,
+        });
     }
 
     let file_count = snapshot_files.len() as i64;
@@ -267,8 +406,9 @@ fn process_commit(
     // Insert commit metadata (idempotent).
     let stored_commit = atlas_store_sqlite::StoredCommit {
         commit_sha: meta.sha.clone(),
-        repo_id,
+        repo_id: ctx.repo_id,
         parent_sha: meta.parent_sha.clone(),
+        indexed_ref: ctx.indexed_ref.map(str::to_owned),
         author_name: Some(meta.author_name.clone()),
         author_email: Some(meta.author_email.clone()),
         author_time: meta.author_time,
@@ -281,13 +421,13 @@ fn process_commit(
         },
         indexed_at: String::new(),
     };
-    store
+    ctx.store
         .upsert_commit(&stored_commit)
         .context("upsert commit")?;
 
     // Insert graph snapshot.
-    let snapshot_id = store.insert_snapshot(
-        repo_id,
+    let snapshot_id = ctx.store.insert_snapshot(
+        ctx.repo_id,
         &meta.sha,
         root_tree_hash.as_deref(),
         total_node_count,
@@ -305,23 +445,249 @@ fn process_commit(
             f
         })
         .collect();
-    store
+    ctx.store
         .insert_snapshot_files(&fixed_files)
         .context("insert snapshot files")?;
 
     // Attach node and edge membership.
-    for (file_hash, qns) in &file_node_qns {
-        store
-            .attach_snapshot_nodes(snapshot_id, file_hash, qns)
-            .with_context(|| format!("attach snapshot nodes for {file_hash}"))?;
+    for membership in &file_memberships {
+        ctx.store
+            .attach_snapshot_nodes(
+                snapshot_id,
+                &membership.file_hash,
+                &membership.qualified_names,
+            )
+            .with_context(|| format!("attach snapshot nodes for {}", membership.file_hash))?;
     }
-    for (file_hash, edges) in &file_edge_keys {
-        store
-            .attach_snapshot_edges(snapshot_id, file_hash, edges)
-            .with_context(|| format!("attach snapshot edges for {file_hash}"))?;
+    for membership in &file_memberships {
+        ctx.store
+            .attach_snapshot_edges(snapshot_id, &membership.file_hash, &membership.edge_keys)
+            .with_context(|| format!("attach snapshot edges for {}", membership.file_hash))?;
     }
 
+    let membership_blobs = file_memberships
+        .into_iter()
+        .map(|membership| StoredSnapshotMembershipBlob {
+            snapshot_id,
+            file_path: membership.file_path,
+            file_hash: membership.file_hash,
+            node_membership: encode_node_membership(&membership.qualified_names),
+            edge_membership: encode_edge_membership(&membership.edge_keys),
+        })
+        .collect::<Vec<_>>();
+    ctx.store
+        .insert_snapshot_membership_blobs(&membership_blobs)
+        .context("insert snapshot membership blobs")?;
+
     Ok(())
+}
+
+fn load_blob_bytes(
+    cache: &mut BuildRunCache,
+    repo: &Path,
+    commit_sha: &str,
+    rel_path: &str,
+    file_hash: &str,
+) -> Result<Option<Vec<u8>>> {
+    if let Some(bytes) = cache.blob_bytes.get(file_hash) {
+        return Ok(Some(bytes.clone()));
+    }
+
+    let Some(bytes) = git::show_file(repo, commit_sha, rel_path)
+        .with_context(|| format!("git show {commit_sha}:{rel_path}"))?
+    else {
+        return Ok(None);
+    };
+    cache.blob_bytes.insert(file_hash.to_owned(), bytes.clone());
+    Ok(Some(bytes))
+}
+
+fn load_cached_file_graph(
+    store: &Store,
+    cache: &mut BuildRunCache,
+    file_hash: &str,
+) -> Result<CachedFileGraph> {
+    if let Some(graph) = cache.blob_graphs.get(file_hash) {
+        return Ok(graph.clone());
+    }
+
+    let graph = CachedFileGraph {
+        language: store.get_historical_file_language(file_hash)?,
+        size: None,
+        node_count: store.count_historical_nodes(file_hash)? as usize,
+        edge_count: store.count_historical_edges(file_hash)? as usize,
+        qualified_names: store.list_historical_node_qns(file_hash)?,
+        edge_keys: store.list_historical_edge_keys(file_hash)?,
+    };
+    cache
+        .blob_graphs
+        .insert(file_hash.to_owned(), graph.clone());
+    Ok(graph)
+}
+
+fn full_snapshot_files(
+    repo: &Path,
+    commit_sha: &str,
+    summary: &mut BuildSummary,
+) -> Result<Vec<StoredSnapshotFile>> {
+    let entries =
+        git::ls_tree(repo, commit_sha).with_context(|| format!("ls-tree for {commit_sha}"))?;
+    let mut files = Vec::new();
+    for entry in entries {
+        if entry.object_type == "blob" {
+            files.push(StoredSnapshotFile {
+                snapshot_id: 0,
+                file_path: entry.file_path,
+                file_hash: entry.object_hash,
+                language: None,
+                size: None,
+            });
+            continue;
+        }
+        if entry.object_type == "commit" {
+            push_warning(
+                summary,
+                format!(
+                    "commit {commit_sha} contains submodule {} which historical indexing skips",
+                    entry.file_path
+                ),
+            );
+        }
+    }
+    Ok(files)
+}
+
+fn replay_snapshot_files(
+    repo: &Path,
+    repo_id: i64,
+    store: &Store,
+    meta: &git::GitCommitMeta,
+    summary: &mut BuildSummary,
+) -> Result<Option<Vec<StoredSnapshotFile>>> {
+    let Some(parent_sha) = meta.parent_sha.as_deref() else {
+        return Ok(None);
+    };
+    let Some(parent_snapshot) = store.find_snapshot(repo_id, parent_sha)? else {
+        return Ok(None);
+    };
+
+    let mut files = store
+        .list_snapshot_files(parent_snapshot.snapshot_id)?
+        .into_iter()
+        .map(|file| (file.file_path.clone(), file))
+        .collect::<BTreeMap<_, _>>();
+    let changes = git::diff_tree_files(repo, &meta.sha, Some(parent_sha))
+        .with_context(|| format!("diff-tree for {parent_sha}..{}", meta.sha))?;
+    if changes.is_empty() {
+        return Ok(Some(sorted_snapshot_files(files)));
+    }
+
+    let changed_paths = changes
+        .iter()
+        .filter_map(|(_, new_path, status)| match status {
+            'A' | 'M' | 'R' | 'C' => Some(new_path.clone()),
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let entry_map = git::ls_tree_paths(repo, &meta.sha, &changed_paths)?
+        .into_iter()
+        .map(|entry| (entry.file_path.clone(), entry))
+        .collect::<BTreeMap<_, _>>();
+
+    for (old_path, new_path, status) in changes {
+        match status {
+            'D' => {
+                files.remove(&old_path);
+            }
+            'R' => {
+                files.remove(&old_path);
+                apply_replayed_entry(&mut files, &entry_map, &new_path, &meta.sha, summary);
+            }
+            'C' => {
+                apply_replayed_entry(&mut files, &entry_map, &new_path, &meta.sha, summary);
+            }
+            _ => {
+                apply_replayed_entry(&mut files, &entry_map, &new_path, &meta.sha, summary);
+            }
+        }
+    }
+
+    Ok(Some(sorted_snapshot_files(files)))
+}
+
+fn apply_replayed_entry(
+    files: &mut BTreeMap<String, StoredSnapshotFile>,
+    entry_map: &BTreeMap<String, git::TreeEntry>,
+    path: &str,
+    commit_sha: &str,
+    summary: &mut BuildSummary,
+) {
+    let Some(entry) = entry_map.get(path) else {
+        files.remove(path);
+        return;
+    };
+    if entry.object_type != "blob" {
+        files.remove(path);
+        if entry.object_type == "commit" {
+            push_warning(
+                summary,
+                format!(
+                    "commit {commit_sha} contains submodule {path} which historical indexing skips"
+                ),
+            );
+        }
+        return;
+    }
+
+    let (language, size) = files
+        .get(path)
+        .map(|existing| {
+            if existing.file_hash == entry.object_hash {
+                (existing.language.clone(), existing.size)
+            } else {
+                (None, None)
+            }
+        })
+        .unwrap_or((None, None));
+
+    files.insert(
+        path.to_owned(),
+        StoredSnapshotFile {
+            snapshot_id: 0,
+            file_path: path.to_owned(),
+            file_hash: entry.object_hash.clone(),
+            language,
+            size,
+        },
+    );
+}
+
+fn sorted_snapshot_files(files: BTreeMap<String, StoredSnapshotFile>) -> Vec<StoredSnapshotFile> {
+    files.into_values().collect()
+}
+
+fn push_warning(summary: &mut BuildSummary, warning: String) {
+    if !summary.warnings.iter().any(|existing| existing == &warning) {
+        summary.warnings.push(warning);
+    }
+}
+
+fn encode_node_membership(qualified_names: &[String]) -> String {
+    let mut sorted = qualified_names.to_vec();
+    sorted.sort();
+    sorted.join("\n")
+}
+
+fn encode_edge_membership(edge_keys: &[EdgeKey]) -> String {
+    let mut sorted = edge_keys.to_vec();
+    sorted.sort();
+    sorted
+        .into_iter()
+        .map(|(source, target, kind)| format!("{source}\t{target}\t{kind}"))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn persist_parsed_file(
@@ -381,7 +747,148 @@ fn is_binary_bytes(bytes: &[u8]) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+    use std::path::Path;
+    use std::process::Command;
+
+    use atlas_parser::ParserRegistry;
+    use atlas_store_sqlite::Store;
+
+    use crate::diff::reconstruct_snapshot;
+
     use super::*;
+
+    const GIT_TEST_NAME: &str = "Atlas Test";
+    const GIT_TEST_EMAIL: &str = "test@atlas";
+    const GIT_LOCAL_ENV_VARS: &[&str] = &[
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_COMMON_DIR",
+        "GIT_CONFIG",
+        "GIT_CONFIG_COUNT",
+        "GIT_CONFIG_KEY_0",
+        "GIT_CONFIG_VALUE_0",
+        "GIT_DIR",
+        "GIT_GRAFT_FILE",
+        "GIT_IMPLICIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_INTERNAL_SUPER_PREFIX",
+        "GIT_NAMESPACE",
+        "GIT_NO_REPLACE_OBJECTS",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_PREFIX",
+        "GIT_REPLACE_REF_BASE",
+        "GIT_SHALLOW_FILE",
+        "GIT_WORK_TREE",
+    ];
+
+    fn sanitized_git(dir: &Path) -> Command {
+        let mut cmd = Command::new("git");
+        cmd.current_dir(dir);
+        for var in GIT_LOCAL_ENV_VARS {
+            cmd.env_remove(var);
+        }
+        cmd.env("GIT_AUTHOR_NAME", GIT_TEST_NAME);
+        cmd.env("GIT_AUTHOR_EMAIL", GIT_TEST_EMAIL);
+        cmd.env("GIT_COMMITTER_NAME", GIT_TEST_NAME);
+        cmd.env("GIT_COMMITTER_EMAIL", GIT_TEST_EMAIL);
+        cmd
+    }
+
+    fn git(dir: &Path, args: &[&str]) {
+        let status = sanitized_git(dir).args(args).status().expect("git command");
+        assert!(status.success(), "git {args:?} failed");
+    }
+
+    fn git_output(dir: &Path, args: &[&str]) -> String {
+        let output = sanitized_git(dir).args(args).output().expect("git output");
+        assert!(output.status.success(), "git {args:?} failed");
+        String::from_utf8(output.stdout).expect("utf8")
+    }
+
+    fn git_init(dir: &Path) {
+        git(dir, &["init", "--quiet"]);
+        git(dir, &["config", "user.email", GIT_TEST_EMAIL]);
+        git(dir, &["config", "user.name", GIT_TEST_NAME]);
+        git(dir, &["branch", "-M", "main"]);
+    }
+
+    fn git_clone_shallow(source: &Path, dest: &Path) {
+        let source_url = format!("file://{}", source.display());
+        let output = Command::new("git")
+            .args(["clone", "--quiet", "--depth", "1", &source_url])
+            .arg(dest)
+            .output()
+            .expect("git clone --depth 1");
+        assert!(
+            output.status.success(),
+            "git clone failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn write_file(root: &Path, rel: &str, content: &str) {
+        let path = root.join(rel);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).expect("mkdirs");
+        }
+        fs::write(path, content).expect("write file");
+    }
+
+    fn commit_all(root: &Path, message: &str) -> String {
+        git(root, &["add", "-A"]);
+        git(root, &["commit", "--quiet", "-m", message]);
+        git_output(root, &["rev-parse", "HEAD"]).trim().to_owned()
+    }
+
+    fn open_store(temp: &tempfile::TempDir) -> Store {
+        let db_path = temp.path().join("history.sqlite");
+        Store::open(db_path.to_str().expect("db path")).expect("open store")
+    }
+
+    fn snapshot_signature(
+        snapshot: &crate::diff::HistoricalSnapshot,
+    ) -> (Vec<String>, Vec<String>, Vec<String>) {
+        let mut files = snapshot
+            .files
+            .iter()
+            .map(|file| {
+                format!(
+                    "{}|{}|{:?}|{:?}",
+                    file.file_path, file.file_hash, file.language, file.size
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut nodes = snapshot
+            .nodes
+            .iter()
+            .map(|node| {
+                format!(
+                    "{}|{}|{}|{:?}|{:?}|{:?}",
+                    node.qualified_name,
+                    node.kind,
+                    node.file_path,
+                    node.line_start,
+                    node.line_end,
+                    node.language
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut edges = snapshot
+            .edges
+            .iter()
+            .map(|edge| {
+                format!(
+                    "{}|{}|{}|{}|{:?}",
+                    edge.source_qn, edge.target_qn, edge.kind, edge.file_path, edge.line
+                )
+            })
+            .collect::<Vec<_>>();
+        files.sort();
+        nodes.sort();
+        edges.sort();
+        (files, nodes, edges)
+    }
 
     #[test]
     fn binary_detection_null_byte() {
@@ -395,5 +902,167 @@ mod tests {
         let mut buf = vec![b'a'; BINARY_SNIFF_BYTES + 1];
         buf[BINARY_SNIFF_BYTES] = 0u8; // null beyond sniff window
         assert!(!is_binary_bytes(&buf));
+    }
+
+    #[test]
+    fn membership_encoding_is_sorted_and_stable() {
+        let nodes = encode_node_membership(&["crate::beta".to_owned(), "crate::alpha".to_owned()]);
+        let edges = encode_edge_membership(&[
+            (
+                "crate::b".to_owned(),
+                "crate::c".to_owned(),
+                "calls".to_owned(),
+            ),
+            (
+                "crate::a".to_owned(),
+                "crate::b".to_owned(),
+                "calls".to_owned(),
+            ),
+        ]);
+
+        assert_eq!(nodes, "crate::alpha\ncrate::beta");
+        assert_eq!(
+            edges,
+            "crate::a\tcrate::b\tcalls\ncrate::b\tcrate::c\tcalls"
+        );
+    }
+
+    #[test]
+    fn shallow_build_surfaces_warning() {
+        let source = tempfile::tempdir().expect("source tempdir");
+        git_init(source.path());
+        write_file(source.path(), "src/lib.rs", "pub fn alpha() -> i32 { 1 }\n");
+        commit_all(source.path(), "first");
+        write_file(
+            source.path(),
+            "src/lib.rs",
+            "pub fn alpha() -> i32 { 1 }\npub fn beta() -> i32 { 2 }\n",
+        );
+        commit_all(source.path(), "second");
+
+        let clone = tempfile::tempdir().expect("clone tempdir");
+        git_clone_shallow(source.path(), clone.path());
+
+        let store_dir = tempfile::tempdir().expect("db tempdir");
+        let store = open_store(&store_dir);
+        let registry = ParserRegistry::with_defaults();
+        let canonical_root = std::fs::canonicalize(clone.path())
+            .expect("canonical root")
+            .to_string_lossy()
+            .into_owned();
+
+        let summary = build_historical_graph(
+            clone.path(),
+            &canonical_root,
+            &store,
+            &CommitSelector::Bounded {
+                start_ref: "HEAD".to_owned(),
+                max_commits: None,
+                since: None,
+                until: None,
+            },
+            &registry,
+            Some("HEAD"),
+        )
+        .expect("build on shallow clone");
+
+        assert!(
+            summary
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("shallow clone detected")),
+            "expected shallow warning, got {summary:?}"
+        );
+    }
+
+    #[test]
+    fn repeated_build_for_same_commit_range_is_deterministic() {
+        let repo = tempfile::tempdir().expect("tempdir");
+        git_init(repo.path());
+        write_file(repo.path(), "src/lib.rs", "pub fn alpha() -> i32 { 1 }\n");
+        let first = commit_all(repo.path(), "first");
+        write_file(
+            repo.path(),
+            "src/lib.rs",
+            "pub fn alpha() -> i32 { 1 }\npub fn beta() -> i32 { 2 }\n",
+        );
+        let second = commit_all(repo.path(), "second");
+
+        let selector = CommitSelector::Explicit {
+            shas: vec![first.clone(), second.clone()],
+        };
+        let registry = ParserRegistry::with_defaults();
+        let canonical_root = std::fs::canonicalize(repo.path())
+            .expect("canonical root")
+            .to_string_lossy()
+            .into_owned();
+
+        let store_a_dir = tempfile::tempdir().expect("store a dir");
+        let store_a = open_store(&store_a_dir);
+        let summary_a = build_historical_graph(
+            repo.path(),
+            &canonical_root,
+            &store_a,
+            &selector,
+            &registry,
+            None,
+        )
+        .expect("first build");
+
+        let store_b_dir = tempfile::tempdir().expect("store b dir");
+        let store_b = open_store(&store_b_dir);
+        let summary_b = build_historical_graph(
+            repo.path(),
+            &canonical_root,
+            &store_b,
+            &selector,
+            &registry,
+            None,
+        )
+        .expect("second build");
+
+        assert_eq!(summary_a.commits_processed, summary_b.commits_processed);
+        assert_eq!(summary_a.files_reused, summary_b.files_reused);
+        assert_eq!(summary_a.files_parsed, summary_b.files_parsed);
+        assert_eq!(summary_a.files_skipped, summary_b.files_skipped);
+        assert_eq!(summary_a.nodes_reused, summary_b.nodes_reused);
+        assert_eq!(summary_a.nodes_written, summary_b.nodes_written);
+        assert_eq!(summary_a.edges_written, summary_b.edges_written);
+        assert_eq!(summary_a.warnings, summary_b.warnings);
+        assert_eq!(summary_a.errors.len(), summary_b.errors.len());
+
+        let repo_id_a = store_a
+            .find_repo_id(&canonical_root)
+            .expect("repo id a")
+            .expect("repo a");
+        let repo_id_b = store_b
+            .find_repo_id(&canonical_root)
+            .expect("repo id b")
+            .expect("repo b");
+
+        for sha in [&first, &second] {
+            let snapshot_a = store_a
+                .find_snapshot(repo_id_a, sha)
+                .expect("snapshot a")
+                .expect("snapshot a row");
+            let snapshot_b = store_b
+                .find_snapshot(repo_id_b, sha)
+                .expect("snapshot b")
+                .expect("snapshot b row");
+            assert_eq!(snapshot_a.node_count, snapshot_b.node_count);
+            assert_eq!(snapshot_a.edge_count, snapshot_b.edge_count);
+            assert_eq!(snapshot_a.file_count, snapshot_b.file_count);
+            assert_eq!(snapshot_a.completeness, snapshot_b.completeness);
+            assert_eq!(snapshot_a.parse_error_count, snapshot_b.parse_error_count);
+
+            let materialized_a =
+                reconstruct_snapshot(&store_a, &canonical_root, sha).expect("reconstruct a");
+            let materialized_b =
+                reconstruct_snapshot(&store_b, &canonical_root, sha).expect("reconstruct b");
+            assert_eq!(
+                snapshot_signature(&materialized_a),
+                snapshot_signature(&materialized_b)
+            );
+        }
     }
 }

@@ -10,6 +10,7 @@ atlas-repo = { path = "../atlas-repo", version = "0.5.0" }
 anyhow.workspace = true
 rusqlite.workspace = true
 regex.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
 

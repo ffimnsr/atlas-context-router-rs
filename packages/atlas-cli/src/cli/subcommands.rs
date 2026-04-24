@@ -310,4 +310,143 @@ pub enum HistoryCommand {
         #[arg(long, value_delimiter = ',')]
         commits: Vec<String>,
     },
+
+    /// Append missing commits from current branch ancestry without rebuilding existing snapshots.
+    Update {
+        /// Branch or ref to walk (defaults to `HEAD`).
+        #[arg(long)]
+        branch: Option<String>,
+
+        /// Allow update after detecting rewritten history / force-push divergence.
+        #[arg(long)]
+        repair: bool,
+
+        /// Maximum number of commits to inspect while searching for missing history.
+        #[arg(long)]
+        max_commits: Option<usize>,
+    },
+
+    /// Rebuild one indexed historical snapshot for an exact commit SHA.
+    #[command(visible_alias = "reindex")]
+    Rebuild {
+        /// Exact 40-char commit SHA to rebuild.
+        commit_sha: String,
+    },
+
+    /// Diff two indexed historical snapshots.
+    Diff {
+        /// Older or left-side commit SHA.
+        commit_a: String,
+
+        /// Newer or right-side commit SHA.
+        commit_b: String,
+
+        /// Emit only compact summary counts.
+        #[arg(long, conflicts_with = "full")]
+        stat_only: bool,
+
+        /// Emit expanded human-readable details.
+        #[arg(long, conflicts_with = "stat_only")]
+        full: bool,
+    },
+
+    /// Query history for one fully-qualified symbol.
+    ///
+    /// Qualified-name changes are reported as remove + add. Atlas does not
+    /// infer rename continuity for symbols in the first pass.
+    Symbol {
+        /// Fully-qualified symbol name.
+        qualified_name: String,
+
+        /// Emit only compact summary fields.
+        #[arg(long, conflicts_with = "full")]
+        stat_only: bool,
+
+        /// Emit expanded human-readable details.
+        #[arg(long, conflicts_with = "stat_only")]
+        full: bool,
+    },
+
+    /// Query history for one canonical repo-relative file path.
+    File {
+        /// Repo-relative file path.
+        path: String,
+
+        /// Follow git-detected renames across indexed snapshots.
+        #[arg(long)]
+        follow_renames: bool,
+
+        /// Emit only compact summary fields.
+        #[arg(long, conflicts_with = "full")]
+        stat_only: bool,
+
+        /// Emit expanded human-readable details.
+        #[arg(long, conflicts_with = "stat_only")]
+        full: bool,
+    },
+
+    /// Query history for one dependency edge.
+    Dependency {
+        /// Fully-qualified source symbol name.
+        source: String,
+
+        /// Fully-qualified target symbol name.
+        target: String,
+
+        /// Emit only compact summary fields.
+        #[arg(long, conflicts_with = "full")]
+        stat_only: bool,
+
+        /// Emit expanded human-readable details.
+        #[arg(long, conflicts_with = "stat_only")]
+        full: bool,
+    },
+
+    /// Query growth and coupling trends for one module bucket.
+    Module {
+        /// Module bucket, for example `packages/atlas-cli` or `src/lib.rs`.
+        module: String,
+
+        /// Emit only compact summary fields.
+        #[arg(long, conflicts_with = "full")]
+        stat_only: bool,
+
+        /// Emit expanded human-readable details.
+        #[arg(long, conflicts_with = "stat_only")]
+        full: bool,
+    },
+
+    /// Compute churn, stability, trend, and storage diagnostics across indexed history.
+    Churn {
+        /// Emit only compact summary fields.
+        #[arg(long, conflicts_with = "full")]
+        stat_only: bool,
+
+        /// Emit expanded human-readable details.
+        #[arg(long, conflicts_with = "stat_only")]
+        full: bool,
+    },
+
+    /// Prune indexed history snapshots using one or more retention policies.
+    Prune {
+        /// Keep all indexed commits and snapshots.
+        #[arg(long)]
+        keep_all: bool,
+
+        /// Keep latest N indexed commits.
+        #[arg(long)]
+        keep_latest: Option<usize>,
+
+        /// Keep commits newer than N days from now.
+        #[arg(long)]
+        older_than_days: Option<u64>,
+
+        /// Keep commits that still have a reachable git tag.
+        #[arg(long)]
+        keep_tagged_only: bool,
+
+        /// Keep latest indexed snapshot from each calendar week bucket.
+        #[arg(long)]
+        keep_weekly: bool,
+    },
 }
