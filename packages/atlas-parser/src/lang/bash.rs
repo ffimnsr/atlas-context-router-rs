@@ -34,27 +34,13 @@ impl LangParser for BashParser {
 
         if let Some(ref tree) = tree {
             let root = tree.root_node();
-            let mut import_index = 0usize;
-            let mut cursor = root.walk();
-            for child in root.named_children(&mut cursor) {
-                match child.kind() {
-                    "function_definition" => emit_function(child, ctx, &mut nodes, &mut edges),
-                    "command" => emit_source_command(
-                        child,
-                        ctx,
-                        ctx.rel_path,
-                        &mut nodes,
-                        &mut edges,
-                        &mut import_index,
-                    ),
-                    _ => {}
-                }
-            }
+            collect_functions(root, ctx, ctx.rel_path, &mut nodes, &mut edges);
 
             let function_map = function_qn_map(&nodes);
             let mut call_edges = Vec::new();
             let mut extra_import_nodes = Vec::new();
             let mut extra_import_edges = Vec::new();
+            let mut import_index = 0usize;
             walk_commands(
                 root,
                 ctx,
@@ -84,17 +70,36 @@ impl LangParser for BashParser {
     }
 }
 
-fn emit_function(
+fn collect_functions(
     node: TsNode<'_>,
     ctx: &ParseContext<'_>,
+    parent_qn: &str,
     nodes: &mut Vec<Node>,
     edges: &mut Vec<Edge>,
 ) {
-    let Some(name_node) = node.child_by_field_name("name") else {
-        return;
-    };
+    let mut next_parent_qn = parent_qn.to_owned();
+    if node.kind() == "function_definition"
+        && let Some(function_qn) = emit_function(node, ctx, parent_qn, nodes, edges)
+    {
+        next_parent_qn = function_qn;
+    }
+
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        collect_functions(child, ctx, &next_parent_qn, nodes, edges);
+    }
+}
+
+fn emit_function(
+    node: TsNode<'_>,
+    ctx: &ParseContext<'_>,
+    parent_qn: &str,
+    nodes: &mut Vec<Node>,
+    edges: &mut Vec<Edge>,
+) -> Option<String> {
+    let name_node = node.child_by_field_name("name")?;
     let name = node_text(name_node, ctx.source).to_owned();
-    let qn = format!("{}::fn::{}", ctx.rel_path, name);
+    let qn = function_qn(parent_qn, ctx.rel_path, &name);
     let line = start_line(node);
     nodes.push(Node {
         id: NodeId::UNSET,
@@ -105,7 +110,7 @@ fn emit_function(
         line_start: line,
         line_end: end_line(node),
         language: "bash".to_owned(),
-        parent_name: Some(ctx.rel_path.to_owned()),
+        parent_name: Some(parent_qn.to_owned()),
         params: None,
         return_type: None,
         modifiers: None,
@@ -113,7 +118,8 @@ fn emit_function(
         file_hash: ctx.file_hash.to_owned(),
         extra_json: serde_json::Value::Null,
     });
-    edges.push(contains_edge(ctx.rel_path, &qn, ctx.rel_path, line));
+    edges.push(contains_edge(parent_qn, &qn, ctx.rel_path, line));
+    Some(qn)
 }
 
 fn emit_source_command(
@@ -158,11 +164,11 @@ fn emit_source_command(
 }
 
 fn function_qn_map(nodes: &[Node]) -> HashMap<String, String> {
-    nodes
-        .iter()
-        .filter(|node| node.kind == NodeKind::Function)
-        .map(|node| (node.name.clone(), node.qualified_name.clone()))
-        .collect()
+    let mut functions = HashMap::new();
+    for node in nodes.iter().filter(|node| node.kind == NodeKind::Function) {
+        functions.insert(node.qualified_name.clone(), node.name.clone());
+    }
+    functions
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -181,20 +187,22 @@ fn walk_commands(
         && let Some(name_node) = node.child_by_field_name("name")
     {
         let name = node_text(name_node, ctx.source);
-        next_fn = Some(format!("{}::fn::{}", ctx.rel_path, name));
+        let parent_qn = next_fn.as_deref().unwrap_or(ctx.rel_path);
+        next_fn = Some(function_qn(parent_qn, ctx.rel_path, name));
     }
 
-    if node.kind() == "command"
-        && let Some(ref owner_qn) = next_fn
-    {
+    if node.kind() == "command" {
+        let owner_qn = next_fn.clone().unwrap_or_else(|| ctx.rel_path.to_owned());
         if let Some(command_name) = command_name(node, ctx.source)
-            && let Some(target_qn) = functions.get(command_name)
+            && let Some(ref function_owner) = next_fn
+            && let Some(target_qn) =
+                resolve_function_target(function_owner, command_name, functions)
         {
             call_edges.push(Edge {
                 id: 0,
                 kind: EdgeKind::Calls,
-                source_qn: owner_qn.clone(),
-                target_qn: target_qn.clone(),
+                source_qn: function_owner.clone(),
+                target_qn: target_qn.to_owned(),
                 file_path: ctx.rel_path.to_owned(),
                 line: Some(start_line(node)),
                 confidence: 1.0,
@@ -206,7 +214,7 @@ fn walk_commands(
             emit_source_command(
                 node,
                 ctx,
-                owner_qn,
+                &owner_qn,
                 import_nodes,
                 import_edges,
                 import_index,
@@ -231,28 +239,20 @@ fn walk_commands(
 
 fn parse_source_command(node: TsNode<'_>, source: &[u8]) -> Option<(String, String)> {
     let command_name = command_name(node, source)?;
-    if command_name != "source" && command_name != "." {
-        return None;
+    let args = command_args(node, source);
+
+    if command_name == "source" || command_name == "." {
+        let target = args.first()?.to_owned();
+        return Some((command_name.to_owned(), target));
     }
 
-    let mut cursor = node.walk();
-    let mut seen_command = false;
-    for child in node.named_children(&mut cursor) {
-        match child.kind() {
-            "command_name" => seen_command = true,
-            "word" | "string" if seen_command => {
-                return Some((
-                    command_name.to_owned(),
-                    node_text(child, source)
-                        .trim()
-                        .trim_matches('"')
-                        .trim_matches('\'')
-                        .to_owned(),
-                ));
-            }
-            _ => {}
+    if (command_name == "command" || command_name == "builtin") && args.len() >= 2 {
+        let forwarded = &args[0];
+        if forwarded == "source" || forwarded == "." {
+            return Some((forwarded.clone(), args[1].clone()));
         }
     }
+
     None
 }
 
@@ -261,6 +261,78 @@ fn command_name<'a>(node: TsNode<'a>, source: &'a [u8]) -> Option<&'a str> {
     node.named_children(&mut cursor)
         .find(|child| child.kind() == "command_name")
         .map(|child| node_text(child, source).trim())
+}
+
+fn command_args(node: TsNode<'_>, source: &[u8]) -> Vec<String> {
+    let mut args = Vec::new();
+    let mut cursor = node.walk();
+    let mut seen_command = false;
+    for child in node.named_children(&mut cursor) {
+        match child.kind() {
+            "command_name" => seen_command = true,
+            "word" | "string" | "raw_string" if seen_command => {
+                args.push(
+                    node_text(child, source)
+                        .trim()
+                        .trim_matches('"')
+                        .trim_matches('\'')
+                        .to_owned(),
+                );
+            }
+            _ => {}
+        }
+    }
+    args
+}
+
+fn function_qn(parent_qn: &str, rel_path: &str, name: &str) -> String {
+    if parent_qn == rel_path {
+        return format!("{}::fn::{}", rel_path, name);
+    }
+    format!("{}::fn::{}", parent_qn, name)
+}
+
+fn resolve_function_target<'a>(
+    current_fn: &str,
+    command_name: &str,
+    functions: &'a HashMap<String, String>,
+) -> Option<&'a str> {
+    let mut scope = Some(current_fn);
+    while let Some(scope_qn) = scope {
+        if let Some(qn) = resolve_nested_scope_target(scope_qn, command_name, functions) {
+            return Some(qn);
+        }
+        scope = parent_function_qn(scope_qn);
+    }
+
+    functions.iter().find_map(|(qn, name)| {
+        (name == command_name && parent_function_qn(qn).is_none()).then_some(qn.as_str())
+    })
+}
+
+fn resolve_nested_scope_target<'a>(
+    scope_qn: &str,
+    command_name: &str,
+    functions: &'a HashMap<String, String>,
+) -> Option<&'a str> {
+    let nested_prefix = format!("{}::fn::", scope_qn);
+    let mut best_match: Option<(&str, usize)> = None;
+    for (qn, name) in functions {
+        if name != command_name || !qn.starts_with(&nested_prefix) {
+            continue;
+        }
+        let depth = qn.matches("::fn::").count();
+        match best_match {
+            Some((_, best_depth)) if depth >= best_depth => {}
+            _ => best_match = Some((qn.as_str(), depth)),
+        }
+    }
+    best_match.map(|(qn, _)| qn)
+}
+
+fn parent_function_qn(qn: &str) -> Option<&str> {
+    qn.rsplit_once("::fn::")
+        .and_then(|(parent, _)| parent.contains("::fn::").then_some(parent))
 }
 
 fn file_node(rel_path: &str, file_hash: &str, line_end: u32, language: &str) -> Node {
@@ -343,5 +415,49 @@ mod tests {
         assert!(pf.edges.iter().any(|edge| edge.kind == EdgeKind::Calls
             && edge.target_qn == "scripts/deploy.sh::fn::helper"));
         assert!(pf.edges.iter().any(|edge| edge.kind == EdgeKind::Imports));
+    }
+
+    #[test]
+    fn extracts_nested_top_level_source_and_wrapped_source() {
+        let pf = parse(
+            "if true; then\n  command source ./from_if.sh\nfi\nsetup() {\n  builtin source ./from_fn.sh\n}\n",
+        );
+        assert!(pf.nodes.iter().any(|node| node.kind == NodeKind::Import
+            && node.name == "./from_if.sh"
+            && node.parent_name.as_deref() == Some("scripts/deploy.sh")));
+        assert!(pf.nodes.iter().any(|node| node.kind == NodeKind::Import
+            && node.name == "./from_fn.sh"
+            && node.parent_name.as_deref() == Some("scripts/deploy.sh::fn::setup")));
+    }
+
+    #[test]
+    fn nested_functions_keep_parent_function_ownership() {
+        let pf = parse("outer() {\n  inner() {\n    echo hi\n  }\n  inner\n}\n");
+        assert!(pf.nodes.iter().any(|node| node.kind == NodeKind::Function
+            && node.qualified_name == "scripts/deploy.sh::fn::outer::fn::inner"
+            && node.parent_name.as_deref() == Some("scripts/deploy.sh::fn::outer")));
+        assert!(pf.edges.iter().any(|edge| edge.kind == EdgeKind::Contains
+            && edge.source_qn == "scripts/deploy.sh::fn::outer"
+            && edge.target_qn == "scripts/deploy.sh::fn::outer::fn::inner"));
+    }
+
+    #[test]
+    fn nested_same_name_functions_get_distinct_qnames() {
+        let pf = parse(
+            "first() {\n  helper() {\n    echo first\n  }\n  helper\n}\nsecond() {\n  helper() {\n    echo second\n  }\n  helper\n}\n",
+        );
+
+        assert!(pf.nodes.iter().any(|node| node.kind == NodeKind::Function
+            && node.qualified_name == "scripts/deploy.sh::fn::first::fn::helper"
+            && node.parent_name.as_deref() == Some("scripts/deploy.sh::fn::first")));
+        assert!(pf.nodes.iter().any(|node| node.kind == NodeKind::Function
+            && node.qualified_name == "scripts/deploy.sh::fn::second::fn::helper"
+            && node.parent_name.as_deref() == Some("scripts/deploy.sh::fn::second")));
+        assert!(pf.edges.iter().any(|edge| edge.kind == EdgeKind::Calls
+            && edge.source_qn == "scripts/deploy.sh::fn::first"
+            && edge.target_qn == "scripts/deploy.sh::fn::first::fn::helper"));
+        assert!(pf.edges.iter().any(|edge| edge.kind == EdgeKind::Calls
+            && edge.source_qn == "scripts/deploy.sh::fn::second"
+            && edge.target_qn == "scripts/deploy.sh::fn::second::fn::helper"));
     }
 }

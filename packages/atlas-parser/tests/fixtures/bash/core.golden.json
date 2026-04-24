@@ -7,28 +7,6 @@
       "file_path": "fixtures/bash/core.sh",
       "id": 0,
       "kind": "contains",
-      "line": 1,
-      "source_qn": "fixtures/bash/core.sh",
-      "target_qn": "fixtures/bash/core.sh::import::bash:1"
-    },
-    {
-      "confidence": 1.0,
-      "confidence_tier": "shell_source",
-      "extra_json": null,
-      "file_path": "fixtures/bash/core.sh",
-      "id": 0,
-      "kind": "imports",
-      "line": 1,
-      "source_qn": "fixtures/bash/core.sh",
-      "target_qn": "fixtures/bash/core.sh::import::bash:1"
-    },
-    {
-      "confidence": 1.0,
-      "confidence_tier": "definite",
-      "extra_json": null,
-      "file_path": "fixtures/bash/core.sh",
-      "id": 0,
-      "kind": "contains",
       "line": 3,
       "source_qn": "fixtures/bash/core.sh",
       "target_qn": "fixtures/bash/core.sh::fn::setup"
@@ -43,6 +21,28 @@
       "line": 7,
       "source_qn": "fixtures/bash/core.sh",
       "target_qn": "fixtures/bash/core.sh::fn::helper"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/bash/core.sh",
+      "id": 0,
+      "kind": "contains",
+      "line": 1,
+      "source_qn": "fixtures/bash/core.sh",
+      "target_qn": "fixtures/bash/core.sh::import::bash:1"
+    },
+    {
+      "confidence": 1.0,
+      "confidence_tier": "shell_source",
+      "extra_json": null,
+      "file_path": "fixtures/bash/core.sh",
+      "id": 0,
+      "kind": "imports",
+      "line": 1,
+      "source_qn": "fixtures/bash/core.sh",
+      "target_qn": "fixtures/bash/core.sh::import::bash:1"
     },
     {
       "confidence": 1.0,
@@ -77,26 +77,6 @@
       "return_type": null
     },
     {
-      "extra_json": {
-        "command": "source",
-        "imported": "./env.sh"
-      },
-      "file_hash": "fixture-hash",
-      "file_path": "fixtures/bash/core.sh",
-      "id": 0,
-      "is_test": false,
-      "kind": "import",
-      "language": "bash",
-      "line_end": 1,
-      "line_start": 1,
-      "modifiers": null,
-      "name": "./env.sh",
-      "params": null,
-      "parent_name": "fixtures/bash/core.sh",
-      "qualified_name": "fixtures/bash/core.sh::import::bash:1",
-      "return_type": null
-    },
-    {
       "extra_json": null,
       "file_hash": "fixture-hash",
       "file_path": "fixtures/bash/core.sh",
@@ -128,6 +108,26 @@
       "params": null,
       "parent_name": "fixtures/bash/core.sh",
       "qualified_name": "fixtures/bash/core.sh::fn::helper",
+      "return_type": null
+    },
+    {
+      "extra_json": {
+        "command": "source",
+        "imported": "./env.sh"
+      },
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/bash/core.sh",
+      "id": 0,
+      "is_test": false,
+      "kind": "import",
+      "language": "bash",
+      "line_end": 1,
+      "line_start": 1,
+      "modifiers": null,
+      "name": "./env.sh",
+      "params": null,
+      "parent_name": "fixtures/bash/core.sh",
+      "qualified_name": "fixtures/bash/core.sh::import::bash:1",
       "return_type": null
     }
   ],

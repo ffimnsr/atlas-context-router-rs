@@ -70,9 +70,9 @@ For terms that are easy to misread in this document:
 
 Read this part in order. It covers initial architecture, storage, parsing, indexing, querying, UX, quality, serve foundations, and historical graph planning.
 
-## Phase 0 — Core Architecture Decisions
+### Phase 0 — Core Architecture Decisions
 
-### 0.1 Freeze release-1 scope
+#### 0.1 Freeze release-1 scope
 
 - [x] Include in v1:
   - [x] repo root detection
@@ -99,7 +99,7 @@ Read this part in order. It covers initial architecture, storage, parsing, index
   - [ ] evaluation harness
   - [ ] cloud providers
 
-### 0.2 Freeze compatibility policy
+#### 0.2 Freeze compatibility policy
 
 - [x] Preserve upstream behavior where it matters:
   - [x] qualified-name semantics
@@ -113,7 +113,7 @@ Read this part in order. It covers initial architecture, storage, parsing, index
   - [x] use repo-relative paths internally instead of absolute paths where possible
 - [x] Document every intentional compatibility break (see COMPATIBILITY.md)
 
-### 0.3 Choose Rust crate strategy
+#### 0.3 Choose Rust crate strategy
 
 - [x] Start with one Cargo workspace
 - [x] Create crates:
@@ -131,9 +131,9 @@ Read this part in order. It covers initial architecture, storage, parsing, index
 
 ---
 
-## Phase 1 — Rust Project Foundation
+### Phase 1 — Rust Project Foundation
 
-### 1.1 Create workspace
+#### 1.1 Create workspace
 
 - [x] `cargo new --bin packages/atlas-cli`
 - [x] `cargo new --lib packages/atlas-core`
@@ -144,7 +144,7 @@ Read this part in order. It covers initial architecture, storage, parsing, index
 - [x] `cargo new --lib packages/atlas-review`
 - [x] `cargo new --lib packages/atlas-impact`
 
-### 1.2 Choose core dependencies
+#### 1.2 Choose core dependencies
 
 - [x] CLI:
   - [x] `clap`
@@ -176,7 +176,7 @@ Read this part in order. It covers initial architecture, storage, parsing, index
 - [x] For performance-sensitive hashmaps use `hashbrown` crate (added to workspace deps)
 
 
-### 1.3 CI and quality gates
+#### 1.3 CI and quality gates
 
 - [x] Add:
   - [x] `cargo fmt --check`
@@ -188,11 +188,11 @@ Read this part in order. It covers initial architecture, storage, parsing, index
 
 ---
 
-## Phase 2 — Domain Model
+### Phase 2 — Domain Model
 
 The current project is fundamentally a code graph persisted in SQLite, with nodes, edges, metadata, impact traversals, and FTS-backed search. Preserving that data model is one of the strongest parity choices for the rewrite.
 
-### 2.1 Define node kinds
+#### 2.1 Define node kinds
 
 - [x] `File`
 - [x] `Package`
@@ -209,7 +209,7 @@ The current project is fundamentally a code graph persisted in SQLite, with node
 - [x] `Trait`
 - [x] `Test`
 
-### 2.2 Define edge kinds
+#### 2.2 Define edge kinds
 
 - [x] `Contains`
 - [x] `Imports`
@@ -221,7 +221,7 @@ The current project is fundamentally a code graph persisted in SQLite, with node
 - [x] `References`
 - [x] `TestedBy`
 
-### 2.3 Define `Node`
+#### 2.3 Define `Node`
 
 - [x] Create `NodeId` type
 - [x] Include:
@@ -241,7 +241,7 @@ The current project is fundamentally a code graph persisted in SQLite, with node
   - [x] `file_hash: String`
   - [x] `extra_json: serde_json::Value`
 
-### 2.4 Define `Edge`
+#### 2.4 Define `Edge`
 
 - [x] Include:
   - [x] `id: i64`
@@ -254,7 +254,7 @@ The current project is fundamentally a code graph persisted in SQLite, with node
   - [x] `confidence_tier: Option<String>`
   - [x] `extra_json: serde_json::Value`
 
-### 2.5 Define supporting types
+#### 2.5 Define supporting types
 
 - [x] `FileRecord`
 - [x] `GraphStats`
@@ -266,11 +266,11 @@ The current project is fundamentally a code graph persisted in SQLite, with node
 
 ---
 
-## Phase 3 — SQLite Schema and Store
+### Phase 3 — SQLite Schema and Store
 
 The upstream implementation already treats SQLite as the durable center of the system, with WAL mode, explicit transactions, and atomic file-slice replacement. That should be preserved.
 
-### 3.1 Open database and pragmas
+#### 3.1 Open database and pragmas
 
 - [x] Create DB at `.atlas/worldview.sqlite`
 - [x] On open, set:
@@ -281,14 +281,14 @@ The upstream implementation already treats SQLite as the durable center of the s
 - [x] Use one write connection policy for mutation-heavy operations
 - [x] Add startup integrity check command later
 
-### 3.2 Migrations
+#### 3.2 Migrations
 
 - [x] Create migration runner
 - [x] Add schema version table
 - [x] Make migrations idempotent
 - [x] Add golden-schema tests
 
-### 3.3 Tables
+#### 3.3 Tables
 
 - [x] `metadata`
 - [x] `files`
@@ -299,18 +299,18 @@ The upstream implementation already treats SQLite as the durable center of the s
 - [x] `flow_memberships` — join table assigning node to flow with order/role metadata
 - [x] `communities` — catalog of named graph clusters; membership table can be added later if clustering work needs persistent node-to-community assignment
 
-#### 3.3.1 Flow, Flow Membership, Communities Meaning
+##### 3.3.1 Flow, Flow Membership, Communities Meaning
 
 - `flows` should store reusable higher-level paths over graph, not duplicate raw `edges`. Example: "payment request path" or "rename blast radius walkthrough".
 - `flow_memberships` should store which node is in which flow, plus `position` for order and `role` for labels like `entrypoint`, `middle`, `sink`, `changed`, `caller`, `test`.
 - `communities` should store cluster metadata such as algorithm, level, parent/child hierarchy, and summary stats. Current schema does not yet persist explicit per-node community membership; if later features need that, add a separate `community_memberships` table instead of overloading `flow_memberships`.
 
-### 3.4 `metadata` table
+#### 3.4 `metadata` table
 
 - [x] `key TEXT PRIMARY KEY`
 - [x] `value TEXT NOT NULL`
 
-### 3.5 `files` table
+#### 3.5 `files` table
 
 - [x] `path TEXT PRIMARY KEY`
 - [x] `language TEXT`
@@ -318,7 +318,7 @@ The upstream implementation already treats SQLite as the durable center of the s
 - [x] `size INTEGER`
 - [x] `indexed_at TEXT NOT NULL`
 
-### 3.6 `nodes` table
+#### 3.6 `nodes` table
 
 - [x] `id INTEGER PRIMARY KEY`
 - [x] `kind TEXT NOT NULL`
@@ -336,7 +336,7 @@ The upstream implementation already treats SQLite as the durable center of the s
 - [x] `file_hash TEXT`
 - [x] `extra_json TEXT`
 
-### 3.7 `edges` table
+#### 3.7 `edges` table
 
 - [x] `id INTEGER PRIMARY KEY`
 - [x] `kind TEXT NOT NULL`
@@ -348,7 +348,7 @@ The upstream implementation already treats SQLite as the durable center of the s
 - [x] `confidence_tier TEXT`
 - [x] `extra_json TEXT`
 
-### 3.8 Indexes
+#### 3.8 Indexes
 
 - [x] `idx_nodes_kind`
 - [x] `idx_nodes_file_path`
@@ -359,7 +359,7 @@ The upstream implementation already treats SQLite as the durable center of the s
 - [x] `idx_edges_target`
 - [x] `idx_edges_file_path`
 
-### 3.9 FTS5 table
+#### 3.9 FTS5 table
 
 - [x] Create `nodes_fts` virtual table
 - [x] Index:
@@ -374,7 +374,7 @@ The upstream implementation already treats SQLite as the durable center of the s
 - [x] Start with FTS only
 - [x] Keep hybrid/vector search out of v1
 
-### 3.10 Store API
+#### 3.10 Store API
 
 - [x] `open(path)`
 - [x] `migrate()`
@@ -388,7 +388,7 @@ The upstream implementation already treats SQLite as the durable center of the s
 - [x] `search(query)`
 - [x] `stats()`
 
-### 3.11 Transaction semantics
+#### 3.11 Transaction semantics
 
 - [x] Replace one file graph atomically:
   - [x] begin immediate transaction
@@ -405,18 +405,18 @@ The upstream implementation already treats SQLite as the durable center of the s
 
 ---
 
-## Phase 4 — Repository Scanner and Git Diff
+### Phase 4 — Repository Scanner and Git Diff
 
 The upstream project’s primary promise includes full build plus incremental update from git diff. That makes repo scanning and change detection part of the actual product kernel, not glue code.
 
-### 4.1 Repo root detection
+#### 4.1 Repo root detection
 
 - [x] Implement `find_repo_root(start: &Utf8Path) -> Result<Utf8PathBuf>`
 - [x] First try `git rev-parse --show-toplevel`
 - [x] Fallback: walk parent dirs for `.git`
 - [x] Normalize returned path
 
-### 4.2 Path normalization
+#### 4.2 Path normalization
 
 - [x] Convert to repo-relative paths for persistence
 - [x] Normalize separators to `/`
@@ -424,7 +424,7 @@ The upstream project’s primary promise includes full build plus incremental up
 - [x] Decide symlink policy
 - [x] Add Windows casing normalization tests
 
-### 4.3 Ignore handling
+#### 4.3 Ignore handling
 
 - [x] Support git-tracked files first via `git ls-files`
 - [x] Add `.atlasignore` later
@@ -439,7 +439,7 @@ The upstream project’s primary promise includes full build plus incremental up
   - [x] `.venv`
   - [x] `__pycache__`
 
-### 4.4 File collection
+#### 4.4 File collection
 
 - [x] `collect_files(repo_root)`
 - [x] Use `git ls-files`
@@ -449,13 +449,13 @@ The upstream project’s primary promise includes full build plus incremental up
 - [x] skip giant files
 - [x] configurable file size threshold
 
-### 4.5 File hashing
+#### 4.5 File hashing
 
 - [x] SHA-256 file hash
 - [x] skip unchanged files on full build
 - [x] persist hash in `files`
 
-### 4.6 Change detection
+#### 4.6 Change detection
 
 - [x] `changed_files(repo_root, base_ref)`
 - [x] support:
@@ -471,7 +471,7 @@ The upstream project’s primary promise includes full build plus incremental up
   - [x] renamed
   - [x] copied
 
-### 4.7 Deleted and renamed files
+#### 4.7 Deleted and renamed files
 
 - [x] delete stale file graph on delete
 - [x] MVP rename behavior:
@@ -479,7 +479,7 @@ The upstream project’s primary promise includes full build plus incremental up
   - [x] parse new path as fresh file
 - [x] preserve stable node identity across rename if hash unchanged
 
-### 4.8 Workspace and package-member awareness (useful for monorepo)
+#### 4.8 Workspace and package-member awareness (useful for monorepo)
 
 Track real workspace/package boundaries instead of using top-level path heuristics so monorepos like this Cargo workspace, NPM workspace, or Go workspace behave correctly during build, impact, review, and reasoning.
 
@@ -499,7 +499,7 @@ Track real workspace/package boundaries instead of using top-level path heuristi
 - [x] add fixture repo with multiple Go workspace modules
 - [x] add regression tests for `build`, `update`, `impact`, `review-context`, and reasoning on multi-package workspace repos
 
-#### 4.8.1 Owner Resolution Rules for Repos Without Workspace Metadata
+##### 4.8.1 Owner Resolution Rules for Repos Without Workspace Metadata
 
 Repos with multiple packages but no root workspace file must still resolve package ownership correctly. Workspace metadata is preferred when present, but standalone package-root detection is required and must produce same owner model.
 
@@ -513,7 +513,7 @@ Repos with multiple packages but no root workspace file must still resolve packa
 - [x] ensure root package does not swallow files under nested child package roots
 - [x] ensure rename or move across package roots changes owner identity correctly during `update`
 
-#### 4.8.2 Multi-Package Acceptance Cases
+##### 4.8.2 Multi-Package Acceptance Cases
 
 - [x] no-workspace Cargo repo with `crates/foo/Cargo.toml` and `libs/bar/Cargo.toml` resolves files under each root to different owning packages
 - [x] no-workspace Cargo repo with root `Cargo.toml` plus nested `tools/gen/Cargo.toml` assigns `tools/gen/**` to nested package, not root package
@@ -525,11 +525,11 @@ Repos with multiple packages but no root workspace file must still resolve packa
 
 ---
 
-## Phase 5 — Parser Abstraction
+### Phase 5 — Parser Abstraction
 
 The upstream parser is both the most important subsystem and the most monolithic file. The right Rust design is a per-language handler model behind a common parser interface.
 
-### 5.1 Parser interface
+#### 5.1 Parser interface
 
 - [x] `supports(path) -> bool`
 - [x] `parse(repo_root, abs_path, src) -> ParsedFile`
@@ -537,14 +537,14 @@ The upstream parser is both the most important subsystem and the most monolithic
 - [x] `extract_nodes()`
 - [x] `extract_edges()`
 
-### 5.2 Parser registry
+#### 5.2 Parser registry
 
 - [x] register handlers
 - [x] resolve parser by extension
 - [x] expose supported languages list
 - [x] fail gracefully on unknown languages
 
-### 5.3 Language strategy
+#### 5.3 Language strategy
 
 - [x] v1 first-class languages:
   - [x] Rust
@@ -555,7 +555,7 @@ The upstream parser is both the most important subsystem and the most monolithic
 - [x] v1.1 parser expansion covered in Phase 7.5
 - [ ] treat notebooks and framework-specific formats as later work
 
-### 5.4 Tree-sitter integration
+#### 5.4 Tree-sitter integration
 
 - [x] wire core Tree-sitter parser
 - [x] load per-language grammars
@@ -564,7 +564,7 @@ The upstream parser is both the most important subsystem and the most monolithic
 - [x] standardize text slice extraction
 - [x] standardize fallback behavior on parse failure
 
-### 5.5 Parser output shape
+#### 5.5 Parser output shape
 
 - [x] always emit a `File` node
 - [x] emit symbol nodes
@@ -576,13 +576,13 @@ The upstream parser is both the most important subsystem and the most monolithic
 
 ---
 
-## Phase 6 — First Language: Rust
+### Phase 6 — First Language: Rust
 
-### 6.1 Rust extension support
+#### 6.1 Rust extension support
 
 - [x] `.rs`
 
-### 6.2 Rust node extraction
+#### 6.2 Rust node extraction
 
 - [x] modules
 - [x] functions
@@ -594,7 +594,7 @@ The upstream parser is both the most important subsystem and the most monolithic
 - [x] statics
 - [x] tests
 
-### 6.3 Rust edge extraction
+#### 6.3 Rust edge extraction
 
 - [x] `Contains`
 - [x] `Calls`
@@ -602,7 +602,7 @@ The upstream parser is both the most important subsystem and the most monolithic
 - [x] `References` for `use`/type refs later
 - [x] `Tests` / `TestedBy` for `#[cfg(test)]` and `#[test]`
 
-### 6.4 Rust qualified-name scheme
+#### 6.4 Rust qualified-name scheme
 
 - [x] file node: `<relative-path>`
 - [x] module node: `<relative-path>::module::<name>`
@@ -612,7 +612,7 @@ The upstream parser is both the most important subsystem and the most monolithic
 - [x] enum node: `<relative-path>::enum::<name>`
 - [x] trait node: `<relative-path>::trait::<name>`
 
-### 6.5 Rust parser tests
+#### 6.5 Rust parser tests
 
 - [x] free functions
 - [x] nested modules
@@ -625,9 +625,9 @@ The upstream parser is both the most important subsystem and the most monolithic
 
 ---
 
-## Phase 7 — Additional Language Handlers
+### Phase 7 — Additional Language Handlers
 
-### 7.1 Go
+#### 7.1 Go
 
 - [x] package node
 - [x] functions
@@ -637,7 +637,7 @@ The upstream parser is both the most important subsystem and the most monolithic
 - [x] imports
 - [x] call edges
 
-### 7.2 Python
+#### 7.2 Python
 
 - [x] modules
 - [x] functions
@@ -647,7 +647,7 @@ The upstream parser is both the most important subsystem and the most monolithic
 - [x] decorators
 - [x] tests
 
-### 7.3 JavaScript/TypeScript
+#### 7.3 JavaScript/TypeScript
 
 - [x] functions
 - [x] classes
@@ -657,7 +657,7 @@ The upstream parser is both the most important subsystem and the most monolithic
 - [x] TS type/interface nodes
 - [x] TS path alias resolution
 
-### 7.4 Call-target resolution tiers
+#### 7.4 Call-target resolution tiers
 
 - [x] Tier 1:
   - [x] capture textual callee target only
@@ -676,7 +676,7 @@ The upstream parser is both the most important subsystem and the most monolithic
   - [x] support explicit `"*"` catch-all `paths` migration patterns
   - [x] resolve `paths` targets relative to declaring config while keeping legacy `baseUrl`-prefixed aliases working where possible
 
-## Phase 7.5 — v1.1 Language Handlers
+### Phase 7.5 — v1.1 Language Handlers
 
 Implement these like Rust and Go: dedicated handler, qualified-name scheme, edge extraction, parser tests, build/update integration.
 
@@ -694,7 +694,7 @@ When implementation starts, pin exact grammar source in crate/module docs so par
 - CSS: `github.com/tree-sitter/tree-sitter-css`
 - Markdown: `github.com/tree-sitter-grammars/tree-sitter-markdown`
 
-### 7.5.1 Java (`tree-sitter/tree-sitter-java`)
+#### 7.5.1 Java (`tree-sitter/tree-sitter-java`)
 
 - [x] package node
 - [x] classes
@@ -707,7 +707,7 @@ When implementation starts, pin exact grammar source in crate/module docs so par
 - [x] qualified-name scheme
 - [x] parser tests
 
-### 7.5.2 C# (`tree-sitter/tree-sitter-c-sharp`)
+#### 7.5.2 C# (`tree-sitter/tree-sitter-c-sharp`)
 
 - [x] namespace node
 - [x] classes
@@ -721,7 +721,7 @@ When implementation starts, pin exact grammar source in crate/module docs so par
 - [x] qualified-name scheme
 - [x] parser tests
 
-### 7.5.3 PHP (`tree-sitter/tree-sitter-php`)
+#### 7.5.3 PHP (`tree-sitter/tree-sitter-php`)
 
 - [x] namespace node
 - [x] classes
@@ -735,7 +735,7 @@ When implementation starts, pin exact grammar source in crate/module docs so par
 - [x] qualified-name scheme
 - [x] parser tests
 
-### 7.5.4 C (`tree-sitter/tree-sitter-c`)
+#### 7.5.4 C (`tree-sitter/tree-sitter-c`)
 
 - [x] translation-unit / file node
 - [x] functions
@@ -748,7 +748,7 @@ When implementation starts, pin exact grammar source in crate/module docs so par
 - [x] qualified-name scheme
 - [x] parser tests
 
-### 7.5.5 C++ (`tree-sitter/tree-sitter-cpp`)
+#### 7.5.5 C++ (`tree-sitter/tree-sitter-cpp`)
 
 - [x] namespace node
 - [x] classes
@@ -761,7 +761,7 @@ When implementation starts, pin exact grammar source in crate/module docs so par
 - [x] qualified-name scheme
 - [x] parser tests
 
-### 7.5.6 Scala (`tree-sitter/tree-sitter-scala`)
+#### 7.5.6 Scala (`tree-sitter/tree-sitter-scala`)
 
 - [x] package node
 - [x] objects
@@ -774,7 +774,7 @@ When implementation starts, pin exact grammar source in crate/module docs so par
 - [x] qualified-name scheme
 - [x] parser tests
 
-### 7.5.7 Ruby (`tree-sitter/tree-sitter-ruby`)
+#### 7.5.7 Ruby (`tree-sitter/tree-sitter-ruby`)
 
 - [x] module node
 - [x] classes
@@ -786,7 +786,7 @@ When implementation starts, pin exact grammar source in crate/module docs so par
 - [x] qualified-name scheme
 - [x] parser tests
 
-### 7.5.8 JSON and TOML
+#### 7.5.8 JSON and TOML
 
 - [x] JSON document node extraction
 - [x] JSON top-level object/key symbol strategy
@@ -795,7 +795,7 @@ When implementation starts, pin exact grammar source in crate/module docs so par
 - [x] stable qualified-name scheme for config files
 - [x] parser tests for nested keys and arrays
 
-### 7.5.9 HTML, CSS, Bash (`tree-sitter/tree-sitter-html`, `tree-sitter/tree-sitter-css`, `tree-sitter/tree-sitter-bash`)
+#### 7.5.9 HTML, CSS, Bash (`tree-sitter/tree-sitter-html`, `tree-sitter/tree-sitter-css`, `tree-sitter/tree-sitter-bash`)
 
 - [x] HTML document/component node extraction
 - [x] HTML imports/includes where practical
@@ -805,7 +805,7 @@ When implementation starts, pin exact grammar source in crate/module docs so par
 - [x] language-specific qualified-name scheme
 - [x] parser tests for representative fixtures
 
-### 7.5.10 Markdown (`tree-sitter-grammars/tree-sitter-markdown`)
+#### 7.5.10 Markdown (`tree-sitter-grammars/tree-sitter-markdown`)
 
 - [x] document node extraction
 - [x] heading hierarchy extraction
@@ -814,7 +814,7 @@ When implementation starts, pin exact grammar source in crate/module docs so par
 - [x] stable qualified-name scheme by heading path
 - [x] parser tests for nested heading documents
 
-### 7.5.11 Shared acceptance criteria
+#### 7.5.11 Shared acceptance criteria
 
 - [x] unsupported constructs degrade gracefully
 - [x] parser never panic on malformed source
@@ -824,9 +824,9 @@ When implementation starts, pin exact grammar source in crate/module docs so par
 
 ---
 
-## Phase 8 — Full Build Pipeline
+### Phase 8 — Full Build Pipeline
 
-### 8.1 `atlas build`
+#### 8.1 `atlas build`
 
 - [x] find repo root
 - [x] open DB
@@ -845,7 +845,7 @@ When implementation starts, pin exact grammar source in crate/module docs so par
   - [x] edges inserted
   - [x] elapsed time
 
-### 8.2 Concurrency model
+#### 8.2 Concurrency model
 
 - [x] concurrent file parsing
 - [x] single writer thread for SQLite
@@ -853,7 +853,7 @@ When implementation starts, pin exact grammar source in crate/module docs so par
 - [x] memory cap for queued parsed files
 - [x] backpressure instead of unbounded buffering
 
-### 8.3 Failure handling
+#### 8.3 Failure handling
 
 - [x] continue on per-file parse failure
 - [x] surface file parse errors in summary
@@ -862,11 +862,11 @@ When implementation starts, pin exact grammar source in crate/module docs so par
 
 ---
 
-## Phase 9 — Incremental Update Pipeline
+### Phase 9 — Incremental Update Pipeline
 
 The upstream project’s incremental update flow is one of the highest-value behaviors to preserve. It re-parses changed files plus dependent files, then replaces only affected graph slices.
 
-### 9.1 `atlas update`
+#### 9.1 `atlas update`
 
 - [x] discover changed files
 - [x] if no explicit list, call git diff
@@ -877,7 +877,7 @@ The upstream project’s incremental update flow is one of the highest-value beh
 - [x] batch replace graph slices
 - [x] print update summary
 
-### 9.2 Dependent invalidation
+#### 9.2 Dependent invalidation
 
 - [x] implement `find_dependents(changed_files)`
 - [x] start conservative:
@@ -886,7 +886,7 @@ The upstream project’s incremental update flow is one of the highest-value beh
 - [x] tolerate over-invalidation in v1
 - [x] avoid under-invalidation where possible
 
-### 9.3 Update modes
+#### 9.3 Update modes
 
 - [x] `atlas update --base origin/main`
 - [x] `atlas update --staged`
@@ -895,17 +895,17 @@ The upstream project’s incremental update flow is one of the highest-value beh
 
 ---
 
-## Phase 10 — Impact Radius
+### Phase 10 — Impact Radius
 
 The upstream system already uses a recursive SQLite CTE seeded from nodes in changed files. That SQL-first traversal should be preserved in Rust because it avoids rebuilding the full graph in memory.
 
-### 10.1 Seed selection
+#### 10.1 Seed selection
 
 - [x] map changed files to node qualified names
 - [x] load seed nodes into temp table
 - [x] preserve changed node set separately from impacted node set
 
-### 10.2 Recursive traversal
+#### 10.2 Recursive traversal
 
 - [x] forward through source -> target edges
 - [x] backward through target -> source edges
@@ -913,14 +913,14 @@ The upstream system already uses a recursive SQLite CTE seeded from nodes in cha
 - [x] node-count cap
 - [x] dedupe visited nodes
 
-### 10.3 Impact result shape
+#### 10.3 Impact result shape
 
 - [x] changed nodes
 - [x] impacted nodes
 - [x] impacted files
 - [x] relevant edges among those nodes
 
-### 10.4 CLI
+#### 10.4 CLI
 
 - [x] `atlas impact --base origin/main`
 - [x] `atlas impact --files ...`
@@ -928,7 +928,7 @@ The upstream system already uses a recursive SQLite CTE seeded from nodes in cha
 - [x] `atlas impact --max-nodes 200`
 - [x] `atlas impact --json`
 
-### 10.5 Tests
+#### 10.5 Tests
 
 - [x] one-hop graph
 - [x] cyclic graph
@@ -940,11 +940,11 @@ The upstream system already uses a recursive SQLite CTE seeded from nodes in cha
 
 ---
 
-## Phase 11 — Search
+### Phase 11 — Search
 
 The upstream search layer uses FTS5 and ranking heuristics; embeddings are explicitly optional and belong later, not in the first release.
 
-### 11.1 Basic FTS search
+#### 11.1 Basic FTS search
 
 - [x] search `nodes_fts`
 - [x] join back to `nodes`
@@ -952,7 +952,7 @@ The upstream search layer uses FTS5 and ranking heuristics; embeddings are expli
 - [x] limit results
 - [x] return scored nodes
 
-### 11.2 Search filters
+#### 11.2 Search filters
 
 - [x] by kind
 - [x] by language
@@ -960,7 +960,7 @@ The upstream search layer uses FTS5 and ranking heuristics; embeddings are expli
 - [x] by test status
 - [x] by repo subpath
 
-### 11.3 Ranking heuristics
+#### 11.3 Ranking heuristics
 
 - [x] exact name boost
 - [x] exact qualified-name boost
@@ -969,7 +969,7 @@ The upstream search layer uses FTS5 and ranking heuristics; embeddings are expli
 - [x] same-language boost
 - [x] changed-file boost
 
-### 11.4 CLI
+#### 11.4 CLI
 
 - [x] `atlas query "ReplaceFileGraph"`
 - [x] `atlas query "impact radius" --kind function`
@@ -978,11 +978,11 @@ The upstream search layer uses FTS5 and ranking heuristics; embeddings are expli
 
 ---
 
-## Phase 12 — Review Context Assembly
+### Phase 12 — Review Context Assembly
 
 The main user benefit of the upstream project is not just building the graph, but generating minimal useful context around code changes. That review/query layer belongs in core scope.
 
-### 12.1 Minimal context
+#### 12.1 Minimal context
 
 - [x] input:
   - [x] changed files
@@ -994,7 +994,7 @@ The main user benefit of the upstream project is not just building the graph, bu
   - [x] critical edges
   - [x] relevant file excerpts later
 
-### 12.2 Review context
+#### 12.2 Review context
 
 - [x] identify touched functions/methods/classes
 - [x] list callers/callees/importers/tests
@@ -1003,7 +1003,7 @@ The main user benefit of the upstream project is not just building the graph, bu
 - [x] avoid dumping entire graph
 - [x] provide machine-readable JSON and concise text output
 
-### 12.3 Risk/change summaries
+#### 12.3 Risk/change summaries
 
 - [x] changed files list
 - [x] changed symbol count
@@ -1012,7 +1012,7 @@ The main user benefit of the upstream project is not just building the graph, bu
 - [x] large function touched
 - [x] cross-module/cross-package impact
 
-### 12.4 CLI
+#### 12.4 CLI
 
 - [x] `atlas review-context --base origin/main`
 - [x] `atlas review-context --files ...`
@@ -1021,9 +1021,9 @@ The main user benefit of the upstream project is not just building the graph, bu
 
 ---
 
-## Phase 13 — CLI UX
+### Phase 13 — CLI UX
 
-### 13.1 Clap commands
+#### 13.1 Clap commands
 
 - [x] root command with global flags:
   - [x] `--repo`
@@ -1040,7 +1040,7 @@ The main user benefit of the upstream project is not just building the graph, bu
   - [x] `impact`
   - [x] `review-context`
 
-### 13.2 Output styles
+#### 13.2 Output styles
 
 - [x] human-readable output
 - [x] structured JSON output
@@ -1048,7 +1048,7 @@ The main user benefit of the upstream project is not just building the graph, bu
 - [x] concise error messages
 - [x] rich verbose diagnostics when requested
 
-### 13.3 Status command
+#### 13.3 Status command
 
 - [x] DB path
 - [x] repo root
@@ -1062,11 +1062,11 @@ The main user benefit of the upstream project is not just building the graph, bu
 
 ---
 
-## Phase 14 — Testing Strategy
+### Phase 14 — Testing Strategy
 
 The upstream report highlights parser fidelity and install/hook fragility as the real high-risk areas, not SQLite itself. For the Rust rewrite, parser and incremental-update tests should therefore be first-class.
 
-### 14.1 Unit tests
+#### 14.1 Unit tests
 
 - [x] node/edge serialization
 - [x] qualified-name generation
@@ -1074,7 +1074,7 @@ The upstream report highlights parser fidelity and install/hook fragility as the
 - [x] hash stability
 - [x] CLI arg parsing
 
-### 14.2 SQLite tests
+#### 14.2 SQLite tests
 
 - [x] migration creates schema
 - [x] WAL mode enabled
@@ -1084,7 +1084,7 @@ The upstream report highlights parser fidelity and install/hook fragility as the
 - [x] impact CTE works
 - [x] lock/retry behavior — covered by `write_succeeds_while_second_connection_holds_wal_write_lock`: blocker thread holds `BEGIN IMMEDIATE` for 100 ms; store write succeeds within `busy_timeout=5000`
 
-### 14.3 Repo tests
+#### 14.3 Repo tests
 
 - [x] repo root detection
 - [x] tracked-file collection
@@ -1092,7 +1092,7 @@ The upstream report highlights parser fidelity and install/hook fragility as the
 - [x] rename handling
 - [x] deleted file handling
 
-### 14.4 Parser golden tests
+#### 14.4 Parser golden tests
 
 - [x] Rust fixtures
 - [x] Go fixtures
@@ -1104,7 +1104,7 @@ The upstream report highlights parser fidelity and install/hook fragility as the
 - [x] bad syntax handling
 - [x] line ranges
 
-### 14.5 Integration tests
+#### 14.5 Integration tests
 
 - [x] `atlas build` on sample repo
 - [x] `atlas update` after edits
@@ -1112,7 +1112,7 @@ The upstream report highlights parser fidelity and install/hook fragility as the
 - [x] `atlas review-context` returns stable useful output
 - [x] `atlas query` returns expected ranked matches
 
-### 14.6 Cross-platform tests
+#### 14.6 Cross-platform tests
 
 - [x] Linux
 - [x] Windows path/casing behavior
@@ -1121,9 +1121,9 @@ The upstream report highlights parser fidelity and install/hook fragility as the
 
 ---
 
-## Phase 15 — Performance and Operational Hardening
+### Phase 15 — Performance and Operational Hardening
 
-### 15.1 Build performance
+#### 15.1 Build performance
 
 - [x] measure files/sec — covered by `store_bench` write-throughput criterion benchmark
 - [x] measure nodes/sec — covered by `store_bench` write-throughput criterion benchmark
@@ -1131,20 +1131,20 @@ The upstream report highlights parser fidelity and install/hook fragility as the
 - [x] benchmark parser workers vs writer bottleneck — covered by `pipeline_bench` (parse_only / write_only / full_pipeline groups)
 - [x] tune batch sizes — `pipeline_bench` sweeps batch sizes 16/32/64/128/256; `DEFAULT_PARSE_BATCH_SIZE=64` confirmed reasonable for this repo
 
-### 15.2 Query performance
+#### 15.2 Query performance
 
 - [x] benchmark FTS query latency — covered by `store_bench`
 - [x] benchmark impact-radius latency — covered by `store_bench`
 - [x] benchmark review-context latency — covered by `context_bench` in `atlas-review` (64 and 256 module variants)
 
-### 15.3 Memory and reliability
+#### 15.3 Memory and reliability
 
 - [x] cap parse queue size — build pipeline uses bounded chunk-based batches; no unbounded in-memory accumulation
 - [x] avoid loading giant repos into memory — chunked parallel parse; per-file size cap in collector
 - [x] add partial-failure reporting — `parse_errors` counter surfaces failures in build/update summary
 - [x] add crash-safe file replacement semantics — each file graph replaced in an atomic `BEGIN IMMEDIATE` transaction
 
-### 15.4 Diagnostics
+#### 15.4 Diagnostics
 
 - [x] `atlas doctor` — implemented: checks repo root, git root, .atlas dir, config, DB file, integrity, graph stats, git ls-files
 - [x] `atlas db check` — implemented
@@ -1152,15 +1152,15 @@ The upstream report highlights parser fidelity and install/hook fragility as the
 
 ---
 
-## Phase 16 — MCP / Serve Layer
+### Phase 16 — MCP / Serve Layer
 
-### 16.1 Status
+#### 16.1 Status
 
 Keep this phase as chronological marker for first MCP/serve work. Detailed MCP checklist now lives in Part II under MCP and Agent Roadmap, especially MCP1.
 
 ---
 
-## Phase 17 — Historical Graphs (Atlas v3 / Phase 1.1)
+### Phase 17 — Historical Graphs (Atlas v3 / Phase 1.1)
 
 Add time dimension to Atlas so system can answer historical questions, compare architectural evolution, and reason about how symbols, dependencies, and risks changed over time.
 
@@ -1181,7 +1181,7 @@ This phase must:
 - support commit-based historical inspection
 - keep storage and indexing costs bounded
 
-### 17.1 Scope
+#### 17.1 Scope
 
 Historical Graphs means Atlas can persist and query graph state across multiple commits or snapshots.
 
@@ -1201,7 +1201,7 @@ This phase is:
 - symbol/file/edge history queries
 - architectural evolution analysis
 
-### 17.2 Core capabilities
+#### 17.2 Core capabilities
 
 - [ ] store graph snapshots per commit
 - [ ] associate graph snapshots with repository + branch metadata
@@ -1222,9 +1222,9 @@ This phase is:
 - [ ] expose historical graph queries through CLI
 - [ ] keep retention and storage policies configurable
 
-### 17.3 Historical model choice
+#### 17.3 Historical model choice
 
-#### Design principle
+##### Design principle
 
 Do not duplicate entire live schema blindly for every commit if it explodes storage.
 
@@ -1235,7 +1235,7 @@ Start with hybrid design:
 - initial version may store full per-commit graph slices for affected files only
 - later version may deduplicate unchanged file graphs across commits
 
-#### Recommended first implementation
+##### Recommended first implementation
 
 - [ ] persist commit-level snapshot records
 - [ ] persist file-graph state keyed by file hash
@@ -1245,9 +1245,9 @@ Start with hybrid design:
 
 This provides historical power without storing same file graph repeatedly.
 
-### 17.4 Git metadata ingestion
+#### 17.4 Git metadata ingestion
 
-#### Commit discovery
+##### Commit discovery
 
 - [ ] implement commit enumeration:
   - [ ] latest commit only
@@ -1261,7 +1261,7 @@ This provides historical power without storing same file graph repeatedly.
   - [ ] tag
   - [ ] merge base ranges later
 
-#### Commit metadata
+##### Commit metadata
 
 - [ ] collect and store:
   - [ ] commit SHA
@@ -1276,7 +1276,7 @@ This provides historical power without storing same file graph repeatedly.
 - [ ] normalize timestamps
 - [ ] define canonical repo-relative commit identity
 
-#### Git commands
+##### Git commands
 
 - [ ] implement helper wrappers for:
   - [ ] `git rev-parse`
@@ -1292,9 +1292,9 @@ This provides historical power without storing same file graph repeatedly.
   - [ ] rewritten history
   - [ ] submodules later
 
-### 17.5 Snapshot data model
+#### 17.5 Snapshot data model
 
-#### New tables
+##### New tables
 
 - [ ] create `repos` table if not already present
 - [ ] create `commits` table
@@ -1305,7 +1305,7 @@ This provides historical power without storing same file graph repeatedly.
 - [ ] create `node_history` table
 - [ ] create `edge_history` table
 
-#### `commits` table
+##### `commits` table
 
 - [ ] columns:
   - [ ] `commit_sha`
@@ -1319,7 +1319,7 @@ This provides historical power without storing same file graph repeatedly.
   - [ ] `message`
   - [ ] `indexed_at`
 
-#### `graph_snapshots` table
+##### `graph_snapshots` table
 
 - [ ] columns:
   - [ ] `snapshot_id`
@@ -1331,7 +1331,7 @@ This provides historical power without storing same file graph repeatedly.
   - [ ] `file_count`
   - [ ] `created_at`
 
-#### `snapshot_files` table
+##### `snapshot_files` table
 
 - [ ] columns:
   - [ ] `snapshot_id`
@@ -1341,7 +1341,7 @@ This provides historical power without storing same file graph repeatedly.
   - [ ] `size`
 - [ ] enforce uniqueness on `(snapshot_id, file_path)`
 
-#### Node/edge history model
+##### Node/edge history model
 
 Recommended first pass:
 
@@ -1356,7 +1356,7 @@ Alternative first pass if simpler:
 - [ ] duplicate per-snapshot nodes/edges for correctness first
 - [ ] optimize storage later
 
-#### Lifecycle tables
+##### Lifecycle tables
 
 - [ ] `node_history` should support:
   - [ ] first_seen_snapshot
@@ -1367,15 +1367,15 @@ Alternative first pass if simpler:
   - [ ] removal_commit
 - [ ] `edge_history` should support same lifecycle fields
 
-### 17.6 Identity strategy
+#### 17.6 Identity strategy
 
-#### Symbol identity
+##### Symbol identity
 
 This is hardest design problem in historical graphs.
 
 Need stable way to say whether symbol in commit A is same symbol in commit B.
 
-#### First-pass identity rules
+##### First-pass identity rules
 
 - [ ] use qualified name as primary identity key
 - [ ] pair with file path and kind
@@ -1383,13 +1383,13 @@ Need stable way to say whether symbol in commit A is same symbol in commit B.
 - [ ] treat changed qualified name as remove + add unless explicit rename tracking exists
 - [ ] document this behavior clearly
 
-#### Later improvement
+##### Later improvement
 
 - [ ] add rename-aware symbol lineage
 - [ ] add content-based similarity matching for moved/renamed symbols
 - [ ] add signature-aware continuity heuristics
 
-#### Edge identity
+##### Edge identity
 
 - [ ] use:
   - [ ] edge kind
@@ -1398,9 +1398,9 @@ Need stable way to say whether symbol in commit A is same symbol in commit B.
   - [ ] file path
 - [ ] optionally include line number bucket or hash
 
-### 17.7 Historical indexing pipeline
+#### 17.7 Historical indexing pipeline
 
-#### Initial historical build
+##### Initial historical build
 
 - [ ] implement `atlas history build`
 - [ ] accept:
@@ -1425,7 +1425,7 @@ Need stable way to say whether symbol in commit A is same symbol in commit B.
   - [ ] nodes reused
   - [ ] elapsed time
 
-#### Incremental historical update
+##### Incremental historical update
 
 - [ ] implement `atlas history update`
 - [ ] detect commits not yet indexed
@@ -1434,9 +1434,9 @@ Need stable way to say whether symbol in commit A is same symbol in commit B.
 - [ ] guard against rewritten history
 - [ ] detect force-push divergence and require explicit repair mode
 
-### 17.8 Commit-time file reconstruction
+#### 17.8 Commit-time file reconstruction
 
-#### Source retrieval
+##### Source retrieval
 
 - [ ] support reading file contents from commit without checkout
 - [ ] use:
@@ -1445,7 +1445,7 @@ Need stable way to say whether symbol in commit A is same symbol in commit B.
 - [ ] ensure binary detection still applies
 - [ ] handle deleted paths correctly
 
-#### File list reconstruction
+##### File list reconstruction
 
 - [ ] reconstruct tracked file list for each commit
 - [ ] support:
@@ -1454,13 +1454,13 @@ Need stable way to say whether symbol in commit A is same symbol in commit B.
 - [ ] decide whether to full-enumerate per commit or replay diffs
 - [ ] first version may prefer correctness over speed
 
-### 17.9 Graph diff engine
+#### 17.9 Graph diff engine
 
-#### Goal
+##### Goal
 
 Compare two graph snapshots and describe structural differences.
 
-#### Diff scopes
+##### Diff scopes
 
 - [ ] file diff
 - [ ] node diff
@@ -1468,7 +1468,7 @@ Compare two graph snapshots and describe structural differences.
 - [ ] module diff
 - [ ] architecture diff
 
-#### Node diff
+##### Node diff
 
 - [ ] detect:
   - [ ] added nodes
@@ -1481,7 +1481,7 @@ Compare two graph snapshots and describe structural differences.
   - [ ] test status changed
   - [ ] extra metadata changed
 
-#### Edge diff
+##### Edge diff
 
 - [ ] detect:
   - [ ] added edges
@@ -1489,7 +1489,7 @@ Compare two graph snapshots and describe structural differences.
   - [ ] changed confidence tier
   - [ ] changed metadata
 
-#### File diff
+##### File diff
 
 - [ ] detect:
   - [ ] added files
@@ -1498,7 +1498,7 @@ Compare two graph snapshots and describe structural differences.
   - [ ] renamed files if git reports them
 - [ ] expose language and size changes
 
-#### Architecture diff
+##### Architecture diff
 
 - [ ] detect:
   - [ ] new dependency paths
@@ -1508,9 +1508,9 @@ Compare two graph snapshots and describe structural differences.
   - [ ] changed central hubs
   - [ ] changed coupling between modules
 
-### 17.10 History query layer
+#### 17.10 History query layer
 
-#### Symbol history
+##### Symbol history
 
 - [ ] implement query:
   - [ ] show first/last appearance
@@ -1518,7 +1518,7 @@ Compare two graph snapshots and describe structural differences.
   - [ ] show signature evolution
   - [ ] show file path changes
 
-#### File history
+##### File history
 
 - [ ] implement query:
   - [ ] show all commits touching file
@@ -1526,7 +1526,7 @@ Compare two graph snapshots and describe structural differences.
   - [ ] show edge count over time
   - [ ] show symbol additions/removals
 
-#### Dependency history
+##### Dependency history
 
 - [ ] implement query:
   - [ ] when edge first appeared
@@ -1534,7 +1534,7 @@ Compare two graph snapshots and describe structural differences.
   - [ ] which commits added/removed dependency
   - [ ] how long edge persisted
 
-#### Module history
+##### Module history
 
 - [ ] implement query:
   - [ ] node growth over time
@@ -1542,9 +1542,9 @@ Compare two graph snapshots and describe structural differences.
   - [ ] test adjacency over time later
   - [ ] coupling trend over time
 
-### 17.11 Evolution analytics
+#### 17.11 Evolution analytics
 
-#### Churn metrics
+##### Churn metrics
 
 - [ ] compute per symbol:
   - [ ] change count
@@ -1557,7 +1557,7 @@ Compare two graph snapshots and describe structural differences.
   - [ ] dependency churn
   - [ ] symbol churn
 
-#### Stability indicators
+##### Stability indicators
 
 - [ ] identify:
   - [ ] stable symbols
@@ -1565,7 +1565,7 @@ Compare two graph snapshots and describe structural differences.
   - [ ] frequently changing dependencies
   - [ ] architectural hotspots
 
-#### Trend metrics
+##### Trend metrics
 
 - [ ] track:
   - [ ] file count growth
@@ -1574,15 +1574,15 @@ Compare two graph snapshots and describe structural differences.
   - [ ] module coupling trend
   - [ ] cycle count trend
 
-### 17.12 Snapshot storage efficiency
+#### 17.12 Snapshot storage efficiency
 
-#### Deduplication
+##### Deduplication
 
 - [ ] reuse parsed file graph when file hash repeats across commits
 - [ ] avoid duplicate node/edge rows when content-identical
 - [ ] deduplicate snapshot membership rows where possible
 
-#### Retention controls
+##### Retention controls
 
 - [ ] support pruning policies:
   - [ ] keep all commits
@@ -1591,7 +1591,7 @@ Compare two graph snapshots and describe structural differences.
   - [ ] keep weekly snapshots
 - [ ] implement `atlas history prune`
 
-#### Storage diagnostics
+##### Storage diagnostics
 
 - [ ] report:
   - [ ] commits stored
@@ -1600,9 +1600,9 @@ Compare two graph snapshots and describe structural differences.
   - [ ] DB size
   - [ ] snapshot density
 
-### 17.13 CLI surfaces
+#### 17.13 CLI surfaces
 
-#### New commands
+##### New commands
 
 - [ ] `atlas history build`
 - [ ] `atlas history update`
@@ -1613,7 +1613,7 @@ Compare two graph snapshots and describe structural differences.
 - [ ] `atlas history dependency <source> <target>`
 - [ ] `atlas history prune`
 
-#### Flags
+##### Flags
 
 - [ ] `--repo`
 - [ ] `--db`
@@ -1626,7 +1626,7 @@ Compare two graph snapshots and describe structural differences.
 - [ ] `--full`
 - [ ] `--follow-renames` later
 
-### 17.14 Output structures
+#### 17.14 Output structures
 
 - [ ] define `HistoricalSnapshot`
 - [ ] define `GraphDiffReport`
@@ -1646,7 +1646,7 @@ Each should include:
   - [ ] node/edge identifiers
   - [ ] file paths
 
-### 17.15 Compatibility and correctness rules
+#### 17.15 Compatibility and correctness rules
 
 - [ ] if symbol identity cannot be confidently linked across commits, prefer add/remove over false continuity
 - [ ] preserve exact commit SHA references
@@ -1654,7 +1654,7 @@ Each should include:
 - [ ] make rewritten-history behavior explicit
 - [ ] keep historical indexing reproducible for same commit range
 
-### 17.16 Failure modes and safeguards
+#### 17.16 Failure modes and safeguards
 
 - [ ] handle missing commits in shallow clones
 - [ ] handle corrupted snapshot membership rows
@@ -1663,9 +1663,9 @@ Each should include:
 - [ ] mark snapshots with parse errors
 - [ ] allow reindex/rebuild of individual snapshots
 
-### 17.17 Tests
+#### 17.17 Tests
 
-#### Git history fixtures
+##### Git history fixtures
 
 - [ ] repo with:
   - [ ] symbol introduced
@@ -1676,34 +1676,34 @@ Each should include:
   - [ ] file renamed
   - [ ] module split/merge later
 
-#### Snapshot tests
+##### Snapshot tests
 
 - [ ] commit metadata stored correctly
 - [ ] snapshot membership stored correctly
 - [ ] unchanged file graph reused across commits
 - [ ] modified file graph creates new membership state
 
-#### Diff tests
+##### Diff tests
 
 - [ ] node add/remove/change diff
 - [ ] edge add/remove diff
 - [ ] architecture diff detects new cycle
 - [ ] architecture diff detects broken cycle
 
-#### Query tests
+##### Query tests
 
 - [ ] symbol history query
 - [ ] file history query
 - [ ] dependency history query
 - [ ] module history trend query
 
-#### Retention tests
+##### Retention tests
 
 - [ ] prune latest N
 - [ ] prune by age
 - [ ] prune by release/tag policy later
 
-### 17.18 Performance and scaling
+#### 17.18 Performance and scaling
 
 - [ ] benchmark commits/sec
 - [ ] benchmark snapshot reconstruction speed
@@ -1711,7 +1711,7 @@ Each should include:
 - [ ] benchmark symbol history query latency
 - [ ] measure storage growth with and without deduplication
 
-#### Optimization backlog
+##### Optimization backlog
 
 - [ ] commit-to-commit diff replay instead of full file enumeration
 - [ ] blob-level cache
@@ -1719,9 +1719,9 @@ Each should include:
 - [ ] compressed membership encoding
 - [ ] partial snapshot materialization
 
-### 17.19 Recommended implementation order
+#### 17.19 Recommended implementation order
 
-#### Slice 1 — metadata foundation
+##### Slice 1 — metadata foundation
 
 - [ ] commits table
 - [ ] graph_snapshots table
@@ -1729,13 +1729,13 @@ Each should include:
 - [ ] git metadata ingestion
 - [ ] `atlas history status`
 
-#### Slice 2 — reusable file-hash historical storage
+##### Slice 2 — reusable file-hash historical storage
 
 - [ ] file hash reuse model
 - [ ] snapshot membership mapping
 - [ ] historical build for bounded commit range
 
-#### Slice 3 — snapshot reconstruction and diff
+##### Slice 3 — snapshot reconstruction and diff
 
 - [ ] reconstruct graph for commit
 - [ ] node diff
@@ -1743,21 +1743,21 @@ Each should include:
 - [ ] file diff
 - [ ] `atlas history diff`
 
-#### Slice 4 — history queries
+##### Slice 4 — history queries
 
 - [ ] symbol history
 - [ ] file history
 - [ ] dependency history
 - [ ] module history
 
-#### Slice 5 — analytics and retention
+##### Slice 5 — analytics and retention
 
 - [ ] churn metrics
 - [ ] stability metrics
 - [ ] prune policies
 - [ ] storage diagnostics
 
-### 17.20 Completion criteria
+#### 17.20 Completion criteria
 
 Phase 17 is complete when all of these are true:
 
@@ -1769,7 +1769,7 @@ Phase 17 is complete when all of these are true:
 - [ ] storage growth is measurable and bounded by policy
 - [ ] all historical outputs are deterministic and evidence-backed
 
-### 17.21 Guiding rules
+#### 17.21 Guiding rules
 
 - [ ] correctness before optimization
 - [ ] reuse unchanged file graphs across history
@@ -1783,11 +1783,11 @@ Phase 17 is complete when all of these are true:
 
 Use this part for release definitions and all MCP / agent-facing rollout work.
 
-## Release Gates
+### Release Gates
 
 Use these as outcome checkpoints between core roadmap completion and broader post-MVP expansion.
 
-### Release 1 Definition (MVP)
+#### Release 1 Definition (MVP)
 
 Release 1 is done when this works end-to-end:
 
@@ -1811,7 +1811,7 @@ And the system has:
 
 ---
 
-### Release 2 Definition
+#### Release 2 Definition
 
 Release 2 is done when this works end-to-end:
 
@@ -1853,11 +1853,11 @@ And system has:
 
 ---
 
-## MCP and Agent Roadmap
+### MCP and Agent Roadmap
 
 Use this section for MCP-specific rollout, payload design, continuity, and agent-facing tool work. Other phases should point here instead of repeating MCP checklists.
 
-### MCP1 — Core serve foundation
+#### MCP1 — Core serve foundation
 
 - [x] `build_or_update_graph`
 - [x] `get_minimal_context`
@@ -1875,7 +1875,7 @@ Use this section for MCP-specific rollout, payload design, continuity, and agent
 - [x] expose only core tools in first version
 - [x] add prompts later, not first (MCP prompt templates for external LLMs to use as guidance)
 
-### MCP2 — Public context surface and schema
+#### MCP2 — Public context surface and schema
 
 - [x] expose MCP tool only after JSON shape stabilizes
 - [x] decide whether MCP public context surface stays review-focused (`get_review_context`) or adds generic `get_context`
@@ -1886,7 +1886,7 @@ Use this section for MCP-specific rollout, payload design, continuity, and agent
 - [x] confirm public MCP tools stay token-efficient without hiding critical ambiguity/truncation metadata
 - [x] MCP adapter thin, no duplicated retrieval logic
 
-### MCP3 — Agent-facing tools and response shaping
+#### MCP3 — Agent-facing tools and response shaping
 
 - [x] `get_review_context`
 - [x] `get_impact_radius`
@@ -1905,14 +1905,14 @@ Use this section for MCP-specific rollout, payload design, continuity, and agent
 - [x] limit node count
 - [x] prioritize relevance
 
-### MCP4 — Alternate payload modes
+#### MCP4 — Alternate payload modes
 
 - [x] add MCP response mode for TOON text output
 - [x] use TOON first for context-heavy agent-facing tools
 - [x] keep MCP tool contracts stable while swapping payload body format
 - [x] add opt-in selection per tool or global config flag
 
-### MCP5 — Continuity, adapters, and saved-context tools
+#### MCP5 — Continuity, adapters, and saved-context tools
 
 - [x] MCP tool handler execution boundaries
 - [x] MCP adapter
@@ -1934,7 +1934,7 @@ Use this section for MCP-specific rollout, payload design, continuity, and agent
 - [x] include build status in `build_or_update_graph` MCP tool response
 - [x] MCP `build_or_update_graph` returns persisted build state
 
-### MCP6 — Content and file discovery
+#### MCP6 — Content and file discovery
 
 - [x] add MCP tool for file-name/path discovery outside graph-symbol lookup
   - [x] search_files(pattern, globs)
@@ -1957,7 +1957,7 @@ Use this section for MCP-specific rollout, payload design, continuity, and agent
 - [x] keep response payloads compact and agent-friendly
 - [x] use crates globset, ignore, grep (all crates by ripgrep)
 
-### MCP7 — Response provenance and trust metadata
+#### MCP7 — Response provenance and trust metadata
 
 - [x] include compact repo/index provenance metadata in every MCP tool response
 - [x] include:
@@ -1974,7 +1974,7 @@ Use this section for MCP-specific rollout, payload design, continuity, and agent
 - [x] document metadata contract in MCP reference and agent instructions
 - [x] make mismatched repo/db/index state obvious in agent sessions
 
-### MCP8 — Health and debug command parity
+#### MCP8 — Health and debug command parity
 
 Expose CLI health/debug commands through MCP so agents can verify graph health before trusting graph-backed context.
 
@@ -2005,7 +2005,7 @@ Expose CLI health/debug commands through MCP so agents can verify graph health b
 - [x] document when agents should call health tools before `query_graph`, `get_context`, and review tools
 - [x] add MCP handler tests for healthy repo, missing DB, stale graph, failed build, and schema mismatch
 
-### MCP9 — File and content search expansion
+#### MCP9 — File and content search expansion
 
 Graph search is symbol-oriented. Add first-class MCP search for prompts, Markdown, SQL templates, config snippets, and embedded text so agents do not need to fall back to `rg`.
 
@@ -2021,7 +2021,7 @@ Graph search is symbol-oriented. Add first-class MCP search for prompts, Markdow
 - [x] document selection rules for `query_graph` vs file/content/template/text-asset search
 - [x] add tests for Markdown, prompt files, SQL, config, templates, embedded strings, ignored paths, and generated-file suppression
 
-### MCP10 — Query graph option parity
+#### MCP10 — Query graph option parity
 
 Expose CLI query options in MCP `query_graph` so agents can use the same ranking and scope controls as CLI users.
 
@@ -2042,7 +2042,7 @@ Expose CLI query options in MCP `query_graph` so agents can use the same ranking
 - [x] include active query mode in response metadata
 - [x] add tests for monorepo subpath filtering, fuzzy ranking, hybrid mode, regex-only lookup, text+regex filtering, and invalid regex
 
-### MCP10.1 — Analysis tool MCP wrappers
+#### MCP10.1 — Analysis tool MCP wrappers
 
 Expose CLI analysis commands directly through MCP with compact, agent-oriented defaults.
 
@@ -2055,7 +2055,7 @@ Expose CLI analysis commands directly through MCP with compact, agent-oriented d
 - [x] include applied limits, omitted counts, and truncation metadata
 - [x] reuse standardized error contract for unresolved seeds and ambiguous symbols
 
-### MCP11 — Review and impact change-source parity
+#### MCP11 — Review and impact change-source parity
 
 Make `get_impact_radius` and `get_review_context` accept the same change-source controls as CLI and `detect_changes`.
 
@@ -2071,7 +2071,7 @@ Make `get_impact_radius` and `get_review_context` accept the same change-source 
 - [x] include resolved changed-file set and source mode in response metadata
 - [x] add tests for explicit files, base diff, staged diff, working-tree diff, empty diff, and invalid argument combinations
 
-### MCP11.1 — Graph freshness warnings
+#### MCP11.1 — Graph freshness warnings
 
 Warn agents when graph-backed answers may be stale for changed code files.
 
@@ -2085,7 +2085,7 @@ Warn agents when graph-backed answers may be stale for changed code files.
 - [x] include suggested recovery, for example `build_or_update_graph`
 - [x] add tests for clean repo, changed code file, changed non-code zero-node file, and stale changed symbol
 
-### MCP12 — Context detail controls
+#### MCP12 — Context detail controls
 
 Expose `atlas context` detail toggles through MCP `get_context` so agents can tune token use without changing service internals.
 
@@ -2101,7 +2101,7 @@ Expose `atlas context` detail toggles through MCP `get_context` so agents can tu
 - [x] document token-use tradeoffs for each toggle in MCP reference
 - [x] add tests for each toggle, combined toggles, limit enforcement, and JSON/TOON output parity
 
-### MCP13 — Saved context read-by-id
+#### MCP13 — Saved context read-by-id
 
 Add direct full-artifact retrieval by `source_id`; search previews are not enough after agents save large context.
 
@@ -2121,11 +2121,11 @@ Add direct full-artifact retrieval by `source_id`; search previews are not enoug
   - [x] chunk count
 - [x] add tests for found artifact, missing artifact, oversized artifact, paged artifact, and cross-session/repo isolation
 
-### MCP14 — Agent hook integrations
+#### MCP14 — Agent hook integrations
 
 Add first-class hook templates and adapter docs for Copilot, Claude, and Codex so Atlas session continuity, graph freshness, review context, and command audit signals work across agent hosts.
 
-#### Shared Atlas hook behavior
+##### Shared Atlas hook behavior
 
 - [x] add repo-local hook scripts under `.atlas/hooks/` or generated host-specific locations that call Atlas CLI commands, never write SQLite directly
 - [x] extend existing `atlas install --platform <platform>` flow to install platform hooks in addition to MCP config
@@ -2149,7 +2149,7 @@ Add first-class hook templates and adapter docs for Copilot, Claude, and Codex s
 - [x] save compaction snapshots before host context compaction when host exposes compaction hooks
 - [x] log denied or risky shell/file operations without storing secret-bearing arguments
 
-#### Hook storage and context routing
+##### Hook storage and context routing
 
 - [x] all hooks write a small normalized event through session service first
 - [x] session event stores `source_id` when large payload is saved to content store
@@ -2191,7 +2191,7 @@ Add first-class hook templates and adapter docs for Copilot, Claude, and Codex s
   - [x] `PostToolUse` refreshes review/impact context after successful tests or builds when bounded
   - [x] `FileChanged` marks graph/content freshness stale without storing full file content
 
-#### Hook install files and directories
+##### Hook install files and directories
 
 - [x] install one shared Atlas hook runner in repo-local directory:
   - [x] `.atlas/hooks/atlas-hook`
@@ -2237,7 +2237,7 @@ Add first-class hook templates and adapter docs for Copilot, Claude, and Codex s
   - [x] `packages/atlas-cli/tests/fixtures/hooks/claude/`
   - [x] `packages/atlas-cli/tests/fixtures/hooks/codex/`
 
-#### Required hooks by platform
+##### Required hooks by platform
 
 - [x] Copilot must use these VS Code hook names where running in VS Code:
   - [x] `SessionStart` for Atlas session start/resume and graph health check
@@ -2281,7 +2281,7 @@ Add first-class hook templates and adapter docs for Copilot, Claude, and Codex s
   - [x] `PostToolUse` with `Bash` matcher for command-result capture and graph refresh
   - [x] `Stop` for final turn state and resume hints
 
-#### Copilot hooks
+##### Copilot hooks
 
 Use `.github/hooks/atlas-copilot.json` for Copilot hooks. VS Code uses PascalCase event names; GitHub Copilot cloud agent and Copilot CLI use camelCase event names.
 
@@ -2311,7 +2311,7 @@ Use `.github/hooks/atlas-copilot.json` for Copilot hooks. VS Code uses PascalCas
   - [x] `chat.hookFilesLocations`
   - [x] `chat.useCustomAgentHooks` when agent-scoped hooks are emitted
 
-#### Copilot cloud agent / CLI hooks
+##### Copilot cloud agent / CLI hooks
 
 Use `.github/hooks/atlas-copilot.json` with `version: 1`; remember cloud agent requires hook config on default branch, while CLI loads hooks from current working directory.
 
@@ -2338,7 +2338,7 @@ Use `.github/hooks/atlas-copilot.json` with `version: 1`; remember cloud agent r
 - [x] support Bash and PowerShell command fields where host allows both
 - [x] keep default timeout at host default unless Atlas command needs explicit `timeoutSec`
 
-#### Claude hooks
+##### Claude hooks
 
 Use `.claude/settings.json` and `.claude/settings.local.json`; keep matchers narrow and prefer command hooks.
 
@@ -2388,7 +2388,7 @@ Use `.claude/settings.json` and `.claude/settings.local.json`; keep matchers nar
 - [x] generate `SessionEnd`
   - [x] cleanup transient bridge files and persist final snapshot
 
-#### Codex hooks
+##### Codex hooks
 
 Use Codex hook config with event -> matcher group -> command handlers. Current runtime is Bash-focused for tool hooks, and Windows hook execution is not supported.
 
@@ -2419,7 +2419,7 @@ Use Codex hook config with event -> matcher group -> command handlers. Current r
   - [x] MCP, web, write, and non-shell tools may not trigger `PreToolUse` / `PostToolUse`
   - [x] `PostToolUse` cannot undo side effects from completed commands
 
-#### MCP14 Patch
+##### MCP14 Patch
 
 - [x] fail closed for unknown hook names instead of silently mapping them to generic `CommandRun`
 - [x] expand `HookPolicy` so policy table owns lifecycle, prompt-routing, freshness, and review-refresh triggers instead of ad hoc event matching
@@ -2444,7 +2444,7 @@ Expected impact for thin-runner change:
 - installed-runner end-to-end tests in `packages/atlas-cli/tests/cli_quality_gates/core.rs` should keep passing if launcher argv contract stays stable, but they should gain regression coverage for thin-launcher behavior
 - hook docs in `wiki/hooks-copilot.md`, `wiki/hooks-claude.md`, and `wiki/hooks-codex.md` should describe runner as launcher shim, not primary logic owner
 
-#### Tests and docs
+##### Tests and docs
 
 - [x] add fixture hook configs for all supported hosts
 - [x] add schema validation tests for generated JSON
@@ -2467,9 +2467,9 @@ Use this part for advanced retrieval, analysis, refactoring, observability, real
 
 These phases extend v1 after core graph/build/update/query path is reliable.
 
-## Phase 18 — Retrieval & Search Intelligence
+### Phase 18 — Retrieval & Search Intelligence
 
-### 18.1 Hybrid search
+#### 18.1 Hybrid search
 
 - [x] keep SQLite FTS5 as baseline
 - [x] add embeddings behind optional toggle
@@ -2481,7 +2481,7 @@ These phases extend v1 after core graph/build/update/query path is reliable.
   - [x] vector results
   - [x] reciprocal-rank fusion merge
 
-### 18.2 Ranking improvements
+#### 18.2 Ranking improvements
 
 - [x] exact name boost
 - [x] qualified-name boost
@@ -2491,105 +2491,105 @@ These phases extend v1 after core graph/build/update/query path is reliable.
 - [x] recent-file boost
 - [x] API-level boost
 
-### 18.3 Graph-aware search
+#### 18.3 Graph-aware search
 
 - [x] expand results to callers
 - [x] expand results to callees
 - [x] expand results to imports
 - [x] rank by graph distance
 
-## Phase 19 — Advanced Impact Analysis
+### Phase 19 — Advanced Impact Analysis
 
-### 19.1 Weighted traversal
+#### 19.1 Weighted traversal
 
 - [x] assign traversal weights:
   - [x] calls > imports > references
 - [x] add confidence tiers
 
-### 19.2 Impact scoring
+#### 19.2 Impact scoring
 
 - [x] compute `impact_score` per node
 - [x] rank impacted nodes
 
-### 19.3 Change classification
+#### 19.3 Change classification
 
 - [x] detect API change
 - [x] detect signature change
 - [x] detect internal change
 - [x] assign risk level
 
-### 19.4 Test impact
+#### 19.4 Test impact
 
 - [x] map tests to functions
 - [x] list affected tests
 - [x] detect missing tests
 
-### 19.5 Boundary detection
+#### 19.5 Boundary detection
 
 - [x] detect cross-module changes
 - [x] highlight architecture violations
 
-## Phase 20 — Performance & Incremental Engine
+### Phase 20 — Performance & Incremental Engine
 
-### 20.1 Incremental parsing
+#### 20.1 Incremental parsing
 
 - [x] partial file reparse
 - [x] optional Tree-sitter incremental parsing
 
-### 20.2 Dependency invalidation
+#### 20.2 Dependency invalidation
 
 - [x] improve `find_dependents`
 - [x] reduce over-invalidation
 
-### 20.3 Parallelization
+#### 20.3 Parallelization
 
 - [x] optimize worker pool
 - [x] batch DB writes
 - [x] reduce lock contention
 
-### 20.4 Large-repo handling
+#### 20.4 Large-repo handling
 
 - [x] streaming parsing
 - [x] memory caps
 - [x] chunked DB writes
 
-## Phase 21 — Developer Workflow Features
+### Phase 21 — Developer Workflow Features
 
-### 21.1 Explain change
+#### 21.1 Explain change
 
 - [x] summarize diff
 - [x] list impacted components
 - [x] explain ripple effects
 
-### 21.2 Smart review context
+#### 21.2 Smart review context
 
 - [x] prioritize high-impact nodes
 - [x] include call chains
 - [x] remove noise
 
-### 21.3 Natural-language queries
+#### 21.3 Natural-language queries
 
 - [x] support `where is X used`
 - [x] support `what calls Y`
 - [x] support `what breaks if I change Z`
 - [x] map intent to graph query
 
-### 21.4 CLI UX
+#### 21.4 CLI UX
 
 - [x] interactive shell (`atlas shell`)
 - [x] fuzzy search
 - [x] paging
 - [x] colored output
 
-## Phase 22 — Context Engine
+### Phase 22 — Context Engine
 
 Build deterministic retrieval-and-selection layer over graph. No LLM dependence. Input structured request or simple text. Output bounded, explainable context for CLI, review flow, later agent flow.
 
-### 22.0 Recommended implementation order
+#### 22.0 Recommended implementation order
 
 Implement Phase 22 in this order so each slice reuses existing store/search/review pieces and leaves Phase 23-25 with stable contracts instead of churn.
 
-#### 22.0.1 Core types and crate boundary
+##### 22.0.1 Core types and crate boundary
 
 - [x] decide crate home for context engine (`packages/atlas-review` if scope stays retrieval-only, new crate only if responsibilities outgrow review assembly)
 - [x] add `ContextIntent`, `ContextTarget`, `ContextRequest`, `ContextResult`, `SelectedNode`, `SelectedEdge`, `SelectedFile`
@@ -2605,7 +2605,7 @@ Exit criteria:
 - [x] model types compile
 - [x] json snapshot tests cover serialize/deserialize round-trip
 
-#### 22.0.2 Store/query support needed by engine
+##### 22.0.2 Store/query support needed by engine
 
 - [x] audit and expose exact helper queries from SQLite store before engine logic grows
 - [x] add focused store helpers for direct callers, direct callees, import neighbors, containment neighbors, node lookup by qname/name/path
@@ -2620,7 +2620,7 @@ Exit criteria:
 - [x] unit tests for each helper query on small graph fixtures
 - [x] helper outputs stable for missing nodes, ambiguous names, deleted paths
 
-#### 22.0.3 Exact target resolution path
+##### 22.0.3 Exact target resolution path
 
 - [x] implement `resolve_target` for qualified name, exact symbol name, exact file path
   - [x] expose this as first-class public resolver surface instead of forcing agents to copy `qualified_name` from `query_graph`
@@ -2646,7 +2646,7 @@ Exit criteria:
 - [x] tests for ambiguous short symbol names
 - [x] tests for missing target with suggestions
 
-#### 22.0.4 Deterministic symbol-context retrieval
+##### 22.0.4 Deterministic symbol-context retrieval
 
 - [x] implement `build_symbol_context` from resolved seed
 - [x] retrieve direct node, callers, callees, imports, containment siblings, optional tests
@@ -2662,7 +2662,7 @@ Exit criteria:
 - [x] direct callers/callees always survive trimming over broad file neighbors
 - [x] include/exclude flags work for tests/imports/neighbors
 
-#### 22.0.5 Ranking and trimming policy
+##### 22.0.5 Ranking and trimming policy
 
 - [x] implement `rank_context`
 - [x] score by exact-target boost, graph distance, edge confidence, same-file, same-package, public API, test adjacency
@@ -2679,7 +2679,7 @@ Exit criteria:
 - [x] tests prove caps deterministic under tie conditions
 - [x] truncated output explains what got cut
 
-#### 22.0.6 Review and impact context builders
+##### 22.0.6 Review and impact context builders
 
 - [x] implement `build_review_context` by adapting existing changed-file and impact flow into `ContextResult`
 - [x] implement `build_impact_context` from file seeds and changed-symbol seeds
@@ -2693,7 +2693,7 @@ Exit criteria:
 - [x] current review-context command can be mapped onto context engine without behavior regression
 - [x] impact context returns machine-readable bounded graph slice
 
-#### 22.0.7 Semi-structured query parsing
+##### 22.0.7 Semi-structured query parsing
 
 - [x] add simple classifier for `what breaks`, `used by`, `who calls`, `safe to refactor`, `dead code`, `rename`, `remove dependency`
 - [x] add regex extraction for quoted symbols, file paths, function-like names, method-like names
@@ -2708,7 +2708,7 @@ Exit criteria:
 - [x] text requests resolve to same result as equivalent structured requests
 - [x] ambiguity metadata survives classifier path
 
-#### 22.0.8 Code spans and source packaging
+##### 22.0.8 Code spans and source packaging
 
 - [x] include target span first
 - [x] include caller/callee spans only when enabled
@@ -2723,14 +2723,14 @@ Exit criteria:
 - [x] code span tests verify exact lines for target and adjacent symbols
 - [x] large file requests stay bounded
 
-#### 22.0.9 Public surfaces
+##### 22.0.9 Public surfaces
 
 - [x] add internal engine entrypoint `ContextEngine`
 - [x] wire CLI prototype behind future `atlas context` surface or hidden/dev command first
 - [x] track MCP public-surface rollout in dedicated MCP and Agent Roadmap section
 - [x] keep old `review-context` command during transition; switch implementation under hood first
 
-##### 22.0.9.1 Public rollout checklist for `atlas context` and MCP context tools
+###### 22.0.9.1 Public rollout checklist for `atlas context` and MCP context tools
 
 - [x] unhide `atlas context` once command shape is frozen
 - [x] replace dev-style `--qname` / `--name` / `--file` targeting UX with stable public CLI contract
@@ -2751,7 +2751,7 @@ Why ninth:
 Exit criteria:
 - [x] CLI json output stable enough for golden tests
 
-#### 22.0.10 Finish gates for “context engine complete”
+##### 22.0.10 Finish gates for “context engine complete”
 
 - [x] exact symbol lookup
 - [x] ambiguous symbol resolution
@@ -2764,10 +2764,10 @@ Exit criteria:
 - [x] `cargo test --workspace`
 - [x] `cargo clippy --workspace --all-targets --all-features -- -D warnings`
 
-#### 22.0.11 Validate completion rule
+##### 22.0.11 Validate completion rule
 - [x] Phase 22 done only when review flow, symbol flow, and impact flow all share same engine contracts and no duplicate ranking/trimming logic remains in CLI or MCP layers
 
-### 22.1 Scope and responsibilities
+#### 22.1 Scope and responsibilities
 
 - [x] accept structured or semi-structured request
 - [x] resolve target symbol(s), file(s), or change-set
@@ -2776,7 +2776,7 @@ Exit criteria:
 - [x] trim to bounded result size
 - [x] return machine-readable context
 
-### 22.2 Request model
+#### 22.2 Request model
 
 - [x] define `ContextIntent` enum:
   - [x] `ImpactAnalysis`
@@ -2808,7 +2808,7 @@ Exit criteria:
   - [x] include_callees
   - [x] include_neighbors
 
-### 22.3 Response model
+#### 22.3 Response model
 
 - [x] define `ContextResult`:
   - [x] resolved target nodes
@@ -2840,7 +2840,7 @@ Exit criteria:
   - [x] reason included
   - [x] node count included
 
-### 22.4 Intent parsing and resolution
+#### 22.4 Intent parsing and resolution
 
 - [x] implement exact symbol lookup path
 - [x] implement simple query classifier:
@@ -2865,7 +2865,7 @@ Exit criteria:
 - [x] resolve by ranked search if ambiguous
 - [x] return ambiguity metadata if multiple candidates remain, including import/call-resolution ties
 
-### 22.5 Retrieval, ranking, trimming
+#### 22.5 Retrieval, ranking, trimming
 
 - [x] fetch direct node record
 - [x] fetch direct callers
@@ -2902,7 +2902,7 @@ Exit criteria:
 - [x] drop distant neighbors before dropping direct callers/callees
 - [x] mark output as truncated if limits applied
 
-### 22.6 Code spans, APIs, tests
+#### 22.6 Code spans, APIs, tests
 
 - [x] include target symbol span
 - [x] include caller/callee spans if enabled
@@ -2926,11 +2926,11 @@ Exit criteria:
   - [x] include/exclude tests behavior
   - [x] code span selection accuracy
 
-## Phase 23 — Autonomous Code Reasoning
+### Phase 23 — Autonomous Code Reasoning
 
 Answer structural questions from graph + parser + store facts only. No unsupported claims. Return structured findings with evidence and certainty.
 
-### 23.1 Engine responsibilities and core types
+#### 23.1 Engine responsibilities and core types
 
 - [x] analyze removal impact
 - [x] detect dead code candidates
@@ -2950,7 +2950,7 @@ Answer structural questions from graph + parser + store facts only. No unsupport
 - [x] define `DependencyRemovalResult`
 - [x] define `RenamePreviewResult`
 
-### 23.2 Removal impact analysis
+#### 23.2 Removal impact analysis
 
 - [x] accept symbol or file as seed
 - [x] find direct inbound edges
@@ -2984,7 +2984,7 @@ Answer structural questions from graph + parser + store facts only. No unsupport
   - [x] do not count `contains` edges as probable impact unless explicitly requested
   - [x] add regression for `analyze remove <symbol>` inflated by file/package containment
 
-### 23.3 Dead code, safety, dependency removal
+#### 23.3 Dead code, safety, dependency removal
 
 - [x] detect dead code candidates when:
   - [x] no inbound call edges
@@ -3061,7 +3061,7 @@ Answer structural questions from graph + parser + store facts only. No unsupport
   - [x] `--code-only`
 - [x] enforce compact defaults for MCP analysis wrappers
 
-### 23.4 Rename radius, test adjacency, risk, APIs
+#### 23.4 Rename radius, test adjacency, risk, APIs
 
 - [x] preview rename blast radius:
   - [x] locate definition
@@ -3121,11 +3121,11 @@ Answer structural questions from graph + parser + store facts only. No unsupport
   - [x] missing test signal for changed symbol
   - [x] risk scoring sanity checks
 
-## Phase 24 — Smart Refactoring Core
+### Phase 24 — Smart Refactoring Core
 
 Deterministic, syntax-aware transforms backed by graph validation. Start with strongly checkable operations only: rename, dead-code removal, import cleanup. Keep extract-function as detection/planning first.
 
-### 24.1 Responsibilities and operation model
+#### 24.1 Responsibilities and operation model
 
 - [x] plan refactor
 - [x] simulate impact before apply
@@ -3146,7 +3146,7 @@ Deterministic, syntax-aware transforms backed by graph validation. Start with st
 - [x] define `RefactorValidationResult`
 - [x] define `RefactorDryRunResult`
 
-### 24.2 Rename symbol
+#### 24.2 Rename symbol
 
 - [x] require unique definition resolution
 - [x] require valid new identifier
@@ -3171,7 +3171,7 @@ Deterministic, syntax-aware transforms backed by graph validation. Start with st
   - [x] manual review list
   - [x] patch preview
 
-### 24.3 Remove dead code and clean imports
+#### 24.3 Remove dead code and clean imports
 
 - [x] remove dead code only when:
   - [x] candidate has sufficient confidence
@@ -3199,7 +3199,7 @@ Deterministic, syntax-aware transforms backed by graph validation. Start with st
   - [x] file remains syntactically valid if parser re-check exists
   - [x] no duplicate imports created
 
-### 24.4 Extract-function detection, simulation, APIs, tests
+#### 24.4 Extract-function detection, simulation, APIs, tests
 
 - [x] detect extract-function candidates from:
   - [x] large contiguous block
@@ -3261,18 +3261,18 @@ Deterministic, syntax-aware transforms backed by graph validation. Start with st
   - [x] dry-run output stable
   - [x] patch output stable
 
-## Phase 25 — Shared Analysis and Refactor Infrastructure
+### Phase 25 — Shared Analysis and Refactor Infrastructure
 
 Shared support for explainability, config, CLI surface, JSON contracts, benchmarks. Phase 22-24 depend on this.
 
-### 25.1 Evidence and explainability
+#### 25.1 Evidence and explainability
 
 - [x] attach evidence edges
 - [x] attach evidence nodes
 - [x] attach scoring factors
 - [x] attach uncertainty flags
 
-### 25.2 Config surface
+#### 25.2 Config surface
 
 - [x] max context nodes
 - [x] max context depth
@@ -3284,14 +3284,14 @@ Shared support for explainability, config, CLI surface, JSON contracts, benchmar
 - [x] entrypoint allowlist
 - [x] framework conventions file
 
-### 25.3 Language support policy
+#### 25.3 Language support policy
 
 - [x] phase-2 features degrade gracefully by language
 - [x] enable rename only where symbol/reference mapping is mature
 - [x] enable dead code only where inbound usage confidence is acceptable
 - [x] enable import cleanup only where parser support is reliable
 
-### 25.4 CLI surfaces
+#### 25.4 CLI surfaces
 
 - [x] `atlas context <symbol>`
 - [x] `atlas analyze remove <symbol>`
@@ -3305,7 +3305,7 @@ Shared support for explainability, config, CLI surface, JSON contracts, benchmar
 - [x] `atlas refactor remove-dead <symbol> --dry-run`
 - [x] `atlas refactor clean-imports <file> --dry-run`
 
-### 25.5 JSON output, benchmarks, completion criteria
+#### 25.5 JSON output, benchmarks, completion criteria
 
 - [x] stable JSON schema for all analysis commands
   - [x] NOTE: stable schema exists, but unresolved seeds and warnings need standardized `ok/error_code/message/suggestions` contract
@@ -3328,22 +3328,22 @@ Shared support for explainability, config, CLI surface, JSON contracts, benchmar
   - [x] import cleanup works reliably
   - [x] extract-function candidate detection exists even if auto-apply stays out of scope
 
-## Phase 26 — MCP / Agent Integration
+### Phase 26 — MCP / Agent Integration
 
-### 26.1 Status
+#### 26.1 Status
 
 Detailed MCP tool rollout, schema work, and response shaping now live in Part II under MCP and Agent Roadmap.
 
-## Phase 27 — Observability
+### Phase 27 — Observability
 
-### 27.1 Metrics
+#### 27.1 Metrics
 
 - [x] indexing time
 - [x] nodes/sec
 - [x] query latency
 - [x] impact latency
 
-### 27.2 Debug tools
+#### 27.2 Debug tools
 
 - [x] `atlas doctor`
 - [x] `atlas debug graph`
@@ -3351,25 +3351,25 @@ Detailed MCP tool rollout, schema work, and response shaping now live in Part II
 - [x] `atlas explain-query`
   - [x] expose same query-explanation details through MCP `explain_query`
 
-### 27.3 Data integrity
+#### 27.3 Data integrity
 
 - [x] orphan-node detection
   - [x] add regression that orphan-node query uses current edge schema column names
 - [x] edge validation
 - [x] DB consistency checks
 
-## Phase 28 — Real-Time & Continuous Mode
+### Phase 28 — Real-Time & Continuous Mode
 
 Deterministic watch flow on top of existing incremental pipeline. Goal: near-real-time graph freshness without full rebuilds for small edits.
 
-### 28.1 Watch mode scope
+#### 28.1 Watch mode scope
 
 - [x] auto-update graph when files change
 - [x] stay efficient on rapid edit bursts
 - [x] avoid full rebuild path for ordinary edits
 - [x] integrate with existing incremental parse + update flow
 
-### 28.2 File watcher
+#### 28.2 File watcher
 
 - [x] choose watcher crate (for example `notify`)
 - [x] watch repo directories recursively
@@ -3380,7 +3380,7 @@ Deterministic watch flow on top of existing incremental pipeline. Goal: near-rea
 - [x] map watch roots to normalized repo-relative paths
 - [x] handle platform-specific watcher quirks
 
-### 28.3 Change detection
+#### 28.3 Change detection
 
 - [x] detect:
   - [x] file create
@@ -3391,7 +3391,7 @@ Deterministic watch flow on top of existing incremental pipeline. Goal: near-rea
 - [x] normalize duplicate event bursts
 - [x] keep delete/rename handling consistent with batch update mode
 
-### 28.4 Update pipeline integration
+#### 28.4 Update pipeline integration
 
 - [x] on change enqueue file for update
 - [x] batch changes with debounce window (`100–500ms`)
@@ -3401,7 +3401,7 @@ Deterministic watch flow on top of existing incremental pipeline. Goal: near-rea
 - [x] reuse existing update/build primitives where practical
 - [x] avoid duplicate queue entries for same file
 
-### 28.5 Incremental update logic
+#### 28.5 Incremental update logic
 
 - [x] reuse existing update logic
 - [x] handle:
@@ -3411,7 +3411,7 @@ Deterministic watch flow on top of existing incremental pipeline. Goal: near-rea
 - [x] preserve dependent invalidation rules
 - [x] ensure graph slice replacement semantics stay atomic
 
-### 28.6 Queue, workers, state
+#### 28.6 Queue, workers, state
 
 - [x] create update queue
 - [x] worker responsibilities:
@@ -3426,7 +3426,7 @@ Deterministic watch flow on top of existing incremental pipeline. Goal: near-rea
   - [x] last update time
 - [x] expose internal state for status/debug surfaces later
 
-### 28.7 Performance and failure handling
+#### 28.7 Performance and failure handling
 
 - [x] debounce rapid file changes
 - [x] coalesce duplicate updates
@@ -3436,7 +3436,7 @@ Deterministic watch flow on top of existing incremental pipeline. Goal: near-rea
 - [x] log watch/update errors
 - [x] keep watch loop alive after recoverable failures
 
-### 28.8 CLI and tests
+#### 28.8 CLI and tests
 
 - [x] add `atlas watch`
 - [x] show:
@@ -3455,11 +3455,11 @@ Deterministic watch flow on top of existing incremental pipeline. Goal: near-rea
   - [x] no full rebuild required for small changes
   - [x] queue and writer path remain race-free
 
-## Phase 29 — Intelligence & Insights
+### Phase 29 — Intelligence & Insights
 
 Deterministic analytics layer on top of graph + stored metadata. Produce explainable architecture insights, metrics, risk assessments, pattern detection. No LLM dependency.
 
-### 29.1 Architecture analysis
+#### 29.1 Architecture analysis
 
 - [ ] build module-level graph
 - [ ] detect strongly connected components (SCC)
@@ -3477,7 +3477,7 @@ Deterministic analytics layer on top of graph + stored metadata. Produce explain
 - [ ] compute edges per file
 - [ ] flag large/highly connected files
 
-### 29.2 Code health metrics
+#### 29.2 Code health metrics
 
 - [ ] node-level metrics:
   - [ ] fan-in
@@ -3498,7 +3498,7 @@ Deterministic analytics layer on top of graph + stored metadata. Produce explain
 - [ ] compute percentiles
 - [ ] detect outliers
 
-### 29.3 Risk assessment engine
+#### 29.3 Risk assessment engine
 
 - [ ] score from inputs:
   - [ ] public API
@@ -3514,7 +3514,7 @@ Deterministic analytics layer on top of graph + stored metadata. Produce explain
   - [ ] factors list
   - [ ] evidence nodes/edges
 
-### 29.4 Pattern detection
+#### 29.4 Pattern detection
 
 - [ ] duplicate patterns:
   - [ ] repeated call chains
@@ -3531,7 +3531,7 @@ Deterministic analytics layer on top of graph + stored metadata. Produce explain
   - [ ] detect long call chains
   - [ ] flag complexity
 
-### 29.5 APIs, outputs, CLI, config, tests
+#### 29.5 APIs, outputs, CLI, config, tests
 
 - [ ] create `InsightsEngine`
 - [ ] implement:
@@ -3572,23 +3572,23 @@ Deterministic analytics layer on top of graph + stored metadata. Produce explain
   - [ ] useful pattern detection
   - [ ] structured outputs
 
-## Phase 30 — Optional Advanced Features
+### Phase 30 — Optional Advanced Features
 
-### 30.1 Multi-repo
+#### 30.1 Multi-repo
 
 - [ ] shared graph
 - [ ] cross-repo impact
 
-### 30.2 Remaining code intelligence
+#### 30.2 Remaining code intelligence
 
 - [ ] similar-function detection beyond graph-shape heuristics
 - [ ] duplicate detection beyond exact structural patterns
 - [ ] infer modules
 - [ ] label components
 
-## Phase 31 — Lowest Priority
+### Phase 31 — Lowest Priority
 
-### 31.1 Wiki / docs generation (CLI command)
+#### 31.1 Wiki / docs generation (CLI command)
 
 - [ ] generate Markdown docs
 - [ ] module pages
@@ -3596,11 +3596,11 @@ Deterministic analytics layer on top of graph + stored metadata. Produce explain
 - [ ] static site export
 - [ ] visualization/export
 
-## Phase 32 — TOON Output
+### Phase 32 — TOON Output
 
 TOON for LLM-facing MCP output only. Goal: reduce token usage for review and context payloads without changing Atlas core storage, parser, or JSON-RPC transport. Prefer official Rust TOON library (official only) (`toon-format/toon-rust`) over a custom Atlas encoder. Build Atlas-specific adapter code only where library integration is insufficient.
 
-### 32.1 Scope and boundaries
+#### 32.1 Scope and boundaries
 
 - [x] evaluate official Rust TOON library for Atlas use
 - [x] add TOON dependency only if maintenance, API shape, and spec coverage are acceptable
@@ -3610,7 +3610,7 @@ TOON for LLM-facing MCP output only. Goal: reduce token usage for review and con
 - [x] do not use TOON for SQLite persistence, internal domain models, or MCP transport framing
 - [x] avoid custom TOON implementation unless official library is blocked or insufficient
 
-### 32.2 Encoding MVP
+#### 32.2 Encoding MVP
 
 - [x] encode `serde_json::Value` to TOON through library API
 - [x] confirm support for objects, arrays, strings, numbers, booleans, and null
@@ -3622,11 +3622,11 @@ TOON for LLM-facing MCP output only. Goal: reduce token usage for review and con
 - [x] confirm expanded encoding for mixed or nested arrays
 - [x] add Atlas-side fallback/error path when payload shape exceeds supported library behavior
 
-### 32.3 MCP integration
+#### 32.3 MCP integration
 
 - [x] tracked in MCP4 under MCP and Agent Roadmap
 
-### 32.4 Validation and quality gates
+#### 32.4 Validation and quality gates
 
 - [x] add fixture tests from TOON spec examples for supported library subset
 - [x] add round-trip tests for Atlas-produced payloads where feasible
@@ -3640,11 +3640,11 @@ TOON for LLM-facing MCP output only. Goal: reduce token usage for review and con
 
 Use this part for session persistence, saved artifacts, retrieval-backed resume, and long-lived memory work.
 
-## Context-Mode and Continuity Roadmap
+### Context-Mode and Continuity Roadmap
 
 These phases cover continuity storage, session lifecycle, retrieval-backed restoration, memory quality, and longer-term cross-session intelligence.
 
-### Overview
+#### Overview
 
 Extend Atlas with context-mode persistence and session continuity without mixing those concerns into graph database.
 
@@ -3655,7 +3655,7 @@ This backlog covers pieces needed for:
 - resume snapshots
 - retrieval-backed restoration
 
-#### Core Design Rules
+##### Core Design Rules
 
 - DO NOT store saved context in graph database
 - DO NOT replay raw command history into future sessions
@@ -3665,18 +3665,18 @@ This backlog covers pieces needed for:
 - KEEP continuity best-effort; never block primary CLI/MCP flow on session persistence failure
 - KEEP retrieval lexical and local first; embeddings are optional later, not required for v1 context-mode completion
 
-### Phase CM1 — Foundation and crate boundaries
+#### Phase CM1 — Foundation and crate boundaries
 
 Create storage and adapter boundaries first so later work does not leak session or artifact concerns into graph code.
 
-#### New crates
+##### New crates
 
 - [x] `packages/atlas-contentstore`
 - [x] `packages/atlas-session`
 - [x] `packages/atlas-contextsave`
 - [x] `packages/atlas-adapters`
 
-#### Session identity model
+##### Session identity model
 
 - [x] define `session_id = hash(repo_root + worktree + frontend)`
 - [x] normalize paths before hashing
@@ -3690,11 +3690,11 @@ Exit criteria:
 - [x] crates compile with narrow responsibilities
 - [x] session identity rules are fixed before persistence APIs spread
 
-### Phase CM2 — Content store for saved artifacts
+#### Phase CM2 — Content store for saved artifacts
 
 Build durable artifact storage before eventing so large outputs already have somewhere safe to go.
 
-#### Database
+##### Database
 
 - [x] create SQLite database at `.atlas/context.db`
 - [x] enable `PRAGMA journal_mode=WAL;`
@@ -3704,7 +3704,7 @@ Build durable artifact storage before eventing so large outputs already have som
 - [x] enable FTS5 support
 - [x] keep this database separate from `.atlas/worldtree.db`
 
-#### Required tables
+##### Required tables
 
 `sources`
 
@@ -3741,7 +3741,7 @@ Build durable artifact storage before eventing so large outputs already have som
 
 - [x] vocabulary table for bounded fuzzy correction and term suggestions
 
-#### Content store API
+##### Content store API
 
 - [x] `open(path)`
 - [x] `migrate()`
@@ -3752,7 +3752,7 @@ Build durable artifact storage before eventing so large outputs already have som
 - [x] `delete_source(source_id)`
 - [x] `cleanup(retention_policy)`
 
-#### Chunking rules
+##### Chunking rules
 
 - [x] markdown must split by headings first
 - [x] plain text must split by paragraph blocks or line windows
@@ -3761,14 +3761,14 @@ Build durable artifact storage before eventing so large outputs already have som
 - [x] each chunk must preserve stable `chunk_index`
 - [x] each chunk should preserve human-readable `title` when possible
 
-#### Compression routing
+##### Compression routing
 
 - [x] if output is below small-output threshold, return raw output directly
 - [x] if output is above preview threshold, index it and return compact preview
 - [x] if output is above large-output threshold, index it and return pointer only
 - [x] never put raw large output into future prompts
 
-#### Retrieval quality stack
+##### Retrieval quality stack
 
 - [x] keep byte-threshold routing configurable and documented
 - [x] add `search_with_fallback(query, filters)`
@@ -3793,15 +3793,15 @@ Exit criteria:
 - [x] chunking is deterministic enough for tests and follow-up retrieval
 - [x] saved artifact search is strong enough to recover relevant prior results without replaying raw history
 
-### Phase CM3 — Session store and event ledger
+#### Phase CM3 — Session store and event ledger
 
 Persist session facts and bounded events next so every later surface can write into one service.
 
-#### Database
+##### Database
 
 - [x] create SQLite database at `.atlas/session.db`
 
-#### Required tables
+##### Required tables
 
 `session_meta`
 
@@ -3833,7 +3833,7 @@ Persist session facts and bounded events next so every later surface can write i
 - [x] `created_at TEXT NOT NULL`
 - [x] `updated_at TEXT NOT NULL`
 
-#### Event rules
+##### Event rules
 
 - [x] deduplicate events using `event_hash`
 - [x] keep maximum number of events per session
@@ -3842,7 +3842,7 @@ Persist session facts and bounded events next so every later surface can write i
 - [x] never store large raw output in `session_events`
 - [x] large raw output must be stored in content store and referenced from session event payload
 
-#### Fixed event types
+##### Fixed event types
 
 - [x] `FILE_READ`
 - [x] `FILE_WRITE`
@@ -3867,11 +3867,11 @@ Exit criteria:
 - [x] session records persist across runs
 - [x] event retention and dedup rules are enforced centrally
 
-### Phase CM4 — Event extraction and adapter pipeline
+#### Phase CM4 — Event extraction and adapter pipeline
 
 Instrument existing commands and engines only after the session/content services exist.
 
-#### Internal session event capture points
+##### Internal session event capture points
 
 - [x] CLI command start
 - [x] CLI command finish
@@ -3886,7 +3886,7 @@ Instrument existing commands and engines only after the session/content services
 - [x] reasoning engine response must emit session events
 - [x] MCP tool handler execution boundaries
 
-#### Extraction API
+##### Extraction API
 
 - [x] `extract_cli_event`
 - [x] `extract_graph_event`
@@ -3897,7 +3897,7 @@ Instrument existing commands and engines only after the session/content services
 - [x] `normalize_event`
 - [x] `hash_event`
 
-#### Event payload rules
+##### Event payload rules
 
 - [x] payloads must be structured JSON
 - [x] payloads must be bounded in size
@@ -3906,13 +3906,13 @@ Instrument existing commands and engines only after the session/content services
 - [x] payloads must never embed large stdout blobs
 - [x] continuity write failures must degrade to log-and-continue behavior
 
-#### Session bridge artifacts
+##### Session bridge artifacts
 
 - [x] write transient session event markdown bridge file when direct hook payload transport is unavailable
 - [x] auto-index session bridge markdown into content store
 - [x] clean up consumed or stale bridge files
 
-#### External hooks adapter interfaces
+##### External hooks adapter interfaces
 
 - [x] `BeforeCommand`
 - [x] `AfterCommand`
@@ -3922,12 +3922,12 @@ Instrument existing commands and engines only after the session/content services
 - [x] `BeforeCompact`
 - [x] `BeforeExit`
 
-#### Initial adapters
+##### Initial adapters
 
 - [x] CLI adapter
 - [x] MCP adapter
 
-#### Adapter rules
+##### Adapter rules
 
 - [x] adapters must emit normalized events
 - [x] adapters must not write SQLite directly
@@ -3944,15 +3944,15 @@ Exit criteria:
 - [x] no direct SQLite writes occur from CLI or MCP adapters
 - [x] continuity remains non-blocking even when hook capture or persistence partially fails
 
-### Phase CM5 — Resume snapshots and CLI session workflow
+#### Phase CM5 — Resume snapshots and CLI session workflow
 
 Once events exist, build bounded resume material and user-facing session commands.
 
-#### Snapshot API
+##### Snapshot API
 
 - [x] `build_resume(session_id) -> ResumeSnapshot`
 
-#### Snapshot content
+##### Snapshot content
 
 - [x] repo root
 - [x] worktree identifier
@@ -3968,7 +3968,7 @@ Once events exist, build bounded resume material and user-facing session command
 - [x] active rules/instructions
 - [x] retrieval-ready source labels or queries for important prior artifacts
 
-#### Snapshot constraints
+##### Snapshot constraints
 
 - [x] snapshot size must be bounded
 - [x] snapshot must contain retrieval hints
@@ -3978,14 +3978,14 @@ Once events exist, build bounded resume material and user-facing session command
 - [x] snapshot must include exact follow-up search commands / retrieval directives
 - [x] snapshot rendering must be deterministic and easy to snapshot-test
 
-#### Lifecycle
+##### Lifecycle
 
 - [x] build snapshot before compaction or reset
 - [x] persist snapshot into `session_resume`
 - [x] inject snapshot at next session start or explicit resume
 - [x] mark snapshot consumed after successful injection
 
-#### CLI commands
+##### CLI commands
 
 - [x] `atlas session start`
 - [x] `atlas session status`
@@ -3993,7 +3993,7 @@ Once events exist, build bounded resume material and user-facing session command
 - [x] `atlas session clear`
 - [x] `atlas session list`
 
-#### CLI behavior
+##### CLI behavior
 
 - [x] auto-create session on interactive run
 - [x] auto-load resume snapshot when available
@@ -4011,16 +4011,16 @@ Exit criteria:
 - [x] CLI surfaces expose session lifecycle without leaking internal storage details
 - [x] resume snapshot gives enough retrieval instructions to recover prior tool results, topics, and decisions on demand
 
-### Phase CM6 — Retrieval-backed restoration in Context Engine
+#### Phase CM6 — Retrieval-backed restoration in Context Engine
 
 Extend context retrieval only after saved artifacts and session identity are stable.
 
-#### Context Engine request additions
+##### Context Engine request additions
 
 - [x] add `include_saved_context: bool`
 - [x] add `session_id: Option<String>`
 
-#### Retrieval flow
+##### Retrieval flow
 
 - [x] query content store by symbol name after graph retrieval
 - [x] query content store by file path after graph retrieval
@@ -4028,7 +4028,7 @@ Extend context retrieval only after saved artifacts and session identity are sta
 - [x] add retrieval from content store after graph retrieval
 - [x] merge saved-context results into `ContextResult`
 
-#### Ranking additions
+##### Ranking additions
 
 - [x] add saved-context relevance
 - [x] add recency boost
@@ -4037,7 +4037,7 @@ Extend context retrieval only after saved artifacts and session identity are sta
 - [x] preserve lexical retrieval as primary ranking path
 - [x] avoid vector/embedding dependency in v1 continuity path
 
-#### Result additions
+##### Result additions
 
 - [x] include `saved_context_sources`
 - [x] include `source_ids`
@@ -4053,7 +4053,7 @@ Exit criteria:
 - [x] context restoration works through retrieval, not transcript replay
 - [x] `ContextResult` exposes enough source ids and hints for follow-up fetches
 
-### Phase CM7 — MCP continuity and saved-context tools
+#### Phase CM7 — MCP continuity and saved-context tools
 
 Expose session continuity to agents only after storage, events, resume, and retrieval paths are working locally. Detailed tool, event, and payload checklist is consolidated in MCP5 under MCP and Agent Roadmap.
 
@@ -4065,11 +4065,11 @@ Exit criteria:
 - [x] MCP returns pointers and previews instead of raw large payloads
 - [x] session-aware MCP tools work without duplicating business logic from CLI/services
 
-### Phase CM8 — Safety limits, tests, and completion gate
+#### Phase CM8 — Safety limits, tests, and completion gate
 
 Close with the operational guards and tests that keep context-mode safe and maintainable.
 
-#### Tests
+##### Tests
 
 - [x] session creation
 - [x] event deduplication
@@ -4087,14 +4087,14 @@ Close with the operational guards and tests that keep context-mode safe and main
 - [x] best-effort continuity failure path
 - [x] race/concurrency coverage for session writes and snapshot updates
 
-#### Redaction
+##### Redaction
 
 - [x] strip environment variables
 - [x] strip secrets from command arguments
 - [x] strip tokens from logs and payloads
 - [x] avoid indexing sensitive bridge payloads or raw secrets into content store
 
-#### Limits
+##### Limits
 
 - [x] max events per session
 - [x] max content DB size
@@ -4104,7 +4104,7 @@ Close with the operational guards and tests that keep context-mode safe and main
 - [x] stale session cleanup
 - [x] dedup time window for repeated near-identical events
 
-#### Operational visibility
+##### Operational visibility
 
 - [x] add session stats
 - [x] add content-store stats
@@ -4112,7 +4112,7 @@ Close with the operational guards and tests that keep context-mode safe and main
 - [x] add indexed artifact / preview / pointer routing counters
 - [x] add purge visibility for session DB, content DB, and bridge artifacts
 
-#### Completion criteria
+##### Completion criteria
 
 - [x] sessions persist across runs
 - [x] large outputs are stored instead of passed directly
@@ -4129,13 +4129,13 @@ Why last:
 
 ---
 
-### Phase CM9 — Semantic Retrieval
+#### Phase CM9 — Semantic Retrieval
 
-#### Goal
+##### Goal
 
 Move beyond lexical search (BM25, trigram) into meaning-aware retrieval.
 
-#### Tasks
+##### Tasks
 
 - [x] add symbol-aware retrieval using graph relationships
 - [x] expand queries using related symbols from graph
@@ -4143,11 +4143,11 @@ Move beyond lexical search (BM25, trigram) into meaning-aware retrieval.
 - [x] implement cross-file semantic linking
 - [x] add query expansion based on prior context
 
-#### Output
+##### Output
 
 - retrieval can find conceptually related data, not just keyword matches
 
-#### CLI and MCP rollout follow-up
+##### CLI and MCP rollout follow-up
 
 - [x] add `atlas query --semantic` routing to semantic retrieval
 - [x] route `atlas context` through prior-context semantic expansion when session context is available
@@ -4156,13 +4156,13 @@ Move beyond lexical search (BM25, trigram) into meaning-aware retrieval.
 
 ---
 
-### Phase CM10 — Memory Curation
+#### Phase CM10 — Memory Curation
 
-#### Goal
+##### Goal
 
 Reduce noise and improve signal quality in stored memory.
 
-#### Tasks
+##### Tasks
 
 - [ ] implement event compaction
 - [ ] merge duplicate or similar events
@@ -4171,12 +4171,12 @@ Reduce noise and improve signal quality in stored memory.
 - [ ] promote high-value events to persistent memory
 - [ ] deduplicate reasoning outputs
 
-#### Output
+##### Output
 
 - cleaner, more meaningful session memory
 - reduced redundancy
 
-#### CLI and MCP rollout follow-up
+##### CLI and MCP rollout follow-up
 
 - [ ] surface curation and compaction stats in `atlas session status` and `get_session_status`
 - [ ] apply curation before resume snapshot build and before saved-context retrieval results are returned
@@ -4184,13 +4184,13 @@ Reduce noise and improve signal quality in stored memory.
 
 ---
 
-### Phase CM11 — Cross-Session Intelligence
+#### Phase CM11 — Cross-Session Intelligence
 
-#### Goal
+##### Goal
 
 Enable memory across multiple sessions.
 
-#### Tasks
+##### Tasks
 
 - [ ] implement cross-session search
 - [ ] create global memory layer
@@ -4198,11 +4198,11 @@ Enable memory across multiple sessions.
 - [ ] detect recurring workflows
 - [ ] surface relevant past sessions
 
-#### Output
+##### Output
 
 - system recalls past work across sessions
 
-#### CLI and MCP rollout follow-up
+##### CLI and MCP rollout follow-up
 
 - [ ] add cross-session mode or flag to saved-context search surfaces
 - [ ] route `atlas context` and MCP context/query tools through global memory lookup when cross-session recall is enabled
@@ -4210,25 +4210,25 @@ Enable memory across multiple sessions.
 
 ---
 
-### Phase CM12 — Predictive Context
+#### Phase CM12 — Predictive Context
 
-#### Goal
+##### Goal
 
 Make context proactive instead of reactive.
 
-#### Tasks
+##### Tasks
 
 - [ ] predict next likely user action
 - [ ] prefetch relevant artifacts
 - [ ] preload context based on recent activity
 - [ ] cache frequently accessed context
 
-#### Output
+##### Output
 
 - faster, smarter responses
 - reduced latency for common workflows
 
-#### CLI and MCP rollout follow-up
+##### CLI and MCP rollout follow-up
 
 - [ ] wire predictive prefetch into `atlas context`, `query_graph`, and resume flows rather than leaving it as background-only logic
 - [ ] expose debug or metadata fields showing what was prefetched and why in CLI JSON and MCP responses
@@ -4236,13 +4236,13 @@ Make context proactive instead of reactive.
 
 ---
 
-### Phase CM13 — Context Budget Optimization (depends on Operational Budget Policy Patch)
+#### Phase CM13 — Context Budget Optimization (depends on Operational Budget Policy Patch)
 
-#### Goal
+##### Goal
 
 Select the best possible context within limits.
 
-#### Tasks
+##### Tasks
 
 - [x] implement dynamic token budgeting
 - [x] rank sources:
@@ -4252,11 +4252,11 @@ Select the best possible context within limits.
 - [x] select optimal mix of context sources
 - [x] enforce strict token limits
 
-#### Output
+##### Output
 
 - optimal context selection instead of naive inclusion
 
-#### CLI and MCP rollout follow-up
+##### CLI and MCP rollout follow-up
 
 - [x] apply token budgeting to `atlas context`, `get_review_context`, `get_context`, and related MCP responses
 - [x] expose budget decisions, dropped-source counts, and selected-source mix in structured output
@@ -4264,13 +4264,13 @@ Select the best possible context within limits.
 
 ---
 
-### Phase CM14 — Decision Memory
+#### Phase CM14 — Decision Memory
 
-#### Goal
+##### Goal
 
 Persist and reuse decisions.
 
-#### Tasks
+##### Tasks
 
 - [ ] create decision event types
 - [ ] link decisions to artifacts
@@ -4278,11 +4278,11 @@ Persist and reuse decisions.
 - [ ] retrieve decisions for future tasks
 - [ ] avoid recomputing prior conclusions
 
-#### Output
+##### Output
 
 - system remembers why decisions were made
 
-#### CLI and MCP rollout follow-up
+##### CLI and MCP rollout follow-up
 
 - [ ] emit decision events from CLI, context, reasoning, and MCP adapter flows
 - [ ] route `atlas context` and saved-context retrieval through decision lookup when relevant prior conclusions exist
@@ -4290,24 +4290,24 @@ Persist and reuse decisions.
 
 ---
 
-### Phase CM15 — Agent-Aware Context (Optional)
+#### Phase CM15 — Agent-Aware Context (Optional)
 
-#### Goal
+##### Goal
 
 Support multi-agent workflows.
 
-#### Tasks
+##### Tasks
 
 - [ ] implement per-agent memory partitions
 - [ ] track delegated tasks
 - [ ] merge outputs across agents
 - [ ] track agent responsibilities
 
-#### Output
+##### Output
 
 - scalable multi-agent memory system
 
-#### CLI and MCP rollout follow-up
+##### CLI and MCP rollout follow-up
 
 - [ ] add agent partition identifiers to session, context, and saved-context APIs
 - [ ] extend MCP tools to read/write per-agent memory partitions and merged views intentionally
@@ -4315,7 +4315,7 @@ Support multi-agent workflows.
 
 ---
 
-#### Completion Criteria
+##### Completion Criteria
 
 - [ ] memory is curated, not just stored
 - [ ] retrieval is semantic-aware
@@ -4330,13 +4330,13 @@ Support multi-agent workflows.
 
 Use these patch sections for focused improvements that cut across existing roadmap phases without rewriting phase scope.
 
-## Retrieval Follow-Up Patch
+### Retrieval Follow-Up Patch
 
 These are the high-value retrieval/indexing improvements still missing or only partially specified after the current v3 plan.
 
 They are meant to strengthen Atlas’s retrieval/content sidecar without changing the graph-first core.
 
-### Patch R1 — Retrieval index lifecycle state
+#### Patch R1 — Retrieval index lifecycle state
 
 Atlas already has strong graph build/update state and separate content/session stores, but retrieval/content indexing should also have an explicit lifecycle model so “built”, “indexed”, “searchable”, and “failed” do not drift.
 
@@ -4362,7 +4362,7 @@ Why:
 - prevents state drift between stored content, searchable content, and agent-visible status
 - improves crash recovery and diagnostics
 
-### Patch R2 — Retrieval batching and chunk explosion guardrails
+#### Patch R2 — Retrieval batching and chunk explosion guardrails
 
 Current plan has chunking and retrieval, but operational safety limits should be explicit.
 
@@ -4388,7 +4388,7 @@ Why:
 - protects retrieval layer from pathological files and runaway indexing cost
 - makes retrieval/index behavior predictable under load
 
-### Patch R3 — Embedding dimension registry and freeze rules
+#### Patch R3 — Embedding dimension registry and freeze rules
 
 Atlas already has optional embeddings and hybrid retrieval roadmap, but dimension handling should be explicit and deterministic.
 
@@ -4413,7 +4413,7 @@ Why:
 - avoids one of the most common hybrid/vector indexing failure modes
 - keeps retrieval layer deterministic and debuggable
 
-### Patch R4 — Retrieval backend capability flags
+#### Patch R4 — Retrieval backend capability flags
 
 Atlas should make backend capability checks explicit instead of assuming all retrieval backends support all modes.
 
@@ -4437,7 +4437,7 @@ Why:
 - makes future retrieval backends or storage variants safe to introduce
 - avoids silent degradation and confusing behavior
 
-### Patch R5 — Stable content-derived chunk identity
+#### Patch R5 — Stable content-derived chunk identity
 
 Current chunk storage should have a true stable identity separate from display order.
 
@@ -4461,7 +4461,7 @@ Why:
 - improves deduplication and retrieval consistency across rebuilds
 - helps saved-context and future historical retrieval features
 
-### Patch R6 — Retrieval/token-efficiency evaluation
+#### Patch R6 — Retrieval/token-efficiency evaluation
 
 Atlas already measures correctness and performance in many places, but retrieval should also be evaluated as a context-efficiency system.
 
@@ -4490,7 +4490,7 @@ Why:
 - keeps retrieval improvements aligned with actual user value
 - validates that the retrieval layer improves token efficiency, not just ranking complexity
 
-### Patch R7 — Later experimental post-retrieval compaction
+#### Patch R7 — Later experimental post-retrieval compaction
 
 This is not core and should stay late, but it is a useful optional experiment once retrieval and context engine behavior are stable.
 
@@ -4507,7 +4507,7 @@ Why:
 - useful possible optimization later
 - should not destabilize current graph-first + retrieval-assisted architecture
 
-### Patch completion criteria
+#### Patch completion criteria
 
 This patch is complete when:
 
@@ -4521,11 +4521,11 @@ This patch is complete when:
 
 ---
 
-## Retrieval Ranking Evidence Patch
+### Retrieval Ranking Evidence Patch
 
 Atlas already exposes query scores, active query mode, global `explain_query` ranking factors, provenance, and truncation metadata. What is still missing is a first-class retrieval contract that explains why each returned result ranked where it did. A result-level score alone is not enough for agents to distinguish exact matches, fuzzy repairs, package/path boosts, changed-file boosts, graph expansion, and hybrid/vector fusion.
 
-### Patch Q1 — Result-level ranking evidence model
+#### Patch Q1 — Result-level ranking evidence model
 
 - [ ] add compact `RankingEvidence` / `ScoreEvidence` model for ranked retrieval results
 - [ ] attach evidence to graph/search result structs without replacing numeric score
@@ -4553,7 +4553,7 @@ Why:
 - agents need to know why a result won, not only that it scored higher
 - global `ranking_factors` explain query mode, but not individual result ranking
 
-### Patch Q2 — Capture evidence during ranking
+#### Patch Q2 — Capture evidence during ranking
 
 - [ ] update `apply_ranking_boosts` to record which boosts fired per result
 - [ ] update fuzzy relaxed-candidate path to record:
@@ -4573,7 +4573,7 @@ Why:
 - evidence must be produced at scoring time while the ranking decision is known
 - reconstructing explanation after sorting is lossy and easy to get wrong
 
-### Patch Q3 — Surface evidence in CLI and MCP retrieval outputs
+#### Patch Q3 — Surface evidence in CLI and MCP retrieval outputs
 
 - [ ] include ranking evidence in MCP `query_graph` results
 - [ ] include ranking evidence in MCP `batch_query_graph` per-query results
@@ -4589,7 +4589,7 @@ Why:
 - query-mode observability should be part of normal retrieval output, not only debug output
 - downstream tools can make better escalation and trust decisions from structured evidence
 
-### Patch Q4 — Evidence contract for context and review ranking
+#### Patch Q4 — Evidence contract for context and review ranking
 
 - [ ] decide whether review/context `relevance_score` also gets evidence
 - [ ] if yes, add context-ranking evidence for:
@@ -4607,7 +4607,7 @@ Why:
 - search ranking and context ranking are related but not identical
 - review flows need evidence for why context was included, not only why a symbol matched search
 
-### Patch Q completion criteria
+#### Patch Q completion criteria
 
 - [ ] every ranked graph/search result can include compact structured ranking evidence
 - [ ] query boosts, fuzzy correction, graph expansion, and hybrid/RRF all record evidence
@@ -4618,11 +4618,11 @@ Why:
 
 ---
 
-## Graph/Content Companion Patch
+### Graph/Content Companion Patch
 
 Atlas already has graph search for symbols and relationships plus file/content/template/text-asset search for prompts, docs, config, SQL, and templates. The missing design rule is that these are coordinated retrieval surfaces, not separate universes or a simple fallback chain. Graph answers code structure questions; content lookup answers non-code and context-adjacent questions; the context engine should merge both under one bounded selection, ranking, evidence, and truncation policy.
 
-### Patch N1 — Declare graph/content lookup contract
+#### Patch N1 — Declare graph/content lookup contract
 
 - [ ] document canonical responsibility split:
   - [ ] graph search answers symbols, ownership, callers, callees, tests, imports, and structural relationships
@@ -4645,7 +4645,7 @@ Why:
 - non-code artifacts are first-class context when they affect behavior
 - graph-first should not mean content-blind
 
-### Patch N2 — Unified bounded selection policy
+#### Patch N2 — Unified bounded selection policy
 
 - [ ] define one context selection policy for mixed graph/content results:
   - [ ] direct graph targets first
@@ -4672,7 +4672,7 @@ Why:
 - separate bounded lists can still create an unbounded combined context
 - agents need one budget story for the final answer context
 
-### Patch N3 — Coordinated ranking and evidence
+#### Patch N3 — Coordinated ranking and evidence
 
 - [ ] define a mixed-result ranking envelope with source kind:
   - [ ] `graph_node`
@@ -4699,7 +4699,7 @@ Why:
 - mixed context should be explainable, not an opaque concatenation of tool outputs
 - ranking evidence must work for content assets as well as graph nodes
 
-### Patch N4 — MCP and prompt workflow integration
+#### Patch N4 — MCP and prompt workflow integration
 
 - [ ] update MCP tool descriptions to describe graph/content companion rules
 - [ ] update `review_change` prompt to query content assets when changed files include docs/config/templates/prompts/SQL
@@ -4714,7 +4714,7 @@ Why:
 - agents follow surface contracts more reliably than implicit architecture
 - prompt and install docs should not describe content lookup as mere fallback
 
-### Patch N completion criteria
+#### Patch N completion criteria
 
 - [ ] graph/content companion contract is documented as a design rule
 - [ ] mixed graph/content context has one bounded selection policy
@@ -4724,11 +4724,11 @@ Why:
 
 ---
 
-## Parity Surface Patch
+### Parity Surface Patch
 
 Atlas already has pieces of the upstream parity surface: Markdown heading graph nodes, content search over docs, large-function risk flags in review summaries, and explicit build/update plus flows/communities commands. Missing work is to turn those pieces into first-class CLI/MCP surfaces with shared service logic, compact output, and parity tests.
 
-### Patch PS1 — Docs section lookup parity
+#### Patch PS1 — Docs section lookup parity
 
 - [ ] add docs-section lookup service over indexed project docs:
   - [ ] resolve doc by canonical repo path
@@ -4755,7 +4755,7 @@ Why:
 - current docs support can find files and headings, but cannot fetch one section as a stable agent-facing unit
 - review/query workflows need precise docs excerpts without broad file scans
 
-### Patch PS2 — Large-function finder parity
+#### Patch PS2 — Large-function finder parity
 
 - [ ] add large-function analysis service:
   - [ ] scan function/method graph nodes by line span
@@ -4782,7 +4782,7 @@ Why:
 - current review code only flags large changed functions; agents need direct repo/file discovery and ranked evidence
 - one service prevents review, CLI, and MCP thresholds from drifting
 
-### Patch PS3 — Explicit postprocess command parity
+#### Patch PS3 — Explicit postprocess command parity
 
 - [ ] define postprocess orchestration service for derived graph analytics:
   - [ ] run after build/update without reparsing source files
@@ -4810,7 +4810,7 @@ Why:
 - build/update should stay focused on scan, parse, and persistence
 - derived analytics need explicit orchestration instead of hidden side effects or ad hoc commands
 
-### Patch PS completion criteria
+#### Patch PS completion criteria
 
 - [ ] `get_docs_section`, `find_large_functions`, and `postprocess_graph` exist as MCP tools with matching CLI surfaces
 - [ ] all three surfaces share service-layer implementations with no duplicated ranking, truncation, or error rules
@@ -4820,11 +4820,11 @@ Why:
 
 ---
 
-## Runtime Event Enrichment and Graph Linking Patch
+### Runtime Event Enrichment and Graph Linking Patch
 
 Atlas already has session events, adapter extraction helpers, content-store artifact routing, resume snapshots, saved-context retrieval, and context-engine saved-context merge. Do not replace that foundation with a parallel extractor system. Extend it with deterministic enrichment that turns runtime activity into bounded, graph-aware memory while preserving the existing storage boundaries: graph facts stay in `worldtree.db`, large/runtime artifacts stay in `context.db`, and session timelines stay in `session.db`.
 
-### Patch X1 — Scope and crate boundary
+#### Patch X1 — Scope and crate boundary
 
 - [ ] define this as enrichment over existing `atlas-session`, `atlas-contentstore`, and `atlas-adapters`
 - [ ] avoid creating `packages/atlas-extractor` unless extraction logic grows large enough to justify a separate crate
@@ -4841,7 +4841,7 @@ Why:
 - existing continuity architecture already solved session/content boundaries
 - a parallel extractor crate or DB path would duplicate behavior and increase drift
 
-### Patch X2 — Raw input envelope and deterministic event enrichment
+#### Patch X2 — Raw input envelope and deterministic event enrichment
 
 - [ ] define a `RuntimeInput` / `RawActivityInput` envelope for enrichment:
   - [ ] `frontend` (`cli`, `mcp`, adapter host)
@@ -4880,7 +4880,7 @@ Why:
 - enrichment should preserve existing event persistence and dedupe semantics
 - deterministic input/output keeps resume snapshots stable
 
-### Patch X3 — Rule-based classification
+#### Patch X3 — Rule-based classification
 
 - [ ] add bounded rule-based classifiers for runtime activity:
   - [ ] panic
@@ -4918,7 +4918,7 @@ Why:
 - event type should stay stable; detailed meaning belongs in structured metadata
 - deterministic classifiers provide useful memory without LLM inference
 
-### Patch X4 — Artifact routing before session insertion
+#### Patch X4 — Artifact routing before session insertion
 
 - [ ] run all raw stdout/stderr/tool-result blobs through existing content-store routing before session insertion
 - [ ] define routing thresholds through the central budget policy:
@@ -4946,7 +4946,7 @@ Why:
 - `SessionStore::append_event` already rejects oversized inline payloads
 - content store is the correct place for searchable runtime text
 
-### Patch X5 — Graph linking without storing runtime data in graph DB
+#### Patch X5 — Graph linking without storing runtime data in graph DB
 
 - [ ] link enriched events to graph facts by stable identifiers, not raw node IDs alone
 - [ ] store links in session/content side tables, not `worldtree.db`
@@ -4977,7 +4977,7 @@ Why:
 - runtime memory should be graph-aware without mutating graph facts
 - stable identifiers survive rebuilds better than SQLite row IDs
 
-### Patch X6 — Readiness, identity, and budget integration
+#### Patch X6 — Readiness, identity, and budget integration
 
 - [ ] run graph linking only through canonical graph readiness state
 - [ ] define behavior by execution state:
@@ -5004,7 +5004,7 @@ Why:
 - runtime enrichment must follow the same safety rules as graph-backed tools
 - extraction can otherwise become another unbounded path
 
-### Patch X7 — Context-engine integration
+#### Patch X7 — Context-engine integration
 
 - [ ] extend context engine to include enriched runtime events only when requested or relevant
 - [ ] add request controls:
@@ -5037,7 +5037,7 @@ Why:
 - runtime memory is useful only when it participates in context selection
 - it must not bypass existing context budgets or ranking rules
 
-### Patch X8 — CLI, MCP, and hook integration
+#### Patch X8 — CLI, MCP, and hook integration
 
 - [ ] integrate enrichment with existing CLI adapter event flow
 - [ ] integrate enrichment with MCP tool handler boundaries
@@ -5059,7 +5059,7 @@ Why:
 - runtime memory should come from existing adapters and hooks
 - host-specific capture gaps must reduce enrichment quality, not break commands
 
-### Patch X9 — Resume snapshot enrichment
+#### Patch X9 — Resume snapshot enrichment
 
 - [ ] include enriched runtime signals in resume snapshots:
   - [ ] recent errors
@@ -5079,7 +5079,7 @@ Why:
 - resume should recover useful runtime state without replaying history
 - enriched events make snapshots more useful while staying compact
 
-### Patch X completion criteria
+#### Patch X completion criteria
 
 - [ ] runtime enrichment extends existing session/content/adapters architecture without replacing it
 - [ ] no runtime data is stored in graph DB
@@ -5094,11 +5094,11 @@ Why:
 
 ---
 
-## Ranking and Trimming Primitives Patch
+### Ranking and Trimming Primitives Patch
 
 Atlas already requires MCP/context surfaces to stay thin over the context engine, and Phase 22 checks review/symbol/impact parity. Widen that rule to the whole graph/query core: no CLI, MCP, review, explain-change, impact, analyze, retrieval, or context path should carry its own ad hoc ranking or trimming rules when a shared primitive can own the decision.
 
-### Patch D1 — Inventory and classify all ranking/trimming paths
+#### Patch D1 — Inventory and classify all ranking/trimming paths
 
 - [x] inventory every ranking, scoring, sorting, truncation, and trimming path:
   - [x] CLI `query`
@@ -5130,7 +5130,7 @@ Why:
 - duplicated ranking logic hides in small `sort_by` and `truncate` blocks
 - inventory makes drift visible before refactors start
 
-### Patch D2 — Define shared ranking primitives
+#### Patch D2 — Define shared ranking primitives
 
 - [x] define shared primitives for graph/search ranking:
   - [x] exact and qualified-name match boosts
@@ -5159,7 +5159,7 @@ Why:
 - query, context, review, and analysis need consistent ordering semantics
 - shared primitives make ranking evidence and budget metadata easier to trust
 
-### Patch D3 — Route public tools through shared primitives
+#### Patch D3 — Route public tools through shared primitives
 
 - [x] update CLI query to use shared graph/search ranking primitive
 - [x] update MCP `query_graph` and `batch_query_graph` to use same primitive as CLI query
@@ -5175,7 +5175,7 @@ Why:
 - public tools should disagree only because inputs differ, not because ranking rules forked
 - `explain_query` must never describe different ranking than `query_graph` uses
 
-### Patch D4 — Guard against future drift
+#### Patch D4 — Guard against future drift
 
 - [x] add parity tests:
   - [x] CLI query versus MCP query for same inputs
@@ -5192,7 +5192,7 @@ Why:
 - ranking drift usually returns as small local convenience code
 - parity tests make drift fail loudly
 
-### Patch D completion criteria
+#### Patch D completion criteria
 
 - [x] every public graph/query/context/review/analysis path maps to a shared ranking/trimming primitive or documented adapter
 - [x] CLI and MCP query paths share ranking semantics
@@ -5203,11 +5203,11 @@ Why:
 
 ---
 
-## Graph Build Lifecycle Patch
+### Graph Build Lifecycle Patch
 
 Atlas has retrieval index lifecycle state in the content store (Patch R1), but the graph store (`worldtree.db`) has no equivalent. Schema version alone is not enough — a `building` or `build_failed` state cannot be inferred from `metadata.schema_version`.
 
-### Patch G1 — Graph build lifecycle state
+#### Patch G1 — Graph build lifecycle state
 
 - [x] add explicit graph build state model to `atlas-store-sqlite`
 - [x] create migration `006_graph_build_state.sql` in `packages/atlas-store-sqlite/src/migrations/`
@@ -5250,7 +5250,7 @@ Why:
 - `atlas status` and `atlas doctor` cannot correctly report graph freshness without explicit state
 - mirrors Patch R1 pattern for consistency across all three stores
 
-### Patch G completion criteria
+#### Patch G completion criteria
 
 - [x] graph store has explicit build state separate from schema version
 - [x] `atlas build` and `atlas update` record lifecycle transitions
@@ -5262,11 +5262,11 @@ Why:
 ---
 
 
-## Canonical Path Identity Patch
+### Canonical Path Identity Patch
 
 Atlas already normalizes many repo paths during scan, diff handling, and some call-resolution flows, but path identity must be stronger than local normalization. Every store key, snapshot key, cache key, `source_id` seed, `chunk_id` seed, graph node/file key, and future sidecar index key must use one canonical repo-relative path identity before hashing or persistence.
 
-### Patch P1 — Canonical repo path type and rules
+#### Patch P1 — Canonical repo path type and rules
 
 - [x] state invariant explicitly: ALL path-derived keys MUST derive from canonical repo-relative path identity before hashing, persistence, dedupe, or cross-store ID generation
 - [x] define a shared `CanonicalRepoPath` / `RepoPathIdentity` type in `atlas-repo` or shared core
@@ -5293,7 +5293,7 @@ Why:
 - prevents path-casing and separator drift before hashing
 - makes path identity a contract, not scattered string cleanup
 
-### Patch P2 — Use canonical identity for graph store keys
+#### Patch P2 — Use canonical identity for graph store keys
 
 - [x] require `CanonicalRepoPath` before writing `files.path`
 - [x] require canonical path before `replace_file_graph`
@@ -5309,7 +5309,7 @@ Why:
 - graph identity depends on file path strings embedded in nodes, edges, QNs, and lookup keys
 - equivalent paths must not create duplicate graph facts
 
-### Patch P3 — Use canonical identity for content, session, and adapter IDs
+#### Patch P3 — Use canonical identity for content, session, and adapter IDs
 
 - [x] require canonical path before content-store `source_id` when artifact represents a repo file
 - [x] require canonical path before `chunk_id` source seed when source is file-backed
@@ -5328,7 +5328,7 @@ Why:
 - cross-store joins and future sidecar indexes break when graph uses one path form and content/session use another
 - hashing raw paths bakes bugs permanently into IDs
 
-### Patch P4 — Audit and migration guardrails
+#### Patch P4 — Audit and migration guardrails
 
 - [x] audit all hashing/keying call sites for raw path usage
 - [x] add lint-like tests or targeted regression tests for forbidden raw path hashing
@@ -5341,7 +5341,7 @@ Why:
 - existing code has multiple local path-normalization helpers
 - future cache/sidebar/retrieval features must not reintroduce raw path keys
 
-### Patch P completion criteria
+#### Patch P completion criteria
 
 - [x] one canonical repo path identity type exists
 - [x] ALL path-derived keys are documented as canonical-before-hash/canonical-before-persist
@@ -5353,11 +5353,11 @@ Why:
 
 ---
 
-## Graph Readiness Source-of-Truth Patch
+### Graph Readiness Source-of-Truth Patch
 
 Atlas has persisted build state, graph freshness checks, health/debug tools, provenance, and adapter metadata, but there is no explicit invariant that one subsystem owns the answer to: "is the graph ready, searchable, and current enough to use?" That decision must not drift across CLI status, MCP status, query tools, impact analysis, review context, and adapters.
 
-### Patch S1 — Canonical graph readiness record
+#### Patch S1 — Canonical graph readiness record
 
 - [ ] define a canonical `GraphReadiness` / `GraphState` model in shared core or graph service code
 - [ ] include fields:
@@ -5391,7 +5391,7 @@ Why:
 - prevents drift between build lifecycle state, status output, query behavior, and adapter metadata
 - makes readiness a contract instead of scattered boolean logic
 
-### Patch S1.5 — Graph execution safety states
+#### Patch S1.5 — Graph execution safety states
 
 - [ ] define canonical graph execution states:
   - [ ] `fresh` — graph is built, queryable, current, and integrity-clean
@@ -5421,7 +5421,7 @@ Why:
 - agents need one simple safety state before deciding whether graph facts are usable
 - stale, partial, and corrupt graphs require different behavior
 
-### Patch S2 — Route CLI graph tools through canonical readiness
+#### Patch S2 — Route CLI graph tools through canonical readiness
 
 - [ ] update `atlas status` to emit canonical readiness directly
 - [ ] update `atlas doctor` to reference canonical readiness instead of partially recomputing it
@@ -5442,7 +5442,7 @@ Why:
 - query, impact, and review must not infer readiness from `Store::open` alone
 - status output and command behavior must agree
 
-### Patch S3 — Route MCP and adapters through canonical readiness
+#### Patch S3 — Route MCP and adapters through canonical readiness
 
 - [ ] update MCP `status` to surface canonical readiness, not redefine it
 - [ ] add readiness block to graph-backed MCP responses:
@@ -5467,7 +5467,7 @@ Why:
 - MCP should surface graph readiness, not become another readiness authority
 - provenance and readiness are related but not the same contract
 
-### Patch S completion criteria
+#### Patch S completion criteria
 
 - [ ] one canonical graph readiness model exists
 - [ ] CLI status, doctor, query, impact, and review consume that model
@@ -5479,11 +5479,11 @@ Why:
 
 ---
 
-## Operational Budget Policy Patch
+### Operational Budget Policy Patch
 
 Atlas already has per-file size caps, parse batch sizing, bounded queues, result node/file caps, session payload caps, and retrieval guardrail backlog items. What is still missing is one explicit operational budget policy across build, query, impact, review, context, and MCP output stages: how much work may be attempted, what happens when a hard budget is hit, and whether each stage fails open, fails closed, or returns degraded partial results.
 
-### Patch B0 — Central budget policy and manager
+#### Patch B0 — Central budget policy and manager
 
 - [x] define one shared `BudgetPolicy` / `BudgetManager` model for all bounded work
 - [x] include budget namespaces:
@@ -5509,7 +5509,7 @@ Why:
 - a list of limits is not enough if each tool interprets limits differently
 - one budget manager prevents drift across traversal, context, and serialization layers
 
-### Patch B1 — Build and update budgets
+#### Patch B1 — Build and update budgets
 
 - [x] add explicit build/update budget config:
   - [x] `max_files_per_run`
@@ -5538,7 +5538,7 @@ Why:
 - batch size prevents unbounded queues but does not cap total build work
 - operators need predictable upper bounds for large repos and pathological changes
 
-### Patch B2 — Query, seed, and traversal budgets
+#### Patch B2 — Query, seed, and traversal budgets
 
 - [x] add explicit query/traversal budget config:
   - [x] `max_seed_nodes`
@@ -5566,7 +5566,7 @@ Why:
 - `max_nodes` caps returned context, not necessarily seed loading or traversal work
 - seed explosion can make bounded output misleading unless reported explicitly
 
-### Patch B3 — Review/context payload budgets
+#### Patch B3 — Review/context payload budgets
 
 - [x] add explicit review/context budget config:
   - [x] `max_review_source_bytes`
@@ -5594,7 +5594,7 @@ Why:
 - node/file caps do not guarantee bounded serialized payload size
 - large excerpts and saved artifacts can bypass graph caps unless independently budgeted
 
-### Patch B4 — Fail-open versus fail-closed policy
+#### Patch B4 — Fail-open versus fail-closed policy
 
 - [x] define budget-hit behavior matrix for each stage:
   - [x] build
@@ -5624,7 +5624,7 @@ Why:
 - budget behavior must be predictable, not inferred from missing rows or truncated arrays
 - agents need to know whether partial context is safe to use
 
-### Patch B completion criteria
+#### Patch B completion criteria
 
 - [x] one central budget policy/manager exists and all bounded graph/query/context paths consume it
 - [x] build/update total work budgets exist and are reported
@@ -5637,11 +5637,11 @@ Why:
 
 ---
 
-## Context Escalation Contract Patch
+### Context Escalation Contract Patch
 
 Atlas has compact context tools, review context, symbol lookup, neighbor tools, and wider traversal tools, but the preferred order is currently only hinted in prompts and installed instructions. Make the core agent workflow explicit: start with the smallest bounded graph context that can answer the question, then escalate only when evidence says broader context is needed.
 
-### Patch E1 — Define minimal-context-first workflow
+#### Patch E1 — Define minimal-context-first workflow
 
 - [ ] document canonical escalation order for review/change tasks:
   - [ ] `detect_changes` when files are unknown
@@ -5671,7 +5671,7 @@ Why:
 - reduces token load and noisy context
 - keeps graph workflows deterministic and cheap by default
 
-### Patch E2 — Surface contract in MCP, prompts, and installed instructions
+#### Patch E2 — Surface contract in MCP, prompts, and installed instructions
 
 - [ ] update MCP tool descriptions to mention minimal-first escalation where relevant
 - [ ] update `review_change` prompt to make minimal context first a requirement, not just a recommendation
@@ -5684,7 +5684,7 @@ Why:
 - agents follow tool descriptions and prompts more reliably than implicit design intent
 - one workflow description prevents drift across docs and MCP metadata
 
-### Patch E2.5 — Enforce minimal-context-first inside higher-level tools
+#### Patch E2.5 — Enforce minimal-context-first inside higher-level tools
 
 - [ ] require higher-level tools to start from minimal bounded context internally unless explicitly bypassed:
   - [ ] `get_review_context`
@@ -5712,7 +5712,7 @@ Why:
 - workflow guidance is weaker than internal enforcement
 - higher-level tools should not silently bypass bounded triage
 
-### Patch E3 — Add escalation metadata and tests where practical
+#### Patch E3 — Add escalation metadata and tests where practical
 
 - [ ] include response metadata that helps decide whether to escalate:
   - [ ] `truncated`
@@ -5729,7 +5729,7 @@ Why:
 - tools should tell agents when more context is justified
 - escalation should be evidence-driven, not habit-driven
 
-### Patch E completion criteria
+#### Patch E completion criteria
 
 - [ ] minimal-context-first contract is documented as required workflow
 - [ ] higher-level tools internally start from minimal context or emit explicit bypass metadata
@@ -5739,11 +5739,11 @@ Why:
 
 ---
 
-## Graph Store Corruption Recovery Patch
+### Graph Store Corruption Recovery Patch
 
 Atlas can detect SQLite integrity failures, orphan nodes, dangling edges, stale graph state, and interrupted builds, but the operational policy for a damaged `.atlas/worldtree.db` is not explicit enough. Detection should lead to one clear outcome: quarantine unusable graph data, rebuild from repository source, and block graph-backed answers while stored graph facts are unsafe.
 
-### Patch C1 — Graph DB corruption classification
+#### Patch C1 — Graph DB corruption classification
 
 - [ ] define graph-store health classes:
   - [ ] `healthy`
@@ -5768,7 +5768,7 @@ Why:
 - makes corruption versus stale data explicit
 - avoids treating dangling/orphan graph rows as a generic diagnostics warning
 
-### Patch C2 — Quarantine and rebuild policy for `worldtree.db`
+#### Patch C2 — Quarantine and rebuild policy for `worldtree.db`
 
 - [ ] define no partial salvage for graph DB corruption unless a future task explicitly adds verified salvage
 - [ ] define recovery modes:
@@ -5798,7 +5798,7 @@ Why:
 - graph data is derived from repo source, so clean rebuild is safer than partial salvage
 - quarantine preserves evidence without serving unsafe facts
 
-### Patch C3 — Block unsafe graph-backed answers
+#### Patch C3 — Block unsafe graph-backed answers
 
 - [ ] block graph-backed query/context tools when health class is `sqlite_corrupt`, `schema_mismatch`, or `logical_inconsistency`
 - [ ] return machine-readable failure with:
@@ -5820,7 +5820,7 @@ Why:
 - prevents confident answers from known-bad graph rows
 - keeps diagnostics available while blocking unsafe context
 
-### Patch C completion criteria
+#### Patch C completion criteria
 
 - [ ] graph DB health classes are explicit and shared by CLI/MCP
 - [ ] corrupt graph execution state maps to block + quarantine + rebuild behavior
@@ -5833,11 +5833,11 @@ Why:
 
 ---
 
-## Repo-Scoped MCP Singleton Patch
+### Repo-Scoped MCP Singleton Patch
 
 Atlas currently exposes MCP over stdio, which means each client session owns its own server process even when multiple clients target the same repo and the same `.atlas/worldtree.db`. Add one backend instance per canonical repo root plus DB path, with `atlas serve` acting as stdio broker that attaches to or starts that backend. This preserves current client config shape while preventing duplicate MCP server spawns and redundant runtime state.
 
-### Patch M1 — Repo-scoped singleton identity and coordination
+#### Patch M1 — Repo-scoped singleton identity and coordination
 
 - [x] define singleton identity as canonical repo root plus canonical DB path
 - [x] reuse canonical path rules from `atlas-repo` instead of adding local normalization helpers
@@ -5859,7 +5859,7 @@ Why:
 - one MCP backend must be keyed by exact repo-plus-DB identity, not cwd or repo name
 - lock and metadata contract must be explicit before broker or daemon work starts
 
-### Patch M2 — Shared serving core and daemon transport
+#### Patch M2 — Shared serving core and daemon transport
 
 - [x] extract transport-agnostic request-serving core from MCP stdio transport
 - [x] preserve current JSON-RPC behavior, worker-pool semantics, timeouts, and tool outputs
@@ -5877,7 +5877,7 @@ Why:
 - spawn dedupe alone is not enough; clients need attachable long-lived backend transport
 - transport refactor must not change MCP-visible behavior
 
-### Patch M3 — Stdio broker attach-or-spawn path
+#### Patch M3 — Stdio broker attach-or-spawn path
 
 - [x] change `atlas serve` from direct stdio server to stdio broker or proxy
 - [x] under exclusive lock:
@@ -5898,7 +5898,7 @@ Why:
 - current clients still expect stdio, so broker compatibility is required for Copilot, Codex, and Claude installs
 - attach-or-spawn behavior is core feature, not optional polish
 
-### Patch M4 — Install, diagnostics, and behavior guarantees
+#### Patch M4 — Install, diagnostics, and behavior guarantees
 
 - [x] keep generated Copilot, Claude, and Codex config shape unchanged:
   - [x] `type` remains `stdio`
@@ -5919,7 +5919,7 @@ Why:
 - rollout should be transparent to existing MCP clients and install surfaces
 - diagnostics and docs are necessary for debugging duplicate spawn or wrong-instance attachment
 
-### Patch M completion criteria
+#### Patch M completion criteria
 
 - [x] one MCP backend instance exists per canonical repo root plus canonical DB path
 - [x] `atlas serve` remains stdio-compatible for existing clients

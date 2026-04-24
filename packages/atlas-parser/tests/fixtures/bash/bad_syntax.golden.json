@@ -1,5 +1,17 @@
 {
-  "edges": [],
+  "edges": [
+    {
+      "confidence": 1.0,
+      "confidence_tier": "definite",
+      "extra_json": null,
+      "file_path": "fixtures/bash/bad_syntax.sh",
+      "id": 0,
+      "kind": "contains",
+      "line": 4,
+      "source_qn": "fixtures/bash/bad_syntax.sh",
+      "target_qn": "fixtures/bash/bad_syntax.sh::fn::helper"
+    }
+  ],
   "hash": "fixture-hash",
   "language": "bash",
   "nodes": [
@@ -18,6 +30,23 @@
       "params": null,
       "parent_name": null,
       "qualified_name": "fixtures/bash/bad_syntax.sh",
+      "return_type": null
+    },
+    {
+      "extra_json": null,
+      "file_hash": "fixture-hash",
+      "file_path": "fixtures/bash/bad_syntax.sh",
+      "id": 0,
+      "is_test": false,
+      "kind": "function",
+      "language": "bash",
+      "line_end": 6,
+      "line_start": 4,
+      "modifiers": null,
+      "name": "helper",
+      "params": null,
+      "parent_name": "fixtures/bash/bad_syntax.sh",
+      "qualified_name": "fixtures/bash/bad_syntax.sh::fn::helper",
       "return_type": null
     }
   ],
