@@ -24,7 +24,7 @@ The graph is faster, cheaper (fewer tokens), and gives you structural context
 - **Code review**: `detect_changes` + `get_review_context`, or `get_minimal_context` when tokens matter
 - **Finding relationships**: `symbol_neighbors` for immediate usage edges, `traverse_graph` for broader callers/callees, and `get_context` for intent-aware usage lookup
 - **Repo health**: `list_graph_stats`, `status`, `doctor`, `db_check`, and `debug_graph` before trusting graph-backed answers
-- **Session continuity**: `get_session_status`, `resume_session`, `search_saved_context`, and `save_context_artifact`
+- **Session continuity**: `get_session_status`, `resume_session`, `search_saved_context`, `search_decisions`, and `save_context_artifact`
 
 Do not treat `query_graph` as caller/callee search. Fall back to file tools **only** after graph relationship tools do not cover what you need.
 
@@ -62,6 +62,7 @@ Do not treat `query_graph` as caller/callee search. Fall back to file tools **on
 | `compact_session` | Compact session event ledger: merge repeated events, decay low-value, deduplicate reasoning, promote high-value |
 | `resume_session` | Restore prior session snapshot after reconnect or restart |
 | `search_saved_context` | Search saved artifacts from earlier large outputs |
+| `search_decisions` | Search persisted decision memory for prior conclusions |
 | `read_saved_context` | Retrieve full artifact content by source_id with optional paging |
 | `save_context_artifact` | Persist large context payloads for later retrieval |
 | `get_context_stats` | Inspect session and content-store stats |

@@ -222,6 +222,30 @@ pub struct ResumeSnapshot {
     pub updated_at: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DecisionRecord {
+    pub decision_id: String,
+    pub session_id: String,
+    pub repo_root: String,
+    pub summary: String,
+    pub rationale: Option<String>,
+    pub conclusion: Option<String>,
+    pub query_text: Option<String>,
+    pub source_ids: Vec<String>,
+    pub evidence: Vec<Value>,
+    pub related_files: Vec<String>,
+    pub related_symbols: Vec<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DecisionSearchHit {
+    pub decision: DecisionRecord,
+    pub relevance_score: f32,
+    pub matched_terms: Vec<String>,
+}
+
 /// A frequently-accessed symbol or file aggregated across all sessions.
 ///
 /// Used by the global memory layer (CM11) to surface recurring access patterns.

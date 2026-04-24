@@ -22,8 +22,8 @@ pub use bridge::{
 };
 pub use events::{
     PendingEvent, extract_cli_event, extract_context_event, extract_decision_event,
-    extract_graph_event, extract_reasoning_event, extract_rule_event, extract_tool_event,
-    extract_user_event, hash_event, normalize_event,
+    extract_decision_event_with_details, extract_graph_event, extract_reasoning_event,
+    extract_rule_event, extract_tool_event, extract_user_event, hash_event, normalize_event,
 };
 pub use hooks::{AdapterHooks, CliAdapter, McpAdapter};
 pub use redact::redact_payload;

@@ -3,6 +3,7 @@
 use std::path::Path;
 
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
+use serde_json::Value;
 use tracing::info;
 
 use atlas_core::{AtlasError, Result};
@@ -11,6 +12,7 @@ use crate::SessionId;
 use crate::migrations::MIGRATIONS;
 
 mod curation;
+mod decision_memory;
 mod global_memory;
 mod resume;
 #[cfg(test)]
@@ -20,12 +22,14 @@ mod util;
 
 pub use self::types::{
     CurationResult, DEFAULT_DEDUP_WINDOW_SECS, DEFAULT_MAX_SNAPSHOT_BYTES, DEFAULT_SESSION_DB,
-    DEFAULT_SESSION_MAX_EVENTS, EventCategory, GlobalAccessEntry, GlobalWorkflowPattern,
-    MAX_INLINE_EVENT_PAYLOAD_BYTES, NewSessionEvent, ResumeSnapshot, SessionEventRow,
-    SessionEventType, SessionMeta, SessionStats, SessionStoreConfig,
+    DEFAULT_SESSION_MAX_EVENTS, DecisionRecord, DecisionSearchHit, EventCategory,
+    GlobalAccessEntry, GlobalWorkflowPattern, MAX_INLINE_EVENT_PAYLOAD_BYTES, NewSessionEvent,
+    ResumeSnapshot, SessionEventRow, SessionEventType, SessionMeta, SessionStats,
+    SessionStoreConfig,
 };
 
 use self::curation::compact_session_events;
+use self::decision_memory::{search_decisions, upsert_decision_from_event};
 use self::resume::build_resume_snapshot;
 use self::util::{
     canonical_json, enforce_event_limit, format_days_ago, format_now, format_seconds_ago,
@@ -276,6 +280,22 @@ impl SessionStore {
             .optional()
             .map_err(|e| AtlasError::Db(e.to_string()))?;
 
+        if inserted > 0
+            && event.event_type == SessionEventType::Decision
+            && let Some(stored) = row.as_ref()
+        {
+            let payload: Value = serde_json::from_str(&stored.payload_json).unwrap_or(Value::Null);
+            if let Err(error) = upsert_decision_from_event(
+                &tx,
+                &event.session_id,
+                stored.id,
+                &payload,
+                &stored.created_at,
+            ) {
+                tracing::warn!(err = %error, "decision memory upsert failed; event kept");
+            }
+        }
+
         tx.commit().map_err(|e| AtlasError::Db(e.to_string()))?;
 
         if inserted == 0 {
@@ -463,6 +483,16 @@ impl SessionStore {
         // reflects clean, deduplicated event history (CM10 requirement).
         let _ = compact_session_events(self, session_id);
         build_resume_snapshot(self, session_id)
+    }
+
+    pub fn search_decisions(
+        &self,
+        repo_root: &str,
+        query: &str,
+        session_id: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<DecisionSearchHit>> {
+        search_decisions(&self.conn, repo_root, session_id, query, limit)
     }
 
     // ── CM11: Cross-Session Intelligence ─────────────────────────────────────

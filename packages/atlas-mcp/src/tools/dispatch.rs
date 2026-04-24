@@ -10,7 +10,7 @@ use crate::session_tools::{
     tool_compact_session, tool_cross_session_search, tool_get_context_stats,
     tool_get_global_memory, tool_get_session_status, tool_purge_saved_context,
     tool_read_saved_context, tool_resume_session, tool_save_context_artifact,
-    tool_search_saved_context,
+    tool_search_decisions, tool_search_saved_context,
 };
 
 use super::analysis::{
@@ -111,6 +111,7 @@ fn call_inner(
         "search_saved_context" => {
             tool_search_saved_context(args, repo_root, db_path, output_format)
         }
+        "search_decisions" => tool_search_decisions(args, repo_root, db_path, output_format),
         "read_saved_context" => tool_read_saved_context(args, repo_root, db_path, output_format),
         "save_context_artifact" => {
             tool_save_context_artifact(args, repo_root, db_path, output_format)

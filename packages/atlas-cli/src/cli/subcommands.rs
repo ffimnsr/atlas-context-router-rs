@@ -18,6 +18,20 @@ pub enum SessionCommand {
     /// List all known sessions for this repo.
     List,
 
+    /// Search persisted decision memory for prior conclusions.
+    Decisions {
+        /// Search query text.
+        query: String,
+
+        /// Restrict lookup to current CLI session only.
+        #[arg(long)]
+        current_session: bool,
+
+        /// Maximum decisions to return.
+        #[arg(long, default_value_t = 10)]
+        limit: usize,
+    },
+
     /// Compact and curate the session event ledger.
     ///
     /// Removes stale low-value events, merges repeated actions, deduplicates

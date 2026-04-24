@@ -16,9 +16,29 @@ use super::shared::{
     open_store, parse_mcp_intent, str_arg, string_array_arg, tool_result_value, u64_arg,
 };
 use crate::context::{enforce_mcp_response_budget, package_context_result, package_impact};
+use crate::session_tools::{
+    decision_hits_json, record_mcp_decision_best_effort, search_decisions_best_effort,
+};
 
 fn context_ranking_evidence_legend_json() -> serde_json::Value {
     atlas_core::context_ranking_evidence_legend()
+}
+
+fn context_decision_lookup_query(request: &ContextRequest) -> Option<String> {
+    match &request.target {
+        ContextTarget::QualifiedName { qname } => Some(qname.clone()),
+        ContextTarget::SymbolName { name } => Some(name.clone()),
+        ContextTarget::FilePath { path } => Some(path.clone()),
+        ContextTarget::ChangedFiles { paths } => {
+            let joined = paths.iter().take(3).cloned().collect::<Vec<_>>().join(" ");
+            (!joined.is_empty()).then_some(joined)
+        }
+        ContextTarget::ChangedSymbols { qnames } => {
+            let joined = qnames.iter().take(3).cloned().collect::<Vec<_>>().join(" ");
+            (!joined.is_empty()).then_some(joined)
+        }
+        ContextTarget::EdgeQuerySeed { source_qname, .. } => Some(source_qname.clone()),
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -901,6 +921,22 @@ pub(super) fn tool_get_context(
     let include_context_ranking_evidence = output_format == crate::output::OutputFormat::Json;
     let packaged = package_context_result(&result, include_context_ranking_evidence);
     let mut packaged_value = serde_json::to_value(&packaged)?;
+    let linked_decisions = context_decision_lookup_query(&request)
+        .map(|query| {
+            let hits = search_decisions_best_effort(
+                repo_root,
+                db_path,
+                request.session_id.as_deref(),
+                &query,
+                3,
+            );
+            (query, hits)
+        })
+        .filter(|(_, hits)| !hits.is_empty());
+    if let Some((query, hits)) = linked_decisions.as_ref() {
+        packaged_value["linked_decisions"] = decision_hits_json(hits);
+        packaged_value["decision_lookup_query"] = serde_json::Value::String(query.clone());
+    }
     let context_files: Vec<String> = match &request.target {
         ContextTarget::ChangedFiles { paths } => paths.clone(),
         ContextTarget::FilePath { path } => vec![path.clone()],
@@ -1007,6 +1043,29 @@ pub(super) fn tool_get_context(
              use query_graph with regex for pattern matching; \
              (3) the file path is wrong or the file has no indexed symbols."
                 .to_owned(),
+        );
+    }
+    if let Some((query, hits)) = linked_decisions {
+        let source_ids = hits
+            .iter()
+            .flat_map(|hit| hit.decision.source_ids.iter().cloned())
+            .take(5)
+            .collect::<Vec<_>>();
+        record_mcp_decision_best_effort(
+            repo_root,
+            db_path,
+            &format!("reuse prior decision for context: {query}"),
+            Some("stored decision memory matched current context request"),
+            serde_json::json!({
+                "query": query,
+                "conclusion": "prior decision reused for context request",
+                "source_ids": source_ids,
+                "evidence": hits.iter().take(3).map(|hit| serde_json::json!({
+                    "decision_id": hit.decision.decision_id,
+                    "summary": hit.decision.summary,
+                    "relevance_score": hit.relevance_score,
+                })).collect::<Vec<_>>(),
+            }),
         );
     }
     let _ = ensure_final_response_budget(

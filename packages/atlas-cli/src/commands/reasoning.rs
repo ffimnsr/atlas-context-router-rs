@@ -1,5 +1,8 @@
 use anyhow::{Context, Result};
-use atlas_adapters::{AdapterHooks, CliAdapter, extract_reasoning_event};
+use atlas_adapters::{
+    AdapterHooks, CliAdapter, PendingEvent, extract_decision_event_with_details,
+    extract_reasoning_event,
+};
 use atlas_reasoning::{
     AnalysisRankingPrimitives, AnalysisTrimmingPrimitives, ReasoningEngine,
     sort_dead_code_candidates, sort_dependency_result, sort_refactor_safety_result,
@@ -52,6 +55,7 @@ pub fn run_analyze(cli: &Cli) -> Result<()> {
         _ => "analyze",
     };
     let mut adapter = CliAdapter::open(&repo);
+    let mut decision_event: Option<PendingEvent> = None;
     if let Some(ref mut a) = adapter {
         a.before_command(analyze_label);
     }
@@ -79,6 +83,14 @@ pub fn run_analyze(cli: &Cli) -> Result<()> {
                     .analyze_removal(&[symbol.as_str()], Some(*max_depth), Some(*max_nodes))
                     .with_context(|| format!("removal analysis for `{symbol}` failed"))?;
                 sort_removal_result(&mut result, &ranking);
+                decision_event = Some(extract_decision_event_with_details(
+                    &format!("removal impact for {symbol}"),
+                    Some("reasoning analysis completed"),
+                    serde_json::json!({
+                        "query": symbol,
+                        "conclusion": format!("{} impacted symbol(s)", result.impacted_symbols.len()),
+                    }),
+                ));
 
                 if cli.json {
                     print_json("analyze_remove", serde_json::to_value(&result)?)?;
@@ -168,6 +180,14 @@ pub fn run_analyze(cli: &Cli) -> Result<()> {
                     )
                     .context("dead-code detection failed")?;
                 sort_dead_code_candidates(&mut candidates, &ranking);
+                decision_event = Some(extract_decision_event_with_details(
+                    "dead-code scan",
+                    Some("reasoning analysis completed"),
+                    serde_json::json!({
+                        "query": subpath.clone().unwrap_or_else(|| "repo".to_owned()),
+                        "conclusion": format!("{} dead-code candidate(s)", candidates.len()),
+                    }),
+                ));
 
                 if *summary {
                     println!("Dead-code candidates: {}", candidates.len());
@@ -201,6 +221,14 @@ pub fn run_analyze(cli: &Cli) -> Result<()> {
                     .score_refactor_safety(symbol)
                     .with_context(|| format!("safety scoring for `{symbol}` failed"))?;
                 sort_refactor_safety_result(&mut result);
+                decision_event = Some(extract_decision_event_with_details(
+                    &format!("refactor safety for {symbol}"),
+                    Some("reasoning analysis completed"),
+                    serde_json::json!({
+                        "query": symbol,
+                        "conclusion": format!("{:?}", result.safety.band),
+                    }),
+                ));
 
                 if cli.json {
                     print_json("analyze_safety", serde_json::to_value(&result)?)?;
@@ -232,6 +260,14 @@ pub fn run_analyze(cli: &Cli) -> Result<()> {
                     .check_dependency_removal(symbol)
                     .with_context(|| format!("dependency check for `{symbol}` failed"))?;
                 sort_dependency_result(&mut result, &ranking);
+                decision_event = Some(extract_decision_event_with_details(
+                    &format!("dependency removal for {symbol}"),
+                    Some("reasoning analysis completed"),
+                    serde_json::json!({
+                        "query": symbol,
+                        "conclusion": if result.removable { "removable" } else { "blocked" },
+                    }),
+                ));
 
                 if cli.json {
                     print_json("analyze_dependency", serde_json::to_value(&result)?)?;
@@ -275,6 +311,9 @@ pub fn run_analyze(cli: &Cli) -> Result<()> {
     if result.is_ok()
         && let Some(ref mut a) = adapter
     {
+        if let Some(event) = decision_event.take() {
+            a.record(event);
+        }
         a.record(extract_reasoning_event(None, analyze_label));
     }
     if let Some(ref mut a) = adapter {

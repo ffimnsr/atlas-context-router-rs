@@ -1,9 +1,12 @@
 use std::collections::HashMap;
 use std::io::{self, BufRead, IsTerminal, Write};
+use std::path::Path;
 use std::process::{Command as ProcessCommand, Stdio};
 
 use anyhow::{Context, Result};
-use atlas_adapters::{AdapterHooks, CliAdapter, extract_context_event};
+use atlas_adapters::{
+    AdapterHooks, CliAdapter, extract_context_event, extract_decision_event_with_details,
+};
 use atlas_core::SearchQuery;
 use atlas_core::model::{
     ContextIntent, ContextRequest, ContextResult, ContextTarget, SelectionReason,
@@ -13,6 +16,7 @@ use atlas_repo::{CanonicalRepoPath, DiffTarget, changed_files, find_repo_root};
 use atlas_review::{ContextEngine, normalize_qn_kind_tokens, query_parser};
 use atlas_search as search;
 use atlas_search::semantic as sem;
+use atlas_session::{DecisionSearchHit, SessionId, SessionStore};
 use atlas_store_sqlite::Store;
 use camino::Utf8Path;
 
@@ -49,9 +53,6 @@ fn parse_intent_override(override_str: Option<&str>, default: ContextIntent) -> 
 /// events and collects file paths found in `"files"` arrays inside the event
 /// payload JSON (emitted by MCP continuity tools).
 fn context_session_hints(repo: &str, frontend: &str) -> (Vec<String>, Vec<String>) {
-    use atlas_session::{SessionId, SessionStore};
-    use std::path::Path;
-
     let store = match SessionStore::open_in_repo(Path::new(repo)) {
         Ok(s) => s,
         Err(_) => return (vec![], vec![]),
@@ -82,7 +83,51 @@ fn context_session_hints(repo: &str, frontend: &str) -> (Vec<String>, Vec<String
     (files, vec![])
 }
 
+fn decision_lookup_query(request: &ContextRequest) -> Option<String> {
+    match &request.target {
+        ContextTarget::QualifiedName { qname } => Some(qname.clone()),
+        ContextTarget::SymbolName { name } => Some(name.clone()),
+        ContextTarget::FilePath { path } => Some(path.clone()),
+        ContextTarget::ChangedFiles { paths } => {
+            let joined = paths.iter().take(3).cloned().collect::<Vec<_>>().join(" ");
+            (!joined.is_empty()).then_some(joined)
+        }
+        ContextTarget::ChangedSymbols { qnames } => {
+            let joined = qnames.iter().take(3).cloned().collect::<Vec<_>>().join(" ");
+            (!joined.is_empty()).then_some(joined)
+        }
+        ContextTarget::EdgeQuerySeed { source_qname, .. } => Some(source_qname.clone()),
+    }
+}
+
+fn search_linked_decisions(repo: &str, request: &ContextRequest) -> Vec<DecisionSearchHit> {
+    let Some(query) = decision_lookup_query(request) else {
+        return Vec::new();
+    };
+    let store = match SessionStore::open_in_repo(Path::new(repo)) {
+        Ok(store) => store,
+        Err(_) => return Vec::new(),
+    };
+    let session_id = SessionId::derive(repo, "", "cli");
+    let current = store
+        .search_decisions(repo, &query, Some(session_id.as_str()), 5)
+        .unwrap_or_default();
+    if !current.is_empty() {
+        return current;
+    }
+    store
+        .search_decisions(repo, &query, None, 5)
+        .unwrap_or_default()
+}
+
 fn format_context_output(result: &ContextResult) -> String {
+    format_context_output_with_decisions(result, &[])
+}
+
+fn format_context_output_with_decisions(
+    result: &ContextResult,
+    linked_decisions: &[DecisionSearchHit],
+) -> String {
     use atlas_core::model::SelectionReason;
 
     if let Some(ambiguity) = &result.ambiguity {
@@ -221,6 +266,29 @@ fn format_context_output(result: &ContextResult) -> String {
         "Summary: {} target, {} callers, {} callees",
         direct_count, caller_count, callee_count
     ));
+
+    if !linked_decisions.is_empty() {
+        out.push(colorize(
+            &format!("Prior decisions ({}):", linked_decisions.len()),
+            "1;33",
+        ));
+        out.extend(linked_decisions.iter().take(5).map(|hit| {
+            let conclusion = hit
+                .decision
+                .conclusion
+                .as_deref()
+                .unwrap_or("no conclusion recorded");
+            let refs = if hit.decision.source_ids.is_empty() {
+                String::new()
+            } else {
+                format!(" | artifacts: {}", hit.decision.source_ids.join(","))
+            };
+            format!(
+                "  [{:.1}] {} -> {}{}",
+                hit.relevance_score, hit.decision.summary, conclusion, refs
+            )
+        }));
+    }
 
     out.join("\n")
 }
@@ -429,6 +497,7 @@ pub fn run_context(cli: &Cli) -> Result<()> {
 
         let engine = ContextEngine::new(&store).with_budget_policy(load_budget_policy(&repo)?);
         let result = engine.build(&request).context("context engine failed")?;
+        let linked_decisions = search_linked_decisions(&repo, &request);
 
         if cli.json {
             let mut value = serde_json::to_value(&result)?;
@@ -437,10 +506,51 @@ pub fn run_context(cli: &Cli) -> Result<()> {
                     "context_ranking_evidence_legend".to_owned(),
                     atlas_core::context_ranking_evidence_legend(),
                 );
+                if !linked_decisions.is_empty() {
+                    object.insert(
+                        "linked_decisions".to_owned(),
+                        serde_json::to_value(&linked_decisions)?,
+                    );
+                }
             }
             print_json("context", value)?;
         } else {
-            println!("{}", format_context_output(&result));
+            println!(
+                "{}",
+                format_context_output_with_decisions(&result, &linked_decisions)
+            );
+        }
+
+        if !linked_decisions.is_empty()
+            && let Some(ref mut a) = adapter
+        {
+            let lookup_query = decision_lookup_query(&request).unwrap_or_default();
+            let evidence = linked_decisions
+                .iter()
+                .take(3)
+                .map(|hit| {
+                    serde_json::json!({
+                        "decision_id": hit.decision.decision_id,
+                        "summary": hit.decision.summary,
+                        "relevance_score": hit.relevance_score,
+                    })
+                })
+                .collect::<Vec<_>>();
+            let source_ids = linked_decisions
+                .iter()
+                .flat_map(|hit| hit.decision.source_ids.iter().cloned())
+                .take(5)
+                .collect::<Vec<_>>();
+            a.record(extract_decision_event_with_details(
+                &format!("reuse prior decision for context: {lookup_query}"),
+                Some("stored decision memory matched current context request"),
+                serde_json::json!({
+                    "query": lookup_query,
+                    "conclusion": "prior decision reused for context request",
+                    "source_ids": source_ids,
+                    "evidence": evidence,
+                }),
+            ));
         }
 
         Ok(())

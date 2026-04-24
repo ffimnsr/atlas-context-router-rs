@@ -153,10 +153,24 @@ pub fn extract_tool_event(tool_name: &str, status: &str, extra: Value) -> Pendin
 /// `rationale` is an optional one-sentence explanation.
 /// Neither field should embed raw output blobs.
 pub fn extract_decision_event(summary: &str, rationale: Option<&str>) -> PendingEvent {
-    let payload = normalize_payload(json!({
+    extract_decision_event_with_details(summary, rationale, Value::Null)
+}
+
+pub fn extract_decision_event_with_details(
+    summary: &str,
+    rationale: Option<&str>,
+    details: Value,
+) -> PendingEvent {
+    let mut payload = json!({
         "summary": summary,
         "rationale": rationale,
-    }));
+    });
+    if let (Some(payload_obj), Some(details_obj)) = (payload.as_object_mut(), details.as_object()) {
+        for (key, value) in details_obj {
+            payload_obj.insert(key.clone(), value.clone());
+        }
+    }
+    let payload = normalize_payload(payload);
     PendingEvent {
         event_type: SessionEventType::Decision,
         priority: 4,
@@ -333,6 +347,21 @@ mod tests {
         assert_eq!(event.priority, 4);
         assert_eq!(event.payload["summary"], "prefer composition");
         assert_eq!(event.payload["rationale"], "simpler design");
+    }
+
+    #[test]
+    fn extract_decision_event_with_details_merges_extra_fields() {
+        let event = extract_decision_event_with_details(
+            "reuse prior context",
+            Some("matched prior decision"),
+            serde_json::json!({
+                "query": "src/lib.rs",
+                "source_ids": ["src-1"],
+            }),
+        );
+        assert_eq!(event.payload["summary"], "reuse prior context");
+        assert_eq!(event.payload["query"], "src/lib.rs");
+        assert_eq!(event.payload["source_ids"][0], "src-1");
     }
 
     #[test]

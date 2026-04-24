@@ -437,6 +437,7 @@ The MCP server (`atlas serve`) exposes these tools to agents:
 | `compact_session` | Compact session event ledger: merge, decay, dedup, promote |
 | `resume_session` | Retrieve and consume current session snapshot |
 | `search_saved_context` | Search saved artifacts from prior tool outputs |
+| `search_decisions` | Search persisted decision memory for prior conclusions |
 | `read_saved_context` | Retrieve full artifact content by source_id with optional paging |
 | `save_context_artifact` | Store large context payloads for later retrieval |
 | `get_context_stats` | Session/content-store stats and DB paths |

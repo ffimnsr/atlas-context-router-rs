@@ -16,6 +16,15 @@ use std::path::Path;
 
 use crate::output::{OutputFormat, render_serializable};
 
+fn invalid_search_content_regex_error(query: &str, error: impl std::fmt::Display) -> anyhow::Error {
+    let escaped_example = r"Command::Context|Context \{";
+    anyhow::anyhow!(
+        "invalid regex pattern for search_content query '{query}': {error}. \
+         search_content keeps is_regex=true strict and does not fall back to literal search. \
+         Set is_regex=false for literal text search, or escape regex metacharacters, e.g. {escaped_example}"
+    )
+}
+
 // ---------------------------------------------------------------------------
 // Generated / vendor patterns excluded by default in search_content
 // ---------------------------------------------------------------------------
@@ -295,14 +304,14 @@ pub(crate) fn tool_search_content(
         // Literal queries are case-insensitive by default; regex queries respect user intent.
         .case_insensitive(!is_regex)
         .build(&pattern)
-        .with_context(|| format!("invalid search pattern: {query}"))?;
+        .map_err(|error| invalid_search_content_regex_error(&query, error))?;
 
     let rich_snippet_regex = if rich_snippets {
         Some(
             regex::RegexBuilder::new(&pattern)
                 .case_insensitive(!is_regex)
                 .build()
-                .with_context(|| format!("invalid search pattern: {query}"))?,
+                .map_err(|error| invalid_search_content_regex_error(&query, error))?,
         )
     } else {
         None
@@ -1286,6 +1295,36 @@ mod tests {
         assert!(
             v["result_count"].as_u64().unwrap() >= 2,
             "expected ≥2 matches: {v}"
+        );
+    }
+
+    #[test]
+    fn search_content_invalid_regex_returns_guidance() {
+        let (_dir, root) = make_repo(&[(
+            "src/lib.rs",
+            "pub enum Command {\n    Context { value: String },\n}\n",
+        )]);
+        let args = serde_json::json!({
+            "query": "Command::Context|Context {",
+            "is_regex": true,
+            "exclude_generated": false
+        });
+
+        let error = tool_search_content(Some(&args), &root, OutputFormat::Json)
+            .expect_err("invalid regex must return error");
+        let message = error.to_string();
+
+        assert!(
+            message.contains("invalid regex pattern for search_content"),
+            "expected invalid regex guidance, got: {message}"
+        );
+        assert!(
+            message.contains("Set is_regex=false for literal text search"),
+            "expected literal-search guidance, got: {message}"
+        );
+        assert!(
+            message.contains(r"Command::Context|Context \{"),
+            "expected escaped regex guidance, got: {message}"
         );
     }
 

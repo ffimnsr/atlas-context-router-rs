@@ -859,8 +859,6 @@ Use this part for session persistence, saved artifacts, retrieval-backed resume,
 
 These phases cover continuity storage, session lifecycle, retrieval-backed restoration, memory quality, and longer-term cross-session intelligence.
 
-#### Overview
-
 Extend Atlas with context-mode persistence and session continuity without mixing those concerns into graph database.
 
 This backlog covers pieces needed for:
@@ -870,7 +868,7 @@ This backlog covers pieces needed for:
 - resume snapshots
 - retrieval-backed restoration
 
-##### Core Design Rules
+Core Design Rules:
 
 - DO NOT store saved context in graph database
 - DO NOT replay raw command history into future sessions
@@ -914,11 +912,11 @@ Persist and reuse decisions.
 
 ##### Tasks
 
-- [ ] create decision event types
-- [ ] link decisions to artifacts
-- [ ] store reasoning behind decisions
-- [ ] retrieve decisions for future tasks
-- [ ] avoid recomputing prior conclusions
+- [x] create decision event types
+- [x] link decisions to artifacts
+- [x] store reasoning behind decisions
+- [x] retrieve decisions for future tasks
+- [x] avoid recomputing prior conclusions
 
 ##### Output
 
@@ -926,9 +924,9 @@ Persist and reuse decisions.
 
 ##### CLI and MCP rollout follow-up
 
-- [ ] emit decision events from CLI, context, reasoning, and MCP adapter flows
-- [ ] route `atlas context` and saved-context retrieval through decision lookup when relevant prior conclusions exist
-- [ ] expose decision retrieval through CLI or MCP surface with linked evidence and artifact references
+- [x] emit decision events from CLI, context, reasoning, and MCP adapter flows
+- [x] route `atlas context` and saved-context retrieval through decision lookup when relevant prior conclusions exist
+- [x] expose decision retrieval through CLI or MCP surface with linked evidence and artifact references
 
 ---
 
@@ -1344,6 +1342,11 @@ Why:
 #### Patch N4 — MCP and prompt workflow integration
 
 - [ ] update MCP tool descriptions to describe graph/content companion rules
+- [x] improve `search_content` invalid-regex guidance:
+  - [x] keep `is_regex=true` strict; invalid regex returns error instead of fallback search
+  - [x] include escaped-regex suggestion for literal metacharacters, for example `Context \\{`
+  - [x] suggest `is_regex=false` when caller wants literal text search
+  - [x] add MCP regression test for invalid pattern like `Command::Context|Context {`
 - [ ] update `review_change` prompt to query content assets when changed files include docs/config/templates/prompts/SQL
 - [ ] update `inspect_symbol` prompt to look for context-adjacent assets only when graph evidence suggests dependency
 - [ ] update installed AGENTS instructions:

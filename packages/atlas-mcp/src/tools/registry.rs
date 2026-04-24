@@ -251,18 +251,6 @@ pub fn tool_list() -> serde_json::Value {
                 }
             },
             {
-                "name": "compact_session",
-                "description": "Compact and curate the session event ledger. Removes stale low-value events, merges repeated actions, deduplicates reasoning outputs, and promotes high-value events to survive future eviction. Returns curation stats. Safe to call repeatedly.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "session_id":    { "type": "string",  "description": "Explicit session id. Omit to use the derived id for the current repo." },
-                        "output_format": { "type": "string",  "description": DEFAULT_OUTPUT_DESCRIPTION }
-                    },
-                    "required": []
-                }
-            },
-            {
                 "name": "resume_session",
                 "description": "Retrieve and optionally consume the resume snapshot for the current (or specified) session. Builds a snapshot on demand if one does not exist.",
                 "inputSchema": {
@@ -285,6 +273,20 @@ pub fn tool_list() -> serde_json::Value {
                         "session_id":   { "type": "string",  "description": "Restrict search to artifacts from this session." },
                         "source_type":  { "type": "string",  "description": "Filter by source type (e.g. 'review_context', 'mcp_artifact')." },
                         "limit":        { "type": "integer", "description": "Maximum results to return (default 10)." },
+                        "output_format":{ "type": "string",  "description": DEFAULT_OUTPUT_DESCRIPTION }
+                    },
+                    "required": ["query"]
+                }
+            },
+            {
+                "name": "search_decisions",
+                "description": "Search persisted decision memory for prior conclusions, linked evidence, and artifact references.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "query":        { "type": "string",  "description": "Search query text." },
+                        "session_id":   { "type": "string",  "description": "Restrict search to one session. Omit for repo-wide decision recall." },
+                        "limit":        { "type": "integer", "description": "Maximum decisions to return (default 10)." },
                         "output_format":{ "type": "string",  "description": DEFAULT_OUTPUT_DESCRIPTION }
                     },
                     "required": ["query"]
@@ -435,11 +437,11 @@ pub fn tool_list() -> serde_json::Value {
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "query":              { "type": "string",  "description": "Text to search for. Literal string by default; set is_regex=true for regex patterns." },
+                        "query":              { "type": "string",  "description": "Text to search for. Literal string by default; set is_regex=true for regex patterns. Invalid regex stays strict and returns an error; for literal metacharacters prefer is_regex=false or escape them, e.g. 'Command::Context|Context \\{' ." },
                         "globs":              { "type": "array", "items": { "type": "string" }, "description": "Optional include-path filters: only files matching at least one glob are searched." },
                         "exclude_globs":      { "type": "array", "items": { "type": "string" }, "description": "Optional exclusion filters: files matching any of these globs are skipped." },
                         "exclude_generated":  { "type": "boolean", "description": "Skip generated/vendor files (node_modules, dist, *.min.js, etc.). Default true." },
-                        "is_regex":           { "type": "boolean", "description": "Treat query as a regex pattern (default false). Literal queries are case-insensitive by default." },
+                        "is_regex":           { "type": "boolean", "description": "Treat query as a regex pattern (default false). Literal queries are case-insensitive by default. Invalid regex does not fall back to literal search." },
                         "context_lines":      { "type": "integer", "description": "Lines of context to include before and after each match (default 0)." },
                         "rich_snippets":      { "type": "boolean", "description": "When true, also return grouped per-match snippets with before/match/after context lines. Default false to keep payloads compact." },
                         "snippet_context_lines": { "type": "integer", "description": "Context lines per grouped rich snippet (default: max(context_lines, 2) when rich_snippets=true)." },

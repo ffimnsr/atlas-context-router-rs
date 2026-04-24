@@ -1,5 +1,49 @@
 use super::*;
 use serde_json::{Value, json};
+use std::collections::BTreeSet;
+
+const TOOL_REGISTRY_SNAPSHOT: &[&str] = &[
+    "list_graph_stats",
+    "query_graph",
+    "batch_query_graph",
+    "get_impact_radius",
+    "get_review_context",
+    "detect_changes",
+    "build_or_update_graph",
+    "postprocess_graph",
+    "traverse_graph",
+    "get_minimal_context",
+    "explain_change",
+    "get_context",
+    "get_session_status",
+    "compact_session",
+    "resume_session",
+    "search_saved_context",
+    "search_decisions",
+    "read_saved_context",
+    "save_context_artifact",
+    "get_context_stats",
+    "purge_saved_context",
+    "cross_session_search",
+    "get_global_memory",
+    "symbol_neighbors",
+    "cross_file_links",
+    "concept_clusters",
+    "search_files",
+    "search_content",
+    "search_templates",
+    "search_text_assets",
+    "status",
+    "doctor",
+    "db_check",
+    "debug_graph",
+    "explain_query",
+    "analyze_safety",
+    "analyze_remove",
+    "analyze_dead_code",
+    "analyze_dependency",
+    "resolve_symbol",
+];
 
 fn parity_seed_source_id(repo_root: &str, db_path: &str) -> String {
     let content = "x".repeat(600);
@@ -43,6 +87,7 @@ fn parity_args(tool_name: &str, source_id: &str) -> Value {
         "compact_session" => json!({ "output_format": "json" }),
         "resume_session" => json!({ "mark_consumed": false, "output_format": "json" }),
         "search_saved_context" => json!({ "query": "parity-seed", "output_format": "json" }),
+        "search_decisions" => json!({ "query": "parity-seed", "output_format": "json" }),
         "read_saved_context" => json!({ "source_id": source_id, "output_format": "json" }),
         "save_context_artifact" => json!({
             "content": "parity preview payload".repeat(40),
@@ -175,6 +220,43 @@ fn tool_list_all_tools_default_to_toon() {
 }
 
 #[test]
+fn tool_list_matches_registry_snapshot() {
+    let list = tool_list();
+    let names = list
+        .get("tools")
+        .and_then(|value| value.as_array())
+        .expect("tools array")
+        .iter()
+        .map(|tool| {
+            tool.get("name")
+                .and_then(|value| value.as_str())
+                .expect("tool name")
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(names, TOOL_REGISTRY_SNAPSHOT);
+}
+
+#[test]
+fn tool_list_names_are_unique() {
+    let list = tool_list();
+    let names = list
+        .get("tools")
+        .and_then(|value| value.as_array())
+        .expect("tools array")
+        .iter()
+        .map(|tool| {
+            tool.get("name")
+                .and_then(|value| value.as_str())
+                .expect("tool name")
+        })
+        .collect::<Vec<_>>();
+    let unique = names.iter().copied().collect::<BTreeSet<_>>();
+
+    assert_eq!(unique.len(), names.len(), "tool_list must not repeat names");
+}
+
+#[test]
 fn tool_result_value_falls_back_to_json_when_toon_is_empty() {
     let rendered =
         tool_result_value(&serde_json::json!({}), OutputFormat::Toon).expect("tool result");
@@ -199,6 +281,47 @@ fn invalid_output_format_returns_error() {
             .unwrap_err()
             .to_string()
             .contains("unsupported output_format")
+    );
+}
+
+#[test]
+fn search_content_invalid_regex_returns_strict_guidance() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    write_repo_file(
+        dir.path(),
+        "src/lib.rs",
+        "pub enum Command {\n    Context { value: String },\n}\n",
+    );
+    let db_path = dir.path().join("atlas.db");
+    let db_path = db_path.to_string_lossy().to_string();
+    let _ = Store::open(&db_path).expect("open store");
+
+    let args = json!({
+        "query": "Command::Context|Context {",
+        "is_regex": true,
+        "output_format": "json"
+    });
+
+    let result = call(
+        "search_content",
+        Some(&args),
+        dir.path().to_str().expect("repo root"),
+        &db_path,
+    );
+
+    assert!(result.is_err(), "invalid regex must return an error");
+    let message = result.unwrap_err().to_string();
+    assert!(
+        message.contains("search_content keeps is_regex=true strict"),
+        "expected strict regex guidance, got: {message}"
+    );
+    assert!(
+        message.contains("Set is_regex=false for literal text search"),
+        "expected literal-search guidance, got: {message}"
+    );
+    assert!(
+        message.contains(r"Command::Context|Context \{"),
+        "expected escaped regex example, got: {message}"
     );
 }
 

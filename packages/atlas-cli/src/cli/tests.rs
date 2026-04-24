@@ -290,6 +290,35 @@ fn parse_review_context_defaults() {
     }
 }
 
+#[test]
+fn parse_session_decisions_command() {
+    let cli = parse(&[
+        "atlas",
+        "session",
+        "decisions",
+        "verify_token",
+        "--current-session",
+        "--limit",
+        "7",
+    ]);
+    if let Command::Session { subcommand } = cli.command {
+        match subcommand {
+            SessionCommand::Decisions {
+                query,
+                current_session,
+                limit,
+            } => {
+                assert_eq!(query, "verify_token");
+                assert!(current_session);
+                assert_eq!(limit, 7);
+            }
+            _ => panic!("expected SessionCommand::Decisions"),
+        }
+    } else {
+        panic!("expected Session command");
+    }
+}
+
 // -------------------------------------------------------------------------
 // detect-changes
 // -------------------------------------------------------------------------

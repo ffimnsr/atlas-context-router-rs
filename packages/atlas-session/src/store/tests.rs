@@ -370,6 +370,85 @@ fn build_resume_captures_decisions_and_deduplicates_rules_by_label() {
 }
 
 #[test]
+fn decision_events_are_indexed_for_lookup_with_artifact_links() {
+    let (_dir, mut store) = open_store(64, 8192);
+    let session_id = session_id();
+    seed_session(&mut store, &session_id);
+
+    store
+        .append_event(NewSessionEvent {
+            session_id: session_id.clone(),
+            event_type: SessionEventType::Decision,
+            priority: 4,
+            payload: serde_json::json!({
+                "summary": "reuse saved review context",
+                "rationale": "matching file and symbol overlap",
+                "conclusion": "prior review still relevant",
+                "query": "review src/lib.rs",
+                "source_id": "src-123",
+                "files": ["src/lib.rs"],
+                "related_symbols": ["crate::lib::compute"],
+                "evidence": [{"kind": "saved_context", "source_id": "src-123"}],
+            }),
+            created_at: None,
+        })
+        .unwrap();
+
+    let hits = store
+        .search_decisions("/repo", "review src/lib.rs", Some(session_id.as_str()), 10)
+        .unwrap();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].decision.summary, "reuse saved review context");
+    assert_eq!(hits[0].decision.source_ids, vec!["src-123"]);
+    assert_eq!(hits[0].decision.related_files, vec!["src/lib.rs"]);
+    assert_eq!(
+        hits[0].decision.related_symbols,
+        vec!["crate::lib::compute"]
+    );
+    assert!(hits[0].relevance_score > 0.0);
+}
+
+#[test]
+fn decision_lookup_matches_conclusion_and_query_text() {
+    let (_dir, mut store) = open_store(64, 8192);
+    let session_id = session_id();
+    seed_session(&mut store, &session_id);
+
+    store
+        .append_event(NewSessionEvent {
+            session_id: session_id.clone(),
+            event_type: SessionEventType::Decision,
+            priority: 4,
+            payload: serde_json::json!({
+                "summary": "refactor safety verdict",
+                "conclusion": "safe to refactor auth::verify_token",
+                "query": "verify_token",
+            }),
+            created_at: None,
+        })
+        .unwrap();
+
+    let hits = store
+        .search_decisions("/repo", "verify_token", None, 10)
+        .unwrap();
+    assert_eq!(hits.len(), 1);
+    assert!(
+        hits[0]
+            .decision
+            .conclusion
+            .as_deref()
+            .unwrap()
+            .contains("verify_token")
+    );
+    assert!(
+        hits[0]
+            .matched_terms
+            .iter()
+            .any(|term| term == "verify_token")
+    );
+}
+
+#[test]
 fn build_resume_canonicalizes_changed_files() {
     let (_dir, mut store) = open_store(64, 8192);
     let session_id = session_id();

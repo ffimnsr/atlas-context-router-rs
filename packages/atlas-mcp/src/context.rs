@@ -416,6 +416,17 @@ fn rendered_response_bytes(value: &Value, output_format: OutputFormat) -> anyhow
 }
 
 fn trim_packaged_context_once(value: &mut Value) -> bool {
+    if drop_array_entry(value, "linked_decisions", |entry| {
+        (
+            0_u8,
+            score_value(entry.get("relevance_score")),
+            string_key(entry, "decision_id"),
+            "",
+        )
+    }) {
+        increment_u64(value, "payload_truncation", "omitted_source_count", 1);
+        return true;
+    }
     if drop_array_entry(value, "saved_context_sources", |entry| {
         (
             0_u8,

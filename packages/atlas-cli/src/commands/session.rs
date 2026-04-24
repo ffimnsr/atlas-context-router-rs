@@ -277,6 +277,48 @@ pub fn run_session(cli: &Cli) -> Result<()> {
                 }
             }
         }
+        SessionCommand::Decisions {
+            query,
+            current_session,
+            limit,
+        } => {
+            let store = open_store()?;
+            let session_filter = current_session.then_some(session_id.as_str());
+            let hits = store.search_decisions(&repo, query, session_filter, *limit)?;
+
+            if cli.json {
+                print_json(
+                    "session.decisions",
+                    serde_json::json!({
+                        "query": query,
+                        "session_id": session_filter,
+                        "results": hits,
+                        "total": hits.len(),
+                    }),
+                )?;
+            } else if hits.is_empty() {
+                println!("No prior decisions matched '{query}'.");
+            } else {
+                println!("Decision matches ({}):", hits.len());
+                for hit in &hits {
+                    let conclusion = hit
+                        .decision
+                        .conclusion
+                        .as_deref()
+                        .unwrap_or("no conclusion recorded");
+                    println!(
+                        "  [{:.1}] {} -> {}",
+                        hit.relevance_score, hit.decision.summary, conclusion
+                    );
+                    if let Some(rationale) = hit.decision.rationale.as_deref() {
+                        println!("    rationale: {rationale}");
+                    }
+                    if !hit.decision.source_ids.is_empty() {
+                        println!("    artifacts: {}", hit.decision.source_ids.join(", "));
+                    }
+                }
+            }
+        }
         SessionCommand::Compact => {
             let mut store = open_store()?;
             let result = store
