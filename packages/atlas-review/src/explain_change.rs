@@ -2,7 +2,7 @@ use atlas_core::model::{
     ChangeType, ChangedFile, ContextIntent, ContextRequest, ContextTarget, NoiseReductionSummary,
     WorkflowCallChain, WorkflowComponent, WorkflowFocusNode,
 };
-use atlas_core::{BudgetReport, ImpactResult, Result};
+use atlas_core::{BudgetPolicy, BudgetReport, ImpactResult, Result};
 use atlas_impact::analyze as advanced_impact;
 use atlas_store_sqlite::Store;
 use serde::Serialize;
@@ -129,16 +129,14 @@ pub fn build_explain_change_summary(
     files: &[String],
     max_depth: u32,
     max_nodes: usize,
+    policy: &BudgetPolicy,
 ) -> Result<ExplainChangeSummary> {
     let file_refs: Vec<&str> = files.iter().map(String::as_str).collect();
     let base_impact = store.impact_radius(
         &file_refs,
         max_depth,
         max_nodes,
-        atlas_core::BudgetPolicy::default()
-            .graph_traversal
-            .edges
-            .default_limit,
+        policy.graph_traversal.edges.default_limit,
     )?;
     let advanced = advanced_impact(base_impact);
     let workflow_request = ContextRequest {
@@ -150,7 +148,9 @@ pub fn build_explain_change_summary(
         depth: Some(max_depth),
         ..ContextRequest::default()
     };
-    let workflow_result = ContextEngine::new(store).build(&workflow_request)?;
+    let workflow_result = ContextEngine::new(store)
+        .with_budget_policy(*policy)
+        .build(&workflow_request)?;
     let workflow = workflow_result.workflow.clone();
 
     let mut changed_by_kind = ExplainChangedByKind::default();

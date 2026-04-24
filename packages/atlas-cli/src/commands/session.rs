@@ -1,5 +1,7 @@
 use anyhow::{Context, Result};
 
+use atlas_session::{GlobalAccessEntry, GlobalWorkflowPattern};
+
 use crate::cli::{Cli, Command, SessionCommand};
 
 use super::{print_json, resolve_repo};
@@ -59,6 +61,14 @@ pub fn run_session(cli: &Cli) -> Result<()> {
             let events = store.list_events(&session_id)?;
             let snapshot = store.get_resume_snapshot(&session_id)?;
 
+            // CM11: best-effort global memory; empty if no data yet.
+            let frequent_symbols: Vec<GlobalAccessEntry> =
+                store.get_frequent_symbols(&repo, 10).unwrap_or_default();
+            let frequent_files: Vec<GlobalAccessEntry> =
+                store.get_frequent_files(&repo, 10).unwrap_or_default();
+            let recurring_workflows: Vec<GlobalWorkflowPattern> =
+                store.get_recurring_workflows(&repo, 5).unwrap_or_default();
+
             if cli.json {
                 let snapshot_info = snapshot.as_ref().map(|s| {
                     serde_json::json!({
@@ -68,6 +78,36 @@ pub fn run_session(cli: &Cli) -> Result<()> {
                         "updated_at": s.updated_at,
                     })
                 });
+                let symbols_json: Vec<_> = frequent_symbols
+                    .iter()
+                    .map(|e| {
+                        serde_json::json!({
+                            "value": e.value,
+                            "access_count": e.access_count,
+                            "last_accessed": e.last_accessed,
+                        })
+                    })
+                    .collect();
+                let files_json: Vec<_> = frequent_files
+                    .iter()
+                    .map(|e| {
+                        serde_json::json!({
+                            "value": e.value,
+                            "access_count": e.access_count,
+                            "last_accessed": e.last_accessed,
+                        })
+                    })
+                    .collect();
+                let workflows_json: Vec<_> = recurring_workflows
+                    .iter()
+                    .map(|w| {
+                        serde_json::json!({
+                            "pattern": w.pattern,
+                            "occurrence_count": w.occurrence_count,
+                            "last_seen": w.last_seen,
+                        })
+                    })
+                    .collect();
                 print_json(
                     "session.status",
                     serde_json::json!({
@@ -84,23 +124,51 @@ pub fn run_session(cli: &Cli) -> Result<()> {
                         })),
                         "event_count": events.len(),
                         "resume_snapshot": snapshot_info,
+                        "global_memory": {
+                            "frequent_symbols": symbols_json,
+                            "frequent_files": files_json,
+                            "recurring_workflows": workflows_json,
+                        },
                     }),
                 )?;
             } else {
                 match &meta {
                     None => println!("No active session (run `atlas session start`)"),
                     Some(m) => {
-                        println!("Session  : {}", session_id.as_str());
-                        println!("Repo     : {}", m.repo_root);
-                        println!("Frontend : {}", m.frontend);
-                        println!("Created  : {}", m.created_at);
-                        println!("Updated  : {}", m.updated_at);
-                        println!("Events   : {}", events.len());
+                        println!("Session   : {}", session_id.as_str());
+                        println!("Repo      : {}", m.repo_root);
+                        println!("Frontend  : {}", m.frontend);
+                        println!("Created   : {}", m.created_at);
+                        println!("Updated   : {}", m.updated_at);
+                        println!("Events    : {}", events.len());
+                        if let Some(ca) = &m.last_compaction_at {
+                            println!("Compacted : {ca}");
+                        }
                         match &snapshot {
-                            None => println!("Snapshot : none"),
+                            None => println!("Snapshot  : none"),
                             Some(s) => {
                                 let state = if s.consumed { "consumed" } else { "pending" };
-                                println!("Snapshot : {state} ({} events)", s.event_count);
+                                println!("Snapshot  : {state} ({} events)", s.event_count);
+                            }
+                        }
+                        // CM11: show global memory summary if data exists.
+                        if !frequent_symbols.is_empty() {
+                            println!("\nFrequent symbols ({}):", frequent_symbols.len());
+                            for e in &frequent_symbols {
+                                println!("  {} (accessed {} times)", e.value, e.access_count);
+                            }
+                        }
+                        if !frequent_files.is_empty() {
+                            println!("\nFrequent files ({}):", frequent_files.len());
+                            for e in &frequent_files {
+                                println!("  {} (accessed {} times)", e.value, e.access_count);
+                            }
+                        }
+                        if !recurring_workflows.is_empty() {
+                            println!("\nRecurring workflows ({}):", recurring_workflows.len());
+                            for w in &recurring_workflows {
+                                let pat = w.pattern.join(" → ");
+                                println!("  [{pat}] ({} times)", w.occurrence_count);
                             }
                         }
                     }
@@ -206,6 +274,46 @@ pub fn run_session(cli: &Cli) -> Result<()> {
                         "{:<20} {:<12} {:<14} {}",
                         updated, s.frontend, id_short, s.repo_root
                     );
+                }
+            }
+        }
+        SessionCommand::Compact => {
+            let mut store = open_store()?;
+            let result = store
+                .compact_session(&session_id)
+                .with_context(|| "cannot compact session events")?;
+
+            if cli.json {
+                print_json(
+                    "session.compact",
+                    serde_json::json!({
+                        "session_id": session_id.as_str(),
+                        "events_before": result.events_before,
+                        "events_after": result.events_after,
+                        "merged": result.merged_count,
+                        "decayed": result.decayed_count,
+                        "deduplicated": result.deduplicated_count,
+                        "promoted": result.promoted_count,
+                    }),
+                )?;
+            } else if result.events_before == result.events_after && result.promoted_count == 0 {
+                println!("Session already compact ({} events).", result.events_before);
+            } else {
+                println!(
+                    "Session compacted: {} → {} events",
+                    result.events_before, result.events_after
+                );
+                if result.decayed_count > 0 {
+                    println!("  Decayed    : {}", result.decayed_count);
+                }
+                if result.merged_count > 0 {
+                    println!("  Merged     : {}", result.merged_count);
+                }
+                if result.deduplicated_count > 0 {
+                    println!("  Deduplicated: {}", result.deduplicated_count);
+                }
+                if result.promoted_count > 0 {
+                    println!("  Promoted   : {}", result.promoted_count);
                 }
             }
         }

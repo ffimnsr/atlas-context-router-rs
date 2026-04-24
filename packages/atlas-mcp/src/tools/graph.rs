@@ -380,14 +380,22 @@ pub(super) fn tool_traverse_graph(
 
 pub(super) fn tool_symbol_neighbors(
     args: Option<&serde_json::Value>,
+    repo_root: &str,
     db_path: &str,
     output_format: crate::output::OutputFormat,
 ) -> Result<serde_json::Value> {
+    let policy = load_budget_policy(repo_root)?;
+    let mut budgets = BudgetManager::new();
     let qname = normalize_qn_kind_tokens(
         str_arg(args, "qname")?
             .ok_or_else(|| anyhow::anyhow!("missing required argument: qname"))?,
     );
-    let limit = u64_arg(args, "limit").unwrap_or(10) as usize;
+    let requested_limit = u64_arg(args, "limit").unwrap_or(10) as usize;
+    let limit = budgets.resolve_limit(
+        policy.review_context_extraction.nodes,
+        "review_context_extraction.max_nodes",
+        Some(requested_limit),
+    );
 
     let store = open_store(db_path)?;
     let nbhd =
@@ -484,18 +492,42 @@ pub(super) fn tool_symbol_neighbors(
         }
     }
 
+    let observed = result.callers.len()
+        + result.callees.len()
+        + result.tests.len()
+        + result.siblings.len()
+        + result.import_neighbors.len()
+        + result.caller_edges.len()
+        + result.callee_edges.len();
+    inject_budget_metadata(
+        &mut response,
+        &budgets.summary(
+            "review_context_extraction.max_nodes",
+            limit,
+            requested_limit.max(observed),
+        ),
+    );
+
     Ok(response)
 }
 
 pub(super) fn tool_cross_file_links(
     args: Option<&serde_json::Value>,
+    repo_root: &str,
     db_path: &str,
     output_format: crate::output::OutputFormat,
 ) -> Result<serde_json::Value> {
+    let policy = load_budget_policy(repo_root)?;
+    let mut budgets = BudgetManager::new();
     let file = str_arg(args, "file")?
         .ok_or_else(|| anyhow::anyhow!("missing required argument: file"))?
         .to_owned();
-    let limit = u64_arg(args, "limit").unwrap_or(20) as usize;
+    let requested_limit = u64_arg(args, "limit").unwrap_or(20) as usize;
+    let limit = budgets.resolve_limit(
+        policy.review_context_extraction.files,
+        "review_context_extraction.max_files",
+        Some(requested_limit),
+    );
 
     let store = open_store(db_path)?;
     let links = sem::cross_file_links(&store, &file, limit).context("cross_file_links failed")?;
@@ -518,19 +550,36 @@ pub(super) fn tool_cross_file_links(
         })
         .collect();
 
-    tool_result_value(&result, output_format)
+    let mut response = tool_result_value(&result, output_format)?;
+    inject_budget_metadata(
+        &mut response,
+        &budgets.summary(
+            "review_context_extraction.max_files",
+            limit,
+            requested_limit.max(result.len()),
+        ),
+    );
+    Ok(response)
 }
 
 pub(super) fn tool_concept_clusters(
     args: Option<&serde_json::Value>,
+    repo_root: &str,
     db_path: &str,
     output_format: crate::output::OutputFormat,
 ) -> Result<serde_json::Value> {
+    let policy = load_budget_policy(repo_root)?;
+    let mut budgets = BudgetManager::new();
     let files = string_array_arg(args, "files")?;
     if files.is_empty() {
         return Err(anyhow::anyhow!("missing required argument: files"));
     }
-    let limit = u64_arg(args, "limit").unwrap_or(10) as usize;
+    let requested_limit = u64_arg(args, "limit").unwrap_or(10) as usize;
+    let limit = budgets.resolve_limit(
+        policy.review_context_extraction.files,
+        "review_context_extraction.max_files",
+        Some(requested_limit),
+    );
 
     let store = open_store(db_path)?;
     let seed_refs: Vec<&str> = files.iter().map(String::as_str).collect();
@@ -553,20 +602,37 @@ pub(super) fn tool_concept_clusters(
         })
         .collect();
 
-    tool_result_value(&result, output_format)
+    let mut response = tool_result_value(&result, output_format)?;
+    inject_budget_metadata(
+        &mut response,
+        &budgets.summary(
+            "review_context_extraction.max_files",
+            limit,
+            requested_limit.max(result.len()),
+        ),
+    );
+    Ok(response)
 }
 
 pub(super) fn tool_explain_query(
     args: Option<&serde_json::Value>,
+    repo_root: &str,
     db_path: &str,
     output_format: crate::output::OutputFormat,
 ) -> Result<serde_json::Value> {
+    let policy = load_budget_policy(repo_root)?;
+    let mut budgets = BudgetManager::new();
     let text = str_arg(args, "text")?
         .map(str::to_owned)
         .unwrap_or_default();
     let kind = str_arg(args, "kind")?.map(str::to_owned);
     let language = str_arg(args, "language")?.map(str::to_owned);
-    let limit = u64_arg(args, "limit").unwrap_or(20) as usize;
+    let requested_limit = u64_arg(args, "limit").unwrap_or(20) as usize;
+    let limit = budgets.resolve_limit(
+        policy.query_candidates_and_seeds.candidates,
+        "query_candidates_and_seeds.max_candidates",
+        Some(requested_limit),
+    );
     let semantic = bool_arg(args, "semantic").unwrap_or(false);
     let regex = str_arg(args, "regex")?.map(str::to_owned);
     let subpath = str_arg(args, "subpath")?.map(str::to_owned);
@@ -598,15 +664,27 @@ pub(super) fn tool_explain_query(
     };
     let result = atlas_search::explain_query(store.as_ref(), db_exists, &query, semantic);
 
-    tool_result_value(&result, output_format)
+    let mut response = tool_result_value(&result, output_format)?;
+    inject_budget_metadata(
+        &mut response,
+        &budgets.summary(
+            "query_candidates_and_seeds.max_candidates",
+            limit,
+            requested_limit.max(limit),
+        ),
+    );
+    Ok(response)
 }
 
 pub(super) fn tool_resolve_symbol(
     args: Option<&serde_json::Value>,
+    repo_root: &str,
     db_path: &str,
     output_format: crate::output::OutputFormat,
 ) -> Result<serde_json::Value> {
     const DEFAULT_LIMIT: usize = 10;
+    let policy = load_budget_policy(repo_root)?;
+    let mut budgets = BudgetManager::new();
 
     let name = str_arg(args, "name")?
         .ok_or_else(|| anyhow::anyhow!("resolve_symbol requires 'name'"))?
@@ -614,7 +692,12 @@ pub(super) fn tool_resolve_symbol(
     let kind_input = str_arg(args, "kind")?.map(str::to_owned);
     let file_filter = str_arg(args, "file")?.map(str::to_owned);
     let language = str_arg(args, "language")?.map(str::to_owned);
-    let limit = u64_arg(args, "limit").unwrap_or(DEFAULT_LIMIT as u64) as usize;
+    let requested_limit = u64_arg(args, "limit").unwrap_or(DEFAULT_LIMIT as u64) as usize;
+    let limit = budgets.resolve_limit(
+        policy.query_candidates_and_seeds.candidates,
+        "query_candidates_and_seeds.max_candidates",
+        Some(requested_limit),
+    );
 
     if name.trim().is_empty() {
         anyhow::bail!("resolve_symbol requires non-empty 'name'");
@@ -667,7 +750,16 @@ pub(super) fn tool_resolve_symbol(
                         "next_tools": ["symbol_neighbors", "traverse_graph", "get_context"]
                     }],
                 });
-                return tool_result_value(&result, output_format);
+                let mut response = tool_result_value(&result, output_format)?;
+                inject_budget_metadata(
+                    &mut response,
+                    &budgets.summary(
+                        "query_candidates_and_seeds.max_candidates",
+                        limit,
+                        requested_limit.max(1),
+                    ),
+                );
+                return Ok(response);
             }
             ResolvedTarget::Ambiguous(meta) => {
                 let result = serde_json::json!({
@@ -685,7 +777,16 @@ pub(super) fn tool_resolve_symbol(
                         "next_tools": ["symbol_neighbors", "traverse_graph", "get_context"]
                     }],
                 });
-                return tool_result_value(&result, output_format);
+                let mut response = tool_result_value(&result, output_format)?;
+                inject_budget_metadata(
+                    &mut response,
+                    &budgets.summary(
+                        "query_candidates_and_seeds.max_candidates",
+                        limit,
+                        requested_limit.max(meta.candidates.len()),
+                    ),
+                );
+                return Ok(response);
             }
             ResolvedTarget::NotFound { suggestions } => {
                 let result = serde_json::json!({
@@ -705,14 +806,27 @@ pub(super) fn tool_resolve_symbol(
                         "next_tools": ["query_graph", "explain_query"]
                     }],
                 });
-                return tool_result_value(&result, output_format);
+                let mut response = tool_result_value(&result, output_format)?;
+                inject_budget_metadata(
+                    &mut response,
+                    &budgets.summary(
+                        "query_candidates_and_seeds.max_candidates",
+                        limit,
+                        requested_limit.max(suggestions.len()),
+                    ),
+                );
+                return Ok(response);
             }
             ResolvedTarget::File(_) => {}
         }
     }
 
     let resolved_kind = kind_input.as_deref().map(resolve_kind_alias);
-    let fetch_limit = (limit * 4).max(40);
+    let fetch_limit = budgets.resolve_limit(
+        policy.query_candidates_and_seeds.candidates,
+        "query_candidates_and_seeds.max_candidates",
+        Some((limit * 4).max(40)),
+    );
     let query = SearchQuery {
         text: name.clone(),
         kind: resolved_kind.clone(),
@@ -735,6 +849,15 @@ pub(super) fn tool_resolve_symbol(
     let total_before_limit = filtered.len();
     let ranked: Vec<_> = filtered.into_iter().take(limit).collect();
     let truncated = total_before_limit > ranked.len();
+    if truncated {
+        budgets.record_usage(
+            policy.query_candidates_and_seeds.candidates,
+            "query_candidates_and_seeds.max_candidates",
+            limit,
+            total_before_limit,
+            true,
+        );
+    }
 
     let best_qn = ranked.first().map(|r| r.node.qualified_name.as_str());
     let ambiguous = ranked.len() > 1;
@@ -793,5 +916,14 @@ pub(super) fn tool_resolve_symbol(
         "suggestions": suggestions,
     });
 
-    tool_result_value(&result, output_format)
+    let mut response = tool_result_value(&result, output_format)?;
+    inject_budget_metadata(
+        &mut response,
+        &budgets.summary(
+            "query_candidates_and_seeds.max_candidates",
+            limit,
+            requested_limit.max(total_before_limit),
+        ),
+    );
+    Ok(response)
 }

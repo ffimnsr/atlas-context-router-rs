@@ -1181,6 +1181,13 @@ This phase must:
 - support commit-based historical inspection
 - keep storage and indexing costs bounded
 
+Core Design Rules:
+
+- correctness before optimization
+- reuse unchanged file graphs across history
+- prefer explicit evidence over inferred continuity
+- keep history queries deterministic
+
 #### 17.1 Scope
 
 Historical Graphs means Atlas can persist and query graph state across multiple commits or snapshots.
@@ -1768,14 +1775,6 @@ Phase 17 is complete when all of these are true:
 - [ ] Atlas can report churn/stability metrics
 - [ ] storage growth is measurable and bounded by policy
 - [ ] all historical outputs are deterministic and evidence-backed
-
-#### 17.21 Guiding rules
-
-- [ ] correctness before optimization
-- [ ] reuse unchanged file graphs across history
-- [ ] prefer explicit evidence over inferred continuity
-- [ ] keep history queries deterministic
-- [ ] do not add LLM dependence anywhere in this phase
 
 ---
 
@@ -3576,8 +3575,134 @@ Deterministic analytics layer on top of graph + stored metadata. Produce explain
 
 #### 30.1 Multi-repo
 
-- [ ] shared graph
-- [ ] cross-repo impact
+Registry-first design, not raw path merge. Current recursive submodule scan, owner identity, and cross-package edges give base. Extend that into first-class multi-repo federation so each repo keeps its own identity, git lifecycle, and provenance while Atlas can answer cross-repo questions.
+
+##### 30.1.1 Goals and scope
+
+- [ ] treat root repo, initialized git submodules, and manually registered sibling repos as one logical analysis scope
+- [ ] keep per-repo identity explicit in storage, output, and cache keys
+- [ ] support query, review, impact, and context flows across repo boundaries
+- [ ] keep single-repo UX fast and unchanged by default
+- [ ] fail closed when registry entries are missing, stale, detached, or unauthorized
+
+##### 30.1.2 Multi-repo registry
+
+- [ ] define `RepoRegistry` model
+- [ ] define `RepoRegistration` entry with:
+  - [ ] stable `repo_id`
+  - [ ] canonical absolute root
+  - [ ] repo-relative display alias
+  - [ ] VCS metadata: `HEAD`, default branch, remote URL when available
+  - [ ] relationship kind: `root`, `submodule`, `workspace_member`, `manual`
+  - [ ] trust state and enabled/disabled flag
+  - [ ] optional include/exclude globs
+  - [ ] optional dependency metadata to other registered repos
+- [ ] persist registry metadata under `.atlas/` instead of inferring everything from transient process state
+- [ ] keep registry format human-editable
+- [ ] version registry schema for future migrations
+
+##### 30.1.3 Discovery and bootstrap
+
+- [ ] auto-register root repo on `atlas init`
+- [ ] auto-discover initialized git submodules as first-class repo entries
+- [ ] record parent-to-submodule linkage instead of flattening submodule identity into root only
+- [ ] support manual `atlas repo add <path>` for sibling repos outside root tree
+- [ ] support `atlas repo remove <repo-id>` without deleting graph data for unrelated repos
+- [ ] support `atlas repo sync` to refresh refs, remotes, enabled state, and missing paths
+- [ ] surface uninitialized or missing submodules as registry warnings, not hard failures
+
+##### 30.1.4 Identity and storage model
+
+- [ ] extend path identity invariant from repo-relative path to `(repo_id, canonical_repo_relative_path)`
+- [ ] prevent qualified-name collisions for same file names across different repos
+- [ ] keep per-repo synthetic owner/workspace nodes and add synthetic repo nodes
+- [ ] add repo-membership edges:
+  - [ ] `repo contains package`
+  - [ ] `repo contains workspace`
+  - [ ] `registry contains repo`
+  - [ ] `repo depends_on repo`
+  - [ ] `repo submodule_of repo`
+- [ ] store repo provenance on nodes, edges, files, saved context, and diagnostics output
+- [ ] preserve existing single-db deployment when practical, but partition rows by `repo_id`
+- [ ] avoid shared-graph writes that cannot be traced back to one source repo
+
+##### 30.1.5 Build and update flows
+
+- [ ] build each registered repo as independent parse/update unit
+- [ ] reuse existing submodule-safe git invocation rules for child repos
+- [ ] detect changes per repo using each repo's own git root and diff state
+- [ ] let root-repo `detect-changes` expand into registered sub-repo changes when requested
+- [ ] support targeted update:
+  - [ ] one repo
+  - [ ] all enabled repos
+  - [ ] affected repos only
+- [ ] cache per-repo build status, indexed revision, and stale markers
+- [ ] report partial success when some repos update and others fail
+
+##### 30.1.6 Cross-repo resolution and graph semantics
+
+- [ ] resolve imports/calls across repos only when registry relationship or dependency evidence exists
+- [ ] treat submodule boundaries as repo boundaries first, directory prefixes second
+- [ ] let package-owner and workspace-owner metadata bridge repo boundaries when manifests point across repos
+- [ ] add cross-repo edge metadata:
+  - [ ] source repo
+  - [ ] target repo
+  - [ ] relationship reason: import, dependency, submodule, workspace link
+  - [ ] confidence tier
+- [ ] keep unresolved cross-repo references explicit so review/impact can explain missing evidence
+- [ ] support cross-repo impact radius and removal analysis without hiding repo hops
+
+##### 30.1.7 CLI and MCP surface
+
+- [ ] CLI:
+  - [ ] `atlas repo list`
+  - [ ] `atlas repo add <path>`
+  - [ ] `atlas repo remove <repo-id>`
+  - [ ] `atlas repo sync`
+  - [ ] `atlas build --all-repos`
+  - [ ] `atlas update --all-repos`
+  - [ ] `atlas query --repo <repo-id>|--all-repos`
+  - [ ] `atlas impact --all-repos`
+- [ ] MCP:
+  - [ ] expose registry inspection tool
+  - [ ] add optional repo scoping to graph/context tools
+  - [ ] return repo identity in ambiguity candidates and provenance payloads
+- [ ] human-readable output must show repo labels anywhere same symbol exists in multiple repos
+- [ ] JSON output must include repo metadata in stable fields, not ad hoc strings
+
+##### 30.1.8 Review, context, and saved artifacts
+
+- [ ] let review context summarize changed repos before changed files
+- [ ] include cross-repo boundary violations in impact and review summaries
+- [ ] allow `get_context` to follow caller/callee edges across repos when enabled
+- [ ] store session artifacts with repo-set ownership, not single repo only
+- [ ] block saved-context reads when session repo scope does not overlap requested repo scope
+
+##### 30.1.9 Safety, performance, and rollout
+
+- [ ] keep single-repo default path zero-config and zero-regression
+- [ ] gate multi-repo federation behind explicit registry presence or `--all-repos`
+- [ ] bound fan-out so one command cannot accidentally parse every nearby checkout
+- [ ] add per-repo and aggregate budget reporting
+- [ ] degrade cleanly when one repo is unavailable, corrupted, or on unsupported filesystem
+- [ ] start with submodules as phase-1 supported multi-repo source, then add manual sibling repos
+
+##### 30.1.10 Tests and completion criteria
+
+- [ ] tests:
+  - [ ] submodule auto-registration
+  - [ ] manual sibling repo registration
+  - [ ] repo-id stability across rebuilds
+  - [ ] qualified-name collision handling across repos
+  - [ ] cross-repo query ranking and ambiguity output
+  - [ ] cross-repo impact/review context
+  - [ ] partial update failure reporting
+  - [ ] saved-context repo-scope isolation
+- [ ] completion criteria:
+  - [ ] Atlas can index at least root repo plus one submodule as separate repo identities
+  - [ ] cross-repo query output is deterministic and provenance-rich
+  - [ ] impact/review tools can explain repo hops
+  - [ ] default single-repo behavior remains unchanged
 
 #### 30.2 Remaining code intelligence
 
@@ -4164,12 +4289,12 @@ Reduce noise and improve signal quality in stored memory.
 
 ##### Tasks
 
-- [ ] implement event compaction
-- [ ] merge duplicate or similar events
-- [ ] detect repeated actions and summarize
-- [ ] decay low-value events over time
-- [ ] promote high-value events to persistent memory
-- [ ] deduplicate reasoning outputs
+- [x] implement event compaction
+- [x] merge duplicate or similar events
+- [x] detect repeated actions and summarize
+- [x] decay low-value events over time
+- [x] promote high-value events to persistent memory
+- [x] deduplicate reasoning outputs
 
 ##### Output
 
@@ -4178,9 +4303,9 @@ Reduce noise and improve signal quality in stored memory.
 
 ##### CLI and MCP rollout follow-up
 
-- [ ] surface curation and compaction stats in `atlas session status` and `get_session_status`
-- [ ] apply curation before resume snapshot build and before saved-context retrieval results are returned
-- [ ] add manual compaction/curation trigger through CLI or MCP if automatic lifecycle hooks are insufficient
+- [x] surface curation and compaction stats in `atlas session status` and `get_session_status`
+- [x] apply curation before resume snapshot build and before saved-context retrieval results are returned
+- [x] add manual compaction/curation trigger through CLI or MCP if automatic lifecycle hooks are insufficient
 
 ---
 
@@ -4192,11 +4317,11 @@ Enable memory across multiple sessions.
 
 ##### Tasks
 
-- [ ] implement cross-session search
-- [ ] create global memory layer
-- [ ] track frequently accessed symbols/files
-- [ ] detect recurring workflows
-- [ ] surface relevant past sessions
+- [x] implement cross-session search
+- [x] create global memory layer
+- [x] track frequently accessed symbols/files
+- [x] detect recurring workflows
+- [x] surface relevant past sessions
 
 ##### Output
 
@@ -4204,9 +4329,9 @@ Enable memory across multiple sessions.
 
 ##### CLI and MCP rollout follow-up
 
-- [ ] add cross-session mode or flag to saved-context search surfaces
-- [ ] route `atlas context` and MCP context/query tools through global memory lookup when cross-session recall is enabled
-- [ ] expose frequently accessed symbols/files and recurring workflows in session or context status surfaces
+- [x] add cross-session mode or flag to saved-context search surfaces
+- [x] route `atlas context` and MCP context/query tools through global memory lookup when cross-session recall is enabled
+- [x] expose frequently accessed symbols/files and recurring workflows in session or context status surfaces
 
 ---
 
@@ -5624,6 +5749,36 @@ Why:
 - budget behavior must be predictable, not inferred from missing rows or truncated arrays
 - agents need to know whether partial context is safe to use
 
+#### Patch B5 — Close remaining public-surface budget bypasses
+
+- [x] route MCP discovery tools through central budget policy and manager:
+  - [x] `search_content`
+  - [x] `search_templates`
+  - [x] `search_text_assets`
+  - [x] `search_files`
+- [x] route MCP session and saved-context tools through central budget policy and manager:
+  - [x] `compact_session`
+  - [x] `search_saved_context`
+  - [x] `read_saved_context`
+  - [x] `cross_session_search`
+  - [x] `get_global_memory`
+- [x] route MCP graph helper tools through central budget policy and manager:
+  - [x] `symbol_neighbors`
+  - [x] `cross_file_links`
+  - [x] `concept_clusters`
+  - [x] `explain_query`
+  - [x] `resolve_symbol`
+- [x] replace hardcoded health/debug caps with central budget policy:
+  - [x] `db_check`
+  - [x] `debug_graph`
+- [x] replace `BudgetPolicy::default()` fallbacks in explain-change and impact paths with repo-loaded authoritative policy
+- [x] ensure all above paths emit shared budget metadata instead of local truncation-only behavior
+- [x] add regression tests proving these public surfaces cannot bypass central budget policy via raw `limit`, `max_results`, `max_bytes`, `.take(...)`, or `.truncate(...)`
+
+Why:
+- discovery, session, helper, and health surfaces still expose local caps that can drift from central policy
+- repo-configured overrides are not authoritative until every public path resolves budgets from same source
+
 #### Patch B completion criteria
 
 - [x] one central budget policy/manager exists and all bounded graph/query/context paths consume it
@@ -5634,6 +5789,7 @@ Why:
 - [x] every budget has explicit fail-open, fail-closed, or degraded behavior
 - [x] CLI/MCP outputs include machine-readable budget status when limits hit
 - [x] tests cover budget hits across build, query, impact, review, and MCP serialization
+- [x] remaining MCP discovery, session, graph-helper, health, and explain-change public surfaces are wired to central budget policy with shared metadata
 
 ---
 

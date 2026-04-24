@@ -6,6 +6,7 @@
 //! - Use `search_content` when you need literal or regex matches in file content.
 
 use anyhow::{Context, Result};
+use atlas_core::{BudgetManager, BudgetPolicy, BudgetReport};
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 use grep_regex::RegexMatcherBuilder;
 use grep_searcher::{BinaryDetection, Searcher, SearcherBuilder, Sink, SinkContext, SinkMatch};
@@ -91,6 +92,8 @@ pub(crate) fn tool_search_files(
     repo_root: &str,
     output_format: OutputFormat,
 ) -> Result<serde_json::Value> {
+    let policy = load_budget_policy(repo_root)?;
+    let mut budgets = BudgetManager::new();
     let pattern = str_arg(args, "pattern")?
         .ok_or_else(|| anyhow::anyhow!("missing required argument: pattern"))?
         .to_owned();
@@ -98,6 +101,11 @@ pub(crate) fn tool_search_files(
     let exclude_globs = string_array_arg(args, "exclude_globs")?;
     let case_sensitive = bool_arg(args, "case_sensitive").unwrap_or(false);
     let subpath = str_arg(args, "subpath")?.map(str::to_owned);
+    let result_limit = budgets.resolve_limit(
+        policy.review_context_extraction.files,
+        "review_context_extraction.max_files",
+        None,
+    );
 
     let name_matcher = build_globset(&[&pattern], case_sensitive)
         .with_context(|| format!("invalid pattern glob: {pattern}"))?;
@@ -138,8 +146,13 @@ pub(crate) fn tool_search_files(
     }
 
     let mut files: Vec<String> = Vec::new();
+    let mut truncated = false;
 
     for entry in walker.build().flatten() {
+        if files.len() >= result_limit {
+            truncated = true;
+            break;
+        }
         let ft = match entry.file_type() {
             Some(ft) => ft,
             None => continue,
@@ -181,6 +194,15 @@ pub(crate) fn tool_search_files(
     files.sort_unstable();
 
     let result_count = files.len();
+    if truncated {
+        budgets.record_usage(
+            policy.review_context_extraction.files,
+            "review_context_extraction.max_files",
+            result_limit,
+            result_limit.saturating_add(1),
+            true,
+        );
+    }
     let atlas_hint = if result_count == 0 {
         Some(
             "No files matched. Try a broader glob (e.g. '*.rs' instead of 'foo*.rs'), \
@@ -194,6 +216,7 @@ pub(crate) fn tool_search_files(
     struct SearchFilesResult<'a> {
         files: Vec<String>,
         result_count: usize,
+        truncated: bool,
         atlas_result_kind: &'static str,
         #[serde(skip_serializing_if = "Option::is_none")]
         atlas_hint: Option<&'a str>,
@@ -202,11 +225,21 @@ pub(crate) fn tool_search_files(
     let result = SearchFilesResult {
         files,
         result_count,
+        truncated,
         atlas_result_kind: "file_paths",
         atlas_hint,
     };
 
-    render_tool_result(&result, output_format)
+    let mut response = render_tool_result(&result, output_format)?;
+    inject_budget_metadata(
+        &mut response,
+        &budgets.summary(
+            "review_context_extraction.max_files",
+            result_limit,
+            result_count,
+        ),
+    );
+    Ok(response)
 }
 
 // ---------------------------------------------------------------------------
@@ -223,6 +256,8 @@ pub(crate) fn tool_search_content(
     repo_root: &str,
     output_format: OutputFormat,
 ) -> Result<serde_json::Value> {
+    let policy = load_budget_policy(repo_root)?;
+    let mut budgets = BudgetManager::new();
     let query = str_arg(args, "query")?
         .ok_or_else(|| anyhow::anyhow!("missing required argument: query"))?
         .to_owned();
@@ -231,7 +266,12 @@ pub(crate) fn tool_search_content(
     let exclude_generated = bool_arg(args, "exclude_generated").unwrap_or(true);
     let is_regex = bool_arg(args, "is_regex").unwrap_or(false);
     let context_lines = u64_arg(args, "context_lines").unwrap_or(0) as usize;
-    let max_results = u64_arg(args, "max_results").unwrap_or(50) as usize;
+    let requested_max_results = u64_arg(args, "max_results").unwrap_or(50) as usize;
+    let max_results = budgets.resolve_limit(
+        policy.review_context_extraction.nodes,
+        "review_context_extraction.max_nodes",
+        Some(requested_max_results),
+    );
     let rich_snippets = bool_arg(args, "rich_snippets").unwrap_or(false);
     let snippet_context_lines = u64_arg(args, "snippet_context_lines")
         .map(|value| value as usize)
@@ -442,7 +482,26 @@ pub(crate) fn tool_search_content(
         atlas_hint,
     };
 
-    render_tool_result(&result, output_format)
+    if truncated {
+        budgets.record_usage(
+            policy.review_context_extraction.nodes,
+            "review_context_extraction.max_nodes",
+            max_results,
+            max_results.saturating_add(1),
+            true,
+        );
+    }
+
+    let mut response = render_tool_result(&result, output_format)?;
+    inject_budget_metadata(
+        &mut response,
+        &budgets.summary(
+            "review_context_extraction.max_nodes",
+            max_results,
+            requested_max_results.max(result_count),
+        ),
+    );
+    Ok(response)
 }
 
 fn collect_rich_snippets(
@@ -532,12 +591,19 @@ pub(crate) fn tool_search_templates(
     repo_root: &str,
     output_format: OutputFormat,
 ) -> Result<serde_json::Value> {
+    let policy = load_budget_policy(repo_root)?;
+    let mut budgets = BudgetManager::new();
     let kind = str_arg(args, "kind")?.map(str::to_owned);
     let globs = string_array_arg(args, "globs")?;
     let exclude_globs = string_array_arg(args, "exclude_globs")?;
     let subpath = str_arg(args, "subpath")?.map(str::to_owned);
     let case_sensitive = bool_arg(args, "case_sensitive").unwrap_or(false);
-    let max_results = u64_arg(args, "max_results").unwrap_or(100) as usize;
+    let requested_max_results = u64_arg(args, "max_results").unwrap_or(100) as usize;
+    let max_results = budgets.resolve_limit(
+        policy.review_context_extraction.files,
+        "review_context_extraction.max_files",
+        Some(requested_max_results),
+    );
 
     // Determine which extension patterns to use based on `kind`.
     let extension_patterns: Vec<&str> = match kind.as_deref() {
@@ -594,9 +660,11 @@ pub(crate) fn tool_search_templates(
     }
 
     let mut files: Vec<String> = Vec::new();
+    let mut truncated = false;
 
     for entry in walker.build().flatten() {
         if files.len() >= max_results {
+            truncated = true;
             break;
         }
         let ft = match entry.file_type() {
@@ -638,6 +706,15 @@ pub(crate) fn tool_search_templates(
     files.sort_unstable();
 
     let result_count = files.len();
+    if truncated {
+        budgets.record_usage(
+            policy.review_context_extraction.files,
+            "review_context_extraction.max_files",
+            max_results,
+            max_results.saturating_add(1),
+            true,
+        );
+    }
     let atlas_hint = if result_count == 0 {
         let kind_hint = kind.as_deref().unwrap_or("any template");
         Some(format!(
@@ -652,6 +729,7 @@ pub(crate) fn tool_search_templates(
     struct SearchTemplatesResult {
         files: Vec<String>,
         result_count: usize,
+        truncated: bool,
         atlas_result_kind: &'static str,
         #[serde(skip_serializing_if = "Option::is_none")]
         atlas_hint: Option<String>,
@@ -660,11 +738,21 @@ pub(crate) fn tool_search_templates(
     let result = SearchTemplatesResult {
         files,
         result_count,
+        truncated,
         atlas_result_kind: "template_files",
         atlas_hint,
     };
 
-    render_tool_result(&result, output_format)
+    let mut response = render_tool_result(&result, output_format)?;
+    inject_budget_metadata(
+        &mut response,
+        &budgets.summary(
+            "review_context_extraction.max_files",
+            max_results,
+            requested_max_results.max(result_count),
+        ),
+    );
+    Ok(response)
 }
 
 // ---------------------------------------------------------------------------
@@ -710,12 +798,19 @@ pub(crate) fn tool_search_text_assets(
     repo_root: &str,
     output_format: OutputFormat,
 ) -> Result<serde_json::Value> {
+    let policy = load_budget_policy(repo_root)?;
+    let mut budgets = BudgetManager::new();
     let kind = str_arg(args, "kind")?.map(str::to_owned);
     let globs = string_array_arg(args, "globs")?;
     let exclude_globs = string_array_arg(args, "exclude_globs")?;
     let subpath = str_arg(args, "subpath")?.map(str::to_owned);
     let case_sensitive = bool_arg(args, "case_sensitive").unwrap_or(false);
-    let max_results = u64_arg(args, "max_results").unwrap_or(100) as usize;
+    let requested_max_results = u64_arg(args, "max_results").unwrap_or(100) as usize;
+    let max_results = budgets.resolve_limit(
+        policy.review_context_extraction.files,
+        "review_context_extraction.max_files",
+        Some(requested_max_results),
+    );
 
     let extension_patterns: Vec<&str> = match kind.as_deref() {
         Some("sql") => TEXT_ASSET_SQL.to_vec(),
@@ -764,9 +859,11 @@ pub(crate) fn tool_search_text_assets(
     }
 
     let mut files: Vec<String> = Vec::new();
+    let mut truncated = false;
 
     for entry in walker.build().flatten() {
         if files.len() >= max_results {
+            truncated = true;
             break;
         }
         let ft = match entry.file_type() {
@@ -809,6 +906,15 @@ pub(crate) fn tool_search_text_assets(
     files.sort_unstable();
 
     let result_count = files.len();
+    if truncated {
+        budgets.record_usage(
+            policy.review_context_extraction.files,
+            "review_context_extraction.max_files",
+            max_results,
+            max_results.saturating_add(1),
+            true,
+        );
+    }
     let atlas_hint = if result_count == 0 {
         let kind_hint = kind.as_deref().unwrap_or("any text asset");
         Some(format!(
@@ -823,6 +929,7 @@ pub(crate) fn tool_search_text_assets(
     struct SearchTextAssetsResult {
         files: Vec<String>,
         result_count: usize,
+        truncated: bool,
         atlas_result_kind: &'static str,
         #[serde(skip_serializing_if = "Option::is_none")]
         atlas_hint: Option<String>,
@@ -831,11 +938,21 @@ pub(crate) fn tool_search_text_assets(
     let result = SearchTextAssetsResult {
         files,
         result_count,
+        truncated,
         atlas_result_kind: "text_asset_files",
         atlas_hint,
     };
 
-    render_tool_result(&result, output_format)
+    let mut response = render_tool_result(&result, output_format)?;
+    inject_budget_metadata(
+        &mut response,
+        &budgets.summary(
+            "review_context_extraction.max_files",
+            max_results,
+            requested_max_results.max(result_count),
+        ),
+    );
+    Ok(response)
 }
 
 // ---------------------------------------------------------------------------
@@ -948,6 +1065,22 @@ fn string_array_arg(args: Option<&serde_json::Value>, key: &str) -> Result<Vec<S
                 .collect()
         })
         .unwrap_or_default())
+}
+
+fn load_budget_policy(repo_root: &str) -> Result<BudgetPolicy> {
+    let config =
+        atlas_engine::Config::load(&atlas_engine::paths::atlas_dir(repo_root)).unwrap_or_default();
+    config.budget_policy()
+}
+
+fn inject_budget_metadata(response: &mut serde_json::Value, budget: &BudgetReport) {
+    response["budget_status"] = serde_json::json!(budget.budget_status);
+    response["budget_hit"] = serde_json::json!(budget.budget_hit);
+    response["budget_name"] = serde_json::json!(&budget.budget_name);
+    response["budget_limit"] = serde_json::json!(budget.budget_limit);
+    response["budget_observed"] = serde_json::json!(budget.budget_observed);
+    response["partial"] = serde_json::json!(budget.partial);
+    response["safe_to_answer"] = serde_json::json!(budget.safe_to_answer);
 }
 
 fn render_tool_result<T: Serialize>(
@@ -1215,6 +1348,35 @@ mod tests {
             "result_count exceeded max: {v}"
         );
         assert!(v["truncated"].as_bool().unwrap(), "expected truncated=true");
+    }
+
+    #[test]
+    fn search_content_max_results_is_clamped_by_central_budget_policy() {
+        let files: Vec<(String, String)> = (0..210)
+            .map(|i| (format!("src/f{i}.rs"), format!("fn target_{i}() {{}}")))
+            .collect();
+        let file_refs: Vec<(&str, &str)> = files
+            .iter()
+            .map(|(a, b)| (a.as_str(), b.as_str()))
+            .collect();
+        let (_dir, root) = make_repo(&file_refs);
+        let args = serde_json::json!({
+            "query": "target",
+            "max_results": 9999,
+            "exclude_generated": false
+        });
+
+        let resp = tool_search_content(Some(&args), &root, OutputFormat::Json).unwrap();
+        let body: serde_json::Value =
+            serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
+
+        assert_eq!(resp["budget_status"], "partial_result");
+        assert_eq!(resp["budget_hit"], true);
+        assert_eq!(resp["budget_name"], "review_context_extraction.max_nodes");
+        assert_eq!(resp["budget_limit"], 200);
+        assert_eq!(resp["budget_observed"], 201);
+        assert_eq!(body["result_count"], 200);
+        assert_eq!(body["truncated"], true);
     }
 
     #[test]

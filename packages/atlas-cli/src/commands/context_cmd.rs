@@ -616,6 +616,7 @@ fn render_shell_impact_output(store: &Store, repo: &str, args: &ShellArgs) -> Re
     let max_depth = args.flag_u32("max-depth", 5);
     let max_nodes = args.flag_usize("max-nodes", 200);
     let target_files = resolve_shell_files(repo, args)?;
+    let policy = load_budget_policy(repo)?;
 
     if target_files.is_empty() {
         return Ok("No changed files detected.".to_string());
@@ -627,10 +628,7 @@ fn render_shell_impact_output(store: &Store, repo: &str, args: &ShellArgs) -> Re
             &path_refs,
             max_depth,
             max_nodes,
-            atlas_core::BudgetPolicy::default()
-                .graph_traversal
-                .edges
-                .default_limit,
+            policy.graph_traversal.edges.default_limit,
         )
         .context("impact radius query failed")?;
     let advanced = advanced_impact(result);
@@ -686,6 +684,7 @@ fn render_shell_explain_output(store: &Store, repo: &str, args: &ShellArgs) -> R
     let max_depth = args.flag_u32("max-depth", 5);
     let max_nodes = args.flag_usize("max-nodes", 200);
     let target_files = resolve_shell_files(repo, args)?;
+    let policy = load_budget_policy(repo)?;
 
     if target_files.is_empty() {
         return Ok("No changed files detected.".to_string());
@@ -697,10 +696,7 @@ fn render_shell_explain_output(store: &Store, repo: &str, args: &ShellArgs) -> R
             &path_refs,
             max_depth,
             max_nodes,
-            atlas_core::BudgetPolicy::default()
-                .graph_traversal
-                .edges
-                .default_limit,
+            policy.graph_traversal.edges.default_limit,
         )
         .context("impact radius query failed")?;
     let advanced = advanced_impact(result);
@@ -715,6 +711,7 @@ fn render_shell_explain_output(store: &Store, repo: &str, args: &ShellArgs) -> R
         ..ContextRequest::default()
     };
     let workflow_result = ContextEngine::new(store)
+        .with_budget_policy(policy)
         .build(&workflow_request)
         .context("workflow summary failed")?;
     let workflow = workflow_result.workflow;
@@ -1026,7 +1023,7 @@ fn render_shell_neighbors_output(store: &Store, qname: &str) -> Result<String> {
     Ok(lines.join("\n"))
 }
 
-fn render_shell_traverse_output(store: &Store, args: &ShellArgs) -> Result<String> {
+fn render_shell_traverse_output(store: &Store, repo: &str, args: &ShellArgs) -> Result<String> {
     let qname = match args.positionals.first() {
         Some(q) => normalize_qn_kind_tokens(q),
         None => {
@@ -1035,16 +1032,14 @@ fn render_shell_traverse_output(store: &Store, args: &ShellArgs) -> Result<Strin
     };
     let max_depth = args.flag_u32("depth", 3);
     let max_nodes = args.flag_usize("max-nodes", 100);
+    let policy = load_budget_policy(repo)?;
 
     let result = store
         .traverse_from_qnames(
             &[qname.as_str()],
             max_depth,
             max_nodes,
-            atlas_core::BudgetPolicy::default()
-                .graph_traversal
-                .edges
-                .default_limit,
+            policy.graph_traversal.edges.default_limit,
         )
         .context("traverse_from_qnames failed")?;
 
@@ -1348,7 +1343,7 @@ pub fn run_shell(cli: &Cli) -> Result<()> {
                 render_shell_neighbors_output(&store, qname)?
             }
         } else if let Some(rest) = input.strip_prefix("/traverse") {
-            render_shell_traverse_output(&store, &ShellArgs::parse(rest.trim()))?
+            render_shell_traverse_output(&store, &repo, &ShellArgs::parse(rest.trim()))?
         } else if let Some(rest) = input.strip_prefix("/context") {
             let text = rest.trim();
             if text.is_empty() {

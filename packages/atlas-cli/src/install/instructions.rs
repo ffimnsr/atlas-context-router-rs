@@ -58,12 +58,15 @@ Do not treat `query_graph` as caller/callee search. Fall back to file tools **on
 | `explain_change` | Get deterministic risk analysis, change kinds, and test gaps |
 | `get_context` | Build bounded context around symbol, file, or change-set |
 | `get_session_status` | Inspect current session identity, event count, and resume state |
+| `compact_session` | Compact session event ledger: merge repeated events, decay low-value, deduplicate reasoning, promote high-value |
 | `resume_session` | Restore prior session snapshot after reconnect or restart |
 | `search_saved_context` | Search saved artifacts from earlier large outputs |
 | `read_saved_context` | Retrieve full artifact content by source_id with optional paging |
 | `save_context_artifact` | Persist large context payloads for later retrieval |
 | `get_context_stats` | Inspect session and content-store stats |
 | `purge_saved_context` | Remove saved artifacts by session or age |
+| `cross_session_search` | CM11: search saved context across all sessions for this repo |
+| `get_global_memory` | CM11: frequent symbols/files/workflows and related past sessions |
 | `symbol_neighbors` | Inspect immediate callers, callees, tests, and local graph neighborhood |
 | `cross_file_links` | Find files coupled to a file through shared symbol references |
 | `concept_clusters` | Group related files around seed files by coupling density |

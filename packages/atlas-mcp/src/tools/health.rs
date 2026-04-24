@@ -1,11 +1,12 @@
 use anyhow::{Context, Result};
+use atlas_core::BudgetManager;
 use atlas_core::NodeKind;
 use camino::Utf8Path;
 use serde::Serialize;
 
 use super::shared::{
-    error_message, error_suggestions, failure_category, graph_issue_code, open_store,
-    pending_graph_relevant_changes, tool_result_value, u64_arg,
+    error_message, error_suggestions, failure_category, graph_issue_code, inject_budget_metadata,
+    load_budget_policy, open_store, pending_graph_relevant_changes, tool_result_value, u64_arg,
 };
 
 #[derive(Serialize)]
@@ -557,11 +558,19 @@ pub(super) fn tool_doctor(
 
 pub(super) fn tool_db_check(
     args: Option<&serde_json::Value>,
+    repo_root: &str,
     db_path: &str,
     output_format: crate::output::OutputFormat,
 ) -> Result<serde_json::Value> {
     const DEFAULT_LIMIT: usize = 100;
-    let limit = u64_arg(args, "limit").unwrap_or(DEFAULT_LIMIT as u64) as usize;
+    let policy = load_budget_policy(repo_root)?;
+    let mut budgets = BudgetManager::new();
+    let requested_limit = u64_arg(args, "limit").unwrap_or(DEFAULT_LIMIT as u64) as usize;
+    let limit = budgets.resolve_limit(
+        policy.mcp_cli_payload_serialization.nodes,
+        "mcp_cli_payload_serialization.max_nodes",
+        Some(requested_limit),
+    );
 
     let store = open_store(db_path)?;
     let issues = store.integrity_check().context("integrity check failed")?;
@@ -626,16 +635,44 @@ pub(super) fn tool_db_check(
         "dangling_edges": dangling_edges,
     });
 
-    tool_result_value(&result, output_format)
+    let observed = issues.len().max(orphans.len()).max(dangling.len());
+    if orphans.len() >= limit || dangling.len() >= limit {
+        budgets.record_usage(
+            policy.mcp_cli_payload_serialization.nodes,
+            "mcp_cli_payload_serialization.max_nodes",
+            limit,
+            observed,
+            true,
+        );
+    }
+
+    let mut response = tool_result_value(&result, output_format)?;
+    inject_budget_metadata(
+        &mut response,
+        &budgets.summary(
+            "mcp_cli_payload_serialization.max_nodes",
+            limit,
+            requested_limit.max(observed),
+        ),
+    );
+    Ok(response)
 }
 
 pub(super) fn tool_debug_graph(
     args: Option<&serde_json::Value>,
+    repo_root: &str,
     db_path: &str,
     output_format: crate::output::OutputFormat,
 ) -> Result<serde_json::Value> {
     const DEFAULT_LIMIT: usize = 20;
-    let limit = u64_arg(args, "limit").unwrap_or(DEFAULT_LIMIT as u64) as usize;
+    let policy = load_budget_policy(repo_root)?;
+    let mut budgets = BudgetManager::new();
+    let requested_limit = u64_arg(args, "limit").unwrap_or(DEFAULT_LIMIT as u64) as usize;
+    let limit = budgets.resolve_limit(
+        policy.mcp_cli_payload_serialization.nodes,
+        "mcp_cli_payload_serialization.max_nodes",
+        Some(requested_limit),
+    );
 
     let store = open_store(db_path)?;
     let stats = store.stats().context("cannot read graph stats")?;
@@ -705,7 +742,27 @@ pub(super) fn tool_debug_graph(
         "dangling_edges": dangling_edges,
     });
 
-    tool_result_value(&result, output_format)
+    let observed = top_files.len().max(orphans.len()).max(dangling.len());
+    if orphans.len() >= limit || dangling.len() >= limit {
+        budgets.record_usage(
+            policy.mcp_cli_payload_serialization.nodes,
+            "mcp_cli_payload_serialization.max_nodes",
+            limit,
+            observed,
+            true,
+        );
+    }
+
+    let mut response = tool_result_value(&result, output_format)?;
+    inject_budget_metadata(
+        &mut response,
+        &budgets.summary(
+            "mcp_cli_payload_serialization.max_nodes",
+            limit,
+            requested_limit.max(observed),
+        ),
+    );
+    Ok(response)
 }
 
 #[cfg(test)]

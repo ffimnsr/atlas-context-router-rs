@@ -195,6 +195,23 @@ pub struct SessionEventRow {
     pub created_at: String,
 }
 
+/// Result returned by [`SessionStore::compact_session`].
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct CurationResult {
+    /// Number of events in the session before compaction.
+    pub events_before: usize,
+    /// Number of events remaining after compaction.
+    pub events_after: usize,
+    /// Events removed by merging repeated actions (e.g., duplicate COMMAND_RUN).
+    pub merged_count: usize,
+    /// Events removed by decay (FILE_READ excess, old GRAPH_STATE, old CONTEXT_REQUEST).
+    pub decayed_count: usize,
+    /// Events removed by deduplication (REASONING_RESULT with same source_id).
+    pub deduplicated_count: usize,
+    /// Events whose priority was raised to survive future eviction.
+    pub promoted_count: usize,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResumeSnapshot {
     pub session_id: SessionId,
@@ -203,4 +220,35 @@ pub struct ResumeSnapshot {
     pub consumed: bool,
     pub created_at: String,
     pub updated_at: String,
+}
+
+/// A frequently-accessed symbol or file aggregated across all sessions.
+///
+/// Used by the global memory layer (CM11) to surface recurring access patterns.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GlobalAccessEntry {
+    /// Stable ID: hex-encoded SHA-256 of `{repo_root}:{value}`.
+    pub id: String,
+    pub repo_root: String,
+    /// Symbol qualified name (for symbol entries) or canonical file path (for file entries).
+    pub value: String,
+    pub access_count: u64,
+    pub last_accessed: String,
+    pub first_accessed: String,
+}
+
+/// A recurring workflow pattern detected across sessions in a single repo.
+///
+/// `pattern` is an ordered list of command strings or event-type tokens that
+/// appear together repeatedly.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GlobalWorkflowPattern {
+    /// Stable ID: hex-encoded SHA-256 of `{repo_root}:{pattern_json}`.
+    pub id: String,
+    pub repo_root: String,
+    /// Ordered sequence of command strings or event-type tokens.
+    pub pattern: Vec<String>,
+    pub occurrence_count: u64,
+    pub last_seen: String,
+    pub first_seen: String,
 }

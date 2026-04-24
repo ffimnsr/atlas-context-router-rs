@@ -18,8 +18,10 @@ use atlas_adapters::{
     generate_source_id,
 };
 use atlas_contentstore::{ContentStore, OutputRouting, SearchFilters, SourceMeta};
+use atlas_core::{BudgetManager, BudgetPolicy, BudgetReport};
 use atlas_session::{
-    NewSessionEvent, ResumeSnapshot, SessionEventType, SessionId, SessionMeta, SessionStore,
+    CurationResult, GlobalAccessEntry, GlobalWorkflowPattern, NewSessionEvent, ResumeSnapshot,
+    SessionEventType, SessionId, SessionMeta, SessionStore,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -172,6 +174,7 @@ pub fn tool_get_session_status(
             "created_at": m.created_at,
             "updated_at": m.updated_at,
             "last_resume_at": m.last_resume_at,
+            "last_compaction_at": m.last_compaction_at,
             "event_count": event_count,
             "has_resume_snapshot": snapshot.is_some(),
             "snapshot_consumed": snap_consumed,
@@ -186,6 +189,77 @@ pub fn tool_get_session_status(
     };
 
     tool_result_value(&result, output_format)
+}
+
+// ---------------------------------------------------------------------------
+// compact_session
+// ---------------------------------------------------------------------------
+
+/// Compact and curate the session event ledger.
+///
+/// Removes stale low-value events, merges repeated actions, deduplicates
+/// reasoning outputs, and promotes high-value events to a higher priority.
+/// Returns curation stats. Safe to call repeatedly; no-ops when nothing needs
+/// compaction.
+pub fn tool_compact_session(
+    args: Option<&Value>,
+    repo_root: &str,
+    db_path: &str,
+    output_format: OutputFormat,
+) -> Result<Value> {
+    let policy = load_budget_policy(repo_root)?;
+    let session_id = resolve_session_id(args, repo_root);
+    let session_db = derive_session_db_path(db_path);
+
+    let mut store = match SessionStore::open(&session_db) {
+        Ok(s) => s,
+        Err(e) => {
+            return tool_result_value(
+                &serde_json::json!({
+                    "session_id": session_id.as_str(),
+                    "status": "no_session",
+                    "error": e.to_string(),
+                }),
+                output_format,
+            );
+        }
+    };
+
+    // Ensure session meta exists before compacting.
+    store.upsert_session_meta(session_id.clone(), repo_root, "mcp", None)?;
+
+    let CurationResult {
+        events_before,
+        events_after,
+        merged_count,
+        decayed_count,
+        deduplicated_count,
+        promoted_count,
+    } = store.compact_session(&session_id)?;
+
+    let result = serde_json::json!({
+        "session_id": session_id.as_str(),
+        "status": "ok",
+        "events_before": events_before,
+        "events_after": events_after,
+        "merged": merged_count,
+        "decayed": decayed_count,
+        "deduplicated": deduplicated_count,
+        "promoted": promoted_count,
+    });
+
+    let mut response = tool_result_value(&result, output_format)?;
+    let emitted_bytes = serde_json::to_vec(&response)?.len();
+    let budget = BudgetReport::within_budget(
+        "mcp_cli_payload_serialization.max_mcp_response_bytes",
+        policy
+            .mcp_cli_payload_serialization
+            .mcp_response_bytes
+            .default_limit,
+        emitted_bytes,
+    );
+    inject_budget_metadata(&mut response, &budget);
+    Ok(response)
 }
 
 // ---------------------------------------------------------------------------
@@ -254,26 +328,47 @@ pub fn tool_resume_session(
 /// returned `source_id` with subsequent searches to narrow to one source.
 pub fn tool_search_saved_context(
     args: Option<&Value>,
-    _repo_root: &str,
+    repo_root: &str,
     db_path: &str,
     output_format: OutputFormat,
 ) -> Result<Value> {
+    let policy = load_budget_policy(repo_root)?;
+    let mut budgets = BudgetManager::new();
     let query = args
         .and_then(|a| a.get("query"))
         .and_then(|v| v.as_str())
         .ok_or_else(|| anyhow::anyhow!("missing required argument: query"))?;
-    let session_id_filter = args
-        .and_then(|a| a.get("session_id"))
-        .and_then(|v| v.as_str())
-        .map(str::to_owned);
+    let cross_session = args
+        .and_then(|a| a.get("cross_session"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    // When cross_session=true, session_id filter is dropped so all sessions
+    // in the repo are searched. The repo_root filter is still applied.
+    let session_id_filter = if cross_session {
+        None
+    } else {
+        args.and_then(|a| a.get("session_id"))
+            .and_then(|v| v.as_str())
+            .map(str::to_owned)
+    };
+    let repo_root_filter = if cross_session {
+        Some(repo_root.to_string())
+    } else {
+        None
+    };
     let source_type_filter = args
         .and_then(|a| a.get("source_type"))
         .and_then(|v| v.as_str())
         .map(str::to_owned);
-    let limit = args
+    let requested_limit = args
         .and_then(|a| a.get("limit"))
         .and_then(|v| v.as_u64())
         .unwrap_or(10) as usize;
+    let limit = budgets.resolve_limit(
+        policy.content_saved_context_lookup.sources,
+        "content_saved_context_lookup.max_sources",
+        Some(requested_limit),
+    );
 
     let content_db = derive_content_db_path(db_path);
     let mut cs = ContentStore::open(&content_db)?;
@@ -282,7 +377,7 @@ pub fn tool_search_saved_context(
     let filters = SearchFilters {
         session_id: session_id_filter,
         source_type: source_type_filter,
-        repo_root: None,
+        repo_root: repo_root_filter,
     };
 
     let chunks = cs.search_with_fallback(query, &filters)?;
@@ -306,6 +401,7 @@ pub fn tool_search_saved_context(
         content_type: String,
     }
 
+    let total_matches = chunks.len();
     let results: Vec<ChunkPreview> = chunks
         .into_iter()
         .take(limit)
@@ -325,11 +421,30 @@ pub fn tool_search_saved_context(
         })
         .collect();
 
+    if total_matches > limit {
+        budgets.record_usage(
+            policy.content_saved_context_lookup.sources,
+            "content_saved_context_lookup.max_sources",
+            limit,
+            total_matches,
+            true,
+        );
+    }
+
     let total = results.len();
-    tool_result_value(
+    let mut response = tool_result_value(
         &serde_json::json!({"query": query, "results": results, "total": total}),
         output_format,
-    )
+    )?;
+    inject_budget_metadata(
+        &mut response,
+        &budgets.summary(
+            "content_saved_context_lookup.max_sources",
+            limit,
+            requested_limit.max(total_matches),
+        ),
+    );
+    Ok(response)
 }
 
 // ---------------------------------------------------------------------------
@@ -430,6 +545,7 @@ pub fn tool_get_context_stats(
     db_path: &str,
     output_format: OutputFormat,
 ) -> Result<Value> {
+    let policy = load_budget_policy(repo_root)?;
     let session_id = resolve_session_id(args, repo_root);
     let session_db = derive_session_db_path(db_path);
     let content_db = derive_content_db_path(db_path);
@@ -475,7 +591,7 @@ pub fn tool_get_context_stats(
     // Bridge artifact count.
     let bridge_file_pending = bridge_file_count(&bridge_dir);
 
-    tool_result_value(
+    let mut response = tool_result_value(
         &serde_json::json!({
             "session_id": session_id.as_str(),
             "event_count": event_count,
@@ -488,7 +604,20 @@ pub fn tool_get_context_stats(
             "retrieval_index": retrieval_index,
         }),
         output_format,
-    )
+    )?;
+    let emitted_bytes = serde_json::to_vec(&response)?.len();
+    inject_budget_metadata(
+        &mut response,
+        &BudgetReport::within_budget(
+            "mcp_cli_payload_serialization.max_mcp_response_bytes",
+            policy
+                .mcp_cli_payload_serialization
+                .mcp_response_bytes
+                .default_limit,
+            emitted_bytes,
+        ),
+    );
+    Ok(response)
 }
 
 // ---------------------------------------------------------------------------
@@ -517,6 +646,8 @@ pub fn tool_read_saved_context(
     db_path: &str,
     output_format: OutputFormat,
 ) -> Result<Value> {
+    let policy = load_budget_policy(repo_root)?;
+    let mut budgets = BudgetManager::new();
     let source_id = args
         .and_then(|a| a.get("source_id"))
         .and_then(|v| v.as_str())
@@ -530,11 +661,16 @@ pub fn tool_read_saved_context(
         .and_then(|a| a.get("chunk_offset"))
         .and_then(|v| v.as_u64())
         .unwrap_or(0) as usize;
-    let max_bytes = args
+    let requested_max_bytes = args
         .and_then(|a| a.get("max_bytes"))
         .and_then(|v| v.as_u64())
         .map(|n| n as usize)
         .unwrap_or(DEFAULT_READ_MAX_BYTES);
+    let max_bytes = budgets.resolve_limit(
+        policy.mcp_cli_payload_serialization.saved_context_bytes,
+        "mcp_cli_payload_serialization.max_saved_context_bytes",
+        Some(requested_max_bytes),
+    );
 
     let content_db = derive_content_db_path(db_path);
     let mut cs = ContentStore::open(&content_db)?;
@@ -544,14 +680,23 @@ pub fn tool_read_saved_context(
     let source = match cs.get_source(source_id)? {
         Some(s) => s,
         None => {
-            return tool_result_value(
+            let mut response = tool_result_value(
                 &serde_json::json!({
                     "found": false,
                     "source_id": source_id,
                     "error": "artifact not found",
                 }),
                 output_format,
+            )?;
+            inject_budget_metadata(
+                &mut response,
+                &budgets.summary(
+                    "mcp_cli_payload_serialization.max_saved_context_bytes",
+                    max_bytes,
+                    requested_max_bytes.max(max_bytes),
+                ),
             );
+            return Ok(response);
         }
     };
 
@@ -559,14 +704,23 @@ pub fn tool_read_saved_context(
     if let Some(ref caller_sid) = caller_session_id
         && source.session_id.as_deref() != Some(caller_sid.as_str())
     {
-        return tool_result_value(
+        let mut response = tool_result_value(
             &serde_json::json!({
                 "found": false,
                 "source_id": source_id,
                 "error": "artifact not accessible from this session",
             }),
             output_format,
+        )?;
+        inject_budget_metadata(
+            &mut response,
+            &budgets.summary(
+                "mcp_cli_payload_serialization.max_saved_context_bytes",
+                max_bytes,
+                requested_max_bytes.max(max_bytes),
+            ),
         );
+        return Ok(response);
     }
 
     // --- enforce repo scoping ---
@@ -574,14 +728,23 @@ pub fn tool_read_saved_context(
     if let Some(ref artifact_repo) = source.repo_root
         && artifact_repo != repo_root
     {
-        return tool_result_value(
+        let mut response = tool_result_value(
             &serde_json::json!({
                 "found": false,
                 "source_id": source_id,
                 "error": "artifact not accessible from this repository",
             }),
             output_format,
+        )?;
+        inject_budget_metadata(
+            &mut response,
+            &budgets.summary(
+                "mcp_cli_payload_serialization.max_saved_context_bytes",
+                max_bytes,
+                requested_max_bytes.max(max_bytes),
+            ),
         );
+        return Ok(response);
     }
 
     // --- load chunks ---
@@ -640,7 +803,26 @@ pub fn tool_read_saved_context(
         ));
     }
 
-    tool_result_value(&result, output_format)
+    if truncated {
+        budgets.record_usage(
+            policy.mcp_cli_payload_serialization.saved_context_bytes,
+            "mcp_cli_payload_serialization.max_saved_context_bytes",
+            max_bytes,
+            total_byte_count,
+            true,
+        );
+    }
+
+    let mut response = tool_result_value(&result, output_format)?;
+    inject_budget_metadata(
+        &mut response,
+        &budgets.summary(
+            "mcp_cli_payload_serialization.max_saved_context_bytes",
+            max_bytes,
+            requested_max_bytes.max(total_byte_count),
+        ),
+    );
+    Ok(response)
 }
 
 // ---------------------------------------------------------------------------
@@ -658,10 +840,11 @@ pub fn tool_read_saved_context(
 /// files from `.atlas/bridge/`.
 pub fn tool_purge_saved_context(
     args: Option<&Value>,
-    _repo_root: &str,
+    repo_root: &str,
     db_path: &str,
     output_format: OutputFormat,
 ) -> Result<Value> {
+    let policy = load_budget_policy(repo_root)?;
     let session_id_filter = args
         .and_then(|a| a.get("session_id"))
         .and_then(|v| v.as_str())
@@ -693,21 +876,296 @@ pub fn tool_purge_saved_context(
         0
     };
 
-    tool_result_value(
+    let mut response = tool_result_value(
         &serde_json::json!({
             "deleted_source_count": deleted,
             "deleted_bridge_file_count": deleted_bridge,
             "keep_days": keep_days,
         }),
         output_format,
-    )
+    )?;
+    let emitted_bytes = serde_json::to_vec(&response)?.len();
+    inject_budget_metadata(
+        &mut response,
+        &BudgetReport::within_budget(
+            "mcp_cli_payload_serialization.max_mcp_response_bytes",
+            policy
+                .mcp_cli_payload_serialization
+                .mcp_response_bytes
+                .default_limit,
+            emitted_bytes,
+        ),
+    );
+    Ok(response)
+}
+
+// ---------------------------------------------------------------------------
+// cross_session_search  (CM11)
+// ---------------------------------------------------------------------------
+
+/// Search saved context artifacts across **all** sessions for this repo.
+///
+/// Unlike `search_saved_context` (which defaults to the current session),
+/// this tool always scans every session stored under `repo_root`, making it
+/// suitable for cross-session recall workflows.
+pub fn tool_cross_session_search(
+    args: Option<&Value>,
+    repo_root: &str,
+    db_path: &str,
+    output_format: OutputFormat,
+) -> Result<Value> {
+    let policy = load_budget_policy(repo_root)?;
+    let mut budgets = BudgetManager::new();
+    let query = args
+        .and_then(|a| a.get("query"))
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("missing required argument: query"))?;
+    let source_type_filter = args
+        .and_then(|a| a.get("source_type"))
+        .and_then(|v| v.as_str())
+        .map(str::to_owned);
+    let requested_limit = args
+        .and_then(|a| a.get("limit"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(10) as usize;
+    let limit = budgets.resolve_limit(
+        policy.content_saved_context_lookup.sources,
+        "content_saved_context_lookup.max_sources",
+        Some(requested_limit),
+    );
+
+    let content_db = derive_content_db_path(db_path);
+    let mut cs = ContentStore::open(&content_db)?;
+    let _ = cs.migrate();
+
+    // Explicitly filter by repo_root, no session_id restriction.
+    let filters = SearchFilters {
+        session_id: None,
+        source_type: source_type_filter,
+        repo_root: Some(repo_root.to_string()),
+    };
+
+    let chunks = cs.search_with_fallback(query, &filters)?;
+
+    #[derive(Serialize)]
+    struct CrossSessionResult {
+        source_id: String,
+        chunk_index: usize,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        session_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        label: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        source_type: Option<String>,
+        /// First 256 chars — full content retrievable via `read_saved_context`.
+        preview: String,
+    }
+
+    let total_matches = chunks.len();
+    let results: Vec<CrossSessionResult> = chunks
+        .into_iter()
+        .take(limit)
+        .map(|c| {
+            let source = cs.get_source(&c.source_id).ok().flatten();
+            CrossSessionResult {
+                source_id: c.source_id,
+                chunk_index: c.chunk_index,
+                session_id: source.as_ref().and_then(|s| s.session_id.clone()),
+                title: c.title,
+                label: source.as_ref().map(|s| s.label.clone()),
+                source_type: source.as_ref().map(|s| s.source_type.clone()),
+                preview: c.content.chars().take(256).collect(),
+            }
+        })
+        .collect();
+
+    if total_matches > limit {
+        budgets.record_usage(
+            policy.content_saved_context_lookup.sources,
+            "content_saved_context_lookup.max_sources",
+            limit,
+            total_matches,
+            true,
+        );
+    }
+
+    let total = results.len();
+    let mut response = tool_result_value(
+        &serde_json::json!({
+            "query": query,
+            "repo_root": repo_root,
+            "cross_session": true,
+            "results": results,
+            "total": total,
+        }),
+        output_format,
+    )?;
+    inject_budget_metadata(
+        &mut response,
+        &budgets.summary(
+            "content_saved_context_lookup.max_sources",
+            limit,
+            requested_limit.max(total_matches),
+        ),
+    );
+    Ok(response)
+}
+
+// ---------------------------------------------------------------------------
+// get_global_memory  (CM11)
+// ---------------------------------------------------------------------------
+
+/// Return the cross-session global memory summary for this repo:
+/// frequently-accessed symbols and files, and recurring workflow patterns.
+///
+/// Optionally supply `focus_symbols` and `focus_files` to also receive a list
+/// of past sessions most relevant to the current work context.
+pub fn tool_get_global_memory(
+    args: Option<&Value>,
+    repo_root: &str,
+    db_path: &str,
+    output_format: OutputFormat,
+) -> Result<Value> {
+    let policy = load_budget_policy(repo_root)?;
+    let mut budgets = BudgetManager::new();
+    let requested_limit = args
+        .and_then(|a| a.get("limit"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(10) as usize;
+    let limit = budgets.resolve_limit(
+        policy.content_saved_context_lookup.sources,
+        "content_saved_context_lookup.max_sources",
+        Some(requested_limit),
+    ) as u32;
+    let focus_symbols: Vec<String> = args
+        .and_then(|a| a.get("focus_symbols"))
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(str::to_owned))
+                .collect()
+        })
+        .unwrap_or_default();
+    let focus_files: Vec<String> = args
+        .and_then(|a| a.get("focus_files"))
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(str::to_owned))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let session_db = derive_session_db_path(db_path);
+    let store = SessionStore::open(&session_db)?;
+
+    let symbols = store.get_frequent_symbols(repo_root, limit)?;
+    let files = store.get_frequent_files(repo_root, limit)?;
+    let workflows = store.get_recurring_workflows(repo_root, limit)?;
+
+    #[derive(Serialize)]
+    struct AccessPreview {
+        value: String,
+        access_count: u64,
+        last_accessed: String,
+    }
+    #[derive(Serialize)]
+    struct WorkflowPreview {
+        pattern: Vec<String>,
+        occurrence_count: u64,
+        last_seen: String,
+    }
+    #[derive(Serialize)]
+    struct RelatedSession {
+        session_id: String,
+        repo_root: String,
+        frontend: String,
+        updated_at: String,
+    }
+
+    let frequent_symbols: Vec<AccessPreview> = symbols
+        .into_iter()
+        .map(|e: GlobalAccessEntry| AccessPreview {
+            value: e.value,
+            access_count: e.access_count,
+            last_accessed: e.last_accessed,
+        })
+        .collect();
+    let frequent_files: Vec<AccessPreview> = files
+        .into_iter()
+        .map(|e: GlobalAccessEntry| AccessPreview {
+            value: e.value,
+            access_count: e.access_count,
+            last_accessed: e.last_accessed,
+        })
+        .collect();
+    let recurring_workflows: Vec<WorkflowPreview> = workflows
+        .into_iter()
+        .map(|w: GlobalWorkflowPattern| WorkflowPreview {
+            pattern: w.pattern,
+            occurrence_count: w.occurrence_count,
+            last_seen: w.last_seen,
+        })
+        .collect();
+
+    // Optionally find related sessions.
+    let related_sessions: Vec<RelatedSession> =
+        if !focus_symbols.is_empty() || !focus_files.is_empty() {
+            store
+                .find_relevant_sessions(repo_root, &focus_symbols, &focus_files, limit)?
+                .into_iter()
+                .map(|m: SessionMeta| RelatedSession {
+                    session_id: m.session_id.as_str().to_string(),
+                    repo_root: m.repo_root,
+                    frontend: m.frontend,
+                    updated_at: m.updated_at,
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+    let observed = frequent_symbols
+        .len()
+        .max(frequent_files.len())
+        .max(recurring_workflows.len())
+        .max(related_sessions.len());
+    if observed > limit as usize {
+        budgets.record_usage(
+            policy.content_saved_context_lookup.sources,
+            "content_saved_context_lookup.max_sources",
+            limit as usize,
+            observed,
+            true,
+        );
+    }
+
+    let mut response = tool_result_value(
+        &serde_json::json!({
+            "repo_root": repo_root,
+            "frequent_symbols": frequent_symbols,
+            "frequent_files": frequent_files,
+            "recurring_workflows": recurring_workflows,
+            "related_sessions": related_sessions,
+        }),
+        output_format,
+    )?;
+    inject_budget_metadata(
+        &mut response,
+        &budgets.summary(
+            "content_saved_context_lookup.max_sources",
+            limit as usize,
+            requested_limit.max(observed),
+        ),
+    );
+    Ok(response)
 }
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-/// Resolve session_id from args or derive it from repo_root.
 fn resolve_session_id(args: Option<&Value>, repo_root: &str) -> SessionId {
     if let Some(sid) = args
         .and_then(|a| a.get("session_id"))
@@ -717,6 +1175,22 @@ fn resolve_session_id(args: Option<&Value>, repo_root: &str) -> SessionId {
     } else {
         mcp_session_id(repo_root)
     }
+}
+
+fn load_budget_policy(repo_root: &str) -> Result<BudgetPolicy> {
+    let config =
+        atlas_engine::Config::load(&atlas_engine::paths::atlas_dir(repo_root)).unwrap_or_default();
+    config.budget_policy()
+}
+
+fn inject_budget_metadata(response: &mut Value, budget: &BudgetReport) {
+    response["budget_status"] = serde_json::json!(budget.budget_status);
+    response["budget_hit"] = serde_json::json!(budget.budget_hit);
+    response["budget_name"] = serde_json::json!(&budget.budget_name);
+    response["budget_limit"] = serde_json::json!(budget.budget_limit);
+    response["budget_observed"] = serde_json::json!(budget.budget_observed);
+    response["partial"] = serde_json::json!(budget.partial);
+    response["safe_to_answer"] = serde_json::json!(budget.safe_to_answer);
 }
 
 /// Wrap structured output in an MCP tool-result content envelope.
@@ -828,6 +1302,43 @@ mod tests {
         let hit = &body["results"].as_array().unwrap()[0];
         assert_eq!(hit["identity_kind"].as_str().unwrap(), "artifact_label");
         assert_eq!(hit["identity_value"].as_str().unwrap(), "my label");
+    }
+
+    #[test]
+    fn search_saved_context_limit_is_clamped_by_central_budget_policy() {
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join(".atlas")).unwrap();
+        let db_path = setup_db_path(&dir);
+        let repo_root = dir.path().to_str().unwrap();
+
+        for i in 0..30 {
+            let content = medium_content(&format!("budget-{i}"));
+            let _ = save_indexed_artifact(
+                repo_root,
+                &db_path,
+                &format!("budget artifact {i}"),
+                &content,
+                None,
+            );
+        }
+
+        let args = serde_json::json!({"query": "budget", "limit": 9999});
+        let result =
+            tool_search_saved_context(Some(&args), repo_root, &db_path, OutputFormat::Json)
+                .unwrap();
+        let body: Value =
+            serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+
+        assert_eq!(result["budget_status"], "partial_result");
+        assert_eq!(result["budget_hit"], true);
+        assert_eq!(
+            result["budget_name"],
+            "content_saved_context_lookup.max_sources"
+        );
+        assert_eq!(result["budget_limit"], 25);
+        assert_eq!(result["budget_observed"], 30);
+        assert_eq!(body["total"], 25);
+        assert_eq!(body["results"].as_array().unwrap().len(), 25);
     }
 
     #[test]
@@ -1040,6 +1551,37 @@ mod tests {
                 .unwrap()
                 .contains("chunk_offset")
         );
+    }
+
+    #[test]
+    fn read_saved_context_max_bytes_is_clamped_by_central_budget_policy() {
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join(".atlas")).unwrap();
+        let db_path = setup_db_path(&dir);
+        let repo_root = dir.path().to_str().unwrap();
+
+        let content: String = (0..1_200)
+            .map(|i| format!("chunk paragraph {i} with unique payload data\n\n"))
+            .collect();
+        let source_id = save_indexed_artifact(repo_root, &db_path, "very large", &content, None);
+        assert!(!source_id.is_empty(), "artifact must be indexed");
+
+        let args = serde_json::json!({"source_id": source_id, "max_bytes": 999999});
+        let result =
+            tool_read_saved_context(Some(&args), repo_root, &db_path, OutputFormat::Json).unwrap();
+        let body: Value =
+            serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+
+        assert_eq!(result["budget_status"], "partial_result");
+        assert_eq!(result["budget_hit"], true);
+        assert_eq!(
+            result["budget_name"],
+            "mcp_cli_payload_serialization.max_saved_context_bytes"
+        );
+        assert_eq!(result["budget_limit"], 32768);
+        assert!(result["budget_observed"].as_u64().unwrap() > 32_768);
+        assert_eq!(body["found"], true);
+        assert_eq!(body["truncated"], true);
     }
 
     #[test]

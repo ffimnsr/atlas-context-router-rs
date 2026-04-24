@@ -37,6 +37,7 @@ fn parity_args(tool_name: &str, source_id: &str) -> Value {
         "explain_change" => json!({ "files": ["src/service.rs"], "output_format": "json" }),
         "get_context" => json!({ "query": "compute", "output_format": "json" }),
         "get_session_status" => json!({ "output_format": "json" }),
+        "compact_session" => json!({ "output_format": "json" }),
         "resume_session" => json!({ "mark_consumed": false, "output_format": "json" }),
         "search_saved_context" => json!({ "query": "parity-seed", "output_format": "json" }),
         "read_saved_context" => json!({ "source_id": source_id, "output_format": "json" }),
@@ -47,6 +48,8 @@ fn parity_args(tool_name: &str, source_id: &str) -> Value {
         }),
         "get_context_stats" => json!({ "output_format": "json" }),
         "purge_saved_context" => json!({ "keep_days": 365, "output_format": "json" }),
+        "cross_session_search" => json!({ "query": "parity-seed", "output_format": "json" }),
+        "get_global_memory" => json!({ "limit": 5, "output_format": "json" }),
         "symbol_neighbors" => {
             json!({ "qname": "src/service.rs::fn::compute", "output_format": "json" })
         }

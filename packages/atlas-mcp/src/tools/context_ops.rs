@@ -706,6 +706,7 @@ pub(super) fn tool_explain_change(
     db_path: &str,
     output_format: crate::output::OutputFormat,
 ) -> Result<serde_json::Value> {
+    let policy = load_budget_policy(repo_root)?;
     let max_depth = u64_arg(args, "max_depth").unwrap_or(5) as u32;
     let max_nodes = u64_arg(args, "max_nodes").unwrap_or(200) as usize;
 
@@ -745,9 +746,10 @@ pub(super) fn tool_explain_change(
             old_path: None,
         })
         .collect();
-    let summary =
-        atlas_review::build_explain_change_summary(&store, &changes, &files, max_depth, max_nodes)
-            .context("explain_change summary generation failed")?;
+    let summary = atlas_review::build_explain_change_summary(
+        &store, &changes, &files, max_depth, max_nodes, &policy,
+    )
+    .context("explain_change summary generation failed")?;
 
     tool_result_value(&summary, output_format)
 }

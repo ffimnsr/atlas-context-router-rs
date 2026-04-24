@@ -214,7 +214,31 @@ pub fn tool_list() -> serde_json::Value {
             },
             {
                 "name": "get_session_status",
-                "description": "Return the status of the current MCP session: identity, event count, and whether a resume snapshot exists.",
+                "description": "Return the status of the current MCP session: identity, event count, last compaction time, and whether a resume snapshot exists.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "session_id":    { "type": "string",  "description": "Explicit session id. Omit to use the derived id for the current repo." },
+                        "output_format": { "type": "string",  "description": DEFAULT_OUTPUT_DESCRIPTION }
+                    },
+                    "required": []
+                }
+            },
+            {
+                "name": "compact_session",
+                "description": "Compact and curate the session event ledger. Removes stale low-value events, merges repeated actions, deduplicates reasoning outputs, and promotes high-value events to survive future eviction. Returns curation stats. Safe to call repeatedly.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "session_id":    { "type": "string",  "description": "Explicit session id. Omit to use the derived id for the current repo." },
+                        "output_format": { "type": "string",  "description": DEFAULT_OUTPUT_DESCRIPTION }
+                    },
+                    "required": []
+                }
+            },
+            {
+                "name": "compact_session",
+                "description": "Compact and curate the session event ledger. Removes stale low-value events, merges repeated actions, deduplicates reasoning outputs, and promotes high-value events to survive future eviction. Returns curation stats. Safe to call repeatedly.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -304,6 +328,34 @@ pub fn tool_list() -> serde_json::Value {
                         "session_id":    { "type": "string",  "description": "Delete all saved artifacts for this session." },
                         "keep_days":     { "type": "integer", "description": "For age-based cleanup: keep sources newer than this many days (default 30)." },
                         "output_format": { "type": "string",  "description": DEFAULT_OUTPUT_DESCRIPTION }
+                    },
+                    "required": []
+                }
+            },
+            {
+                "name": "cross_session_search",
+                "description": "CM11: Search saved context artifacts across all sessions for this repo. Use this for cross-session recall when the relevant content may have been saved in a prior session.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "query":         { "type": "string",  "description": "Full-text or semantic search query." },
+                        "source_type":   { "type": "string",  "description": "Optional filter: restrict to a specific source_type (e.g. 'mcp_artifact')." },
+                        "limit":         { "type": "integer", "description": "Maximum results to return (default 10)." },
+                        "output_format": { "type": "string",  "description": DEFAULT_OUTPUT_DESCRIPTION }
+                    },
+                    "required": ["query"]
+                }
+            },
+            {
+                "name": "get_global_memory",
+                "description": "CM11: Return the cross-session global memory summary for this repo: frequently-accessed symbols and files, and recurring workflow patterns. Optionally provide focus_symbols and focus_files to also find past sessions most relevant to the current work context.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "limit":          { "type": "integer", "description": "Maximum entries to return per category (default 10)." },
+                        "focus_symbols":  { "type": "array", "items": { "type": "string" }, "description": "Symbol qualified names from the current context used to find related past sessions." },
+                        "focus_files":    { "type": "array", "items": { "type": "string" }, "description": "File paths from the current context used to find related past sessions." },
+                        "output_format":  { "type": "string",  "description": DEFAULT_OUTPUT_DESCRIPTION }
                     },
                     "required": []
                 }

@@ -17,6 +17,13 @@ pub enum SessionCommand {
 
     /// List all known sessions for this repo.
     List,
+
+    /// Compact and curate the session event ledger.
+    ///
+    /// Removes stale low-value events, merges repeated actions, deduplicates
+    /// reasoning outputs, and promotes high-value events to a higher priority
+    /// so they survive future eviction cycles.
+    Compact,
 }
 
 /// Sub-commands for `atlas flows`.

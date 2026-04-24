@@ -524,6 +524,7 @@ fn build_review_refresh_artifacts(
         &bounded_files,
         MAX_HOOK_REVIEW_REFRESH_DEPTH,
         MAX_HOOK_REVIEW_REFRESH_NODES,
+        &review_policy,
     )
     .context("explain change generation failed")?;
     let impact_result = advanced_impact(
@@ -532,10 +533,7 @@ fn build_review_refresh_artifacts(
                 &bounded_files.iter().map(String::as_str).collect::<Vec<_>>(),
                 MAX_HOOK_REVIEW_REFRESH_DEPTH,
                 MAX_HOOK_REVIEW_REFRESH_NODES,
-                atlas_core::BudgetPolicy::default()
-                    .graph_traversal
-                    .edges
-                    .default_limit,
+                review_policy.graph_traversal.edges.default_limit,
             )
             .context("impact radius generation failed")?,
     );

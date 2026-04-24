@@ -209,6 +209,7 @@ pub fn run_detect_changes(cli: &Cli) -> Result<()> {
 
         // Graph-level impact summary when DB is available.
         if let Ok(store) = &store_result {
+            let policy = load_budget_policy(&repo)?;
             let non_deleted: Vec<&str> = changes
                 .iter()
                 .filter(|cf| cf.change_type != ChangeType::Deleted)
@@ -219,10 +220,7 @@ pub fn run_detect_changes(cli: &Cli) -> Result<()> {
                     &non_deleted,
                     5,
                     200,
-                    atlas_core::BudgetPolicy::default()
-                        .graph_traversal
-                        .edges
-                        .default_limit,
+                    policy.graph_traversal.edges.default_limit,
                 )
             {
                 println!("\nGraph impact summary:");
@@ -298,8 +296,15 @@ pub fn run_explain_change(cli: &Cli) -> Result<()> {
 
         let store =
             Store::open(&db_path).with_context(|| format!("cannot open database at {db_path}"))?;
-        let summary =
-            build_explain_change_summary(&store, &changes, &target_files, max_depth, max_nodes)?;
+        let policy = load_budget_policy(&repo)?;
+        let summary = build_explain_change_summary(
+            &store,
+            &changes,
+            &target_files,
+            max_depth,
+            max_nodes,
+            &policy,
+        )?;
 
         if cli.json {
             print_json("explain_change", serde_json::to_value(&summary)?)?;
@@ -408,6 +413,7 @@ pub fn run_impact(cli: &Cli) -> Result<()> {
 
         let store =
             Store::open(&db_path).with_context(|| format!("cannot open database at {db_path}"))?;
+        let policy = load_budget_policy(&repo)?;
 
         let (base, explicit_files, max_depth, max_nodes) = match &cli.command {
             Command::Impact {
@@ -465,10 +471,7 @@ pub fn run_impact(cli: &Cli) -> Result<()> {
                 &path_refs,
                 max_depth,
                 max_nodes,
-                atlas_core::BudgetPolicy::default()
-                    .graph_traversal
-                    .edges
-                    .default_limit,
+                policy.graph_traversal.edges.default_limit,
             )
             .context("impact radius query failed")?;
         let latency_ms = t0.elapsed().as_millis();

@@ -18,12 +18,15 @@
 //! | `get_minimal_context`     | Compact auto-detected review context                     |
 //! | `explain_change`          | Advanced impact: risk, change kinds, boundary/test gaps  |
 //! | `get_session_status`      | CM7: current session identity and event count            |
+//! | `compact_session`         | CM10: compact event ledger; merge, decay, dedup, promote |
 //! | `resume_session`          | CM7: retrieve and consume the resume snapshot            |
 //! | `search_saved_context`    | CM7: FTS + trigram search over saved artifacts           |
 //! | `read_saved_context`      | MCP13: full artifact retrieval by source_id with paging  |
 //! | `save_context_artifact`   | CM7: index and store a large output                      |
 //! | `get_context_stats`       | CM7: storage stats for the current session               |
 //! | `purge_saved_context`     | CM7: delete saved artifacts by session or age            |
+//! | `cross_session_search`    | CM11: search saved context across all sessions for repo  |
+//! | `get_global_memory`       | CM11: frequent symbols/files/workflows; related sessions |
 //! | `symbol_neighbors`        | Immediate callers, callees, tests, and nearby nodes      |
 //! | `cross_file_links`        | Files coupled through shared symbol references           |
 //! | `concept_clusters`        | Related file groups around seed files                    |

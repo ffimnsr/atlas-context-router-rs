@@ -433,12 +433,15 @@ The MCP server (`atlas serve`) exposes these tools to agents:
 | `get_minimal_context` | Auto-detect changes and return compact impact bundle |
 | `explain_change` | Advanced impact: risk, change kinds, boundary/test gaps |
 | `get_session_status` | Current session identity, event count, and resume state |
+| `compact_session` | Compact session event ledger: merge, decay, dedup, promote |
 | `resume_session` | Retrieve and consume current session snapshot |
 | `search_saved_context` | Search saved artifacts from prior tool outputs |
 | `read_saved_context` | Retrieve full artifact content by source_id with optional paging |
 | `save_context_artifact` | Store large context payloads for later retrieval |
 | `get_context_stats` | Session/content-store stats and DB paths |
 | `purge_saved_context` | Delete saved artifacts by session or age |
+| `cross_session_search` | CM11: search saved context across all sessions for this repo |
+| `get_global_memory` | CM11: frequent symbols/files/workflows and related past sessions |
 | `symbol_neighbors` | Immediate callers, callees, tests, and nearby graph nodes |
 | `cross_file_links` | Files semantically linked to a file by shared symbol references |
 | `concept_clusters` | Related file groups around seed files by coupling density |

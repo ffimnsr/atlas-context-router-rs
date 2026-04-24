@@ -7,7 +7,8 @@ use crate::discovery_tools::{
 };
 use crate::output::{OutputFormat, resolve_output_format};
 use crate::session_tools::{
-    tool_get_context_stats, tool_get_session_status, tool_purge_saved_context,
+    tool_compact_session, tool_cross_session_search, tool_get_context_stats,
+    tool_get_global_memory, tool_get_session_status, tool_purge_saved_context,
     tool_read_saved_context, tool_resume_session, tool_save_context_artifact,
     tool_search_saved_context,
 };
@@ -103,6 +104,7 @@ fn call_inner(
         "explain_change" => tool_explain_change(args, repo_root, db_path, output_format),
         "get_context" => tool_get_context(args, repo_root, db_path, output_format),
         "get_session_status" => tool_get_session_status(args, repo_root, db_path, output_format),
+        "compact_session" => tool_compact_session(args, repo_root, db_path, output_format),
         "resume_session" => tool_resume_session(args, repo_root, db_path, output_format),
         "search_saved_context" => {
             tool_search_saved_context(args, repo_root, db_path, output_format)
@@ -113,19 +115,23 @@ fn call_inner(
         }
         "get_context_stats" => tool_get_context_stats(args, repo_root, db_path, output_format),
         "purge_saved_context" => tool_purge_saved_context(args, repo_root, db_path, output_format),
-        "symbol_neighbors" => tool_symbol_neighbors(args, db_path, output_format),
-        "cross_file_links" => tool_cross_file_links(args, db_path, output_format),
-        "concept_clusters" => tool_concept_clusters(args, db_path, output_format),
+        "cross_session_search" => {
+            tool_cross_session_search(args, repo_root, db_path, output_format)
+        }
+        "get_global_memory" => tool_get_global_memory(args, repo_root, db_path, output_format),
+        "symbol_neighbors" => tool_symbol_neighbors(args, repo_root, db_path, output_format),
+        "cross_file_links" => tool_cross_file_links(args, repo_root, db_path, output_format),
+        "concept_clusters" => tool_concept_clusters(args, repo_root, db_path, output_format),
         "search_files" => tool_search_files(args, repo_root, output_format),
         "search_content" => tool_search_content(args, repo_root, output_format),
         "search_templates" => tool_search_templates(args, repo_root, output_format),
         "search_text_assets" => tool_search_text_assets(args, repo_root, output_format),
         "status" => tool_status(repo_root, db_path, output_format),
         "doctor" => tool_doctor(repo_root, db_path, output_format),
-        "db_check" => tool_db_check(args, db_path, output_format),
-        "debug_graph" => tool_debug_graph(args, db_path, output_format),
-        "explain_query" => tool_explain_query(args, db_path, output_format),
-        "resolve_symbol" => tool_resolve_symbol(args, db_path, output_format),
+        "db_check" => tool_db_check(args, repo_root, db_path, output_format),
+        "debug_graph" => tool_debug_graph(args, repo_root, db_path, output_format),
+        "explain_query" => tool_explain_query(args, repo_root, db_path, output_format),
+        "resolve_symbol" => tool_resolve_symbol(args, repo_root, db_path, output_format),
         "analyze_safety" => tool_analyze_safety(args, db_path, output_format),
         "analyze_remove" => tool_analyze_remove(args, db_path, output_format),
         "analyze_dead_code" => tool_analyze_dead_code(args, db_path, output_format),

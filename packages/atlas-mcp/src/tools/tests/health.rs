@@ -225,6 +225,41 @@ fn status_schema_mismatch_returns_error_code() {
 }
 
 #[test]
+fn db_check_limit_is_clamped_by_central_budget_policy() {
+    let fixture = setup_mcp_fixture();
+    let args = serde_json::json!({ "limit": 9999, "output_format": "json" });
+
+    let response = call("db_check", Some(&args), "/repo", &fixture.db_path).expect("db_check");
+
+    assert_eq!(response["budget_status"], "override_clamped");
+    assert_eq!(response["budget_hit"], true);
+    assert_eq!(
+        response["budget_name"],
+        "mcp_cli_payload_serialization.max_nodes"
+    );
+    assert_eq!(response["budget_limit"], 200);
+    assert_eq!(response["budget_observed"], 9999);
+}
+
+#[test]
+fn debug_graph_limit_is_clamped_by_central_budget_policy() {
+    let fixture = setup_mcp_fixture();
+    let args = serde_json::json!({ "limit": 9999, "output_format": "json" });
+
+    let response =
+        call("debug_graph", Some(&args), "/repo", &fixture.db_path).expect("debug_graph");
+
+    assert_eq!(response["budget_status"], "override_clamped");
+    assert_eq!(response["budget_hit"], true);
+    assert_eq!(
+        response["budget_name"],
+        "mcp_cli_payload_serialization.max_nodes"
+    );
+    assert_eq!(response["budget_limit"], 200);
+    assert_eq!(response["budget_observed"], 9999);
+}
+
+#[test]
 fn doctor_returns_checks_array() {
     let fixture = setup_mcp_fixture();
     let dir_path = fixture._dir.path().to_string_lossy().to_string();
