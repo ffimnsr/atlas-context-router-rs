@@ -16,7 +16,8 @@
     "include_callers": true,
     "include_callees": true,
     "include_saved_context": false,
-    "session_id": null
+    "session_id": null,
+    "token_budget": null
   },
   "ambiguity": null,
   "edges": [

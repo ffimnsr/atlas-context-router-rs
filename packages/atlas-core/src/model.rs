@@ -583,6 +583,13 @@ pub struct ContextRequest {
     /// Restrict saved-context retrieval to artifacts from this session.
     /// Also applies a same-session relevance boost when scoring.
     pub session_id: Option<String>,
+    // --- CM13: context budget optimization ---
+    /// Optional per-call token budget.  When set the engine enforces this cap
+    /// during payload trimming instead of (or in addition to) the policy
+    /// default.  The effective limit is always capped by
+    /// `BudgetPolicy::mcp_cli_payload_serialization.context_tokens_estimate.max_limit`
+    /// so callers cannot bypass the central policy ceiling.
+    pub token_budget: Option<usize>,
 }
 
 impl Default for ContextRequest {
@@ -604,6 +611,7 @@ impl Default for ContextRequest {
             include_callees: true,
             include_saved_context: false,
             session_id: None,
+            token_budget: None,
         }
     }
 }
@@ -705,12 +713,36 @@ pub struct PayloadTruncationMeta {
     pub bytes_requested: usize,
     pub bytes_emitted: usize,
     pub tokens_estimated: usize,
+    /// Effective token budget that was enforced (from request or policy default).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token_budget_applied: Option<usize>,
     pub omitted_node_count: usize,
     pub omitted_file_count: usize,
     pub omitted_source_count: usize,
     pub omitted_byte_count: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub continuation_hint: Option<String>,
+    /// Per-source-type token usage after trimming.
+    /// Shows how many tokens/bytes each source kind contributed so callers
+    /// can understand how the budget was allocated.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub source_mix: Vec<ContextSourceMix>,
+}
+
+/// Token/byte usage for a single context source kind inside a [`ContextResult`].
+///
+/// Populated in [`PayloadTruncationMeta::source_mix`] whenever payload
+/// trimming runs so callers can see how the token budget was distributed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContextSourceMix {
+    /// Source kind: `"graph_context"`, `"saved_artifacts"`, or `"resume_snapshot"`.
+    pub source_kind: String,
+    /// Items included in the emitted result.
+    pub items_included: usize,
+    /// Items dropped to stay within budget.
+    pub items_dropped: usize,
+    /// Estimated tokens used by this source in the emitted result.
+    pub tokens_used: usize,
 }
 
 impl TruncationMeta {
@@ -1414,6 +1446,7 @@ mod tests {
             include_callees: true,
             include_saved_context: false,
             session_id: None,
+            token_budget: None,
         }
     }
 

@@ -323,6 +323,7 @@ pub(super) fn tool_get_review_context(
     let resolved = resolve_change_source(args, repo_root, true)?;
     let max_depth = u64_arg(args, "max_depth").unwrap_or(3) as u32;
     let max_nodes = u64_arg(args, "max_nodes").unwrap_or(200) as usize;
+    let token_budget = u64_arg(args, "token_budget").map(|n| n as usize);
 
     let store = open_store(db_path)?;
     let policy = load_budget_policy(repo_root)?;
@@ -334,6 +335,7 @@ pub(super) fn tool_get_review_context(
         },
         max_nodes: Some(max_nodes),
         depth: Some(max_depth),
+        token_budget,
         ..ContextRequest::default()
     };
     let result = engine.build(&request).context("context engine failed")?;
@@ -773,6 +775,7 @@ pub(super) fn tool_get_context(
     let semantic = bool_arg(args, "semantic").unwrap_or(false);
     let include_saved_context = bool_arg(args, "include_saved_context").unwrap_or(false);
     let session_id = str_arg(args, "session_id")?.map(str::to_owned);
+    let token_budget = u64_arg(args, "token_budget").map(|n| n as usize);
 
     let mut request = if !files.is_empty() {
         let intent = intent_override
@@ -832,6 +835,9 @@ pub(super) fn tool_get_context(
     }
     request.include_saved_context = include_saved_context;
     request.session_id = session_id;
+    if token_budget.is_some() {
+        request.token_budget = token_budget;
+    }
 
     let store = open_store(db_path)?;
     let policy = load_budget_policy(repo_root)?;

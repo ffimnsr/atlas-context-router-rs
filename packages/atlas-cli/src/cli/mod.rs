@@ -388,6 +388,13 @@ pub enum Command {
         /// and symbols from recent events are used to boost relevance.
         #[arg(long)]
         semantic: bool,
+
+        /// Maximum tokens to include in the result.  Overrides the default
+        /// policy limit (context_tokens_estimate) for this request only.
+        /// The engine enforces this as a strict cap; it cannot exceed the
+        /// policy ceiling set in atlas.toml.
+        #[arg(long)]
+        token_budget: Option<usize>,
     },
 
     /// Manage named ordered sequences of graph nodes (flows).

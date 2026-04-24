@@ -161,6 +161,7 @@ fn bench_context_retrieval_latency(c: &mut Criterion) {
             include_callees: true,
             include_saved_context: false,
             session_id: None,
+            token_budget: None,
         };
 
         group.bench_with_input(

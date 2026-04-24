@@ -7,8 +7,8 @@
 
 use atlas_core::BudgetReport;
 use atlas_core::model::{
-    ContextResult, Edge, ImpactResult, Node, PayloadTruncationMeta, SavedContextSource,
-    SeedBudgetMeta, SelectedEdge, SelectedNode, TraversalBudgetMeta,
+    ContextResult, ContextSourceMix, Edge, ImpactResult, Node, PayloadTruncationMeta,
+    SavedContextSource, SeedBudgetMeta, SelectedEdge, SelectedNode, TraversalBudgetMeta,
 };
 use serde::Serialize;
 use serde_json::{Map, Value};
@@ -167,6 +167,14 @@ pub struct PackagedContextResult<'a> {
     pub traversal_budget: Option<&'a TraversalBudgetMeta>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub payload_truncation: Option<&'a PayloadTruncationMeta>,
+    /// Per-source-kind token usage breakdown (CM13).
+    /// Only present when payload trimming ran (i.e. when `payload_truncation` is set).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub source_mix: Vec<&'a ContextSourceMix>,
+    /// Effective token budget applied for this result (CM13).
+    /// Only present when a per-request token_budget was set and enforced.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token_budget_applied: Option<usize>,
     #[serde(flatten)]
     pub budget: BudgetReport,
 }
@@ -299,6 +307,17 @@ pub fn package_context_result(result: &ContextResult) -> PackagedContextResult<'
         seed_budgets: &result.seed_budgets,
         traversal_budget: result.traversal_budget.as_ref(),
         payload_truncation: result.truncation.payload.as_ref(),
+        source_mix: result
+            .truncation
+            .payload
+            .as_ref()
+            .map(|p| p.source_mix.iter().collect())
+            .unwrap_or_default(),
+        token_budget_applied: result
+            .truncation
+            .payload
+            .as_ref()
+            .and_then(|p| p.token_budget_applied),
         budget: result.budget.clone(),
     }
 }

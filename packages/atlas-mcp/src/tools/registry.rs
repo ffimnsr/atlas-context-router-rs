@@ -105,6 +105,7 @@ pub fn tool_list() -> serde_json::Value {
                         "working_tree": { "type": "boolean", "description": "Diff working-tree changes only. Mutually exclusive with files/base/staged." },
                         "max_depth": { "type": "integer", "description": "Traversal depth limit (default 3)" },
                         "max_nodes": { "type": "integer", "description": "Maximum impacted nodes to consider (default 200)" },
+                        "token_budget": { "type": "integer", "description": "Maximum tokens to include in the result. Overrides the default policy limit for this call only. Cannot exceed the policy ceiling." },
                         "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
                     },
                     "required": []
@@ -205,6 +206,7 @@ pub fn tool_list() -> serde_json::Value {
                         "semantic":  { "type": "boolean", "description": "Run graph-aware semantic search to resolve the best-matching qualified name before building context (default false). Useful when the symbol name is ambiguous or approximate." },
                         "include_saved_context": { "type": "boolean", "description": "When true, also query the content store for saved artifacts relevant to this request and include them in the result (default false)." },
                         "session_id": { "type": "string",  "description": "Restrict saved-context retrieval to artifacts from this session and apply a same-session relevance boost." },
+                        "token_budget": { "type": "integer", "description": "Maximum tokens to include in the result. Overrides the default policy limit for this call only. Cannot exceed the policy ceiling. Use to enforce tighter context budgets from the caller side." },
                         "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
                     },
                     "required": []

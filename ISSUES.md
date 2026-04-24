@@ -4244,13 +4244,13 @@ Select the best possible context within limits.
 
 #### Tasks
 
-- [ ] implement dynamic token budgeting
-- [ ] rank sources:
+- [x] implement dynamic token budgeting
+- [x] rank sources:
   - graph context
   - saved artifacts
   - resume snapshot
-- [ ] select optimal mix of context sources
-- [ ] enforce strict token limits
+- [x] select optimal mix of context sources
+- [x] enforce strict token limits
 
 #### Output
 
@@ -4258,9 +4258,9 @@ Select the best possible context within limits.
 
 #### CLI and MCP rollout follow-up
 
-- [ ] apply token budgeting to `atlas context`, `get_review_context`, `get_context`, and related MCP responses
-- [ ] expose budget decisions, dropped-source counts, and selected-source mix in structured output
-- [ ] allow CLI and MCP callers to override or inspect budget caps without bypassing the optimizer
+- [x] apply token budgeting to `atlas context`, `get_review_context`, `get_context`, and related MCP responses
+- [x] expose budget decisions, dropped-source counts, and selected-source mix in structured output
+- [x] allow CLI and MCP callers to override or inspect budget caps without bypassing the optimizer
 
 ---
 
@@ -5626,14 +5626,14 @@ Why:
 
 ### Patch B completion criteria
 
-- [ ] one central budget policy/manager exists and all bounded graph/query/context paths consume it
-- [ ] build/update total work budgets exist and are reported
-- [ ] query seed and traversal budgets exist and are reported
-- [ ] review/context byte or token budgets exist and are reported
-- [ ] MCP/CLI payload budgets are enforced by the same budget policy
-- [ ] every budget has explicit fail-open, fail-closed, or degraded behavior
-- [ ] CLI/MCP outputs include machine-readable budget status when limits hit
-- [ ] tests cover budget hits across build, query, impact, review, and MCP serialization
+- [x] one central budget policy/manager exists and all bounded graph/query/context paths consume it
+- [x] build/update total work budgets exist and are reported
+- [x] query seed and traversal budgets exist and are reported
+- [x] review/context byte or token budgets exist and are reported
+- [x] MCP/CLI payload budgets are enforced by the same budget policy
+- [x] every budget has explicit fail-open, fail-closed, or degraded behavior
+- [x] CLI/MCP outputs include machine-readable budget status when limits hit
+- [x] tests cover budget hits across build, query, impact, review, and MCP serialization
 
 ---
 

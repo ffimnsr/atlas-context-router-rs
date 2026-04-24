@@ -306,6 +306,7 @@ pub fn run_context(cli: &Cli) -> Result<()> {
             imports,
             neighbors,
             semantic,
+            token_budget,
         ) = match &cli.command {
             Command::Context {
                 query,
@@ -321,6 +322,7 @@ pub fn run_context(cli: &Cli) -> Result<()> {
                 imports,
                 neighbors,
                 semantic,
+                token_budget,
             } => (
                 query.clone(),
                 file.clone(),
@@ -335,6 +337,7 @@ pub fn run_context(cli: &Cli) -> Result<()> {
                 *imports,
                 *neighbors,
                 *semantic,
+                *token_budget,
             ),
             _ => unreachable!(),
         };
@@ -391,6 +394,9 @@ pub fn run_context(cli: &Cli) -> Result<()> {
         }
         if neighbors {
             request.include_neighbors = true;
+        }
+        if token_budget.is_some() {
+            request.token_budget = token_budget;
         }
 
         let store =

@@ -1,5 +1,5 @@
 use super::*;
-use atlas_core::model::PayloadTruncationMeta;
+use atlas_core::model::{ContextSourceMix, PayloadTruncationMeta};
 use std::cmp::Ordering;
 
 pub(super) fn apply_payload_budgets(result: &mut ContextResult, policy: &BudgetPolicy) {
@@ -11,6 +11,37 @@ pub(super) fn apply_payload_budgets(result: &mut ContextResult, policy: &BudgetP
     let initial_node_drops = result.truncation.nodes_dropped;
     let initial_edge_drops = result.truncation.edges_dropped;
     let initial_file_drops = result.truncation.files_dropped;
+
+    // CM13: compute effective token/byte limits, honouring per-request override.
+    // The per-request token_budget is capped by the policy ceiling so callers
+    // cannot bypass the central policy.
+    let policy_token_limit = policy
+        .mcp_cli_payload_serialization
+        .context_tokens_estimate
+        .default_limit;
+    let token_ceiling = policy
+        .mcp_cli_payload_serialization
+        .context_tokens_estimate
+        .max_limit;
+    let effective_token_limit = match result.request.token_budget {
+        Some(requested) => requested.min(token_ceiling).min(policy_token_limit),
+        None => policy_token_limit,
+    };
+    // When a per-request token budget is tighter than the byte cap, derive an
+    // equivalent byte limit (4 bytes/token approximation).
+    let policy_byte_limit = policy
+        .mcp_cli_payload_serialization
+        .context_payload_bytes
+        .default_limit;
+    let effective_byte_limit = (effective_token_limit * 4).min(policy_byte_limit);
+
+    // Track whether the token budget was overridden by the caller.
+    let token_budget_applied =
+        if result.request.token_budget.is_some() && effective_token_limit < policy_token_limit {
+            Some(effective_token_limit)
+        } else {
+            None
+        };
 
     trim_file_excerpt_bytes(
         result,
@@ -33,17 +64,7 @@ pub(super) fn apply_payload_budgets(result: &mut ContextResult, policy: &BudgetP
             .review_source_bytes
             .default_limit,
     );
-    trim_context_payload(
-        result,
-        policy
-            .mcp_cli_payload_serialization
-            .context_payload_bytes
-            .default_limit,
-        policy
-            .mcp_cli_payload_serialization
-            .context_tokens_estimate
-            .default_limit,
-    );
+    trim_context_payload(result, effective_byte_limit, effective_token_limit);
     update_file_node_counts(result);
 
     let payload_nodes_dropped = initial_nodes.saturating_sub(result.nodes.len());
@@ -60,22 +81,126 @@ pub(super) fn apply_payload_budgets(result: &mut ContextResult, policy: &BudgetP
         || payload_files_dropped > 0
         || payload_sources_dropped > 0
         || omitted_byte_count > 0
+        || token_budget_applied.is_some()
     {
         result.truncation.nodes_dropped = initial_node_drops + payload_nodes_dropped;
         result.truncation.edges_dropped = initial_edge_drops + payload_edges_dropped;
         result.truncation.files_dropped = initial_file_drops + payload_files_dropped;
-        result.truncation.truncated = true;
+        result.truncation.truncated = payload_nodes_dropped > 0
+            || payload_edges_dropped > 0
+            || payload_files_dropped > 0
+            || payload_sources_dropped > 0
+            || omitted_byte_count > 0;
+
+        // CM13: compute per-source-kind token breakdown.
+        let source_mix = compute_source_mix(
+            result,
+            &DropCounts {
+                nodes: payload_nodes_dropped,
+                edges: payload_edges_dropped,
+                files: payload_files_dropped,
+                sources: payload_sources_dropped,
+            },
+            emitted_bytes,
+        );
+
         result.truncation.payload = Some(PayloadTruncationMeta {
             bytes_requested: requested_bytes,
             bytes_emitted: emitted_bytes,
             tokens_estimated,
+            token_budget_applied,
             omitted_node_count: payload_nodes_dropped,
             omitted_file_count: payload_files_dropped,
             omitted_source_count: payload_sources_dropped,
             omitted_byte_count,
-            continuation_hint: Some(continuation_hint(result, payload_sources_dropped)),
+            continuation_hint: if omitted_byte_count > 0
+                || payload_nodes_dropped > 0
+                || payload_files_dropped > 0
+            {
+                Some(continuation_hint(result, payload_sources_dropped))
+            } else {
+                None
+            },
+            source_mix,
         });
     }
+}
+
+struct DropCounts {
+    nodes: usize,
+    edges: usize,
+    files: usize,
+    sources: usize,
+}
+
+/// Build a compact per-source-kind token usage breakdown.
+///
+/// Source priority (highest first): graph_context > saved_artifacts.
+/// Resume snapshot is not a separate source type in the current model; saved
+/// artifacts produced by resume are included in `saved_artifacts`.
+fn compute_source_mix(
+    result: &ContextResult,
+    dropped: &DropCounts,
+    emitted_bytes: usize,
+) -> Vec<ContextSourceMix> {
+    let dropped_nodes = dropped.nodes;
+    let dropped_edges = dropped.edges;
+    let dropped_files = dropped.files;
+    let dropped_sources = dropped.sources;
+    let total_tokens = estimate_tokens(emitted_bytes);
+    if total_tokens == 0 {
+        return Vec::new();
+    }
+
+    // Estimate how many bytes each source kind occupies in the result.
+    let graph_node_bytes = serde_json::to_vec(&result.nodes)
+        .map(|b| b.len())
+        .unwrap_or(0);
+    let graph_edge_bytes = serde_json::to_vec(&result.edges)
+        .map(|b| b.len())
+        .unwrap_or(0);
+    let graph_file_bytes = serde_json::to_vec(&result.files)
+        .map(|b| b.len())
+        .unwrap_or(0);
+    let graph_bytes = graph_node_bytes + graph_edge_bytes + graph_file_bytes;
+    let saved_bytes = serde_json::to_vec(&result.saved_context_sources)
+        .map(|b| b.len())
+        .unwrap_or(0);
+
+    let mut mix = Vec::new();
+
+    // graph_context: nodes + edges + files
+    let graph_included = result.nodes.len() + result.edges.len() + result.files.len();
+    let graph_dropped = dropped_nodes + dropped_edges + dropped_files;
+    if graph_included > 0 || graph_dropped > 0 {
+        mix.push(ContextSourceMix {
+            source_kind: "graph_context".to_owned(),
+            items_included: graph_included,
+            items_dropped: graph_dropped,
+            tokens_used: estimate_tokens(graph_bytes),
+        });
+    }
+
+    // saved_artifacts: saved context sources
+    let saved_included = result.saved_context_sources.len();
+    if saved_included > 0 || dropped_sources > 0 {
+        mix.push(ContextSourceMix {
+            source_kind: "saved_artifacts".to_owned(),
+            items_included: saved_included,
+            items_dropped: dropped_sources,
+            tokens_used: estimate_tokens(saved_bytes),
+        });
+    }
+
+    // Suppress empty mix to keep output compact.
+    if mix
+        .iter()
+        .all(|m| m.items_included == 0 && m.items_dropped == 0)
+    {
+        return Vec::new();
+    }
+
+    mix
 }
 
 fn continuation_hint(result: &ContextResult, omitted_sources: usize) -> String {
