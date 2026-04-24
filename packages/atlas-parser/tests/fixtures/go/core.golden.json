@@ -53,7 +53,7 @@
       "kind": "contains",
       "line": 19,
       "source_qn": "fixtures/go/core.go::package::sample",
-      "target_qn": "fixtures/go/core.go::method::.Greet"
+      "target_qn": "fixtures/go/core.go::method::Greeter.Greet"
     },
     {
       "confidence": 1.0,
@@ -108,7 +108,7 @@
       "id": 0,
       "kind": "calls",
       "line": 20,
-      "source_qn": "fixtures/go/core.go::method::.Greet",
+      "source_qn": "fixtures/go/core.go::method::Greeter.Greet",
       "target_qn": "fixtures/go/core.go::fn::caller"
     },
     {
@@ -231,7 +231,10 @@
       "return_type": "string"
     },
     {
-      "extra_json": null,
+      "extra_json": {
+        "receiver_name": "g",
+        "receiver_type": "Greeter"
+      },
       "file_hash": "fixture-hash",
       "file_path": "fixtures/go/core.go",
       "id": 0,
@@ -244,7 +247,7 @@
       "name": "Greet",
       "params": "(name string)",
       "parent_name": "fixtures/go/core.go::package::sample",
-      "qualified_name": "fixtures/go/core.go::method::.Greet",
+      "qualified_name": "fixtures/go/core.go::method::Greeter.Greet",
       "return_type": "string"
     },
     {

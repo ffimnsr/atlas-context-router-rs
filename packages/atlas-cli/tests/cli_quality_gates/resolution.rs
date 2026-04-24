@@ -574,6 +574,70 @@ fn build_resolves_go_local_module_import_calls() {
 }
 
 #[test]
+fn build_resolves_go_same_package_method_calls_by_receiver_type() {
+    let repo = setup_repo(&[
+        (
+            "pkg/caller.go",
+            "package demo\n\nfunc caller(f Foo) { f.B() }\n",
+        ),
+        (
+            "pkg/foo.go",
+            "package demo\n\ntype Foo struct{}\n\nfunc (f Foo) B() {}\n",
+        ),
+        (
+            "pkg/bar.go",
+            "package demo\n\ntype Bar struct{}\n\nfunc (b Bar) B() {}\n",
+        ),
+    ]);
+
+    run_atlas(repo.path(), &["init"]);
+    run_atlas(repo.path(), &["build"]);
+
+    let store = open_store(repo.path());
+    let edges = store.edges_by_file("pkg/caller.go").expect("go caller edges");
+    assert!(
+        edges.iter().any(|edge| {
+            edge.kind == EdgeKind::Calls
+                && edge.target_qn == "pkg/foo.go::method::Foo.B"
+                && edge.confidence_tier.as_deref() == Some("same_package")
+        }),
+        "expected same-package receiver-typed call to resolve into pkg/foo.go::method::Foo.B; edges: {edges:?}"
+    );
+}
+
+#[test]
+fn build_resolves_go_same_package_field_receiver_method_calls() {
+    let repo = setup_repo(&[
+        (
+            "pkg/caller.go",
+            "package demo\n\ntype Foo struct{}\ntype Holder struct{ foo Foo }\n\nfunc caller(holder Holder) { holder.foo.B() }\n",
+        ),
+        (
+            "pkg/foo.go",
+            "package demo\n\nfunc (f Foo) B() {}\n",
+        ),
+        (
+            "pkg/bar.go",
+            "package demo\n\ntype Bar struct{}\n\nfunc (b Bar) B() {}\n",
+        ),
+    ]);
+
+    run_atlas(repo.path(), &["init"]);
+    run_atlas(repo.path(), &["build"]);
+
+    let store = open_store(repo.path());
+    let edges = store.edges_by_file("pkg/caller.go").expect("go caller edges");
+    assert!(
+        edges.iter().any(|edge| {
+            edge.kind == EdgeKind::Calls
+                && edge.target_qn == "pkg/foo.go::method::Foo.B"
+                && edge.confidence_tier.as_deref() == Some("same_package")
+        }),
+        "expected same-package field receiver call to resolve into pkg/foo.go::method::Foo.B; edges: {edges:?}"
+    );
+}
+
+#[test]
 fn build_and_update_replace_json_toml_file_graphs() {
     let repo = setup_repo(&[
         (

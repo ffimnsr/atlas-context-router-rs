@@ -276,7 +276,8 @@ impl<'s, 'o> Walker<'s, 'o> {
         };
         let trait_name = field_text(node, "trait", self.source);
         let parent_qn = self.current_parent_qn().to_owned();
-        let impl_scope = format!("{}::impl::{}", self.rel_path, type_name);
+        let suffix = qualified_suffix(&parent_qn, self.rel_path, type_name);
+        let impl_scope = format!("{}::impl::{}", self.rel_path, suffix);
 
         self.nodes.push(Node {
             id: NodeId::UNSET,
@@ -450,16 +451,7 @@ fn resolve_same_file_calls(
     rel_path: &str,
     nodes: &[Node],
 ) -> Vec<Edge> {
-    // Build callable name → qualified_name map.
-    let mut callables: HashMap<String, String> = HashMap::new();
-    for n in nodes {
-        if matches!(
-            n.kind,
-            NodeKind::Function | NodeKind::Method | NodeKind::Test
-        ) {
-            callables.insert(n.name.clone(), n.qualified_name.clone());
-        }
-    }
+    let callables = collect_callables(nodes);
 
     let mut edges = Vec::new();
     let mut scope: Vec<String> = Vec::new();
@@ -467,19 +459,47 @@ fn resolve_same_file_calls(
     edges
 }
 
+#[derive(Clone)]
+struct CallableNode {
+    qn: String,
+    name: String,
+    parent_qn: String,
+    line_start: u32,
+}
+
+fn collect_callables(nodes: &[Node]) -> Vec<CallableNode> {
+    nodes
+        .iter()
+        .filter(|n| {
+            matches!(
+                n.kind,
+                NodeKind::Function | NodeKind::Method | NodeKind::Test
+            )
+        })
+        .map(|n| CallableNode {
+            qn: n.qualified_name.clone(),
+            name: n.name.clone(),
+            parent_qn: n.parent_name.clone().unwrap_or_else(|| n.file_path.clone()),
+            line_start: n.line_start,
+        })
+        .collect()
+}
+
 fn walk_for_rust_calls<'a>(
     node: TsNode<'a>,
     source: &[u8],
     rel_path: &str,
-    callables: &HashMap<String, String>,
+    callables: &[CallableNode],
     scope: &mut Vec<String>,
     edges: &mut Vec<Edge>,
 ) {
     match node.kind() {
         "function_item" => {
-            let caller_qn = node
-                .child_by_field_name("name")
-                .and_then(|n| callables.get(node_text(n, source)));
+            let line = start_line(node);
+            let caller_qn = callables
+                .iter()
+                .find(|callable| callable.line_start == line)
+                .map(|callable| &callable.qn);
             let pushed = if let Some(qn) = caller_qn {
                 scope.push(qn.clone());
                 true
@@ -507,12 +527,12 @@ fn walk_for_rust_calls<'a>(
                     if is_self_call(caller_qn, &name, receiver.as_deref()) {
                         return;
                     }
-                    if let Some(callee_qn) = callables.get(&name)
-                        && callee_qn != caller_qn
+                    if let Some(callee_qn) = resolve_local_callee(caller_qn, &name, callables)
+                        && callee_qn != *caller_qn
                     {
                         edges.push(call_edge(
                             caller_qn,
-                            callee_qn,
+                            &callee_qn,
                             rel_path,
                             start_line(node),
                             &text,
@@ -540,12 +560,12 @@ fn walk_for_rust_calls<'a>(
                     if is_self_call(caller_qn, &name, receiver.as_deref()) {
                         return;
                     }
-                    if let Some(callee_qn) = callables.get(&name)
-                        && callee_qn != caller_qn
+                    if let Some(callee_qn) = resolve_local_callee(caller_qn, &name, callables)
+                        && callee_qn != *caller_qn
                     {
                         edges.push(call_edge(
                             caller_qn,
-                            callee_qn,
+                            &callee_qn,
                             rel_path,
                             start_line(node),
                             &text,
@@ -573,6 +593,50 @@ fn walk_for_rust_calls<'a>(
     for child in node.children(&mut cursor) {
         walk_for_rust_calls(child, source, rel_path, callables, scope, edges);
     }
+}
+
+fn resolve_local_callee(caller_qn: &str, name: &str, callables: &[CallableNode]) -> Option<String> {
+    let mut candidates = callables.iter().filter(|callable| callable.name == name);
+    let first = candidates.next()?;
+    let second = candidates.next();
+    if second.is_none() {
+        return Some(first.qn.clone());
+    }
+
+    let caller_parent_chain = scope_chain_for_qn(caller_qn);
+    for parent in &caller_parent_chain {
+        if let Some(matched) = callables
+            .iter()
+            .find(|callable| callable.name == name && callable.parent_qn == *parent)
+        {
+            return Some(matched.qn.clone());
+        }
+    }
+
+    callables
+        .iter()
+        .find(|callable| callable.name == name && callable.parent_qn == caller_parent_chain[0])
+        .map(|callable| callable.qn.clone())
+}
+
+fn scope_chain_for_qn(qn: &str) -> Vec<String> {
+    let Some((prefix, tail)) = qn
+        .split_once("::fn::")
+        .or_else(|| qn.split_once("::method::"))
+    else {
+        return vec![qn.to_owned()];
+    };
+    let mut scopes = Vec::new();
+    let mut parts: Vec<&str> = tail.split("::").collect();
+    if parts.len() > 1 {
+        parts.pop();
+    }
+    while !parts.is_empty() {
+        scopes.push(format!("{prefix}::module::{}", parts.join("::")));
+        parts.pop();
+    }
+    scopes.push(prefix.to_owned());
+    scopes
 }
 
 fn rust_call_target(node: TsNode<'_>, source: &[u8]) -> Option<(String, String, Option<String>)> {
@@ -1225,5 +1289,52 @@ fn caller() {
                 .iter()
                 .any(|n| n.kind == NodeKind::Function && n.name == "caller")
         );
+    }
+
+    #[test]
+    fn nested_impl_scope_tracks_parent_module() {
+        let src = r#"
+mod outer {
+    struct Thing;
+    impl Thing {
+        fn run(&self) {}
+    }
+}
+"#;
+        let pf = parse(src);
+        assert!(pf.nodes.iter().any(|n| {
+            n.kind == NodeKind::Module && n.qualified_name == "src/lib.rs::impl::outer::Thing"
+        }));
+        assert!(pf.nodes.iter().any(|n| {
+            n.kind == NodeKind::Method
+                && n.qualified_name == "src/lib.rs::method::outer::Thing::run"
+                && n.parent_name.as_deref() == Some("src/lib.rs::impl::outer::Thing")
+        }));
+    }
+
+    #[test]
+    fn resolves_calls_to_closest_parent_scope() {
+        let src = r#"
+fn helper() {}
+
+mod alpha {
+    fn helper() {}
+
+    fn caller() {
+        helper();
+    }
+}
+"#;
+        let pf = parse(src);
+        assert!(pf.edges.iter().any(|e| {
+            e.kind == EdgeKind::Calls
+                && e.source_qn == "src/lib.rs::fn::alpha::caller"
+                && e.target_qn == "src/lib.rs::fn::alpha::helper"
+        }));
+        assert!(!pf.edges.iter().any(|e| {
+            e.kind == EdgeKind::Calls
+                && e.source_qn == "src/lib.rs::fn::alpha::caller"
+                && e.target_qn == "src/lib.rs::fn::helper"
+        }));
     }
 }

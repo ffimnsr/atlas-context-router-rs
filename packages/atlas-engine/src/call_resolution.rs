@@ -120,6 +120,7 @@ pub fn reconcile_call_targets(
 struct CallMeta {
     callee_name: String,
     receiver_text: Option<String>,
+    receiver_type: Option<String>,
 }
 
 #[derive(Clone)]
@@ -355,9 +356,15 @@ fn call_meta(edge: &Edge) -> Option<CallMeta> {
         .and_then(|value| value.as_str())
         .map(str::to_owned)
         .filter(|value| !value.is_empty());
+    let receiver_type = extra
+        .get("receiver_type")
+        .and_then(|value| value.as_str())
+        .map(str::to_owned)
+        .filter(|value| !value.is_empty());
     Some(CallMeta {
         callee_name,
         receiver_text,
+        receiver_type,
     })
 }
 
@@ -418,7 +425,11 @@ fn resolve_same_package_target(
 ) -> Option<(String, &'static str, f32)> {
     let mut candidates =
         callable_candidates(store, language, &meta.callee_name, candidate_cache).ok()?;
-    if let Some(receiver_hint) = meta.receiver_text.as_deref().and_then(receiver_type_hint) {
+    if let Some(receiver_hint) = meta
+        .receiver_type
+        .as_deref()
+        .or_else(|| meta.receiver_text.as_deref().and_then(receiver_type_hint))
+    {
         let receiver_matches: Vec<Node> = candidates
             .iter()
             .filter(|node| matches_receiver_hint(node, receiver_hint))
@@ -923,11 +934,21 @@ fn receiver_type_hint(receiver: &str) -> Option<&str> {
 }
 
 fn matches_receiver_hint(node: &Node, receiver_hint: &str) -> bool {
+    method_receiver_name(node).is_some_and(|candidate| candidate == receiver_hint)
+}
+
+fn method_receiver_name(node: &Node) -> Option<&str> {
     node.parent_name
         .as_deref()
+        .and_then(|parent| parent.contains("::impl::").then_some(parent))
         .and_then(|parent| parent.rsplit("::impl::").next())
         .and_then(|tail| tail.rsplit("::").next())
-        .is_some_and(|candidate| candidate == receiver_hint)
+        .or_else(|| {
+            let (_, tail) = node.qualified_name.split_once("::method::")?;
+            tail.rsplit_once("::")
+                .map(|(receiver, _)| receiver)
+                .or_else(|| tail.rsplit_once('.').map(|(receiver, _)| receiver))
+        })
 }
 
 fn same_dir(current_dir: &Utf8Path, candidate_path: &str) -> bool {
