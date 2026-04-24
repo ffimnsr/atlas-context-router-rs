@@ -4,6 +4,7 @@ mod build_state;
 mod context;
 mod graph;
 mod helpers;
+mod history;
 mod lifecycle;
 mod mutation;
 mod retrieval;
@@ -11,6 +12,7 @@ mod search;
 mod taxonomy;
 
 pub use self::build_state::{BuildFinishStats, GraphBuildState, GraphBuildStatus};
+pub use self::history::{HistoryStatusSummary, StoredCommit, StoredSnapshot, StoredSnapshotFile};
 
 type DanglingEdge = (i64, String, String, String, &'static str);
 

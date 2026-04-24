@@ -2,6 +2,7 @@ mod changes;
 mod context_cmd;
 mod graph;
 mod graph_objects;
+mod history;
 mod hook;
 mod init_wizard;
 mod maintenance;
@@ -14,6 +15,7 @@ pub use changes::{run_detect_changes, run_explain_change, run_impact, run_review
 pub use context_cmd::{run_context, run_shell};
 pub use graph::{run_build, run_init, run_status, run_update, run_watch};
 pub use graph_objects::{run_communities, run_flows};
+pub use history::run_history;
 pub use hook::run_hook;
 pub use maintenance::{run_db_check, run_debug_graph, run_doctor, run_purge_noncanonical};
 pub use platform::{run_completions, run_install, run_serve, run_serve_daemon};

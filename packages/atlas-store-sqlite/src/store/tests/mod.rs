@@ -16,6 +16,7 @@ mod build_state;
 mod context;
 mod graph;
 mod helpers;
+mod history;
 mod lifecycle;
 mod mutation;
 mod search;

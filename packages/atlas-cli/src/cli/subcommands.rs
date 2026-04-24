@@ -274,3 +274,11 @@ pub enum RefactorCommand {
         dry_run: bool,
     },
 }
+
+/// Sub-commands for `atlas history`.
+#[derive(Debug, Subcommand)]
+pub enum HistoryCommand {
+    /// Show historical indexing status: commit count, snapshot count, latest
+    /// indexed commit, and any shallow-clone or missing-ref warnings.
+    Status,
+}

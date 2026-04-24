@@ -133,101 +133,101 @@ Implement schema, deterministic git metadata ingestion, and `atlas history statu
 
 Schema:
 
-- [ ] `repos` if not already present
-- [ ] `commits`
-- [ ] `graph_snapshots`
-- [ ] `snapshot_files`
-- [ ] indexes and uniqueness constraints for repo, commit, snapshot, and file membership lookups
+- [x] `repos` if not already present
+- [x] `commits`
+- [x] `graph_snapshots`
+- [x] `snapshot_files`
+- [x] indexes and uniqueness constraints for repo, commit, snapshot, and file membership lookups
 
 `commits` columns:
 
-- [ ] `commit_sha`
-- [ ] `repo_id`
-- [ ] `parent_sha`
-- [ ] `author_name`
-- [ ] `author_email`
-- [ ] `author_time`
-- [ ] `committer_time`
-- [ ] `subject`
-- [ ] `message`
-- [ ] `indexed_at`
+- [x] `commit_sha`
+- [x] `repo_id`
+- [x] `parent_sha`
+- [x] `author_name`
+- [x] `author_email`
+- [x] `author_time`
+- [x] `committer_time`
+- [x] `subject`
+- [x] `message`
+- [x] `indexed_at`
 
 `graph_snapshots` columns:
 
-- [ ] `snapshot_id`
-- [ ] `repo_id`
-- [ ] `commit_sha`
-- [ ] `root_tree_hash` if available
-- [ ] `node_count`
-- [ ] `edge_count`
-- [ ] `file_count`
-- [ ] `created_at`
-- [ ] `completeness`
-- [ ] `parse_error_count`
+- [x] `snapshot_id`
+- [x] `repo_id`
+- [x] `commit_sha`
+- [x] `root_tree_hash` if available
+- [x] `node_count`
+- [x] `edge_count`
+- [x] `file_count`
+- [x] `created_at`
+- [x] `completeness`
+- [x] `parse_error_count`
 
 `snapshot_files` columns:
 
-- [ ] `snapshot_id`
-- [ ] `file_path`
-- [ ] `file_hash`
-- [ ] `language`
-- [ ] `size`
-- [ ] enforce uniqueness on `(snapshot_id, file_path)`
+- [x] `snapshot_id`
+- [x] `file_path`
+- [x] `file_hash`
+- [x] `language`
+- [x] `size`
+- [x] enforce uniqueness on `(snapshot_id, file_path)`
 
 Git wrappers:
 
-- [ ] `git rev-parse`
-- [ ] `git log`
-- [ ] `git show`
-- [ ] `git ls-tree`
-- [ ] `git diff-tree`
-- [ ] `git cat-file`
+- [x] `git rev-parse`
+- [x] `git log`
+- [x] `git show`
+- [x] `git ls-tree`
+- [x] `git diff-tree`
+- [x] `git cat-file`
 
 Commit selection:
 
-- [ ] latest commit only
-- [ ] bounded history window
-- [ ] explicit commit list
-- [ ] commit range
-- [ ] `HEAD`
-- [ ] branch ref
-- [ ] commit SHA
-- [ ] tag
+- [x] latest commit only
+- [x] bounded history window
+- [x] explicit commit list
+- [x] commit range
+- [x] `HEAD`
+- [x] branch ref
+- [x] commit SHA
+- [x] tag
 - [ ] merge base ranges later
 
 Commit metadata:
 
-- [ ] commit SHA
-- [ ] parent SHA(s)
-- [ ] author name
-- [ ] author email
-- [ ] author time
-- [ ] committer time
-- [ ] commit message subject
+- [x] commit SHA
+- [x] parent SHA(s)
+- [x] author name
+- [x] author email
+- [x] author time
+- [x] committer time
+- [x] commit message subject
 - [ ] full message later
 - [ ] branch/ref used during indexing
-- [ ] normalized timestamps
-- [ ] canonical repo-relative commit identity
+- [x] normalized timestamps
+- [x] canonical repo-relative commit identity
 
 Status command:
 
-- [ ] implement `atlas history status`
-- [ ] report indexed commit count
-- [ ] report latest indexed commit
-- [ ] report snapshot count
-- [ ] report shallow clone or missing ref warnings
+- [x] implement `atlas history status`
+- [x] report indexed commit count
+- [x] report latest indexed commit
+- [x] report snapshot count
+- [x] report shallow clone or missing ref warnings
 
 Tests:
 
-- [ ] commit metadata stored correctly
-- [ ] deterministic parsing of git metadata
-- [ ] missing refs produce clear error
+- [x] commit metadata stored correctly
+- [x] deterministic parsing of git metadata
+- [x] missing refs produce clear error
 
 Safeguards:
 
-- [ ] shallow clones
-- [ ] detached HEAD
-- [ ] missing refs
+- [x] shallow clones
+- [x] detached HEAD
+- [x] missing refs
 - [ ] rewritten history
 - [ ] submodules later
 

@@ -126,6 +126,7 @@ dependencies = [
  "atlas-contentstore",
  "atlas-core",
  "atlas-engine",
+ "atlas-history",
  "atlas-impact",
  "atlas-mcp",
  "atlas-parser",
@@ -210,6 +211,19 @@ dependencies = [
  "toml",
  "tracing",
  "tree-sitter",
+]
+
+[[package]]
+name = "atlas-history"
+version = "0.5.0"
+dependencies = [
+ "anyhow",
+ "atlas-store-sqlite",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tracing",
 ]
 
 [[package]]
@@ -377,6 +391,7 @@ dependencies = [
 name = "atlas-store-sqlite"
 version = "0.5.0"
 dependencies = [
+ "anyhow",
  "atlas-core",
  "atlas-repo",
  "criterion",

@@ -13,6 +13,7 @@ atlas-core.workspace = true
 atlas-adapters = { path = "../atlas-adapters" , version = "0.5.0"}
 atlas-contentstore = { path = "../atlas-contentstore" , version = "0.5.0"}
 atlas-engine.workspace = true
+atlas-history = { path = "../atlas-history", version = "0.5.0" }
 atlas-impact = { path = "../atlas-impact" , version = "0.5.0"}
 atlas-mcp.workspace = true
 atlas-parser = { path = "../atlas-parser" , version = "0.5.0"}

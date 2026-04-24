@@ -41,6 +41,7 @@ fn main() {
         Command::Communities { .. } => commands::run_communities(&cli),
         Command::Session { .. } => commands::run_session(&cli),
         Command::Hook { .. } => commands::run_hook(&cli),
+        Command::History { .. } => commands::run_history(&cli),
         Command::Version => commands::run_version(&cli),
     };
 

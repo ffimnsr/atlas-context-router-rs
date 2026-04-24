@@ -38,4 +38,8 @@ pub const MIGRATIONS: &[Migration] = &[
         version: 7,
         sql: include_str!("migrations/007_graph_build_budget_state.sql"),
     },
+    Migration {
+        version: 8,
+        sql: include_str!("migrations/008_history_tables.sql"),
+    },
 ];

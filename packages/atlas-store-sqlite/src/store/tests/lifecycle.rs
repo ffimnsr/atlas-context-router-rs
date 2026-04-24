@@ -155,6 +155,9 @@ fn migration_schema_matches_golden_layout() {
         "idx_files_owner_id".to_string(),
         "idx_communities_parent".to_string(),
         "idx_community_nodes_node_qn".to_string(),
+        "idx_commits_author_time".to_string(),
+        "idx_commits_committer_time".to_string(),
+        "idx_commits_repo_id".to_string(),
         "idx_edges_file_path".to_string(),
         "idx_edges_kind".to_string(),
         "idx_edges_source".to_string(),
@@ -162,10 +165,15 @@ fn migration_schema_matches_golden_layout() {
         "idx_flow_memberships_flow_position".to_string(),
         "idx_flow_memberships_node_qualified_name".to_string(),
         "idx_flows_kind".to_string(),
+        "idx_graph_snapshots_commit_sha".to_string(),
+        "idx_graph_snapshots_repo_id".to_string(),
         "idx_nodes_file_path".to_string(),
         "idx_nodes_kind".to_string(),
         "idx_nodes_language".to_string(),
         "idx_nodes_qualified_name".to_string(),
+        "idx_repos_root_path".to_string(),
+        "idx_snapshot_files_file_hash".to_string(),
+        "idx_snapshot_files_snapshot_id".to_string(),
     ]);
     assert_eq!(schema_indexes(&store.conn), expected_indexes);
 

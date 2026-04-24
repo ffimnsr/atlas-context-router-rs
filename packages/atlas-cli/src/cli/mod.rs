@@ -7,7 +7,8 @@ mod subcommands;
 mod tests;
 
 pub use subcommands::{
-    AnalyzeCommand, CommunitiesCommand, FlowsCommand, RefactorCommand, SessionCommand,
+    AnalyzeCommand, CommunitiesCommand, FlowsCommand, HistoryCommand, RefactorCommand,
+    SessionCommand,
 };
 
 #[derive(Debug, Parser)]
@@ -432,6 +433,12 @@ pub enum Command {
     Hook {
         /// Normalized hook event name (for example `session-start`).
         event: String,
+    },
+
+    /// Query, build, and inspect historical graph snapshots per git commit.
+    History {
+        #[command(subcommand)]
+        subcommand: HistoryCommand,
     },
 
     /// Print the CLI version and build commit hash.

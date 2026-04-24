@@ -3,6 +3,7 @@ members = [
   "packages/atlas-cli",
   "packages/atlas-core",
   "packages/atlas-engine",
+  "packages/atlas-history",
   "packages/atlas-mcp",
   "packages/atlas-refactor",
   "packages/atlas-store-sqlite",

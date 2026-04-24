@@ -1,0 +1,16 @@
+[package]
+name = "atlas-history"
+version = "0.5.0"
+edition = "2024"
+description = "Historical graph metadata ingestion and querying for Atlas"
+
+[dependencies]
+atlas-store-sqlite = { path = "../atlas-store-sqlite", version = "0.5.0" }
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+rusqlite.workspace = true
