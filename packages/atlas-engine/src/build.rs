@@ -69,6 +69,9 @@ pub fn build_graph(
 
     let mut store =
         Store::open(db_path).with_context(|| format!("cannot open database at {db_path}"))?;
+    store
+        .upsert_repo(repo_root.as_str())
+        .context("cannot register repo root for build state and history")?;
 
     for path in store
         .file_paths_with_prefix("")
@@ -414,6 +417,10 @@ mod tests {
         assert!(qnames.contains_key("lib.rs::struct::Greeter"));
         assert!(qnames.contains_key("lib.rs::method::Greeter::greet"));
         assert!(refreshed.dangling_edges(20).unwrap().is_empty());
+        assert!(
+            refreshed.find_repo_id(repo_root.to_str().unwrap()).unwrap().is_some(),
+            "full build must register repo root in repos table"
+        );
     }
 
     #[test]

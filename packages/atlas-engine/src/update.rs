@@ -161,6 +161,9 @@ pub fn update_graph(
 
     let mut store =
         Store::open(db_path).with_context(|| format!("cannot open database at {db_path}"))?;
+    store
+        .upsert_repo(repo_root.as_str())
+        .context("cannot register repo root for build state and history")?;
     let owners = discover_package_owners(repo_root).context("cannot discover package owners")?;
 
     // ── Determine which files changed ────────────────────────────────────────
@@ -701,6 +704,50 @@ mod tests {
         assert_eq!(
             summary.budget_counters.budget_stop_reason.as_deref(),
             Some("max_parse_failures")
+        );
+    }
+
+    #[test]
+    fn update_graph_registers_repo_root_for_repo_scoped_reads() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo_root = dir.path();
+
+        git(repo_root, &["init", "--quiet"]);
+        std::fs::write(repo_root.join("lib.rs"), "pub fn ok() {}\n").unwrap();
+        git(repo_root, &["add", "lib.rs"]);
+        git(repo_root, &["commit", "--quiet", "-m", "init"]);
+
+        let db_path = repo_root.join("worldtree.db");
+        build_graph(
+            Utf8Path::from_path(repo_root).unwrap(),
+            db_path.to_str().unwrap(),
+            &BuildOptions {
+                fail_fast: true,
+                batch_size: 16,
+                budget: BuildRunBudget::default(),
+            },
+        )
+        .unwrap();
+
+        std::fs::write(repo_root.join("lib.rs"), "pub fn ok() {}\npub fn later() {}\n").unwrap();
+
+        let summary = update_graph(
+            Utf8Path::from_path(repo_root).unwrap(),
+            db_path.to_str().unwrap(),
+            &UpdateOptions {
+                fail_fast: true,
+                batch_size: 16,
+                target: UpdateTarget::WorkingTree,
+                budget: BuildRunBudget::default(),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(summary.parsed, 1);
+        let store = Store::open(db_path.to_str().unwrap()).unwrap();
+        assert!(
+            store.find_repo_id(repo_root.to_str().unwrap()).unwrap().is_some(),
+            "incremental update must keep repo root registered in repos table"
         );
     }
 }

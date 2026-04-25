@@ -1,5 +1,6 @@
 # yaml-language-server: $schema=https://raw.githubusercontent.com/ffimnsr/mk-rs/main/docs/schema.json
 
+gpg_key_id: 105AF578CF730F08
 use_cargo: true
 
 tasks:
