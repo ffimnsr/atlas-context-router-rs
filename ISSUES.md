@@ -1865,6 +1865,133 @@ Why:
 
 ---
 
+### Rust Reachability Guard Patch
+
+Atlas Rust call resolution can over-report cross-file references for orphan files because `same_package` heuristics use package ownership plus simple-name matching, but do not verify crate-root module reachability. A file can be outside the compiled module tree and still accumulate inbound graph edges. `cross_file_links` then treats those heuristic edges as evidence that the file is connected.
+
+The current `resolve_same_package_target` in `atlas-engine/src/call_resolution.rs` filters candidates by `owner_id` match (Cargo package) and then optionally by same directory. Neither check requires the candidate file to be reachable from any crate root via `mod` declarations. This lets stale, deleted, or orphan files remain as resolution targets as long as they share a Cargo package.
+
+Design overview:
+
+Two complementary data structures carry the fix:
+
+1. **`CrateReachabilityIndex`** — built once per Cargo package during the parse/build phase. Stores the set of canonical file paths reachable from each crate root (lib, main, example, test, bench) within the package. Built by walking `mod` declarations in parsed ASTs rather than filesystem scanning. Lives in `atlas-engine` or `atlas-parser`; never written to `worldtree.db`.
+
+2. **`ReachabilityGuard`** — thin wrapper passed into `resolve_same_package_target` alongside the existing `Store` and owner cache. Given a `(caller_file, candidate_file)` pair, it answers `is_reachable(candidate_file, from_crate_root_of: caller_file)`. Returns `false` when the index is absent (safe default: block heuristic edge rather than assume live).
+
+Edge provenance gets one new field: `reachability_checked: bool`. When `true` and `same_package` tier is set, the candidate passed crate-root reachability. When `false`, the edge is a legacy heuristic edge emitted before the guard existed.
+
+#### Patch R1 — `CrateReachabilityIndex` model and builder
+
+- [ ] define `CrateReachabilityIndex` struct in `atlas-engine` (or `atlas-parser` if mod-walk lives there):
+  - [ ] `owner_id: String` — Cargo manifest key, matches existing `owner_id` field
+  - [ ] `crate_roots: Vec<CrateRoot>` — one entry per compiled crate target
+  - [ ] each `CrateRoot`:
+    - [ ] `root_file: CanonicalRepoPath` — e.g. `src/lib.rs`, `src/main.rs`, `examples/foo.rs`
+    - [ ] `crate_kind: CrateKind` — `Lib`, `Bin`, `Example`, `Test`, `Bench`
+    - [ ] `reachable_files: HashSet<CanonicalRepoPath>` — all files reachable via `mod` from this root
+- [ ] implement `CrateReachabilityIndex::build(owner_id, manifest_path, parsed_files)`:
+  - [ ] identify crate roots by standard Cargo layout heuristics: `src/lib.rs`, `src/main.rs`, `examples/*.rs`, `tests/*.rs`, `benches/*.rs`
+  - [ ] respect `[[bin]]`, `[[example]]`, `[[test]]`, `[[bench]]` `path` overrides from `Cargo.toml` when parsed
+  - [ ] walk `mod <name>;` declarations in each root file using already-parsed AST nodes (no re-parse)
+  - [ ] resolve sibling `mod` paths relative to declaring file using Rust module path rules (`mod foo;` → `foo.rs` or `foo/mod.rs`)
+  - [ ] recursively follow `mod` declarations up to a configurable depth cap (default: 64 levels)
+  - [ ] treat `mod foo { ... }` inline modules as transparent (they do not add a new file, all their declarations remain in the declaring file)
+  - [ ] treat unresolvable `mod` targets as absent rather than erroring out; record them in `unresolved_mods` for diagnostics
+  - [ ] all file paths stored as `CanonicalRepoPath` via `atlas_repo::CanonicalRepoPath`
+- [ ] expose `is_file_reachable(file: &CanonicalRepoPath) -> bool` helper that checks across all `CrateRoot` entries in the index
+- [ ] expose `reachable_from_same_root(caller: &CanonicalRepoPath, candidate: &CanonicalRepoPath) -> bool` — returns `true` only when both files appear in the same `CrateRoot.reachable_files` set
+- [ ] add unit tests:
+  - [ ] standard `src/lib.rs` layout with one level of `mod`
+  - [ ] nested `mod foo { mod bar; }` inline with sibling file
+  - [ ] multi-target package: lib + bin + example each have separate reachable sets
+  - [ ] orphan `.rs` file in same package directory not reachable from any crate root
+  - [ ] unresolvable `mod` target is recorded but does not panic or block other mods
+  - [ ] path identity: same file via different path strings produces one entry
+
+Why:
+- `owner_id` covers Cargo package membership, not Rust module-tree membership
+- index must be built from AST, not filesystem, to stay consistent with parsed graph facts
+
+#### Patch R2 — `ReachabilityGuard` and integration into `resolve_same_package_target`
+
+- [ ] define `ReachabilityGuard` in `atlas-engine`:
+  - [ ] wraps `HashMap<String, CrateReachabilityIndex>` keyed by `owner_id`
+  - [ ] `is_reachable_from_same_root(caller: &str, candidate: &str) -> ReachabilityResult`
+  - [ ] `ReachabilityResult` variants: `Reachable`, `Unreachable`, `IndexAbsent`
+  - [ ] treat `IndexAbsent` as non-reachable (safe default: do not emit heuristic edge without evidence)
+- [ ] build `ReachabilityGuard` once per engine build/update run, before resolution pass
+- [ ] thread `ReachabilityGuard` into `resolve_same_package_target` alongside existing `owner_cache`
+- [ ] update `resolve_same_package_target` resolution order:
+  1. filter candidates by `owner_id` (existing step — coarse package filter)
+  2. apply receiver-hint filtering (existing step — keep)
+  3. **new**: filter `same_owner_matches` to retain only candidates where `ReachabilityGuard::is_reachable_from_same_root(caller, candidate)` returns `Reachable`
+  4. apply existing same-dir tie-break on the reachability-filtered set
+  5. if reachability index is absent (`IndexAbsent`), fall back to existing behavior but mark edge with `reachability_checked: false`
+- [ ] add `reachability_checked: bool` to edge metadata or edge extra fields (stored in existing `metadata` JSON or new column)
+- [ ] add regression tests:
+  - [ ] orphan file in same Cargo package is rejected as same-package target after reachability filtering
+  - [ ] live file reachable via `mod` chain is accepted as same-package target
+  - [ ] receiver-hint still narrows candidates correctly after reachability filtering
+  - [ ] absent index falls back gracefully and does not panic
+
+Why:
+- package membership alone is too broad; reachability narrows to files the compiler actually sees
+- `IndexAbsent` fallback prevents breaking existing resolution for languages or layouts where index is not built
+
+#### Patch R3 — Edge provenance and `cross_file_links` filtering
+
+- [ ] audit `cross_file_links` query for Rust heuristic-edge false positives:
+  - [ ] identify whether `cross_file_links` joins only on edge existence or also on confidence tier
+  - [ ] determine whether filtering at read time or write time is safer given incremental update semantics
+- [ ] decide and document filter strategy:
+  - [ ] **preferred**: filter at write time — do not persist `same_package` edges for unreachable candidates; `cross_file_links` naturally sees correct graph
+  - [ ] **acceptable fallback**: filter at read time — add `reachability_checked = true` predicate to `cross_file_links` query for Rust `same_package` edges
+  - [ ] document chosen strategy in a code comment near the `cross_file_links` query
+- [ ] ensure incremental update removes stale node rows and their inbound `same_package` edges when a file is deleted
+  - [ ] verify existing node deletion cascade covers edge rows; add explicit edge cleanup if missing
+- [ ] expose edge provenance in `cross_file_links` output:
+  - [ ] add `confidence_tier` to `CrossFileLink` result struct if not already present
+  - [ ] add `reachability_checked` flag to `CrossFileLink` when available
+- [ ] add tests:
+  - [ ] orphan Rust file shows zero `cross_file_links` inbound edges after reachability-gated build
+  - [ ] deleted Rust file shows zero `cross_file_links` results after incremental refresh removes its nodes
+  - [ ] import-backed edge (`use` / `extern crate`) still appears in `cross_file_links` regardless of reachability guard
+
+Why:
+- `cross_file_links` is the user-visible surface; false-positive heuristic edges here mislead dead-code and impact analysis
+- write-time filtering is cleaner than read-time masking
+
+#### Patch R4 — Diagnostics and observability
+
+- [ ] expose reachability index stats in `atlas doctor` / `atlas db_check` output:
+  - [ ] number of Cargo packages with reachability index built
+  - [ ] number of packages where index build failed or was skipped
+  - [ ] number of unresolved `mod` targets across all packages
+  - [ ] number of `same_package` edges emitted with `reachability_checked: true` vs `false`
+- [ ] expose reachability status per file in `atlas status --json` or a dedicated debug command:
+  - [ ] file is reachable from which crate root(s)
+  - [ ] file has no reachable crate root (orphan)
+- [ ] log reachability index build failures at `warn` level with package path; do not fail the build
+- [ ] add MCP `doctor` response fields for reachability index health when data is available
+
+Why:
+- operators need to see whether the guard is active and which packages lack an index
+- silent guard absence produces the same false positives as before, so visibility is required
+
+#### Patch R completion criteria
+
+- [ ] `CrateReachabilityIndex` model exists and is built from parsed AST `mod` declarations
+- [ ] `ReachabilityGuard` wraps the index and answers caller/candidate reachability queries
+- [ ] `resolve_same_package_target` in `atlas-engine/src/call_resolution.rs` filters candidates through `ReachabilityGuard` before emitting `same_package` edges
+- [ ] `same_package` edges carry `reachability_checked` provenance
+- [ ] `cross_file_links` does not claim orphan Rust files are connected after a reachability-gated build
+- [ ] incremental refresh removes deleted-file nodes and clears their inbound edges
+- [ ] `atlas doctor` reports reachability index coverage and unresolved mod counts
+- [ ] tests cover: orphan file rejection, live file acceptance, receiver-hint interaction, absent index fallback, deleted-file cleanup, and `cross_file_links` false-positive regression
+
+---
+
 ### Context Escalation Contract Patch
 
 Atlas has compact context tools, review context, symbol lookup, neighbor tools, and wider traversal tools, but the preferred order is currently only hinted in prompts and installed instructions. Make the core agent workflow explicit: start with the smallest bounded graph context that can answer the question, then escalate only when evidence says broader context is needed.
