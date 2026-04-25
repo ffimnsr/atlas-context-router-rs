@@ -203,10 +203,36 @@ fn wait_for_daemon_ready(
 fn relay_stdio(mut stream: std::os::unix::net::UnixStream) -> Result<()> {
     use std::io::{self, Write};
     use std::net::Shutdown;
+    use std::os::fd::AsRawFd;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     let mut write_stream = stream
         .try_clone()
         .context("cannot clone broker socket stream")?;
+    let signal_stream = stream
+        .try_clone()
+        .context("cannot clone broker socket stream for shutdown")?;
+    let shutdown = Arc::new(AtomicBool::new(false));
+    let signal_shutdown = Arc::clone(&shutdown);
+    let mut signals = signal_hook::iterator::Signals::new([
+        signal_hook::consts::SIGINT,
+        signal_hook::consts::SIGTERM,
+    ])
+    .context("cannot install broker shutdown signals")?;
+    let signal_handle = signals.handle();
+    let signal_thread = std::thread::Builder::new()
+        .name("atlas-cli:broker-signal-handler".to_owned())
+        .spawn(move || {
+            if signals.forever().next().is_some() {
+                signal_shutdown.store(true, Ordering::Relaxed);
+                let _ = signal_stream.shutdown(Shutdown::Both);
+                unsafe {
+                    let _ = libc::close(libc::STDIN_FILENO);
+                }
+            }
+        })
+        .context("cannot spawn broker shutdown signal handler")?;
     let stdin_thread = std::thread::spawn(move || -> Result<()> {
         let stdin = io::stdin();
         let mut input = stdin.lock();
@@ -219,12 +245,24 @@ fn relay_stdio(mut stream: std::os::unix::net::UnixStream) -> Result<()> {
 
     let stdout = io::stdout();
     let mut output = stdout.lock();
-    io::copy(&mut stream, &mut output).context("stdout relay failed")?;
+    match io::copy(&mut stream, &mut output) {
+        Ok(_) => {}
+        Err(_error) if shutdown.load(Ordering::Relaxed) => {}
+        Err(error) => return Err(error).context("stdout relay failed"),
+    }
     output.flush().context("cannot flush broker stdout")?;
 
-    stdin_thread
-        .join()
-        .map_err(|_| anyhow::anyhow!("stdin relay thread panicked"))??;
+    match stdin_thread.join() {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) if shutdown.load(Ordering::Relaxed) => {
+            let _ = stream.shutdown(Shutdown::Both);
+            tracing::debug!(error = %error, fd = stream.as_raw_fd(), "broker stdin relay interrupted by shutdown signal");
+        }
+        Ok(Err(error)) => return Err(error),
+        Err(_) => return Err(anyhow::anyhow!("stdin relay thread panicked")),
+    }
+    signal_handle.close();
+    let _ = signal_thread.join();
     Ok(())
 }
 

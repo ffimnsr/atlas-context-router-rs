@@ -25,7 +25,7 @@ mod taxonomy;
 
 fn open_in_memory() -> Store {
     let conn = Connection::open_in_memory().unwrap();
-    Store::apply_pragmas(&conn).unwrap();
+    atlas_db_utils::apply_atlas_pragmas(&conn).unwrap();
     Store::register_regexp_udf(&conn).unwrap();
     let mut store = Store { conn };
     store.migrate().unwrap();

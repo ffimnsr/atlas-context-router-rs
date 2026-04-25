@@ -17,7 +17,9 @@ members = [
   "packages/atlas-session",
   "packages/atlas-contextsave",
   "packages/atlas-adapters",
+  "packages/atlas-db-utils",
 ]
+exclude = ["fuzz"]
 resolver = "2"
 
 [workspace.dependencies]
@@ -45,6 +47,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # SQLite
 rusqlite = { version = "0.32", features = ["bundled", "bundled-full"] }
+atlas-db-utils = { path = "packages/atlas-db-utils", version = "1.0.0" }
 
 # Tree-sitter
 tree-sitter = "0.26"
@@ -77,7 +80,6 @@ regex = { version = "1", default-features = false, features = ["std", "unicode-p
 
 # concurrency
 rayon = "1"
-hashbrown = "0.15"
 notify = "7"
 
 # internal crates

@@ -6,6 +6,7 @@ description = "Durable artifact content store for Atlas context memory integrati
 
 [dependencies]
 atlas-core.workspace = true
+atlas-db-utils.workspace = true
 atlas-repo = { path = "../atlas-repo", version = "1.0.0" }
 rusqlite.workspace = true
 serde.workspace = true

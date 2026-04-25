@@ -1992,6 +1992,149 @@ Why:
 
 ---
 
+### Fuzz Patches
+
+Atlas now has initial `cargo-fuzz` coverage for parser registry dispatch, direct language handlers, and SQLite regex UDF execution. That is a good base, but tree-sitter-heavy paths still have integration and invariant gaps. Add focused fuzz patches to cover cache lifecycle, engine update flow, parser output invariants, AST helper safety, refactor validation reuse, and seed corpora quality.
+
+#### Patch F1 — Stateful `TreeCache` incremental-reparse fuzz target
+
+- [ ] add `tree_cache_stateful` cargo-fuzz target under `fuzz/fuzz_targets/`
+- [ ] define stateful fuzz input model:
+  - [ ] sequence of operations over `TreeCache`: `parse`, `reparse_with_old_tree`, `insert`, `remove`, `evict`, `rename_key`
+  - [ ] path selector over supported parser paths (`.rs`, `.go`, `.py`, `.js`, `.ts`, `.json`, `.toml`, `.html`, `.css`, `.sh`, `.md`, `.java`, `.cs`, `.php`, `.c`, `.cpp`, `.scala`, `.rb`)
+  - [ ] source bytes per operation
+- [ ] drive real `ParserRegistry::with_defaults()` plus real `TreeCache` from `atlas-parser`
+- [ ] fuzz remove/reinsert path used by incremental update worker handoff
+- [ ] fuzz delete/rename path transitions:
+  - [ ] parse old path
+  - [ ] remove cached tree
+  - [ ] reinsert under new path
+  - [ ] evict old path
+- [ ] assert no panic when cached old tree is reused with changed bytes for same path
+- [ ] add deterministic regression test alongside `TreeCache` tests for minimal cache rename/remove round-trip discovered during fuzzing
+
+Why:
+- current fuzz targets pass `old_tree`, but do not exercise actual `TreeCache` lifecycle semantics
+- tree ownership and path-key transitions are core to safe incremental reparse
+
+#### Patch F2 — `atlas-engine` update-flow fuzz target
+
+- [ ] add `update_graph_sequence` cargo-fuzz target under `fuzz/fuzz_targets/`
+- [ ] create temp repo fixture per fuzz case with minimal `.git` init and tracked files
+- [ ] define fuzz input model:
+  - [ ] initial file set
+  - [ ] sequence of file mutations (`add`, `modify`, `delete`, `rename`)
+  - [ ] path kinds spanning supported parser extensions plus unsupported files
+  - [ ] base content bytes and mutated content bytes
+- [ ] run real `atlas_engine::update::update_graph` against temp repo and temp SQLite db
+- [ ] cover both:
+  - [ ] working-tree diff mode
+  - [ ] explicit file-list mode
+- [ ] ensure fuzz sequence exercises:
+  - [ ] old-tree reuse through `TreeCache`
+  - [ ] unsupported-file skip path
+  - [ ] deleted-file cleanup path
+  - [ ] renamed-file path
+- [ ] assert no panic and no hard error from benign malformed source in supported files
+- [ ] add targeted regression tests for any crashers found in update pipeline
+
+Why:
+- parser-only fuzz misses actual engine integration path that moves trees through work items and persistence logic
+- update flow is where tree-sitter parse reuse meets repo state and file churn
+
+#### Patch F3 — Parser output invariant fuzz target
+
+- [ ] add `parser_invariants` cargo-fuzz target under `fuzz/fuzz_targets/`
+- [ ] feed all built-in language handlers through `ParserRegistry::parse`
+- [ ] define invariant checks on returned `ParsedFile`:
+  - [ ] exactly one `file` node exists for supported parse result
+  - [ ] `ParsedFile.path` equals input relative path
+  - [ ] every node `file_path` equals input relative path
+  - [ ] every node `qualified_name` is non-empty
+  - [ ] every edge `source_qn` is non-empty
+  - [ ] every edge `target_qn` is non-empty
+  - [ ] `line_start >= 1`
+  - [ ] `line_end >= line_start`
+  - [ ] `size` matches source length when populated
+- [ ] document any intentional invariant exceptions in comments near the checks
+- [ ] add optional duplicate-qualified-name detector:
+  - [ ] fail only if duplicate QNs are invalid for that language/model
+  - [ ] otherwise record as advisory and do not assert
+- [ ] add regression tests for each new invariant that catches a real bug found by fuzzing
+
+Why:
+- current fuzz verifies “no crash” only
+- malformed tree-sitter outputs can still silently create invalid graph state
+
+#### Patch F4 — AST helper safety fuzz target
+
+- [ ] add `ast_helpers_walk` cargo-fuzz target under `fuzz/fuzz_targets/`
+- [ ] parse fuzz bytes with each built-in language grammar
+- [ ] if parse returns a tree:
+  - [ ] walk all nodes recursively
+  - [ ] call `node_text`, `start_line`, `end_line`, and `has_ancestor_kind` on each node
+  - [ ] call `field_text` across a bounded list of common field names (`name`, `parameters`, `return_type`, `body`, `value`, `type`, `result`, `object`, `function`)
+  - [ ] call `find_all` for bounded common kinds relevant to each grammar
+- [ ] assert helpers never panic on malformed parse trees or invalid UTF-8 source bytes
+- [ ] add direct unit tests in `ast_helpers.rs` for any helper edge case discovered by fuzzing
+
+Why:
+- helper panics would affect every language parser
+- current language-handler fuzz only covers helper usage that happens to be reached by parser-specific traversal
+
+#### Patch F5 — Refactor validation parser-reuse fuzz target
+
+- [ ] add `refactor_parse_validation` cargo-fuzz target under `fuzz/fuzz_targets/`
+- [ ] expose minimal public or test-only harness in `atlas-refactor` for `parse_file_content` path without requiring full refactor scenario setup
+- [ ] define fuzz input model:
+  - [ ] file path
+  - [ ] content bytes
+  - [ ] supported and unsupported file extensions
+- [ ] run parser revalidation path used by refactor engine
+- [ ] assert behavior stays bounded:
+  - [ ] unsupported files return `None`
+  - [ ] empty files do not panic
+  - [ ] malformed supported-language content does not panic
+  - [ ] validation warnings/errors remain UTF-8 safe
+- [ ] add regression tests for any parser-validation crash discovered
+
+Why:
+- refactor engine reuses parser stack through a different caller path with different assumptions about content and file support
+- parser safety should cover both graph build and refactor validation paths
+
+#### Patch F6 — Seed corpus and dictionary patch
+
+- [ ] add initial corpora under `fuzz/corpus/` for all parser-centric targets
+- [ ] seed `parser_handlers`, `language_parsers`, `tree_cache_stateful`, `parser_invariants`, and `ast_helpers_walk` from existing parser fixtures:
+  - [ ] `packages/atlas-parser/tests/fixtures/*/core.*`
+  - [ ] `packages/atlas-parser/tests/fixtures/*/bad_syntax.*`
+- [ ] add regex corpus for `regex_sql_udf`:
+  - [ ] literals
+  - [ ] anchors
+  - [ ] alternation
+  - [ ] character classes
+  - [ ] invalid patterns
+  - [ ] Unicode-heavy samples
+- [ ] add optional `regex.dict` with common regex metacharacters and flags
+- [ ] add `README` commands for refreshing corpora from fixture files
+- [ ] document nightly/toolchain and `cargo fuzz` setup in `fuzz/README.md`
+
+Why:
+- harnesses without corpora start colder and discover structural paths more slowly
+- existing parser fixtures already provide valid and invalid syntax seeds across languages
+
+#### Patch F completion criteria
+
+- [ ] `tree_cache_stateful` fuzzes real `TreeCache` lifecycle operations with parser reuse
+- [ ] `update_graph_sequence` fuzzes `atlas-engine` incremental update flow on temp repos
+- [ ] `parser_invariants` asserts graph-shape invariants for every built-in language parser
+- [ ] `ast_helpers_walk` stress-tests `ast_helpers` against arbitrary parse trees and byte input
+- [ ] `refactor_parse_validation` fuzzes parser reuse through `atlas-refactor`
+- [ ] corpora exist under `fuzz/corpus/` and seed parser and regex targets from real fixtures
+- [ ] every new fuzz-discovered crash adds a deterministic regression test near affected code
+
+---
+
 ### Context Escalation Contract Patch
 
 Atlas has compact context tools, review context, symbol lookup, neighbor tools, and wider traversal tools, but the preferred order is currently only hinted in prompts and installed instructions. Make the core agent workflow explicit: start with the smallest bounded graph context that can answer the question, then escalate only when evidence says broader context is needed.

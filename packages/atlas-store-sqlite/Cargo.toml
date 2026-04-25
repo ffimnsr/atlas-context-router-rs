@@ -6,6 +6,7 @@ description = "SQLite graph store and migrations for Atlas code graph persistenc
 
 [dependencies]
 atlas-core.workspace = true
+atlas-db-utils.workspace = true
 atlas-repo = { path = "../atlas-repo", version = "1.0.0" }
 anyhow.workspace = true
 rusqlite.workspace = true

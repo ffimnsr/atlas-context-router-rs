@@ -7,6 +7,7 @@ use serde_json::Value;
 use tracing::info;
 
 use atlas_core::{AtlasError, Result};
+use atlas_db_utils::{application_id, apply_atlas_pragmas, set_application_id, set_user_version};
 
 use crate::SessionId;
 use crate::migrations::MIGRATIONS;
@@ -75,24 +76,10 @@ impl SessionStore {
         .map_err(|e| AtlasError::Db(e.to_string()))?;
 
         let mut store = Self { conn, config };
-        store.apply_pragmas()?;
+        apply_atlas_pragmas(&store.conn)?;
+        set_application_id(&store.conn, application_id::SESSION)?;
         store.migrate()?;
         Ok(store)
-    }
-
-    fn apply_pragmas(&self) -> Result<()> {
-        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
-        for sql in &[
-            "PRAGMA journal_mode=WAL",
-            "PRAGMA synchronous=NORMAL",
-            "PRAGMA foreign_keys=ON",
-            "PRAGMA busy_timeout=5000",
-        ] {
-            let mut stmt = self.conn.prepare(sql).map_err(db_err)?;
-            let mut rows = stmt.query([]).map_err(db_err)?;
-            while rows.next().map_err(db_err)?.is_some() {}
-        }
-        Ok(())
     }
 
     pub fn migrate(&mut self) -> Result<()> {
@@ -130,6 +117,15 @@ impl SessionStore {
                 .map_err(|e| AtlasError::Db(e.to_string()))?;
         }
 
+        let applied: i32 = self
+            .conn
+            .query_row(
+                "SELECT CAST(value AS INTEGER) FROM metadata WHERE key = 'schema_version'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        set_user_version(&self.conn, applied)?;
         Ok(())
     }
 

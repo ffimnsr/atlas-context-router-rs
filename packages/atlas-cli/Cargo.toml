@@ -38,8 +38,12 @@ tracing-subscriber.workspace = true
 fs2 = "0.4"
 indicatif = "0.17"
 libc = "0.2"
+signal-hook = "0.3"
 sha2.workspace = true
 
 [dev-dependencies]
 rusqlite.workspace = true
 tempfile = "3"
+
+[build-dependencies]
+time = { workspace = true, features = ["formatting"] }

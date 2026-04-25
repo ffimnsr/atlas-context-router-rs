@@ -12,7 +12,11 @@ pub use subcommands::{
 };
 
 #[derive(Debug, Parser)]
-#[command(name = "atlas", about = "Atlas code graph CLI")]
+#[command(
+    name = "atlas",
+    about = "Atlas code graph CLI",
+    version = env!("ATLAS_LONG_VERSION")
+)]
 pub struct Cli {
     /// Path to the repository root (default: auto-detect from cwd).
     #[arg(long, global = true)]
@@ -457,6 +461,6 @@ pub enum Command {
         subcommand: HistoryCommand,
     },
 
-    /// Print the CLI version and build commit hash.
+    /// Print CLI version, build commit hash, and build date.
     Version,
 }

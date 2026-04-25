@@ -6,6 +6,7 @@ description = "Session identity, event ledger, and resume snapshots for Atlas co
 
 [dependencies]
 atlas-core.workspace = true
+atlas-db-utils.workspace = true
 atlas-repo = { path = "../atlas-repo" , version = "1.0.0"}
 camino.workspace = true
 rusqlite.workspace = true

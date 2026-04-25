@@ -1,4 +1,5 @@
 use atlas_core::{AtlasError, GraphStats, Node, Result};
+use atlas_db_utils::{application_id, apply_atlas_pragmas, set_application_id, set_user_version};
 use atlas_repo::CanonicalRepoPath;
 use rusqlite::{Connection, OpenFlags, params};
 use tracing::{debug, info};
@@ -19,30 +20,13 @@ impl Store {
         )
         .map_err(|e| AtlasError::Db(e.to_string()))?;
 
-        Self::apply_pragmas(&conn)?;
+        apply_atlas_pragmas(&conn)?;
+        set_application_id(&conn, application_id::WORLDTREE)?;
         Self::register_regexp_udf(&conn)?;
 
         let mut store = Self { conn };
         store.migrate()?;
         Ok(store)
-    }
-
-    pub(super) fn apply_pragmas(conn: &Connection) -> Result<()> {
-        // Pragmas in SQLite may or may not return result rows depending on the
-        // pragma and the SQLite version. Prepare + drain rows so we never hit
-        // the "Execute returned results" error from rusqlite's execute_batch.
-        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
-        for sql in &[
-            "PRAGMA journal_mode=WAL",
-            "PRAGMA synchronous=NORMAL",
-            "PRAGMA foreign_keys=ON",
-            "PRAGMA busy_timeout=5000",
-        ] {
-            let mut stmt = conn.prepare(sql).map_err(db_err)?;
-            let mut rows = stmt.query([]).map_err(db_err)?;
-            while rows.next().map_err(db_err)?.is_some() {}
-        }
-        Ok(())
     }
 
     /// Register a permanent two-arg `atlas_regexp(pattern, value)` UDF on `conn`.
@@ -87,6 +71,19 @@ impl Store {
         .map_err(|e| AtlasError::Db(e.to_string()))
     }
 
+    /// Execute the same SQLite-backed regex UDF path used by query-time
+    /// structural scans and regex post-filters.
+    pub fn eval_regexp_udf(pattern: &str, value: &str) -> Result<bool> {
+        let conn = Connection::open_in_memory().map_err(|e| AtlasError::Db(e.to_string()))?;
+        Self::register_regexp_udf(&conn)?;
+        conn.query_row(
+            "SELECT atlas_regexp(?1, ?2)",
+            params![pattern, value],
+            |row| row.get(0),
+        )
+        .map_err(|e| AtlasError::Db(e.to_string()))
+    }
+
     /// Apply any migrations that have not yet been applied to this database.
     pub fn migrate(&mut self) -> Result<()> {
         // Bootstrap the metadata table so we can store schema_version.
@@ -125,6 +122,17 @@ impl Store {
                 )
                 .map_err(|e| AtlasError::Db(e.to_string()))?;
         }
+        // Keep PRAGMA user_version in sync with the metadata schema_version so
+        // `sqlite3 worldtree.db "PRAGMA user_version"` returns the live version.
+        let applied: i32 = self
+            .conn
+            .query_row(
+                "SELECT CAST(value AS INTEGER) FROM metadata WHERE key = 'schema_version'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        set_user_version(&self.conn, applied)?;
         Ok(())
     }
 

@@ -78,6 +78,54 @@ cargo install --path packages/atlas-cli
 cargo run -p atlas-cli -- --help
 ```
 
+### Build container image
+
+Build the multi-stage container image from the repository root:
+
+```bash
+podman build -f Containerfile -t atlas .
+```
+
+Docker works as well:
+
+```bash
+docker build -f Containerfile -t atlas .
+```
+
+The default builder and runtime images in [Containerfile](Containerfile) are pinned to immutable Chainguard digests.
+Override them explicitly if you need newer base images during maintenance:
+
+```bash
+podman build \
+  --build-arg RUST_IMAGE=cgr.dev/chainguard/rust:latest-dev \
+  --build-arg GIT_RUNTIME_IMAGE=cgr.dev/chainguard/git:latest-glibc \
+  -f Containerfile \
+  -t atlas .
+```
+
+Refresh the pinned digests in [Containerfile](Containerfile) to the latest upstream tags:
+
+```bash
+scripts/update-containerfile-images.sh
+```
+
+Preview the resolved references without editing files:
+
+```bash
+scripts/update-containerfile-images.sh --dry-run
+```
+
+Run Atlas against the current repository by mounting the workspace into the container:
+
+```bash
+podman run --rm -it \
+  -v "$PWD":/work \
+  -w /work \
+  atlas status
+```
+
+Atlas shells out to `git`, so the runtime stage uses a minimal Git-capable base image instead of a shell-free static runtime.
+
 ## Quick Start
 
 Inside any git repository:
@@ -125,6 +173,22 @@ graph context:
 Use `grep` or `rg` for raw text search. Use Atlas when caller/callee links,
 impact, review context, or MCP token budget matter more than the fastest line
 scan.
+
+## Project Policy and Maintenance
+
+Repository workflow and support docs live at the root:
+
+- [CONTRIBUTING.md](CONTRIBUTING.md)
+- [SECURITY.md](SECURITY.md)
+- [SUPPORT.md](SUPPORT.md)
+- [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
+- [CHANGELOG.md](CHANGELOG.md)
+
+GitHub triage defaults also live in `.github/`:
+
+- `.github/CODEOWNERS`
+- `.github/PULL_REQUEST_TEMPLATE.md`
+- `.github/ISSUE_TEMPLATE/`
 
 ## LLM Agent Setup
 

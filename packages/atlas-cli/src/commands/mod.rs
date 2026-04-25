@@ -25,16 +25,32 @@ pub use query::{run_embed, run_explain_query, run_query};
 pub use reasoning::{run_analyze, run_refactor};
 pub use session::run_session;
 
+pub(crate) const VERSION: &str = env!("CARGO_PKG_VERSION");
+pub(crate) const GIT_HASH: &str = env!("GIT_HASH");
+pub(crate) const GIT_COMMIT_DATE: &str = env!("GIT_COMMIT_DATE");
+pub(crate) const GIT_DIRTY: &str = env!("GIT_DIRTY");
+pub(crate) const CARGO_PROFILE: &str = env!("CARGO_PROFILE");
+pub(crate) const RUSTC_VERSION: &str = env!("RUSTC_VERSION");
+pub(crate) const BUILD_DATE: &str = env!("BUILD_DATE");
+pub(crate) const LONG_VERSION: &str = env!("ATLAS_LONG_VERSION");
+
 pub fn run_version(cli: &Cli) -> Result<()> {
-    const VERSION: &str = env!("CARGO_PKG_VERSION");
-    const GIT_HASH: &str = env!("GIT_HASH");
     if cli.json {
         print_json(
             "version",
-            serde_json::json!({ "version": VERSION, "git_hash": GIT_HASH }),
+            serde_json::json!({
+                "version": VERSION,
+                "git_hash": GIT_HASH,
+                "git_commit_date": GIT_COMMIT_DATE,
+                "git_dirty": GIT_DIRTY == "true",
+                "cargo_profile": CARGO_PROFILE,
+                "rustc_version": RUSTC_VERSION,
+                "build_date": BUILD_DATE,
+                "long_version": LONG_VERSION
+            }),
         )
     } else {
-        println!("atlas {VERSION} ({GIT_HASH})");
+        println!("atlas {LONG_VERSION}");
         Ok(())
     }
 }

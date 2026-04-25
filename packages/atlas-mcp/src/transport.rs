@@ -21,7 +21,15 @@ use serde::{Deserialize, Serialize};
 use crate::{prompts, tools};
 
 #[cfg(unix)]
+use std::net::Shutdown;
+#[cfg(unix)]
+use std::os::fd::AsRawFd;
+#[cfg(unix)]
 use std::os::unix::net::{UnixListener, UnixStream};
+#[cfg(unix)]
+use std::sync::Mutex;
+#[cfg(unix)]
+use std::sync::atomic::AtomicBool;
 
 const MCP_WORKER_THREADS_ENV: &str = "ATLAS_MCP_WORKER_THREADS";
 const MCP_TOOL_TIMEOUT_MS_ENV: &str = "ATLAS_MCP_TOOL_TIMEOUT_MS";
@@ -65,6 +73,8 @@ pub fn run_server_with_options(
     let stdout = std::io::stdout();
     let reader = BufReader::new(stdin);
     let mut writer = std::io::BufWriter::new(stdout.lock());
+    #[cfg(unix)]
+    let _shutdown_guard = install_stdio_shutdown_handler()?;
 
     run_server_io(reader, &mut writer, repo_root, db_path, options)
 }
@@ -87,27 +97,53 @@ pub fn run_socket_server_with_options(
 
     let listener = UnixListener::bind(socket_path)
         .with_context(|| format!("cannot bind {}", socket_path.display()))?;
+    listener
+        .set_nonblocking(true)
+        .with_context(|| format!("cannot set nonblocking {}", socket_path.display()))?;
     let worker_pool = Arc::new(WorkerPool::from_env("atlas-mcp:tool-worker", options)?);
     let next_connection = AtomicUsize::new(0);
+    let shutdown = Arc::new(AtomicBool::new(false));
+    let active_streams = Arc::new(Mutex::new(Vec::<UnixStream>::new()));
+    let _shutdown_guard =
+        install_socket_shutdown_handler(Arc::clone(&shutdown), Arc::clone(&active_streams))?;
 
     eprintln!(
         "atlas-mcp: daemon ready (repo={repo_root}, db={db_path}, socket={})",
         socket_path.display()
     );
 
-    for stream in listener.incoming() {
-        let stream = stream
-            .with_context(|| format!("cannot accept connection on {}", socket_path.display()))?;
+    while !shutdown.load(Ordering::Relaxed) {
+        let stream = match listener.accept() {
+            Ok((stream, _addr)) => stream,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                thread::sleep(Duration::from_millis(25));
+                continue;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_error) if shutdown.load(Ordering::Relaxed) => break,
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!("cannot accept connection on {}", socket_path.display())
+                });
+            }
+        };
         let repo_root = repo_root.to_owned();
         let db_path = db_path.to_owned();
         let worker_pool = Arc::clone(&worker_pool);
+        let active_streams = Arc::clone(&active_streams);
         let connection_id = next_connection.fetch_add(1, Ordering::Relaxed) + 1;
         let thread_name = format!("atlas-mcp:daemon-client-{connection_id}");
         let log_thread_name = thread_name.clone();
         thread::Builder::new()
             .name(thread_name.clone())
             .spawn(move || {
-                if let Err(error) = serve_socket_connection(stream, &repo_root, &db_path, worker_pool) {
+                if let Err(error) = serve_socket_connection(
+                    stream,
+                    &repo_root,
+                    &db_path,
+                    worker_pool,
+                    active_streams,
+                ) {
                     tracing::warn!(error = %error, client = %log_thread_name, "daemon client failed");
                 }
             })
@@ -169,7 +205,17 @@ fn serve_socket_connection(
     repo_root: &str,
     db_path: &str,
     worker_pool: Arc<WorkerPool>,
+    active_streams: Arc<Mutex<Vec<UnixStream>>>,
 ) -> Result<()> {
+    let registered_stream = stream
+        .try_clone()
+        .context("cannot clone daemon stream for shutdown")?;
+    let registered_fd = registered_stream.as_raw_fd();
+    active_streams
+        .lock()
+        .expect("active daemon streams lock poisoned")
+        .push(registered_stream);
+    let _stream_guard = ActiveStreamGuard::new(registered_fd, active_streams);
     let reader_stream = stream.try_clone().context("cannot clone daemon stream")?;
     let mut reader = BufReader::new(reader_stream);
     let mut writer = std::io::BufWriter::new(stream);
@@ -742,6 +788,90 @@ enum WorkerMessage {
     Shutdown,
 }
 
+#[cfg(unix)]
+struct ShutdownHandlerGuard(signal_hook::iterator::Handle);
+
+#[cfg(unix)]
+impl Drop for ShutdownHandlerGuard {
+    fn drop(&mut self) {
+        self.0.close();
+    }
+}
+
+#[cfg(unix)]
+fn install_stdio_shutdown_handler() -> Result<ShutdownHandlerGuard> {
+    spawn_signal_handler(move || unsafe {
+        let _ = libc::close(libc::STDIN_FILENO);
+    })
+}
+
+#[cfg(unix)]
+fn install_socket_shutdown_handler(
+    shutdown: Arc<AtomicBool>,
+    active_streams: Arc<Mutex<Vec<UnixStream>>>,
+) -> Result<ShutdownHandlerGuard> {
+    spawn_signal_handler(move || {
+        shutdown.store(true, Ordering::Relaxed);
+        let streams = active_streams
+            .lock()
+            .expect("active daemon streams lock poisoned");
+        for stream in streams.iter() {
+            let _ = stream.shutdown(Shutdown::Both);
+        }
+    })
+}
+
+#[cfg(unix)]
+fn spawn_signal_handler(action: impl Fn() + Send + 'static) -> Result<ShutdownHandlerGuard> {
+    let mut signals = signal_hook::iterator::Signals::new([
+        signal_hook::consts::SIGINT,
+        signal_hook::consts::SIGTERM,
+    ])
+    .context("cannot register shutdown signals")?;
+    let handle = signals.handle();
+    thread::Builder::new()
+        .name("atlas-mcp:signal-handler".to_owned())
+        .spawn(move || {
+            if signals.forever().next().is_some() {
+                action();
+            }
+        })
+        .context("cannot spawn shutdown signal handler")?;
+    Ok(ShutdownHandlerGuard(handle))
+}
+
+#[cfg(unix)]
+struct ActiveStreamGuard {
+    raw_fd: i32,
+    active_streams: Arc<Mutex<Vec<UnixStream>>>,
+}
+
+#[cfg(unix)]
+impl ActiveStreamGuard {
+    fn new(raw_fd: i32, active_streams: Arc<Mutex<Vec<UnixStream>>>) -> Self {
+        Self {
+            raw_fd,
+            active_streams,
+        }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for ActiveStreamGuard {
+    fn drop(&mut self) {
+        let mut streams = self
+            .active_streams
+            .lock()
+            .expect("active daemon streams lock poisoned");
+        if let Some(index) = streams
+            .iter()
+            .position(|stream| stream.as_raw_fd() == self.raw_fd)
+        {
+            streams.swap_remove(index);
+        }
+    }
+}
+
 struct WorkerPool {
     thread_name_prefix: String,
     timeout: Duration,
@@ -1256,10 +1386,17 @@ mod tests {
             WorkerPool::new("atlas-mcp:socket-test", 2, Duration::from_secs(1))
                 .expect("spawn workers"),
         );
+        let active_streams = Arc::new(Mutex::new(Vec::new()));
         let db_path = fixture.db_path.clone();
         let expected_db_path = fixture.db_path.clone();
         let server = std::thread::spawn(move || {
-            serve_socket_connection(server_stream, "/repo", &db_path, worker_pool)
+            serve_socket_connection(
+                server_stream,
+                "/repo",
+                &db_path,
+                worker_pool,
+                active_streams,
+            )
         });
 
         writeln!(
@@ -1347,9 +1484,16 @@ mod tests {
             WorkerPool::new("atlas-mcp:socket-test", 1, Duration::from_secs(1))
                 .expect("spawn workers"),
         );
+        let active_streams = Arc::new(Mutex::new(Vec::new()));
         let db_path = fixture.db_path.clone();
         let server = std::thread::spawn(move || {
-            serve_socket_connection(server_stream, "/repo", &db_path, worker_pool)
+            serve_socket_connection(
+                server_stream,
+                "/repo",
+                &db_path,
+                worker_pool,
+                active_streams,
+            )
         });
 
         writeln!(

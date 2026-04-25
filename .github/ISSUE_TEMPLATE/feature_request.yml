@@ -1,0 +1,43 @@
+name: Feature request
+description: Propose a new capability or workflow improvement.
+title: "feat: "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or workflow gap
+      placeholder: What workflow is blocked or too costly today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      placeholder: Describe desired behavior, flags, output, or API shape.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      placeholder: Existing commands, scripts, or workarounds you tried.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - CLI
+        - MCP
+        - graph build/update
+        - review/impact/context
+        - session or saved context
+        - docs or install flow
+    validations:
+      required: true
+  - type: textarea
+    id: constraints
+    attributes:
+      label: Constraints or non-goals
+      placeholder: Performance, compatibility, repo-size, or UX limits.

@@ -1,0 +1,16 @@
+.atlas/
+.git/
+.github/
+.idea/
+.vscode/
+
+target/
+**/target/
+
+coverage/
+tmp/
+
+*.log
+*.swp
+.DS_Store
+Thumbs.db

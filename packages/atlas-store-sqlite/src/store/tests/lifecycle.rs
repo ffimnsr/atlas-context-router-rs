@@ -287,6 +287,8 @@ fn migration_schema_matches_golden_layout() {
         "idx_nodes_kind".to_string(),
         "idx_nodes_language".to_string(),
         "idx_nodes_qualified_name".to_string(),
+        "idx_postprocess_state_state".to_string(),
+        "idx_postprocess_state_updated_at_ms".to_string(),
         "idx_repos_root_path".to_string(),
         "idx_snapshot_edges_file_hash".to_string(),
         "idx_snapshot_edges_snapshot_id".to_string(),
@@ -345,7 +347,7 @@ fn wal_mode_enabled_on_file_db() {
     let dir = tempfile::tempdir().unwrap();
     let db_path = dir.path().join("test.sqlite");
     let conn = Connection::open(&db_path).unwrap();
-    Store::apply_pragmas(&conn).unwrap();
+    atlas_db_utils::apply_atlas_pragmas(&conn).unwrap();
     let mode: String = conn
         .query_row("PRAGMA journal_mode", [], |r| r.get(0))
         .unwrap();

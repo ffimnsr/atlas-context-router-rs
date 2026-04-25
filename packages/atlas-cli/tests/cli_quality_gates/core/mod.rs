@@ -15,6 +15,7 @@ mod query;
 mod review;
 mod session;
 mod serve;
+mod version;
 mod worktree;
 
 fn run_installed_hook(repo_root: &Path, frontend: &str, event: &str, payload: &str) {

@@ -4,16 +4,33 @@ mod commands;
 mod install;
 mod logging;
 mod mcp_instance;
+mod panic_hook;
 
 use atlas_core::user_facing_error_message;
 use clap::Parser;
 use cli::{Cli, Command};
 
 fn main() {
+    panic_hook::install();
+
+    match std::panic::catch_unwind(run_cli) {
+        Ok(Ok(())) => {}
+        Ok(Err(err)) => {
+            eprintln!(
+                "error: {}",
+                user_facing_error_message(&err.to_string(), &format!("{err:#}"))
+            );
+            std::process::exit(1);
+        }
+        Err(_) => std::process::exit(1),
+    }
+}
+
+fn run_cli() -> anyhow::Result<()> {
     let cli = Cli::parse();
     logging::init(cli.verbose);
 
-    let result = match &cli.command {
+    match &cli.command {
         Command::Init => commands::run_init(&cli),
         Command::Build { .. } => commands::run_build(&cli),
         Command::Update { .. } => commands::run_update(&cli),
@@ -45,13 +62,5 @@ fn main() {
         Command::Hook { .. } => commands::run_hook(&cli),
         Command::History { .. } => commands::run_history(&cli),
         Command::Version => commands::run_version(&cli),
-    };
-
-    if let Err(err) = result {
-        eprintln!(
-            "error: {}",
-            user_facing_error_message(&err.to_string(), &format!("{err:#}"))
-        );
-        std::process::exit(1);
     }
 }

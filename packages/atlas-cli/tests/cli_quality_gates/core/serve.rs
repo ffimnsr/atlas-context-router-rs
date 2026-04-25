@@ -208,3 +208,47 @@ fn broker_recovers_after_dead_daemon_pid() {
 
     cleanup_mcp_daemons(repo.path());
 }
+
+#[test]
+fn serve_daemon_clears_runtime_state_on_sigterm() {
+    let repo = setup_fixture_repo();
+
+    run_atlas(repo.path(), &["init"]);
+    run_atlas(repo.path(), &["build"]);
+
+    let child = spawn_command(repo.path(), env!("CARGO_BIN_EXE_atlas"), &["serve-daemon"]);
+    wait_until(Duration::from_secs(3), || !list_mcp_instance_metadata(repo.path()).is_empty());
+
+    send_signal(child.id(), libc::SIGTERM);
+    let output = child.wait_with_output().expect("wait for serve-daemon");
+    assert!(
+        output.status.success(),
+        "serve-daemon should exit cleanly on SIGTERM\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    wait_until(Duration::from_secs(3), || list_mcp_instance_metadata(repo.path()).is_empty());
+}
+
+#[test]
+fn serve_broker_exits_cleanly_on_sigint() {
+    let repo = setup_fixture_repo();
+
+    run_atlas(repo.path(), &["init"]);
+    run_atlas(repo.path(), &["build"]);
+
+    let child = spawn_command(repo.path(), env!("CARGO_BIN_EXE_atlas"), &["serve"]);
+    wait_until(Duration::from_secs(3), || !list_mcp_instance_metadata(repo.path()).is_empty());
+    std::thread::sleep(Duration::from_millis(250));
+
+    send_signal(child.id(), libc::SIGINT);
+    let output = child.wait_with_output().expect("wait for serve broker");
+    assert!(
+        output.status.success(),
+        "serve broker should exit cleanly on SIGINT\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    cleanup_mcp_daemons(repo.path());
+}

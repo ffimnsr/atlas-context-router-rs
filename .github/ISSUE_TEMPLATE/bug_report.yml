@@ -1,0 +1,64 @@
+name: Bug report
+description: Report a defect or regression in Atlas CLI, MCP, graph build, or context flows.
+title: "bug: "
+labels:
+  - bug
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What is wrong?
+      placeholder: Clear description of observed problem.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction
+      description: Commands, repo state, and exact steps.
+      placeholder: |
+        1. Run ...
+        2. Run ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior and logs
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Atlas version or commit
+      placeholder: main@<sha> or release tag
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - CLI
+        - MCP
+        - graph build/update
+        - search/context/review
+        - SQLite storage
+        - install or release tooling
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      placeholder: OS, shell, Rust toolchain, repo shape
+    validations:
+      required: true

@@ -499,6 +499,27 @@ fn run_command(repo_root: &Path, program: &str, args: &[&str]) -> Output {
     output
 }
 
+fn spawn_command(repo_root: &Path, program: &str, args: &[&str]) -> Child {
+    sanitized_command(program)
+        .args(args)
+        .current_dir(repo_root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap_or_else(|err| panic!("failed to spawn {program} {:?}: {err}", args))
+}
+
+fn send_signal(pid: u32, signal: i32) {
+    let result = unsafe { libc::kill(pid as i32, signal) };
+    assert_eq!(
+        result,
+        0,
+        "failed to send signal {signal} to pid {pid}: {}",
+        std::io::Error::last_os_error()
+    );
+}
+
 struct SpawnedWatch {
     child: Child,
     stdout_rx: mpsc::Receiver<String>,

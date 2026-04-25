@@ -138,6 +138,17 @@ fn regex_matches_name() {
 }
 
 #[test]
+fn regex_udf_eval_exercises_query_udf_path() {
+    assert!(Store::eval_regexp_udf(r"foo\d+", "foo42").unwrap());
+
+    let err = Store::eval_regexp_udf("(", "foo42").unwrap_err();
+    assert!(
+        err.to_string().contains("regex parse error"),
+        "expected regex parse error, got: {err}"
+    );
+}
+
+#[test]
 fn regex_matches_qualified_name() {
     let mut store = open_in_memory();
     let f1 = make_node(
