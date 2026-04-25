@@ -3,6 +3,7 @@ name = "atlas-mcp"
 version = "1.0.0"
 edition = "2024"
 description = "MCP server exposing Atlas graph, impact, and review tools over stdio"
+publish = false
 
 [dependencies]
 atlas-core.workspace = true
@@ -36,3 +37,6 @@ grep-regex = "0.1.14"
 rusqlite.workspace = true
 tempfile = "3"
 tiktoken-rs = "0.6"
+
+[lints]
+workspace = true

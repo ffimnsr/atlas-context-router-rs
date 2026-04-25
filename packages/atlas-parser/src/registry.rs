@@ -21,6 +21,7 @@ use crate::lang::{
 };
 use crate::traits::{LangParser, ParseContext};
 use atlas_core::ParsedFile;
+use atlas_repo::DEFAULT_MAX_FILE_BYTES;
 
 /// Central registry that resolves a [`LangParser`] for a given file path.
 pub struct ParserRegistry {
@@ -79,6 +80,15 @@ impl ParserRegistry {
         source: &[u8],
         old_tree: Option<&tree_sitter::Tree>,
     ) -> Option<(ParsedFile, Option<tree_sitter::Tree>)> {
+        if source.len() > DEFAULT_MAX_FILE_BYTES as usize {
+            tracing::warn!(
+                path = rel_path,
+                size_bytes = source.len(),
+                max_bytes = DEFAULT_MAX_FILE_BYTES,
+                "skipping parse: file exceeds parser byte cap"
+            );
+            return None;
+        }
         let handler = self.handler_for(rel_path)?;
         let ctx = ParseContext {
             rel_path,
@@ -111,6 +121,32 @@ impl ParserRegistry {
 mod tests {
     use super::*;
 
+    fn bundled_grammars() -> Vec<(&'static str, tree_sitter::Language)> {
+        vec![
+            ("bash", tree_sitter_bash::LANGUAGE.into()),
+            ("c", tree_sitter_c::LANGUAGE.into()),
+            ("cpp", tree_sitter_cpp::LANGUAGE.into()),
+            ("csharp", tree_sitter_c_sharp::LANGUAGE.into()),
+            ("css", tree_sitter_css::LANGUAGE.into()),
+            ("go", tree_sitter_go::LANGUAGE.into()),
+            ("html", tree_sitter_html::LANGUAGE.into()),
+            ("java", tree_sitter_java::LANGUAGE.into()),
+            ("javascript", tree_sitter_javascript::LANGUAGE.into()),
+            ("json", tree_sitter_json::LANGUAGE.into()),
+            ("markdown", tree_sitter_md::LANGUAGE.into()),
+            ("php", tree_sitter_php::LANGUAGE_PHP.into()),
+            ("python", tree_sitter_python::LANGUAGE.into()),
+            ("ruby", tree_sitter_ruby::LANGUAGE.into()),
+            ("rust", tree_sitter_rust::LANGUAGE.into()),
+            ("scala", tree_sitter_scala::LANGUAGE.into()),
+            (
+                "typescript",
+                tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+            ),
+            ("tsx", tree_sitter_typescript::LANGUAGE_TSX.into()),
+        ]
+    }
+
     #[test]
     fn registry_supports_rust_and_go() {
         let reg = ParserRegistry::with_defaults();
@@ -134,5 +170,32 @@ mod tests {
         assert!(reg.supports("src/Main.scala"));
         assert!(reg.supports("lib/app.rb"));
         assert!(!reg.supports("config.yaml"));
+    }
+
+    #[test]
+    fn bundled_grammars_match_runtime_abi() {
+        for (name, language) in bundled_grammars() {
+            let abi = language.abi_version();
+            assert!(
+                (tree_sitter::MIN_COMPATIBLE_LANGUAGE_VERSION..=tree_sitter::LANGUAGE_VERSION)
+                    .contains(&abi),
+                "{name} grammar ABI {abi} outside supported range {}..={}",
+                tree_sitter::MIN_COMPATIBLE_LANGUAGE_VERSION,
+                tree_sitter::LANGUAGE_VERSION
+            );
+
+            let mut parser = tree_sitter::Parser::new();
+            parser
+                .set_language(&language)
+                .unwrap_or_else(|err| panic!("failed to load {name} grammar: {err}"));
+        }
+    }
+
+    #[test]
+    fn registry_skips_files_over_parse_byte_cap() {
+        let reg = ParserRegistry::with_defaults();
+        let oversized = vec![b'a'; DEFAULT_MAX_FILE_BYTES as usize + 1];
+
+        assert!(reg.parse("src/main.rs", "hash", &oversized, None).is_none());
     }
 }

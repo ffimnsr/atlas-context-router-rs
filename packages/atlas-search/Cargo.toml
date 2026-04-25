@@ -3,6 +3,7 @@ name = "atlas-search"
 version = "1.0.0"
 edition = "2024"
 description = "FTS-backed graph search and ranking utilities for Atlas"
+publish = false
 
 [dependencies]
 atlas-core.workspace = true
@@ -21,3 +22,6 @@ tempfile = "3"
 [[bench]]
 name = "retrieval_eval_bench"
 harness = false
+
+[lints]
+workspace = true

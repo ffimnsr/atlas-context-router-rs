@@ -1,7 +1,10 @@
 use anyhow::{Context, Result};
 use camino::{Utf8Component, Utf8Path, Utf8PathBuf};
+use std::ffi::OsString;
+use std::path::Path;
 use std::process::Command;
 use thiserror::Error;
+use unicode_normalization::UnicodeNormalization;
 
 /// Git environment variables that encode the *caller's* repository context.
 ///
@@ -107,6 +110,19 @@ impl CanonicalRepoPath {
         repo_root: &Utf8Path,
         path: &Utf8Path,
     ) -> std::result::Result<Self, RepoPathError> {
+        let absolute = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            repo_root.join(path)
+        };
+
+        if let (Ok(physical_root), Ok(physical_path)) = (
+            canonical_filesystem_path(repo_root),
+            canonical_filesystem_path(absolute.as_path()),
+        ) {
+            return Self::from_absolute_path(physical_root.as_path(), physical_path.as_path());
+        }
+
         if path.is_absolute() {
             Self::from_absolute_path(repo_root, path)
         } else {
@@ -137,6 +153,10 @@ pub enum RepoPathError {
     EscapesRepoRoot(String),
     #[error("path '{0}' must not end with '/'")]
     TrailingSlash(String),
+    #[error("cannot canonicalize filesystem path '{path}': {message}")]
+    FilesystemCanonicalize { path: String, message: String },
+    #[error("path '{0}' is not valid UTF-8 after filesystem canonicalization")]
+    NonUtf8Path(String),
 }
 
 #[derive(Clone, Copy)]
@@ -161,13 +181,29 @@ pub fn canonical_absolute_path(path: &Utf8Path) -> std::result::Result<Utf8PathB
     normalize_absolute(path, AbsoluteRole::InputPath)
 }
 
+/// Return canonical absolute path identity using filesystem-resolved casing for
+/// the deepest existing ancestor, then re-append any non-existing suffix.
+///
+/// This is Atlas' single boundary point for paths coming from user input,
+/// watch events, or platform APIs where filesystem casing and Unicode form may
+/// drift from git's textual form.
+pub fn canonical_filesystem_path(
+    path: &Utf8Path,
+) -> std::result::Result<Utf8PathBuf, RepoPathError> {
+    let normalized = canonical_absolute_path(path)?;
+    let canonical = canonicalize_existing_ancestor(normalized.as_std_path())?;
+    let utf8 = Utf8PathBuf::from_path_buf(canonical)
+        .map_err(|path| RepoPathError::NonUtf8Path(path.display().to_string()))?;
+    canonical_absolute_path(utf8.as_path())
+}
+
 fn canonicalize_relative(raw: &str) -> std::result::Result<CanonicalRepoPath, RepoPathError> {
     let raw = raw.trim();
     if raw.is_empty() {
         return Err(RepoPathError::Empty);
     }
 
-    let slashed = to_forward_slashes(raw);
+    let slashed = normalize_identity(raw);
     let path = Utf8Path::new(&slashed);
     if path.is_absolute() {
         return Err(RepoPathError::AbsoluteNotAllowed(slashed));
@@ -206,8 +242,7 @@ fn normalize_absolute(
     path: &Utf8Path,
     role: AbsoluteRole,
 ) -> std::result::Result<Utf8PathBuf, RepoPathError> {
-    let slashed = to_forward_slashes(path.as_str());
-    let cased = normalize_case(&slashed);
+    let cased = normalize_identity(path.as_str());
     let utf8_path = Utf8Path::new(&cased);
     if !utf8_path.is_absolute() {
         return Err(match role {
@@ -246,22 +281,65 @@ pub fn to_forward_slashes(s: &str) -> String {
     s.replace('\\', "/")
 }
 
+/// Normalize path Unicode to NFC so equivalent macOS NFD/NFC spellings share
+/// one canonical Atlas identity.
+pub fn normalize_unicode(s: &str) -> String {
+    s.nfc().collect()
+}
+
 /// Normalize path casing for the current platform.
 ///
 /// On Windows the filesystem is case-insensitive, so two paths that differ
 /// only in case refer to the same file.  To guarantee the qualified-name
 /// scheme is stable regardless of how a path was obtained, we lowercase the
-/// entire path on Windows.  On Unix the filesystem is case-sensitive, so no
-/// transformation is applied.
+/// entire path on Windows using Unicode lowercase folding. On Unix the
+/// filesystem is case-sensitive, so no transformation is applied.
 ///
 /// Call this **after** [`to_forward_slashes`] so that the input is already
 /// separator-normalized.
 pub fn normalize_case(s: &str) -> String {
     if cfg!(target_os = "windows") {
-        s.to_ascii_lowercase()
+        s.chars().flat_map(char::to_lowercase).collect()
     } else {
         s.to_owned()
     }
+}
+
+fn normalize_identity(s: &str) -> String {
+    normalize_case(&normalize_unicode(&to_forward_slashes(s)))
+}
+
+fn canonicalize_existing_ancestor(
+    path: &Path,
+) -> std::result::Result<std::path::PathBuf, RepoPathError> {
+    let mut existing = path;
+    let mut suffix = Vec::<OsString>::new();
+
+    while !existing.exists() {
+        let name = existing
+            .file_name()
+            .ok_or_else(|| RepoPathError::FilesystemCanonicalize {
+                path: path.display().to_string(),
+                message: "no existing ancestor was found".to_string(),
+            })?;
+        suffix.push(name.to_os_string());
+        existing = existing
+            .parent()
+            .ok_or_else(|| RepoPathError::FilesystemCanonicalize {
+                path: path.display().to_string(),
+                message: "no existing ancestor was found".to_string(),
+            })?;
+    }
+
+    let mut canonical =
+        std::fs::canonicalize(existing).map_err(|error| RepoPathError::FilesystemCanonicalize {
+            path: existing.display().to_string(),
+            message: error.to_string(),
+        })?;
+    for component in suffix.iter().rev() {
+        canonical.push(component);
+    }
+    Ok(canonical)
 }
 
 #[cfg(test)]
@@ -285,6 +363,14 @@ mod tests {
     fn canonical_repo_relative_converts_backslashes() {
         let path = CanonicalRepoPath::from_repo_relative("src\\main\\lib.rs").unwrap();
         assert_eq!(path.as_str(), "src/main/lib.rs");
+    }
+
+    #[test]
+    fn canonical_repo_relative_normalizes_unicode_equivalents() {
+        let nfc = CanonicalRepoPath::from_repo_relative("caf\u{00e9}.rs").unwrap();
+        let nfd = CanonicalRepoPath::from_repo_relative("cafe\u{0301}.rs").unwrap();
+        assert_eq!(nfc, nfd);
+        assert_eq!(nfc.as_str(), "caf\u{00e9}.rs");
     }
 
     #[test]
@@ -368,6 +454,7 @@ mod tests {
     fn normalize_case_lowercases_on_windows() {
         assert_eq!(normalize_case("Src/Main.rs"), "src/main.rs");
         assert_eq!(normalize_case("PKG/FOO.GO"), "pkg/foo.go");
+        assert_eq!(normalize_case("CAF\u{00c9}/Main.rs"), "caf\u{00e9}/main.rs");
         assert_eq!(
             normalize_case("packages/Atlas-Core/Src/Lib.rs"),
             "packages/atlas-core/src/lib.rs"
@@ -397,6 +484,14 @@ mod tests {
     fn canonical_absolute_path_normalizes_dot_segments() {
         let path = canonical_absolute_path(Utf8Path::new("/repo/src/./nested/../lib.rs")).unwrap();
         assert_eq!(path.as_str(), "/repo/src/lib.rs");
+    }
+
+    #[test]
+    fn canonical_absolute_path_normalizes_unicode_equivalents() {
+        let nfc = canonical_absolute_path(Utf8Path::new("/repo/caf\u{00e9}.rs")).unwrap();
+        let nfd = canonical_absolute_path(Utf8Path::new("/repo/cafe\u{0301}.rs")).unwrap();
+        assert_eq!(nfc, nfd);
+        assert_eq!(nfc.as_str(), "/repo/caf\u{00e9}.rs");
     }
 
     #[test]
@@ -470,6 +565,21 @@ mod tests {
             CanonicalRepoPath::from_watch_event_path(root, Utf8Path::new("/repo/src/lib.rs"))
                 .unwrap();
         assert_eq!(path.as_str(), "src/lib.rs");
+    }
+
+    #[test]
+    fn filesystem_canonical_path_reuses_physical_unicode_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8Path::from_path(dir.path()).unwrap();
+        let nfd_name = "cafe\u{0301}.rs";
+        let abs = root.join(nfd_name);
+        std::fs::write(abs.as_std_path(), "fn main() {}\n").unwrap();
+
+        let canonical = canonical_filesystem_path(abs.as_path()).unwrap();
+        assert_eq!(
+            canonical.as_str(),
+            &format!("{}/caf\u{00e9}.rs", root.as_str())
+        );
     }
 
     #[test]

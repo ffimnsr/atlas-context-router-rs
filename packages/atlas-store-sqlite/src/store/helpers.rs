@@ -158,7 +158,7 @@ pub(super) fn row_to_node(row: &Row<'_>) -> rusqlite::Result<Node> {
     })
 }
 
-pub(super) fn row_to_edge(row: &Row<'_>) -> rusqlite::Result<atlas_core::Edge> {
+pub(super) fn row_to_edge(row: &Row<'_>) -> rusqlite::Result<Edge> {
     let kind_str: String = row.get(1)?;
     let kind = kind_str.parse::<EdgeKind>().unwrap_or(EdgeKind::References);
 
@@ -168,7 +168,7 @@ pub(super) fn row_to_edge(row: &Row<'_>) -> rusqlite::Result<atlas_core::Edge> {
         .and_then(|s| serde_json::from_str(s).ok())
         .unwrap_or(serde_json::Value::Null);
 
-    Ok(atlas_core::Edge {
+    Ok(Edge {
         id: row.get(0)?,
         kind,
         source_qn: row.get(2)?,

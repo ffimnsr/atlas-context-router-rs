@@ -3,9 +3,8 @@ use std::path::Path;
 use rusqlite::params;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use time::OffsetDateTime;
 
-use atlas_core::{AtlasError, Result};
+use atlas_core::{AtlasError, Clock, Result, SystemClock, format_rfc3339};
 use atlas_repo::CanonicalRepoPath;
 use camino::Utf8Path;
 
@@ -171,21 +170,15 @@ fn is_repo_path_key(key: &str) -> bool {
 }
 
 pub(super) fn format_now() -> String {
-    OffsetDateTime::now_utc()
-        .format(&time::format_description::well_known::Rfc3339)
-        .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string())
+    format_now_with(&SystemClock)
 }
 
 pub(super) fn format_days_ago(days: u32) -> String {
-    let ts = OffsetDateTime::now_utc() - time::Duration::days(days as i64);
-    ts.format(&time::format_description::well_known::Rfc3339)
-        .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string())
+    format_days_ago_with(&SystemClock, days)
 }
 
 pub(super) fn format_seconds_ago(secs: u64) -> String {
-    let ts = OffsetDateTime::now_utc() - time::Duration::seconds(secs as i64);
-    ts.format(&time::format_description::well_known::Rfc3339)
-        .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string())
+    format_seconds_ago_with(&SystemClock, secs)
 }
 
 pub(super) fn hex_encode(bytes: &[u8]) -> String {
@@ -225,5 +218,35 @@ pub(super) fn quarantine_db(path: &str) {
             quarantine = %qpath,
             "corrupt session DB quarantined; a fresh store will be created on next open"
         );
+    }
+}
+
+fn format_now_with(clock: &dyn Clock) -> String {
+    format_rfc3339(clock.now_utc())
+}
+
+fn format_days_ago_with(clock: &dyn Clock, days: u32) -> String {
+    let ts = clock.now_utc() - time::Duration::days(days as i64);
+    format_rfc3339(ts)
+}
+
+fn format_seconds_ago_with(clock: &dyn Clock, secs: u64) -> String {
+    let ts = clock.now_utc() - time::Duration::seconds(secs as i64);
+    format_rfc3339(ts)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use atlas_core::FixedClock;
+    use time::OffsetDateTime;
+
+    #[test]
+    fn injected_clock_drives_relative_time_helpers() {
+        let now = OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap();
+        let clock = FixedClock::new(now);
+        assert_eq!(format_now_with(&clock), "2023-11-14T22:13:20Z");
+        assert_eq!(format_days_ago_with(&clock, 1), "2023-11-13T22:13:20Z");
+        assert_eq!(format_seconds_ago_with(&clock, 30), "2023-11-14T22:12:50Z");
     }
 }

@@ -150,7 +150,7 @@ impl std::fmt::Display for SessionEventType {
 impl std::str::FromStr for SessionEventType {
     type Err = AtlasError;
 
-    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
             "FILE_READ" => Ok(Self::FileRead),
             "FILE_WRITE" => Ok(Self::FileWrite),

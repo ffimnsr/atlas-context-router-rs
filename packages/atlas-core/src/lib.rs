@@ -1,4 +1,5 @@
 pub mod budget;
+pub mod clock;
 pub mod error;
 pub mod health;
 pub mod kinds;
@@ -9,6 +10,7 @@ pub use budget::{
     BudgetPolicy, BudgetReport, BudgetStage, BudgetStageRule, BudgetStatus,
     BuildUpdateBudgetCounters, budget_stage_rules,
 };
+pub use clock::{Clock, FixedClock, SystemClock, format_rfc3339, now_utc};
 pub use error::{AtlasError, Result};
 pub use health::{
     GraphHealthInput, graph_health_error_message, graph_health_error_suggestions,

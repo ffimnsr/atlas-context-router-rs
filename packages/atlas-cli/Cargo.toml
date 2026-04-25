@@ -47,3 +47,6 @@ tempfile = "3"
 
 [build-dependencies]
 time = { workspace = true, features = ["formatting"] }
+
+[lints]
+workspace = true

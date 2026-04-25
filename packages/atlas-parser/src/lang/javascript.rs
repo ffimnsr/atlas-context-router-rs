@@ -72,7 +72,7 @@ fn parse_source(
     ctx: &ParseContext<'_>,
     lang: &'static str,
 ) -> (ParsedFile, Option<tree_sitter::Tree>) {
-    let tree = parser.parse(ctx.source, ctx.old_tree);
+    let tree = crate::parse_runtime::parse_tree(parser, ctx.source, ctx.old_tree);
     let mut nodes: Vec<Node> = Vec::new();
     let mut edges: Vec<Edge> = Vec::new();
 

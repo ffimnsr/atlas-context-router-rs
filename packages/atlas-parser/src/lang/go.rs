@@ -27,7 +27,7 @@ impl LangParser for GoParser {
             .set_language(&tree_sitter_go::LANGUAGE.into())
             .expect("tree-sitter-go grammar failed to load");
 
-        let tree = parser.parse(ctx.source, ctx.old_tree);
+        let tree = crate::parse_runtime::parse_tree(&mut parser, ctx.source, ctx.old_tree);
         let mut nodes: Vec<Node> = Vec::new();
         let mut edges: Vec<Edge> = Vec::new();
 

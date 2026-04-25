@@ -21,7 +21,7 @@ impl LangParser for JsonParser {
             .set_language(&tree_sitter_json::LANGUAGE.into())
             .expect("tree-sitter-json grammar failed to load");
 
-        let tree = parser.parse(ctx.source, ctx.old_tree);
+        let tree = crate::parse_runtime::parse_tree(&mut parser, ctx.source, ctx.old_tree);
         let mut nodes = Vec::new();
         let mut edges = Vec::new();
 

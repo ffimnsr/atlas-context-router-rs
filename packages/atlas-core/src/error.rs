@@ -1,5 +1,11 @@
 use thiserror::Error;
 
+/// Shared library-facing Atlas error.
+///
+/// Convention:
+/// - library crates expose typed errors or `atlas_core::Result<T>`
+/// - CLI / MCP / process-entry crates may use `anyhow::Result<T>` at command
+///   boundaries to attach context while keeping internal domain surfaces typed
 #[derive(Debug, Error)]
 pub enum AtlasError {
     #[error("I/O error: {0}")]

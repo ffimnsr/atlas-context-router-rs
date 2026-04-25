@@ -14,7 +14,7 @@ pub use files::{
 pub use hash::hash_file;
 pub use owners::{PackageOwners, WorkspaceRoot, discover_package_owners};
 pub use path::{
-    CanonicalRepoPath, RepoPathError, canonical_absolute_path, normalize_case, repo_relative,
-    to_forward_slashes,
+    CanonicalRepoPath, RepoPathError, canonical_absolute_path, canonical_filesystem_path,
+    normalize_case, normalize_unicode, repo_relative, to_forward_slashes,
 };
 pub use root::find_repo_root;

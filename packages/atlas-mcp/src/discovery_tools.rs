@@ -514,7 +514,7 @@ pub(crate) fn tool_search_content(
 }
 
 fn collect_rich_snippets(
-    path: &std::path::Path,
+    path: &Path,
     rel_path: &str,
     regex: &Regex,
     context_lines: usize,

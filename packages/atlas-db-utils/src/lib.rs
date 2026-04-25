@@ -24,11 +24,21 @@
 //!
 //! # Connection/thread policy
 //!
-//! `rusqlite::Connection` is `!Send`. Each Atlas store struct wraps exactly one
-//! `Connection` and must not be shared across threads. Rayon parallel sections
-//! in `atlas-engine` only parse files (no `Connection` access); the store is
-//! written sequentially after the rayon section completes. No pool is required
-//! for the current single-writer architecture.
+//! Atlas uses one canonical ownership rule for SQLite connections:
+//!
+//! - each store instance owns exactly one `rusqlite::Connection`
+//! - store structs are thread-confined and must not cross Rayon or worker-thread
+//!   boundaries
+//! - concurrent DB access, when needed, uses separate connections rather than
+//!   shared ownership of one connection
+//! - current architecture is single-writer per store instance; no read pool
+//!   exists yet
+//!
+//! `rusqlite::Connection` is `!Send`, which matches this policy. `atlas-engine`
+//! keeps SQLite work outside Rayon closures: parallel phases hash/read/parse
+//! files, then sequential phases persist results through the owning store.
+//! WAL permits concurrent reads during writes only across separate connections;
+//! it does not make one `Connection` safe to share across threads.
 //!
 //! # VACUUM policy
 //!

@@ -61,14 +61,14 @@ For terms that are easy to misread in this document:
 - Part I. Remaining core delivery roadmap: Phase 17
 - Part III. Remaining product expansion roadmap: Phases 29 through 31
 - Part IV. Remaining context continuity roadmap: Phases CM12, CM14, and CM15
-- Part V. Remaining focused follow-up patches: Retrieval Follow-Up Patch, Retrieval Ranking Evidence Patch, Graph/Content Companion Patch, Parity Surface Patch, Runtime Event Enrichment and Graph Linking Patch, Graph Readiness Source-of-Truth Patch, Context Escalation Contract Patch, Graph Store Corruption Recovery Patch
+- Part V. Remaining focused follow-up patches: Retrieval Follow-Up Patch, Retrieval Ranking Evidence Patch, Graph/Content Companion Patch, Parity Surface Patch, Runtime Event Enrichment and Graph Linking Patch, Graph Readiness Source-of-Truth Patch, Context Escalation Contract Patch, Graph Store Corruption Recovery Patch, SQLite Connection Concurrency Policy Patch
 
 ## Cross-Cutting Track Map
 
 - Historical and analytics work: Phase 17, Phase 29, Phase 30, Phase 31
 - Retrieval and search follow-ups: Retrieval Follow-Up Patch, Retrieval Ranking Evidence Patch, Graph/Content Companion Patch, Parity Surface Patch
 - Context continuity and runtime memory: Phase CM12, Phase CM14, Phase CM15, Runtime Event Enrichment and Graph Linking Patch
-- Graph safety and workflow: Graph Readiness Source-of-Truth Patch, Context Escalation Contract Patch, Graph Store Corruption Recovery Patch
+- Graph safety and workflow: Graph Readiness Source-of-Truth Patch, Context Escalation Contract Patch, Graph Store Corruption Recovery Patch, SQLite Connection Concurrency Policy Patch
 
 ---
 
@@ -2328,5 +2328,69 @@ Why:
 - [ ] graph-backed tools fail closed when graph facts are corrupt or inconsistent
 - [ ] diagnostics expose exact reason, quarantine path, and next command
 - [ ] tests cover physical corruption, logical inconsistency, rebuild success, rebuild failure, and fail-closed query behavior
+
+### SQLite Connection Concurrency Policy Patch
+
+Atlas currently uses one `rusqlite::Connection` per store struct. That is safe for the current architecture because `atlas-engine` uses Rayon only for file hashing, reading, and parsing; SQLite persistence happens after parallel work completes. What is still underspecified is the operational contract around thread confinement, separate-connection concurrency, and future pooling. This patch makes the current model explicit, adds regression coverage, and leaves a clean boundary for future separate-connection read pooling without adding one now.
+
+#### Patch T1 — Canonical connection ownership contract
+
+- [x] define one canonical SQLite thread/ownership policy in `atlas-db-utils`:
+  - [x] each Atlas store owns exactly one `rusqlite::Connection`
+  - [x] store structs are thread-confined and must not cross Rayon or worker-thread boundaries
+  - [x] concurrent DB access, when needed, must use separate connections; never shared ownership of one connection
+  - [x] current architecture is single-writer per store instance; no read pool exists yet
+- [x] align wording across `atlas-store-sqlite`, `atlas-contentstore`, `atlas-session`, and `atlas-db-utils`:
+  - [x] replace ambiguous `serialized-reader` wording with `single-connection per store instance`
+  - [x] document that WAL permits concurrent reads during writes only across separate connections
+  - [x] document why `worldtree.db` opens with `SQLITE_OPEN_NO_MUTEX` under thread-confined ownership
+- [x] add succinct comments near engine build/update Rayon phases stating DB work is intentionally outside parallel closures
+- [x] ensure parser docs stay explicit that parser crate has no SQLite access and is not part of DB-sharing risk
+
+Why:
+- avoids reviewer confusion from `rayon` presence in workspace dependencies
+- makes current concurrency guarantees explicit and consistent across crates
+
+#### Patch T2 — Engine boundary enforcement and regression tests
+
+- [ ] keep engine parallel parse phases structurally separated from SQLite write phases:
+  - [ ] Rayon closures receive only parse inputs such as paths, hashes, bytes, and optional tree-cache entries
+  - [ ] `Store` access stays in explicit sequential write/update phases after parallel collection completes
+- [ ] add regression tests for current architecture:
+  - [ ] full build path proves parallel parse completes before store write phase
+  - [ ] incremental update path proves changed/dependent file parse phases complete before store write phase
+  - [ ] existing WAL lock test continues to model concurrency with a second connection on a second thread, not a shared connection
+- [ ] add compile-fail or equivalent trait-bound tests proving `Store`, `ContentStore`, and `SessionStore` cannot satisfy APIs that require `Send` or `Sync`
+- [ ] reject any new abstraction that wraps one `Connection` in `Arc<Mutex<_>>`, `RwLock<_>`, or similar cross-thread sharing helper
+
+Why:
+- turns architecture intent into an enforceable boundary
+- catches refactors that accidentally move store access into worker threads
+
+#### Patch T3 — Future separate-connection read concurrency contract
+
+- [ ] document explicit non-goal for this patch: do not add `r2d2_sqlite` or any read pool yet
+- [ ] define future upgrade rule:
+  - [ ] if read concurrency is added later, use separate checked-out connections
+  - [ ] do not share one `Connection` across threads behind a lock
+  - [ ] keep write ownership/policy explicit before introducing mixed read/write pooling
+- [ ] surface current mode in docs or diagnostics:
+  - [ ] parallel parse plus sequential persistence
+  - [ ] single-connection per store instance
+  - [ ] separate-connection concurrency only
+  - [ ] read-pool layer reserved for future measured need
+- [ ] add note to `doctor`/`status` or crate-level docs that pooled graph reads are not implemented today
+
+Why:
+- answers pool question without adding premature complexity
+- preserves clean path for future measured read-parallel improvements
+
+#### Patch T completion criteria
+
+- [ ] one canonical SQLite connection/thread policy exists and all Atlas stores reference it
+- [ ] engine Rayon parse code is explicitly separated from SQLite access
+- [ ] tests fail if store types become cross-thread sharable
+- [ ] docs say current mode is single-connection per store instance with separate-connection concurrency only
+- [ ] future pool direction is documented as separate-connection only, not shared-connection wrappers
 
 ---

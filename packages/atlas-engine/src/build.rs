@@ -180,6 +180,8 @@ pub fn build_graph(
             break;
         }
 
+        // SQLite work stays outside this Rayon closure. Workers only read and
+        // parse files; `Store` writes happen sequentially after collection.
         let results: Vec<(String, Result<ParsedFile, String>)> = chunk
             .par_iter()
             .map(|(rel_str, abs_path, hash)| {
@@ -232,6 +234,8 @@ pub fn build_graph(
         }
 
         if !parsed_files.is_empty() {
+            // Single-connection persistence phase: DB writes happen after the
+            // parallel parse batch completes.
             let (n, e) = store
                 .replace_files_transactional(&parsed_files)
                 .context("cannot store parsed files")?;
@@ -418,7 +422,10 @@ mod tests {
         assert!(qnames.contains_key("lib.rs::method::Greeter::greet"));
         assert!(refreshed.dangling_edges(20).unwrap().is_empty());
         assert!(
-            refreshed.find_repo_id(repo_root.to_str().unwrap()).unwrap().is_some(),
+            refreshed
+                .find_repo_id(repo_root.to_str().unwrap())
+                .unwrap()
+                .is_some(),
             "full build must register repo root in repos table"
         );
     }

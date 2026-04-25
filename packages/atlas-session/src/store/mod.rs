@@ -38,6 +38,8 @@ use self::util::{
 };
 
 pub struct SessionStore {
+    // One connection per store instance. Keep thread-confined; do not share
+    // across worker threads.
     pub(super) conn: Connection,
     pub(super) config: SessionStoreConfig,
 }

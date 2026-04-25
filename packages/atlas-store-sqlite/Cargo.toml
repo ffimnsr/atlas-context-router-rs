@@ -3,6 +3,7 @@ name = "atlas-store-sqlite"
 version = "1.0.0"
 edition = "2024"
 description = "SQLite graph store and migrations for Atlas code graph persistence"
+publish = false
 
 [dependencies]
 atlas-core.workspace = true
@@ -22,3 +23,6 @@ criterion.workspace = true
 [[bench]]
 name = "store_bench"
 harness = false
+
+[lints]
+workspace = true

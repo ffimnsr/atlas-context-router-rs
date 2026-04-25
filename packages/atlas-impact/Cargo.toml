@@ -3,8 +3,12 @@ name = "atlas-impact"
 version = "1.0.0"
 edition = "2024"
 description = "Impact scoring, boundary analysis, and test reachability for Atlas"
+publish = false
 
 [dependencies]
 atlas-core.workspace = true
 tracing.workspace = true
 serde_json.workspace = true
+
+[lints]
+workspace = true

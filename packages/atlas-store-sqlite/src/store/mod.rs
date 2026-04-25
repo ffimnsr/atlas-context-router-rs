@@ -22,8 +22,10 @@ type DanglingEdge = (i64, String, String, String, &'static str);
 
 /// SQLite-backed graph store.
 ///
-/// Holds a single write connection; all mutation goes through this struct.
-/// Parallel read access is left for a future read-pool layer.
+/// Owns exactly one thread-confined SQLite connection for `worldtree.db`.
+/// All graph mutation goes through this struct. Concurrent reads, if added
+/// later, must use separate connections rather than shared ownership of this
+/// one. No read pool exists today.
 pub struct Store {
     conn: Connection,
 }

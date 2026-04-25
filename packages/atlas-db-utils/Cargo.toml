@@ -3,7 +3,11 @@ name = "atlas-db-utils"
 version = "1.0.0"
 edition = "2024"
 description = "Shared SQLite connection helpers (PRAGMAs, application_id, VACUUM) for Atlas stores"
+publish = false
 
 [dependencies]
 atlas-core.workspace = true
 rusqlite.workspace = true
+
+[lints]
+workspace = true

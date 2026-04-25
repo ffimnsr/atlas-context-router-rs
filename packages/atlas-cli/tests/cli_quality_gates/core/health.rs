@@ -11,6 +11,7 @@ fn sqlite_fts5_smoke_round_trip() {
     let status = read_json_data_output("status", run_atlas(repo.path(), &["--json", "status"]));
     assert_eq!(status["mcp"]["worker_threads"], json!(2));
     assert_eq!(status["mcp"]["tool_timeout_ms"], json!(300000));
+    assert_eq!(status["mcp"]["tool_timeout_ms_by_tool"], json!({}));
     assert!(status["indexed_file_count"].as_u64().unwrap_or_default() >= 2);
     assert!(status["node_count"].as_i64().unwrap_or_default() >= 5);
     assert!(status["edge_count"].as_i64().unwrap_or_default() >= 1);
@@ -48,7 +49,10 @@ fn doctor_reports_mcp_serve_config() {
         .expect("mcp serve config check present");
 
     assert_eq!(mcp_check["ok"], json!(true));
-    assert_eq!(mcp_check["detail"], json!("workers=2 timeout_ms=300000"));
+    assert_eq!(
+        mcp_check["detail"],
+        json!("workers=2 timeout_ms=300000")
+    );
 }
 
 #[test]

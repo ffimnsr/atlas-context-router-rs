@@ -445,11 +445,11 @@ pub(super) fn tool_detect_changes(
             ChangedEntry {
                 path: &cf.path,
                 change_type: match cf.change_type {
-                    atlas_core::ChangeType::Added => "added",
-                    atlas_core::ChangeType::Modified => "modified",
-                    atlas_core::ChangeType::Deleted => "deleted",
-                    atlas_core::ChangeType::Renamed => "renamed",
-                    atlas_core::ChangeType::Copied => "copied",
+                    ChangeType::Added => "added",
+                    ChangeType::Modified => "modified",
+                    ChangeType::Deleted => "deleted",
+                    ChangeType::Renamed => "renamed",
+                    ChangeType::Copied => "copied",
                 },
                 old_path: cf.old_path.as_deref(),
                 node_count,

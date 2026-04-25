@@ -22,7 +22,7 @@ impl LangParser for PythonParser {
             .set_language(&tree_sitter_python::LANGUAGE.into())
             .expect("tree-sitter-python grammar failed to load");
 
-        let tree = parser.parse(ctx.source, ctx.old_tree);
+        let tree = crate::parse_runtime::parse_tree(&mut parser, ctx.source, ctx.old_tree);
         let mut nodes: Vec<Node> = Vec::new();
         let mut edges: Vec<Edge> = Vec::new();
 

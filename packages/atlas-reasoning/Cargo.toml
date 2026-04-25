@@ -3,6 +3,7 @@ name = "atlas-reasoning"
 version = "1.0.0"
 edition = "2024"
 description = "Autonomous code reasoning engine for Atlas — removal impact, dead code, refactor safety, rename radius, and change risk"
+publish = false
 
 [dependencies]
 atlas-core.workspace = true
@@ -16,3 +17,6 @@ criterion.workspace = true
 [[bench]]
 name = "reasoning_bench"
 harness = false
+
+[lints]
+workspace = true

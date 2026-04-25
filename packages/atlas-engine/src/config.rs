@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
@@ -32,8 +33,10 @@ pub struct Config {
 pub struct McpConfig {
     /// Number of MCP worker threads (clamped to 1–64).
     pub worker_threads: usize,
-    /// Hard timeout in milliseconds for each MCP tool request (clamped to 1_000–3_600_000).
+    /// Default timeout in milliseconds for MCP tool requests without a per-tool override.
     pub tool_timeout_ms: u64,
+    /// Optional per-tool timeout overrides in milliseconds.
+    pub tool_timeout_ms_by_tool: HashMap<String, u64>,
     /// Maximum serialized MCP tool response size in bytes.
     pub max_mcp_response_bytes: u64,
 }
@@ -43,6 +46,7 @@ impl Default for McpConfig {
         Self {
             worker_threads: DEFAULT_MCP_WORKER_THREADS,
             tool_timeout_ms: DEFAULT_MCP_TOOL_TIMEOUT_MS,
+            tool_timeout_ms_by_tool: HashMap::new(),
             max_mcp_response_bytes: BudgetPolicy::default()
                 .mcp_cli_payload_serialization
                 .mcp_response_bytes
@@ -270,6 +274,21 @@ impl Config {
     /// Return effective MCP tool timeout in milliseconds, clamped to [1_000, 3_600_000].
     pub fn mcp_tool_timeout_ms(&self) -> u64 {
         self.mcp.tool_timeout_ms.clamp(1_000, 3_600_000)
+    }
+
+    pub fn mcp_tool_timeout_ms_by_tool(&self) -> HashMap<String, u64> {
+        self.mcp
+            .tool_timeout_ms_by_tool
+            .iter()
+            .map(|(tool, timeout_ms)| (tool.clone(), (*timeout_ms).clamp(1_000, 3_600_000)))
+            .collect()
+    }
+
+    pub fn mcp_tool_timeout_ms_for(&self, tool_name: &str) -> u64 {
+        self.mcp_tool_timeout_ms_by_tool()
+            .get(tool_name)
+            .copied()
+            .unwrap_or_else(|| self.mcp_tool_timeout_ms())
     }
 }
 
@@ -609,6 +628,10 @@ mod tests {
         let config = Config::default();
         assert_eq!(config.mcp_worker_threads(), DEFAULT_MCP_WORKER_THREADS);
         assert_eq!(config.mcp_tool_timeout_ms(), DEFAULT_MCP_TOOL_TIMEOUT_MS);
+        assert!(
+            config.mcp_tool_timeout_ms_by_tool().is_empty(),
+            "default config should not invent per-tool timeout overrides"
+        );
         assert_eq!(
             config.mcp.max_mcp_response_bytes,
             BudgetPolicy::default()
@@ -630,6 +653,31 @@ mod tests {
         config.mcp.tool_timeout_ms = 9_999_999;
         assert_eq!(config.mcp_worker_threads(), 64);
         assert_eq!(config.mcp_tool_timeout_ms(), 3_600_000);
+
+        config
+            .mcp
+            .tool_timeout_ms_by_tool
+            .insert("query_graph".to_owned(), 5);
+        config
+            .mcp
+            .tool_timeout_ms_by_tool
+            .insert("build_or_update_graph".to_owned(), 9_999_999);
+        let overrides = config.mcp_tool_timeout_ms_by_tool();
+        assert_eq!(overrides.get("query_graph"), Some(&1_000));
+        assert_eq!(overrides.get("build_or_update_graph"), Some(&3_600_000));
+    }
+
+    #[test]
+    fn mcp_tool_timeout_prefers_per_tool_override() {
+        let mut config = Config::default();
+        config.mcp.tool_timeout_ms = 30_000;
+        config
+            .mcp
+            .tool_timeout_ms_by_tool
+            .insert("query_graph".to_owned(), 5_000);
+
+        assert_eq!(config.mcp_tool_timeout_ms_for("query_graph"), 5_000);
+        assert_eq!(config.mcp_tool_timeout_ms_for("build_or_update_graph"), 30_000);
     }
 
     #[test]
@@ -703,5 +751,6 @@ mod tests {
         assert_eq!(config.mcp.max_mcp_response_bytes, 4096);
         assert_eq!(config.context.max_saved_context_bytes, 256);
         assert_eq!(config.mcp.worker_threads, DEFAULT_MCP_WORKER_THREADS);
+        assert!(config.mcp.tool_timeout_ms_by_tool.is_empty());
     }
 }

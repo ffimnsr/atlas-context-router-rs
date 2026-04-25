@@ -3,6 +3,7 @@ name = "atlas-refactor"
 version = "1.0.0"
 edition = "2024"
 description = "Smart refactoring core for Atlas — deterministic rename, dead-code removal, import cleanup, and extract-function detection"
+publish = false
 
 [dependencies]
 atlas-core.workspace = true
@@ -22,3 +23,6 @@ tempfile = "3"
 [[bench]]
 name = "refactor_bench"
 harness = false
+
+[lints]
+workspace = true

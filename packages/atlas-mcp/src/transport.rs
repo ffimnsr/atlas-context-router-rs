@@ -4,7 +4,7 @@
 //! writes newline-delimited JSON responses to stdout.  Follows the MCP
 //! 2024-11-05 protocol specification.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::BufReader;
 use std::io::{BufRead, Write};
 use std::path::Path;
@@ -25,6 +25,8 @@ use std::net::Shutdown;
 #[cfg(unix)]
 use std::os::fd::AsRawFd;
 #[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+#[cfg(unix)]
 use std::os::unix::net::{UnixListener, UnixStream};
 #[cfg(unix)]
 use std::sync::Mutex;
@@ -36,11 +38,21 @@ const MCP_TOOL_TIMEOUT_MS_ENV: &str = "ATLAS_MCP_TOOL_TIMEOUT_MS";
 const DEFAULT_WORKER_THREADS: usize = 2;
 const DEFAULT_TOOL_TIMEOUT_MS: u64 = 300_000;
 pub const MCP_PROTOCOL_VERSION: &str = "2024-11-05";
+const JSONRPC_PARSE_ERROR: i32 = -32700;
+const JSONRPC_INVALID_REQUEST: i32 = -32600;
+const JSONRPC_METHOD_NOT_FOUND: i32 = -32601;
+const JSONRPC_INVALID_PARAMS: i32 = -32602;
+const JSONRPC_INTERNAL_ERROR: i32 = -32603;
+const JSONRPC_TOOL_EXECUTION_FAILED: i32 = -32001;
+const JSONRPC_WORKER_UNAVAILABLE: i32 = -32002;
+const JSONRPC_REQUEST_TIMEOUT: i32 = -32003;
+const JSONRPC_RATE_LIMITED: i32 = -32004;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct ServerOptions {
     pub worker_threads: usize,
     pub tool_timeout_ms: u64,
+    pub tool_timeout_ms_by_tool: HashMap<String, u64>,
 }
 
 impl Default for ServerOptions {
@@ -48,6 +60,7 @@ impl Default for ServerOptions {
         Self {
             worker_threads: DEFAULT_WORKER_THREADS,
             tool_timeout_ms: DEFAULT_TOOL_TIMEOUT_MS,
+            tool_timeout_ms_by_tool: HashMap::new(),
         }
     }
 }
@@ -97,10 +110,14 @@ pub fn run_socket_server_with_options(
 
     let listener = UnixListener::bind(socket_path)
         .with_context(|| format!("cannot bind {}", socket_path.display()))?;
+    secure_socket_path(socket_path)?;
     listener
         .set_nonblocking(true)
         .with_context(|| format!("cannot set nonblocking {}", socket_path.display()))?;
-    let worker_pool = Arc::new(WorkerPool::from_env("atlas-mcp:tool-worker", options)?);
+    let worker_pool = Arc::new(WorkerPool::from_env(
+        "atlas-mcp:tool-worker",
+        options.clone(),
+    )?);
     let next_connection = AtomicUsize::new(0);
     let shutdown = Arc::new(AtomicBool::new(false));
     let active_streams = Arc::new(Mutex::new(Vec::<UnixStream>::new()));
@@ -130,6 +147,7 @@ pub fn run_socket_server_with_options(
         let repo_root = repo_root.to_owned();
         let db_path = db_path.to_owned();
         let worker_pool = Arc::clone(&worker_pool);
+        let server_options = options.clone();
         let active_streams = Arc::clone(&active_streams);
         let connection_id = next_connection.fetch_add(1, Ordering::Relaxed) + 1;
         let thread_name = format!("atlas-mcp:daemon-client-{connection_id}");
@@ -142,6 +160,7 @@ pub fn run_socket_server_with_options(
                     &repo_root,
                     &db_path,
                     worker_pool,
+                    server_options,
                     active_streams,
                 ) {
                     tracing::warn!(error = %error, client = %log_thread_name, "daemon client failed");
@@ -172,8 +191,11 @@ fn run_server_io<R: BufRead + Send, W: Write>(
     db_path: &str,
     options: ServerOptions,
 ) -> Result<()> {
-    let worker_pool = Arc::new(WorkerPool::from_env("atlas-mcp:tool-worker", options)?);
-    serve_connection(reader, writer, repo_root, db_path, worker_pool)
+    let worker_pool = Arc::new(WorkerPool::from_env(
+        "atlas-mcp:tool-worker",
+        options.clone(),
+    )?);
+    serve_connection(reader, writer, repo_root, db_path, worker_pool, options)
 }
 
 fn serve_connection<R: BufRead + Send, W: Write>(
@@ -182,8 +204,13 @@ fn serve_connection<R: BufRead + Send, W: Write>(
     repo_root: &str,
     db_path: &str,
     worker_pool: Arc<WorkerPool>,
+    server_options: ServerOptions,
 ) -> Result<()> {
     let (event_tx, event_rx) = mpsc::channel::<TransportEvent>();
+    let connection_state = ConnectionState {
+        trace: TraceLevel::Off,
+        canceled_tokens: Arc::new(Mutex::new(HashSet::new())),
+    };
 
     thread::scope(|scope| -> Result<()> {
         let reader_tx = event_tx.clone();
@@ -193,8 +220,10 @@ fn serve_connection<R: BufRead + Send, W: Write>(
             repo_root,
             db_path,
             worker_pool.as_ref(),
+            &server_options,
             event_tx,
             event_rx,
+            connection_state,
         )
     })
 }
@@ -205,8 +234,10 @@ fn serve_socket_connection(
     repo_root: &str,
     db_path: &str,
     worker_pool: Arc<WorkerPool>,
+    server_options: ServerOptions,
     active_streams: Arc<Mutex<Vec<UnixStream>>>,
 ) -> Result<()> {
+    ensure_peer_uid_allowed(&stream)?;
     let registered_stream = stream
         .try_clone()
         .context("cannot clone daemon stream for shutdown")?;
@@ -221,7 +252,14 @@ fn serve_socket_connection(
     let mut writer = std::io::BufWriter::new(stream);
 
     perform_socket_handshake(&mut reader, &mut writer, repo_root, db_path)?;
-    serve_connection(reader, &mut writer, repo_root, db_path, worker_pool)
+    serve_connection(
+        reader,
+        &mut writer,
+        repo_root,
+        db_path,
+        worker_pool,
+        server_options,
+    )
 }
 
 fn perform_socket_handshake<R: BufRead, W: Write>(
@@ -283,13 +321,16 @@ fn perform_socket_handshake<R: BufRead, W: Write>(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn process_requests<W: Write>(
     writer: &mut W,
     repo_root: &str,
     db_path: &str,
     worker_pool: &WorkerPool,
+    server_options: &ServerOptions,
     event_tx: mpsc::Sender<TransportEvent>,
     event_rx: mpsc::Receiver<TransportEvent>,
+    mut connection_state: ConnectionState,
 ) -> Result<()> {
     let mut input_closed = false;
     let mut next_token = 0_u64;
@@ -299,11 +340,13 @@ fn process_requests<W: Write>(
         repo_root,
         db_path,
         worker_pool,
+        server_options,
+        canceled_tokens: Arc::clone(&connection_state.canceled_tokens),
         event_tx: &event_tx,
     };
 
     loop {
-        drain_expired_requests(writer, &mut pending, &mut stats)?;
+        drain_expired_requests(writer, &mut pending, &mut stats, &connection_state)?;
         if input_closed && pending.is_empty() {
             break;
         }
@@ -329,7 +372,17 @@ fn process_requests<W: Write>(
                 &mut pending,
                 &mut next_token,
                 &mut stats,
+                &mut connection_state,
             )?,
+            Ok(TransportEvent::WorkerStarted { token, queue_wait_ms }) => {
+                handle_worker_started(
+                    writer,
+                    &mut pending,
+                    token,
+                    queue_wait_ms,
+                    &connection_state,
+                )?
+            }
             Ok(TransportEvent::Response {
                 token,
                 response,
@@ -341,6 +394,7 @@ fn process_requests<W: Write>(
                 response,
                 completion,
                 &mut stats,
+                &connection_state,
             )?,
             Ok(TransportEvent::InputClosed) => {
                 input_closed = true;
@@ -369,6 +423,7 @@ fn process_requests<W: Write>(
         completed_ok = stats.completed_ok,
         completed_err = stats.completed_err,
         timed_out = stats.timed_out,
+        canceled = stats.canceled,
         dropped_late = stats.dropped_late,
         "MCP transport summary"
     );
@@ -403,6 +458,7 @@ fn handle_input_line<W: Write>(
     pending: &mut HashMap<u64, PendingRequest>,
     next_token: &mut u64,
     stats: &mut TransportStats,
+    connection_state: &mut ConnectionState,
 ) -> Result<()> {
     let line = line.trim();
     if line.is_empty() {
@@ -417,7 +473,7 @@ fn handle_input_line<W: Write>(
             stats.parse_errors += 1;
             let response = jsonrpc_error(
                 serde_json::Value::Null,
-                -32700,
+                JsonRpcErrorKind::ParseError,
                 format!("parse error: {error}"),
             );
             write_response(writer, &response)?;
@@ -425,6 +481,27 @@ fn handle_input_line<W: Write>(
         }
     };
 
+    if !request.is_object()
+        || request.get("jsonrpc").and_then(|value| value.as_str()) != Some("2.0")
+        || request
+            .get("method")
+            .and_then(|value| value.as_str())
+            .is_none()
+    {
+        let id = request
+            .get("id")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        let response = jsonrpc_error(
+            id,
+            JsonRpcErrorKind::InvalidRequest,
+            "invalid request: expected jsonrpc='2.0' and string method".to_owned(),
+        );
+        write_response(writer, &response)?;
+        return Ok(());
+    }
+
+    let is_notification = request.get("id").is_none();
     let id = request
         .get("id")
         .cloned()
@@ -446,6 +523,32 @@ fn handle_input_line<W: Write>(
         return Ok(());
     }
 
+    if method == "$/setTrace" {
+        stats.notifications += u64::from(is_notification);
+        match parse_trace_level(params) {
+            Ok(level) => connection_state.trace = level,
+            Err(error) => {
+                if !is_notification {
+                    write_response(
+                        writer,
+                        &jsonrpc_error(id, JsonRpcErrorKind::InvalidParams, error.to_string()),
+                    )?;
+                }
+                return Ok(());
+            }
+        }
+        if !is_notification {
+            write_response(writer, &jsonrpc_ok(id, serde_json::Value::Null))?;
+        }
+        return Ok(());
+    }
+
+    if method == "$/cancelRequest" {
+        stats.notifications += 1;
+        let _ = cancel_request(writer, pending, params, stats, connection_state);
+        return Ok(());
+    }
+
     if method == "tools/call" {
         stats.async_dispatched += 1;
         *next_token += 1;
@@ -456,9 +559,11 @@ fn handle_input_line<W: Write>(
         let db_path = ctx.db_path.to_owned();
         let event_tx = ctx.event_tx.clone();
         let method_name = method.clone();
-        let timeout = ctx.worker_pool.timeout();
+        let timeout = resolve_request_timeout(ctx.server_options, &request_log);
         let queued_at = Instant::now();
         let request_log_for_worker = request_log.clone();
+        let canceled_tokens = Arc::clone(&ctx.canceled_tokens);
+        let progress_token = progress_token_from_params(params.as_ref());
         tracing::debug!(
             request_id = %request_log.request_id,
             method = %request_log.method,
@@ -469,16 +574,46 @@ fn handle_input_line<W: Write>(
         pending.insert(
             token,
             PendingRequest {
-                id,
+                id: id.clone(),
                 request: request_log,
                 queued_at,
                 deadline: Instant::now() + timeout,
                 timeout_ms: timeout.as_millis(),
+                progress_token: progress_token.clone(),
             },
         );
-        ctx.worker_pool.submit(move || {
+        emit_progress_notification(
+            writer,
+            progress_token.as_ref(),
+            ProgressEventKind::Begin,
+            "queued",
+        )?;
+        emit_trace_log(
+            writer,
+            connection_state.trace,
+            TraceThreshold::Messages,
+            "info",
+            format!(
+                "queued request method={} tool={} timeout_ms={}",
+                method_name,
+                request_log_for_worker.tool_name.as_deref().unwrap_or("-"),
+                timeout.as_millis()
+            ),
+        )?;
+        let submit_result = ctx.worker_pool.submit(move || {
+            if canceled_tokens
+                .lock()
+                .expect("canceled token set lock poisoned")
+                .remove(&token)
+            {
+                return;
+            }
             let started_at = Instant::now();
             let queue_wait_ms = started_at.duration_since(queued_at).as_millis();
+            let _ = event_tx.send(TransportEvent::WorkerStarted {
+                token,
+                queue_wait_ms,
+            });
             tracing::debug!(
                 request_id = %request_log_for_worker.request_id,
                 method = %request_log_for_worker.method,
@@ -492,7 +627,7 @@ fn handle_input_line<W: Write>(
             let success = result.is_ok();
             let response = match result {
                 Ok(result) => jsonrpc_ok(request_id, result),
-                Err(error) => jsonrpc_error(request_id, -32000, user_visible_error_message(&error)),
+                Err(error) => jsonrpc_dispatch_error(request_id, &error),
             };
             let _ = event_tx.send(TransportEvent::Response {
                 token,
@@ -504,7 +639,13 @@ fn handle_input_line<W: Write>(
                     success,
                 },
             });
-        })?;
+        });
+        if let Err(error) = submit_result {
+            pending.remove(&token);
+            stats.async_dispatched = stats.async_dispatched.saturating_sub(1);
+            let response = jsonrpc_error(id, error.kind, error.message);
+            write_response(writer, &response)?;
+        }
         return Ok(());
     }
 
@@ -532,10 +673,10 @@ fn handle_input_line<W: Write>(
                 request_id = %request_log.request_id,
                 method = %request_log.method,
                 tool = request_log.tool_name.as_deref().unwrap_or("-"),
-                error = %error,
+                error = %error.source,
                 "MCP method failed"
             );
-            jsonrpc_error(id, -32000, user_visible_error_message(&error))
+            jsonrpc_dispatch_error(id, &error)
         }
     };
     write_response(writer, &response)
@@ -551,6 +692,7 @@ fn drain_expired_requests<W: Write>(
     writer: &mut W,
     pending: &mut HashMap<u64, PendingRequest>,
     stats: &mut TransportStats,
+    connection_state: &ConnectionState,
 ) -> Result<()> {
     let now = Instant::now();
     let mut expired_tokens = Vec::new();
@@ -573,12 +715,30 @@ fn drain_expired_requests<W: Write>(
             );
             let response = jsonrpc_error(
                 request.id,
-                -32000,
+                JsonRpcErrorKind::RequestTimedOut,
                 format!(
                     "worker pool timed out after {} ms while handling request",
                     request.timeout_ms
                 ),
             );
+            emit_progress_notification(
+                writer,
+                request.progress_token.as_ref(),
+                ProgressEventKind::End,
+                "timed out",
+            )?;
+            emit_trace_log(
+                writer,
+                connection_state.trace,
+                TraceThreshold::Messages,
+                "error",
+                format!(
+                    "timed out request method={} tool={} timeout_ms={}",
+                    request.request.method,
+                    request.request.tool_name.as_deref().unwrap_or("-"),
+                    request.timeout_ms
+                ),
+            )?;
             write_response(writer, &response)?;
         }
     }
@@ -593,6 +753,7 @@ fn handle_completion_event<W: Write>(
     response: String,
     completion: RequestCompletion,
     stats: &mut TransportStats,
+    connection_state: &ConnectionState,
 ) -> Result<()> {
     if let Some(request) = pending.remove(&token) {
         stats.completed += 1;
@@ -608,6 +769,29 @@ fn handle_completion_event<W: Write>(
             completion.execution_ms,
             request.queued_at.elapsed().as_millis(),
         );
+        emit_progress_notification(
+            writer,
+            request.progress_token.as_ref(),
+            ProgressEventKind::End,
+            if completion.success {
+                "completed"
+            } else {
+                "failed"
+            },
+        )?;
+        emit_trace_log(
+            writer,
+            connection_state.trace,
+            TraceThreshold::Messages,
+            if completion.success { "info" } else { "error" },
+            format!(
+                "completed request method={} tool={} success={} total_ms={}",
+                completion.request.method,
+                completion.request.tool_name.as_deref().unwrap_or("-"),
+                completion.success,
+                request.queued_at.elapsed().as_millis()
+            ),
+        )?;
         write_response(writer, &response)?;
     } else {
         stats.dropped_late += 1;
@@ -635,12 +819,15 @@ struct PendingRequest {
     queued_at: Instant,
     deadline: Instant,
     timeout_ms: u128,
+    progress_token: Option<serde_json::Value>,
 }
 
 struct RequestDispatchContext<'a> {
     repo_root: &'a str,
     db_path: &'a str,
     worker_pool: &'a WorkerPool,
+    server_options: &'a ServerOptions,
+    canceled_tokens: Arc<Mutex<HashSet<u64>>>,
     event_tx: &'a mpsc::Sender<TransportEvent>,
 }
 
@@ -654,6 +841,7 @@ struct TransportStats {
     completed_ok: u64,
     completed_err: u64,
     timed_out: u64,
+    canceled: u64,
     dropped_late: u64,
 }
 
@@ -661,6 +849,10 @@ enum TransportEvent {
     InputLine(String),
     InputClosed,
     InputError(String),
+    WorkerStarted {
+        token: u64,
+        queue_wait_ms: u128,
+    },
     Response {
         token: u64,
         response: String,
@@ -680,6 +872,31 @@ struct RequestCompletion {
     queue_wait_ms: u128,
     execution_ms: u128,
     success: bool,
+}
+
+struct ConnectionState {
+    trace: TraceLevel,
+    canceled_tokens: Arc<Mutex<HashSet<u64>>>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TraceLevel {
+    Off,
+    Messages,
+    Verbose,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TraceThreshold {
+    Messages,
+    Verbose,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProgressEventKind {
+    Begin,
+    Report,
+    End,
 }
 
 fn request_id_string(id: &serde_json::Value) -> String {
@@ -719,6 +936,186 @@ fn log_request_finished(
     );
 }
 
+fn resolve_request_timeout(options: &ServerOptions, request: &RequestLogContext) -> Duration {
+    let timeout_ms = request
+        .tool_name
+        .as_ref()
+        .and_then(|tool_name| options.tool_timeout_ms_by_tool.get(tool_name))
+        .copied()
+        .unwrap_or(options.tool_timeout_ms)
+        .clamp(1_000, 3_600_000);
+    Duration::from_millis(timeout_ms)
+}
+
+fn progress_token_from_params(params: Option<&serde_json::Value>) -> Option<serde_json::Value> {
+    params
+        .and_then(|value| value.get("progressToken"))
+        .cloned()
+        .or_else(|| {
+            params
+                .and_then(|value| value.get("_meta"))
+                .and_then(|value| value.get("progressToken"))
+                .cloned()
+        })
+        .or_else(|| params.and_then(|value| value.get("workDoneToken")).cloned())
+}
+
+fn parse_trace_level(params: Option<&serde_json::Value>) -> Result<TraceLevel> {
+    let level = params
+        .and_then(|value| value.get("value"))
+        .and_then(|value| value.as_str())
+        .unwrap_or("off");
+    match level {
+        "off" => Ok(TraceLevel::Off),
+        "messages" => Ok(TraceLevel::Messages),
+        "verbose" => Ok(TraceLevel::Verbose),
+        other => Err(anyhow::anyhow!(
+            "invalid $/setTrace value: expected 'off', 'messages', or 'verbose', got '{other}'"
+        )),
+    }
+}
+
+fn emit_progress_notification<W: Write>(
+    writer: &mut W,
+    token: Option<&serde_json::Value>,
+    kind: ProgressEventKind,
+    message: &str,
+) -> Result<()> {
+    let Some(token) = token else {
+        return Ok(());
+    };
+    let value = match kind {
+        ProgressEventKind::Begin => serde_json::json!({
+            "kind": "begin",
+            "title": "Atlas MCP tool call",
+            "message": message,
+        }),
+        ProgressEventKind::Report => serde_json::json!({
+            "kind": "report",
+            "message": message,
+        }),
+        ProgressEventKind::End => serde_json::json!({
+            "kind": "end",
+            "message": message,
+        }),
+    };
+    write_notification(
+        writer,
+        &jsonrpc_notification(
+            "$/progress",
+            serde_json::json!({
+                "token": token,
+                "value": value,
+            }),
+        ),
+    )
+}
+
+fn emit_trace_log<W: Write>(
+    writer: &mut W,
+    trace: TraceLevel,
+    threshold: TraceThreshold,
+    level: &str,
+    message: String,
+) -> Result<()> {
+    let enabled = match (trace, threshold) {
+        (TraceLevel::Off, _) => false,
+        (TraceLevel::Messages, TraceThreshold::Messages) => true,
+        (TraceLevel::Messages, TraceThreshold::Verbose) => false,
+        (TraceLevel::Verbose, _) => true,
+    };
+    if !enabled {
+        return Ok(());
+    }
+
+    write_notification(
+        writer,
+        &jsonrpc_notification(
+            "$/logMessage",
+            serde_json::json!({
+                "level": level,
+                "message": message,
+            }),
+        ),
+    )
+}
+
+fn cancel_request<W: Write>(
+    writer: &mut W,
+    pending: &mut HashMap<u64, PendingRequest>,
+    params: Option<&serde_json::Value>,
+    stats: &mut TransportStats,
+    connection_state: &ConnectionState,
+) -> Result<()> {
+    let target_id = params
+        .and_then(|value| value.get("id"))
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("$/cancelRequest requires 'id'"))?;
+    let Some(token) = pending
+        .iter()
+        .find_map(|(token, request)| (request.id == target_id).then_some(*token))
+    else {
+        return Ok(());
+    };
+    let request = pending
+        .remove(&token)
+        .expect("pending request must exist while canceling");
+    connection_state
+        .canceled_tokens
+        .lock()
+        .expect("canceled token set lock poisoned")
+        .insert(token);
+    stats.canceled += 1;
+    emit_progress_notification(
+        writer,
+        request.progress_token.as_ref(),
+        ProgressEventKind::End,
+        "canceled",
+    )?;
+    emit_trace_log(
+        writer,
+        connection_state.trace,
+        TraceThreshold::Messages,
+        "warning",
+        format!(
+            "canceled request method={} tool={}",
+            request.request.method,
+            request.request.tool_name.as_deref().unwrap_or("-")
+        ),
+    )?;
+    Ok(())
+}
+
+fn handle_worker_started<W: Write>(
+    writer: &mut W,
+    pending: &mut HashMap<u64, PendingRequest>,
+    token: u64,
+    queue_wait_ms: u128,
+    connection_state: &ConnectionState,
+) -> Result<()> {
+    let Some(request) = pending.get(&token) else {
+        return Ok(());
+    };
+    emit_progress_notification(
+        writer,
+        request.progress_token.as_ref(),
+        ProgressEventKind::Report,
+        "running",
+    )?;
+    emit_trace_log(
+        writer,
+        connection_state.trace,
+        TraceThreshold::Verbose,
+        "debug",
+        format!(
+            "started request method={} tool={} queue_wait_ms={queue_wait_ms}",
+            request.request.method,
+            request.request.tool_name.as_deref().unwrap_or("-")
+        ),
+    )?;
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Method dispatch
 // ---------------------------------------------------------------------------
@@ -728,13 +1125,19 @@ fn dispatch(
     params: Option<&serde_json::Value>,
     repo_root: &str,
     db_path: &str,
-) -> Result<serde_json::Value> {
+) -> std::result::Result<serde_json::Value, DispatchError> {
     match method {
         "initialize" => Ok(serde_json::json!({
             "protocolVersion": MCP_PROTOCOL_VERSION,
             "capabilities": {
                 "tools": {},
-                "prompts": { "listChanged": false }
+                "prompts": { "listChanged": false },
+                "logging": {},
+                "experimental": {
+                    "cancelRequest": true,
+                    "progressNotifications": true,
+                    "setTrace": true
+                }
             },
             "serverInfo": {
                 "name": "atlas",
@@ -750,21 +1153,34 @@ fn dispatch(
             let name = params
                 .and_then(|p| p.get("name"))
                 .and_then(|n| n.as_str())
-                .ok_or_else(|| anyhow::anyhow!("missing prompt name"))?;
+                .ok_or_else(|| {
+                    DispatchError::new(
+                        JsonRpcErrorKind::InvalidParams,
+                        anyhow::anyhow!("missing prompt name"),
+                    )
+                })?;
             let args = params.and_then(|p| p.get("arguments"));
-            prompts::prompt_get(name, args)
+            prompts::prompt_get(name, args).map_err(classify_prompt_error)
         }
 
         "tools/call" => {
             let name = params
                 .and_then(|p| p.get("name"))
                 .and_then(|n| n.as_str())
-                .ok_or_else(|| anyhow::anyhow!("missing tool name"))?;
+                .ok_or_else(|| {
+                    DispatchError::new(
+                        JsonRpcErrorKind::InvalidParams,
+                        anyhow::anyhow!("missing tool name"),
+                    )
+                })?;
             let args = params.and_then(|p| p.get("arguments"));
-            tools::call(name, args, repo_root, db_path)
+            tools::call(name, args, repo_root, db_path).map_err(classify_tool_error)
         }
 
-        other => Err(anyhow::anyhow!("method not found: {other}")),
+        other => Err(DispatchError::new(
+            JsonRpcErrorKind::MethodNotFound,
+            anyhow::anyhow!("method not found: {other}"),
+        )),
     }
 }
 
@@ -786,6 +1202,12 @@ where
 enum WorkerMessage {
     Run(WorkerTask),
     Shutdown,
+}
+
+#[derive(Debug)]
+struct WorkerSubmitError {
+    kind: JsonRpcErrorKind,
+    message: String,
 }
 
 #[cfg(unix)]
@@ -874,6 +1296,7 @@ impl Drop for ActiveStreamGuard {
 
 struct WorkerPool {
     thread_name_prefix: String,
+    #[cfg(test)]
     timeout: Duration,
     sender: mpsc::SyncSender<WorkerMessage>,
     handles: Vec<thread::JoinHandle<()>>,
@@ -890,6 +1313,7 @@ impl WorkerPool {
         )
     }
 
+    #[cfg_attr(not(test), allow(unused_variables))]
     fn new(thread_name_prefix: &str, worker_count: usize, timeout: Duration) -> Result<Self> {
         let worker_count = worker_count.max(1);
         let queue_bound = worker_count.saturating_mul(4).max(1);
@@ -921,6 +1345,7 @@ impl WorkerPool {
 
         Ok(Self {
             thread_name_prefix,
+            #[cfg(test)]
             timeout,
             sender,
             handles,
@@ -964,17 +1389,27 @@ impl WorkerPool {
             })?
     }
 
-    fn submit<F>(&self, task: F) -> Result<()>
+    fn submit<F>(&self, task: F) -> std::result::Result<(), WorkerSubmitError>
     where
         F: FnOnce() + Send + 'static,
     {
-        self.sender
-            .send(WorkerMessage::Run(Box::new(task)))
-            .map_err(|_| {
-                anyhow::anyhow!("worker pool '{}' is unavailable", self.thread_name_prefix)
-            })
+        match self.sender.try_send(WorkerMessage::Run(Box::new(task))) {
+            Ok(()) => Ok(()),
+            Err(mpsc::TrySendError::Full(_)) => Err(WorkerSubmitError {
+                kind: JsonRpcErrorKind::RateLimited,
+                message: format!(
+                    "worker pool '{}' is saturated; retry later",
+                    self.thread_name_prefix
+                ),
+            }),
+            Err(mpsc::TrySendError::Disconnected(_)) => Err(WorkerSubmitError {
+                kind: JsonRpcErrorKind::WorkerUnavailable,
+                message: format!("worker pool '{}' is unavailable", self.thread_name_prefix),
+            }),
+        }
     }
 
+    #[cfg(test)]
     fn timeout(&self) -> Duration {
         self.timeout
     }
@@ -1027,17 +1462,122 @@ fn jsonrpc_ok(id: serde_json::Value, result: serde_json::Value) -> String {
     serde_json::json!({ "jsonrpc": "2.0", "id": id, "result": result }).to_string()
 }
 
+fn jsonrpc_notification(method: &str, params: serde_json::Value) -> String {
+    serde_json::json!({ "jsonrpc": "2.0", "method": method, "params": params }).to_string()
+}
+
 fn user_visible_error_message(error: &anyhow::Error) -> String {
     user_facing_error_message(&error.to_string(), &format!("{error:#}"))
 }
 
-fn jsonrpc_error(id: serde_json::Value, code: i32, message: String) -> String {
+fn jsonrpc_error(id: serde_json::Value, kind: JsonRpcErrorKind, message: String) -> String {
     serde_json::json!({
         "jsonrpc": "2.0",
         "id": id,
-        "error": { "code": code, "message": message }
+        "error": {
+            "code": kind.code(),
+            "message": message,
+            "data": { "atlas_error_code": kind.atlas_error_code() }
+        }
     })
     .to_string()
+}
+
+fn jsonrpc_dispatch_error(id: serde_json::Value, error: &DispatchError) -> String {
+    jsonrpc_error(id, error.kind, error.message())
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum JsonRpcErrorKind {
+    ParseError,
+    InvalidRequest,
+    MethodNotFound,
+    InvalidParams,
+    InternalError,
+    ToolExecutionFailed,
+    WorkerUnavailable,
+    RequestTimedOut,
+    RateLimited,
+}
+
+impl JsonRpcErrorKind {
+    fn code(self) -> i32 {
+        match self {
+            Self::ParseError => JSONRPC_PARSE_ERROR,
+            Self::InvalidRequest => JSONRPC_INVALID_REQUEST,
+            Self::MethodNotFound => JSONRPC_METHOD_NOT_FOUND,
+            Self::InvalidParams => JSONRPC_INVALID_PARAMS,
+            Self::InternalError => JSONRPC_INTERNAL_ERROR,
+            Self::ToolExecutionFailed => JSONRPC_TOOL_EXECUTION_FAILED,
+            Self::WorkerUnavailable => JSONRPC_WORKER_UNAVAILABLE,
+            Self::RequestTimedOut => JSONRPC_REQUEST_TIMEOUT,
+            Self::RateLimited => JSONRPC_RATE_LIMITED,
+        }
+    }
+
+    fn atlas_error_code(self) -> &'static str {
+        match self {
+            Self::ParseError => "parse_error",
+            Self::InvalidRequest => "invalid_request",
+            Self::MethodNotFound => "method_not_found",
+            Self::InvalidParams => "invalid_params",
+            Self::InternalError => "internal_error",
+            Self::ToolExecutionFailed => "tool_execution_failed",
+            Self::WorkerUnavailable => "worker_unavailable",
+            Self::RequestTimedOut => "request_timed_out",
+            Self::RateLimited => "rate_limited",
+        }
+    }
+}
+
+#[derive(Debug)]
+struct DispatchError {
+    kind: JsonRpcErrorKind,
+    source: anyhow::Error,
+}
+
+impl DispatchError {
+    fn new(kind: JsonRpcErrorKind, source: anyhow::Error) -> Self {
+        Self { kind, source }
+    }
+
+    fn message(&self) -> String {
+        match self.kind {
+            JsonRpcErrorKind::ToolExecutionFailed | JsonRpcErrorKind::InternalError => {
+                user_visible_error_message(&self.source)
+            }
+            _ => self.source.to_string(),
+        }
+    }
+}
+
+fn classify_prompt_error(error: anyhow::Error) -> DispatchError {
+    let detail = error.to_string();
+    let kind = if detail.starts_with("unknown prompt:") || is_invalid_params_message(&detail) {
+        JsonRpcErrorKind::InvalidParams
+    } else {
+        JsonRpcErrorKind::InternalError
+    };
+    DispatchError::new(kind, error)
+}
+
+fn classify_tool_error(error: anyhow::Error) -> DispatchError {
+    let detail = error.to_string();
+    let kind = if detail.starts_with("unknown tool:") || is_invalid_params_message(&detail) {
+        JsonRpcErrorKind::InvalidParams
+    } else {
+        JsonRpcErrorKind::ToolExecutionFailed
+    };
+    DispatchError::new(kind, error)
+}
+
+fn is_invalid_params_message(detail: &str) -> bool {
+    detail.starts_with("missing ")
+        || detail.starts_with("argument '")
+        || detail.contains("missing required argument:")
+        || detail.contains("requires non-empty")
+        || detail.contains("must be ")
+        || detail.contains("invalid regex pattern")
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1075,6 +1615,76 @@ impl DaemonHandshakeResponse {
             db_path: db_path.to_owned(),
             error: Some(error),
         }
+    }
+}
+
+fn write_notification<W: Write>(writer: &mut W, notification: &str) -> Result<()> {
+    writeln!(writer, "{notification}")?;
+    writer.flush()?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn secure_socket_path(socket_path: &Path) -> Result<()> {
+    std::fs::set_permissions(socket_path, std::fs::Permissions::from_mode(0o600))
+        .with_context(|| format!("cannot secure {}", socket_path.display()))
+}
+
+#[cfg(unix)]
+fn ensure_peer_uid_allowed(stream: &UnixStream) -> Result<()> {
+    let peer_uid = peer_uid(stream)?;
+    let process_uid = unsafe { libc::geteuid() };
+    if peer_uid == process_uid || peer_uid == 0 {
+        return Ok(());
+    }
+
+    Err(anyhow::anyhow!(
+        "rejecting daemon client from uid {peer_uid}; expected uid {process_uid}"
+    ))
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn peer_uid(stream: &UnixStream) -> Result<libc::uid_t> {
+    let fd = stream.as_raw_fd();
+    let mut creds = libc::ucred {
+        pid: 0,
+        uid: 0,
+        gid: 0,
+    };
+    let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+    let result = unsafe {
+        libc::getsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_PEERCRED,
+            &mut creds as *mut libc::ucred as *mut libc::c_void,
+            &mut len,
+        )
+    };
+    if result == 0 {
+        Ok(creds.uid)
+    } else {
+        Err(std::io::Error::last_os_error()).context("cannot read peer credentials")
+    }
+}
+
+#[cfg(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "freebsd",
+    target_os = "dragonfly",
+    target_os = "openbsd",
+    target_os = "netbsd"
+))]
+fn peer_uid(stream: &UnixStream) -> Result<libc::uid_t> {
+    let fd = stream.as_raw_fd();
+    let mut uid = 0;
+    let mut gid = 0;
+    let result = unsafe { libc::getpeereid(fd, &mut uid, &mut gid) };
+    if result == 0 {
+        Ok(uid)
+    } else {
+        Err(std::io::Error::last_os_error()).context("cannot read peer credentials")
     }
 }
 
@@ -1197,6 +1807,13 @@ mod tests {
             .collect()
     }
 
+    fn test_connection_state() -> ConnectionState {
+        ConnectionState {
+            trace: TraceLevel::Off,
+            canceled_tokens: Arc::new(Mutex::new(HashSet::new())),
+        }
+    }
+
     #[test]
     fn stdio_transport_handles_initialize_list_and_tool_calls() {
         let fixture = setup_fixture();
@@ -1296,6 +1913,8 @@ mod tests {
         let fixture = setup_fixture();
         let input = concat!(
             "not-json\n",
+            "{\"id\":6,\"method\":\"initialize\",\"params\":{}}\n",
+            "{\"jsonrpc\":\"2.0\",\"id\":8,\"method\":\"tools/call\",\"params\":{\"name\":\"query_graph\",\"arguments\":{}}}\n",
             "{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"missing/method\",\"params\":{}}\n"
         );
         let reader = BufReader::new(Cursor::new(input.as_bytes()));
@@ -1311,13 +1930,37 @@ mod tests {
         .expect("run server io");
 
         let responses = parse_output_lines(writer);
-        assert_eq!(responses.len(), 2);
-        assert_eq!(responses[0]["error"]["code"], -32700);
-        assert_eq!(responses[0]["id"], serde_json::Value::Null);
-        assert_eq!(responses[1]["id"], 7);
-        assert_eq!(responses[1]["error"]["code"], -32000);
+        assert_eq!(responses.len(), 4);
+        let by_id: std::collections::HashMap<_, _> = responses
+            .into_iter()
+            .map(|response| (response["id"].clone(), response))
+            .collect();
+
+        assert_eq!(by_id[&serde_json::Value::Null]["error"]["code"], -32700);
+        assert_eq!(
+            by_id[&serde_json::Value::Null]["error"]["data"]["atlas_error_code"],
+            serde_json::json!("parse_error")
+        );
+        assert_eq!(by_id[&serde_json::json!(6)]["id"], 6);
+        assert_eq!(by_id[&serde_json::json!(6)]["error"]["code"], -32600);
+        assert_eq!(
+            by_id[&serde_json::json!(6)]["error"]["data"]["atlas_error_code"],
+            serde_json::json!("invalid_request")
+        );
+        assert_eq!(by_id[&serde_json::json!(8)]["id"], 8);
+        assert_eq!(by_id[&serde_json::json!(8)]["error"]["code"], -32602);
+        assert_eq!(
+            by_id[&serde_json::json!(8)]["error"]["data"]["atlas_error_code"],
+            serde_json::json!("invalid_params")
+        );
+        assert_eq!(by_id[&serde_json::json!(7)]["id"], 7);
+        assert_eq!(by_id[&serde_json::json!(7)]["error"]["code"], -32601);
+        assert_eq!(
+            by_id[&serde_json::json!(7)]["error"]["data"]["atlas_error_code"],
+            serde_json::json!("method_not_found")
+        );
         assert!(
-            responses[1]["error"]["message"]
+            by_id[&serde_json::json!(7)]["error"]["message"]
                 .as_str()
                 .expect("error message")
                 .contains("method not found")
@@ -1358,7 +2001,11 @@ mod tests {
             .as_str()
             .expect("error message");
 
-        assert_eq!(response["error"]["code"], -32000);
+        assert_eq!(response["error"]["code"], -32001);
+        assert_eq!(
+            response["error"]["data"]["atlas_error_code"],
+            serde_json::json!("tool_execution_failed")
+        );
         assert!(
             message.contains("Graph database schema does not match this Atlas build."),
             "message should be user friendly: {message}"
@@ -1374,6 +2021,97 @@ mod tests {
         assert!(
             !message.contains("no such table"),
             "message must not leak raw schema failure: {message}"
+        );
+    }
+
+    #[test]
+    fn stdio_transport_emits_progress_and_log_notifications() {
+        let fixture = setup_fixture();
+        let input = concat!(
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"$/setTrace\",\"params\":{\"value\":\"messages\"}}\n",
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"query_graph\",\"progressToken\":\"tok-1\",\"arguments\":{\"text\":\"compute\"}}}\n"
+        );
+        let reader = BufReader::new(Cursor::new(input.as_bytes()));
+        let mut writer = Vec::new();
+
+        run_server_io(
+            reader,
+            &mut writer,
+            "/ignored",
+            &fixture.db_path,
+            ServerOptions::default(),
+        )
+        .expect("run server io");
+
+        let responses = parse_output_lines(writer);
+        assert!(
+            responses
+                .iter()
+                .any(|value| value["method"] == serde_json::json!("$/logMessage")),
+            "setTrace=messages should emit log notifications"
+        );
+        assert!(
+            responses.iter().any(|value| {
+                value["method"] == serde_json::json!("$/progress")
+                    && value["params"]["token"] == serde_json::json!("tok-1")
+                    && value["params"]["value"]["kind"] == serde_json::json!("begin")
+            }),
+            "tool call should emit progress begin"
+        );
+        assert!(
+            responses.iter().any(|value| {
+                value["method"] == serde_json::json!("$/progress")
+                    && value["params"]["token"] == serde_json::json!("tok-1")
+                    && value["params"]["value"]["kind"] == serde_json::json!("end")
+            }),
+            "tool call should emit progress end"
+        );
+        assert!(
+            responses.iter().any(|value| value["id"] == serde_json::json!(2)),
+            "tool response must still be returned"
+        );
+    }
+
+    #[test]
+    fn stdio_transport_cancels_queued_request_without_response() {
+        let fixture = setup_fixture();
+        let input = concat!(
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"__test_sleep\",\"arguments\":{\"sleep_ms\":200}}}\n",
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"__test_sleep\",\"progressToken\":\"cancel-me\",\"arguments\":{\"sleep_ms\":200}}}\n",
+            "{\"jsonrpc\":\"2.0\",\"method\":\"$/cancelRequest\",\"params\":{\"id\":2}}\n"
+        );
+        let reader = BufReader::new(Cursor::new(input.as_bytes()));
+        let mut writer = Vec::new();
+
+        run_server_io(
+            reader,
+            &mut writer,
+            "/ignored",
+            &fixture.db_path,
+            ServerOptions {
+                worker_threads: 1,
+                tool_timeout_ms: 1_000,
+                tool_timeout_ms_by_tool: HashMap::from([("__test_sleep".to_owned(), 1_000)]),
+            },
+        )
+        .expect("run server io");
+
+        let responses = parse_output_lines(writer);
+        assert!(
+            responses.iter().any(|value| value["id"] == serde_json::json!(1)),
+            "first slow request should complete"
+        );
+        assert!(
+            responses.iter().all(|value| value["id"] != serde_json::json!(2)),
+            "canceled queued request must not emit a response"
+        );
+        assert!(
+            responses.iter().any(|value| {
+                value["method"] == serde_json::json!("$/progress")
+                    && value["params"]["token"] == serde_json::json!("cancel-me")
+                    && value["params"]["value"]["message"] == serde_json::json!("canceled")
+            }),
+            "canceled request should close progress stream"
         );
     }
 
@@ -1395,6 +2133,7 @@ mod tests {
                 "/repo",
                 &db_path,
                 worker_pool,
+                ServerOptions::default(),
                 active_streams,
             )
         });
@@ -1492,6 +2231,7 @@ mod tests {
                 "/repo",
                 &db_path,
                 worker_pool,
+                ServerOptions::default(),
                 active_streams,
             )
         });
@@ -1529,6 +2269,23 @@ mod tests {
                 .unwrap_or_default()
                 .contains("protocol mismatch")
         );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn secure_socket_path_sets_owner_only_permissions() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join("atlas.sock");
+        std::fs::write(&path, b"socket-placeholder").expect("write placeholder");
+
+        secure_socket_path(&path).expect("secure socket path");
+
+        let mode = std::fs::metadata(&path)
+            .expect("metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600);
     }
 
     #[test]
@@ -1670,6 +2427,7 @@ mod tests {
             ServerOptions {
                 worker_threads: 1,
                 tool_timeout_ms: 1000,
+                tool_timeout_ms_by_tool: HashMap::new(),
             },
         )
         .expect("pool from env");
@@ -1729,6 +2487,7 @@ mod tests {
             ServerOptions {
                 worker_threads: 4,
                 tool_timeout_ms: 4321,
+                tool_timeout_ms_by_tool: HashMap::new(),
             },
         )
         .expect("pool from options");
@@ -1738,12 +2497,76 @@ mod tests {
     }
 
     #[test]
+    fn transport_applies_per_tool_timeout_overrides() {
+        let fixture = setup_fixture();
+        let input =
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"__test_sleep\",\"arguments\":{\"sleep_ms\":1200}}}\n";
+        let reader = BufReader::new(Cursor::new(input.as_bytes()));
+        let mut writer = Vec::new();
+
+        run_server_io(
+            reader,
+            &mut writer,
+            "/ignored",
+            &fixture.db_path,
+            ServerOptions {
+                worker_threads: 1,
+                tool_timeout_ms: 2_000,
+                tool_timeout_ms_by_tool: HashMap::from([("__test_sleep".to_owned(), 1_000)]),
+            },
+        )
+        .expect("run server io");
+
+        let responses = parse_output_lines(writer);
+        let response = responses
+            .iter()
+            .find(|value| value["id"] == serde_json::json!(1))
+            .expect("sleep response");
+        assert_eq!(response["error"]["code"], serde_json::json!(-32003));
+    }
+
+    #[test]
+    fn transport_rate_limits_when_queue_is_saturated() {
+        let fixture = setup_fixture();
+        let mut input = String::new();
+        for id in 1..=12 {
+            input.push_str(&format!(
+                "{{\"jsonrpc\":\"2.0\",\"id\":{id},\"method\":\"tools/call\",\"params\":{{\"name\":\"__test_sleep\",\"arguments\":{{\"sleep_ms\":200}}}}}}\n"
+            ));
+        }
+        let reader = BufReader::new(Cursor::new(input.into_bytes()));
+        let mut writer = Vec::new();
+
+        run_server_io(
+            reader,
+            &mut writer,
+            "/ignored",
+            &fixture.db_path,
+            ServerOptions {
+                worker_threads: 1,
+                tool_timeout_ms: 1_000,
+                tool_timeout_ms_by_tool: HashMap::from([("__test_sleep".to_owned(), 1_000)]),
+            },
+        )
+        .expect("run server io");
+
+        let responses = parse_output_lines(writer);
+        assert!(
+            responses
+                .iter()
+                .any(|value| value["error"]["code"] == serde_json::json!(-32004)),
+            "queue saturation should return rate-limited error"
+        );
+    }
+
+    #[test]
     fn timed_out_request_emits_single_response_even_if_completion_arrives_late() {
         let mut pending = HashMap::new();
         let mut stats = TransportStats::default();
         let mut writer = Vec::new();
         let token = 7;
         let request_id = serde_json::json!(99);
+        let connection_state = test_connection_state();
 
         pending.insert(
             token,
@@ -1757,10 +2580,12 @@ mod tests {
                 queued_at: Instant::now() - Duration::from_millis(20),
                 deadline: Instant::now() - Duration::from_millis(1),
                 timeout_ms: 10,
+                progress_token: None,
             },
         );
 
-        drain_expired_requests(&mut writer, &mut pending, &mut stats).expect("expire request");
+        drain_expired_requests(&mut writer, &mut pending, &mut stats, &connection_state)
+            .expect("expire request");
         assert!(
             pending.is_empty(),
             "timed out request must be removed from pending set"
@@ -1783,6 +2608,7 @@ mod tests {
                 success: true,
             },
             &mut stats,
+            &connection_state,
         )
         .expect("late completion handling");
 
@@ -1793,7 +2619,11 @@ mod tests {
             "late completion must not emit duplicate response"
         );
         assert_eq!(responses[0]["id"], request_id);
-        assert_eq!(responses[0]["error"]["code"], serde_json::json!(-32000));
+        assert_eq!(responses[0]["error"]["code"], serde_json::json!(-32003));
+        assert_eq!(
+            responses[0]["error"]["data"]["atlas_error_code"],
+            serde_json::json!("request_timed_out")
+        );
         assert!(
             responses[0]["error"]["message"]
                 .as_str()

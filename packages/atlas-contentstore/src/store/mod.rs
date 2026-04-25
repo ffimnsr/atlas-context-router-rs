@@ -29,6 +29,10 @@ pub use types::{
 };
 
 /// SQLite-backed content store.
+///
+/// Owns exactly one thread-confined SQLite connection for `context.db`.
+/// Concurrent access, when needed, must use separate connections rather than
+/// sharing this one across threads.
 pub struct ContentStore {
     pub(super) conn: Connection,
     pub(super) config: ContentStoreConfig,

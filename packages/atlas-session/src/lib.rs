@@ -8,6 +8,8 @@
 //!
 //! This crate must not depend on the graph database (`atlas-store-sqlite`)
 //! or on content-storage concerns (`atlas-contentstore`).
+//! Each `SessionStore` instance owns one thread-confined SQLite connection;
+//! concurrent access uses separate store instances and separate connections.
 
 pub mod identity;
 mod migrations;

@@ -281,6 +281,7 @@ fn status_payload(ctx: StatusPayloadContext<'_>) -> serde_json::Value {
         "mcp": {
             "worker_threads": ctx.config.mcp_worker_threads(),
             "tool_timeout_ms": ctx.config.mcp_tool_timeout_ms(),
+            "tool_timeout_ms_by_tool": ctx.config.mcp_tool_timeout_ms_by_tool(),
         },
         "diff_target": {
             "base": ctx.base,
@@ -395,9 +396,10 @@ pub fn run_status(cli: &Cli) -> Result<()> {
         println!("Repo root : {repo}");
         println!("Database  : {db_path}");
         println!(
-            "MCP serve : workers={} timeout_ms={}",
+            "MCP serve : workers={} default_timeout_ms={} per_tool_overrides={}",
             config.mcp_worker_threads(),
-            config.mcp_tool_timeout_ms()
+            config.mcp_tool_timeout_ms(),
+            config.mcp_tool_timeout_ms_by_tool().len()
         );
         println!("Files     : {}", stats.file_count);
         println!("Nodes     : {}", stats.node_count);

@@ -22,6 +22,26 @@ members = [
 exclude = ["fuzz"]
 resolver = "2"
 
+[workspace.package]
+rust-version = "1.95"
+
+[workspace.lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+
+[workspace.metadata.cargo-deny]
+config = "deny.toml"
+
+[workspace.metadata.dist]
+cargo-dist-version = "0.29.0"
+ci = ["github"]
+installers = ["shell"]
+targets = ["x86_64-unknown-linux-musl", "aarch64-apple-darwin"]
+unix-archive = ".tar.gz"
+
+[workspace.metadata.release-plz]
+config = "release-plz.toml"
+
 [workspace.dependencies]
 # errors
 thiserror = "2"
@@ -36,6 +56,7 @@ toml = "0.8"
 camino = { version = "1", features = ["serde1"] }
 sha2 = "0.10"
 time = { version = "0.3", features = ["serde"] }
+unicode-normalization = "0.1"
 
 # CLI
 clap = { version = "4", features = ["derive"] }
@@ -46,7 +67,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # SQLite
-rusqlite = { version = "0.32", features = ["bundled", "bundled-full"] }
+rusqlite = { version = "0.32", features = ["bundled-full"] }
 atlas-db-utils = { path = "packages/atlas-db-utils", version = "1.0.0" }
 
 # Tree-sitter
@@ -73,7 +94,7 @@ tree-sitter-ruby = "0.23.1"
 criterion = { version = "0.5", features = ["html_reports"] }
 
 # HTTP client
-ureq = { version = "2", features = ["json"] }
+ureq = { version = "3", features = ["json"] }
 
 # regex
 regex = { version = "1", default-features = false, features = ["std", "unicode-perl"] }
@@ -87,3 +108,17 @@ atlas-core      = { path = "packages/atlas-core" }
 atlas-engine    = { path = "packages/atlas-engine" }
 atlas-mcp       = { path = "packages/atlas-mcp" }
 atlas-reasoning = { path = "packages/atlas-reasoning" }
+
+[profile.dev]
+debug = 1
+split-debuginfo = "unpacked"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
+
+[profile.bench]
+debug = 1
+split-debuginfo = "unpacked"

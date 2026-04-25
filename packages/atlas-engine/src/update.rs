@@ -217,7 +217,7 @@ pub fn update_graph(
                 if let Some(old) = &cf.old_path {
                     // Check whether content is unchanged: if so, preserve node ids.
                     let new_abs = repo_root.join(&cf.path);
-                    let new_hash = atlas_repo::hash_file(&new_abs).ok();
+                    let new_hash = hash_file(&new_abs).ok();
                     let stored_hash = store.file_hash(old).ok().flatten();
                     let old_owner_id = store.file_owner_id(old).ok().flatten();
                     let new_owner_id = owners
@@ -349,6 +349,8 @@ pub fn update_graph(
             })
             .collect();
 
+        // SQLite work stays outside this Rayon closure. Workers only hash,
+        // read, and parse; store mutation resumes after collection.
         let results: Vec<ParseResultRow> = work
             .par_iter_mut()
             .map(|(rel_str, abs_path, old_tree)| {
@@ -481,6 +483,8 @@ pub fn update_graph(
             })
             .collect();
 
+        // Same boundary here: dependent-file parsing is parallel, DB access is
+        // deferred until the sequential write phase below.
         let results: Vec<ParseResultRow> = work
             .par_iter_mut()
             .map(|(rel_str, abs_path, old_tree)| {
@@ -547,6 +551,7 @@ pub fn update_graph(
 
     let all_parsed: Vec<&ParsedFile> = parsed_changed.iter().chain(parsed_deps.iter()).collect();
     for chunk in all_parsed.chunks(opts.batch_size) {
+        // Sequential persistence through the store's single owned connection.
         let chunk_owned: Vec<ParsedFile> = chunk.iter().map(|pf| (*pf).clone()).collect();
         let (n, e) = store
             .replace_files_transactional(&chunk_owned)
@@ -729,7 +734,11 @@ mod tests {
         )
         .unwrap();
 
-        std::fs::write(repo_root.join("lib.rs"), "pub fn ok() {}\npub fn later() {}\n").unwrap();
+        std::fs::write(
+            repo_root.join("lib.rs"),
+            "pub fn ok() {}\npub fn later() {}\n",
+        )
+        .unwrap();
 
         let summary = update_graph(
             Utf8Path::from_path(repo_root).unwrap(),
@@ -746,7 +755,10 @@ mod tests {
         assert_eq!(summary.parsed, 1);
         let store = Store::open(db_path.to_str().unwrap()).unwrap();
         assert!(
-            store.find_repo_id(repo_root.to_str().unwrap()).unwrap().is_some(),
+            store
+                .find_repo_id(repo_root.to_str().unwrap())
+                .unwrap()
+                .is_some(),
             "incremental update must keep repo root registered in repos table"
         );
     }

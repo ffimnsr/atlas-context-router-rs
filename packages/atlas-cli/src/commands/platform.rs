@@ -16,6 +16,7 @@ pub fn run_serve(cli: &Cli) -> Result<()> {
     let options = ServerOptions {
         worker_threads: config.mcp_worker_threads(),
         tool_timeout_ms: config.mcp_tool_timeout_ms(),
+        tool_timeout_ms_by_tool: config.mcp_tool_timeout_ms_by_tool(),
     };
 
     #[cfg(unix)]
@@ -37,6 +38,7 @@ pub fn run_serve_daemon(cli: &Cli) -> Result<()> {
     let options = ServerOptions {
         worker_threads: config.mcp_worker_threads(),
         tool_timeout_ms: config.mcp_tool_timeout_ms(),
+        tool_timeout_ms_by_tool: config.mcp_tool_timeout_ms_by_tool(),
     };
 
     #[cfg(unix)]

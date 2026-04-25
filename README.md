@@ -264,6 +264,8 @@ Repo-local MCP coordination state lives under `.atlas/mcp/<instance-id>/`:
 
 Atlas treats repo-relative paths as canonical identity for persisted graph rows, content source IDs, chunk seeds, and session file references.
 
+Shared path normalization now happens in `atlas-repo`: separators become `/`, Unicode folds to NFC, Windows identities fold case, and CLI/watch boundary absolute paths prefer filesystem-canonical spelling so case-insensitive filesystems do not drift. Repo scan skips symlinks and dedupes canonical submodule roots to guard loop topologies.
+
 Audit coverage:
 
 - graph store persistence and lookup keys go through canonical `files.path` / `nodes.file_path` identity before reuse or persistence

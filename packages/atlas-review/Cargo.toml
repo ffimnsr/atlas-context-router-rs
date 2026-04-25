@@ -3,6 +3,7 @@ name = "atlas-review"
 version = "1.0.0"
 edition = "2024"
 description = "Review context assembly and risk summarization for Atlas code changes"
+publish = false
 
 [dependencies]
 atlas-core.workspace = true
@@ -21,3 +22,6 @@ tempfile = "3"
 [[bench]]
 name = "context_bench"
 harness = false
+
+[lints]
+workspace = true

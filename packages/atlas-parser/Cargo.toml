@@ -3,9 +3,11 @@ name = "atlas-parser"
 version = "1.0.0"
 edition = "2024"
 description = "Tree-sitter based source parsing and parser registry for Atlas"
+publish = false
 
 [dependencies]
 atlas-core.workspace = true
+atlas-repo = { path = "../atlas-repo", version = "1.0.0" }
 tracing.workspace = true
 tree-sitter.workspace = true
 tree-sitter-rust.workspace = true
@@ -35,3 +37,6 @@ criterion.workspace = true
 [[bench]]
 name = "parse_bench"
 harness = false
+
+[lints]
+workspace = true

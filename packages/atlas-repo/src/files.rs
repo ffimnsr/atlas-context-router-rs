@@ -1,7 +1,8 @@
 use anyhow::{Context, Result};
 use camino::{Utf8Path, Utf8PathBuf};
 
-use crate::path::{CanonicalRepoPath, git_cmd};
+use crate::path::{CanonicalRepoPath, canonical_filesystem_path, git_cmd};
+use std::collections::HashSet;
 
 /// Default maximum file size in bytes (10 MiB).
 pub const DEFAULT_MAX_FILE_BYTES: u64 = 10 * 1024 * 1024;
@@ -51,6 +52,8 @@ pub const DEFAULT_IGNORE_PATTERNS: &[&str] = &[
 ///
 /// Returned paths are repo-relative, forward-slash separated. Initialized
 /// submodules are scanned recursively and prefixed with their submodule path.
+/// Recursion is guarded by canonical filesystem repo roots so symlink aliases
+/// or malformed nested submodule topology cannot loop forever.
 pub fn collect_files(repo_root: &Utf8Path, max_bytes: Option<u64>) -> Result<Vec<Utf8PathBuf>> {
     let (files, _) = collect_supported_files(repo_root, max_bytes, |_| true)?;
     Ok(files)
@@ -233,6 +236,22 @@ fn glob_match_inner(pat: &[u8], text: &[u8]) -> bool {
 
 /// Run `git ls-files` and return repo-relative paths.
 fn git_ls_files(repo_root: &Utf8Path) -> Result<Vec<Utf8PathBuf>> {
+    let mut visited = HashSet::new();
+    git_ls_files_with_guard(repo_root, &mut visited)
+}
+
+fn git_ls_files_with_guard(
+    repo_root: &Utf8Path,
+    visited: &mut HashSet<Utf8PathBuf>,
+) -> Result<Vec<Utf8PathBuf>> {
+    if !register_repo_scan_root(visited, repo_root)? {
+        tracing::warn!(
+            "skipping repo scan for '{}': canonical root already visited; possible symlink loop",
+            repo_root
+        );
+        return Ok(Vec::new());
+    }
+
     let mut paths = git_ls_files_in_repo(repo_root)?;
 
     for submodule_path in git_submodule_paths(repo_root)? {
@@ -245,7 +264,7 @@ fn git_ls_files(repo_root: &Utf8Path) -> Result<Vec<Utf8PathBuf>> {
             continue;
         }
 
-        match git_ls_files(&submodule_root) {
+        match git_ls_files_with_guard(&submodule_root, visited) {
             Ok(submodule_files) => {
                 paths.extend(
                     submodule_files
@@ -260,6 +279,15 @@ fn git_ls_files(repo_root: &Utf8Path) -> Result<Vec<Utf8PathBuf>> {
     }
 
     Ok(paths)
+}
+
+fn register_repo_scan_root(
+    visited: &mut HashSet<Utf8PathBuf>,
+    repo_root: &Utf8Path,
+) -> Result<bool> {
+    let canonical = canonical_filesystem_path(repo_root)
+        .with_context(|| format!("cannot canonicalize repo root '{repo_root}'"))?;
+    Ok(visited.insert(canonical))
 }
 
 fn git_ls_files_in_repo(repo_root: &Utf8Path) -> Result<Vec<Utf8PathBuf>> {
@@ -575,6 +603,28 @@ mod tests {
             check_file(target_utf8, DEFAULT_MAX_FILE_BYTES).unwrap(),
             CheckFileOutcome::Accept
         ));
+    }
+
+    #[test]
+    fn repo_scan_guard_dedupes_same_physical_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = Utf8Path::from_path(dir.path()).unwrap();
+        let alias = dir.path().join("alias");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            symlink(dir.path(), &alias).unwrap();
+            let alias = Utf8Path::from_path(&alias).unwrap();
+            let mut visited = HashSet::new();
+            assert!(register_repo_scan_root(&mut visited, root).unwrap());
+            assert!(!register_repo_scan_root(&mut visited, alias).unwrap());
+        }
+        #[cfg(not(unix))]
+        {
+            let mut visited = HashSet::new();
+            assert!(register_repo_scan_root(&mut visited, root).unwrap());
+            assert!(!register_repo_scan_root(&mut visited, root).unwrap());
+        }
     }
 
     #[test]

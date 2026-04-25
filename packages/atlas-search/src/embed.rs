@@ -59,11 +59,13 @@ pub fn embed_text(config: &EmbeddingConfig, text: &str) -> Result<Vec<f32>> {
         "input": text,
     });
 
-    let resp_text: String = ureq::post(&url)
-        .set("Content-Type", "application/json")
+    let mut response = ureq::post(&url)
+        .header("Content-Type", "application/json")
         .send_json(&body)
-        .map_err(|e| anyhow::anyhow!("embedding HTTP request failed: {e}"))?
-        .into_string()
+        .map_err(|e| anyhow::anyhow!("embedding HTTP request failed: {e}"))?;
+    let resp_text = response
+        .body_mut()
+        .read_to_string()
         .context("reading embedding response body")?;
 
     // Try Ollama format first (has `embeddings` array of arrays).

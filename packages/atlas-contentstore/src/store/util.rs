@@ -1,9 +1,8 @@
 use std::collections::HashMap;
 
-use time::OffsetDateTime;
 use tracing::{debug, info};
 
-use atlas_core::AtlasError;
+use atlas_core::{AtlasError, Clock, SystemClock, format_rfc3339};
 
 use super::ChunkResult;
 
@@ -11,16 +10,11 @@ use super::ChunkResult;
 const RRF_K: f64 = 60.0;
 
 pub(super) fn format_now() -> String {
-    OffsetDateTime::now_utc()
-        .format(&time::format_description::well_known::Rfc3339)
-        .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string())
+    format_now_with(&SystemClock)
 }
 
 pub(super) fn format_days_ago(days: u32) -> String {
-    let duration = time::Duration::days(days as i64);
-    let ts = OffsetDateTime::now_utc() - duration;
-    ts.format(&time::format_description::well_known::Rfc3339)
-        .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string())
+    format_days_ago_with(&SystemClock, days)
 }
 
 pub(super) fn fts5_escape(input: &str) -> String {
@@ -174,5 +168,30 @@ pub(super) fn quarantine_db(path: &str) {
             quarantine = %qpath,
             "corrupt content DB quarantined; a fresh store will be created on next open"
         );
+    }
+}
+
+fn format_now_with(clock: &dyn Clock) -> String {
+    format_rfc3339(clock.now_utc())
+}
+
+fn format_days_ago_with(clock: &dyn Clock, days: u32) -> String {
+    let duration = time::Duration::days(days as i64);
+    let ts = clock.now_utc() - duration;
+    format_rfc3339(ts)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use atlas_core::FixedClock;
+    use time::OffsetDateTime;
+
+    #[test]
+    fn injected_clock_formats_contentstore_timestamps() {
+        let now = OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap();
+        let clock = FixedClock::new(now);
+        assert_eq!(format_now_with(&clock), "2023-11-14T22:13:20Z");
+        assert_eq!(format_days_ago_with(&clock, 2), "2023-11-12T22:13:20Z");
     }
 }

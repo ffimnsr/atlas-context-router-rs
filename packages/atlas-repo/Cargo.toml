@@ -3,6 +3,7 @@ name = "atlas-repo"
 version = "1.0.0"
 edition = "2024"
 description = "Repository discovery, file collection, diffing, and path utilities for Atlas"
+publish = false
 
 [dependencies]
 atlas-core.workspace = true
@@ -13,6 +14,10 @@ serde_json.workspace = true
 thiserror.workspace = true
 toml.workspace = true
 tracing.workspace = true
+unicode-normalization.workspace = true
+
+[lints]
+workspace = true
 
 [dev-dependencies]
 tempfile = "3"

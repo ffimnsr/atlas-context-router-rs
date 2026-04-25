@@ -24,7 +24,7 @@ impl LangParser for CssParser {
             .set_language(&tree_sitter_css::LANGUAGE.into())
             .expect("tree-sitter-css grammar failed to load");
 
-        let tree = parser.parse(ctx.source, ctx.old_tree);
+        let tree = crate::parse_runtime::parse_tree(&mut parser, ctx.source, ctx.old_tree);
         let mut nodes = Vec::new();
         let mut edges = Vec::new();
         let line_count = ctx.source.iter().filter(|&&b| b == b'\n').count() as u32 + 1;

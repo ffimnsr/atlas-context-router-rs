@@ -89,6 +89,16 @@ fn call_inner(
     repo_root: &str,
     db_path: &str,
 ) -> Result<serde_json::Value> {
+    #[cfg(test)]
+    if name == "__test_sleep" {
+        let sleep_ms = args
+            .and_then(|value| value.get("sleep_ms"))
+            .and_then(|value| value.as_u64())
+            .unwrap_or(25);
+        std::thread::sleep(std::time::Duration::from_millis(sleep_ms));
+        return Ok(serde_json::json!({ "slept_ms": sleep_ms }));
+    }
+
     let output_format = resolve_output_format(args, default_output_format_for_tool(name))?;
     let mut response = match name {
         "list_graph_stats" => tool_list_graph_stats(db_path, output_format),

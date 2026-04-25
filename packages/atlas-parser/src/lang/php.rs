@@ -27,7 +27,7 @@ impl LangParser for PhpParser {
             .set_language(&tree_sitter_php::LANGUAGE_PHP.into())
             .expect("tree-sitter-php grammar failed to load");
 
-        let tree = parser.parse(ctx.source, ctx.old_tree);
+        let tree = crate::parse_runtime::parse_tree(&mut parser, ctx.source, ctx.old_tree);
         let mut nodes = Vec::new();
         let mut edges = Vec::new();
         let line_count = ctx.source.iter().filter(|&&b| b == b'\n').count() as u32 + 1;

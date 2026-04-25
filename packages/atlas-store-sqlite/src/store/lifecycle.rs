@@ -16,6 +16,8 @@ impl Store {
             path,
             OpenFlags::SQLITE_OPEN_READ_WRITE
                 | OpenFlags::SQLITE_OPEN_CREATE
+                // Safe because `Store` owns one thread-confined connection and
+                // Atlas keeps DB work out of Rayon closures.
                 | OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )
         .map_err(|e| AtlasError::Db(e.to_string()))?;

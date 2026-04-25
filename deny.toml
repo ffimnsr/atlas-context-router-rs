@@ -1,0 +1,23 @@
+[graph]
+all-features = true
+
+[advisories]
+version = 2
+yanked = "deny"
+ignore = []
+
+[licenses]
+version = 2
+confidence-threshold = 0.8
+allow = ["Apache-2.0", "MIT", "Unicode-3.0"]
+
+[bans]
+version = 2
+multiple-versions = "warn"
+wildcards = "deny"
+highlight = "all"
+
+[sources]
+version = 2
+unknown-registry = "deny"
+unknown-git = "deny"

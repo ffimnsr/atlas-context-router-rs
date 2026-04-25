@@ -3,6 +3,7 @@ name = "atlas-history"
 version = "1.0.0"
 edition = "2024"
 description = "Historical graph metadata ingestion and querying for Atlas"
+publish = false
 
 [dependencies]
 atlas-core.workspace = true
@@ -22,3 +23,6 @@ rusqlite.workspace = true
 [[bench]]
 name = "history_bench"
 harness = false
+
+[lints]
+workspace = true
