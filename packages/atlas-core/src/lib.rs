@@ -1,3 +1,14 @@
+//! Shared Atlas domain model crate.
+//!
+//! Defines cross-crate types used by graph build, update, query, review, and
+//! transport layers:
+//! - graph node and edge kinds
+//! - persisted and returned data models
+//! - budget, health, and error contracts
+//!
+//! Most other Atlas crates depend on this crate for stable shared types instead
+//! of re-declaring transport or storage-specific copies.
+
 pub mod budget;
 pub mod clock;
 pub mod error;

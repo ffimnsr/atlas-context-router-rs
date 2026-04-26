@@ -183,7 +183,8 @@ impl Store {
 
     /// Files that have at least one edge pointing into any of `changed_qnames`.
     ///
-    /// More targeted than [`find_dependents`] which operates on file paths:
+    /// More targeted than `Store::find_dependents()` which operates on file
+    /// paths:
     /// this accepts specific qualified names so the caller can restrict
     /// invalidation to symbols whose signatures actually changed, avoiding
     /// unnecessary reparsing of files that only depend on stable symbols.

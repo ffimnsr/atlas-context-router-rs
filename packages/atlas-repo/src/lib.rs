@@ -1,3 +1,14 @@
+//! Repository discovery and path identity utilities for Atlas.
+//!
+//! This crate keeps repo-relative file handling deterministic across graph
+//! build, history, persistence, and retrieval flows.
+//!
+//! Primary surfaces:
+//! - canonical path conversion via [`CanonicalRepoPath`]
+//! - repository root discovery and repo-relative conversion
+//! - supported-file collection and ignore handling
+//! - changed-file detection and content hashing
+
 mod diff;
 mod files;
 mod hash;

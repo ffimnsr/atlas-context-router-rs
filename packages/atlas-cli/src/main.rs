@@ -1,3 +1,11 @@
+//! Atlas command-line interface binary.
+//!
+//! `atlas` is primary operator surface for repository graph build, update,
+//! status, query, review, refactor, history, and MCP-serving workflows.
+//!
+//! This binary crate wires clap parsing, logging, panic handling, and command
+//! dispatch into shared library crates.
+
 mod cli;
 mod cli_paths;
 mod commands;

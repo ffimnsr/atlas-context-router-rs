@@ -677,7 +677,10 @@ mod tests {
             .insert("query_graph".to_owned(), 5_000);
 
         assert_eq!(config.mcp_tool_timeout_ms_for("query_graph"), 5_000);
-        assert_eq!(config.mcp_tool_timeout_ms_for("build_or_update_graph"), 30_000);
+        assert_eq!(
+            config.mcp_tool_timeout_ms_for("build_or_update_graph"),
+            30_000
+        );
     }
 
     #[test]

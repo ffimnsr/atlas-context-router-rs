@@ -1,3 +1,14 @@
+//! Graph search and ranking crate for Atlas.
+//!
+//! Provides FTS-backed symbol retrieval plus ranking evidence used by CLI, MCP,
+//! review, and reasoning surfaces.
+//!
+//! Search modes combine:
+//! - FTS matches over persisted graph records
+//! - regex-assisted filtering and structural scans
+//! - graph expansion over neighboring nodes
+//! - optional hybrid/vector-assisted ranking inputs
+
 use std::collections::{HashMap, HashSet};
 
 use atlas_core::{

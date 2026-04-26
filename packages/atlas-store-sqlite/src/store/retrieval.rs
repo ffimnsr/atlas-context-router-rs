@@ -28,7 +28,8 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f64 {
 impl Store {
     /// Insert or update the text for a single retrieval chunk.
     ///
-    /// Embeddings are not touched; call [`set_chunk_embedding`] separately.
+    /// Embeddings are not touched; call `Store::set_chunk_embedding()`
+    /// separately.
     pub fn upsert_chunk(&self, node_qn: &str, chunk_idx: i32, text: &str) -> Result<()> {
         let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
         self.conn

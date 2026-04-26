@@ -195,7 +195,7 @@ pub struct SessionEventRow {
     pub created_at: String,
 }
 
-/// Result returned by [`SessionStore::compact_session`].
+/// Result returned by `SessionStore::compact_session()`.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct CurationResult {
     /// Number of events in the session before compaction.

@@ -22,7 +22,7 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub repo: Option<String>,
 
-    /// Path to the atlas database (default: <repo>/.atlas/worldtree.db).
+    /// Path to the atlas database (default: `REPO_ROOT/.atlas/worldtree.db`).
     #[arg(long, global = true)]
     pub db: Option<String>,
 

@@ -374,15 +374,16 @@ fn process_requests<W: Write>(
                 &mut stats,
                 &mut connection_state,
             )?,
-            Ok(TransportEvent::WorkerStarted { token, queue_wait_ms }) => {
-                handle_worker_started(
-                    writer,
-                    &mut pending,
-                    token,
-                    queue_wait_ms,
-                    &connection_state,
-                )?
-            }
+            Ok(TransportEvent::WorkerStarted {
+                token,
+                queue_wait_ms,
+            }) => handle_worker_started(
+                writer,
+                &mut pending,
+                token,
+                queue_wait_ms,
+                &connection_state,
+            )?,
             Ok(TransportEvent::Response {
                 token,
                 response,
@@ -2067,7 +2068,9 @@ mod tests {
             "tool call should emit progress end"
         );
         assert!(
-            responses.iter().any(|value| value["id"] == serde_json::json!(2)),
+            responses
+                .iter()
+                .any(|value| value["id"] == serde_json::json!(2)),
             "tool response must still be returned"
         );
     }
@@ -2098,11 +2101,15 @@ mod tests {
 
         let responses = parse_output_lines(writer);
         assert!(
-            responses.iter().any(|value| value["id"] == serde_json::json!(1)),
+            responses
+                .iter()
+                .any(|value| value["id"] == serde_json::json!(1)),
             "first slow request should complete"
         );
         assert!(
-            responses.iter().all(|value| value["id"] != serde_json::json!(2)),
+            responses
+                .iter()
+                .all(|value| value["id"] != serde_json::json!(2)),
             "canceled queued request must not emit a response"
         );
         assert!(
@@ -2499,8 +2506,7 @@ mod tests {
     #[test]
     fn transport_applies_per_tool_timeout_overrides() {
         let fixture = setup_fixture();
-        let input =
-            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"__test_sleep\",\"arguments\":{\"sleep_ms\":1200}}}\n";
+        let input = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"__test_sleep\",\"arguments\":{\"sleep_ms\":1200}}}\n";
         let reader = BufReader::new(Cursor::new(input.as_bytes()));
         let mut writer = Vec::new();
 

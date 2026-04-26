@@ -100,7 +100,7 @@ pub struct ContentStoreConfig {
     /// Maximum chunks sent to an embedding provider per batch call.
     pub embedding_batch_size: usize,
     /// Hard cap on total chunks written across one indexing run.
-    /// Tracked cumulatively via [`ContentStore::run_stats`].
+    /// Tracked cumulatively via `ContentStore::run_stats()`.
     pub max_chunks_per_index_run: usize,
     /// Hard cap on chunks produced from a single file/artifact.
     pub max_chunks_per_file: usize,
@@ -126,8 +126,8 @@ impl Default for ContentStoreConfig {
 
 /// In-process counters tracking chunk throughput for the current indexing run.
 ///
-/// Reset by [`ContentStore::reset_run_stats`] at the start of each run.
-/// Read via [`ContentStore::run_stats`].
+/// Reset by `ContentStore::reset_run_stats()` at the start of each run.
+/// Read via `ContentStore::run_stats()`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct IndexRunStats {
     /// Total chunks buffered (queued for flush) since last reset.
@@ -201,7 +201,7 @@ pub struct RetrievalIndexStatus {
     pub updated_at: String,
 }
 
-/// Progress counters passed to [`ContentStore::finish_indexing`].
+/// Progress counters passed to `ContentStore::finish_indexing()`.
 #[derive(Debug, Clone, Default)]
 pub struct IndexingStats {
     pub files_indexed: i64,
