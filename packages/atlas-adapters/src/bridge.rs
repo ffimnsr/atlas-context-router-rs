@@ -229,6 +229,7 @@ pub fn ingest_bridge_file(
     let meta = SourceMeta {
         id: source_id,
         session_id: Some(envelope.session_id.clone()),
+        agent_id: None,
         source_type: "bridge_artifact".to_string(),
         label: format!(
             "bridge: {} events from {} at {}",

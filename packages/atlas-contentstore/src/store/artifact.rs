@@ -214,11 +214,12 @@ impl ContentStore {
 
             tx.execute(
                 "INSERT OR REPLACE INTO sources (
-                     id, session_id, source_type, label, repo_root, identity_kind, identity_value, created_at
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                     id, session_id, agent_id, source_type, label, repo_root, identity_kind, identity_value, created_at
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                 params![
                     meta.id,
                     meta.session_id,
+                    meta.agent_id,
                     meta.source_type,
                     meta.label,
                     meta.repo_root,
@@ -406,7 +407,7 @@ impl ContentStore {
         let mut stmt = self
             .conn
             .prepare(
-                "SELECT id, session_id, source_type, label, repo_root, identity_kind, identity_value, created_at
+                "SELECT id, session_id, agent_id, source_type, label, repo_root, identity_kind, identity_value, created_at
                  FROM sources WHERE id = ?1",
             )
             .map_err(|e| AtlasError::Db(e.to_string()))?;
@@ -419,12 +420,13 @@ impl ContentStore {
             Ok(Some(SourceRow {
                 id: row.get(0).map_err(|e| AtlasError::Db(e.to_string()))?,
                 session_id: row.get(1).map_err(|e| AtlasError::Db(e.to_string()))?,
-                source_type: row.get(2).map_err(|e| AtlasError::Db(e.to_string()))?,
-                label: row.get(3).map_err(|e| AtlasError::Db(e.to_string()))?,
-                repo_root: row.get(4).map_err(|e| AtlasError::Db(e.to_string()))?,
-                identity_kind: row.get(5).map_err(|e| AtlasError::Db(e.to_string()))?,
-                identity_value: row.get(6).map_err(|e| AtlasError::Db(e.to_string()))?,
-                created_at: row.get(7).map_err(|e| AtlasError::Db(e.to_string()))?,
+                agent_id: row.get(2).map_err(|e| AtlasError::Db(e.to_string()))?,
+                source_type: row.get(3).map_err(|e| AtlasError::Db(e.to_string()))?,
+                label: row.get(4).map_err(|e| AtlasError::Db(e.to_string()))?,
+                repo_root: row.get(5).map_err(|e| AtlasError::Db(e.to_string()))?,
+                identity_kind: row.get(6).map_err(|e| AtlasError::Db(e.to_string()))?,
+                identity_value: row.get(7).map_err(|e| AtlasError::Db(e.to_string()))?,
+                created_at: row.get(8).map_err(|e| AtlasError::Db(e.to_string()))?,
             }))
         } else {
             Ok(None)
@@ -499,26 +501,51 @@ impl ContentStore {
     }
 
     /// Return `(source_count, chunk_count)` for given session or globally.
-    pub fn stats(&self, session_id: Option<&str>) -> Result<(usize, usize)> {
+    pub fn stats(
+        &self,
+        session_id: Option<&str>,
+        agent_id: Option<&str>,
+    ) -> Result<(usize, usize)> {
         let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
         let (src, chk) = if let Some(sid) = session_id {
-            let src: i64 = self
-                .conn
-                .query_row(
-                    "SELECT COUNT(*) FROM sources WHERE session_id = ?1",
-                    params![sid],
-                    |r| r.get(0),
-                )
-                .map_err(db_err)?;
-            let chk: i64 = self
-                .conn
-                .query_row(
-                    "SELECT COUNT(*) FROM chunks
-                     WHERE source_id IN (SELECT id FROM sources WHERE session_id = ?1)",
-                    params![sid],
-                    |r| r.get(0),
-                )
-                .map_err(db_err)?;
+            let src: i64 = if let Some(agent_id) = agent_id {
+                self.conn
+                    .query_row(
+                        "SELECT COUNT(*) FROM sources WHERE session_id = ?1 AND agent_id = ?2",
+                        params![sid, agent_id],
+                        |r| r.get(0),
+                    )
+                    .map_err(db_err)?
+            } else {
+                self.conn
+                    .query_row(
+                        "SELECT COUNT(*) FROM sources WHERE session_id = ?1",
+                        params![sid],
+                        |r| r.get(0),
+                    )
+                    .map_err(db_err)?
+            };
+            let chk: i64 = if let Some(agent_id) = agent_id {
+                self.conn
+                    .query_row(
+                        "SELECT COUNT(*) FROM chunks
+                         WHERE source_id IN (
+                             SELECT id FROM sources WHERE session_id = ?1 AND agent_id = ?2
+                         )",
+                        params![sid, agent_id],
+                        |r| r.get(0),
+                    )
+                    .map_err(db_err)?
+            } else {
+                self.conn
+                    .query_row(
+                        "SELECT COUNT(*) FROM chunks
+                         WHERE source_id IN (SELECT id FROM sources WHERE session_id = ?1)",
+                        params![sid],
+                        |r| r.get(0),
+                    )
+                    .map_err(db_err)?
+            };
             (src, chk)
         } else {
             let src: i64 = self
@@ -535,14 +562,23 @@ impl ContentStore {
     }
 
     /// Delete all sources belonging to `session_id`.
-    pub fn delete_session_sources(&mut self, session_id: &str) -> Result<usize> {
+    pub fn delete_session_sources(
+        &mut self,
+        session_id: &str,
+        agent_id: Option<&str>,
+    ) -> Result<usize> {
         let safe_sid = session_id.replace('\'', "''");
+        let safe_agent = agent_id.map(|value| value.replace('\'', "''"));
         let fts_cleanup = format!(
             "INSERT INTO chunks_fts(chunks_fts, rowid, title, content, source_id, content_type)
              SELECT 'delete', c.id, c.title, c.content, c.source_id, c.content_type
              FROM chunks c
              JOIN sources s ON c.source_id = s.id
-             WHERE s.session_id = '{safe_sid}'"
+             WHERE s.session_id = '{safe_sid}'{}",
+            safe_agent
+                .as_deref()
+                .map(|value| format!(" AND s.agent_id = '{value}'"))
+                .unwrap_or_default()
         );
         self.conn
             .execute_batch(&fts_cleanup)
@@ -553,19 +589,31 @@ impl ContentStore {
              SELECT 'delete', c.id, c.title, c.content, c.source_id, c.content_type
              FROM chunks c
              JOIN sources s ON c.source_id = s.id
-             WHERE s.session_id = '{safe_sid}'"
+             WHERE s.session_id = '{safe_sid}'{}",
+            safe_agent
+                .as_deref()
+                .map(|value| format!(" AND s.agent_id = '{value}'"))
+                .unwrap_or_default()
         );
         self.conn
             .execute_batch(&trigram_cleanup)
             .map_err(|e| AtlasError::Db(e.to_string()))?;
 
-        let count = self
-            .conn
-            .execute(
-                "DELETE FROM sources WHERE session_id = ?1",
-                params![session_id],
-            )
-            .map_err(|e| AtlasError::Db(e.to_string()))?;
+        let count = if let Some(agent_id) = agent_id {
+            self.conn
+                .execute(
+                    "DELETE FROM sources WHERE session_id = ?1 AND agent_id = ?2",
+                    params![session_id, agent_id],
+                )
+                .map_err(|e| AtlasError::Db(e.to_string()))?
+        } else {
+            self.conn
+                .execute(
+                    "DELETE FROM sources WHERE session_id = ?1",
+                    params![session_id],
+                )
+                .map_err(|e| AtlasError::Db(e.to_string()))?
+        };
         Ok(count)
     }
 }

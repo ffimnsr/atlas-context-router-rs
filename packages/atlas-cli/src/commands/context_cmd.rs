@@ -374,6 +374,8 @@ pub fn run_context(cli: &Cli) -> Result<()> {
             imports,
             neighbors,
             semantic,
+            agent_id,
+            merge_agent_partitions,
             token_budget,
         ) = match &cli.command {
             Command::Context {
@@ -390,6 +392,8 @@ pub fn run_context(cli: &Cli) -> Result<()> {
                 imports,
                 neighbors,
                 semantic,
+                agent_id,
+                merge_agent_partitions,
                 token_budget,
             } => (
                 query.clone(),
@@ -405,6 +409,8 @@ pub fn run_context(cli: &Cli) -> Result<()> {
                 *imports,
                 *neighbors,
                 *semantic,
+                agent_id.clone(),
+                *merge_agent_partitions,
                 *token_budget,
             ),
             _ => unreachable!(),
@@ -466,6 +472,8 @@ pub fn run_context(cli: &Cli) -> Result<()> {
         if token_budget.is_some() {
             request.token_budget = token_budget;
         }
+        request.agent_id = agent_id.clone();
+        request.merge_agent_partitions = merge_agent_partitions;
 
         let store =
             Store::open(&db_path).with_context(|| format!("cannot open database at {db_path}"))?;
@@ -506,6 +514,13 @@ pub fn run_context(cli: &Cli) -> Result<()> {
                     "context_ranking_evidence_legend".to_owned(),
                     atlas_core::context_ranking_evidence_legend(),
                 );
+                object.insert(
+                    "agent_scope".to_owned(),
+                    serde_json::json!({
+                        "agent_id": agent_id,
+                        "merge_agent_partitions": merge_agent_partitions,
+                    }),
+                );
                 if !linked_decisions.is_empty() {
                     object.insert(
                         "linked_decisions".to_owned(),
@@ -519,6 +534,16 @@ pub fn run_context(cli: &Cli) -> Result<()> {
                 "{}",
                 format_context_output_with_decisions(&result, &linked_decisions)
             );
+            if agent_id.is_some() || merge_agent_partitions {
+                println!(
+                    "Agent scope: {}",
+                    if merge_agent_partitions {
+                        "merged"
+                    } else {
+                        agent_id.as_deref().unwrap_or("default")
+                    }
+                );
+            }
         }
 
         if !linked_decisions.is_empty()

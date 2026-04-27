@@ -14,6 +14,7 @@ use atlas_db_utils::{
 use crate::SessionId;
 use crate::migrations::{LATEST_VERSION, MIGRATION_SET};
 
+mod agent_memory;
 mod curation;
 mod decision_memory;
 mod global_memory;
@@ -24,13 +25,15 @@ mod types;
 mod util;
 
 pub use self::types::{
-    CurationResult, DEFAULT_DEDUP_WINDOW_SECS, DEFAULT_MAX_SNAPSHOT_BYTES, DEFAULT_SESSION_DB,
-    DEFAULT_SESSION_MAX_EVENTS, DecisionRecord, DecisionSearchHit, EventCategory,
-    GlobalAccessEntry, GlobalWorkflowPattern, MAX_INLINE_EVENT_PAYLOAD_BYTES, NewSessionEvent,
-    ResumeSnapshot, SessionEventRow, SessionEventType, SessionMeta, SessionStats,
+    AgentMemorySummary, AgentPartitionSummary, AgentResponsibilitySummary, CurationResult,
+    DEFAULT_DEDUP_WINDOW_SECS, DEFAULT_MAX_SNAPSHOT_BYTES, DEFAULT_SESSION_DB,
+    DEFAULT_SESSION_MAX_EVENTS, DecisionRecord, DecisionSearchHit, DelegatedTaskSummary,
+    EventCategory, GlobalAccessEntry, GlobalWorkflowPattern, MAX_INLINE_EVENT_PAYLOAD_BYTES,
+    NewSessionEvent, ResumeSnapshot, SessionEventRow, SessionEventType, SessionMeta, SessionStats,
     SessionStoreConfig,
 };
 
+use self::agent_memory::{summarize_agent_memory, summarize_agent_memory_from_events};
 use self::curation::compact_session_events;
 use self::decision_memory::{search_decisions, upsert_decision_from_event};
 use self::resume::build_resume_snapshot;
@@ -479,6 +482,22 @@ impl SessionStore {
         build_resume_snapshot(self, session_id)
     }
 
+    pub fn build_resume_view(
+        &self,
+        session_id: &SessionId,
+        agent_id: Option<&str>,
+        merge_agent_partitions: bool,
+    ) -> Result<Value> {
+        let events = self.list_events(session_id)?;
+        self::resume::build_resume_snapshot_view(
+            self,
+            session_id,
+            events,
+            agent_id,
+            merge_agent_partitions,
+        )
+    }
+
     pub fn search_decisions(
         &self,
         repo_root: &str,
@@ -487,6 +506,24 @@ impl SessionStore {
         limit: usize,
     ) -> Result<Vec<DecisionSearchHit>> {
         search_decisions(&self.conn, repo_root, session_id, query, limit)
+    }
+
+    pub fn summarize_agent_memory(
+        &self,
+        session_id: &SessionId,
+        agent_id: Option<&str>,
+        merge_agent_partitions: bool,
+    ) -> Result<AgentMemorySummary> {
+        summarize_agent_memory(self, session_id, agent_id, merge_agent_partitions)
+    }
+
+    pub fn summarize_agent_memory_from_events(
+        &self,
+        events: Vec<SessionEventRow>,
+        agent_id: Option<&str>,
+        merge_agent_partitions: bool,
+    ) -> Result<AgentMemorySummary> {
+        summarize_agent_memory_from_events(events, agent_id, merge_agent_partitions)
     }
 
     // ── CM11: Cross-Session Intelligence ─────────────────────────────────────

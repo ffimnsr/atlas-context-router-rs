@@ -408,6 +408,14 @@ pub enum Command {
         #[arg(long)]
         semantic: bool,
 
+        /// Restrict session-aware context enrichment to one agent partition.
+        #[arg(long)]
+        agent_id: Option<String>,
+
+        /// Intentionally merge context across all agent partitions.
+        #[arg(long)]
+        merge_agent_partitions: bool,
+
         /// Maximum tokens to include in the result.  Overrides the default
         /// policy limit (context_tokens_estimate) for this request only.
         /// The engine enforces this as a strict cap; it cannot exceed the

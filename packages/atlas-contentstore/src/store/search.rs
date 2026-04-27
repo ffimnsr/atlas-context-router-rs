@@ -18,6 +18,10 @@ impl ContentStore {
             extra_params.push(sid.clone());
             where_parts.push(format!("s.session_id = ?{}", extra_params.len() + 1));
         }
+        if let Some(ref agent_id) = filters.agent_id {
+            extra_params.push(agent_id.clone());
+            where_parts.push(format!("s.agent_id = ?{}", extra_params.len() + 1));
+        }
         if let Some(ref source_type) = filters.source_type {
             extra_params.push(source_type.clone());
             where_parts.push(format!("s.source_type = ?{}", extra_params.len() + 1));
@@ -80,6 +84,10 @@ impl ContentStore {
         if let Some(ref sid) = filters.session_id {
             extra_params.push(sid.clone());
             where_parts.push(format!("s.session_id = ?{}", extra_params.len() + 1));
+        }
+        if let Some(ref agent_id) = filters.agent_id {
+            extra_params.push(agent_id.clone());
+            where_parts.push(format!("s.agent_id = ?{}", extra_params.len() + 1));
         }
         if let Some(ref source_type) = filters.source_type {
             extra_params.push(source_type.clone());

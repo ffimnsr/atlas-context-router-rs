@@ -20,8 +20,9 @@ use atlas_adapters::{
 use atlas_contentstore::{ContentStore, OutputRouting, SearchFilters, SourceMeta};
 use atlas_core::{BudgetManager, BudgetPolicy, BudgetReport};
 use atlas_session::{
-    CurationResult, DecisionSearchHit, GlobalAccessEntry, GlobalWorkflowPattern, NewSessionEvent,
-    ResumeSnapshot, SessionEventType, SessionId, SessionMeta, SessionStore,
+    AgentMemorySummary, CurationResult, DecisionSearchHit, GlobalAccessEntry,
+    GlobalWorkflowPattern, NewSessionEvent, ResumeSnapshot, SessionEventType, SessionId,
+    SessionMeta, SessionStore,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -216,6 +217,14 @@ pub fn tool_get_session_status(
     output_format: OutputFormat,
 ) -> Result<Value> {
     let session_id = resolve_session_id(args, repo_root);
+    let agent_id = args
+        .and_then(|a| a.get("agent_id"))
+        .and_then(|v| v.as_str())
+        .map(str::to_owned);
+    let merge_agent_partitions = args
+        .and_then(|a| a.get("merge_agent_partitions"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     let session_db = derive_session_db_path(db_path);
 
     let store = match SessionStore::open(&session_db) {
@@ -233,13 +242,37 @@ pub fn tool_get_session_status(
     };
 
     let meta: Option<SessionMeta> = store.get_session_meta(&session_id)?;
-    let event_count = store.list_events(&session_id)?.len();
-    let snapshot = store.get_resume_snapshot(&session_id)?;
+    let (event_count, snapshot, agent_summary) = if meta.is_some() {
+        let event_count = store
+            .build_resume_view(&session_id, agent_id.as_deref(), merge_agent_partitions)?
+            .get("event_count")
+            .and_then(|value| value.as_i64())
+            .unwrap_or(0);
+        let snapshot = store.get_resume_snapshot(&session_id)?;
+        let agent_summary = store.summarize_agent_memory(
+            &session_id,
+            agent_id.as_deref(),
+            merge_agent_partitions,
+        )?;
+        (event_count, snapshot, agent_summary)
+    } else {
+        (
+            0,
+            None,
+            AgentMemorySummary {
+                merged_view: merge_agent_partitions || agent_id.is_none(),
+                requested_agent_id: agent_id.clone(),
+                ..AgentMemorySummary::default()
+            },
+        )
+    };
 
     let result = if let Some(m) = meta {
         let snap_consumed = snapshot.as_ref().map(|s| s.consumed);
         serde_json::json!({
             "session_id": m.session_id.as_str(),
+            "agent_id": agent_id,
+            "merged_agent_view": agent_summary.merged_view,
             "status": "active",
             "repo_root": m.repo_root,
             "frontend": m.frontend,
@@ -251,13 +284,21 @@ pub fn tool_get_session_status(
             "event_count": event_count,
             "has_resume_snapshot": snapshot.is_some(),
             "snapshot_consumed": snap_consumed,
+            "agent_partitions": agent_summary.partitions,
+            "delegated_tasks": agent_summary.delegated_tasks,
+            "agent_responsibilities": agent_summary.responsibilities,
         })
     } else {
         serde_json::json!({
             "session_id": session_id.as_str(),
+            "agent_id": agent_id,
+            "merged_agent_view": agent_summary.merged_view,
             "status": "no_session",
             "event_count": 0,
             "has_resume_snapshot": false,
+            "agent_partitions": agent_summary.partitions,
+            "delegated_tasks": agent_summary.delegated_tasks,
+            "agent_responsibilities": agent_summary.responsibilities,
         })
     };
 
@@ -351,6 +392,14 @@ pub fn tool_resume_session(
     output_format: OutputFormat,
 ) -> Result<Value> {
     let session_id = resolve_session_id(args, repo_root);
+    let agent_id = args
+        .and_then(|a| a.get("agent_id"))
+        .and_then(|v| v.as_str())
+        .map(str::to_owned);
+    let merge_agent_partitions = args
+        .and_then(|a| a.get("merge_agent_partitions"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     let mark_consumed = args
         .and_then(|a| a.get("mark_consumed"))
         .and_then(|v| v.as_bool())
@@ -366,6 +415,8 @@ pub fn tool_resume_session(
         Some(s) => s,
         None => store.build_resume(&session_id)?,
     };
+    let snapshot_view =
+        store.build_resume_view(&session_id, agent_id.as_deref(), merge_agent_partitions)?;
 
     if mark_consumed {
         let _ = store.mark_resume_consumed(&session_id, true);
@@ -382,8 +433,10 @@ pub fn tool_resume_session(
 
     let result = serde_json::json!({
         "session_id": snapshot.session_id.as_str(),
-        "snapshot": snapshot.snapshot,
-        "event_count": snapshot.event_count,
+        "agent_id": agent_id,
+        "merged_agent_view": merge_agent_partitions || args.and_then(|a| a.get("agent_id")).is_none(),
+        "snapshot": snapshot_view,
+        "event_count": snapshot_view.get("event_count").and_then(|value| value.as_i64()).unwrap_or(snapshot.event_count),
         "consumed": mark_consumed,
         "created_at": snapshot.created_at,
     });
@@ -424,6 +477,17 @@ pub fn tool_search_saved_context(
             .and_then(|v| v.as_str())
             .map(str::to_owned)
     };
+    let agent_id_filter = if cross_session {
+        None
+    } else {
+        args.and_then(|a| a.get("agent_id"))
+            .and_then(|v| v.as_str())
+            .map(str::to_owned)
+    };
+    let merge_agent_partitions = args
+        .and_then(|a| a.get("merge_agent_partitions"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     let repo_root_filter = if cross_session {
         Some(repo_root.to_string())
     } else {
@@ -449,6 +513,11 @@ pub fn tool_search_saved_context(
 
     let filters = SearchFilters {
         session_id: session_id_filter.clone(),
+        agent_id: if merge_agent_partitions {
+            None
+        } else {
+            agent_id_filter.clone()
+        },
         source_type: source_type_filter,
         repo_root: repo_root_filter,
     };
@@ -464,6 +533,8 @@ pub fn tool_search_saved_context(
         title: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         label: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        agent_id: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         source_type: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -494,6 +565,7 @@ pub fn tool_search_saved_context(
                 chunk_index: c.chunk_index,
                 title: c.title,
                 label: source.as_ref().map(|row| row.label.clone()),
+                agent_id: source.as_ref().and_then(|row| row.agent_id.clone()),
                 source_type: source.as_ref().map(|row| row.source_type.clone()),
                 identity_kind: source.as_ref().map(|row| row.identity_kind.clone()),
                 identity_value: source.as_ref().map(|row| row.identity_value.clone()),
@@ -517,6 +589,8 @@ pub fn tool_search_saved_context(
     let mut response = tool_result_value(
         &serde_json::json!({
             "query": query,
+            "agent_id": agent_id_filter,
+            "merged_agent_view": merge_agent_partitions || cross_session,
             "results": results,
             "total": total,
             "linked_decisions": linked_decisions,
@@ -571,6 +645,10 @@ pub fn tool_search_decisions(
         .and_then(|a| a.get("session_id"))
         .and_then(|v| v.as_str())
         .map(str::to_owned);
+    let agent_id = args
+        .and_then(|a| a.get("agent_id"))
+        .and_then(|v| v.as_str())
+        .map(str::to_owned);
     let limit = args
         .and_then(|a| a.get("limit"))
         .and_then(|v| v.as_u64())
@@ -587,6 +665,7 @@ pub fn tool_search_decisions(
         &serde_json::json!({
             "query": query,
             "session_id": session_id,
+            "agent_id": agent_id,
             "results": hits,
             "total": hits.len(),
         }),
@@ -635,6 +714,10 @@ pub fn tool_save_context_artifact(
         .and_then(|v| v.as_str())
         .map(str::to_owned)
         .unwrap_or_else(|| mcp_session_id(repo_root).as_str().to_string());
+    let agent_id = args
+        .and_then(|a| a.get("agent_id"))
+        .and_then(|v| v.as_str())
+        .map(str::to_owned);
 
     let identity = ArtifactIdentity::artifact_label(label);
     let source_id = generate_source_id(&identity, content);
@@ -646,6 +729,7 @@ pub fn tool_save_context_artifact(
     let meta = SourceMeta {
         id: source_id,
         session_id: Some(session_id_str),
+        agent_id: agent_id.clone(),
         source_type: source_type.to_string(),
         label: label.to_string(),
         repo_root: Some(repo_root.to_string()),
@@ -659,6 +743,7 @@ pub fn tool_save_context_artifact(
         OutputRouting::Raw(raw) => serde_json::json!({
             "routing": "raw",
             "source_id": Value::Null,
+            "agent_id": agent_id,
             "content": raw,
         }),
         OutputRouting::Preview {
@@ -667,11 +752,13 @@ pub fn tool_save_context_artifact(
         } => serde_json::json!({
             "routing": "preview",
             "source_id": sid,
+            "agent_id": agent_id,
             "preview": preview,
         }),
         OutputRouting::Pointer { source_id: sid } => serde_json::json!({
             "routing": "pointer",
             "source_id": sid,
+            "agent_id": agent_id,
             "retrieval_hint": format!(
                 "use search_saved_context to retrieve content for source_id={sid}"
             ),
@@ -694,6 +781,10 @@ pub fn tool_get_context_stats(
 ) -> Result<Value> {
     let policy = load_budget_policy(repo_root)?;
     let session_id = resolve_session_id(args, repo_root);
+    let agent_id = args
+        .and_then(|a| a.get("agent_id"))
+        .and_then(|v| v.as_str())
+        .map(str::to_owned);
     let session_db = derive_session_db_path(db_path);
     let content_db = derive_content_db_path(db_path);
     let bridge_dir = derive_bridge_dir(db_path);
@@ -710,7 +801,8 @@ pub fn tool_get_context_stats(
         .ok()
         .and_then(|mut cs| {
             let _ = cs.migrate();
-            cs.stats(Some(session_id.as_str())).ok()
+            cs.stats(Some(session_id.as_str()), agent_id.as_deref())
+                .ok()
         })
         .unwrap_or((0, 0));
 
@@ -741,6 +833,7 @@ pub fn tool_get_context_stats(
     let mut response = tool_result_value(
         &serde_json::json!({
             "session_id": session_id.as_str(),
+            "agent_id": agent_id,
             "event_count": event_count,
             "source_count": source_count,
             "chunk_count": chunk_count,
@@ -804,6 +897,14 @@ pub fn tool_read_saved_context(
         .and_then(|a| a.get("session_id"))
         .and_then(|v| v.as_str())
         .map(str::to_owned);
+    let caller_agent_id = args
+        .and_then(|a| a.get("agent_id"))
+        .and_then(|v| v.as_str())
+        .map(str::to_owned);
+    let merge_agent_partitions = args
+        .and_then(|a| a.get("merge_agent_partitions"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     let chunk_offset = args
         .and_then(|a| a.get("chunk_offset"))
         .and_then(|v| v.as_u64())
@@ -856,6 +957,29 @@ pub fn tool_read_saved_context(
                 "found": false,
                 "source_id": source_id,
                 "error": "artifact not accessible from this session",
+            }),
+            output_format,
+        )?;
+        inject_budget_metadata(
+            &mut response,
+            &budgets.summary(
+                "mcp_cli_payload_serialization.max_saved_context_bytes",
+                max_bytes,
+                requested_max_bytes.max(max_bytes),
+            ),
+        );
+        return Ok(response);
+    }
+
+    if !merge_agent_partitions
+        && let Some(ref caller_agent_id) = caller_agent_id
+        && source.agent_id.as_deref() != Some(caller_agent_id.as_str())
+    {
+        let mut response = tool_result_value(
+            &serde_json::json!({
+                "found": false,
+                "source_id": source_id,
+                "error": "artifact not accessible from this agent partition",
             }),
             output_format,
         )?;
@@ -940,6 +1064,8 @@ pub fn tool_read_saved_context(
         "identity_value": source.identity_value,
         "created_at": source.created_at,
         "session_id": source.session_id,
+        "agent_id": source.agent_id,
+        "merged_agent_view": merge_agent_partitions,
         "label": source.label,
         "byte_count": total_byte_count,
         "chunk_count": total_chunks,
@@ -1005,6 +1131,10 @@ pub fn tool_purge_saved_context(
         .and_then(|a| a.get("session_id"))
         .and_then(|v| v.as_str())
         .map(str::to_owned);
+    let agent_id_filter = args
+        .and_then(|a| a.get("agent_id"))
+        .and_then(|v| v.as_str())
+        .map(str::to_owned);
     let keep_days = args
         .and_then(|a| a.get("keep_days"))
         .and_then(|v| v.as_u64())
@@ -1021,7 +1151,7 @@ pub fn tool_purge_saved_context(
     let _ = cs.migrate();
 
     let deleted = if let Some(sid) = session_id_filter {
-        cs.delete_session_sources(&sid)?
+        cs.delete_session_sources(&sid, agent_id_filter.as_deref())?
     } else {
         cs.cleanup(keep_days)?
     };
@@ -1035,6 +1165,7 @@ pub fn tool_purge_saved_context(
     let mut response = tool_result_value(
         &serde_json::json!({
             "deleted_source_count": deleted,
+            "agent_id": agent_id_filter,
             "deleted_bridge_file_count": deleted_bridge,
             "keep_days": keep_days,
         }),
@@ -1080,6 +1211,14 @@ pub fn tool_cross_session_search(
         .and_then(|a| a.get("source_type"))
         .and_then(|v| v.as_str())
         .map(str::to_owned);
+    let agent_id_filter = args
+        .and_then(|a| a.get("agent_id"))
+        .and_then(|v| v.as_str())
+        .map(str::to_owned);
+    let merge_agent_partitions = args
+        .and_then(|a| a.get("merge_agent_partitions"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
     let requested_limit = args
         .and_then(|a| a.get("limit"))
         .and_then(|v| v.as_u64())
@@ -1097,6 +1236,11 @@ pub fn tool_cross_session_search(
     // Explicitly filter by repo_root, no session_id restriction.
     let filters = SearchFilters {
         session_id: None,
+        agent_id: if merge_agent_partitions {
+            None
+        } else {
+            agent_id_filter.clone()
+        },
         source_type: source_type_filter,
         repo_root: Some(repo_root.to_string()),
     };
@@ -1110,6 +1254,8 @@ pub fn tool_cross_session_search(
         chunk_index: usize,
         #[serde(skip_serializing_if = "Option::is_none")]
         session_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        agent_id: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         title: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -1131,6 +1277,7 @@ pub fn tool_cross_session_search(
                 chunk_id: c.chunk_id,
                 chunk_index: c.chunk_index,
                 session_id: source.as_ref().and_then(|s| s.session_id.clone()),
+                agent_id: source.as_ref().and_then(|s| s.agent_id.clone()),
                 title: c.title,
                 label: source.as_ref().map(|s| s.label.clone()),
                 source_type: source.as_ref().map(|s| s.source_type.clone()),
@@ -1155,6 +1302,8 @@ pub fn tool_cross_session_search(
             "query": query,
             "repo_root": repo_root,
             "cross_session": true,
+            "agent_id": agent_id_filter,
+            "merged_agent_view": merge_agent_partitions,
             "results": results,
             "total": total,
         }),

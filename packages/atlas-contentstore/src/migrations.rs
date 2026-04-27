@@ -28,9 +28,14 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "005_source_identity",
         up_sql: include_str!("migrations/005_source_identity.sql"),
     },
+    Migration {
+        version: 6,
+        name: "006_agent_partitions",
+        up_sql: include_str!("migrations/006_agent_partitions.sql"),
+    },
 ];
 
-pub const LATEST_VERSION: i32 = 5;
+pub const LATEST_VERSION: i32 = 6;
 
 pub const MIGRATION_SET: MigrationSet = MigrationSet {
     db_kind: "context",

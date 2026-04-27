@@ -220,6 +220,8 @@ pub fn tool_list() -> serde_json::Value {
                         "semantic":  { "type": "boolean", "description": "Run graph-aware semantic search to resolve the best-matching qualified name before building context (default false). Useful when the symbol name is ambiguous or approximate." },
                         "include_saved_context": { "type": "boolean", "description": "When true, also query the content store for saved artifacts relevant to this request and include them in the result (default false)." },
                         "session_id": { "type": "string",  "description": "Restrict saved-context retrieval to artifacts from this session and apply a same-session relevance boost." },
+                        "agent_id": { "type": "string",  "description": "Restrict saved-context retrieval to one agent memory partition." },
+                        "merge_agent_partitions": { "type": "boolean", "description": "Intentionally merge context across all agent partitions instead of filtering to one partition." },
                         "token_budget": { "type": "integer", "description": "Maximum tokens to include in the result. Overrides the default policy limit for this call only. Cannot exceed the policy ceiling. Use to enforce tighter context budgets from the caller side." },
                         "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
                     },
@@ -233,6 +235,8 @@ pub fn tool_list() -> serde_json::Value {
                     "type": "object",
                     "properties": {
                         "session_id":    { "type": "string",  "description": "Explicit session id. Omit to use the derived id for the current repo." },
+                        "agent_id":      { "type": "string",  "description": "Restrict status to one agent memory partition." },
+                        "merge_agent_partitions": { "type": "boolean", "description": "Intentionally merge status across all agent partitions." },
                         "output_format": { "type": "string",  "description": DEFAULT_OUTPUT_DESCRIPTION }
                     },
                     "required": []
@@ -257,6 +261,8 @@ pub fn tool_list() -> serde_json::Value {
                     "type": "object",
                     "properties": {
                         "session_id":     { "type": "string",  "description": "Explicit session id. Omit to use the derived id for the current repo." },
+                        "agent_id":       { "type": "string",  "description": "Restrict resume output to one agent memory partition." },
+                        "merge_agent_partitions": { "type": "boolean", "description": "Intentionally merge resume output across all agent partitions." },
                         "mark_consumed":  { "type": "boolean", "description": "Mark the snapshot consumed after reading (default true)." },
                         "output_format":  { "type": "string",  "description": DEFAULT_OUTPUT_DESCRIPTION }
                     },
@@ -271,6 +277,8 @@ pub fn tool_list() -> serde_json::Value {
                     "properties": {
                         "query":        { "type": "string",  "description": "Search query text." },
                         "session_id":   { "type": "string",  "description": "Restrict search to artifacts from this session." },
+                        "agent_id":     { "type": "string",  "description": "Restrict search to artifacts from one agent memory partition." },
+                        "merge_agent_partitions": { "type": "boolean", "description": "Intentionally merge saved-context search across all agent partitions." },
                         "source_type":  { "type": "string",  "description": "Filter by source type (e.g. 'review_context', 'mcp_artifact')." },
                         "limit":        { "type": "integer", "description": "Maximum results to return (default 10)." },
                         "output_format":{ "type": "string",  "description": DEFAULT_OUTPUT_DESCRIPTION }
@@ -300,6 +308,8 @@ pub fn tool_list() -> serde_json::Value {
                     "properties": {
                         "source_id":     { "type": "string",  "description": "The source_id returned by save_context_artifact or search_saved_context." },
                         "session_id":    { "type": "string",  "description": "Optional: restrict access to artifacts owned by this session. Omit to skip session scoping." },
+                        "agent_id":      { "type": "string",  "description": "Optional: restrict access to artifacts owned by this agent partition." },
+                        "merge_agent_partitions": { "type": "boolean", "description": "When true, allow reads across agent partitions intentionally after repo/session checks pass." },
                         "chunk_offset":  { "type": "integer", "description": "0-based chunk index to start reading from (default 0). Use next_chunk_offset from a prior truncated response for paging." },
                         "max_bytes":     { "type": "integer", "description": "Byte cap on returned content (default 65536). When content exceeds this the response sets truncated=true and includes next_chunk_offset." },
                         "output_format": { "type": "string",  "description": DEFAULT_OUTPUT_DESCRIPTION }
@@ -317,6 +327,7 @@ pub fn tool_list() -> serde_json::Value {
                         "label":        { "type": "string",  "description": "Human-readable label for display and retrieval." },
                         "source_type":  { "type": "string",  "description": "Category tag (e.g. 'review_context', 'mcp_artifact'). Default: 'mcp_artifact'." },
                         "session_id":   { "type": "string",  "description": "Associate artifact with this session. Omit to use derived session." },
+                        "agent_id":     { "type": "string",  "description": "Associate artifact with this agent memory partition." },
                         "content_type": { "type": "string",  "description": "MIME type: 'text/plain' (default), 'text/markdown', or 'application/json'." },
                         "output_format":{ "type": "string",  "description": DEFAULT_OUTPUT_DESCRIPTION }
                     },
@@ -330,6 +341,7 @@ pub fn tool_list() -> serde_json::Value {
                     "type": "object",
                     "properties": {
                         "session_id":    { "type": "string",  "description": "Explicit session id. Omit to use the derived id for the current repo." },
+                        "agent_id":      { "type": "string",  "description": "Restrict storage statistics to one agent memory partition." },
                         "output_format": { "type": "string",  "description": DEFAULT_OUTPUT_DESCRIPTION }
                     },
                     "required": []
@@ -342,6 +354,7 @@ pub fn tool_list() -> serde_json::Value {
                     "type": "object",
                     "properties": {
                         "session_id":    { "type": "string",  "description": "Delete all saved artifacts for this session." },
+                        "agent_id":      { "type": "string",  "description": "Restrict session deletion to one agent memory partition." },
                         "keep_days":     { "type": "integer", "description": "For age-based cleanup: keep sources newer than this many days (default 30)." },
                         "output_format": { "type": "string",  "description": DEFAULT_OUTPUT_DESCRIPTION }
                     },
@@ -356,6 +369,8 @@ pub fn tool_list() -> serde_json::Value {
                     "properties": {
                         "query":         { "type": "string",  "description": "Full-text or semantic search query." },
                         "source_type":   { "type": "string",  "description": "Optional filter: restrict to a specific source_type (e.g. 'mcp_artifact')." },
+                        "agent_id":      { "type": "string",  "description": "Restrict cross-session search to one agent memory partition." },
+                        "merge_agent_partitions": { "type": "boolean", "description": "Intentionally merge cross-session search across all agent partitions." },
                         "limit":         { "type": "integer", "description": "Maximum results to return (default 10)." },
                         "output_format": { "type": "string",  "description": DEFAULT_OUTPUT_DESCRIPTION }
                     },

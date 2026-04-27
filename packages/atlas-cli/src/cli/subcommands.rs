@@ -7,10 +7,22 @@ pub enum SessionCommand {
     Start,
 
     /// Show the current session status and recent event summary.
-    Status,
+    Status {
+        #[arg(long)]
+        agent_id: Option<String>,
+
+        #[arg(long)]
+        merge_agent_partitions: bool,
+    },
 
     /// Print the pending resume snapshot, then mark it consumed.
-    Resume,
+    Resume {
+        #[arg(long)]
+        agent_id: Option<String>,
+
+        #[arg(long)]
+        merge_agent_partitions: bool,
+    },
 
     /// Delete the current session and all its stored events.
     Clear,

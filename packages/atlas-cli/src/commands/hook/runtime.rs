@@ -154,6 +154,7 @@ fn route_hook_payload(
     let meta = SourceMeta {
         id: generate_source_id(&identity, &raw_payload),
         session_id: Some(session_id.as_str().to_owned()),
+        agent_id: None,
         source_type: "hook_event".to_owned(),
         label,
         repo_root: Some(repo.to_owned()),

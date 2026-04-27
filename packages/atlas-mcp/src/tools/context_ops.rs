@@ -832,6 +832,8 @@ pub(super) fn tool_get_context(
     let semantic = bool_arg(args, "semantic").unwrap_or(false);
     let include_saved_context = bool_arg(args, "include_saved_context").unwrap_or(false);
     let session_id = str_arg(args, "session_id")?.map(str::to_owned);
+    let agent_id = str_arg(args, "agent_id")?.map(str::to_owned);
+    let merge_agent_partitions = bool_arg(args, "merge_agent_partitions").unwrap_or(false);
     let token_budget = u64_arg(args, "token_budget").map(|n| n as usize);
 
     let mut request = if !files.is_empty() {
@@ -892,6 +894,8 @@ pub(super) fn tool_get_context(
     }
     request.include_saved_context = include_saved_context;
     request.session_id = session_id;
+    request.agent_id = agent_id.clone();
+    request.merge_agent_partitions = merge_agent_partitions;
     if token_budget.is_some() {
         request.token_budget = token_budget;
     }
@@ -1018,7 +1022,13 @@ pub(super) fn tool_get_context(
         "imports": result.request.include_imports,
         "neighbors": result.request.include_neighbors,
         "semantic": semantic,
+            "agent_id": result.request.agent_id,
+            "merge_agent_partitions": result.request.merge_agent_partitions,
         "omitted_sections": omitted,
+    });
+    response["atlas_agent_scope"] = serde_json::json!({
+        "agent_id": result.request.agent_id,
+        "merge_agent_partitions": result.request.merge_agent_partitions,
     });
     let response_bytes_before_trim = serde_json::to_vec(&response)
         .map(|bytes| bytes.len())

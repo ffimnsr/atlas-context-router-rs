@@ -55,11 +55,28 @@ pub fn run_session(cli: &Cli) -> Result<()> {
             }
         }
 
-        SessionCommand::Status => {
+        SessionCommand::Status {
+            agent_id,
+            merge_agent_partitions,
+        } => {
             let store = open_store()?;
             let meta = store.get_session_meta(&session_id)?;
             let events = store.list_events(&session_id)?;
             let snapshot = store.get_resume_snapshot(&session_id)?;
+            let agent_summary = store.summarize_agent_memory(
+                &session_id,
+                agent_id.as_deref(),
+                *merge_agent_partitions,
+            )?;
+            let scoped_event_count = if agent_summary.merged_view && agent_id.is_none() {
+                events.len()
+            } else {
+                agent_summary
+                    .partitions
+                    .iter()
+                    .map(|partition| partition.event_count)
+                    .sum::<usize>()
+            };
 
             // CM11: best-effort global memory; empty if no data yet.
             let frequent_symbols: Vec<GlobalAccessEntry> =
@@ -112,6 +129,8 @@ pub fn run_session(cli: &Cli) -> Result<()> {
                     "session.status",
                     serde_json::json!({
                         "session_id": session_id.as_str(),
+                        "agent_id": agent_id,
+                        "merged_agent_view": agent_summary.merged_view,
                         "exists": meta.is_some(),
                         "meta": meta.as_ref().map(|m| serde_json::json!({
                             "repo_root": m.repo_root,
@@ -122,8 +141,11 @@ pub fn run_session(cli: &Cli) -> Result<()> {
                             "last_resume_at": m.last_resume_at,
                             "last_compaction_at": m.last_compaction_at,
                         })),
-                        "event_count": events.len(),
+                        "event_count": scoped_event_count,
                         "resume_snapshot": snapshot_info,
+                        "agent_partitions": agent_summary.partitions,
+                        "delegated_tasks": agent_summary.delegated_tasks,
+                        "agent_responsibilities": agent_summary.responsibilities,
                         "global_memory": {
                             "frequent_symbols": symbols_json,
                             "frequent_files": files_json,
@@ -140,7 +162,12 @@ pub fn run_session(cli: &Cli) -> Result<()> {
                         println!("Frontend  : {}", m.frontend);
                         println!("Created   : {}", m.created_at);
                         println!("Updated   : {}", m.updated_at);
-                        println!("Events    : {}", events.len());
+                        if let Some(agent_id) = agent_id.as_deref() {
+                            println!("Agent     : {agent_id}");
+                        } else if *merge_agent_partitions {
+                            println!("Agent     : merged");
+                        }
+                        println!("Events    : {}", scoped_event_count);
                         if let Some(ca) = &m.last_compaction_at {
                             println!("Compacted : {ca}");
                         }
@@ -149,6 +176,32 @@ pub fn run_session(cli: &Cli) -> Result<()> {
                             Some(s) => {
                                 let state = if s.consumed { "consumed" } else { "pending" };
                                 println!("Snapshot  : {state} ({} events)", s.event_count);
+                            }
+                        }
+                        if !agent_summary.partitions.is_empty() {
+                            println!("\nAgent partitions ({}):", agent_summary.partitions.len());
+                            for partition in &agent_summary.partitions {
+                                println!(
+                                    "  {} (events={}, active={}, completed={})",
+                                    partition.agent_id.as_deref().unwrap_or("default"),
+                                    partition.event_count,
+                                    partition.active_task_count,
+                                    partition.completed_task_count
+                                );
+                            }
+                        }
+                        if !agent_summary.delegated_tasks.is_empty() {
+                            println!(
+                                "\nDelegated tasks ({}):",
+                                agent_summary.delegated_tasks.len()
+                            );
+                            for task in &agent_summary.delegated_tasks {
+                                println!(
+                                    "  [{}] {} -> {}",
+                                    task.status,
+                                    task.agent_id.as_deref().unwrap_or("default"),
+                                    task.title
+                                );
                             }
                         }
                         // CM11: show global memory summary if data exists.
@@ -176,7 +229,10 @@ pub fn run_session(cli: &Cli) -> Result<()> {
             }
         }
 
-        SessionCommand::Resume => {
+        SessionCommand::Resume {
+            agent_id,
+            merge_agent_partitions,
+        } => {
             let mut store = open_store()?;
             let snapshot = store.get_resume_snapshot(&session_id)?;
             match snapshot {
@@ -194,18 +250,23 @@ pub fn run_session(cli: &Cli) -> Result<()> {
                         println!("Build one with `atlas session start` after active work.");
                     }
                 }
-                Some(s) => {
+                Some(_s) => {
                     // Mark consumed so next `session start` knows it was loaded.
                     store.mark_resume_consumed(&session_id, true)?;
 
-                    let inner: serde_json::Value =
-                        serde_json::from_str(&s.snapshot).unwrap_or(serde_json::Value::Null);
+                    let inner = store.build_resume_view(
+                        &session_id,
+                        agent_id.as_deref(),
+                        *merge_agent_partitions,
+                    )?;
 
                     if cli.json {
                         print_json(
                             "session.resume",
                             serde_json::json!({
                                 "session_id": session_id.as_str(),
+                                "agent_id": agent_id,
+                                "merged_agent_view": *merge_agent_partitions || agent_id.is_none(),
                                 "consumed": true,
                                 "snapshot": inner,
                             }),

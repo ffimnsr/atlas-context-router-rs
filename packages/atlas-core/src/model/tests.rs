@@ -248,6 +248,8 @@ fn sample_context_request_symbol() -> ContextRequest {
         include_callees: true,
         include_saved_context: false,
         session_id: None,
+        agent_id: None,
+        merge_agent_partitions: false,
         token_budget: None,
     }
 }
@@ -600,6 +602,7 @@ fn context_result_round_trip() {
             label: "prior review".to_string(),
             source_type: "review_context".to_string(),
             session_id: Some("sess-1".to_string()),
+            agent_id: None,
             preview: "preview".to_string(),
             retrieval_hint: "source_id=saved-1".to_string(),
             relevance_score: 14.0,

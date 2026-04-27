@@ -35,6 +35,8 @@ pub struct SourceMeta {
     pub id: String,
     /// Session this artifact belongs to (optional).
     pub session_id: Option<String>,
+    /// Agent memory partition this artifact belongs to (optional).
+    pub agent_id: Option<String>,
     /// Category label: `"review_context"`, `"impact_result"`, `"command_output"`, etc.
     pub source_type: String,
     /// Human-readable label for display and retrieval.
@@ -53,6 +55,7 @@ pub struct SourceMeta {
 #[derive(Debug, Default, Clone)]
 pub struct SearchFilters {
     pub session_id: Option<String>,
+    pub agent_id: Option<String>,
     pub source_type: Option<String>,
     pub repo_root: Option<String>,
 }
@@ -160,6 +163,7 @@ pub struct RoutingStats {
 pub struct SourceRow {
     pub id: String,
     pub session_id: Option<String>,
+    pub agent_id: Option<String>,
     pub source_type: String,
     pub label: String,
     pub repo_root: Option<String>,

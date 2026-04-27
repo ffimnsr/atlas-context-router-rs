@@ -161,6 +161,8 @@ fn bench_context_retrieval_latency(c: &mut Criterion) {
             include_callees: true,
             include_saved_context: false,
             session_id: None,
+            agent_id: None,
+            merge_agent_partitions: false,
             token_budget: None,
         };
 

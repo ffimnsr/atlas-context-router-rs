@@ -421,6 +421,7 @@ fn user_prompt_hook_routes_intent_and_finds_saved_context() {
             SourceMeta {
                 id: source_id.clone(),
                 session_id: None,
+                agent_id: None,
                 source_type: "review_context".to_owned(),
                 label: "review context".to_owned(),
                 repo_root: Some(repo.clone()),

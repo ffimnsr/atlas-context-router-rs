@@ -223,6 +223,45 @@ pub struct ResumeSnapshot {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentPartitionSummary {
+    pub agent_id: Option<String>,
+    pub event_count: usize,
+    pub last_event_at: Option<String>,
+    pub active_task_count: usize,
+    pub completed_task_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DelegatedTaskSummary {
+    pub task_id: String,
+    pub title: String,
+    pub status: String,
+    pub agent_id: Option<String>,
+    pub delegated_by: Option<String>,
+    pub responsibility: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentResponsibilitySummary {
+    pub agent_id: String,
+    pub responsibilities: Vec<String>,
+    pub active_task_count: usize,
+    pub completed_task_count: usize,
+    pub last_event_at: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct AgentMemorySummary {
+    pub merged_view: bool,
+    pub requested_agent_id: Option<String>,
+    pub partitions: Vec<AgentPartitionSummary>,
+    pub delegated_tasks: Vec<DelegatedTaskSummary>,
+    pub responsibilities: Vec<AgentResponsibilitySummary>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DecisionRecord {
     pub decision_id: String,
     pub session_id: String,

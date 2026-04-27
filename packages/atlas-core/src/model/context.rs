@@ -85,6 +85,11 @@ pub struct ContextRequest {
     /// Restrict saved-context retrieval to artifacts from this session.
     /// Also applies a same-session relevance boost when scoring.
     pub session_id: Option<String>,
+    /// Restrict saved-context retrieval to one agent memory partition.
+    /// When omitted, retrieval preserves legacy merged behavior.
+    pub agent_id: Option<String>,
+    /// When true, allow retrieval across all agent partitions intentionally.
+    pub merge_agent_partitions: bool,
     // --- CM13: context budget optimization ---
     /// Optional per-call token budget. When set the engine enforces this cap
     /// during payload trimming instead of (or in addition to) the policy
@@ -113,6 +118,8 @@ impl Default for ContextRequest {
             include_callees: true,
             include_saved_context: false,
             session_id: None,
+            agent_id: None,
+            merge_agent_partitions: false,
             token_budget: None,
         }
     }
@@ -485,6 +492,8 @@ pub struct SavedContextSource {
     pub source_type: String,
     /// Session that produced this artifact, if recorded.
     pub session_id: Option<String>,
+    /// Agent partition that produced this artifact, if recorded.
+    pub agent_id: Option<String>,
     /// Truncated preview of the first chunk (≤ 512 chars); never the raw blob.
     pub preview: String,
     /// Opaque hint an agent can use to retrieve the full artifact,

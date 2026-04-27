@@ -17,6 +17,8 @@
     "include_callees": true,
     "include_saved_context": false,
     "session_id": null,
+    "agent_id": null,
+    "merge_agent_partitions": false,
     "token_budget": null
   },
   "ambiguity": null,
@@ -33,6 +35,10 @@
     "same_session_boost": "Additive boost for saved-context artifacts from the active session.",
     "saved_context_rank_score": "Base saved-context ranking contribution derived from retrieval rank.",
     "test_adjacent": "Item was included because of test adjacency."
+  },
+  "agent_scope": {
+    "agent_id": null,
+    "merge_agent_partitions": false
   },
   "edges": [
     {

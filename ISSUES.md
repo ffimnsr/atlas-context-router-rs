@@ -435,10 +435,10 @@ Support multi-agent workflows.
 
 ##### Tasks
 
-- [ ] implement per-agent memory partitions
-- [ ] track delegated tasks
-- [ ] merge outputs across agents
-- [ ] track agent responsibilities
+- [x] implement per-agent memory partitions
+- [x] track delegated tasks
+- [x] merge outputs across agents
+- [x] track agent responsibilities
 
 ##### Output
 
@@ -446,9 +446,9 @@ Support multi-agent workflows.
 
 ##### CLI and MCP rollout follow-up
 
-- [ ] add agent partition identifiers to session, context, and saved-context APIs
-- [ ] extend MCP tools to read/write per-agent memory partitions and merged views intentionally
-- [ ] expose delegated-task and responsibility summaries through CLI or MCP status/context surfaces
+- [x] add agent partition identifiers to session, context, and saved-context APIs
+- [x] extend MCP tools to read/write per-agent memory partitions and merged views intentionally
+- [x] expose delegated-task and responsibility summaries through CLI or MCP status/context surfaces
 
 ---
 
@@ -666,7 +666,7 @@ Atlas already exposes query scores, active query mode, global `explain_query` ra
 
 - [x] add compact `RankingEvidence` / `ScoreEvidence` model for ranked retrieval results
 - [x] attach evidence to graph/search result structs without replacing numeric score
-- [ ] include fields for:
+- [x] include fields for:
   - [x] base retrieval mode (`fts5`, `regex_structural_scan`, `vector`, `hybrid`, `graph_expand`)
   - [x] raw score before boosts when available
   - [x] final score

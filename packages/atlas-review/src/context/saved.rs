@@ -36,6 +36,9 @@ pub(super) fn retrieve_saved_context(
     let query = terms.join(" ");
     let filters = SearchFilters {
         session_id: request.session_id.clone(),
+        agent_id: (!request.merge_agent_partitions)
+            .then(|| request.agent_id.clone())
+            .flatten(),
         ..SearchFilters::default()
     };
 
@@ -128,6 +131,7 @@ pub(super) fn retrieve_saved_context(
             label: meta.label,
             source_type: meta.source_type,
             session_id: meta.session_id,
+            agent_id: meta.agent_id,
             preview,
             retrieval_hint,
             relevance_score: score,

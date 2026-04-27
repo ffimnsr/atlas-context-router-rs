@@ -218,6 +218,7 @@ fn persist_handoff_artifact(
     let meta = SourceMeta {
         id: source_id.clone(),
         session_id: Some(session_id.as_str().to_owned()),
+        agent_id: None,
         source_type: "hook_handoff".to_owned(),
         label: format!("hook:{frontend}:{trigger}:handoff"),
         repo_root: Some(repo.to_owned()),
@@ -614,6 +615,7 @@ fn persist_named_hook_artifact(
             SourceMeta {
                 id: source_id.clone(),
                 session_id: Some(session_id.as_str().to_owned()),
+                agent_id: None,
                 source_type: kind.to_owned(),
                 label: format!("hook:{trigger}:{kind}"),
                 repo_root: Some(repo.to_owned()),

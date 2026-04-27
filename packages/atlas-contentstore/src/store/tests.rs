@@ -33,6 +33,7 @@ fn meta(id: &str) -> SourceMeta {
     SourceMeta {
         id: id.to_string(),
         session_id: Some("sess1".into()),
+        agent_id: Some("agent-alpha".into()),
         source_type: "review_context".into(),
         label: "test artifact".into(),
         repo_root: Some("/repo".into()),
@@ -50,6 +51,7 @@ fn index_and_retrieve_by_source_id() {
     let src = store.get_source("src-1").unwrap().unwrap();
     assert_eq!(src.identity_kind, "artifact_label");
     assert_eq!(src.identity_value, "test artifact");
+    assert_eq!(src.agent_id.as_deref(), Some("agent-alpha"));
     let chunks = store.get_chunks("src-1").unwrap();
     assert!(!chunks.is_empty());
 }
@@ -61,7 +63,7 @@ fn open_stamps_migration_history_and_provenance() {
         .conn
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 5);
+    assert_eq!(version, 6);
 
     let history_count: i64 = store
         .conn
@@ -69,7 +71,7 @@ fn open_stamps_migration_history_and_provenance() {
             row.get(0)
         })
         .unwrap();
-    assert_eq!(history_count, 5);
+    assert_eq!(history_count, 6);
 
     let (db_kind, created_by): (String, String) = store
         .conn
@@ -100,9 +102,10 @@ fn rollback_and_reupgrade_restore_content_schema() {
         .conn
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(restored_version, 5);
+    assert_eq!(restored_version, 6);
     assert!(table_columns(&store.conn, "chunks").contains(&"chunk_id".to_string()));
     assert!(table_columns(&store.conn, "sources").contains(&"identity_kind".to_string()));
+    assert!(table_columns(&store.conn, "sources").contains(&"agent_id".to_string()));
 }
 
 #[test]
@@ -359,6 +362,34 @@ fn configurable_thresholds_respected() {
 }
 
 #[test]
+fn search_can_filter_by_agent_partition() {
+    let mut store = open_store();
+    let mut alpha = meta("src-agent-a");
+    alpha.agent_id = Some("agent-alpha".into());
+    store
+        .index_artifact(alpha, "shared phrase alpha unique", "text/plain")
+        .unwrap();
+
+    let mut beta = meta("src-agent-b");
+    beta.agent_id = Some("agent-beta".into());
+    store
+        .index_artifact(beta, "shared phrase beta unique", "text/plain")
+        .unwrap();
+
+    let alpha_results = store
+        .search_with_fallback(
+            "shared phrase",
+            &SearchFilters {
+                agent_id: Some("agent-alpha".into()),
+                ..SearchFilters::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(alpha_results.len(), 1);
+    assert_eq!(alpha_results[0].source_id, "src-agent-a");
+}
+
+#[test]
 fn routing_stats_increment_correctly() {
     let file = tempfile::NamedTempFile::new().unwrap();
     let path = file.path().to_str().unwrap().to_string();
@@ -421,7 +452,7 @@ fn size_limit_enforced_by_pruning_oldest_sources() {
             .unwrap();
     }
 
-    let (src_count, _) = store.stats(None).unwrap();
+    let (src_count, _) = store.stats(None, None).unwrap();
     assert!(
         src_count < 5,
         "size limit should have pruned old sources; got {src_count}"

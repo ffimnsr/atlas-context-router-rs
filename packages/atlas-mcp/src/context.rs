@@ -188,6 +188,8 @@ pub struct PackagedSavedSource<'a> {
     pub source_type: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<&'a str>,
     pub preview: &'a str,
     pub retrieval_hint: &'a str,
     pub relevance_score: f32,
@@ -315,6 +317,7 @@ pub fn package_context_result(
                 label: &s.label,
                 source_type: &s.source_type,
                 session_id: s.session_id.as_deref(),
+                agent_id: s.agent_id.as_deref(),
                 preview: &s.preview,
                 retrieval_hint: &s.retrieval_hint,
                 relevance_score: s.relevance_score,
