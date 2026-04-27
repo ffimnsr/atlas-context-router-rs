@@ -483,7 +483,6 @@ pub fn run_impact(cli: &Cli) -> Result<()> {
                 "impact",
                 serde_json::json!({
                     "files": target_files,
-                    "latency_ms": latency_ms,
                     "analysis": advanced,
                 }),
             )?;

@@ -85,7 +85,10 @@ fn apply_migrations_through(conn: &Connection, version: i32) {
          );",
     )
     .unwrap();
-    for migration in MIGRATIONS.iter().filter(|migration| migration.version <= version) {
+    for migration in MIGRATIONS
+        .iter()
+        .filter(|migration| migration.version <= version)
+    {
         conn.execute_batch(migration.up_sql).unwrap();
         conn.execute(
             "INSERT OR REPLACE INTO metadata (key, value) VALUES ('schema_version', ?1)",
@@ -101,7 +104,9 @@ fn normalize_schema_sql(sql: &str) -> String {
 }
 
 fn schema_dump(conn: &Connection) -> String {
-    let user_version: i32 = conn.query_row("PRAGMA user_version", [], |row| row.get(0)).unwrap();
+    let user_version: i32 = conn
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .unwrap();
     let mut stmt = conn
         .prepare(
             "SELECT type, name, sql

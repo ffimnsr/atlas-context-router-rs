@@ -25,7 +25,9 @@ use super::graph::{
     tool_list_graph_stats, tool_query_graph, tool_resolve_symbol, tool_symbol_neighbors,
     tool_traverse_graph,
 };
-use super::health::{tool_broker_status, tool_db_check, tool_debug_graph, tool_doctor, tool_status};
+use super::health::{
+    tool_broker_status, tool_db_check, tool_debug_graph, tool_doctor, tool_status,
+};
 use super::postprocess::tool_postprocess_graph;
 
 fn response_file_list(response: &serde_json::Value, pointer: &str) -> Vec<String> {

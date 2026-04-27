@@ -60,7 +60,7 @@ tasks:
     commands:
       - |
         git ls-files -z --cached --others --exclude-standard \
-         | grep -zv '^Cargo.lock$' \
+        | grep -zv 'Cargo.lock$' \
         | xargs -0 -I{} sh -c '[ -f "{}" ] && wc -l "{}"' \
         | awk '$1 > 1000' \
         | sort -nr

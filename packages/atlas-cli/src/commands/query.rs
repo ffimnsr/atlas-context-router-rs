@@ -180,7 +180,6 @@ pub fn run_query(cli: &Cli) -> Result<()> {
                     "semantic": semantic,
                     "regex_pattern": query.regex_pattern,
                 },
-                "latency_ms": latency_ms,
                 "results": results,
                 "ranking_evidence_legend": atlas_core::ranking_evidence_legend(),
                 "budget": budget,

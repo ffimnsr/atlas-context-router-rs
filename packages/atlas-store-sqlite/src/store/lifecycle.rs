@@ -1,5 +1,7 @@
 use atlas_core::{AtlasError, GraphStats, Node, Result};
-use atlas_db_utils::{application_id, apply_atlas_pragmas, migrate_database_to, set_application_id};
+use atlas_db_utils::{
+    application_id, apply_atlas_pragmas, migrate_database_to, set_application_id,
+};
 use atlas_repo::CanonicalRepoPath;
 use rusqlite::{Connection, OpenFlags, params};
 use tracing::{debug, info};
@@ -105,15 +107,20 @@ impl Store {
             .unwrap_or(0);
         debug!(current_version, target_version, "checking migrations");
         if target_version >= current_version {
-            for migration in MIGRATION_SET
-                .migrations
-                .iter()
-                .filter(|migration| migration.version > current_version && migration.version <= target_version)
-            {
-                info!(version = migration.version, name = migration.name, "applying migration");
+            for migration in MIGRATION_SET.migrations.iter().filter(|migration| {
+                migration.version > current_version && migration.version <= target_version
+            }) {
+                info!(
+                    version = migration.version,
+                    name = migration.name,
+                    "applying migration"
+                );
             }
         } else {
-            info!(current_version, target_version, "rebuilding schema for downgrade");
+            info!(
+                current_version,
+                target_version, "rebuilding schema for downgrade"
+            );
         }
         migrate_database_to(&mut self.conn, &MIGRATION_SET, target_version)
     }

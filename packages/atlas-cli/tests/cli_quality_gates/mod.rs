@@ -231,7 +231,9 @@ fn read_golden_json(name: &str) -> Value {
 }
 
 fn normalize_query_results(value: &mut Value) {
-    value["latency_ms"] = json!(0);
+    if let Some(object) = value.as_object_mut() {
+        object.remove("latency_ms");
+    }
     let Some(results) = value["results"].as_array_mut() else {
         panic!("query output results should be an array");
     };

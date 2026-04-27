@@ -155,7 +155,7 @@ pub fn build_explain_change_summary(
 
     let mut changed_by_kind = ExplainChangedByKind::default();
 
-    let changed_symbols: Vec<ExplainChangedSymbol> = advanced
+    let mut changed_symbols: Vec<ExplainChangedSymbol> = advanced
         .scored_nodes
         .iter()
         .filter_map(|scored| {
@@ -190,8 +190,13 @@ pub fn build_explain_change_summary(
             }
         })
         .collect();
+    changed_symbols.sort_by(|left, right| {
+        left.qn
+            .cmp(&right.qn)
+            .then_with(|| left.change_kind.cmp(&right.change_kind))
+    });
 
-    let boundary_violations: Vec<ExplainBoundaryViolation> = advanced
+    let mut boundary_violations: Vec<ExplainBoundaryViolation> = advanced
         .boundary_violations
         .iter()
         .map(|violation| ExplainBoundaryViolation {
@@ -204,13 +209,24 @@ pub fn build_explain_change_summary(
             nodes: violation.nodes.clone(),
         })
         .collect();
+    for violation in &mut boundary_violations {
+        violation.nodes.sort();
+        violation.nodes.dedup();
+    }
+    boundary_violations.sort_by(|left, right| {
+        left.kind
+            .cmp(&right.kind)
+            .then_with(|| left.description.cmp(&right.description))
+    });
 
-    let uncovered_symbols: Vec<String> = advanced
+    let mut uncovered_symbols: Vec<String> = advanced
         .test_impact
         .uncovered_changed_nodes
         .iter()
         .map(|node| node.qualified_name.clone())
         .collect();
+    uncovered_symbols.sort();
+    uncovered_symbols.dedup();
 
     let risk_level = advanced.risk_level.to_string();
     let impacted_file_count = advanced.base.impacted_files.len();
@@ -332,7 +348,7 @@ fn build_diff_summary(changes: &[ChangedFile], impact: &ImpactResult) -> Explain
             });
 
     let mut counts = ExplainDiffCounts::default();
-    let files = changes
+    let mut files: Vec<ExplainDiffFile> = changes
         .iter()
         .map(|change| {
             match change.change_type {
@@ -365,6 +381,12 @@ fn build_diff_summary(changes: &[ChangedFile], impact: &ImpactResult) -> Explain
             }
         })
         .collect();
+    files.sort_by(|left, right| {
+        left.path
+            .cmp(&right.path)
+            .then_with(|| left.old_path.cmp(&right.old_path))
+            .then_with(|| left.change_type.cmp(&right.change_type))
+    });
 
     ExplainDiffSummary { counts, files }
 }

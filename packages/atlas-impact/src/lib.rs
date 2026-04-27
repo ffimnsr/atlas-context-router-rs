@@ -172,6 +172,7 @@ fn score_nodes(
         b.impact_score
             .partial_cmp(&a.impact_score)
             .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.node.qualified_name.cmp(&b.node.qualified_name))
     });
     result
 }
@@ -269,7 +270,7 @@ fn compute_test_impact(base: &ImpactResult) -> TestImpactResult {
         .flat_map(|e| [e.source_qn.clone(), e.target_qn.clone()])
         .collect();
 
-    let uncovered_changed_nodes: Vec<Node> = base
+    let mut uncovered_changed_nodes: Vec<Node> = base
         .changed_nodes
         .iter()
         .filter(|n| {
@@ -277,6 +278,7 @@ fn compute_test_impact(base: &ImpactResult) -> TestImpactResult {
         })
         .cloned()
         .collect();
+    uncovered_changed_nodes.sort_by(|a, b| a.qualified_name.cmp(&b.qualified_name));
 
     TestImpactResult {
         affected_tests,

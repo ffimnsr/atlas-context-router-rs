@@ -57,17 +57,17 @@
 mod context;
 mod discovery_tools;
 mod output;
+pub mod progress;
 mod prompts;
 mod session_tools;
 mod tools;
 mod transport;
-pub mod progress;
 
 #[cfg(feature = "http-transport")]
 pub mod transport_http;
 
-pub use tools::tool_list;
 pub use tools::health::mark_server_started;
+pub use tools::tool_list;
 pub use transport::{
     MCP_PROTOCOL_VERSION, ServerOptions, run_server, run_server_with_options,
     run_socket_server_with_options,

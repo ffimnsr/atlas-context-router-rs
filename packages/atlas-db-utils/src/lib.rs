@@ -276,7 +276,10 @@ pub fn auto_vacuum_mode(conn: &Connection) -> Result<i64> {
 }
 
 fn latest_version(set: &MigrationSet) -> i32 {
-    set.migrations.last().map(|migration| migration.version).unwrap_or(0)
+    set.migrations
+        .last()
+        .map(|migration| migration.version)
+        .unwrap_or(0)
 }
 
 fn ensure_framework_tables(conn: &Connection) -> Result<()> {
@@ -353,33 +356,38 @@ fn current_schema_version(conn: &Connection) -> Result<i32> {
 
 fn backfill_history_if_missing(conn: &Connection, set: &MigrationSet, current: i32) -> Result<()> {
     let existing: i64 = conn
-        .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row.get(0))
+        .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| {
+            row.get(0)
+        })
         .map_err(|e| AtlasError::Db(e.to_string()))?;
     if existing > 0 || current == 0 {
         return Ok(());
     }
 
     let banner = atlas_version_banner();
-    for migration in set.migrations.iter().filter(|migration| migration.version <= current) {
+    for migration in set
+        .migrations
+        .iter()
+        .filter(|migration| migration.version <= current)
+    {
         record_migration(conn, migration, MigrationDirection::Up, &banner)?;
     }
     Ok(())
 }
 
-fn migrate_up(
-    conn: &mut Connection,
-    set: &MigrationSet,
-    current: i32,
-    target: i32,
-) -> Result<()> {
+fn migrate_up(conn: &mut Connection, set: &MigrationSet, current: i32, target: i32) -> Result<()> {
     let banner = atlas_version_banner();
     for migration in set
         .migrations
         .iter()
         .filter(|migration| migration.version > current && migration.version <= target)
     {
-        conn.execute_batch(migration.up_sql)
-            .map_err(|e| AtlasError::Db(format!("migration {} ({}): {e}", migration.version, migration.name)))?;
+        conn.execute_batch(migration.up_sql).map_err(|e| {
+            AtlasError::Db(format!(
+                "migration {} ({}): {e}",
+                migration.version, migration.name
+            ))
+        })?;
         write_metadata(conn, "schema_version", &migration.version.to_string())?;
         record_migration(conn, migration, MigrationDirection::Up, &banner)?;
     }
@@ -392,7 +400,8 @@ fn rebuild_down(
     current: i32,
     target: i32,
 ) -> Result<()> {
-    let mut target_conn = Connection::open_in_memory().map_err(|e| AtlasError::Db(e.to_string()))?;
+    let mut target_conn =
+        Connection::open_in_memory().map_err(|e| AtlasError::Db(e.to_string()))?;
     ensure_framework_tables(&target_conn)?;
     migrate_up(&mut target_conn, set, 0, target)?;
 
@@ -414,7 +423,11 @@ fn rebuild_down(
             .migrations
             .iter()
             .find(|migration| migration.version == version)
-            .ok_or_else(|| AtlasError::Db(format!("missing migration definition for version {version}")))?;
+            .ok_or_else(|| {
+                AtlasError::Db(format!(
+                    "missing migration definition for version {version}"
+                ))
+            })?;
         record_migration(conn, migration, MigrationDirection::Down, &banner)?;
     }
     Ok(())
@@ -477,7 +490,9 @@ fn drop_user_objects(conn: &Connection) -> Result<()> {
         )
         .map_err(|e| AtlasError::Db(e.to_string()))?;
     let objects = stmt
-        .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
         .map_err(|e| AtlasError::Db(e.to_string()))?
         .collect::<std::result::Result<Vec<_>, _>>()
         .map_err(|e| AtlasError::Db(e.to_string()))?;
@@ -503,12 +518,14 @@ fn shadow_table_names(conn: &Connection) -> Result<BTreeSet<String>> {
     let mut stmt = conn
         .prepare("PRAGMA table_list")
         .map_err(|e| AtlasError::Db(e.to_string()))?;
-    stmt.query_map([], |row| Ok((row.get::<_, String>(1)?, row.get::<_, String>(2)?)))
-        .map_err(|e| AtlasError::Db(e.to_string()))?
-        .filter_map(|row| row.ok())
-        .filter(|(_, table_type)| table_type == "shadow")
-        .map(|(name, _)| Ok(name))
-        .collect::<std::result::Result<BTreeSet<_>, AtlasError>>()
+    stmt.query_map([], |row| {
+        Ok((row.get::<_, String>(1)?, row.get::<_, String>(2)?))
+    })
+    .map_err(|e| AtlasError::Db(e.to_string()))?
+    .filter_map(|row| row.ok())
+    .filter(|(_, table_type)| table_type == "shadow")
+    .map(|(name, _)| Ok(name))
+    .collect::<std::result::Result<BTreeSet<_>, AtlasError>>()
 }
 
 fn is_framework_object(name: &str) -> bool {

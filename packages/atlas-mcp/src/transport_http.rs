@@ -67,7 +67,11 @@ struct AppState {
 
 /// Run the HTTP+SSE MCP server with default options.
 pub fn run_http_server(repo_root: &str, db_path: &str) -> Result<()> {
-    run_http_server_with_options(repo_root, db_path, crate::transport::ServerOptions::default())
+    run_http_server_with_options(
+        repo_root,
+        db_path,
+        crate::transport::ServerOptions::default(),
+    )
 }
 
 /// Run the HTTP+SSE MCP server with explicit options.
@@ -86,7 +90,7 @@ pub fn run_http_server_with_options(
     let auth_token = std::env::var("ATLAS_HTTP_AUTH_TOKEN")
         .ok()
         .filter(|t| !t.is_empty())
-        .map(|t| Arc::new(t));
+        .map(Arc::new);
 
     if auth_token.is_none() {
         eprintln!(
@@ -116,9 +120,7 @@ pub fn run_http_server_with_options(
         .layer(cors)
         .with_state(state);
 
-    eprintln!(
-        "atlas-mcp[http]: listening on http://{bind_addr} (repo={repo_root}, db={db_path})"
-    );
+    eprintln!("atlas-mcp[http]: listening on http://{bind_addr} (repo={repo_root}, db={db_path})");
 
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -147,7 +149,7 @@ async fn handle_health() -> impl IntoResponse {
 
 /// `GET /sse` — authenticated Server-Sent Events stream.
 async fn handle_sse(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    if let Err(resp) = check_auth(&state, &headers) {
+    if let Some(resp) = check_auth(&state, &headers) {
         return resp;
     }
 
@@ -172,7 +174,7 @@ async fn handle_jsonrpc(
     headers: HeaderMap,
     body: axum::body::Bytes,
 ) -> Response {
-    if let Err(resp) = check_auth(&state, &headers) {
+    if let Some(resp) = check_auth(&state, &headers) {
         return resp;
     }
 
@@ -241,7 +243,7 @@ async fn handle_jsonrpc(
             {
                 Some(n) => n.to_owned(),
                 None => {
-                    return jsonrpc_error_response(id, -32602, "missing prompt name".to_owned())
+                    return jsonrpc_error_response(id, -32602, "missing prompt name".to_owned());
                 }
             };
             let prompt_args = params.as_ref().and_then(|p| p.get("arguments")).cloned();
@@ -327,18 +329,16 @@ async fn dispatch_tool_call(
             let _ = sse_tx.send(rsp.to_string());
             jsonrpc_error_response(id, -32001, err_msg)
         }
-        Err(join_err) => {
-            jsonrpc_error_response(id, -32603, format!("worker panicked: {join_err}"))
-        }
+        Err(join_err) => jsonrpc_error_response(id, -32603, format!("worker panicked: {join_err}")),
     }
 }
 
 // ── Authentication ─────────────────────────────────────────────────────────────
 
 /// Verify `Authorization: Bearer <token>` using a timing-safe comparison.
-fn check_auth(state: &AppState, headers: &HeaderMap) -> Result<(), Response> {
+fn check_auth(state: &AppState, headers: &HeaderMap) -> Option<Response> {
     let Some(expected) = &state.auth_token else {
-        return Ok(());
+        return None;
     };
 
     let provided = headers
@@ -358,16 +358,18 @@ fn check_auth(state: &AppState, headers: &HeaderMap) -> Result<(), Response> {
         .fold(0u8, |acc, (a, b)| acc | (a ^ b));
 
     if lengths_equal && diff == 0 {
-        Ok(())
+        None
     } else {
-        Err((
-            StatusCode::UNAUTHORIZED,
-            Json(serde_json::json!({
-                "error": "unauthorized",
-                "message": "valid Bearer token required",
-            })),
+        Some(
+            (
+                StatusCode::UNAUTHORIZED,
+                Json(serde_json::json!({
+                    "error": "unauthorized",
+                    "message": "valid Bearer token required",
+                })),
+            )
+                .into_response(),
         )
-            .into_response())
     }
 }
 
@@ -420,13 +422,13 @@ mod tests {
     #[test]
     fn auth_passes_when_no_token_configured() {
         let state = make_state(None);
-        assert!(check_auth(&state, &HeaderMap::new()).is_ok());
+        assert!(check_auth(&state, &HeaderMap::new()).is_none());
     }
 
     #[test]
     fn auth_rejects_missing_header() {
         let state = make_state(Some("secret"));
-        assert!(check_auth(&state, &HeaderMap::new()).is_err());
+        assert!(check_auth(&state, &HeaderMap::new()).is_some());
     }
 
     #[test]
@@ -434,7 +436,7 @@ mod tests {
         let state = make_state(Some("correct"));
         let mut headers = HeaderMap::new();
         headers.insert(header::AUTHORIZATION, "Bearer wrong".parse().unwrap());
-        assert!(check_auth(&state, &headers).is_err());
+        assert!(check_auth(&state, &headers).is_some());
     }
 
     #[test]
@@ -442,7 +444,7 @@ mod tests {
         let state = make_state(Some("secret"));
         let mut headers = HeaderMap::new();
         headers.insert(header::AUTHORIZATION, "Bearer secret".parse().unwrap());
-        assert!(check_auth(&state, &headers).is_ok());
+        assert!(check_auth(&state, &headers).is_none());
     }
 
     #[test]
@@ -450,6 +452,6 @@ mod tests {
         let state = make_state(Some("secret-long"));
         let mut headers = HeaderMap::new();
         headers.insert(header::AUTHORIZATION, "Bearer secret".parse().unwrap());
-        assert!(check_auth(&state, &headers).is_err());
+        assert!(check_auth(&state, &headers).is_some());
     }
 }

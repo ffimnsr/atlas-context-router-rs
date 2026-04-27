@@ -41,7 +41,11 @@ fn migration_schema_matches_checked_in_schema_sql() {
 
 #[test]
 fn migration_schema_matches_versioned_schema_fixtures() {
-    assert_eq!(MIGRATIONS.len(), 13, "add fixture when migration count changes");
+    assert_eq!(
+        MIGRATIONS.len(),
+        13,
+        "add fixture when migration count changes"
+    );
 
     for migration in MIGRATIONS {
         let conn = open_unmigrated_in_memory();
@@ -99,7 +103,9 @@ fn migration_framework_records_history_and_provenance() {
     let store = open_in_memory();
     let history_count: i64 = store
         .conn
-        .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row.get(0))
+        .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| {
+            row.get(0)
+        })
         .unwrap();
     assert_eq!(history_count, MIGRATIONS.len() as i64);
 

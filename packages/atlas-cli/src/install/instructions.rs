@@ -39,6 +39,7 @@ Do not treat `query_graph` as caller/callee search. Fall back to file tools **on
 | `search_content` | Search file contents when you need text matches instead of graph symbols |
 | `search_templates` | Discover template files by engine or extension |
 | `search_text_assets` | Find SQL, config, env, and prompt files outside graph-symbol lookup |
+| `broker_status` | Verify MCP broker liveness, PID, uptime, and version |
 | `status` | Check graph health and basic build state before trusting graph-backed answers |
 | `doctor` | Run deeper repo, config, DB, and index health checks |
 | `db_check` | Validate SQLite integrity and detect orphan or dangling graph records |

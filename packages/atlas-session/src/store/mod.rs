@@ -7,7 +7,9 @@ use serde_json::Value;
 use tracing::info;
 
 use atlas_core::{AtlasError, Result};
-use atlas_db_utils::{application_id, apply_atlas_pragmas, migrate_database_to, set_application_id};
+use atlas_db_utils::{
+    application_id, apply_atlas_pragmas, migrate_database_to, set_application_id,
+};
 
 use crate::SessionId;
 use crate::migrations::{LATEST_VERSION, MIGRATION_SET};
@@ -105,15 +107,20 @@ impl SessionStore {
             )
             .unwrap_or(0);
         if target_version >= current {
-            for migration in MIGRATION_SET
-                .migrations
-                .iter()
-                .filter(|migration| migration.version > current && migration.version <= target_version)
-            {
-                info!(version = migration.version, name = migration.name, "applying session migration");
+            for migration in MIGRATION_SET.migrations.iter().filter(|migration| {
+                migration.version > current && migration.version <= target_version
+            }) {
+                info!(
+                    version = migration.version,
+                    name = migration.name,
+                    "applying session migration"
+                );
             }
         } else {
-            info!(current, target_version, "rebuilding session schema for downgrade");
+            info!(
+                current,
+                target_version, "rebuilding session schema for downgrade"
+            );
         }
         migrate_database_to(&mut self.conn, &MIGRATION_SET, target_version)
     }

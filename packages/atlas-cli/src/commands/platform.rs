@@ -714,6 +714,30 @@ pub fn run_completions(cli: &Cli) -> Result<()> {
     Ok(())
 }
 
+/// `atlas serve-http` — HTTP + SSE MCP transport.
+///
+/// Requires the `http-transport` crate feature.
+#[cfg(feature = "http-transport")]
+pub fn run_serve_http(cli: &Cli) -> Result<()> {
+    let repo = resolve_repo(cli)?;
+    let db_path = db_path(cli, &repo);
+    let config = atlas_engine::Config::load(&atlas_engine::paths::atlas_dir(&repo))?;
+    let options = atlas_mcp::ServerOptions {
+        worker_threads: config.mcp_worker_threads(),
+        tool_timeout_ms: config.mcp_tool_timeout_ms(),
+        tool_timeout_ms_by_tool: config.mcp_tool_timeout_ms_by_tool(),
+    };
+    atlas_mcp::run_http_server_with_options(&repo, &db_path, options)
+}
+
+/// Stub shown when the binary was built without `--features http-transport`.
+#[cfg(not(feature = "http-transport"))]
+pub fn run_serve_http(_cli: &Cli) -> Result<()> {
+    Err(anyhow::anyhow!(
+        "HTTP transport is not compiled in. Rebuild with `--features http-transport`."
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     #[cfg(unix)]
@@ -753,28 +777,4 @@ mod tests {
             );
         }
     }
-}
-
-/// `atlas serve-http` — HTTP + SSE MCP transport.
-///
-/// Requires the `http-transport` crate feature.
-#[cfg(feature = "http-transport")]
-pub fn run_serve_http(cli: &Cli) -> Result<()> {
-    let repo = resolve_repo(cli)?;
-    let db_path = db_path(cli, &repo);
-    let config = atlas_engine::Config::load(&atlas_engine::paths::atlas_dir(&repo))?;
-    let options = atlas_mcp::ServerOptions {
-        worker_threads: config.mcp_worker_threads(),
-        tool_timeout_ms: config.mcp_tool_timeout_ms(),
-        tool_timeout_ms_by_tool: config.mcp_tool_timeout_ms_by_tool(),
-    };
-    atlas_mcp::run_http_server_with_options(&repo, &db_path, options)
-}
-
-/// Stub shown when the binary was built without `--features http-transport`.
-#[cfg(not(feature = "http-transport"))]
-pub fn run_serve_http(_cli: &Cli) -> Result<()> {
-    Err(anyhow::anyhow!(
-        "HTTP transport is not compiled in. Rebuild with `--features http-transport`."
-    ))
 }

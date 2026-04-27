@@ -11,10 +11,9 @@
     "data": {
       "type": "object",
       "additionalProperties": true,
-      "required": ["files", "latency_ms", "analysis"],
+      "required": ["files", "analysis"],
       "properties": {
         "files": { "type": "array", "items": { "type": "string" } },
-        "latency_ms": { "type": "integer" },
         "analysis": {
           "type": "object",
           "additionalProperties": true,

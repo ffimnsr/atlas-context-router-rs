@@ -26,25 +26,24 @@ fn detached_current_repo_worktree_meets_large_repo_performance_gate() {
         "status should report representative repo scale: {status:?}"
     );
 
+    let query_started = Instant::now();
     let query = read_json_data_output(
         "query",
         run_atlas(worktree.path(), &["--json", "query", "ContextEngine"]),
     );
+    let query_elapsed_ms = query_started.elapsed().as_millis();
     assert!(
         !query["results"].as_array().expect("query results array").is_empty(),
         "large-repo query should return known symbol hits: {query:?}"
     );
-    assert!(
-        query["latency_ms"].as_u64().unwrap_or(u64::MAX) <= 10_000,
-        "large-repo query latency regressed: {query:?}"
-    );
-
+    assert!(query_elapsed_ms <= 10_000, "large-repo query latency regressed: {query:?}");
     let impact_target = "packages/atlas-impact/src/lib.rs";
     let original = fs::read_to_string(worktree.path().join(impact_target)).expect("read impact file");
     let mut updated = original.clone();
     updated.push_str("\n// perf gate change\n");
     write_repo_file(worktree.path(), impact_target, &updated);
 
+    let impact_started = Instant::now();
     let impact = read_json_data_output(
         "impact",
         run_atlas(
@@ -61,6 +60,7 @@ fn detached_current_repo_worktree_meets_large_repo_performance_gate() {
             ],
         ),
     );
+    let impact_elapsed_ms = impact_started.elapsed().as_millis();
     assert!(
         impact["analysis"]["base"]["changed_nodes"]
             .as_array()
@@ -69,10 +69,7 @@ fn detached_current_repo_worktree_meets_large_repo_performance_gate() {
             .any(|node| node["file_path"] == json!(impact_target)),
         "impact must include changed file seed from representative repo: {impact:?}"
     );
-    assert!(
-        impact["latency_ms"].as_u64().unwrap_or(u64::MAX) <= 15_000,
-        "large-repo impact latency regressed: {impact:?}"
-    );
+    assert!(impact_elapsed_ms <= 15_000, "large-repo impact latency regressed: {impact:?}");
 
     let update = read_json_data_output(
         "update",

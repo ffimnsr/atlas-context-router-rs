@@ -161,10 +161,7 @@ pub(super) fn tool_broker_status(
     db_path: &str,
     output_format: crate::output::OutputFormat,
 ) -> Result<serde_json::Value> {
-    let uptime_secs = STARTED_AT
-        .get_or_init(Instant::now)
-        .elapsed()
-        .as_secs();
+    let uptime_secs = STARTED_AT.get_or_init(Instant::now).elapsed().as_secs();
 
     let worker_threads = std::env::var("ATLAS_MCP_WORKER_THREADS")
         .ok()

@@ -12,8 +12,10 @@ use std::cell::RefCell;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+type ProgressReporter = dyn Fn(&str, Option<u32>) + 'static;
+
 struct ProgressSink {
-    reporter: Box<dyn Fn(&str, Option<u32>) + 'static>,
+    reporter: Box<ProgressReporter>,
     cancel_flag: Arc<AtomicBool>,
 }
 
@@ -78,7 +80,6 @@ pub fn is_canceled() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::cell::Cell;
 
     #[test]
     fn report_noop_without_install() {

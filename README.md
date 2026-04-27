@@ -486,6 +486,7 @@ The MCP server (`atlas serve`) exposes these tools to agents:
 | `search_content` | Literal or regex content search outside graph-symbol lookup |
 | `search_templates` | Discover HTML, Jinja, Handlebars, Tera, and related template files |
 | `search_text_assets` | Discover SQL, config, env, and prompt files |
+| `broker_status` | Lightweight broker liveness probe: PID, uptime, version |
 | `status` | Compact graph health summary with machine-readable failure state |
 | `doctor` | Full repo health checks: git, config, DB, build, and retrieval index |
 | `db_check` | SQLite integrity plus orphan-node and dangling-edge scan |

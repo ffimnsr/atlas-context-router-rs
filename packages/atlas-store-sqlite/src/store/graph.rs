@@ -10,6 +10,25 @@ use super::{
 };
 
 impl Store {
+    fn sort_impact_result(result: &mut ImpactResult) {
+        result
+            .changed_nodes
+            .sort_by(|left, right| left.qualified_name.cmp(&right.qualified_name));
+        result
+            .impacted_nodes
+            .sort_by(|left, right| left.qualified_name.cmp(&right.qualified_name));
+        result.impacted_files.sort();
+        result.impacted_files.dedup();
+        result.relevant_edges.sort_by(|left, right| {
+            left.source_qn
+                .cmp(&right.source_qn)
+                .then_with(|| left.target_qn.cmp(&right.target_qn))
+                .then_with(|| left.kind.as_str().cmp(right.kind.as_str()))
+                .then_with(|| left.file_path.cmp(&right.file_path))
+                .then_with(|| left.line.cmp(&right.line))
+        });
+    }
+
     pub fn nodes_by_file(&self, path: &str) -> Result<Vec<Node>> {
         let path = canonicalize_repo_path(path)?;
         let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
@@ -258,7 +277,7 @@ impl Store {
             Some(max_edges),
         );
         if changed_paths.is_empty() {
-            return Ok(ImpactResult {
+            let mut result = ImpactResult {
                 changed_nodes: vec![],
                 impacted_nodes: vec![],
                 impacted_files: vec![],
@@ -278,7 +297,9 @@ impl Store {
                     suggested_narrower_query: None,
                 }),
                 budget: budgets.summary("graph_traversal.max_nodes", max_nodes, 0),
-            });
+            };
+            Self::sort_impact_result(&mut result);
+            return Ok(result);
         }
         let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
         let placeholders = repeat_placeholders(changed_paths.len());
@@ -424,7 +445,7 @@ impl Store {
             relevant_edges.truncate(max_edges);
         }
 
-        Ok(ImpactResult {
+        let mut result = ImpactResult {
             changed_nodes,
             impacted_nodes,
             impacted_files,
@@ -452,6 +473,8 @@ impl Store {
                 }),
             }),
             budget: budgets.summary("graph_traversal.max_nodes", max_nodes, observed_nodes),
-        })
+        };
+        Self::sort_impact_result(&mut result);
+        Ok(result)
     }
 }

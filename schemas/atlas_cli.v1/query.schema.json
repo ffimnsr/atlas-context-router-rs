@@ -11,10 +11,9 @@
     "data": {
       "type": "object",
       "additionalProperties": true,
-      "required": ["query", "latency_ms", "results", "ranking_evidence_legend", "budget"],
+      "required": ["query", "results", "ranking_evidence_legend", "budget"],
       "properties": {
         "query": { "type": "object", "additionalProperties": true },
-        "latency_ms": { "type": "integer" },
         "results": {
           "type": "array",
           "items": {

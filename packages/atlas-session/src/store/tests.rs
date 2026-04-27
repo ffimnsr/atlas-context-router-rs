@@ -84,7 +84,9 @@ fn open_stamps_session_migration_history_and_provenance() {
 
     let history_count: i64 = store
         .conn
-        .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row.get(0))
+        .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| {
+            row.get(0)
+        })
         .unwrap();
     assert_eq!(history_count, 5);
 
