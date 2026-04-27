@@ -292,6 +292,110 @@ fn init_creates_graph_content_and_session_databases() {
 }
 
 #[test]
+fn init_full_profile_writes_active_config_template() {
+    let repo = setup_fixture_repo();
+
+    let data = read_json_data_output(
+        "init",
+        run_atlas(repo.path(), &["--json", "init", "--profile", "full"]),
+    );
+    let config_path = repo.path().join(".atlas").join("config.toml");
+    let config_text = fs::read_to_string(&config_path).expect("read generated config");
+
+    assert_eq!(data["config_profile"], json!("full"));
+    assert!(config_text.contains("# profile = \"full\""));
+    assert!(config_text.contains("hybrid_enabled = true"));
+    assert!(config_text.contains("tool_timeout_ms_by_tool = { build_or_update_graph = 900000, get_review_context = 120000 }"));
+}
+
+#[test]
+fn migrate_reports_all_repo_local_databases() {
+    let repo = setup_fixture_repo();
+
+    run_atlas(repo.path(), &["init"]);
+
+    let payload = read_json_data_output("migrate", run_atlas(repo.path(), &["--json", "migrate"]));
+    let databases = payload["databases"]
+        .as_array()
+        .expect("migrate databases array");
+
+    assert_eq!(databases.len(), 3);
+    assert!(databases.iter().any(|db| db["label"] == json!("graph_db")));
+    assert!(databases.iter().all(|db| db["schema_version"] == db["latest_version"]));
+}
+
+#[test]
+fn debug_config_reports_file_cli_and_env_sources() {
+    let repo = setup_fixture_repo();
+
+    run_atlas(repo.path(), &["init"]);
+    fs::write(
+        repo.path().join(".atlas").join("config.toml"),
+        "[mcp]\nworker_threads = 9\n",
+    )
+    .expect("write config override");
+
+    let output = sanitized_command(env!("CARGO_BIN_EXE_atlas"))
+        .args(["--json", "--db", "custom.db", "debug-config"])
+        .env("ATLAS_EMBED_URL", "http://embed.test")
+        .current_dir(repo.path())
+        .output()
+        .expect("run atlas debug-config");
+    assert!(output.status.success(), "debug-config failed: {output:?}");
+
+    let payload = read_json_data_output("debug_config", output);
+    assert_eq!(
+        payload["resolved"]["mcp.worker_threads"]["source"],
+        json!("file")
+    );
+    assert_eq!(
+        payload["resolved"]["runtime.db_path"]["source"],
+        json!("cli")
+    );
+    assert_eq!(
+        payload["resolved"]["env.ATLAS_EMBED_URL"]["source"],
+        json!("env")
+    );
+    assert_eq!(
+        payload["resolved"]["env.ATLAS_EMBED_URL"]["value"],
+        json!("http://embed.test")
+    );
+}
+
+#[test]
+fn config_show_alias_matches_debug_config_json_shape() {
+    let repo = setup_fixture_repo();
+
+    run_atlas(repo.path(), &["init"]);
+
+    let payload = read_json_data_output(
+        "debug_config",
+        run_atlas(repo.path(), &["--json", "config", "show"]),
+    );
+
+    assert_eq!(payload["config_exists"], json!(true));
+    assert!(payload["resolved"].get("runtime.repo_root").is_some());
+}
+
+#[test]
+fn selfupdate_returns_explicit_refusal_with_next_steps() {
+    let repo = setup_fixture_repo();
+
+    let payload = read_json_data_output(
+        "selfupdate",
+        run_atlas(repo.path(), &["--json", "selfupdate"]),
+    );
+
+    assert_eq!(payload["ok"], json!(false));
+    assert_eq!(payload["error_code"], json!("selfupdate_not_supported"));
+    assert_eq!(payload["next_steps"][0], json!("./install.sh"));
+    assert_eq!(
+        payload["next_steps"][1],
+        json!("cargo install --path packages/atlas-cli --force")
+    );
+}
+
+#[test]
 fn build_and_update_skip_unsupported_files_without_count_drift() {
     let repo = setup_fixture_repo();
 

@@ -15,6 +15,7 @@ use atlas_repo::{changed_files, find_repo_root, hash_file};
 use atlas_session::SessionStore;
 use atlas_store_sqlite::{BuildFinishStats, Store};
 use camino::Utf8Path;
+use tracing::debug;
 
 use crate::cli::{Cli, Command};
 
@@ -310,12 +311,15 @@ fn status_payload(ctx: StatusPayloadContext<'_>) -> serde_json::Value {
 
 pub fn run_init(cli: &Cli) -> Result<()> {
     let repo = resolve_repo(cli)?;
+    debug!(repo_root = %repo, "init: resolved repo root");
     let atlas_dir = atlas_engine::paths::atlas_dir(&repo);
     fs::create_dir_all(&atlas_dir)
         .with_context(|| format!("cannot create {}", atlas_dir.display()))?;
+    debug!(atlas_dir = %atlas_dir.display(), "init: ensured atlas directory");
 
     let db_path = db_path(cli, &repo);
     Store::open(&db_path).with_context(|| format!("cannot open database at {db_path}"))?;
+    debug!(db_path = %db_path, "init: opened graph database");
 
     let content_db_path = atlas_engine::paths::content_db_path(&db_path);
     let mut content_store = ContentStore::open(&content_db_path)
@@ -323,14 +327,26 @@ pub fn run_init(cli: &Cli) -> Result<()> {
     content_store
         .migrate()
         .with_context(|| format!("cannot migrate content store at {content_db_path}"))?;
+    debug!(content_db_path = %content_db_path, "init: opened content store");
 
     let session_db_path = atlas_engine::paths::session_db_path(&db_path);
     SessionStore::open(&session_db_path)
         .with_context(|| format!("cannot open session store at {session_db_path}"))?;
+    debug!(session_db_path = %session_db_path, "init: opened session store");
 
     let config_path = atlas_engine::paths::config_path(&repo);
-    let config_created = atlas_engine::Config::write_default(&atlas_dir)
+    let profile = match &cli.command {
+        Command::Init { profile } => match profile.as_str() {
+            "minimal" => atlas_engine::config::ConfigTemplateProfile::Minimal,
+            "standard" => atlas_engine::config::ConfigTemplateProfile::Standard,
+            "full" => atlas_engine::config::ConfigTemplateProfile::Full,
+            other => anyhow::bail!("unsupported init profile: {other}"),
+        },
+        _ => unreachable!(),
+    };
+    let config_created = atlas_engine::Config::write_template(&atlas_dir, profile)
         .with_context(|| format!("cannot write config to {}", config_path.display()))?;
+    debug!(config_path = %config_path.display(), config_created, profile = profile.as_str(), "init: prepared config template");
 
     if cli.json {
         print_json(
@@ -342,6 +358,7 @@ pub fn run_init(cli: &Cli) -> Result<()> {
                 "session_db_path": session_db_path,
                 "config_path": config_path.display().to_string(),
                 "config_created": config_created,
+                "config_profile": profile.as_str(),
             }),
         )?;
     } else if super::init_wizard::should_run(cli.json) {
@@ -353,7 +370,7 @@ pub fn run_init(cli: &Cli) -> Result<()> {
         println!("Content : {content_db_path}");
         println!("Session : {session_db_path}");
         if config_created {
-            println!("Config  : {}", config_path.display());
+            println!("Config  : {} ({})", config_path.display(), profile.as_str());
         }
     }
     Ok(())

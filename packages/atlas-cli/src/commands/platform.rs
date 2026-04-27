@@ -243,9 +243,7 @@ fn relay_stdio(mut stream: std::os::unix::net::UnixStream) -> Result<()> {
             Err(error) if is_benign_broker_stdin_disconnect(&error) => return Ok(()),
             Err(error) => return Err(error).context("stdin relay failed"),
         }
-        write_stream
-            .shutdown(Shutdown::Write)
-            .context("cannot close broker socket write half")?;
+        finish_broker_socket_write_half(write_stream.shutdown(Shutdown::Write))?;
         Ok(())
     });
 
@@ -282,6 +280,15 @@ fn is_benign_broker_stdin_disconnect(error: &std::io::Error) -> bool {
             | std::io::ErrorKind::NotConnected
             | std::io::ErrorKind::UnexpectedEof
     )
+}
+
+#[cfg(unix)]
+fn finish_broker_socket_write_half(result: std::io::Result<()>) -> Result<()> {
+    match result {
+        Ok(()) => Ok(()),
+        Err(error) if is_benign_broker_stdin_disconnect(&error) => Ok(()),
+        Err(error) => Err(error).context("cannot close broker socket write half"),
+    }
 }
 
 #[cfg(unix)]
@@ -774,6 +781,46 @@ mod tests {
             assert!(
                 !super::is_benign_broker_stdin_disconnect(&error),
                 "expected {kind:?} to remain a fatal broker stdin error"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn broker_write_half_close_keeps_expected_socket_teardowns_nonfatal() {
+        let benign = [
+            std::io::ErrorKind::BrokenPipe,
+            std::io::ErrorKind::ConnectionReset,
+            std::io::ErrorKind::ConnectionAborted,
+            std::io::ErrorKind::NotConnected,
+            std::io::ErrorKind::UnexpectedEof,
+        ];
+
+        for kind in benign {
+            assert!(
+                super::finish_broker_socket_write_half(Err(std::io::Error::from(kind))).is_ok(),
+                "expected {kind:?} to be treated as a benign broker write-half close"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn broker_write_half_close_keeps_real_io_failures_fatal() {
+        let fatal = [
+            std::io::ErrorKind::PermissionDenied,
+            std::io::ErrorKind::InvalidInput,
+            std::io::ErrorKind::Other,
+        ];
+
+        for kind in fatal {
+            let error = super::finish_broker_socket_write_half(Err(std::io::Error::from(kind)))
+                .expect_err("fatal shutdown error must propagate");
+            assert!(
+                error
+                    .to_string()
+                    .contains("cannot close broker socket write half"),
+                "expected shutdown error context for {kind:?}: {error:#}"
             );
         }
     }

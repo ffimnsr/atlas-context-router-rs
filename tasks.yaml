@@ -24,6 +24,12 @@ tasks:
     commands:
       - cargo test --workspace
     description: Run workspace tests.
+  doc-check:
+    commands:
+      - cargo doc --workspace --no-deps --document-private-items
+    description: Run documentation tests.
+    environment:
+      RUSTDOCFLAGS: "-D warnings"
   audit:
     commands:
       - cargo audit --workspace
@@ -36,10 +42,6 @@ tasks:
     commands:
       - cargo bench --workspace --no-run
     description: Run benchmarks without executing them to check for compilation issues.
-  doc-check:
-    commands:
-      - cargo doc --workspace --no-deps --document-private-items
-    description: Build documentation to check for doc comment issues.
   coverage:
     commands:
       - cargo tarpaulin --workspace --out Html

@@ -2,8 +2,8 @@
 //!
 //! Long-running tools call [`report`] to push `$/progress` notifications back
 //! to the transport loop without changing their function signatures.  The
-//! transport layer calls [`install`] before dispatching a tool and
-//! [`uninstall`] immediately after the tool returns.
+//! transport layer installs reporter state before dispatching a tool and
+//! removes it immediately after the tool returns.
 //!
 //! Tools that support cooperative cancellation call [`is_canceled`]
 //! periodically and return early when it returns `true`.

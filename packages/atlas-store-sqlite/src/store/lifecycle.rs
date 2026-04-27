@@ -125,6 +125,16 @@ impl Store {
         migrate_database_to(&mut self.conn, &MIGRATION_SET, target_version)
     }
 
+    pub fn schema_version(&self) -> Result<i32> {
+        self.conn
+            .query_row(
+                "SELECT CAST(value AS INTEGER) FROM metadata WHERE key = 'schema_version'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|e| AtlasError::Db(e.to_string()))
+    }
+
     /// Return high-level statistics about the stored graph.
     /// Return a minimal provenance snapshot: only the two cheapest queries.
     ///

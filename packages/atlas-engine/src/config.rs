@@ -12,6 +12,23 @@ pub const DEFAULT_PARSE_BATCH_SIZE: usize = 64;
 pub const DEFAULT_MCP_WORKER_THREADS: usize = 2;
 pub const DEFAULT_MCP_TOOL_TIMEOUT_MS: u64 = 300_000;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigTemplateProfile {
+    Minimal,
+    Standard,
+    Full,
+}
+
+impl ConfigTemplateProfile {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Minimal => "minimal",
+            Self::Standard => "standard",
+            Self::Full => "full",
+        }
+    }
+}
+
 /// Top-level atlas configuration loaded from `.atlas/config.toml`.
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Config {
@@ -246,15 +263,250 @@ impl Config {
     ///
     /// Does not overwrite an existing file.
     pub fn write_default(atlas_dir: &Path) -> Result<bool> {
+        Self::write_template(atlas_dir, ConfigTemplateProfile::Standard)
+    }
+
+    /// Write a commented config template to `<atlas_dir>/config.toml`.
+    ///
+    /// Does not overwrite an existing file.
+    pub fn write_template(atlas_dir: &Path, profile: ConfigTemplateProfile) -> Result<bool> {
         let path = atlas_dir.join(crate::paths::ATLAS_CONFIG);
         if path.exists() {
             return Ok(false);
         }
-        let default = Self::default();
-        let content =
-            toml::to_string_pretty(&default).context("cannot serialize default config")?;
+        let content = Self::render_template(profile)?;
         fs::write(&path, content).with_context(|| format!("cannot write {}", path.display()))?;
         Ok(true)
+    }
+
+    pub fn render_template(profile: ConfigTemplateProfile) -> Result<String> {
+        let active = Self::profile(profile);
+        active.build_run_budget()?;
+        active.budget_policy()?;
+
+        let mut lines = vec![
+            "# Atlas config template.",
+            "#",
+            "# Profile selected by `atlas init --profile`.",
+            &format!("# profile = \"{}\"", profile.as_str()),
+            "#",
+            "# Lines that start with `# ` are examples. Remove leading `# ` to activate them.",
+            "# All active values in this template validate against Atlas config rules.",
+            "",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+
+        match profile {
+            ConfigTemplateProfile::Minimal => {
+                lines.push(
+                    "# Minimal profile: keep defaults, uncomment only overrides you need."
+                        .to_owned(),
+                );
+                lines.push(String::new());
+            }
+            ConfigTemplateProfile::Standard => {
+                lines.push(
+                    "# Standard profile: common operational knobs shown with Atlas defaults."
+                        .to_owned(),
+                );
+                lines.push(String::new());
+            }
+            ConfigTemplateProfile::Full => {
+                lines.push(
+                    "# Full profile: every key rendered as active config for copy-editing."
+                        .to_owned(),
+                );
+                lines.push(String::new());
+            }
+        }
+
+        lines.extend(render_section(
+            "build",
+            &[
+                (
+                    "parse_batch_size",
+                    active.build.parse_batch_size.to_string(),
+                ),
+                (
+                    "max_files_per_run",
+                    active.build.max_files_per_run.to_string(),
+                ),
+                (
+                    "max_total_bytes_per_run",
+                    active.build.max_total_bytes_per_run.to_string(),
+                ),
+                ("max_file_bytes", active.build.max_file_bytes.to_string()),
+                (
+                    "max_parse_failures",
+                    active.build.max_parse_failures.to_string(),
+                ),
+                (
+                    "max_parse_failure_ratio",
+                    active.build.max_parse_failure_ratio.to_string(),
+                ),
+                (
+                    "max_wall_time_ms",
+                    active.build.max_wall_time_ms.to_string(),
+                ),
+            ],
+            profile == ConfigTemplateProfile::Full,
+        ));
+
+        lines.extend(render_section(
+            "search",
+            &[
+                ("hybrid_enabled", active.search.hybrid_enabled.to_string()),
+                ("top_k_fts", active.search.top_k_fts.to_string()),
+                ("top_k_vector", active.search.top_k_vector.to_string()),
+                ("rrf_k", active.search.rrf_k.to_string()),
+                (
+                    "max_query_candidates",
+                    active.search.max_query_candidates.to_string(),
+                ),
+                (
+                    "max_query_wall_time_ms",
+                    active.search.max_query_wall_time_ms.to_string(),
+                ),
+            ],
+            profile == ConfigTemplateProfile::Full,
+        ));
+
+        lines.extend(render_section(
+            "analysis",
+            &[
+                (
+                    "dead_code_certainty_threshold",
+                    format!("\"{}\"", active.analysis.dead_code_certainty_threshold),
+                ),
+                (
+                    "refactor_safety_threshold",
+                    active.analysis.refactor_safety_threshold.to_string(),
+                ),
+                (
+                    "impact_max_depth",
+                    active.analysis.impact_max_depth.to_string(),
+                ),
+                (
+                    "impact_max_nodes",
+                    active.analysis.impact_max_nodes.to_string(),
+                ),
+                (
+                    "dynamic_usage_allowlist",
+                    render_string_array(&active.analysis.dynamic_usage_allowlist),
+                ),
+                (
+                    "entrypoint_allowlist",
+                    render_string_array(&active.analysis.entrypoint_allowlist),
+                ),
+                (
+                    "framework_conventions_file",
+                    render_optional_string(active.analysis.framework_conventions_file.as_deref()),
+                ),
+            ],
+            profile == ConfigTemplateProfile::Full,
+        ));
+
+        lines.extend(render_section(
+            "context",
+            &[
+                (
+                    "max_context_nodes",
+                    active.context.max_context_nodes.to_string(),
+                ),
+                (
+                    "max_context_depth",
+                    active.context.max_context_depth.to_string(),
+                ),
+                ("max_seed_nodes", active.context.max_seed_nodes.to_string()),
+                ("max_seed_files", active.context.max_seed_files.to_string()),
+                (
+                    "max_traversal_depth",
+                    active.context.max_traversal_depth.to_string(),
+                ),
+                (
+                    "max_traversal_nodes",
+                    active.context.max_traversal_nodes.to_string(),
+                ),
+                (
+                    "max_traversal_edges",
+                    active.context.max_traversal_edges.to_string(),
+                ),
+                (
+                    "max_review_source_bytes",
+                    active.context.max_review_source_bytes.to_string(),
+                ),
+                (
+                    "max_context_payload_bytes",
+                    active.context.max_context_payload_bytes.to_string(),
+                ),
+                (
+                    "max_context_tokens_estimate",
+                    active.context.max_context_tokens_estimate.to_string(),
+                ),
+                (
+                    "max_file_excerpt_bytes",
+                    active.context.max_file_excerpt_bytes.to_string(),
+                ),
+                (
+                    "max_saved_context_bytes",
+                    active.context.max_saved_context_bytes.to_string(),
+                ),
+            ],
+            profile == ConfigTemplateProfile::Full,
+        ));
+
+        lines.extend(render_section(
+            "mcp",
+            &[
+                ("worker_threads", active.mcp.worker_threads.to_string()),
+                ("tool_timeout_ms", active.mcp.tool_timeout_ms.to_string()),
+                (
+                    "tool_timeout_ms_by_tool",
+                    render_timeout_map(&active.mcp.tool_timeout_ms_by_tool),
+                ),
+                (
+                    "max_mcp_response_bytes",
+                    active.mcp.max_mcp_response_bytes.to_string(),
+                ),
+            ],
+            profile == ConfigTemplateProfile::Full,
+        ));
+
+        Ok(lines.join("\n"))
+    }
+
+    pub fn profile(profile: ConfigTemplateProfile) -> Self {
+        let mut config = Self::default();
+        match profile {
+            ConfigTemplateProfile::Minimal => {}
+            ConfigTemplateProfile::Standard => {
+                config.build.parse_batch_size = 64;
+                config.search.max_query_wall_time_ms = 30_000;
+                config.context.max_context_nodes = 100;
+                config.mcp.tool_timeout_ms = 300_000;
+            }
+            ConfigTemplateProfile::Full => {
+                config.search.hybrid_enabled = true;
+                config.search.top_k_fts = 80;
+                config.search.top_k_vector = 80;
+                config.analysis.dead_code_certainty_threshold = "medium".to_owned();
+                config.analysis.refactor_safety_threshold = 0.6;
+                config.context.max_context_nodes = 150;
+                config.context.max_context_depth = 3;
+                config.mcp.worker_threads = 4;
+                config
+                    .mcp
+                    .tool_timeout_ms_by_tool
+                    .insert("build_or_update_graph".to_owned(), 900_000);
+                config
+                    .mcp
+                    .tool_timeout_ms_by_tool
+                    .insert("get_review_context".to_owned(), 120_000);
+            }
+        }
+        config
     }
 
     /// Return the effective parse batch size, clamped to [1, 4096].
@@ -290,6 +542,50 @@ impl Config {
             .copied()
             .unwrap_or_else(|| self.mcp_tool_timeout_ms())
     }
+}
+
+fn render_section(name: &str, fields: &[(&str, String)], active: bool) -> Vec<String> {
+    let mut lines = vec![format!("[{}]", name)];
+    for (key, value) in fields {
+        if active {
+            lines.push(format!("{key} = {value}"));
+        } else {
+            lines.push(format!("# {key} = {value}"));
+        }
+    }
+    lines.push(String::new());
+    lines
+}
+
+fn render_string_array(values: &[String]) -> String {
+    let rendered = values
+        .iter()
+        .map(|value| format!("\"{value}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("[{rendered}]")
+}
+
+fn render_optional_string(value: Option<&str>) -> String {
+    match value {
+        Some(value) => format!("\"{value}\""),
+        None => "\"path/to/framework-conventions.toml\"".to_owned(),
+    }
+}
+
+fn render_timeout_map(values: &HashMap<String, u64>) -> String {
+    if values.is_empty() {
+        return "{}".to_owned();
+    }
+
+    let mut pairs = values.iter().collect::<Vec<_>>();
+    pairs.sort_by(|left, right| left.0.cmp(right.0));
+    let rendered = pairs
+        .into_iter()
+        .map(|(key, value)| format!("{key} = {value}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("{{ {rendered} }}")
 }
 
 /// Analysis-phase configuration (dead-code, refactor safety, impact traversal).
@@ -755,5 +1051,36 @@ mod tests {
         assert_eq!(config.context.max_saved_context_bytes, 256);
         assert_eq!(config.mcp.worker_threads, DEFAULT_MCP_WORKER_THREADS);
         assert!(config.mcp.tool_timeout_ms_by_tool.is_empty());
+    }
+
+    #[test]
+    fn render_template_minimal_comments_all_keys() {
+        let template = Config::render_template(ConfigTemplateProfile::Minimal).expect("template");
+
+        assert!(template.contains("# parse_batch_size = 64"));
+        assert!(template.contains("# worker_threads = 2"));
+        assert!(!template.contains("\nparse_batch_size = 64\n"));
+    }
+
+    #[test]
+    fn render_template_full_activates_keys() {
+        let template = Config::render_template(ConfigTemplateProfile::Full).expect("template");
+
+        assert!(template.contains("[build]\nparse_batch_size = 64"));
+        assert!(template.contains("tool_timeout_ms_by_tool = { build_or_update_graph = 900000, get_review_context = 120000 }"));
+        assert!(template.contains("hybrid_enabled = true"));
+    }
+
+    #[test]
+    fn write_template_uses_selected_profile() {
+        let dir = tempdir().expect("tempdir");
+        let created = Config::write_template(dir.path(), ConfigTemplateProfile::Full)
+            .expect("write template");
+
+        assert!(created);
+        let text =
+            fs::read_to_string(dir.path().join(crate::paths::ATLAS_CONFIG)).expect("read config");
+        assert!(text.contains("# profile = \"full\""));
+        assert!(text.contains("hybrid_enabled = true"));
     }
 }

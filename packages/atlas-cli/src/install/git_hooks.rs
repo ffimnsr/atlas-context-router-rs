@@ -21,7 +21,7 @@ const QUIET_HOOK_SCRIPT: &str = r#"
 # Installed by atlas. Remove these lines to disable atlas graph updates.
 if command -v atlas >/dev/null 2>&1; then
     atlas update || true
-    atlas detect-changes --brief || true
+    atlas detect-changes || true
 fi
 "#;
 

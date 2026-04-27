@@ -216,6 +216,40 @@ fn review_context_cross_package_changed_file_flow_surfaces_useful_focus() {
 }
 
 #[test]
+fn review_context_markdown_profile_is_pr_comment_friendly() {
+    let repo = setup_fixture_repo();
+
+    run_atlas(repo.path(), &["init"]);
+    run_atlas(repo.path(), &["build"]);
+    rewrite_fixture_helper(repo.path());
+
+    let review = stdout_text(&run_atlas(
+        repo.path(),
+        &[
+            "review-context",
+            "--base",
+            "HEAD",
+            "--format",
+            "markdown",
+        ],
+    ));
+
+    assert_contains_all(
+        &review,
+        &[
+            "## Atlas Review Context",
+            "### Summary",
+            "<details>",
+            "<summary>Changed files</summary>",
+            "### Changed Symbols",
+            "### Critical Paths",
+            "```text",
+            "src/main.rs::fn::main -> src/lib.rs::fn::helper",
+        ],
+    );
+}
+
+#[test]
 fn impact_reports_test_signal_for_changed_symbol() {
     let repo = setup_repo(&[
         (

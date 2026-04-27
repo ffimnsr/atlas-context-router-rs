@@ -131,10 +131,19 @@ Atlas shells out to `git`, so the runtime stage uses a minimal Git-capable base 
 Inside any git repository:
 
 ```bash
-atlas init
+atlas init --profile standard
 atlas build
 atlas status
+atlas debug-config
 atlas query "symbol_name"
+```
+
+Repair local Atlas state without rebuilding graph data:
+
+```bash
+atlas migrate
+atlas config show
+atlas selfupdate
 ```
 
 Review recent work against mainline:
@@ -144,6 +153,7 @@ atlas update --base origin/main
 atlas detect-changes --base origin/main
 atlas impact --base origin/main
 atlas review-context --base origin/main
+atlas review-context --base origin/main --format markdown
 ```
 
 ## Benchmarks
@@ -394,6 +404,7 @@ Assemble review context:
 
 ```bash
 atlas review-context --base origin/main
+atlas review-context --base origin/main --format markdown
 atlas review-context --files packages/atlas-cli/src/install.rs
 ```
 

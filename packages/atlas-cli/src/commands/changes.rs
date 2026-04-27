@@ -1,4 +1,4 @@
-use crate::cli::{Cli, Command};
+use crate::cli::{Cli, Command, ReviewContextFormat};
 use anyhow::{Context, Result};
 use atlas_adapters::{AdapterHooks, CliAdapter};
 use atlas_core::BudgetReport;
@@ -11,6 +11,7 @@ use atlas_repo::{CanonicalRepoPath, DiffTarget, changed_files, find_repo_root};
 use atlas_review::{ContextEngine, build_explain_change_summary, empty_explain_change_summary};
 use atlas_store_sqlite::Store;
 use camino::Utf8Path;
+use std::fmt::Write as _;
 
 use super::{
     augment_changes_with_node_counts, change_tag, db_path, detect_changes_target,
@@ -149,6 +150,230 @@ fn print_review_context_text(ctx: &ContextResult, changed_files: &[String]) {
         println!("  Edges dropped    : {}", ctx.truncation.edges_dropped);
         println!("  Files dropped    : {}", ctx.truncation.files_dropped);
     }
+}
+
+fn markdown_label(text: &str) -> String {
+    let mut escaped = String::with_capacity(text.len());
+    for ch in text.chars() {
+        match ch {
+            '\\' => escaped.push_str("\\\\"),
+            '`' => escaped.push_str("\\`"),
+            '*' | '_' | '[' | ']' | '<' | '>' => {
+                escaped.push('\\');
+                escaped.push(ch);
+            }
+            '\n' | '\r' => escaped.push(' '),
+            _ => escaped.push(ch),
+        }
+    }
+    escaped
+}
+
+fn yes_no(value: bool) -> &'static str {
+    if value { "yes" } else { "no" }
+}
+
+fn push_markdown_list(out: &mut String, items: &[String], limit: usize) {
+    for item in items.iter().take(limit) {
+        let _ = writeln!(out, "- {}", markdown_label(item));
+    }
+    if items.len() > limit {
+        let _ = writeln!(out, "- ... and {} more", items.len() - limit);
+    }
+}
+
+fn render_review_context_markdown(ctx: &ContextResult, changed_files: &[String]) -> String {
+    let mut out = String::new();
+    let changed_symbols: Vec<_> = ctx
+        .nodes
+        .iter()
+        .filter(|node| node.selection_reason == SelectionReason::DirectTarget)
+        .collect();
+    let cross_package_impact = ctx
+        .workflow
+        .as_ref()
+        .map(|workflow| {
+            workflow
+                .impacted_components
+                .iter()
+                .filter(|component| component.kind == "package")
+                .count()
+                > 1
+        })
+        .unwrap_or(false);
+
+    out.push_str("## Atlas Review Context\n\n");
+
+    if let Some(workflow) = &ctx.workflow
+        && let Some(headline) = &workflow.headline
+    {
+        let _ = writeln!(out, "> {}\n", markdown_label(headline));
+    }
+
+    out.push_str("### Summary\n\n");
+    let _ = writeln!(out, "- Changed files: {}", changed_files.len());
+    let _ = writeln!(out, "- Changed symbols: {}", changed_symbols.len());
+    let _ = writeln!(out, "- Selected nodes: {}", ctx.nodes.len());
+    let _ = writeln!(out, "- Selected edges: {}", ctx.edges.len());
+    let _ = writeln!(out, "- Selected files: {}", ctx.files.len());
+    let _ = writeln!(
+        out,
+        "- Max depth: {}",
+        ctx.request.depth.unwrap_or_default()
+    );
+    let _ = writeln!(
+        out,
+        "- Max nodes: {}",
+        ctx.request.max_nodes.unwrap_or(ctx.nodes.len())
+    );
+    let _ = writeln!(
+        out,
+        "- Cross-package impact: {}",
+        yes_no(cross_package_impact)
+    );
+    if ctx.truncation.truncated {
+        let _ = writeln!(
+            out,
+            "- Truncated: yes (dropped nodes {}, edges {}, files {})",
+            ctx.truncation.nodes_dropped,
+            ctx.truncation.edges_dropped,
+            ctx.truncation.files_dropped
+        );
+    } else {
+        out.push_str("- Truncated: no\n");
+    }
+    out.push('\n');
+
+    out.push_str("<details>\n<summary>Changed files</summary>\n\n");
+    push_markdown_list(&mut out, changed_files, 20);
+    out.push_str("\n</details>\n\n");
+
+    if !changed_symbols.is_empty() {
+        out.push_str("### Changed Symbols\n\n");
+        for selected in changed_symbols.iter().take(12) {
+            let _ = writeln!(
+                out,
+                "- `{}` `{}` in `{}`:{}",
+                selected.node.kind.as_str(),
+                selected.node.qualified_name,
+                selected.node.file_path,
+                selected.node.line_start
+            );
+        }
+        if changed_symbols.len() > 12 {
+            let _ = writeln!(out, "- ... and {} more", changed_symbols.len() - 12);
+        }
+        out.push('\n');
+    }
+
+    if let Some(workflow) = &ctx.workflow {
+        if !workflow.high_impact_nodes.is_empty() {
+            out.push_str("### Reviewer Focus\n\n");
+            for node in workflow.high_impact_nodes.iter().take(8) {
+                let _ = writeln!(
+                    out,
+                    "- {:.1} `{}` `{}` in `{}` ({})",
+                    node.relevance_score,
+                    node.kind,
+                    node.qualified_name,
+                    node.file_path,
+                    markdown_label(&node.selection_reason)
+                );
+            }
+            if workflow.high_impact_nodes.len() > 8 {
+                let _ = writeln!(
+                    out,
+                    "- ... and {} more",
+                    workflow.high_impact_nodes.len() - 8
+                );
+            }
+            out.push('\n');
+        }
+
+        if !workflow.impacted_components.is_empty() {
+            out.push_str("### Impacted Components\n\n");
+            for component in workflow.impacted_components.iter().take(8) {
+                let _ = writeln!(
+                    out,
+                    "- `{}` {}: changed {}, impacted {}, files {}",
+                    component.kind,
+                    markdown_label(&component.label),
+                    component.changed_node_count,
+                    component.impacted_node_count,
+                    component.file_count
+                );
+            }
+            if workflow.impacted_components.len() > 8 {
+                let _ = writeln!(
+                    out,
+                    "- ... and {} more",
+                    workflow.impacted_components.len() - 8
+                );
+            }
+            out.push('\n');
+        }
+
+        if !workflow.call_chains.is_empty() {
+            out.push_str("### Critical Paths\n\n```text\n");
+            for chain in workflow.call_chains.iter().take(6) {
+                let _ = writeln!(out, "{}", chain.summary);
+            }
+            if workflow.call_chains.len() > 6 {
+                let _ = writeln!(out, "... and {} more", workflow.call_chains.len() - 6);
+            }
+            out.push_str("```\n\n");
+        }
+
+        if !workflow.ripple_effects.is_empty() {
+            out.push_str("### Ripple Effects\n\n");
+            for ripple in workflow.ripple_effects.iter().take(8) {
+                let _ = writeln!(out, "- {}", markdown_label(ripple));
+            }
+            if workflow.ripple_effects.len() > 8 {
+                let _ = writeln!(out, "- ... and {} more", workflow.ripple_effects.len() - 8);
+            }
+            out.push('\n');
+        }
+
+        out.push_str("<details>\n<summary>Noise reduction</summary>\n\n");
+        let _ = writeln!(
+            out,
+            "- Retained nodes: {}",
+            workflow.noise_reduction.retained_nodes
+        );
+        let _ = writeln!(
+            out,
+            "- Retained edges: {}",
+            workflow.noise_reduction.retained_edges
+        );
+        let _ = writeln!(
+            out,
+            "- Retained files: {}",
+            workflow.noise_reduction.retained_files
+        );
+        let _ = writeln!(
+            out,
+            "- Dropped nodes: {}",
+            workflow.noise_reduction.dropped_nodes
+        );
+        let _ = writeln!(
+            out,
+            "- Dropped edges: {}",
+            workflow.noise_reduction.dropped_edges
+        );
+        let _ = writeln!(
+            out,
+            "- Dropped files: {}",
+            workflow.noise_reduction.dropped_files
+        );
+        if !workflow.noise_reduction.rules_applied.is_empty() {
+            out.push_str("\nApplied rules:\n");
+            push_markdown_list(&mut out, &workflow.noise_reduction.rules_applied, 12);
+        }
+        out.push_str("\n</details>\n");
+    }
+
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -561,15 +786,26 @@ pub fn run_review_context(cli: &Cli) -> Result<()> {
         let store =
             Store::open(&db_path).with_context(|| format!("cannot open database at {db_path}"))?;
 
-        let (base, explicit_files, max_depth, max_nodes) = match &cli.command {
+        let (base, explicit_files, max_depth, max_nodes, format) = match &cli.command {
             Command::ReviewContext {
                 base,
                 files,
                 max_depth,
                 max_nodes,
-            } => (base.clone(), files.clone(), *max_depth, *max_nodes as usize),
+                format,
+            } => (
+                base.clone(),
+                files.clone(),
+                *max_depth,
+                *max_nodes as usize,
+                *format,
+            ),
             _ => unreachable!(),
         };
+
+        if cli.json && format == ReviewContextFormat::Markdown {
+            anyhow::bail!("--format markdown cannot be combined with --json");
+        }
 
         let target_files: Vec<String> = if !explicit_files.is_empty() {
             normalize_explicit_files(repo_root, &explicit_files)?
@@ -622,6 +858,8 @@ pub fn run_review_context(cli: &Cli) -> Result<()> {
                         "review_context": empty,
                     }),
                 )?;
+            } else if format == ReviewContextFormat::Markdown {
+                println!("## Atlas Review Context\n\nNo changed files detected.");
             } else {
                 println!("No changed files detected.");
             }
@@ -654,7 +892,15 @@ pub fn run_review_context(cli: &Cli) -> Result<()> {
             return Ok(());
         }
 
-        print_review_context_text(&workflow_result, &target_files);
+        match format {
+            ReviewContextFormat::Text => print_review_context_text(&workflow_result, &target_files),
+            ReviewContextFormat::Markdown => {
+                print!(
+                    "{}",
+                    render_review_context_markdown(&workflow_result, &target_files)
+                );
+            }
+        }
 
         Ok(())
     })();

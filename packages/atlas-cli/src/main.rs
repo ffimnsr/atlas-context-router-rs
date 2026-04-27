@@ -39,7 +39,8 @@ fn run_cli() -> anyhow::Result<()> {
     logging::init(cli.verbose);
 
     match &cli.command {
-        Command::Init => commands::run_init(&cli),
+        Command::Init { .. } => commands::run_init(&cli),
+        Command::Migrate => commands::run_migrate(&cli),
         Command::Build { .. } => commands::run_build(&cli),
         Command::Update { .. } => commands::run_update(&cli),
         Command::Status { .. } => commands::run_status(&cli),
@@ -55,9 +56,12 @@ fn run_cli() -> anyhow::Result<()> {
         Command::Doctor => commands::run_doctor(&cli),
         Command::PurgeNoncanonical => commands::run_purge_noncanonical(&cli),
         Command::DebugGraph { .. } => commands::run_debug_graph(&cli),
+        Command::DebugConfig => commands::run_debug_config(&cli),
+        Command::Config { .. } => commands::run_debug_config(&cli),
         Command::ExplainQuery { .. } => commands::run_explain_query(&cli),
         Command::ExplainChange { .. } => commands::run_explain_change(&cli),
         Command::Install { .. } => commands::run_install(&cli),
+        Command::Selfupdate => commands::run_selfupdate(&cli),
         Command::Completions { .. } => commands::run_completions(&cli),
         Command::Shell { .. } => commands::run_shell(&cli),
         Command::Watch { .. } => commands::run_watch(&cli),

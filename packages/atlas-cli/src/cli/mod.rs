@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use clap_complete::Shell;
 
 mod subcommands;
@@ -7,9 +7,15 @@ mod subcommands;
 mod tests;
 
 pub use subcommands::{
-    AnalyzeCommand, CommunitiesCommand, FlowsCommand, HistoryCommand, RefactorCommand,
-    SessionCommand,
+    AnalyzeCommand, CommunitiesCommand, ConfigCommand, FlowsCommand, HistoryCommand,
+    RefactorCommand, SessionCommand,
 };
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+pub enum ReviewContextFormat {
+    Text,
+    Markdown,
+}
 
 #[derive(Debug, Parser)]
 #[command(
@@ -41,7 +47,14 @@ pub struct Cli {
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Initialize the atlas work directory and database in the current repo.
-    Init,
+    Init {
+        /// Config template profile to write on first init.
+        #[arg(long, default_value = "standard", value_parser = ["minimal", "standard", "full"])]
+        profile: String,
+    },
+
+    /// Run repo-local database migrations without building graph state.
+    Migrate,
 
     /// Scan all tracked files and build the code graph from scratch.
     Build {
@@ -184,6 +197,10 @@ pub enum Command {
         /// Maximum number of impacted nodes to consider.
         #[arg(long, default_value_t = 200)]
         max_nodes: u32,
+
+        /// Output profile for human-readable review comments.
+        #[arg(long, value_enum, default_value_t = ReviewContextFormat::Text)]
+        format: ReviewContextFormat,
     },
 
     /// Generate and store embeddings for all un-embedded chunks.
@@ -226,6 +243,16 @@ pub enum Command {
         /// Maximum number of orphan nodes and dangling edges to display.
         #[arg(long, default_value_t = 20)]
         limit: usize,
+    },
+
+    /// Show resolved config values and their sources.
+    #[command(name = "debug-config")]
+    DebugConfig,
+
+    /// Inspect Atlas config surfaces.
+    Config {
+        #[command(subcommand)]
+        subcommand: ConfigCommand,
     },
 
     /// Show what a query would match, with timing and match details.
@@ -305,6 +332,9 @@ pub enum Command {
         #[arg(long)]
         no_instructions: bool,
     },
+
+    /// Explain supported update path for the installed atlas binary.
+    Selfupdate,
 
     /// Print shell completion script to stdout.
     Completions {

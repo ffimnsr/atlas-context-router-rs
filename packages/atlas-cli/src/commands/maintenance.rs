@@ -8,10 +8,283 @@ use atlas_session::DEFAULT_SESSION_DB;
 use atlas_store_sqlite::{GraphBuildState, Store};
 use camino::Utf8Path;
 use std::path::{Path, PathBuf};
+use toml::Value as TomlValue;
 
-use crate::cli::{Cli, Command};
+use crate::cli::{Cli, Command, ConfigCommand};
 
 use super::{db_path, print_json, resolve_repo};
+
+#[derive(Debug, Clone)]
+struct MigrationReport {
+    label: &'static str,
+    path: String,
+    schema_version: i32,
+    latest_version: i32,
+}
+
+#[derive(Debug, Clone)]
+struct ConfigSourceValue {
+    value: serde_json::Value,
+    source: &'static str,
+}
+
+fn json_value_from_toml(value: &TomlValue) -> serde_json::Value {
+    serde_json::to_value(value).unwrap_or(serde_json::Value::Null)
+}
+
+fn flatten_toml(prefix: Option<&str>, value: &TomlValue, out: &mut Vec<(String, TomlValue)>) {
+    match value {
+        TomlValue::Table(table) => {
+            let mut keys = table.keys().cloned().collect::<Vec<_>>();
+            keys.sort();
+            for key in keys {
+                let child_prefix = match prefix {
+                    Some(prefix) => format!("{prefix}.{key}"),
+                    None => key.clone(),
+                };
+                flatten_toml(Some(&child_prefix), &table[&key], out);
+            }
+        }
+        other => {
+            if let Some(prefix) = prefix {
+                out.push((prefix.to_owned(), other.clone()));
+            }
+        }
+    }
+}
+
+fn flatten_runtime_json(
+    prefix: Option<&str>,
+    value: &serde_json::Value,
+    out: &mut Vec<(String, serde_json::Value)>,
+) {
+    match value {
+        serde_json::Value::Object(map) => {
+            let mut keys = map.keys().cloned().collect::<Vec<_>>();
+            keys.sort();
+            for key in keys {
+                let child_prefix = match prefix {
+                    Some(prefix) => format!("{prefix}.{key}"),
+                    None => key.clone(),
+                };
+                flatten_runtime_json(Some(&child_prefix), &map[&key], out);
+            }
+        }
+        other => {
+            if let Some(prefix) = prefix {
+                out.push((prefix.to_owned(), other.clone()));
+            }
+        }
+    }
+}
+
+fn config_runtime_json(config: &atlas_engine::Config) -> serde_json::Value {
+    serde_json::json!({
+        "build": {
+            "parse_batch_size": config.parse_batch_size(),
+            "max_files_per_run": config.build.max_files_per_run,
+            "max_total_bytes_per_run": config.build.max_total_bytes_per_run,
+            "max_file_bytes": config.build.max_file_bytes,
+            "max_parse_failures": config.build.max_parse_failures,
+            "max_parse_failure_ratio": config.build.max_parse_failure_ratio,
+            "max_wall_time_ms": config.build.max_wall_time_ms,
+        },
+        "search": {
+            "hybrid_enabled": config.search.hybrid_enabled,
+            "top_k_fts": config.search.top_k_fts,
+            "top_k_vector": config.search.top_k_vector,
+            "rrf_k": config.search.rrf_k,
+            "max_query_candidates": config.search.max_query_candidates,
+            "max_query_wall_time_ms": config.search.max_query_wall_time_ms,
+        },
+        "analysis": {
+            "dead_code_certainty_threshold": config.analysis.dead_code_certainty_threshold,
+            "refactor_safety_threshold": config.analysis.refactor_safety_threshold,
+            "impact_max_depth": config.analysis.impact_max_depth,
+            "impact_max_nodes": config.analysis.impact_max_nodes,
+            "dynamic_usage_allowlist": config.analysis.dynamic_usage_allowlist,
+            "entrypoint_allowlist": config.analysis.entrypoint_allowlist,
+            "framework_conventions_file": config.analysis.framework_conventions_file,
+        },
+        "context": {
+            "max_context_nodes": config.context.max_context_nodes,
+            "max_context_depth": config.context.max_context_depth,
+            "max_seed_nodes": config.context.max_seed_nodes,
+            "max_seed_files": config.context.max_seed_files,
+            "max_traversal_depth": config.context.max_traversal_depth,
+            "max_traversal_nodes": config.context.max_traversal_nodes,
+            "max_traversal_edges": config.context.max_traversal_edges,
+            "max_review_source_bytes": config.context.max_review_source_bytes,
+            "max_context_payload_bytes": config.context.max_context_payload_bytes,
+            "max_context_tokens_estimate": config.context.max_context_tokens_estimate,
+            "max_file_excerpt_bytes": config.context.max_file_excerpt_bytes,
+            "max_saved_context_bytes": config.context.max_saved_context_bytes,
+        },
+        "mcp": {
+            "worker_threads": config.mcp_worker_threads(),
+            "tool_timeout_ms": config.mcp_tool_timeout_ms(),
+            "tool_timeout_ms_by_tool": config.mcp_tool_timeout_ms_by_tool(),
+            "max_mcp_response_bytes": config.mcp.max_mcp_response_bytes,
+        },
+    })
+}
+
+fn config_sources(
+    raw_config: Option<&str>,
+    config: &atlas_engine::Config,
+) -> Vec<(String, ConfigSourceValue)> {
+    let mut runtime = Vec::new();
+    flatten_runtime_json(None, &config_runtime_json(config), &mut runtime);
+
+    let mut explicit = std::collections::HashMap::new();
+    if let Some(raw) = raw_config
+        && !raw.trim().is_empty()
+    {
+        let parsed: TomlValue = toml::from_str(raw)
+            .context("cannot parse raw config for source tracing")
+            .unwrap_or(TomlValue::Table(Default::default()));
+        let mut flattened = Vec::new();
+        flatten_toml(None, &parsed, &mut flattened);
+        for (key, value) in flattened {
+            explicit.insert(key, json_value_from_toml(&value));
+        }
+    }
+
+    runtime
+        .into_iter()
+        .map(|(key, value)| {
+            let source = if explicit.contains_key(&key) {
+                "file"
+            } else {
+                "default"
+            };
+            (key, ConfigSourceValue { value, source })
+        })
+        .collect()
+}
+
+fn cli_runtime_overrides(cli: &Cli, repo: &str) -> Vec<(String, ConfigSourceValue)> {
+    let repo_source = if cli.repo.is_some() { "cli" } else { "auto" };
+    let db_source = if cli.db.is_some() { "cli" } else { "default" };
+    vec![
+        (
+            "runtime.repo_root".to_owned(),
+            ConfigSourceValue {
+                value: serde_json::json!(repo),
+                source: repo_source,
+            },
+        ),
+        (
+            "runtime.db_path".to_owned(),
+            ConfigSourceValue {
+                value: serde_json::json!(db_path(cli, repo)),
+                source: db_source,
+            },
+        ),
+        (
+            "runtime.output.json".to_owned(),
+            ConfigSourceValue {
+                value: serde_json::json!(cli.json),
+                source: "cli",
+            },
+        ),
+        (
+            "runtime.output.verbose".to_owned(),
+            ConfigSourceValue {
+                value: serde_json::json!(cli.verbose),
+                source: "cli",
+            },
+        ),
+    ]
+}
+
+fn env_runtime_overrides() -> Vec<(String, ConfigSourceValue)> {
+    [
+        ("ATLAS_EMBED_URL", false),
+        ("ATLAS_EMBED_MODEL", false),
+        ("ATLAS_HTTP_BIND", false),
+        ("ATLAS_HTTP_AUTH_TOKEN", true),
+    ]
+    .into_iter()
+    .map(|(name, redacted)| {
+        let value = match std::env::var(name) {
+            Ok(_value) if redacted => serde_json::json!("<redacted>"),
+            Ok(value) => serde_json::json!(value),
+            Err(_) => serde_json::Value::Null,
+        };
+        let source = if value.is_null() { "unset" } else { "env" };
+        (format!("env.{name}"), ConfigSourceValue { value, source })
+    })
+    .collect()
+}
+
+fn render_debug_config_payload(cli: &Cli, repo: &str) -> Result<serde_json::Value> {
+    let atlas_dir = atlas_engine::paths::atlas_dir(repo);
+    let config_path = atlas_engine::paths::config_path(repo);
+    let raw_config = std::fs::read_to_string(&config_path).ok();
+    let config = atlas_engine::Config::load(&atlas_dir)?;
+    config.build_run_budget()?;
+    config.budget_policy()?;
+
+    let mut entries = config_sources(raw_config.as_deref(), &config);
+    entries.extend(cli_runtime_overrides(cli, repo));
+    entries.extend(env_runtime_overrides());
+    entries.sort_by(|left, right| left.0.cmp(&right.0));
+
+    let values = entries
+        .iter()
+        .map(|(key, entry)| {
+            (
+                key.clone(),
+                serde_json::json!({
+                    "value": entry.value,
+                    "source": entry.source,
+                }),
+            )
+        })
+        .collect::<serde_json::Map<String, serde_json::Value>>();
+
+    Ok(serde_json::json!({
+        "repo_root": repo,
+        "atlas_dir": atlas_dir.display().to_string(),
+        "config_path": config_path.display().to_string(),
+        "config_exists": config_path.exists(),
+        "resolved": values,
+    }))
+}
+
+fn graph_migration_report(path: &str) -> Result<MigrationReport> {
+    let mut store = Store::open(path)?;
+    store.migrate()?;
+    Ok(MigrationReport {
+        label: "graph_db",
+        path: path.to_owned(),
+        schema_version: store.schema_version()?,
+        latest_version: store.schema_version()?,
+    })
+}
+
+fn content_migration_report(path: &str) -> Result<MigrationReport> {
+    let mut store = ContentStore::open(path)?;
+    store.migrate()?;
+    Ok(MigrationReport {
+        label: "content_db",
+        path: path.to_owned(),
+        schema_version: store.schema_version()?,
+        latest_version: store.schema_version()?,
+    })
+}
+
+fn session_migration_report(path: &str) -> Result<MigrationReport> {
+    let mut store = atlas_session::SessionStore::open(path)?;
+    store.migrate()?;
+    Ok(MigrationReport {
+        label: "session_db",
+        path: path.to_owned(),
+        schema_version: store.schema_version()?,
+        latest_version: store.schema_version()?,
+    })
+}
 
 struct CheckResult {
     name: &'static str,
@@ -244,6 +517,132 @@ pub fn run_purge_noncanonical(cli: &Cli) -> Result<()> {
     println!("Next:");
     println!("  atlas build");
     println!("  atlas session start");
+    Ok(())
+}
+
+pub fn run_migrate(cli: &Cli) -> Result<()> {
+    let repo = resolve_repo(cli)?;
+    let graph_db = db_path(cli, &repo);
+    let content_db = atlas_engine::paths::content_db_path(&graph_db);
+    let session_db = atlas_engine::paths::session_db_path(&graph_db);
+
+    let reports = vec![
+        graph_migration_report(&graph_db)?,
+        content_migration_report(&content_db)?,
+        session_migration_report(&session_db)?,
+    ];
+
+    if cli.json {
+        let dbs = reports
+            .iter()
+            .map(|report| {
+                serde_json::json!({
+                    "label": report.label,
+                    "path": report.path,
+                    "schema_version": report.schema_version,
+                    "latest_version": report.latest_version,
+                })
+            })
+            .collect::<Vec<_>>();
+        print_json(
+            "migrate",
+            serde_json::json!({
+                "repo_root": repo,
+                "ok": true,
+                "error_code": "none",
+                "message": "Repo-local Atlas databases migrated.",
+                "databases": dbs,
+            }),
+        )?;
+        return Ok(());
+    }
+
+    println!("Migrated Atlas databases for {repo}");
+    for report in &reports {
+        println!(
+            "  {}: {} (schema {} / latest {})",
+            report.label, report.path, report.schema_version, report.latest_version
+        );
+    }
+    Ok(())
+}
+
+pub fn run_debug_config(cli: &Cli) -> Result<()> {
+    match &cli.command {
+        Command::DebugConfig => {}
+        Command::Config {
+            subcommand: ConfigCommand::Show,
+        } => {}
+        _ => unreachable!(),
+    }
+
+    let repo = resolve_repo(cli)?;
+    let payload = render_debug_config_payload(cli, &repo)?;
+
+    if cli.json {
+        print_json("debug_config", payload)?;
+        return Ok(());
+    }
+
+    println!("Resolved config for {repo}");
+    println!(
+        "  atlas_dir   : {}",
+        payload["atlas_dir"].as_str().unwrap_or_default()
+    );
+    println!(
+        "  config_path : {}",
+        payload["config_path"].as_str().unwrap_or_default()
+    );
+    println!(
+        "  config_file : {}",
+        if payload["config_exists"] == serde_json::json!(true) {
+            "present"
+        } else {
+            "missing (defaults only)"
+        }
+    );
+    println!();
+    let resolved = payload["resolved"]
+        .as_object()
+        .context("resolved config payload malformed")?;
+    for (key, value) in resolved {
+        println!(
+            "  {key:<40} {:<8} {}",
+            value["source"].as_str().unwrap_or("unknown"),
+            match &value["value"] {
+                serde_json::Value::String(text) => text.clone(),
+                other => other.to_string(),
+            }
+        );
+    }
+    Ok(())
+}
+
+pub fn run_selfupdate(cli: &Cli) -> Result<()> {
+    let message = "Self-update is not built into atlas. Reinstall with the documented installer or your package manager to pick up a newer binary.";
+    let next_steps = vec![
+        "./install.sh".to_owned(),
+        "cargo install --path packages/atlas-cli --force".to_owned(),
+    ];
+
+    if cli.json {
+        print_json(
+            "selfupdate",
+            serde_json::json!({
+                "ok": false,
+                "error_code": "selfupdate_not_supported",
+                "message": message,
+                "next_steps": next_steps,
+            }),
+        )?;
+        return Ok(());
+    }
+
+    println!("{message}");
+    println!("Suggested commands:");
+    for step in &next_steps {
+        println!("  {step}");
+    }
     Ok(())
 }
 

@@ -10,7 +10,7 @@ impl Store {
     ///
     /// Used by callers that batch many history inserts into a single commit so
     /// SQLite does not auto-commit (fsync) after every statement.  The caller
-    /// **must** call [`commit_write`] on success or [`rollback_write`] on any
+    /// **must** call [`Self::commit_write`] on success or [`Self::rollback_write`] on any
     /// error; failing to do so leaves the connection in an open transaction.
     pub fn begin_write(&self) -> Result<()> {
         self.conn
@@ -18,12 +18,12 @@ impl Store {
             .context("BEGIN IMMEDIATE")
     }
 
-    /// Commit the write transaction opened by [`begin_write`].
+    /// Commit the write transaction opened by [`Self::begin_write`].
     pub fn commit_write(&self) -> Result<()> {
         self.conn.execute_batch("COMMIT").context("COMMIT")
     }
 
-    /// Roll back the write transaction opened by [`begin_write`].  Ignores
+    /// Roll back the write transaction opened by [`Self::begin_write`].  Ignores
     /// errors since this is typically called from error paths where the
     /// original error is already propagated.
     pub fn rollback_write(&self) {

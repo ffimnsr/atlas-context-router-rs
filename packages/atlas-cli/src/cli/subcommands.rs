@@ -1,5 +1,11 @@
 use clap::Subcommand;
 
+#[derive(Debug, Subcommand)]
+pub enum ConfigCommand {
+    /// Show resolved config values and where they came from.
+    Show,
+}
+
 /// Sub-commands for `atlas session`.
 #[derive(Debug, Subcommand)]
 pub enum SessionCommand {

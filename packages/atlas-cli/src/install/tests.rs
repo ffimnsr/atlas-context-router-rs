@@ -73,6 +73,9 @@ fn instructions_section_mentions_current_mcp_tools() {
 fn instructions_section_documents_trust_metadata() {
     assert!(INSTRUCTIONS_SECTION.contains("atlas_provenance"));
     assert!(INSTRUCTIONS_SECTION.contains("atlas_freshness"));
+    assert!(INSTRUCTIONS_SECTION.contains(
+        "ALWAYS use TOON output everytime, and JSON when you expect there's floating numbers."
+    ));
     assert!(INSTRUCTIONS_SECTION.contains("status` or `doctor"));
     assert!(INSTRUCTIONS_SECTION.contains("Canonicalize repo paths before hashing"));
     assert!(INSTRUCTIONS_SECTION.contains("noncanonical_path_rows"));
@@ -422,10 +425,10 @@ fn git_hooks_installed_and_executable() {
         assert_eq!(content.matches("atlas update || true").count(), 1);
         if file_name == "pre-commit" {
             assert!(content.contains("atlas detect-changes || true"));
-            assert!(!content.contains("atlas detect-changes --brief || true"));
             assert!(content.contains("[pre-commit] complete"));
         } else {
-            assert!(content.contains("atlas detect-changes --brief || true"));
+            assert!(content.contains("atlas detect-changes || true"));
+            assert!(!content.contains("atlas detect-changes --brief || true"));
         }
     }
 }
@@ -451,7 +454,7 @@ fn install_git_hooks_replaces_legacy_marker_block() {
     let hook = tmp.path().join(".git/hooks/post-checkout");
     fs::write(
         &hook,
-        "#!/bin/sh\natlas update # atlas-hook\n\n# Installed by atlas. Remove these lines to disable atlas graph updates.\nif command -v atlas >/dev/null 2>&1; then\n    atlas update || true\n    atlas detect-changes --brief || true\nfi\n",
+        "#!/bin/sh\natlas update # atlas-hook\n\n# Installed by atlas. Remove these lines to disable atlas graph updates.\nif command -v atlas >/dev/null 2>&1; then\n    atlas update || true\n    atlas detect-changes || true\nfi\n",
     )
     .unwrap();
 

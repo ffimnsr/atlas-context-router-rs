@@ -47,7 +47,48 @@ fn defaults_are_none_and_false() {
 #[test]
 fn parse_init_command() {
     let cli = parse(&["atlas", "init"]);
-    assert!(matches!(cli.command, Command::Init));
+    assert!(matches!(
+        cli.command,
+        Command::Init { ref profile } if profile == "standard"
+    ));
+}
+
+#[test]
+fn parse_init_full_profile() {
+    let cli = parse(&["atlas", "init", "--profile", "full"]);
+    assert!(matches!(
+        cli.command,
+        Command::Init { ref profile } if profile == "full"
+    ));
+}
+
+#[test]
+fn parse_migrate_command() {
+    let cli = parse(&["atlas", "migrate"]);
+    assert!(matches!(cli.command, Command::Migrate));
+}
+
+#[test]
+fn parse_debug_config_command() {
+    let cli = parse(&["atlas", "debug-config"]);
+    assert!(matches!(cli.command, Command::DebugConfig));
+}
+
+#[test]
+fn parse_config_show_command() {
+    let cli = parse(&["atlas", "config", "show"]);
+    match cli.command {
+        Command::Config { subcommand } => match subcommand {
+            ConfigCommand::Show => {}
+        },
+        _ => panic!("expected Config command"),
+    }
+}
+
+#[test]
+fn parse_selfupdate_command() {
+    let cli = parse(&["atlas", "selfupdate"]);
+    assert!(matches!(cli.command, Command::Selfupdate));
 }
 
 #[test]
@@ -279,12 +320,24 @@ fn parse_review_context_defaults() {
         max_nodes,
         base,
         files,
+        format,
     } = cli.command
     {
         assert_eq!(max_depth, 3);
         assert_eq!(max_nodes, 200);
         assert!(base.is_none());
         assert!(files.is_empty());
+        assert_eq!(format, ReviewContextFormat::Text);
+    } else {
+        panic!("expected ReviewContext command");
+    }
+}
+
+#[test]
+fn parse_review_context_markdown_format() {
+    let cli = parse(&["atlas", "review-context", "--format", "markdown"]);
+    if let Command::ReviewContext { format, .. } = cli.command {
+        assert_eq!(format, ReviewContextFormat::Markdown);
     } else {
         panic!("expected ReviewContext command");
     }

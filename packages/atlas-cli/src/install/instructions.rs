@@ -16,6 +16,8 @@ atlas MCP tools BEFORE using file-search or grep to explore the codebase.**
 The graph is faster, cheaper (fewer tokens), and gives you structural context
 (callers, dependents, test coverage) that file scanning cannot.
 
+ALWAYS use TOON output everytime, and JSON when you expect there's floating numbers.
+
 ### When to use atlas tools first
 
 - **Exploring code**: `query_graph` to find candidate symbols, then `symbol_neighbors`, `traverse_graph`, or `get_context` for callers/callees and usage relationships

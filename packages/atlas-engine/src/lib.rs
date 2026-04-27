@@ -13,7 +13,7 @@ mod update;
 pub mod watch;
 
 pub use build::{BuildOptions, BuildSummary, build_graph};
-pub use config::{BuildRunBudget, Config};
+pub use config::{BuildRunBudget, Config, ConfigTemplateProfile};
 pub use lang_policy::{Feature, LangEntry, LanguagePolicy, Maturity};
 pub use postprocess::{
     POSTPROCESS_STAGE_ARCHITECTURE_METRICS, POSTPROCESS_STAGE_COMMUNITIES, POSTPROCESS_STAGE_FLOWS,

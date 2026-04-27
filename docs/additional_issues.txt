@@ -10,22 +10,6 @@ criterion is already a workspace dep but the README has only one ad-hoc benchmar
 
 Track parser cache hit ratio (blob-hash cache from 17.13 is shipped) as a CI gate so regressions are caught.
 
-
-atlas init could write a sample .atlas/config.toml with all keys commented and validated, plus a --profile minimal|standard|full template.
-
-atlas migrate command — explicit DB migration entry point distinct from build.
-
-atlas debug-config — print resolved config + sources (file vs CLI vs env).
-
-No atlas debug-config / atlas config show command despite there being a non-trivial Config schema in atlas-engine/src/config.rs.
-
-No atlas migrate command — migrations only run on Store::open, so users can't separately test/repair schema drift.
-
-No atlas selfupdate (or explicit refusal) — the README installer is the only update path.
-
-
-A first-class diff-of-graph at PR time for CI integration: atlas review-context --base origin/main --format markdown for posting to PR comments. (Some pieces exist; needs a reviewer-friendly markdown profile.)
-
 A thin LSP shim that re-exposes query, context, impact, references as standard LSP requests, so editors that don't speak MCP still get value.
 
 docs/architecture.md with a diagram of the three databases (worldtree.db, context.db, session.db), the atlas-engine pipeline, and where adapters/hooks plug in. The boundaries are repeatedly referenced in patches X1, S1, C1 — a single picture would anchor them.
@@ -33,14 +17,6 @@ docs/architecture.md with a diagram of the three databases (worldtree.db, contex
 A single BudgetPolicy struct is referenced repeatedly (R2, X4, X6). Surface it as a documented config block in .atlas/config.toml with defaults, env overrides, and a --budget-profile flag. Currently it's implicit code.
 
 Same for the layer rules in 29.1 and the redaction rules in X4 — push them into config files so users can tune without recompiling.
-
-No JSON-RPC notifications/progress, no $/cancelRequest handling. I grep'd for progress and cancel in packages/atlas-mcp/src/ — nothing. Long-running tools (build_or_update_graph, postprocess_graph, history build, analyze_*) cannot stream progress and cannot be canceled.
-
-No $/setTrace / $/logMessage — agents that want server logs piped back over the wire have no channel.
-
-No client-side rate limiting / backpressure on tool calls. A misbehaving agent can pin worker threads.
-
-tool_timeout_ms default is 300_000 (5 minutes) for every tool (verified config.rs:12). No per-tool budget. A query_graph should not get the same 5-minute ceiling as build_or_update_graph.
 
 atlas-search/src/embed.rs reads ATLAS_EMBED_URL from env at request time. There is no Config::embedding block; users cannot configure the embedder in .atlas/config.toml. Patch R3 in ISSUES.md tracks dimension freezing but not config surface.
 
@@ -54,8 +30,6 @@ No MCP_TOOLS.md auto-generated from the registry. README has a hand-curated tabl
 
 No per-crate doc landing pages (#![doc = ...] headers are sparse). cargo doc produces a nearly empty index.
 
-Watch mode (atlas-engine/src/watch.rs) uses notify = "7". There is no documented backpressure or coalescing policy in code or in patches; under monorepo-scale git pull you can swamp the channel.
-
 No --dry-run matrix. atlas install has it; build/update/postprocess do not. For agent integration, dry-run-everywhere is valuable.
 
 No prompt-injection defense doc/policy for MCP responses — MCP server returns user-controlled text (file contents, commit messages, doc sections). There is no "always quote/escape untrusted content with markers" policy. Worth a SECURITY.md section.
@@ -66,3 +40,5 @@ TODO:
 Snapshot/golden tests for CLI/MCP JSON shapes; you already have parity tests planned (PS1–PS3) but a generic snapshot harness would compound their value.
 
 atlas doctor --json should already be machine-stable; add a JSON Schema for it (and other --json outputs).
+
+Watch mode (atlas-engine/src/watch.rs) uses notify = "7". There is no documented backpressure or coalescing policy in code or in patches; under monorepo-scale git pull you can swamp the channel.
