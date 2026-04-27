@@ -375,90 +375,26 @@ Core Design Rules:
 - KEEP continuity best-effort; never block primary CLI/MCP flow on session persistence failure
 - KEEP retrieval lexical and local first; embeddings are optional later, not required for v1 context-mode completion
 
-#### Phase CM12 — Predictive Context
+---
 
-##### Goal
+#### Phase CM14 is Shipped
 
-Make context proactive instead of reactive.
-
-##### Tasks
-
-- [ ] predict next likely user action
-- [ ] prefetch relevant artifacts
-- [ ] preload context based on recent activity
-- [ ] cache frequently accessed context
-
-##### Output
-
-- faster, smarter responses
-- reduced latency for common workflows
-
-##### CLI and MCP rollout follow-up
-
-- [ ] wire predictive prefetch into `atlas context`, `query_graph`, and resume flows rather than leaving it as background-only logic
-- [ ] expose debug or metadata fields showing what was prefetched and why in CLI JSON and MCP responses
-- [ ] ensure predictive caches respect existing session and saved-context boundaries
+See SHIPPED.md for details on decision memory implementation.
 
 ---
 
-#### Phase CM14 — Decision Memory
+##### Completion Criteria for Part IV
 
-##### Goal
+Both **Phase CM14 (Decision Memory)** and **Phase CM15 (Agent-Aware Context)** are shipped. See SHIPPED.md for implementation details.
 
-Persist and reuse decisions.
+The memory system is undergoing continuous improvement:
 
-##### Tasks
-
-- [x] create decision event types
-- [x] link decisions to artifacts
-- [x] store reasoning behind decisions
-- [x] retrieve decisions for future tasks
-- [x] avoid recomputing prior conclusions
-
-##### Output
-
-- system remembers why decisions were made
-
-##### CLI and MCP rollout follow-up
-
-- [x] emit decision events from CLI, context, reasoning, and MCP adapter flows
-- [x] route `atlas context` and saved-context retrieval through decision lookup when relevant prior conclusions exist
-- [x] expose decision retrieval through CLI or MCP surface with linked evidence and artifact references
-
----
-
-#### Phase CM15 — Agent-Aware Context (Optional)
-
-##### Goal
-
-Support multi-agent workflows.
-
-##### Tasks
-
-- [x] implement per-agent memory partitions
-- [x] track delegated tasks
-- [x] merge outputs across agents
-- [x] track agent responsibilities
-
-##### Output
-
-- scalable multi-agent memory system
-
-##### CLI and MCP rollout follow-up
-
-- [x] add agent partition identifiers to session, context, and saved-context APIs
-- [x] extend MCP tools to read/write per-agent memory partitions and merged views intentionally
-- [x] expose delegated-task and responsibility summaries through CLI or MCP status/context surfaces
-
----
-
-##### Completion Criteria
-
+- [x] decisions persist and are reused
+- [x] agent partitioning is implemented
 - [ ] memory is curated, not just stored
 - [ ] retrieval is semantic-aware
 - [ ] system can recall past sessions
 - [ ] context selection is optimized
-- [ ] decisions persist and are reused
 - [ ] system improves over time
 
 ---

@@ -70,6 +70,9 @@ For active backlog, see ISSUES.md.
 - Saved-context artifact storage, previewing, retrieval, search, and purge flows are implemented.
 - Resume snapshots and retrieval-backed restoration are implemented for session continuity.
 - Context storage compaction and budget-aware retention behavior are implemented.
+- Decision memory with persistent decision events, artifact linking, reasoning storage, and decision retrieval is implemented.
+- Agent-scoped context and session management is implemented with agent_id partitioning, agent memory summaries, delegated task tracking, and agent responsibility summaries.
+- Agent-aware context isolation, intentional merged views, and agent-scoped session continuity are implemented.
 
 ## Hook and Agent Host Integration
 
@@ -89,4 +92,4 @@ For active backlog, see ISSUES.md.
 
 ## Still Open
 
-- Insights, multi-repo federation, predictive and decision memory, readiness unification, corruption recovery, runtime enrichment, and several retrieval/context follow-up patches remain in ISSUES.md.
+- Insights (Phase 29), multi-repo federation (Phase 30.1), advanced features (Phase 30.2, Phase 31), readiness unification, corruption recovery, runtime enrichment, and several retrieval/context follow-up patches remain in ISSUES.md.
