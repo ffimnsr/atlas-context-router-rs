@@ -14,13 +14,13 @@ mod tests;
 mod types;
 mod util;
 
-use rusqlite::{Connection, OpenFlags, params};
+use rusqlite::{Connection, OpenFlags};
 use tracing::info;
 
 use atlas_core::{AtlasError, Result};
-use atlas_db_utils::{application_id, apply_atlas_pragmas, set_application_id, set_user_version};
+use atlas_db_utils::{application_id, apply_atlas_pragmas, migrate_database_to, set_application_id};
 
-use crate::migrations::MIGRATIONS;
+use crate::migrations::{LATEST_VERSION, MIGRATION_SET};
 use util::{is_corruption_error, quarantine_db};
 
 pub use types::{
@@ -71,7 +71,7 @@ impl ContentStore {
         )
         .map_err(|e| AtlasError::Db(e.to_string()))?;
 
-        let store = Self {
+        let mut store = Self {
             conn,
             config,
             routing_stats: RoutingStats::default(),
@@ -80,20 +80,16 @@ impl ContentStore {
         };
         apply_atlas_pragmas(&store.conn)?;
         set_application_id(&store.conn, application_id::CONTEXT)?;
+        store.migrate()?;
         Ok(store)
     }
 
     /// Apply any pending schema migrations.
     pub fn migrate(&mut self) -> Result<()> {
-        self.conn
-            .execute_batch(
-                "CREATE TABLE IF NOT EXISTS metadata (
-                     key   TEXT PRIMARY KEY,
-                     value TEXT NOT NULL
-                 );",
-            )
-            .map_err(|e| AtlasError::Db(e.to_string()))?;
+        self.migrate_to(LATEST_VERSION)
+    }
 
+    pub fn migrate_to(&mut self, target_version: i32) -> Result<()> {
         let current: i32 = self
             .conn
             .query_row(
@@ -102,30 +98,17 @@ impl ContentStore {
                 |r| r.get(0),
             )
             .unwrap_or(0);
-
-        for m in MIGRATIONS {
-            if m.version > current {
-                info!("applying content store migration v{}", m.version);
-                self.conn
-                    .execute_batch(m.sql)
-                    .map_err(|e| AtlasError::Db(format!("migration {}: {e}", m.version)))?;
-                self.conn
-                    .execute(
-                        "INSERT OR REPLACE INTO metadata (key, value) VALUES ('schema_version', ?1)",
-                        params![m.version.to_string()],
-                    )
-                    .map_err(|e| AtlasError::Db(e.to_string()))?;
+        if target_version >= current {
+            for migration in MIGRATION_SET
+                .migrations
+                .iter()
+                .filter(|migration| migration.version > current && migration.version <= target_version)
+            {
+                info!(version = migration.version, name = migration.name, "applying content store migration");
             }
+        } else {
+            info!(current, target_version, "rebuilding content store schema for downgrade");
         }
-        let applied: i32 = self
-            .conn
-            .query_row(
-                "SELECT CAST(value AS INTEGER) FROM metadata WHERE key = 'schema_version'",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap_or(0);
-        set_user_version(&self.conn, applied)?;
-        Ok(())
+        migrate_database_to(&mut self.conn, &MIGRATION_SET, target_version)
     }
 }

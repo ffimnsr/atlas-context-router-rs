@@ -33,6 +33,29 @@ use std::sync::Mutex;
 #[cfg(unix)]
 use std::sync::atomic::AtomicBool;
 
+#[cfg(windows)]
+use std::os::windows::io::FromRawHandle;
+#[cfg(windows)]
+use windows_sys::Win32::Foundation::{
+    CloseHandle, DuplicateHandle, ERROR_NO_DATA, ERROR_PIPE_CONNECTED, FALSE, GetLastError, HANDLE,
+    INVALID_HANDLE_VALUE,
+};
+#[cfg(windows)]
+use windows_sys::Win32::Security::{
+    CopySid, EqualSid, GetLengthSid, GetTokenInformation, OpenProcessToken, TOKEN_QUERY,
+    TOKEN_USER, TokenUser,
+};
+#[cfg(windows)]
+use windows_sys::Win32::System::Pipes::{
+    ConnectNamedPipe, CreateNamedPipeW, GetNamedPipeClientProcessId, PIPE_ACCESS_DUPLEX,
+    PIPE_READMODE_BYTE, PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
+};
+#[cfg(windows)]
+use windows_sys::Win32::System::Threading::{
+    DUPLICATE_SAME_ACCESS, GetCurrentProcess, GetCurrentProcessId, OpenProcess,
+    PROCESS_QUERY_LIMITED_INFORMATION,
+};
+
 const MCP_WORKER_THREADS_ENV: &str = "ATLAS_MCP_WORKER_THREADS";
 const MCP_TOOL_TIMEOUT_MS_ENV: &str = "ATLAS_MCP_TOOL_TIMEOUT_MS";
 const DEFAULT_WORKER_THREADS: usize = 2;
@@ -79,6 +102,7 @@ pub fn run_server_with_options(
     db_path: &str,
     options: ServerOptions,
 ) -> Result<()> {
+    crate::tools::health::mark_server_started();
     eprintln!("atlas-mcp: server ready (repo={repo_root}, db={db_path})");
     eprintln!("atlas-mcp: reading JSON-RPC requests from stdin");
 
@@ -108,12 +132,18 @@ pub fn run_socket_server_with_options(
             .with_context(|| format!("cannot remove stale {}", socket_path.display()))?;
     }
 
-    let listener = UnixListener::bind(socket_path)
-        .with_context(|| format!("cannot bind {}", socket_path.display()))?;
+    // Set umask to 0o177 before bind so the socket is created as 0600 directly,
+    // eliminating the race window between bind and the chmod below.
+    let old_mask = unsafe { libc::umask(0o177) };
+    let bind_result = UnixListener::bind(socket_path);
+    unsafe { libc::umask(old_mask) };
+    let listener = bind_result.with_context(|| format!("cannot bind {}", socket_path.display()))?;
+    // Defense-in-depth: re-apply 0600 in case the umask was ineffective.
     secure_socket_path(socket_path)?;
     listener
         .set_nonblocking(true)
         .with_context(|| format!("cannot set nonblocking {}", socket_path.display()))?;
+    crate::tools::health::mark_server_started();
     let worker_pool = Arc::new(WorkerPool::from_env(
         "atlas-mcp:tool-worker",
         options.clone(),
@@ -172,7 +202,82 @@ pub fn run_socket_server_with_options(
     Ok(())
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+pub fn run_socket_server_with_options(
+    pipe_path: &Path,
+    repo_root: &str,
+    db_path: &str,
+    options: ServerOptions,
+) -> Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+
+    let pipe_name: Vec<u16> = pipe_path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+
+    let worker_pool = Arc::new(WorkerPool::from_env(
+        "atlas-mcp:tool-worker",
+        options.clone(),
+    )?);
+    let next_connection = AtomicUsize::new(0);
+
+    eprintln!(
+        "atlas-mcp: daemon ready (repo={repo_root}, db={db_path}, pipe={})",
+        pipe_path.display()
+    );
+
+    loop {
+        let pipe_handle = win_create_named_pipe_server(&pipe_name)?;
+
+        // ConnectNamedPipe blocks until a client connects; ERROR_PIPE_CONNECTED
+        // means a client connected between CreateNamedPipe and ConnectNamedPipe.
+        let connected = unsafe {
+            ConnectNamedPipe(pipe_handle, std::ptr::null_mut()) != 0
+                || GetLastError() == ERROR_PIPE_CONNECTED
+        };
+        if !connected {
+            let err_code = unsafe { GetLastError() };
+            unsafe { CloseHandle(pipe_handle) };
+            if err_code == ERROR_NO_DATA {
+                // Client connected and disconnected before we serviced it; continue.
+                continue;
+            }
+            return Err(std::io::Error::from_raw_os_error(err_code as i32))
+                .context("ConnectNamedPipe failed");
+        }
+
+        let repo_root = repo_root.to_owned();
+        let db_path = db_path.to_owned();
+        let worker_pool = Arc::clone(&worker_pool);
+        let server_options = options.clone();
+        let connection_id = next_connection.fetch_add(1, Ordering::Relaxed) + 1;
+        let thread_name = format!("atlas-mcp:daemon-client-{connection_id}");
+        let log_thread_name = thread_name.clone();
+
+        thread::Builder::new()
+            .name(thread_name.clone())
+            .spawn(move || {
+                if let Err(error) = win_serve_pipe_connection(
+                    pipe_handle,
+                    &repo_root,
+                    &db_path,
+                    worker_pool,
+                    server_options,
+                ) {
+                    tracing::warn!(
+                        error = %error,
+                        client = %log_thread_name,
+                        "daemon pipe client failed"
+                    );
+                }
+            })
+            .with_context(|| format!("cannot spawn '{thread_name}'"))?;
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
 pub fn run_socket_server_with_options(
     _socket_path: &Path,
     _repo_root: &str,
@@ -180,7 +285,7 @@ pub fn run_socket_server_with_options(
     _options: ServerOptions,
 ) -> Result<()> {
     Err(anyhow::anyhow!(
-        "Unix socket MCP daemon transport is unsupported on this platform"
+        "MCP daemon transport is unsupported on this platform"
     ))
 }
 
@@ -384,6 +489,11 @@ fn process_requests<W: Write>(
                 queue_wait_ms,
                 &connection_state,
             )?,
+            Ok(TransportEvent::ProgressReport {
+                token,
+                message,
+                percentage,
+            }) => handle_progress_report(writer, &pending, token, &message, percentage)?,
             Ok(TransportEvent::Response {
                 token,
                 response,
@@ -572,6 +682,7 @@ fn handle_input_line<W: Write>(
             timeout_ms = timeout.as_millis() as u64,
             "queued MCP request"
         );
+        let cancel_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
         pending.insert(
             token,
             PendingRequest {
@@ -581,6 +692,7 @@ fn handle_input_line<W: Write>(
                 deadline: Instant::now() + timeout,
                 timeout_ms: timeout.as_millis(),
                 progress_token: progress_token.clone(),
+                cancel_flag: Arc::clone(&cancel_flag),
             },
         );
         emit_progress_notification(
@@ -622,8 +734,22 @@ fn handle_input_line<W: Write>(
                 queue_wait_ms = queue_wait_ms as u64,
                 "started MCP request"
             );
+            // Install per-request progress reporter; tools call
+            // crate::progress::report() / is_canceled() on this thread.
+            let progress_event_tx = event_tx.clone();
+            crate::progress::install(
+                move |msg, pct| {
+                    let _ = progress_event_tx.send(TransportEvent::ProgressReport {
+                        token,
+                        message: msg.to_owned(),
+                        percentage: pct,
+                    });
+                },
+                cancel_flag,
+            );
             let dispatch_started_at = Instant::now();
             let result = dispatch(&method_name, params.as_ref(), &repo_root, &db_path);
+            crate::progress::uninstall();
             let execution_ms = dispatch_started_at.elapsed().as_millis();
             let success = result.is_ok();
             let response = match result {
@@ -821,6 +947,10 @@ struct PendingRequest {
     deadline: Instant,
     timeout_ms: u128,
     progress_token: Option<serde_json::Value>,
+    /// Shared flag set to `true` when the client cancels this request after it
+    /// has already started executing.  Long-running tools poll
+    /// [`crate::progress::is_canceled`] which reads this flag.
+    cancel_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 struct RequestDispatchContext<'a> {
@@ -858,6 +988,12 @@ enum TransportEvent {
         token: u64,
         response: String,
         completion: RequestCompletion,
+    },
+    /// Mid-execution progress emitted by a running tool via [`crate::progress`].
+    ProgressReport {
+        token: u64,
+        message: String,
+        percentage: Option<u32>,
     },
 }
 
@@ -1061,6 +1197,11 @@ fn cancel_request<W: Write>(
     let request = pending
         .remove(&token)
         .expect("pending request must exist while canceling");
+    // Signal any already-running tool to stop at its next cancellation
+    // checkpoint (tools poll crate::progress::is_canceled()).
+    request
+        .cancel_flag
+        .store(true, std::sync::atomic::Ordering::Relaxed);
     connection_state
         .canceled_tokens
         .lock()
@@ -1115,6 +1256,29 @@ fn handle_worker_started<W: Write>(
         ),
     )?;
     Ok(())
+}
+
+/// Forward a mid-execution progress update from a running tool to the client.
+fn handle_progress_report<W: Write>(
+    writer: &mut W,
+    pending: &HashMap<u64, PendingRequest>,
+    token: u64,
+    message: &str,
+    percentage: Option<u32>,
+) -> Result<()> {
+    let Some(request) = pending.get(&token) else {
+        return Ok(());
+    };
+    let msg = match percentage {
+        Some(pct) => format!("{message} ({pct}%)"),
+        None => message.to_owned(),
+    };
+    emit_progress_notification(
+        writer,
+        request.progress_token.as_ref(),
+        ProgressEventKind::Report,
+        &msg,
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -1687,6 +1851,187 @@ fn peer_uid(stream: &UnixStream) -> Result<libc::uid_t> {
     } else {
         Err(std::io::Error::last_os_error()).context("cannot read peer credentials")
     }
+}
+
+// Fail-closed fallback for exotic Unix platforms not covered by the cfg blocks above.
+// Rejecting all connections is safer than allowing unknown users to attach.
+#[cfg(all(
+    unix,
+    not(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        target_os = "dragonfly",
+        target_os = "openbsd",
+        target_os = "netbsd",
+    ))
+))]
+fn peer_uid(_stream: &UnixStream) -> Result<libc::uid_t> {
+    Err(anyhow::anyhow!(
+        "peer credential check not supported on this Unix platform; daemon rejected"
+    ))
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Windows named-pipe helpers
+// ──────────────────────────────────────────────────────────────────────────────
+
+/// Create a new named-pipe server instance.  The default DACL (inherited from
+/// the process token) already restricts access to the creating user, so we do
+/// not need an explicit security descriptor here.  Peer-credential verification
+/// happens after `ConnectNamedPipe` via `win_ensure_pipe_client_is_same_user`.
+#[cfg(windows)]
+fn win_create_named_pipe_server(pipe_name: &[u16]) -> Result<HANDLE> {
+    let handle = unsafe {
+        CreateNamedPipeW(
+            pipe_name.as_ptr(),
+            PIPE_ACCESS_DUPLEX,
+            PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+            PIPE_UNLIMITED_INSTANCES,
+            65536,
+            65536,
+            0,
+            std::ptr::null(),
+        )
+    };
+    if handle == INVALID_HANDLE_VALUE {
+        return Err(std::io::Error::last_os_error()).context("cannot create named pipe server");
+    }
+    Ok(handle)
+}
+
+/// Duplicate a Windows HANDLE so that reader and writer threads each own an
+/// independent handle to the same pipe endpoint.
+#[cfg(windows)]
+fn win_dup_handle(handle: HANDLE) -> Result<HANDLE> {
+    let process = unsafe { GetCurrentProcess() };
+    let mut new_handle = INVALID_HANDLE_VALUE;
+    let ok = unsafe {
+        DuplicateHandle(
+            process,
+            handle,
+            process,
+            &mut new_handle,
+            0,
+            FALSE,
+            DUPLICATE_SAME_ACCESS,
+        )
+    };
+    if ok == 0 {
+        return Err(std::io::Error::last_os_error()).context("cannot duplicate pipe handle");
+    }
+    Ok(new_handle)
+}
+
+/// RAII guard that closes a Windows HANDLE on drop.
+#[cfg(windows)]
+struct WinHandleGuard(HANDLE);
+
+#[cfg(windows)]
+impl Drop for WinHandleGuard {
+    fn drop(&mut self) {
+        unsafe { CloseHandle(self.0) };
+    }
+}
+
+/// Retrieve the binary SID of the owner of the given process.
+#[cfg(windows)]
+fn win_process_owner_sid(pid: u32) -> Result<Vec<u8>> {
+    let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid) };
+    if process == 0 {
+        return Err(std::io::Error::last_os_error())
+            .with_context(|| format!("cannot open process {pid}"));
+    }
+    let _process_guard = WinHandleGuard(process);
+
+    let mut token: HANDLE = 0;
+    if unsafe { OpenProcessToken(process, TOKEN_QUERY, &mut token) } == 0 {
+        return Err(std::io::Error::last_os_error()).context("cannot open process token");
+    }
+    let _token_guard = WinHandleGuard(token);
+
+    // First call: determine the required buffer size.
+    let mut len: u32 = 0;
+    unsafe { GetTokenInformation(token, TokenUser, std::ptr::null_mut(), 0, &mut len) };
+    if len == 0 {
+        return Err(std::io::Error::last_os_error())
+            .context("GetTokenInformation size query failed");
+    }
+
+    let mut buf = vec![0u8; len as usize];
+    if unsafe { GetTokenInformation(token, TokenUser, buf.as_mut_ptr() as *mut _, len, &mut len) }
+        == 0
+    {
+        return Err(std::io::Error::last_os_error()).context("cannot get token user SID");
+    }
+
+    // TOKEN_USER.User.Sid is a pointer into `buf`; copy the SID bytes out before
+    // `buf` is dropped.
+    let token_user = unsafe { &*(buf.as_ptr() as *const TOKEN_USER) };
+    let sid_ptr = token_user.User.Sid;
+    let sid_len = unsafe { GetLengthSid(sid_ptr) } as usize;
+    let mut sid_bytes = vec![0u8; sid_len];
+    if unsafe { CopySid(sid_len as u32, sid_bytes.as_mut_ptr() as *mut _, sid_ptr) } == 0 {
+        return Err(std::io::Error::last_os_error()).context("cannot copy SID");
+    }
+    Ok(sid_bytes)
+}
+
+/// Reject daemon connections from a different Windows user account.
+///
+/// Uses `GetNamedPipeClientProcessId` to identify the connecting process, then
+/// compares its owner SID with the server process owner SID.
+#[cfg(windows)]
+fn win_ensure_pipe_client_is_same_user(pipe_handle: HANDLE) -> Result<()> {
+    let mut client_pid: u32 = 0;
+    if unsafe { GetNamedPipeClientProcessId(pipe_handle, &mut client_pid) } == 0 {
+        return Err(std::io::Error::last_os_error())
+            .context("cannot get named pipe client process id");
+    }
+    let server_pid = unsafe { GetCurrentProcessId() };
+
+    let client_sid = win_process_owner_sid(client_pid)?;
+    let server_sid = win_process_owner_sid(server_pid)?;
+
+    if unsafe { EqualSid(client_sid.as_ptr() as *mut _, server_sid.as_ptr() as *mut _) } == 0 {
+        return Err(anyhow::anyhow!(
+            "rejecting daemon pipe client from a different user account (client pid {client_pid})"
+        ));
+    }
+    Ok(())
+}
+
+/// Serve one named-pipe client connection.
+#[cfg(windows)]
+fn win_serve_pipe_connection(
+    pipe_handle: HANDLE,
+    repo_root: &str,
+    db_path: &str,
+    worker_pool: Arc<WorkerPool>,
+    server_options: ServerOptions,
+) -> Result<()> {
+    win_ensure_pipe_client_is_same_user(pipe_handle)?;
+
+    // Duplicate the handle so the reader and writer each own an independent
+    // HANDLE; dropping one does not close the other.
+    let reader_handle = win_dup_handle(pipe_handle)?;
+    let reader_file = unsafe { std::fs::File::from_raw_handle(reader_handle as _) };
+    let writer_file = unsafe { std::fs::File::from_raw_handle(pipe_handle as _) };
+
+    let mut reader = BufReader::new(reader_file);
+    let mut writer = std::io::BufWriter::new(writer_file);
+
+    perform_socket_handshake(&mut reader, &mut writer, repo_root, db_path)?;
+    serve_connection(
+        reader,
+        &mut writer,
+        repo_root,
+        db_path,
+        worker_pool,
+        server_options,
+    )
 }
 
 #[cfg(test)]
@@ -2587,6 +2932,7 @@ mod tests {
                 deadline: Instant::now() - Duration::from_millis(1),
                 timeout_ms: 10,
                 progress_token: None,
+                cancel_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             },
         );
 

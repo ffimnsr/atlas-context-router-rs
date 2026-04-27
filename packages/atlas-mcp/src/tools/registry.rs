@@ -487,6 +487,17 @@ pub fn tool_list() -> serde_json::Value {
                 }
             },
             {
+                "name": "broker_status",
+                "description": "Return a lightweight health/ready check for the MCP broker process itself. Reports process uptime, PID, server version, and configured worker threads. Does NOT check graph readiness — use `status` or `doctor` for graph health. Useful for liveness probes and connectivity verification independent of graph state.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
+                    },
+                    "required": []
+                }
+            },
+            {
                 "name": "status",
                 "description": "Return a compact graph health summary: build state, node/edge counts, last-indexed timestamp, and a machine-readable failure category. Call this before query_graph or get_context to verify the graph is healthy and up-to-date. Succeeds even when the graph DB is missing.",
                 "inputSchema": {

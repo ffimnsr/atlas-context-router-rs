@@ -19,12 +19,12 @@ pub fn run_serve(cli: &Cli) -> Result<()> {
         tool_timeout_ms_by_tool: config.mcp_tool_timeout_ms_by_tool(),
     };
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     {
         run_stdio_broker(instance, options)
     }
 
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     {
         atlas_mcp::run_server_with_options(&repo, &db_path, options)
     }
@@ -41,12 +41,12 @@ pub fn run_serve_daemon(cli: &Cli) -> Result<()> {
         tool_timeout_ms_by_tool: config.mcp_tool_timeout_ms_by_tool(),
     };
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     {
         run_socket_daemon(instance, options)
     }
 
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = instance;
         let _ = options;
@@ -348,7 +348,251 @@ impl Drop for DaemonCleanup {
     }
 }
 
-#[cfg(unix)]
+// ──────────────────────────────────────────────────────────────────────────────
+// Windows named-pipe broker
+// ──────────────────────────────────────────────────────────────────────────────
+
+#[cfg(windows)]
+fn run_stdio_broker(
+    instance: crate::mcp_instance::McpInstance,
+    options: ServerOptions,
+) -> Result<()> {
+    let coordination_lock = instance.acquire_lock_blocking()?;
+    let (reader, writer) = match instance.inspect_metadata()? {
+        crate::mcp_instance::McpInstanceStatus::Ready(metadata) => {
+            match win_connect_to_daemon(
+                &metadata.socket_path,
+                &instance.repo_root,
+                &instance.db_path,
+            ) {
+                Ok(pair) => {
+                    eprintln!(
+                        "atlas-mcp: broker attach pipe={} repo={} db={}",
+                        metadata.socket_path, instance.repo_root, instance.db_path
+                    );
+                    pair
+                }
+                Err(error) => {
+                    eprintln!("atlas-mcp: stale daemon state detected; respawn: {error:#}");
+                    instance.clear_runtime_state()?;
+                    win_spawn_and_wait_for_daemon(&instance, options)?
+                }
+            }
+        }
+        crate::mcp_instance::McpInstanceStatus::Missing => {
+            win_spawn_and_wait_for_daemon(&instance, options)?
+        }
+        crate::mcp_instance::McpInstanceStatus::Stale(stale) => {
+            eprintln!(
+                "atlas-mcp: cleaning stale daemon state for {} pipe={} ({:?})",
+                instance.instance_id,
+                instance.socket_path.display(),
+                stale.reasons
+            );
+            instance.clear_runtime_state()?;
+            win_spawn_and_wait_for_daemon(&instance, options)?
+        }
+    };
+    drop(coordination_lock);
+    win_relay_stdio(reader, writer)
+}
+
+#[cfg(windows)]
+fn run_socket_daemon(
+    instance: crate::mcp_instance::McpInstance,
+    options: ServerOptions,
+) -> Result<()> {
+    instance.clear_runtime_state()?;
+    let metadata = instance.default_metadata(
+        std::process::id(),
+        atlas_mcp::MCP_PROTOCOL_VERSION,
+        &daemon_started_at(),
+    );
+    instance.write_metadata(&metadata)?;
+    let cleanup = WinDaemonCleanup {
+        instance: instance.clone(),
+    };
+    let result = atlas_mcp::run_socket_server_with_options(
+        &instance.socket_path,
+        &instance.repo_root,
+        &instance.db_path,
+        options,
+    );
+    drop(cleanup);
+    result
+}
+
+#[cfg(windows)]
+fn daemon_started_at() -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    format!("{}.{}Z", now.as_secs(), now.subsec_millis())
+}
+
+#[cfg(windows)]
+struct WinDaemonCleanup {
+    instance: crate::mcp_instance::McpInstance,
+}
+
+#[cfg(windows)]
+impl Drop for WinDaemonCleanup {
+    fn drop(&mut self) {
+        let _ = self.instance.clear_runtime_state();
+    }
+}
+
+#[cfg(windows)]
+fn win_spawn_and_wait_for_daemon(
+    instance: &crate::mcp_instance::McpInstance,
+    options: ServerOptions,
+) -> Result<(std::io::BufReader<std::fs::File>, std::fs::File)> {
+    eprintln!(
+        "atlas-mcp: broker spawn pipe={} repo={} db={}",
+        instance.socket_path.display(),
+        instance.repo_root,
+        instance.db_path
+    );
+    spawn_daemon_process(instance, options)?;
+    win_wait_for_daemon_ready(instance)
+}
+
+#[cfg(windows)]
+fn win_wait_for_daemon_ready(
+    instance: &crate::mcp_instance::McpInstance,
+) -> Result<(std::io::BufReader<std::fs::File>, std::fs::File)> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let mut last_error: Option<anyhow::Error> = None;
+
+    while std::time::Instant::now() < deadline {
+        match instance.read_metadata() {
+            Ok(Some(metadata)) => {
+                match win_connect_to_daemon(
+                    &metadata.socket_path,
+                    &instance.repo_root,
+                    &instance.db_path,
+                ) {
+                    Ok(pair) => return Ok(pair),
+                    Err(error) => last_error = Some(error),
+                }
+            }
+            Ok(None) => {}
+            Err(error) => last_error = Some(error),
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+
+    Err(anyhow::anyhow!(
+        "daemon readiness handshake failed for repo={} db={}: {}",
+        instance.repo_root,
+        instance.db_path,
+        last_error
+            .map(|e| e.to_string())
+            .unwrap_or_else(|| "daemon never became ready".to_owned())
+    ))
+}
+
+/// Open the named pipe and perform the daemon handshake.  Returns a
+/// `(BufReader, File)` pair so the caller can relay stdio without dropping
+/// any data that the BufReader already consumed during the handshake.
+#[cfg(windows)]
+fn win_connect_to_daemon(
+    pipe_path: &str,
+    repo_root: &str,
+    db_path: &str,
+) -> Result<(std::io::BufReader<std::fs::File>, std::fs::File)> {
+    use std::fs::OpenOptions;
+    use std::io::{BufRead, BufReader, Write};
+
+    let writer_file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(pipe_path)
+        .with_context(|| format!("cannot connect to daemon pipe {pipe_path}"))?;
+    let reader_file = writer_file
+        .try_clone()
+        .context("cannot clone pipe handle for reader")?;
+    let mut reader = BufReader::new(reader_file);
+    let mut writer = writer_file
+        .try_clone()
+        .context("cannot clone pipe handle for handshake writer")?;
+
+    let request = DaemonHandshakeRequest {
+        protocol_version: atlas_mcp::MCP_PROTOCOL_VERSION.to_owned(),
+        repo_root: repo_root.to_owned(),
+        db_path: db_path.to_owned(),
+    };
+    writeln!(writer, "{}", serde_json::to_string(&request)?)
+        .context("cannot write daemon handshake")?;
+    writer.flush().context("cannot flush daemon handshake")?;
+
+    let mut response_line = String::new();
+    let bytes = reader
+        .read_line(&mut response_line)
+        .context("cannot read daemon handshake")?;
+    if bytes == 0 {
+        return Err(anyhow::anyhow!("daemon closed before handshake response"));
+    }
+    let response: DaemonHandshakeResponse =
+        serde_json::from_str(response_line.trim()).context("invalid daemon handshake response")?;
+    if response.ok {
+        // Return the already-positioned reader so no buffered bytes are lost,
+        // and the original writer_file for writing stdin data to the daemon.
+        Ok((reader, writer_file))
+    } else {
+        Err(anyhow::anyhow!(
+            response
+                .error
+                .unwrap_or_else(|| "daemon handshake rejected".to_owned())
+        ))
+    }
+}
+
+#[cfg(windows)]
+fn win_relay_stdio(
+    mut reader: std::io::BufReader<std::fs::File>,
+    mut writer: std::fs::File,
+) -> Result<()> {
+    use std::io::{self, Write};
+
+    let stdin_thread = std::thread::spawn(move || -> Result<()> {
+        let stdin = io::stdin();
+        let mut input = stdin.lock();
+        match io::copy(&mut input, &mut writer) {
+            Ok(_) => Ok(()),
+            Err(error) if win_is_benign_disconnect(&error) => Ok(()),
+            Err(error) => Err(error).context("stdin relay failed"),
+        }
+    });
+
+    let stdout = io::stdout();
+    let mut output = stdout.lock();
+    match io::copy(&mut reader, &mut output) {
+        Ok(_) => {}
+        Err(error) if win_is_benign_disconnect(&error) => {}
+        Err(error) => return Err(error).context("stdout relay failed"),
+    }
+    output.flush().context("cannot flush broker stdout")?;
+
+    match stdin_thread.join() {
+        Ok(Ok(())) | Ok(Err(_)) => {}
+        Err(_) => return Err(anyhow::anyhow!("stdin relay thread panicked")),
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn win_is_benign_disconnect(error: &std::io::Error) -> bool {
+    matches!(
+        error.kind(),
+        std::io::ErrorKind::BrokenPipe
+            | std::io::ErrorKind::ConnectionReset
+            | std::io::ErrorKind::ConnectionAborted
+            | std::io::ErrorKind::UnexpectedEof
+    )
+}
+
+#[cfg(any(unix, windows))]
 #[derive(Debug, Serialize)]
 struct DaemonHandshakeRequest {
     protocol_version: String,
@@ -356,7 +600,7 @@ struct DaemonHandshakeRequest {
     db_path: String,
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 #[derive(Debug, Deserialize)]
 struct DaemonHandshakeResponse {
     ok: bool,
@@ -364,24 +608,27 @@ struct DaemonHandshakeResponse {
 }
 
 pub fn run_install(cli: &Cli) -> Result<()> {
-    let (platform, scope, dry_run, validate_only, no_hooks, no_instructions) = match &cli.command {
-        Command::Install {
-            platform,
-            scope,
-            dry_run,
-            validate_only,
-            no_hooks,
-            no_instructions,
-        } => (
-            platform.clone(),
-            scope.clone(),
-            *dry_run,
-            *validate_only,
-            *no_hooks,
-            *no_instructions,
-        ),
-        _ => unreachable!(),
-    };
+    let (platform, scope, dry_run, validate_only, force, no_hooks, no_instructions) =
+        match &cli.command {
+            Command::Install {
+                platform,
+                scope,
+                dry_run,
+                validate_only,
+                force,
+                no_hooks,
+                no_instructions,
+            } => (
+                platform.clone(),
+                scope.clone(),
+                *dry_run,
+                *validate_only,
+                *force,
+                *no_hooks,
+                *no_instructions,
+            ),
+            _ => unreachable!(),
+        };
 
     let repo = resolve_repo(cli)?;
     let repo_root = std::path::Path::new(&repo);
@@ -396,10 +643,13 @@ pub fn run_install(cli: &Cli) -> Result<()> {
         repo_root,
         &platform,
         &scope,
-        dry_run,
-        validate_only,
-        no_hooks,
-        no_instructions,
+        crate::install::InstallOptions {
+            dry_run,
+            validate_only,
+            force,
+            no_hooks,
+            no_instructions,
+        },
     )?;
 
     if cli.json {
@@ -503,4 +753,28 @@ mod tests {
             );
         }
     }
+}
+
+/// `atlas serve-http` — HTTP + SSE MCP transport.
+///
+/// Requires the `http-transport` crate feature.
+#[cfg(feature = "http-transport")]
+pub fn run_serve_http(cli: &Cli) -> Result<()> {
+    let repo = resolve_repo(cli)?;
+    let db_path = db_path(cli, &repo);
+    let config = atlas_engine::Config::load(&atlas_engine::paths::atlas_dir(&repo))?;
+    let options = atlas_mcp::ServerOptions {
+        worker_threads: config.mcp_worker_threads(),
+        tool_timeout_ms: config.mcp_tool_timeout_ms(),
+        tool_timeout_ms_by_tool: config.mcp_tool_timeout_ms_by_tool(),
+    };
+    atlas_mcp::run_http_server_with_options(&repo, &db_path, options)
+}
+
+/// Stub shown when the binary was built without `--features http-transport`.
+#[cfg(not(feature = "http-transport"))]
+pub fn run_serve_http(_cli: &Cli) -> Result<()> {
+    Err(anyhow::anyhow!(
+        "HTTP transport is not compiled in. Rebuild with `--features http-transport`."
+    ))
 }

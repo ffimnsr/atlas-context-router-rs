@@ -1,11 +1,12 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 
 pub(super) const LEGACY_HOOK_MARKER: &str = "atlas update # atlas-hook";
 pub(super) const HOOK_START_MARKER: &str = "# atlas-hook start";
 pub(super) const HOOK_END_MARKER: &str = "# atlas-hook end";
+pub(super) const HOOK_VERSION_MARKER: &str = "# atlas-hook version: 1";
 
 const PRE_COMMIT_HOOK_SCRIPT: &str = r#"
 # Installed by atlas. Remove these lines to disable atlas graph updates.
@@ -24,7 +25,7 @@ if command -v atlas >/dev/null 2>&1; then
 fi
 "#;
 
-pub fn install_git_hooks(repo_root: &Path, dry_run: bool) -> Result<Vec<PathBuf>> {
+pub fn install_git_hooks(repo_root: &Path, dry_run: bool, force: bool) -> Result<Vec<PathBuf>> {
     let git_dir = repo_root.join(".git");
     if !git_dir.is_dir() {
         return Ok(Vec::new());
@@ -35,13 +36,14 @@ pub fn install_git_hooks(repo_root: &Path, dry_run: bool) -> Result<Vec<PathBuf>
         paths.push(install_git_hook(
             git_dir.join("hooks").join(hook_name),
             dry_run,
+            force,
         )?);
     }
 
     Ok(paths)
 }
 
-fn install_git_hook(hook_path: PathBuf, dry_run: bool) -> Result<PathBuf> {
+fn install_git_hook(hook_path: PathBuf, dry_run: bool, force: bool) -> Result<PathBuf> {
     let hook_name = hook_path
         .file_name()
         .and_then(|name| name.to_str())
@@ -59,7 +61,14 @@ fn install_git_hook(hook_path: PathBuf, dry_run: bool) -> Result<PathBuf> {
         String::new()
     };
 
-    let next_content = upsert_hook_block(&existing, hook_script);
+    if !force && has_unmanaged_hook(&existing) {
+        bail!(
+            "refusing to overwrite non-Atlas hook at {}. Re-run `atlas install --force` to replace it",
+            hook_path.display()
+        );
+    }
+
+    let next_content = upsert_hook_block(&existing, hook_script, force);
     if next_content == existing {
         return Ok(hook_path);
     }
@@ -90,8 +99,9 @@ fn install_git_hook(hook_path: PathBuf, dry_run: bool) -> Result<PathBuf> {
     Ok(hook_path)
 }
 
-fn upsert_hook_block(existing: &str, hook_script: &str) -> String {
-    let managed_block = format!("{HOOK_START_MARKER}\n{hook_script}{HOOK_END_MARKER}\n");
+fn upsert_hook_block(existing: &str, hook_script: &str, force: bool) -> String {
+    let managed_block =
+        format!("{HOOK_START_MARKER}\n{HOOK_VERSION_MARKER}\n{hook_script}{HOOK_END_MARKER}\n");
 
     if let Some((start, end)) = managed_hook_range(existing) {
         let mut updated = String::new();
@@ -108,7 +118,7 @@ fn upsert_hook_block(existing: &str, hook_script: &str) -> String {
         return updated;
     }
 
-    if existing.is_empty() {
+    if existing.trim().is_empty() || force {
         return format!("#!/bin/sh\n{managed_block}");
     }
 
@@ -140,4 +150,10 @@ fn legacy_hook_start(existing: &str) -> Option<usize> {
             .map(|index| index + 1)
             .unwrap_or(0)
     })
+}
+
+fn has_unmanaged_hook(existing: &str) -> bool {
+    !existing.trim().is_empty()
+        && managed_hook_range(existing).is_none()
+        && legacy_hook_start(existing).is_none()
 }

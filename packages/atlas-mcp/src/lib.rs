@@ -46,6 +46,7 @@
 //! | `analyze_remove`          | Removal-impact analysis with confidence-tiered results   |
 //! | `analyze_dead_code`       | Dead-code candidates with certainty tiers and blockers   |
 //! | `analyze_dependency`      | Dependency-removal validation: removable verdict and refs |
+//! | `broker_status`           | Lightweight broker liveness probe: PID, uptime, version  |
 //!
 //! MCP prompt templates:
 //! - `review_change`: review-flow guidance for changed files
@@ -60,12 +61,20 @@ mod prompts;
 mod session_tools;
 mod tools;
 mod transport;
+pub mod progress;
+
+#[cfg(feature = "http-transport")]
+pub mod transport_http;
 
 pub use tools::tool_list;
+pub use tools::health::mark_server_started;
 pub use transport::{
     MCP_PROTOCOL_VERSION, ServerOptions, run_server, run_server_with_options,
     run_socket_server_with_options,
 };
+
+#[cfg(feature = "http-transport")]
+pub use transport_http::{run_http_server, run_http_server_with_options};
 
 #[cfg(test)]
 mod tests {

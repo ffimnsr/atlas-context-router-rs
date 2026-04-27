@@ -200,6 +200,16 @@ pub enum Command {
     #[command(name = "serve-daemon", hide = true)]
     ServeDaemon,
 
+    /// Start an HTTP + Server-Sent Events MCP server.
+    ///
+    /// Binds to `ATLAS_HTTP_BIND` (default `127.0.0.1:7070`).
+    /// Require a Bearer token with `ATLAS_HTTP_AUTH_TOKEN`.
+    ///
+    /// Requires the `http-transport` feature (build with
+    /// `cargo build --features http-transport`).
+    #[command(name = "serve-http")]
+    ServeHttp,
+
     /// Run an integrity check on the atlas database (SQLite + orphan/dangling checks).
     DbCheck,
 
@@ -282,6 +292,10 @@ pub enum Command {
         /// Validate existing install targets without writing files.
         #[arg(long)]
         validate_only: bool,
+
+        /// Overwrite existing non-Atlas git hooks.
+        #[arg(long)]
+        force: bool,
 
         /// Skip installing git hooks and platform agent hook configs.
         #[arg(long)]

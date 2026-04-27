@@ -7,6 +7,7 @@
 
 use anyhow::{Context, Result};
 use atlas_core::{BudgetManager, BudgetPolicy, BudgetReport};
+use atlas_repo::CanonicalRepoPath;
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 use grep_regex::RegexMatcherBuilder;
 use grep_searcher::{BinaryDetection, Searcher, SearcherBuilder, Sink, SinkContext, SinkMatch};
@@ -15,6 +16,26 @@ use serde::Serialize;
 use std::path::Path;
 
 use crate::output::{OutputFormat, render_serializable};
+
+/// Validate a user-supplied `subpath` and return the absolute walk root.
+///
+/// Security: `CanonicalRepoPath::from_repo_relative` rejects any `..` segments
+/// that would escape `repo_root`, absolute paths, and empty inputs. Without this
+/// guard a caller could supply `../../etc` and the `WalkBuilder` would traverse
+/// outside the repository boundary before the `strip_prefix` output filter
+/// had any effect.
+///
+/// Falls back to `repo_root` when the resolved candidate is not a directory.
+fn resolve_subpath_walk_root(repo_root: &str, subpath: &str) -> Result<String> {
+    let canonical = CanonicalRepoPath::from_repo_relative(subpath)
+        .map_err(|e| anyhow::anyhow!("invalid subpath '{subpath}': {e}"))?;
+    let candidate = Path::new(repo_root).join(canonical.as_str());
+    if candidate.is_dir() {
+        Ok(candidate.to_string_lossy().into_owned())
+    } else {
+        Ok(repo_root.to_owned())
+    }
+}
 
 fn invalid_search_content_regex_error(query: &str, error: impl std::fmt::Display) -> anyhow::Error {
     let escaped_example = r"Command::Context|Context \{";
@@ -131,15 +152,9 @@ pub(crate) fn tool_search_files(
         Some(build_globset(&exclude_globs, false).context("invalid exclude_globs filter")?)
     };
 
-    let walk_root = if let Some(ref sp) = subpath {
-        let candidate = Path::new(repo_root).join(sp);
-        if candidate.is_dir() {
-            candidate.to_string_lossy().into_owned()
-        } else {
-            repo_root.to_owned()
-        }
-    } else {
-        repo_root.to_owned()
+    let walk_root = match subpath.as_deref() {
+        Some(sp) => resolve_subpath_walk_root(repo_root, sp)?,
+        None => repo_root.to_owned(),
     };
 
     let atlasignore_path = Path::new(repo_root).join(".atlasignore");
@@ -344,15 +359,9 @@ pub(crate) fn tool_search_content(
         None
     };
 
-    let walk_root = if let Some(ref sp) = subpath {
-        let candidate = Path::new(repo_root).join(sp);
-        if candidate.is_dir() {
-            candidate.to_string_lossy().into_owned()
-        } else {
-            repo_root.to_owned()
-        }
-    } else {
-        repo_root.to_owned()
+    let walk_root = match subpath.as_deref() {
+        Some(sp) => resolve_subpath_walk_root(repo_root, sp)?,
+        None => repo_root.to_owned(),
     };
 
     let atlasignore_path = Path::new(repo_root).join(".atlasignore");
@@ -645,15 +654,9 @@ pub(crate) fn tool_search_templates(
         Some(build_globset(&exclude_globs, false).context("invalid exclude_globs filter")?)
     };
 
-    let walk_root = if let Some(ref sp) = subpath {
-        let candidate = Path::new(repo_root).join(sp);
-        if candidate.is_dir() {
-            candidate.to_string_lossy().into_owned()
-        } else {
-            repo_root.to_owned()
-        }
-    } else {
-        repo_root.to_owned()
+    let walk_root = match subpath.as_deref() {
+        Some(sp) => resolve_subpath_walk_root(repo_root, sp)?,
+        None => repo_root.to_owned(),
     };
 
     let atlasignore_path = Path::new(repo_root).join(".atlasignore");
@@ -844,15 +847,9 @@ pub(crate) fn tool_search_text_assets(
         Some(build_globset(&exclude_globs, false).context("invalid exclude_globs filter")?)
     };
 
-    let walk_root = if let Some(ref sp) = subpath {
-        let candidate = Path::new(repo_root).join(sp);
-        if candidate.is_dir() {
-            candidate.to_string_lossy().into_owned()
-        } else {
-            repo_root.to_owned()
-        }
-    } else {
-        repo_root.to_owned()
+    let walk_root = match subpath.as_deref() {
+        Some(sp) => resolve_subpath_walk_root(repo_root, sp)?,
+        None => repo_root.to_owned(),
     };
 
     let atlasignore_path = Path::new(repo_root).join(".atlasignore");
@@ -1479,6 +1476,37 @@ mod tests {
     // -----------------------------------------------------------------------
     // subpath scoping
     // -----------------------------------------------------------------------
+
+    #[test]
+    fn search_files_subpath_path_traversal_is_rejected() {
+        let (_dir, root) = make_repo(&[("src/lib.rs", "fn x() {}")]);
+        // ".." and absolute paths must be rejected rather than allowed to walk outside repo.
+        for bad in &["../", "../../etc", "/etc", "../sibling"] {
+            let args = serde_json::json!({ "pattern": "*.rs", "subpath": bad });
+            let result = tool_search_files(Some(&args), &root, OutputFormat::Json);
+            assert!(
+                result.is_err(),
+                "subpath '{bad}' should be rejected as traversal attempt"
+            );
+        }
+    }
+
+    #[test]
+    fn search_content_subpath_path_traversal_is_rejected() {
+        let (_dir, root) = make_repo(&[("src/lib.rs", "fn x() {}")]);
+        for bad in &["../", "../../etc", "/etc"] {
+            let args = serde_json::json!({
+                "query": "fn",
+                "subpath": bad,
+                "exclude_generated": false
+            });
+            let result = tool_search_content(Some(&args), &root, OutputFormat::Json);
+            assert!(
+                result.is_err(),
+                "subpath '{bad}' should be rejected as traversal attempt"
+            );
+        }
+    }
 
     #[test]
     fn search_files_subpath_limits_to_subdir() {

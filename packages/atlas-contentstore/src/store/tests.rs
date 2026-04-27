@@ -20,6 +20,15 @@ fn open_store() -> ContentStore {
     store
 }
 
+fn table_columns(conn: &rusqlite::Connection, table: &str) -> Vec<String> {
+    let sql = format!("PRAGMA table_info('{table}')");
+    let mut stmt = conn.prepare(&sql).unwrap();
+    stmt.query_map([], |row| row.get::<_, String>(1))
+        .unwrap()
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .unwrap()
+}
+
 fn meta(id: &str) -> SourceMeta {
     SourceMeta {
         id: id.to_string(),
@@ -43,6 +52,55 @@ fn index_and_retrieve_by_source_id() {
     assert_eq!(src.identity_value, "test artifact");
     let chunks = store.get_chunks("src-1").unwrap();
     assert!(!chunks.is_empty());
+}
+
+#[test]
+fn open_stamps_migration_history_and_provenance() {
+    let store = open_store();
+    let version: i32 = store
+        .conn
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(version, 5);
+
+    let history_count: i64 = store
+        .conn
+        .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(history_count, 5);
+
+    let (db_kind, created_by): (String, String) = store
+        .conn
+        .query_row(
+            "SELECT db_kind, created_by FROM atlas_provenance WHERE singleton_key = 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(db_kind, "context");
+    assert_eq!(created_by, format!("atlas v{}", env!("CARGO_PKG_VERSION")));
+}
+
+#[test]
+fn rollback_and_reupgrade_restore_content_schema() {
+    let mut store = open_store();
+    store.migrate_to(3).unwrap();
+    let version: i32 = store
+        .conn
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(version, 3);
+    assert!(!table_columns(&store.conn, "chunks").contains(&"chunk_id".to_string()));
+    assert!(!table_columns(&store.conn, "sources").contains(&"identity_kind".to_string()));
+
+    store.migrate().unwrap();
+    let restored_version: i32 = store
+        .conn
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(restored_version, 5);
+    assert!(table_columns(&store.conn, "chunks").contains(&"chunk_id".to_string()));
+    assert!(table_columns(&store.conn, "sources").contains(&"identity_kind".to_string()));
 }
 
 #[test]

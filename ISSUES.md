@@ -1866,17 +1866,17 @@ Why:
 
 #### Patch T3 — Future separate-connection read concurrency contract
 
-- [ ] document explicit non-goal for this patch: do not add `r2d2_sqlite` or any read pool yet
-- [ ] define future upgrade rule:
-  - [ ] if read concurrency is added later, use separate checked-out connections
-  - [ ] do not share one `Connection` across threads behind a lock
-  - [ ] keep write ownership/policy explicit before introducing mixed read/write pooling
-- [ ] surface current mode in docs or diagnostics:
-  - [ ] parallel parse plus sequential persistence
-  - [ ] single-connection per store instance
-  - [ ] separate-connection concurrency only
-  - [ ] read-pool layer reserved for future measured need
-- [ ] add note to `doctor`/`status` or crate-level docs that pooled graph reads are not implemented today
+- [x] document explicit non-goal for this patch: do not add `r2d2_sqlite` or any read pool yet
+- [x] define future upgrade rule:
+  - [x] if read concurrency is added later, use separate checked-out connections
+  - [x] do not share one `Connection` across threads behind a lock
+  - [x] keep write ownership/policy explicit before introducing mixed read/write pooling
+- [x] surface current mode in docs or diagnostics:
+  - [x] parallel parse plus sequential persistence
+  - [x] single-connection per store instance
+  - [x] separate-connection concurrency only
+  - [x] read-pool layer reserved for future measured need
+- [x] add note to `doctor`/`status` or crate-level docs that pooled graph reads are not implemented today
 
 Why:
 - answers pool question without adding premature complexity

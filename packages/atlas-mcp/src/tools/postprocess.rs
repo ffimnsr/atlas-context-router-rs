@@ -15,6 +15,10 @@ pub(super) fn tool_postprocess_graph(
     let dry_run = bool_arg(args, "dry_run").unwrap_or(false);
     let stage = str_arg(args, "stage")?.map(str::to_owned);
     let repo_root = find_repo_root(Utf8Path::new(repo_root))?;
+    crate::progress::report("running postprocess stages", None);
+    if crate::progress::is_canceled() {
+        return Err(anyhow::anyhow!("canceled"));
+    }
     let summary = postprocess_graph(
         repo_root.as_path(),
         db_path,
@@ -24,6 +28,7 @@ pub(super) fn tool_postprocess_graph(
             dry_run,
         },
     )?;
+    crate::progress::report("postprocess complete", Some(100));
 
     let mut response = tool_result_value(&summary, output_format)?;
     let store = open_store(db_path)?;

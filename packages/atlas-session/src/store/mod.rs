@@ -7,10 +7,10 @@ use serde_json::Value;
 use tracing::info;
 
 use atlas_core::{AtlasError, Result};
-use atlas_db_utils::{application_id, apply_atlas_pragmas, set_application_id, set_user_version};
+use atlas_db_utils::{application_id, apply_atlas_pragmas, migrate_database_to, set_application_id};
 
 use crate::SessionId;
-use crate::migrations::MIGRATIONS;
+use crate::migrations::{LATEST_VERSION, MIGRATION_SET};
 
 mod curation;
 mod decision_memory;
@@ -92,15 +92,10 @@ impl SessionStore {
     }
 
     pub fn migrate(&mut self) -> Result<()> {
-        self.conn
-            .execute_batch(
-                "CREATE TABLE IF NOT EXISTS metadata (
-                     key   TEXT PRIMARY KEY,
-                     value TEXT NOT NULL
-                 );",
-            )
-            .map_err(|e| AtlasError::Db(e.to_string()))?;
+        self.migrate_to(LATEST_VERSION)
+    }
 
+    pub fn migrate_to(&mut self, target_version: i32) -> Result<()> {
         let current: i32 = self
             .conn
             .query_row(
@@ -109,33 +104,18 @@ impl SessionStore {
                 |row| row.get(0),
             )
             .unwrap_or(0);
-
-        for migration in MIGRATIONS {
-            if migration.version <= current {
-                continue;
+        if target_version >= current {
+            for migration in MIGRATION_SET
+                .migrations
+                .iter()
+                .filter(|migration| migration.version > current && migration.version <= target_version)
+            {
+                info!(version = migration.version, name = migration.name, "applying session migration");
             }
-            info!(version = migration.version, "applying session migration");
-            self.conn
-                .execute_batch(migration.sql)
-                .map_err(|e| AtlasError::Db(format!("migration {}: {e}", migration.version)))?;
-            self.conn
-                .execute(
-                    "INSERT OR REPLACE INTO metadata (key, value) VALUES ('schema_version', ?1)",
-                    params![migration.version.to_string()],
-                )
-                .map_err(|e| AtlasError::Db(e.to_string()))?;
+        } else {
+            info!(current, target_version, "rebuilding session schema for downgrade");
         }
-
-        let applied: i32 = self
-            .conn
-            .query_row(
-                "SELECT CAST(value AS INTEGER) FROM metadata WHERE key = 'schema_version'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap_or(0);
-        set_user_version(&self.conn, applied)?;
-        Ok(())
+        migrate_database_to(&mut self.conn, &MIGRATION_SET, target_version)
     }
 
     pub fn upsert_session_meta(

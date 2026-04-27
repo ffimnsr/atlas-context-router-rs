@@ -7,6 +7,7 @@ use std::io::Write;
 use std::process::{Output, Stdio};
 
 mod analysis;
+mod contracts;
 mod health;
 mod history;
 mod hooks;

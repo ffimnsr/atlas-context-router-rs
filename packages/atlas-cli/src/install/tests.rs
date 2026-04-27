@@ -5,7 +5,9 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 use tempfile::TempDir;
 
-use super::git_hooks::{HOOK_END_MARKER, HOOK_START_MARKER, LEGACY_HOOK_MARKER, install_git_hooks};
+use super::git_hooks::{
+    HOOK_END_MARKER, HOOK_START_MARKER, HOOK_VERSION_MARKER, LEGACY_HOOK_MARKER, install_git_hooks,
+};
 use super::instructions::{
     INSTRUCTIONS_END_MARKER, INSTRUCTIONS_MARKER, INSTRUCTIONS_SECTION, inject_instructions,
     instruction_targets,
@@ -17,7 +19,7 @@ use super::platform_hooks::{
     install_platform_agent_hooks, install_platform_agent_hooks_scoped,
 };
 use super::validation::validate_install;
-use super::{InstallScope, PlatformResult, run_install};
+use super::{InstallOptions, InstallScope, PlatformResult, run_install};
 
 fn repo_with_git(dir: &Path) {
     fs::create_dir_all(dir.join(".git").join("hooks")).unwrap();
@@ -363,7 +365,16 @@ fn install_codex_preserves_custom_config_toml() {
 fn run_install_codex_creates_only_agents_md() {
     let tmp = TempDir::new().unwrap();
 
-    let summary = run_install(tmp.path(), "codex", "repo", false, false, true, false).unwrap();
+    let summary = run_install(
+        tmp.path(),
+        "codex",
+        "repo",
+        InstallOptions {
+            no_hooks: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
 
     assert!(summary.instruction_files.contains(&"AGENTS.md".to_owned()));
     assert!(!summary.instruction_files.contains(&"CLAUDE.md".to_owned()));
@@ -375,7 +386,16 @@ fn run_install_codex_creates_only_agents_md() {
 fn run_install_claude_creates_only_claude_md() {
     let tmp = TempDir::new().unwrap();
 
-    let summary = run_install(tmp.path(), "claude", "repo", false, false, true, false).unwrap();
+    let summary = run_install(
+        tmp.path(),
+        "claude",
+        "repo",
+        InstallOptions {
+            no_hooks: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
 
     assert!(summary.instruction_files.contains(&"CLAUDE.md".to_owned()));
     assert!(!summary.instruction_files.contains(&"AGENTS.md".to_owned()));
@@ -387,7 +407,7 @@ fn run_install_claude_creates_only_claude_md() {
 fn git_hooks_installed_and_executable() {
     let tmp = TempDir::new().unwrap();
     repo_with_git(tmp.path());
-    let hooks = install_git_hooks(tmp.path(), false).unwrap();
+    let hooks = install_git_hooks(tmp.path(), false, false).unwrap();
     assert_eq!(hooks.len(), 4);
     for hook in hooks {
         let file_name = hook
@@ -398,6 +418,7 @@ fn git_hooks_installed_and_executable() {
         let content = fs::read_to_string(&hook).unwrap();
         assert!(content.contains(HOOK_START_MARKER));
         assert!(content.contains(HOOK_END_MARKER));
+        assert!(content.contains(HOOK_VERSION_MARKER));
         assert_eq!(content.matches("atlas update || true").count(), 1);
         if file_name == "pre-commit" {
             assert!(content.contains("atlas detect-changes || true"));
@@ -413,11 +434,12 @@ fn git_hooks_installed_and_executable() {
 fn git_hooks_idempotent() {
     let tmp = TempDir::new().unwrap();
     repo_with_git(tmp.path());
-    install_git_hooks(tmp.path(), false).unwrap();
-    let hooks = install_git_hooks(tmp.path(), false).unwrap();
+    install_git_hooks(tmp.path(), false, false).unwrap();
+    let hooks = install_git_hooks(tmp.path(), false, false).unwrap();
     for hook in hooks {
         let content = fs::read_to_string(hook).unwrap();
         assert_eq!(content.matches(HOOK_START_MARKER).count(), 1);
+        assert_eq!(content.matches(HOOK_VERSION_MARKER).count(), 1);
         assert_eq!(content.matches("atlas update || true").count(), 1);
     }
 }
@@ -433,12 +455,46 @@ fn install_git_hooks_replaces_legacy_marker_block() {
     )
     .unwrap();
 
-    install_git_hooks(tmp.path(), false).unwrap();
+    install_git_hooks(tmp.path(), false, false).unwrap();
 
     let content = fs::read_to_string(hook).unwrap();
     assert!(!content.contains(LEGACY_HOOK_MARKER));
     assert_eq!(content.matches("atlas update || true").count(), 1);
     assert!(content.contains(HOOK_START_MARKER));
+    assert!(content.contains(HOOK_END_MARKER));
+    assert!(content.contains(HOOK_VERSION_MARKER));
+}
+
+#[test]
+fn install_git_hooks_refuses_to_overwrite_non_atlas_hook_without_force() {
+    let tmp = TempDir::new().unwrap();
+    repo_with_git(tmp.path());
+    let hook = tmp.path().join(".git/hooks/pre-commit");
+    fs::write(&hook, "#!/bin/sh\necho custom\n").unwrap();
+
+    let error = install_git_hooks(tmp.path(), false, false).unwrap_err();
+
+    assert!(error.to_string().contains("atlas install --force"));
+    assert_eq!(
+        fs::read_to_string(hook).unwrap(),
+        "#!/bin/sh\necho custom\n"
+    );
+}
+
+#[test]
+fn install_git_hooks_force_replaces_non_atlas_hook() {
+    let tmp = TempDir::new().unwrap();
+    repo_with_git(tmp.path());
+    let hook = tmp.path().join(".git/hooks/pre-commit");
+    fs::write(&hook, "#!/bin/sh\necho custom\n").unwrap();
+
+    let hooks = install_git_hooks(tmp.path(), false, true).unwrap();
+
+    assert_eq!(hooks.len(), 4);
+    let content = fs::read_to_string(hook).unwrap();
+    assert!(!content.contains("echo custom"));
+    assert!(content.contains(HOOK_START_MARKER));
+    assert!(content.contains(HOOK_VERSION_MARKER));
     assert!(content.contains(HOOK_END_MARKER));
 }
 
@@ -446,7 +502,16 @@ fn install_git_hooks_replaces_legacy_marker_block() {
 fn install_summary_reports_all_git_hooks() {
     let tmp = TempDir::new().unwrap();
     repo_with_git(tmp.path());
-    let summary = run_install(tmp.path(), "claude", "repo", false, false, false, true).unwrap();
+    let summary = run_install(
+        tmp.path(),
+        "claude",
+        "repo",
+        InstallOptions {
+            no_instructions: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
     assert_eq!(summary.hook_paths.len(), 4);
     assert!(
         summary
@@ -478,7 +543,16 @@ fn install_summary_reports_all_git_hooks() {
 fn dry_run_writes_nothing() {
     let tmp = TempDir::new().unwrap();
     repo_with_git(tmp.path());
-    run_install(tmp.path(), "claude", "repo", true, false, false, false).unwrap();
+    run_install(
+        tmp.path(),
+        "claude",
+        "repo",
+        InstallOptions {
+            dry_run: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
     assert!(!tmp.path().join(".mcp.json").exists());
     assert!(!tmp.path().join("AGENTS.md").exists());
     assert!(!tmp.path().join("CLAUDE.md").exists());
@@ -729,7 +803,16 @@ fn run_install_validate_only_reports_missing_targets_without_writing() {
     let tmp = TempDir::new().unwrap();
     repo_with_git(tmp.path());
 
-    let summary = run_install(tmp.path(), "claude", "repo", false, true, false, false).unwrap();
+    let summary = run_install(
+        tmp.path(),
+        "claude",
+        "repo",
+        InstallOptions {
+            validate_only: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
 
     assert!(summary.validate_only);
     assert!(summary.configured.is_empty());

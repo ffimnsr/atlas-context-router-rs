@@ -5,6 +5,11 @@ edition = "2024"
 description = "MCP server exposing Atlas graph, impact, and review tools over stdio"
 publish = false
 
+[features]
+default = []
+# Enable optional HTTP + SSE transport (requires tokio + axum).
+http-transport = ["dep:tokio", "dep:axum", "dep:tower-http", "dep:tokio-stream"]
+
 [dependencies]
 atlas-core.workspace = true
 atlas-adapters = { path = "../atlas-adapters" , version = "1.0.0"}
@@ -32,6 +37,19 @@ ignore = "0.4.25"
 globset = "0.4.18"
 grep-searcher = "0.1.16"
 grep-regex = "0.1.14"
+# Optional HTTP+SSE transport dependencies
+tokio         = { version = "1", features = ["rt-multi-thread", "macros", "sync", "net", "time"], optional = true }
+axum          = { version = "0.8", optional = true }
+tower-http    = { version = "0.6", features = ["cors"], optional = true }
+tokio-stream  = { version = "0.1", features = ["sync"], optional = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.52", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Pipes",
+    "Win32_System_Threading",
+] }
 
 [dev-dependencies]
 rusqlite.workspace = true

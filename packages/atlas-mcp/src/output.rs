@@ -1,5 +1,7 @@
 //! MCP output rendering with deterministic JSON and optional TOON encoding.
 //!
+//! Versioned TOON contract lives in `docs/contracts/atlas_toon.v1.md`.
+//!
 //! Supported TOON subset in Atlas:
 //! - objects, arrays, strings, numbers, booleans, and null
 //! - inline primitive arrays when encoder selects them
@@ -229,7 +231,10 @@ mod tests {
         let rendered = render_value(&payload, OutputFormat::Toon).expect("render toon");
 
         assert_eq!(rendered.actual_format, OutputFormat::Toon);
-        assert!(rendered.text.contains("users[2]{active,id,name}:"));
+        assert_eq!(
+            rendered.text,
+            include_str!("../testdata/atlas_toon.v1/tabular-rows.toon").trim_end()
+        );
     }
 
     #[test]
@@ -238,7 +243,10 @@ mod tests {
 
         let rendered = render_value(&payload, OutputFormat::Toon).expect("render toon");
 
-        assert_eq!(rendered.text, "tags[3]: reading,gaming,coding");
+        assert_eq!(
+            rendered.text,
+            include_str!("../testdata/atlas_toon.v1/primitive-array.toon").trim_end()
+        );
     }
 
     #[test]

@@ -25,7 +25,7 @@ use super::graph::{
     tool_list_graph_stats, tool_query_graph, tool_resolve_symbol, tool_symbol_neighbors,
     tool_traverse_graph,
 };
-use super::health::{tool_db_check, tool_debug_graph, tool_doctor, tool_status};
+use super::health::{tool_broker_status, tool_db_check, tool_debug_graph, tool_doctor, tool_status};
 use super::postprocess::tool_postprocess_graph;
 
 fn response_file_list(response: &serde_json::Value, pointer: &str) -> Vec<String> {
@@ -139,6 +139,7 @@ fn call_inner(
         "search_content" => tool_search_content(args, repo_root, output_format),
         "search_templates" => tool_search_templates(args, repo_root, output_format),
         "search_text_assets" => tool_search_text_assets(args, repo_root, output_format),
+        "broker_status" => tool_broker_status(repo_root, db_path, output_format),
         "status" => tool_status(repo_root, db_path, output_format),
         "doctor" => tool_doctor(repo_root, db_path, output_format),
         "db_check" => tool_db_check(args, repo_root, db_path, output_format),

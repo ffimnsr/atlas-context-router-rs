@@ -623,6 +623,7 @@ fn parse_install_defaults() {
         scope,
         dry_run,
         validate_only,
+        force,
         no_hooks,
         no_instructions,
     } = cli.command
@@ -631,6 +632,7 @@ fn parse_install_defaults() {
         assert_eq!(scope, "repo");
         assert!(!dry_run);
         assert!(!validate_only);
+        assert!(!force);
         assert!(!no_hooks);
         assert!(!no_instructions);
     } else {
@@ -673,6 +675,16 @@ fn parse_install_validate_only() {
     let cli = parse(&["atlas", "install", "--validate-only"]);
     if let Command::Install { validate_only, .. } = cli.command {
         assert!(validate_only);
+    } else {
+        panic!("expected Install command");
+    }
+}
+
+#[test]
+fn parse_install_force() {
+    let cli = parse(&["atlas", "install", "--force"]);
+    if let Command::Install { force, .. } = cli.command {
+        assert!(force);
     } else {
         panic!("expected Install command");
     }

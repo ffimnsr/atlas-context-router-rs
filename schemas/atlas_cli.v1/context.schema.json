@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://atlas-context-router-rs/schemas/atlas_cli.v1/context.schema.json",
+  "title": "atlas_cli.v1 context",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "command", "data"],
+  "properties": {
+    "schema_version": { "const": "atlas_cli.v1" },
+    "command": { "const": "context" },
+    "data": { "$ref": "#/$defs/context_result" }
+  },
+  "$defs": {
+    "context_result": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "request",
+        "nodes",
+        "edges",
+        "files",
+        "truncation",
+        "ambiguity",
+        "saved_context_sources",
+        "budget_status",
+        "budget_hit",
+        "budget_name",
+        "budget_limit",
+        "budget_observed",
+        "partial",
+        "safe_to_answer"
+      ],
+      "properties": {
+        "request": { "type": "object", "additionalProperties": true },
+        "nodes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "required": ["node", "selection_reason", "distance", "relevance_score"],
+            "properties": {
+              "node": { "type": "object", "additionalProperties": true },
+              "selection_reason": { "type": "string" },
+              "distance": { "type": "integer" },
+              "relevance_score": { "type": "number" },
+              "context_ranking_evidence": { "type": ["object", "null"] }
+            }
+          }
+        },
+        "edges": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "required": ["edge", "selection_reason", "depth", "relevance_score"],
+            "properties": {
+              "edge": { "type": "object", "additionalProperties": true },
+              "selection_reason": { "type": "string" },
+              "depth": { "type": ["integer", "null"] },
+              "relevance_score": { "type": "number" },
+              "context_ranking_evidence": { "type": ["object", "null"] }
+            }
+          }
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "required": ["path", "selection_reason", "line_ranges", "language", "node_count_included"]
+          }
+        },
+        "truncation": { "type": "object", "additionalProperties": true },
+        "seed_budgets": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+        "traversal_budget": { "type": ["object", "null"], "additionalProperties": true },
+        "ambiguity": { "type": ["object", "null"] },
+        "workflow": { "type": ["object", "null"], "additionalProperties": true },
+        "saved_context_sources": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+        "budget_status": { "type": "string" },
+        "budget_hit": { "type": "boolean" },
+        "budget_name": { "type": ["string", "null"] },
+        "budget_limit": { "type": ["integer", "null"] },
+        "budget_observed": { "type": ["integer", "null"] },
+        "partial": { "type": "boolean" },
+        "safe_to_answer": { "type": "boolean" },
+        "context_ranking_evidence_legend": { "type": "object", "additionalProperties": true },
+        "linked_decisions": { "type": "array", "items": { "type": "object", "additionalProperties": true } }
+      }
+    }
+  }
+}

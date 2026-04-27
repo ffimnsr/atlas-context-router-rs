@@ -2,7 +2,7 @@ mod analysis;
 mod context_ops;
 mod dispatch;
 mod graph;
-mod health;
+pub mod health;
 mod postprocess;
 mod registry;
 mod shared;

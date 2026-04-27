@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://atlas-context-router-rs/schemas/atlas_cli.v1/review-context.schema.json",
+  "title": "atlas_cli.v1 review_context",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "command", "data"],
+  "properties": {
+    "schema_version": { "const": "atlas_cli.v1" },
+    "command": { "const": "review_context" },
+    "data": {
+      "oneOf": [
+        { "$ref": "#/$defs/context_result" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["files", "review_context"],
+          "properties": {
+            "files": { "type": "array", "items": { "type": "string" } },
+            "review_context": { "type": "object", "additionalProperties": true }
+          }
+        }
+      ]
+    }
+  },
+  "$defs": {
+    "context_result": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "request",
+        "nodes",
+        "edges",
+        "files",
+        "truncation",
+        "ambiguity",
+        "saved_context_sources",
+        "budget_status",
+        "budget_hit",
+        "budget_name",
+        "budget_limit",
+        "budget_observed",
+        "partial",
+        "safe_to_answer"
+      ],
+      "properties": {
+        "request": { "type": "object", "additionalProperties": true },
+        "nodes": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+        "edges": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+        "files": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+        "truncation": { "type": "object", "additionalProperties": true },
+        "seed_budgets": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+        "traversal_budget": { "type": ["object", "null"], "additionalProperties": true },
+        "ambiguity": { "type": ["object", "null"] },
+        "workflow": { "type": ["object", "null"], "additionalProperties": true },
+        "saved_context_sources": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+        "budget_status": { "type": "string" },
+        "budget_hit": { "type": "boolean" },
+        "budget_name": { "type": ["string", "null"] },
+        "budget_limit": { "type": ["integer", "null"] },
+        "budget_observed": { "type": ["integer", "null"] },
+        "partial": { "type": "boolean" },
+        "safe_to_answer": { "type": "boolean" },
+        "context_ranking_evidence_legend": { "type": "object", "additionalProperties": true }
+      }
+    }
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://atlas-context-router-rs/schemas/atlas_cli.v1/impact.schema.json",
+  "title": "atlas_cli.v1 impact",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "command", "data"],
+  "properties": {
+    "schema_version": { "const": "atlas_cli.v1" },
+    "command": { "const": "impact" },
+    "data": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["files", "latency_ms", "analysis"],
+      "properties": {
+        "files": { "type": "array", "items": { "type": "string" } },
+        "latency_ms": { "type": "integer" },
+        "analysis": {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["base", "scored_nodes", "risk_level", "test_impact", "boundary_violations"],
+          "properties": {
+            "base": {
+              "type": "object",
+              "additionalProperties": true,
+              "required": [
+                "changed_nodes",
+                "impacted_nodes",
+                "impacted_files",
+                "relevant_edges",
+                "budget_status",
+                "budget_hit",
+                "budget_name",
+                "budget_limit",
+                "budget_observed",
+                "partial",
+                "safe_to_answer"
+              ]
+            },
+            "scored_nodes": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+            "risk_level": { "type": "string" },
+            "test_impact": { "type": "object", "additionalProperties": true },
+            "boundary_violations": { "type": "array", "items": { "type": "object", "additionalProperties": true } }
+          }
+        }
+      }
+    }
+  }
+}

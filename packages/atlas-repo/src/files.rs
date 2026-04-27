@@ -45,7 +45,8 @@ pub const DEFAULT_IGNORE_PATTERNS: &[&str] = &[
 /// Collect all git-tracked files under `repo_root`, filtering out:
 /// - files larger than `max_bytes` (defaults to [`DEFAULT_MAX_FILE_BYTES`])
 /// - binary files (null byte in first 8 KiB)
-/// - symlinks (skipped — git tracks symlinks as pointer objects, not content)
+/// - symlinks (skipped — git tracks symlinks as pointer objects, not content;
+///   following symlinks outside the repo root would be a path-escape risk)
 /// - paths matched by [`DEFAULT_IGNORE_PATTERNS`]
 /// - paths matched by patterns in `.atlasignore` at the repo root
 /// - uninitialized submodules (skipped with a warning)
@@ -54,6 +55,25 @@ pub const DEFAULT_IGNORE_PATTERNS: &[&str] = &[
 /// submodules are scanned recursively and prefixed with their submodule path.
 /// Recursion is guarded by canonical filesystem repo roots so symlink aliases
 /// or malformed nested submodule topology cannot loop forever.
+///
+/// ## Submodule `.gitignore` semantics
+///
+/// Each repo is scanned with its own `git ls-files --exclude-standard`, so
+/// each submodule's `.gitignore` (and `.git/info/exclude`) is applied
+/// independently. The *parent* repo's `.gitignore` is **not** propagated into
+/// a submodule, which mirrors git's own behaviour. Atlas-level ignore rules
+/// (`.atlasignore` and [`DEFAULT_IGNORE_PATTERNS`]) are checked against the
+/// combined repo-relative path that includes the submodule prefix, so a
+/// pattern like `node_modules/` will suppress `my-submodule/node_modules/foo`
+/// as expected.
+///
+/// ## Path-identity invariants
+///
+/// All paths returned by this function go through
+/// [`CanonicalRepoPath::from_git_diff_path`], which applies NFC Unicode
+/// normalisation, converts backslashes to forward slashes, collapses `.` and
+/// `..` components, and lowercases on Windows. This matches the invariants
+/// enforced by every other Atlas path boundary.
 pub fn collect_files(repo_root: &Utf8Path, max_bytes: Option<u64>) -> Result<Vec<Utf8PathBuf>> {
     let (files, _) = collect_supported_files(repo_root, max_bytes, |_| true)?;
     Ok(files)

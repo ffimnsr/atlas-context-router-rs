@@ -3,6 +3,8 @@ use atlas_core::BudgetManager;
 use atlas_core::NodeKind;
 use camino::Utf8Path;
 use serde::Serialize;
+use std::sync::OnceLock;
+use std::time::Instant;
 
 use super::shared::{
     error_message, error_suggestions, failure_category, graph_issue_code, inject_budget_metadata,
@@ -139,6 +141,49 @@ fn integrity_issue_code(issues: &[String], structural_problem: bool) -> &'static
     }
 }
 
+/// Records the first time any `broker_status` call is made.  Used to compute
+/// uptime.  The transport layer calls [`mark_server_started`] at startup so
+/// the timestamp is set before the first client request arrives.
+static STARTED_AT: OnceLock<Instant> = OnceLock::new();
+
+/// Mark the MCP server as started.  Call this once when the server begins
+/// accepting requests.  Idempotent.
+pub fn mark_server_started() {
+    STARTED_AT.get_or_init(Instant::now);
+}
+/// `broker_status` — lightweight health/ready check for the MCP broker process.
+///
+/// This is intentionally separate from [`tool_status`] (which reports graph
+/// readiness).  Use `broker_status` to verify that the broker itself is alive
+/// and accepting requests, independently of whether a graph has been built.
+pub(super) fn tool_broker_status(
+    repo_root: &str,
+    db_path: &str,
+    output_format: crate::output::OutputFormat,
+) -> Result<serde_json::Value> {
+    let uptime_secs = STARTED_AT
+        .get_or_init(Instant::now)
+        .elapsed()
+        .as_secs();
+
+    let worker_threads = std::env::var("ATLAS_MCP_WORKER_THREADS")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .unwrap_or(2);
+
+    let response = serde_json::json!({
+        "ok": true,
+        "pid": std::process::id(),
+        "version": env!("CARGO_PKG_VERSION"),
+        "uptime_secs": uptime_secs,
+        "worker_threads_configured": worker_threads,
+        "repo_root": repo_root,
+        "db_path": db_path,
+    });
+
+    tool_result_value(&response, output_format)
+}
+
 pub(super) fn tool_status(
     repo_root: &str,
     db_path: &str,
@@ -264,6 +309,10 @@ pub(super) fn tool_status(
         "pending_graph_change_count": pending_graph_changes.len(),
         "pending_graph_changes": pending_graph_changes,
         "retrieval_index": retrieval_index,
+        // Current SQLite connection/concurrency mode. Pooled graph reads are
+        // not implemented; a future read pool would change this field.
+        "connection_mode": "single_connection_per_store",
+        "read_pool_active": false,
     });
 
     tool_result_value(&result, output_format)
@@ -545,6 +594,17 @@ pub(super) fn tool_doctor(
     }
 
     let all_ok = checks.iter().all(|c| c.ok);
+
+    // Informational check: surface the current SQLite connection/concurrency
+    // mode so operators and agents know pooled graph reads are not active.
+    // This check always passes; it documents the current mode, not a failure
+    // state. A future read pool would update this detail string.
+    checks.push(pass!(
+        "connection_mode",
+        "single_connection_per_store; parallel_parse+sequential_persistence; \
+         no_read_pool (pooled graph reads not implemented)"
+    ));
+
     let ec = if all_ok { "none" } else { "checks_failed" };
     let result = serde_json::json!({
         "ok": all_ok,

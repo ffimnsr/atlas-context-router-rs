@@ -1,10 +1,11 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::time::Duration;
 
 use atlas_core::{
     AtlasError, Edge, EdgeKind, Node, NodeId, NodeKind, PackageOwner, PackageOwnerKind, ParsedFile,
     SearchQuery,
 };
+use atlas_db_utils::set_user_version;
 use rusqlite::Connection;
 
 use crate::migrations::MIGRATIONS;
@@ -34,6 +35,12 @@ fn open_in_memory() -> Store {
     };
     store.migrate().unwrap();
     store
+}
+
+fn open_unmigrated_in_memory() -> Connection {
+    let conn = Connection::open_in_memory().unwrap();
+    atlas_db_utils::apply_atlas_pragmas(&conn).unwrap();
+    conn
 }
 
 fn open_file_backed() -> (tempfile::TempDir, String, Store) {
@@ -68,6 +75,90 @@ fn schema_indexes(conn: &Connection) -> BTreeSet<String> {
         .unwrap()
         .collect::<std::result::Result<BTreeSet<_>, _>>()
         .unwrap()
+}
+
+fn apply_migrations_through(conn: &Connection, version: i32) {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS metadata (
+             key   TEXT PRIMARY KEY,
+             value TEXT NOT NULL
+         );",
+    )
+    .unwrap();
+    for migration in MIGRATIONS.iter().filter(|migration| migration.version <= version) {
+        conn.execute_batch(migration.up_sql).unwrap();
+        conn.execute(
+            "INSERT OR REPLACE INTO metadata (key, value) VALUES ('schema_version', ?1)",
+            [migration.version.to_string()],
+        )
+        .unwrap();
+    }
+    set_user_version(conn, version).unwrap();
+}
+
+fn normalize_schema_sql(sql: &str) -> String {
+    sql.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn schema_dump(conn: &Connection) -> String {
+    let user_version: i32 = conn.query_row("PRAGMA user_version", [], |row| row.get(0)).unwrap();
+    let mut stmt = conn
+        .prepare(
+            "SELECT type, name, sql
+             FROM sqlite_master
+             WHERE sql IS NOT NULL
+             ORDER BY CASE type
+                 WHEN 'table' THEN 0
+                 WHEN 'index' THEN 1
+                 WHEN 'trigger' THEN 2
+                 WHEN 'view' THEN 3
+                 ELSE 4
+             END,
+             name",
+        )
+        .unwrap();
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })
+        .unwrap()
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .unwrap();
+
+    let mut dump = vec![
+        format!("-- schema_version: {user_version}"),
+        format!("PRAGMA user_version = {user_version};"),
+        String::new(),
+    ];
+    for (object_type, name, sql) in rows {
+        dump.push(format!("-- {object_type}: {name}"));
+        dump.push(format!("{};", normalize_schema_sql(&sql)));
+        dump.push(String::new());
+    }
+    dump.join("\n").trim_end().to_string() + "\n"
+}
+
+fn schema_fixture(version: i32) -> &'static str {
+    match version {
+        1 => include_str!("../../migrations/schema_versions/001.sql"),
+        2 => include_str!("../../migrations/schema_versions/002.sql"),
+        3 => include_str!("../../migrations/schema_versions/003.sql"),
+        4 => include_str!("../../migrations/schema_versions/004.sql"),
+        5 => include_str!("../../migrations/schema_versions/005.sql"),
+        6 => include_str!("../../migrations/schema_versions/006.sql"),
+        7 => include_str!("../../migrations/schema_versions/007.sql"),
+        8 => include_str!("../../migrations/schema_versions/008.sql"),
+        9 => include_str!("../../migrations/schema_versions/009.sql"),
+        10 => include_str!("../../migrations/schema_versions/010.sql"),
+        11 => include_str!("../../migrations/schema_versions/011.sql"),
+        12 => include_str!("../../migrations/schema_versions/012.sql"),
+        13 => include_str!("../../migrations/schema_versions/013.sql"),
+        _ => panic!("missing schema fixture for version {version}"),
+    }
 }
 
 fn cols(names: &[&str]) -> Vec<String> {

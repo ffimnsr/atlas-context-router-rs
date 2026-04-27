@@ -35,6 +35,15 @@ pub struct InstallSummary {
     pub validate_only: bool,
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+pub struct InstallOptions {
+    pub dry_run: bool,
+    pub validate_only: bool,
+    pub force: bool,
+    pub no_hooks: bool,
+    pub no_instructions: bool,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct InstallValidation {
     pub check: String,
@@ -73,16 +82,13 @@ pub fn run_install(
     repo_root: &Path,
     platform: &str,
     scope: &str,
-    dry_run: bool,
-    validate_only: bool,
-    no_hooks: bool,
-    no_instructions: bool,
+    options: InstallOptions,
 ) -> Result<InstallSummary> {
     let mut summary = InstallSummary::default();
     let scope = InstallScope::parse(scope);
     let scope_root = scope_root(repo_root, scope)?;
     summary.scope = scope.as_str().to_owned();
-    summary.validate_only = validate_only;
+    summary.validate_only = options.validate_only;
 
     for name in ["copilot", "claude", "codex"] {
         let skip = match platform {
@@ -93,14 +99,14 @@ pub fn run_install(
             continue;
         }
 
-        if validate_only {
+        if options.validate_only {
             continue;
         }
 
         let result = match name {
-            "copilot" => install_copilot_scoped(repo_root, &scope_root, scope, dry_run),
-            "claude" => install_claude_scoped(repo_root, &scope_root, scope, dry_run),
-            "codex" => install_codex_scoped(repo_root, &scope_root, scope, dry_run),
+            "copilot" => install_copilot_scoped(repo_root, &scope_root, scope, options.dry_run),
+            "claude" => install_claude_scoped(repo_root, &scope_root, scope, options.dry_run),
+            "codex" => install_codex_scoped(repo_root, &scope_root, scope, options.dry_run),
             _ => unreachable!(),
         }?;
 
@@ -110,35 +116,35 @@ pub fn run_install(
         }
     }
 
-    if !no_hooks {
-        summary.hook_paths = install_git_hooks(repo_root, dry_run)?;
-        if !validate_only {
+    if !options.no_hooks {
+        summary.hook_paths = install_git_hooks(repo_root, options.dry_run, options.force)?;
+        if !options.validate_only {
             summary.platform_hook_files = install_platform_agent_hooks_scoped(
                 repo_root,
                 &scope_root,
                 platform,
                 scope,
-                dry_run,
+                options.dry_run,
             )?;
         }
     }
 
-    if !no_instructions && !validate_only {
+    if !options.no_instructions && !options.validate_only {
         summary.instruction_files = inject_instructions(
             repo_root,
             &instruction_targets(platform, repo_root),
-            dry_run,
+            options.dry_run,
         )?;
     }
 
-    if !dry_run || validate_only {
+    if !options.dry_run || options.validate_only {
         summary.validation_checks = validate_install(
             repo_root,
             &scope_root,
             platform,
             scope,
-            no_hooks,
-            no_instructions,
+            options.no_hooks,
+            options.no_instructions,
         )?;
     }
 

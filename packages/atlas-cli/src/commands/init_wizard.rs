@@ -128,7 +128,7 @@ pub fn run(repo_root: &Path) -> Result<()> {
 
     // Git hooks
     if install_hooks {
-        match crate::install::install_git_hooks(repo_root, false) {
+        match crate::install::install_git_hooks(repo_root, false, false) {
             Ok(paths) if !paths.is_empty() => {
                 for p in &paths {
                     print_tick(&term, &format!("Git hook  → {}", p.display()))?;
@@ -266,8 +266,15 @@ fn print_cross(term: &Term, msg: &str) -> Result<()> {
 }
 
 fn install_platform_setup(repo_root: &Path, platform: &str) -> Result<InstallSummary> {
-    let mut summary =
-        crate::install::run_install(repo_root, platform, "repo", false, false, true, false)?;
+    let mut summary = crate::install::run_install(
+        repo_root,
+        platform,
+        "repo",
+        crate::install::InstallOptions {
+            no_hooks: true,
+            ..Default::default()
+        },
+    )?;
     summary.platform_hook_files =
         crate::install::install_platform_agent_hooks(repo_root, platform, false)?;
     Ok(summary)

@@ -526,6 +526,12 @@ pub(super) fn tool_build_or_update_graph(
             let _ = s.begin_build(repo_root_str);
         }
 
+        crate::progress::report("detecting changed files", None);
+        if crate::progress::is_canceled() {
+            return Err(anyhow::anyhow!("canceled"));
+        }
+        crate::progress::report("updating graph", Some(10));
+
         let update_result = update_graph(
             repo_root_path.as_path(),
             db_path,
@@ -574,7 +580,9 @@ pub(super) fn tool_build_or_update_graph(
             }
         }
 
+        crate::progress::report("writing results", Some(90));
         let summary = update_result?;
+        crate::progress::report("update complete", Some(100));
         tool_result_value(
             &serde_json::json!({
                 "mode": "update",
@@ -600,6 +608,12 @@ pub(super) fn tool_build_or_update_graph(
         if let Ok(s) = Store::open(db_path) {
             let _ = s.begin_build(repo_root_str);
         }
+
+        crate::progress::report("scanning repository files", None);
+        if crate::progress::is_canceled() {
+            return Err(anyhow::anyhow!("canceled"));
+        }
+        crate::progress::report("building graph", Some(10));
 
         let build_result = build_graph(
             repo_root_path.as_path(),
@@ -648,7 +662,9 @@ pub(super) fn tool_build_or_update_graph(
             }
         }
 
+        crate::progress::report("writing results", Some(90));
         let summary = build_result?;
+        crate::progress::report("build complete", Some(100));
         tool_result_value(
             &serde_json::json!({
                 "mode": "build",

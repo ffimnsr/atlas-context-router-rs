@@ -1,0 +1,139 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://atlas-context-router-rs/schemas/atlas_cli.v1/status.schema.json",
+  "title": "atlas_cli.v1 status",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "command", "data"],
+  "properties": {
+    "schema_version": { "const": "atlas_cli.v1" },
+    "command": { "const": "status" },
+    "data": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "ok",
+        "error_code",
+        "message",
+        "suggestions",
+        "repo_root",
+        "db_path",
+        "mcp",
+        "diff_target",
+        "indexed_file_count",
+        "node_count",
+        "edge_count",
+        "nodes_by_kind",
+        "languages",
+        "last_indexed_at",
+        "graph_built",
+        "build_state",
+        "build_last_error",
+        "graph_query_error",
+        "stale_index",
+        "pending_graph_change_count",
+        "pending_graph_changes",
+        "retrieval_index",
+        "changed_file_count",
+        "changed_files",
+        "build_status"
+      ],
+      "properties": {
+        "ok": { "type": "boolean" },
+        "error_code": { "type": "string" },
+        "message": { "type": "string" },
+        "suggestions": { "type": "array", "items": { "type": "string" } },
+        "repo_root": { "type": "string" },
+        "db_path": { "type": "string" },
+        "mcp": {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["worker_threads", "tool_timeout_ms", "tool_timeout_ms_by_tool"],
+          "properties": {
+            "worker_threads": { "type": "integer" },
+            "tool_timeout_ms": { "type": "integer" },
+            "tool_timeout_ms_by_tool": { "type": "object" }
+          }
+        },
+        "diff_target": {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["base", "staged", "kind"],
+          "properties": {
+            "base": { "type": ["string", "null"] },
+            "staged": { "type": "boolean" },
+            "kind": { "type": "string" }
+          }
+        },
+        "indexed_file_count": { "type": "integer" },
+        "node_count": { "type": "integer" },
+        "edge_count": { "type": "integer" },
+        "nodes_by_kind": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 2,
+            "prefixItems": [{ "type": "string" }, { "type": "integer" }]
+          }
+        },
+        "languages": { "type": "array", "items": { "type": "string" } },
+        "last_indexed_at": { "type": ["string", "null"] },
+        "graph_built": { "type": "boolean" },
+        "build_state": { "type": ["string", "null"] },
+        "build_last_error": { "type": ["string", "null"] },
+        "graph_query_error": { "type": ["string", "null"] },
+        "stale_index": { "type": "boolean" },
+        "pending_graph_change_count": { "type": "integer" },
+        "pending_graph_changes": { "type": "array", "items": { "type": "string" } },
+        "retrieval_index": {
+          "type": "object",
+          "additionalProperties": true,
+          "required": [
+            "available",
+            "searchable",
+            "state",
+            "files_discovered",
+            "files_indexed",
+            "chunks_written",
+            "chunks_reused",
+            "last_indexed_at",
+            "last_error",
+            "content_db_path"
+          ],
+          "properties": {
+            "available": { "type": "boolean" },
+            "searchable": { "type": "boolean" },
+            "state": { "type": ["string", "null"] },
+            "files_discovered": { "type": "integer" },
+            "files_indexed": { "type": "integer" },
+            "chunks_written": { "type": "integer" },
+            "chunks_reused": { "type": "integer" },
+            "last_indexed_at": { "type": ["string", "null"] },
+            "last_error": { "type": ["string", "null"] },
+            "content_db_path": { "type": "string" }
+          }
+        },
+        "changed_file_count": { "type": "integer" },
+        "changed_files": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "required": ["path", "change_type", "old_path"],
+            "properties": {
+              "path": { "type": "string" },
+              "change_type": { "type": "string" },
+              "old_path": { "type": ["string", "null"] },
+              "node_count": { "type": "integer" }
+            }
+          }
+        },
+        "build_status": {
+          "type": ["object", "null"],
+          "additionalProperties": true
+        }
+      }
+    }
+  }
+}

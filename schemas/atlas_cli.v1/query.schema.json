@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://atlas-context-router-rs/schemas/atlas_cli.v1/query.schema.json",
+  "title": "atlas_cli.v1 query",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "command", "data"],
+  "properties": {
+    "schema_version": { "const": "atlas_cli.v1" },
+    "command": { "const": "query" },
+    "data": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["query", "latency_ms", "results", "ranking_evidence_legend", "budget"],
+      "properties": {
+        "query": { "type": "object", "additionalProperties": true },
+        "latency_ms": { "type": "integer" },
+        "results": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "required": ["node", "score"],
+            "properties": {
+              "node": {
+                "type": "object",
+                "additionalProperties": true,
+                "required": [
+                  "id",
+                  "kind",
+                  "name",
+                  "qualified_name",
+                  "file_path",
+                  "line_start",
+                  "line_end",
+                  "language",
+                  "is_test"
+                ]
+              },
+              "score": { "type": "number" },
+              "ranking_evidence": { "type": ["object", "null"] }
+            }
+          }
+        },
+        "ranking_evidence_legend": { "type": "object", "additionalProperties": true },
+        "budget": { "type": "object", "additionalProperties": true }
+      }
+    }
+  }
+}

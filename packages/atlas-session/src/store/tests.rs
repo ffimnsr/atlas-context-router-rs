@@ -44,6 +44,15 @@ fn seed_session(store: &mut SessionStore, session_id: &SessionId) {
         .unwrap();
 }
 
+fn table_columns(conn: &rusqlite::Connection, table: &str) -> Vec<String> {
+    let sql = format!("PRAGMA table_info('{table}')");
+    let mut stmt = conn.prepare(&sql).unwrap();
+    stmt.query_map([], |row| row.get::<_, String>(1))
+        .unwrap()
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .unwrap()
+}
+
 #[test]
 fn session_meta_persists_across_reopen() {
     let dir = TempDir::new().unwrap();
@@ -62,6 +71,70 @@ fn session_meta_persists_across_reopen() {
     assert_eq!(meta.repo_root, "/repo");
     assert_eq!(meta.frontend, "cli");
     assert_eq!(meta.worktree_id.as_deref(), Some("main"));
+}
+
+#[test]
+fn open_stamps_session_migration_history_and_provenance() {
+    let (_dir, store) = open_store(16, 1024);
+    let version: i32 = store
+        .conn
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(version, 5);
+
+    let history_count: i64 = store
+        .conn
+        .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(history_count, 5);
+
+    let (db_kind, created_by): (String, String) = store
+        .conn
+        .query_row(
+            "SELECT db_kind, created_by FROM atlas_provenance WHERE singleton_key = 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(db_kind, "session");
+    assert_eq!(created_by, format!("atlas v{}", env!("CARGO_PKG_VERSION")));
+}
+
+#[test]
+fn rollback_and_reupgrade_restore_session_schema() {
+    let (_dir, mut store) = open_store(16, 1024);
+    store.migrate_to(2).unwrap();
+    let version: i32 = store
+        .conn
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(version, 2);
+    let decision_exists: i64 = store
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'decision_memory'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(decision_exists, 0);
+    assert!(table_columns(&store.conn, "session_meta").contains(&"session_id".to_string()));
+
+    store.migrate().unwrap();
+    let restored_version: i32 = store
+        .conn
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(restored_version, 5);
+    let fts_exists: i64 = store
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'decision_memory_fts'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(fts_exists, 1);
 }
 
 #[test]

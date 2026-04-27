@@ -4,6 +4,10 @@ version = "1.0.0"
 edition = "2024"
 description = "Command-line interface for building, updating, and querying Atlas code graphs"
 
+[features]
+default = []
+http-transport = ["atlas-mcp/http-transport"]
+
 [[bin]]
 name = "atlas"
 path = "src/main.rs"
@@ -41,7 +45,11 @@ libc = "0.2"
 signal-hook = "0.3"
 sha2.workspace = true
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.52", features = ["Win32_Foundation"] }
+
 [dev-dependencies]
+jsonschema = "0.18"
 rusqlite.workspace = true
 tempfile = "3"
 

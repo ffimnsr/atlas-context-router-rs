@@ -31,287 +31,50 @@ fn migration_creates_optional_flow_tables() {
 }
 
 #[test]
-fn migration_schema_matches_golden_layout() {
+fn migration_schema_matches_checked_in_schema_sql() {
     let store = open_in_memory();
-    let expected_columns = BTreeMap::from([
-        ("metadata".to_string(), cols(&["key", "value"])),
-        (
-            "files".to_string(),
-            cols(&[
-                "path",
-                "language",
-                "hash",
-                "size",
-                "indexed_at",
-                "owner_id",
-                "owner_kind",
-                "owner_root",
-                "owner_manifest_path",
-                "owner_name",
-            ]),
-        ),
-        (
-            "commits".to_string(),
-            cols(&[
-                "commit_sha",
-                "repo_id",
-                "parent_sha",
-                "author_name",
-                "author_email",
-                "author_time",
-                "committer_time",
-                "subject",
-                "message",
-                "indexed_at",
-                "indexed_ref",
-            ]),
-        ),
-        (
-            "nodes".to_string(),
-            cols(&[
-                "id",
-                "kind",
-                "name",
-                "qualified_name",
-                "file_path",
-                "line_start",
-                "line_end",
-                "language",
-                "parent_name",
-                "params",
-                "return_type",
-                "modifiers",
-                "is_test",
-                "file_hash",
-                "extra_json",
-            ]),
-        ),
-        (
-            "edges".to_string(),
-            cols(&[
-                "id",
-                "kind",
-                "source_qualified",
-                "target_qualified",
-                "file_path",
-                "line",
-                "confidence",
-                "confidence_tier",
-                "extra_json",
-            ]),
-        ),
-        (
-            "nodes_fts".to_string(),
-            cols(&[
-                "qualified_name",
-                "name",
-                "kind",
-                "file_path",
-                "language",
-                "params",
-                "return_type",
-                "modifiers",
-            ]),
-        ),
-        (
-            "flows".to_string(),
-            cols(&[
-                "id",
-                "name",
-                "kind",
-                "description",
-                "extra_json",
-                "created_at",
-                "updated_at",
-            ]),
-        ),
-        (
-            "flow_memberships".to_string(),
-            cols(&[
-                "flow_id",
-                "node_qualified_name",
-                "position",
-                "role",
-                "extra_json",
-            ]),
-        ),
-        (
-            "communities".to_string(),
-            cols(&[
-                "id",
-                "name",
-                "algorithm",
-                "level",
-                "parent_community_id",
-                "extra_json",
-                "created_at",
-                "updated_at",
-            ]),
-        ),
-        (
-            "retrieval_chunks".to_string(),
-            cols(&["id", "node_qn", "chunk_idx", "text", "embedding"]),
-        ),
-        (
-            "community_nodes".to_string(),
-            cols(&["community_id", "node_qualified_name"]),
-        ),
-        (
-            "historical_nodes".to_string(),
-            cols(&[
-                "file_hash",
-                "qualified_name",
-                "kind",
-                "name",
-                "file_path",
-                "line_start",
-                "line_end",
-                "language",
-                "parent_name",
-                "params",
-                "return_type",
-                "modifiers",
-                "is_test",
-                "extra_json",
-            ]),
-        ),
-        (
-            "historical_edges".to_string(),
-            cols(&[
-                "file_hash",
-                "source_qn",
-                "target_qn",
-                "kind",
-                "file_path",
-                "line",
-                "confidence",
-                "confidence_tier",
-                "extra_json",
-            ]),
-        ),
-        (
-            "snapshot_nodes".to_string(),
-            cols(&["snapshot_id", "file_hash", "qualified_name"]),
-        ),
-        (
-            "snapshot_edges".to_string(),
-            cols(&["snapshot_id", "file_hash", "source_qn", "target_qn", "kind"]),
-        ),
-        (
-            "snapshot_membership_blobs".to_string(),
-            cols(&[
-                "snapshot_id",
-                "file_path",
-                "file_hash",
-                "node_membership",
-                "edge_membership",
-            ]),
-        ),
-        (
-            "node_history".to_string(),
-            cols(&[
-                "repo_id",
-                "qualified_name",
-                "file_path",
-                "kind",
-                "signature_hash",
-                "first_snapshot_id",
-                "last_snapshot_id",
-                "first_commit_sha",
-                "last_commit_sha",
-                "introduction_commit_sha",
-                "removal_commit_sha",
-                "confidence",
-                "evidence_json",
-            ]),
-        ),
-        (
-            "edge_history".to_string(),
-            cols(&[
-                "repo_id",
-                "source_qn",
-                "target_qn",
-                "kind",
-                "file_path",
-                "metadata_hash",
-                "first_snapshot_id",
-                "last_snapshot_id",
-                "first_commit_sha",
-                "last_commit_sha",
-                "introduction_commit_sha",
-                "removal_commit_sha",
-                "confidence",
-                "evidence_json",
-            ]),
-        ),
-    ]);
+    assert_eq!(
+        normalize_schema_sql(&schema_dump(&store.conn)),
+        normalize_schema_sql(include_str!("../../migrations/schema.sql"))
+    );
+}
 
-    let actual_columns = expected_columns
-        .keys()
-        .map(|table| ((*table).to_string(), table_columns(&store.conn, table)))
-        .collect::<BTreeMap<_, _>>();
-    assert_eq!(actual_columns, expected_columns);
+#[test]
+fn migration_schema_matches_versioned_schema_fixtures() {
+    assert_eq!(MIGRATIONS.len(), 13, "add fixture when migration count changes");
 
-    let expected_indexes = BTreeSet::from([
-        "idx_chunks_has_embedding".to_string(),
-        "idx_chunks_node_qn".to_string(),
-        "idx_communities_algorithm".to_string(),
-        "idx_communities_parent".to_string(),
-        "idx_community_nodes_node_qn".to_string(),
-        "idx_commits_author_time".to_string(),
-        "idx_commits_committer_time".to_string(),
-        "idx_commits_indexed_ref".to_string(),
-        "idx_commits_repo_id".to_string(),
-        "idx_edges_file_path".to_string(),
-        "idx_edges_kind".to_string(),
-        "idx_edges_source".to_string(),
-        "idx_edges_target".to_string(),
-        "idx_edge_history_introduction_commit".to_string(),
-        "idx_edge_history_removal_commit".to_string(),
-        "idx_edge_history_repo_id".to_string(),
-        "idx_edge_history_source_qn".to_string(),
-        "idx_edge_history_target_qn".to_string(),
-        "idx_files_owner_id".to_string(),
-        "idx_flow_memberships_flow_position".to_string(),
-        "idx_flow_memberships_node_qualified_name".to_string(),
-        "idx_flows_kind".to_string(),
-        "idx_graph_snapshots_commit_sha".to_string(),
-        "idx_graph_snapshots_repo_id".to_string(),
-        "idx_historical_edges_file_hash".to_string(),
-        "idx_historical_nodes_file_hash".to_string(),
-        "idx_node_history_introduction_commit".to_string(),
-        "idx_node_history_qualified_name".to_string(),
-        "idx_node_history_removal_commit".to_string(),
-        "idx_node_history_repo_id".to_string(),
-        "idx_nodes_file_path".to_string(),
-        "idx_nodes_kind".to_string(),
-        "idx_nodes_language".to_string(),
-        "idx_nodes_qualified_name".to_string(),
-        "idx_postprocess_state_state".to_string(),
-        "idx_postprocess_state_updated_at_ms".to_string(),
-        "idx_repos_root_path".to_string(),
-        "idx_snapshot_edges_file_hash".to_string(),
-        "idx_snapshot_edges_snapshot_id".to_string(),
-        "idx_snapshot_files_file_hash".to_string(),
-        "idx_snapshot_files_snapshot_id".to_string(),
-        "idx_snapshot_membership_blobs_file_hash".to_string(),
-        "idx_snapshot_membership_blobs_snapshot_id".to_string(),
-        "idx_snapshot_nodes_file_hash".to_string(),
-        "idx_snapshot_nodes_snapshot_id".to_string(),
-    ]);
-    assert_eq!(schema_indexes(&store.conn), expected_indexes);
+    for migration in MIGRATIONS {
+        let conn = open_unmigrated_in_memory();
+        apply_migrations_through(&conn, migration.version);
+        assert_eq!(
+            schema_dump(&conn),
+            schema_fixture(migration.version),
+            "schema fixture mismatch at migration {}",
+            migration.version
+        );
+    }
+}
 
-    let nodes_fts_sql: String = store
-        .conn
-        .query_row(
-            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'nodes_fts'",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap();
-    assert!(nodes_fts_sql.contains("USING fts5"));
-    assert!(nodes_fts_sql.contains("content='nodes'"));
-    assert!(nodes_fts_sql.contains("content_rowid='id'"));
+#[test]
+fn migration_upgrades_every_historical_version_to_latest_schema() {
+    let latest_version = MIGRATIONS.last().expect("latest migration").version;
+    let latest_fixture = include_str!("../../migrations/schema.sql");
+
+    for version in 0..latest_version {
+        let conn = open_unmigrated_in_memory();
+        apply_migrations_through(&conn, version);
+        let mut store = Store {
+            conn,
+            _thread_bound: std::marker::PhantomData,
+        };
+        store.migrate().unwrap();
+        assert_eq!(
+            normalize_schema_sql(&schema_dump(&store.conn)),
+            normalize_schema_sql(latest_fixture),
+            "upgrade mismatch from schema version {}",
+            version
+        );
+    }
 }
 
 #[test]
@@ -328,6 +91,66 @@ fn schema_version_stored() {
     assert_eq!(
         version,
         MIGRATIONS.last().expect("latest migration").version
+    );
+}
+
+#[test]
+fn migration_framework_records_history_and_provenance() {
+    let store = open_in_memory();
+    let history_count: i64 = store
+        .conn
+        .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(history_count, MIGRATIONS.len() as i64);
+
+    let mut stmt = store
+        .conn
+        .prepare("SELECT DISTINCT direction FROM schema_migrations ORDER BY direction")
+        .unwrap();
+    let directions = stmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .unwrap()
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(directions, vec!["up"]);
+
+    let (db_kind, created_by, last_opened_by): (String, String, String) = store
+        .conn
+        .query_row(
+            "SELECT db_kind, created_by, last_opened_by FROM atlas_provenance WHERE singleton_key = 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(db_kind, "worldtree");
+    assert_eq!(created_by, format!("atlas v{}", env!("CARGO_PKG_VERSION")));
+    assert_eq!(last_opened_by, created_by);
+}
+
+#[test]
+fn rollback_and_reupgrade_restore_latest_schema() {
+    let mut store = open_in_memory();
+    store.migrate_to(3).unwrap();
+    let downgraded_version: i32 = store
+        .conn
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(downgraded_version, 3);
+    assert!(!table_columns(&store.conn, "files").contains(&"owner_id".to_string()));
+    let rollback_events: i64 = store
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM schema_migrations WHERE direction = 'down'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(rollback_events, 10);
+
+    store.migrate().unwrap();
+    assert_eq!(
+        normalize_schema_sql(&schema_dump(&store.conn)),
+        normalize_schema_sql(include_str!("../../migrations/schema.sql"))
     );
 }
 

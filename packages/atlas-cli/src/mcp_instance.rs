@@ -11,8 +11,6 @@ use crate::cli_paths::canonicalize_cli_path;
 const INSTANCE_DIR_NAME: &str = "mcp";
 const LOCK_FILE_NAME: &str = "mcp.instance.lock";
 const METADATA_FILE_NAME: &str = "mcp.instance.json";
-#[cfg(not(unix))]
-const SOCKET_FILE_NAME: &str = "mcp.sock";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct McpInstance {
@@ -207,9 +205,16 @@ fn socket_path_for_instance(instance_id: &str, _instance_dir: &Path) -> PathBuf 
         Path::new("/tmp").join(format!("atlas-mcp-{instance_id}.sock"))
     }
 
-    #[cfg(not(unix))]
+    // Windows named pipes must have the path prefix \\.\pipe\.
+    // We embed the instance ID so each repo+db pair gets its own pipe.
+    #[cfg(windows)]
     {
-        instance_dir.join(SOCKET_FILE_NAME)
+        PathBuf::from(format!("\\\\.\\pipe\\atlas-mcp-{instance_id}"))
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    {
+        PathBuf::from(format!("atlas-mcp-{instance_id}.sock"))
     }
 }
 
@@ -314,6 +319,7 @@ fn cleanup_empty_dirs(instance_dir: &Path, atlas_dir: &Path) -> Result<()> {
 }
 
 #[cfg(test)]
+#[cfg(unix)]
 mod tests {
     use super::*;
 

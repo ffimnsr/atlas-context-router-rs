@@ -1,0 +1,3 @@
+users[2]{active,id,name}:
+  true,1,Alice
+  false,2,Bob

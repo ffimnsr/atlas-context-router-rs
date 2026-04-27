@@ -34,6 +34,33 @@
 //! - current architecture is single-writer per store instance; no read pool
 //!   exists yet
 //!
+//! **Current connection mode (all stores):**
+//! - parallel parse + sequential persistence: Rayon closures hash/read/parse
+//!   files; all SQLite writes happen after parallel phases complete
+//! - single-connection per store instance: one `Connection` per `Store`,
+//!   `ContentStore`, and `SessionStore`
+//! - separate-connection concurrency only: if a second reader is needed, open
+//!   a second store instance — never share one `Connection` across threads
+//! - read-pool layer reserved for future measured need: `r2d2_sqlite` or any
+//!   equivalent connection pool has not been added; pooled graph reads are not
+//!   implemented today
+//!
+//! **Non-goal for current architecture:** do not add `r2d2_sqlite` or any read
+//! pool until contention is measured. WAL already allows one writer plus
+//! multiple readers across separate connections; adding a pool before observing
+//! `SQLITE_BUSY` pressure only adds complexity without benefit.
+//!
+//! **Future upgrade rule (when read concurrency is eventually added):**
+//! - use separate checked-out connections per reader; never put one
+//!   `Connection` behind `Arc<Mutex<_>>`, `RwLock<_>`, or similar shared
+//!   wrappers
+//! - preserve one write-owning connection per mutable store instance; route
+//!   all writes through it exclusively
+//! - keep write-ownership policy explicit before introducing mixed read/write
+//!   pooling
+//! - apply the canonical Atlas PRAGMAs and open flags to every pooled
+//!   connection on checkout
+//!
 //! `rusqlite::Connection` is `!Send`, which matches this policy. `atlas-engine`
 //! keeps SQLite work outside Rayon closures: parallel phases hash/read/parse
 //! files, then sequential phases persist results through the owning store.
@@ -51,8 +78,10 @@
 //! operator. The [`freelist_count`] and [`auto_vacuum_mode`] helpers feed into
 //! that diagnostic surface.
 
+use std::collections::BTreeSet;
+
 use atlas_core::{AtlasError, Result};
-use rusqlite::Connection;
+use rusqlite::{Connection, params};
 
 /// Well-known `application_id` values stamped on each Atlas database file so
 /// `file(1)` and external SQLite tooling can identify them without reading the
@@ -67,6 +96,34 @@ pub mod application_id {
     pub const CONTEXT: i32 = 0x41544C43_u32 as i32;
     /// `session.db` — session event store (`ATLS` = `0x41_54_4C_53`).
     pub const SESSION: i32 = 0x41544C53_u32 as i32;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MigrationDirection {
+    Up,
+    Down,
+}
+
+impl MigrationDirection {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Up => "up",
+            Self::Down => "down",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct Migration {
+    pub version: i32,
+    pub name: &'static str,
+    pub up_sql: &'static str,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct MigrationSet {
+    pub db_kind: &'static str,
+    pub migrations: &'static [Migration],
 }
 
 /// Apply the canonical Atlas PRAGMA set to `conn`.
@@ -128,6 +185,55 @@ pub fn set_user_version(conn: &Connection, version: i32) -> Result<()> {
     Ok(())
 }
 
+/// Apply Atlas framework metadata plus all pending migrations for `set`.
+///
+/// Each open stamps `atlas_provenance` and `metadata` with current Atlas
+/// binary version. Upgrades append rows into `schema_migrations`.
+pub fn migrate_database(conn: &mut Connection, set: &MigrationSet) -> Result<()> {
+    migrate_database_to(conn, set, latest_version(set))
+}
+
+/// Move database schema to `target_version`.
+///
+/// Upgrades run migration `up_sql` in order. Downgrades rebuild user schema
+/// from scratch to match `target_version`, preserving only framework tables
+/// (`metadata`, `schema_migrations`, `atlas_provenance`).
+pub fn migrate_database_to(
+    conn: &mut Connection,
+    set: &MigrationSet,
+    target_version: i32,
+) -> Result<()> {
+    ensure_framework_tables(conn)?;
+    stamp_provenance(conn, set.db_kind)?;
+
+    let latest = latest_version(set);
+    if target_version < 0 || target_version > latest {
+        return Err(AtlasError::Db(format!(
+            "unsupported target schema version {target_version}; latest is {latest}"
+        )));
+    }
+
+    let current = current_schema_version(conn)?;
+    if current > latest {
+        return Err(AtlasError::Db(format!(
+            "database schema version {current} newer than atlas-supported version {latest}"
+        )));
+    }
+
+    backfill_history_if_missing(conn, set, current)?;
+
+    match current.cmp(&target_version) {
+        std::cmp::Ordering::Less => migrate_up(conn, set, current, target_version)?,
+        std::cmp::Ordering::Greater => rebuild_down(conn, set, current, target_version)?,
+        std::cmp::Ordering::Equal => {}
+    }
+
+    set_user_version(conn, target_version)?;
+    write_metadata(conn, "schema_version", &target_version.to_string())?;
+    write_metadata(conn, "atlas_last_opened_by", &atlas_version_banner())?;
+    Ok(())
+}
+
 /// Run `PRAGMA foreign_key_check` and return the number of integrity
 /// violations found.
 ///
@@ -167,4 +273,286 @@ pub fn freelist_count(conn: &Connection) -> Result<i64> {
 pub fn auto_vacuum_mode(conn: &Connection) -> Result<i64> {
     conn.query_row("PRAGMA auto_vacuum", [], |r| r.get(0))
         .map_err(|e| AtlasError::Db(e.to_string()))
+}
+
+fn latest_version(set: &MigrationSet) -> i32 {
+    set.migrations.last().map(|migration| migration.version).unwrap_or(0)
+}
+
+fn ensure_framework_tables(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS metadata (
+             key   TEXT PRIMARY KEY,
+             value TEXT NOT NULL
+         );
+         CREATE TABLE IF NOT EXISTS schema_migrations (
+             id            INTEGER PRIMARY KEY,
+             version       INTEGER NOT NULL,
+             name          TEXT    NOT NULL,
+             direction     TEXT    NOT NULL CHECK(direction IN ('up', 'down')),
+             atlas_version TEXT    NOT NULL,
+             applied_at    TEXT    NOT NULL
+         );
+         CREATE INDEX IF NOT EXISTS idx_schema_migrations_version_id
+             ON schema_migrations(version, id);
+         CREATE TABLE IF NOT EXISTS atlas_provenance (
+             singleton_key INTEGER PRIMARY KEY CHECK(singleton_key = 1),
+             db_kind       TEXT    NOT NULL,
+             created_by    TEXT    NOT NULL,
+             created_at    TEXT    NOT NULL,
+             last_opened_by TEXT   NOT NULL,
+             last_opened_at TEXT   NOT NULL
+         );",
+    )
+    .map_err(|e| AtlasError::Db(e.to_string()))
+}
+
+fn stamp_provenance(conn: &Connection, db_kind: &str) -> Result<()> {
+    let banner = atlas_version_banner();
+    conn.execute(
+        "INSERT INTO atlas_provenance(
+             singleton_key,
+             db_kind,
+             created_by,
+             created_at,
+             last_opened_by,
+             last_opened_at
+         ) VALUES (
+             1,
+             ?1,
+             ?2,
+             strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
+             ?2,
+             strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+         )
+         ON CONFLICT(singleton_key) DO UPDATE SET
+             db_kind = excluded.db_kind,
+             last_opened_by = excluded.last_opened_by,
+             last_opened_at = excluded.last_opened_at",
+        params![db_kind, banner],
+    )
+    .map_err(|e| AtlasError::Db(e.to_string()))?;
+    write_metadata(conn, "atlas_db_kind", db_kind)?;
+    insert_metadata_if_absent(conn, "atlas_created_by", &banner)?;
+    write_metadata(conn, "atlas_last_opened_by", &banner)?;
+    Ok(())
+}
+
+fn current_schema_version(conn: &Connection) -> Result<i32> {
+    conn.query_row(
+        "SELECT CAST(value AS INTEGER) FROM metadata WHERE key = 'schema_version'",
+        [],
+        |row| row.get(0),
+    )
+    .or_else(|error| match error {
+        rusqlite::Error::QueryReturnedNoRows => Ok(0),
+        other => Err(other),
+    })
+    .map_err(|e| AtlasError::Db(e.to_string()))
+}
+
+fn backfill_history_if_missing(conn: &Connection, set: &MigrationSet, current: i32) -> Result<()> {
+    let existing: i64 = conn
+        .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row.get(0))
+        .map_err(|e| AtlasError::Db(e.to_string()))?;
+    if existing > 0 || current == 0 {
+        return Ok(());
+    }
+
+    let banner = atlas_version_banner();
+    for migration in set.migrations.iter().filter(|migration| migration.version <= current) {
+        record_migration(conn, migration, MigrationDirection::Up, &banner)?;
+    }
+    Ok(())
+}
+
+fn migrate_up(
+    conn: &mut Connection,
+    set: &MigrationSet,
+    current: i32,
+    target: i32,
+) -> Result<()> {
+    let banner = atlas_version_banner();
+    for migration in set
+        .migrations
+        .iter()
+        .filter(|migration| migration.version > current && migration.version <= target)
+    {
+        conn.execute_batch(migration.up_sql)
+            .map_err(|e| AtlasError::Db(format!("migration {} ({}): {e}", migration.version, migration.name)))?;
+        write_metadata(conn, "schema_version", &migration.version.to_string())?;
+        record_migration(conn, migration, MigrationDirection::Up, &banner)?;
+    }
+    Ok(())
+}
+
+fn rebuild_down(
+    conn: &mut Connection,
+    set: &MigrationSet,
+    current: i32,
+    target: i32,
+) -> Result<()> {
+    let mut target_conn = Connection::open_in_memory().map_err(|e| AtlasError::Db(e.to_string()))?;
+    ensure_framework_tables(&target_conn)?;
+    migrate_up(&mut target_conn, set, 0, target)?;
+
+    let schema_sql = export_user_schema_sql(&target_conn)?;
+    let banner = atlas_version_banner();
+
+    conn.execute_batch("PRAGMA foreign_keys=OFF")
+        .map_err(|e| AtlasError::Db(e.to_string()))?;
+    drop_user_objects(conn)?;
+    if !schema_sql.trim().is_empty() {
+        conn.execute_batch(&schema_sql)
+            .map_err(|e| AtlasError::Db(format!("rebuild schema v{target}: {e}")))?;
+    }
+    conn.execute_batch("PRAGMA foreign_keys=ON")
+        .map_err(|e| AtlasError::Db(e.to_string()))?;
+
+    for version in ((target + 1)..=current).rev() {
+        let migration = set
+            .migrations
+            .iter()
+            .find(|migration| migration.version == version)
+            .ok_or_else(|| AtlasError::Db(format!("missing migration definition for version {version}")))?;
+        record_migration(conn, migration, MigrationDirection::Down, &banner)?;
+    }
+    Ok(())
+}
+
+fn export_user_schema_sql(conn: &Connection) -> Result<String> {
+    let shadow_tables = shadow_table_names(conn)?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT type, name, sql
+             FROM sqlite_master
+             WHERE sql IS NOT NULL
+               AND name NOT LIKE 'sqlite_%'
+             ORDER BY CASE type
+                 WHEN 'table' THEN 0
+                 WHEN 'index' THEN 1
+                 WHEN 'trigger' THEN 2
+                 WHEN 'view' THEN 3
+                 ELSE 4
+             END,
+             name",
+        )
+        .map_err(|e| AtlasError::Db(e.to_string()))?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })
+        .map_err(|e| AtlasError::Db(e.to_string()))?
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|e| AtlasError::Db(e.to_string()))?;
+
+    let sql = rows
+        .into_iter()
+        .filter(|(_, name, _)| !is_framework_object(name) && !shadow_tables.contains(name))
+        .map(|(_, _, sql)| format!("{sql};"))
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    Ok(sql)
+}
+
+fn drop_user_objects(conn: &Connection) -> Result<()> {
+    let shadow_tables = shadow_table_names(conn)?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT type, name
+             FROM sqlite_master
+             WHERE name NOT LIKE 'sqlite_%'
+             ORDER BY CASE type
+                 WHEN 'trigger' THEN 0
+                 WHEN 'index' THEN 1
+                 WHEN 'view' THEN 2
+                 WHEN 'table' THEN 3
+                 ELSE 4
+             END,
+             name",
+        )
+        .map_err(|e| AtlasError::Db(e.to_string()))?;
+    let objects = stmt
+        .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+        .map_err(|e| AtlasError::Db(e.to_string()))?
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|e| AtlasError::Db(e.to_string()))?;
+
+    for (kind, name) in objects {
+        if is_framework_object(&name) || shadow_tables.contains(&name) {
+            continue;
+        }
+        let ddl = match kind.as_str() {
+            "table" => format!("DROP TABLE IF EXISTS \"{}\"", name.replace('"', "\"\"")),
+            "index" => format!("DROP INDEX IF EXISTS \"{}\"", name.replace('"', "\"\"")),
+            "trigger" => format!("DROP TRIGGER IF EXISTS \"{}\"", name.replace('"', "\"\"")),
+            "view" => format!("DROP VIEW IF EXISTS \"{}\"", name.replace('"', "\"\"")),
+            _ => continue,
+        };
+        conn.execute_batch(&ddl)
+            .map_err(|e| AtlasError::Db(format!("drop {kind} {name}: {e}")))?;
+    }
+    Ok(())
+}
+
+fn shadow_table_names(conn: &Connection) -> Result<BTreeSet<String>> {
+    let mut stmt = conn
+        .prepare("PRAGMA table_list")
+        .map_err(|e| AtlasError::Db(e.to_string()))?;
+    stmt.query_map([], |row| Ok((row.get::<_, String>(1)?, row.get::<_, String>(2)?)))
+        .map_err(|e| AtlasError::Db(e.to_string()))?
+        .filter_map(|row| row.ok())
+        .filter(|(_, table_type)| table_type == "shadow")
+        .map(|(name, _)| Ok(name))
+        .collect::<std::result::Result<BTreeSet<_>, AtlasError>>()
+}
+
+fn is_framework_object(name: &str) -> bool {
+    matches!(name, "metadata" | "schema_migrations" | "atlas_provenance")
+}
+
+fn record_migration(
+    conn: &Connection,
+    migration: &Migration,
+    direction: MigrationDirection,
+    atlas_version: &str,
+) -> Result<()> {
+    conn.execute(
+        "INSERT INTO schema_migrations(version, name, direction, atlas_version, applied_at)
+         VALUES (?1, ?2, ?3, ?4, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))",
+        params![
+            migration.version,
+            migration.name,
+            direction.as_str(),
+            atlas_version
+        ],
+    )
+    .map_err(|e| AtlasError::Db(e.to_string()))?;
+    Ok(())
+}
+
+fn insert_metadata_if_absent(conn: &Connection, key: &str, value: &str) -> Result<()> {
+    conn.execute(
+        "INSERT OR IGNORE INTO metadata(key, value) VALUES (?1, ?2)",
+        params![key, value],
+    )
+    .map_err(|e| AtlasError::Db(e.to_string()))?;
+    Ok(())
+}
+
+fn write_metadata(conn: &Connection, key: &str, value: &str) -> Result<()> {
+    conn.execute(
+        "INSERT OR REPLACE INTO metadata(key, value) VALUES (?1, ?2)",
+        params![key, value],
+    )
+    .map_err(|e| AtlasError::Db(e.to_string()))?;
+    Ok(())
+}
+
+fn atlas_version_banner() -> String {
+    format!("atlas v{}", env!("CARGO_PKG_VERSION"))
 }

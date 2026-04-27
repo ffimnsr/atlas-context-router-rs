@@ -448,6 +448,12 @@ Default limits: 100 nodes, 100 edges, 20 files, depth 2.
 
 JSON output uses `atlas_cli.v1` and returns request metadata, selected nodes and edges, file spans, truncation info, and optional ambiguity candidates. If target is ambiguous, `ambiguity` is populated instead of direct node results. `atlas review-context` remains available as focused shortcut for review-heavy workflows.
 
+Contract references:
+
+- [Output stability policy](docs/contracts/output-stability.md)
+- [TOON contract](docs/contracts/atlas_toon.v1.md)
+- `schemas/atlas_cli.v1/*.schema.json`
+
 ## Output Modes
 
 Most user-facing commands support machine-readable output:

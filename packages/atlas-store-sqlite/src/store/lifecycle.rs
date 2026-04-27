@@ -1,10 +1,10 @@
 use atlas_core::{AtlasError, GraphStats, Node, Result};
-use atlas_db_utils::{application_id, apply_atlas_pragmas, set_application_id, set_user_version};
+use atlas_db_utils::{application_id, apply_atlas_pragmas, migrate_database_to, set_application_id};
 use atlas_repo::CanonicalRepoPath;
 use rusqlite::{Connection, OpenFlags, params};
 use tracing::{debug, info};
 
-use crate::migrations::MIGRATIONS;
+use crate::migrations::{LATEST_VERSION, MIGRATION_SET};
 
 use super::{DanglingEdge, Store, helpers::row_to_node};
 
@@ -91,16 +91,10 @@ impl Store {
 
     /// Apply any migrations that have not yet been applied to this database.
     pub fn migrate(&mut self) -> Result<()> {
-        // Bootstrap the metadata table so we can store schema_version.
-        self.conn
-            .execute_batch(
-                "CREATE TABLE IF NOT EXISTS metadata (
-                     key   TEXT PRIMARY KEY,
-                     value TEXT NOT NULL
-                 );",
-            )
-            .map_err(|e| AtlasError::Db(e.to_string()))?;
+        self.migrate_to(LATEST_VERSION)
+    }
 
+    pub fn migrate_to(&mut self, target_version: i32) -> Result<()> {
         let current_version: i32 = self
             .conn
             .query_row(
@@ -109,36 +103,19 @@ impl Store {
                 |row| row.get(0),
             )
             .unwrap_or(0);
-
-        debug!(current_version, "checking migrations");
-
-        for migration in MIGRATIONS {
-            if migration.version <= current_version {
-                continue;
+        debug!(current_version, target_version, "checking migrations");
+        if target_version >= current_version {
+            for migration in MIGRATION_SET
+                .migrations
+                .iter()
+                .filter(|migration| migration.version > current_version && migration.version <= target_version)
+            {
+                info!(version = migration.version, name = migration.name, "applying migration");
             }
-            info!(version = migration.version, "applying migration");
-            self.conn
-                .execute_batch(migration.sql)
-                .map_err(|e| AtlasError::Db(format!("migration {}: {e}", migration.version)))?;
-            self.conn
-                .execute(
-                    "INSERT OR REPLACE INTO metadata (key, value) VALUES ('schema_version', ?1)",
-                    params![migration.version.to_string()],
-                )
-                .map_err(|e| AtlasError::Db(e.to_string()))?;
+        } else {
+            info!(current_version, target_version, "rebuilding schema for downgrade");
         }
-        // Keep PRAGMA user_version in sync with the metadata schema_version so
-        // `sqlite3 worldtree.db "PRAGMA user_version"` returns the live version.
-        let applied: i32 = self
-            .conn
-            .query_row(
-                "SELECT CAST(value AS INTEGER) FROM metadata WHERE key = 'schema_version'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap_or(0);
-        set_user_version(&self.conn, applied)?;
-        Ok(())
+        migrate_database_to(&mut self.conn, &MIGRATION_SET, target_version)
     }
 
     /// Return high-level statistics about the stored graph.

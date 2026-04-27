@@ -50,6 +50,7 @@ fn run_cli() -> anyhow::Result<()> {
         Command::ReviewContext { .. } => commands::run_review_context(&cli),
         Command::Serve => commands::run_serve(&cli),
         Command::ServeDaemon => commands::run_serve_daemon(&cli),
+        Command::ServeHttp => commands::run_serve_http(&cli),
         Command::DbCheck => commands::run_db_check(&cli),
         Command::Doctor => commands::run_doctor(&cli),
         Command::PurgeNoncanonical => commands::run_purge_noncanonical(&cli),
