@@ -1,14 +1,14 @@
 [package]
 name = "atlas-contextsave"
-version = "1.0.1"
+version = "1.0.2"
 edition = "2024"
 description = "Context save/restore coordinator for Atlas context memory integration"
 publish = false
 
 [dependencies]
 atlas-core.workspace = true
-atlas-contentstore = { path = "../atlas-contentstore" , version = "1.0.1"}
-atlas-session = { path = "../atlas-session" , version = "1.0.1"}
+atlas-contentstore = { path = "../atlas-contentstore" , version = "1.0.2"}
+atlas-session = { path = "../atlas-session" , version = "1.0.2"}
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true

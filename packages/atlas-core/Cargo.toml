@@ -1,6 +1,6 @@
 [package]
 name = "atlas-core"
-version = "1.0.1"
+version = "1.0.2"
 edition = "2024"
 description = "Core domain models, kinds, and error types shared across Atlas crates"
 publish = false
