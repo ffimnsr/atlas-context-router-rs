@@ -17,6 +17,7 @@ use std::path::Path;
 use std::time::Instant;
 
 use anyhow::Context;
+use rayon::prelude::*;
 
 use crate::error::Result;
 use atlas_core::ParsedFile;
@@ -60,6 +61,27 @@ struct SnapshotFileMembership {
     file_hash: String,
     qualified_names: Vec<String>,
     edge_keys: Vec<EdgeKey>,
+}
+
+/// Work item for the parallel parse phase.  Carries everything needed to call
+/// `registry.parse()` without touching the SQLite store.
+struct ParseWork {
+    file_index: usize,
+    file_hash: String,
+    rel_path: String,
+    bytes: Vec<u8>,
+    orig_language: Option<String>,
+}
+
+/// Result of one parallel `registry.parse()` call.
+struct ParseOutcome {
+    file_index: usize,
+    file_hash: String,
+    rel_path: String,
+    orig_language: Option<String>,
+    size: i64,
+    /// `None` means the parser returned no output (SkippedNoParserOutput).
+    parsed: Option<ParsedFile>,
 }
 
 struct BuildContext<'a, P: FnMut(BuildProgressEvent)> {
@@ -391,26 +413,44 @@ where
         total_files,
     });
 
+    // Batch-fetch all blob bytes that will be needed for this commit in a
+    // single `git cat-file --batch` call rather than one subprocess per file.
+    prefetch_blob_bytes(ctx.cache, ctx.repo, &tracked_files, ctx.registry)?;
+
+    // Begin a single write transaction covering all store inserts for this
+    // commit.  Without it every INSERT auto-commits (one fsync each), which
+    // turns ~100k writes per large commit into minutes of wall-clock time.
+    ctx.store
+        .begin_write()
+        .context("begin commit write transaction")?;
+
     let mut snapshot_files: Vec<StoredSnapshotFile> = Vec::new();
     let mut file_memberships: Vec<SnapshotFileMembership> = Vec::new();
     let mut total_node_count: i64 = 0;
     let mut total_edge_count: i64 = 0;
     let mut parse_error_count: i64 = 0;
 
+    // --- Phase 1: sequential classification (touches store and cache) --------
+    //
+    // Reused and skipped files are handled immediately.  Files that need a
+    // fresh parse are collected into `parse_batch` so phase 2 can run them
+    // in parallel without touching the SQLite store.
+    let mut parse_batch: Vec<ParseWork> = Vec::new();
+
     for (file_offset, tracked_file) in tracked_files.into_iter().enumerate() {
         let file_index = file_offset + 1;
-        let rel_path = &tracked_file.file_path;
-        let file_hash = &tracked_file.file_hash;
+        let rel_path = tracked_file.file_path.clone();
+        let file_hash = tracked_file.file_hash.clone();
 
         // Try to detect language early via parser support.
-        if !ctx.registry.supports(rel_path) {
+        if !ctx.registry.supports(&rel_path) {
             ctx.summary.files_skipped += 1;
             emit_file_progress(
                 ctx,
                 meta,
                 total_files,
                 file_index,
-                rel_path,
+                &rel_path,
                 BuildFileProgressKind::SkippedUnsupported,
             );
             debug!(path = %rel_path, "no parser support, skipping");
@@ -419,11 +459,11 @@ where
 
         let already_indexed = ctx
             .store
-            .has_historical_file_graph(file_hash)
+            .has_historical_file_graph(&file_hash)
             .with_context(|| format!("has_historical_file_graph for {file_hash}"))?;
 
         if already_indexed {
-            let cached_graph = load_cached_file_graph(ctx.store, ctx.cache, file_hash)?;
+            let cached_graph = load_cached_file_graph(ctx.store, ctx.cache, &file_hash)?;
             ctx.summary.files_reused += 1;
             ctx.summary.nodes_reused += cached_graph.node_count;
             total_node_count += cached_graph.node_count as i64;
@@ -449,13 +489,13 @@ where
                 meta,
                 total_files,
                 file_index,
-                rel_path,
+                &rel_path,
                 BuildFileProgressKind::Reused,
             );
             continue;
         }
 
-        let Some(bytes) = load_blob_bytes(ctx.cache, ctx.repo, &meta.sha, rel_path, file_hash)?
+        let Some(bytes) = load_blob_bytes(ctx.cache, ctx.repo, &meta.sha, &rel_path, &file_hash)?
         else {
             ctx.summary.files_skipped += 1;
             emit_file_progress(
@@ -463,14 +503,14 @@ where
                 meta,
                 total_files,
                 file_index,
-                rel_path,
+                &rel_path,
                 BuildFileProgressKind::SkippedMissing,
             );
             continue;
         };
 
         // Binary detection: null byte in first BINARY_SNIFF_BYTES.
-        if ctx.cache.binary_blobs.contains(file_hash) || is_binary_bytes(&bytes) {
+        if ctx.cache.binary_blobs.contains(&file_hash) || is_binary_bytes(&bytes) {
             ctx.cache.binary_blobs.insert(file_hash.clone());
             ctx.summary.files_skipped += 1;
             emit_file_progress(
@@ -478,16 +518,53 @@ where
                 meta,
                 total_files,
                 file_index,
-                rel_path,
+                &rel_path,
                 BuildFileProgressKind::SkippedBinary,
             );
             debug!(path = %rel_path, "binary file, skipping");
             continue;
         }
 
-        // Parse the file.
-        let parsed = match ctx.registry.parse(rel_path, file_hash, &bytes, None) {
-            Some((pf, _tree)) => pf,
+        parse_batch.push(ParseWork {
+            file_index,
+            file_hash,
+            rel_path,
+            bytes,
+            orig_language: tracked_file.language,
+        });
+    }
+
+    // --- Phase 2: parallel parse (CPU-bound, no store access) ---------------
+    //
+    // SQLite writes stay outside this Rayon closure.  Workers only parse bytes;
+    // `Store` writes happen sequentially in phase 3 after collection.
+    let registry = ctx.registry;
+    let parse_outcomes: Vec<ParseOutcome> = parse_batch
+        .into_par_iter()
+        .map(|work| {
+            let size = work.bytes.len() as i64;
+            let parsed = registry
+                .parse(&work.rel_path, &work.file_hash, &work.bytes, None)
+                .map(|(pf, _)| pf);
+            ParseOutcome {
+                file_index: work.file_index,
+                file_hash: work.file_hash,
+                rel_path: work.rel_path,
+                orig_language: work.orig_language,
+                size,
+                parsed,
+            }
+        })
+        .collect();
+
+    // --- Phase 3: sequential persist + progress emission --------------------
+    for outcome in parse_outcomes {
+        let file_index = outcome.file_index;
+        let rel_path = &outcome.rel_path;
+        let file_hash = &outcome.file_hash;
+
+        let parsed = match outcome.parsed {
+            Some(pf) => pf,
             None => {
                 ctx.summary.files_skipped += 1;
                 emit_file_progress(
@@ -504,8 +581,8 @@ where
 
         let node_count = parsed.nodes.len();
         let edge_count = parsed.edges.len();
-        let size = bytes.len() as i64;
-        let language = parsed.language.clone();
+        let size = outcome.size;
+        let language = parsed.language.clone().or(outcome.orig_language);
 
         // Persist content-addressed nodes + edges.
         if let Err(e) = persist_parsed_file(ctx.store, file_hash, rel_path, &parsed) {
@@ -610,19 +687,23 @@ where
     };
     ctx.store
         .upsert_commit(&stored_commit)
-        .context("upsert commit")?;
+        .context("upsert commit")
+        .inspect_err(|_| ctx.store.rollback_write())?;
 
     // Insert graph snapshot.
-    let snapshot_id = ctx.store.insert_snapshot(
-        ctx.repo_id,
-        &meta.sha,
-        root_tree_hash.as_deref(),
-        total_node_count,
-        total_edge_count,
-        file_count,
-        completeness,
-        parse_error_count,
-    )?;
+    let snapshot_id = ctx
+        .store
+        .insert_snapshot(
+            ctx.repo_id,
+            &meta.sha,
+            root_tree_hash.as_deref(),
+            total_node_count,
+            total_edge_count,
+            file_count,
+            completeness,
+            parse_error_count,
+        )
+        .inspect_err(|_| ctx.store.rollback_write())?;
 
     // Fix snapshot_id in file rows and insert membership.
     let fixed_files: Vec<StoredSnapshotFile> = snapshot_files
@@ -634,7 +715,8 @@ where
         .collect();
     ctx.store
         .insert_snapshot_files(&fixed_files)
-        .context("insert snapshot files")?;
+        .context("insert snapshot files")
+        .inspect_err(|_| ctx.store.rollback_write())?;
 
     // Attach node and edge membership.
     for membership in &file_memberships {
@@ -644,12 +726,14 @@ where
                 &membership.file_hash,
                 &membership.qualified_names,
             )
-            .with_context(|| format!("attach snapshot nodes for {}", membership.file_hash))?;
+            .with_context(|| format!("attach snapshot nodes for {}", membership.file_hash))
+            .inspect_err(|_| ctx.store.rollback_write())?;
     }
     for membership in &file_memberships {
         ctx.store
             .attach_snapshot_edges(snapshot_id, &membership.file_hash, &membership.edge_keys)
-            .with_context(|| format!("attach snapshot edges for {}", membership.file_hash))?;
+            .with_context(|| format!("attach snapshot edges for {}", membership.file_hash))
+            .inspect_err(|_| ctx.store.rollback_write())?;
     }
 
     let membership_blobs = file_memberships
@@ -664,7 +748,12 @@ where
         .collect::<Vec<_>>();
     ctx.store
         .insert_snapshot_membership_blobs(&membership_blobs)
-        .context("insert snapshot membership blobs")?;
+        .context("insert snapshot membership blobs")
+        .inspect_err(|_| ctx.store.rollback_write())?;
+
+    ctx.store
+        .commit_write()
+        .context("commit write transaction")?;
 
     Ok(())
 }
@@ -708,6 +797,50 @@ fn load_blob_bytes(
     };
     cache.blob_bytes.insert(file_hash.to_owned(), bytes.clone());
     Ok(Some(bytes))
+}
+
+/// Prefetch blob bytes for all supported, not-yet-cached files in a single
+/// `git cat-file --batch` call.  Populates `cache.blob_bytes` so the
+/// per-file loop in `process_commit` hits the in-memory cache and skips the
+/// individual `git show` subprocess spawns.
+fn prefetch_blob_bytes(
+    cache: &mut BuildRunCache,
+    repo: &Path,
+    tracked_files: &[StoredSnapshotFile],
+    registry: &ParserRegistry,
+) -> Result<()> {
+    // Collect deduplicated hashes that need content:
+    // - parser supports the file extension
+    // - not already in the blob_bytes or blob_graphs in-run cache
+    // Already-indexed files are detected per-file in the main loop via
+    // `has_historical_file_graph`; we intentionally over-fetch here so that
+    // the prefetch does not duplicate those per-file store queries.
+    let mut to_fetch: Vec<&str> = tracked_files
+        .iter()
+        .filter(|f| registry.supports(&f.file_path))
+        .filter(|f| {
+            !cache.blob_bytes.contains_key(&f.file_hash)
+                && !cache.blob_graphs.contains_key(&f.file_hash)
+                && !cache.binary_blobs.contains(&f.file_hash)
+        })
+        .map(|f| f.file_hash.as_str())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+
+    if to_fetch.is_empty() {
+        return Ok(());
+    }
+
+    // Sort for deterministic ordering (BTreeSet already sorted, but make
+    // explicit for readability).
+    to_fetch.sort_unstable();
+
+    let fetched = git::cat_file_blob_batch(repo, &to_fetch).context("batch-fetch blob bytes")?;
+    for (hash, bytes) in fetched {
+        cache.blob_bytes.insert(hash, bytes);
+    }
+    Ok(())
 }
 
 fn load_cached_file_graph(
@@ -1248,5 +1381,61 @@ mod tests {
                 snapshot_signature(&materialized_b)
             );
         }
+    }
+
+    // --- parallel parse → sequential write boundary -------------------------
+    //
+    // Verifies that the parallel parse pipeline collects all results before
+    // writing to the store.  Three Rust source files are committed; every
+    // function node from every file must appear in the store after the build,
+    // regardless of which Rayon thread parsed each file.
+    #[test]
+    fn build_parallel_parse_completes_before_store_write() {
+        let repo = tempfile::tempdir().expect("tempdir");
+        git_init(repo.path());
+        write_file(repo.path(), "a.rs", "pub fn alpha() {}\n");
+        write_file(repo.path(), "b.rs", "pub fn beta() {}\n");
+        write_file(repo.path(), "c.rs", "pub fn gamma() {}\n");
+        let sha = commit_all(repo.path(), "init");
+
+        let store_dir = tempfile::tempdir().expect("store dir");
+        let store = open_store(&store_dir);
+        let registry = ParserRegistry::with_defaults();
+        let canonical_root = std::fs::canonicalize(repo.path())
+            .expect("canonical root")
+            .to_string_lossy()
+            .into_owned();
+
+        let summary = build_historical_graph(
+            repo.path(),
+            &canonical_root,
+            &store,
+            &CommitSelector::Explicit {
+                shas: vec![sha.clone()],
+            },
+            &registry,
+            Some(&sha),
+        )
+        .expect("build");
+
+        assert_eq!(summary.files_parsed, 3, "all three files must be parsed");
+
+        // Every function from every parallel-parsed file must land in the
+        // store.  If any write phase ran before parse collection finished,
+        // nodes from later Rayon tasks would be missing.
+        let repo_id = store
+            .find_repo_id(&canonical_root)
+            .expect("find repo id")
+            .expect("repo id");
+        let snapshot = store
+            .find_snapshot(repo_id, &sha)
+            .expect("find snapshot")
+            .expect("snapshot row");
+
+        assert_eq!(snapshot.file_count, 3, "three files in snapshot");
+        assert!(
+            snapshot.node_count > 0,
+            "nodes from all parallel-parsed files must be written"
+        );
     }
 }

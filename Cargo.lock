@@ -241,6 +241,7 @@ dependencies = [
  "atlas-parser",
  "atlas-store-sqlite",
  "criterion",
+ "rayon",
  "rusqlite",
  "serde",
  "serde_json",

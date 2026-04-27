@@ -6,8 +6,10 @@
 //!
 //! Supported sub-commands: rev-parse, log, show, ls-tree, diff-tree, cat-file.
 
+use std::collections::HashMap;
+use std::io::{Read, Write};
 use std::path::Path;
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 
 use anyhow::{Context, Result, bail};
 
@@ -399,6 +401,104 @@ pub fn validate_sha(sha: &str) -> Result<()> {
         return Ok(());
     }
     bail!("invalid git SHA (must be 40 hex chars): {:?}", sha);
+}
+
+// ── git cat-file --batch ──────────────────────────────────────────────────────
+
+/// Read multiple blob objects by their object hashes using a single
+/// `git cat-file --batch` subprocess.
+///
+/// Returns a map from object_hash to raw bytes. Missing or non-blob objects
+/// are silently omitted. Each `hash` in the slice must be a valid 40-char hex
+/// SHA (validated before the subprocess is spawned).
+///
+/// This is significantly faster than spawning one `git cat-file blob` or
+/// `git show` per file when indexing many files from a commit tree.
+pub fn cat_file_blob_batch(repo: &Path, hashes: &[&str]) -> Result<HashMap<String, Vec<u8>>> {
+    if hashes.is_empty() {
+        return Ok(HashMap::new());
+    }
+    for hash in hashes {
+        validate_sha(hash).with_context(|| format!("invalid SHA in batch request: {hash}"))?;
+    }
+
+    let mut child = Command::new("git")
+        .args(["cat-file", "--batch"])
+        .current_dir(repo)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .context("spawn git cat-file --batch")?;
+
+    // We must write to stdin in a separate thread to avoid a pipe deadlock.
+    // git reads hashes from stdin and streams blobs to stdout.  Once git's
+    // stdout pipe fills (~64 KB), git blocks waiting for us to drain it.  If
+    // we are still blocked writing to stdin at that point, both sides wait
+    // on each other forever.  The writer thread lets stdout drain concurrently.
+    let stdin = child.stdin.take().expect("piped stdin");
+    let input: Vec<u8> = hashes
+        .iter()
+        .flat_map(|h| {
+            let mut v = Vec::with_capacity(h.len() + 1);
+            v.extend_from_slice(h.as_bytes());
+            v.push(b'\n');
+            v
+        })
+        .collect();
+    let writer = std::thread::spawn(move || -> Result<()> {
+        let mut stdin = std::io::BufWriter::new(stdin);
+        stdin.write_all(&input).context("write hashes to stdin")
+    });
+
+    // Drain all stdout while the writer feeds stdin.
+    let mut data = Vec::new();
+    child
+        .stdout
+        .take()
+        .expect("piped stdout")
+        .read_to_end(&mut data)
+        .context("read git cat-file --batch output")?;
+
+    writer
+        .join()
+        .expect("stdin writer thread panicked")
+        .context("write hashes")?;
+    child.wait().context("wait for git cat-file --batch")?;
+    let mut result = HashMap::with_capacity(hashes.len());
+    let mut pos = 0usize;
+
+    while pos < data.len() {
+        // Find header line end.
+        let Some(nl) = data[pos..].iter().position(|&b| b == b'\n') else {
+            break;
+        };
+        let header = std::str::from_utf8(&data[pos..pos + nl])
+            .context("non-UTF-8 cat-file --batch header")?;
+        pos += nl + 1;
+
+        let parts: Vec<&str> = header.splitn(3, ' ').collect();
+        // "missing" entries have only 2 tokens: "<hash> missing"
+        if parts.len() < 3 || parts[1] == "missing" {
+            continue;
+        }
+        let hash = parts[0].to_owned();
+        let obj_type = parts[1];
+        let size: usize = parts[2]
+            .parse()
+            .with_context(|| format!("parse object size for {hash}"))?;
+
+        if pos + size > data.len() {
+            bail!("truncated content for blob {hash}");
+        }
+        if obj_type == "blob" {
+            result.insert(hash, data[pos..pos + size].to_vec());
+        }
+        // Skip content bytes + the trailing newline separator git emits.
+        pos += size + 1;
+    }
+
+    Ok(result)
 }
 
 #[cfg(test)]
