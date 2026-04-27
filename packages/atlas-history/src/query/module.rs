@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use anyhow::Result;
+use crate::error::Result;
 use atlas_store_sqlite::Store;
 
 use crate::diff::module_key;
@@ -158,7 +158,9 @@ pub fn query_module_history(
     }
 
     let Some((first_snapshot_id, first_commit_sha)) = first_seen else {
-        anyhow::bail!("no historical module matches found for {module}");
+        return Err(crate::error::HistoryError::Other(format!(
+            "no historical module matches found for {module}"
+        )));
     };
     let (last_snapshot_id, last_commit_sha, _, _, _, _) = last_seen
         .ok_or_else(|| anyhow::anyhow!("module history missing last appearance for {module}"))?;

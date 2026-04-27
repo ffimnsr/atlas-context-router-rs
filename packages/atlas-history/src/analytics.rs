@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use anyhow::Result;
+use crate::error::Result;
 use atlas_store_sqlite::{HistoricalEdge, HistoricalNode, Store};
 use serde::Serialize;
 

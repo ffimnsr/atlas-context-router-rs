@@ -39,9 +39,12 @@ use self::util::{
 
 pub struct SessionStore {
     // One connection per store instance. Keep thread-confined; do not share
-    // across worker threads.
+    // across worker threads. The `_thread_bound` field explicitly opts out of
+    // `Send` and `Sync` auto-traits at the compiler level.
     pub(super) conn: Connection,
     pub(super) config: SessionStoreConfig,
+    /// Marker that opts this struct out of `Send` and `Sync`.
+    _thread_bound: std::marker::PhantomData<*const ()>,
 }
 
 impl SessionStore {
@@ -77,7 +80,11 @@ impl SessionStore {
         )
         .map_err(|e| AtlasError::Db(e.to_string()))?;
 
-        let mut store = Self { conn, config };
+        let mut store = Self {
+            conn,
+            config,
+            _thread_bound: std::marker::PhantomData,
+        };
         apply_atlas_pragmas(&store.conn)?;
         set_application_id(&store.conn, application_id::SESSION)?;
         store.migrate()?;

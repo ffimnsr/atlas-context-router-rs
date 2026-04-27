@@ -13,6 +13,7 @@ use super::helpers::fts5_escape;
 use super::*;
 
 mod build_state;
+mod concurrency;
 mod context;
 mod graph;
 mod helpers;
@@ -27,7 +28,10 @@ fn open_in_memory() -> Store {
     let conn = Connection::open_in_memory().unwrap();
     atlas_db_utils::apply_atlas_pragmas(&conn).unwrap();
     Store::register_regexp_udf(&conn).unwrap();
-    let mut store = Store { conn };
+    let mut store = Store {
+        conn,
+        _thread_bound: std::marker::PhantomData,
+    };
     store.migrate().unwrap();
     store
 }

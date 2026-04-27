@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
 
-use anyhow::{Context, Result};
+use anyhow::Context;
+
+use crate::error::Result;
 use atlas_store_sqlite::{
     HistoricalEdge, HistoricalNode, Store, StoredEdgeHistory, StoredNodeHistory,
 };

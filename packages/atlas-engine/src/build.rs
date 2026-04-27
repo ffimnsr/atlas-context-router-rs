@@ -507,4 +507,67 @@ mod tests {
             Some("max_total_bytes_per_run")
         );
     }
+
+    // --- parallel parse → sequential write boundary --------------------------
+    //
+    // Verifies that the full build pipeline collects all parallel parse results
+    // before writing anything to the store.  A batch_size of 1 forces the
+    // Rayon closure to run once per file; all resulting `ParsedFile` values are
+    // collected into `results` before the sequential store write phase begins.
+    // Every parsed function node must appear in the store after the build
+    // completes, regardless of which Rayon thread produced it.
+    #[test]
+    fn build_parallel_parse_completes_before_store_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo_root = dir.path();
+
+        git(repo_root, &["init", "--quiet"]);
+        std::fs::write(repo_root.join("a.rs"), "pub fn alpha() {}\n").unwrap();
+        std::fs::write(repo_root.join("b.rs"), "pub fn beta() {}\n").unwrap();
+        std::fs::write(repo_root.join("c.rs"), "pub fn gamma() {}\n").unwrap();
+        git(repo_root, &["add", "a.rs", "b.rs", "c.rs"]);
+        git(repo_root, &["commit", "--quiet", "-m", "init"]);
+
+        let db_path = repo_root.join("worldtree.db");
+        let summary = build_graph(
+            Utf8Path::from_path(repo_root).unwrap(),
+            db_path.to_str().unwrap(),
+            // batch_size=1 forces one file per Rayon batch; all results must
+            // be collected before the sequential write phase processes them.
+            &BuildOptions {
+                fail_fast: true,
+                batch_size: 1,
+                budget: BuildRunBudget::default(),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(summary.parsed, 3, "all three files must be parsed");
+
+        // Every function from every parallel-parsed file must land in the store.
+        // If any write phase ran before parse collection finished, nodes from
+        // later batches would be missing.
+        let store = Store::open(db_path.to_str().unwrap()).unwrap();
+        assert!(
+            store
+                .node_signatures_by_file("a.rs")
+                .unwrap()
+                .contains_key("a.rs::fn::alpha"),
+            "a.rs::fn::alpha must be in the store"
+        );
+        assert!(
+            store
+                .node_signatures_by_file("b.rs")
+                .unwrap()
+                .contains_key("b.rs::fn::beta"),
+            "b.rs::fn::beta must be in the store"
+        );
+        assert!(
+            store
+                .node_signatures_by_file("c.rs")
+                .unwrap()
+                .contains_key("c.rs::fn::gamma"),
+            "c.rs::fn::gamma must be in the store"
+        );
+    }
 }

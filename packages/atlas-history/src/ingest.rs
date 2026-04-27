@@ -2,7 +2,9 @@
 
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::Context;
+
+use crate::error::Result;
 use atlas_store_sqlite::{Store, StoredCommit};
 use serde::Serialize;
 use tracing::warn;

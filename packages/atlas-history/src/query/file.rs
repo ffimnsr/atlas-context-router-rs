@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use anyhow::Result;
+use crate::error::Result;
 use atlas_store_sqlite::Store;
 
 use crate::git;
@@ -139,7 +139,9 @@ pub fn query_file_history_with_options(
     }
 
     let Some((first_snapshot_id, first_commit_sha)) = first_seen else {
-        anyhow::bail!("no historical file matches found for {file_path}");
+        return Err(crate::error::HistoryError::Other(format!(
+            "no historical file matches found for {file_path}"
+        )));
     };
     let (last_snapshot_id, last_commit_sha, current_file_hash) = last_seen
         .ok_or_else(|| anyhow::anyhow!("file history missing last appearance for {file_path}"))?;

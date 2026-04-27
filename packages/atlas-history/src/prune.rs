@@ -1,7 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::Context;
+
+use crate::error::{HistoryError, Result};
 use serde::Serialize;
 
 use atlas_store_sqlite::Store;
@@ -67,7 +69,9 @@ pub fn prune_historical_graph(
         && !policy.keep_tagged_only
         && !policy.keep_weekly
     {
-        anyhow::bail!("no history prune retention policy selected");
+        return Err(HistoryError::InvalidSelector(
+            "no history prune retention policy selected".to_owned(),
+        ));
     }
 
     if policy.keep_all {

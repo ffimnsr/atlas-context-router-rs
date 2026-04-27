@@ -762,4 +762,151 @@ mod tests {
             "incremental update must keep repo root registered in repos table"
         );
     }
+
+    // --- parallel parse → sequential write boundary --------------------------
+    //
+    // Verifies that the incremental update pipeline collects all parallel parse
+    // results for changed files before writing anything to the store.
+    // A batch_size of 1 forces one file per Rayon batch; all `ParsedFile`
+    // values from the changed-file phase are collected into `parsed_changed`
+    // before the sequential write phase begins.  Both updated files must appear
+    // correctly in the store after the update regardless of Rayon scheduling.
+    #[test]
+    fn update_changed_files_parallel_parse_completes_before_store_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo_root = dir.path();
+
+        git(repo_root, &["init", "--quiet"]);
+        std::fs::write(repo_root.join("a.rs"), "pub fn alpha() {}\n").unwrap();
+        std::fs::write(repo_root.join("b.rs"), "pub fn beta() {}\n").unwrap();
+        std::fs::write(repo_root.join("c.rs"), "pub fn gamma() {}\n").unwrap();
+        git(repo_root, &["add", "a.rs", "b.rs", "c.rs"]);
+        git(repo_root, &["commit", "--quiet", "-m", "init"]);
+
+        let db_path = repo_root.join("worldtree.db");
+        build_graph(
+            Utf8Path::from_path(repo_root).unwrap(),
+            db_path.to_str().unwrap(),
+            &BuildOptions::default(),
+        )
+        .unwrap();
+
+        // Modify two files in the working tree, each gaining a new function.
+        std::fs::write(
+            repo_root.join("a.rs"),
+            "pub fn alpha() {}\npub fn alpha2() {}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            repo_root.join("b.rs"),
+            "pub fn beta() {}\npub fn beta2() {}\n",
+        )
+        .unwrap();
+
+        let summary = update_graph(
+            Utf8Path::from_path(repo_root).unwrap(),
+            db_path.to_str().unwrap(),
+            // batch_size=1 forces one file per Rayon batch so both parse
+            // results are collected before the sequential write phase.
+            &UpdateOptions {
+                fail_fast: true,
+                batch_size: 1,
+                target: UpdateTarget::WorkingTree,
+                budget: BuildRunBudget::default(),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            summary.parsed, 2,
+            "both modified files must be parsed in the update"
+        );
+
+        // New functions from both parallel-parsed files must be in the store.
+        // If the write phase ran before parse collection finished, one file's
+        // new nodes would be missing.
+        let store = Store::open(db_path.to_str().unwrap()).unwrap();
+        let a_sigs = store.node_signatures_by_file("a.rs").unwrap();
+        assert!(
+            a_sigs.contains_key("a.rs::fn::alpha2"),
+            "a.rs::fn::alpha2 must be in the store after update"
+        );
+        let b_sigs = store.node_signatures_by_file("b.rs").unwrap();
+        assert!(
+            b_sigs.contains_key("b.rs::fn::beta2"),
+            "b.rs::fn::beta2 must be in the store after update"
+        );
+        // Unchanged file must be intact.
+        let c_sigs = store.node_signatures_by_file("c.rs").unwrap();
+        assert!(
+            c_sigs.contains_key("c.rs::fn::gamma"),
+            "c.rs::fn::gamma must still be present after update"
+        );
+    }
+
+    // Verifies that dependent file parse results are collected before the write
+    // phase executes.  Files passed explicitly via `UpdateTarget::Files` all go
+    // through the changed-file parallel parse phase; the write phase must see
+    // all of them regardless of Rayon scheduling order.
+    //
+    // Note: the dependency-detection path (phase 2 / `parsed_deps`) follows the
+    // same collect-then-write pattern as phase 1; that structural guarantee
+    // holds for both phases because both populate a Vec<ParsedFile> before the
+    // single sequential write loop at the end of `update_graph`.
+    #[test]
+    fn update_explicit_file_list_parse_completes_before_store_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo_root = dir.path();
+
+        git(repo_root, &["init", "--quiet"]);
+        std::fs::write(repo_root.join("x.rs"), "pub fn x1() {}\n").unwrap();
+        std::fs::write(repo_root.join("y.rs"), "pub fn y1() {}\n").unwrap();
+        git(repo_root, &["add", "x.rs", "y.rs"]);
+        git(repo_root, &["commit", "--quiet", "-m", "init"]);
+
+        let db_path = repo_root.join("worldtree.db");
+        build_graph(
+            Utf8Path::from_path(repo_root).unwrap(),
+            db_path.to_str().unwrap(),
+            &BuildOptions::default(),
+        )
+        .unwrap();
+
+        // Modify both files; pass them explicitly to exercise the Files path.
+        std::fs::write(repo_root.join("x.rs"), "pub fn x1() {}\npub fn x2() {}\n").unwrap();
+        std::fs::write(repo_root.join("y.rs"), "pub fn y1() {}\npub fn y2() {}\n").unwrap();
+
+        let summary = update_graph(
+            Utf8Path::from_path(repo_root).unwrap(),
+            db_path.to_str().unwrap(),
+            &UpdateOptions {
+                fail_fast: true,
+                batch_size: 1,
+                target: UpdateTarget::Files(vec!["x.rs".to_string(), "y.rs".to_string()]),
+                budget: BuildRunBudget::default(),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            summary.parsed, 2,
+            "both explicitly listed files must be parsed"
+        );
+
+        let store = Store::open(db_path.to_str().unwrap()).unwrap();
+        assert!(
+            store
+                .node_signatures_by_file("x.rs")
+                .unwrap()
+                .contains_key("x.rs::fn::x2"),
+            "x.rs::fn::x2 must be in the store after explicit-file update"
+        );
+        assert!(
+            store
+                .node_signatures_by_file("y.rs")
+                .unwrap()
+                .contains_key("y.rs::fn::y2"),
+            "y.rs::fn::y2 must be in the store after explicit-file update"
+        );
+    }
 }

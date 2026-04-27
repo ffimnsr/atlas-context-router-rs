@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use anyhow::Result;
+use crate::error::Result;
 use atlas_store_sqlite::Store;
 
 use crate::reports::{build_evidence, edge_identifier_for};
@@ -96,7 +96,9 @@ pub fn query_dependency_history(
     }
 
     let Some((first_snapshot_id, first_commit_sha)) = first_seen else {
-        anyhow::bail!("no historical dependency matches found for {source_qn} -> {target_qn}");
+        return Err(crate::error::HistoryError::Other(format!(
+            "no historical dependency matches found for {source_qn} -> {target_qn}"
+        )));
     };
     let (last_snapshot_id, last_commit_sha) = last_seen.ok_or_else(|| {
         anyhow::anyhow!("dependency history missing last appearance for {source_qn} -> {target_qn}")

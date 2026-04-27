@@ -8,6 +8,14 @@ use crate::SessionId;
 
 use super::*;
 
+// Compile-time enforcement: `SessionStore` must not implement `Send` or `Sync`.
+//
+// `SessionStore` carries `PhantomData<*const ()>` which explicitly opts it out
+// of `Send` and `Sync` auto-traits, enforcing thread confinement at the
+// compiler level regardless of what `rusqlite::Connection` implements.
+static_assertions::assert_not_impl_any!(SessionStore: Send);
+static_assertions::assert_not_impl_any!(SessionStore: Sync);
+
 fn open_store(
     max_events_per_session: usize,
     max_inline_payload_bytes: usize,

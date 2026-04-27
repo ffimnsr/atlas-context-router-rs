@@ -23,6 +23,23 @@ For active backlog, see ISSUES.md.
 - Graph lifecycle diagnostics are implemented through status, doctor, db-check, and debug-graph style workflows.
 - Watch mode and operational diagnostics are implemented for local development refresh loops.
 
+## Historical Graphs
+
+- Commit-linked graph snapshot storage is implemented with schema for commits, graph_snapshots, and snapshot_files tables.
+- Deterministic git metadata ingestion is implemented with git rev-parse, log, show, ls-tree, diff-tree, and cat-file operations.
+- Checkout-free file reconstruction is implemented using `git show <sha>:<path>` with binary detection and path canonicalization.
+- File graph reuse and content-addressed storage is implemented to avoid duplicating unchanged file graphs across commits.
+- Snapshot membership tracking is implemented to record which file hashes, nodes, and edges are active at each commit.
+- Incremental historical indexing is implemented with missing-commit detection, force-push safeguards, and explicit repair mode for rewritten history.
+- Lifecycle tables `node_history` and `edge_history` are implemented to track first/last/introduction/removal across snapshots and commits.
+- Graph diffing across commits is implemented with file, node, edge, module, and architecture diff scopes.
+- Symbol, file, module, and dependency history query commands are implemented with evidence-backed outputs including commit SHAs and qualified names.
+- Churn metrics, stability indicators, and trend analysis are implemented for per-symbol, per-file, and per-module analysis.
+- Snapshot reconstruction is implemented to restore graph state for any indexed commit with partial completeness tracking.
+- Retention controls and pruning are implemented with keep-latest-N, keep-by-age, and storage diagnostics.
+- CLI commands `atlas history status`, `atlas history build`, `atlas history update`, `atlas history diff`, and pruning workflows are implemented.
+- All historical operations preserve exact commit SHA evidence, are deterministic and reproducible, and never rely on branch names for identity.
+
 ## Query, Search, and Impact Surfaces
 
 - Symbol lookup is implemented through graph query surfaces with ranked exact-match, qualified-name, filtered, fuzzy, regex, and hybrid retrieval modes.
@@ -72,4 +89,4 @@ For active backlog, see ISSUES.md.
 
 ## Still Open
 
-- Historical graphs, insights, multi-repo federation, predictive and decision memory, readiness unification, corruption recovery, runtime enrichment, and several retrieval/context follow-up patches remain in ISSUES.md.
+- Insights, multi-repo federation, predictive and decision memory, readiness unification, corruption recovery, runtime enrichment, and several retrieval/context follow-up patches remain in ISSUES.md.

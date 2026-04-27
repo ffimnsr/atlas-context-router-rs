@@ -1,7 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::Context;
+
+use crate::error::Result;
 use atlas_store_sqlite::{
     HistoricalEdge, HistoricalNode, Store, StoredSnapshot, StoredSnapshotFile,
 };
@@ -520,12 +522,13 @@ pub(crate) fn validate_snapshot_materialization(
         return Ok(());
     }
 
-    anyhow::bail!(
+    Err(anyhow::anyhow!(
         "snapshot membership rows appear corrupted for commit {} (snapshot_id={}): {}",
         snapshot.commit_sha,
         snapshot.snapshot_id,
         mismatches.join(", ")
     )
+    .into())
 }
 
 fn node_added(node: &HistoricalNode) -> NodeDiffEntry {

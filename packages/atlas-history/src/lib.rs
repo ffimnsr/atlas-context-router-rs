@@ -32,6 +32,7 @@
 pub mod analytics;
 pub mod build;
 pub mod diff;
+pub mod error;
 pub mod git;
 pub mod ingest;
 pub mod lifecycle;
@@ -55,6 +56,7 @@ pub use build::{
     rebuild_historical_snapshot_with_progress,
 };
 pub use diff::{GraphDiffReport, HistoricalSnapshot, diff_snapshots, reconstruct_snapshot};
+pub use error::{HistoryError, Result};
 pub use ingest::IngestError;
 pub use lifecycle::{LifecycleSummary, recompute_lifecycle};
 pub use prune::{HistoryPruneSummary, HistoryRetentionPolicy, prune_historical_graph};

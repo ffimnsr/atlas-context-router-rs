@@ -9,6 +9,7 @@ publish = false
 atlas-core.workspace = true
 atlas-store-sqlite = { path = "../atlas-store-sqlite" , version = "1.0.0"}
 anyhow.workspace = true
+thiserror.workspace = true
 regex.workspace = true
 serde_json.workspace = true
 serde.workspace = true

@@ -33,11 +33,16 @@ pub use types::{
 /// Owns exactly one thread-confined SQLite connection for `context.db`.
 /// Concurrent access, when needed, must use separate connections rather than
 /// sharing this one across threads.
+///
+/// The `_thread_bound` field holds `PhantomData<*const ()>` to explicitly
+/// opt out of `Send` and `Sync` auto-traits at the compiler level.
 pub struct ContentStore {
     pub(super) conn: Connection,
     pub(super) config: ContentStoreConfig,
     pub(super) routing_stats: RoutingStats,
     pub(super) run_stats: IndexRunStats,
+    /// Marker that opts this struct out of `Send` and `Sync`.
+    _thread_bound: std::marker::PhantomData<*const ()>,
 }
 
 impl ContentStore {
@@ -71,6 +76,7 @@ impl ContentStore {
             config,
             routing_stats: RoutingStats::default(),
             run_stats: IndexRunStats::default(),
+            _thread_bound: std::marker::PhantomData,
         };
         apply_atlas_pragmas(&store.conn)?;
         set_application_id(&store.conn, application_id::CONTEXT)?;

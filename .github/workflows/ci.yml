@@ -31,12 +31,61 @@ jobs:
 
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: atlas-rust-${{ runner.os }}
+          cache-on-failure: "true"
 
       - name: Check formatting
         run: cargo fmt --all --check
 
       - name: Run clippy
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+
+  docs:
+    name: Docs
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: atlas-rust-${{ runner.os }}
+          cache-on-failure: "true"
+
+      - name: Build docs with warnings denied
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --workspace --no-deps --locked
+
+  bench-smoke:
+    name: Bench Smoke
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: atlas-rust-${{ runner.os }}
+          cache-on-failure: "true"
+
+      - name: Compile benchmarks
+        run: cargo bench --workspace --no-run --locked
 
   test:
     name: Test (${{ matrix.os }})
@@ -60,10 +109,13 @@ jobs:
 
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: atlas-rust-${{ runner.os }}
+          cache-on-failure: "true"
 
       - name: Run tests
-        run: cargo test --workspace
+        run: cargo test --workspace --locked
 
       - name: SQLite FTS5 smoke test
         if: matrix.os == 'ubuntu-latest'
-        run: cargo test -p atlas-cli --test cli_quality_gates sqlite_fts5_smoke_round_trip -- --exact
+        run: cargo test -p atlas-cli --locked --test cli_quality_gates sqlite_fts5_smoke_round_trip -- --exact

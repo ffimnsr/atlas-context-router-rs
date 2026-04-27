@@ -8,6 +8,18 @@ on:
 
 permissions:
   contents: write
+  actions: read
+  id-token: write
+  attestations: write
+  artifact-metadata: write
+
+env:
+  CARGO_INCREMENTAL: 0
+  CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 1
+  CARGO_PROFILE_RELEASE_LTO: thin
+  CARGO_PROFILE_RELEASE_PANIC: abort
+  CARGO_PROFILE_RELEASE_STRIP: symbols
+  RUSTFLAGS: --remap-path-prefix=${{ github.workspace }}=/workspace
 
 concurrency:
   group: release-${{ github.ref }}
@@ -31,28 +43,82 @@ jobs:
 
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: atlas-rust-${{ runner.os }}
+          cache-on-failure: "true"
 
-      - name: Run quality gates
-        run: |
-          cargo fmt --all --check
-          cargo clippy --workspace --all-targets --all-features -- -D warnings
-          cargo test --workspace
-          cargo test -p atlas-cli --test cli_quality_gates sqlite_fts5_smoke_round_trip -- --exact
-
-      - name: Package installer
+      - name: Resolve matching CI run
+        id: ci_status
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
 
+          runs_json="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${GITHUB_SHA}&status=completed&per_page=20")"
+
+          if jq -e '.workflow_runs[] | select(.head_sha == env.GITHUB_SHA and .name == "CI" and .conclusion == "success")' <<<"${runs_json}" >/dev/null; then
+            echo "ci_green=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "ci_green=false" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Run quality gates
+        run: |
+          cargo fmt --all --check
+          cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+          RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked
+          cargo bench --workspace --no-run --locked
+
+      - name: Run test suite when CI result is unavailable
+        if: github.ref_type != 'tag' || steps.ci_status.outputs.ci_green != 'true'
+        run: |
+          cargo test --workspace --locked
+          cargo test -p atlas-cli --locked --test cli_quality_gates sqlite_fts5_smoke_round_trip -- --exact
+
+      - name: Skip duplicate tests after green CI
+        if: github.ref_type == 'tag' && steps.ci_status.outputs.ci_green == 'true'
+        run: echo "Skipping cargo test because commit already passed ci.yml."
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v4.1.0
+
+      - name: Prepare release inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          shasum -a 256 Cargo.lock | awk '{print $1 "  Cargo.lock"}' > Cargo.lock.sha256
           shasum -a 256 install.sh | awk '{print $1 "  install.sh"}' > install.sh.sha256
+
+      - name: Sign Cargo.lock
+        run: cosign sign-blob --yes --bundle Cargo.lock.sigstore.json Cargo.lock
+
+      - name: Sign installer
+        run: cosign sign-blob --yes --bundle install.sh.sigstore.json install.sh
+
+      - name: Attest Cargo.lock
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: Cargo.lock
+
+      - name: Attest installer
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: install.sh
 
       - name: Upload installer bundle
         uses: actions/upload-artifact@v4
         with:
           name: release-installer
           path: |
+            Cargo.lock
+            Cargo.lock.sha256
+            Cargo.lock.sigstore.json
             install.sh
             install.sh.sha256
+            install.sh.sigstore.json
 
   build:
     name: Build ${{ matrix.target }}
@@ -86,10 +152,17 @@ jobs:
 
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: atlas-rust-${{ runner.os }}
+          cache-on-failure: "true"
 
       - name: Install Linux musl tools
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Derive reproducible build timestamp
+        shell: bash
+        run: echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)" >> "${GITHUB_ENV}"
 
       - name: Build release binary
         run: cargo build --locked --release -p atlas-cli --target ${{ matrix.target }}
@@ -120,10 +193,38 @@ jobs:
 
           mkdir -p "${BASENAME}"
           cp "target/${{ matrix.target }}/release/${{ matrix.binary_name }}" "${BASENAME}/atlas"
+          cp Cargo.lock "${BASENAME}/"
           cp README.md LICENSE LICENSE-APACHE "${BASENAME}/"
 
           tar -czf "${BASENAME}.tar.gz" "${BASENAME}"
           shasum -a 256 "${BASENAME}.tar.gz" | awk -v name="${BASENAME}.tar.gz" '{print $1 "  " name}' > "${BASENAME}.tar.gz.sha256"
+
+      - name: Generate SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          path: ./${{ steps.meta.outputs.basename }}
+          artifact-name: ${{ steps.meta.outputs.basename }}.spdx.json
+          output-file: ${{ steps.meta.outputs.basename }}.spdx.json
+          format: spdx-json
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v4.1.0
+
+      - name: Sign archive
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          BASENAME="${{ steps.meta.outputs.basename }}"
+          cosign sign-blob --yes --bundle "${BASENAME}.tar.gz.sigstore.json" "${BASENAME}.tar.gz"
+          cosign sign-blob --yes --bundle "${BASENAME}.spdx.json.sigstore.json" "${BASENAME}.spdx.json"
+
+      - name: Attest archive provenance
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: ${{ steps.meta.outputs.basename }}.${{ matrix.archive_ext }}
 
       - name: Upload release bundle
         uses: actions/upload-artifact@v4
@@ -132,6 +233,9 @@ jobs:
           path: |
             ${{ steps.meta.outputs.basename }}.${{ matrix.archive_ext }}
             ${{ steps.meta.outputs.basename }}.${{ matrix.archive_ext }}.sha256
+            ${{ steps.meta.outputs.basename }}.${{ matrix.archive_ext }}.sigstore.json
+            ${{ steps.meta.outputs.basename }}.spdx.json
+            ${{ steps.meta.outputs.basename }}.spdx.json.sigstore.json
 
   publish:
     name: Publish release
@@ -152,6 +256,13 @@ jobs:
           files: |
             *.tar.gz
             *.tar.gz.sha256
+            *.tar.gz.sigstore.json
+            *.spdx.json
+            *.spdx.json.sigstore.json
+            Cargo.lock
+            Cargo.lock.sha256
+            Cargo.lock.sigstore.json
             install.sh
             install.sh.sha256
+            install.sh.sigstore.json
           generate_release_notes: true

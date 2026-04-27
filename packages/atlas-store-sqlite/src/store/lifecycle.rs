@@ -26,7 +26,10 @@ impl Store {
         set_application_id(&conn, application_id::WORLDTREE)?;
         Self::register_regexp_udf(&conn)?;
 
-        let mut store = Self { conn };
+        let mut store = Self {
+            conn,
+            _thread_bound: std::marker::PhantomData,
+        };
         store.migrate()?;
         Ok(store)
     }

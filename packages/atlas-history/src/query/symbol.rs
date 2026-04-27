@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use anyhow::Result;
+use crate::error::Result;
 use atlas_store_sqlite::Store;
 
 use crate::reports::{build_evidence, node_identifier_for};
@@ -141,7 +141,9 @@ pub fn query_symbol_history(
     }
 
     let Some((first_snapshot_id, first_commit_sha)) = first_seen else {
-        anyhow::bail!("no historical symbol matches found for {qualified_name}");
+        return Err(crate::error::HistoryError::Other(format!(
+            "no historical symbol matches found for {qualified_name}"
+        )));
     };
     let (last_snapshot_id, last_commit_sha, current_file_paths) = last_seen.ok_or_else(|| {
         anyhow::anyhow!("symbol history missing last appearance for {qualified_name}")

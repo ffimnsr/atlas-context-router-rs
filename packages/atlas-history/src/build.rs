@@ -16,7 +16,9 @@ use std::fmt;
 use std::path::Path;
 use std::time::Instant;
 
-use anyhow::{Context, Result};
+use anyhow::Context;
+
+use crate::error::Result;
 use atlas_core::ParsedFile;
 use atlas_parser::ParserRegistry;
 use atlas_store_sqlite::{

@@ -3,6 +3,14 @@ use tempfile::NamedTempFile;
 use super::util::{is_corruption_error, levenshtein, rrf_merge};
 use super::*;
 
+// Compile-time enforcement: `ContentStore` must not implement `Send` or `Sync`.
+//
+// `ContentStore` carries `PhantomData<*const ()>` which explicitly opts it out
+// of `Send` and `Sync` auto-traits, enforcing thread confinement at the
+// compiler level regardless of what `rusqlite::Connection` implements.
+static_assertions::assert_not_impl_any!(ContentStore: Send);
+static_assertions::assert_not_impl_any!(ContentStore: Sync);
+
 fn open_store() -> ContentStore {
     let file = NamedTempFile::new().unwrap();
     let path = file.path().to_str().unwrap().to_string();

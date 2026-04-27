@@ -10,7 +10,19 @@
 //! - `ATLAS_EMBED_URL`   — base URL, e.g. `http://localhost:11434` (required for hybrid)
 //! - `ATLAS_EMBED_MODEL` — model name, e.g. `nomic-embed-text` (default)
 
-use anyhow::{Context, Result};
+use thiserror::Error;
+
+/// Typed error for HTTP embedding backend operations.
+#[derive(Debug, Error)]
+pub enum EmbedError {
+    #[error("embedding HTTP request failed: {0}")]
+    Http(String),
+    #[error("empty response from embedding server")]
+    EmptyResponse,
+    #[error("failed to parse embedding response: {0}")]
+    Parse(String),
+}
+
 use serde::Deserialize;
 
 // ---------------------------------------------------------------------------
@@ -47,7 +59,7 @@ impl EmbeddingConfig {
 /// The endpoint format is auto-detected from `base_url`:
 /// - URLs containing `/v1` → OpenAI-compat (`POST /v1/embeddings`)
 /// - All others            → Ollama native (`POST /api/embed`)
-pub fn embed_text(config: &EmbeddingConfig, text: &str) -> Result<Vec<f32>> {
+pub fn embed_text(config: &EmbeddingConfig, text: &str) -> Result<Vec<f32>, EmbedError> {
     let url = if config.base_url.contains("/v1") {
         format!("{}/embeddings", config.base_url.trim_end_matches('/'))
     } else {
@@ -62,11 +74,11 @@ pub fn embed_text(config: &EmbeddingConfig, text: &str) -> Result<Vec<f32>> {
     let mut response = ureq::post(&url)
         .header("Content-Type", "application/json")
         .send_json(&body)
-        .map_err(|e| anyhow::anyhow!("embedding HTTP request failed: {e}"))?;
+        .map_err(|e| EmbedError::Http(e.to_string()))?;
     let resp_text = response
         .body_mut()
         .read_to_string()
-        .context("reading embedding response body")?;
+        .map_err(|e| EmbedError::Parse(format!("reading embedding response body: {e}")))?;
 
     // Try Ollama format first (has `embeddings` array of arrays).
     if let Ok(ollama) = serde_json::from_str::<OllamaResp>(&resp_text) {
@@ -74,18 +86,19 @@ pub fn embed_text(config: &EmbeddingConfig, text: &str) -> Result<Vec<f32>> {
             .embeddings
             .into_iter()
             .next()
-            .ok_or_else(|| anyhow::anyhow!("empty embeddings array in Ollama response"));
+            .ok_or(EmbedError::EmptyResponse);
     }
 
     // Fall back to OpenAI-compat format.
-    let openai: OpenAiResp = serde_json::from_str(&resp_text)
-        .with_context(|| format!("cannot parse embedding response from {url}"))?;
+    let openai: OpenAiResp = serde_json::from_str(&resp_text).map_err(|e| {
+        EmbedError::Parse(format!("cannot parse embedding response from {url}: {e}"))
+    })?;
     openai
         .data
         .into_iter()
         .next()
         .map(|d| d.embedding)
-        .ok_or_else(|| anyhow::anyhow!("empty data array in OpenAI embedding response"))
+        .ok_or(EmbedError::EmptyResponse)
 }
 
 // ---------------------------------------------------------------------------

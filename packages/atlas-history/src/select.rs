@@ -6,7 +6,9 @@
 
 use std::path::Path;
 
-use anyhow::{Context, Result, bail};
+use anyhow::Context;
+
+use crate::error::Result;
 
 use crate::git::{self, GitCommitMeta};
 
@@ -56,7 +58,7 @@ impl CommitSelector {
             CommitSelector::Latest { start_ref } => {
                 let sha = git::rev_parse(repo, start_ref)
                     .map_err(|e| anyhow::anyhow!("ref not found {:?}: {e}", start_ref))?;
-                git::log_commits(repo, &sha, Some(1), None, None)
+                Ok(git::log_commits(repo, &sha, Some(1), None, None)?)
             }
 
             CommitSelector::Bounded {
@@ -67,7 +69,13 @@ impl CommitSelector {
             } => {
                 let sha = git::rev_parse(repo, start_ref)
                     .map_err(|e| anyhow::anyhow!("ref not found {:?}: {e}", start_ref))?;
-                git::log_commits(repo, &sha, *max_commits, since.as_deref(), until.as_deref())
+                Ok(git::log_commits(
+                    repo,
+                    &sha,
+                    *max_commits,
+                    since.as_deref(),
+                    until.as_deref(),
+                )?)
             }
 
             CommitSelector::Explicit { shas } => {
@@ -78,7 +86,7 @@ impl CommitSelector {
                     git::validate_sha(sha)
                         .map_err(|e| anyhow::anyhow!("invalid SHA in explicit list: {e}"))?;
                 }
-                git::log_commits_explicit(repo, shas)
+                Ok(git::log_commits_explicit(repo, shas)?)
             }
 
             CommitSelector::Range { range } => {
@@ -87,26 +95,28 @@ impl CommitSelector {
                     let left = left.trim();
                     let right = right.trim();
                     if left.is_empty() || right.is_empty() {
-                        bail!("invalid merge-base range: {:?}", range);
+                        return Err(crate::error::HistoryError::InvalidSelector(format!(
+                            "invalid merge-base range: {range:?}"
+                        )));
                     }
                     let base = git::merge_base(repo, left, right).with_context(|| {
                         format!("resolve merge base for range {left}...{right}")
                     })?;
                     let log_range = format!("{base}..{right}");
-                    return git::log_commits(repo, &log_range, None, None, None);
+                    return Ok(git::log_commits(repo, &log_range, None, None, None)?);
                 }
-                git::log_commits(repo, range, None, None, None)
+                Ok(git::log_commits(repo, range, None, None, None)?)
             }
         }
     }
 }
 
-fn validate_range(range: &str) -> Result<()> {
+fn validate_range(range: &str) -> anyhow::Result<()> {
     if range
         .chars()
         .any(|c| matches!(c, '&' | '|' | ';' | '$' | '`' | '\n' | '\r'))
     {
-        bail!("unsafe characters in commit range: {:?}", range);
+        anyhow::bail!("unsafe characters in commit range: {:?}", range);
     }
     Ok(())
 }

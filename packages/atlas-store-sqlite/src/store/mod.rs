@@ -26,8 +26,17 @@ type DanglingEdge = (i64, String, String, String, &'static str);
 /// All graph mutation goes through this struct. Concurrent reads, if added
 /// later, must use separate connections rather than shared ownership of this
 /// one. No read pool exists today.
+///
+/// The `_thread_bound` field holds `PhantomData<*const ()>` to explicitly
+/// opt out of `Send` and `Sync` auto-traits. This enforces thread confinement
+/// at the compiler level even though `rusqlite::Connection` gained `Send` in
+/// 0.32 (single-threaded serialized mode). Atlas stores must stay on the
+/// thread that opened them; Rayon closures receive only parse inputs.
 pub struct Store {
     conn: Connection,
+    /// Marker that opts this struct out of `Send` and `Sync`.
+    /// Atlas stores are thread-confined; see struct-level doc.
+    _thread_bound: std::marker::PhantomData<*const ()>,
 }
 
 #[cfg(test)]

@@ -1,7 +1,9 @@
 use std::path::Path;
 use std::time::Instant;
 
-use anyhow::{Context, Result, bail};
+use anyhow::Context;
+
+use crate::error::{HistoryError, Result};
 use atlas_parser::ParserRegistry;
 use atlas_store_sqlite::Store;
 use serde::Serialize;
@@ -93,10 +95,10 @@ where
     }
 
     if is_shallow && latest_indexed_sha.is_some() && indexed_base_sha.is_none() {
-        bail!(
+        return Err(HistoryError::Other(format!(
             "shallow clone missing indexed base commit {}; fetch more history or rerun after `git fetch --unshallow`",
             latest_indexed_sha.as_deref().unwrap_or("(unknown)")
-        );
+        )));
     }
 
     let divergence_detected = match latest_indexed_sha.as_ref() {
@@ -104,9 +106,9 @@ where
         None => false,
     };
     if divergence_detected && !repair {
-        bail!(
+        return Err(HistoryError::Divergence(format!(
             "indexed history diverged from current {branch} ancestry; rerun with `atlas history update --repair` after verifying force-push or rewritten history"
-        );
+        )));
     }
 
     missing.reverse();
