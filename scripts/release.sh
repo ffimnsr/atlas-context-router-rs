@@ -4,6 +4,7 @@ set -euo pipefail
 
 readonly RELEASE_MANIFEST="packages/atlas-cli/Cargo.toml"
 readonly REMOTE_NAME="origin"
+readonly CHANGELOG_FILE="CHANGELOG.md"
 
 # Topological publish order: dependencies before dependents.
 readonly PUBLISH_ORDER=(
@@ -55,6 +56,13 @@ die() {
   exit 1
 }
 
+append_section_entry() {
+  local section_name="$1"
+  local entry="$2"
+
+  printf -v "$section_name" '%s- %s\n' "${!section_name}" "$entry"
+}
+
 need_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "required command not found: $1"
 }
@@ -82,6 +90,158 @@ manifest_version() {
 ensure_clean_worktree() {
   git diff --quiet --exit-code || die "working tree has unstaged changes"
   git diff --cached --quiet --exit-code || die "index has staged but uncommitted changes"
+}
+
+previous_release_tag() {
+  git describe --tags --abbrev=0 --match 'v[0-9]*.[0-9]*.[0-9]*' 2>/dev/null || true
+}
+
+render_changelog_group() {
+  local title="$1"
+  local content="$2"
+
+  [[ -n "$content" ]] || return 0
+
+  printf '### %s\n\n' "$title"
+  printf '%s\n' "$content"
+  printf '\n'
+}
+
+update_changelog() {
+  local version="$1"
+  local release_date="$2"
+  local previous_tag="$3"
+  local log_range
+  local features=""
+  local fixes=""
+  local docs=""
+  local tests=""
+  local ci=""
+  local maintenance=""
+  local other=""
+  local entry_count=0
+  local conventional_commit_regex='^([[:alnum:]_-]+)(\([^)]+\))?(!)?:[[:space:]]*(.+)$'
+
+  if [[ -n "$previous_tag" ]]; then
+    log_range="${previous_tag}..HEAD"
+  else
+    log_range="HEAD"
+  fi
+
+  while IFS=$'\t' read -r commit_sha subject; do
+    local short_sha category message commit_type
+    [[ -n "$commit_sha" ]] || continue
+
+    short_sha="$(git rev-parse --short "$commit_sha")"
+    category="other"
+    message="$subject"
+
+    if [[ "$subject" =~ $conventional_commit_regex ]]; then
+      commit_type="${BASH_REMATCH[1]}"
+      message="${BASH_REMATCH[4]}"
+
+      case "$commit_type" in
+        feat)
+          category="features"
+          ;;
+        fix)
+          category="fixes"
+          ;;
+        docs)
+          category="docs"
+          ;;
+        test)
+          category="tests"
+          ;;
+        ci)
+          category="ci"
+          ;;
+        build|style|refactor|perf|chore)
+          category="maintenance"
+          ;;
+      esac
+    fi
+
+    case "$category" in
+      features)
+        append_section_entry features "${message} (\`${short_sha}\`)"
+        ;;
+      fixes)
+        append_section_entry fixes "${message} (\`${short_sha}\`)"
+        ;;
+      docs)
+        append_section_entry docs "${message} (\`${short_sha}\`)"
+        ;;
+      tests)
+        append_section_entry tests "${message} (\`${short_sha}\`)"
+        ;;
+      ci)
+        append_section_entry ci "${message} (\`${short_sha}\`)"
+        ;;
+      maintenance)
+        append_section_entry maintenance "${message} (\`${short_sha}\`)"
+        ;;
+      *)
+        append_section_entry other "${message} (\`${short_sha}\`)"
+        ;;
+    esac
+
+    ((entry_count += 1))
+  done < <(git log --reverse --format='%H%x09%s' "$log_range")
+
+  ((entry_count > 0)) || die "no commits found for changelog range: ${log_range}"
+
+  if [[ -f "$CHANGELOG_FILE" ]] && grep -Eq "^## ${version//./\\.}([[:space:]]|$)" "$CHANGELOG_FILE"; then
+    die "$CHANGELOG_FILE already contains an entry for version $version"
+  fi
+
+  local tmp preface existing_releases
+  tmp="$(mktemp)"
+  preface=""
+  existing_releases=""
+
+  if [[ -f "$CHANGELOG_FILE" ]]; then
+    preface="$(awk '
+      BEGIN { seen_release = 0 }
+      /^## [0-9]+\.[0-9]+\.[0-9]+([[:space:]]-|$)/ {
+        seen_release = 1
+        exit
+      }
+      { print }
+    ' "$CHANGELOG_FILE")"
+
+    existing_releases="$(awk '
+      BEGIN { seen_release = 0 }
+      /^## [0-9]+\.[0-9]+\.[0-9]+([[:space:]]-|$)/ {
+        seen_release = 1
+      }
+      seen_release { print }
+    ' "$CHANGELOG_FILE")"
+  fi
+
+  {
+    if [[ -n "$preface" ]]; then
+      printf '%s\n' "$preface"
+      [[ "$preface" == *$'\n' ]] || printf '\n'
+    else
+      printf '# Changelog\n\n'
+    fi
+
+    printf '## %s - %s\n\n' "$version" "$release_date"
+    render_changelog_group "Features" "$features"
+    render_changelog_group "Fixes" "$fixes"
+    render_changelog_group "Documentation" "$docs"
+    render_changelog_group "Tests" "$tests"
+    render_changelog_group "CI" "$ci"
+    render_changelog_group "Maintenance" "$maintenance"
+    render_changelog_group "Other Changes" "$other"
+
+    if [[ -n "$existing_releases" ]]; then
+      printf '%s\n' "$existing_releases"
+    fi
+  } >"$tmp"
+
+  mv "$tmp" "$CHANGELOG_FILE"
 }
 
 current_version() {
@@ -251,6 +411,7 @@ main() {
 
   need_cmd awk
   need_cmd cargo
+  need_cmd date
   need_cmd git
   need_cmd mktemp
 
@@ -275,6 +436,8 @@ main() {
   [[ "$old_version" != "$version" ]] || die "version is already $version"
 
   local tag_name="v$version"
+  local previous_tag
+  local release_date
 
   if (( run_push )); then
     ensure_remote_exists
@@ -282,7 +445,11 @@ main() {
 
   ensure_tag_absent "$tag_name"
 
+  previous_tag="$(previous_release_tag)"
+  release_date="$(date +%Y-%m-%d)"
+
   update_workspace_versions "$version"
+  update_changelog "$version" "$release_date" "$previous_tag"
 
   cargo check --workspace --all-targets --quiet
   cargo fmt --all --check
@@ -290,7 +457,7 @@ main() {
   cargo test --workspace
   cargo test -p atlas-cli --test cli_quality_gates sqlite_fts5_smoke_round_trip -- --exact
 
-  git add Cargo.lock packages/*/Cargo.toml
+  git add Cargo.lock packages/*/Cargo.toml "$CHANGELOG_FILE"
   git commit -m "release: $tag_name"
 
   git tag -a "$tag_name" -m "release: $tag_name"
