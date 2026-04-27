@@ -61,8 +61,9 @@ use std::io::IsTerminal;
 use anyhow::{Context, Result};
 use atlas_core::BudgetPolicy;
 use atlas_core::model::ChangeType;
-use atlas_repo::DiffTarget;
+use atlas_repo::{DiffTarget, find_repo_root};
 use atlas_store_sqlite::Store;
+use camino::Utf8Path;
 
 use crate::cli::Cli;
 
@@ -151,6 +152,11 @@ pub(crate) fn query_display_path(node: &atlas_core::Node) -> String {
 }
 
 pub(crate) fn resolve_repo(cli: &Cli) -> Result<String> {
+    let cwd = std::env::current_dir().context("cannot determine cwd")?;
+    resolve_repo_with_cwd(cli, &cwd)
+}
+
+fn resolve_repo_with_cwd(cli: &Cli, cwd: &std::path::Path) -> Result<String> {
     if let Some(r) = &cli.repo {
         // Expand leading `~/` or a bare `~` to the home directory.
         let expanded = if r == "~" {
@@ -162,10 +168,12 @@ pub(crate) fn resolve_repo(cli: &Cli) -> Result<String> {
         };
         return Ok(expanded);
     }
-    Ok(std::env::current_dir()
-        .context("cannot determine cwd")?
-        .to_string_lossy()
-        .into_owned())
+
+    let cwd_utf8 =
+        Utf8Path::from_path(cwd).ok_or_else(|| anyhow::anyhow!("cwd is not valid UTF-8"))?;
+    Ok(find_repo_root(cwd_utf8)
+        .map(|root| root.into_string())
+        .unwrap_or_else(|_| cwd.to_string_lossy().into_owned()))
 }
 
 fn dirs_home() -> Result<String> {
@@ -190,6 +198,11 @@ pub(crate) fn db_path(cli: &Cli, repo: &str) -> String {
 mod tests {
     use super::*;
     use crate::cli::{Cli, Command};
+    use camino::Utf8Path;
+    use std::process::Command as ProcessCommand;
+
+    const GIT_TEST_NAME: &str = "Atlas Test";
+    const GIT_TEST_EMAIL: &str = "test@atlas";
 
     fn cli_with_repo(repo: &str) -> Cli {
         Cli {
@@ -209,6 +222,19 @@ mod tests {
             json: false,
             command: Command::Doctor,
         }
+    }
+
+    fn git(dir: &std::path::Path, args: &[&str]) {
+        let status = ProcessCommand::new("git")
+            .current_dir(dir)
+            .args(args)
+            .env("GIT_AUTHOR_NAME", GIT_TEST_NAME)
+            .env("GIT_AUTHOR_EMAIL", GIT_TEST_EMAIL)
+            .env("GIT_COMMITTER_NAME", GIT_TEST_NAME)
+            .env("GIT_COMMITTER_EMAIL", GIT_TEST_EMAIL)
+            .status()
+            .expect("git command");
+        assert!(status.success(), "git {args:?} failed");
     }
 
     #[test]
@@ -232,13 +258,29 @@ mod tests {
     }
 
     #[test]
-    fn resolve_repo_no_repo_returns_cwd() {
+    fn resolve_repo_no_repo_prefers_git_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo_root = dir.path();
+        let nested = repo_root.join("packages").join("app");
+        std::fs::create_dir_all(&nested).unwrap();
+        git(repo_root, &["init", "--quiet"]);
+
         let cli = cli_no_repo();
-        let cwd = std::env::current_dir()
+        let expected = Utf8Path::from_path(&repo_root.canonicalize().unwrap())
             .unwrap()
-            .to_string_lossy()
-            .into_owned();
-        assert_eq!(resolve_repo(&cli).unwrap(), cwd);
+            .to_string();
+        assert_eq!(resolve_repo_with_cwd(&cli, &nested).unwrap(), expected);
+    }
+
+    #[test]
+    fn resolve_repo_no_repo_falls_back_to_cwd_outside_git() {
+        let dir = tempfile::tempdir().unwrap();
+        let nested = dir.path().join("scratch");
+        std::fs::create_dir_all(&nested).unwrap();
+
+        let cli = cli_no_repo();
+        let expected = nested.to_string_lossy().into_owned();
+        assert_eq!(resolve_repo_with_cwd(&cli, &nested).unwrap(), expected);
     }
 
     #[test]

@@ -96,6 +96,13 @@ fn structural_dangling_edges(
         .collect()
 }
 
+fn display_check_name(name: &str) -> &str {
+    match name {
+        "repo_root" => "atlas_scope",
+        other => other,
+    }
+}
+
 fn print_doctor_report(cli: &Cli, checks: &[CheckResult], all_ok: bool) -> Result<()> {
     if cli.json {
         let items: Vec<serde_json::Value> = checks
@@ -123,7 +130,7 @@ fn print_doctor_report(cli: &Cli, checks: &[CheckResult], all_ok: bool) -> Resul
     } else {
         for c in checks {
             let status = if c.ok { "PASS" } else { "FAIL" };
-            println!("  [{status}] {}: {}", c.name, c.detail);
+            println!("  [{status}] {}: {}", display_check_name(c.name), c.detail);
         }
         println!();
         if all_ok {

@@ -327,16 +327,25 @@ pub(super) fn tool_doctor(
     #[derive(Serialize)]
     struct CheckItem {
         check: &'static str,
+        label: &'static str,
         ok: bool,
         detail: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         issue_code: Option<&'static str>,
     }
 
+    fn check_label(check: &'static str) -> &'static str {
+        match check {
+            "repo_root" => "atlas_scope",
+            other => other,
+        }
+    }
+
     macro_rules! pass {
         ($name:expr, $detail:expr) => {
             CheckItem {
                 check: $name,
+                label: check_label($name),
                 ok: true,
                 detail: $detail.into(),
                 issue_code: None,
@@ -347,6 +356,7 @@ pub(super) fn tool_doctor(
         ($name:expr, $detail:expr) => {
             CheckItem {
                 check: $name,
+                label: check_label($name),
                 ok: false,
                 detail: $detail.into(),
                 issue_code: None,
@@ -355,6 +365,7 @@ pub(super) fn tool_doctor(
         ($name:expr, $detail:expr, $issue_code:expr) => {
             CheckItem {
                 check: $name,
+                label: check_label($name),
                 ok: false,
                 detail: $detail.into(),
                 issue_code: Some($issue_code),

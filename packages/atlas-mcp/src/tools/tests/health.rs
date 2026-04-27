@@ -277,6 +277,7 @@ fn doctor_returns_checks_array() {
     assert!(!checks.is_empty());
     for item in checks {
         assert!(item.get("check").is_some());
+        assert!(item.get("label").is_some());
         assert!(item.get("ok").is_some());
         assert!(item.get("detail").is_some());
     }

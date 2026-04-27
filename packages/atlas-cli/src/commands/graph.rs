@@ -393,7 +393,8 @@ pub fn run_status(cli: &Cli) -> Result<()> {
             }),
         )?;
     } else {
-        println!("Repo root : {repo}");
+        println!("Atlas scope: {repo}");
+        println!("Git root   : {repo_root}");
         println!("Database  : {db_path}");
         println!(
             "MCP serve : workers={} default_timeout_ms={} per_tool_overrides={}",
