@@ -232,6 +232,11 @@ struct OpenAiDatum {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    // Serialize tests that mutate/read process-global env vars to prevent
+    // races when `cargo test` runs tests in parallel threads.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn url_ollama_native() {
@@ -261,13 +266,17 @@ mod tests {
 
     #[test]
     fn from_env_none_when_unset() {
-        if std::env::var("ATLAS_EMBED_URL").is_err() {
-            assert!(EmbeddingConfig::from_env().is_none());
+        let _guard = ENV_LOCK.lock().unwrap();
+        // Only meaningful when var is absent; skip if caller pre-set it.
+        if std::env::var("ATLAS_EMBED_URL").is_ok() {
+            return;
         }
+        assert!(EmbeddingConfig::from_env().is_none());
     }
 
     #[test]
     fn from_env_defaults() {
+        let _guard = ENV_LOCK.lock().unwrap();
         // Skip if ATLAS_EMBED_URL is already set in the environment.
         if std::env::var("ATLAS_EMBED_URL").is_ok() {
             return;
