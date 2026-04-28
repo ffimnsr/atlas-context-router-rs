@@ -24,6 +24,14 @@ tasks:
     commands:
       - cargo test --workspace
     description: Run workspace tests.
+  test-summary:
+    commands:
+      - bash scripts/test-workspace-summary.sh
+    description: Run workspace tests and print merged test summary.
+  test-summary-check:
+    commands:
+      - bash scripts/tests/test-workspace-summary-test.sh
+    description: Verify merged test summary parser fixtures.
   doc-check:
     commands:
       - cargo doc --workspace --no-deps --document-private-items

@@ -376,16 +376,22 @@ fn normalize_context_result(value: &mut serde_json::Value) {
 }
 
 fn scrub_repo_paths(value: &mut Value, repo_root: &Path) {
-    let repo_root = repo_root.to_string_lossy().into_owned();
-    scrub_repo_paths_inner(value, &repo_root);
+    let repo_root_str = repo_root.to_string_lossy().into_owned();
+    scrub_repo_paths_inner(value, &repo_root_str);
+    // On macOS, /var is a symlink to /private/var. tempfile returns the symlink
+    // path but atlas canonicalizes it, so scrub the canonical form too.
+    if let Ok(canonical) = fs::canonicalize(repo_root) {
+        let canonical_str = canonical.to_string_lossy().into_owned();
+        if canonical_str != repo_root_str {
+            scrub_repo_paths_inner(value, &canonical_str);
+        }
+    }
 }
 
 fn scrub_repo_paths_inner(value: &mut Value, repo_root: &str) {
     match value {
-        Value::String(text) => {
-            if text.starts_with(repo_root) {
-                *text = text.replacen(repo_root, "<repo_root>", 1);
-            }
+        Value::String(text) if text.starts_with(repo_root) => {
+            *text = text.replacen(repo_root, "<repo_root>", 1);
         }
         Value::Array(items) => {
             for item in items {

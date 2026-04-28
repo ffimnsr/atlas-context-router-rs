@@ -1855,3 +1855,26 @@ Why:
 - [ ] any future read pool remains evidence-driven and preserves explicit writer ownership
 
 ---
+
+## Additional Backlog
+
+- [x] add `docs/threat-model-serve.md` that defines `atlas serve` trust boundaries, trusted components, untrusted inputs, and forbidden MCP client actions
+- [x] add prompt-injection handling policy to `SECURITY.md` for quoting/escaping untrusted MCP response content such as file text, commit messages, and docs
+- [x] add `docs/architecture.md` with diagram and narrative for `worldtree.db`, `context.db`, `session.db`, atlas-engine pipeline, and adapter/hook boundaries
+
+- [ ] add canonical `docs/error_codes.md` file and make README, MCP responses, and tests reference that single error-code catalog
+- [ ] add generated `MCP_TOOLS.md` from tool registry and test/docs check that catches drift from hand-maintained tool tables
+- [ ] add build/query/MCP metrics counters and histograms for build duration, parsed file count, parser cache reuse ratio, query latency by mode, and MCP tool call counts
+- [ ] add informational `cargo-llvm-cov` coverage task and CI job that reports coverage without gating merge
+- [ ] add `criterion` bench suites per crate for build, incremental update, query modes, context engine, and history reconstruction workloads
+- [ ] add CI regression harness for `cargo bench --message-format=json` and store benchmark output as comparable artifact
+- [ ] add CI-visible parser cache hit-ratio metric and fail when cache reuse drops below configured threshold
+- [ ] add thin LSP shim that maps Atlas query/context/impact/reference flows onto standard LSP requests
+- [ ] add documented `budget_policy` block to `.atlas/config.toml` with defaults, environment overrides, and `--budget-profile` selection
+- [ ] add configurable layer-rules file surface for Phase 29.1 so architecture rules can change without recompiling
+- [ ] add configurable redaction-rules file surface for Patch X4 so sanitization policy can change without recompiling
+- [ ] add `.atlas/config.toml` embedding config block for `atlas-search` URL/model settings instead of reading `ATLAS_EMBED_URL` only at request time
+- [ ] add issue items for tokenizer-backed budget accounting using real token counts instead of byte/char heuristics
+- [ ] add `proptest` coverage for ranking/trimming, canonical-path normalization, and FTS query escaping
+
+---

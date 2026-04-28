@@ -69,13 +69,22 @@ fn spawn_serve_child(repo_root: &Path, args: &[&str]) -> std::process::Child {
 
 fn run_serve_jsonrpc_session(repo_root: &Path, args: &[&str], requests: impl AsRef<[u8]>) -> Output {
     let mut child = spawn_serve_child(repo_root, args);
-    child
-        .stdin
-        .as_mut()
-        .expect("serve stdin")
-        .write_all(requests.as_ref())
-        .expect("write serve requests");
-    child.wait_with_output().expect("wait for atlas serve output")
+    // Write stdin in a separate thread so the write end of the pipe stays open
+    // until after the write completes. On macOS, closing the write end inside
+    // wait_with_output (which happens before the broker relay loop has a chance
+    // to read) causes the relay to see EOF before any data arrives. Keeping
+    // stdin open in the writer thread until write_all returns avoids that race.
+    let data = requests.as_ref().to_vec();
+    let mut stdin = child.stdin.take().expect("serve stdin");
+    let writer = std::thread::spawn(move || {
+        stdin.write_all(&data).expect("write serve requests");
+        // stdin (the write end) is explicitly dropped here, after the write
+        // completes, signaling EOF to the broker relay loop.
+    });
+    // wait_with_output will not try to close stdin since child.stdin is None.
+    let output = child.wait_with_output().expect("wait for atlas serve output");
+    let _ = writer.join();
+    output
 }
 
 pub(super) fn read_json_tool_result(output: &Output, id: u64) -> Value {
