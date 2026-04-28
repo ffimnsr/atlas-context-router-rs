@@ -1,13 +1,13 @@
 [package]
 name = "atlas-reasoning"
-version = "1.0.2"
+version = "1.1.0"
 edition = "2024"
 description = "Autonomous code reasoning engine for Atlas — removal impact, dead code, refactor safety, rename radius, and change risk"
 publish = false
 
 [dependencies]
 atlas-core.workspace = true
-atlas-store-sqlite = { path = "../atlas-store-sqlite" , version = "1.0.2"}
+atlas-store-sqlite = { path = "../atlas-store-sqlite" , version = "1.1.0"}
 tracing.workspace = true
 serde_json.workspace = true
 
