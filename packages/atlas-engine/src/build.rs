@@ -23,6 +23,8 @@ use crate::owner_graph::refresh_owner_graphs;
 pub struct BuildOptions {
     /// Abort on the first parse or I/O failure instead of continuing.
     pub fail_fast: bool,
+    /// Parse and summarize build work without mutating graph state.
+    pub dry_run: bool,
     /// Number of files parsed per parallel batch.
     pub batch_size: usize,
     /// Centralized operational budget for build work.
@@ -33,6 +35,7 @@ impl Default for BuildOptions {
     fn default() -> Self {
         Self {
             fail_fast: false,
+            dry_run: false,
             batch_size: crate::config::DEFAULT_PARSE_BATCH_SIZE,
             budget: BuildRunBudget::default(),
         }
@@ -73,13 +76,15 @@ pub fn build_graph(
         .upsert_repo(repo_root.as_str())
         .context("cannot register repo root for build state and history")?;
 
-    for path in store
-        .file_paths_with_prefix("")
-        .context("cannot list existing graph files")?
-    {
-        store
-            .delete_file_graph(&path)
-            .with_context(|| format!("cannot clear stale graph for '{path}'"))?;
+    if !opts.dry_run {
+        for path in store
+            .file_paths_with_prefix("")
+            .context("cannot list existing graph files")?
+        {
+            store
+                .delete_file_graph(&path)
+                .with_context(|| format!("cannot clear stale graph for '{path}'"))?;
+        }
     }
 
     let registry = ParserRegistry::with_defaults();
@@ -233,7 +238,7 @@ pub fn build_graph(
             }
         }
 
-        if !parsed_files.is_empty() {
+        if !parsed_files.is_empty() && !opts.dry_run {
             // Single-connection persistence phase: DB writes happen after the
             // parallel parse batch completes.
             let (n, e) = store
@@ -259,6 +264,11 @@ pub fn build_graph(
             }
         }
 
+        if opts.dry_run {
+            total_nodes += parsed_files.iter().map(|pf| pf.nodes.len()).sum::<usize>();
+            total_edges += parsed_files.iter().map(|pf| pf.edges.len()).sum::<usize>();
+        }
+
         if budget_blocked {
             break;
         }
@@ -266,10 +276,13 @@ pub fn build_graph(
 
     drop(_parse_span);
 
-    refresh_owner_graphs(&mut store, repo_root, &owners)
-        .context("cannot refresh package/workspace nodes")?;
+    if !opts.dry_run {
+        refresh_owner_graphs(&mut store, repo_root, &owners)
+            .context("cannot refresh package/workspace nodes")?;
+    }
 
     if !resolved_paths.is_empty()
+        && !opts.dry_run
         && let Err(err) = reconcile_call_targets(&mut store, repo_root, &resolved_paths)
     {
         tracing::warn!("late call-target resolution failed during build: {err:#}");
@@ -403,6 +416,7 @@ mod tests {
             db_path.to_str().unwrap(),
             &BuildOptions {
                 fail_fast: true,
+                dry_run: false,
                 batch_size: 16,
                 budget: BuildRunBudget::default(),
             },
@@ -453,6 +467,7 @@ mod tests {
             db_path.to_str().unwrap(),
             &BuildOptions {
                 fail_fast: true,
+                dry_run: false,
                 batch_size: 16,
                 budget,
             },
@@ -492,6 +507,7 @@ mod tests {
             db_path.to_str().unwrap(),
             &BuildOptions {
                 fail_fast: true,
+                dry_run: false,
                 batch_size: 16,
                 budget,
             },
@@ -536,6 +552,7 @@ mod tests {
             // be collected before the sequential write phase processes them.
             &BuildOptions {
                 fail_fast: true,
+                dry_run: false,
                 batch_size: 1,
                 budget: BuildRunBudget::default(),
             },

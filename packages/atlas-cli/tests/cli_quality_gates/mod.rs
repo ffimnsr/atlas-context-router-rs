@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 
 use atlas_core::{EdgeKind, NodeKind};
 use atlas_store_sqlite::Store;
+use crate::core::read_json_tool_result;
 use serde_json::{json, Value};
 use tempfile::TempDir;
 
@@ -374,6 +375,60 @@ fn normalize_context_result(value: &mut serde_json::Value) {
     }
 }
 
+fn scrub_repo_paths(value: &mut Value, repo_root: &Path) {
+    let repo_root = repo_root.to_string_lossy().into_owned();
+    scrub_repo_paths_inner(value, &repo_root);
+}
+
+fn scrub_repo_paths_inner(value: &mut Value, repo_root: &str) {
+    match value {
+        Value::String(text) => {
+            if text.starts_with(repo_root) {
+                *text = text.replacen(repo_root, "<repo_root>", 1);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                scrub_repo_paths_inner(item, repo_root);
+            }
+        }
+        Value::Object(map) => {
+            for item in map.values_mut() {
+                scrub_repo_paths_inner(item, repo_root);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn assert_cli_json_snapshot(
+    repo_root: &Path,
+    command: &str,
+    output: Output,
+    golden_name: &str,
+    normalize: impl FnOnce(&mut Value),
+) {
+    let mut data = read_json_data_output(command, output);
+    scrub_repo_paths(&mut data, repo_root);
+    normalize(&mut data);
+    let golden = read_golden_json(golden_name);
+    assert_eq!(data, golden, "snapshot mismatch for {golden_name}");
+}
+
+fn assert_mcp_json_snapshot(
+    repo_root: &Path,
+    output: &Output,
+    id: u64,
+    golden_name: &str,
+    normalize: impl FnOnce(&mut Value),
+) {
+    let mut data = read_json_tool_result(output, id);
+    scrub_repo_paths(&mut data, repo_root);
+    normalize(&mut data);
+    let golden = read_golden_json(golden_name);
+    assert_eq!(data, golden, "snapshot mismatch for {golden_name}");
+}
+
 fn write_repo_file(repo_root: &Path, relative_path: &str, content: &str) {
     fs::write(repo_root.join(relative_path), content).expect("write repo file");
 }
@@ -477,6 +532,10 @@ fn run_atlas(repo_root: &Path, args: &[&str]) -> Output {
     run_command(repo_root, env!("CARGO_BIN_EXE_atlas"), args)
 }
 
+fn run_atlas_capture(repo_root: &Path, args: &[&str]) -> Output {
+    run_command_capture(repo_root, env!("CARGO_BIN_EXE_atlas"), args)
+}
+
 fn json_path(value: &Value) -> PathBuf {
     PathBuf::from(value.as_str().expect("json path string"))
 }
@@ -486,11 +545,7 @@ fn canonical_path(path: &Path) -> PathBuf {
 }
 
 fn run_command(repo_root: &Path, program: &str, args: &[&str]) -> Output {
-    let output = sanitized_command(program)
-        .args(args)
-        .current_dir(repo_root)
-        .output()
-        .unwrap_or_else(|err| panic!("failed to run {program} {:?}: {err}", args));
+    let output = run_command_capture(repo_root, program, args);
     assert!(
         output.status.success(),
         "command failed: {program} {:?}\nstdout:\n{}\nstderr:\n{}",
@@ -499,6 +554,14 @@ fn run_command(repo_root: &Path, program: &str, args: &[&str]) -> Output {
         String::from_utf8_lossy(&output.stderr),
     );
     output
+}
+
+fn run_command_capture(repo_root: &Path, program: &str, args: &[&str]) -> Output {
+    sanitized_command(program)
+        .args(args)
+        .current_dir(repo_root)
+        .output()
+        .unwrap_or_else(|err| panic!("failed to run {program} {:?}: {err}", args))
 }
 
 fn spawn_command(repo_root: &Path, program: &str, args: &[&str]) -> Child {

@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://atlas-context-router-rs/schemas/atlas_cli.v1/postprocess.schema.json",
+  "title": "atlas_cli.v1 postprocess",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "command", "data"],
+  "properties": {
+    "schema_version": { "const": "atlas_cli.v1" },
+    "command": { "const": "postprocess" },
+    "data": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "repo_root",
+        "ok",
+        "noop",
+        "error_code",
+        "message",
+        "suggestions",
+        "graph_built",
+        "state",
+        "requested_mode",
+        "stage_filter",
+        "dry_run",
+        "changed_files",
+        "started_at_ms",
+        "finished_at_ms",
+        "total_elapsed_ms",
+        "stages",
+        "supported_stages"
+      ],
+      "properties": {
+        "repo_root": { "type": "string" },
+        "ok": { "type": "boolean" },
+        "noop": { "type": "boolean" },
+        "noop_reason": { "type": ["string", "null"] },
+        "error_code": { "type": "string" },
+        "message": { "type": "string" },
+        "suggestions": { "type": "array", "items": { "type": "string" } },
+        "graph_built": { "type": "boolean" },
+        "state": { "type": "string" },
+        "requested_mode": { "type": "string" },
+        "stage_filter": { "type": ["string", "null"] },
+        "dry_run": { "type": "boolean" },
+        "changed_files": { "type": "array", "items": { "type": "string" } },
+        "started_at_ms": { "type": "integer" },
+        "finished_at_ms": { "type": "integer" },
+        "total_elapsed_ms": { "type": "integer" },
+        "stages": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+        "supported_stages": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  }
+}

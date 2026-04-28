@@ -245,7 +245,7 @@ pub fn run_embed(cli: &Cli) -> Result<()> {
     let mut errors = 0usize;
 
     for (id, qn, text) in chunks {
-        match atlas_search::embed::embed_text(&embed_cfg, &text) {
+        match atlas_search::embed::embed_text_blocking(&embed_cfg, &text) {
             Ok(vec) => {
                 if let Err(err) = store.set_chunk_embedding(id, &vec) {
                     tracing::warn!("store embedding failed for {qn}: {err:#}");

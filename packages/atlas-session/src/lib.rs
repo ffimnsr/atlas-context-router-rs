@@ -1,15 +1,4 @@
-//! Atlas session identity, event ledger, and resume snapshot storage.
-//!
-//! Responsibilities:
-//! - derive stable session ids from repo + worktree + frontend anchors
-//! - persist session metadata across runs
-//! - record bounded event history per session
-//! - produce and consume resume snapshots
-//!
-//! This crate must not depend on the graph database (`atlas-store-sqlite`)
-//! or on content-storage concerns (`atlas-contentstore`).
-//! Each `SessionStore` instance owns one thread-confined SQLite connection;
-//! concurrent access uses separate store instances and separate connections.
+#![doc = include_str!("../README.md")]
 
 pub mod identity;
 mod migrations;

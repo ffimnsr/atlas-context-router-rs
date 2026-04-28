@@ -35,6 +35,10 @@ fn watch_mode_updates_graph_end_to_end_in_real_time() {
             >= 1,
         "watch batch should report at least one updated file: {payload:?}"
     );
+    assert!(payload["data"]["observed_events"].as_u64().is_some());
+    assert!(payload["data"]["coalesced_events"].as_u64().is_some());
+    assert!(payload["data"]["dropped_events"].as_u64().is_some());
+    assert!(payload["data"]["recovery_mode"].as_str().is_some());
     assert_eq!(payload["data"]["errors"], json!(0));
     assert!(
         elapsed <= Duration::from_secs(5),

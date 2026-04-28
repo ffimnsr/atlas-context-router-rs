@@ -17,6 +17,7 @@ mod query;
 mod review;
 mod session;
 mod serve;
+mod snapshots;
 mod version;
 mod worktree;
 
@@ -77,7 +78,7 @@ fn run_serve_jsonrpc_session(repo_root: &Path, args: &[&str], requests: impl AsR
     child.wait_with_output().expect("wait for atlas serve output")
 }
 
-fn read_json_tool_result(output: &Output, id: u64) -> Value {
+pub(super) fn read_json_tool_result(output: &Output, id: u64) -> Value {
     let response = parse_jsonrpc_lines(&output.stdout)
         .into_iter()
         .find(|response| response["id"] == json!(id))

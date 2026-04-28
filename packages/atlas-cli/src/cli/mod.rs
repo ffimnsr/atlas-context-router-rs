@@ -61,6 +61,10 @@ pub enum Command {
         /// Stop immediately on the first parse error instead of continuing.
         #[arg(long)]
         fail_fast: bool,
+
+        /// Preview build work without writing graph state.
+        #[arg(long)]
+        dry_run: bool,
     },
 
     /// Incrementally update the graph for files changed since a base ref.
@@ -84,6 +88,10 @@ pub enum Command {
         /// Stop immediately on the first parse error instead of continuing.
         #[arg(long)]
         fail_fast: bool,
+
+        /// Preview update work without writing graph state.
+        #[arg(long)]
+        dry_run: bool,
     },
 
     /// Show database status and graph statistics.

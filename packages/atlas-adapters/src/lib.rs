@@ -1,8 +1,4 @@
-//! Transport and frontend adapter layer for Atlas context memory integration.
-//!
-//! Provides thin adapter implementations so CLI, MCP, and other surfaces can
-//! funnel session events and large outputs through the content and session
-//! stores without coupling to transport details.
+#![doc = include_str!("../README.md")]
 
 pub mod artifacts;
 pub mod bridge;

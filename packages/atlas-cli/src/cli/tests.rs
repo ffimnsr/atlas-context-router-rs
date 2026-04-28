@@ -94,13 +94,37 @@ fn parse_selfupdate_command() {
 #[test]
 fn parse_build_command_no_flags() {
     let cli = parse(&["atlas", "build"]);
-    assert!(matches!(cli.command, Command::Build { fail_fast: false }));
+    assert!(matches!(
+        cli.command,
+        Command::Build {
+            fail_fast: false,
+            dry_run: false
+        }
+    ));
 }
 
 #[test]
 fn parse_build_fail_fast() {
     let cli = parse(&["atlas", "build", "--fail-fast"]);
-    assert!(matches!(cli.command, Command::Build { fail_fast: true }));
+    assert!(matches!(
+        cli.command,
+        Command::Build {
+            fail_fast: true,
+            dry_run: false
+        }
+    ));
+}
+
+#[test]
+fn parse_build_dry_run() {
+    let cli = parse(&["atlas", "build", "--dry-run"]);
+    assert!(matches!(
+        cli.command,
+        Command::Build {
+            fail_fast: false,
+            dry_run: true
+        }
+    ));
 }
 
 #[test]
@@ -140,6 +164,7 @@ fn parse_update_with_base_ref() {
         working_tree,
         files,
         fail_fast,
+        dry_run,
     } = cli.command
     {
         assert_eq!(base.as_deref(), Some("origin/main"));
@@ -147,6 +172,7 @@ fn parse_update_with_base_ref() {
         assert!(!working_tree);
         assert!(files.is_empty());
         assert!(!fail_fast);
+        assert!(!dry_run);
     } else {
         panic!("expected Update command");
     }
@@ -167,6 +193,16 @@ fn parse_update_explicit_files() {
     let cli = parse(&["atlas", "update", "--files", "src/a.rs", "src/b.rs"]);
     if let Command::Update { files, .. } = cli.command {
         assert_eq!(files, vec!["src/a.rs", "src/b.rs"]);
+    } else {
+        panic!("expected Update command");
+    }
+}
+
+#[test]
+fn parse_update_dry_run() {
+    let cli = parse(&["atlas", "update", "--dry-run"]);
+    if let Command::Update { dry_run, .. } = cli.command {
+        assert!(dry_run);
     } else {
         panic!("expected Update command");
     }

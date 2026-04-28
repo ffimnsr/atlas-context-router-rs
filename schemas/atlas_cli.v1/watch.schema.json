@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://atlas-context-router-rs/schemas/atlas_cli.v1/watch.schema.json",
+  "title": "atlas_cli.v1 watch",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "command", "data"],
+  "properties": {
+    "schema_version": { "const": "atlas_cli.v1" },
+    "command": { "const": "watch" },
+    "data": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "files_updated",
+        "observed_events",
+        "coalesced_events",
+        "dropped_events",
+        "recovery_mode",
+        "nodes_updated",
+        "errors",
+        "elapsed_ms",
+        "error_messages"
+      ],
+      "properties": {
+        "files_updated": { "type": "integer" },
+        "observed_events": { "type": "integer" },
+        "coalesced_events": { "type": "integer" },
+        "dropped_events": { "type": "integer" },
+        "recovery_mode": { "type": "string" },
+        "nodes_updated": { "type": "integer" },
+        "errors": { "type": "integer" },
+        "elapsed_ms": { "type": "integer" },
+        "error_messages": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  }
+}

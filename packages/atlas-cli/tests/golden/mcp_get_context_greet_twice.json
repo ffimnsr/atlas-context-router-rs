@@ -1,0 +1,66 @@
+{
+  "budget_hit": true,
+  "budget_limit": 0,
+  "budget_name": "review_context_extraction.max_edges",
+  "budget_observed": 8,
+  "budget_status": "partial_result",
+  "edge_count": 0,
+  "edges": [],
+  "edges_dropped": 8,
+  "file_count": 1,
+  "files": [
+    {
+      "path": "src/lib.rs",
+      "reason": "direct_target"
+    }
+  ],
+  "files_dropped": 1,
+  "intent": "review",
+  "node_count": 1,
+  "nodes": [
+    {
+      "context_ranking_evidence": {
+        "base_score": 120.0,
+        "changed_symbol": true,
+        "direct_target": true,
+        "final_score": 165.0,
+        "impact_score_contribution": 45.0
+      },
+      "distance": 0,
+      "file": "src/lib.rs",
+      "kind": "struct",
+      "lang": "rust",
+      "line": 1,
+      "parent": "src/lib.rs",
+      "qn": "src/lib.rs::struct::Greeter",
+      "reason": "direct_target"
+    }
+  ],
+  "nodes_dropped": 6,
+  "partial": true,
+  "safe_to_answer": true,
+  "seed_budgets": [
+    {
+      "accepted_seed_count": 1,
+      "budget_hit": false,
+      "omitted_seed_count": 0,
+      "partial": false,
+      "requested_seed_count": 1,
+      "safe_to_answer": true,
+      "seed_kind": "changed_files"
+    }
+  ],
+  "traversal_budget": {
+    "accepted_depth": 3,
+    "accepted_edge_budget": 500,
+    "accepted_node_budget": 200,
+    "budget_hit": false,
+    "emitted_edge_count": 8,
+    "emitted_node_count": 7,
+    "omitted_edge_count": 0,
+    "requested_depth": 3,
+    "requested_edge_budget": 500,
+    "requested_node_budget": 200
+  },
+  "truncated": true
+}

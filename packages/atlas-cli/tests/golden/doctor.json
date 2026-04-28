@@ -1,0 +1,94 @@
+{
+  "ok": false,
+  "error_code": "checks_failed",
+  "message": "One or more health checks failed.",
+  "suggestions": [
+    "inspect the checks array for details"
+  ],
+  "checks": [
+    {
+      "check": "repo_root",
+      "ok": true,
+      "detail": "<repo_root>",
+      "issue_code": null
+    },
+    {
+      "check": "git_root",
+      "ok": true,
+      "detail": "<repo_root>",
+      "issue_code": null
+    },
+    {
+      "check": "atlas_dir",
+      "ok": true,
+      "detail": "<repo_root>/.atlas",
+      "issue_code": null
+    },
+    {
+      "check": "config_file",
+      "ok": true,
+      "detail": "<repo_root>/.atlas/config.toml",
+      "issue_code": null
+    },
+    {
+      "check": "mcp_serve_config",
+      "ok": true,
+      "detail": "workers=2 timeout_ms=300000",
+      "issue_code": null
+    },
+    {
+      "check": "db_file",
+      "ok": true,
+      "detail": "<repo_root>/.atlas/worldtree.db",
+      "issue_code": null
+    },
+    {
+      "check": "db_open",
+      "ok": true,
+      "detail": "<repo_root>/.atlas/worldtree.db",
+      "issue_code": null
+    },
+    {
+      "check": "db_integrity",
+      "ok": true,
+      "detail": "ok",
+      "issue_code": null
+    },
+    {
+      "check": "graph_stats",
+      "ok": true,
+      "detail": "files=2 nodes=7 edges=8",
+      "issue_code": null
+    },
+    {
+      "check": "graph_build_state",
+      "ok": true,
+      "detail": "state=built nodes=7 edges=8",
+      "issue_code": null
+    },
+    {
+      "check": "git_ls_files",
+      "ok": true,
+      "detail": "2 tracked files",
+      "issue_code": null
+    },
+    {
+      "check": "graph_freshness",
+      "ok": true,
+      "detail": "up_to_date",
+      "issue_code": null
+    },
+    {
+      "check": "retrieval_index",
+      "ok": false,
+      "detail": "no index run recorded yet",
+      "issue_code": "retrieval_index_unavailable"
+    },
+    {
+      "check": "content_path_identity",
+      "ok": true,
+      "detail": "ok",
+      "issue_code": null
+    }
+  ]
+}

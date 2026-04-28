@@ -1,8 +1,4 @@
-//! Parser registry and tree-cache crate.
-//!
-//! This crate does not open SQLite connections and has no database ownership
-//! role. It only parses source bytes and manages parser/tree-cache state, so it
-//! is outside Atlas SQLite sharing and thread-confinement risk.
+#![doc = include_str!("../README.md")]
 
 pub mod ast_helpers;
 pub mod lang;

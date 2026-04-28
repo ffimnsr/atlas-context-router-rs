@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://atlas-context-router-rs/schemas/atlas_cli.v1/update.schema.json",
+  "title": "atlas_cli.v1 update",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "command", "data"],
+  "properties": {
+    "schema_version": { "const": "atlas_cli.v1" },
+    "command": { "const": "update" },
+    "data": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "dry_run",
+        "deleted",
+        "renamed",
+        "parsed",
+        "skipped_unsupported",
+        "parse_errors",
+        "nodes_updated",
+        "edges_updated",
+        "budget",
+        "budget_counters",
+        "elapsed_ms",
+        "nodes_per_sec"
+      ],
+      "properties": {
+        "dry_run": { "type": "boolean" },
+        "deleted": { "type": "integer" },
+        "renamed": { "type": "integer" },
+        "parsed": { "type": "integer" },
+        "skipped_unsupported": { "type": "integer" },
+        "parse_errors": { "type": "integer" },
+        "nodes_updated": { "type": "integer" },
+        "edges_updated": { "type": "integer" },
+        "budget": { "type": "object", "additionalProperties": true },
+        "budget_counters": { "type": "object", "additionalProperties": true },
+        "elapsed_ms": { "type": "integer" },
+        "nodes_per_sec": { "type": "integer" }
+      }
+    }
+  }
+}

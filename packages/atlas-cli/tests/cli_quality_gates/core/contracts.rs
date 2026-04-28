@@ -61,6 +61,12 @@ fn atlas_cli_v1_schemas_validate_live_outputs() {
     run_atlas(repo.path(), &["build"]);
 
     assert_valid_against_schema("status.schema.json", "status", run_atlas(repo.path(), &["--json", "status"]));
+    assert_valid_against_schema("build.schema.json", "build", run_atlas(repo.path(), &["--json", "build"]));
+    assert_valid_against_schema(
+        "doctor.schema.json",
+        "doctor",
+        run_atlas_capture(repo.path(), &["--json", "doctor"]),
+    );
     assert_valid_against_schema(
         "query.schema.json",
         "query",
@@ -71,8 +77,19 @@ fn atlas_cli_v1_schemas_validate_live_outputs() {
         "context",
         run_atlas(repo.path(), &["--json", "context", "greet_twice"]),
     );
+    assert_valid_against_schema(
+        "postprocess.schema.json",
+        "postprocess",
+        run_atlas(repo.path(), &["--json", "postprocess"]),
+    );
 
     rewrite_fixture_helper(repo.path());
+
+    assert_valid_against_schema(
+        "update.schema.json",
+        "update",
+        run_atlas(repo.path(), &["--json", "update", "--base", "HEAD"]),
+    );
 
     assert_valid_against_schema(
         "impact.schema.json",

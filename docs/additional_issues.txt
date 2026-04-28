@@ -22,23 +22,10 @@ atlas-search/src/embed.rs reads ATLAS_EMBED_URL from env at request time. There 
 
 No tokenizer / token-counter (e.g. tiktoken-rs). All "token budget" knobs in BudgetPolicy use byte/char heuristics. For an LLM context router, that's a real correctness gap not tracked in any patch.
 
-ureq is sync. Embedding HTTP calls block a worker thread.
-
-No retry/backoff/timeout config for the embedding HTTP call.
-
 No MCP_TOOLS.md auto-generated from the registry. README has a hand-curated table that will drift from tools/registry.rs.
-
-No per-crate doc landing pages (#![doc = ...] headers are sparse). cargo doc produces a nearly empty index.
-
-No --dry-run matrix. atlas install has it; build/update/postprocess do not. For agent integration, dry-run-everywhere is valuable.
 
 No prompt-injection defense doc/policy for MCP responses — MCP server returns user-controlled text (file contents, commit messages, doc sections). There is no "always quote/escape untrusted content with markers" policy. Worth a SECURITY.md section.
 
 Property tests (proptest) for ranking/trimming, canonical-path normalization, and FTS query escaping.
 
 TODO:
-Snapshot/golden tests for CLI/MCP JSON shapes; you already have parity tests planned (PS1–PS3) but a generic snapshot harness would compound their value.
-
-atlas doctor --json should already be machine-stable; add a JSON Schema for it (and other --json outputs).
-
-Watch mode (atlas-engine/src/watch.rs) uses notify = "7". There is no documented backpressure or coalescing policy in code or in patches; under monorepo-scale git pull you can swamp the channel.

@@ -49,6 +49,7 @@ fn canonicalize_batch_change(
 }
 
 /// Specifies which set of changes to process.
+#[derive(Debug, Clone)]
 pub enum UpdateTarget {
     /// Unstaged working-tree changes.
     WorkingTree,
@@ -66,6 +67,8 @@ pub enum UpdateTarget {
 pub struct UpdateOptions {
     /// Abort on the first parse or I/O failure instead of continuing.
     pub fail_fast: bool,
+    /// Parse and summarize update work without mutating graph state.
+    pub dry_run: bool,
     /// Number of files parsed per parallel batch.
     pub batch_size: usize,
     /// Which changes to process.
@@ -78,6 +81,7 @@ impl Default for UpdateOptions {
     fn default() -> Self {
         Self {
             fail_fast: false,
+            dry_run: false,
             batch_size: crate::config::DEFAULT_PARSE_BATCH_SIZE,
             target: UpdateTarget::WorkingTree,
             budget: BuildRunBudget::default(),
@@ -246,7 +250,7 @@ pub fn update_graph(
 
     // ── Stable renames (hash-unchanged) ─────────────────────────────────────
     let renamed_count = to_rename.len();
-    if !to_rename.is_empty() {
+    if !to_rename.is_empty() && !opts.dry_run {
         let _rename_span = tracing::info_span!("update.rename_stable").entered();
         for (old, new) in &to_rename {
             store
@@ -273,7 +277,7 @@ pub fn update_graph(
 
     // ── Delete stale graphs ───────────────────────────────────────────────────
     let deleted_count = to_delete.len();
-    {
+    if !opts.dry_run {
         let _del_span = tracing::info_span!("update.delete_stale").entered();
         for path in &to_delete {
             store
@@ -551,6 +555,12 @@ pub fn update_graph(
 
     let all_parsed: Vec<&ParsedFile> = parsed_changed.iter().chain(parsed_deps.iter()).collect();
     for chunk in all_parsed.chunks(opts.batch_size) {
+        if opts.dry_run {
+            total_nodes += chunk.iter().map(|pf| pf.nodes.len()).sum::<usize>();
+            total_edges += chunk.iter().map(|pf| pf.edges.len()).sum::<usize>();
+            continue;
+        }
+
         // Sequential persistence through the store's single owned connection.
         let chunk_owned: Vec<ParsedFile> = chunk.iter().map(|pf| (*pf).clone()).collect();
         let (n, e) = store
@@ -578,11 +588,14 @@ pub fn update_graph(
     }
     drop(_write_span);
 
-    refresh_owner_graphs(&mut store, repo_root, &owners)
-        .context("cannot refresh package/workspace nodes")?;
+    if !opts.dry_run {
+        refresh_owner_graphs(&mut store, repo_root, &owners)
+            .context("cannot refresh package/workspace nodes")?;
+    }
 
     let resolved_paths: Vec<String> = all_parsed.iter().map(|pf| pf.path.clone()).collect();
     if !resolved_paths.is_empty()
+        && !opts.dry_run
         && let Err(err) = reconcile_call_targets(&mut store, repo_root, &resolved_paths)
     {
         tracing::warn!("late call-target resolution failed during update: {err:#}");
@@ -675,6 +688,7 @@ mod tests {
             db_path.to_str().unwrap(),
             &BuildOptions {
                 fail_fast: true,
+                dry_run: false,
                 batch_size: 16,
                 budget: BuildRunBudget::default(),
             },
@@ -697,6 +711,7 @@ mod tests {
             db_path.to_str().unwrap(),
             &UpdateOptions {
                 fail_fast: false,
+                dry_run: false,
                 batch_size: 16,
                 target: UpdateTarget::WorkingTree,
                 budget,
@@ -728,6 +743,7 @@ mod tests {
             db_path.to_str().unwrap(),
             &BuildOptions {
                 fail_fast: true,
+                dry_run: false,
                 batch_size: 16,
                 budget: BuildRunBudget::default(),
             },
@@ -745,6 +761,7 @@ mod tests {
             db_path.to_str().unwrap(),
             &UpdateOptions {
                 fail_fast: true,
+                dry_run: false,
                 batch_size: 16,
                 target: UpdateTarget::WorkingTree,
                 budget: BuildRunBudget::default(),
@@ -810,6 +827,7 @@ mod tests {
             // results are collected before the sequential write phase.
             &UpdateOptions {
                 fail_fast: true,
+                dry_run: false,
                 batch_size: 1,
                 target: UpdateTarget::WorkingTree,
                 budget: BuildRunBudget::default(),
@@ -881,6 +899,7 @@ mod tests {
             db_path.to_str().unwrap(),
             &UpdateOptions {
                 fail_fast: true,
+                dry_run: false,
                 batch_size: 1,
                 target: UpdateTarget::Files(vec!["x.rs".to_string(), "y.rs".to_string()]),
                 budget: BuildRunBudget::default(),

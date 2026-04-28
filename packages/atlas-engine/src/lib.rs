@@ -1,4 +1,4 @@
-//! Atlas engine — shared build/update pipeline usable by CLI and MCP.
+#![doc = include_str!("../README.md")]
 
 mod build_budget;
 mod call_resolution;

@@ -350,6 +350,7 @@ fn execute_graph_refresh_action(
         graph_db_path,
         &UpdateOptions {
             fail_fast: false,
+            dry_run: false,
             batch_size: config.parse_batch_size(),
             target,
             budget: build_budget,

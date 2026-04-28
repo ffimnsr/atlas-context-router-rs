@@ -45,8 +45,14 @@ pub fn run_postprocess(cli: &Cli) -> Result<()> {
     }
 
     println!(
-        "Postprocess complete ({:?}, {} ms)",
-        summary.requested_mode, summary.total_elapsed_ms
+        "{} ({:?}, {} ms)",
+        if summary.dry_run {
+            "Postprocess dry run complete"
+        } else {
+            "Postprocess complete"
+        },
+        summary.requested_mode,
+        summary.total_elapsed_ms
     );
     for stage in &summary.stages {
         println!(

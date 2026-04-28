@@ -1,9 +1,4 @@
-//! Durable artifact content store for Atlas context memory integration.
-//!
-//! Stores large command outputs, tool results, and context payloads in
-//! `.atlas/context.db`, separate from the graph database and session database.
-//! Each `ContentStore` instance owns one thread-confined SQLite connection;
-//! concurrent access uses separate store instances and separate connections.
+#![doc = include_str!("../README.md")]
 
 pub mod chunking;
 mod migrations;

@@ -7,6 +7,9 @@
 //! [`WatchRunner`] owns a `FileWatcher` and drives the incremental update
 //! pipeline: debounce rapid edits, coalesce duplicate paths, call
 //! `update_graph` with explicit change sets, and expose per-batch results.
+//! Raw notify delivery is bounded: Atlas keeps a fixed-size queue, drops
+//! excess raw events on overflow, and recovers by reconciling against the
+//! current working tree instead of trusting a lossy partial event stream.
 //!
 //! Design constraints:
 //! - 28.1: scope — auto-update on file changes, avoid full rebuild.
@@ -17,7 +20,8 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::{Context, Result};
@@ -49,6 +53,68 @@ pub enum WatchEvent {
 /// Paths that are always ignored by watch mode in addition to
 /// [`DEFAULT_IGNORE_PATTERNS`].
 const WATCH_EXTRA_IGNORE: &[&str] = &[".atlas"];
+const WATCH_EVENT_BUFFER_CAPACITY: usize = 2048;
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct WatchOverflowStats {
+    dropped_events: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WatchRecoveryMode {
+    EventBatch,
+    WorkingTreeRescan,
+}
+
+impl WatchRecoveryMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::EventBatch => "event_batch",
+            Self::WorkingTreeRescan => "working_tree_rescan",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct WatchBatchPlan {
+    target: crate::update::UpdateTarget,
+    files_updated: usize,
+    observed_events: usize,
+    coalesced_events: usize,
+    dropped_events: u64,
+    recovery_mode: WatchRecoveryMode,
+}
+
+fn plan_batch(events: Vec<WatchEvent>, overflow: WatchOverflowStats) -> Option<WatchBatchPlan> {
+    let observed_events = events.len();
+    let changes = events_to_changes(events);
+    let files_updated = changes.len();
+    let coalesced_events = observed_events.saturating_sub(changes.len());
+
+    if overflow.dropped_events > 0 {
+        return Some(WatchBatchPlan {
+            target: crate::update::UpdateTarget::WorkingTree,
+            files_updated: changes.len().max(1),
+            observed_events,
+            coalesced_events,
+            dropped_events: overflow.dropped_events,
+            recovery_mode: WatchRecoveryMode::WorkingTreeRescan,
+        });
+    }
+
+    if changes.is_empty() {
+        return None;
+    }
+
+    Some(WatchBatchPlan {
+        target: crate::update::UpdateTarget::Batch(changes),
+        files_updated,
+        observed_events,
+        coalesced_events,
+        dropped_events: 0,
+        recovery_mode: WatchRecoveryMode::EventBatch,
+    })
+}
 
 // ── FileWatcher ──────────────────────────────────────────────────────────────
 
@@ -60,6 +126,8 @@ pub struct FileWatcher {
     _watcher: RecommendedWatcher,
     rx: mpsc::Receiver<notify::Result<Event>>,
     repo_root: PathBuf,
+    overflowed: Arc<AtomicBool>,
+    dropped_events: Arc<AtomicU64>,
     /// Prefixes that should be skipped, stored as `"dir/"` strings.
     ignore_prefixes: Vec<String>,
 }
@@ -80,9 +148,22 @@ impl FileWatcher {
     /// `extra` entries follow the same format as [`DEFAULT_IGNORE_PATTERNS`]
     /// (plain directory/file names, not globs).
     pub fn with_extra_ignores(repo_root: &Path, extra: &[&str]) -> Result<Self> {
-        let (tx, rx) = mpsc::channel();
-        let mut watcher =
-            recommended_watcher(tx).context("failed to create file-system watcher")?;
+        let (tx, rx) = mpsc::sync_channel(WATCH_EVENT_BUFFER_CAPACITY);
+        let overflowed = Arc::new(AtomicBool::new(false));
+        let dropped_events = Arc::new(AtomicU64::new(0));
+        let overflowed_tx = Arc::clone(&overflowed);
+        let dropped_events_tx = Arc::clone(&dropped_events);
+        let mut watcher = recommended_watcher(move |event| match tx.try_send(event) {
+            Ok(()) => {}
+            Err(mpsc::TrySendError::Full(_)) => {
+                overflowed_tx.store(true, Ordering::Relaxed);
+                dropped_events_tx.fetch_add(1, Ordering::Relaxed);
+            }
+            Err(mpsc::TrySendError::Disconnected(_)) => {
+                tracing::debug!("file-watcher receiver disconnected");
+            }
+        })
+        .context("failed to create file-system watcher")?;
 
         watcher
             .watch(repo_root, RecursiveMode::Recursive)
@@ -109,6 +190,8 @@ impl FileWatcher {
             _watcher: watcher,
             rx,
             repo_root: repo_root.to_path_buf(),
+            overflowed,
+            dropped_events,
             ignore_prefixes,
         })
     }
@@ -297,6 +380,18 @@ impl FileWatcher {
         }
         self.normalize(raw)
     }
+
+    fn take_overflow_stats(&self) -> WatchOverflowStats {
+        let dropped_events = self.dropped_events.swap(0, Ordering::Relaxed);
+        let overflowed = self.overflowed.swap(false, Ordering::Relaxed);
+        WatchOverflowStats {
+            dropped_events: if overflowed {
+                dropped_events.max(1)
+            } else {
+                dropped_events
+            },
+        }
+    }
 }
 
 // ── WatchRunner types ────────────────────────────────────────────────────────
@@ -321,6 +416,14 @@ pub struct WatchState {
 pub struct WatchBatchResult {
     /// Number of file paths included in this batch.
     pub files_updated: usize,
+    /// Number of raw notify events observed before normalization.
+    pub observed_events: usize,
+    /// Number of raw events collapsed by debounce/deduplication.
+    pub coalesced_events: usize,
+    /// Number of raw events dropped because the bounded queue overflowed.
+    pub dropped_events: u64,
+    /// Recovery path used for this batch.
+    pub recovery_mode: &'static str,
     /// Number of graph nodes written during this batch.
     pub nodes_updated: usize,
     /// Number of non-fatal errors encountered (parse failures, etc.).
@@ -412,15 +515,21 @@ impl WatchRunner {
             let mut all_events = first_events;
             all_events.append(&mut more_events);
 
-            // Convert to classified ChangedFile batch, deduplicating by key.
-            let changes = events_to_changes(all_events);
-            if changes.is_empty() {
+            let overflow = self.watcher.take_overflow_stats();
+            let Some(plan) = plan_batch(all_events, overflow) else {
                 continue;
-            }
+            };
 
-            tracing::debug!("watch: processing {} change(s) in batch", changes.len());
+            tracing::debug!(
+                "watch: processing {} file change(s) in batch (events={} coalesced={} dropped={} mode={})",
+                plan.files_updated,
+                plan.observed_events,
+                plan.coalesced_events,
+                plan.dropped_events,
+                plan.recovery_mode.as_str(),
+            );
 
-            let result = self.apply_batch(changes);
+            let result = self.apply_batch(plan);
             self.state.total_batches += 1;
             self.state.total_files_updated += result.files_updated as u64;
             self.state.total_nodes_updated += result.nodes_updated as u64;
@@ -433,16 +542,16 @@ impl WatchRunner {
 
     // ── Internals ─────────────────────────────────────────────────────────────
 
-    /// Run `update_graph` for `changes`, returning a per-batch result.
-    fn apply_batch(&self, changes: Vec<ChangedFile>) -> WatchBatchResult {
+    /// Run `update_graph` for one planned watch batch, returning batch result.
+    fn apply_batch(&self, plan: WatchBatchPlan) -> WatchBatchResult {
         let started = Instant::now();
-        let files_updated = changes.len();
         let mut error_messages: Vec<String> = Vec::new();
 
         let opts = crate::update::UpdateOptions {
             fail_fast: false,
+            dry_run: false,
             batch_size: self.batch_size,
-            target: crate::update::UpdateTarget::Batch(changes),
+            target: plan.target,
             budget: crate::config::BuildRunBudget::default(),
         };
 
@@ -463,7 +572,11 @@ impl WatchRunner {
             };
 
         WatchBatchResult {
-            files_updated,
+            files_updated: plan.files_updated,
+            observed_events: plan.observed_events,
+            coalesced_events: plan.coalesced_events,
+            dropped_events: plan.dropped_events,
+            recovery_mode: plan.recovery_mode.as_str(),
             nodes_updated,
             errors,
             elapsed_ms: started.elapsed().as_millis(),
@@ -552,6 +665,8 @@ mod tests {
                 .expect("watcher creation failed in test"),
             rx,
             repo_root: root.to_path_buf(),
+            overflowed: Arc::new(AtomicBool::new(false)),
+            dropped_events: Arc::new(AtomicU64::new(0)),
             ignore_prefixes: vec![
                 ".git/".into(),
                 ".git".into(),
@@ -744,5 +859,36 @@ mod tests {
         let abs = Path::new("/repo/src/./nested/../lib.rs");
 
         assert_eq!(watcher.repo_rel(abs).as_deref(), Some("src/lib.rs"));
+    }
+
+    #[test]
+    fn plan_batch_switches_to_worktree_rescan_after_overflow() {
+        let plan = plan_batch(
+            vec![
+                WatchEvent::Modified("src/lib.rs".into()),
+                WatchEvent::Modified("src/lib.rs".into()),
+            ],
+            WatchOverflowStats { dropped_events: 7 },
+        )
+        .expect("overflowed batch plan");
+
+        assert_eq!(plan.recovery_mode, WatchRecoveryMode::WorkingTreeRescan);
+        assert_eq!(plan.dropped_events, 7);
+        assert_eq!(plan.coalesced_events, 1);
+        assert!(matches!(
+            plan.target,
+            crate::update::UpdateTarget::WorkingTree
+        ));
+    }
+
+    #[test]
+    fn take_overflow_stats_resets_counter() {
+        let root = Path::new("/repo");
+        let watcher = watcher_for_root(root);
+        watcher.overflowed.store(true, Ordering::Relaxed);
+        watcher.dropped_events.store(3, Ordering::Relaxed);
+
+        assert_eq!(watcher.take_overflow_stats().dropped_events, 3);
+        assert_eq!(watcher.take_overflow_stats().dropped_events, 0);
     }
 }

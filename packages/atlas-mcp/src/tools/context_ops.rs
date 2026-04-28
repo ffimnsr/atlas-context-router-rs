@@ -537,6 +537,7 @@ pub(super) fn tool_build_or_update_graph(
             db_path,
             &UpdateOptions {
                 fail_fast: false,
+                dry_run: false,
                 batch_size: config.parse_batch_size(),
                 target,
                 budget: build_budget,
@@ -620,6 +621,7 @@ pub(super) fn tool_build_or_update_graph(
             db_path,
             &BuildOptions {
                 fail_fast: false,
+                dry_run: false,
                 batch_size: config.parse_batch_size(),
                 budget: build_budget,
             },

@@ -524,6 +524,24 @@ fn build_on_sample_repo_emits_expected_summary() {
 }
 
 #[test]
+fn build_dry_run_does_not_persist_graph_state() {
+    let repo = setup_fixture_repo();
+
+    run_atlas(repo.path(), &["init"]);
+
+    let build = read_json_data_output(
+        "build",
+        run_atlas(repo.path(), &["--json", "build", "--dry-run"]),
+    );
+    assert_eq!(build["dry_run"], json!(true));
+    assert!(build["parsed"].as_u64().unwrap_or_default() >= 2);
+
+    let status = read_json_data_output("status", run_atlas(repo.path(), &["--json", "status"]));
+    assert_eq!(status["graph_built"], json!(false), "dry-run must not build graph");
+    assert_eq!(status["node_count"], json!(0), "dry-run must not persist nodes");
+}
+
+#[test]
 fn update_after_fixture_edit_emits_expected_summary() {
     let repo = setup_fixture_repo();
 
@@ -543,5 +561,34 @@ fn update_after_fixture_edit_emits_expected_summary() {
             "Nodes    :",
             "Edges    :",
         ],
+    );
+}
+
+#[test]
+fn update_dry_run_keeps_existing_graph_unchanged() {
+    let repo = setup_fixture_repo();
+
+    run_atlas(repo.path(), &["init"]);
+    run_atlas(repo.path(), &["build"]);
+    rewrite_fixture_helper(repo.path());
+
+    let dry_run = read_json_data_output(
+        "update",
+        run_atlas(repo.path(), &["--json", "update", "--base", "HEAD", "--dry-run"]),
+    );
+    assert_eq!(dry_run["dry_run"], json!(true));
+    assert!(dry_run["parsed"].as_u64().unwrap_or_default() >= 1);
+
+    let status = read_json_data_output("status", run_atlas(repo.path(), &["--json", "status"]));
+    assert_eq!(status["stale_index"], json!(true), "dry-run must not clear stale index state");
+
+    let query = read_json_data_output(
+        "query",
+        run_atlas(repo.path(), &["--json", "query", "render"]),
+    );
+    let results = query["results"].as_array().expect("query results array");
+    assert!(
+        results.iter().all(|item| item["node"]["name"] != json!("render")),
+        "dry-run must not make newly added symbols queryable yet: {query:?}"
     );
 }

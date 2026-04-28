@@ -1,0 +1,23 @@
+[
+  {
+    "file": "src/lib.rs",
+    "kind": "method",
+    "lang": "rust",
+    "line": 4,
+    "parent": "src/lib.rs::impl::Greeter",
+    "qn": "src/lib.rs::method::Greeter::greet_twice",
+    "ranking_evidence": {
+      "base_mode": "fts5",
+      "exact_name_match": true,
+      "final_score": 0.0,
+      "kind_boost": 3.0,
+      "matched_fields": [
+        "name"
+      ],
+      "public_exported_boost": 2.0,
+      "raw_score": 0.0
+    },
+    "score": 0.0,
+    "sig": "(name: &str)"
+  }
+]

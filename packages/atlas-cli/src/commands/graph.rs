@@ -470,7 +470,10 @@ pub fn run_status(cli: &Cli) -> Result<()> {
 }
 
 pub fn run_build(cli: &Cli) -> Result<()> {
-    let fail_fast = matches!(&cli.command, Command::Build { fail_fast } if *fail_fast);
+    let (fail_fast, dry_run) = match &cli.command {
+        Command::Build { fail_fast, dry_run } => (*fail_fast, *dry_run),
+        _ => unreachable!(),
+    };
     let repo = resolve_repo(cli)?;
     let mut adapter = CliAdapter::open(&repo);
     if let Some(ref mut a) = adapter {
@@ -486,7 +489,7 @@ pub fn run_build(cli: &Cli) -> Result<()> {
         let build_budget = config.build_run_budget()?;
 
         // Record lifecycle: building.
-        if let Ok(store) = Store::open(&db_path) {
+        if !dry_run && let Ok(store) = Store::open(&db_path) {
             let _ = store.begin_build(repo_root_path.as_str());
         }
 
@@ -495,13 +498,14 @@ pub fn run_build(cli: &Cli) -> Result<()> {
             &db_path,
             &BuildOptions {
                 fail_fast,
+                dry_run,
                 batch_size: config.parse_batch_size(),
                 budget: build_budget,
             },
         );
 
         // Record lifecycle: built or build_failed.
-        if let Ok(store) = Store::open(&db_path) {
+        if !dry_run && let Ok(store) = Store::open(&db_path) {
             match &build_result {
                 Ok(s) => {
                     let state =
@@ -544,6 +548,7 @@ pub fn run_build(cli: &Cli) -> Result<()> {
             print_json(
                 "build",
                 serde_json::json!({
+                    "dry_run": dry_run,
                     "scanned": summary.scanned,
                     "skipped_unsupported": summary.skipped_unsupported,
                     "skipped_unchanged": summary.skipped_unchanged,
@@ -569,7 +574,12 @@ pub fn run_build(cli: &Cli) -> Result<()> {
                 String::from("—")
             };
             println!(
-                "Build complete ({:.2}s, {nodes_per_sec})",
+                "{} ({:.2}s, {nodes_per_sec})",
+                if dry_run {
+                    "Build dry run complete"
+                } else {
+                    "Build complete"
+                },
                 summary.elapsed_ms as f64 / 1000.0
             );
             println!("  Scanned             : {}", summary.scanned);
@@ -606,10 +616,12 @@ pub fn run_build(cli: &Cli) -> Result<()> {
 }
 
 pub fn run_update(cli: &Cli) -> Result<()> {
-    let fail_fast = matches!(
-        &cli.command,
-        Command::Update { fail_fast, .. } if *fail_fast
-    );
+    let (fail_fast, dry_run) = match &cli.command {
+        Command::Update {
+            fail_fast, dry_run, ..
+        } => (*fail_fast, *dry_run),
+        _ => unreachable!(),
+    };
     let repo = resolve_repo(cli)?;
     let mut adapter = CliAdapter::open(&repo);
     if let Some(ref mut a) = adapter {
@@ -647,7 +659,7 @@ pub fn run_update(cli: &Cli) -> Result<()> {
         };
 
         // Record lifecycle: building.
-        if let Ok(store) = Store::open(&db_path) {
+        if !dry_run && let Ok(store) = Store::open(&db_path) {
             let _ = store.begin_build(repo_root_path.as_str());
         }
 
@@ -656,6 +668,7 @@ pub fn run_update(cli: &Cli) -> Result<()> {
             &db_path,
             &UpdateOptions {
                 fail_fast,
+                dry_run,
                 batch_size: config.parse_batch_size(),
                 target,
                 budget: build_budget,
@@ -663,7 +676,7 @@ pub fn run_update(cli: &Cli) -> Result<()> {
         );
 
         // Record lifecycle: built or build_failed.
-        if let Ok(store) = Store::open(&db_path) {
+        if !dry_run && let Ok(store) = Store::open(&db_path) {
             match &update_result {
                 Ok(s) => {
                     let state =
@@ -706,6 +719,7 @@ pub fn run_update(cli: &Cli) -> Result<()> {
             print_json(
                 "update",
                 serde_json::json!({
+                    "dry_run": dry_run,
                     "deleted": summary.deleted,
                     "renamed": summary.renamed,
                     "parsed": summary.parsed,
@@ -731,7 +745,12 @@ pub fn run_update(cli: &Cli) -> Result<()> {
                 String::from("—")
             };
             println!(
-                "Update complete ({:.2}s, {nodes_per_sec})",
+                "{} ({:.2}s, {nodes_per_sec})",
+                if dry_run {
+                    "Update dry run complete"
+                } else {
+                    "Update complete"
+                },
                 summary.elapsed_ms as f64 / 1000.0
             );
             println!("  Deleted  : {}", summary.deleted);
@@ -811,6 +830,10 @@ pub fn run_watch(cli: &Cli) -> Result<()> {
                 "command": "watch",
                 "data": {
                     "files_updated": result.files_updated,
+                    "observed_events": result.observed_events,
+                    "coalesced_events": result.coalesced_events,
+                    "dropped_events": result.dropped_events,
+                    "recovery_mode": result.recovery_mode,
                     "nodes_updated": result.nodes_updated,
                     "errors": result.errors,
                     "elapsed_ms": result.elapsed_ms,
@@ -819,17 +842,38 @@ pub fn run_watch(cli: &Cli) -> Result<()> {
             });
             println!("{}", serde_json::to_string(&obj).unwrap_or_default());
         } else if result.errors > 0 {
+            if result.dropped_events > 0 {
+                eprintln!(
+                    "watch: backlog overflowed; recovered via {} after dropping {} raw event(s)",
+                    result.recovery_mode, result.dropped_events,
+                );
+            }
             eprintln!(
-                "watch: {} file(s) — {} node(s) updated — {} error(s) [{} ms]",
-                result.files_updated, result.nodes_updated, result.errors, result.elapsed_ms,
+                "watch: {} file(s) — {} event(s) observed — {} coalesced — {} node(s) updated — {} error(s) [{} ms]",
+                result.files_updated,
+                result.observed_events,
+                result.coalesced_events,
+                result.nodes_updated,
+                result.errors,
+                result.elapsed_ms,
             );
             for msg in &result.error_messages {
                 eprintln!("  {msg}");
             }
         } else {
+            if result.dropped_events > 0 {
+                println!(
+                    "watch: backlog overflowed; recovered via {} after dropping {} raw event(s)",
+                    result.recovery_mode, result.dropped_events,
+                );
+            }
             println!(
-                "watch: {} file(s) — {} node(s) updated [{} ms]",
-                result.files_updated, result.nodes_updated, result.elapsed_ms,
+                "watch: {} file(s) — {} event(s) observed — {} coalesced — {} node(s) updated [{} ms]",
+                result.files_updated,
+                result.observed_events,
+                result.coalesced_events,
+                result.nodes_updated,
+                result.elapsed_ms,
             );
         }
     })

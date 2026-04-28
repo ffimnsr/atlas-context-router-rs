@@ -113,3 +113,20 @@ fn postprocess_unknown_stage_uses_stable_json_error_code() {
     assert_eq!(data["ok"], json!(false));
     assert_eq!(data["error_code"], json!("unknown_stage"));
 }
+
+#[test]
+fn postprocess_dry_run_surfaces_preview_mode() {
+    let repo = repo_with_large_function();
+    run_atlas(repo.path(), &["init"]);
+    run_atlas(repo.path(), &["build"]);
+
+    let data = read_json_data_output(
+        "postprocess",
+        run_atlas(repo.path(), &["--json", "postprocess", "--dry-run"]),
+    );
+
+    assert_eq!(data["ok"], json!(true));
+    assert_eq!(data["dry_run"], json!(true));
+    assert_eq!(data["message"], json!("postprocess dry run complete"));
+    assert_eq!(data["stages"].as_array().map(Vec::len), Some(5));
+}

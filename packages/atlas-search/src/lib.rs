@@ -1,13 +1,4 @@
-//! Graph search and ranking crate for Atlas.
-//!
-//! Provides FTS-backed symbol retrieval plus ranking evidence used by CLI, MCP,
-//! review, and reasoning surfaces.
-//!
-//! Search modes combine:
-//! - FTS matches over persisted graph records
-//! - regex-assisted filtering and structural scans
-//! - graph expansion over neighboring nodes
-//! - optional hybrid/vector-assisted ranking inputs
+#![doc = include_str!("../README.md")]
 
 use std::collections::{HashMap, HashSet};
 
@@ -1142,7 +1133,7 @@ fn search_hybrid(
     );
 
     // Vector branch — embed query and fetch top_k_vector candidates.
-    let query_vec = embed::embed_text(embed_cfg, &query.text)
+    let query_vec = embed::embed_text_blocking(embed_cfg, &query.text)
         .map_err(|e| atlas_core::AtlasError::Other(e.to_string()))?;
     let vector_results = maybe_exclude_file_nodes(
         store.nodes_by_vector_similarity(&query_vec, query.top_k_vector)?,

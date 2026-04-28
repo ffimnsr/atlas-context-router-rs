@@ -1,5 +1,4 @@
-//! Advanced impact analysis: weighted traversal, impact scoring,
-//! change classification, test impact, and boundary detection.
+#![doc = include_str!("../README.md")]
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
