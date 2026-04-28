@@ -174,6 +174,14 @@ pub fn run_socket_server_with_options(
                 });
             }
         };
+        // On macOS (and other BSDs), an accepted socket inherits the
+        // non-blocking flag from the listening socket. Reset to blocking so
+        // that serve_socket_connection can use normal blocking I/O without
+        // getting WouldBlock errors on reads.
+        if let Err(error) = stream.set_nonblocking(false) {
+            tracing::warn!(error = %error, "cannot set accepted socket to blocking; skipping connection");
+            continue;
+        }
         let repo_root = repo_root.to_owned();
         let db_path = db_path.to_owned();
         let worker_pool = Arc::clone(&worker_pool);
