@@ -556,10 +556,10 @@ fn update_after_fixture_edit_emits_expected_summary() {
         &stdout,
         &[
             "Update complete (",
-            "Deleted  : 0",
-            "Parsed   :",
-            "Nodes    :",
-            "Edges    :",
+            "Deleted             : 0",
+            "Parsed              :",
+            "Nodes               :",
+            "Edges               :",
         ],
     );
 }

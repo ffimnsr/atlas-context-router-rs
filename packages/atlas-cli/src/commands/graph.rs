@@ -1,3 +1,4 @@
+use std::fmt::Display;
 use std::fs;
 
 use anyhow::{Context, Result};
@@ -44,6 +45,10 @@ struct StatusDiagnostics {
     graph_query_error: Option<String>,
     pending_graph_changes: Vec<String>,
     retrieval_index: serde_json::Value,
+}
+
+fn print_summary_value(label: &str, value: impl Display) {
+    println!("  {label:<20}: {value}");
 }
 
 fn file_has_graph_facts(store: &Store, path: &str) -> bool {
@@ -582,27 +587,24 @@ pub fn run_build(cli: &Cli) -> Result<()> {
                 },
                 summary.elapsed_ms as f64 / 1000.0
             );
-            println!("  Scanned             : {}", summary.scanned);
-            println!("  Unsupported skipped : {}", summary.skipped_unsupported);
-            println!("  Unchanged skipped   : {}", summary.skipped_unchanged);
-            println!("  Parsed              : {}", summary.parsed);
+            print_summary_value("Scanned", summary.scanned);
+            print_summary_value("Unsupported skipped", summary.skipped_unsupported);
+            print_summary_value("Unchanged skipped", summary.skipped_unchanged);
+            print_summary_value("Parsed", summary.parsed);
             if summary.parse_errors > 0 {
-                println!("  Errors              : {}", summary.parse_errors);
+                print_summary_value("Errors", summary.parse_errors);
             }
-            println!(
-                "  Files accepted      : {}",
-                summary.budget_counters.files_accepted
-            );
+            print_summary_value("Files accepted", summary.budget_counters.files_accepted);
             if summary.budget_counters.files_skipped_by_byte_budget > 0 {
-                println!(
-                    "  Byte-budget skipped : {}",
-                    summary.budget_counters.files_skipped_by_byte_budget
+                print_summary_value(
+                    "Byte-budget skipped",
+                    summary.budget_counters.files_skipped_by_byte_budget,
                 );
             }
-            println!("  Nodes inserted      : {}", summary.nodes_inserted);
-            println!("  Edges inserted      : {}", summary.edges_inserted);
+            print_summary_value("Nodes inserted", summary.nodes_inserted);
+            print_summary_value("Edges inserted", summary.edges_inserted);
             if let Some(reason) = &summary.budget_counters.budget_stop_reason {
-                println!("  Budget stop reason  : {reason}");
+                print_summary_value("Budget stop reason", reason);
             }
         }
 
@@ -753,31 +755,28 @@ pub fn run_update(cli: &Cli) -> Result<()> {
                 },
                 summary.elapsed_ms as f64 / 1000.0
             );
-            println!("  Deleted  : {}", summary.deleted);
+            print_summary_value("Deleted", summary.deleted);
             if summary.renamed > 0 {
-                println!("  Renamed  : {}", summary.renamed);
+                print_summary_value("Renamed", summary.renamed);
             }
-            println!("  Parsed   : {}", summary.parsed);
+            print_summary_value("Parsed", summary.parsed);
             if summary.skipped_unsupported > 0 {
-                println!("  Unsupported skipped : {}", summary.skipped_unsupported);
+                print_summary_value("Unsupported skipped", summary.skipped_unsupported);
             }
-            println!(
-                "  Files accepted      : {}",
-                summary.budget_counters.files_accepted
-            );
+            print_summary_value("Files accepted", summary.budget_counters.files_accepted);
             if summary.budget_counters.files_skipped_by_byte_budget > 0 {
-                println!(
-                    "  Byte-budget skipped : {}",
-                    summary.budget_counters.files_skipped_by_byte_budget
+                print_summary_value(
+                    "Byte-budget skipped",
+                    summary.budget_counters.files_skipped_by_byte_budget,
                 );
             }
             if summary.parse_errors > 0 {
-                println!("  Errors   : {}", summary.parse_errors);
+                print_summary_value("Errors", summary.parse_errors);
             }
-            println!("  Nodes    : {}", summary.nodes_updated);
-            println!("  Edges    : {}", summary.edges_updated);
+            print_summary_value("Nodes", summary.nodes_updated);
+            print_summary_value("Edges", summary.edges_updated);
             if let Some(reason) = &summary.budget_counters.budget_stop_reason {
-                println!("  Budget stop reason  : {reason}");
+                print_summary_value("Budget stop reason", reason);
             }
         }
 
