@@ -576,9 +576,13 @@ mod tests {
         std::fs::write(abs.as_std_path(), "fn main() {}\n").unwrap();
 
         let canonical = canonical_filesystem_path(abs.as_path()).unwrap();
+        // Use canonical_filesystem_path on the directory itself so the expected
+        // prefix matches on platforms where tempdir returns a symlink path
+        // (e.g. macOS /var -> /private/var).
+        let canonical_root = canonical_filesystem_path(root).unwrap();
         assert_eq!(
             canonical.as_str(),
-            &format!("{}/caf\u{00e9}.rs", root.as_str())
+            &format!("{}/caf\u{00e9}.rs", canonical_root.as_str())
         );
     }
 

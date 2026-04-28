@@ -10,7 +10,7 @@ thiserror.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 camino.workspace = true
-time.workspace = true
+time = { workspace = true, features = ["formatting"] }
 
 [lints]
 workspace = true
