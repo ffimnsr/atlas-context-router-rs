@@ -101,6 +101,15 @@ fn call_inner(
         return Ok(serde_json::json!({ "slept_ms": sleep_ms }));
     }
 
+    #[cfg(test)]
+    if name == "__test_panic" {
+        let msg = args
+            .and_then(|value| value.get("message"))
+            .and_then(|value| value.as_str())
+            .unwrap_or("test panic");
+        panic!("{msg}");
+    }
+
     let output_format = resolve_output_format(args, default_output_format_for_tool(name))?;
     let mut response = match name {
         "list_graph_stats" => tool_list_graph_stats(db_path, output_format),

@@ -120,7 +120,7 @@ split-debuginfo = "unpacked"
 [profile.release]
 lto = "thin"
 codegen-units = 1
-panic = "abort"
+panic = "unwind"
 strip = "symbols"
 
 [profile.bench]

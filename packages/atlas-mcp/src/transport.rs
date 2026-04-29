@@ -550,10 +550,79 @@ fn process_requests<W: Write>(
     Ok(())
 }
 
+/// Maximum number of bytes accepted for a single newline-delimited input line.
+/// Requests larger than this are almost certainly malformed or malicious; the
+/// connection is terminated so the daemon is not forced to parse or allocate
+/// the full payload.
+const MAX_INPUT_LINE_BYTES: usize = 16 * 1024 * 1024; // 16 MiB
+
+/// Read one newline-terminated line from `reader` into `buf`, enforcing a byte
+/// cap.  Returns `Ok(true)` when a line (possibly without a trailing `\n`) was
+/// appended to `buf`, `Ok(false)` on clean EOF, and `Err(_)` on I/O error or
+/// when the accumulated bytes exceed `limit` before a `\n` is found.
+fn read_limited_line<R: BufRead>(
+    reader: &mut R,
+    buf: &mut Vec<u8>,
+    limit: usize,
+) -> std::io::Result<bool> {
+    loop {
+        let available = reader.fill_buf()?;
+        if available.is_empty() {
+            // Clean EOF.
+            return Ok(!buf.is_empty());
+        }
+        match available.iter().position(|&b| b == b'\n') {
+            Some(i) => {
+                let end = i + 1;
+                if buf.len() + end > limit {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!("input line exceeds {limit} byte limit"),
+                    ));
+                }
+                buf.extend_from_slice(&available[..end]);
+                reader.consume(end);
+                return Ok(true);
+            }
+            None => {
+                let n = available.len();
+                if buf.len() + n > limit {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!("input line exceeds {limit} byte limit"),
+                    ));
+                }
+                buf.extend_from_slice(available);
+                reader.consume(n);
+            }
+        }
+    }
+}
+
 fn read_requests<R: BufRead>(reader: R, event_tx: mpsc::Sender<TransportEvent>) {
-    for line in reader.lines() {
-        match line {
-            Ok(line) => {
+    let mut reader = reader;
+    let mut raw: Vec<u8> = Vec::with_capacity(4096);
+    loop {
+        raw.clear();
+        match read_limited_line(&mut reader, &mut raw, MAX_INPUT_LINE_BYTES) {
+            Ok(false) => break, // clean EOF
+            Ok(true) => {
+                // Strip trailing \r\n or \n.
+                if raw.last() == Some(&b'\n') {
+                    raw.pop();
+                }
+                if raw.last() == Some(&b'\r') {
+                    raw.pop();
+                }
+                let line = match String::from_utf8(raw.clone()) {
+                    Ok(s) => s,
+                    Err(_) => {
+                        let _ = event_tx.send(TransportEvent::InputError(
+                            "invalid UTF-8 in input line".to_owned(),
+                        ));
+                        return;
+                    }
+                };
                 if event_tx.send(TransportEvent::InputLine(line)).is_err() {
                     return;
                 }
@@ -756,13 +825,29 @@ fn handle_input_line<W: Write>(
                 cancel_flag,
             );
             let dispatch_started_at = Instant::now();
-            let result = dispatch(&method_name, params.as_ref(), &repo_root, &db_path);
+            let dispatch_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                dispatch(&method_name, params.as_ref(), &repo_root, &db_path)
+            }));
             crate::progress::uninstall();
             let execution_ms = dispatch_started_at.elapsed().as_millis();
-            let success = result.is_ok();
-            let response = match result {
-                Ok(result) => jsonrpc_ok(request_id, result),
-                Err(error) => jsonrpc_dispatch_error(request_id, &error),
+            let (success, response) = match dispatch_result {
+                Ok(Ok(result)) => (true, jsonrpc_ok(request_id, result)),
+                Ok(Err(error)) => (false, jsonrpc_dispatch_error(request_id, &error)),
+                Err(payload) => {
+                    tracing::error!(
+                        method = %method_name,
+                        message = %panic_payload_message(&payload),
+                        "MCP tool dispatch panicked; returning internal error to client"
+                    );
+                    (
+                        false,
+                        jsonrpc_error(
+                            request_id,
+                            JsonRpcErrorKind::InternalError,
+                            "tool panicked; server recovered".to_owned(),
+                        ),
+                    )
+                }
             };
             let _ = event_tx.send(TransportEvent::Response {
                 token,
@@ -785,25 +870,20 @@ fn handle_input_line<W: Write>(
     }
 
     let dispatch_started_at = Instant::now();
-    let response = match dispatch(&method, params, ctx.repo_root, ctx.db_path) {
-        Ok(result) => {
-            log_request_finished(
-                &request_log,
-                true,
-                0,
-                dispatch_started_at.elapsed().as_millis(),
-                dispatch_started_at.elapsed().as_millis(),
-            );
+    // Synchronous dispatch path (initialize, tools/list, prompts/get, etc.).
+    // Wrap in catch_unwind so a bug in any of these methods cannot kill the
+    // event-loop thread and take down the whole server.
+    let sync_dispatch_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        dispatch(&method, params, ctx.repo_root, ctx.db_path)
+    }));
+    let elapsed_ms = dispatch_started_at.elapsed().as_millis();
+    let response = match sync_dispatch_result {
+        Ok(Ok(result)) => {
+            log_request_finished(&request_log, true, 0, elapsed_ms, elapsed_ms);
             jsonrpc_ok(id, result)
         }
-        Err(error) => {
-            log_request_finished(
-                &request_log,
-                false,
-                0,
-                dispatch_started_at.elapsed().as_millis(),
-                dispatch_started_at.elapsed().as_millis(),
-            );
+        Ok(Err(error)) => {
+            log_request_finished(&request_log, false, 0, elapsed_ms, elapsed_ms);
             tracing::warn!(
                 request_id = %request_log.request_id,
                 method = %request_log.method,
@@ -812,6 +892,19 @@ fn handle_input_line<W: Write>(
                 "MCP method failed"
             );
             jsonrpc_dispatch_error(id, &error)
+        }
+        Err(payload) => {
+            log_request_finished(&request_log, false, 0, elapsed_ms, elapsed_ms);
+            tracing::error!(
+                method = %method,
+                message = %panic_payload_message(&payload),
+                "MCP sync dispatch panicked; returning internal error to client"
+            );
+            jsonrpc_error(
+                id,
+                JsonRpcErrorKind::InternalError,
+                "method panicked; server recovered".to_owned(),
+            )
         }
     };
     write_response(writer, &response)
@@ -1507,7 +1600,20 @@ impl WorkerPool {
                             guard.recv()
                         };
                         match message {
-                            Ok(WorkerMessage::Run(task)) => task.run(),
+                            Ok(WorkerMessage::Run(task)) => {
+                                // Catch panics so worker threads survive individual
+                                // task failures. The dispatch catch_unwind in
+                                // handle_input_line is the first line of defence;
+                                // this is the backstop that keeps pool threads alive.
+                                if let Err(payload) = std::panic::catch_unwind(
+                                    std::panic::AssertUnwindSafe(move || task.run()),
+                                ) {
+                                    tracing::error!(
+                                        message = %panic_payload_message(&payload),
+                                        "MCP worker task panicked; worker thread survived"
+                                    );
+                                }
+                            }
                             Ok(WorkerMessage::Shutdown) | Err(_) => break,
                         }
                     }
@@ -1616,7 +1722,6 @@ fn parse_env_u64(var: &str, default: u64) -> Result<u64> {
     }
 }
 
-#[cfg(test)]
 fn panic_payload_message(payload: &Box<dyn std::any::Any + Send + 'static>) -> String {
     if let Some(message) = payload.downcast_ref::<&'static str>() {
         (*message).to_owned()
@@ -2681,6 +2786,59 @@ mod tests {
 
         assert!(error.to_string().contains("panic-worker"));
         assert!(error.to_string().contains("boom"));
+    }
+
+    #[test]
+    fn dispatch_panic_returns_internal_error_and_server_survives() {
+        // Verify that a tool which panics during dispatch returns an
+        // InternalError JSON-RPC response and does NOT hang or kill the server.
+        // A subsequent request on the same connection must succeed.
+        let fixture = setup_fixture();
+        let input = concat!(
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"__test_panic\",\"arguments\":{\"message\":\"deliberate\"}}}\n",
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"__test_sleep\",\"arguments\":{\"sleep_ms\":0}}}\n",
+        );
+        let reader = BufReader::new(Cursor::new(input.as_bytes()));
+        let mut writer = Vec::new();
+
+        run_server_io(
+            reader,
+            &mut writer,
+            "/ignored",
+            &fixture.db_path,
+            ServerOptions {
+                worker_threads: 1,
+                tool_timeout_ms: 2_000,
+                tool_timeout_ms_by_tool: HashMap::new(),
+            },
+        )
+        .expect("server must not crash");
+
+        let responses = parse_output_lines(writer);
+
+        let panic_resp = responses
+            .iter()
+            .find(|v| v["id"] == serde_json::json!(1))
+            .expect("panic request must produce a response");
+        assert!(
+            panic_resp["error"].is_object(),
+            "panicking tool must return error: {panic_resp}"
+        );
+        // JSONRPC_INTERNAL_ERROR = -32603
+        assert_eq!(
+            panic_resp["error"]["code"],
+            serde_json::json!(JSONRPC_INTERNAL_ERROR),
+            "error code must be InternalError"
+        );
+
+        let ok_resp = responses
+            .iter()
+            .find(|v| v["id"] == serde_json::json!(2))
+            .expect("subsequent request must succeed");
+        assert!(
+            ok_resp["result"].is_object(),
+            "subsequent request must succeed: {ok_resp}"
+        );
     }
 
     #[test]

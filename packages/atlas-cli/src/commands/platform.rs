@@ -56,6 +56,37 @@ pub fn run_serve_daemon(cli: &Cli) -> Result<()> {
     }
 }
 
+/// Exponential backoff delay before a daemon reconnect attempt.
+///
+/// Attempt 1 → ~500 ms, attempt 2 → ~1 000 ms, attempt 3 → ~2 000 ms,
+/// capped at 5 000 ms.  A small deterministic jitter (≤ 10 % of `BASE_MS`) is
+/// mixed in using a cheap integer hash so two concurrent broker processes
+/// (e.g. two editor windows) don't thunder-herd the daemon on restart.
+fn broker_reconnect_delay(attempt: u32) -> std::time::Duration {
+    const BASE_MS: u64 = 500;
+    const CAP_MS: u64 = 5_000;
+    let exp = BASE_MS.saturating_mul(1u64 << attempt.saturating_sub(1).min(10));
+    let capped = exp.min(CAP_MS);
+    // Deterministic jitter: mix the attempt counter through a cheap hash.
+    let jitter_range = BASE_MS / 10 + 1;
+    let jitter = (u64::from(attempt)
+        .wrapping_mul(6_364_136_223_846_793_005)
+        .wrapping_add(1))
+        % jitter_range;
+    std::time::Duration::from_millis(capped + jitter)
+}
+
+#[cfg(unix)]
+enum RelayOutcome {
+    /// stdin closed naturally or signal received — session is done.
+    Clean,
+    /// Daemon socket disconnected while stdin was still open — daemon crashed.
+    DaemonDied,
+}
+
+#[cfg(unix)]
+const MAX_DAEMON_RECONNECTS: u32 = 3;
+
 #[cfg(unix)]
 fn run_stdio_broker(
     instance: crate::mcp_instance::McpInstance,
@@ -83,12 +114,12 @@ fn run_stdio_broker(
                         metadata.socket_path, instance.repo_root, instance.db_path
                     );
                     instance.clear_runtime_state()?;
-                    spawn_and_wait_for_daemon(&instance, options)?
+                    spawn_and_wait_for_daemon(&instance, options.clone())?
                 }
             }
         }
         crate::mcp_instance::McpInstanceStatus::Missing => {
-            spawn_and_wait_for_daemon(&instance, options)?
+            spawn_and_wait_for_daemon(&instance, options.clone())?
         }
         crate::mcp_instance::McpInstanceStatus::Stale(stale) => {
             eprintln!(
@@ -98,12 +129,36 @@ fn run_stdio_broker(
                 stale.reasons
             );
             instance.clear_runtime_state()?;
-            spawn_and_wait_for_daemon(&instance, options)?
+            spawn_and_wait_for_daemon(&instance, options.clone())?
         }
     };
 
     drop(coordination_lock);
-    relay_stdio(stream)
+
+    let mut stream = stream;
+    let mut reconnects = 0u32;
+    loop {
+        match relay_stdio(stream)? {
+            RelayOutcome::Clean => break,
+            RelayOutcome::DaemonDied => {
+                reconnects += 1;
+                if reconnects > MAX_DAEMON_RECONNECTS {
+                    return Err(anyhow::anyhow!(
+                        "atlas-mcp: daemon crashed {MAX_DAEMON_RECONNECTS} times; giving up"
+                    ));
+                }
+                let delay = broker_reconnect_delay(reconnects);
+                eprintln!(
+                    "atlas-mcp: daemon died mid-session; waiting {}ms before reconnect attempt {reconnects}/{MAX_DAEMON_RECONNECTS}",
+                    delay.as_millis()
+                );
+                std::thread::sleep(delay);
+                instance.clear_runtime_state()?;
+                stream = spawn_and_wait_for_daemon(&instance, options.clone())?;
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(unix)]
@@ -202,7 +257,7 @@ fn wait_for_daemon_ready(
 }
 
 #[cfg(unix)]
-fn relay_stdio(mut stream: std::os::unix::net::UnixStream) -> Result<()> {
+fn relay_stdio(mut stream: std::os::unix::net::UnixStream) -> Result<RelayOutcome> {
     use std::io::{self, Write};
     use std::net::Shutdown;
     use std::os::fd::AsRawFd;
@@ -217,6 +272,10 @@ fn relay_stdio(mut stream: std::os::unix::net::UnixStream) -> Result<()> {
         .context("cannot clone broker socket stream for shutdown")?;
     let shutdown = Arc::new(AtomicBool::new(false));
     let signal_shutdown = Arc::clone(&shutdown);
+    // Set to true when stdin closes naturally (EOF), false if we close it to
+    // interrupt the relay because the daemon died first.
+    let stdin_done = Arc::new(AtomicBool::new(false));
+    let stdin_done_writer = Arc::clone(&stdin_done);
     let mut signals = signal_hook::iterator::Signals::new([
         signal_hook::consts::SIGINT,
         signal_hook::consts::SIGTERM,
@@ -239,7 +298,10 @@ fn relay_stdio(mut stream: std::os::unix::net::UnixStream) -> Result<()> {
         let stdin = io::stdin();
         let mut input = stdin.lock();
         match io::copy(&mut input, &mut write_stream) {
-            Ok(_) => {}
+            Ok(_) => {
+                // stdin reached EOF naturally before the daemon disconnected.
+                stdin_done_writer.store(true, Ordering::Relaxed);
+            }
             Err(error) if is_benign_broker_stdin_disconnect(&error) => return Ok(()),
             Err(error) => return Err(error).context("stdin relay failed"),
         }
@@ -249,25 +311,44 @@ fn relay_stdio(mut stream: std::os::unix::net::UnixStream) -> Result<()> {
 
     let stdout = io::stdout();
     let mut output = stdout.lock();
-    match io::copy(&mut stream, &mut output) {
+    let stdout_result = io::copy(&mut stream, &mut output);
+    output.flush().context("cannot flush broker stdout")?;
+
+    // Determine the outcome before joining the stdin thread.
+    let outcome = if shutdown.load(Ordering::Relaxed) {
+        // Clean signal-triggered shutdown.
+        RelayOutcome::Clean
+    } else if stdin_done.load(Ordering::Relaxed) {
+        // stdin reached EOF before the daemon closed — normal session end.
+        RelayOutcome::Clean
+    } else {
+        // Daemon socket closed while stdin was still open — daemon died.
+        // Interrupt the stdin relay so it exits.
+        let _ = stream.shutdown(Shutdown::Both);
+        RelayOutcome::DaemonDied
+    };
+
+    match stdout_result {
         Ok(_) => {}
         Err(_error) if shutdown.load(Ordering::Relaxed) => {}
+        Err(_error) if matches!(outcome, RelayOutcome::DaemonDied) => {}
         Err(error) => return Err(error).context("stdout relay failed"),
     }
-    output.flush().context("cannot flush broker stdout")?;
 
     match stdin_thread.join() {
         Ok(Ok(())) => {}
         Ok(Err(error)) if shutdown.load(Ordering::Relaxed) => {
-            let _ = stream.shutdown(Shutdown::Both);
             tracing::debug!(error = %error, fd = stream.as_raw_fd(), "broker stdin relay interrupted by shutdown signal");
+        }
+        Ok(Err(error)) if matches!(outcome, RelayOutcome::DaemonDied) => {
+            tracing::debug!(error = %error, "broker stdin relay interrupted by daemon death");
         }
         Ok(Err(error)) => return Err(error),
         Err(_) => return Err(anyhow::anyhow!("stdin relay thread panicked")),
     }
     signal_handle.close();
     let _ = signal_thread.join();
-    Ok(())
+    Ok(outcome)
 }
 
 #[cfg(unix)]
@@ -360,6 +441,15 @@ impl Drop for DaemonCleanup {
 // ──────────────────────────────────────────────────────────────────────────────
 
 #[cfg(windows)]
+enum WinRelayOutcome {
+    Clean,
+    DaemonDied,
+}
+
+#[cfg(windows)]
+const MAX_DAEMON_RECONNECTS_WIN: u32 = 3;
+
+#[cfg(windows)]
 fn run_stdio_broker(
     instance: crate::mcp_instance::McpInstance,
     options: ServerOptions,
@@ -382,12 +472,12 @@ fn run_stdio_broker(
                 Err(error) => {
                     eprintln!("atlas-mcp: stale daemon state detected; respawn: {error:#}");
                     instance.clear_runtime_state()?;
-                    win_spawn_and_wait_for_daemon(&instance, options)?
+                    win_spawn_and_wait_for_daemon(&instance, options.clone())?
                 }
             }
         }
         crate::mcp_instance::McpInstanceStatus::Missing => {
-            win_spawn_and_wait_for_daemon(&instance, options)?
+            win_spawn_and_wait_for_daemon(&instance, options.clone())?
         }
         crate::mcp_instance::McpInstanceStatus::Stale(stale) => {
             eprintln!(
@@ -397,11 +487,36 @@ fn run_stdio_broker(
                 stale.reasons
             );
             instance.clear_runtime_state()?;
-            win_spawn_and_wait_for_daemon(&instance, options)?
+            win_spawn_and_wait_for_daemon(&instance, options.clone())?
         }
     };
     drop(coordination_lock);
-    win_relay_stdio(reader, writer)
+
+    let mut pair = (reader, writer);
+    let mut reconnects = 0u32;
+    loop {
+        let (reader, writer) = pair;
+        match win_relay_stdio(reader, writer)? {
+            WinRelayOutcome::Clean => break,
+            WinRelayOutcome::DaemonDied => {
+                reconnects += 1;
+                if reconnects > MAX_DAEMON_RECONNECTS_WIN {
+                    return Err(anyhow::anyhow!(
+                        "atlas-mcp: daemon crashed {MAX_DAEMON_RECONNECTS_WIN} times; giving up"
+                    ));
+                }
+                let delay = broker_reconnect_delay(reconnects);
+                eprintln!(
+                    "atlas-mcp: daemon died mid-session; waiting {}ms before reconnect attempt {reconnects}/{MAX_DAEMON_RECONNECTS_WIN}",
+                    delay.as_millis()
+                );
+                std::thread::sleep(delay);
+                instance.clear_runtime_state()?;
+                pair = win_spawn_and_wait_for_daemon(&instance, options.clone())?;
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(windows)]
@@ -559,14 +674,21 @@ fn win_connect_to_daemon(
 fn win_relay_stdio(
     mut reader: std::io::BufReader<std::fs::File>,
     mut writer: std::fs::File,
-) -> Result<()> {
+) -> Result<WinRelayOutcome> {
     use std::io::{self, Write};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
+    let stdin_done = Arc::new(AtomicBool::new(false));
+    let stdin_done_writer = Arc::clone(&stdin_done);
     let stdin_thread = std::thread::spawn(move || -> Result<()> {
         let stdin = io::stdin();
         let mut input = stdin.lock();
         match io::copy(&mut input, &mut writer) {
-            Ok(_) => Ok(()),
+            Ok(_) => {
+                stdin_done_writer.store(true, Ordering::Relaxed);
+                Ok(())
+            }
             Err(error) if win_is_benign_disconnect(&error) => Ok(()),
             Err(error) => Err(error).context("stdin relay failed"),
         }
@@ -574,18 +696,27 @@ fn win_relay_stdio(
 
     let stdout = io::stdout();
     let mut output = stdout.lock();
-    match io::copy(&mut reader, &mut output) {
+    let stdout_result = io::copy(&mut reader, &mut output);
+    output.flush().context("cannot flush broker stdout")?;
+
+    let outcome = if stdin_done.load(Ordering::Relaxed) {
+        WinRelayOutcome::Clean
+    } else {
+        WinRelayOutcome::DaemonDied
+    };
+
+    match stdout_result {
         Ok(_) => {}
         Err(error) if win_is_benign_disconnect(&error) => {}
+        Err(_error) if matches!(outcome, WinRelayOutcome::DaemonDied) => {}
         Err(error) => return Err(error).context("stdout relay failed"),
     }
-    output.flush().context("cannot flush broker stdout")?;
 
     match stdin_thread.join() {
         Ok(Ok(())) | Ok(Err(_)) => {}
         Err(_) => return Err(anyhow::anyhow!("stdin relay thread panicked")),
     }
-    Ok(())
+    Ok(outcome)
 }
 
 #[cfg(windows)]
@@ -823,5 +954,36 @@ mod tests {
                 "expected shutdown error context for {kind:?}: {error:#}"
             );
         }
+    }
+
+    #[test]
+    fn broker_reconnect_delay_is_bounded_and_grows() {
+        let d = |attempt| super::broker_reconnect_delay(attempt).as_millis();
+        // Attempt 1: at least the base (500 ms).
+        assert!(d(1) >= 500, "attempt 1 should be >= 500 ms, got {}", d(1));
+        // Each subsequent attempt at least doubles the previous base.
+        assert!(
+            d(2) >= 1_000,
+            "attempt 2 should be >= 1000 ms, got {}",
+            d(2)
+        );
+        assert!(
+            d(3) >= 2_000,
+            "attempt 3 should be >= 2000 ms, got {}",
+            d(3)
+        );
+        // High attempt numbers must not exceed cap + jitter ceiling.
+        let cap_with_jitter = 5_000 + 500 / 10 + 1;
+        for attempt in [5, 10, 100] {
+            assert!(
+                d(attempt) <= cap_with_jitter,
+                "attempt {attempt} should be <= {cap_with_jitter} ms, got {}",
+                d(attempt)
+            );
+        }
+        // Delays grow monotonically until the cap (attempts 1-4).
+        assert!(d(1) < d(2), "delay should grow from attempt 1 to 2");
+        assert!(d(2) < d(3), "delay should grow from attempt 2 to 3");
+        assert!(d(3) < d(4), "delay should grow from attempt 3 to 4");
     }
 }
