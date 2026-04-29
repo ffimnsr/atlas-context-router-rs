@@ -4,6 +4,23 @@ All notable changes to this project should be recorded in this file.
 
 Versioning policy may evolve while Atlas is still moving quickly, but release notes should still group changes by user-visible impact.
 
+## 1.1.1 - 2026-04-29
+
+### Features
+
+- daemon crash recovery with exponential backoff and panic handling (`5eb9012`)
+
+
+### Fixes
+
+- serialize embed env-var tests to prevent race condition (`f3da333`)
+
+
+### Maintenance
+
+- consolidate summary output formatting (`48428bb`)
+
+
 ## 1.1.0 - 2026-04-28
 
 ### Features

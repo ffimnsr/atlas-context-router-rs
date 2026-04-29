@@ -1,13 +1,13 @@
 [package]
 name = "atlas-parser"
-version = "1.1.0"
+version = "1.1.1"
 edition = "2024"
 description = "Tree-sitter based source parsing and parser registry for Atlas"
 publish = false
 
 [dependencies]
 atlas-core.workspace = true
-atlas-repo = { path = "../atlas-repo", version = "1.1.0" }
+atlas-repo = { path = "../atlas-repo", version = "1.1.1" }
 tracing.workspace = true
 tree-sitter.workspace = true
 tree-sitter-rust.workspace = true
