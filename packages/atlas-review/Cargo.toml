@@ -9,8 +9,10 @@ publish = false
 atlas-core.workspace = true
 atlas-contentstore = { path = "../atlas-contentstore" , version = "1.1.1"}
 atlas-impact = { path = "../atlas-impact" , version = "1.1.1"}
+atlas-repo = { path = "../atlas-repo" , version = "1.1.1"}
 atlas-store-sqlite = { path = "../atlas-store-sqlite" , version = "1.1.1"}
 atlas-search = { path = "../atlas-search" , version = "1.1.1"}
+camino.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true

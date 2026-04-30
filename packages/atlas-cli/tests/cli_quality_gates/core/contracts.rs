@@ -56,9 +56,18 @@ fn assert_valid_against_schema(schema_file: &str, command: &str, output: Output)
 #[test]
 fn atlas_cli_v1_schemas_validate_live_outputs() {
     let repo = setup_fixture_repo();
+    let docs_repo = setup_repo(&[
+        (
+            "README.md",
+            "# Overview\nintro\n## Install\nstep\n",
+        ),
+        ("src/lib.rs", "pub fn helper() {}\n"),
+    ]);
 
     run_atlas(repo.path(), &["init"]);
     run_atlas(repo.path(), &["build"]);
+    run_atlas(docs_repo.path(), &["init"]);
+    run_atlas(docs_repo.path(), &["build"]);
 
     assert_valid_against_schema("status.schema.json", "status", run_atlas(repo.path(), &["--json", "status"]));
     assert_valid_against_schema("build.schema.json", "build", run_atlas(repo.path(), &["--json", "build"]));
@@ -81,6 +90,20 @@ fn atlas_cli_v1_schemas_validate_live_outputs() {
         "postprocess.schema.json",
         "postprocess",
         run_atlas(repo.path(), &["--json", "postprocess"]),
+    );
+    assert_valid_against_schema(
+        "docs-section.schema.json",
+        "docs_section",
+        run_atlas(
+            docs_repo.path(),
+            &[
+                "--json",
+                "docs-section",
+                "README.md",
+                "--heading",
+                "document.overview.install",
+            ],
+        ),
     );
 
     rewrite_fixture_helper(repo.path());

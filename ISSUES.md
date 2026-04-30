@@ -808,26 +808,26 @@ Atlas already has pieces of the upstream parity surface: Markdown heading graph 
 
 #### Patch PS1 — Docs section lookup parity
 
-- [ ] add docs-section lookup service over indexed project docs:
-  - [ ] resolve doc by canonical repo path
-  - [ ] resolve section by Markdown heading path / slug
-  - [ ] return section body with bounded child-heading context
-  - [ ] include heading level, line range, file hash, and truncation metadata
-  - [ ] reuse existing Markdown parser heading nodes and content-store/file reads where possible
-- [ ] add CLI surface:
-  - [ ] `atlas docs-section <path> --heading <heading-path-or-slug>`
-  - [ ] `atlas docs-section <path> --line <line>`
-  - [ ] `--json`, `--max-bytes`, and stable not-found errors
-- [ ] add MCP `get_docs_section`:
-  - [ ] same inputs and defaults as CLI JSON
-  - [ ] TOON/JSON output parity
-  - [ ] provenance and freshness metadata
-- [ ] add CLI/MCP parity tests:
-  - [ ] nested headings
-  - [ ] duplicate heading slugs
-  - [ ] missing file / missing heading
-  - [ ] max-byte truncation
-  - [ ] stale graph warning when doc file changed
+- [x] add docs-section lookup service over indexed project docs:
+  - [x] resolve doc by canonical repo path
+  - [x] resolve section by Markdown heading path / slug
+  - [x] return section body with bounded child-heading context
+  - [x] include heading level, line range, file hash, and truncation metadata
+  - [x] reuse existing Markdown parser heading nodes and content-store/file reads where possible
+- [x] add CLI surface:
+  - [x] `atlas docs-section <path> --heading <heading-path-or-slug>`
+  - [x] `atlas docs-section <path> --line <line>`
+  - [x] `--json`, `--max-bytes`, and stable not-found errors
+- [x] add MCP `get_docs_section`:
+  - [x] same inputs and defaults as CLI JSON
+  - [x] TOON/JSON output parity
+  - [x] provenance and freshness metadata
+- [x] add CLI/MCP parity tests:
+  - [x] nested headings
+  - [x] duplicate heading slugs
+  - [x] missing file / missing heading
+  - [x] max-byte truncation
+  - [x] stale graph warning when doc file changed
 
 Why:
 - current docs support can find files and headings, but cannot fetch one section as a stable agent-facing unit

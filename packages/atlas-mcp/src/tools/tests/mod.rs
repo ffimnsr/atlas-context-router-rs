@@ -186,6 +186,11 @@ pub(super) fn setup_git_mcp_fixture() -> GitMcpFixture {
         "tests/service_test.rs",
         "#[test]\nfn compute_test() { assert_eq!(1, 1); }\n",
     );
+    write_repo_file(
+        root,
+        "README.md",
+        "# Overview\nfixture docs\n## Install\nstep\n",
+    );
 
     git_run(root, &["add", "-A"]);
     git_run(root, &["commit", "--quiet", "-m", "initial"]);
@@ -256,18 +261,63 @@ pub(super) fn setup_git_mcp_fixture() -> GitMcpFixture {
         )
         .expect("replace test graph");
 
+    let readme_heading = Node {
+        id: NodeId::UNSET,
+        kind: NodeKind::Module,
+        name: "Overview".to_owned(),
+        qualified_name: "README.md::heading::document.overview".to_owned(),
+        file_path: "README.md".to_owned(),
+        line_start: 1,
+        line_end: 1,
+        language: "markdown".to_owned(),
+        parent_name: None,
+        params: None,
+        return_type: None,
+        modifiers: None,
+        is_test: false,
+        file_hash: "hash:README.md".to_owned(),
+        extra_json: serde_json::json!({ "level": 1, "path": "document.overview" }),
+    };
+    let install_heading = Node {
+        id: NodeId::UNSET,
+        kind: NodeKind::Module,
+        name: "Install".to_owned(),
+        qualified_name: "README.md::heading::document.overview.install".to_owned(),
+        file_path: "README.md".to_owned(),
+        line_start: 3,
+        line_end: 3,
+        language: "markdown".to_owned(),
+        parent_name: None,
+        params: None,
+        return_type: None,
+        modifiers: None,
+        is_test: false,
+        file_hash: "hash:README.md".to_owned(),
+        extra_json: serde_json::json!({ "level": 2, "path": "document.overview.install" }),
+    };
+    store
+        .replace_file_graph(
+            "README.md",
+            "hash:README.md",
+            Some("markdown"),
+            Some(4),
+            &[readme_heading, install_heading],
+            &[],
+        )
+        .expect("replace readme graph");
+
     let content_db_path = atlas_engine::paths::content_db_path(&db_path);
     let mut content_store = ContentStore::open(&content_db_path).expect("open content store");
     content_store.migrate().expect("migrate content store");
     content_store
-        .begin_indexing(&root.to_string_lossy(), 3)
+        .begin_indexing(&root.to_string_lossy(), 4)
         .expect("begin indexing");
     content_store
         .finish_indexing(
             &root.to_string_lossy(),
             &IndexingStats {
-                files_indexed: 3,
-                chunks_written: 3,
+                files_indexed: 4,
+                chunks_written: 4,
                 chunks_reused: 0,
             },
         )

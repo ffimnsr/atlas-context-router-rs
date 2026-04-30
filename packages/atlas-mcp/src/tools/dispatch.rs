@@ -3,6 +3,7 @@ use atlas_adapters::{AdapterHooks, McpAdapter};
 use atlas_store_sqlite::Store;
 
 use crate::discovery_tools::{
+    tool_get_docs_section, tool_read_file_around_match, tool_read_file_excerpt,
     tool_search_content, tool_search_files, tool_search_templates, tool_search_text_assets,
 };
 use crate::output::{OutputFormat, resolve_output_format};
@@ -43,6 +44,14 @@ fn response_file_list(response: &serde_json::Value, pointer: &str) -> Vec<String
         .unwrap_or_default()
 }
 
+fn response_single_file(response: &serde_json::Value, pointer: &str) -> Vec<String> {
+    response
+        .pointer(pointer)
+        .and_then(|value| value.as_str())
+        .map(|value| vec![value.to_owned()])
+        .unwrap_or_default()
+}
+
 fn inject_freshness_warning(
     response: &mut serde_json::Value,
     name: &str,
@@ -55,6 +64,7 @@ fn inject_freshness_warning(
         "get_review_context" | "get_impact_radius" => {
             response_file_list(response, "/atlas_change_source/resolved_files")
         }
+        "get_docs_section" => response_single_file(response, "/file"),
         _ => Vec::new(),
     };
 
@@ -148,6 +158,9 @@ fn call_inner(
         "concept_clusters" => tool_concept_clusters(args, repo_root, db_path, output_format),
         "search_files" => tool_search_files(args, repo_root, output_format),
         "search_content" => tool_search_content(args, repo_root, output_format),
+        "read_file_excerpt" => tool_read_file_excerpt(args, repo_root, output_format),
+        "get_docs_section" => tool_get_docs_section(args, repo_root, db_path, output_format),
+        "read_file_around_match" => tool_read_file_around_match(args, repo_root, output_format),
         "search_templates" => tool_search_templates(args, repo_root, output_format),
         "search_text_assets" => tool_search_text_assets(args, repo_root, output_format),
         "broker_status" => tool_broker_status(repo_root, db_path, output_format),

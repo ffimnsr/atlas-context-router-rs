@@ -468,6 +468,70 @@ pub fn tool_list() -> serde_json::Value {
                 }
             },
             {
+                "name": "read_file_excerpt",
+                "description": "Read bounded file content from a repo-relative path using either explicit line range(s) or a single line with surrounding context. Use this when you already know the file path and need precise excerpts instead of content search.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "file": { "type": "string", "description": "Repo-relative file path to read." },
+                        "start_line": { "type": "integer", "description": "1-based inclusive start line for single-range mode. Requires end_line." },
+                        "end_line": { "type": "integer", "description": "1-based inclusive end line for single-range mode. Requires start_line." },
+                        "line": { "type": "integer", "description": "1-based line number for line-with-context mode." },
+                        "before": { "type": "integer", "description": "Context lines before `line` (default 0). Only valid with line." },
+                        "after": { "type": "integer", "description": "Context lines after `line` (default 0). Only valid with line." },
+                        "line_ranges": {
+                            "type": "array",
+                            "description": "Explicit list of line ranges. Mutually exclusive with start_line/end_line and line.",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "start_line": { "type": "integer", "description": "1-based inclusive start line." },
+                                    "end_line": { "type": "integer", "description": "1-based inclusive end line." }
+                                },
+                                "required": ["start_line", "end_line"]
+                            }
+                        },
+                        "max_lines": { "type": "integer", "description": "Maximum excerpt lines to return across all ranges (default 200, clamped by policy)." },
+                        "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
+                    },
+                    "required": ["file"]
+                }
+            },
+            {
+                "name": "get_docs_section",
+                "description": "Resolve a Markdown section from a repo-relative documentation file using either a heading path/slug or a line number. Returns the section excerpt with heading metadata and file hash.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "file": { "type": "string", "description": "Repo-relative Markdown file path to read." },
+                        "heading": { "type": "string", "description": "Heading path, slug, or title to resolve. Mutually exclusive with line." },
+                        "line": { "type": "integer", "description": "1-based line number to resolve to the containing Markdown section. Mutually exclusive with heading." },
+                        "max_bytes": { "type": "integer", "description": "Maximum bytes of section content to emit before truncating (default 16384)." },
+                        "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
+                    },
+                    "required": ["file"]
+                }
+            },
+            {
+                "name": "read_file_around_match",
+                "description": "Read grouped snippets around literal or regex matches inside one repo-relative file. Use this when the file path is known and you need nearby context around matched lines.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "file": { "type": "string", "description": "Repo-relative file path to search." },
+                        "query": { "type": "string", "description": "Literal string or regex pattern to match within the file." },
+                        "is_regex": { "type": "boolean", "description": "Treat query as regex (default false)." },
+                        "case_sensitive": { "type": "boolean", "description": "When false, literal matching is case-insensitive by default; regex matching is case-sensitive by default." },
+                        "before": { "type": "integer", "description": "Context lines before each match window (default 2)." },
+                        "after": { "type": "integer", "description": "Context lines after each match window (default 2)." },
+                        "max_matches": { "type": "integer", "description": "Maximum matched lines to consider before truncating (default 20, clamped by policy)." },
+                        "max_lines": { "type": "integer", "description": "Maximum lines to emit across returned snippets (default 200, clamped by policy)." },
+                        "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
+                    },
+                    "required": ["file", "query"]
+                }
+            },
+            {
                 "name": "search_templates",
                 "description": "Discover template files (HTML, Jinja2, Handlebars, Tera, Mako, Mustache, Twig, Liquid, ERB, HAML, Pug) by extension. Narrows by `kind` when you know the template engine. Prefer this over search_files for template-specific discovery. For symbol/relationship questions use query_graph instead.",
                 "inputSchema": {

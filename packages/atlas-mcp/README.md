@@ -8,6 +8,9 @@ MCP server exposing Atlas graph, impact, and review tools over stdio. Implements
 - `list_graph_stats` — node/edge counts and language breakdown
 - `query_graph` — FTS5 keyword search over symbols
 - `batch_query_graph` — run up to 20 queries in one round-trip
+- `read_file_excerpt` — repo-scoped file excerpt reads by line range or line-with-context
+- `get_docs_section` — Markdown section lookup by heading path/slug or line
+- `read_file_around_match` — grouped snippets around one-file matches
 - `get_context` — general context engine for symbol, file, review, or impact
 - `get_review_context` — review bundle with symbols, neighbors, risk summary
 - `get_impact_radius` — traversal from changed files

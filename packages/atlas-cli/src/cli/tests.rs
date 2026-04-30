@@ -235,6 +235,52 @@ fn parse_query_text_only() {
 }
 
 #[test]
+fn parse_docs_section_heading_selector() {
+    let cli = parse(&[
+        "atlas",
+        "docs-section",
+        "README.md",
+        "--heading",
+        "document.overview.install",
+        "--max-bytes",
+        "2048",
+    ]);
+    if let Command::DocsSection {
+        path,
+        heading,
+        line,
+        max_bytes,
+    } = cli.command
+    {
+        assert_eq!(path, "README.md");
+        assert_eq!(heading.as_deref(), Some("document.overview.install"));
+        assert_eq!(line, None);
+        assert_eq!(max_bytes, 2048);
+    } else {
+        panic!("expected DocsSection command");
+    }
+}
+
+#[test]
+fn parse_docs_section_line_selector() {
+    let cli = parse(&["atlas", "docs-section", "README.md", "--line", "7"]);
+    if let Command::DocsSection {
+        path,
+        heading,
+        line,
+        max_bytes,
+    } = cli.command
+    {
+        assert_eq!(path, "README.md");
+        assert_eq!(heading, None);
+        assert_eq!(line, Some(7));
+        assert_eq!(max_bytes, 16_384);
+    } else {
+        panic!("expected DocsSection command");
+    }
+}
+
+#[test]
 fn parse_query_with_kind_and_language_filters() {
     let cli = parse(&[
         "atlas",

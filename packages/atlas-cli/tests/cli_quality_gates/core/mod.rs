@@ -9,6 +9,7 @@ use std::process::{Output, Stdio};
 mod analysis;
 mod contracts;
 mod determinism;
+mod docs_section;
 mod health;
 mod history;
 mod hooks;

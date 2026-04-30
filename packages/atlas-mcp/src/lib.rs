@@ -34,6 +34,9 @@
 //! | `concept_clusters`        | Related file groups around seed files                    |
 //! | `search_files`            | File-path discovery by glob pattern outside graph lookup |
 //! | `search_content`          | Content search by literal string or regex outside graph  |
+//! | `read_file_excerpt`       | Repo-scoped file excerpt reads by line range             |
+//! | `get_docs_section`        | Markdown section lookup by heading path/slug or line     |
+//! | `read_file_around_match`  | Grouped snippets around one-file literal/regex matches   |
 //! | `search_templates`        | Template file discovery by engine kind (HTML, Jinja, …)  |
 //! | `search_text_assets`      | SQL, config, env, and prompt file discovery              |
 //! | `status`                  | Compact graph health summary with machine-readable state |

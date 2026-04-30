@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://atlas-context-router-rs/schemas/atlas_cli.v1/docs-section.schema.json",
+  "title": "atlas_cli.v1 docs_section",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "command", "data"],
+  "properties": {
+    "schema_version": { "const": "atlas_cli.v1" },
+    "command": { "const": "docs_section" },
+    "data": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "file",
+        "selector_kind",
+        "resolved",
+        "truncated",
+        "omitted_byte_count",
+        "atlas_result_kind"
+      ],
+      "properties": {
+        "file": { "type": "string" },
+        "selector_kind": { "enum": ["heading", "line"] },
+        "resolved": { "type": "boolean" },
+        "query": { "type": ["string", "null"] },
+        "heading_path": { "type": ["string", "null"] },
+        "heading_slug": { "type": ["string", "null"] },
+        "heading_level": { "type": ["integer", "null"] },
+        "start_line": { "type": ["integer", "null"] },
+        "end_line": { "type": ["integer", "null"] },
+        "line_count": { "type": ["integer", "null"] },
+        "file_hash": { "type": ["string", "null"] },
+        "content": { "type": ["string", "null"] },
+        "lines": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+        "truncated": { "type": "boolean" },
+        "omitted_byte_count": { "type": "integer", "minimum": 0 },
+        "candidates": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+        "atlas_result_kind": { "const": "docs_section" }
+      }
+    }
+  }
+}

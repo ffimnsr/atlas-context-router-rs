@@ -21,7 +21,7 @@ ALWAYS use TOON output everytime, and JSON when you expect there's floating numb
 ### When to use atlas tools first
 
 - **Exploring code**: `query_graph` to find candidate symbols, then `symbol_neighbors`, `traverse_graph`, or `get_context` for callers/callees and usage relationships
-- **Searching non-symbol content**: `search_files`, `search_content`, `search_templates`, and `search_text_assets` when graph lookup is the wrong tool
+- **Searching non-symbol content**: `search_files`, `search_content`, `read_file_excerpt`, `get_docs_section`, `read_file_around_match`, `search_templates`, and `search_text_assets` when graph lookup is the wrong tool
 - **Understanding impact**: `get_impact_radius` for blast radius, `explain_change` for richer risk analysis
 - **Code review**: `detect_changes` + `get_review_context`, or `get_minimal_context` when tokens matter
 - **Finding relationships**: `symbol_neighbors` for immediate usage edges, `traverse_graph` for broader callers/callees, and `get_context` for intent-aware usage lookup
@@ -39,6 +39,9 @@ Do not treat `query_graph` as caller/callee search. Fall back to file tools **on
 | `batch_query_graph` | Run up to 20 query_graph searches in one call |
 | `search_files` | Find config, template, SQL, Markdown, and other files by path or glob |
 | `search_content` | Search file contents when you need text matches instead of graph symbols |
+| `read_file_excerpt` | Read precise line ranges or one line with surrounding context from a known file |
+| `get_docs_section` | Resolve a Markdown heading path or line number to a bounded docs section |
+| `read_file_around_match` | Read grouped snippets around literal or regex matches in a known file |
 | `search_templates` | Discover template files by engine or extension |
 | `search_text_assets` | Find SQL, config, env, and prompt files outside graph-symbol lookup |
 | `broker_status` | Verify MCP broker liveness, PID, uptime, and version |

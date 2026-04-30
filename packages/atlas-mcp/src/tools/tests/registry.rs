@@ -31,6 +31,9 @@ const TOOL_REGISTRY_SNAPSHOT: &[&str] = &[
     "concept_clusters",
     "search_files",
     "search_content",
+    "read_file_excerpt",
+    "get_docs_section",
+    "read_file_around_match",
     "search_templates",
     "search_text_assets",
     "broker_status",
@@ -106,6 +109,15 @@ fn parity_args(tool_name: &str, source_id: &str) -> Value {
         "concept_clusters" => json!({ "files": ["src/service.rs"], "output_format": "json" }),
         "search_files" => json!({ "pattern": "*.rs", "output_format": "json" }),
         "search_content" => json!({ "query": "compute", "output_format": "json" }),
+        "read_file_excerpt" => {
+            json!({ "file": "src/service.rs", "start_line": 1, "end_line": 3, "output_format": "json" })
+        }
+        "get_docs_section" => {
+            json!({ "file": "README.md", "heading": "document.overview", "output_format": "json" })
+        }
+        "read_file_around_match" => {
+            json!({ "file": "src/service.rs", "query": "compute", "output_format": "json" })
+        }
         "search_templates" => json!({ "kind": "html", "output_format": "json" }),
         "search_text_assets" => json!({ "kind": "config", "output_format": "json" }),
         "broker_status" => json!({ "output_format": "json" }),
@@ -367,4 +379,39 @@ fn every_listed_tool_dispatches_with_parity_fixture_args() {
             panic!("tool {name} returned invalid json: {error}; body={text}")
         });
     }
+}
+
+#[test]
+fn get_docs_section_reports_freshness_when_doc_changes_after_index() {
+    let fixture = setup_git_mcp_fixture();
+    write_repo_file(
+        fixture._dir.path(),
+        "README.md",
+        "# Overview\nfixture docs changed\n## Install\nstep\n",
+    );
+
+    let response = call(
+        "get_docs_section",
+        Some(&json!({
+            "file": "README.md",
+            "heading": "document.overview",
+            "output_format": "json"
+        })),
+        &fixture.repo_root,
+        &fixture.db_path,
+    )
+    .expect("get_docs_section response");
+
+    assert_eq!(
+        response
+            .pointer("/atlas_freshness/stale")
+            .and_then(|v| v.as_bool()),
+        Some(true)
+    );
+    assert_eq!(
+        response
+            .pointer("/atlas_freshness/stale_result_files/0")
+            .and_then(|v| v.as_str()),
+        Some("README.md")
+    );
 }

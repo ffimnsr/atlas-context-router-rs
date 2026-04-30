@@ -169,6 +169,25 @@ pub enum Command {
         regex: bool,
     },
 
+    /// Read one indexed Markdown docs section by heading path/slug or line.
+    #[command(name = "docs-section")]
+    DocsSection {
+        /// Repo-relative path to the Markdown file.
+        path: String,
+
+        /// Heading path, slug, or title selector.
+        #[arg(long, conflicts_with = "line")]
+        heading: Option<String>,
+
+        /// One-based source line inside the desired section.
+        #[arg(long, conflicts_with = "heading")]
+        line: Option<u32>,
+
+        /// Maximum UTF-8 bytes to return from the section body.
+        #[arg(long, default_value_t = 16_384)]
+        max_bytes: usize,
+    },
+
     /// Compute the impact radius of changed files.
     Impact {
         /// Git ref or range to diff against.

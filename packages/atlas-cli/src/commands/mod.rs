@@ -1,5 +1,6 @@
 mod changes;
 mod context_cmd;
+mod docs;
 mod graph;
 mod graph_objects;
 mod history;
@@ -14,6 +15,7 @@ mod session;
 
 pub use changes::{run_detect_changes, run_explain_change, run_impact, run_review_context};
 pub use context_cmd::{run_context, run_shell};
+pub use docs::run_docs_section;
 pub use graph::{run_build, run_init, run_status, run_update, run_watch};
 pub use graph_objects::{run_communities, run_flows};
 pub use history::run_history;

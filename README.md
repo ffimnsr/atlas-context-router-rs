@@ -495,6 +495,9 @@ The MCP server (`atlas serve`) exposes these tools to agents:
 | `batch_query_graph` | Run up to 20 `query_graph` searches in a single round-trip |
 | `search_files` | File-path discovery for config, templates, SQL, Markdown, and other non-code assets |
 | `search_content` | Literal or regex content search outside graph-symbol lookup |
+| `read_file_excerpt` | Repo-scoped file excerpt reads by line range or line-with-context |
+| `get_docs_section` | Markdown section lookup by heading path/slug or line number |
+| `read_file_around_match` | Grouped snippets around literal or regex matches in one file |
 | `search_templates` | Discover HTML, Jinja, Handlebars, Tera, and related template files |
 | `search_text_assets` | Discover SQL, config, env, and prompt files |
 | `broker_status` | Lightweight broker liveness probe: PID, uptime, version |
@@ -537,8 +540,11 @@ Search tool selection rules:
 1. `query_graph`: use for symbol names, definitions, and graph-native relationships.
 2. `search_files`: use when filename, extension, or path pattern is known but content is not.
 3. `search_content`: use for literal or regex text such as error strings, comments, config keys, SQL fragments, and embedded constants. Enable `rich_snippets=true` only when grouped before/match/after context is worth extra payload.
-4. `search_templates`: use when looking specifically for template files by engine or extension.
-5. `search_text_assets`: use for SQL, config, `.env`, and prompt files outside graph-symbol lookup.
+4. `read_file_excerpt`: use when file path is already known and you need precise line ranges or one line with bounded surrounding context.
+5. `get_docs_section`: use for Markdown docs when section identity matters more than raw line ranges.
+6. `read_file_around_match`: use when file path is known and you need grouped context around matched lines.
+7. `search_templates`: use when looking specifically for template files by engine or extension.
+8. `search_text_assets`: use for SQL, config, `.env`, and prompt files outside graph-symbol lookup.
 
 ## MCP Prompts
 

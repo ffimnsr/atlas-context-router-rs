@@ -8,12 +8,14 @@
 use anyhow::{Context, Result};
 use atlas_core::{BudgetManager, BudgetPolicy, BudgetReport};
 use atlas_repo::CanonicalRepoPath;
+use atlas_review::{DocsSectionSelector, lookup_docs_section};
+use atlas_store_sqlite::Store;
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 use grep_regex::RegexMatcherBuilder;
 use grep_searcher::{BinaryDetection, Searcher, SearcherBuilder, Sink, SinkContext, SinkMatch};
 use regex::Regex;
 use serde::Serialize;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::output::{OutputFormat, render_serializable};
 
@@ -35,6 +37,13 @@ fn resolve_subpath_walk_root(repo_root: &str, subpath: &str) -> Result<String> {
     } else {
         Ok(repo_root.to_owned())
     }
+}
+
+fn resolve_repo_file_path(repo_root: &str, path: &str) -> Result<(String, PathBuf)> {
+    let canonical = CanonicalRepoPath::from_repo_relative(path)
+        .map_err(|error| anyhow::anyhow!("invalid file path '{path}': {error}"))?;
+    let absolute = Path::new(repo_root).join(canonical.as_str());
+    Ok((canonical.as_str().to_owned(), absolute))
 }
 
 fn invalid_search_content_regex_error(query: &str, error: impl std::fmt::Display) -> anyhow::Error {
@@ -108,9 +117,561 @@ struct RichSnippet {
     lines: Vec<RichSnippetLine>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct RequestedLineRange {
+    start_line: usize,
+    end_line: usize,
+}
+
+#[derive(Serialize)]
+struct ExcerptLine {
+    line: u64,
+    text: String,
+}
+
+#[derive(Serialize)]
+struct FileExcerpt {
+    start_line: u64,
+    end_line: u64,
+    line_count: usize,
+    content: String,
+    lines: Vec<ExcerptLine>,
+}
+
+#[derive(Clone, Debug)]
+struct LineSnippetWindow {
+    start_line: usize,
+    end_line: usize,
+    match_lines: Vec<usize>,
+}
+
+#[derive(Serialize)]
+struct AroundMatchLine {
+    line: u64,
+    text: String,
+    kind: &'static str,
+}
+
+#[derive(Serialize)]
+struct AroundMatchSnippet {
+    start_line: u64,
+    end_line: u64,
+    match_lines: Vec<u64>,
+    content: String,
+    lines: Vec<AroundMatchLine>,
+}
+
+fn parse_requested_range(value: &serde_json::Value) -> Result<RequestedLineRange> {
+    let start_line = value
+        .get("start_line")
+        .and_then(|v| v.as_u64())
+        .ok_or_else(|| anyhow::anyhow!("line_ranges entries must include start_line"))?
+        as usize;
+    let end_line = value
+        .get("end_line")
+        .and_then(|v| v.as_u64())
+        .ok_or_else(|| anyhow::anyhow!("line_ranges entries must include end_line"))?
+        as usize;
+    validate_requested_range(start_line, end_line)
+}
+
+fn validate_requested_range(start_line: usize, end_line: usize) -> Result<RequestedLineRange> {
+    if start_line == 0 || end_line == 0 {
+        anyhow::bail!("line numbers are 1-based; got start_line={start_line}, end_line={end_line}");
+    }
+    if end_line < start_line {
+        anyhow::bail!("invalid line range: start_line {start_line} exceeds end_line {end_line}");
+    }
+    Ok(RequestedLineRange {
+        start_line,
+        end_line,
+    })
+}
+
+fn normalize_requested_ranges(mut ranges: Vec<RequestedLineRange>) -> Vec<RequestedLineRange> {
+    ranges.sort_unstable_by_key(|range| (range.start_line, range.end_line));
+
+    let mut merged: Vec<RequestedLineRange> = Vec::with_capacity(ranges.len());
+    for range in ranges {
+        if let Some(last) = merged.last_mut()
+            && range.start_line <= last.end_line.saturating_add(1)
+        {
+            last.end_line = last.end_line.max(range.end_line);
+            continue;
+        }
+        merged.push(range);
+    }
+
+    merged
+}
+
+fn extract_line_text(lines: &[&str], line_number: usize) -> String {
+    lines[line_number - 1].trim_end_matches('\r').to_owned()
+}
+
+fn build_line_windows(matches: &[usize], before: usize, after: usize) -> Vec<LineSnippetWindow> {
+    let mut windows: Vec<LineSnippetWindow> = Vec::new();
+    for line in matches {
+        let start_line = line.saturating_sub(before).max(1);
+        let end_line = line.saturating_add(after);
+        if let Some(last) = windows.last_mut()
+            && start_line <= last.end_line.saturating_add(1)
+        {
+            last.end_line = last.end_line.max(end_line);
+            last.match_lines.push(*line);
+            continue;
+        }
+        windows.push(LineSnippetWindow {
+            start_line,
+            end_line,
+            match_lines: vec![*line],
+        });
+    }
+    windows
+}
+
+fn build_around_match_snippets(
+    lines: &[&str],
+    matches: &[usize],
+    before: usize,
+    after: usize,
+    max_lines: usize,
+) -> (Vec<AroundMatchSnippet>, bool, usize) {
+    let mut remaining_lines = max_lines;
+    let mut snippets = Vec::new();
+    let mut truncated = false;
+    let windows = build_line_windows(matches, before, after);
+    let observed_lines = windows
+        .iter()
+        .map(|window| window.end_line.min(lines.len()) - window.start_line + 1)
+        .sum();
+
+    for mut window in windows {
+        if lines.is_empty() || remaining_lines == 0 {
+            truncated = true;
+            break;
+        }
+        window.end_line = window.end_line.min(lines.len());
+        let available = window.end_line - window.start_line + 1;
+        let end_line = if available > remaining_lines {
+            truncated = true;
+            window.start_line + remaining_lines - 1
+        } else {
+            window.end_line
+        };
+
+        let snippet_lines: Vec<AroundMatchLine> = (window.start_line..=end_line)
+            .map(|line_number| AroundMatchLine {
+                line: line_number as u64,
+                text: extract_line_text(lines, line_number),
+                kind: if window.match_lines.contains(&line_number) {
+                    "match"
+                } else if line_number < *window.match_lines.first().unwrap_or(&line_number) {
+                    "before"
+                } else {
+                    "after"
+                },
+            })
+            .collect();
+        let content = snippet_lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let match_lines = window
+            .match_lines
+            .into_iter()
+            .filter(|line| *line <= end_line)
+            .map(|line| line as u64)
+            .collect();
+        remaining_lines = remaining_lines.saturating_sub(snippet_lines.len());
+        snippets.push(AroundMatchSnippet {
+            start_line: window.start_line as u64,
+            end_line: end_line as u64,
+            match_lines,
+            content,
+            lines: snippet_lines,
+        });
+    }
+
+    (snippets, truncated, observed_lines)
+}
+
+fn parse_excerpt_selection(
+    args: Option<&serde_json::Value>,
+) -> Result<(Vec<RequestedLineRange>, &'static str)> {
+    let start_line = u64_arg(args, "start_line").map(|value| value as usize);
+    let end_line = u64_arg(args, "end_line").map(|value| value as usize);
+    let line = u64_arg(args, "line").map(|value| value as usize);
+    let before = u64_arg(args, "before").unwrap_or(0) as usize;
+    let after = u64_arg(args, "after").unwrap_or(0) as usize;
+    let line_ranges_value = args.and_then(|value| value.get("line_ranges"));
+    let line_ranges = line_ranges_value
+        .and_then(|value| value.as_array())
+        .map(|ranges| {
+            ranges
+                .iter()
+                .map(parse_requested_range)
+                .collect::<Result<Vec<_>>>()
+        })
+        .transpose()?
+        .unwrap_or_default();
+
+    let selectors_used = usize::from(!line_ranges.is_empty())
+        + usize::from(start_line.is_some() || end_line.is_some())
+        + usize::from(line.is_some());
+    if selectors_used != 1 {
+        anyhow::bail!(
+            "provide exactly one selector: line_ranges, start_line/end_line, or line with optional before/after"
+        );
+    }
+
+    if !line_ranges.is_empty() {
+        return Ok((normalize_requested_ranges(line_ranges), "line_ranges"));
+    }
+
+    if let Some(line) = line {
+        let start_line = line.saturating_sub(before).max(1);
+        let end_line = line.saturating_add(after);
+        return Ok((
+            vec![validate_requested_range(start_line, end_line)?],
+            "line_context",
+        ));
+    }
+
+    if before > 0 || after > 0 {
+        anyhow::bail!("before/after are only valid with line selector");
+    }
+
+    let start_line =
+        start_line.ok_or_else(|| anyhow::anyhow!("missing required argument: start_line"))?;
+    let end_line =
+        end_line.ok_or_else(|| anyhow::anyhow!("missing required argument: end_line"))?;
+    Ok((
+        vec![validate_requested_range(start_line, end_line)?],
+        "single_range",
+    ))
+}
+
 // ---------------------------------------------------------------------------
 // search_files
 // ---------------------------------------------------------------------------
+
+/// MCP tool: `read_file_excerpt` — bounded file reads by line range or line-with-context.
+pub(crate) fn tool_read_file_excerpt(
+    args: Option<&serde_json::Value>,
+    repo_root: &str,
+    output_format: OutputFormat,
+) -> Result<serde_json::Value> {
+    let policy = load_budget_policy(repo_root)?;
+    let mut budgets = BudgetManager::new();
+    let file =
+        str_arg(args, "file")?.ok_or_else(|| anyhow::anyhow!("missing required argument: file"))?;
+    let requested_max_lines = u64_arg(args, "max_lines").unwrap_or(200) as usize;
+    let max_lines = budgets.resolve_limit(
+        policy.review_context_extraction.nodes,
+        "review_context_extraction.max_nodes",
+        Some(requested_max_lines),
+    );
+    let (file, abs_path) = resolve_repo_file_path(repo_root, file)?;
+    if !abs_path.is_file() {
+        anyhow::bail!("file not found: {file}");
+    }
+
+    let (requested_ranges, mode) = parse_excerpt_selection(args)?;
+    let contents = std::fs::read_to_string(&abs_path)
+        .with_context(|| format!("cannot read UTF-8 text file '{file}'"))?;
+    let lines: Vec<&str> = contents.lines().collect();
+    let total_lines = lines.len();
+
+    let mut resolved_ranges = Vec::with_capacity(requested_ranges.len());
+    for range in requested_ranges {
+        if total_lines == 0 {
+            break;
+        }
+        if range.start_line > total_lines {
+            anyhow::bail!(
+                "requested start_line {} exceeds file length {} for {}",
+                range.start_line,
+                total_lines,
+                file
+            );
+        }
+        resolved_ranges.push(RequestedLineRange {
+            start_line: range.start_line,
+            end_line: range.end_line.min(total_lines),
+        });
+    }
+
+    let total_selected_lines: usize = resolved_ranges
+        .iter()
+        .map(|range| range.end_line - range.start_line + 1)
+        .sum();
+    let mut remaining_lines = max_lines;
+    let mut excerpts = Vec::with_capacity(resolved_ranges.len());
+    let mut truncated = false;
+
+    for range in resolved_ranges {
+        if remaining_lines == 0 {
+            truncated = true;
+            break;
+        }
+
+        let available_lines = range.end_line - range.start_line + 1;
+        let excerpt_end = if available_lines > remaining_lines {
+            truncated = true;
+            range.start_line + remaining_lines - 1
+        } else {
+            range.end_line
+        };
+
+        let excerpt_lines: Vec<ExcerptLine> = (range.start_line..=excerpt_end)
+            .map(|line_number| ExcerptLine {
+                line: line_number as u64,
+                text: lines[line_number - 1].trim_end_matches('\r').to_owned(),
+            })
+            .collect();
+        let content = excerpt_lines
+            .iter()
+            .map(|entry| entry.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        remaining_lines = remaining_lines.saturating_sub(excerpt_lines.len());
+        excerpts.push(FileExcerpt {
+            start_line: range.start_line as u64,
+            end_line: excerpt_end as u64,
+            line_count: excerpt_lines.len(),
+            content,
+            lines: excerpt_lines,
+        });
+    }
+
+    if truncated {
+        budgets.record_usage(
+            policy.review_context_extraction.nodes,
+            "review_context_extraction.max_nodes",
+            max_lines,
+            total_selected_lines,
+            true,
+        );
+    }
+
+    let atlas_hint = if total_lines == 0 {
+        Some(format!("{file} is empty."))
+    } else if truncated {
+        Some(format!(
+            "Excerpt truncated to {max_lines} lines. Narrow line_ranges or raise max_lines within policy limits."
+        ))
+    } else {
+        None
+    };
+
+    #[derive(Serialize)]
+    struct ReadFileExcerptResult {
+        file: String,
+        mode: &'static str,
+        total_lines: usize,
+        excerpts: Vec<FileExcerpt>,
+        excerpt_count: usize,
+        truncated: bool,
+        atlas_result_kind: &'static str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        atlas_hint: Option<String>,
+    }
+
+    let result = ReadFileExcerptResult {
+        file,
+        mode,
+        total_lines,
+        excerpt_count: excerpts.len(),
+        excerpts,
+        truncated,
+        atlas_result_kind: "file_excerpt",
+        atlas_hint,
+    };
+
+    let mut response = render_tool_result(&result, output_format)?;
+    inject_budget_metadata(
+        &mut response,
+        &budgets.summary(
+            "review_context_extraction.max_nodes",
+            max_lines,
+            requested_max_lines.max(total_selected_lines),
+        ),
+    );
+    Ok(response)
+}
+
+/// MCP tool: `get_docs_section` — resolve a Markdown section by heading path/slug or line.
+pub(crate) fn tool_get_docs_section(
+    args: Option<&serde_json::Value>,
+    repo_root: &str,
+    db_path: &str,
+    output_format: OutputFormat,
+) -> Result<serde_json::Value> {
+    let file =
+        str_arg(args, "file")?.ok_or_else(|| anyhow::anyhow!("missing required argument: file"))?;
+    let heading = str_arg(args, "heading")?.map(str::to_owned);
+    let line = u64_arg(args, "line").map(|value| value as u32);
+    if usize::from(heading.is_some()) + usize::from(line.is_some()) != 1 {
+        anyhow::bail!("provide exactly one selector: heading or line");
+    }
+
+    let max_bytes = u64_arg(args, "max_bytes").unwrap_or(16_384) as usize;
+    let (file, _) = resolve_repo_file_path(repo_root, file)?;
+    let store =
+        Store::open(db_path).with_context(|| format!("cannot open atlas store at '{db_path}'"))?;
+    let selector = if let Some(selector) = heading {
+        DocsSectionSelector::Heading(selector)
+    } else {
+        DocsSectionSelector::Line(line.expect("validated line selector"))
+    };
+    let result = lookup_docs_section(
+        &store,
+        camino::Utf8Path::new(repo_root),
+        &file,
+        selector,
+        max_bytes,
+    )?;
+
+    let mut response = render_tool_result(&result, output_format)?;
+    response["file"] = serde_json::Value::String(result.file.clone());
+    Ok(response)
+}
+
+/// MCP tool: `read_file_around_match` — read merged snippets around matches in one file.
+pub(crate) fn tool_read_file_around_match(
+    args: Option<&serde_json::Value>,
+    repo_root: &str,
+    output_format: OutputFormat,
+) -> Result<serde_json::Value> {
+    let policy = load_budget_policy(repo_root)?;
+    let mut budgets = BudgetManager::new();
+    let file =
+        str_arg(args, "file")?.ok_or_else(|| anyhow::anyhow!("missing required argument: file"))?;
+    let query = str_arg(args, "query")?
+        .ok_or_else(|| anyhow::anyhow!("missing required argument: query"))?;
+    let is_regex = bool_arg(args, "is_regex").unwrap_or(false);
+    let case_sensitive = bool_arg(args, "case_sensitive").unwrap_or(is_regex);
+    let before = u64_arg(args, "before").unwrap_or(2) as usize;
+    let after = u64_arg(args, "after").unwrap_or(2) as usize;
+    let requested_max_matches = u64_arg(args, "max_matches").unwrap_or(20) as usize;
+    let max_matches = budgets.resolve_limit(
+        policy.review_context_extraction.nodes,
+        "review_context_extraction.max_nodes",
+        Some(requested_max_matches),
+    );
+    let requested_max_lines = u64_arg(args, "max_lines").unwrap_or(200) as usize;
+    let max_lines = budgets.resolve_limit(
+        policy.review_context_extraction.nodes,
+        "review_context_extraction.max_nodes",
+        Some(requested_max_lines),
+    );
+    let (file, abs_path) = resolve_repo_file_path(repo_root, file)?;
+    if !abs_path.is_file() {
+        anyhow::bail!("file not found: {file}");
+    }
+
+    let contents = std::fs::read_to_string(&abs_path)
+        .with_context(|| format!("cannot read UTF-8 text file '{file}'"))?;
+    let lines: Vec<&str> = contents.lines().collect();
+    let pattern = if is_regex {
+        query.to_owned()
+    } else {
+        regex::escape(query)
+    };
+    let matcher = regex::RegexBuilder::new(&pattern)
+        .case_insensitive(!case_sensitive)
+        .build()
+        .map_err(|error| invalid_search_content_regex_error(query, error))?;
+
+    let mut match_lines = lines
+        .iter()
+        .enumerate()
+        .filter_map(|(index, line)| matcher.is_match(line).then_some(index + 1))
+        .collect::<Vec<_>>();
+    let total_matches = match_lines.len();
+    let match_limit_hit = match_lines.len() > max_matches;
+    if match_limit_hit {
+        match_lines.truncate(max_matches);
+        budgets.record_usage(
+            policy.review_context_extraction.nodes,
+            "review_context_extraction.max_nodes",
+            max_matches,
+            total_matches,
+            true,
+        );
+    }
+
+    let (snippets, line_limit_hit, observed_lines) =
+        build_around_match_snippets(&lines, &match_lines, before, after, max_lines);
+    if line_limit_hit {
+        budgets.record_usage(
+            policy.review_context_extraction.nodes,
+            "review_context_extraction.max_nodes",
+            max_lines,
+            observed_lines,
+            true,
+        );
+    }
+
+    let truncated = match_limit_hit || line_limit_hit;
+    let atlas_hint = if total_matches == 0 {
+        Some(format!("No matches for '{query}' in {file}."))
+    } else if truncated {
+        Some("Snippets truncated by max_matches or max_lines budget.".to_owned())
+    } else {
+        None
+    };
+
+    #[derive(Serialize)]
+    struct AroundMatchResult {
+        file: String,
+        query: String,
+        is_regex: bool,
+        case_sensitive: bool,
+        total_matches: usize,
+        returned_matches: usize,
+        snippet_count: usize,
+        snippets: Vec<AroundMatchSnippet>,
+        truncated: bool,
+        atlas_result_kind: &'static str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        atlas_hint: Option<String>,
+    }
+
+    let returned_matches = snippets
+        .iter()
+        .map(|snippet| snippet.match_lines.len())
+        .sum();
+    let result = AroundMatchResult {
+        file,
+        query: query.to_owned(),
+        is_regex,
+        case_sensitive,
+        total_matches,
+        returned_matches,
+        snippet_count: snippets.len(),
+        snippets,
+        truncated,
+        atlas_result_kind: "file_match_snippets",
+        atlas_hint,
+    };
+
+    let mut response = render_tool_result(&result, output_format)?;
+    inject_budget_metadata(
+        &mut response,
+        &budgets.summary(
+            "review_context_extraction.max_nodes",
+            max_matches.min(max_lines),
+            requested_max_matches
+                .max(requested_max_lines)
+                .max(total_matches)
+                .max(observed_lines),
+        ),
+    );
+    Ok(response)
+}
 
 /// MCP tool: `search_files` — file-path discovery by glob pattern.
 ///
@@ -1116,6 +1677,9 @@ fn render_tool_result<T: Serialize>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use atlas_core::{NodeId, kinds::NodeKind, model::Node};
+    use atlas_store_sqlite::Store;
+    use serde_json::json;
     use std::fs;
     use tempfile::TempDir;
 
@@ -1133,6 +1697,42 @@ mod tests {
             fs::write(&full, content).unwrap();
         }
         (dir, root)
+    }
+
+    fn markdown_heading(title: &str, path: &str, level: u32, start_line: u32) -> Node {
+        Node {
+            id: NodeId::UNSET,
+            kind: NodeKind::Module,
+            name: title.to_owned(),
+            qualified_name: format!("README.md::heading::{path}"),
+            file_path: "README.md".to_owned(),
+            line_start: start_line,
+            line_end: start_line,
+            language: "markdown".to_owned(),
+            parent_name: None,
+            params: None,
+            return_type: None,
+            modifiers: None,
+            is_test: false,
+            file_hash: "hash:README.md".to_owned(),
+            extra_json: json!({ "level": level, "path": path }),
+        }
+    }
+
+    fn seed_docs_index(root: &str, nodes: &[Node]) -> String {
+        let db_path = format!("{root}/atlas.db");
+        let mut store = Store::open(&db_path).expect("open store");
+        store
+            .replace_file_graph(
+                "README.md",
+                "hash:README.md",
+                Some("markdown"),
+                Some(32),
+                nodes,
+                &[],
+            )
+            .expect("replace README graph");
+        db_path
     }
 
     // -----------------------------------------------------------------------
@@ -1249,6 +1849,272 @@ mod tests {
             serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
         assert_eq!(v["result_count"], 0);
         assert!(v["atlas_hint"].is_string(), "expected hint on empty result");
+    }
+
+    // -----------------------------------------------------------------------
+    // read_file_excerpt
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn read_file_excerpt_reads_single_range() {
+        let (_dir, root) = make_repo(&[(
+            "src/lib.rs",
+            "fn one() {}\nfn two() {}\nfn three() {}\nfn four() {}\n",
+        )]);
+        let args = serde_json::json!({
+            "file": "src/lib.rs",
+            "start_line": 2,
+            "end_line": 3,
+        });
+        let resp = tool_read_file_excerpt(Some(&args), &root, OutputFormat::Json).unwrap();
+        let v: serde_json::Value =
+            serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
+
+        assert_eq!(v["atlas_result_kind"], "file_excerpt");
+        assert_eq!(v["mode"], "single_range");
+        assert_eq!(v["excerpt_count"], 1);
+        assert_eq!(v["excerpts"][0]["start_line"], 2);
+        assert_eq!(v["excerpts"][0]["end_line"], 3);
+        assert!(v["excerpts"][0]["content"].as_str().is_some_and(|text| {
+            text.contains("fn two() {}") && text.contains("fn three() {}")
+        }));
+    }
+
+    #[test]
+    fn read_file_excerpt_supports_line_with_context() {
+        let (_dir, root) = make_repo(&[(
+            "src/lib.rs",
+            "fn one() {}\nfn two() {}\nfn three() {}\nfn four() {}\n",
+        )]);
+        let args = serde_json::json!({
+            "file": "src/lib.rs",
+            "line": 3,
+            "before": 1,
+            "after": 1,
+        });
+        let resp = tool_read_file_excerpt(Some(&args), &root, OutputFormat::Json).unwrap();
+        let v: serde_json::Value =
+            serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
+
+        assert_eq!(v["mode"], "line_context");
+        assert_eq!(v["excerpts"][0]["start_line"], 2);
+        assert_eq!(v["excerpts"][0]["end_line"], 4);
+        let lines = v["excerpts"][0]["lines"].as_array().expect("excerpt lines");
+        assert_eq!(lines.len(), 3);
+        assert_eq!(lines[1]["line"], 3);
+        assert_eq!(lines[1]["text"], "fn three() {}");
+    }
+
+    #[test]
+    fn read_file_excerpt_merges_overlapping_ranges() {
+        let (_dir, root) = make_repo(&[(
+            "src/lib.rs",
+            "fn one() {}\nfn two() {}\nfn three() {}\nfn four() {}\n",
+        )]);
+        let args = serde_json::json!({
+            "file": "src/lib.rs",
+            "line_ranges": [
+                { "start_line": 1, "end_line": 2 },
+                { "start_line": 2, "end_line": 4 }
+            ],
+        });
+        let resp = tool_read_file_excerpt(Some(&args), &root, OutputFormat::Json).unwrap();
+        let v: serde_json::Value =
+            serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
+
+        assert_eq!(v["mode"], "line_ranges");
+        assert_eq!(v["excerpt_count"], 1);
+        assert_eq!(v["excerpts"][0]["start_line"], 1);
+        assert_eq!(v["excerpts"][0]["end_line"], 4);
+    }
+
+    #[test]
+    fn read_file_excerpt_truncates_to_budgeted_max_lines() {
+        let (_dir, root) = make_repo(&[(
+            "src/lib.rs",
+            "fn one() {}\nfn two() {}\nfn three() {}\nfn four() {}\n",
+        )]);
+        let args = serde_json::json!({
+            "file": "src/lib.rs",
+            "start_line": 1,
+            "end_line": 4,
+            "max_lines": 2,
+        });
+        let resp = tool_read_file_excerpt(Some(&args), &root, OutputFormat::Json).unwrap();
+        let v: serde_json::Value =
+            serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
+
+        assert_eq!(resp["budget_name"], "review_context_extraction.max_nodes");
+        assert_eq!(resp["budget_limit"], 2);
+        assert_eq!(resp["budget_observed"], 4);
+        assert_eq!(resp["budget_hit"], true);
+        assert_eq!(v["truncated"], true);
+        assert_eq!(v["excerpts"][0]["end_line"], 2);
+    }
+
+    #[test]
+    fn read_file_excerpt_path_traversal_is_rejected() {
+        let (_dir, root) = make_repo(&[("src/lib.rs", "fn x() {}\n")]);
+        for bad in &["../", "../../etc/passwd", "/etc/passwd"] {
+            let args = serde_json::json!({
+                "file": bad,
+                "start_line": 1,
+                "end_line": 1,
+            });
+            let result = tool_read_file_excerpt(Some(&args), &root, OutputFormat::Json);
+            assert!(
+                result.is_err(),
+                "file path '{bad}' should be rejected as traversal attempt"
+            );
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // get_docs_section
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn get_docs_section_by_heading_path_returns_section() {
+        let (_dir, root) = make_repo(&[(
+            "README.md",
+            "# Overview\nintro\n## Install\nstep one\n## Usage\nrun it\n",
+        )]);
+        let db_path = seed_docs_index(
+            &root,
+            &[
+                markdown_heading("Overview", "document.overview", 1, 1),
+                markdown_heading("Install", "document.overview.install", 2, 3),
+                markdown_heading("Usage", "document.overview.usage", 2, 5),
+            ],
+        );
+        let args = serde_json::json!({
+            "file": "README.md",
+            "heading": "document.overview.install",
+        });
+        let resp = tool_get_docs_section(Some(&args), &root, &db_path, OutputFormat::Json).unwrap();
+        let v: serde_json::Value =
+            serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
+
+        assert_eq!(v["atlas_result_kind"], "docs_section");
+        assert_eq!(v["heading_path"], "document.overview.install");
+        assert_eq!(v["heading_level"], 2);
+        assert!(
+            v["content"]
+                .as_str()
+                .is_some_and(|text| text.contains("step one"))
+        );
+    }
+
+    #[test]
+    fn get_docs_section_by_line_returns_containing_section() {
+        let (_dir, root) = make_repo(&[(
+            "README.md",
+            "# Overview\nintro\n## Install\nstep one\n## Usage\nrun it\n",
+        )]);
+        let db_path = seed_docs_index(
+            &root,
+            &[
+                markdown_heading("Overview", "document.overview", 1, 1),
+                markdown_heading("Install", "document.overview.install", 2, 3),
+                markdown_heading("Usage", "document.overview.usage", 2, 5),
+            ],
+        );
+        let args = serde_json::json!({
+            "file": "README.md",
+            "line": 4,
+        });
+        let resp = tool_get_docs_section(Some(&args), &root, &db_path, OutputFormat::Json).unwrap();
+        let v: serde_json::Value =
+            serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
+
+        assert_eq!(v["heading_path"], "document.overview.install");
+        assert_eq!(v["start_line"], 3);
+        assert_eq!(v["end_line"], 4);
+    }
+
+    #[test]
+    fn get_docs_section_returns_candidates_for_ambiguous_slug() {
+        let (_dir, root) =
+            make_repo(&[("README.md", "# One\n## Install\na\n# Two\n## Install\nb\n")]);
+        let db_path = seed_docs_index(
+            &root,
+            &[
+                markdown_heading("One", "document.one", 1, 1),
+                markdown_heading("Install", "document.one.install", 2, 2),
+                markdown_heading("Two", "document.two", 1, 4),
+                markdown_heading("Install", "document.two.install", 2, 5),
+            ],
+        );
+        let args = serde_json::json!({
+            "file": "README.md",
+            "heading": "install",
+        });
+        let resp = tool_get_docs_section(Some(&args), &root, &db_path, OutputFormat::Json).unwrap();
+        let v: serde_json::Value =
+            serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
+
+        assert_eq!(v["resolved"], false);
+        assert_eq!(v["candidates"][0]["heading_path"], "document.one.install");
+        assert_eq!(v["candidates"][1]["heading_path"], "document.two.install");
+    }
+
+    // -----------------------------------------------------------------------
+    // read_file_around_match
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn read_file_around_match_groups_nearby_matches() {
+        let (_dir, root) = make_repo(&[(
+            "src/lib.rs",
+            "zero\nalpha target\nbeta\ngamma target\nomega\n",
+        )]);
+        let args = serde_json::json!({
+            "file": "src/lib.rs",
+            "query": "target",
+            "before": 1,
+            "after": 1,
+        });
+        let resp = tool_read_file_around_match(Some(&args), &root, OutputFormat::Json).unwrap();
+        let v: serde_json::Value =
+            serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
+
+        assert_eq!(v["atlas_result_kind"], "file_match_snippets");
+        assert_eq!(v["total_matches"], 2);
+        assert_eq!(v["snippet_count"], 1);
+        let snippet = &v["snippets"][0];
+        assert_eq!(snippet["start_line"], 1);
+        assert_eq!(snippet["end_line"], 5);
+        assert_eq!(snippet["match_lines"][0], 2);
+        assert_eq!(snippet["match_lines"][1], 4);
+    }
+
+    #[test]
+    fn read_file_around_match_supports_regex() {
+        let (_dir, root) = make_repo(&[("src/lib.rs", "alpha\nBeta\ngamma\n")]);
+        let args = serde_json::json!({
+            "file": "src/lib.rs",
+            "query": "^[A-Z][a-z]+$",
+            "is_regex": true,
+            "before": 0,
+            "after": 0,
+        });
+        let resp = tool_read_file_around_match(Some(&args), &root, OutputFormat::Json).unwrap();
+        let v: serde_json::Value =
+            serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
+
+        assert_eq!(v["total_matches"], 1);
+        assert_eq!(v["snippets"][0]["match_lines"][0], 2);
+    }
+
+    #[test]
+    fn read_file_around_match_path_traversal_is_rejected() {
+        let (_dir, root) = make_repo(&[("src/lib.rs", "target\n")]);
+        let args = serde_json::json!({
+            "file": "../etc/passwd",
+            "query": "target",
+        });
+        let result = tool_read_file_around_match(Some(&args), &root, OutputFormat::Json);
+        assert!(result.is_err());
     }
 
     // -----------------------------------------------------------------------
