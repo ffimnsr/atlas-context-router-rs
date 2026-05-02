@@ -7,10 +7,9 @@
 use std::io::{IsTerminal, Write};
 use std::path::Path;
 
-use anyhow::{Context, Result};
-use clap_complete::Shell;
+use anyhow::Result;
 use console::{Style, Term, style};
-use dialoguer::{Confirm, MultiSelect, Select, theme::ColorfulTheme};
+use dialoguer::{Confirm, MultiSelect, theme::ColorfulTheme};
 
 use crate::install::InstallSummary;
 
@@ -55,31 +54,6 @@ pub fn run(repo_root: &Path) -> Result<()> {
         .with_prompt("Install git hooks for automatic graph updates?")
         .default(false)
         .interact()?;
-
-    // ── Step 3: Shell completions ─────────────────────────────────────────────
-    writeln!(term.clone())?;
-    section(&term, "3", "Shell Completions")?;
-
-    let install_completions = Confirm::with_theme(&theme)
-        .with_prompt("Install shell completions?")
-        .default(false)
-        .interact()?;
-
-    let chosen_shell: Option<Shell> = if install_completions {
-        const SHELL_NAMES: [&str; 4] = ["bash", "zsh", "fish", "powershell"];
-        const SHELL_VALS: [Shell; 4] = [Shell::Bash, Shell::Zsh, Shell::Fish, Shell::PowerShell];
-        let default = detect_shell_idx(&SHELL_NAMES);
-
-        let idx = Select::with_theme(&theme)
-            .with_prompt("Select your shell")
-            .items(&SHELL_NAMES)
-            .default(default)
-            .interact()?;
-
-        Some(SHELL_VALS[idx])
-    } else {
-        None
-    };
 
     // ── Apply ─────────────────────────────────────────────────────────────────
     writeln!(term.clone())?;
@@ -138,14 +112,6 @@ pub fn run(repo_root: &Path) -> Result<()> {
                 print_skip(&term, "Git hooks: no .git directory found")?;
             }
             Err(e) => print_cross(&term, &format!("Git hooks: {e}"))?,
-        }
-    }
-
-    // Shell completions
-    if let Some(shell) = chosen_shell {
-        match write_completions(shell) {
-            Ok(path) => print_tick(&term, &format!("Completions → {path}"))?,
-            Err(e) => print_cross(&term, &format!("Completions: {e}"))?,
         }
     }
 
@@ -278,97 +244,6 @@ fn install_platform_setup(repo_root: &Path, platform: &str) -> Result<InstallSum
     summary.platform_hook_files =
         crate::install::install_platform_agent_hooks(repo_root, platform, false)?;
     Ok(summary)
-}
-
-// ---------------------------------------------------------------------------
-// Shell detection
-// ---------------------------------------------------------------------------
-
-fn detect_shell_idx(names: &[&str]) -> usize {
-    let shell_bin = std::env::var("SHELL").unwrap_or_default().to_lowercase();
-    let hint = shell_bin.rsplit('/').next().unwrap_or("").to_lowercase();
-
-    names.iter().position(|&n| n == hint).unwrap_or(0)
-}
-
-// ---------------------------------------------------------------------------
-// Completions installation
-// ---------------------------------------------------------------------------
-
-/// Generate completions for `shell` and write them to the conventional
-/// location for that shell. Returns the path written (as a display string).
-fn write_completions(shell: Shell) -> Result<String> {
-    use clap::CommandFactory;
-    use clap_complete::generate;
-
-    let mut cmd = crate::cli::Cli::command();
-    let mut buf = Vec::new();
-    generate(shell, &mut cmd, "atlas", &mut buf);
-    let completions = String::from_utf8(buf).context("completions are not valid UTF-8")?;
-
-    let (path, preamble) = completions_path(shell)?;
-
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("cannot create {}", parent.display()))?;
-    }
-
-    match shell {
-        Shell::Bash | Shell::Zsh => {
-            // Append eval line to shell rc if not already present.
-            let rc = std::fs::read_to_string(&path).unwrap_or_default();
-            if !rc.contains("atlas completions") {
-                let mut f = std::fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open(&path)
-                    .with_context(|| format!("cannot open {}", path.display()))?;
-                writeln!(f, "\n{preamble}")?;
-            }
-        }
-        _ => {
-            // Write (or overwrite) the completions file.
-            std::fs::write(&path, &completions)
-                .with_context(|| format!("cannot write {}", path.display()))?;
-        }
-    }
-
-    Ok(path.display().to_string())
-}
-
-/// Return `(file_path, eval_line_or_source)` for the given shell.
-fn completions_path(shell: Shell) -> Result<(std::path::PathBuf, String)> {
-    let home = home_dir()?;
-    match shell {
-        Shell::Bash => {
-            let rc = home.join(".bashrc");
-            Ok((rc, r#"eval "$(atlas completions bash)""#.to_owned()))
-        }
-        Shell::Zsh => {
-            let rc = home.join(".zshrc");
-            Ok((rc, r#"eval "$(atlas completions zsh)""#.to_owned()))
-        }
-        Shell::Fish => {
-            let p = home
-                .join(".config")
-                .join("fish")
-                .join("completions")
-                .join("atlas.fish");
-            Ok((p, String::new()))
-        }
-        Shell::PowerShell => {
-            // $PROFILE equivalent — use a well-known default location.
-            let docs = home.join("Documents").join("PowerShell");
-            let p = docs.join("atlas.ps1");
-            Ok((p, String::new()))
-        }
-        _ => anyhow::bail!("unsupported shell variant"),
-    }
-}
-
-fn home_dir() -> Result<std::path::PathBuf> {
-    #[allow(deprecated)]
-    std::env::home_dir().context("cannot determine home directory")
 }
 
 #[cfg(test)]

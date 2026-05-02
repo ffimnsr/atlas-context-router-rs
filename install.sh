@@ -71,6 +71,74 @@ main() {
         echo "Note: ${BIN_DIR} is not on your \$PATH."
         echo "Add it to your shell profile before using ${PACKAGE_NAME}."
     fi
+
+    maybe_install_completions "${BIN_DIR}"
+}
+
+maybe_install_completions() {
+    local _bin_dir _shell _rc_file _eval_line _comp_dir _comp_file
+    _bin_dir="$1"
+
+    # Skip when stdin is not a terminal (non-interactive installs).
+    if ! [ -t 0 ]; then
+        return 0
+    fi
+
+    printf "Install shell completions? [y/N] "
+    read -r _answer </dev/tty
+    case "${_answer}" in
+        [yY]|[yY][eE][sS]) ;;
+        *) return 0 ;;
+    esac
+
+    # Detect shell from $SHELL; fall back to asking the user.
+    _shell="$(basename "${SHELL:-}")"
+    case "${_shell}" in
+        bash|zsh|fish) ;;
+        *)
+            printf "Shell not detected. Enter shell name (bash/zsh/fish): "
+            read -r _shell </dev/tty
+            ;;
+    esac
+
+    _atlas="${_bin_dir}/${PACKAGE_NAME}"
+
+    case "${_shell}" in
+        bash)
+            _rc_file="${HOME}/.bashrc"
+            _eval_line='eval "$(atlas completions bash)"'
+            if ! grep -qF 'atlas completions' "${_rc_file}" 2>/dev/null; then
+                printf '\n%s\n' "${_eval_line}" >> "${_rc_file}"
+                echo "Added completions eval to ${_rc_file}"
+            else
+                echo "Completions already configured in ${_rc_file}"
+            fi
+            ;;
+        zsh)
+            _rc_file="${HOME}/.zshrc"
+            _eval_line='eval "$(atlas completions zsh)"'
+            if ! grep -qF 'atlas completions' "${_rc_file}" 2>/dev/null; then
+                printf '\n%s\n' "${_eval_line}" >> "${_rc_file}"
+                echo "Added completions eval to ${_rc_file}"
+            else
+                echo "Completions already configured in ${_rc_file}"
+            fi
+            ;;
+        fish)
+            _comp_dir="${HOME}/.config/fish/completions"
+            _comp_file="${_comp_dir}/atlas.fish"
+            mkdir -p "${_comp_dir}"
+            "${_atlas}" completions fish > "${_comp_file}" 2>/dev/null \
+                || err "failed to generate fish completions"
+            echo "Installed fish completions to ${_comp_file}"
+            ;;
+        *)
+            echo "Unsupported shell '${_shell}'. Run 'atlas completions <shell>' manually."
+            return 0
+            ;;
+    esac
+
+    echo "Restart your shell or source the rc file to enable completions."
 }
 
 parse_args() {
