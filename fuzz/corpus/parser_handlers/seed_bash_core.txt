@@ -1,0 +1,24 @@
+ATLAS_PARSER_SEED
+kind=bash
+reuse_old_tree=true
+===SOURCE===
+source ./env.sh
+
+setup() {
+  helper
+}
+
+helper() {
+  echo ok
+}
+
+===NEXT===
+source ./env.sh
+
+setup() {
+  helper
+}
+
+helper() {
+  echo ok
+}

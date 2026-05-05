@@ -1,0 +1,26 @@
+ATLAS_PARSER_SEED
+kind=cpp
+reuse_old_tree=true
+===SOURCE===
+#include <vector>
+
+namespace demo {
+
+class Broken {
+public:
+    void run( {
+        helper();
+    }
+};
+
+===NEXT===
+#include <vector>
+
+namespace demo {
+
+class Broken {
+public:
+    void run( {
+        helper();
+    }
+};

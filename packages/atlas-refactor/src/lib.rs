@@ -18,3 +18,4 @@ mod extract;
 mod patch;
 
 pub use engine::RefactorEngine;
+pub use engine::{RefactorParseValidation, validate_file_parse_for_refactor};

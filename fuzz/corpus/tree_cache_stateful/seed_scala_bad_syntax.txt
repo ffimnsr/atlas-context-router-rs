@@ -1,0 +1,9 @@
+ATLAS_TREE_CACHE_SEED
+kind=scala
+===SOURCE===
+package demo.app
+
+object Broken {
+  def run( =
+    helper(
+}

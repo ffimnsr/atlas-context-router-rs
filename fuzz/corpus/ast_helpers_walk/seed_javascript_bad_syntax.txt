@@ -1,0 +1,6 @@
+ATLAS_SOURCE_SEED
+kind=javascript
+===SOURCE===
+function broken(value) {
+  if (value > 0) {
+    return value + 1;

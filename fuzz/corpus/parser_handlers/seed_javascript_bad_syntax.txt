@@ -1,0 +1,12 @@
+ATLAS_PARSER_SEED
+kind=javascript
+reuse_old_tree=true
+===SOURCE===
+function broken(value) {
+  if (value > 0) {
+    return value + 1;
+
+===NEXT===
+function broken(value) {
+  if (value > 0) {
+    return value + 1;

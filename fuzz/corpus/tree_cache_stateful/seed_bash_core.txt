@@ -1,0 +1,12 @@
+ATLAS_TREE_CACHE_SEED
+kind=bash
+===SOURCE===
+source ./env.sh
+
+setup() {
+  helper
+}
+
+helper() {
+  echo ok
+}

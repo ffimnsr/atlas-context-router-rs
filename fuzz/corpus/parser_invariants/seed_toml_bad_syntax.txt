@@ -1,0 +1,5 @@
+ATLAS_SOURCE_SEED
+kind=toml
+===SOURCE===
+[package
+name = "atlas"

@@ -1,0 +1,10 @@
+ATLAS_PARSER_SEED
+kind=json
+reuse_old_tree=true
+===SOURCE===
+{
+  "service": [1, 2,
+
+===NEXT===
+{
+  "service": [1, 2,

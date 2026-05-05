@@ -1,0 +1,18 @@
+ATLAS_PARSER_SEED
+kind=java
+reuse_old_tree=true
+===SOURCE===
+package demo.app
+
+class Broken {
+    void run( {
+        helper()
+    }
+
+===NEXT===
+package demo.app
+
+class Broken {
+    void run( {
+        helper()
+    }

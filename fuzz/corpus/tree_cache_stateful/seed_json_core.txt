@@ -1,0 +1,14 @@
+ATLAS_TREE_CACHE_SEED
+kind=json
+===SOURCE===
+{
+  "service": {
+    "host": "localhost",
+    "ports": [8080, 8081],
+    "features": [
+      { "name": "search", "enabled": true },
+      { "name": "review", "enabled": false }
+    ]
+  },
+  "enabled": true
+}

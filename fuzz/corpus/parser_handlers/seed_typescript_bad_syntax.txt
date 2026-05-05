@@ -1,0 +1,12 @@
+ATLAS_PARSER_SEED
+kind=typescript
+reuse_old_tree=true
+===SOURCE===
+export function broken(name: string): string {
+  if (name.length > 0) {
+    return name.toUpperCase();
+
+===NEXT===
+export function broken(name: string): string {
+  if (name.length > 0) {
+    return name.toUpperCase();

@@ -1,0 +1,5 @@
+ATLAS_TREE_CACHE_SEED
+kind=toml
+===SOURCE===
+[package
+name = "atlas"

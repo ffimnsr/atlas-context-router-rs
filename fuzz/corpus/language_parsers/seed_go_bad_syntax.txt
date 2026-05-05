@@ -1,0 +1,16 @@
+ATLAS_PARSER_SEED
+kind=go
+reuse_old_tree=true
+===SOURCE===
+package sample
+
+func broken(name string) string {
+    if name != "" {
+        return name
+
+===NEXT===
+package sample
+
+func broken(name string) string {
+    if name != "" {
+        return name

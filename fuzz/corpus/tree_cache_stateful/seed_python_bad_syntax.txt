@@ -1,0 +1,6 @@
+ATLAS_TREE_CACHE_SEED
+kind=python
+===SOURCE===
+def broken(value: int) -> int
+    if value > 0:
+        return value + 1

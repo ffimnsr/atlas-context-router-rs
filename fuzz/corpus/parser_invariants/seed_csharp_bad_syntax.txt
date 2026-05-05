@@ -1,0 +1,11 @@
+ATLAS_SOURCE_SEED
+kind=csharp
+===SOURCE===
+using System.Text;
+
+namespace Demo.App;
+
+class Broken {
+    void Run( {
+        Helper();
+    }

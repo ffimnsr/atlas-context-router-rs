@@ -120,6 +120,8 @@ impl ParserRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use atlas_core::NodeKind;
+    use std::collections::HashMap;
 
     fn bundled_grammars() -> Vec<(&'static str, tree_sitter::Language)> {
         vec![
@@ -188,6 +190,107 @@ mod tests {
             parser
                 .set_language(&language)
                 .unwrap_or_else(|err| panic!("failed to load {name} grammar: {err}"));
+        }
+    }
+
+    fn assert_parsed_file_invariants(parsed: &ParsedFile, rel_path: &str, source: &[u8]) {
+        assert_eq!(parsed.path, rel_path);
+
+        if let Some(size) = parsed.size {
+            assert_eq!(size, source.len() as i64);
+        }
+
+        let file_node_count = parsed
+            .nodes
+            .iter()
+            .filter(|node| node.kind == NodeKind::File)
+            .count();
+        assert_eq!(file_node_count, 1, "{rel_path} should emit one file node");
+
+        for node in &parsed.nodes {
+            assert_eq!(node.file_path, rel_path, "{rel_path} node path drifted");
+            assert!(
+                !node.qualified_name.is_empty(),
+                "{rel_path} emitted empty qualified_name"
+            );
+            assert!(
+                node.line_start >= 1,
+                "{rel_path} line_start must be 1-based"
+            );
+            assert!(
+                node.line_end >= node.line_start,
+                "{rel_path} line_end must not precede line_start"
+            );
+        }
+
+        for edge in &parsed.edges {
+            assert!(
+                !edge.source_qn.is_empty(),
+                "{rel_path} emitted empty edge.source_qn"
+            );
+            assert!(
+                !edge.target_qn.is_empty(),
+                "{rel_path} emitted empty edge.target_qn"
+            );
+        }
+
+        // Duplicate qualified names remain advisory until validity is defined
+        // per language/model. Keep detector live without asserting here.
+        let mut counts = HashMap::new();
+        for node in &parsed.nodes {
+            *counts.entry(node.qualified_name.as_str()).or_insert(0usize) += 1;
+        }
+        std::hint::black_box(
+            counts
+                .into_iter()
+                .filter(|(_, count)| *count > 1)
+                .map(|(qualified_name, count)| (qualified_name.to_owned(), count))
+                .collect::<Vec<_>>(),
+        );
+    }
+
+    #[test]
+    fn built_in_handlers_preserve_parsed_file_invariants() {
+        let reg = ParserRegistry::with_defaults();
+        let samples: [(&str, &[u8]); 18] = [
+            ("src/main.rs", b"fn main() {}\n"),
+            ("src/main.go", b"package main\nfunc main() {}\n"),
+            ("src/main.py", b"def main():\n    return 1\n"),
+            ("src/main.js", b"function main() { return 1; }\n"),
+            (
+                "src/main.ts",
+                b"export function main(value: number): number { return value; }\n",
+            ),
+            ("src/main.json", b"{\"enabled\":true}\n"),
+            ("src/main.toml", b"enabled = true\n"),
+            (
+                "src/main.html",
+                b"<html><body><main>ok</main></body></html>\n",
+            ),
+            ("src/main.css", b"body { color: red; }\n"),
+            ("src/main.sh", b"echo hello\n"),
+            ("src/main.md", b"# Heading\nbody\n"),
+            (
+                "src/Main.java",
+                b"class Main { int value() { return 1; } }\n",
+            ),
+            ("src/Main.cs", b"class Main { int Value() { return 1; } }\n"),
+            ("src/main.php", b"<?php function main() { return 1; }\n"),
+            ("src/main.c", b"int main(void) { return 0; }\n"),
+            ("src/main.cpp", b"int main() { return 0; }\n"),
+            (
+                "src/Main.scala",
+                b"object Main { def main(args: Array[String]): Unit = () }\n",
+            ),
+            ("src/main.rb", b"def main\n  1\nend\n"),
+        ];
+
+        for (rel_path, source) in samples {
+            let file_hash = format!("hash-{rel_path}");
+            let (parsed, _tree) = reg
+                .parse(rel_path, &file_hash, source, None)
+                .unwrap_or_else(|| panic!("registry should support {rel_path}"));
+            assert_parsed_file_invariants(&parsed, rel_path, source);
         }
     }
 

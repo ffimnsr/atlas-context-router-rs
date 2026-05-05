@@ -1,0 +1,20 @@
+ATLAS_PARSER_SEED
+kind=php
+reuse_old_tree=true
+===SOURCE===
+<?php
+namespace Demo\App;
+
+class Broken {
+    public function run( {
+        helper();
+    }
+
+===NEXT===
+<?php
+namespace Demo\App;
+
+class Broken {
+    public function run( {
+        helper();
+    }

@@ -1,0 +1,36 @@
+ATLAS_PARSER_SEED
+kind=javascript
+reuse_old_tree=true
+===SOURCE===
+import defaultThing, { helperAlias as helperImport } from "./dep.js";
+
+function helper(value) {
+  return value + 1;
+}
+
+function caller() {
+  return helper(1);
+}
+
+class Greeter {
+  greet() {
+    return caller();
+  }
+}
+
+===NEXT===
+import defaultThing, { helperAlias as helperImport } from "./dep.js";
+
+function helper(value) {
+  return value + 1;
+}
+
+function caller() {
+  return helper(1);
+}
+
+class Greeter {
+  greet() {
+    return caller();
+  }
+}

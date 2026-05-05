@@ -1,0 +1,42 @@
+ATLAS_PARSER_SEED
+kind=scala
+reuse_old_tree=true
+===SOURCE===
+package demo.app
+
+import demo.support.Helper
+
+object Runner {
+  def helper(): Unit = ()
+  def run(): Unit = helper()
+}
+
+case class Box(value: Int)
+
+class Worker {
+  def work(): Unit = ()
+}
+
+trait Service {
+  def ping(): Unit
+}
+
+===NEXT===
+package demo.app
+
+import demo.support.Helper
+
+object Runner {
+  def helper(): Unit = ()
+  def run(): Unit = helper()
+}
+
+case class Box(value: Int)
+
+class Worker {
+  def work(): Unit = ()
+}
+
+trait Service {
+  def ping(): Unit
+}

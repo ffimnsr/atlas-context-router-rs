@@ -1,0 +1,12 @@
+ATLAS_PARSER_SEED
+kind=rust
+reuse_old_tree=true
+===SOURCE===
+pub fn broken(value: i32) -> i32 {
+    if value > 0 {
+        value + 1
+
+===NEXT===
+pub fn broken(value: i32) -> i32 {
+    if value > 0 {
+        value + 1

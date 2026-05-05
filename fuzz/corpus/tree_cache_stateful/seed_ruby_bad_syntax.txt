@@ -1,0 +1,9 @@
+ATLAS_TREE_CACHE_SEED
+kind=ruby
+===SOURCE===
+module Demo
+  class Broken
+    def run(
+      helper
+    end
+end

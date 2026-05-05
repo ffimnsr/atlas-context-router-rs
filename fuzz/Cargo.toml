@@ -9,10 +9,15 @@ cargo-fuzz = true
 
 [dependencies]
 arbitrary = { version = "1", features = ["derive"] }
+atlas-core = { path = "../packages/atlas-core" }
+atlas-engine = { path = "../packages/atlas-engine" }
 atlas-parser = { path = "../packages/atlas-parser" }
+atlas-refactor = { path = "../packages/atlas-refactor" }
 atlas-store-sqlite = { path = "../packages/atlas-store-sqlite" }
+camino = "1"
 libfuzzer-sys = "0.4"
 sha2 = "0.10"
+tempfile = "3"
 tree-sitter = "0.26"
 
 [[bin]]
@@ -32,6 +37,41 @@ bench = false
 [[bin]]
 name = "regex_sql_udf"
 path = "fuzz_targets/regex_sql_udf.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "tree_cache_stateful"
+path = "fuzz_targets/tree_cache_stateful.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "update_graph_sequence"
+path = "fuzz_targets/update_graph_sequence.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parser_invariants"
+path = "fuzz_targets/parser_invariants.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ast_helpers_walk"
+path = "fuzz_targets/ast_helpers_walk.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "refactor_parse_validation"
+path = "fuzz_targets/refactor_parse_validation.rs"
 test = false
 doc = false
 bench = false

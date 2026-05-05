@@ -1,0 +1,10 @@
+ATLAS_TREE_CACHE_SEED
+kind=html
+===SOURCE===
+<!doctype html>
+<html>
+  <body>
+    <script src="app.js"></script>
+    <img src="hero.png" />
+  </body>
+</html>

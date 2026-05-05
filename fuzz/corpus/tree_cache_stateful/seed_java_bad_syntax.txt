@@ -1,0 +1,9 @@
+ATLAS_TREE_CACHE_SEED
+kind=java
+===SOURCE===
+package demo.app
+
+class Broken {
+    void run( {
+        helper()
+    }

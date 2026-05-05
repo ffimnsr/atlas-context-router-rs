@@ -1,6 +1,6 @@
 #![no_main]
 
-use atlas_fuzz::{ParserCase, SupportedPathKind, hash_bytes};
+use atlas_fuzz::{SupportedPathKind, hash_bytes, parser_case_from_bytes};
 use atlas_parser::lang::{
     bash::BashParser,
     c::CParser,
@@ -23,7 +23,11 @@ use atlas_parser::lang::{
 use atlas_parser::{LangParser, ParseContext};
 use libfuzzer_sys::fuzz_target;
 
-fuzz_target!(|case: ParserCase| {
+fuzz_target!(|data: &[u8]| {
+    let Some(case) = parser_case_from_bytes(data) else {
+        return;
+    };
+
     let first = parse_once(case.path_kind, &case.source, None);
     if !case.reuse_old_tree {
         return;

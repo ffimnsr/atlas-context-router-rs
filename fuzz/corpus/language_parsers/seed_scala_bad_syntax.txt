@@ -1,0 +1,18 @@
+ATLAS_PARSER_SEED
+kind=scala
+reuse_old_tree=true
+===SOURCE===
+package demo.app
+
+object Broken {
+  def run( =
+    helper(
+}
+
+===NEXT===
+package demo.app
+
+object Broken {
+  def run( =
+    helper(
+}

@@ -1,0 +1,20 @@
+ATLAS_PARSER_SEED
+kind=c
+reuse_old_tree=true
+===SOURCE===
+#include "util.h"
+
+typedef unsigned long size_t
+
+void run(void {
+    helper();
+}
+
+===NEXT===
+#include "util.h"
+
+typedef unsigned long size_t
+
+void run(void {
+    helper();
+}

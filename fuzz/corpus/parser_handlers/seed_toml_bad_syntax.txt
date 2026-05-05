@@ -1,0 +1,10 @@
+ATLAS_PARSER_SEED
+kind=toml
+reuse_old_tree=true
+===SOURCE===
+[package
+name = "atlas"
+
+===NEXT===
+[package
+name = "atlas"

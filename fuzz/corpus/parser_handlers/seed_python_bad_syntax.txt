@@ -1,0 +1,12 @@
+ATLAS_PARSER_SEED
+kind=python
+reuse_old_tree=true
+===SOURCE===
+def broken(value: int) -> int
+    if value > 0:
+        return value + 1
+
+===NEXT===
+def broken(value: int) -> int
+    if value > 0:
+        return value + 1

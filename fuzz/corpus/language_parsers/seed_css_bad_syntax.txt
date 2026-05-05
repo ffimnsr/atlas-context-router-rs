@@ -1,0 +1,14 @@
+ATLAS_PARSER_SEED
+kind=css
+reuse_old_tree=true
+===SOURCE===
+@import 'broken.css'
+
+.button {
+  color: red
+
+===NEXT===
+@import 'broken.css'
+
+.button {
+  color: red

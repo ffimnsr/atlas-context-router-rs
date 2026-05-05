@@ -1,0 +1,5 @@
+ATLAS_REGEX_SEED
+===PATTERN===
+^\p{L}+$
+===VALUE===
+naivé

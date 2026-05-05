@@ -1,0 +1,5 @@
+ATLAS_REGEX_SEED
+===PATTERN===
+[A-Z][a-z]+_[0-9]+
+===VALUE===
+Rust_2024

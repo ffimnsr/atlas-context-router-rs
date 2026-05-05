@@ -1,0 +1,7 @@
+ATLAS_TREE_CACHE_SEED
+kind=css
+===SOURCE===
+@import 'broken.css'
+
+.button {
+  color: red

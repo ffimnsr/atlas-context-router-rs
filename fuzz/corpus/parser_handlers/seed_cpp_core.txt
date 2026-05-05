@@ -1,0 +1,42 @@
+ATLAS_PARSER_SEED
+kind=cpp
+reuse_old_tree=true
+===SOURCE===
+#include <vector>
+
+namespace demo {
+
+template <typename T>
+class Box {};
+
+class Runner {
+public:
+    void helper() {}
+    void run() {
+        helper();
+    }
+};
+
+void free_fn() {}
+
+}
+
+===NEXT===
+#include <vector>
+
+namespace demo {
+
+template <typename T>
+class Box {};
+
+class Runner {
+public:
+    void helper() {}
+    void run() {
+        helper();
+    }
+};
+
+void free_fn() {}
+
+}

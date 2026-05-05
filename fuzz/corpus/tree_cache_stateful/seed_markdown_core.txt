@@ -1,0 +1,12 @@
+ATLAS_TREE_CACHE_SEED
+kind=markdown
+===SOURCE===
+# Intro
+
+See [guide](docs/guide.md).
+
+## Usage
+
+```rust
+fn main() {}
+```

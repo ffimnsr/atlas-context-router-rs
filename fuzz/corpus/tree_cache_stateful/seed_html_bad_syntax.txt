@@ -1,0 +1,9 @@
+ATLAS_TREE_CACHE_SEED
+kind=html
+===SOURCE===
+<html>
+  <body>
+    <div
+    <script src="app.js">
+  </body>
+</html>

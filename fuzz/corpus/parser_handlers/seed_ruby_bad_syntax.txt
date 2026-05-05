@@ -1,0 +1,18 @@
+ATLAS_PARSER_SEED
+kind=ruby
+reuse_old_tree=true
+===SOURCE===
+module Demo
+  class Broken
+    def run(
+      helper
+    end
+end
+
+===NEXT===
+module Demo
+  class Broken
+    def run(
+      helper
+    end
+end

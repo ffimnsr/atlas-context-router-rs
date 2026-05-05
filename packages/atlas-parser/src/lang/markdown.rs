@@ -27,7 +27,9 @@ impl LangParser for MarkdownParser {
             .set_language(&tree_sitter_md::LANGUAGE.into())
             .expect("tree-sitter-md grammar failed to load");
 
-        let tree = crate::parse_runtime::parse_tree(&mut parser, ctx.source, ctx.old_tree);
+        // tree-sitter-md incremental reuse is not stable on malformed shorter
+        // inputs. Keep Markdown on full parses until upstream behavior is safe.
+        let tree = crate::parse_runtime::parse_tree(&mut parser, ctx.source, None);
         let mut nodes = Vec::new();
         let mut edges = Vec::new();
         let line_count = ctx.source.iter().filter(|&&b| b == b'\n').count() as u32 + 1;
@@ -443,6 +445,7 @@ fn contains_edge(parent_qn: &str, child_qn: &str, file_path: &str, line: u32) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ParseContext;
 
     fn parse(src: &str) -> ParsedFile {
         let (pf, _) = MarkdownParser.parse(&ParseContext {
@@ -480,5 +483,26 @@ mod tests {
                 .any(|node| node.qualified_name == "README.md::code::1")
         );
         assert!(pf.edges.iter().any(|edge| edge.kind == EdgeKind::Imports));
+    }
+
+    #[test]
+    fn incremental_reparse_with_shorter_source_does_not_panic() {
+        let (_, tree1) = MarkdownParser.parse(&ParseContext {
+            rel_path: "README.md",
+            file_hash: "hash1",
+            source: &[45, 10],
+            old_tree: None,
+        });
+        let tree1 = tree1.expect("markdown parser should return a tree");
+
+        let (pf2, tree2) = MarkdownParser.parse(&ParseContext {
+            rel_path: "README.md",
+            file_hash: "hash2",
+            source: &[3, 60, 62],
+            old_tree: Some(&tree1),
+        });
+
+        assert_eq!(pf2.path, "README.md");
+        assert!(tree2.is_some(), "markdown parse should still return a tree");
     }
 }

@@ -1,0 +1,9 @@
+ATLAS_SOURCE_SEED
+kind=bash
+===SOURCE===
+setup() {
+  helper
+
+helper() {
+  echo ok
+}

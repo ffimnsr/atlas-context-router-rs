@@ -1,0 +1,22 @@
+ATLAS_PARSER_SEED
+kind=csharp
+reuse_old_tree=true
+===SOURCE===
+using System.Text;
+
+namespace Demo.App;
+
+class Broken {
+    void Run( {
+        Helper();
+    }
+
+===NEXT===
+using System.Text;
+
+namespace Demo.App;
+
+class Broken {
+    void Run( {
+        Helper();
+    }

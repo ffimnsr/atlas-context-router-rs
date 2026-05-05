@@ -1,0 +1,10 @@
+ATLAS_TREE_CACHE_SEED
+kind=toml
+===SOURCE===
+[package]
+name = "atlas"
+version = "0.1.0"
+keywords = ["rust", "graph"]
+
+[tool.meta]
+enabled = true

@@ -386,6 +386,7 @@ fn imports_edge(source_qn: &str, target_qn: &str, file_path: &str, line: u32, ti
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ParserRegistry;
 
     fn parse(src: &str) -> ParsedFile {
         let (pf, _) = BashParser.parse(&ParseContext {
@@ -459,5 +460,26 @@ mod tests {
         assert!(pf.edges.iter().any(|edge| edge.kind == EdgeKind::Calls
             && edge.source_qn == "scripts/deploy.sh::fn::second"
             && edge.target_qn == "scripts/deploy.sh::fn::second::fn::helper"));
+    }
+
+    #[test]
+    fn incremental_reparse_with_shorter_source_does_not_panic() {
+        let registry = ParserRegistry::with_defaults();
+        let path = "scripts/deploy.sh";
+
+        let (_, tree1) = registry
+            .parse(path, "hash1", &[18, 77, 46, 120], None)
+            .expect("initial bash parse should succeed");
+        let tree1 = tree1.expect("bash parser should return a tree");
+
+        let (pf2, tree2) = registry
+            .parse(path, "hash2", &[91], Some(&tree1))
+            .expect("incremental bash parse should stay bounded on shorter source");
+
+        assert_eq!(pf2.path, path);
+        assert!(
+            tree2.is_some(),
+            "incremental parse should still return a tree"
+        );
     }
 }

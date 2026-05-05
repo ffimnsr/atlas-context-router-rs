@@ -1,0 +1,8 @@
+ATLAS_TREE_CACHE_SEED
+kind=css
+===SOURCE===
+@import url('base.css');
+
+.button, #app {
+  color: red;
+}

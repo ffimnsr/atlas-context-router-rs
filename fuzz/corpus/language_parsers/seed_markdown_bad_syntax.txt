@@ -1,0 +1,18 @@
+ATLAS_PARSER_SEED
+kind=markdown
+reuse_old_tree=true
+===SOURCE===
+# Broken
+
+See [guide](docs/guide.md
+
+```bash
+echo broken
+
+===NEXT===
+# Broken
+
+See [guide](docs/guide.md
+
+```bash
+echo broken

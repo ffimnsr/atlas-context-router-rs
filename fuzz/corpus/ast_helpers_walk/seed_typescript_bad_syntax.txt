@@ -1,0 +1,6 @@
+ATLAS_SOURCE_SEED
+kind=typescript
+===SOURCE===
+export function broken(name: string): string {
+  if (name.length > 0) {
+    return name.toUpperCase();

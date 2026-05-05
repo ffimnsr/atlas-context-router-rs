@@ -1,0 +1,48 @@
+ATLAS_PARSER_SEED
+kind=java
+reuse_old_tree=true
+===SOURCE===
+package demo.app;
+
+import java.util.List;
+
+@Service
+class Main {
+    @Trace
+    void run() {
+        helper();
+    }
+
+    void helper() {}
+}
+
+interface Api {
+    void ping();
+}
+
+enum Mode {
+    ON,
+}
+
+===NEXT===
+package demo.app;
+
+import java.util.List;
+
+@Service
+class Main {
+    @Trace
+    void run() {
+        helper();
+    }
+
+    void helper() {}
+}
+
+interface Api {
+    void ping();
+}
+
+enum Mode {
+    ON,
+}

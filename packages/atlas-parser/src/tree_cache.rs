@@ -139,4 +139,68 @@ mod tests {
             .collect();
         assert_eq!(qns1, qns2, "incremental re-parse must produce same nodes");
     }
+
+    /// Regression test for minimal cache rename/remove round-trip
+    #[test]
+    fn cache_rename_remove_round_trip() {
+        use crate::ParserRegistry;
+
+        let mut cache = TreeCache::new();
+        let registry = ParserRegistry::with_defaults();
+
+        let src1 = b"fn main() {}";
+        let path1 = "src/main.rs";
+        let (_, tree1) = registry
+            .parse(path1, "hash1", src1, None)
+            .expect("should parse");
+
+        let tree1 = tree1.expect("rust parser must return a tree");
+        cache.insert(path1.to_string(), tree1);
+        assert!(cache.get(path1).is_some());
+        assert_eq!(cache.len(), 1);
+
+        let path2 = "src/main_renamed.rs";
+        let renamed_tree = cache.remove(path1).expect("rename must detach old tree");
+        cache.insert(path2.to_string(), renamed_tree);
+        cache.evict(path1);
+        assert!(
+            cache.get(path1).is_none(),
+            "old key must be evicted after rename"
+        );
+        assert!(
+            cache.get(path2).is_some(),
+            "renamed key must retain cached tree"
+        );
+        assert_eq!(cache.len(), 1, "rename must not duplicate cache entries");
+
+        let src2 = b"fn main() { println!(\"reused\"); }";
+        let old_tree = cache
+            .remove(path2)
+            .expect("worker handoff must remove cached tree");
+        assert!(
+            cache.get(path2).is_none(),
+            "remove must detach cached tree during handoff"
+        );
+
+        let (pf2, tree2) = registry
+            .parse(path2, "hash2", src2, Some(&old_tree))
+            .expect("should re-parse without panic");
+        let tree2 = tree2.expect("incremental reparse must return replacement tree");
+        cache.insert(path2.to_string(), tree2);
+        assert!(
+            cache.get(path2).is_some(),
+            "updated tree must be reinserted after parse"
+        );
+        assert_eq!(cache.len(), 1, "reinsert must restore single cache entry");
+
+        let qns: Vec<&str> = pf2
+            .nodes
+            .iter()
+            .map(|node| node.qualified_name.as_str())
+            .collect();
+        assert!(
+            qns.iter().any(|qn| qn.contains("main")),
+            "renamed-path incremental reparse must still produce symbol output"
+        );
+    }
 }

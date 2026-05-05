@@ -1,0 +1,18 @@
+ATLAS_PARSER_SEED
+kind=html
+reuse_old_tree=true
+===SOURCE===
+<html>
+  <body>
+    <div
+    <script src="app.js">
+  </body>
+</html>
+
+===NEXT===
+<html>
+  <body>
+    <div
+    <script src="app.js">
+  </body>
+</html>

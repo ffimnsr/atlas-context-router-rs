@@ -20,6 +20,51 @@ use crate::edits::{apply_edits, check_overlaps, replace_identifier, validate_ide
 use crate::extract::detect_candidates;
 use crate::patch::unified_diff_annotated;
 
+/// Minimal public harness for parser revalidation used by refactor apply flow.
+#[derive(Debug, Clone)]
+pub struct RefactorParseValidation {
+    pub parsed_file: Option<atlas_core::ParsedFile>,
+    pub tree_has_error: bool,
+    pub validation: RefactorValidationResult,
+}
+
+/// Run the same parser revalidation path used by refactor apply without
+/// requiring a full engine/store setup. Unsupported files return `None`.
+pub fn validate_file_parse_for_refactor(
+    file_path: &str,
+    content: &str,
+) -> Option<RefactorParseValidation> {
+    let parser_registry = ParserRegistry::with_defaults();
+    if !parser_registry.supports(file_path) {
+        return None;
+    }
+
+    let mut validation = RefactorValidationResult {
+        valid: true,
+        errors: Vec::new(),
+        warnings: Vec::new(),
+        manual_review: Vec::new(),
+    };
+
+    let parsed =
+        parse_file_content_with_registry(&parser_registry, file_path, content, &mut validation);
+
+    Some(match parsed {
+        Some((parsed_file, tree)) => RefactorParseValidation {
+            tree_has_error: tree
+                .as_ref()
+                .is_some_and(|tree| tree.root_node().has_error()),
+            parsed_file: Some(parsed_file),
+            validation,
+        },
+        None => RefactorParseValidation {
+            parsed_file: None,
+            tree_has_error: false,
+            validation,
+        },
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -784,23 +829,7 @@ impl<'s> RefactorEngine<'s> {
         content: &str,
         validation: &mut RefactorValidationResult,
     ) -> Option<(atlas_core::ParsedFile, Option<tree_sitter::Tree>)> {
-        if !self.parser_registry.supports(file_path) {
-            return None;
-        }
-
-        let mut hasher = Sha256::new();
-        hasher.update(content.as_bytes());
-        let hash = format!("{:x}", hasher.finalize());
-
-        if content.is_empty() {
-            validation.warnings.push(format!(
-                "skipping parser revalidation for empty file `{file_path}`"
-            ));
-            return None;
-        }
-
-        self.parser_registry
-            .parse(file_path, &hash, content.as_bytes(), None)
+        parse_file_content_with_registry(&self.parser_registry, file_path, content, validation)
     }
 
     fn rollback_written_files(
@@ -816,6 +845,30 @@ impl<'s> RefactorEngine<'s> {
             let _ = std::fs::write(abs, old_content);
         }
     }
+}
+
+fn parse_file_content_with_registry(
+    parser_registry: &ParserRegistry,
+    file_path: &str,
+    content: &str,
+    validation: &mut RefactorValidationResult,
+) -> Option<(atlas_core::ParsedFile, Option<tree_sitter::Tree>)> {
+    if !parser_registry.supports(file_path) {
+        return None;
+    }
+
+    let mut hasher = Sha256::new();
+    hasher.update(content.as_bytes());
+    let hash = format!("{:x}", hasher.finalize());
+
+    if content.is_empty() {
+        validation.warnings.push(format!(
+            "skipping parser revalidation for empty file `{file_path}`"
+        ));
+        return None;
+    }
+
+    parser_registry.parse(file_path, &hash, content.as_bytes(), None)
 }
 
 // ---------------------------------------------------------------------------
@@ -1203,5 +1256,43 @@ mod tests {
     fn contains_word_basic() {
         assert!(contains_word("let foo = bar;", "foo"));
         assert!(!contains_word("let foobar = 1;", "foo"));
+    }
+
+    #[test]
+    fn validate_file_parse_for_refactor_skips_unsupported_path() {
+        assert!(validate_file_parse_for_refactor("notes.txt", "hello").is_none());
+    }
+
+    #[test]
+    fn validate_file_parse_for_refactor_warns_on_empty_supported_file() {
+        let outcome = validate_file_parse_for_refactor("src/lib.rs", "")
+            .expect("supported path should produce validation outcome");
+
+        assert!(outcome.parsed_file.is_none());
+        assert!(!outcome.tree_has_error);
+        assert_eq!(outcome.validation.errors, Vec::<String>::new());
+        assert_eq!(outcome.validation.warnings.len(), 1);
+        assert!(outcome.validation.warnings[0].contains("empty file"));
+        assert!(
+            std::str::from_utf8(outcome.validation.warnings[0].as_bytes()).is_ok(),
+            "warnings must stay UTF-8 safe"
+        );
+    }
+
+    #[test]
+    fn validate_file_parse_for_refactor_handles_malformed_supported_source() {
+        let outcome = validate_file_parse_for_refactor("src/lib.rs", "fn broken( {")
+            .expect("supported path should produce validation outcome");
+
+        assert!(
+            outcome.parsed_file.is_some(),
+            "tree-sitter should still yield best-effort parse output"
+        );
+        for warning in &outcome.validation.warnings {
+            assert!(std::str::from_utf8(warning.as_bytes()).is_ok());
+        }
+        for error in &outcome.validation.errors {
+            assert!(std::str::from_utf8(error.as_bytes()).is_ok());
+        }
     }
 }

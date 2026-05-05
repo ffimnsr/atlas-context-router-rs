@@ -1,0 +1,20 @@
+ATLAS_PARSER_SEED
+kind=toml
+reuse_old_tree=true
+===SOURCE===
+[package]
+name = "atlas"
+version = "0.1.0"
+keywords = ["rust", "graph"]
+
+[tool.meta]
+enabled = true
+
+===NEXT===
+[package]
+name = "atlas"
+version = "0.1.0"
+keywords = ["rust", "graph"]
+
+[tool.meta]
+enabled = true

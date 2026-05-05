@@ -1,0 +1,10 @@
+ATLAS_SOURCE_SEED
+kind=php
+===SOURCE===
+<?php
+namespace Demo\App;
+
+class Broken {
+    public function run( {
+        helper();
+    }

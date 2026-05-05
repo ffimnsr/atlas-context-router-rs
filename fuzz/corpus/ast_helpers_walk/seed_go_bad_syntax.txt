@@ -1,0 +1,8 @@
+ATLAS_SOURCE_SEED
+kind=go
+===SOURCE===
+package sample
+
+func broken(name string) string {
+    if name != "" {
+        return name

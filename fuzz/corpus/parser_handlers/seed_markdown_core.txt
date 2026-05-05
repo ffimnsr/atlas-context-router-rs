@@ -1,0 +1,24 @@
+ATLAS_PARSER_SEED
+kind=markdown
+reuse_old_tree=true
+===SOURCE===
+# Intro
+
+See [guide](docs/guide.md).
+
+## Usage
+
+```rust
+fn main() {}
+```
+
+===NEXT===
+# Intro
+
+See [guide](docs/guide.md).
+
+## Usage
+
+```rust
+fn main() {}
+```

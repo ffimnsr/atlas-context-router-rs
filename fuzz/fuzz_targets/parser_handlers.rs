@@ -1,10 +1,14 @@
 #![no_main]
 
-use atlas_fuzz::{ParserCase, hash_bytes};
+use atlas_fuzz::{hash_bytes, parser_case_from_bytes};
 use atlas_parser::ParserRegistry;
 use libfuzzer_sys::fuzz_target;
 
-fuzz_target!(|case: ParserCase| {
+fuzz_target!(|data: &[u8]| {
+    let Some(case) = parser_case_from_bytes(data) else {
+        return;
+    };
+
     let registry = ParserRegistry::with_defaults();
     let rel_path = case.path_kind.rel_path();
     let file_hash = hash_bytes(&case.source);

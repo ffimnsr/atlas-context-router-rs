@@ -1,0 +1,9 @@
+ATLAS_TREE_CACHE_SEED
+kind=markdown
+===SOURCE===
+# Broken
+
+See [guide](docs/guide.md
+
+```bash
+echo broken

@@ -1,0 +1,13 @@
+ATLAS_SOURCE_SEED
+kind=cpp
+===SOURCE===
+#include <vector>
+
+namespace demo {
+
+class Broken {
+public:
+    void run( {
+        helper();
+    }
+};
