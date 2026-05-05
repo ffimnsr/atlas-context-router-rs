@@ -4,6 +4,19 @@ All notable changes to this project should be recorded in this file.
 
 Versioning policy may evolve while Atlas is still moving quickly, but release notes should still group changes by user-visible impact.
 
+## 1.1.2 - 2026-05-05
+
+### Features
+
+- add docs section discovery surfaces (`3755be5`)
+- expand fuzz harness coverage and add new fuzz targets (`4f2490d`)
+
+
+### Maintenance
+
+- move shell completions installation to install.sh (`8e9a6f3`)
+
+
 ## 1.1.1 - 2026-04-29
 
 ### Features
