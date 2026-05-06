@@ -8,11 +8,14 @@
 
 mod artifact;
 mod lifecycle;
+pub mod registry;
 mod search;
 #[cfg(test)]
 mod tests;
 mod types;
 mod util;
+
+use std::collections::HashMap;
 
 use rusqlite::{Connection, OpenFlags};
 use tracing::info;
@@ -26,8 +29,9 @@ use crate::migrations::{LATEST_VERSION, MIGRATION_SET};
 use util::{is_corruption_error, quarantine_db};
 
 pub use types::{
-    ChunkResult, ContentStoreConfig, IndexRunStats, IndexState, IndexingStats, OutputRouting,
-    OversizedPolicy, RetrievalIndexStatus, RoutingStats, SearchFilters, SourceMeta, SourceRow,
+    ChunkResult, ContentStoreConfig, DimensionMismatchError, EmbeddingProviderEntry, IndexRunStats,
+    IndexState, IndexingStats, OutputRouting, OversizedPolicy, RetrievalIndexStatus, RoutingStats,
+    SearchFilters, SourceMeta, SourceRow,
 };
 
 /// SQLite-backed content store.
@@ -43,6 +47,9 @@ pub struct ContentStore {
     pub(super) config: ContentStoreConfig,
     pub(super) routing_stats: RoutingStats,
     pub(super) run_stats: IndexRunStats,
+    /// In-process cache of frozen embedding dimensions, keyed by
+    /// `(provider_name, model_name)`.  Populated lazily or by `warm_dimension_cache()`.
+    pub(super) dim_cache: HashMap<(String, String), u32>,
     /// Marker that opts this struct out of `Send` and `Sync`.
     _thread_bound: std::marker::PhantomData<*const ()>,
 }
@@ -78,6 +85,7 @@ impl ContentStore {
             config,
             routing_stats: RoutingStats::default(),
             run_stats: IndexRunStats::default(),
+            dim_cache: HashMap::new(),
             _thread_bound: std::marker::PhantomData,
         };
         apply_atlas_pragmas(&store.conn)?;

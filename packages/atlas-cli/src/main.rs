@@ -76,5 +76,6 @@ fn run_cli() -> anyhow::Result<()> {
         Command::Hook { .. } => commands::run_hook(&cli),
         Command::History { .. } => commands::run_history(&cli),
         Command::Version => commands::run_version(&cli),
+        Command::EmbeddingConfig => commands::run_embedding_config(&cli),
     }
 }

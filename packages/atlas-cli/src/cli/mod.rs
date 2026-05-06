@@ -590,4 +590,11 @@ pub enum Command {
 
     /// Print CLI version, build commit hash, and build date.
     Version,
+
+    /// Show active embedding provider configuration and dimension registry.
+    ///
+    /// Lists all registered (provider, model, dimension) entries from the
+    /// content store and reports the active embedding config from `.atlas/config.toml`.
+    #[command(name = "embedding-config")]
+    EmbeddingConfig,
 }

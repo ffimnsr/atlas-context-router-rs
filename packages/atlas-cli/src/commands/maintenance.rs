@@ -1253,6 +1253,104 @@ pub fn run_debug_graph(cli: &Cli) -> Result<()> {
     Ok(())
 }
 
+pub fn run_embedding_config(cli: &Cli) -> Result<()> {
+    let repo = resolve_repo(cli)?;
+    let db_path_str = db_path(cli, &repo);
+    let content_db = atlas_engine::paths::content_db_path(&db_path_str);
+
+    // Active config from .atlas/config.toml.
+    let atlas_dir = atlas_engine::paths::atlas_dir(&repo);
+    let config = atlas_engine::Config::load(&atlas_dir).unwrap_or_default();
+    let embedding_url = config.search.embedding.url.clone().unwrap_or_default();
+    let embedding_model = config.search.embedding.model.clone();
+    let hybrid_enabled = config.search.hybrid_enabled;
+
+    // Derive provider name the same way the embed command does.
+    let active_provider = if embedding_url.is_empty() {
+        None
+    } else {
+        Some(atlas_contentstore::store::registry::provider_name_from_url(&embedding_url).to_owned())
+    };
+
+    // Read persisted registry from content store.
+    let (registry_entries, registry_error) = match ContentStore::open(&content_db) {
+        Ok(mut store) => {
+            let _ = store.migrate();
+            match store.list_embedding_providers() {
+                Ok(entries) => (entries, None),
+                Err(e) => (vec![], Some(e.to_string())),
+            }
+        }
+        Err(e) => (vec![], Some(e.to_string())),
+    };
+
+    if cli.json {
+        let entries: Vec<serde_json::Value> = registry_entries
+            .iter()
+            .map(|e| {
+                serde_json::json!({
+                    "provider_name": e.provider_name,
+                    "model_name": e.model_name,
+                    "dimension": e.dimension,
+                    "discovered_at": e.discovered_at,
+                    "index_schema_version": e.index_schema_version,
+                })
+            })
+            .collect();
+        print_json(
+            "embedding_config",
+            serde_json::json!({
+                "repo_root": repo,
+                "active": {
+                    "url": if embedding_url.is_empty() { serde_json::Value::Null } else { serde_json::json!(embedding_url) },
+                    "model": embedding_model,
+                    "provider_name": active_provider,
+                    "hybrid_enabled": hybrid_enabled,
+                },
+                "registry": entries,
+                "registry_error": registry_error,
+                "content_db_path": content_db,
+            }),
+        )?;
+        return Ok(());
+    }
+
+    println!("Embedding configuration for {repo}");
+    println!();
+    println!("Active config:");
+    if embedding_url.is_empty() {
+        println!("  URL            : (not configured)");
+        println!("  Model          : {embedding_model}");
+        println!("  Hybrid enabled : {hybrid_enabled}");
+    } else {
+        println!("  URL            : {embedding_url}");
+        println!("  Model          : {embedding_model}");
+        println!(
+            "  Provider       : {}",
+            active_provider.as_deref().unwrap_or("unknown")
+        );
+        println!("  Hybrid enabled : {hybrid_enabled}");
+    }
+    println!();
+    println!(
+        "Registered dimension registry ({} entries):",
+        registry_entries.len()
+    );
+    if let Some(err) = &registry_error {
+        println!("  (error reading registry: {err})");
+    } else if registry_entries.is_empty() {
+        println!("  (none — run `atlas embed` to register dimensions)");
+    } else {
+        for e in &registry_entries {
+            println!(
+                "  {}/{}: dim={}, schema_v={}, discovered={}",
+                e.provider_name, e.model_name, e.dimension, e.index_schema_version, e.discovered_at
+            );
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

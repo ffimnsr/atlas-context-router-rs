@@ -21,7 +21,7 @@ pub use graph_objects::{run_communities, run_flows};
 pub use history::run_history;
 pub use hook::run_hook;
 pub use maintenance::{
-    run_db_check, run_debug_config, run_debug_graph, run_doctor, run_migrate,
+    run_db_check, run_debug_config, run_debug_graph, run_doctor, run_embedding_config, run_migrate,
     run_purge_noncanonical, run_selfupdate,
 };
 pub use platform::{run_completions, run_install, run_serve, run_serve_daemon, run_serve_http};

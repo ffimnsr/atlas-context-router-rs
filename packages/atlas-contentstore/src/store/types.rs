@@ -212,3 +212,41 @@ pub struct IndexingStats {
     pub chunks_written: i64,
     pub chunks_reused: i64,
 }
+
+// ---------------------------------------------------------------------------
+// Embedding provider registry
+// ---------------------------------------------------------------------------
+
+/// Persisted entry for one (provider, model) embedding dimension record.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EmbeddingProviderEntry {
+    pub provider_name: String,
+    pub model_name: String,
+    /// Frozen dimension for this provider+model pair (in floats, i.e. vector length).
+    pub dimension: u32,
+    pub discovered_at: String,
+    pub index_schema_version: i32,
+}
+
+/// Error returned when an embedding vector's dimension does not match the
+/// frozen dimension in the registry.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DimensionMismatchError {
+    pub provider_name: String,
+    pub model_name: String,
+    pub expected_dimension: u32,
+    pub actual_dimension: u32,
+}
+
+impl std::fmt::Display for DimensionMismatchError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "embedding dimension mismatch for {}/{}: expected {} got {}; \
+             rebuild embeddings or switch provider/model",
+            self.provider_name, self.model_name, self.expected_dimension, self.actual_dimension,
+        )
+    }
+}
+
+impl std::error::Error for DimensionMismatchError {}

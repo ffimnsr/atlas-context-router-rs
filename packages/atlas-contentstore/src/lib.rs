@@ -5,7 +5,7 @@ mod migrations;
 pub mod store;
 
 pub use store::{
-    ChunkResult, ContentStore, ContentStoreConfig, IndexRunStats, IndexState, IndexingStats,
-    OutputRouting, OversizedPolicy, RetrievalIndexStatus, RoutingStats, SearchFilters, SourceMeta,
-    SourceRow,
+    ChunkResult, ContentStore, ContentStoreConfig, DimensionMismatchError, EmbeddingProviderEntry,
+    IndexRunStats, IndexState, IndexingStats, OutputRouting, OversizedPolicy, RetrievalIndexStatus,
+    RoutingStats, SearchFilters, SourceMeta, SourceRow,
 };

@@ -10,11 +10,13 @@ use atlas_store_sqlite::Store;
 use serde::Serialize;
 use tracing::debug;
 
+pub mod capabilities;
 pub mod embed;
 pub mod eval;
 mod ranking;
 pub mod semantic;
 
+use capabilities::BackendCapabilities;
 use ranking::{GraphSearchRankingPrimitives, sort_scored_nodes};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -99,6 +101,8 @@ pub struct QueryExplanation {
     pub latency_ms: Option<u128>,
     pub result_count: Option<usize>,
     pub matches: Option<Vec<QueryExplainMatch>>,
+    /// Active backend capability flags at explain time.
+    pub active_capabilities: BackendCapabilities,
 }
 
 fn query_execution_mode_for(
@@ -223,7 +227,8 @@ pub fn explain_query_with_embedding(
         (true, None)
     };
 
-    let hybrid_backend_available = query.hybrid && embed_cfg.is_some();
+    let caps = capabilities::derive_capabilities(embed_cfg);
+    let hybrid_backend_available = query.hybrid && caps.hybrid_lexical_vector;
     let mode = query_execution_mode_for(query, semantic, hybrid_backend_available);
     let mut warnings: Vec<String> = Vec::new();
     if fts_tokens.len() > 1 {
@@ -239,7 +244,7 @@ pub fn explain_query_with_embedding(
     if !regex_valid {
         warnings.push("regex pattern is invalid; the query would return an error.".to_string());
     }
-    if query.hybrid && !hybrid_backend_available {
+    if query.hybrid && !caps.hybrid_lexical_vector {
         warnings.push(
             "hybrid retrieval requested but search.embedding.url is not configured; execution falls back to FTS-only ranking.".to_string(),
         );
@@ -311,6 +316,7 @@ pub fn explain_query_with_embedding(
         latency_ms,
         result_count,
         matches,
+        active_capabilities: caps,
     }
 }
 

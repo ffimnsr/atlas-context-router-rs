@@ -60,14 +60,14 @@ For terms that are easy to misread in this document:
 
 - Part III. Remaining product expansion roadmap: Phases 29 through 31
 - Part IV. Remaining context continuity roadmap: Phases CM12, CM14, and CM15
-- Part V. Remaining focused follow-up patches: Retrieval Follow-Up Patch, Retrieval Ranking Evidence Patch, Graph/Content Companion Patch, Parity Surface Patch, Runtime Event Enrichment and Graph Linking Patch, Graph Readiness Source-of-Truth Patch, Context Escalation Contract Patch, Graph Store Corruption Recovery Patch, SQLite Connection Concurrency Policy Patch
+- Part V. Remaining focused follow-up patches: Retrieval Follow-Up Patch, Graph/Content Companion Patch, Parity Surface Patch, Runtime Event Enrichment and Graph Linking Patch, Context Escalation Contract Patch, Graph Store Corruption Recovery Patch, SQLite Connection Concurrency Policy Patch
 
 ## Cross-Cutting Track Map
 
 - Historical and analytics work: Phase 17, Phase 29, Phase 30, Phase 31
-- Retrieval and search follow-ups: Retrieval Follow-Up Patch, Retrieval Ranking Evidence Patch, Graph/Content Companion Patch, Parity Surface Patch
+- Retrieval and search follow-ups: Retrieval Follow-Up Patch, Graph/Content Companion Patch, Parity Surface Patch
 - Context continuity and runtime memory: Phase CM12, Phase CM14, Phase CM15, Runtime Event Enrichment and Graph Linking Patch
-- Graph safety and workflow: Graph Readiness Source-of-Truth Patch, Context Escalation Contract Patch, Graph Store Corruption Recovery Patch, SQLite Connection Concurrency Policy Patch
+- Graph safety and workflow: Context Escalation Contract Patch, Graph Store Corruption Recovery Patch, SQLite Connection Concurrency Policy Patch
 
 ---
 
@@ -462,22 +462,22 @@ Why:
 
 Atlas already has optional embeddings and hybrid retrieval roadmap, but dimension handling should be explicit and deterministic.
 
-- [ ] create embedding provider registry metadata
-- [ ] persist:
-  - [ ] provider name
-  - [ ] model name
-  - [ ] embedding dimension
-  - [ ] discovered_at
-  - [ ] index schema version
-- [ ] require dimension to be frozen at index creation time
-- [ ] reject insert/search if dimension does not match active retrieval index
-- [ ] cache discovered dimensions per provider/model
-- [ ] add CLI / diagnostics surface for current embedding config
-- [ ] add tests for:
-  - [ ] dimension mismatch on insert
-  - [ ] dimension mismatch on query
-  - [ ] provider switch with incompatible existing index
-  - [ ] explicit rebuild requirement after dimension change
+- [x] create embedding provider registry metadata
+- [x] persist:
+  - [x] provider name
+  - [x] model name
+  - [x] embedding dimension
+  - [x] discovered_at
+  - [x] index schema version
+- [x] require dimension to be frozen at index creation time
+- [x] reject insert/search if dimension does not match active retrieval index
+- [x] cache discovered dimensions per provider/model
+- [x] add CLI / diagnostics surface for current embedding config
+- [x] add tests for:
+  - [x] dimension mismatch on insert
+  - [x] dimension mismatch on query
+  - [x] provider switch with incompatible existing index
+  - [x] explicit rebuild requirement after dimension change
 
 Why:
 - avoids one of the most common hybrid/vector indexing failure modes
@@ -487,21 +487,21 @@ Why:
 
 Atlas should make backend capability checks explicit instead of assuming all retrieval backends support all modes.
 
-- [ ] define retrieval backend capability model
-- [ ] support capability flags for:
-  - [ ] lexical FTS
-  - [ ] dense vector search
-  - [ ] hybrid lexical + vector fusion
-  - [ ] sparse / BM25-native retrieval
-  - [ ] metadata filtering
-- [ ] validate requested retrieval mode against backend capabilities before query/index
+- [x] define retrieval backend capability model
+- [x] support capability flags for:
+  - [x] lexical FTS
+  - [x] dense vector search
+  - [x] hybrid lexical + vector fusion
+  - [x] sparse / BM25-native retrieval
+  - [x] metadata filtering
+- [x] validate requested retrieval mode against backend capabilities before query/index
 - [x] disable unsupported hybrid mode automatically with explicit warning
 - [x] ensure MCP/CLI surfaces report active retrieval mode clearly
 - [ ] add tests for:
   - [x] lexical-only backend
-  - [ ] dense-only backend
+  - [x] dense-only backend
   - [x] hybrid-capable backend
-  - [ ] unsupported mode request fails cleanly
+  - [x] unsupported mode request fails cleanly
 
 Why:
 - makes future retrieval backends or storage variants safe to introduce
@@ -593,98 +593,7 @@ This patch is complete when:
 
 ### Retrieval Ranking Evidence Patch
 
-Atlas already exposes query scores, active query mode, global `explain_query` ranking factors, provenance, and truncation metadata. What is still missing is a first-class retrieval contract that explains why each returned result ranked where it did. A result-level score alone is not enough for agents to distinguish exact matches, fuzzy repairs, package/path boosts, changed-file boosts, graph expansion, and hybrid/vector fusion.
-
-#### Patch Q1 — Result-level ranking evidence model
-
-- [x] add compact `RankingEvidence` / `ScoreEvidence` model for ranked retrieval results
-- [x] attach evidence to graph/search result structs without replacing numeric score
-- [x] include fields for:
-  - [x] base retrieval mode (`fts5`, `regex_structural_scan`, `vector`, `hybrid`, `graph_expand`)
-  - [x] raw score before boosts when available
-  - [x] final score
-  - [x] matched fields (`name`, `qualified_name`, `file_path`, `content`, `embedding`)
-  - [x] exact name match
-  - [x] exact qualified-name match
-  - [x] prefix match
-  - [x] fuzzy correction and edit distance
-  - [x] kind boost
-  - [x] public/exported boost
-  - [x] same-directory boost
-  - [x] same-language boost
-  - [x] recent-file boost
-  - [x] changed-file boost
-  - [x] graph expansion hop distance
-  - [x] hybrid/RRF contributing sources and ranks
-- [x] keep evidence compact and stable for MCP JSON output
-- [x] add serde round-trip tests for evidence schema
-
-Why:
-- agents need to know why a result won, not only that it scored higher
-- global `ranking_factors` explain query mode, but not individual result ranking
-
-#### Patch Q2 — Capture evidence during ranking
-
-- [x] update `apply_ranking_boosts` to record which boosts fired per result
-- [x] update fuzzy relaxed-candidate path to record:
-  - [x] corrected/matched term
-  - [x] edit distance
-  - [x] fuzzy threshold
-- [x] update exact-hit merge path to preserve exact-match evidence
-- [x] update graph expansion to record hop distance and seed source
-- [x] update hybrid/RRF merge to record:
-  - [x] FTS rank contribution
-  - [x] vector rank contribution
-  - [x] RRF score contribution
-- [x] ensure evidence survives result merging and deduplication
-- [x] add tests for each evidence source and merge precedence
-
-Why:
-- evidence must be produced at scoring time while the ranking decision is known
-- reconstructing explanation after sorting is lossy and easy to get wrong
-
-#### Patch Q3 — Surface evidence in CLI and MCP retrieval outputs
-
-- [x] include ranking evidence in MCP `query_graph` results
-- [x] include ranking evidence in MCP `batch_query_graph` per-query results
-- [x] include ranking evidence in `explain_query` matches
-- [x] include ranking evidence in CLI `atlas query --json`
-- [x] keep human CLI output compact:
-  - [x] show score as today
-  - [x] optionally show top evidence labels when verbose/debug mode is enabled
-- [x] document stable evidence labels and meanings
-- [x] add snapshot tests for MCP output shape
-
-Why:
-- query-mode observability should be part of normal retrieval output, not only debug output
-- downstream tools can make better escalation and trust decisions from structured evidence
-
-#### Patch Q4 — Evidence contract for context and review ranking
-
-- [x] decide whether review/context `relevance_score` also gets evidence
-- [x] if yes, add context-ranking evidence for:
-  - [x] direct target
-  - [x] changed symbol
-  - [x] caller/callee neighbor
-  - [x] test adjacency
-  - [x] impact-score contribution
-  - [x] saved-context/session boost
-- [x] surface context-ranking evidence only where payload budget allows
-- [x] document whether graph search evidence and context relevance evidence are separate contracts
-- [x] add tests for direct target and changed-file evidence in context results
-
-Why:
-- search ranking and context ranking are related but not identical
-- review flows need evidence for why context was included, not only why a symbol matched search
-
-#### Patch Q completion criteria
-
-- [x] every ranked graph/search result can include compact structured ranking evidence
-- [x] query boosts, fuzzy correction, graph expansion, and hybrid/RRF all record evidence
-- [x] MCP `query_graph`, `batch_query_graph`, and `explain_query` expose evidence
-- [x] CLI JSON exposes evidence without bloating human output
-- [x] evidence labels are documented and covered by tests
-- [x] context/review relevance evidence is explicitly included or deferred with documented rationale
+Retrieval Ranking Evidence Patch is shipped. See SHIPPED.md for details.
 
 ---
 
@@ -805,30 +714,7 @@ Atlas already has pieces of the upstream parity surface: Markdown heading graph 
 
 #### Patch PS1 — Docs section lookup parity
 
-- [x] add docs-section lookup service over indexed project docs:
-  - [x] resolve doc by canonical repo path
-  - [x] resolve section by Markdown heading path / slug
-  - [x] return section body with bounded child-heading context
-  - [x] include heading level, line range, file hash, and truncation metadata
-  - [x] reuse existing Markdown parser heading nodes and content-store/file reads where possible
-- [x] add CLI surface:
-  - [x] `atlas docs-section <path> --heading <heading-path-or-slug>`
-  - [x] `atlas docs-section <path> --line <line>`
-  - [x] `--json`, `--max-bytes`, and stable not-found errors
-- [x] add MCP `get_docs_section`:
-  - [x] same inputs and defaults as CLI JSON
-  - [x] TOON/JSON output parity
-  - [x] provenance and freshness metadata
-- [x] add CLI/MCP parity tests:
-  - [x] nested headings
-  - [x] duplicate heading slugs
-  - [x] missing file / missing heading
-  - [x] max-byte truncation
-  - [x] stale graph warning when doc file changed
-
-Why:
-- current docs support can find files and headings, but cannot fetch one section as a stable agent-facing unit
-- review/query workflows need precise docs excerpts without broad file scans
+Patch PS1 is shipped. See SHIPPED.md for details.
 
 #### Patch PS2 — Large-function finder parity
 
@@ -859,39 +745,14 @@ Why:
 
 #### Patch PS3 — Explicit postprocess command parity
 
-- [x] define postprocess orchestration service for derived graph analytics:
-  - [x] run after build/update without reparsing source files
-  - [x] refresh derived analytics such as flows, communities, architecture metrics, query hints, and large-function summaries
-  - [x] support full and changed-only modes where data dependencies allow
-  - [x] record started/finished/failed state and per-stage counts/durations
-  - [x] keep failures bounded and machine-readable
-- [x] add CLI surface:
-  - [x] `atlas postprocess`
-  - [x] `atlas postprocess --changed-only`
-  - [x] `atlas postprocess --stage <name>`
-  - [x] `--json`, `--dry-run`, and stable error contract
-- [x] add MCP `postprocess_graph`:
-  - [x] same stage/mode controls as CLI JSON
-  - [x] compact stage summary by default
-  - [x] provenance, readiness, and freshness metadata
-- [x] add CLI/MCP parity tests:
-  - [x] no-op repo with no graph
-  - [x] full postprocess after build
-  - [x] changed-only postprocess after update
-  - [x] single-stage execution
-  - [x] stage failure surfaces same error code in CLI JSON and MCP
-
-Why:
-- build/update should stay focused on scan, parse, and persistence
-- derived analytics need explicit orchestration instead of hidden side effects or ad hoc commands
+Patch PS3 is shipped. See SHIPPED.md for details.
 
 #### Patch PS completion criteria
 
-- [ ] `get_docs_section`, `find_large_functions`, and `postprocess_graph` exist as MCP tools with matching CLI surfaces
-- [ ] all three surfaces share service-layer implementations with no duplicated ranking, truncation, or error rules
-- [ ] CLI JSON and MCP JSON are parity-tested for representative fixtures
-- [ ] README, MCP reference, installed AGENTS instructions, and prompt workflows document the new surfaces consistently
-- [ ] graph freshness/readiness metadata appears on every new graph-backed MCP response
+- [ ] `find_large_functions` exists as an MCP tool with matching CLI surface
+- [ ] large-function service shares ranking, truncation, and error rules with review summaries instead of drifting thresholds
+- [ ] CLI JSON and MCP JSON are parity-tested for representative large-function fixtures
+- [ ] README, MCP reference, installed AGENTS instructions, and prompt workflows document the remaining large-function surface consistently
 
 ---
 
@@ -1171,127 +1032,7 @@ Why:
 
 ### Graph Readiness Source-of-Truth Patch
 
-Atlas has persisted build state, graph freshness checks, health/debug tools, provenance, and adapter metadata, but there is no explicit invariant that one subsystem owns the answer to: "is the graph ready, searchable, and current enough to use?" That decision must not drift across CLI status, MCP status, query tools, impact analysis, review context, and adapters.
-
-#### Patch S1 — Canonical graph readiness record
-
-- [x] define a canonical `GraphReadiness` / `GraphState` model in shared core or graph service code
-- [x] include fields:
-  - [x] `repo_root`
-  - [x] `db_path`
-  - [x] `db_exists`
-  - [x] `db_open_error`
-  - [x] `build_state`
-  - [x] `build_last_error`
-  - [x] `graph_built`
-  - [x] `graph_queryable`
-  - [x] `graph_current`
-  - [x] `stale_index`
-  - [x] `pending_graph_changes`
-  - [x] `integrity_state`
-  - [x] `error_code`
-  - [x] `message`
-  - [x] `suggestions`
-  - [x] `last_indexed_at`
-  - [x] `indexed_file_count`
-- [x] distinguish readiness dimensions:
-  - [x] built versus missing
-  - [x] queryable versus blocked
-  - [x] current versus stale
-  - [x] corrupt/inconsistent versus merely stale
-  - [x] graph readiness versus retrieval/content index readiness
-- [x] make this record the only source allowed to decide graph readiness
-- [x] add tests for every readiness class and field derivation
-
-Why:
-- prevents drift between build lifecycle state, status output, query behavior, and adapter metadata
-- makes readiness a contract instead of scattered boolean logic
-
-#### Patch S1.5 — Graph execution safety states
-
-- [x] define canonical graph execution states:
-  - [x] `fresh` — graph is built, queryable, current, and integrity-clean
-  - [x] `stale` — graph is queryable but behind graph-relevant working-tree changes
-  - [x] `partial` — graph is queryable but build/update/indexing stopped early or degraded
-  - [x] `corrupt` — graph has SQLite integrity errors, schema mismatch, orphan nodes, or dangling edges
-- [x] define feature behavior by state:
-  - [x] `fresh` -> full graph-backed features enabled
-  - [x] `stale` -> warn and allow graph-backed answers with freshness metadata
-  - [x] `partial` -> allow limited features only; block answers requiring complete graph facts
-  - [x] `corrupt` -> block graph-backed answers and require rebuild/quarantine flow
-- [x] define explicit override policy:
-  - [x] stale graph may run only when default policy allows stale reads or caller passes `--allow-stale` / MCP `allow_stale=true`
-  - [x] partial graph may run only for tools with documented degraded behavior or caller passes `--allow-partial` / MCP `allow_partial=true`
-  - [x] corrupt graph has no override for graph-backed answers
-  - [x] every allowed stale/partial response must include `safe_to_answer`, execution state, and freshness/degraded metadata
-- [x] define which tools are allowed in `partial` state:
-  - [x] status/debug/doctor allowed
-  - [x] direct symbol lookup allowed only when result provenance is complete enough
-  - [x] impact/review/analyze flows blocked or degraded unless completeness requirements are met
-  - [x] traversal blocked when missing edges could make answer unsafe
-- [x] expose execution state in CLI/MCP readiness output
-- [x] make query, impact, review, context, and analyze tools consume execution state before graph reads
-- [x] add tests for each state and allowed/blocked feature behavior
-
-Why:
-- agents need one simple safety state before deciding whether graph facts are usable
-- stale, partial, and corrupt graphs require different behavior
-
-#### Patch S2 — Route CLI graph tools through canonical readiness
-
-- [x] update `atlas status` to emit canonical readiness directly
-- [x] update `atlas doctor` to reference canonical readiness instead of partially recomputing it
-- [x] update `atlas query` to consult readiness before search
-- [x] update `atlas impact` to consult readiness before impact traversal
-- [x] update `atlas review-context` to consult readiness before context assembly
-- [x] update reasoning/refactor graph-backed commands to consult readiness before graph reads
-- [x] define command behavior per readiness state:
-  - [x] fresh graph: full features enabled
-  - [x] missing graph: fail with build suggestion
-  - [x] interrupted/failed build: fail with lifecycle suggestion
-  - [x] stale graph: warn + allow only by configured policy or explicit stale override
-  - [x] partial graph: allow limited features only by documented degraded policy or explicit partial override
-  - [x] corrupt/inconsistent graph: fail closed
-- [x] add CLI tests proving all graph-backed commands consume same readiness decision
-
-Why:
-- query, impact, and review must not infer readiness from `Store::open` alone
-- status output and command behavior must agree
-
-#### Patch S3 — Route MCP and adapters through canonical readiness
-
-- [x] update MCP `status` to surface canonical readiness, not redefine it
-- [x] add readiness block to graph-backed MCP responses:
-  - [x] `query_graph`
-  - [x] `get_context`
-  - [x] `get_impact_radius`
-  - [x] `get_review_context`
-  - [x] `get_minimal_context`
-  - [x] `symbol_neighbors`
-  - [x] `traverse_graph`
-  - [x] reasoning/refactor analysis tools
-- [x] replace ad hoc provenance/freshness readiness inference with canonical readiness fields
-- [x] keep provenance as identity metadata only:
-  - [x] `repo_root`
-  - [x] `db_path`
-  - [x] `indexed_file_count`
-  - [x] `last_indexed_at`
-- [x] ensure adapters never decide graph readiness independently
-- [x] add MCP tests proving graph-backed tools surface identical readiness for same repo/db
-
-Why:
-- MCP should surface graph readiness, not become another readiness authority
-- provenance and readiness are related but not the same contract
-
-#### Patch S completion criteria
-
-- [x] one canonical graph readiness model exists
-- [x] CLI status, doctor, query, impact, and review consume that model
-- [x] MCP graph-backed tools surface that model and do not redefine readiness
-- [x] adapters only report or forward readiness, never compute their own
-- [x] stale/queryable and corrupt/blocked states are distinct
-- [x] fresh/stale/partial/corrupt execution states map to explicit allowed/blocked features
-- [x] tests prove all graph-backed paths agree on readiness for same repo and DB
+Graph Readiness Source-of-Truth Patch is shipped. See SHIPPED.md for details.
 
 ---
 
@@ -1665,6 +1406,160 @@ Why:
 - [ ] MCP prompts, tool descriptions, README, and installed AGENTS instructions agree
 - [ ] graph/context responses expose enough metadata to justify escalation
 - [ ] tests protect contract wording and escalation metadata
+
+---
+
+### Dynamic Agent Policy and Hook Enforcement Patch
+
+Atlas already installs static AGENTS/CLAUDE instructions and platform hook files, but current workflow policy still lives mostly in static text. Add one runtime policy surface plus hard hook enforcement so agents can load fresh Atlas workflow guidance at session start without trying to make markdown executable.
+
+#### Patch A1 — Canonical runtime policy contract
+
+- [ ] define compact `AgentInstructionsPolicy` model in shared service code with fields:
+  - [ ] `policy_version`
+  - [ ] `generated_at`
+  - [ ] `frontend`
+  - [ ] `policy_mode`
+  - [ ] `required_first_step`
+  - [ ] `required_tool_order`
+  - [ ] `protected_tools`
+  - [ ] `forbidden_patterns`
+  - [ ] `fallback_behavior`
+  - [ ] `trust_notes`
+  - [ ] `source`
+- [ ] keep policy payload deterministic and compact enough for hook/session injection
+- [ ] make one shared Rust service produce policy for both MCP tool calls and `atlas hook`
+- [ ] version policy explicitly so hooks can detect stale cached payloads
+- [ ] add serde round-trip tests for policy schema stability
+
+Why:
+- runtime workflow policy should have one source of truth
+- MCP tool output, hook preload, prompts, and installed instructions must not drift
+
+#### Patch A2 — MCP `agent_instructions` tool surface
+
+- [ ] add `agent_instructions` to MCP tool registry in `packages/atlas-mcp/src/tools/registry.rs`
+- [ ] add dispatch arm in `packages/atlas-mcp/src/tools/dispatch.rs`
+- [ ] implement handler that returns current `AgentInstructionsPolicy`
+- [ ] accept explicit inputs:
+  - [ ] `frontend`
+  - [ ] `policy_mode`
+  - [ ] `include_fallback_static_rules`
+  - [ ] `output_format`
+- [ ] default output to compact agent-facing payload suitable for session preload
+- [ ] include TOON and JSON parity tests for tool output
+- [ ] add registry snapshot test so installed instructions and MCP registry stay aligned
+
+Why:
+- agent needs runtime policy as normal Atlas surface, not hidden ad hoc hook text
+- hook runner should reuse same policy source returned by MCP
+
+#### Patch A3 — Installed instruction bootstrap text
+
+- [ ] update install-generated instruction block in `packages/atlas-cli/src/install/instructions.rs`
+- [ ] replace duplicated workflow detail with explicit bootstrap rule:
+  - [ ] call `agent_instructions` before substantive repo exploration
+  - [ ] use static AGENTS rules only when runtime policy is unavailable
+  - [ ] keep graph-first and minimal-context-first invariants in static text
+- [ ] keep injected section idempotent under existing instruction markers
+- [ ] add install test proving stale injected section is replaced with new bootstrap wording
+- [ ] add install test proving user-authored content before and after injected section is preserved
+
+Why:
+- static markdown should bootstrap runtime policy, not duplicate mutable operational rules
+- install flow already owns AGENTS/CLAUDE injected guidance and should remain source for static bootstrap text
+
+#### Patch A4 — Platform hook preload integration
+
+- [ ] extend `packages/atlas-cli/src/install/platform_hooks.rs` generated Copilot hook config to preload policy on:
+  - [ ] `SessionStart`
+  - [ ] `UserPromptSubmit`
+- [ ] extend generated Claude hook config to preload policy on:
+  - [ ] `SessionStart`
+  - [ ] `UserPromptSubmit`
+  - [ ] `InstructionsLoaded`
+- [ ] extend generated Codex hook config to preload policy on:
+  - [ ] `SessionStart`
+  - [ ] `UserPromptSubmit`
+- [ ] extend shared `.atlas/hooks/atlas-hook` runner so preload path calls shared Rust policy service instead of duplicating JSON assembly in shell
+- [ ] cache last successful compact policy payload under `.atlas/hooks/lib/` with version/hash metadata
+- [ ] define bounded cache TTL or invalidation rule so long sessions can refresh policy safely
+- [ ] add tests for generated hook configs and runner output after install
+
+Why:
+- existing install-generated hook path already exists and should carry runtime policy preload
+- session-start and prompt-submit are strongest points for loading fresh policy before work begins
+
+#### Patch A5 — Hard enforcement at hook boundary
+
+- [ ] make hook enforcement check whether current session has loaded valid policy version before protected tool execution
+- [ ] define initial protected tool set:
+  - [ ] `query_graph`
+  - [ ] `get_context`
+  - [ ] `get_review_context`
+  - [ ] `get_minimal_context`
+  - [ ] `get_impact_radius`
+  - [ ] `explain_change`
+  - [ ] graph-backed analysis tools
+  - [ ] refactor planning tools
+- [ ] define exempt diagnostic/repair tools that remain fail-open when policy preload fails:
+  - [ ] `status`
+  - [ ] `doctor`
+  - [ ] `db_check`
+  - [ ] `debug_graph`
+  - [ ] `build_or_update_graph`
+- [ ] return explicit enforcement decision metadata:
+  - [ ] `policy_loaded`
+  - [ ] `policy_version`
+  - [ ] `enforcement_mode`
+  - [ ] `blocked_reason`
+  - [ ] `fallback_active`
+- [ ] record enforcement events through existing adapter/session APIs; do not let hooks write SQLite directly
+- [ ] add integration test proving protected tool is blocked before preload and allowed after preload
+
+Why:
+- AGENTS text alone cannot guarantee runtime behavior
+- hook boundary is correct deterministic enforcement point for required policy preload
+
+#### Patch A6 — Fallback and degraded-mode behavior
+
+- [ ] define explicit fallback path when runtime policy fetch fails:
+  - [ ] static AGENTS/install rules remain active
+  - [ ] protected tools use configured fail-open or fail-closed behavior by class
+  - [ ] fallback state is surfaced in metadata instead of silent skip
+- [ ] ensure fallback does not bypass graph-readiness checks or existing safety gates
+- [ ] ensure fallback path remains deterministic when cache exists but live fetch fails
+- [ ] add tests for:
+  - [ ] live fetch failure with valid cache
+  - [ ] live fetch failure without cache
+  - [ ] stale cache version rejection
+  - [ ] explicit degraded metadata in hook/session output
+
+Why:
+- runtime policy fetch can fail and behavior must stay explicit, bounded, and safe
+- degraded mode should not silently weaken existing Atlas safety contracts
+
+#### Patch A7 — Prompt and documentation consistency
+
+- [ ] update MCP prompts in `packages/atlas-mcp/src/prompts.rs` to mention `agent_instructions` as first runtime step where relevant
+- [ ] update installed AGENTS instructions to reference runtime-policy bootstrap and fallback rules
+- [ ] update README and wiki MCP workflow docs to match same wording
+- [ ] ensure graph/content companion wording and minimal-context-first wording stay consistent with runtime-policy contract
+- [ ] add snapshot tests protecting prompt/install/doc wording from drift
+
+Why:
+- prompts and installed instructions are agent-facing control surfaces and must agree
+- runtime policy is only useful if every workflow surface points to same first-step contract
+
+#### Patch A completion criteria
+
+- [ ] `agent_instructions` exists as MCP tool with stable compact output
+- [ ] installed AGENTS/bootstrap text tells agents to call `agent_instructions` first and defines fallback clearly
+- [ ] install-generated Copilot/Claude/Codex hooks preload runtime policy on session/prompt start
+- [ ] protected Atlas tools are blocked when required policy preload has not happened
+- [ ] fallback mode is explicit, deterministic, and covered by tests
+- [ ] prompts, installed instructions, README, and wiki workflow docs agree on runtime-policy-first behavior
+- [ ] adapter/session event flow records policy preload and enforcement decisions without direct hook SQLite writes
 
 ---
 

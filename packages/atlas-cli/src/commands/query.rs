@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use atlas_contentstore::ContentStore;
 use atlas_core::{BudgetManager, GraphToolRequirement, RankingEvidence, SearchQuery};
 use atlas_search as search;
 use atlas_search::QueryExplanation;
@@ -267,6 +268,19 @@ pub fn run_embed(cli: &Cli) -> Result<()> {
     let store =
         Store::open(&db_path).with_context(|| format!("cannot open database at {db_path}"))?;
 
+    // Open the content store and warm the dimension cache so we can enforce
+    // the embedding dimension registry (Patch R3).
+    let content_db_path = atlas_engine::paths::content_db_path(&db_path);
+    let mut content_store = ContentStore::open(&content_db_path)
+        .with_context(|| format!("cannot open content store at {content_db_path}"))?;
+    content_store
+        .warm_dimension_cache()
+        .context("failed to warm embedding dimension cache")?;
+
+    let provider_name =
+        atlas_contentstore::store::registry::provider_name_from_url(&embed_cfg.base_url);
+    let model_name = embed_cfg.model.clone();
+
     let chunks = store
         .chunks_missing_embeddings(limit)
         .context("failed to read chunks")?;
@@ -279,10 +293,25 @@ pub fn run_embed(cli: &Cli) -> Result<()> {
     let total = chunks.len();
     let mut done = 0usize;
     let mut errors = 0usize;
+    let mut dimension_checked = false;
 
     for (id, qn, text) in chunks {
         match atlas_search::embed::embed_text_blocking(&embed_cfg, &text) {
             Ok(vec) => {
+                let dim = vec.len() as u32;
+                // Check / freeze dimension on the first successful embedding.
+                if !dimension_checked {
+                    if let Err(e) =
+                        content_store.check_embedding_dimension(provider_name, &model_name, dim)
+                    {
+                        anyhow::bail!(
+                            "Aborting embed run: {e}\n\
+                             Run `atlas embed` again after rebuilding embeddings from scratch, \
+                             or switch back to the original provider/model."
+                        );
+                    }
+                    dimension_checked = true;
+                }
                 if let Err(err) = store.set_chunk_embedding(id, &vec) {
                     tracing::warn!("store embedding failed for {qn}: {err:#}");
                     errors += 1;

@@ -43,6 +43,8 @@ For active backlog, see ISSUES.md.
 ## Query, Search, and Impact Surfaces
 
 - Symbol lookup is implemented through graph query surfaces with ranked exact-match, qualified-name, filtered, fuzzy, regex, and hybrid retrieval modes.
+- Result-level ranking evidence is implemented for graph retrieval with compact stable evidence for match fields, exact and prefix hits, fuzzy repairs, fired boosts, graph-expansion hops, and hybrid/RRF contributions.
+- Ranking evidence is propagated through `query_graph`, `batch_query_graph`, `explain_query`, CLI JSON query output, and bounded context/review relevance scoring where payload budgets allow.
 - Impact traversal is implemented with bounded graph walking, changed-node seeding, impacted-node/file selection, and structured output.
 - Review-context and minimal-context flows are implemented for changed files and bounded downstream context assembly.
 - Explain-change and change classification flows are implemented with compact structured summaries.
@@ -60,6 +62,8 @@ For active backlog, see ISSUES.md.
 
 - CLI command surfaces are implemented for init, build, update, detect-changes, status, query, impact, review-context, context, doctor, db-check, debug-style diagnostics, reasoning, refactor, install, and serve workflows.
 - MCP tool registry is implemented for graph queries, traversal, review/impact/context flows, health/debug tools, saved-context tools, content/file search tools, and reasoning analysis tools.
+- Docs-section lookup parity is implemented through shared CLI and MCP surfaces with heading-path or line-based resolution, bounded section excerpts, truncation metadata, and parity-tested not-found behavior.
+- Explicit postprocess parity is implemented through shared CLI and MCP surfaces for derived graph analytics refresh, including full and changed-only modes, stage selection, dry-run preview, and parity-tested error handling.
 - MCP transport support is implemented with stdio-compatible serving and repo-scoped backend brokering.
 - CLI and MCP parity is implemented across major shared service surfaces rather than maintained as unrelated code paths.
 
@@ -85,6 +89,8 @@ For active backlog, see ISSUES.md.
 
 - Shared ranking and trimming primitives are implemented across query, context, review, impact, and analysis surfaces.
 - Graph build lifecycle state is implemented and surfaced through status, doctor, and MCP responses.
+- Canonical graph readiness is implemented as single source of truth for built/queryable/current/integrity state, including explicit `fresh`, `stale`, `partial`, and `corrupt` execution states.
+- CLI, MCP, adapters, and graph-backed analysis flows consume the same readiness contract and surface consistent safe-to-answer, freshness, and degraded-mode metadata.
 - Canonical repo path identity is implemented across graph, content, session, adapter, and saved-context keys.
 - Central budget policy and shared budget metadata are implemented across public surfaces.
 - Repo-scoped MCP backend brokering is implemented without breaking stdio compatibility.
@@ -92,4 +98,4 @@ For active backlog, see ISSUES.md.
 
 ## Still Open
 
-- Insights (Phase 29), multi-repo federation (Phase 30.1), advanced features (Phase 30.2, Phase 31), readiness unification, corruption recovery, runtime enrichment, and several retrieval/context follow-up patches remain in ISSUES.md.
+- Insights (Phase 29), multi-repo federation (Phase 30.1), advanced features (Phase 30.2, Phase 31), large-function parity, corruption recovery, runtime enrichment, and several retrieval/context follow-up patches remain in ISSUES.md.

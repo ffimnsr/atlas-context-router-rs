@@ -33,9 +33,14 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "006_agent_partitions",
         up_sql: include_str!("migrations/006_agent_partitions.sql"),
     },
+    Migration {
+        version: 7,
+        name: "007_embedding_provider_registry",
+        up_sql: include_str!("migrations/007_embedding_provider_registry.sql"),
+    },
 ];
 
-pub const LATEST_VERSION: i32 = 6;
+pub const LATEST_VERSION: i32 = 7;
 
 pub const MIGRATION_SET: MigrationSet = MigrationSet {
     db_kind: "context",

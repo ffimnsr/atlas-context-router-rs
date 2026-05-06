@@ -25,6 +25,30 @@ use super::runtime::{
     build_hook_event, persist_hook_event, read_hook_payload_from, resolve_hook_repo,
 };
 
+const GIT_LOCAL_ENV_VARS: &[&str] = &[
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_COMMON_DIR",
+    "GIT_CONFIG",
+    "GIT_CONFIG_COUNT",
+    "GIT_CONFIG_KEY_0",
+    "GIT_CONFIG_VALUE_0",
+    "GIT_DIR",
+    "GIT_GRAFT_FILE",
+    "GIT_IMPLICIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_INTERNAL_SUPER_PREFIX",
+    "GIT_NAMESPACE",
+    "GIT_NO_REPLACE_OBJECTS",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_PREFIX",
+    "GIT_REPLACE_REF_BASE",
+    "GIT_SHALLOW_FILE",
+    "GIT_WORK_TREE",
+];
+
+const GIT_TEST_NAME: &str = "Atlas Test";
+const GIT_TEST_EMAIL: &str = "test@atlas";
+
 fn hook_cli_without_repo() -> Cli {
     Cli {
         repo: None,
@@ -43,6 +67,22 @@ impl Read for PanicRead {
     fn read(&mut self, _buf: &mut [u8]) -> io::Result<usize> {
         panic!("reader should not be touched when stdin is a terminal");
     }
+}
+
+fn git(dir: &Path, args: &[&str]) {
+    let mut command = ProcessCommand::new("git");
+    command
+        .current_dir(dir)
+        .args(args)
+        .env("GIT_AUTHOR_NAME", GIT_TEST_NAME)
+        .env("GIT_AUTHOR_EMAIL", GIT_TEST_EMAIL)
+        .env("GIT_COMMITTER_NAME", GIT_TEST_NAME)
+        .env("GIT_COMMITTER_EMAIL", GIT_TEST_EMAIL);
+    for env_var in GIT_LOCAL_ENV_VARS {
+        command.env_remove(env_var);
+    }
+    let status = command.status().expect("git command");
+    assert!(status.success(), "git {args:?} failed in {}", dir.display());
 }
 
 fn last_hook_payload(graph_db_path: &str, repo: &str, frontend: &str) -> Value {
@@ -134,15 +174,7 @@ fn resolve_hook_repo_prefers_runner_script_git_root() {
     let repo = dir.path();
     std::fs::create_dir_all(repo.join(".atlas/hooks")).unwrap();
     std::fs::write(repo.join(".atlas/hooks/atlas-hook"), "#!/bin/sh\n").unwrap();
-    assert!(
-        ProcessCommand::new("git")
-            .arg("init")
-            .arg("--quiet")
-            .current_dir(repo)
-            .status()
-            .unwrap()
-            .success()
-    );
+    git(repo, &["init", "--quiet"]);
 
     let prior_script = std::env::var("ATLAS_HOOK_SCRIPT_PATH").ok();
     unsafe {
@@ -726,23 +758,8 @@ fn post_tool_use_hook_refreshes_graph_for_changed_files() {
     .unwrap();
     std::fs::write(repo.join("src/lib.rs"), "pub fn alpha() {}\n").unwrap();
     std::fs::create_dir_all(repo.join(".atlas")).unwrap();
-    assert!(
-        ProcessCommand::new("git")
-            .arg("init")
-            .arg("--quiet")
-            .current_dir(repo)
-            .status()
-            .unwrap()
-            .success()
-    );
-    assert!(
-        ProcessCommand::new("git")
-            .args(["add", "Cargo.toml", "src/lib.rs"])
-            .current_dir(repo)
-            .status()
-            .unwrap()
-            .success()
-    );
+    git(repo, &["init", "--quiet"]);
+    git(repo, &["add", "Cargo.toml", "src/lib.rs"]);
 
     let repo_str = repo.to_string_lossy().into_owned();
     let graph_db_path = format!("{repo_str}/.atlas/worldtree.db");
@@ -803,23 +820,8 @@ fn post_tool_use_build_test_flow_persists_review_refresh_artifacts() {
     .unwrap();
     std::fs::write(repo.join("src/lib.rs"), "pub fn alpha() {}\n").unwrap();
     std::fs::create_dir_all(repo.join(".atlas")).unwrap();
-    assert!(
-        ProcessCommand::new("git")
-            .arg("init")
-            .arg("--quiet")
-            .current_dir(repo)
-            .status()
-            .unwrap()
-            .success()
-    );
-    assert!(
-        ProcessCommand::new("git")
-            .args(["add", "Cargo.toml", "src/lib.rs"])
-            .current_dir(repo)
-            .status()
-            .unwrap()
-            .success()
-    );
+    git(repo, &["init", "--quiet"]);
+    git(repo, &["add", "Cargo.toml", "src/lib.rs"]);
 
     let repo_str = repo.to_string_lossy().into_owned();
     let graph_db_path = format!("{repo_str}/.atlas/worldtree.db");
@@ -931,23 +933,8 @@ fn post_tool_use_run_in_terminal_triggers_graph_refresh() {
     .unwrap();
     std::fs::write(repo.join("src/lib.rs"), "pub fn alpha() {}\n").unwrap();
     std::fs::create_dir_all(repo.join(".atlas")).unwrap();
-    assert!(
-        ProcessCommand::new("git")
-            .arg("init")
-            .arg("--quiet")
-            .current_dir(repo)
-            .status()
-            .unwrap()
-            .success()
-    );
-    assert!(
-        ProcessCommand::new("git")
-            .args(["add", "Cargo.toml", "src/lib.rs"])
-            .current_dir(repo)
-            .status()
-            .unwrap()
-            .success()
-    );
+    git(repo, &["init", "--quiet"]);
+    git(repo, &["add", "Cargo.toml", "src/lib.rs"]);
 
     let repo_str = repo.to_string_lossy().into_owned();
     let graph_db_path = format!("{repo_str}/.atlas/worldtree.db");
@@ -1014,23 +1001,8 @@ fn post_tool_use_replace_string_in_file_targets_changed_file() {
     .unwrap();
     std::fs::write(repo.join("src/lib.rs"), "pub fn alpha() {}\n").unwrap();
     std::fs::create_dir_all(repo.join(".atlas")).unwrap();
-    assert!(
-        ProcessCommand::new("git")
-            .arg("init")
-            .arg("--quiet")
-            .current_dir(repo)
-            .status()
-            .unwrap()
-            .success()
-    );
-    assert!(
-        ProcessCommand::new("git")
-            .args(["add", "Cargo.toml", "src/lib.rs"])
-            .current_dir(repo)
-            .status()
-            .unwrap()
-            .success()
-    );
+    git(repo, &["init", "--quiet"]);
+    git(repo, &["add", "Cargo.toml", "src/lib.rs"]);
 
     let repo_str = repo.to_string_lossy().into_owned();
     let graph_db_path = format!("{repo_str}/.atlas/worldtree.db");
