@@ -3,6 +3,7 @@ use atlas_adapters::{
     AdapterHooks, CliAdapter, PendingEvent, extract_decision_event_with_details,
     extract_reasoning_event,
 };
+use atlas_core::GraphToolRequirement;
 use atlas_reasoning::{
     AnalysisRankingPrimitives, AnalysisTrimmingPrimitives, ReasoningEngine,
     sort_dead_code_candidates, sort_dependency_result, sort_refactor_safety_result,
@@ -13,7 +14,10 @@ use camino::Utf8Path;
 
 use crate::cli::{AnalyzeCommand, Cli, Command, RefactorCommand};
 
-use super::{db_path, print_json, resolve_repo};
+use super::{
+    check_graph_readiness, db_path, derive_graph_readiness, derive_graph_readiness_open_failed,
+    print_json, readiness_overrides, resolve_repo,
+};
 
 fn print_refactor_result(result: &atlas_core::RefactorDryRunResult, dry_run: bool) {
     let mode = if dry_run { "dry-run" } else { "applied" };
@@ -46,7 +50,7 @@ pub fn run_analyze(cli: &Cli) -> Result<()> {
     let repo = resolve_repo(cli)?;
     // Identify the subcommand for event labelling before the closure borrows cli.command.
     let analyze_label = match &cli.command {
-        Command::Analyze { subcommand } => match subcommand {
+        Command::Analyze { subcommand, .. } => match subcommand {
             AnalyzeCommand::Remove { .. } => "analyze:remove",
             AnalyzeCommand::DeadCode { .. } => "analyze:dead-code",
             AnalyzeCommand::Safety { .. } => "analyze:safety",
@@ -62,14 +66,47 @@ pub fn run_analyze(cli: &Cli) -> Result<()> {
 
     let result = (|| -> Result<()> {
         let db_path = db_path(cli, &repo);
-        let store =
-            Store::open(&db_path).with_context(|| format!("cannot open database at {db_path}"))?;
+        let (allow_stale, allow_partial) = match &cli.command {
+            Command::Analyze {
+                allow_stale,
+                allow_partial,
+                ..
+            } => (*allow_stale, *allow_partial),
+            _ => (false, false),
+        };
+
+        let store = match Store::open(&db_path) {
+            Ok(s) => s,
+            Err(e) => {
+                let readiness = derive_graph_readiness_open_failed(&repo, &db_path, &e.to_string());
+                check_graph_readiness(
+                    &readiness,
+                    GraphToolRequirement::Analysis,
+                    readiness_overrides(allow_stale, allow_partial),
+                    "analyze",
+                    cli,
+                )?;
+                return Err(e).with_context(|| format!("cannot open database at {db_path}"));
+            }
+        };
+
+        let readiness = derive_graph_readiness(&store, &repo, &db_path);
+        if let Some(warning) = check_graph_readiness(
+            &readiness,
+            GraphToolRequirement::Analysis,
+            readiness_overrides(allow_stale, allow_partial),
+            "analyze",
+            cli,
+        )? {
+            eprintln!("Warning: {warning}");
+        }
+
         let engine = ReasoningEngine::new(&store);
         let ranking = AnalysisRankingPrimitives::default();
         let trimming = AnalysisTrimmingPrimitives::default();
 
         let sub = match &cli.command {
-            Command::Analyze { subcommand } => subcommand,
+            Command::Analyze { subcommand, .. } => subcommand,
             _ => unreachable!(),
         };
 
@@ -337,12 +374,46 @@ pub fn run_refactor(cli: &Cli) -> Result<()> {
             find_repo_root(Utf8Path::new(&repo)).context("cannot find git repo root")?;
         let repo_root = repo_root_path.as_std_path();
         let db_path = db_path(cli, &repo);
-        let mut store =
-            Store::open(&db_path).with_context(|| format!("cannot open database at {db_path}"))?;
+
+        let (allow_stale, allow_partial) = match &cli.command {
+            Command::Refactor {
+                allow_stale,
+                allow_partial,
+                ..
+            } => (*allow_stale, *allow_partial),
+            _ => (false, false),
+        };
+
+        let mut store = match Store::open(&db_path) {
+            Ok(s) => s,
+            Err(e) => {
+                let readiness = derive_graph_readiness_open_failed(&repo, &db_path, &e.to_string());
+                check_graph_readiness(
+                    &readiness,
+                    GraphToolRequirement::Analysis,
+                    readiness_overrides(allow_stale, allow_partial),
+                    "refactor",
+                    cli,
+                )?;
+                return Err(e).with_context(|| format!("cannot open database at {db_path}"));
+            }
+        };
+
+        let readiness = derive_graph_readiness(&store, &repo, &db_path);
+        if let Some(warning) = check_graph_readiness(
+            &readiness,
+            GraphToolRequirement::Analysis,
+            readiness_overrides(allow_stale, allow_partial),
+            "refactor",
+            cli,
+        )? {
+            eprintln!("Warning: {warning}");
+        }
+
         let mut engine = RefactorEngine::new(&mut store, repo_root);
 
         let sub = match &cli.command {
-            Command::Refactor { subcommand } => subcommand,
+            Command::Refactor { subcommand, .. } => subcommand,
             _ => unreachable!(),
         };
 

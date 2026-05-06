@@ -52,7 +52,27 @@ fn get_context_missing_args_returns_error() {
     let dir = tempfile::tempdir().expect("tempdir");
     let db_path = dir.path().join("atlas.db");
     let db_path = db_path.to_string_lossy().to_string();
-    let _ = Store::open(&db_path).expect("open store");
+    let store = Store::open(&db_path).expect("open store");
+    // Mark graph as built so the readiness check passes and the tool itself
+    // handles the missing-args validation (rather than being blocked early).
+    store
+        .finish_build(
+            "/ignored",
+            atlas_store_sqlite::BuildFinishStats {
+                state: atlas_store_sqlite::GraphBuildState::Built,
+                files_discovered: 0,
+                files_processed: 0,
+                files_accepted: 0,
+                files_skipped_by_byte_budget: 0,
+                files_failed: 0,
+                bytes_accepted: 0,
+                bytes_skipped: 0,
+                nodes_written: 0,
+                edges_written: 0,
+                budget_stop_reason: None,
+            },
+        )
+        .expect("finish_build");
 
     let result = call(
         "get_context",
@@ -125,7 +145,27 @@ fn get_context_files_returns_review_intent() {
     let dir = tempfile::tempdir().expect("tempdir");
     let db_path = dir.path().join("atlas.db");
     let db_path = db_path.to_string_lossy().to_string();
-    let _ = Store::open(&db_path).expect("open store");
+    let store = Store::open(&db_path).expect("open store");
+    // A built (empty) graph is sufficient to pass readiness; the test only
+    // checks that the `files` argument sets intent=review.
+    store
+        .finish_build(
+            "/ignored",
+            atlas_store_sqlite::BuildFinishStats {
+                state: atlas_store_sqlite::GraphBuildState::Built,
+                files_discovered: 0,
+                files_processed: 0,
+                files_accepted: 0,
+                files_skipped_by_byte_budget: 0,
+                files_failed: 0,
+                bytes_accepted: 0,
+                bytes_skipped: 0,
+                nodes_written: 0,
+                edges_written: 0,
+                budget_stop_reason: None,
+            },
+        )
+        .expect("finish_build");
 
     let args = serde_json::json!({ "files": ["src/main.rs"], "output_format": "json" });
     let resp = call("get_context", Some(&args), "/ignored", &db_path).expect("call");
@@ -144,7 +184,27 @@ fn get_context_not_found_returns_empty_nodes() {
     let dir = tempfile::tempdir().expect("tempdir");
     let db_path = dir.path().join("atlas.db");
     let db_path = db_path.to_string_lossy().to_string();
-    let _ = Store::open(&db_path).expect("open store");
+    let store = Store::open(&db_path).expect("open store");
+    // A built (empty) graph is sufficient to pass readiness; the test only
+    // checks that an unknown query returns 0 nodes.
+    store
+        .finish_build(
+            "/ignored",
+            atlas_store_sqlite::BuildFinishStats {
+                state: atlas_store_sqlite::GraphBuildState::Built,
+                files_discovered: 0,
+                files_processed: 0,
+                files_accepted: 0,
+                files_skipped_by_byte_budget: 0,
+                files_failed: 0,
+                bytes_accepted: 0,
+                bytes_skipped: 0,
+                nodes_written: 0,
+                edges_written: 0,
+                budget_stop_reason: None,
+            },
+        )
+        .expect("finish_build");
 
     let args =
         serde_json::json!({ "query": "nonexistent_xyz_unknown_symbol", "output_format": "json" });

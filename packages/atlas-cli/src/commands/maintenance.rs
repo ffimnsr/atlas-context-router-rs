@@ -1,7 +1,8 @@
 use anyhow::{Context, Result};
 use atlas_contentstore::{ContentStore, IndexState};
 use atlas_core::{
-    NodeKind, graph_health_error_message, graph_health_error_suggestions, is_schema_mismatch_error,
+    GraphExecutionState, NodeKind, graph_health_error_message, graph_health_error_suggestions,
+    is_schema_mismatch_error,
 };
 use atlas_repo::{collect_files, find_repo_root, hash_file};
 use atlas_session::DEFAULT_SESSION_DB;
@@ -12,7 +13,9 @@ use toml::Value as TomlValue;
 
 use crate::cli::{Cli, Command, ConfigCommand};
 
-use super::{db_path, print_json, resolve_repo};
+use super::{
+    db_path, derive_graph_readiness, derive_graph_readiness_open_failed, print_json, resolve_repo,
+};
 
 #[derive(Debug, Clone)]
 struct MigrationReport {
@@ -378,7 +381,12 @@ fn display_check_name(name: &str) -> &str {
     }
 }
 
-fn print_doctor_report(cli: &Cli, checks: &[CheckResult], all_ok: bool) -> Result<()> {
+fn print_doctor_report(
+    cli: &Cli,
+    checks: &[CheckResult],
+    all_ok: bool,
+    execution_state: Option<GraphExecutionState>,
+) -> Result<()> {
     if cli.json {
         let items: Vec<serde_json::Value> = checks
             .iter()
@@ -399,6 +407,7 @@ fn print_doctor_report(cli: &Cli, checks: &[CheckResult], all_ok: bool) -> Resul
                 "error_code": error_code,
                 "message": graph_health_error_message(error_code),
                 "suggestions": graph_health_error_suggestions(error_code),
+                "execution_state": execution_state.map(|s| s.as_str()),
                 "checks": items,
             }),
         )?;
@@ -659,7 +668,7 @@ pub fn run_doctor(cli: &Cli) -> Result<()> {
         }
         Err(e) => {
             checks.push(CheckResult::fail("repo_root", e.to_string(), None));
-            return print_doctor_report(cli, &checks, false);
+            return print_doctor_report(cli, &checks, false, None);
         }
     };
 
@@ -1038,7 +1047,20 @@ pub fn run_doctor(cli: &Cli) -> Result<()> {
     }
 
     let all_ok = checks.iter().all(|c| c.ok);
-    print_doctor_report(cli, &checks, all_ok)?;
+    let execution_state = if db_exists {
+        match Store::open(&db_path_str) {
+            Ok(store) => Some(derive_graph_readiness(&store, &repo, &db_path_str).execution_state),
+            Err(e) => Some(
+                derive_graph_readiness_open_failed(&repo, &db_path_str, &e.to_string())
+                    .execution_state,
+            ),
+        }
+    } else {
+        Some(
+            derive_graph_readiness_open_failed(&repo, &db_path_str, "db not found").execution_state,
+        )
+    };
+    print_doctor_report(cli, &checks, all_ok, execution_state)?;
     if !all_ok {
         std::process::exit(1);
     }

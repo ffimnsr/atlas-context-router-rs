@@ -1,5 +1,6 @@
 use anyhow::Result;
 use atlas_adapters::{AdapterHooks, McpAdapter};
+use atlas_core::{GraphToolRequirement, ReadinessOverride, ReadinessVerdict};
 use atlas_store_sqlite::Store;
 
 use crate::discovery_tools::{
@@ -30,6 +31,7 @@ use super::health::{
     tool_broker_status, tool_db_check, tool_debug_graph, tool_doctor, tool_status,
 };
 use super::postprocess::tool_postprocess_graph;
+use super::shared::{bool_arg, derive_graph_readiness, derive_graph_readiness_open_failed};
 
 fn response_file_list(response: &serde_json::Value, pointer: &str) -> Vec<String> {
     response
@@ -121,6 +123,49 @@ fn call_inner(
     }
 
     let output_format = resolve_output_format(args, default_output_format_for_tool(name))?;
+
+    // Derive canonical readiness once for graph-backed tools.
+    // Non-graph tools (file search, session, broker) skip this.
+    let requirement = tool_graph_requirement(name);
+    let readiness = if requirement.is_some() {
+        let r = match Store::open(db_path) {
+            Ok(store) => derive_graph_readiness(&store, repo_root, db_path),
+            Err(e) => derive_graph_readiness_open_failed(repo_root, db_path, &e.to_string()),
+        };
+        Some(r)
+    } else {
+        None
+    };
+
+    // Gate blocked tools before invoking them.
+    if let (Some(readiness), Some(req)) = (&readiness, requirement) {
+        let allow_stale = bool_arg(args, "allow_stale").unwrap_or(false);
+        let allow_partial = bool_arg(args, "allow_partial").unwrap_or(false);
+        let overrides = ReadinessOverride {
+            allow_stale,
+            allow_partial,
+        };
+        if let ReadinessVerdict::Blocked {
+            execution_state,
+            reason,
+            suggestions,
+        } = readiness.check_tool(req, overrides)
+        {
+            let mut blocked = serde_json::json!({
+                "content": [{"type": "text", "text": format!("Graph not ready: {reason}")}],
+                "isError": true,
+                "atlas_readiness": {
+                    "execution_state": execution_state.as_str(),
+                    "blocked": true,
+                    "reason": reason,
+                    "suggestions": suggestions,
+                },
+            });
+            inject_provenance(&mut blocked, repo_root, db_path);
+            return Ok(blocked);
+        }
+    }
+
     let mut response = match name {
         "list_graph_stats" => tool_list_graph_stats(db_path, output_format),
         "query_graph" => tool_query_graph(args, repo_root, db_path, output_format),
@@ -179,11 +224,72 @@ fn call_inner(
 
     inject_provenance(&mut response, repo_root, db_path);
     inject_freshness_warning(&mut response, name, repo_root, db_path);
+
+    // Stamp canonical readiness on graph-backed tool responses.
+    if let (Some(readiness), Some(req)) = (&readiness, requirement) {
+        let allow_stale = bool_arg(args, "allow_stale").unwrap_or(false);
+        let allow_partial = bool_arg(args, "allow_partial").unwrap_or(false);
+        let overrides = ReadinessOverride {
+            allow_stale,
+            allow_partial,
+        };
+        let verdict = readiness.check_tool(req, overrides);
+        let (execution_state, safe_to_answer, warning) = match verdict {
+            ReadinessVerdict::Allowed {
+                execution_state,
+                safe_to_answer,
+                warning,
+            } => (execution_state, safe_to_answer, warning),
+            ReadinessVerdict::Blocked {
+                execution_state, ..
+            } => (execution_state, false, None),
+        };
+        let mut atlas_readiness = serde_json::json!({
+            "execution_state": execution_state.as_str(),
+            "safe_to_answer": safe_to_answer,
+        });
+        if let Some(w) = warning {
+            atlas_readiness["warning"] = serde_json::Value::String(w);
+        }
+        response["atlas_readiness"] = atlas_readiness;
+    }
+
     Ok(response)
 }
 
 fn default_output_format_for_tool(_name: &str) -> OutputFormat {
     OutputFormat::Toon
+}
+
+/// Map a tool name to its [`GraphToolRequirement`] class.
+///
+/// Returns `None` for tools that do not need graph readiness gating
+/// (file search, session tools, broker status, etc.).
+fn tool_graph_requirement(name: &str) -> Option<GraphToolRequirement> {
+    match name {
+        // Symbol lookup: blocked only on Corrupt or Missing; Partial allowed
+        // when `allow_partial=true` is set.
+        "query_graph" | "batch_query_graph" | "resolve_symbol" | "explain_query" => {
+            Some(GraphToolRequirement::SymbolLookup)
+        }
+        // Traversal: blocked on Partial, Corrupt, Missing.
+        "symbol_neighbors" | "traverse_graph" | "cross_file_links" | "concept_clusters"
+        | "list_graph_stats" => Some(GraphToolRequirement::Traversal),
+        // Analysis: blocked on Partial, Corrupt, Missing.
+        "get_context"
+        | "get_impact_radius"
+        | "get_review_context"
+        | "get_minimal_context"
+        | "explain_change"
+        | "detect_changes"
+        | "analyze_safety"
+        | "analyze_remove"
+        | "analyze_dead_code"
+        | "analyze_dependency" => Some(GraphToolRequirement::Analysis),
+        // Docs section: reads Markdown heading nodes from the graph DB.
+        "get_docs_section" => Some(GraphToolRequirement::SymbolLookup),
+        _ => None,
+    }
 }
 
 fn inject_provenance(response: &mut serde_json::Value, repo_root: &str, db_path: &str) {

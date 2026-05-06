@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use atlas_core::{BudgetManager, RankingEvidence, SearchQuery};
+use atlas_core::{BudgetManager, GraphToolRequirement, RankingEvidence, SearchQuery};
 use atlas_search as search;
 use atlas_search::QueryExplanation;
 use atlas_store_sqlite::Store;
@@ -7,7 +7,8 @@ use atlas_store_sqlite::Store;
 use crate::cli::{Cli, Command};
 
 use super::{
-    db_path, load_budget_policy, load_embedding_config, print_json, query_display_path,
+    check_graph_readiness, db_path, derive_graph_readiness, derive_graph_readiness_open_failed,
+    load_budget_policy, load_embedding_config, print_json, query_display_path, readiness_overrides,
     resolve_repo,
 };
 
@@ -67,8 +68,20 @@ pub fn run_query(cli: &Cli) -> Result<()> {
     let db_path = db_path(cli, &repo);
     let embed_cfg = load_embedding_config(&repo)?;
 
-    let store =
-        Store::open(&db_path).with_context(|| format!("cannot open database at {db_path}"))?;
+    let store = match Store::open(&db_path) {
+        Ok(s) => s,
+        Err(e) => {
+            let readiness = derive_graph_readiness_open_failed(&repo, &db_path, &e.to_string());
+            check_graph_readiness(
+                &readiness,
+                GraphToolRequirement::SymbolLookup,
+                readiness_overrides(false, false),
+                "query",
+                cli,
+            )?;
+            return Err(e).with_context(|| format!("cannot open database at {db_path}"));
+        }
+    };
     let policy = load_budget_policy(&repo)?;
 
     let (
@@ -84,6 +97,8 @@ pub fn run_query(cli: &Cli) -> Result<()> {
         hybrid,
         semantic,
         regex,
+        allow_stale,
+        allow_partial,
     ) = match &cli.command {
         Command::Query {
             text,
@@ -98,6 +113,8 @@ pub fn run_query(cli: &Cli) -> Result<()> {
             hybrid,
             semantic,
             regex,
+            allow_stale,
+            allow_partial,
         } => (
             text.clone(),
             kind.clone(),
@@ -111,9 +128,22 @@ pub fn run_query(cli: &Cli) -> Result<()> {
             *hybrid,
             *semantic,
             *regex,
+            *allow_stale,
+            *allow_partial,
         ),
         _ => unreachable!(),
     };
+
+    let readiness = derive_graph_readiness(&store, &repo, &db_path);
+    if let Some(warning) = check_graph_readiness(
+        &readiness,
+        GraphToolRequirement::SymbolLookup,
+        readiness_overrides(allow_stale, allow_partial),
+        "query",
+        cli,
+    )? {
+        eprintln!("Warning: {warning}");
+    }
 
     if text.trim().is_empty() {
         if regex {
@@ -292,8 +322,30 @@ pub fn run_explain_query(cli: &Cli) -> Result<()> {
     let repo = resolve_repo(cli)?;
     let db_path = db_path(cli, &repo);
     let embed_cfg = load_embedding_config(&repo)?;
-    let store =
-        Store::open(&db_path).with_context(|| format!("cannot open database at {db_path}"))?;
+    let store = match Store::open(&db_path) {
+        Err(e) => {
+            let readiness = derive_graph_readiness_open_failed(&repo, &db_path, &e.to_string());
+            check_graph_readiness(
+                &readiness,
+                GraphToolRequirement::SymbolLookup,
+                readiness_overrides(false, false),
+                "explain-query",
+                cli,
+            )?;
+            return Err(e).with_context(|| format!("cannot open database at {db_path}"));
+        }
+        Ok(s) => s,
+    };
+    let readiness = derive_graph_readiness(&store, &repo, &db_path);
+    if let Some(warning) = check_graph_readiness(
+        &readiness,
+        GraphToolRequirement::SymbolLookup,
+        readiness_overrides(false, false),
+        "explain-query",
+        cli,
+    )? {
+        eprintln!("Warning: {warning}");
+    }
 
     let query = SearchQuery {
         text: text.clone(),

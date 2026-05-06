@@ -14,6 +14,7 @@ mod analysis;
 mod context_ops;
 mod graph;
 mod health;
+mod readiness;
 mod registry;
 
 pub(super) struct McpFixture {

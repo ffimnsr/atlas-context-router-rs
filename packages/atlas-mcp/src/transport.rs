@@ -2456,30 +2456,36 @@ mod tests {
             .into_iter()
             .find(|value| value["id"] == serde_json::json!(2))
             .expect("query_graph response");
-        let message = response["error"]["message"]
-            .as_str()
-            .expect("error message");
 
-        assert_eq!(response["error"]["code"], -32001);
+        // A corrupt database is caught by the readiness gate before the tool
+        // executes.  The response is a successful JSON-RPC call whose tool
+        // result carries isError=true and a user-friendly reason.  This
+        // ensures SQL internals are never exposed through the error path.
+        let result = &response["result"];
         assert_eq!(
-            response["error"]["data"]["atlas_error_code"],
-            serde_json::json!("tool_execution_failed")
+            result["isError"].as_bool(),
+            Some(true),
+            "corrupt db must produce isError=true tool result; response={response}"
+        );
+        assert_eq!(
+            result["atlas_readiness"]["execution_state"].as_str(),
+            Some("corrupt"),
+            "execution_state must be corrupt for a dropped-table db"
+        );
+        let reason = result["atlas_readiness"]["reason"]
+            .as_str()
+            .unwrap_or_default();
+        assert!(
+            !reason.to_ascii_lowercase().contains("sqlite"),
+            "reason must not leak sqlite internals: {reason}"
         );
         assert!(
-            message.contains("Graph database schema does not match this Atlas build."),
-            "message should be user friendly: {message}"
+            !reason.to_ascii_lowercase().contains("sql"),
+            "reason must not leak sql internals: {reason}"
         );
         assert!(
-            !message.to_ascii_lowercase().contains("sqlite"),
-            "message must not leak sqlite internals: {message}"
-        );
-        assert!(
-            !message.to_ascii_lowercase().contains("sql"),
-            "message must not leak sql internals: {message}"
-        );
-        assert!(
-            !message.contains("no such table"),
-            "message must not leak raw schema failure: {message}"
+            !reason.contains("no such table"),
+            "reason must not leak raw schema failure: {reason}"
         );
     }
 

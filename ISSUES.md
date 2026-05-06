@@ -1175,33 +1175,33 @@ Atlas has persisted build state, graph freshness checks, health/debug tools, pro
 
 #### Patch S1 — Canonical graph readiness record
 
-- [ ] define a canonical `GraphReadiness` / `GraphState` model in shared core or graph service code
-- [ ] include fields:
-  - [ ] `repo_root`
-  - [ ] `db_path`
-  - [ ] `db_exists`
-  - [ ] `db_open_error`
-  - [ ] `build_state`
-  - [ ] `build_last_error`
-  - [ ] `graph_built`
-  - [ ] `graph_queryable`
-  - [ ] `graph_current`
-  - [ ] `stale_index`
-  - [ ] `pending_graph_changes`
-  - [ ] `integrity_state`
-  - [ ] `error_code`
-  - [ ] `message`
-  - [ ] `suggestions`
-  - [ ] `last_indexed_at`
-  - [ ] `indexed_file_count`
-- [ ] distinguish readiness dimensions:
-  - [ ] built versus missing
-  - [ ] queryable versus blocked
-  - [ ] current versus stale
-  - [ ] corrupt/inconsistent versus merely stale
-  - [ ] graph readiness versus retrieval/content index readiness
-- [ ] make this record the only source allowed to decide graph readiness
-- [ ] add tests for every readiness class and field derivation
+- [x] define a canonical `GraphReadiness` / `GraphState` model in shared core or graph service code
+- [x] include fields:
+  - [x] `repo_root`
+  - [x] `db_path`
+  - [x] `db_exists`
+  - [x] `db_open_error`
+  - [x] `build_state`
+  - [x] `build_last_error`
+  - [x] `graph_built`
+  - [x] `graph_queryable`
+  - [x] `graph_current`
+  - [x] `stale_index`
+  - [x] `pending_graph_changes`
+  - [x] `integrity_state`
+  - [x] `error_code`
+  - [x] `message`
+  - [x] `suggestions`
+  - [x] `last_indexed_at`
+  - [x] `indexed_file_count`
+- [x] distinguish readiness dimensions:
+  - [x] built versus missing
+  - [x] queryable versus blocked
+  - [x] current versus stale
+  - [x] corrupt/inconsistent versus merely stale
+  - [x] graph readiness versus retrieval/content index readiness
+- [x] make this record the only source allowed to decide graph readiness
+- [x] add tests for every readiness class and field derivation
 
 Why:
 - prevents drift between build lifecycle state, status output, query behavior, and adapter metadata
@@ -1209,29 +1209,29 @@ Why:
 
 #### Patch S1.5 — Graph execution safety states
 
-- [ ] define canonical graph execution states:
-  - [ ] `fresh` — graph is built, queryable, current, and integrity-clean
-  - [ ] `stale` — graph is queryable but behind graph-relevant working-tree changes
-  - [ ] `partial` — graph is queryable but build/update/indexing stopped early or degraded
-  - [ ] `corrupt` — graph has SQLite integrity errors, schema mismatch, orphan nodes, or dangling edges
-- [ ] define feature behavior by state:
-  - [ ] `fresh` -> full graph-backed features enabled
-  - [ ] `stale` -> warn and allow graph-backed answers with freshness metadata
-  - [ ] `partial` -> allow limited features only; block answers requiring complete graph facts
-  - [ ] `corrupt` -> block graph-backed answers and require rebuild/quarantine flow
-- [ ] define explicit override policy:
-  - [ ] stale graph may run only when default policy allows stale reads or caller passes `--allow-stale` / MCP `allow_stale=true`
-  - [ ] partial graph may run only for tools with documented degraded behavior or caller passes `--allow-partial` / MCP `allow_partial=true`
-  - [ ] corrupt graph has no override for graph-backed answers
-  - [ ] every allowed stale/partial response must include `safe_to_answer`, execution state, and freshness/degraded metadata
-- [ ] define which tools are allowed in `partial` state:
-  - [ ] status/debug/doctor allowed
-  - [ ] direct symbol lookup allowed only when result provenance is complete enough
-  - [ ] impact/review/analyze flows blocked or degraded unless completeness requirements are met
-  - [ ] traversal blocked when missing edges could make answer unsafe
-- [ ] expose execution state in CLI/MCP readiness output
-- [ ] make query, impact, review, context, and analyze tools consume execution state before graph reads
-- [ ] add tests for each state and allowed/blocked feature behavior
+- [x] define canonical graph execution states:
+  - [x] `fresh` — graph is built, queryable, current, and integrity-clean
+  - [x] `stale` — graph is queryable but behind graph-relevant working-tree changes
+  - [x] `partial` — graph is queryable but build/update/indexing stopped early or degraded
+  - [x] `corrupt` — graph has SQLite integrity errors, schema mismatch, orphan nodes, or dangling edges
+- [x] define feature behavior by state:
+  - [x] `fresh` -> full graph-backed features enabled
+  - [x] `stale` -> warn and allow graph-backed answers with freshness metadata
+  - [x] `partial` -> allow limited features only; block answers requiring complete graph facts
+  - [x] `corrupt` -> block graph-backed answers and require rebuild/quarantine flow
+- [x] define explicit override policy:
+  - [x] stale graph may run only when default policy allows stale reads or caller passes `--allow-stale` / MCP `allow_stale=true`
+  - [x] partial graph may run only for tools with documented degraded behavior or caller passes `--allow-partial` / MCP `allow_partial=true`
+  - [x] corrupt graph has no override for graph-backed answers
+  - [x] every allowed stale/partial response must include `safe_to_answer`, execution state, and freshness/degraded metadata
+- [x] define which tools are allowed in `partial` state:
+  - [x] status/debug/doctor allowed
+  - [x] direct symbol lookup allowed only when result provenance is complete enough
+  - [x] impact/review/analyze flows blocked or degraded unless completeness requirements are met
+  - [x] traversal blocked when missing edges could make answer unsafe
+- [x] expose execution state in CLI/MCP readiness output
+- [x] make query, impact, review, context, and analyze tools consume execution state before graph reads
+- [x] add tests for each state and allowed/blocked feature behavior
 
 Why:
 - agents need one simple safety state before deciding whether graph facts are usable
@@ -1239,20 +1239,20 @@ Why:
 
 #### Patch S2 — Route CLI graph tools through canonical readiness
 
-- [ ] update `atlas status` to emit canonical readiness directly
-- [ ] update `atlas doctor` to reference canonical readiness instead of partially recomputing it
-- [ ] update `atlas query` to consult readiness before search
-- [ ] update `atlas impact` to consult readiness before impact traversal
-- [ ] update `atlas review-context` to consult readiness before context assembly
-- [ ] update reasoning/refactor graph-backed commands to consult readiness before graph reads
-- [ ] define command behavior per readiness state:
-  - [ ] fresh graph: full features enabled
-  - [ ] missing graph: fail with build suggestion
-  - [ ] interrupted/failed build: fail with lifecycle suggestion
-  - [ ] stale graph: warn + allow only by configured policy or explicit stale override
-  - [ ] partial graph: allow limited features only by documented degraded policy or explicit partial override
-  - [ ] corrupt/inconsistent graph: fail closed
-- [ ] add CLI tests proving all graph-backed commands consume same readiness decision
+- [x] update `atlas status` to emit canonical readiness directly
+- [x] update `atlas doctor` to reference canonical readiness instead of partially recomputing it
+- [x] update `atlas query` to consult readiness before search
+- [x] update `atlas impact` to consult readiness before impact traversal
+- [x] update `atlas review-context` to consult readiness before context assembly
+- [x] update reasoning/refactor graph-backed commands to consult readiness before graph reads
+- [x] define command behavior per readiness state:
+  - [x] fresh graph: full features enabled
+  - [x] missing graph: fail with build suggestion
+  - [x] interrupted/failed build: fail with lifecycle suggestion
+  - [x] stale graph: warn + allow only by configured policy or explicit stale override
+  - [x] partial graph: allow limited features only by documented degraded policy or explicit partial override
+  - [x] corrupt/inconsistent graph: fail closed
+- [x] add CLI tests proving all graph-backed commands consume same readiness decision
 
 Why:
 - query, impact, and review must not infer readiness from `Store::open` alone
@@ -1260,24 +1260,24 @@ Why:
 
 #### Patch S3 — Route MCP and adapters through canonical readiness
 
-- [ ] update MCP `status` to surface canonical readiness, not redefine it
-- [ ] add readiness block to graph-backed MCP responses:
-  - [ ] `query_graph`
-  - [ ] `get_context`
-  - [ ] `get_impact_radius`
-  - [ ] `get_review_context`
-  - [ ] `get_minimal_context`
-  - [ ] `symbol_neighbors`
-  - [ ] `traverse_graph`
-  - [ ] reasoning/refactor analysis tools
-- [ ] replace ad hoc provenance/freshness readiness inference with canonical readiness fields
-- [ ] keep provenance as identity metadata only:
-  - [ ] `repo_root`
-  - [ ] `db_path`
-  - [ ] `indexed_file_count`
-  - [ ] `last_indexed_at`
-- [ ] ensure adapters never decide graph readiness independently
-- [ ] add MCP tests proving graph-backed tools surface identical readiness for same repo/db
+- [x] update MCP `status` to surface canonical readiness, not redefine it
+- [x] add readiness block to graph-backed MCP responses:
+  - [x] `query_graph`
+  - [x] `get_context`
+  - [x] `get_impact_radius`
+  - [x] `get_review_context`
+  - [x] `get_minimal_context`
+  - [x] `symbol_neighbors`
+  - [x] `traverse_graph`
+  - [x] reasoning/refactor analysis tools
+- [x] replace ad hoc provenance/freshness readiness inference with canonical readiness fields
+- [x] keep provenance as identity metadata only:
+  - [x] `repo_root`
+  - [x] `db_path`
+  - [x] `indexed_file_count`
+  - [x] `last_indexed_at`
+- [x] ensure adapters never decide graph readiness independently
+- [x] add MCP tests proving graph-backed tools surface identical readiness for same repo/db
 
 Why:
 - MCP should surface graph readiness, not become another readiness authority
@@ -1285,13 +1285,13 @@ Why:
 
 #### Patch S completion criteria
 
-- [ ] one canonical graph readiness model exists
-- [ ] CLI status, doctor, query, impact, and review consume that model
-- [ ] MCP graph-backed tools surface that model and do not redefine readiness
-- [ ] adapters only report or forward readiness, never compute their own
-- [ ] stale/queryable and corrupt/blocked states are distinct
-- [ ] fresh/stale/partial/corrupt execution states map to explicit allowed/blocked features
-- [ ] tests prove all graph-backed paths agree on readiness for same repo and DB
+- [x] one canonical graph readiness model exists
+- [x] CLI status, doctor, query, impact, and review consume that model
+- [x] MCP graph-backed tools surface that model and do not redefine readiness
+- [x] adapters only report or forward readiness, never compute their own
+- [x] stale/queryable and corrupt/blocked states are distinct
+- [x] fresh/stale/partial/corrupt execution states map to explicit allowed/blocked features
+- [x] tests prove all graph-backed paths agree on readiness for same repo and DB
 
 ---
 

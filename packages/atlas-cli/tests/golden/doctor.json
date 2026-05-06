@@ -5,6 +5,7 @@
   "suggestions": [
     "inspect the checks array for details"
   ],
+  "execution_state": "fresh",
   "checks": [
     {
       "check": "repo_root",

@@ -2,6 +2,7 @@ use crate::cli::{Cli, Command, ReviewContextFormat};
 use anyhow::{Context, Result};
 use atlas_adapters::{AdapterHooks, CliAdapter};
 use atlas_core::BudgetReport;
+use atlas_core::GraphToolRequirement;
 use atlas_core::model::{
     ChangeType, ContextIntent, ContextRequest, ContextResult, ContextTarget, ImpactResult,
     ReviewContext, ReviewImpactOverview, RiskSummary, SelectionReason,
@@ -14,8 +15,9 @@ use camino::Utf8Path;
 use std::fmt::Write as _;
 
 use super::{
-    augment_changes_with_node_counts, change_tag, db_path, detect_changes_target,
-    load_budget_policy, print_json, resolve_repo,
+    augment_changes_with_node_counts, change_tag, check_graph_readiness, db_path,
+    derive_graph_readiness, derive_graph_readiness_open_failed, detect_changes_target,
+    load_budget_policy, print_json, readiness_overrides, resolve_repo,
 };
 
 // ---------------------------------------------------------------------------
@@ -472,22 +474,27 @@ pub fn run_explain_change(cli: &Cli) -> Result<()> {
         let repo_root = repo_root_path.as_path();
         let db_path = db_path(cli, &repo);
 
-        let (base, staged, explicit_files, max_depth, max_nodes) = match &cli.command {
-            Command::ExplainChange {
-                base,
-                staged,
-                files,
-                max_depth,
-                max_nodes,
-            } => (
-                base.clone(),
-                *staged,
-                files.clone(),
-                *max_depth,
-                *max_nodes as usize,
-            ),
-            _ => unreachable!(),
-        };
+        let (base, staged, explicit_files, max_depth, max_nodes, allow_stale, allow_partial) =
+            match &cli.command {
+                Command::ExplainChange {
+                    base,
+                    staged,
+                    files,
+                    max_depth,
+                    max_nodes,
+                    allow_stale,
+                    allow_partial,
+                } => (
+                    base.clone(),
+                    *staged,
+                    files.clone(),
+                    *max_depth,
+                    *max_nodes as usize,
+                    *allow_stale,
+                    *allow_partial,
+                ),
+                _ => unreachable!(),
+            };
 
         let changes = if !explicit_files.is_empty() {
             normalize_explicit_files(repo_root, &explicit_files)?
@@ -519,8 +526,32 @@ pub fn run_explain_change(cli: &Cli) -> Result<()> {
             return Ok(());
         }
 
-        let store =
-            Store::open(&db_path).with_context(|| format!("cannot open database at {db_path}"))?;
+        let store = match Store::open(&db_path) {
+            Ok(s) => s,
+            Err(e) => {
+                let readiness = derive_graph_readiness_open_failed(&repo, &db_path, &e.to_string());
+                check_graph_readiness(
+                    &readiness,
+                    GraphToolRequirement::Analysis,
+                    readiness_overrides(allow_stale, allow_partial),
+                    "explain_change",
+                    cli,
+                )?;
+                return Err(e).with_context(|| format!("cannot open database at {db_path}"));
+            }
+        };
+
+        let readiness = derive_graph_readiness(&store, &repo, &db_path);
+        if let Some(warning) = check_graph_readiness(
+            &readiness,
+            GraphToolRequirement::Analysis,
+            readiness_overrides(allow_stale, allow_partial),
+            "explain_change",
+            cli,
+        )? {
+            eprintln!("Warning: {warning}");
+        }
+
         let policy = load_budget_policy(&repo)?;
         let summary = build_explain_change_summary(
             &store,
@@ -636,19 +667,52 @@ pub fn run_impact(cli: &Cli) -> Result<()> {
         let repo_root = repo_root_path.as_path();
         let db_path = db_path(cli, &repo);
 
-        let store =
-            Store::open(&db_path).with_context(|| format!("cannot open database at {db_path}"))?;
+        let store = match Store::open(&db_path) {
+            Ok(s) => s,
+            Err(e) => {
+                let readiness = derive_graph_readiness_open_failed(&repo, &db_path, &e.to_string());
+                check_graph_readiness(
+                    &readiness,
+                    GraphToolRequirement::Analysis,
+                    readiness_overrides(false, false),
+                    "impact",
+                    cli,
+                )?;
+                return Err(e).with_context(|| format!("cannot open database at {db_path}"));
+            }
+        };
         let policy = load_budget_policy(&repo)?;
 
-        let (base, explicit_files, max_depth, max_nodes) = match &cli.command {
-            Command::Impact {
-                base,
-                files,
-                max_depth,
-                max_nodes,
-            } => (base.clone(), files.clone(), *max_depth, *max_nodes as usize),
-            _ => unreachable!(),
-        };
+        let (base, explicit_files, max_depth, max_nodes, allow_stale, allow_partial) =
+            match &cli.command {
+                Command::Impact {
+                    base,
+                    files,
+                    max_depth,
+                    max_nodes,
+                    allow_stale,
+                    allow_partial,
+                } => (
+                    base.clone(),
+                    files.clone(),
+                    *max_depth,
+                    *max_nodes as usize,
+                    *allow_stale,
+                    *allow_partial,
+                ),
+                _ => unreachable!(),
+            };
+
+        let readiness = derive_graph_readiness(&store, &repo, &db_path);
+        if let Some(warning) = check_graph_readiness(
+            &readiness,
+            GraphToolRequirement::Analysis,
+            readiness_overrides(allow_stale, allow_partial),
+            "impact",
+            cli,
+        )? {
+            eprintln!("Warning: {warning}");
+        }
 
         let target_files: Vec<String> = if !explicit_files.is_empty() {
             normalize_explicit_files(repo_root, &explicit_files)?
@@ -783,25 +847,53 @@ pub fn run_review_context(cli: &Cli) -> Result<()> {
         let repo_root = repo_root_path.as_path();
         let db_path = db_path(cli, &repo);
 
-        let store =
-            Store::open(&db_path).with_context(|| format!("cannot open database at {db_path}"))?;
-
-        let (base, explicit_files, max_depth, max_nodes, format) = match &cli.command {
-            Command::ReviewContext {
-                base,
-                files,
-                max_depth,
-                max_nodes,
-                format,
-            } => (
-                base.clone(),
-                files.clone(),
-                *max_depth,
-                *max_nodes as usize,
-                *format,
-            ),
-            _ => unreachable!(),
+        let store = match Store::open(&db_path) {
+            Ok(s) => s,
+            Err(e) => {
+                let readiness = derive_graph_readiness_open_failed(&repo, &db_path, &e.to_string());
+                check_graph_readiness(
+                    &readiness,
+                    GraphToolRequirement::Analysis,
+                    readiness_overrides(false, false),
+                    "review_context",
+                    cli,
+                )?;
+                return Err(e).with_context(|| format!("cannot open database at {db_path}"));
+            }
         };
+
+        let (base, explicit_files, max_depth, max_nodes, format, allow_stale, allow_partial) =
+            match &cli.command {
+                Command::ReviewContext {
+                    base,
+                    files,
+                    max_depth,
+                    max_nodes,
+                    format,
+                    allow_stale,
+                    allow_partial,
+                } => (
+                    base.clone(),
+                    files.clone(),
+                    *max_depth,
+                    *max_nodes as usize,
+                    *format,
+                    *allow_stale,
+                    *allow_partial,
+                ),
+                _ => unreachable!(),
+            };
+
+        let readiness = derive_graph_readiness(&store, &repo, &db_path);
+        if let Some(warning) = check_graph_readiness(
+            &readiness,
+            GraphToolRequirement::Analysis,
+            readiness_overrides(allow_stale, allow_partial),
+            "review_context",
+            cli,
+        )? {
+            eprintln!("Warning: {warning}");
+        }
 
         if cli.json && format == ReviewContextFormat::Markdown {
             anyhow::bail!("--format markdown cannot be combined with --json");

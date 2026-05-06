@@ -403,6 +403,7 @@ fn parse_review_context_defaults() {
         base,
         files,
         format,
+        ..
     } = cli.command
     {
         assert_eq!(max_depth, 3);
@@ -488,6 +489,7 @@ fn parse_explain_change_with_base() {
         files,
         max_depth,
         max_nodes,
+        ..
     } = cli.command
     {
         assert_eq!(base.as_deref(), Some("origin/main"));
@@ -887,7 +889,7 @@ fn parse_shell_with_flags() {
 #[test]
 fn parse_analyze_dead_code_with_subpath() {
     let cli = parse(&["atlas", "analyze", "dead-code", "--subpath", "src"]);
-    if let Command::Analyze { subcommand } = cli.command {
+    if let Command::Analyze { subcommand, .. } = cli.command {
         match subcommand {
             AnalyzeCommand::DeadCode { subpath, limit, .. } => {
                 assert_eq!(subpath.as_deref(), Some("src"));
@@ -912,7 +914,7 @@ fn parse_refactor_rename_with_named_flags() {
         "helper_renamed",
         "--dry-run",
     ]);
-    if let Command::Refactor { subcommand } = cli.command {
+    if let Command::Refactor { subcommand, .. } = cli.command {
         match subcommand {
             RefactorCommand::Rename {
                 symbol,
@@ -944,7 +946,7 @@ fn parse_refactor_rename_legacy_positionals() {
         "helper_renamed",
         "--dry-run",
     ]);
-    if let Command::Refactor { subcommand } = cli.command {
+    if let Command::Refactor { subcommand, .. } = cli.command {
         match subcommand {
             RefactorCommand::Rename {
                 symbol,

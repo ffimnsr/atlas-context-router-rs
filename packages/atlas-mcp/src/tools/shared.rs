@@ -1,9 +1,11 @@
 use anyhow::{Context, Result};
+use atlas_contentstore::{ContentStore, IndexState};
 use atlas_core::model::ContextIntent;
 use atlas_core::model::{ChangeType, ChangedFile};
 use atlas_core::{
-    BudgetPolicy, BudgetReport, GraphHealthInput, graph_health_error_message,
-    graph_health_error_suggestions, is_schema_mismatch_error, select_graph_health_error_code,
+    BudgetPolicy, BudgetReport, GraphHealthInput, GraphReadiness, GraphReadinessInput,
+    graph_health_error_message, graph_health_error_suggestions, is_schema_mismatch_error,
+    select_graph_health_error_code,
 };
 use atlas_parser::ParserRegistry;
 use atlas_repo::{DiffTarget, changed_files, find_repo_root, hash_file};
@@ -316,5 +318,96 @@ pub(super) fn compute_freshness_warning(
             "run build_or_update_graph to refresh the graph",
             "run detect_changes to inspect pending graph-relevant files",
         ],
+    })
+}
+
+// ── Canonical graph readiness helpers ────────────────────────────────────────
+
+/// Derive canonical [`GraphReadiness`] from an already-open store.
+///
+/// This is the shared readiness derivation path for all MCP tool handlers.
+/// Call this after `Store::open` succeeds; use the result to gate
+/// graph-backed operations via [`GraphReadiness::check_tool`].
+pub(super) fn derive_graph_readiness(
+    store: &Store,
+    repo_root: &str,
+    db_path: &str,
+) -> GraphReadiness {
+    let db_exists = std::path::Path::new(db_path).exists();
+
+    let (build_state_str, build_last_error) = match store.get_build_status(repo_root) {
+        Ok(Some(bs)) => {
+            let state = match bs.state {
+                atlas_store_sqlite::GraphBuildState::Building => "building",
+                atlas_store_sqlite::GraphBuildState::Built => "built",
+                atlas_store_sqlite::GraphBuildState::Degraded => "degraded",
+                atlas_store_sqlite::GraphBuildState::BuildFailed => "build_failed",
+            };
+            (Some(state.to_owned()), bs.last_error)
+        }
+        _ => (None, None),
+    };
+
+    let (file_count, graph_has_content, last_indexed_at, graph_error) = match store.stats() {
+        Ok(s) => {
+            let has_content = s.node_count > 0 || s.edge_count > 0 || s.file_count > 0;
+            (s.file_count, has_content, s.last_indexed_at, None)
+        }
+        Err(e) => (0, false, None, Some(e.to_string())),
+    };
+
+    let pending = pending_graph_relevant_changes(repo_root, db_path).unwrap_or_default();
+
+    let content_db_path = atlas_engine::paths::content_db_path(db_path);
+    let retrieval_unavailable = match ContentStore::open(&content_db_path) {
+        Ok(mut cs) => {
+            let _ = cs.migrate();
+            match cs.get_index_status(repo_root) {
+                Ok(Some(s)) => s.state != IndexState::Indexed,
+                _ => true,
+            }
+        }
+        Err(_) => true,
+    };
+
+    GraphReadiness::derive(GraphReadinessInput {
+        repo_root,
+        db_path,
+        db_exists,
+        db_open_error: None,
+        build_state: build_state_str.as_deref(),
+        build_last_error: build_last_error.as_deref(),
+        graph_error: graph_error.as_deref(),
+        pending_graph_changes: &pending,
+        indexed_file_count: file_count,
+        graph_has_content,
+        last_indexed_at: last_indexed_at.as_deref(),
+        retrieval_unavailable,
+    })
+}
+
+/// Derive [`GraphReadiness`] when the store could not be opened.
+///
+/// Use this when `Store::open` fails; the open error is passed into the
+/// readiness record so blocked messages are consistent.
+pub(super) fn derive_graph_readiness_open_failed(
+    repo_root: &str,
+    db_path: &str,
+    open_error: &str,
+) -> GraphReadiness {
+    let db_exists = std::path::Path::new(db_path).exists();
+    GraphReadiness::derive(GraphReadinessInput {
+        repo_root,
+        db_path,
+        db_exists,
+        db_open_error: Some(open_error),
+        build_state: None,
+        build_last_error: None,
+        graph_error: None,
+        pending_graph_changes: &[],
+        indexed_file_count: 0,
+        graph_has_content: false,
+        last_indexed_at: None,
+        retrieval_unavailable: true,
     })
 }

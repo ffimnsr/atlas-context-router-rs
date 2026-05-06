@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use atlas_core::GraphToolRequirement;
 use atlas_repo::{CanonicalRepoPath, find_repo_root};
 use atlas_review::{DocsSectionLookup, DocsSectionSelector, lookup_docs_section};
 use atlas_store_sqlite::Store;
@@ -6,7 +7,10 @@ use camino::Utf8Path;
 
 use crate::cli::{Cli, Command};
 
-use super::{db_path, print_json, resolve_repo};
+use super::{
+    check_graph_readiness, db_path, derive_graph_readiness, derive_graph_readiness_open_failed,
+    print_json, readiness_overrides, resolve_repo,
+};
 
 pub fn run_docs_section(cli: &Cli) -> Result<()> {
     let Command::DocsSection {
@@ -27,7 +31,31 @@ pub fn run_docs_section(cli: &Cli) -> Result<()> {
     let repo_root = find_repo_root(Utf8Path::new(&repo)).context("cannot find git repo root")?;
     let canonical = CanonicalRepoPath::from_cli_argument(repo_root.as_path(), Utf8Path::new(path))
         .with_context(|| format!("invalid explicit file path '{path}'"))?;
-    let store = Store::open(&db_path(cli, &repo))?;
+    let db_path = db_path(cli, &repo);
+    let store = match Store::open(&db_path) {
+        Err(e) => {
+            let readiness = derive_graph_readiness_open_failed(&repo, &db_path, &e.to_string());
+            check_graph_readiness(
+                &readiness,
+                GraphToolRequirement::SymbolLookup,
+                readiness_overrides(false, false),
+                "docs-section",
+                cli,
+            )?;
+            return Err(e).with_context(|| format!("cannot open database at {db_path}"));
+        }
+        Ok(s) => s,
+    };
+    let readiness = derive_graph_readiness(&store, &repo, &db_path);
+    if let Some(warning) = check_graph_readiness(
+        &readiness,
+        GraphToolRequirement::SymbolLookup,
+        readiness_overrides(false, false),
+        "docs-section",
+        cli,
+    )? {
+        eprintln!("Warning: {warning}");
+    }
     let selector = if let Some(heading) = heading {
         DocsSectionSelector::Heading(heading.clone())
     } else {

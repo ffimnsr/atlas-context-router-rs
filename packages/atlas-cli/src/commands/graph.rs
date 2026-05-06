@@ -7,8 +7,8 @@ use atlas_contentstore::{ContentStore, IndexState};
 use atlas_core::GraphStats;
 use atlas_core::model::{ChangeType, ChangedFile};
 use atlas_core::{
-    GraphHealthInput, graph_health_error_message, graph_health_error_suggestions,
-    select_graph_health_error_code,
+    GraphHealthInput, GraphReadiness, GraphReadinessInput, graph_health_error_message,
+    graph_health_error_suggestions, select_graph_health_error_code,
 };
 use atlas_engine::{BuildOptions, UpdateOptions, UpdateTarget, build_graph, update_graph};
 use atlas_parser::ParserRegistry;
@@ -45,6 +45,7 @@ struct StatusDiagnostics {
     graph_query_error: Option<String>,
     pending_graph_changes: Vec<String>,
     retrieval_index: serde_json::Value,
+    execution_state: atlas_core::GraphExecutionState,
 }
 
 fn print_summary_value(label: &str, value: impl Display) {
@@ -237,6 +238,26 @@ fn collect_status_diagnostics(ctx: &StatusPayloadContext<'_>) -> StatusDiagnosti
         retrieval_unavailable,
     });
 
+    // Derive canonical execution state via GraphReadiness.
+    let graph_has_content =
+        ctx.stats.node_count > 0 || ctx.stats.edge_count > 0 || ctx.stats.file_count > 0;
+    let readiness = GraphReadiness::derive(GraphReadinessInput {
+        repo_root: ctx.repo,
+        db_path: ctx.db_path,
+        db_exists: true,
+        db_open_error: None,
+        build_state,
+        build_last_error: build_status
+            .as_ref()
+            .and_then(|bs| bs.last_error.as_deref()),
+        graph_error: graph_query_error.as_deref(),
+        pending_graph_changes: &pending_graph_changes,
+        indexed_file_count: ctx.stats.file_count,
+        graph_has_content,
+        last_indexed_at: ctx.stats.last_indexed_at.as_deref(),
+        retrieval_unavailable,
+    });
+
     StatusDiagnostics {
         ok: error_code == "none" && graph_built,
         error_code,
@@ -246,6 +267,7 @@ fn collect_status_diagnostics(ctx: &StatusPayloadContext<'_>) -> StatusDiagnosti
         graph_query_error,
         pending_graph_changes,
         retrieval_index,
+        execution_state: readiness.execution_state,
     }
 }
 
@@ -307,6 +329,7 @@ fn status_payload(ctx: StatusPayloadContext<'_>) -> serde_json::Value {
         "stale_index": !diagnostics.pending_graph_changes.is_empty(),
         "pending_graph_change_count": diagnostics.pending_graph_changes.len(),
         "pending_graph_changes": diagnostics.pending_graph_changes,
+        "execution_state": diagnostics.execution_state.as_str(),
         "retrieval_index": diagnostics.retrieval_index,
         "changed_file_count": ctx.changes.len(),
         "changed_files": augment_changes_with_node_counts(ctx.changes, ctx.store),

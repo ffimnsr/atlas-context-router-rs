@@ -167,6 +167,14 @@ pub enum Command {
         /// Use `|` for alternation: `atlas query "handle|HANDLE" --regex`.
         #[arg(long)]
         regex: bool,
+
+        /// Allow queries on a stale graph; prints a freshness warning.
+        #[arg(long)]
+        allow_stale: bool,
+
+        /// Allow symbol lookup on a partial (degraded) graph.
+        #[arg(long)]
+        allow_partial: bool,
     },
 
     /// Read one indexed Markdown docs section by heading path/slug or line.
@@ -205,6 +213,14 @@ pub enum Command {
         /// Maximum number of impacted nodes to return.
         #[arg(long, default_value_t = 200)]
         max_nodes: u32,
+
+        /// Allow impact traversal on a stale graph; prints a freshness warning.
+        #[arg(long)]
+        allow_stale: bool,
+
+        /// Allow impact traversal on a partial (degraded) graph.
+        #[arg(long)]
+        allow_partial: bool,
     },
 
     /// Assemble review context for changed files.
@@ -228,6 +244,14 @@ pub enum Command {
         /// Output profile for human-readable review comments.
         #[arg(long, value_enum, default_value_t = ReviewContextFormat::Text)]
         format: ReviewContextFormat,
+
+        /// Allow review context assembly on a stale graph; prints a freshness warning.
+        #[arg(long)]
+        allow_stale: bool,
+
+        /// Allow review context assembly on a partial (degraded) graph.
+        #[arg(long)]
+        allow_partial: bool,
     },
 
     /// Generate and store embeddings for all un-embedded chunks.
@@ -327,6 +351,14 @@ pub enum Command {
         /// Maximum number of impacted nodes to consider.
         #[arg(long, default_value_t = 200)]
         max_nodes: u32,
+
+        /// Allow change explanation on a stale graph; prints a freshness warning.
+        #[arg(long)]
+        allow_stale: bool,
+
+        /// Allow change explanation on a partial (degraded) graph.
+        #[arg(long)]
+        allow_partial: bool,
     },
 
     /// Install MCP server configuration for AI coding platforms.
@@ -513,12 +545,28 @@ pub enum Command {
     Analyze {
         #[command(subcommand)]
         subcommand: AnalyzeCommand,
+
+        /// Allow analysis on a stale graph; prints a freshness warning.
+        #[arg(long)]
+        allow_stale: bool,
+
+        /// Allow analysis on a partial (degraded) graph.
+        #[arg(long)]
+        allow_partial: bool,
     },
 
     /// Plan or apply deterministic refactoring operations.
     Refactor {
         #[command(subcommand)]
         subcommand: RefactorCommand,
+
+        /// Allow refactoring on a stale graph; prints a freshness warning.
+        #[arg(long)]
+        allow_stale: bool,
+
+        /// Allow refactoring on a partial (degraded) graph.
+        #[arg(long)]
+        allow_partial: bool,
     },
 
     /// Manage Atlas context memory sessions (start, status, resume, clear, list).

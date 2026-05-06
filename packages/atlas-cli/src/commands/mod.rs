@@ -64,10 +64,15 @@ use std::io;
 use std::io::IsTerminal;
 
 use anyhow::{Context, Result};
-use atlas_core::BudgetPolicy;
-use atlas_core::model::ChangeType;
-use atlas_repo::{DiffTarget, find_repo_root};
-use atlas_store_sqlite::Store;
+use atlas_contentstore::{ContentStore, IndexState};
+use atlas_core::model::{ChangeType, ChangedFile};
+use atlas_core::{
+    BudgetPolicy, GraphReadiness, GraphReadinessInput, GraphToolRequirement, ReadinessOverride,
+    ReadinessVerdict,
+};
+use atlas_parser::ParserRegistry;
+use atlas_repo::{DiffTarget, changed_files, find_repo_root, hash_file};
+use atlas_store_sqlite::{GraphBuildState, Store};
 use camino::Utf8Path;
 
 use crate::cli::Cli;
@@ -213,6 +218,230 @@ pub(crate) fn db_path(cli: &Cli, repo: &str) -> String {
         return p.clone();
     }
     atlas_engine::paths::default_db_path(repo)
+}
+
+// ── Canonical graph readiness helpers ────────────────────────────────────────
+
+/// Returns `true` when the changed file could affect graph facts stored for it.
+fn change_affects_graph(store: &Store, registry: &ParserRegistry, change: &ChangedFile) -> bool {
+    let has_facts = |path: &str| {
+        store
+            .nodes_by_file(path)
+            .map(|ns| !ns.is_empty())
+            .unwrap_or(false)
+    };
+    registry.supports(&change.path)
+        || change
+            .old_path
+            .as_deref()
+            .is_some_and(|p| registry.supports(p))
+        || has_facts(&change.path)
+        || change.old_path.as_deref().is_some_and(has_facts)
+}
+
+fn graph_matches_path(store: &Store, repo_root: &Utf8Path, path: &str) -> bool {
+    let indexed = store.file_hash(path).ok().flatten();
+    match hash_file(&repo_root.join(path)) {
+        Ok(current) => indexed.as_deref() == Some(current.as_str()),
+        Err(_) => {
+            store.file_hash(path).ok().flatten().is_none()
+                && store
+                    .nodes_by_file(path)
+                    .map(|ns| ns.is_empty())
+                    .unwrap_or(true)
+        }
+    }
+}
+
+fn file_in_graph(store: &Store, path: &str) -> bool {
+    store.file_hash(path).ok().flatten().is_some()
+        || store
+            .nodes_by_file(path)
+            .map(|ns| !ns.is_empty())
+            .unwrap_or(false)
+}
+
+/// Compute graph-relevant pending working-tree changes for readiness detection.
+///
+/// Returns an empty `Vec` when git diff or store queries fail; readiness
+/// callers treat an empty list as "not stale".
+fn pending_graph_changes(store: &Store, repo_root: &str) -> Vec<String> {
+    let Ok(root) = find_repo_root(Utf8Path::new(repo_root)) else {
+        return Vec::new();
+    };
+    let Ok(changes) = changed_files(root.as_path(), &DiffTarget::WorkingTree) else {
+        return Vec::new();
+    };
+    if changes.is_empty() {
+        return Vec::new();
+    }
+
+    let registry = ParserRegistry::with_defaults();
+    let mut files: Vec<String> = changes
+        .iter()
+        .filter(|c| change_affects_graph(store, &registry, c))
+        .filter(|c| match c.change_type {
+            ChangeType::Added | ChangeType::Modified => {
+                !graph_matches_path(store, root.as_path(), &c.path)
+            }
+            ChangeType::Deleted => file_in_graph(store, &c.path),
+            ChangeType::Renamed | ChangeType::Copied => {
+                !graph_matches_path(store, root.as_path(), &c.path)
+                    || c.old_path
+                        .as_deref()
+                        .is_some_and(|old| file_in_graph(store, old))
+            }
+        })
+        .flat_map(|c| std::iter::once(c.path.clone()).chain(c.old_path.clone()))
+        .collect();
+    files.sort();
+    files.dedup();
+    files
+}
+
+/// Derive canonical [`GraphReadiness`] from an already-opened store.
+///
+/// This is the single shared derivation path for all CLI commands.  Call this
+/// after `Store::open` succeeds, then use [`check_graph_readiness`] to gate
+/// graph-backed operations.
+pub(crate) fn derive_graph_readiness(
+    store: &Store,
+    repo_root: &str,
+    db_path: &str,
+) -> GraphReadiness {
+    let db_exists = std::path::Path::new(db_path).exists();
+
+    let (build_state_str, build_last_error) = match store.get_build_status(repo_root) {
+        Ok(Some(bs)) => {
+            let state = match bs.state {
+                GraphBuildState::Building => "building",
+                GraphBuildState::Built => "built",
+                GraphBuildState::Degraded => "degraded",
+                GraphBuildState::BuildFailed => "build_failed",
+            };
+            (Some(state.to_owned()), bs.last_error)
+        }
+        _ => (None, None),
+    };
+
+    let (stats, graph_error) = match store.stats() {
+        Ok(s) => (s, None),
+        Err(e) => {
+            let dummy = atlas_core::GraphStats {
+                file_count: 0,
+                node_count: 0,
+                edge_count: 0,
+                nodes_by_kind: Vec::new(),
+                languages: Vec::new(),
+                last_indexed_at: None,
+            };
+            (dummy, Some(e.to_string()))
+        }
+    };
+
+    let pending = pending_graph_changes(store, repo_root);
+
+    let content_db_path = atlas_engine::paths::content_db_path(db_path);
+    let retrieval_unavailable = match ContentStore::open(&content_db_path) {
+        Ok(mut cs) => {
+            let _ = cs.migrate();
+            match cs.get_index_status(repo_root) {
+                Ok(Some(s)) => s.state != IndexState::Indexed,
+                _ => true,
+            }
+        }
+        Err(_) => true,
+    };
+
+    GraphReadiness::derive(GraphReadinessInput {
+        repo_root,
+        db_path,
+        db_exists,
+        db_open_error: None,
+        build_state: build_state_str.as_deref(),
+        build_last_error: build_last_error.as_deref(),
+        graph_error: graph_error.as_deref(),
+        pending_graph_changes: &pending,
+        indexed_file_count: stats.file_count,
+        graph_has_content: stats.node_count > 0 || stats.edge_count > 0 || stats.file_count > 0,
+        last_indexed_at: stats.last_indexed_at.as_deref(),
+        retrieval_unavailable,
+    })
+}
+
+/// Derive [`GraphReadiness`] when the store could not be opened.
+///
+/// Used by command entry points that fail at `Store::open`; the open error is
+/// included in the readiness record so blocked messages are consistent.
+pub(crate) fn derive_graph_readiness_open_failed(
+    repo_root: &str,
+    db_path: &str,
+    open_error: &str,
+) -> GraphReadiness {
+    let db_exists = std::path::Path::new(db_path).exists();
+    GraphReadiness::derive(GraphReadinessInput {
+        repo_root,
+        db_path,
+        db_exists,
+        db_open_error: Some(open_error),
+        build_state: None,
+        build_last_error: None,
+        graph_error: None,
+        pending_graph_changes: &[],
+        indexed_file_count: 0,
+        graph_has_content: false,
+        last_indexed_at: None,
+        retrieval_unavailable: true,
+    })
+}
+
+/// Build [`ReadinessOverride`] from `--allow-stale` / `--allow-partial` flags.
+pub(crate) fn readiness_overrides(allow_stale: bool, allow_partial: bool) -> ReadinessOverride {
+    ReadinessOverride {
+        allow_stale,
+        allow_partial,
+    }
+}
+
+/// Check graph readiness before a graph-backed operation.
+///
+/// Returns `Ok(Option<warning>)` when the tool is allowed to proceed.
+/// When blocked, prints an appropriate error (JSON or text) and returns `Err`.
+///
+/// Callers should `eprintln!` the returned warning when it is `Some`.
+pub(crate) fn check_graph_readiness(
+    readiness: &GraphReadiness,
+    requirement: GraphToolRequirement,
+    overrides: ReadinessOverride,
+    command: &str,
+    cli: &Cli,
+) -> Result<Option<String>> {
+    let verdict = readiness.check_tool(requirement, overrides);
+    match verdict {
+        ReadinessVerdict::Allowed { warning, .. } => Ok(warning),
+        ReadinessVerdict::Blocked {
+            execution_state,
+            reason,
+            suggestions,
+        } => {
+            if cli.json {
+                print_json(
+                    command,
+                    serde_json::json!({
+                        "error": reason,
+                        "execution_state": execution_state.as_str(),
+                        "suggestions": suggestions,
+                    }),
+                )?;
+            } else {
+                eprintln!("Error: {reason}");
+                for s in &suggestions {
+                    eprintln!("  → {s}");
+                }
+            }
+            anyhow::bail!("{reason}")
+        }
+    }
 }
 
 #[cfg(test)]

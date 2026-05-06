@@ -7,8 +7,9 @@ use std::sync::OnceLock;
 use std::time::Instant;
 
 use super::shared::{
-    error_message, error_suggestions, failure_category, graph_issue_code, inject_budget_metadata,
-    load_budget_policy, open_store, pending_graph_relevant_changes, tool_result_value, u64_arg,
+    derive_graph_readiness, error_message, error_suggestions, failure_category, graph_issue_code,
+    inject_budget_metadata, load_budget_policy, open_store, pending_graph_relevant_changes,
+    tool_result_value, u64_arg,
 };
 
 #[derive(Serialize)]
@@ -265,11 +266,42 @@ pub(super) fn tool_status(
     );
     let ok = category == "none" && graph_built;
 
+    // Derive canonical execution state from the same inputs already computed
+    // above. This ensures `execution_state` in the response is authoritative
+    // and consistent with what graph-backed tools use to gate themselves.
+    //
+    // When the store is open, delegate to the shared derivation helper.
+    // When the store could not be opened (or was never attempted because
+    // db_exists=false), reconstruct a minimal readiness record directly so
+    // the db_open_error is passed verbatim: a genuine open failure may signal
+    // corruption, while a missing db (db_open_error=None) produces Missing.
+    let execution_state = if let Some(store) = store.as_ref() {
+        derive_graph_readiness(store, repo_root, db_path).execution_state
+    } else {
+        use atlas_core::{GraphReadiness, GraphReadinessInput};
+        GraphReadiness::derive(GraphReadinessInput {
+            repo_root,
+            db_path,
+            db_exists,
+            db_open_error: db_open_error.as_deref(),
+            build_state: None,
+            build_last_error: None,
+            graph_error: None,
+            pending_graph_changes: &[],
+            indexed_file_count: 0,
+            graph_has_content: false,
+            last_indexed_at: None,
+            retrieval_unavailable: true,
+        })
+        .execution_state
+    };
+
     let result = serde_json::json!({
         "ok": ok,
         "error_code": category,
         "message": error_message(category),
         "suggestions": error_suggestions(category),
+        "execution_state": execution_state.as_str(),
         "repo_root": repo_root,
         "db_path": db_path,
         "db_exists": db_exists,

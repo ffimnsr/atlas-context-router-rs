@@ -17,6 +17,7 @@
         "error_code": { "type": "string" },
         "message": { "type": "string" },
         "suggestions": { "type": "array", "items": { "type": "string" } },
+        "execution_state": { "type": "string" },
         "checks": {
           "type": "array",
           "items": {

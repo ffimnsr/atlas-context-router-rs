@@ -7,6 +7,7 @@ use anyhow::{Context, Result};
 use atlas_adapters::{
     AdapterHooks, CliAdapter, extract_context_event, extract_decision_event_with_details,
 };
+use atlas_core::GraphToolRequirement;
 use atlas_core::SearchQuery;
 use atlas_core::model::{
     ContextIntent, ContextRequest, ContextResult, ContextTarget, SelectionReason,
@@ -23,8 +24,9 @@ use camino::Utf8Path;
 use crate::cli::{Cli, Command};
 
 use super::{
-    change_tag, colorize, db_path, detect_changes_target, load_budget_policy, print_json,
-    query_display_path, resolve_repo,
+    change_tag, check_graph_readiness, colorize, db_path, derive_graph_readiness,
+    derive_graph_readiness_open_failed, detect_changes_target, load_budget_policy, print_json,
+    query_display_path, readiness_overrides, resolve_repo,
 };
 
 fn parse_intent_str(s: &str) -> Option<ContextIntent> {
@@ -475,8 +477,30 @@ pub fn run_context(cli: &Cli) -> Result<()> {
         request.agent_id = agent_id.clone();
         request.merge_agent_partitions = merge_agent_partitions;
 
-        let store =
-            Store::open(&db_path).with_context(|| format!("cannot open database at {db_path}"))?;
+        let store = match Store::open(&db_path) {
+            Err(e) => {
+                let readiness = derive_graph_readiness_open_failed(&repo, &db_path, &e.to_string());
+                check_graph_readiness(
+                    &readiness,
+                    GraphToolRequirement::Analysis,
+                    readiness_overrides(false, false),
+                    "context",
+                    cli,
+                )?;
+                return Err(e).with_context(|| format!("cannot open database at {db_path}"));
+            }
+            Ok(s) => s,
+        };
+        let readiness = derive_graph_readiness(&store, &repo, &db_path);
+        if let Some(warning) = check_graph_readiness(
+            &readiness,
+            GraphToolRequirement::Analysis,
+            readiness_overrides(false, false),
+            "context",
+            cli,
+        )? {
+            eprintln!("Warning: {warning}");
+        }
 
         // --semantic: when the target is a free-text / symbol query, run a
         // graph-aware semantic search first to find the best matching qualified
@@ -1421,8 +1445,30 @@ pub fn run_shell(cli: &Cli) -> Result<()> {
         _ => unreachable!(),
     };
 
-    let store =
-        Store::open(&db_path).with_context(|| format!("cannot open database at {db_path}"))?;
+    let store = match Store::open(&db_path) {
+        Err(e) => {
+            let readiness = derive_graph_readiness_open_failed(&repo, &db_path, &e.to_string());
+            check_graph_readiness(
+                &readiness,
+                GraphToolRequirement::Analysis,
+                readiness_overrides(false, false),
+                "shell",
+                cli,
+            )?;
+            return Err(e).with_context(|| format!("cannot open database at {db_path}"));
+        }
+        Ok(s) => s,
+    };
+    let readiness = derive_graph_readiness(&store, &repo, &db_path);
+    if let Some(warning) = check_graph_readiness(
+        &readiness,
+        GraphToolRequirement::Analysis,
+        readiness_overrides(false, false),
+        "shell",
+        cli,
+    )? {
+        eprintln!("Warning: {warning}");
+    }
     let engine = ContextEngine::new(&store).with_budget_policy(load_budget_policy(&repo)?);
     let stdin = io::stdin();
     let mut line = String::new();
