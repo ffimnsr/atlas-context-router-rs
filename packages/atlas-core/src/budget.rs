@@ -429,6 +429,9 @@ pub struct ReviewContextBudgetPolicy {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContentLookupBudgetPolicy {
     pub sources: BudgetLimitRule,
+    /// Maximum non-code content assets (docs, config, templates, SQL) to include
+    /// in a mixed graph/content context result.
+    pub content_assets: BudgetLimitRule,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -514,6 +517,7 @@ impl Default for BudgetPolicy {
             },
             content_saved_context_lookup: ContentLookupBudgetPolicy {
                 sources: BudgetLimitRule::new(5, 25, BudgetHitBehavior::Clamp, true),
+                content_assets: BudgetLimitRule::new(5, 20, BudgetHitBehavior::Clamp, true),
             },
             mcp_cli_payload_serialization: PayloadSerializationBudgetPolicy {
                 nodes: BudgetLimitRule::new(100, 200, BudgetHitBehavior::Clamp, true),

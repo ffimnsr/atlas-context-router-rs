@@ -24,7 +24,8 @@
         "changed_symbol": true,
         "direct_target": true,
         "final_score": 165.0,
-        "impact_score_contribution": 45.0
+        "impact_score_contribution": 45.0,
+        "source_kind": "graph_node"
       },
       "distance": 0,
       "file": "src/lib.rs",

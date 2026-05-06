@@ -251,6 +251,8 @@ fn sample_context_request_symbol() -> ContextRequest {
         agent_id: None,
         merge_agent_partitions: false,
         token_budget: None,
+        include_content_assets: false,
+        max_content_assets: None,
     }
 }
 
@@ -476,6 +478,7 @@ fn truncation_meta_none_round_trip() {
     assert_eq!(back.nodes_dropped, 0);
     assert_eq!(back.edges_dropped, 0);
     assert_eq!(back.files_dropped, 0);
+    assert_eq!(back.content_assets_dropped, 0);
 }
 
 #[test]
@@ -484,6 +487,7 @@ fn truncation_meta_with_drops_round_trip() {
         nodes_dropped: 5,
         edges_dropped: 3,
         files_dropped: 1,
+        content_assets_dropped: 2,
         truncated: true,
         payload: None,
     };
@@ -493,6 +497,7 @@ fn truncation_meta_with_drops_round_trip() {
     assert_eq!(back.nodes_dropped, 5);
     assert_eq!(back.edges_dropped, 3);
     assert_eq!(back.files_dropped, 1);
+    assert_eq!(back.content_assets_dropped, 2);
 }
 
 #[test]
@@ -557,6 +562,7 @@ fn context_result_round_trip() {
             language: Some("rust".to_string()),
             node_count_included: 1,
         }],
+        content_assets: vec![],
         truncation: TruncationMeta::none(),
         seed_budgets: vec![],
         traversal_budget: None,
@@ -640,6 +646,7 @@ fn context_result_with_ambiguity_round_trip() {
         nodes: vec![],
         edges: vec![],
         files: vec![],
+        content_assets: vec![],
         truncation: TruncationMeta::none(),
         seed_budgets: vec![],
         traversal_budget: None,

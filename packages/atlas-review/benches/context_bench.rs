@@ -164,6 +164,8 @@ fn bench_context_retrieval_latency(c: &mut Criterion) {
             agent_id: None,
             merge_agent_partitions: false,
             token_budget: None,
+            include_content_assets: false,
+            max_content_assets: None,
         };
 
         group.bench_with_input(

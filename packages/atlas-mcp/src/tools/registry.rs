@@ -201,7 +201,7 @@ pub fn tool_list() -> serde_json::Value {
             },
             {
                 "name": "get_context",
-                "description": "Build bounded context around a symbol, file, or change-set. Provide EITHER 'query' (a symbol name, qualified name, or structured intent phrase like 'who calls MyFunc') OR 'file' (a repo-relative path) OR 'files' (a list of changed paths). Returns ranked nodes, edges, files, and truncation/ambiguity metadata. IMPORTANT: 'query' is matched against indexed symbol names — it does NOT accept natural-language descriptions. Use short exact identifiers or intent phrases.",
+                "description": "Build bounded context around a symbol, file, or change-set. Provide EITHER 'query' (a symbol name, qualified name, or structured intent phrase like 'who calls MyFunc') OR 'file' (a repo-relative path) OR 'files' (a list of changed paths). Returns ranked nodes, edges, files, and truncation/ambiguity metadata. IMPORTANT: 'query' is matched against indexed symbol names — it does NOT accept natural-language descriptions. Use short exact identifiers or intent phrases. When changed files include docs, config, templates, SQL, or prompts, pass those paths in 'files' to merge graph and content assets under one bounded selection, ranking, and truncation policy.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -432,7 +432,7 @@ pub fn tool_list() -> serde_json::Value {
             },
             {
                 "name": "search_files",
-                "description": "Discover files by name or path glob. Use this when you need config files, templates, SQL, Markdown, or other non-code assets that are not indexed as graph symbols. For symbol/relationship questions use query_graph instead.",
+                "description": "Discover files by name or path glob. Use as a graph/content companion lookup for non-code assets — docs, config, SQL, Markdown, templates — after graph tools have surfaced structural context. Do not use before graph resolution for symbol questions. For symbol/relationship questions use query_graph instead.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -448,7 +448,7 @@ pub fn tool_list() -> serde_json::Value {
             },
             {
                 "name": "search_content",
-                "description": "Search file contents by literal string or regex. Use this when you need to find text that is not a symbol name (e.g. error messages, config keys, comments, SQL queries). Generated and vendored files are excluded by default. For symbol/relationship questions use query_graph instead.",
+                "description": "Search file contents by literal string or regex. Use as a graph/content companion lookup when changed symbols depend on non-code text — config keys, SQL queries, prompt content, error messages, comments. Generated and vendored files are excluded by default. Do not use before graph resolution for symbol questions; use as companion after graph tools surface relevant context. For symbol/relationship questions use query_graph instead.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -533,7 +533,7 @@ pub fn tool_list() -> serde_json::Value {
             },
             {
                 "name": "search_templates",
-                "description": "Discover template files (HTML, Jinja2, Handlebars, Tera, Mako, Mustache, Twig, Liquid, ERB, HAML, Pug) by extension. Narrows by `kind` when you know the template engine. Prefer this over search_files for template-specific discovery. For symbol/relationship questions use query_graph instead.",
+                "description": "Discover template files (HTML, Jinja2, Handlebars, Tera, Mako, Mustache, Twig, Liquid, ERB, HAML, Pug) by extension. Use as a graph/content companion lookup when changed files or graph evidence suggests a dependency on template behavior. Narrows by `kind` when you know the template engine. Prefer this over search_files for template-specific discovery. For symbol/relationship questions use query_graph instead.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -550,7 +550,7 @@ pub fn tool_list() -> serde_json::Value {
             },
             {
                 "name": "search_text_assets",
-                "description": "Discover SQL, config (TOML/YAML/INI), environment (.env), and prompt files. Use `kind` to narrow to a specific asset type. These files are not indexed as graph symbols; use query_graph for symbol/relationship questions.",
+                "description": "Discover SQL, config (TOML/YAML/INI), environment (.env), and prompt files. Use as a graph/content companion lookup when changed files include SQL, config, or prompt assets, or when graph evidence suggests a non-code dependency. Use `kind` to narrow to a specific asset type. These files are not indexed as graph symbols; use query_graph for symbol/relationship questions.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {

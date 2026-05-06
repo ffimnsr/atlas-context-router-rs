@@ -7,11 +7,12 @@ mod refactor;
 mod search;
 
 pub use self::context::{
-    AmbiguityMeta, ContextIntent, ContextRankingEvidence, ContextRequest, ContextResult,
-    ContextScoreEvidence, ContextSourceMix, ContextTarget, NoiseReductionSummary,
-    PayloadTruncationMeta, SavedContextSource, SeedBudgetMeta, SelectedEdge, SelectedFile,
-    SelectedNode, SelectionReason, TraversalBudgetMeta, TruncationMeta, WorkflowCallChain,
-    WorkflowComponent, WorkflowFocusNode, WorkflowSummary, context_ranking_evidence_legend,
+    AmbiguityMeta, ContentAsset, ContentAssetReason, ContextIntent, ContextRankingEvidence,
+    ContextRequest, ContextResult, ContextScoreEvidence, ContextSourceMix, ContextTarget,
+    MixedResultKind, NoiseReductionSummary, PayloadTruncationMeta, SavedContextSource,
+    SeedBudgetMeta, SelectedEdge, SelectedFile, SelectedNode, SelectionReason, TraversalBudgetMeta,
+    TruncationMeta, WorkflowCallChain, WorkflowComponent, WorkflowFocusNode, WorkflowSummary,
+    context_ranking_evidence_legend,
 };
 pub use self::graph::{
     ChangeType, ChangedFile, Edge, FileRecord, GraphStats, Node, NodeId, PackageOwner,

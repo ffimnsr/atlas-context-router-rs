@@ -1,5 +1,6 @@
 use super::*;
 use crate::ranking::SavedContextRankingPrimitives;
+use atlas_core::model::MixedResultKind;
 
 pub(super) struct SavedContextRetrieval {
     pub sources: Vec<SavedContextSource>,
@@ -101,14 +102,19 @@ pub(super) fn retrieve_saved_context(
         let mut score = rank_score;
         let mut evidence = ContextRankingEvidence {
             saved_context_rank_score: Some(rank_score),
+            bm25_score: Some(rank_score),
             base_score: Some(rank_score),
             final_score: Some(rank_score),
+            source_kind: Some(MixedResultKind::SavedContext),
             ..ContextRankingEvidence::default()
         };
+
+        let mut session_recency: f32 = 0.0;
 
         if meta.created_at.as_str() >= seven_days_ago.as_str() {
             score += ranking.recent_source_bonus;
             evidence.recent_source_boost = Some(ranking.recent_source_bonus);
+            session_recency += ranking.recent_source_bonus;
         }
 
         if let (Some(req_sid), Some(art_sid)) =
@@ -117,6 +123,11 @@ pub(super) fn retrieve_saved_context(
         {
             score += ranking.same_session_bonus;
             evidence.same_session_boost = Some(ranking.same_session_bonus);
+            session_recency += ranking.same_session_bonus;
+        }
+
+        if session_recency > 0.0 {
+            evidence.session_recency_boost = Some(session_recency);
         }
 
         evidence.final_score = Some(score);

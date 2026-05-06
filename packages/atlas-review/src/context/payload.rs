@@ -8,9 +8,11 @@ pub(super) fn apply_payload_budgets(result: &mut ContextResult, policy: &BudgetP
     let initial_edges = result.edges.len();
     let initial_files = result.files.len();
     let initial_sources = result.saved_context_sources.len();
+    let initial_content_assets = result.content_assets.len();
     let initial_node_drops = result.truncation.nodes_dropped;
     let initial_edge_drops = result.truncation.edges_dropped;
     let initial_file_drops = result.truncation.files_dropped;
+    let initial_content_asset_drops = result.truncation.content_assets_dropped;
 
     // CM13: compute effective token/byte limits, honouring per-request override.
     // The per-request token_budget is capped by the policy ceiling so callers
@@ -72,6 +74,8 @@ pub(super) fn apply_payload_budgets(result: &mut ContextResult, policy: &BudgetP
     let payload_files_dropped = initial_files.saturating_sub(result.files.len());
     let payload_sources_dropped =
         initial_sources.saturating_sub(result.saved_context_sources.len());
+    let payload_content_assets_dropped =
+        initial_content_assets.saturating_sub(result.content_assets.len());
     let emitted_bytes = context_bytes(result);
     let tokens_estimated = estimate_tokens(emitted_bytes);
     let omitted_byte_count = requested_bytes.saturating_sub(emitted_bytes);
@@ -80,16 +84,20 @@ pub(super) fn apply_payload_budgets(result: &mut ContextResult, policy: &BudgetP
         || payload_edges_dropped > 0
         || payload_files_dropped > 0
         || payload_sources_dropped > 0
+        || payload_content_assets_dropped > 0
         || omitted_byte_count > 0
         || token_budget_applied.is_some()
     {
         result.truncation.nodes_dropped = initial_node_drops + payload_nodes_dropped;
         result.truncation.edges_dropped = initial_edge_drops + payload_edges_dropped;
         result.truncation.files_dropped = initial_file_drops + payload_files_dropped;
+        result.truncation.content_assets_dropped =
+            initial_content_asset_drops + payload_content_assets_dropped;
         result.truncation.truncated = payload_nodes_dropped > 0
             || payload_edges_dropped > 0
             || payload_files_dropped > 0
             || payload_sources_dropped > 0
+            || payload_content_assets_dropped > 0
             || omitted_byte_count > 0;
 
         // CM13: compute per-source-kind token breakdown.
@@ -100,6 +108,7 @@ pub(super) fn apply_payload_budgets(result: &mut ContextResult, policy: &BudgetP
                 edges: payload_edges_dropped,
                 files: payload_files_dropped,
                 sources: payload_sources_dropped,
+                content_assets: payload_content_assets_dropped,
             },
             emitted_bytes,
         );
@@ -131,6 +140,7 @@ struct DropCounts {
     edges: usize,
     files: usize,
     sources: usize,
+    content_assets: usize,
 }
 
 /// Build a compact per-source-kind token usage breakdown.
@@ -147,6 +157,7 @@ fn compute_source_mix(
     let dropped_edges = dropped.edges;
     let dropped_files = dropped.files;
     let dropped_sources = dropped.sources;
+    let dropped_content_assets = dropped.content_assets;
     let total_tokens = estimate_tokens(emitted_bytes);
     if total_tokens == 0 {
         return Vec::new();
@@ -166,10 +177,13 @@ fn compute_source_mix(
     let saved_bytes = serde_json::to_vec(&result.saved_context_sources)
         .map(|b| b.len())
         .unwrap_or(0);
+    let content_asset_bytes = serde_json::to_vec(&result.content_assets)
+        .map(|b| b.len())
+        .unwrap_or(0);
 
     let mut mix = Vec::new();
 
-    // graph_context: nodes + edges + files
+    // graph_context: nodes + edges + files (highest priority surface)
     let graph_included = result.nodes.len() + result.edges.len() + result.files.len();
     let graph_dropped = dropped_nodes + dropped_edges + dropped_files;
     if graph_included > 0 || graph_dropped > 0 {
@@ -181,7 +195,19 @@ fn compute_source_mix(
         });
     }
 
-    // saved_artifacts: saved context sources
+    // content_assets: non-code file assets (docs, config, templates, SQL)
+    // Priority: between graph_context and saved_artifacts.
+    let ca_included = result.content_assets.len();
+    if ca_included > 0 || dropped_content_assets > 0 {
+        mix.push(ContextSourceMix {
+            source_kind: "content_assets".to_owned(),
+            items_included: ca_included,
+            items_dropped: dropped_content_assets,
+            tokens_used: estimate_tokens(content_asset_bytes),
+        });
+    }
+
+    // saved_artifacts: prior Atlas session outputs (lowest priority)
     let saved_included = result.saved_context_sources.len();
     if saved_included > 0 || dropped_sources > 0 {
         mix.push(ContextSourceMix {

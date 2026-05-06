@@ -21,9 +21,10 @@ ALWAYS use TOON output everytime, and JSON when you expect there's floating numb
 ### When to use atlas tools first
 
 - **Exploring code**: `query_graph` to find candidate symbols, then `symbol_neighbors`, `traverse_graph`, or `get_context` for callers/callees and usage relationships
-- **Searching non-symbol content**: `search_files`, `search_content`, `read_file_excerpt`, `get_docs_section`, `read_file_around_match`, `search_templates`, and `search_text_assets` when graph lookup is the wrong tool
+- **Companion content lookup**: after graph tools surface structural context, use `search_files`, `search_content`, `search_templates`, or `search_text_assets` when changed files or graph evidence points to non-code assets (docs, config, SQL, templates, prompts). Do not search content before graph resolution for symbol questions.
+- **Mixed graph/content context**: pass non-code asset paths into `get_context` via `files` to merge graph and content evidence under one bounded selection, ranking, and truncation policy.
 - **Understanding impact**: `get_impact_radius` for blast radius, `explain_change` for richer risk analysis
-- **Code review**: `detect_changes` + `get_review_context`, or `get_minimal_context` when tokens matter
+- **Code review**: `detect_changes` + `get_review_context`, or `get_minimal_context` when tokens matter; follow up with `search_text_assets` or `search_templates` when changed files include config/templates/SQL/prompts
 - **Finding relationships**: `symbol_neighbors` for immediate usage edges, `traverse_graph` for broader callers/callees, and `get_context` for intent-aware usage lookup
 - **Repo health**: `list_graph_stats`, `status`, `doctor`, `db_check`, and `debug_graph` before trusting graph-backed answers
 - **Session continuity**: `get_session_status`, `resume_session`, `search_saved_context`, `search_decisions`, and `save_context_artifact`
@@ -86,6 +87,8 @@ Do not treat `query_graph` as caller/callee search. Fall back to file tools **on
 3. Use `detect_changes` to identify changed files.
 4. Use `get_review_context` or `get_minimal_context` for review.
 5. Use `get_impact_radius` or `explain_change` to assess change risk.
+6. When changed files include docs, config, templates, prompts, or SQL, call `search_text_assets` or `search_templates` as companion lookup after graph tools run. Pass asset paths into `get_context` via `files` to merge graph and content under one bounded budget.
+7. When graph evidence shows edges to non-code files (config, SQL, template, prompt), use `search_text_assets` or `search_content` as companion lookup. Do not search content before graph resolution for symbol questions.
 
 ### Trust Metadata
 

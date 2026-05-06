@@ -26,6 +26,7 @@ pub(super) use atlas_core::{
 pub(super) use atlas_store_sqlite::Store;
 
 mod build;
+mod content;
 mod payload;
 mod rank;
 mod resolve;
@@ -39,6 +40,7 @@ mod workflow;
 pub use self::build::build_context;
 pub use self::resolve::{ResolvedTarget, normalize_qn_kind_tokens, resolve_target};
 
+use self::content::retrieve_content_assets;
 use self::payload::apply_payload_budgets;
 use self::rank::{rank_context, trim_context};
 use self::saved::retrieve_saved_context;
@@ -66,10 +68,12 @@ pub(super) const BUCKET_TESTS: usize = 10;
 ///
 /// Wraps the free-function pipeline into a struct so callers inject one
 /// [`Store`] reference and call engine operations as methods.  An optional
-/// [`ContentStore`] enables CM6 saved-context retrieval.
+/// [`ContentStore`] enables CM6 saved-context retrieval and the graph/content
+/// companion unified selection policy (Patch N2).
 pub struct ContextEngine<'a> {
     store: &'a Store,
-    /// Optional content store for CM6 retrieval-backed restoration.
+    /// Optional content store for CM6 retrieval-backed restoration and
+    /// graph/content companion content-asset lookup (Patch N2).
     content_store: Option<&'a ContentStore>,
     budget_policy: BudgetPolicy,
 }
@@ -84,11 +88,18 @@ impl<'a> ContextEngine<'a> {
         }
     }
 
-    /// Attach a content store to enable saved-context retrieval (CM6).
+    /// Attach a content store to enable saved-context retrieval (CM6) and
+    /// graph/content companion content-asset lookup (Patch N2).
     ///
     /// When attached and `request.include_saved_context` is `true`, the engine
     /// queries the content store for relevant saved artifacts after graph
     /// retrieval and merges them into `ContextResult::saved_context_sources`.
+    ///
+    /// When attached and `request.include_content_assets` is `true`, the engine
+    /// also queries for non-code file assets (docs, config, templates, SQL)
+    /// adjacent to the request target or changed files, merging them into
+    /// `ContextResult::content_assets` under the unified selection ordering
+    /// policy (N2).
     pub fn with_content_store(mut self, cs: &'a ContentStore) -> Self {
         self.content_store = Some(cs);
         self
@@ -110,6 +121,9 @@ impl<'a> ContextEngine<'a> {
     /// retrieves neighbors, ranks, trims, and optionally applies code spans.
     /// When `request.include_saved_context` is `true` and a content store is
     /// attached, also populates `saved_context_sources` (CM6).
+    /// When `request.include_content_assets` is `true` and a content store is
+    /// attached, also populates `content_assets` under the unified graph/content
+    /// selection ordering policy (Patch N2).
     pub fn build(&self, request: &ContextRequest) -> Result<ContextResult> {
         let mut budgets = BudgetManager::new();
         let mut effective_request = request.clone();
@@ -140,6 +154,15 @@ impl<'a> ContextEngine<'a> {
             None,
         );
 
+        // N2: resolve content asset limit against policy, then request override.
+        let content_asset_limit = budgets.resolve_limit(
+            self.budget_policy
+                .content_saved_context_lookup
+                .content_assets,
+            "content_saved_context_lookup.max_content_assets",
+            effective_request.max_content_assets,
+        );
+
         let mut result = build_context(self.store, &effective_request, &self.budget_policy)?;
         budgets.record_report(result.budget.clone());
         if effective_request.include_saved_context
@@ -155,6 +178,27 @@ impl<'a> ContextEngine<'a> {
                 retrieval.matched_source_count > saved_source_limit,
             );
             result.saved_context_sources = retrieval.sources;
+        }
+        // N2: retrieve non-code content assets under the unified selection policy.
+        // Content assets are populated after graph assembly so the selection
+        // ordering is preserved: graph targets first, content assets second,
+        // saved artifacts last.
+        if effective_request.include_content_assets
+            && let Some(cs) = self.content_store
+        {
+            let assets =
+                retrieve_content_assets(cs, &effective_request, &result, content_asset_limit);
+            let matched_count = assets.len();
+            budgets.record_usage(
+                self.budget_policy
+                    .content_saved_context_lookup
+                    .content_assets,
+                "content_saved_context_lookup.max_content_assets",
+                content_asset_limit,
+                matched_count,
+                matched_count >= content_asset_limit,
+            );
+            result.content_assets = assets;
         }
         apply_payload_budgets(&mut result, &self.budget_policy);
         let node_limit = result.request.max_nodes.unwrap_or(DEFAULT_MAX_NODES);

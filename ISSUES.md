@@ -603,22 +603,22 @@ Atlas already has graph search for symbols and relationships plus file/content/t
 
 #### Patch N1 — Declare graph/content lookup contract
 
-- [ ] document canonical responsibility split:
-  - [ ] graph search answers symbols, ownership, callers, callees, tests, imports, and structural relationships
-  - [ ] content lookup answers prompts, docs, config, SQL, templates, logs, and embedded text assets
-  - [ ] saved-context lookup answers prior Atlas outputs and session artifacts
-  - [ ] context engine decides how these surfaces combine for a task
-- [ ] define graph/content lookup as companion systems, not fallback-only systems
-- [ ] define when both should be queried for one request:
-  - [ ] review changes touching config or templates
-  - [ ] symbols whose behavior depends on prompts or SQL
-  - [ ] docs/spec questions tied to implementation files
-  - [ ] agent/task questions needing saved context plus graph facts
-- [ ] document anti-patterns:
-  - [ ] broad file search before graph resolution for symbol questions
-  - [ ] graph-only review when changed files include config/templates/prompts
-  - [ ] content-only answers for structural dependency questions
-  - [ ] separate unbounded result lists from graph and content tools
+- [x] document canonical responsibility split:
+  - [x] graph search answers symbols, ownership, callers, callees, tests, imports, and structural relationships
+  - [x] content lookup answers prompts, docs, config, SQL, templates, logs, and embedded text assets
+  - [x] saved-context lookup answers prior Atlas outputs and session artifacts
+  - [x] context engine decides how these surfaces combine for a task
+- [x] define graph/content lookup as companion systems, not fallback-only systems
+- [x] define when both should be queried for one request:
+  - [x] review changes touching config or templates
+  - [x] symbols whose behavior depends on prompts or SQL
+  - [x] docs/spec questions tied to implementation files
+  - [x] agent/task questions needing saved context plus graph facts
+- [x] document anti-patterns:
+  - [x] broad file search before graph resolution for symbol questions
+  - [x] graph-only review when changed files include config/templates/prompts
+  - [x] content-only answers for structural dependency questions
+  - [x] separate unbounded result lists from graph and content tools
 
 Why:
 - non-code artifacts are first-class context when they affect behavior
@@ -626,26 +626,26 @@ Why:
 
 #### Patch N2 — Unified bounded selection policy
 
-- [ ] define one context selection policy for mixed graph/content results:
-  - [ ] direct graph targets first
-  - [ ] changed files and changed symbols next
-  - [ ] adjacent config/templates/prompts/SQL tied to changed files next
-  - [ ] caller/callee/test evidence next
-  - [ ] saved-session artifacts only when relevant to current task
-- [ ] apply shared budgets across mixed results:
-  - [ ] max graph nodes
-  - [ ] max graph edges
-  - [ ] max content assets
-  - [ ] max saved artifacts
-  - [ ] max total payload bytes/tokens
-- [ ] ensure truncation reports mixed omissions:
-  - [ ] omitted graph nodes
-  - [ ] omitted graph edges
-  - [ ] omitted content assets
-  - [ ] omitted saved artifacts
-  - [ ] omitted bytes/tokens
-- [ ] add deterministic tie-breakers when graph and content scores compete
-- [ ] add tests for mixed graph/content truncation order
+- [x] define one context selection policy for mixed graph/content results:
+  - [x] direct graph targets first
+  - [x] changed files and changed symbols next
+  - [x] adjacent config/templates/prompts/SQL tied to changed files next
+  - [x] caller/callee/test evidence next
+  - [x] saved-session artifacts only when relevant to current task
+- [x] apply shared budgets across mixed results:
+  - [x] max graph nodes
+  - [x] max graph edges
+  - [x] max content assets
+  - [x] max saved artifacts
+  - [x] max total payload bytes/tokens
+- [x] ensure truncation reports mixed omissions:
+  - [x] omitted graph nodes
+  - [x] omitted graph edges
+  - [x] omitted content assets
+  - [x] omitted saved artifacts
+  - [x] omitted bytes/tokens
+- [x] add deterministic tie-breakers when graph and content scores compete
+- [x] add tests for mixed graph/content truncation order
 
 Why:
 - separate bounded lists can still create an unbounded combined context
@@ -653,26 +653,26 @@ Why:
 
 #### Patch N3 — Coordinated ranking and evidence
 
-- [ ] define a mixed-result ranking envelope with source kind:
-  - [ ] `graph_node`
-  - [ ] `graph_edge`
-  - [ ] `file_asset`
-  - [ ] `content_match`
-  - [ ] `template`
-  - [ ] `text_asset`
-  - [ ] `saved_context`
-- [ ] normalize ranking signals across surfaces:
-  - [ ] exact symbol match
-  - [ ] graph distance
-  - [ ] changed-file boost
-  - [ ] same package/directory boost
-  - [ ] BM25/content match score
-  - [ ] trigram/fuzzy correction
-  - [ ] proximity/title/path rerank
-  - [ ] session recency/relevance
-- [ ] expose why each mixed item was selected through ranking evidence
-- [ ] include `selection_reason` for both graph and content assets
-- [ ] add tests proving config/template/prompt matches can be selected with graph evidence when relevant
+- [x] define a mixed-result ranking envelope with source kind:
+  - [x] `graph_node`
+  - [x] `graph_edge`
+  - [x] `file_asset`
+  - [x] `content_match`
+  - [x] `template`
+  - [x] `text_asset`
+  - [x] `saved_context`
+- [x] normalize ranking signals across surfaces:
+  - [x] exact symbol match
+  - [x] graph distance
+  - [x] changed-file boost
+  - [x] same package/directory boost
+  - [x] BM25/content match score
+  - [x] trigram/fuzzy correction
+  - [x] proximity/title/path rerank
+  - [x] session recency/relevance
+- [x] expose why each mixed item was selected through ranking evidence
+- [x] include `selection_reason` for both graph and content assets
+- [x] add tests proving config/template/prompt matches can be selected with graph evidence when relevant
 
 Why:
 - mixed context should be explainable, not an opaque concatenation of tool outputs
@@ -680,19 +680,19 @@ Why:
 
 #### Patch N4 — MCP and prompt workflow integration
 
-- [ ] update MCP tool descriptions to describe graph/content companion rules
+- [x] update MCP tool descriptions to describe graph/content companion rules
 - [x] improve `search_content` invalid-regex guidance:
   - [x] keep `is_regex=true` strict; invalid regex returns error instead of fallback search
   - [x] include escaped-regex suggestion for literal metacharacters, for example `Context \\{`
   - [x] suggest `is_regex=false` when caller wants literal text search
   - [x] add MCP regression test for invalid pattern like `Command::Context|Context {`
-- [ ] update `review_change` prompt to query content assets when changed files include docs/config/templates/prompts/SQL
-- [ ] update `inspect_symbol` prompt to look for context-adjacent assets only when graph evidence suggests dependency
-- [ ] update installed AGENTS instructions:
-  - [ ] graph tools first for structure
-  - [ ] content tools as companion lookup for non-code assets
-  - [ ] context engine should merge both under bounded policy
-- [ ] add prompt/registry snapshot tests for companion-contract wording
+- [x] update `review_change` prompt to query content assets when changed files include docs/config/templates/prompts/SQL
+- [x] update `inspect_symbol` prompt to look for context-adjacent assets only when graph evidence suggests dependency
+- [x] update installed AGENTS instructions:
+  - [x] graph tools first for structure
+  - [x] content tools as companion lookup for non-code assets
+  - [x] context engine should merge both under bounded policy
+- [x] add prompt/registry snapshot tests for companion-contract wording
 
 Why:
 - agents follow surface contracts more reliably than implicit architecture
@@ -700,11 +700,11 @@ Why:
 
 #### Patch N completion criteria
 
-- [ ] graph/content companion contract is documented as a design rule
-- [ ] mixed graph/content context has one bounded selection policy
-- [ ] mixed results expose source kind, selection reason, ranking evidence, and truncation metadata
-- [ ] MCP prompts, tool descriptions, README, and installed AGENTS instructions agree
-- [ ] tests cover mixed code + config/template/prompt/doc context assembly
+- [x] graph/content companion contract is documented as a design rule
+- [x] mixed graph/content context has one bounded selection policy
+- [x] mixed results expose source kind, selection reason, ranking evidence, and truncation metadata
+- [x] MCP prompts, tool descriptions, README, and installed AGENTS instructions agree
+- [x] tests cover mixed code + config/template/prompt/doc context assembly
 
 ---
 
@@ -1231,7 +1231,7 @@ Why:
 - [x] add optional duplicate-qualified-name detector:
   - [x] fail only if duplicate QNs are invalid for that language/model
   - [x] otherwise record as advisory and do not assert
-- [ ] add regression tests for each new invariant that catches a real bug found by fuzzing
+- [x] add regression tests for each new invariant that catches a real bug found by fuzzing
 
 Why:
 - current fuzz verifies “no crash” only

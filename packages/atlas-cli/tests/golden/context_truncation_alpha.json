@@ -4,6 +4,7 @@
     "nodes_dropped": 2,
     "edges_dropped": 2,
     "files_dropped": 0,
+    "content_assets_dropped": 0,
     "truncated": true
   },
   "selected_node_qnames": [

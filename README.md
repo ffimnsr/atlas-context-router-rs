@@ -535,16 +535,18 @@ The MCP server (`atlas serve`) exposes these tools to agents:
 | `cross_file_links` | Files semantically linked to a file by shared symbol references |
 | `concept_clusters` | Related file groups around seed files by coupling density |
 
+Graph tools answer code structure questions; content tools answer non-code context-adjacent questions (docs, config, templates, SQL, prompts). Use both as companion surfaces, not as a fallback chain.
+
 Search tool selection rules:
 
 1. `query_graph`: use for symbol names, definitions, and graph-native relationships.
-2. `search_files`: use when filename, extension, or path pattern is known but content is not.
-3. `search_content`: use for literal or regex text such as error strings, comments, config keys, SQL fragments, and embedded constants. Enable `rich_snippets=true` only when grouped before/match/after context is worth extra payload.
+2. `search_files`: companion lookup for config, template, SQL, Markdown, and other non-code assets not indexed as graph symbols.
+3. `search_content`: companion lookup for text matches; use alongside graph results when changed files include embedded constants, config keys, SQL fragments, or error strings.
 4. `read_file_excerpt`: use when file path is already known and you need precise line ranges or one line with bounded surrounding context.
 5. `get_docs_section`: use for Markdown docs when section identity matters more than raw line ranges.
 6. `read_file_around_match`: use when file path is known and you need grouped context around matched lines.
-7. `search_templates`: use when looking specifically for template files by engine or extension.
-8. `search_text_assets`: use for SQL, config, `.env`, and prompt files outside graph-symbol lookup.
+7. `search_templates`: companion lookup for HTML, Jinja, Handlebars, and related template files when changed files include templates.
+8. `search_text_assets`: companion lookup for SQL, config, `.env`, and prompt files when changed files or graph evidence points to non-code assets. Pass results to `get_context` via `files=` to merge under bounded selection policy.
 
 ## MCP Prompts
 
@@ -573,7 +575,8 @@ Recommended agent workflow:
 2. `get_minimal_context` or `get_review_context`
 3. `get_impact_radius` or `explain_change`
 4. `query_graph` or `get_context`
-5. fall back to file search only when graph lacks needed fact
+5. when changed files include docs, config, templates, SQL, or prompts: call `search_text_assets` or `search_templates` as companion lookup, then pass results into `get_context` via `files=` to merge under bounded selection policy
+6. do not use content search before graph tools for symbol questions
 
 ## Contributing
 

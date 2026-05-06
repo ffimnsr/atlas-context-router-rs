@@ -164,3 +164,67 @@ Store split exists so one subsystem can degrade without corrupting others.
 ## Mental model
 
 Use `worldtree.db` for code truth, `context.db` for large text, and `session.db` for continuity. Frontends differ. Storage contract does not.
+
+---
+
+## Graph/Content Companion Contract
+
+Atlas has two coordinated retrieval surfaces: the graph (symbol and relationship data) and the content store (non-code artifacts). These are companion systems operating under one bounded context policy — not a fallback chain and not separate universes.
+
+### Canonical responsibility split
+
+| Surface | Answers |
+| ------- | ------- |
+| **Graph search** (`query_graph`, `symbol_neighbors`, `traverse_graph`, `get_context`) | Symbols, ownership, callers, callees, tests, imports, and structural relationships |
+| **Content lookup** (`search_content`, `search_files`, `search_templates`, `search_text_assets`) | Prompts, docs, config, SQL, templates, logs, and embedded text assets |
+| **Saved-context lookup** (`search_saved_context`, `read_saved_context`) | Prior Atlas outputs and session artifacts from `context.db` |
+| **Context engine** (`get_context`, `get_review_context`) | Merges both surfaces under one bounded selection, ranking, evidence, and truncation policy |
+
+### When to query both surfaces for one request
+
+- Review of changes that touch config files or templates — both graph (what symbols changed) and content (what config/template text changed)
+- Symbols whose behavior depends on prompts or SQL — graph gives structural callers/callees, content gives the embedded text
+- Docs/spec questions tied to implementation files — graph gives structural context, content gives the specification
+- Agent/task questions that need saved context plus graph facts
+
+### Unified bounded selection policy
+
+Context results mix graph items and content assets under a single priority ordering:
+
+1. **Direct graph targets** — seed nodes resolved from the request, distance=0
+2. **Changed files and changed symbols** — nodes and files flagged `changed_symbol=true` from review/impact seeds
+3. **Adjacent content assets** — non-code assets (docs, config, templates, SQL) adjacent to changed files or tied to changed symbols
+4. **Caller/callee/test evidence** — graph neighbors one or more hops from the seed
+5. **Saved-session artifacts** — prior Atlas outputs from `context.db`, only when relevant to the current task
+
+Shared budgets apply across all surfaces in one result:
+
+- `max_nodes` — graph node cap
+- `max_edges` — graph edge cap
+- `max_content_assets` — non-code file asset cap
+- `max_sources` — saved artifact cap
+- `max_total_bytes` / `max_tokens` — combined payload cap
+
+Truncation metadata reports omissions per surface:
+
+- `nodes_dropped`, `edges_dropped`, `files_dropped` — graph omissions
+- `content_assets_dropped` — non-code asset omissions
+- `source_mix` with `items_dropped` per source kind — full budget breakdown
+
+**Deterministic tie-breakers when graph and content scores compete:**
+
+- Graph nodes take priority over content assets at equal relevance score (code structure is primary)
+- Among content assets: `adjacent_to_changed_file` > `related_to_changed_symbol` > `content_match`
+- Equal-scored graph nodes: alphabetical by `qualified_name`
+- Equal-scored content assets: alphabetical by `path`
+
+### Anti-patterns
+
+- Broad file search before graph resolution for symbol questions — use `query_graph` first
+- Graph-only review when changed files include config/templates/prompts — also query content
+- Content-only answers for structural dependency questions — always check graph first for code relationships
+- Separate unbounded result lists from graph and content tools — the context engine applies one shared budget
+
+### Design rule summary
+
+Non-code artifacts are first-class context when they affect behavior. Graph-first does not mean content-blind. The context engine is the merge point; graph and content tools are coordinated inputs to it.

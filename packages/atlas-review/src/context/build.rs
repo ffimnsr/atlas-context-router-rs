@@ -180,6 +180,7 @@ pub(super) fn build_review_context(
         ambiguity: None,
         workflow: None,
         saved_context_sources: vec![],
+        content_assets: vec![],
         budget: impact.budget.clone(),
     };
 

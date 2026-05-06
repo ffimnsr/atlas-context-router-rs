@@ -3,6 +3,7 @@ use crate::ranking::{
     ContextRankingPrimitives, TrimmingPrimitives, compare_edge_scores, compare_file_priorities,
     compare_node_scores,
 };
+use atlas_core::model::MixedResultKind;
 
 pub(super) fn rank_context(result: &mut ContextResult) {
     let ranking = ContextRankingPrimitives::default();
@@ -27,6 +28,17 @@ pub(super) fn rank_context(result: &mut ContextResult) {
         let evidence = sn
             .context_ranking_evidence
             .get_or_insert_with(|| ContextRankingEvidence::from_selection_reason(reason));
+        // N3: ensure graph-node surface kind is set (from_selection_reason already
+        // sets GraphNode by default, but be explicit for clarity).
+        evidence
+            .source_kind
+            .get_or_insert(MixedResultKind::GraphNode);
+        // N3: record the graph distance penalty so agents can see how distance
+        // affected ranking alongside the final score.
+        let dist_penalty = ranking.distance_step_penalty * sn.distance as f64;
+        if dist_penalty > 0.0 {
+            evidence.graph_distance_penalty = Some(dist_penalty as f32);
+        }
         evidence.sync_score(*s);
     }
 
@@ -49,7 +61,15 @@ pub(super) fn rank_context(result: &mut ContextResult) {
         let reason = se.selection_reason;
         let evidence = se
             .context_ranking_evidence
-            .get_or_insert_with(|| ContextRankingEvidence::from_selection_reason(reason));
+            // N3: edges are GraphEdge, not GraphNode.
+            .get_or_insert_with(|| {
+                ContextRankingEvidence::from_selection_reason(reason)
+                    .with_source_kind(MixedResultKind::GraphEdge)
+            });
+        // Correct any evidence that was initialized without the edge surface kind.
+        if evidence.source_kind == Some(MixedResultKind::GraphNode) {
+            evidence.source_kind = Some(MixedResultKind::GraphEdge);
+        }
         evidence.sync_score(*s);
     }
 
@@ -136,6 +156,7 @@ pub(super) fn trim_context(result: &mut ContextResult) {
         nodes_dropped: dropped_nodes,
         edges_dropped: dropped_edges,
         files_dropped: dropped_files,
+        content_assets_dropped: 0, // set later in ContextEngine::build() after retrieval
         truncated: dropped_nodes > 0 || dropped_edges > 0 || dropped_files > 0,
         payload: None,
     };

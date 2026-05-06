@@ -97,6 +97,14 @@ pub struct ContextRequest {
     /// `BudgetPolicy::mcp_cli_payload_serialization.context_tokens_estimate.max_limit`
     /// so callers cannot bypass the central policy ceiling.
     pub token_budget: Option<usize>,
+    // --- Graph/Content Companion Patch N2: unified bounded selection ---
+    /// When `true`, the engine queries the content store for non-code assets
+    /// (docs, config, templates, SQL, prompts) adjacent to the request target
+    /// or changed files and populates `ContextResult::content_assets`.
+    /// Has no effect when no content store is provided to the engine.
+    pub include_content_assets: bool,
+    /// Maximum content assets to include. `None` uses the policy default.
+    pub max_content_assets: Option<usize>,
 }
 
 impl Default for ContextRequest {
@@ -121,6 +129,8 @@ impl Default for ContextRequest {
             agent_id: None,
             merge_agent_partitions: false,
             token_budget: None,
+            include_content_assets: false,
+            max_content_assets: None,
         }
     }
 }
@@ -174,14 +184,28 @@ impl SelectionReason {
 /// Context ranking evidence explains why an item was included and ranked within
 /// a context/review result after graph expansion, impact analysis, and
 /// saved-context scoring.
+///
+/// Patch N3 extends this struct with normalized ranking signals applicable
+/// across all retrieval surfaces (graph, content, saved context) so that
+/// mixed-result sets are explainable rather than opaque.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ContextRankingEvidence {
+    // --- core scores ---
     /// Initial relevance score before context-specific additive boosts.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub base_score: Option<f32>,
     /// Final relevance score after all context-specific contributions.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub final_score: Option<f32>,
+
+    // --- N3: mixed-result surface discriminant ---
+    /// Which retrieval surface produced this item.
+    /// Allows callers to interpret other evidence fields correctly across
+    /// heterogeneous (graph + content + saved-context) result sets.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_kind: Option<MixedResultKind>,
+
+    // --- graph selection reason flags ---
     /// Item is the direct target of the context request.
     #[serde(default, skip_serializing_if = "is_false")]
     pub direct_target: bool,
@@ -197,6 +221,47 @@ pub struct ContextRankingEvidence {
     /// Item was included through test adjacency.
     #[serde(default, skip_serializing_if = "is_false")]
     pub test_adjacent: bool,
+
+    // --- N3: normalized ranking signals (apply across graph and content) ---
+    /// Item matched an exact symbol name derived from the request target.
+    /// Set for content assets whose preview text contains an exact symbol name
+    /// and for graph nodes that are the direct resolution of a symbol query.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub exact_symbol_match: bool,
+    /// Raw BM25 / FTS content-match score for this item.
+    /// Populated for content assets and saved-context sources retrieved via
+    /// lexical search; absent for graph nodes selected by graph traversal.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bm25_score: Option<f32>,
+    /// Additive boost applied because this item is in or adjacent to a
+    /// changed file.  Set for content assets (adjacency) and graph nodes
+    /// (direct-target or changed-symbol selection).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub changed_file_boost: Option<f32>,
+    /// Additive boost applied for same-package or same-directory proximity
+    /// relative to the request target.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub same_package_dir_boost: Option<f32>,
+    /// Score contribution from trigram or fuzzy-match correction applied to
+    /// bring a near-miss symbol or path hit into the result set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trigram_correction: Option<f32>,
+    /// Additive boost from path-title proximity reranking — applied when an
+    /// asset's path is similar to the target file or changed-file paths.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path_proximity_boost: Option<f32>,
+    /// Score penalty from graph hop distance from the seed node.
+    /// Populated for graph nodes; absent for content / saved-context items.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub graph_distance_penalty: Option<f32>,
+    /// Additive boost from session recency or relevance.
+    /// Unifies `recent_source_boost` and `same_session_boost` under one
+    /// normalized signal for mixed-result ranking; individual fields retain
+    /// their original values for backward compatibility.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_recency_boost: Option<f32>,
+
+    // --- legacy saved-context-specific signals (kept for compat) ---
     /// Additive score contributed by impact analysis weighting.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub impact_score_contribution: Option<f32>,
@@ -215,7 +280,13 @@ pub type ContextScoreEvidence = ContextRankingEvidence;
 
 impl ContextRankingEvidence {
     pub fn from_selection_reason(reason: SelectionReason) -> Self {
-        let mut evidence = Self::default();
+        let mut evidence = Self {
+            source_kind: Some(MixedResultKind::GraphNode),
+            ..Self::default()
+        };
+        // Graph nodes are the default surface kind for selection-reason
+        // construction; callers building edge evidence should override with
+        // `evidence.source_kind = Some(MixedResultKind::GraphEdge)`.
         match reason {
             SelectionReason::DirectTarget => evidence.direct_target = true,
             SelectionReason::Caller => evidence.caller_neighbor = true,
@@ -229,6 +300,14 @@ impl ContextRankingEvidence {
         evidence
     }
 
+    /// Override the source kind on an already-constructed evidence value.
+    /// Useful when `from_selection_reason` is called for edges but the caller
+    /// needs to tag the item as [`MixedResultKind::GraphEdge`].
+    pub fn with_source_kind(mut self, kind: MixedResultKind) -> Self {
+        self.source_kind = Some(kind);
+        self
+    }
+
     pub fn sync_score(&mut self, score: f32) {
         self.base_score.get_or_insert(score);
         self.final_score = Some(score);
@@ -240,15 +319,24 @@ pub fn context_ranking_evidence_legend() -> serde_json::Value {
         "contract_scope": "Separate from retrieval ranking evidence: retrieval evidence explains why a result matched search, while context ranking evidence explains why a node, edge, or saved artifact was included and ranked inside a bounded context or review result.",
         "base_score": "Initial context relevance score before impact or saved-context additive boosts.",
         "final_score": "Final context relevance score after all recorded contributions.",
+        "source_kind": "Which retrieval surface produced this item: graph_node, graph_edge, file_asset, content_match, template, text_asset, or saved_context. Allows interpretation of other evidence fields across heterogeneous mixed results.",
         "direct_target": "Item is the primary target resolved from the request.",
         "changed_symbol": "Item is a changed symbol selected from changed-file or impact review seeds.",
         "caller_neighbor": "Item was included as a caller of the target or neighbor.",
         "callee_neighbor": "Item was included as a callee of the target or neighbor.",
         "test_adjacent": "Item was included because of test adjacency.",
+        "exact_symbol_match": "Item matched an exact symbol name from the request target (set for graph nodes that are direct resolutions and for content assets whose text contains an exact symbol name).",
+        "bm25_score": "Raw BM25/FTS content-match score for content assets and saved-context sources retrieved via lexical search. Absent for graph nodes selected by graph traversal.",
+        "changed_file_boost": "Quantified additive boost applied because item is in or adjacent to a changed file.",
+        "same_package_dir_boost": "Additive boost applied for same-package or same-directory proximity relative to the request target.",
+        "trigram_correction": "Score contribution from trigram or fuzzy-match correction bringing a near-miss symbol or path hit into the result.",
+        "path_proximity_boost": "Additive boost from path-title proximity reranking when an asset path is similar to the target or changed-file paths.",
+        "graph_distance_penalty": "Score penalty from graph hop distance from the seed node (graph nodes only).",
+        "session_recency_boost": "Unified normalized signal for session recency/relevance across all surfaces. Mirrors recent_source_boost and same_session_boost for saved context; also set for content assets when session context is available.",
         "impact_score_contribution": "Additive contribution from impact analysis weighting in review or impact context.",
         "saved_context_rank_score": "Base saved-context ranking contribution derived from retrieval rank.",
-        "recent_source_boost": "Additive boost for recently created saved-context artifacts.",
-        "same_session_boost": "Additive boost for saved-context artifacts from the active session."
+        "recent_source_boost": "Additive boost for recently created saved-context artifacts (kept for backward compatibility; see also session_recency_boost).",
+        "same_session_boost": "Additive boost for saved-context artifacts from the active session (kept for backward compatibility; see also session_recency_boost)."
     })
 }
 
@@ -303,6 +391,11 @@ pub struct TruncationMeta {
     pub edges_dropped: usize,
     /// Files dropped to stay within the cap.
     pub files_dropped: usize,
+    /// Content assets dropped to stay within the cap.
+    /// Tracks non-code assets (docs, config, templates, SQL) omitted by the
+    /// graph/content companion unified budget policy.
+    #[serde(default)]
+    pub content_assets_dropped: usize,
     /// `true` when any item was dropped.
     pub truncated: bool,
     /// Payload-level trimming metadata applied after graph selection.
@@ -355,6 +448,7 @@ impl TruncationMeta {
             nodes_dropped: 0,
             edges_dropped: 0,
             files_dropped: 0,
+            content_assets_dropped: 0,
             truncated: false,
             payload: None,
         }
@@ -475,6 +569,101 @@ pub struct WorkflowSummary {
     pub noise_reduction: NoiseReductionSummary,
 }
 
+// ---------------------------------------------------------------------------
+// Graph/Content Companion Patch N2 — content asset types
+// Graph/Content Companion Patch N3 — mixed-result ranking envelope
+// ---------------------------------------------------------------------------
+
+/// Discriminant identifying which retrieval surface produced an item in a
+/// mixed graph/content context result.
+///
+/// Carried in [`ContextRankingEvidence::source_kind`] so callers can
+/// understand which surface each result came from and interpret the other
+/// evidence fields correctly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MixedResultKind {
+    /// Symbol or type node from the code graph.
+    GraphNode,
+    /// Relationship edge from the code graph.
+    GraphEdge,
+    /// Source file entry tracked in the graph file index.
+    FileAsset,
+    /// Non-code asset matched via general content search (docs, readmes).
+    ContentMatch,
+    /// Template file (HTML, Jinja2, Mustache, Tera, Handlebars, etc.).
+    Template,
+    /// Text asset: SQL, config, env, or prompt file.
+    TextAsset,
+    /// Saved context artifact from a prior Atlas session.
+    SavedContext,
+}
+
+impl MixedResultKind {
+    /// Map a content asset `content_type` string to the appropriate surface
+    /// kind.  Falls back to [`ContentMatch`][Self::ContentMatch] for unknown
+    /// categories.
+    pub fn from_content_type(content_type: &str) -> Self {
+        match content_type {
+            "template" => Self::Template,
+            "sql" | "config" | "prompt" => Self::TextAsset,
+            _ => Self::ContentMatch,
+        }
+    }
+}
+
+/// Why a content asset was included in a mixed graph/content context result.
+///
+/// Variants follow the unified selection ordering policy:
+/// adjacent_to_changed_file > related_to_changed_symbol > content_match.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContentAssetReason {
+    /// Asset is in the same directory as a changed file, or its path
+    /// prefix matches a changed file path.
+    AdjacentToChangedFile,
+    /// Asset was retrieved because its content mentions a changed symbol name.
+    RelatedToChangedSymbol,
+    /// General content match from a query derived from the request context.
+    ContentMatch,
+}
+
+impl ContentAssetReason {
+    /// Numeric priority used for deterministic tie-breaking.
+    /// Higher value = higher priority.
+    pub fn priority(self) -> u8 {
+        match self {
+            Self::AdjacentToChangedFile => 3,
+            Self::RelatedToChangedSymbol => 2,
+            Self::ContentMatch => 1,
+        }
+    }
+}
+
+/// A non-code content asset (doc, config, template, SQL, prompt) surfaced as
+/// part of a unified graph/content context result.
+///
+/// Populated when `ContextRequest::include_content_assets` is `true` and a
+/// content store is provided to the engine. Only compact metadata and a short
+/// preview are included; full content is fetched via `source_id`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContentAsset {
+    /// Stable identifier for the stored source.
+    pub source_id: String,
+    /// File path or label for this asset (canonical repo-relative when available).
+    pub path: String,
+    /// Asset category: `"doc"`, `"config"`, `"template"`, `"sql"`, `"prompt"`, or `"other"`.
+    pub content_type: String,
+    /// Truncated preview (≤ 512 chars).
+    pub preview: String,
+    /// Why this asset was included under the unified selection policy.
+    pub selection_reason: ContentAssetReason,
+    /// Relevance score for ranking within this result (higher = more relevant).
+    pub relevance_score: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_ranking_evidence: Option<ContextRankingEvidence>,
+}
+
 /// A saved artifact from the content store surfaced inside a [`ContextResult`].
 ///
 /// Returned when `ContextRequest::include_saved_context` is `true` and the
@@ -512,6 +701,13 @@ pub struct ContextResult {
     pub nodes: Vec<SelectedNode>,
     pub edges: Vec<SelectedEdge>,
     pub files: Vec<SelectedFile>,
+    /// Non-code content assets adjacent to the graph targets.
+    ///
+    /// Populated only when `request.include_content_assets` is `true` and a
+    /// content store is provided. Ordered by descending `relevance_score`
+    /// under the unified graph/content selection policy (N2).
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub content_assets: Vec<ContentAsset>,
     pub truncation: TruncationMeta,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub seed_budgets: Vec<SeedBudgetMeta>,

@@ -382,6 +382,50 @@ fn every_listed_tool_dispatches_with_parity_fixture_args() {
 }
 
 #[test]
+fn content_companion_tools_describe_companion_lookup_contract() {
+    let list = tool_list();
+    let tools = list.get("tools").and_then(|t| t.as_array()).unwrap();
+
+    for name in &[
+        "search_text_assets",
+        "search_templates",
+        "search_content",
+        "search_files",
+    ] {
+        let tool = tools
+            .iter()
+            .find(|t| t.get("name") == Some(&serde_json::Value::String((*name).to_owned())))
+            .unwrap_or_else(|| panic!("tool {name} not found in registry"));
+        let desc = tool["description"].as_str().unwrap_or_default();
+        assert!(
+            desc.contains("companion")
+                || desc.contains("graph evidence")
+                || desc.contains("graph tools"),
+            "tool {name} description must reference graph/content companion contract, got: {desc}"
+        );
+    }
+}
+
+#[test]
+fn get_context_description_mentions_content_asset_merging() {
+    let list = tool_list();
+    let tools = list.get("tools").and_then(|t| t.as_array()).unwrap();
+    let tool = tools
+        .iter()
+        .find(|t| t.get("name") == Some(&serde_json::Value::String("get_context".to_owned())))
+        .expect("get_context must be in registry");
+    let desc = tool["description"].as_str().unwrap_or_default();
+    assert!(
+        desc.contains("bounded selection") || desc.contains("bounded"),
+        "get_context description must mention bounded selection policy, got: {desc}"
+    );
+    assert!(
+        desc.contains("config") || desc.contains("templates") || desc.contains("non-code"),
+        "get_context description must mention non-code companion use case, got: {desc}"
+    );
+}
+
+#[test]
 fn get_docs_section_reports_freshness_when_doc_changes_after_index() {
     let fixture = setup_git_mcp_fixture();
     write_repo_file(

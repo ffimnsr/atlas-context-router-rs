@@ -162,7 +162,7 @@ fn render_review_change(args: Option<&serde_json::Value>) -> Result<PromptGetRes
         .unwrap_or_else(|| "bugs, regressions, missing tests, and cross-boundary risk".to_owned());
 
     let text = format!(
-        "Use Atlas MCP to review code changes. Stay grounded in tool output only. Prefer graph tools before file search.\n\nTarget inputs:\n- files: {files}\n- base: {base}\n- focus: {focus}\n\nRecommended workflow:\n1. If files are unknown, call detect_changes with base={base}. If files are already known, skip directly to context.\n2. Check `atlas_provenance` on first result. If repo_root or db_path looks wrong, call status or doctor before continuing.\n3. Call get_minimal_context for cheap triage.\n4. Call get_review_context for fuller changed-symbol, neighbor, and risk detail.\n5. If any result emits `atlas_freshness`, treat graph facts as potentially stale until build_or_update_graph runs.\n6. Call explain_change when API/signature risk, boundary violations, or test gaps need confirmation.\n7. Call get_impact_radius when blast radius needs explicit changed/impacted nodes and files.\n8. Use query_graph, symbol_neighbors, traverse_graph, or get_context only for targeted follow-up on symbols surfaced by review flow.\n\nResponse requirements:\n- Findings first, ordered by severity.\n- Mention changed symbols, impacted tests, ambiguity, truncation, confidence limits, and trust warnings from atlas_provenance/atlas_freshness.\n- Do not invent callers, tests, or dependencies not returned by Atlas."
+        "Use Atlas MCP to review code changes. Stay grounded in tool output only. Prefer graph tools before file search.\n\nTarget inputs:\n- files: {files}\n- base: {base}\n- focus: {focus}\n\nRecommended workflow:\n1. If files are unknown, call detect_changes with base={base}. If files are already known, skip directly to context.\n2. Check `atlas_provenance` on first result. If repo_root or db_path looks wrong, call status or doctor before continuing.\n3. Call get_minimal_context for cheap triage.\n4. Call get_review_context for fuller changed-symbol, neighbor, and risk detail.\n5. If any result emits `atlas_freshness`, treat graph facts as potentially stale until build_or_update_graph runs.\n6. Call explain_change when API/signature risk, boundary violations, or test gaps need confirmation.\n7. Call get_impact_radius when blast radius needs explicit changed/impacted nodes and files.\n8. If changed files include docs, config, templates, prompts, or SQL (e.g. .md, .toml, .yaml, .sql, .html, .j2, .env files), call search_text_assets or search_templates as companion lookup after graph tools run. Pass the discovered asset paths into get_context via 'files' to merge graph and content evidence under one bounded budget.\n9. Use query_graph, symbol_neighbors, traverse_graph, or get_context only for targeted follow-up on symbols surfaced by review flow.\n\nResponse requirements:\n- Findings first, ordered by severity.\n- Mention changed symbols, impacted tests, ambiguity, truncation, confidence limits, and trust warnings from atlas_provenance/atlas_freshness.\n- Do not invent callers, tests, or dependencies not returned by Atlas."
     );
 
     Ok(single_message_response(
@@ -178,7 +178,7 @@ fn render_inspect_symbol(args: Option<&serde_json::Value>) -> Result<PromptGetRe
     });
 
     let text = format!(
-        "Use Atlas MCP to inspect symbol '{symbol}'. Stay grounded in graph results.\n\nQuestion:\n{question}\n\nRecommended workflow:\n1. Call query_graph with text='{symbol}'. Use semantic=true if name is short or ambiguous.\n2. Check `atlas_provenance`. If repo_root or db_path looks wrong for current workspace, stop and call status or doctor.\n3. If multiple candidates appear, compare qname, kind, and file path before choosing. Report ambiguity if unresolved.\n4. Call symbol_neighbors on chosen qname for immediate callers, callees, tests, and local neighborhood.\n5. Call get_context with query='{symbol}' for bounded ranked context. Use intent='usage_lookup' when appropriate.\n6. If any graph result emits `atlas_freshness`, note that pending edits may make edges or locations stale.\n7. Call traverse_graph only if one-hop neighbors are insufficient and you need wider caller/callee reach.\n8. Fall back to file reads only after graph tools stop answering structural questions.\n\nResponse requirements:\n- Name exact qname chosen.\n- Separate direct facts from weaker inferences.\n- Mention truncation, trust warnings, or unresolved edges when present."
+        "Use Atlas MCP to inspect symbol '{symbol}'. Stay grounded in graph results.\n\nQuestion:\n{question}\n\nRecommended workflow:\n1. Call query_graph with text='{symbol}'. Use semantic=true if name is short or ambiguous.\n2. Check `atlas_provenance`. If repo_root or db_path looks wrong for current workspace, stop and call status or doctor.\n3. If multiple candidates appear, compare qname, kind, and file path before choosing. Report ambiguity if unresolved.\n4. Call symbol_neighbors on chosen qname for immediate callers, callees, tests, and local neighborhood.\n5. Call get_context with query='{symbol}' for bounded ranked context. Use intent='usage_lookup' when appropriate.\n6. If any graph result emits `atlas_freshness`, note that pending edits may make edges or locations stale.\n7. Call traverse_graph only if one-hop neighbors are insufficient and you need wider caller/callee reach.\n8. If graph evidence shows edges to config, SQL, template, or prompt files (e.g. file nodes with non-code extensions), call search_text_assets or search_content as companion lookup. Do not search content assets before graph resolution.\n9. Fall back to file reads only after graph tools stop answering structural questions.\n\nResponse requirements:\n- Name exact qname chosen.\n- Separate direct facts from weaker inferences.\n- Mention truncation, trust warnings, or unresolved edges when present."
     );
 
     Ok(single_message_response(
@@ -292,5 +292,61 @@ mod tests {
         assert!(text.contains("atlas_provenance"));
         assert!(text.contains("atlas_freshness"));
         assert!(text.contains("status or doctor"));
+    }
+
+    #[test]
+    fn review_change_prompt_includes_content_companion_guidance() {
+        let rendered = prompt_get(
+            "review_change",
+            Some(&serde_json::json!({
+                "files": "src/handler.rs, config/settings.toml",
+                "base": "main"
+            })),
+        )
+        .expect("prompt get");
+
+        let text = rendered["messages"][0]["content"]["text"]
+            .as_str()
+            .expect("prompt text");
+        // companion lookup for non-code assets
+        assert!(
+            text.contains("search_text_assets") || text.contains("search_templates"),
+            "review_change prompt must mention content companion tools"
+        );
+        // must gate companion lookup after graph tools
+        assert!(
+            text.contains("after graph"),
+            "review_change prompt must instruct content lookup after graph tools"
+        );
+        // graph tools still primary
+        assert!(text.contains("get_review_context"));
+        assert!(text.contains("get_minimal_context"));
+        assert!(text.contains("detect_changes"));
+    }
+
+    #[test]
+    fn inspect_symbol_prompt_includes_content_companion_rule() {
+        let rendered = prompt_get(
+            "inspect_symbol",
+            Some(&serde_json::json!({
+                "symbol": "MyHandler",
+                "question": "Does this read from a config file?"
+            })),
+        )
+        .expect("prompt get");
+
+        let text = rendered["messages"][0]["content"]["text"]
+            .as_str()
+            .expect("prompt text");
+        // content companion conditional on graph evidence
+        assert!(
+            text.contains("search_text_assets") || text.contains("search_content"),
+            "inspect_symbol prompt must mention content companion tools"
+        );
+        // must not front-run graph resolution
+        assert!(
+            text.contains("Do not search content assets before graph resolution"),
+            "inspect_symbol prompt must prohibit content search before graph resolution"
+        );
     }
 }

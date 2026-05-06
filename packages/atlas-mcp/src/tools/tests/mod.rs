@@ -4,7 +4,7 @@ use atlas_contentstore::{ContentStore, IndexingStats};
 use atlas_core::EdgeKind;
 use atlas_core::kinds::NodeKind;
 use atlas_core::model::{Edge, Node, NodeId};
-use atlas_store_sqlite::Store;
+use atlas_store_sqlite::{BuildFinishStats, GraphBuildState, Store};
 use std::process::Command;
 use tempfile::TempDir;
 
@@ -32,6 +32,28 @@ pub(super) fn git_run(dir: &std::path::Path, args: &[&str]) {
     let status = Command::new("git")
         .args(args)
         .current_dir(dir)
+        .env_remove("GIT_ALTERNATE_OBJECT_DIRECTORIES")
+        .env_remove("GIT_COMMON_DIR")
+        .env_remove("GIT_CONFIG")
+        .env_remove("GIT_CONFIG_COUNT")
+        .env_remove("GIT_CONFIG_KEY_0")
+        .env_remove("GIT_CONFIG_VALUE_0")
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_GRAFT_FILE")
+        .env_remove("GIT_IMPLICIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
+        .env_remove("GIT_INTERNAL_SUPER_PREFIX")
+        .env_remove("GIT_NAMESPACE")
+        .env_remove("GIT_NO_REPLACE_OBJECTS")
+        .env_remove("GIT_OBJECT_DIRECTORY")
+        .env_remove("GIT_PREFIX")
+        .env_remove("GIT_REPLACE_REF_BASE")
+        .env_remove("GIT_SHALLOW_FILE")
+        .env_remove("GIT_WORK_TREE")
+        .env("GIT_AUTHOR_NAME", "Atlas Tests")
+        .env("GIT_AUTHOR_EMAIL", "atlas-tests@example.com")
+        .env("GIT_COMMITTER_NAME", "Atlas Tests")
+        .env("GIT_COMMITTER_EMAIL", "atlas-tests@example.com")
         .status()
         .expect("git command");
     assert!(status.success(), "git {args:?} failed");
@@ -323,6 +345,25 @@ pub(super) fn setup_git_mcp_fixture() -> GitMcpFixture {
             },
         )
         .expect("finish indexing");
+
+    store
+        .finish_build(
+            &root.to_string_lossy(),
+            BuildFinishStats {
+                state: GraphBuildState::Built,
+                files_discovered: 4,
+                files_processed: 4,
+                files_accepted: 4,
+                files_skipped_by_byte_budget: 0,
+                files_failed: 0,
+                bytes_accepted: 400,
+                bytes_skipped: 0,
+                nodes_written: 5,
+                edges_written: 2,
+                budget_stop_reason: None,
+            },
+        )
+        .expect("finish build");
 
     GitMcpFixture {
         repo_root: root.to_string_lossy().to_string(),
