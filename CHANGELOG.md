@@ -4,6 +4,14 @@ All notable changes to this project should be recorded in this file.
 
 Versioning policy may evolve while Atlas is still moving quickly, but release notes should still group changes by user-visible impact.
 
+## 1.2.0 - 2026-05-06
+
+### Features
+
+- move embedding configuration from env vars to .atlas/config.toml (`d4ffe64`)
+- implement canonical graph readiness source-of-truth (Patch S) (`f8a2f01`)
+
+
 ## 1.1.2 - 2026-05-05
 
 ### Features
