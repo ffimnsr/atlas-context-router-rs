@@ -4,6 +4,18 @@ All notable changes to this project should be recorded in this file.
 
 Versioning policy may evolve while Atlas is still moving quickly, but release notes should still group changes by user-visible impact.
 
+## 1.2.2 - 2026-05-07
+
+### Features
+
+- add preflight estimates and confirmation for history operations (`41d1dcb`)
+
+
+### Fixes
+
+- error on CI bug (`e13719a`)
+
+
 ## 1.2.1 - 2026-05-06
 
 ### Features
