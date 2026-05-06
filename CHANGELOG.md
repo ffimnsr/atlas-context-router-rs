@@ -4,6 +4,15 @@ All notable changes to this project should be recorded in this file.
 
 Versioning policy may evolve while Atlas is still moving quickly, but release notes should still group changes by user-visible impact.
 
+## 1.2.1 - 2026-05-06
+
+### Features
+
+- query explanation & retrieval mode diagnostics (`aad1eb0`)
+- ship ranking evidence, docs/postprocess/readiness patches; add embedding dimension freeze and backend capabilities (`9e80471`)
+- implement graph/content companion contract with unified ranking (`1f02a86`)
+
+
 ## 1.2.0 - 2026-05-06
 
 ### Features
