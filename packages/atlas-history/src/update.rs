@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::path::Path;
 use std::time::Instant;
 
@@ -10,7 +11,7 @@ use serde::Serialize;
 
 use crate::build::{BuildProgressEvent, BuildSummary, build_historical_graph_with_progress};
 use crate::git;
-use crate::lifecycle::{LifecycleSummary, recompute_lifecycle};
+use crate::lifecycle::{LifecycleSummary, load_existing_lifecycle_summary, recompute_lifecycle};
 use crate::select::CommitSelector;
 
 #[derive(Debug, Clone, Serialize, Default)]
@@ -79,10 +80,14 @@ where
 
     let head_sha =
         git::rev_parse(repo, &branch).with_context(|| format!("resolve branch/ref {branch}"))?;
-    let latest_indexed_sha = store.latest_commit_sha(repo_id)?;
+    let latest_indexed_any_sha = store.latest_commit_sha(repo_id)?;
 
     let commits = git::log_commits(repo, &head_sha, max_commits, None, None)
         .with_context(|| format!("walk history from {head_sha}"))?;
+    let ancestry_shas = commits
+        .iter()
+        .map(|commit| commit.sha.clone())
+        .collect::<BTreeSet<_>>();
 
     let mut missing = Vec::new();
     let mut indexed_base_sha = None;
@@ -94,22 +99,26 @@ where
         missing.push(commit);
     }
 
-    if is_shallow && latest_indexed_sha.is_some() && indexed_base_sha.is_none() {
+    if is_shallow && latest_indexed_any_sha.is_some() && indexed_base_sha.is_none() {
         return Err(HistoryError::Other(format!(
             "shallow clone missing indexed base commit {}; fetch more history or rerun after `git fetch --unshallow`",
-            latest_indexed_sha.as_deref().unwrap_or("(unknown)")
+            latest_indexed_any_sha.as_deref().unwrap_or("(unknown)")
         )));
     }
 
-    let divergence_detected = match latest_indexed_sha.as_ref() {
-        Some(latest) => indexed_base_sha.as_ref() != Some(latest),
-        None => false,
-    };
+    let orphaned_indexed_snapshot = store
+        .list_snapshots_ordered(repo_id)?
+        .iter()
+        .any(|snapshot| !ancestry_shas.contains(&snapshot.commit_sha));
+    let divergence_detected = orphaned_indexed_snapshot
+        || (latest_indexed_any_sha.is_some() && indexed_base_sha.is_none());
     if divergence_detected && !repair {
         return Err(HistoryError::Divergence(format!(
             "indexed history diverged from current {branch} ancestry; rerun with `atlas history update --repair` after verifying force-push or rewritten history"
         )));
     }
+
+    let latest_indexed_sha = indexed_base_sha.clone().or(latest_indexed_any_sha);
 
     missing.reverse();
     let build_summary = if missing.is_empty() {
@@ -129,7 +138,12 @@ where
         )
         .context("build missing history commits")?
     };
-    let lifecycle = recompute_lifecycle(canonical_root, store).context("recompute lifecycle")?;
+    let lifecycle = if build_summary.commits_processed == 0 {
+        load_existing_lifecycle_summary(canonical_root, store)
+            .context("load existing lifecycle summary")?
+    } else {
+        recompute_lifecycle(canonical_root, store).context("recompute lifecycle")?
+    };
 
     Ok(HistoryUpdateSummary {
         branch,
@@ -152,9 +166,9 @@ mod tests {
     use atlas_store_sqlite::Store;
 
     use super::*;
-    use crate::build_historical_graph;
     use crate::select::CommitSelector;
     use crate::test_support::{commit_all, git, git_clone_shallow, git_init, write_file};
+    use crate::{build_historical_graph, rebuild_historical_snapshot};
 
     fn open_store(temp: &tempfile::TempDir) -> (String, Store) {
         let db_path = temp.path().join("history.sqlite");
@@ -339,5 +353,115 @@ mod tests {
         let message = error.to_string();
         assert!(message.contains("shallow clone missing indexed base commit"));
         assert!(message.contains(&first));
+    }
+
+    #[test]
+    fn update_does_not_false_positive_on_rebuilt_older_snapshot() {
+        let repo = tempfile::tempdir().expect("tempdir");
+        git_init(repo.path());
+        write_file(repo.path(), "src/lib.rs", "pub fn alpha() -> i32 { 1 }\n");
+        let first = commit_all(repo.path(), "first");
+        write_file(
+            repo.path(),
+            "src/lib.rs",
+            "pub fn alpha() -> i32 { 1 }\npub fn beta() -> i32 { 2 }\n",
+        );
+        let second = commit_all(repo.path(), "second");
+
+        let db_dir = tempfile::tempdir().expect("db tempdir");
+        let (_db, store) = open_store(&db_dir);
+        let registry = ParserRegistry::with_defaults();
+        let canonical_root = std::fs::canonicalize(repo.path())
+            .expect("canonical root")
+            .to_string_lossy()
+            .into_owned();
+
+        build_historical_graph(
+            repo.path(),
+            &canonical_root,
+            &store,
+            &CommitSelector::Explicit {
+                shas: vec![first.clone(), second.clone()],
+            },
+            &registry,
+            None,
+        )
+        .expect("initial build");
+        rebuild_historical_snapshot(
+            repo.path(),
+            &canonical_root,
+            &store,
+            &first,
+            &registry,
+            Some("HEAD"),
+        )
+        .expect("rebuild older snapshot");
+
+        let summary = update_historical_graph(
+            repo.path(),
+            &canonical_root,
+            &store,
+            Some("HEAD"),
+            false,
+            None,
+            &registry,
+        )
+        .expect("update without false divergence");
+
+        assert_eq!(summary.indexed_base_sha.as_deref(), Some(second.as_str()));
+        assert_eq!(summary.latest_indexed_sha.as_deref(), Some(second.as_str()));
+        assert!(!summary.divergence_detected);
+        assert_eq!(summary.commits_processed, 0);
+    }
+
+    #[test]
+    fn update_noop_reuses_existing_lifecycle_summary() {
+        let repo = tempfile::tempdir().expect("tempdir");
+        git_init(repo.path());
+        write_file(repo.path(), "src/lib.rs", "pub fn alpha() -> i32 { 1 }\n");
+        let first = commit_all(repo.path(), "first");
+
+        let db_dir = tempfile::tempdir().expect("db tempdir");
+        let (_db, store) = open_store(&db_dir);
+        let registry = ParserRegistry::with_defaults();
+        let canonical_root = std::fs::canonicalize(repo.path())
+            .expect("canonical root")
+            .to_string_lossy()
+            .into_owned();
+
+        build_historical_graph(
+            repo.path(),
+            &canonical_root,
+            &store,
+            &CommitSelector::Explicit {
+                shas: vec![first.clone()],
+            },
+            &registry,
+            None,
+        )
+        .expect("initial build");
+        let baseline = recompute_lifecycle(&canonical_root, &store).expect("baseline lifecycle");
+
+        let summary = update_historical_graph(
+            repo.path(),
+            &canonical_root,
+            &store,
+            Some("HEAD"),
+            false,
+            None,
+            &registry,
+        )
+        .expect("noop update");
+
+        assert_eq!(summary.commits_processed, 0);
+        assert_eq!(summary.lifecycle.snapshot_count, baseline.snapshot_count);
+        assert_eq!(
+            summary.lifecycle.node_history_rows,
+            baseline.node_history_rows
+        );
+        assert_eq!(
+            summary.lifecycle.edge_history_rows,
+            baseline.edge_history_rows
+        );
     }
 }

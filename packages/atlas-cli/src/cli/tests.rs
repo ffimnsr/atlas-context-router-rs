@@ -520,11 +520,39 @@ fn parse_history_update_with_repair() {
                 branch,
                 repair,
                 max_commits,
+                yes,
             } => {
                 assert_eq!(branch.as_deref(), Some("main"));
                 assert!(repair);
                 assert_eq!(max_commits, Some(25));
+                assert!(!yes);
             }
+            _ => panic!("expected history update"),
+        }
+    } else {
+        panic!("expected History command");
+    }
+}
+
+#[test]
+fn parse_history_build_with_yes() {
+    let cli = parse(&["atlas", "history", "build", "--yes"]);
+    if let Command::History { subcommand } = cli.command {
+        match subcommand {
+            HistoryCommand::Build { yes, .. } => assert!(yes),
+            _ => panic!("expected history build"),
+        }
+    } else {
+        panic!("expected History command");
+    }
+}
+
+#[test]
+fn parse_history_update_with_yes() {
+    let cli = parse(&["atlas", "history", "update", "--yes"]);
+    if let Command::History { subcommand } = cli.command {
+        match subcommand {
+            HistoryCommand::Update { yes, .. } => assert!(yes),
             _ => panic!("expected history update"),
         }
     } else {

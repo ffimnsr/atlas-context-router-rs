@@ -341,6 +341,10 @@ pub enum HistoryCommand {
         /// index instead of walking the branch history.
         #[arg(long, value_delimiter = ',')]
         commits: Vec<String>,
+
+        /// Skip interactive confirmation after preflight estimate.
+        #[arg(long)]
+        yes: bool,
     },
 
     /// Append missing commits from current branch ancestry without rebuilding existing snapshots.
@@ -356,6 +360,10 @@ pub enum HistoryCommand {
         /// Maximum number of commits to inspect while searching for missing history.
         #[arg(long)]
         max_commits: Option<usize>,
+
+        /// Skip interactive confirmation after preflight estimate.
+        #[arg(long)]
+        yes: bool,
     },
 
     /// Rebuild one indexed historical snapshot for an exact commit SHA.

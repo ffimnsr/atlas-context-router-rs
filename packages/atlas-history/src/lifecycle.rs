@@ -206,6 +206,23 @@ pub fn recompute_lifecycle(canonical_root: &str, store: &Store) -> Result<Lifecy
     })
 }
 
+pub fn load_existing_lifecycle_summary(
+    canonical_root: &str,
+    store: &Store,
+) -> Result<LifecycleSummary> {
+    let repo_id = store
+        .find_repo_id(canonical_root)?
+        .ok_or_else(|| anyhow::anyhow!("repo not yet registered for history: {canonical_root}"))?;
+    let snapshot_count = store.list_snapshots_ordered(repo_id)?.len();
+    let (node_history_rows, edge_history_rows) = store.lifecycle_history_counts(repo_id)?;
+    Ok(LifecycleSummary {
+        repo_id,
+        snapshot_count,
+        node_history_rows,
+        edge_history_rows,
+    })
+}
+
 fn node_signature_hash(node: &HistoricalNode) -> Option<String> {
     if node.params.is_none() && node.return_type.is_none() && node.modifiers.is_none() {
         return None;

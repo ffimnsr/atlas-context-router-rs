@@ -2,10 +2,10 @@ use anyhow::{Context, Result};
 use atlas_history::status::HistoryStatus;
 use atlas_history::{
     CommitSelector, HistoryRetentionPolicy, build_historical_graph_with_progress,
-    compute_churn_report, diff_snapshots, prune_historical_graph, query_dependency_history,
-    query_file_history_with_options, query_module_history, query_symbol_history,
-    rebuild_historical_snapshot_with_progress, recompute_lifecycle,
-    update_historical_graph_with_progress,
+    compute_churn_report, diff_snapshots, estimate_historical_build, estimate_historical_update,
+    prune_historical_graph, query_dependency_history, query_file_history_with_options,
+    query_module_history, query_symbol_history, rebuild_historical_snapshot_with_progress,
+    recompute_lifecycle, update_historical_graph_with_progress,
 };
 
 use crate::cli::{Cli, Command, HistoryCommand};
@@ -13,9 +13,10 @@ use crate::commands::print_json;
 
 use super::context::HistoryContext;
 use super::render::{
-    HistoryBuildProgress, HistoryOutputMode, output_mode, print_churn_details,
-    print_dependency_details, print_diff_details, print_file_details, print_module_details,
-    print_symbol_details, print_warnings,
+    HistoryBuildProgress, HistoryOutputMode, confirm_history_run, history_confirmation_needed,
+    output_mode, print_churn_details, print_dependency_details, print_diff_details,
+    print_file_details, print_history_estimate_preview, print_module_details, print_symbol_details,
+    print_warnings, should_print_history_estimate_preview,
 };
 
 pub(crate) fn run_history_status(cli: &Cli) -> Result<()> {
@@ -61,14 +62,15 @@ pub(crate) fn run_history_build(cli: &Cli) -> Result<()> {
         _ => unreachable!(),
     };
 
-    let (since, until, max_commits, branch, commits) = match sub {
+    let (since, until, max_commits, branch, commits, yes) = match sub {
         HistoryCommand::Build {
             since,
             until,
             max_commits,
             branch,
             commits,
-        } => (since, until, max_commits, branch, commits),
+            yes,
+        } => (since, until, max_commits, branch, commits, *yes),
         _ => unreachable!(),
     };
 
@@ -88,6 +90,24 @@ pub(crate) fn run_history_build(cli: &Cli) -> Result<()> {
     };
     let registry = ctx.parser_registry();
     let selector_indexed_ref = selector.source_ref_label();
+    let estimate = estimate_historical_build(
+        ctx.repo_path(),
+        &ctx.canonical_root,
+        &ctx.store,
+        &selector,
+        &registry,
+    )
+    .context("estimate historical build")?;
+    if !cli.json && should_print_history_estimate_preview(&estimate) {
+        print_history_estimate_preview("history build", &estimate);
+    }
+    if estimate.commits_to_process > 0
+        && history_confirmation_needed(cli.json, yes)
+        && !confirm_history_run("atlas history build")?
+    {
+        eprintln!("history build canceled");
+        return Ok(());
+    }
     let mut progress = HistoryBuildProgress::new(!cli.json);
     let summary = build_historical_graph_with_progress(
         ctx.repo_path(),
@@ -151,17 +171,38 @@ pub(crate) fn run_history_update(cli: &Cli) -> Result<()> {
         _ => unreachable!(),
     };
 
-    let (branch, repair, max_commits) = match sub {
+    let (branch, repair, max_commits, yes) = match sub {
         HistoryCommand::Update {
             branch,
             repair,
             max_commits,
-        } => (branch.as_deref(), *repair, *max_commits),
+            yes,
+        } => (branch.as_deref(), *repair, *max_commits, *yes),
         _ => unreachable!(),
     };
 
     let ctx = HistoryContext::from_cli(cli)?;
     let registry = ctx.parser_registry();
+    let estimate = estimate_historical_update(
+        ctx.repo_path(),
+        &ctx.canonical_root,
+        &ctx.store,
+        branch,
+        repair,
+        max_commits,
+        &registry,
+    )
+    .context("estimate historical update")?;
+    if !cli.json && should_print_history_estimate_preview(&estimate) {
+        print_history_estimate_preview("history update", &estimate);
+    }
+    if estimate.commits_to_process > 0
+        && history_confirmation_needed(cli.json, yes)
+        && !confirm_history_run("atlas history update")?
+    {
+        eprintln!("history update canceled");
+        return Ok(());
+    }
     let mut progress = HistoryBuildProgress::new(!cli.json);
     let summary = update_historical_graph_with_progress(
         ctx.repo_path(),

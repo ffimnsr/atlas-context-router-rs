@@ -4,6 +4,20 @@ use rusqlite::params;
 use super::{Store, StoredEdgeHistory, StoredNodeHistory};
 
 impl Store {
+    pub fn lifecycle_history_counts(&self, repo_id: i64) -> Result<(usize, usize)> {
+        let node_history_rows: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM node_history WHERE repo_id = ?1",
+            params![repo_id],
+            |row| row.get(0),
+        )?;
+        let edge_history_rows: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM edge_history WHERE repo_id = ?1",
+            params![repo_id],
+            |row| row.get(0),
+        )?;
+        Ok((node_history_rows as usize, edge_history_rows as usize))
+    }
+
     pub fn replace_node_history(&self, repo_id: i64, entries: &[StoredNodeHistory]) -> Result<()> {
         self.conn.execute(
             "DELETE FROM node_history WHERE repo_id = ?1",

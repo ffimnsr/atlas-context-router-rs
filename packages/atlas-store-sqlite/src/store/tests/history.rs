@@ -615,8 +615,11 @@ fn node_and_edge_history_round_trip() {
 
     let nodes = store.list_node_history(repo_id).unwrap();
     let edges = store.list_edge_history(repo_id).unwrap();
+    let (node_count, edge_count) = store.lifecycle_history_counts(repo_id).unwrap();
     assert_eq!(nodes.len(), 1);
     assert_eq!(edges.len(), 1);
+    assert_eq!(node_count, 1);
+    assert_eq!(edge_count, 1);
     assert_eq!(nodes[0].qualified_name, "crate::alpha");
     assert_eq!(edges[0].target_qn, "crate::beta");
 }

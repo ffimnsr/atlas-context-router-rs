@@ -2,7 +2,10 @@ use std::io;
 use std::io::IsTerminal;
 use std::time::Duration;
 
+use anyhow::Result;
 use atlas_history::BuildProgressEvent;
+use atlas_history::HistoryEstimateSummary;
+use dialoguer::{Confirm, theme::ColorfulTheme};
 use indicatif::{ProgressBar, ProgressStyle};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -151,6 +154,70 @@ pub(crate) fn print_warnings(warnings: &[String]) {
     }
 }
 
+pub(crate) fn should_print_history_estimate_preview(estimate: &HistoryEstimateSummary) -> bool {
+    estimate.commits_to_process > 0 || !estimate.warnings.is_empty()
+}
+
+pub(crate) fn history_confirmation_needed(json: bool, assume_yes: bool) -> bool {
+    !json && !assume_yes && io::stdin().is_terminal()
+}
+
+pub(crate) fn confirm_history_run(action: &str) -> Result<bool> {
+    Confirm::with_theme(&ColorfulTheme::default())
+        .with_prompt(format!("Continue with {action}?"))
+        .default(true)
+        .interact()
+        .map_err(Into::into)
+}
+
+pub(crate) fn print_history_estimate_preview(action: &str, estimate: &HistoryEstimateSummary) {
+    eprintln!("preflight {action} estimate:");
+    if let Some(branch) = &estimate.branch {
+        eprintln!("  branch            : {branch}");
+    }
+    if let Some(head_sha) = &estimate.head_sha {
+        eprintln!("  head              : {head_sha}");
+    }
+    if let Some(indexed_base_sha) = &estimate.indexed_base_sha {
+        eprintln!("  indexed base      : {indexed_base_sha}");
+    }
+    eprintln!("  commits selected  : {}", estimate.commits_selected);
+    eprintln!("  commits skipped   : {}", estimate.commits_already_indexed);
+    eprintln!("  commits to process: {}", estimate.commits_to_process);
+    eprintln!("  files enumerated  : {}", estimate.estimated_total_files);
+    eprintln!("  changed files     : {}", estimate.estimated_changed_files);
+    eprintln!(
+        "  parseable files   : {}",
+        estimate.estimated_parseable_files
+    );
+    eprintln!("  reused blobs      : {}", estimate.estimated_reused_blobs);
+    eprintln!("  new blobs         : {}", estimate.estimated_new_blobs);
+    eprintln!(
+        "  estimated time    : {}",
+        format_eta_range(estimate.eta_low_secs, estimate.eta_high_secs)
+    );
+    eprintln!("  note              : estimate is approximate");
+    print_warnings(&estimate.warnings);
+}
+
+fn format_eta_range(low_secs: f64, high_secs: f64) -> String {
+    format!(
+        "~{}-{}",
+        format_eta_value(low_secs),
+        format_eta_value(high_secs)
+    )
+}
+
+fn format_eta_value(secs: f64) -> String {
+    if secs < 1.0 {
+        format!("{secs:.1}s")
+    } else if secs < 60.0 {
+        format!("{secs:.0}s")
+    } else {
+        format!("{:.1}m", secs / 60.0)
+    }
+}
+
 pub(crate) fn print_diff_details(report: &atlas_history::GraphDiffReport) {
     if !report.modified_files.is_empty() {
         println!("modified file details:");
@@ -288,4 +355,34 @@ pub(crate) fn print_churn_details(report: &atlas_history::ChurnReport) {
         report.storage_diagnostics.snapshot_file_memberships,
         report.storage_diagnostics.snapshot_density
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use atlas_history::HistoryEstimateSummary;
+
+    #[test]
+    fn history_confirmation_needed_respects_json_and_yes() {
+        assert!(!super::history_confirmation_needed(true, false));
+        assert!(!super::history_confirmation_needed(false, true));
+    }
+
+    #[test]
+    fn history_estimate_preview_hidden_when_no_work_and_no_warnings() {
+        let estimate = HistoryEstimateSummary::default();
+        assert!(!super::should_print_history_estimate_preview(&estimate));
+    }
+
+    #[test]
+    fn history_estimate_preview_shown_for_work_or_warnings() {
+        let mut estimate = HistoryEstimateSummary {
+            commits_to_process: 1,
+            ..HistoryEstimateSummary::default()
+        };
+        assert!(super::should_print_history_estimate_preview(&estimate));
+
+        estimate.commits_to_process = 0;
+        estimate.warnings.push("warning".to_string());
+        assert!(super::should_print_history_estimate_preview(&estimate));
+    }
 }
