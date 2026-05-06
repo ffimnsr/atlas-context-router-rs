@@ -1867,7 +1867,7 @@ Why:
 - [ ] add documented `budget_policy` block to `.atlas/config.toml` with defaults, environment overrides, and `--budget-profile` selection
 - [ ] add configurable layer-rules file surface for Phase 29.1 so architecture rules can change without recompiling
 - [ ] add configurable redaction-rules file surface for Patch X4 so sanitization policy can change without recompiling
-- [ ] add `.atlas/config.toml` embedding config block for `atlas-search` URL/model settings instead of reading `ATLAS_EMBED_URL`. Add the other ATLAS_EMBED_* envs as well
+- [x] add `.atlas/config.toml` embedding config block for `atlas-search` URL/model settings instead of reading `ATLAS_EMBED_URL`. Move the ATLAS_EMBED_* envs to config, remove the env getters for this
 - [ ] add issue items for tokenizer-backed budget accounting using real token counts instead of byte/char heuristics
 - [ ] add `proptest` coverage for ranking/trimming, canonical-path normalization, and FTS query escaping
 

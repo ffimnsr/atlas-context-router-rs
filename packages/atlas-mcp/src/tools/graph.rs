@@ -10,7 +10,8 @@ use crate::context::{compact_node, package_impact};
 
 use super::shared::{
     bool_arg, error_message, error_suggestions, inject_budget_metadata, load_budget_policy,
-    open_store, resolve_kind_alias, str_arg, string_array_arg, tool_result_value, u64_arg,
+    load_embedding_config, open_store, resolve_kind_alias, str_arg, string_array_arg,
+    tool_result_value, u64_arg,
 };
 
 fn ranking_evidence_legend_json() -> serde_json::Value {
@@ -58,6 +59,7 @@ pub(super) fn tool_query_graph(
     }
 
     let store = open_store(db_path)?;
+    let embed_cfg = load_embedding_config(repo_root)?;
     let policy = load_budget_policy(repo_root)?;
     let mut budgets = BudgetManager::new();
     let limit = budgets.resolve_limit(
@@ -81,7 +83,9 @@ pub(super) fn tool_query_graph(
     };
 
     let started_at = Instant::now();
-    let results = atlas_search::execute_query(&store, &query, semantic).context("search failed")?;
+    let results =
+        atlas_search::execute_query_with_embedding(&store, &query, semantic, embed_cfg.as_ref())
+            .context("search failed")?;
     let elapsed_ms = started_at.elapsed().as_millis() as usize;
     budgets.record_usage(
         policy.query_candidates_and_seeds.wall_time_ms,
@@ -90,7 +94,13 @@ pub(super) fn tool_query_graph(
         elapsed_ms,
         elapsed_ms > policy.query_candidates_and_seeds.wall_time_ms.default_limit,
     );
-    let explanation = atlas_search::explain_query(Some(&store), true, &query, semantic);
+    let explanation = atlas_search::explain_query_with_embedding(
+        Some(&store),
+        true,
+        &query,
+        semantic,
+        embed_cfg.as_ref(),
+    );
 
     #[derive(Serialize)]
     struct CompactResult<'a> {
@@ -190,6 +200,7 @@ pub(super) fn tool_batch_query_graph(
     }
 
     let store = open_store(db_path)?;
+    let embed_cfg = load_embedding_config(repo_root)?;
     let policy = load_budget_policy(repo_root)?;
 
     #[derive(Serialize)]
@@ -269,8 +280,13 @@ pub(super) fn tool_batch_query_graph(
         };
 
         let started_at = Instant::now();
-        let results =
-            atlas_search::execute_query(&store, &query, semantic).context("search failed")?;
+        let results = atlas_search::execute_query_with_embedding(
+            &store,
+            &query,
+            semantic,
+            embed_cfg.as_ref(),
+        )
+        .context("search failed")?;
         let elapsed_ms = started_at.elapsed().as_millis() as usize;
         budgets.record_usage(
             policy.query_candidates_and_seeds.wall_time_ms,
@@ -657,6 +673,7 @@ pub(super) fn tool_explain_query(
     }
 
     let db_exists = std::path::Path::new(db_path).exists();
+    let embed_cfg = load_embedding_config(repo_root)?;
     let query = SearchQuery {
         text,
         kind,
@@ -674,7 +691,13 @@ pub(super) fn tool_explain_query(
     } else {
         None
     };
-    let result = atlas_search::explain_query(store.as_ref(), db_exists, &query, semantic);
+    let result = atlas_search::explain_query_with_embedding(
+        store.as_ref(),
+        db_exists,
+        &query,
+        semantic,
+        embed_cfg.as_ref(),
+    );
 
     let mut response = tool_result_value(&result, output_format)?;
     response["atlas_ranking_evidence_legend"] = ranking_evidence_legend_json();

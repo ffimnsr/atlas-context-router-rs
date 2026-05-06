@@ -153,7 +153,7 @@ pub enum Command {
         #[arg(long)]
         fuzzy: bool,
 
-        /// Use hybrid FTS + vector search with RRF (requires ATLAS_EMBED_URL).
+        /// Use hybrid FTS + vector search with RRF (requires search.embedding.url in config).
         #[arg(long)]
         hybrid: bool,
 

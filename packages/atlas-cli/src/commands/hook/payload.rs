@@ -31,7 +31,20 @@ pub(crate) fn extract_tool_name(payload: &Value) -> Option<String> {
 pub(crate) fn tool_may_change_files(tool_name: &str) -> bool {
     matches!(
         tool_name.to_ascii_lowercase().as_str(),
+        // Claude Code tool names
         "edit" | "write" | "multiedit" | "bash" | "patch"
+        // VS Code / GitHub Copilot agent tool names (terminal can run formatters, git, etc.)
+        | "run_in_terminal"
+        // VS Code file-editing tool names (also covered by filePath extraction, but belt+suspenders)
+        | "replace_string_in_file"
+        | "multi_replace_string_in_file"
+        | "create_file"
+        | "edit_notebook_file"
+        | "create_directory"
+        // VS Code built-in agent tools (camelCase variants seen in hook payloads)
+        | "editfiles"
+        | "createfile"
+        | "runinterminal"
     )
 }
 

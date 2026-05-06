@@ -96,6 +96,22 @@ pub(crate) fn load_budget_policy(repo_root: &str) -> Result<BudgetPolicy> {
     config.budget_policy()
 }
 
+pub(crate) fn load_embedding_config(
+    repo_root: &str,
+) -> Result<Option<atlas_search::embed::EmbeddingConfig>> {
+    let config =
+        atlas_engine::Config::load(&atlas_engine::paths::atlas_dir(repo_root)).unwrap_or_default();
+    Ok(config.embedding_backend()?.map(|backend| {
+        atlas_search::embed::EmbeddingConfig::new(
+            backend.url,
+            backend.model,
+            backend.timeout_secs,
+            backend.max_retries,
+            backend.retry_backoff_ms,
+        )
+    }))
+}
+
 pub(crate) fn detect_changes_target(base: &Option<String>, staged: bool) -> DiffTarget {
     if staged {
         DiffTarget::Staged

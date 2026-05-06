@@ -31,7 +31,7 @@ pub fn tool_list() -> serde_json::Value {
                         "regex":    { "type": "string",  "description": "Regex pattern matched against name and qualified_name via SQL UDF. Three modes: (1) regex-only structural scan when text is empty — filters every node in the DB; (2) text+regex: FTS5 runs first then the UDF post-filters its candidates inside SQLite; (3) invalid pattern returns an error with details. Supports regex crate alternation syntax (e.g. 'handle|HANDLE|Handle_'). Must be valid regex crate syntax." },
                         "subpath":  { "type": "string",  "description": "Restrict results to nodes whose file_path starts with this prefix (e.g. 'src/auth', 'packages/atlas-core'). Filtering happens in SQL before ranking." },
                         "fuzzy":    { "type": "boolean", "description": "Enable fuzzy (edit-distance) typo recovery for near-miss symbol names (default false). Uses relaxed candidate expansion plus stronger code-symbol ranking so close symbol typos outrank weaker docs/config matches." },
-                        "hybrid":   { "type": "boolean", "description": "Enable hybrid FTS + vector retrieval with Reciprocal Rank Fusion (default false). Requires ATLAS_EMBED_URL to be set; falls back to FTS-only when no embedding backend is configured." },
+                        "hybrid":   { "type": "boolean", "description": "Enable hybrid FTS + vector retrieval with Reciprocal Rank Fusion (default false). Requires search.embedding.url in .atlas/config.toml; falls back to FTS-only when no embedding backend is configured." },
                         "include_files": { "type": "boolean", "description": "Include file nodes in the result set (default false). Leave disabled for symbol-centric search; enable when a file-level hit is useful." },
                         "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
                     },
@@ -65,7 +65,7 @@ pub fn tool_list() -> serde_json::Value {
                                     "regex":       { "type": "string",  "description": "Regex pattern matched against name and qualified_name via SQL UDF. Must be valid regex crate syntax." },
                                     "subpath":     { "type": "string",  "description": "Restrict results to nodes whose file_path starts with this prefix." },
                                     "fuzzy":       { "type": "boolean", "description": "Enable fuzzy typo recovery (default false)." },
-                                    "hybrid":      { "type": "boolean", "description": "Enable hybrid FTS + vector retrieval (default false). Requires ATLAS_EMBED_URL." },
+                                    "hybrid":      { "type": "boolean", "description": "Enable hybrid FTS + vector retrieval (default false). Requires search.embedding.url in .atlas/config.toml." },
                                     "include_files": { "type": "boolean", "description": "Include file nodes in the result set (default false)." }
                                 },
                                 "required": []
@@ -636,7 +636,7 @@ pub fn tool_list() -> serde_json::Value {
                         "regex":         { "type": "string",  "description": "Regex pattern — validated and explained. Regex-only (text empty): structural scan. text+regex: FTS5 first then UDF post-filter. Invalid pattern: error with details." },
                         "subpath":       { "type": "string",  "description": "File-path prefix filter — same as query_graph 'subpath'." },
                         "fuzzy":         { "type": "boolean", "description": "Whether fuzzy name-matching boost would be active (default false)." },
-                        "hybrid":        { "type": "boolean", "description": "Whether hybrid FTS + vector retrieval would be used (default false). Requires ATLAS_EMBED_URL." },
+                        "hybrid":        { "type": "boolean", "description": "Whether hybrid FTS + vector retrieval would be used (default false). Requires search.embedding.url in .atlas/config.toml." },
                         "include_files": { "type": "boolean", "description": "Whether file nodes would be included in the result set (default false)." },
                         "output_format": { "type": "string",  "description": DEFAULT_OUTPUT_DESCRIPTION }
                     },

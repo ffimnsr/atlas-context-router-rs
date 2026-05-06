@@ -3,7 +3,7 @@ use atlas_contentstore::{ContentStore, IndexState};
 use atlas_core::{
     NodeKind, graph_health_error_message, graph_health_error_suggestions, is_schema_mismatch_error,
 };
-use atlas_repo::{collect_files, find_repo_root};
+use atlas_repo::{collect_files, find_repo_root, hash_file};
 use atlas_session::DEFAULT_SESSION_DB;
 use atlas_store_sqlite::{GraphBuildState, Store};
 use camino::Utf8Path;
@@ -96,6 +96,13 @@ fn config_runtime_json(config: &atlas_engine::Config) -> serde_json::Value {
             "rrf_k": config.search.rrf_k,
             "max_query_candidates": config.search.max_query_candidates,
             "max_query_wall_time_ms": config.search.max_query_wall_time_ms,
+            "embedding": {
+                "url": config.search.embedding.url,
+                "model": config.search.embedding.model,
+                "timeout_secs": config.search.embedding.timeout_secs,
+                "max_retries": config.search.embedding.max_retries,
+                "retry_backoff_ms": config.search.embedding.retry_backoff_ms,
+            },
         },
         "analysis": {
             "dead_code_certainty_threshold": config.analysis.dead_code_certainty_threshold,
@@ -199,23 +206,18 @@ fn cli_runtime_overrides(cli: &Cli, repo: &str) -> Vec<(String, ConfigSourceValu
 }
 
 fn env_runtime_overrides() -> Vec<(String, ConfigSourceValue)> {
-    [
-        ("ATLAS_EMBED_URL", false),
-        ("ATLAS_EMBED_MODEL", false),
-        ("ATLAS_HTTP_BIND", false),
-        ("ATLAS_HTTP_AUTH_TOKEN", true),
-    ]
-    .into_iter()
-    .map(|(name, redacted)| {
-        let value = match std::env::var(name) {
-            Ok(_value) if redacted => serde_json::json!("<redacted>"),
-            Ok(value) => serde_json::json!(value),
-            Err(_) => serde_json::Value::Null,
-        };
-        let source = if value.is_null() { "unset" } else { "env" };
-        (format!("env.{name}"), ConfigSourceValue { value, source })
-    })
-    .collect()
+    [("ATLAS_HTTP_BIND", false), ("ATLAS_HTTP_AUTH_TOKEN", true)]
+        .into_iter()
+        .map(|(name, redacted)| {
+            let value = match std::env::var(name) {
+                Ok(_value) if redacted => serde_json::json!("<redacted>"),
+                Ok(value) => serde_json::json!(value),
+                Err(_) => serde_json::Value::Null,
+            };
+            let source = if value.is_null() { "unset" } else { "env" };
+            (format!("env.{name}"), ConfigSourceValue { value, source })
+        })
+        .collect()
 }
 
 fn render_debug_config_payload(cli: &Cli, repo: &str) -> Result<serde_json::Value> {
@@ -854,6 +856,9 @@ pub fn run_doctor(cli: &Cli) -> Result<()> {
         match Store::open(&db_path_str) {
             Ok(store) => {
                 let registry = atlas_parser::ParserRegistry::with_defaults();
+                // Collect stored file hashes once; used to detect whether atlas
+                // update has already indexed the current on-disk state.
+                let stored_hashes = store.file_hashes().unwrap_or_default();
                 match atlas_repo::changed_files(
                     Utf8Path::new(&repo),
                     &atlas_repo::DiffTarget::WorkingTree,
@@ -880,6 +885,32 @@ pub fn run_doctor(cli: &Cli) -> Result<()> {
                             })
                             .flat_map(|change| {
                                 std::iter::once(change.path.clone()).chain(change.old_path.clone())
+                            })
+                            // A file is only truly stale if the graph doesn't
+                            // reflect its current on-disk state.  Files that
+                            // were indexed by `atlas update` (working-tree
+                            // mode) are still git-dirty but their stored hash
+                            // already matches the current content, so exclude
+                            // them from the stale list.
+                            .filter(|rel_path| {
+                                let abs_path = format!("{repo}/{rel_path}");
+                                let abs_utf8 = camino::Utf8Path::new(&abs_path);
+                                if abs_utf8.exists() {
+                                    // File exists: stale only when hash doesn't
+                                    // match what's stored in the DB.
+                                    match hash_file(abs_utf8) {
+                                        Ok(disk_hash) => stored_hashes
+                                            .get(rel_path.as_str())
+                                            .map(|db_hash| db_hash != &disk_hash)
+                                            .unwrap_or(true),
+                                        // Can't hash → assume stale.
+                                        Err(_) => true,
+                                    }
+                                } else {
+                                    // File deleted: stale while DB still has
+                                    // a record for it.
+                                    stored_hashes.contains_key(rel_path.as_str())
+                                }
                             })
                             .collect();
                         files.sort();

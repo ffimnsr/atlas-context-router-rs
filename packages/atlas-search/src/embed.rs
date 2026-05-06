@@ -6,12 +6,12 @@
 //! - **OpenAI-compat** (`POST /v1/embeddings`): same request body
 //!   → `{"data": [{"embedding": [f32, …]}]}`
 //!
-//! Configure via environment variables:
-//! - `ATLAS_EMBED_URL`              — base URL, e.g. `http://localhost:11434` (required for hybrid)
-//! - `ATLAS_EMBED_MODEL`            — model name, e.g. `nomic-embed-text` (default)
-//! - `ATLAS_EMBED_TIMEOUT_SECS`     — per-request timeout in seconds (default 30)
-//! - `ATLAS_EMBED_MAX_RETRIES`      — max retry attempts on transient errors (default 3)
-//! - `ATLAS_EMBED_RETRY_BACKOFF_MS` — initial backoff between retries in ms, doubles each attempt (default 500)
+//! Configure via `.atlas/config.toml` `[search.embedding]` fields:
+//! - `url`              — base URL, e.g. `http://localhost:11434` (required for hybrid)
+//! - `model`            — model name, e.g. `nomic-embed-text` (default)
+//! - `timeout_secs`     — per-request timeout in seconds (default 30)
+//! - `max_retries`      — max retry attempts on transient errors (default 3)
+//! - `retry_backoff_ms` — initial backoff between retries in ms, doubles each attempt (default 500)
 
 use std::time::Duration;
 
@@ -54,39 +54,26 @@ pub struct EmbeddingConfig {
 }
 
 impl EmbeddingConfig {
-    /// Load from environment variables.
-    ///
-    /// Returns `None` when `ATLAS_EMBED_URL` is not set.
-    pub fn from_env() -> Option<Self> {
-        let base_url = std::env::var("ATLAS_EMBED_URL").ok()?;
-        let model =
-            std::env::var("ATLAS_EMBED_MODEL").unwrap_or_else(|_| "nomic-embed-text".to_owned());
-        let timeout_secs = std::env::var("ATLAS_EMBED_TIMEOUT_SECS")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(30u64);
-        let max_retries = std::env::var("ATLAS_EMBED_MAX_RETRIES")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(3u32);
-        let retry_backoff_ms = std::env::var("ATLAS_EMBED_RETRY_BACKOFF_MS")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(500u64);
-
+    pub fn new(
+        base_url: impl Into<String>,
+        model: impl Into<String>,
+        timeout_secs: u64,
+        max_retries: u32,
+        retry_backoff_ms: u64,
+    ) -> Self {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(timeout_secs))
             .build()
             .unwrap_or_default();
 
-        Some(Self {
-            base_url,
-            model,
+        Self {
+            base_url: base_url.into(),
+            model: model.into(),
             timeout_secs,
             max_retries,
             retry_backoff_ms,
             client,
-        })
+        }
     }
 
     fn endpoint_url(&self) -> String {
@@ -232,64 +219,42 @@ struct OpenAiDatum {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
-
-    // Serialize tests that mutate/read process-global env vars to prevent
-    // races when `cargo test` runs tests in parallel threads.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn url_ollama_native() {
-        let cfg = EmbeddingConfig {
-            base_url: "http://localhost:11434".to_owned(),
-            model: "nomic-embed-text".to_owned(),
-            timeout_secs: 30,
-            max_retries: 3,
-            retry_backoff_ms: 500,
-            client: reqwest::Client::new(),
-        };
+        let cfg = EmbeddingConfig::new("http://localhost:11434", "nomic-embed-text", 30, 3, 500);
         assert_eq!(cfg.endpoint_url(), "http://localhost:11434/api/embed");
     }
 
     #[test]
     fn url_openai_compat() {
-        let cfg = EmbeddingConfig {
-            base_url: "http://localhost:11434/v1".to_owned(),
-            model: "text-embedding-3-small".to_owned(),
-            timeout_secs: 30,
-            max_retries: 3,
-            retry_backoff_ms: 500,
-            client: reqwest::Client::new(),
-        };
+        let cfg = EmbeddingConfig::new(
+            "http://localhost:11434/v1",
+            "text-embedding-3-small",
+            30,
+            3,
+            500,
+        );
         assert_eq!(cfg.endpoint_url(), "http://localhost:11434/v1/embeddings");
     }
 
     #[test]
-    fn from_env_none_when_unset() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        // Only meaningful when var is absent; skip if caller pre-set it.
-        if std::env::var("ATLAS_EMBED_URL").is_ok() {
-            return;
-        }
-        assert!(EmbeddingConfig::from_env().is_none());
+    fn new_preserves_explicit_settings() {
+        let cfg = EmbeddingConfig::new("http://embed.test", "embed-model", 45, 5, 750);
+
+        assert_eq!(cfg.base_url, "http://embed.test");
+        assert_eq!(cfg.model, "embed-model");
+        assert_eq!(cfg.timeout_secs, 45);
+        assert_eq!(cfg.max_retries, 5);
+        assert_eq!(cfg.retry_backoff_ms, 750);
     }
 
     #[test]
-    fn from_env_defaults() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        // Skip if ATLAS_EMBED_URL is already set in the environment.
-        if std::env::var("ATLAS_EMBED_URL").is_ok() {
-            return;
-        }
-        unsafe {
-            std::env::set_var("ATLAS_EMBED_URL", "http://localhost:11434");
-        }
-        let cfg = EmbeddingConfig::from_env().unwrap();
-        unsafe {
-            std::env::remove_var("ATLAS_EMBED_URL");
-        }
+    fn new_builds_client_from_timeout() {
+        let cfg = EmbeddingConfig::new("http://embed.test", "embed-model", 30, 3, 500);
+
         assert_eq!(cfg.timeout_secs, 30);
-        assert_eq!(cfg.max_retries, 3);
-        assert_eq!(cfg.retry_backoff_ms, 500);
+        let cloned = cfg.client.clone();
+        drop(cloned);
     }
 }

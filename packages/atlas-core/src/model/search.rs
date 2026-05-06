@@ -278,7 +278,7 @@ pub struct SearchQuery {
     pub changed_files: Vec<String>,
     /// Enable hybrid (FTS + vector) retrieval.
     ///
-    /// When `true` and `ATLAS_EMBED_URL` is set, the search layer runs both
+    /// When `true` and `search.embedding.url` is configured, the search layer runs both
     /// FTS and vector retrieval and merges results with Reciprocal Rank Fusion.
     /// Falls back to FTS-only when no embedding backend is configured.
     pub hybrid: bool,

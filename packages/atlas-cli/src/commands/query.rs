@@ -6,7 +6,10 @@ use atlas_store_sqlite::Store;
 
 use crate::cli::{Cli, Command};
 
-use super::{db_path, load_budget_policy, print_json, query_display_path, resolve_repo};
+use super::{
+    db_path, load_budget_policy, load_embedding_config, print_json, query_display_path,
+    resolve_repo,
+};
 
 fn query_owner_identity(node: &atlas_core::Node) -> Option<String> {
     node.extra_json.as_object().and_then(|extra| {
@@ -62,6 +65,7 @@ fn ranking_evidence_labels(evidence: &RankingEvidence) -> Vec<&'static str> {
 pub fn run_query(cli: &Cli) -> Result<()> {
     let repo = resolve_repo(cli)?;
     let db_path = db_path(cli, &repo);
+    let embed_cfg = load_embedding_config(&repo)?;
 
     let store =
         Store::open(&db_path).with_context(|| format!("cannot open database at {db_path}"))?;
@@ -148,7 +152,9 @@ pub fn run_query(cli: &Cli) -> Result<()> {
     };
 
     let t0 = std::time::Instant::now();
-    let results = search::execute_query(&store, &query, semantic).context("search failed")?;
+    let results =
+        search::execute_query_with_embedding(&store, &query, semantic, embed_cfg.as_ref())
+            .context("search failed")?;
     let latency_ms = t0.elapsed().as_millis();
     budgets.record_usage(
         policy.query_candidates_and_seeds.wall_time_ms,
@@ -223,10 +229,10 @@ pub fn run_embed(cli: &Cli) -> Result<()> {
         _ => unreachable!(),
     };
 
-    let embed_cfg = atlas_search::embed::EmbeddingConfig::from_env()
-        .context("ATLAS_EMBED_URL not set — cannot generate embeddings")?;
-
     let repo = resolve_repo(cli)?;
+    let embed_cfg = load_embedding_config(&repo)?.context(
+        "search.embedding.url not set in .atlas/config.toml — cannot generate embeddings",
+    )?;
     let db_path = db_path(cli, &repo);
     let store =
         Store::open(&db_path).with_context(|| format!("cannot open database at {db_path}"))?;
@@ -285,6 +291,7 @@ pub fn run_explain_query(cli: &Cli) -> Result<()> {
 
     let repo = resolve_repo(cli)?;
     let db_path = db_path(cli, &repo);
+    let embed_cfg = load_embedding_config(&repo)?;
     let store =
         Store::open(&db_path).with_context(|| format!("cannot open database at {db_path}"))?;
 
@@ -297,7 +304,8 @@ pub fn run_explain_query(cli: &Cli) -> Result<()> {
         ..Default::default()
     };
 
-    let explanation = search::explain_query(Some(&store), true, &query, false);
+    let explanation =
+        search::explain_query_with_embedding(Some(&store), true, &query, false, embed_cfg.as_ref());
 
     if cli.json {
         print_json("explain_query", serde_json::to_value(&explanation)?)?;

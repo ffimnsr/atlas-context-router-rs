@@ -11,6 +11,10 @@ use serde::{Deserialize, Serialize};
 pub const DEFAULT_PARSE_BATCH_SIZE: usize = 64;
 pub const DEFAULT_MCP_WORKER_THREADS: usize = 2;
 pub const DEFAULT_MCP_TOOL_TIMEOUT_MS: u64 = 300_000;
+pub const DEFAULT_EMBED_MODEL: &str = "nomic-embed-text";
+pub const DEFAULT_EMBED_TIMEOUT_SECS: u64 = 30;
+pub const DEFAULT_EMBED_MAX_RETRIES: u32 = 3;
+pub const DEFAULT_EMBED_RETRY_BACKOFF_MS: u64 = 500;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConfigTemplateProfile {
@@ -42,6 +46,15 @@ pub struct Config {
     pub context: ContextConfig,
     #[serde(default)]
     pub mcp: McpConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EmbeddingBackendConfig {
+    pub url: String,
+    pub model: String,
+    pub timeout_secs: u64,
+    pub max_retries: u32,
+    pub retry_backoff_ms: u64,
 }
 
 /// MCP transport configuration.
@@ -89,6 +102,8 @@ pub struct SearchConfig {
     pub max_query_candidates: usize,
     /// Maximum wall time for one query path before Atlas reports a budget hit.
     pub max_query_wall_time_ms: u64,
+    /// HTTP embedding backend configuration used for hybrid retrieval.
+    pub embedding: SearchEmbeddingConfig,
 }
 
 impl Default for SearchConfig {
@@ -106,6 +121,34 @@ impl Default for SearchConfig {
                 .query_candidates_and_seeds
                 .wall_time_ms
                 .default_limit as u64,
+            embedding: SearchEmbeddingConfig::default(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SearchEmbeddingConfig {
+    /// Base URL for embedding requests. When unset, hybrid retrieval falls back to FTS.
+    pub url: Option<String>,
+    /// Embedding model name sent to the backend.
+    pub model: String,
+    /// Per-request timeout in seconds.
+    pub timeout_secs: u64,
+    /// Maximum retry attempts on transient backend failures.
+    pub max_retries: u32,
+    /// Initial retry backoff in milliseconds.
+    pub retry_backoff_ms: u64,
+}
+
+impl Default for SearchEmbeddingConfig {
+    fn default() -> Self {
+        Self {
+            url: None,
+            model: DEFAULT_EMBED_MODEL.to_owned(),
+            timeout_secs: DEFAULT_EMBED_TIMEOUT_SECS,
+            max_retries: DEFAULT_EMBED_MAX_RETRIES,
+            retry_backoff_ms: DEFAULT_EMBED_RETRY_BACKOFF_MS,
         }
     }
 }
@@ -189,6 +232,28 @@ fn validate_u64_limit(name: &str, value: u64, max: usize) -> Result<u64> {
         anyhow::bail!("invalid config: {name}={value} exceeds safe maximum {max}");
     }
     Ok(value)
+}
+
+fn validate_positive_u64(name: &str, value: u64) -> Result<u64> {
+    if value == 0 {
+        anyhow::bail!("invalid config: {name} must be greater than 0");
+    }
+    Ok(value)
+}
+
+fn validate_positive_u32(name: &str, value: u32) -> Result<u32> {
+    if value == 0 {
+        anyhow::bail!("invalid config: {name} must be greater than 0");
+    }
+    Ok(value)
+}
+
+fn validate_nonempty_string(name: &str, value: &str) -> Result<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        anyhow::bail!("invalid config: {name} must not be empty");
+    }
+    Ok(trimmed.to_owned())
 }
 
 impl BuildConfig {
@@ -374,6 +439,33 @@ impl Config {
         ));
 
         lines.extend(render_section(
+            "search.embedding",
+            &[
+                (
+                    "url",
+                    render_optional_example_string(
+                        active.search.embedding.url.as_deref(),
+                        "http://localhost:11434",
+                    ),
+                ),
+                ("model", format!("\"{}\"", active.search.embedding.model)),
+                (
+                    "timeout_secs",
+                    active.search.embedding.timeout_secs.to_string(),
+                ),
+                (
+                    "max_retries",
+                    active.search.embedding.max_retries.to_string(),
+                ),
+                (
+                    "retry_backoff_ms",
+                    active.search.embedding.retry_backoff_ms.to_string(),
+                ),
+            ],
+            profile == ConfigTemplateProfile::Full,
+        ));
+
+        lines.extend(render_section(
             "analysis",
             &[
                 (
@@ -491,6 +583,7 @@ impl Config {
                 config.search.hybrid_enabled = true;
                 config.search.top_k_fts = 80;
                 config.search.top_k_vector = 80;
+                config.search.embedding.url = Some("http://localhost:11434".to_owned());
                 config.analysis.dead_code_certainty_threshold = "medium".to_owned();
                 config.analysis.refactor_safety_threshold = 0.6;
                 config.context.max_context_nodes = 150;
@@ -516,6 +609,39 @@ impl Config {
 
     pub fn build_run_budget(&self) -> Result<BuildRunBudget> {
         self.build.run_budget()
+    }
+
+    pub fn embedding_backend(&self) -> Result<Option<EmbeddingBackendConfig>> {
+        let Some(url) = self
+            .search
+            .embedding
+            .url
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            return Ok(None);
+        };
+
+        Ok(Some(EmbeddingBackendConfig {
+            url: validate_nonempty_string("search.embedding.url", url)?,
+            model: validate_nonempty_string(
+                "search.embedding.model",
+                &self.search.embedding.model,
+            )?,
+            timeout_secs: validate_positive_u64(
+                "search.embedding.timeout_secs",
+                self.search.embedding.timeout_secs,
+            )?,
+            max_retries: validate_positive_u32(
+                "search.embedding.max_retries",
+                self.search.embedding.max_retries,
+            )?,
+            retry_backoff_ms: validate_positive_u64(
+                "search.embedding.retry_backoff_ms",
+                self.search.embedding.retry_backoff_ms,
+            )?,
+        }))
     }
 
     /// Return effective MCP worker thread count, clamped to [1, 64].
@@ -570,6 +696,13 @@ fn render_optional_string(value: Option<&str>) -> String {
     match value {
         Some(value) => format!("\"{value}\""),
         None => "\"path/to/framework-conventions.toml\"".to_owned(),
+    }
+}
+
+fn render_optional_example_string(value: Option<&str>, example: &str) -> String {
+    match value {
+        Some(value) => format!("\"{value}\""),
+        None => format!("\"{example}\""),
     }
 }
 
@@ -1041,7 +1174,7 @@ mod tests {
         let atlas_dir = dir.path();
         fs::write(
             atlas_dir.join(crate::paths::ATLAS_CONFIG),
-            "[mcp]\nmax_mcp_response_bytes = 4096\n\n[context]\nmax_saved_context_bytes = 256\n",
+            "[mcp]\nmax_mcp_response_bytes = 4096\n\n[context]\nmax_saved_context_bytes = 256\n\n[search.embedding]\nurl = \"http://embed.test\"\n",
         )
         .expect("write config");
 
@@ -1049,6 +1182,10 @@ mod tests {
 
         assert_eq!(config.mcp.max_mcp_response_bytes, 4096);
         assert_eq!(config.context.max_saved_context_bytes, 256);
+        assert_eq!(
+            config.search.embedding.url.as_deref(),
+            Some("http://embed.test")
+        );
         assert_eq!(config.mcp.worker_threads, DEFAULT_MCP_WORKER_THREADS);
         assert!(config.mcp.tool_timeout_ms_by_tool.is_empty());
     }
@@ -1058,6 +1195,7 @@ mod tests {
         let template = Config::render_template(ConfigTemplateProfile::Minimal).expect("template");
 
         assert!(template.contains("# parse_batch_size = 64"));
+        assert!(template.contains("[search.embedding]\n# url = \"http://localhost:11434\""));
         assert!(template.contains("# worker_threads = 2"));
         assert!(!template.contains("\nparse_batch_size = 64\n"));
     }
@@ -1069,6 +1207,7 @@ mod tests {
         assert!(template.contains("[build]\nparse_batch_size = 64"));
         assert!(template.contains("tool_timeout_ms_by_tool = { build_or_update_graph = 900000, get_review_context = 120000 }"));
         assert!(template.contains("hybrid_enabled = true"));
+        assert!(template.contains("[search.embedding]\nurl = \"http://localhost:11434\""));
     }
 
     #[test]
@@ -1082,5 +1221,50 @@ mod tests {
             fs::read_to_string(dir.path().join(crate::paths::ATLAS_CONFIG)).expect("read config");
         assert!(text.contains("# profile = \"full\""));
         assert!(text.contains("hybrid_enabled = true"));
+        assert!(text.contains("url = \"http://localhost:11434\""));
+    }
+
+    #[test]
+    fn embedding_backend_returns_none_when_url_missing() {
+        let config = Config::default();
+
+        assert!(
+            config
+                .embedding_backend()
+                .expect("embedding backend")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn embedding_backend_validates_and_returns_values() {
+        let mut config = Config::default();
+        config.search.embedding.url = Some(" http://embed.test ".to_owned());
+
+        let backend = config
+            .embedding_backend()
+            .expect("embedding backend")
+            .expect("configured backend");
+
+        assert_eq!(backend.url, "http://embed.test");
+        assert_eq!(backend.model, DEFAULT_EMBED_MODEL);
+        assert_eq!(backend.timeout_secs, DEFAULT_EMBED_TIMEOUT_SECS);
+        assert_eq!(backend.max_retries, DEFAULT_EMBED_MAX_RETRIES);
+        assert_eq!(backend.retry_backoff_ms, DEFAULT_EMBED_RETRY_BACKOFF_MS);
+    }
+
+    #[test]
+    fn embedding_backend_rejects_zero_timeout() {
+        let mut config = Config::default();
+        config.search.embedding.url = Some("http://embed.test".to_owned());
+        config.search.embedding.timeout_secs = 0;
+
+        let err = config
+            .embedding_backend()
+            .expect_err("invalid embedding config");
+        assert!(
+            err.to_string()
+                .contains("search.embedding.timeout_secs must be greater than 0")
+        );
     }
 }

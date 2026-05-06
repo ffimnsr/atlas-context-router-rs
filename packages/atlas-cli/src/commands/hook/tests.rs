@@ -19,6 +19,7 @@ use crate::cli::{Cli, Command};
 use crate::cli_paths::canonicalize_cli_path;
 
 use super::actions::execute_hook_actions;
+use super::payload::tool_may_change_files;
 use super::policy::{HookEventParts, resolve_hook_policy};
 use super::runtime::{
     build_hook_event, persist_hook_event, read_hook_payload_from, resolve_hook_repo,
@@ -886,4 +887,215 @@ fn post_tool_use_build_test_flow_persists_review_refresh_artifacts() {
             "review_context" | "explain_change" | "impact_result"
         ));
     }
+}
+
+#[test]
+fn tool_may_change_files_recognizes_vscode_tool_names() {
+    // VS Code file-editing tools
+    assert!(tool_may_change_files("replace_string_in_file"));
+    assert!(tool_may_change_files("multi_replace_string_in_file"));
+    assert!(tool_may_change_files("create_file"));
+    assert!(tool_may_change_files("edit_notebook_file"));
+    assert!(tool_may_change_files("create_directory"));
+    // VS Code terminal tool — can run formatters, git, cargo fmt, etc.
+    assert!(tool_may_change_files("run_in_terminal"));
+    // VS Code camelCase built-in variants
+    assert!(tool_may_change_files("editFiles"));
+    assert!(tool_may_change_files("runInTerminal"));
+    // Claude Code names still work
+    assert!(tool_may_change_files("edit"));
+    assert!(tool_may_change_files("write"));
+    assert!(tool_may_change_files("bash"));
+    assert!(tool_may_change_files("multiedit"));
+    assert!(tool_may_change_files("patch"));
+    // Read-only tools must not trigger refresh
+    assert!(!tool_may_change_files("read_file"));
+    assert!(!tool_may_change_files("grep_search"));
+    assert!(!tool_may_change_files("file_search"));
+    assert!(!tool_may_change_files("semantic_search"));
+    assert!(!tool_may_change_files("get_errors"));
+    assert!(!tool_may_change_files("list_dir"));
+}
+
+#[test]
+fn post_tool_use_run_in_terminal_triggers_graph_refresh() {
+    // run_in_terminal has no file paths in its payload, but it can invoke formatters,
+    // git, cargo fmt, etc. Atlas must trigger a WorkingTree scan rather than skipping.
+    let dir = TempDir::new().unwrap();
+    let repo = dir.path();
+    std::fs::create_dir_all(repo.join("src")).unwrap();
+    std::fs::write(
+        repo.join("Cargo.toml"),
+        "[package]\nname = \"hook-terminal\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )
+    .unwrap();
+    std::fs::write(repo.join("src/lib.rs"), "pub fn alpha() {}\n").unwrap();
+    std::fs::create_dir_all(repo.join(".atlas")).unwrap();
+    assert!(
+        ProcessCommand::new("git")
+            .arg("init")
+            .arg("--quiet")
+            .current_dir(repo)
+            .status()
+            .unwrap()
+            .success()
+    );
+    assert!(
+        ProcessCommand::new("git")
+            .args(["add", "Cargo.toml", "src/lib.rs"])
+            .current_dir(repo)
+            .status()
+            .unwrap()
+            .success()
+    );
+
+    let repo_str = repo.to_string_lossy().into_owned();
+    let graph_db_path = format!("{repo_str}/.atlas/worldtree.db");
+    Store::open(&graph_db_path).unwrap();
+    atlas_engine::build_graph(
+        Utf8Path::new(&repo_str),
+        &graph_db_path,
+        &atlas_engine::BuildOptions::default(),
+    )
+    .unwrap();
+
+    // Simulate run_in_terminal payload: no file paths, just a command string.
+    let payload = json!({
+        "tool_name": "run_in_terminal",
+        "tool_input": {
+            "command": "cargo fmt",
+            "explanation": "Format code",
+            "goal": "Format",
+            "mode": "sync"
+        },
+        "tool_response": "formatted"
+    });
+    let persisted = persist_hook_event(
+        &repo_str,
+        &graph_db_path,
+        "copilot",
+        "post-tool-use",
+        payload.clone(),
+    )
+    .unwrap();
+    let actions = execute_hook_actions(
+        &repo_str,
+        &graph_db_path,
+        "copilot",
+        resolve_hook_policy("post-tool-use").unwrap(),
+        &persisted,
+        &payload,
+    );
+
+    // Must attempt a WorkingTree refresh, not be skipped as "tool_not_graph_relevant".
+    assert_ne!(
+        actions["graph_refresh"]["status"], "skipped",
+        "run_in_terminal must not be skipped; got: {}",
+        actions["graph_refresh"]
+    );
+    assert_eq!(
+        actions["graph_refresh"]["status"], "updated",
+        "graph_refresh={}",
+        actions["graph_refresh"]
+    );
+}
+
+#[test]
+fn post_tool_use_replace_string_in_file_targets_changed_file() {
+    // replace_string_in_file carries filePath inside tool_input, so atlas should pick
+    // up the specific changed file and run a targeted (Files) refresh.
+    let dir = TempDir::new().unwrap();
+    let repo = dir.path();
+    std::fs::create_dir_all(repo.join("src")).unwrap();
+    std::fs::write(
+        repo.join("Cargo.toml"),
+        "[package]\nname = \"hook-replace\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )
+    .unwrap();
+    std::fs::write(repo.join("src/lib.rs"), "pub fn alpha() {}\n").unwrap();
+    std::fs::create_dir_all(repo.join(".atlas")).unwrap();
+    assert!(
+        ProcessCommand::new("git")
+            .arg("init")
+            .arg("--quiet")
+            .current_dir(repo)
+            .status()
+            .unwrap()
+            .success()
+    );
+    assert!(
+        ProcessCommand::new("git")
+            .args(["add", "Cargo.toml", "src/lib.rs"])
+            .current_dir(repo)
+            .status()
+            .unwrap()
+            .success()
+    );
+
+    let repo_str = repo.to_string_lossy().into_owned();
+    let graph_db_path = format!("{repo_str}/.atlas/worldtree.db");
+    Store::open(&graph_db_path).unwrap();
+    atlas_engine::build_graph(
+        Utf8Path::new(&repo_str),
+        &graph_db_path,
+        &atlas_engine::BuildOptions::default(),
+    )
+    .unwrap();
+
+    // Simulate the file being edited, then the VS Code PostToolUse payload.
+    std::fs::write(
+        repo.join("src/lib.rs"),
+        "pub fn alpha() {}\npub fn gamma() {}\n",
+    )
+    .unwrap();
+
+    let abs_path = repo.join("src/lib.rs").to_string_lossy().into_owned();
+    let payload = json!({
+        "tool_name": "replace_string_in_file",
+        "tool_input": {
+            "filePath": abs_path,
+            "oldString": "pub fn alpha() {}\n",
+            "newString": "pub fn alpha() {}\npub fn gamma() {}\n"
+        },
+        "tool_response": "replaced"
+    });
+    let persisted = persist_hook_event(
+        &repo_str,
+        &graph_db_path,
+        "copilot",
+        "post-tool-use",
+        payload.clone(),
+    )
+    .unwrap();
+    let actions = execute_hook_actions(
+        &repo_str,
+        &graph_db_path,
+        "copilot",
+        resolve_hook_policy("post-tool-use").unwrap(),
+        &persisted,
+        &payload,
+    );
+
+    assert_eq!(
+        actions["graph_refresh"]["status"], "updated",
+        "graph_refresh={}",
+        actions["graph_refresh"]
+    );
+    // Targeted refresh: changed_files must list src/lib.rs.
+    assert!(
+        actions["graph_refresh"]["changed_files"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("src/lib.rs")),
+        "expected src/lib.rs in changed_files, got: {}",
+        actions["graph_refresh"]["changed_files"]
+    );
+    let store = Store::open(&graph_db_path).unwrap();
+    let nodes = store.nodes_by_file("src/lib.rs").unwrap();
+    assert!(
+        nodes
+            .iter()
+            .any(|node| node.qualified_name.ends_with("::fn::gamma")),
+        "gamma should be indexed after replace_string_in_file refresh"
+    );
 }

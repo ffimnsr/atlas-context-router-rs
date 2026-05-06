@@ -160,10 +160,19 @@ pub fn execute_query(
     query: &SearchQuery,
     semantic: bool,
 ) -> Result<Vec<ScoredNode>> {
+    execute_query_with_embedding(store, query, semantic, None)
+}
+
+pub fn execute_query_with_embedding(
+    store: &Store,
+    query: &SearchQuery,
+    semantic: bool,
+    embed_cfg: Option<&embed::EmbeddingConfig>,
+) -> Result<Vec<ScoredNode>> {
     let mut results = if semantic {
         semantic::expanded_search(store, query)?
     } else {
-        search(store, query)?
+        search_with_embedding(store, query, embed_cfg)?
     };
 
     if semantic && query.graph_expand && !results.is_empty() {
@@ -179,6 +188,16 @@ pub fn explain_query(
     db_exists: bool,
     query: &SearchQuery,
     semantic: bool,
+) -> QueryExplanation {
+    explain_query_with_embedding(store, db_exists, query, semantic, None)
+}
+
+pub fn explain_query_with_embedding(
+    store: Option<&Store>,
+    db_exists: bool,
+    query: &SearchQuery,
+    semantic: bool,
+    embed_cfg: Option<&embed::EmbeddingConfig>,
 ) -> QueryExplanation {
     let fts_tokens = tokenize_fts(&query.text);
     let fts_phrase = if fts_tokens.is_empty() {
@@ -204,7 +223,7 @@ pub fn explain_query(
         (true, None)
     };
 
-    let hybrid_backend_available = query.hybrid && embed::EmbeddingConfig::from_env().is_some();
+    let hybrid_backend_available = query.hybrid && embed_cfg.is_some();
     let mode = query_execution_mode_for(query, semantic, hybrid_backend_available);
     let mut warnings: Vec<String> = Vec::new();
     if fts_tokens.len() > 1 {
@@ -222,7 +241,7 @@ pub fn explain_query(
     }
     if query.hybrid && !hybrid_backend_available {
         warnings.push(
-            "hybrid retrieval requested but ATLAS_EMBED_URL is not configured; execution falls back to FTS-only ranking.".to_string(),
+            "hybrid retrieval requested but search.embedding.url is not configured; execution falls back to FTS-only ranking.".to_string(),
         );
     }
 
@@ -231,7 +250,8 @@ pub fn explain_query(
     let (latency_ms, result_count, matches) = if regex_valid {
         if let Some(store) = store {
             let t0 = std::time::Instant::now();
-            let results = execute_query(store, query, semantic).unwrap_or_default();
+            let results =
+                execute_query_with_embedding(store, query, semantic, embed_cfg).unwrap_or_default();
             let latency_ms = t0.elapsed().as_millis();
             let matches: Vec<QueryExplainMatch> = results
                 .iter()
@@ -931,17 +951,25 @@ fn merge_scored_nodes(primary: Vec<ScoredNode>, secondary: Vec<ScoredNode>) -> V
 /// Slice 15 features. Raw `Store::search` is still available for cases
 /// where only basic FTS is needed.
 ///
-/// When `query.hybrid` is `true` **and** `ATLAS_EMBED_URL` is set in the
-/// environment, the hybrid path is taken: FTS and vector results are merged
-/// via Reciprocal Rank Fusion.  Falls back silently to FTS-only when no
-/// embedding backend is configured.
+/// When `query.hybrid` is `true` **and** an embedding backend config is
+/// provided, the hybrid path is taken: FTS and vector results are merged via
+/// Reciprocal Rank Fusion. Falls back silently to FTS-only when no embedding
+/// backend is configured.
 pub fn search(store: &Store, query: &SearchQuery) -> Result<Vec<ScoredNode>> {
+    search_with_embedding(store, query, None)
+}
+
+pub fn search_with_embedding(
+    store: &Store,
+    query: &SearchQuery,
+    embed_cfg: Option<&embed::EmbeddingConfig>,
+) -> Result<Vec<ScoredNode>> {
     // ---- hybrid path -------------------------------------------------------
     if query.hybrid {
-        if let Some(embed_cfg) = embed::EmbeddingConfig::from_env() {
-            return search_hybrid(store, query, &embed_cfg);
+        if let Some(embed_cfg) = embed_cfg {
+            return search_hybrid(store, query, embed_cfg);
         }
-        debug!("hybrid=true but ATLAS_EMBED_URL not set; falling back to FTS");
+        debug!("hybrid=true but search.embedding.url not set; falling back to FTS");
     }
 
     // ---- FTS path ----------------------------------------------------------

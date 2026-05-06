@@ -305,6 +305,8 @@ fn init_full_profile_writes_active_config_template() {
     assert_eq!(data["config_profile"], json!("full"));
     assert!(config_text.contains("# profile = \"full\""));
     assert!(config_text.contains("hybrid_enabled = true"));
+    assert!(config_text.contains("[search.embedding]"));
+    assert!(config_text.contains("url = \"http://localhost:11434\""));
     assert!(config_text.contains("tool_timeout_ms_by_tool = { build_or_update_graph = 900000, get_review_context = 120000 }"));
 }
 
@@ -331,13 +333,13 @@ fn debug_config_reports_file_cli_and_env_sources() {
     run_atlas(repo.path(), &["init"]);
     fs::write(
         repo.path().join(".atlas").join("config.toml"),
-        "[mcp]\nworker_threads = 9\n",
+        "[mcp]\nworker_threads = 9\n\n[search.embedding]\nurl = \"http://embed.test\"\n",
     )
     .expect("write config override");
 
     let output = sanitized_command(env!("CARGO_BIN_EXE_atlas"))
         .args(["--json", "--db", "custom.db", "debug-config"])
-        .env("ATLAS_EMBED_URL", "http://embed.test")
+        .env("ATLAS_HTTP_BIND", "127.0.0.1:9000")
         .current_dir(repo.path())
         .output()
         .expect("run atlas debug-config");
@@ -353,13 +355,14 @@ fn debug_config_reports_file_cli_and_env_sources() {
         json!("cli")
     );
     assert_eq!(
-        payload["resolved"]["env.ATLAS_EMBED_URL"]["source"],
-        json!("env")
+        payload["resolved"]["search.embedding.url"]["source"],
+        json!("file")
     );
     assert_eq!(
-        payload["resolved"]["env.ATLAS_EMBED_URL"]["value"],
+        payload["resolved"]["search.embedding.url"]["value"],
         json!("http://embed.test")
     );
+    assert_eq!(payload["resolved"]["env.ATLAS_HTTP_BIND"]["source"], json!("env"));
 }
 
 #[test]
