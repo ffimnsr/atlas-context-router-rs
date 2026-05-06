@@ -50,11 +50,22 @@ pub struct BuildSummary {
     pub skipped_unchanged: usize,
     pub parsed: usize,
     pub parse_errors: usize,
+    pub chunk_upsert_failures: usize,
+    pub call_target_reconcile_failures: usize,
     pub nodes_inserted: usize,
     pub edges_inserted: usize,
+    pub warnings: Vec<String>,
     pub budget_counters: BuildUpdateBudgetCounters,
     pub budget: BudgetReport,
     pub elapsed_ms: u128,
+}
+
+impl BuildSummary {
+    pub fn is_degraded(&self) -> bool {
+        self.budget.partial
+            || self.chunk_upsert_failures > 0
+            || self.call_target_reconcile_failures > 0
+    }
 }
 
 /// Scan `repo_root`, parse all supported changed files, persist graph to `db_path`.
@@ -173,6 +184,8 @@ pub fn build_graph(
     let mut parsed_count = 0usize;
     let mut total_nodes = 0usize;
     let mut total_edges = 0usize;
+    let mut chunk_upsert_failures = 0usize;
+    let mut call_target_reconcile_failures = 0usize;
     let mut resolved_paths: Vec<String> = Vec::new();
     let mut attempted_files = 0usize;
     let mut budget_blocked = false;
@@ -258,6 +271,7 @@ pub fn build_graph(
                     if let Err(err) =
                         store.upsert_chunk(&node.qualified_name, 0, &node.chunk_text())
                     {
+                        chunk_upsert_failures += 1;
                         tracing::warn!("chunk upsert failed for {}: {err:#}", node.qualified_name);
                     }
                 }
@@ -285,10 +299,28 @@ pub fn build_graph(
         && !opts.dry_run
         && let Err(err) = reconcile_call_targets(&mut store, repo_root, &resolved_paths)
     {
+        call_target_reconcile_failures += 1;
         tracing::warn!("late call-target resolution failed during build: {err:#}");
     }
 
     let (budget_counters, budget_report) = budget.finish();
+    let mut warnings = Vec::new();
+    if chunk_upsert_failures > 0 {
+        let suffix = if chunk_upsert_failures == 1 { "" } else { "s" };
+        warnings.push(format!(
+            "retrieval chunk indexing degraded ({chunk_upsert_failures} failure{suffix})"
+        ));
+    }
+    if call_target_reconcile_failures > 0 {
+        let suffix = if call_target_reconcile_failures == 1 {
+            ""
+        } else {
+            "s"
+        };
+        warnings.push(format!(
+            "call target reconciliation degraded ({call_target_reconcile_failures} failure{suffix})"
+        ));
+    }
 
     Ok(BuildSummary {
         scanned,
@@ -296,8 +328,11 @@ pub fn build_graph(
         skipped_unchanged,
         parsed: parsed_count,
         parse_errors,
+        chunk_upsert_failures,
+        call_target_reconcile_failures,
         nodes_inserted: total_nodes,
         edges_inserted: total_edges,
+        warnings,
         budget_counters,
         budget: budget_report,
         elapsed_ms: started.elapsed().as_millis(),
@@ -586,5 +621,15 @@ mod tests {
                 .contains_key("c.rs::fn::gamma"),
             "c.rs::fn::gamma must be in the store"
         );
+    }
+
+    #[test]
+    fn build_summary_marks_degraded_for_chunk_failures() {
+        let summary = BuildSummary {
+            chunk_upsert_failures: 1,
+            ..BuildSummary::default()
+        };
+
+        assert!(summary.is_degraded());
     }
 }

@@ -961,10 +961,7 @@ fn query_graph_hybrid_falls_back_to_fts() {
         arr.iter()
             .any(|item| item["qn"].as_str().unwrap_or("").contains("compute"))
     );
-    assert_eq!(
-        resp["atlas_query_mode"].as_str(),
-        Some("fts5_vector_hybrid")
-    );
+    assert_eq!(resp["atlas_query_mode"].as_str(), Some("fts5"));
 }
 
 #[test]

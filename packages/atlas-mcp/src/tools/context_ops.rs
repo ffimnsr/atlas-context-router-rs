@@ -550,7 +550,7 @@ pub(super) fn tool_build_or_update_graph(
                     let state =
                         if matches!(sum.budget.budget_status, atlas_core::BudgetStatus::Blocked) {
                             GraphBuildState::BuildFailed
-                        } else if sum.budget.partial {
+                        } else if sum.is_degraded() {
                             GraphBuildState::Degraded
                         } else {
                             GraphBuildState::Built
@@ -592,8 +592,11 @@ pub(super) fn tool_build_or_update_graph(
                 "parsed": summary.parsed,
                 "skipped_unsupported": summary.skipped_unsupported,
                 "parse_errors": summary.parse_errors,
+                "chunk_upsert_failures": summary.chunk_upsert_failures,
+                "call_target_reconcile_failures": summary.call_target_reconcile_failures,
                 "nodes_updated": summary.nodes_updated,
                 "edges_updated": summary.edges_updated,
+                "warnings": summary.warnings,
                 "budget": summary.budget,
                 "budget_counters": summary.budget_counters,
                 "elapsed_ms": summary.elapsed_ms,
@@ -633,7 +636,7 @@ pub(super) fn tool_build_or_update_graph(
                     let state =
                         if matches!(sum.budget.budget_status, atlas_core::BudgetStatus::Blocked) {
                             GraphBuildState::BuildFailed
-                        } else if sum.budget.partial {
+                        } else if sum.is_degraded() {
                             GraphBuildState::Degraded
                         } else {
                             GraphBuildState::Built
@@ -675,8 +678,11 @@ pub(super) fn tool_build_or_update_graph(
                 "skipped_unchanged": summary.skipped_unchanged,
                 "parsed": summary.parsed,
                 "parse_errors": summary.parse_errors,
+                "chunk_upsert_failures": summary.chunk_upsert_failures,
+                "call_target_reconcile_failures": summary.call_target_reconcile_failures,
                 "nodes_inserted": summary.nodes_inserted,
                 "edges_inserted": summary.edges_inserted,
+                "warnings": summary.warnings,
                 "budget": summary.budget,
                 "budget_counters": summary.budget_counters,
                 "elapsed_ms": summary.elapsed_ms,

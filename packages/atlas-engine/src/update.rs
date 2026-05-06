@@ -97,11 +97,22 @@ pub struct UpdateSummary {
     pub parsed: usize,
     pub skipped_unsupported: usize,
     pub parse_errors: usize,
+    pub chunk_upsert_failures: usize,
+    pub call_target_reconcile_failures: usize,
     pub nodes_updated: usize,
     pub edges_updated: usize,
+    pub warnings: Vec<String>,
     pub budget_counters: BuildUpdateBudgetCounters,
     pub budget: BudgetReport,
     pub elapsed_ms: u128,
+}
+
+impl UpdateSummary {
+    pub fn is_degraded(&self) -> bool {
+        self.budget.partial
+            || self.chunk_upsert_failures > 0
+            || self.call_target_reconcile_failures > 0
+    }
 }
 
 /// Compute a content-signature string for `node` (excludes line positions).
@@ -239,9 +250,6 @@ pub fn update_graph(
                 to_parse_paths.push(cf.path.clone());
             }
             ChangeType::Copied => {
-                if let Some(old) = &cf.old_path {
-                    to_delete.push(old.clone());
-                }
                 to_parse_paths.push(cf.path.clone());
             }
             _ => to_parse_paths.push(cf.path.clone()),
@@ -552,6 +560,7 @@ pub fn update_graph(
     let _write_span = tracing::info_span!("update.write").entered();
     let mut total_nodes = 0usize;
     let mut total_edges = 0usize;
+    let mut chunk_upsert_failures = 0usize;
 
     let all_parsed: Vec<&ParsedFile> = parsed_changed.iter().chain(parsed_deps.iter()).collect();
     for chunk in all_parsed.chunks(opts.batch_size) {
@@ -581,6 +590,7 @@ pub fn update_graph(
             }
             for node in &pf.nodes {
                 if let Err(err) = store.upsert_chunk(&node.qualified_name, 0, &node.chunk_text()) {
+                    chunk_upsert_failures += 1;
                     tracing::warn!("chunk upsert failed for {}: {err:#}", node.qualified_name);
                 }
             }
@@ -594,16 +604,35 @@ pub fn update_graph(
     }
 
     let resolved_paths: Vec<String> = all_parsed.iter().map(|pf| pf.path.clone()).collect();
+    let mut call_target_reconcile_failures = 0usize;
     if !resolved_paths.is_empty()
         && !opts.dry_run
         && let Err(err) = reconcile_call_targets(&mut store, repo_root, &resolved_paths)
     {
+        call_target_reconcile_failures += 1;
         tracing::warn!("late call-target resolution failed during update: {err:#}");
     }
 
     let parsed_count = parsed_changed.len() + parsed_deps.len();
 
     let (budget_counters, budget_report) = budget.finish();
+    let mut warnings = Vec::new();
+    if chunk_upsert_failures > 0 {
+        let suffix = if chunk_upsert_failures == 1 { "" } else { "s" };
+        warnings.push(format!(
+            "retrieval chunk indexing degraded ({chunk_upsert_failures} failure{suffix})"
+        ));
+    }
+    if call_target_reconcile_failures > 0 {
+        let suffix = if call_target_reconcile_failures == 1 {
+            ""
+        } else {
+            "s"
+        };
+        warnings.push(format!(
+            "call target reconciliation degraded ({call_target_reconcile_failures} failure{suffix})"
+        ));
+    }
 
     Ok(UpdateSummary {
         deleted: deleted_count,
@@ -611,8 +640,11 @@ pub fn update_graph(
         parsed: parsed_count,
         skipped_unsupported,
         parse_errors,
+        chunk_upsert_failures,
+        call_target_reconcile_failures,
         nodes_updated: total_nodes,
         edges_updated: total_edges,
+        warnings,
         budget_counters,
         budget: budget_report,
         elapsed_ms: started.elapsed().as_millis(),
@@ -656,6 +688,7 @@ mod tests {
     use super::*;
     use crate::{BuildOptions, BuildRunBudget, build_graph};
     use atlas_core::BudgetStatus;
+    use atlas_core::model::{ChangeType, ChangedFile};
     use std::os::unix::fs::PermissionsExt;
     use std::process::Command;
 
@@ -862,6 +895,66 @@ mod tests {
         );
     }
 
+    #[test]
+    fn copied_file_update_keeps_source_graph() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo_root = dir.path();
+
+        git(repo_root, &["init", "--quiet"]);
+        std::fs::write(repo_root.join("base.rs"), "pub fn base() {}\n").unwrap();
+        git(repo_root, &["add", "base.rs"]);
+        git(repo_root, &["commit", "--quiet", "-m", "init"]);
+
+        let db_path = repo_root.join("worldtree.db");
+        build_graph(
+            Utf8Path::from_path(repo_root).unwrap(),
+            db_path.to_str().unwrap(),
+            &BuildOptions::default(),
+        )
+        .unwrap();
+
+        std::fs::write(
+            repo_root.join("copy.rs"),
+            "pub fn base() {}\npub fn copy() {}\n",
+        )
+        .unwrap();
+
+        let summary = update_graph(
+            Utf8Path::from_path(repo_root).unwrap(),
+            db_path.to_str().unwrap(),
+            &UpdateOptions {
+                fail_fast: true,
+                dry_run: false,
+                batch_size: 16,
+                target: UpdateTarget::Batch(vec![ChangedFile {
+                    path: "copy.rs".to_string(),
+                    change_type: ChangeType::Copied,
+                    old_path: Some("base.rs".to_string()),
+                }]),
+                budget: BuildRunBudget::default(),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            summary.deleted, 0,
+            "copy updates must not delete source graph"
+        );
+
+        let store = Store::open(db_path.to_str().unwrap()).unwrap();
+        let base_sigs = store.node_signatures_by_file("base.rs").unwrap();
+        let copy_sigs = store.node_signatures_by_file("copy.rs").unwrap();
+
+        assert!(
+            base_sigs.contains_key("base.rs::fn::base"),
+            "source file graph must remain after copied-file update"
+        );
+        assert!(
+            copy_sigs.contains_key("copy.rs::fn::copy"),
+            "copied file graph must be indexed"
+        );
+    }
+
     // Verifies that dependent file parse results are collected before the write
     // phase executes.  Files passed explicitly via `UpdateTarget::Files` all go
     // through the changed-file parallel parse phase; the write phase must see
@@ -927,5 +1020,15 @@ mod tests {
                 .contains_key("y.rs::fn::y2"),
             "y.rs::fn::y2 must be in the store after explicit-file update"
         );
+    }
+
+    #[test]
+    fn update_summary_marks_degraded_for_reconcile_failures() {
+        let summary = UpdateSummary {
+            call_target_reconcile_failures: 1,
+            ..UpdateSummary::default()
+        };
+
+        assert!(summary.is_degraded());
     }
 }

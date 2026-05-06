@@ -365,7 +365,7 @@ fn execute_graph_refresh_action(
                     atlas_core::BudgetStatus::Blocked
                 ) {
                     atlas_store_sqlite::GraphBuildState::BuildFailed
-                } else if summary.budget.partial {
+                } else if summary.is_degraded() {
                     atlas_store_sqlite::GraphBuildState::Degraded
                 } else {
                     atlas_store_sqlite::GraphBuildState::Built
@@ -398,8 +398,11 @@ fn execute_graph_refresh_action(
                 "deleted": summary.deleted,
                 "renamed": summary.renamed,
                 "parsed": summary.parsed,
+                "chunk_upsert_failures": summary.chunk_upsert_failures,
+                "call_target_reconcile_failures": summary.call_target_reconcile_failures,
                 "nodes_updated": summary.nodes_updated,
                 "edges_updated": summary.edges_updated,
+                "warnings": summary.warnings,
                 "budget": summary.budget,
                 "budget_counters": summary.budget_counters,
             })

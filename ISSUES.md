@@ -495,12 +495,12 @@ Atlas should make backend capability checks explicit instead of assuming all ret
   - [ ] sparse / BM25-native retrieval
   - [ ] metadata filtering
 - [ ] validate requested retrieval mode against backend capabilities before query/index
-- [ ] disable unsupported hybrid mode automatically with explicit warning
-- [ ] ensure MCP/CLI surfaces report active retrieval mode clearly
+- [x] disable unsupported hybrid mode automatically with explicit warning
+- [x] ensure MCP/CLI surfaces report active retrieval mode clearly
 - [ ] add tests for:
-  - [ ] lexical-only backend
+  - [x] lexical-only backend
   - [ ] dense-only backend
-  - [ ] hybrid-capable backend
+  - [x] hybrid-capable backend
   - [ ] unsupported mode request fails cleanly
 
 Why:

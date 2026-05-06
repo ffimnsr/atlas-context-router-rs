@@ -104,14 +104,14 @@ pub struct QueryExplanation {
 fn query_execution_mode_for(
     query: &SearchQuery,
     semantic: bool,
-    _hybrid_backend_available: bool,
+    hybrid_backend_available: bool,
 ) -> QueryExecutionMode {
     let graph_aware = semantic || query.graph_expand;
     match (
         query.text.trim().is_empty(),
         query.regex_pattern.is_some(),
         graph_aware,
-        query.hybrid,
+        query.hybrid && hybrid_backend_available,
     ) {
         (true, true, false, _) => QueryExecutionMode::RegexStructuralScan,
         (true, true, true, _) => QueryExecutionMode::RegexStructuralScanGraphExpand,
@@ -1185,6 +1185,7 @@ fn search_hybrid(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use atlas_core::SearchQuery;
     use atlas_core::{Edge, EdgeKind, Node, NodeId};
     use atlas_core::{HybridRankingSource, SearchMatchedField};
 
@@ -1240,6 +1241,54 @@ mod tests {
         let q = build_relaxed_fts_query("gret_twice");
         assert!(q.contains("gre*"), "expected typo prefix token: {q}");
         assert!(q.contains("tw*"), "expected stable suffix token: {q}");
+    }
+
+    #[test]
+    fn explain_query_reports_fts_mode_when_hybrid_backend_missing() {
+        let query = SearchQuery {
+            text: "helper".to_string(),
+            hybrid: true,
+            ..SearchQuery::default()
+        };
+
+        let explanation = explain_query_with_embedding(None, false, &query, false, None);
+
+        assert_eq!(explanation.active_query_mode, "fts5");
+        assert_eq!(explanation.search_path, "fts5");
+        assert!(
+            explanation
+                .warnings
+                .iter()
+                .any(|warning| warning.contains("falls back to FTS-only ranking"))
+        );
+        assert!(
+            !explanation
+                .ranking_factors
+                .iter()
+                .any(|factor| factor == "vector_rrf_merge")
+        );
+    }
+
+    #[test]
+    fn explain_query_reports_hybrid_mode_when_backend_available() {
+        let query = SearchQuery {
+            text: "helper".to_string(),
+            hybrid: true,
+            ..SearchQuery::default()
+        };
+        let embed_cfg =
+            embed::EmbeddingConfig::new("http://localhost:11434", "nomic-embed-text", 30, 3, 500);
+
+        let explanation =
+            explain_query_with_embedding(None, false, &query, false, Some(&embed_cfg));
+
+        assert_eq!(explanation.active_query_mode, "fts5_vector_hybrid");
+        assert!(
+            explanation
+                .ranking_factors
+                .iter()
+                .any(|factor| factor == "vector_rrf_merge")
+        );
     }
 
     #[test]

@@ -5,8 +5,11 @@
   "skipped_unchanged": 0,
   "parsed": 2,
   "parse_errors": 0,
+  "chunk_upsert_failures": 0,
+  "call_target_reconcile_failures": 0,
   "nodes_inserted": 7,
   "edges_inserted": 8,
+  "warnings": [],
   "budget": {
     "budget_status": "within_budget",
     "budget_hit": false,

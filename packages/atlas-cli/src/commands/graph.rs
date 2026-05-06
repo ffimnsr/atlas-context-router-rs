@@ -539,7 +539,7 @@ pub fn run_build(cli: &Cli) -> Result<()> {
                     let state =
                         if matches!(s.budget.budget_status, atlas_core::BudgetStatus::Blocked) {
                             atlas_store_sqlite::GraphBuildState::BuildFailed
-                        } else if s.budget.partial {
+                        } else if s.is_degraded() {
                             atlas_store_sqlite::GraphBuildState::Degraded
                         } else {
                             atlas_store_sqlite::GraphBuildState::Built
@@ -582,8 +582,11 @@ pub fn run_build(cli: &Cli) -> Result<()> {
                     "skipped_unchanged": summary.skipped_unchanged,
                     "parsed": summary.parsed,
                     "parse_errors": summary.parse_errors,
+                    "chunk_upsert_failures": summary.chunk_upsert_failures,
+                    "call_target_reconcile_failures": summary.call_target_reconcile_failures,
                     "nodes_inserted": summary.nodes_inserted,
                     "edges_inserted": summary.edges_inserted,
+                    "warnings": summary.warnings,
                     "budget": summary.budget,
                     "budget_counters": summary.budget_counters,
                     "elapsed_ms": summary.elapsed_ms,
@@ -617,6 +620,15 @@ pub fn run_build(cli: &Cli) -> Result<()> {
             if summary.parse_errors > 0 {
                 print_summary_value("Errors", summary.parse_errors);
             }
+            if summary.chunk_upsert_failures > 0 {
+                print_summary_value("Chunk indexing failures", summary.chunk_upsert_failures);
+            }
+            if summary.call_target_reconcile_failures > 0 {
+                print_summary_value(
+                    "Call-target reconcile failures",
+                    summary.call_target_reconcile_failures,
+                );
+            }
             print_summary_value("Files accepted", summary.budget_counters.files_accepted);
             if summary.budget_counters.files_skipped_by_byte_budget > 0 {
                 print_summary_value(
@@ -628,6 +640,9 @@ pub fn run_build(cli: &Cli) -> Result<()> {
             print_summary_value("Edges inserted", summary.edges_inserted);
             if let Some(reason) = &summary.budget_counters.budget_stop_reason {
                 print_summary_value("Budget stop reason", reason);
+            }
+            for warning in &summary.warnings {
+                print_summary_value("Warning", warning);
             }
         }
 
@@ -707,7 +722,7 @@ pub fn run_update(cli: &Cli) -> Result<()> {
                     let state =
                         if matches!(s.budget.budget_status, atlas_core::BudgetStatus::Blocked) {
                             atlas_store_sqlite::GraphBuildState::BuildFailed
-                        } else if s.budget.partial {
+                        } else if s.is_degraded() {
                             atlas_store_sqlite::GraphBuildState::Degraded
                         } else {
                             atlas_store_sqlite::GraphBuildState::Built
@@ -750,8 +765,11 @@ pub fn run_update(cli: &Cli) -> Result<()> {
                     "parsed": summary.parsed,
                     "skipped_unsupported": summary.skipped_unsupported,
                     "parse_errors": summary.parse_errors,
+                    "chunk_upsert_failures": summary.chunk_upsert_failures,
+                    "call_target_reconcile_failures": summary.call_target_reconcile_failures,
                     "nodes_updated": summary.nodes_updated,
                     "edges_updated": summary.edges_updated,
+                    "warnings": summary.warnings,
                     "budget": summary.budget,
                     "budget_counters": summary.budget_counters,
                     "elapsed_ms": summary.elapsed_ms,
@@ -796,10 +814,22 @@ pub fn run_update(cli: &Cli) -> Result<()> {
             if summary.parse_errors > 0 {
                 print_summary_value("Errors", summary.parse_errors);
             }
+            if summary.chunk_upsert_failures > 0 {
+                print_summary_value("Chunk indexing failures", summary.chunk_upsert_failures);
+            }
+            if summary.call_target_reconcile_failures > 0 {
+                print_summary_value(
+                    "Call-target reconcile failures",
+                    summary.call_target_reconcile_failures,
+                );
+            }
             print_summary_value("Nodes", summary.nodes_updated);
             print_summary_value("Edges", summary.edges_updated);
             if let Some(reason) = &summary.budget_counters.budget_stop_reason {
                 print_summary_value("Budget stop reason", reason);
+            }
+            for warning in &summary.warnings {
+                print_summary_value("Warning", warning);
             }
         }
 
