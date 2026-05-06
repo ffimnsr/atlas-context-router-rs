@@ -200,11 +200,7 @@ fn estimate_selected_commits(
                 match status {
                     'A' | 'C' => estimated_file_count += 1,
                     'D' => estimated_file_count = estimated_file_count.saturating_sub(1),
-                    'R' => {
-                        if old_path.is_empty() {
-                            estimated_file_count += 1;
-                        }
-                    }
+                    'R' if old_path.is_empty() => estimated_file_count += 1,
                     _ => {}
                 }
             }

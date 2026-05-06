@@ -2719,9 +2719,13 @@ mod tests {
         )
         .expect("write handshake");
         client_stream.flush().expect("flush handshake");
-        client_stream
-            .shutdown(Shutdown::Write)
-            .expect("shutdown write");
+        if let Err(error) = client_stream.shutdown(Shutdown::Write) {
+            assert_eq!(
+                error.kind(),
+                std::io::ErrorKind::NotConnected,
+                "shutdown write"
+            );
+        }
 
         let mut output = String::new();
         client_stream
