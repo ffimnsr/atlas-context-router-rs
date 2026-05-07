@@ -59,7 +59,7 @@ pub fn update_historical_graph_with_progress<P>(
     repair: bool,
     max_commits: Option<usize>,
     registry: &ParserRegistry,
-    progress: P,
+    mut progress: P,
 ) -> Result<HistoryUpdateSummary>
 where
     P: FnMut(BuildProgressEvent),
@@ -134,7 +134,7 @@ where
             &selector,
             registry,
             Some(&branch),
-            progress,
+            &mut progress,
         )
         .context("build missing history commits")?
     };
@@ -142,6 +142,9 @@ where
         load_existing_lifecycle_summary(canonical_root, store)
             .context("load existing lifecycle summary")?
     } else {
+        progress(BuildProgressEvent::RunPhaseChanged {
+            message: "recomputing lifecycle history".to_owned(),
+        });
         recompute_lifecycle(canonical_root, store).context("recompute lifecycle")?
     };
 

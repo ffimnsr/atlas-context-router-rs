@@ -1,4 +1,6 @@
 use anyhow::{Context, Result};
+use std::time::Instant;
+
 use atlas_history::status::HistoryStatus;
 use atlas_history::{
     CommitSelector, HistoryRetentionPolicy, build_historical_graph_with_progress,
@@ -108,6 +110,7 @@ pub(crate) fn run_history_build(cli: &Cli) -> Result<()> {
         eprintln!("history build canceled");
         return Ok(());
     }
+    let started = Instant::now();
     let mut progress = HistoryBuildProgress::new(!cli.json);
     let summary = build_historical_graph_with_progress(
         ctx.repo_path(),
@@ -119,9 +122,13 @@ pub(crate) fn run_history_build(cli: &Cli) -> Result<()> {
         |event| progress.observe(event),
     )
     .context("build historical graph")?;
-    progress.finish();
+    progress.observe(atlas_history::BuildProgressEvent::RunPhaseChanged {
+        message: "recomputing lifecycle history".to_owned(),
+    });
     let lifecycle =
         recompute_lifecycle(&ctx.canonical_root, &ctx.store).context("recompute lifecycle")?;
+    let elapsed_secs = started.elapsed().as_secs_f64();
+    progress.finish();
 
     for error in &summary.errors {
         eprintln!("warning: {error}");
@@ -142,7 +149,7 @@ pub(crate) fn run_history_build(cli: &Cli) -> Result<()> {
             "warnings": summary.warnings,
             "node_history_rows": lifecycle.node_history_rows,
             "edge_history_rows": lifecycle.edge_history_rows,
-            "elapsed_secs": summary.elapsed_secs,
+            "elapsed_secs": elapsed_secs,
         });
         print_json("history_build", value)?;
     } else {
@@ -156,7 +163,7 @@ pub(crate) fn run_history_build(cli: &Cli) -> Result<()> {
         println!("edges written     : {}", summary.edges_written);
         println!("node history rows : {}", lifecycle.node_history_rows);
         println!("edge history rows : {}", lifecycle.edge_history_rows);
-        println!("elapsed           : {:.2}s", summary.elapsed_secs);
+        println!("elapsed           : {:.2}s", elapsed_secs);
         if !summary.errors.is_empty() {
             eprintln!("errors            : {}", summary.errors.len());
         }

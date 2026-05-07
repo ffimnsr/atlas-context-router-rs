@@ -94,6 +94,10 @@ fn history_build_json_reports_shallow_clone_warning() {
             .any(|warning| warning.as_str().unwrap_or_default().contains("shallow clone detected")),
         "expected shallow clone warning in history build output: {summary:?}"
     );
+    assert!(
+        summary["elapsed_secs"].as_f64().unwrap_or_default() >= 0.0,
+        "expected elapsed_secs in history build output: {summary:?}"
+    );
 }
 
 #[test]
@@ -110,6 +114,7 @@ fn history_build_human_output_emits_progress_updates() {
             && stderr.contains("progress 1/")
             && stderr.contains("save 1/4")
             && stderr.contains("saving commit metadata")
+            && stderr.contains("recomputing lifecycle history")
             && stderr.contains("src/lib.rs"),
         "expected progress output on stderr\nstderr:\n{stderr}"
     );
@@ -196,6 +201,7 @@ fn history_update_human_output_emits_progress_updates() {
             && stderr.contains("progress 1/")
             && stderr.contains("save 1/4")
             && stderr.contains("saving commit metadata")
+            && stderr.contains("recomputing lifecycle history")
             && stderr.contains("src/lib.rs"),
         "expected update progress output on stderr\nstderr:\n{stderr}"
     );
@@ -262,6 +268,7 @@ fn history_rebuild_human_output_emits_progress_updates() {
             && stderr.contains("progress 1/")
             && stderr.contains("save 1/4")
             && stderr.contains("saving commit metadata")
+            && stderr.contains("recomputing lifecycle history")
             && stderr.contains("src/lib.rs"),
         "expected rebuild progress output on stderr\nstderr:\n{stderr}"
     );

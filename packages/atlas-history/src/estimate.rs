@@ -300,19 +300,43 @@ fn shallow_build_warning(repo: &Path, selector: &CommitSelector) -> Option<Strin
 }
 
 fn finalize_eta(summary: &mut HistoryEstimateSummary) {
-    let language_secs = summary
+    let parse_secs = summary
         .estimated_parseable_by_language
         .iter()
         .map(|(language, count)| parse_cost_secs(language) * (*count as f64))
         .sum::<f64>();
+    let write_secs = write_cost_secs(summary);
+    let lifecycle_secs = lifecycle_cost_secs(summary);
     let base = 0.25
         + (summary.commits_to_process as f64 * 0.04)
         + (summary.estimated_total_files as f64 * 0.0003)
         + (summary.estimated_changed_files as f64 * 0.0015)
         + (summary.estimated_reused_blobs as f64 * 0.0012)
-        + language_secs;
+        + parse_secs
+        + write_secs
+        + lifecycle_secs;
     summary.eta_low_secs = (base * 0.7).max(0.1);
     summary.eta_high_secs = (base * 1.8).max(summary.eta_low_secs + 0.1);
+}
+
+fn write_cost_secs(summary: &HistoryEstimateSummary) -> f64 {
+    if summary.commits_to_process == 0 {
+        return 0.0;
+    }
+
+    (summary.commits_to_process as f64 * 0.02)
+        + (summary.estimated_total_files as f64 * 0.0007)
+        + (summary.estimated_reused_blobs as f64 * 0.0004)
+        + (summary.estimated_new_blobs as f64 * 0.0009)
+}
+
+fn lifecycle_cost_secs(summary: &HistoryEstimateSummary) -> f64 {
+    if summary.commits_to_process == 0 {
+        return 0.0;
+    }
+
+    0.03 + (summary.commits_to_process as f64 * 0.015)
+        + (summary.estimated_parseable_files as f64 * 0.0005)
 }
 
 fn parse_cost_secs(language: &str) -> f64 {
@@ -435,6 +459,26 @@ mod tests {
         assert_eq!(estimate.commits_to_process, 2);
         assert_eq!(estimate.estimated_new_blobs, 1);
         assert_eq!(estimate.estimated_reused_blobs, 1);
+    }
+
+    #[test]
+    fn eta_adds_explicit_write_and_lifecycle_costs() {
+        let summary = HistoryEstimateSummary {
+            commits_to_process: 2,
+            estimated_total_files: 10,
+            estimated_changed_files: 4,
+            estimated_parseable_files: 8,
+            estimated_reused_blobs: 3,
+            estimated_new_blobs: 5,
+            ..HistoryEstimateSummary::default()
+        };
+
+        assert!(write_cost_secs(&summary) > 0.0);
+        assert!(lifecycle_cost_secs(&summary) > 0.0);
+
+        let idle = HistoryEstimateSummary::default();
+        assert_eq!(write_cost_secs(&idle), 0.0);
+        assert_eq!(lifecycle_cost_secs(&idle), 0.0);
     }
 
     #[test]

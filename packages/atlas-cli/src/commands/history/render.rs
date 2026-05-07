@@ -63,6 +63,18 @@ impl HistoryBuildProgress {
                 }
                 ProgressState::Hidden => {}
             },
+            BuildProgressEvent::RunPhaseChanged { message } => match &self.state {
+                ProgressState::Plain => {
+                    let total = self.total_units.max(self.completed_units);
+                    eprintln!("progress {}/{} {message}", self.completed_units, total);
+                }
+                ProgressState::Bar(bar) => {
+                    bar.set_length(self.total_units.max(self.completed_units));
+                    bar.set_position(self.completed_units);
+                    bar.set_message(message);
+                }
+                ProgressState::Hidden => {}
+            },
             BuildProgressEvent::CommitStarted {
                 commit_index,
                 total_commits,

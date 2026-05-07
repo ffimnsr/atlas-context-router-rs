@@ -127,6 +127,9 @@ pub enum BuildProgressEvent {
     RunStarted {
         total_commits: usize,
     },
+    RunPhaseChanged {
+        message: String,
+    },
     CommitStarted {
         commit_index: usize,
         total_commits: usize,
@@ -408,6 +411,9 @@ where
         .find_snapshot(repo_id, commit_sha)?
         .map(|snapshot| snapshot.snapshot_id)
         .ok_or_else(|| anyhow::anyhow!("rebuilt snapshot missing for {commit_sha}"))?;
+    progress(BuildProgressEvent::RunPhaseChanged {
+        message: "recomputing lifecycle history".to_owned(),
+    });
     let lifecycle = recompute_lifecycle(canonical_root, store).context("recompute lifecycle")?;
 
     Ok(SnapshotRebuildSummary {
