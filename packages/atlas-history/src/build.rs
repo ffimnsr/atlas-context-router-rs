@@ -147,6 +147,46 @@ pub enum BuildProgressEvent {
         file_path: String,
         outcome: BuildFileProgressKind,
     },
+    CommitPersistStepStarted {
+        commit_index: usize,
+        total_commits: usize,
+        commit_sha: String,
+        step_index: usize,
+        total_steps: usize,
+        step: BuildPersistProgressKind,
+    },
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum BuildPersistProgressKind {
+    CommitMetadata,
+    SnapshotRows,
+    SnapshotMembership,
+    TransactionCommit,
+}
+
+impl BuildPersistProgressKind {
+    pub const fn total_steps() -> usize {
+        4
+    }
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::CommitMetadata => "saving commit metadata",
+            Self::SnapshotRows => "saving snapshot rows",
+            Self::SnapshotMembership => "storing snapshot membership",
+            Self::TransactionCommit => "committing database transaction",
+        }
+    }
+
+    const fn step_index(self) -> usize {
+        match self {
+            Self::CommitMetadata => 1,
+            Self::SnapshotRows => 2,
+            Self::SnapshotMembership => 3,
+            Self::TransactionCommit => 4,
+        }
+    }
 }
 
 /// Summary produced by [`build_historical_graph`].
@@ -685,12 +725,14 @@ where
         },
         indexed_at: String::new(),
     };
+    emit_persist_progress(ctx, meta, BuildPersistProgressKind::CommitMetadata);
     ctx.store
         .upsert_commit(&stored_commit)
         .context("upsert commit")
         .inspect_err(|_| ctx.store.rollback_write())?;
 
     // Insert graph snapshot.
+    emit_persist_progress(ctx, meta, BuildPersistProgressKind::SnapshotRows);
     let snapshot_id = ctx
         .store
         .insert_snapshot(
@@ -719,6 +761,7 @@ where
         .inspect_err(|_| ctx.store.rollback_write())?;
 
     // Attach node and edge membership.
+    emit_persist_progress(ctx, meta, BuildPersistProgressKind::SnapshotMembership);
     for membership in &file_memberships {
         ctx.store
             .attach_snapshot_nodes(
@@ -751,6 +794,7 @@ where
         .context("insert snapshot membership blobs")
         .inspect_err(|_| ctx.store.rollback_write())?;
 
+    emit_persist_progress(ctx, meta, BuildPersistProgressKind::TransactionCommit);
     ctx.store
         .commit_write()
         .context("commit write transaction")?;
@@ -776,6 +820,23 @@ fn emit_file_progress<P>(
         total_files,
         file_path: file_path.to_owned(),
         outcome,
+    });
+}
+
+fn emit_persist_progress<P>(
+    ctx: &mut BuildContext<'_, P>,
+    meta: &git::GitCommitMeta,
+    step: BuildPersistProgressKind,
+) where
+    P: FnMut(BuildProgressEvent),
+{
+    (ctx.progress)(BuildProgressEvent::CommitPersistStepStarted {
+        commit_index: ctx.commit_index,
+        total_commits: ctx.total_commits,
+        commit_sha: meta.sha.clone(),
+        step_index: step.step_index(),
+        total_steps: BuildPersistProgressKind::total_steps(),
+        step,
     });
 }
 
@@ -1289,6 +1350,26 @@ mod tests {
                 outcome: BuildFileProgressKind::SkippedUnsupported,
                 ..
             } if file_path == "notes.xyz"
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            BuildProgressEvent::CommitPersistStepStarted {
+                commit_index: 1,
+                total_commits: 1,
+                commit_sha,
+                step_index: 1,
+                total_steps,
+                step: BuildPersistProgressKind::CommitMetadata,
+            } if commit_sha == &first && *total_steps == BuildPersistProgressKind::total_steps()
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            BuildProgressEvent::CommitPersistStepStarted {
+                step_index: 4,
+                total_steps,
+                step: BuildPersistProgressKind::TransactionCommit,
+                ..
+            } if *total_steps == BuildPersistProgressKind::total_steps()
         )));
     }
 

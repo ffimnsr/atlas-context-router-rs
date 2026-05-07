@@ -3,8 +3,8 @@ use std::io::IsTerminal;
 use std::time::Duration;
 
 use anyhow::Result;
-use atlas_history::BuildProgressEvent;
 use atlas_history::HistoryEstimateSummary;
+use atlas_history::{BuildPersistProgressKind, BuildProgressEvent};
 use dialoguer::{Confirm, theme::ColorfulTheme};
 use indicatif::{ProgressBar, ProgressStyle};
 
@@ -16,8 +16,8 @@ pub(crate) enum HistoryOutputMode {
 
 pub(crate) struct HistoryBuildProgress {
     state: ProgressState,
-    processed_files: u64,
-    discovered_files: u64,
+    completed_units: u64,
+    total_units: u64,
 }
 
 enum ProgressState {
@@ -47,8 +47,8 @@ impl HistoryBuildProgress {
 
         Self {
             state,
-            processed_files: 0,
-            discovered_files: 0,
+            completed_units: 0,
+            total_units: 0,
         }
     }
 
@@ -69,7 +69,8 @@ impl HistoryBuildProgress {
                 commit_sha,
                 total_files,
             } => {
-                self.discovered_files += total_files as u64;
+                self.total_units +=
+                    total_files as u64 + BuildPersistProgressKind::total_steps() as u64;
                 let message = format!(
                     "[{commit_index}/{total_commits}] {} enumerate {total_files} file(s)",
                     short_sha(&commit_sha)
@@ -77,7 +78,7 @@ impl HistoryBuildProgress {
                 match &self.state {
                     ProgressState::Plain => eprintln!("{message}"),
                     ProgressState::Bar(bar) => {
-                        bar.set_length(self.discovered_files);
+                        bar.set_length(self.total_units);
                         bar.set_message(message);
                     }
                     ProgressState::Hidden => {}
@@ -108,19 +109,46 @@ impl HistoryBuildProgress {
                 file_path,
                 ..
             } => {
-                self.processed_files += 1;
-                let total = self.discovered_files.max(self.processed_files);
+                self.completed_units += 1;
+                let total = self.total_units.max(self.completed_units);
                 let message = format!(
                     "[{commit_index}/{total_commits}] {} {outcome}: {file_path}",
                     short_sha(&commit_sha)
                 );
                 match &self.state {
                     ProgressState::Plain => {
-                        eprintln!("progress {}/{} {message}", self.processed_files, total);
+                        eprintln!("progress {}/{} {message}", self.completed_units, total);
                     }
                     ProgressState::Bar(bar) => {
                         bar.set_length(total);
-                        bar.set_position(self.processed_files);
+                        bar.set_position(self.completed_units);
+                        bar.set_message(message);
+                    }
+                    ProgressState::Hidden => {}
+                }
+            }
+            BuildProgressEvent::CommitPersistStepStarted {
+                commit_index,
+                total_commits,
+                commit_sha,
+                step_index,
+                total_steps,
+                step,
+            } => {
+                self.completed_units += 1;
+                let total = self.total_units.max(self.completed_units);
+                let message = format!(
+                    "[{commit_index}/{total_commits}] {} save {step_index}/{total_steps}: {}",
+                    short_sha(&commit_sha),
+                    step.label()
+                );
+                match &self.state {
+                    ProgressState::Plain => {
+                        eprintln!("progress {}/{} {message}", self.completed_units, total);
+                    }
+                    ProgressState::Bar(bar) => {
+                        bar.set_length(total);
+                        bar.set_position(self.completed_units);
                         bar.set_message(message);
                     }
                     ProgressState::Hidden => {}

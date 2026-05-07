@@ -52,9 +52,9 @@ pub use analytics::{
     ModuleChurnRecord, StorageDiagnostics, TrendMetrics, compute_churn_report,
 };
 pub use build::{
-    BuildFileProgressKind, BuildProgressEvent, BuildSummary, SnapshotRebuildSummary,
-    build_historical_graph, build_historical_graph_with_progress, rebuild_historical_snapshot,
-    rebuild_historical_snapshot_with_progress,
+    BuildFileProgressKind, BuildPersistProgressKind, BuildProgressEvent, BuildSummary,
+    SnapshotRebuildSummary, build_historical_graph, build_historical_graph_with_progress,
+    rebuild_historical_snapshot, rebuild_historical_snapshot_with_progress,
 };
 pub use diff::{GraphDiffReport, HistoricalSnapshot, diff_snapshots, reconstruct_snapshot};
 pub use error::{HistoryError, Result};

@@ -59,14 +59,14 @@ For terms that are easy to misread in this document:
 ## Roadmap Layout
 
 - Part III. Remaining product expansion roadmap: Phases 29 through 31
-- Part IV. Remaining context continuity roadmap: Phases CM12, CM14, and CM15
+- Part IV. Remaining context continuity roadmap: Phases CM12, CM14, and CM15, plus ICM-inspired memory follow-on roadmap
 - Part V. Remaining focused follow-up patches: Retrieval Follow-Up Patch, Graph/Content Companion Patch, Parity Surface Patch, Runtime Event Enrichment and Graph Linking Patch, Context Escalation Contract Patch, Graph Store Corruption Recovery Patch, SQLite Connection Concurrency Policy Patch
 
 ## Cross-Cutting Track Map
 
 - Historical and analytics work: Phase 17, Phase 29, Phase 30, Phase 31
 - Retrieval and search follow-ups: Retrieval Follow-Up Patch, Graph/Content Companion Patch, Parity Surface Patch
-- Context continuity and runtime memory: Phase CM12, Phase CM14, Phase CM15, Runtime Event Enrichment and Graph Linking Patch
+- Context continuity and runtime memory: Phase CM12, Phase CM14, Phase CM15, ICM-inspired memory follow-on roadmap, Runtime Event Enrichment and Graph Linking Patch
 - Graph safety and workflow: Context Escalation Contract Patch, Graph Store Corruption Recovery Patch, SQLite Connection Concurrency Policy Patch
 
 ---
@@ -393,6 +393,337 @@ The memory system is undergoing continuous improvement:
 - [ ] system can recall past sessions
 - [ ] context selection is optimized
 - [ ] system improves over time
+
+---
+
+### ICM-Inspired Memory Follow-On Roadmap
+
+Use this section to merge compatible parts of `atlas-icm-inspired-memory-roadmap.md` into the existing continuity architecture.
+
+Priority order below is implementation order. Extend shipped Phase CM14 and Phase CM15 behavior. Do not introduce a parallel memory stack that conflicts with current `session.db` / `context.db` / `worldtree.db` boundaries.
+
+This grouped roadmap covers the full source document at theme level, except shell-first simplifications requested here: no slash-command track, no skill-install track, and no web dashboard track.
+
+#### ICM-A — Shared Memory Surface Over Existing Storage
+
+What to do:
+
+- [ ] add one shared memory service layer over existing continuity crates so CLI and MCP reuse identical validation, visibility, and storage behavior
+- [ ] restore detailed subphase structure here so `ISSUES.md` can replace source roadmap file without losing implementation guidance
+
+What not to do:
+
+- [ ] do not create a separate memory architecture that bypasses shipped decision-memory and agent-partition services
+- [ ] do not store memory bodies or runtime artifacts in `worldtree.db`
+- [ ] do not require an active session for `project` or `global` writes
+- [ ] do not let CLI and MCP drift on record shape, defaults, or visibility rules
+
+Implementation structure:
+
+##### ICM-A1 — Memory model and storage schema
+
+- [ ] define `MemoryImportance` enum with exact values `critical`, `high`, `normal`, and `low`
+- [ ] add `importance` field to stored memory records and default manual writes to `normal`
+- [ ] define `MemoryScope` enum with exact values `project`, `session`, `frontend`, and `global`
+- [ ] add `scope` field to memory records and make `project` default
+- [ ] require `frontend` identifier when scope is `frontend`
+- [ ] add memory tables to continuity-owned storage, preferably existing session-side persistence unless a dedicated memory DB is justified later
+- [ ] create `memories` table with `id`, `repo_root`, `session_id`, `frontend`, `scope`, `topic`, `title`, `body`, `importance`, `created_at`, `updated_at`, `last_accessed_at`, `decay_score`, `source_id`, and `metadata_json`
+- [ ] add indexes for `topic`, `importance`, `scope`, `session_id`, and `last_accessed_at`
+- [ ] reject unknown importance and scope values at CLI, MCP, and storage boundaries
+- [ ] validate memory schema through `atlas db check` and golden schema tests
+
+##### ICM-A2 — CLI memory CRUD
+
+- [ ] add `atlas memory store <text>` with flags `--topic`, `--title`, `--importance`, `--scope`, `--frontend`, `--source-id`, and `--json`
+- [ ] store memory text exactly as provided unless central redaction policy strips sensitive content
+- [ ] add `atlas memory recall <query>` with flags `--topic`, `--importance`, `--scope`, `--shared`, `--limit`, and `--json`
+- [ ] use lexical search first for recall and rank exact topic matches above broad text matches
+- [ ] add `atlas memory list` with filters `--topic`, `--importance`, `--scope`, `--older-than`, `--newer-than`, and `--json`
+- [ ] sort memory list by `updated_at DESC` by default
+- [ ] add `atlas memory delete <memory_id>` with `--dry-run` and `--json`
+- [ ] require exact memory id for delete and keep linked saved-context artifacts unless explicit delete-source behavior is added later
+
+##### ICM-A3 — Frontend-aware visibility rules
+
+- [ ] normalize frontend identities to `claude`, `codex`, `copilot`, `cli`, and `mcp`
+- [ ] reject unknown frontend names unless config explicitly allows custom frontends
+- [ ] enforce visibility rules: `global` visible everywhere, `project` visible to all frontends in repo, `session` visible only to same session, `frontend` visible only to same repo plus same frontend
+- [ ] make `atlas memory recall --shared` return only `global` and `project` memories
+- [ ] ensure project-scoped writes work without an active session
+
+##### ICM-A4 — MCP parity
+
+- [ ] add MCP `memory_store` with same fields and validation as CLI
+- [ ] add MCP `memory_recall` with same visibility rules and bounded default output
+- [ ] keep source ids and retrieval hints available in compact MCP output
+- [ ] add CLI/MCP parity tests so stored record shape, errors, and defaults match
+
+##### ICM-A completion criteria
+
+- [ ] `atlas memory store --importance critical` persists `importance = critical`
+- [ ] `atlas memory store --scope frontend --frontend codex` stores frontend-private memory with correct visibility
+- [ ] `atlas memory recall --shared` excludes frontend-private memories
+- [ ] `atlas memory list --importance critical` filters correctly and emits stable JSON
+- [ ] invalid importance/scope/frontend values fail with clear validation errors
+- [ ] CLI and MCP memory store/recall paths produce equivalent record shapes
+
+#### ICM-B — Memory Curation, Decay, Health, and Consolidation
+
+What to do:
+
+- [ ] add memory decay config with safe defaults and explicit critical-memory protection
+- [ ] preserve deterministic maintenance structure from source roadmap so cleanup work stays implementation-ready after source file deletion
+
+What not to do:
+
+- [ ] do not auto-prune `critical` memories by default
+- [ ] do not hard-delete linked saved-context artifacts unless explicitly requested
+- [ ] do not make health scoring or consolidation depend on opaque LLM behavior
+- [ ] do not mutate state during `--dry-run`
+
+Implementation structure:
+
+##### ICM-B1 — Decay policy config and scoring
+
+- [ ] add memory decay config to `.atlas/config.toml`
+- [ ] add default retention policy with `critical` never auto-pruned, `high` long retention, `normal` normal retention, and `low` short retention
+- [ ] add config fields `memory.decay.enabled`, `memory.decay.low_days`, `memory.decay.normal_days`, `memory.decay.high_days`, and `memory.decay.critical_never_prune`
+- [ ] validate retention days as positive integers and fail `atlas doctor` clearly on invalid config
+- [ ] add `atlas memory decay` with `--dry-run`, `--topic`, and `--json`
+- [ ] calculate updated `decay_score` without deleting rows
+
+##### ICM-B2 — Stale, prune, and health commands
+
+- [ ] add `atlas memory stale` with `--topic`, `--scope`, and `--json`
+- [ ] list only stale memories and never report critical memories as auto-prune candidates
+- [ ] add `atlas memory prune` with `--dry-run`, `--topic`, `--importance`, `--older-than`, and `--json`
+- [ ] delete only memories marked pruneable by policy and require explicit override before any critical-memory prune path exists
+- [ ] add memory health categories `healthy`, `stale`, `noisy`, `duplicated`, `orphaned`, and `oversized`
+- [ ] detect low-importance old memories, repeated memories, missing `source_id` references, noisy topics, and topics with no critical decisions
+- [ ] add `atlas memory health` with `--topic`, `--scope`, and `--json`
+- [ ] emit actionable suggestions and exact follow-up commands in human output
+
+##### ICM-B3 — Deterministic consolidation
+
+- [ ] add deterministic consolidation planner grouping by topic, similar title, similar body, same source id, and same feedback or decision category
+- [ ] preserve all `source_id` references in consolidation plan output
+- [ ] add `atlas memory consolidate` with `--topic`, `--scope`, `--dry-run`, and `--json`
+- [ ] in dry-run mode, report kept ids, merged ids, and source preservation without mutating storage
+- [ ] add apply mode that creates consolidated memory, marks merged rows as superseded, and stores supersession links `old_memory_id`, `new_memory_id`, and `reason`
+- [ ] make recall prefer consolidated rows while allowing explicit inspection of superseded rows later
+
+##### ICM-B completion criteria
+
+- [ ] default decay config loads without a memory section present
+- [ ] `atlas memory decay --dry-run` reports protected critical memories and updated scores
+- [ ] `atlas memory prune --importance low --dry-run` reports only pruneable low-priority rows
+- [ ] `atlas memory health --topic hooks` returns deterministic findings and suggestions
+- [ ] consolidation preserves source references and leaves dry-run fully read-only
+
+#### ICM-C — Feedback Memory and Analysis Confidence Adjustment
+
+What to do:
+
+- [ ] add feedback storage and search for predicted vs actual outcomes, correction text, related symbol/file, and `source_id`
+- [ ] keep feedback as first-class deterministic correction memory rather than loose comments or opaque notes
+
+What not to do:
+
+- [ ] do not let feedback override deterministic graph evidence silently
+- [ ] do not lower confidence without explicit matching evidence
+- [ ] do not couple feedback storage to graph tables or graph-node lifecycle
+
+Implementation structure:
+
+##### ICM-C1 — Feedback storage and search model
+
+- [ ] create `feedback_records` table with `id`, `repo_root`, `session_id`, `tool_name`, `analysis_kind`, `predicted`, `actual`, `correction`, `related_symbol`, `related_file`, `source_id`, `created_at`, and `metadata_json`
+- [ ] add FTS index for `predicted`, `actual`, `correction`, `related_symbol`, and `related_file`
+- [ ] keep feedback searchable by symbol, file, correction text, and analysis kind
+
+##### ICM-C2 — CLI and MCP feedback commands
+
+- [ ] add `atlas feedback record` with required `--predicted` and `--actual`
+- [ ] add optional `--correction`, `--tool`, `--analysis-kind`, `--symbol`, `--file`, `--source-id`, and `--json`
+- [ ] add `atlas feedback search <query>` with filters `--tool`, `--analysis-kind`, `--symbol`, `--file`, `--limit`, and `--json`
+- [ ] add `atlas feedback stats` with deterministic summary and `--json`
+- [ ] add MCP `feedback_record` using same service layer and validation contract
+
+##### ICM-C3 — Confidence adjustment integration
+
+- [ ] query feedback before returning results from `atlas analyze dead-code`, `atlas analyze remove`, `atlas analyze safety`, and `atlas refactor remove-dead --dry-run`
+- [ ] lower confidence only when prior feedback indicates false positives for same symbol, file, pattern, or analysis kind
+- [ ] expose `feedback_evidence` in analysis JSON whenever scoring changes
+- [ ] add config flag `analysis.feedback_adjustment.enabled`
+
+##### ICM-C completion criteria
+
+- [ ] missing `--predicted` or `--actual` fails validation
+- [ ] feedback search returns predicted, actual, correction, related symbol/file, score, and created time
+- [ ] empty feedback DB returns stable zero-count stats
+- [ ] stored false-positive feedback can lower confidence only when evidence actually matches
+
+#### ICM-D — Wake-Up Packs and Session Start Recall
+
+What to do:
+
+- [ ] define a bounded wake-up pack that summarizes current focus, critical memories, recent decisions, recent feedback, graph readiness, changed files, and retrieval hints
+- [ ] keep wake-up path compact, retrieval-backed, and consistent with resume architecture already shipped in continuity work
+
+What not to do:
+
+- [ ] do not inline raw large artifacts into wake-up or resume payloads
+- [ ] do not block session start on wake-up generation failure
+- [ ] do not replay raw command history as wake-up context
+
+Implementation structure:
+
+##### ICM-D1 — Wake-up pack model
+
+- [ ] define `WakePack` model with `repo_root`, `session_id`, `frontend`, `current_focus`, `recent_decisions`, `critical_memories`, `recent_feedback`, `active_memoir_concepts`, `changed_files`, `graph_readiness`, `retrieval_hints`, and `generated_at`
+- [ ] bound wake-up pack size through config and central budget policy
+- [ ] serialize wake-up packs to stable JSON
+
+##### ICM-D2 — CLI and MCP wake-up
+
+- [ ] add `atlas wake-up` with flags `--topic`, `--session`, `--frontend`, `--max-items`, and `--json`
+- [ ] pull wake-up content from memory, feedback, session resume, and graph readiness services
+- [ ] add MCP `wake_up` with compact default output, retrieval hints, and source ids instead of raw artifact bodies
+
+##### ICM-D3 — Hook integration
+
+- [ ] call wake-up generation from `SessionStart` hook paths where host supports it
+- [ ] attach wake-up packs to session resume only through bounded injection paths
+- [ ] store wake-up generation success or failure metadata in session events
+- [ ] keep hook failures non-blocking and best-effort
+
+##### ICM-D completion criteria
+
+- [ ] `atlas wake-up --topic hooks` prioritizes topic-relevant memories and feedback
+- [ ] wake-up output references large artifacts by `source_id` only
+- [ ] hook failures do not stop host command flow
+- [ ] snapshot tests cover empty, normal, and large sessions
+
+#### ICM-E — Cross-Session Recall Quality and Optional Semantic Recall
+
+What to do:
+
+- [ ] improve recall ranking with topic match, importance, recency, scope visibility, and source-backed evidence
+- [ ] preserve lexical-first default and make cross-session recall quality measurable before adding vector complexity
+
+What not to do:
+
+- [ ] do not make embeddings required for baseline memory recall
+- [ ] do not let vector scores outrank exact lexical or stronger structural evidence by default
+- [ ] do not widen frontend-private or session-private recall unless caller explicitly asks for it
+
+Implementation structure:
+
+##### ICM-E1 — Cross-session recall quality
+
+- [ ] extend memory recall across prior repo sessions while preserving agent/frontend visibility boundaries
+- [ ] rank recall by topic match, importance, recency, scope visibility, and source-backed evidence
+- [ ] make system capable of recalling past sessions without mixing raw session history into future context
+- [ ] optimize context selection so recall surfaces the highest-signal memories first
+
+##### ICM-E2 — Optional semantic and vector recall
+
+- [ ] add config `memory.embedding.enabled`, `memory.embedding.provider`, `memory.embedding.model`, `memory.embedding.dimension`, `memory.search.hybrid_weight_fts`, and `memory.search.hybrid_weight_vector`
+- [ ] keep embeddings disabled by default and require explicit opt-in
+- [ ] add `memory_embeddings` table with `memory_id`, `embedding_model`, `dimension`, `vector_blob`, and `created_at`
+- [ ] reject vector inserts when configured dimension does not match stored dimension
+- [ ] add `atlas memory recall <query> --hybrid` using reciprocal-rank fusion only after lexical evaluation and budget metrics exist
+- [ ] keep graph-backed and exact lexical evidence stronger than vector-only matches by default
+
+##### ICM-E completion criteria
+
+- [ ] baseline memory recall works lexically with no embedding provider configured
+- [ ] enabling embeddings without provider or valid dimension fails clearly
+- [ ] hybrid recall returns ranking explanation fields without burying exact keyword hits
+- [ ] cross-session recall respects `global`, `project`, `session`, and `frontend` visibility boundaries
+
+#### ICM-F — Memoir Concept Graph as Separate Knowledge Layer
+
+What to do:
+
+- [ ] add separate memoir tables, concepts, relations, and graph ids outside the code graph schema
+- [ ] keep memoir path explicit and bounded so semantic memory does not leak into code graph semantics
+
+What not to do:
+
+- [ ] do not merge memoir concepts into code graph `nodes` and `edges`
+- [ ] do not allow unbounded custom relation types by default
+- [ ] do not auto-create missing concepts unless caller explicitly opts in
+
+Implementation structure:
+
+##### ICM-F1 — Memoir schema and vocabulary
+
+- [ ] create `memoir_graphs`, `memoir_concepts`, and `memoir_relations` tables separate from code graph storage
+- [ ] store relation fields `graph_id`, `source_concept_id`, `target_concept_id`, `relation_type`, `confidence`, `source_id`, `created_at`, and `metadata_json`
+- [ ] add controlled relation vocabulary `depends_on`, `part_of`, `contradicts`, `refines`, `replaces`, `caused_by`, `fixed_by`, `blocked_by`, `decided_by`, and `related_to`
+- [ ] normalize aliases such as `replaced_by` and `separate_from` with explicit direction or tagging rules
+- [ ] reject unknown relation types unless config later enables custom relations
+
+##### ICM-F2 — CLI and MCP memoir commands
+
+- [ ] add `atlas memoir create <name>` with `--description`, `--scope`, and `--json`
+- [ ] add `atlas memoir add-concept <graph> <name> <description>` with `--kind`, `--source-id`, and `--json`
+- [ ] add `atlas memoir link <graph> <source> <target> --relation <type>` with `--confidence`, `--source-id`, and `--json`
+- [ ] add `atlas memoir inspect <concept>` with `--graph`, `--depth`, `--relation`, and `--json`
+- [ ] add MCP `memoir_create`, `memoir_add_concept`, `memoir_link`, and `memoir_inspect` as thin wrappers over same service layer
+
+##### ICM-F completion criteria
+
+- [ ] duplicate memoir graph names fail deterministically in same repo and scope
+- [ ] `atlas memoir link A B --relation depends_on` succeeds and invalid relation names fail clearly
+- [ ] bounded inspect output includes relation direction and source evidence ids
+- [ ] code graph queries remain unaware of memoir tables unless explicit memoir surface is invoked
+
+#### ICM-G — Shell-First Install Modes, TUI, Docs, and Release Gates
+
+What to do:
+
+- [ ] add install/init mode split for `mcp`, `hook`, `cli`, and `all`, with idempotent generation and dry-run preview
+- [ ] keep shell-first and TUI-first operational structure from source roadmap while dropping slash-command, skill, and dashboard work
+
+What not to do:
+
+- [ ] do not add slash-command generators or skill-install surfaces for this track
+- [ ] do not add web dashboard routes for memory inspection in this track
+- [ ] do not build TUI surfaces before core service contracts and tests stabilize
+- [ ] do not introduce host-specific command generators that bypass shared service logic
+
+Implementation structure:
+
+##### ICM-G1 — Shell-first install and init modes
+
+- [ ] add supported `atlas init --mode` values `mcp`, `hook`, `cli`, and `all`
+- [ ] make each mode idempotent and emit files to be created during `--dry-run`
+- [ ] ensure `--mode all` installs only MCP config, hooks, and CLI config relevant to shell-first memory workflows
+
+##### ICM-G2 — TUI only, read-only first
+
+- [ ] add `atlas memory tui` with read-only browsing for memories, topics, feedback, memoir concepts, health findings, and saved artifacts
+- [ ] add filters for topic, scope, importance, and frontend
+- [ ] keep first version non-mutating and smoke-testable without panic
+
+##### ICM-G3 — Tests, docs, and release gates
+
+- [ ] create reusable fixtures for critical decision memory, low-priority stale memory, dead-code false-positive feedback, memoir dependency graph, wake-up pack with saved artifact references, and frontend-private memory
+- [ ] snapshot JSON output for `atlas memory store --json`, `atlas memory recall --json`, `atlas memory health --json`, `atlas feedback record --json`, `atlas feedback search --json`, `atlas memoir inspect --json`, and `atlas wake-up --json`
+- [ ] add `wiki/memory-architecture.md` documenting memory DB ownership, importance and decay policy, scope and visibility rules, feedback integration, memoir graph separation, wake-up behavior, and CLI/MCP mapping
+- [ ] define release gate `ICM Memory Layer Complete`
+- [ ] require for release gate: CLI and MCP memory store/recall parity, importance and decay policies, feedback-adjusted analysis, memoir typed relations, wake-up packs without raw large content, health audit coverage, shared/private visibility rules, complete docs, and JSON snapshot coverage
+
+##### ICM-G completion criteria
+
+- [ ] every new shell-first memory command has CLI smoke coverage
+- [ ] every MCP memory tool has handler tests and parity assertions where applicable
+- [ ] `cargo test --workspace` passes with fixtures and JSON snapshots committed
+- [ ] no memory feature writes directly to graph DB
+- [ ] no large artifact is inlined into wake-up or resume output by default
 
 ---
 
@@ -1713,25 +2044,36 @@ Why:
 
 #### Patch T4 — Measured separate-connection read pool
 
-- [ ] gate any read-pool work behind measured need:
-  - [ ] capture current graph-read contention evidence before adding pool layer
-  - [ ] define success metric for pooled reads such as lower `SQLITE_BUSY` rate or lower p95 read latency under concurrent MCP/CLI load
+- [ ] add baseline contention harness for graph reads before pool code lands:
+  - [ ] run concurrent `atlas status`, `atlas query`, and MCP graph-read workload against one `worldtree.db` with `read_pool_active = false`
+  - [ ] record baseline metrics `sqlite_busy_count`, `read_ops_total`, `read_latency_p50_ms`, `read_latency_p95_ms`, and writer success rate
+  - [ ] check benchmark fixture and command into repo so pooled and non-pooled runs use same workload
+- [ ] define explicit merge gate for pooled reads:
+  - [ ] require one stable success metric such as lower `sqlite_busy_count` or lower `read_latency_p95_ms` under same concurrent workload
+  - [ ] require no regression in write success rate, WAL health, or `atlas status` readiness output
+  - [ ] keep pool default-off until benchmark evidence is committed
+- [ ] add config surface for read pool without changing current default:
+  - [ ] add `.atlas/config.toml` fields `graph.read_pool.enabled`, `graph.read_pool.size`, `graph.read_pool.read_only`, and `graph.read_pool.checkout_timeout_ms`
+  - [ ] validate `graph.read_pool.size >= 1` when enabled
+  - [ ] reject pool enablement when `graph.read_pool.read_only = false`
 - [ ] keep writer ownership explicit while adding pooled readers:
   - [ ] preserve one write-owning `rusqlite::Connection` per mutable store instance unless broader store split is designed first
-  - [ ] do not route writes through read-pool checkout path
-  - [ ] document exact read/write boundary before mixed concurrency lands
-- [ ] if pool is implemented, use separate checked-out SQLite connections only:
+  - [ ] add explicit graph-read checkout path separate from write-owner methods
+  - [ ] do not route writes, migrations, or transactions through read-pool checkout APIs
+  - [ ] document exact read/write boundary in store docs before mixed concurrency lands
+- [ ] if pool is implemented, open separate checked-out SQLite connections only:
+  - [ ] add shared helper in `atlas-db-utils` for pooled read connection open flags plus `apply_atlas_pragmas`
   - [ ] allow `r2d2_sqlite` or equivalent only for read-only or read-mostly checked-out connections
-  - [ ] apply canonical Atlas PRAGMAs and open flags to every pooled connection
-  - [ ] keep pooled connection wrappers out of types that own write transactions
+  - [ ] keep pooled connection wrappers out of `Store`, `ContentStore`, and `SessionStore` types that own write transactions
   - [ ] reject designs that share one `Connection` across threads behind `Arc<Mutex<_>>`, `RwLock<_>`, or similar
 - [ ] add pool-specific diagnostics and safety checks:
-  - [ ] surface pool enabled/disabled mode in `status` and `doctor`
-  - [ ] report configured pool size, read-only policy, and fallback behavior when pool is unavailable
-  - [ ] verify WAL and busy-timeout assumptions still hold for checked-out read connections
+  - [ ] surface `read_pool_active`, `read_pool_size`, `read_pool_read_only`, and `read_pool_fallback` in `atlas status --json`
+  - [ ] surface same fields plus checkout timeout and pool-creation failures in `atlas doctor --json`
+  - [ ] verify every checked-out read connection reports canonical WAL mode and busy-timeout settings
 - [ ] add tests before enabling by default:
-  - [ ] concurrent read test uses distinct checked-out connections on distinct threads
-  - [ ] mixed read/write test proves readers never borrow write-owner connection
+  - [ ] concurrent read test proves two threads hold distinct checked-out read connections at same time
+  - [ ] mixed read/write test proves readers never borrow or lock-wrap write-owner connection
+  - [ ] disabled-mode test proves current single-connection-per-store behavior stays unchanged when pool config is absent
   - [ ] shutdown/drop test proves pool teardown does not strand transactions or WAL checkpoints
 
 Why:
