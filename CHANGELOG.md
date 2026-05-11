@@ -4,6 +4,31 @@ All notable changes to this project should be recorded in this file.
 
 Versioning policy may evolve while Atlas is still moving quickly, but release notes should still group changes by user-visible impact.
 
+## 1.3.0 - 2026-05-11
+
+### Features
+
+- update history build/update progress bar for saving to store (`71e3a3f`)
+- update history build and update to have proper estimate with recompute (`2abd0a8`)
+- add new item section for insights (`1efd702`)
+- add insights complete phase (`65baa30`)
+- update rust parser to use tree-sitter scm (`25c68ab`)
+- update golden as now it emits proper on rust (`c7a49da`)
+- update dead code analysis for code only (`f74a81a`)
+- fix fuzz crashes on invariant (`16c85b4`)
+
+
+### CI
+
+- add fuzzing on workflow (`129d497`)
+- update fuzz workflow (`36a883b`)
+
+
+### Maintenance
+
+- update rustfmt (`7ed14ae`)
+
+
 ## 1.2.2 - 2026-05-07
 
 ### Features
