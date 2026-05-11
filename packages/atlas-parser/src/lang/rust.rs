@@ -892,7 +892,7 @@ fn resolve_same_file_calls(
                 receiver.as_deref(),
                 true,
             ));
-        } else {
+        } else if !text.is_empty() {
             edges.push(call_edge(
                 caller_qn,
                 &text,

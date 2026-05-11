@@ -829,7 +829,7 @@ fn walk_js_calls<'a>(
                     receiver.as_deref(),
                     true,
                 ));
-            } else {
+            } else if !text.is_empty() {
                 edges.push(js_call_edge(
                     &caller_qn,
                     &text,
@@ -859,7 +859,7 @@ fn walk_js_calls<'a>(
                 receiver.as_deref(),
                 true,
             ));
-        } else {
+        } else if !text.is_empty() {
             edges.push(js_call_edge(
                 &caller_qn,
                 &text,
@@ -1217,6 +1217,19 @@ mod tests {
                     && e.confidence_tier.as_deref() == Some("text")
             }),
             "lowercase intrinsic JSX element should not produce call edge: {:?}",
+            pf.edges
+        );
+    }
+
+    #[test]
+    fn no_empty_target_qn_in_call_edges() {
+        // A call_expression whose function field produces empty text must not
+        // emit a call edge with empty target_qn.
+        let src = "function f() { (); }\n";
+        let pf = parse_js(src);
+        assert!(
+            pf.edges.iter().all(|e| !e.target_qn.is_empty()),
+            "call edge with empty target_qn found: {:?}",
             pf.edges
         );
     }

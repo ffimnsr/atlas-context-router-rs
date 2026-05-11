@@ -816,7 +816,7 @@ fn walk_go_calls<'a>(
                             None,
                             true,
                         ));
-                    } else {
+                    } else if !text.is_empty() {
                         edges.push(go_call_edge(
                             &caller_scope.qn,
                             &text,

@@ -592,7 +592,7 @@ fn walk_python_calls<'a>(
                             receiver.as_deref(),
                             true,
                         ));
-                    } else {
+                    } else if !text.is_empty() {
                         edges.push(py_call_edge(
                             &caller_qn,
                             &text,
@@ -847,5 +847,18 @@ mod tests {
             .expect("call edge");
         assert_eq!(edge.target_qn, "imported.helper");
         assert_eq!(edge.confidence_tier.as_deref(), Some("text"));
+    }
+
+    #[test]
+    fn no_empty_target_qn_in_call_edges() {
+        // Parsers must not emit call edges with empty target_qn even when the
+        // call target text extracted from the AST is empty.
+        let src = "def f():\n    pass\n";
+        let pf = parse(src);
+        assert!(
+            pf.edges.iter().all(|e| !e.target_qn.is_empty()),
+            "call edge with empty target_qn found: {:?}",
+            pf.edges
+        );
     }
 }
