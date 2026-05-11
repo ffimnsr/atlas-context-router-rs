@@ -8,7 +8,7 @@
   "chunk_upsert_failures": 0,
   "call_target_reconcile_failures": 0,
   "nodes_updated": 9,
-  "edges_updated": 11,
+  "edges_updated": 12,
   "warnings": [],
   "budget": {
     "budget_status": "within_budget",
