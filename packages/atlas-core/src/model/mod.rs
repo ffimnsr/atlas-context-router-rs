@@ -2,6 +2,7 @@ mod context;
 mod graph;
 mod grouping;
 mod impact;
+mod insights;
 mod reasoning;
 mod refactor;
 mod search;
@@ -26,6 +27,10 @@ pub use self::impact::{
     AdvancedImpactResult, BoundaryKind, BoundaryViolation, ChangeKind, ChangedSymbolSummary,
     ImpactResult, ReviewContext, ReviewImpactOverview, RiskLevel, RiskSummary, ScoredImpactNode,
     TestImpactResult,
+};
+pub use self::insights::{
+    ArchitectureReport, FreshnessWarning, InsightEvidence, InsightFinding, InsightLineRange,
+    InsightSeverity, InsightSummary, LargeFunctionReport, MetricsReport, PatternReport, RiskReport,
 };
 pub use self::reasoning::{
     ChangeRiskResult, ConfidenceTier, CoverageStrength, DeadCodeCandidate, DependencyRemovalResult,

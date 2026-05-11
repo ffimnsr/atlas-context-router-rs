@@ -1,6 +1,6 @@
 use atlas_core::{
     ConfidenceTier, DeadCodeCandidate, DependencyRemovalResult, Edge, ImpactClass, ImpactedNode,
-    Node, RefactorSafetyResult, RemovalImpactResult,
+    InsightFinding, Node, RefactorSafetyResult, RemovalImpactResult,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -125,6 +125,16 @@ pub fn sort_dependency_result(
     });
 }
 
+pub fn sort_insight_findings(findings: &mut [InsightFinding]) {
+    findings.sort_by(compare_insight_findings);
+}
+
+pub fn trim_insight_findings(findings: &mut Vec<InsightFinding>, max_findings: usize) {
+    if findings.len() > max_findings {
+        findings.truncate(max_findings);
+    }
+}
+
 fn compare_impacted_nodes(
     primitives: &AnalysisRankingPrimitives,
     left: &ImpactedNode,
@@ -172,12 +182,58 @@ fn compare_edges(left: &Edge, right: &Edge) -> std::cmp::Ordering {
         .then_with(|| left.target_qn.cmp(&right.target_qn))
 }
 
+fn compare_insight_findings(left: &InsightFinding, right: &InsightFinding) -> std::cmp::Ordering {
+    right
+        .severity
+        .cmp(&left.severity)
+        .then_with(|| normalized_score(right).total_cmp(&normalized_score(left)))
+        .then_with(|| primary_file_path(left).cmp(primary_file_path(right)))
+        .then_with(|| primary_line(left).cmp(&primary_line(right)))
+        .then_with(|| primary_qualified_name(left).cmp(primary_qualified_name(right)))
+}
+
+fn normalized_score(finding: &InsightFinding) -> f64 {
+    if finding.score.is_nan() {
+        f64::NEG_INFINITY
+    } else {
+        finding.score
+    }
+}
+
+fn primary_file_path(finding: &InsightFinding) -> &str {
+    finding
+        .evidence
+        .iter()
+        .filter_map(|evidence| evidence.file_path.as_deref())
+        .min()
+        .unwrap_or("")
+}
+
+fn primary_line(finding: &InsightFinding) -> u32 {
+    finding
+        .evidence
+        .iter()
+        .filter_map(|evidence| evidence.line_range.as_ref().map(|line| line.start_line))
+        .min()
+        .unwrap_or(0)
+}
+
+fn primary_qualified_name(finding: &InsightFinding) -> &str {
+    finding
+        .evidence
+        .iter()
+        .filter_map(|evidence| evidence.qualified_name.as_deref())
+        .min()
+        .unwrap_or("")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use atlas_core::BudgetReport;
     use atlas_core::{
-        EdgeKind, ImpactedNode, Node, NodeId, NodeKind, ReasoningEvidence, ReasoningWarning,
+        EdgeKind, ImpactedNode, InsightEvidence, InsightFinding, InsightLineRange, InsightSeverity,
+        Node, NodeId, NodeKind, ReasoningEvidence, ReasoningWarning,
     };
 
     fn node(qn: &str, file: &str, line_start: u32) -> Node {
@@ -365,5 +421,80 @@ mod tests {
         assert_eq!(trimming.removal_containment_preview_limit, 10);
         assert_eq!(trimming.dead_code_candidate_preview_limit, 50);
         assert_eq!(trimming.dependency_blocker_preview_limit, 20);
+    }
+
+    #[test]
+    fn insight_sort_prefers_severity_score_file_line_then_qname() {
+        let mut findings = vec![
+            InsightFinding {
+                id: "b".to_owned(),
+                title: "medium".to_owned(),
+                severity: InsightSeverity::Medium,
+                category: "metrics".to_owned(),
+                message: String::new(),
+                evidence: vec![InsightEvidence {
+                    file_path: Some("src/z.rs".to_owned()),
+                    qualified_name: Some("src/z.rs::fn::zeta".to_owned()),
+                    node_kind: None,
+                    edge_kind: None,
+                    line_range: Some(InsightLineRange {
+                        start_line: 10,
+                        end_line: 20,
+                    }),
+                    confidence_tier: None,
+                }],
+                ranking_reason: String::new(),
+                details: None,
+                score: 20.0,
+            },
+            InsightFinding {
+                id: "a".to_owned(),
+                title: "high".to_owned(),
+                severity: InsightSeverity::High,
+                category: "metrics".to_owned(),
+                message: String::new(),
+                evidence: vec![InsightEvidence {
+                    file_path: Some("src/a.rs".to_owned()),
+                    qualified_name: Some("src/a.rs::fn::alpha".to_owned()),
+                    node_kind: None,
+                    edge_kind: None,
+                    line_range: Some(InsightLineRange {
+                        start_line: 8,
+                        end_line: 20,
+                    }),
+                    confidence_tier: None,
+                }],
+                ranking_reason: String::new(),
+                details: None,
+                score: 10.0,
+            },
+            InsightFinding {
+                id: "c".to_owned(),
+                title: "high-later-line".to_owned(),
+                severity: InsightSeverity::High,
+                category: "metrics".to_owned(),
+                message: String::new(),
+                evidence: vec![InsightEvidence {
+                    file_path: Some("src/a.rs".to_owned()),
+                    qualified_name: Some("src/a.rs::fn::beta".to_owned()),
+                    node_kind: None,
+                    edge_kind: None,
+                    line_range: Some(InsightLineRange {
+                        start_line: 12,
+                        end_line: 18,
+                    }),
+                    confidence_tier: None,
+                }],
+                ranking_reason: String::new(),
+                details: None,
+                score: 10.0,
+            },
+        ];
+
+        sort_insight_findings(&mut findings);
+
+        assert_eq!(findings[0].id, "a");
+        assert_eq!(findings[1].id, "c");
+        assert_eq!(findings[2].id, "b");
     }
 }

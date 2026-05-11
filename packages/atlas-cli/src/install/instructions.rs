@@ -52,10 +52,16 @@ Do not treat `query_graph` as caller/callee search. Fall back to file tools **on
 | `debug_graph` | Inspect node and edge breakdowns plus structural anomalies |
 | `explain_query` | See how query_graph tokenizes and executes a search |
 | `resolve_symbol` | Resolve a symbol or alias-qualified name to a canonical qualified_name |
+| `analyze_architecture` | Analyze cycles, layer violations, and coupling hotspots |
+| `analyze_metrics` | Analyze graph metrics, outliers, and complexity hotspots |
+| `assess_risk` | Assess deterministic risk for a symbol with factor evidence |
+| `analyze_patterns` | Detect repeated chains, isolated structures, hubs, and deep paths |
 | `analyze_safety` | Score refactor safety using callers, fan-out, and test adjacency |
 | `analyze_remove` | Estimate removal impact with bounded evidence and warnings |
 | `analyze_dead_code` | Find likely dead-code candidates with certainty and blockers |
 | `analyze_dependency` | Check whether a symbol can be removed without remaining references |
+| `find_large_functions` | Find large or complex functions with deterministic ranking and thresholds |
+| `find_complex_functions` | Find complexity-driven hotspots with deterministic thresholds |
 | `get_impact_radius` | Understand blast radius from a changed file set |
 | `get_review_context` | Build review bundle with symbols, neighbors, edges, and risk summary |
 | `detect_changes` | Ask Atlas for changed files instead of shelling out to git |

@@ -1,5 +1,118 @@
 use clap::Subcommand;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, clap::ValueEnum)]
+pub enum InsightsLargeFunctionMode {
+    Large,
+    Complex,
+    #[value(name = "large-or-complex")]
+    LargeOrComplex,
+}
+
+impl From<InsightsLargeFunctionMode> for atlas_reasoning::LargeFunctionMode {
+    fn from(value: InsightsLargeFunctionMode) -> Self {
+        match value {
+            InsightsLargeFunctionMode::Large => Self::Large,
+            InsightsLargeFunctionMode::Complex => Self::Complex,
+            InsightsLargeFunctionMode::LargeOrComplex => Self::LargeOrComplex,
+        }
+    }
+}
+
+/// Sub-commands for `atlas insights`.
+#[derive(Debug, Subcommand)]
+pub enum InsightsCommand {
+    /// Analyze module-level cycles, layer violations, and coupling hotspots.
+    Architecture {
+        /// Cap returned findings after ranking.
+        #[arg(long)]
+        limit: Option<usize>,
+    },
+
+    /// Analyze graph health metrics, outliers, and complexity hotspots.
+    Metrics {
+        /// Cap returned findings after ranking.
+        #[arg(long)]
+        limit: Option<usize>,
+    },
+
+    /// Score deterministic change risk for one symbol.
+    Risk {
+        /// Fully-qualified symbol name or resolvable symbol identifier.
+        symbol: String,
+    },
+
+    /// Detect repeated chains, isolated structures, hubs, and deep dependency paths.
+    Patterns {
+        /// Cap returned findings after ranking.
+        #[arg(long)]
+        limit: Option<usize>,
+    },
+
+    /// Find large or complex functions across the repo or within selected files.
+    #[command(name = "large-functions")]
+    LargeFunctions {
+        /// Restrict search to one or more repo-relative files.
+        #[arg(long, num_args = 1..)]
+        files: Vec<String>,
+
+        /// Override the configured LOC threshold.
+        #[arg(long)]
+        threshold: Option<usize>,
+
+        /// Override the configured cyclomatic complexity threshold.
+        #[arg(long = "complexity-threshold")]
+        complexity_threshold: Option<usize>,
+
+        /// Override the configured cognitive complexity threshold.
+        #[arg(long = "cognitive-threshold")]
+        cognitive_threshold: Option<usize>,
+
+        /// Override the configured max nesting depth threshold.
+        #[arg(long = "nesting-threshold")]
+        nesting_threshold: Option<usize>,
+
+        /// Filter to large-only, complex-only, or either category.
+        #[arg(long, value_enum, default_value_t = InsightsLargeFunctionMode::LargeOrComplex)]
+        mode: InsightsLargeFunctionMode,
+
+        /// Cap returned findings after ranking.
+        #[arg(long)]
+        limit: Option<usize>,
+
+        /// Include test functions and test methods in the result set.
+        #[arg(long)]
+        include_tests: bool,
+    },
+
+    /// Find complex functions across the repo or within selected files.
+    #[command(name = "complex-functions")]
+    ComplexFunctions {
+        /// Restrict search to one or more repo-relative files.
+        #[arg(long, num_args = 1..)]
+        files: Vec<String>,
+
+        /// Override the configured cyclomatic complexity threshold.
+        #[arg(long = "complexity-threshold")]
+        complexity_threshold: Option<usize>,
+
+        /// Override the configured cognitive complexity threshold.
+        #[arg(long = "cognitive-threshold")]
+        cognitive_threshold: Option<usize>,
+
+        /// Override the configured max nesting depth threshold.
+        #[arg(long = "nesting-threshold")]
+        nesting_threshold: Option<usize>,
+
+        /// Cap returned findings after ranking.
+        #[arg(long)]
+        limit: Option<usize>,
+
+        /// Include test functions and test methods in the result set.
+        #[arg(long)]
+        include_tests: bool,
+    },
+}
+
 #[derive(Debug, Subcommand)]
 pub enum ConfigCommand {
     /// Show resolved config values and where they came from.

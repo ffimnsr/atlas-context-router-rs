@@ -1,5 +1,27 @@
 use super::shared::DEFAULT_OUTPUT_DESCRIPTION;
 
+pub fn tool_list_markdown() -> String {
+    let mut markdown = String::from(
+        "# MCP Tools\n\nThis file is generated from `atlas_mcp::tool_list()`. Do not edit by hand.\n\n| Tool | Description |\n|------|-------------|\n",
+    );
+
+    for tool in tool_list()["tools"].as_array().expect("tools array") {
+        let name = tool["name"].as_str().expect("tool name");
+        let description = tool["description"].as_str().expect("tool description");
+        markdown.push_str("| `");
+        markdown.push_str(name);
+        markdown.push_str("` | ");
+        markdown.push_str(&escape_markdown_table_cell(description));
+        markdown.push_str(" |\n");
+    }
+
+    markdown
+}
+
+fn escape_markdown_table_cell(text: &str) -> String {
+    text.replace('\n', " ").replace('|', "\\|")
+}
+
 /// Return the MCP `tools/list` response body.
 pub fn tool_list() -> serde_json::Value {
     serde_json::json!({
@@ -223,6 +245,96 @@ pub fn tool_list() -> serde_json::Value {
                         "agent_id": { "type": "string",  "description": "Restrict saved-context retrieval to one agent memory partition." },
                         "merge_agent_partitions": { "type": "boolean", "description": "Intentionally merge context across all agent partitions instead of filtering to one partition." },
                         "token_budget": { "type": "integer", "description": "Maximum tokens to include in the result. Overrides the default policy limit for this call only. Cannot exceed the policy ceiling. Use to enforce tighter context budgets from the caller side." },
+                        "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
+                    },
+                    "required": []
+                }
+            },
+            {
+                "name": "analyze_architecture",
+                "description": "Analyze module-level cycles, layer violations, and coupling hotspots. JSON output matches the CLI insights architecture report; default toon output stays compact unless verbose=true.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "limit": { "type": "integer", "description": "Cap returned findings after ranking." },
+                        "verbose": { "type": "boolean", "description": "Return full report body in toon output too." },
+                        "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
+                    },
+                    "required": []
+                }
+            },
+            {
+                "name": "analyze_metrics",
+                "description": "Analyze graph health metrics, outliers, complexity hotspots, and coupling findings. JSON output matches the CLI insights metrics report; default toon output stays compact unless verbose=true.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "limit": { "type": "integer", "description": "Cap returned findings after ranking." },
+                        "verbose": { "type": "boolean", "description": "Return full report body in toon output too." },
+                        "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
+                    },
+                    "required": []
+                }
+            },
+            {
+                "name": "assess_risk",
+                "description": "Score deterministic risk for one symbol with factor evidence and ranked findings. JSON output matches the CLI insights risk report; default toon output stays compact unless verbose=true.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "symbol": { "type": "string", "description": "Qualified name or resolvable symbol identifier." },
+                        "verbose": { "type": "boolean", "description": "Return full report body in toon output too." },
+                        "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
+                    },
+                    "required": ["symbol"]
+                }
+            },
+            {
+                "name": "analyze_patterns",
+                "description": "Detect repeated call chains, isolated structures, hubs, bottlenecks, and deep dependency paths. JSON output matches the CLI insights patterns report; default toon output stays compact unless verbose=true.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "limit": { "type": "integer", "description": "Cap returned findings after ranking." },
+                        "verbose": { "type": "boolean", "description": "Return full report body in toon output too." },
+                        "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
+                    },
+                    "required": []
+                }
+            },
+            {
+                "name": "find_large_functions",
+                "description": "Find large or complex functions repo-wide or within selected files using deterministic LOC and complexity thresholds. JSON output matches the CLI insights report; default toon output stays compact for agent review.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "files": { "type": "array", "items": { "type": "string" }, "description": "Optional repo-relative files to scope the search." },
+                        "threshold": { "type": "integer", "description": "Override LOC threshold." },
+                        "complexity_threshold": { "type": "integer", "description": "Override cyclomatic complexity threshold." },
+                        "cognitive_threshold": { "type": "integer", "description": "Override cognitive complexity threshold." },
+                        "nesting_threshold": { "type": "integer", "description": "Override max nesting depth threshold." },
+                        "mode": { "type": "string", "description": "One of 'large', 'complex', or 'large-or-complex'." },
+                        "limit": { "type": "integer", "description": "Cap result count after ranking." },
+                        "include_tests": { "type": "boolean", "description": "Include test functions and methods." },
+                        "verbose": { "type": "boolean", "description": "Return full report body in toon output too." },
+                        "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
+                    },
+                    "required": []
+                }
+            },
+            {
+                "name": "find_complex_functions",
+                "description": "Find complex functions repo-wide or within selected files using deterministic complexity thresholds. JSON output matches the CLI insights complex-functions report; default toon output stays compact unless verbose=true.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "files": { "type": "array", "items": { "type": "string" }, "description": "Optional repo-relative files to scope the search." },
+                        "complexity_threshold": { "type": "integer", "description": "Override cyclomatic complexity threshold." },
+                        "cognitive_threshold": { "type": "integer", "description": "Override cognitive complexity threshold." },
+                        "nesting_threshold": { "type": "integer", "description": "Override max nesting depth threshold." },
+                        "limit": { "type": "integer", "description": "Cap result count after ranking." },
+                        "include_tests": { "type": "boolean", "description": "Include test functions and methods." },
+                        "verbose": { "type": "boolean", "description": "Return full report body in toon output too." },
                         "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
                     },
                     "required": []

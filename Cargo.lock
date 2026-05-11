@@ -331,10 +331,15 @@ name = "atlas-reasoning"
 version = "1.2.2"
 dependencies = [
  "atlas-core",
+ "atlas-engine",
+ "atlas-repo",
  "atlas-store-sqlite",
  "criterion",
+ "serde",
  "serde_json",
  "tracing",
+ "tree-sitter",
+ "tree-sitter-rust",
 ]
 
 [[package]]

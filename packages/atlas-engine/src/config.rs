@@ -43,6 +43,8 @@ pub struct Config {
     #[serde(default)]
     pub analysis: AnalysisConfig,
     #[serde(default)]
+    pub insights: InsightsConfig,
+    #[serde(default)]
     pub context: ContextConfig,
     #[serde(default)]
     pub mcp: McpConfig,
@@ -248,6 +250,20 @@ fn validate_positive_u32(name: &str, value: u32) -> Result<u32> {
     Ok(value)
 }
 
+fn validate_positive_f64(name: &str, value: f64) -> Result<f64> {
+    if !value.is_finite() || value <= 0.0 {
+        anyhow::bail!("invalid config: {name} must be a finite value greater than 0");
+    }
+    Ok(value)
+}
+
+fn validate_f64_range(name: &str, value: f64, min: f64, max: f64) -> Result<f64> {
+    if !value.is_finite() || value < min || value > max {
+        anyhow::bail!("invalid config: {name}={value} must be within [{min}, {max}]");
+    }
+    Ok(value)
+}
+
 fn validate_nonempty_string(name: &str, value: &str) -> Result<String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -321,7 +337,10 @@ impl Config {
         }
         let raw =
             fs::read_to_string(&path).with_context(|| format!("cannot read {}", path.display()))?;
-        toml::from_str(&raw).with_context(|| format!("cannot parse {}", path.display()))
+        let config: Self =
+            toml::from_str(&raw).with_context(|| format!("cannot parse {}", path.display()))?;
+        config.insights.validate()?;
+        Ok(config)
     }
 
     /// Write the default config to `<atlas_dir>/config.toml`.
@@ -348,6 +367,7 @@ impl Config {
         let active = Self::profile(profile);
         active.build_run_budget()?;
         active.budget_policy()?;
+        active.insights.validate()?;
 
         let mut lines = vec![
             "# Atlas config template.",
@@ -501,6 +521,132 @@ impl Config {
         ));
 
         lines.extend(render_section(
+            "insights",
+            &[
+                (
+                    "large_function_loc",
+                    active.insights.large_function_loc.to_string(),
+                ),
+                (
+                    "repeated_call_chain_min_length",
+                    active.insights.repeated_call_chain_min_length.to_string(),
+                ),
+                ("high_fan_in", active.insights.high_fan_in.to_string()),
+                ("high_fan_out", active.insights.high_fan_out.to_string()),
+                ("high_coupling", active.insights.high_coupling.to_string()),
+                (
+                    "deep_chain_length",
+                    active.insights.deep_chain_length.to_string(),
+                ),
+                ("max_findings", active.insights.max_findings.to_string()),
+                (
+                    "high_cyclomatic_complexity",
+                    active.insights.high_cyclomatic_complexity.to_string(),
+                ),
+                (
+                    "high_cognitive_complexity",
+                    active.insights.high_cognitive_complexity.to_string(),
+                ),
+                (
+                    "max_nesting_depth",
+                    active.insights.max_nesting_depth.to_string(),
+                ),
+                ("branch_count", active.insights.branch_count.to_string()),
+                (
+                    "outlier_percentile_cutoff",
+                    active.insights.outlier_percentile_cutoff.to_string(),
+                ),
+                (
+                    "risk_public_api_weight",
+                    active.insights.risk_public_api_weight.to_string(),
+                ),
+                (
+                    "risk_fan_in_weight",
+                    active.insights.risk_fan_in_weight.to_string(),
+                ),
+                (
+                    "risk_fan_out_weight",
+                    active.insights.risk_fan_out_weight.to_string(),
+                ),
+                (
+                    "risk_cross_module_dependency_weight",
+                    active
+                        .insights
+                        .risk_cross_module_dependency_weight
+                        .to_string(),
+                ),
+                (
+                    "risk_test_adjacency_mitigation_weight",
+                    active
+                        .insights
+                        .risk_test_adjacency_mitigation_weight
+                        .to_string(),
+                ),
+                (
+                    "risk_dependency_depth_weight",
+                    active.insights.risk_dependency_depth_weight.to_string(),
+                ),
+                (
+                    "risk_unresolved_edge_weight",
+                    active.insights.risk_unresolved_edge_weight.to_string(),
+                ),
+                (
+                    "risk_large_function_weight",
+                    active.insights.risk_large_function_weight.to_string(),
+                ),
+                (
+                    "risk_loc_weight",
+                    active.insights.risk_loc_weight.to_string(),
+                ),
+                (
+                    "risk_cyclomatic_complexity_weight",
+                    active
+                        .insights
+                        .risk_cyclomatic_complexity_weight
+                        .to_string(),
+                ),
+                (
+                    "risk_cognitive_complexity_weight",
+                    active.insights.risk_cognitive_complexity_weight.to_string(),
+                ),
+                (
+                    "risk_nesting_depth_weight",
+                    active.insights.risk_nesting_depth_weight.to_string(),
+                ),
+                (
+                    "risk_cycle_participation_weight",
+                    active.insights.risk_cycle_participation_weight.to_string(),
+                ),
+                (
+                    "risk_medium_threshold",
+                    active.insights.risk_medium_threshold.to_string(),
+                ),
+                (
+                    "risk_high_threshold",
+                    active.insights.risk_high_threshold.to_string(),
+                ),
+                (
+                    "ignore_files",
+                    render_string_array(&active.insights.ignore_files),
+                ),
+                (
+                    "ignore_modules",
+                    render_string_array(&active.insights.ignore_modules),
+                ),
+                (
+                    "ignore_node_kinds",
+                    render_string_array(&active.insights.ignore_node_kinds),
+                ),
+            ],
+            profile == ConfigTemplateProfile::Full,
+        ));
+
+        lines.extend(render_insights_layer_rules(
+            &active.insights.layer_rules,
+            profile,
+        ));
+
+        lines.extend(render_section(
             "context",
             &[
                 (
@@ -586,6 +732,25 @@ impl Config {
                 config.search.embedding.url = Some("http://localhost:11434".to_owned());
                 config.analysis.dead_code_certainty_threshold = "medium".to_owned();
                 config.analysis.refactor_safety_threshold = 0.6;
+                config.insights.large_function_loc = 60;
+                config.insights.repeated_call_chain_min_length = 4;
+                config.insights.high_fan_in = 15;
+                config.insights.high_fan_out = 12;
+                config.insights.max_findings = 100;
+                config.insights.outlier_percentile_cutoff = 90;
+                config.insights.ignore_node_kinds = vec!["import".to_owned()];
+                config.insights.layer_rules = vec![
+                    InsightsLayerRule {
+                        name: "api".to_owned(),
+                        path_prefixes: vec!["src/api".to_owned()],
+                        module_prefixes: vec![],
+                    },
+                    InsightsLayerRule {
+                        name: "domain".to_owned(),
+                        path_prefixes: vec!["src/domain".to_owned()],
+                        module_prefixes: vec![],
+                    },
+                ];
                 config.context.max_context_nodes = 150;
                 config.context.max_context_depth = 3;
                 config.mcp.worker_threads = 4;
@@ -609,6 +774,11 @@ impl Config {
 
     pub fn build_run_budget(&self) -> Result<BuildRunBudget> {
         self.build.run_budget()
+    }
+
+    pub fn insights_config(&self) -> Result<InsightsConfig> {
+        self.insights.validate()?;
+        Ok(self.insights.clone())
     }
 
     pub fn embedding_backend(&self) -> Result<Option<EmbeddingBackendConfig>> {
@@ -721,6 +891,49 @@ fn render_timeout_map(values: &HashMap<String, u64>) -> String {
     format!("{{ {rendered} }}")
 }
 
+fn render_insights_layer_rules(
+    rules: &[InsightsLayerRule],
+    profile: ConfigTemplateProfile,
+) -> Vec<String> {
+    let active = profile == ConfigTemplateProfile::Full;
+    if rules.is_empty() && active {
+        return Vec::new();
+    }
+
+    let rendered_rules: Vec<InsightsLayerRule> = if rules.is_empty() {
+        vec![InsightsLayerRule {
+            name: "layer_1".to_owned(),
+            path_prefixes: vec!["src/path-prefix".to_owned()],
+            module_prefixes: vec!["crate::module_prefix".to_owned()],
+        }]
+    } else {
+        rules.to_vec()
+    };
+
+    let mut lines = Vec::new();
+    for (index, rule) in rendered_rules.iter().enumerate() {
+        if active {
+            lines.push("[[insights.layer_rules]]".to_owned());
+            lines.push(format!("name = \"{}\"", rule.name));
+            lines.push(format!(
+                "path_prefixes = {}",
+                render_string_array(&rule.path_prefixes)
+            ));
+            lines.push(format!(
+                "module_prefixes = {}",
+                render_string_array(&rule.module_prefixes)
+            ));
+        } else {
+            lines.push("# [[insights.layer_rules]]".to_owned());
+            lines.push(format!("# name = \"layer_{}\"", index + 1));
+            lines.push("# path_prefixes = [\"src/path-prefix\"]".to_owned());
+            lines.push("# module_prefixes = [\"crate::module_prefix\"]".to_owned());
+        }
+        lines.push(String::new());
+    }
+    lines
+}
+
 /// Analysis-phase configuration (dead-code, refactor safety, impact traversal).
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(default)]
@@ -757,6 +970,243 @@ impl Default for AnalysisConfig {
             entrypoint_allowlist: Vec::new(),
             framework_conventions_file: None,
         }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct InsightsLayerRule {
+    pub name: String,
+    pub path_prefixes: Vec<String>,
+    pub module_prefixes: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct InsightsConfig {
+    pub large_function_loc: usize,
+    pub repeated_call_chain_min_length: usize,
+    pub high_fan_in: usize,
+    pub high_fan_out: usize,
+    pub high_coupling: usize,
+    pub deep_chain_length: usize,
+    pub max_findings: usize,
+    pub high_cyclomatic_complexity: usize,
+    pub high_cognitive_complexity: usize,
+    pub max_nesting_depth: usize,
+    pub branch_count: usize,
+    pub outlier_percentile_cutoff: usize,
+    pub risk_public_api_weight: f64,
+    pub risk_fan_in_weight: f64,
+    pub risk_fan_out_weight: f64,
+    pub risk_cross_module_dependency_weight: f64,
+    pub risk_test_adjacency_mitigation_weight: f64,
+    pub risk_dependency_depth_weight: f64,
+    pub risk_unresolved_edge_weight: f64,
+    pub risk_large_function_weight: f64,
+    pub risk_loc_weight: f64,
+    pub risk_cyclomatic_complexity_weight: f64,
+    pub risk_cognitive_complexity_weight: f64,
+    pub risk_nesting_depth_weight: f64,
+    pub risk_cycle_participation_weight: f64,
+    pub risk_medium_threshold: f64,
+    pub risk_high_threshold: f64,
+    pub ignore_files: Vec<String>,
+    pub ignore_modules: Vec<String>,
+    pub ignore_node_kinds: Vec<String>,
+    pub layer_rules: Vec<InsightsLayerRule>,
+}
+
+impl Default for InsightsConfig {
+    fn default() -> Self {
+        Self {
+            large_function_loc: 80,
+            repeated_call_chain_min_length: 3,
+            high_fan_in: 20,
+            high_fan_out: 10,
+            high_coupling: 15,
+            deep_chain_length: 6,
+            max_findings: 50,
+            high_cyclomatic_complexity: 15,
+            high_cognitive_complexity: 20,
+            max_nesting_depth: 4,
+            branch_count: 12,
+            outlier_percentile_cutoff: 95,
+            risk_public_api_weight: 1.5,
+            risk_fan_in_weight: 1.25,
+            risk_fan_out_weight: 0.75,
+            risk_cross_module_dependency_weight: 1.0,
+            risk_test_adjacency_mitigation_weight: 1.0,
+            risk_dependency_depth_weight: 0.75,
+            risk_unresolved_edge_weight: 1.25,
+            risk_large_function_weight: 0.5,
+            risk_loc_weight: 0.75,
+            risk_cyclomatic_complexity_weight: 1.0,
+            risk_cognitive_complexity_weight: 1.0,
+            risk_nesting_depth_weight: 0.75,
+            risk_cycle_participation_weight: 1.0,
+            risk_medium_threshold: 35.0,
+            risk_high_threshold: 70.0,
+            ignore_files: Vec::new(),
+            ignore_modules: Vec::new(),
+            ignore_node_kinds: Vec::new(),
+            layer_rules: Vec::new(),
+        }
+    }
+}
+
+impl InsightsConfig {
+    pub fn validate(&self) -> Result<()> {
+        validate_usize_limit(
+            "insights.large_function_loc",
+            self.large_function_loc,
+            usize::MAX,
+        )?;
+        validate_usize_limit(
+            "insights.repeated_call_chain_min_length",
+            self.repeated_call_chain_min_length,
+            usize::MAX,
+        )?;
+        if self.repeated_call_chain_min_length < 2 {
+            anyhow::bail!(
+                "invalid config: insights.repeated_call_chain_min_length={} must be at least 2",
+                self.repeated_call_chain_min_length,
+            );
+        }
+        validate_usize_limit("insights.high_fan_in", self.high_fan_in, usize::MAX)?;
+        validate_usize_limit("insights.high_fan_out", self.high_fan_out, usize::MAX)?;
+        validate_usize_limit("insights.high_coupling", self.high_coupling, usize::MAX)?;
+        validate_usize_limit(
+            "insights.deep_chain_length",
+            self.deep_chain_length,
+            usize::MAX,
+        )?;
+        validate_usize_limit("insights.max_findings", self.max_findings, usize::MAX)?;
+        validate_usize_limit(
+            "insights.high_cyclomatic_complexity",
+            self.high_cyclomatic_complexity,
+            usize::MAX,
+        )?;
+        validate_usize_limit(
+            "insights.high_cognitive_complexity",
+            self.high_cognitive_complexity,
+            usize::MAX,
+        )?;
+        validate_usize_limit(
+            "insights.max_nesting_depth",
+            self.max_nesting_depth,
+            usize::MAX,
+        )?;
+        validate_usize_limit("insights.branch_count", self.branch_count, usize::MAX)?;
+        validate_usize_limit(
+            "insights.outlier_percentile_cutoff",
+            self.outlier_percentile_cutoff,
+            100,
+        )?;
+        validate_positive_f64(
+            "insights.risk_public_api_weight",
+            self.risk_public_api_weight,
+        )?;
+        validate_positive_f64("insights.risk_fan_in_weight", self.risk_fan_in_weight)?;
+        validate_positive_f64("insights.risk_fan_out_weight", self.risk_fan_out_weight)?;
+        validate_positive_f64(
+            "insights.risk_cross_module_dependency_weight",
+            self.risk_cross_module_dependency_weight,
+        )?;
+        validate_positive_f64(
+            "insights.risk_test_adjacency_mitigation_weight",
+            self.risk_test_adjacency_mitigation_weight,
+        )?;
+        validate_positive_f64(
+            "insights.risk_dependency_depth_weight",
+            self.risk_dependency_depth_weight,
+        )?;
+        validate_positive_f64(
+            "insights.risk_unresolved_edge_weight",
+            self.risk_unresolved_edge_weight,
+        )?;
+        validate_positive_f64(
+            "insights.risk_large_function_weight",
+            self.risk_large_function_weight,
+        )?;
+        validate_positive_f64("insights.risk_loc_weight", self.risk_loc_weight)?;
+        validate_positive_f64(
+            "insights.risk_cyclomatic_complexity_weight",
+            self.risk_cyclomatic_complexity_weight,
+        )?;
+        validate_positive_f64(
+            "insights.risk_cognitive_complexity_weight",
+            self.risk_cognitive_complexity_weight,
+        )?;
+        validate_positive_f64(
+            "insights.risk_nesting_depth_weight",
+            self.risk_nesting_depth_weight,
+        )?;
+        validate_positive_f64(
+            "insights.risk_cycle_participation_weight",
+            self.risk_cycle_participation_weight,
+        )?;
+        validate_f64_range(
+            "insights.risk_medium_threshold",
+            self.risk_medium_threshold,
+            0.0,
+            100.0,
+        )?;
+        validate_f64_range(
+            "insights.risk_high_threshold",
+            self.risk_high_threshold,
+            0.0,
+            100.0,
+        )?;
+        if self.risk_medium_threshold >= self.risk_high_threshold {
+            anyhow::bail!(
+                "invalid config: insights.risk_medium_threshold ({}) must be less than insights.risk_high_threshold ({})",
+                self.risk_medium_threshold,
+                self.risk_high_threshold,
+            );
+        }
+
+        for (index, value) in self.ignore_files.iter().enumerate() {
+            validate_nonempty_string(&format!("insights.ignore_files[{index}]"), value)?;
+        }
+        for (index, value) in self.ignore_modules.iter().enumerate() {
+            validate_nonempty_string(&format!("insights.ignore_modules[{index}]"), value)?;
+        }
+        for (index, value) in self.ignore_node_kinds.iter().enumerate() {
+            validate_nonempty_string(&format!("insights.ignore_node_kinds[{index}]"), value)?;
+        }
+
+        let mut seen_names = std::collections::BTreeSet::new();
+        for (index, rule) in self.layer_rules.iter().enumerate() {
+            let name = validate_nonempty_string(
+                &format!("insights.layer_rules[{index}].name"),
+                &rule.name,
+            )?;
+            if !seen_names.insert(name.clone()) {
+                anyhow::bail!(
+                    "invalid config: insights.layer_rules[{index}].name duplicates layer `{name}`"
+                );
+            }
+            if rule.path_prefixes.is_empty() && rule.module_prefixes.is_empty() {
+                anyhow::bail!(
+                    "invalid config: insights.layer_rules[{index}] must define path_prefixes or module_prefixes"
+                );
+            }
+            for (matcher_index, matcher) in rule.path_prefixes.iter().enumerate() {
+                validate_nonempty_string(
+                    &format!("insights.layer_rules[{index}].path_prefixes[{matcher_index}]"),
+                    matcher,
+                )?;
+            }
+            for (matcher_index, matcher) in rule.module_prefixes.iter().enumerate() {
+                validate_nonempty_string(
+                    &format!("insights.layer_rules[{index}].module_prefixes[{matcher_index}]"),
+                    matcher,
+                )?;
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -1196,8 +1646,24 @@ mod tests {
 
         assert!(template.contains("# parse_batch_size = 64"));
         assert!(template.contains("[search.embedding]\n# url = \"http://localhost:11434\""));
+        assert!(template.contains("[insights]\n# large_function_loc = 80"));
+        assert!(template.contains("# repeated_call_chain_min_length = 3"));
+        assert!(template.contains("# outlier_percentile_cutoff = 95"));
+        assert!(template.contains("# [[insights.layer_rules]]\n# name = \"layer_1\""));
         assert!(template.contains("# worker_threads = 2"));
         assert!(!template.contains("\nparse_batch_size = 64\n"));
+    }
+
+    #[test]
+    fn rendered_minimal_template_loads_without_layer_rule_validation_error() {
+        let dir = tempdir().expect("tempdir");
+        fs::write(
+            dir.path().join(crate::paths::ATLAS_CONFIG),
+            Config::render_template(ConfigTemplateProfile::Minimal).expect("template"),
+        )
+        .expect("write config");
+
+        Config::load(dir.path()).expect("minimal template should load");
     }
 
     #[test]
@@ -1208,6 +1674,11 @@ mod tests {
         assert!(template.contains("tool_timeout_ms_by_tool = { build_or_update_graph = 900000, get_review_context = 120000 }"));
         assert!(template.contains("hybrid_enabled = true"));
         assert!(template.contains("[search.embedding]\nurl = \"http://localhost:11434\""));
+        assert!(template.contains("[insights]\nlarge_function_loc = 60"));
+        assert!(template.contains("repeated_call_chain_min_length = 4"));
+        assert!(template.contains("outlier_percentile_cutoff = 90"));
+        assert!(template.contains("ignore_node_kinds = [\"import\"]"));
+        assert!(template.contains("[[insights.layer_rules]]\nname = \"api\""));
     }
 
     #[test]
@@ -1222,6 +1693,75 @@ mod tests {
         assert!(text.contains("# profile = \"full\""));
         assert!(text.contains("hybrid_enabled = true"));
         assert!(text.contains("url = \"http://localhost:11434\""));
+        assert!(text.contains("large_function_loc = 60"));
+        assert!(text.contains("repeated_call_chain_min_length = 4"));
+    }
+
+    #[test]
+    fn insights_config_rejects_non_positive_thresholds() {
+        let mut config = Config::default();
+        config.insights.max_findings = 0;
+
+        let err = config
+            .insights_config()
+            .expect_err("invalid insights config");
+        assert!(
+            err.to_string()
+                .contains("insights.max_findings must be greater than 0")
+        );
+    }
+
+    #[test]
+    fn insights_config_rejects_outlier_percentile_above_100() {
+        let mut config = Config::default();
+        config.insights.outlier_percentile_cutoff = 101;
+
+        let err = config
+            .insights_config()
+            .expect_err("invalid insights percentile cutoff");
+        assert!(
+            err.to_string()
+                .contains("insights.outlier_percentile_cutoff=101 exceeds safe maximum 100")
+        );
+    }
+
+    #[test]
+    fn insights_config_rejects_invalid_risk_threshold_order() {
+        let mut config = Config::default();
+        config.insights.risk_medium_threshold = 80.0;
+        config.insights.risk_high_threshold = 70.0;
+
+        let err = config
+            .insights_config()
+            .expect_err("invalid risk threshold order");
+        assert!(err.to_string().contains("insights.risk_medium_threshold (80) must be less than insights.risk_high_threshold (70)"));
+    }
+
+    #[test]
+    fn insights_config_rejects_non_positive_risk_weight() {
+        let mut config = Config::default();
+        config.insights.risk_unresolved_edge_weight = 0.0;
+
+        let err = config.insights_config().expect_err("invalid risk weight");
+        assert!(err.to_string().contains(
+            "insights.risk_unresolved_edge_weight must be a finite value greater than 0"
+        ));
+    }
+
+    #[test]
+    fn load_rejects_invalid_insights_layer_rule() {
+        let dir = tempdir().expect("tempdir");
+        fs::write(
+            dir.path().join(crate::paths::ATLAS_CONFIG),
+            "[insights]\nmax_findings = 10\n\n[[insights.layer_rules]]\nname = \"app\"\n",
+        )
+        .expect("write config");
+
+        let err = Config::load(dir.path()).expect_err("invalid layer rule");
+        assert!(
+            err.to_string()
+                .contains("insights.layer_rules[0] must define path_prefixes or module_prefixes")
+        );
     }
 
     #[test]

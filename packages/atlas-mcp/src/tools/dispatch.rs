@@ -16,7 +16,9 @@ use crate::session_tools::{
 };
 
 use super::analysis::{
-    tool_analyze_dead_code, tool_analyze_dependency, tool_analyze_remove, tool_analyze_safety,
+    tool_analyze_architecture, tool_analyze_dead_code, tool_analyze_dependency,
+    tool_analyze_metrics, tool_analyze_patterns, tool_analyze_remove, tool_analyze_safety,
+    tool_assess_risk, tool_find_complex_functions, tool_find_large_functions,
 };
 use super::context_ops::{
     tool_build_or_update_graph, tool_detect_changes, tool_explain_change, tool_get_context,
@@ -66,6 +68,12 @@ fn inject_freshness_warning(
         "get_review_context" | "get_impact_radius" => {
             response_file_list(response, "/atlas_change_source/resolved_files")
         }
+        "analyze_architecture"
+        | "analyze_metrics"
+        | "assess_risk"
+        | "analyze_patterns"
+        | "find_large_functions"
+        | "find_complex_functions" => response_file_list(response, "/atlas_result_files"),
         "get_docs_section" => response_single_file(response, "/file"),
         _ => Vec::new(),
     };
@@ -181,6 +189,18 @@ fn call_inner(
         "get_minimal_context" => tool_get_minimal_context(args, repo_root, db_path, output_format),
         "explain_change" => tool_explain_change(args, repo_root, db_path, output_format),
         "get_context" => tool_get_context(args, repo_root, db_path, output_format),
+        "analyze_architecture" => {
+            tool_analyze_architecture(args, repo_root, db_path, output_format)
+        }
+        "analyze_metrics" => tool_analyze_metrics(args, repo_root, db_path, output_format),
+        "assess_risk" => tool_assess_risk(args, repo_root, db_path, output_format),
+        "analyze_patterns" => tool_analyze_patterns(args, repo_root, db_path, output_format),
+        "find_large_functions" => {
+            tool_find_large_functions(args, repo_root, db_path, output_format)
+        }
+        "find_complex_functions" => {
+            tool_find_complex_functions(args, repo_root, db_path, output_format)
+        }
         "get_session_status" => tool_get_session_status(args, repo_root, db_path, output_format),
         "compact_session" => tool_compact_session(args, repo_root, db_path, output_format),
         "resume_session" => tool_resume_session(args, repo_root, db_path, output_format),
@@ -282,6 +302,12 @@ fn tool_graph_requirement(name: &str) -> Option<GraphToolRequirement> {
         | "get_minimal_context"
         | "explain_change"
         | "detect_changes"
+        | "analyze_architecture"
+        | "analyze_metrics"
+        | "assess_risk"
+        | "analyze_patterns"
+        | "find_large_functions"
+        | "find_complex_functions"
         | "analyze_safety"
         | "analyze_remove"
         | "analyze_dead_code"

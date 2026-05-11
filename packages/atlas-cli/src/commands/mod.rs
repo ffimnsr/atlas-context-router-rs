@@ -6,6 +6,7 @@ mod graph_objects;
 mod history;
 mod hook;
 mod init_wizard;
+mod insights;
 mod maintenance;
 mod platform;
 mod postprocess;
@@ -20,6 +21,7 @@ pub use graph::{run_build, run_init, run_status, run_update, run_watch};
 pub use graph_objects::{run_communities, run_flows};
 pub use history::run_history;
 pub use hook::run_hook;
+pub use insights::run_insights;
 pub use maintenance::{
     run_db_check, run_debug_config, run_debug_graph, run_doctor, run_embedding_config, run_migrate,
     run_purge_noncanonical, run_selfupdate,

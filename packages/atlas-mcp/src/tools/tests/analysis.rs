@@ -1,4 +1,7 @@
 use super::*;
+use atlas_reasoning::{
+    InsightsEngine, LargeFunctionMode, LargeFunctionRequest, RiskAssessmentTarget,
+};
 
 #[test]
 fn analyze_safety_returns_score_and_band() {
@@ -322,4 +325,176 @@ fn analyze_dependency_normalizes_alias_qname() {
     let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
 
     assert_eq!(v["symbol"], "src/service.rs::fn::compute");
+}
+
+#[test]
+fn find_large_functions_matches_direct_report_json() {
+    let fixture = setup_mcp_fixture();
+    let args = serde_json::json!({
+        "threshold": 2,
+        "mode": "large",
+        "output_format": "json"
+    });
+    let resp = call(
+        "find_large_functions",
+        Some(&args),
+        "/repo",
+        &fixture.db_path,
+    )
+    .expect("find_large_functions call");
+    let text = unwrap_tool_text(resp.clone());
+    let tool_value: serde_json::Value = serde_json::from_str(&text).expect("parse json");
+
+    let store = Store::open(&fixture.db_path).expect("open store");
+    let engine = InsightsEngine::new(&store, atlas_engine::config::InsightsConfig::default())
+        .expect("insights engine");
+    let direct = engine
+        .find_large_functions(
+            "/repo",
+            LargeFunctionRequest {
+                threshold: Some(2),
+                mode: LargeFunctionMode::Large,
+                ..Default::default()
+            },
+        )
+        .expect("direct analysis");
+    let mut direct_value = serde_json::to_value(&direct.report).expect("serialize report");
+    direct_value["summary"]["generated_at"] = tool_value["summary"]["generated_at"].clone();
+
+    assert_eq!(tool_value, direct_value);
+    assert_provenance(&resp, "/repo", &fixture.db_path);
+}
+
+#[test]
+fn analyze_architecture_matches_direct_report_json() {
+    let fixture = setup_mcp_fixture();
+    let args = serde_json::json!({ "output_format": "json" });
+    let resp = call(
+        "analyze_architecture",
+        Some(&args),
+        "/repo",
+        &fixture.db_path,
+    )
+    .expect("analyze_architecture call");
+    let text = unwrap_tool_text(resp.clone());
+    let tool_value: serde_json::Value = serde_json::from_str(&text).expect("parse json");
+
+    let store = Store::open(&fixture.db_path).expect("open store");
+    let engine = InsightsEngine::new(&store, atlas_engine::config::InsightsConfig::default())
+        .expect("insights engine");
+    let direct = engine
+        .analyze_architecture("/repo")
+        .expect("direct analysis");
+    let mut direct_value = serde_json::to_value(&direct.report).expect("serialize report");
+    direct_value["summary"]["generated_at"] = tool_value["summary"]["generated_at"].clone();
+
+    assert_eq!(tool_value, direct_value);
+    assert_provenance(&resp, "/repo", &fixture.db_path);
+}
+
+#[test]
+fn analyze_metrics_matches_direct_report_json() {
+    let fixture = setup_mcp_fixture();
+    let args = serde_json::json!({ "output_format": "json" });
+    let resp = call("analyze_metrics", Some(&args), "/repo", &fixture.db_path)
+        .expect("analyze_metrics call");
+    let text = unwrap_tool_text(resp.clone());
+    let tool_value: serde_json::Value = serde_json::from_str(&text).expect("parse json");
+
+    let store = Store::open(&fixture.db_path).expect("open store");
+    let engine = InsightsEngine::new(&store, atlas_engine::config::InsightsConfig::default())
+        .expect("insights engine");
+    let direct = engine.analyze_metrics("/repo").expect("direct analysis");
+    let mut direct_value = serde_json::to_value(&direct.report).expect("serialize report");
+    direct_value["summary"]["generated_at"] = tool_value["summary"]["generated_at"].clone();
+
+    assert_eq!(tool_value, direct_value);
+    assert_provenance(&resp, "/repo", &fixture.db_path);
+}
+
+#[test]
+fn assess_risk_matches_direct_report_json() {
+    let fixture = setup_mcp_fixture();
+    let args = serde_json::json!({
+        "symbol": "src/service.rs::fn::compute",
+        "output_format": "json"
+    });
+    let resp =
+        call("assess_risk", Some(&args), "/repo", &fixture.db_path).expect("assess_risk call");
+    let text = unwrap_tool_text(resp.clone());
+    let tool_value: serde_json::Value = serde_json::from_str(&text).expect("parse json");
+
+    let store = Store::open(&fixture.db_path).expect("open store");
+    let engine = InsightsEngine::new(&store, atlas_engine::config::InsightsConfig::default())
+        .expect("insights engine");
+    let direct = engine
+        .assess_risk(
+            "/repo",
+            RiskAssessmentTarget::Symbol {
+                symbol: "src/service.rs::fn::compute".to_owned(),
+            },
+        )
+        .expect("direct analysis");
+    let mut direct_value = serde_json::to_value(&direct.report).expect("serialize report");
+    direct_value["summary"]["generated_at"] = tool_value["summary"]["generated_at"].clone();
+
+    assert_eq!(tool_value, direct_value);
+    assert_provenance(&resp, "/repo", &fixture.db_path);
+}
+
+#[test]
+fn analyze_patterns_matches_direct_report_json() {
+    let fixture = setup_mcp_fixture();
+    let args = serde_json::json!({ "output_format": "json" });
+    let resp = call("analyze_patterns", Some(&args), "/repo", &fixture.db_path)
+        .expect("analyze_patterns call");
+    let text = unwrap_tool_text(resp.clone());
+    let tool_value: serde_json::Value = serde_json::from_str(&text).expect("parse json");
+
+    let store = Store::open(&fixture.db_path).expect("open store");
+    let engine = InsightsEngine::new(&store, atlas_engine::config::InsightsConfig::default())
+        .expect("insights engine");
+    let direct = engine.analyze_patterns().expect("direct analysis");
+    let mut direct_value = serde_json::to_value(&direct).expect("serialize report");
+    direct_value["summary"]["generated_at"] = tool_value["summary"]["generated_at"].clone();
+
+    assert_eq!(tool_value, direct_value);
+    assert_provenance(&resp, "/repo", &fixture.db_path);
+}
+
+#[test]
+fn find_complex_functions_matches_direct_report_json() {
+    let fixture = setup_mcp_fixture();
+    let args = serde_json::json!({
+        "complexity_threshold": 1,
+        "output_format": "json"
+    });
+    let resp = call(
+        "find_complex_functions",
+        Some(&args),
+        "/repo",
+        &fixture.db_path,
+    )
+    .expect("find_complex_functions call");
+    let text = unwrap_tool_text(resp.clone());
+    let tool_value: serde_json::Value = serde_json::from_str(&text).expect("parse json");
+
+    let store = Store::open(&fixture.db_path).expect("open store");
+    let engine = InsightsEngine::new(&store, atlas_engine::config::InsightsConfig::default())
+        .expect("insights engine");
+    let direct = engine
+        .find_large_functions(
+            "/repo",
+            LargeFunctionRequest {
+                complexity_threshold: Some(1),
+                mode: LargeFunctionMode::Complex,
+                ..Default::default()
+            },
+        )
+        .expect("direct analysis");
+    let mut direct_value = serde_json::to_value(&direct.report).expect("serialize report");
+    direct_value["summary"]["generated_at"] = tool_value["summary"]["generated_at"].clone();
+
+    assert_eq!(tool_value, direct_value);
+    assert_provenance(&resp, "/repo", &fixture.db_path);
 }

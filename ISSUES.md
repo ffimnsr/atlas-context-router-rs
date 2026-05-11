@@ -76,37 +76,37 @@ Implement Phase 29 in patch order. Do not start later patches until the precedin
 
 #### 29.1 Insights engine foundation
 
-- [ ] create `InsightsEngine` service:
-  - [ ] place service in engine or reasoning crate only after checking existing analysis service boundaries
-  - [ ] accept read-only graph/store handles or already-loaded graph summaries
-  - [ ] return deterministic report structs without writing to SQLite
-  - [ ] reuse existing ranking/truncation helpers before adding new ones
-  - [ ] reuse existing freshness/provenance metadata shape from graph/context tools
-- [ ] define shared report primitives:
-  - [ ] `InsightSummary` with total findings, highest severity, and generated-at metadata
-  - [ ] `InsightFinding` with `id`, `title`, `severity`, `category`, `message`, `evidence`, and `ranking_reason`
-  - [ ] `InsightEvidence` with file path, qualified name, node kind, edge kind, line range, and confidence tier when available
-  - [ ] deterministic severity values: `info`, `low`, `medium`, `high`
-  - [ ] deterministic sort order: severity desc, score desc, file path asc, line asc, qualified name asc
-- [ ] define top-level reports:
-  - [ ] `ArchitectureReport`
-  - [ ] `MetricsReport`
-  - [ ] `RiskReport`
-  - [ ] `PatternReport`
-  - [ ] `LargeFunctionReport`
-- [ ] define config surface:
-  - [ ] add insights thresholds under `.atlas/config.toml`
-  - [ ] include defaults for large-function LOC, high fan-in, high fan-out, high coupling, deep chain length, and max findings
-  - [ ] include defaults for high cyclomatic complexity, high cognitive complexity, max nesting depth, and branch count
-  - [ ] include ignore lists for files, modules, and node kinds
-  - [ ] include optional layer rules for architecture validation
-  - [ ] validate thresholds are positive and fail with actionable config errors
-- [ ] add foundation tests:
-  - [ ] report sorting is stable
-  - [ ] severity ordering is stable
-  - [ ] invalid threshold config fails clearly
-  - [ ] ignored files/modules are excluded from findings
-  - [ ] report JSON shape is stable
+- [x] create `InsightsEngine` service:
+  - [x] place service in engine or reasoning crate only after checking existing analysis service boundaries
+  - [x] accept read-only graph/store handles or already-loaded graph summaries
+  - [x] return deterministic report structs without writing to SQLite
+  - [x] reuse existing ranking/truncation helpers before adding new ones
+  - [x] reuse existing freshness/provenance metadata shape from graph/context tools
+- [x] define shared report primitives:
+  - [x] `InsightSummary` with total findings, highest severity, and generated-at metadata
+  - [x] `InsightFinding` with `id`, `title`, `severity`, `category`, `message`, `evidence`, and `ranking_reason`
+  - [x] `InsightEvidence` with file path, qualified name, node kind, edge kind, line range, and confidence tier when available
+  - [x] deterministic severity values: `info`, `low`, `medium`, `high`
+  - [x] deterministic sort order: severity desc, score desc, file path asc, line asc, qualified name asc
+- [x] define top-level reports:
+  - [x] `ArchitectureReport`
+  - [x] `MetricsReport`
+  - [x] `RiskReport`
+  - [x] `PatternReport`
+  - [x] `LargeFunctionReport`
+- [x] define config surface:
+  - [x] add insights thresholds under `.atlas/config.toml`
+  - [x] include defaults for large-function LOC, high fan-in, high fan-out, high coupling, deep chain length, and max findings
+  - [x] include defaults for high cyclomatic complexity, high cognitive complexity, max nesting depth, and branch count
+  - [x] include ignore lists for files, modules, and node kinds
+  - [x] include optional layer rules for architecture validation
+  - [x] validate thresholds are positive and fail with actionable config errors
+- [x] add foundation tests:
+  - [x] report sorting is stable
+  - [x] severity ordering is stable
+  - [x] invalid threshold config fails clearly
+  - [x] ignored files/modules are excluded from findings
+  - [x] report JSON shape is stable
 
 Why:
 - every later insight needs same evidence, severity, ranking, and config contract
@@ -114,50 +114,50 @@ Why:
 
 #### 29.2 Code health metrics engine
 
-- [ ] implement node-level metric collection:
-  - [ ] compute fan-in from inbound graph edges by node qualified name
-  - [ ] compute fan-out from outbound graph edges by node qualified name
-  - [ ] compute dependency depth as longest bounded outbound path, with cycle guard
-  - [ ] compute reference count from `References`, `Calls`, `Imports`, and language-specific relationship edges
-  - [ ] compute test adjacency from direct test edges, test nodes in same file, or existing test-adjacency helpers
-  - [ ] compute line count / LOC for function and method nodes from `line_start` and `line_end`
-  - [ ] mark large-function candidate when LOC is at or above configured threshold
-- [ ] implement function complexity metric collection:
-  - [ ] compute cyclomatic complexity for function and method nodes from parser-backed syntax where available
-  - [ ] compute cognitive complexity for nested control-flow constructs where parser data supports it
-  - [ ] compute branch/control-flow count for `if`, `else if`, `match`/`switch`, loops, boolean short-circuit branches, `catch`/exception branches, and early returns where language parser exposes them
-  - [ ] compute max nesting depth for conditional, loop, match/switch, closure/lambda, and block constructs
-  - [ ] mark high-complexity function candidate when any configured complexity threshold is exceeded
-  - [ ] include per-language unsupported metrics as `not_available` instead of guessing from raw text
-- [ ] implement file-level metric collection:
-  - [ ] compute node count per file
-  - [ ] compute edge count per file
-  - [ ] compute average fan-in and fan-out for nodes in file
-  - [ ] compute import count from import nodes or import edges
-  - [ ] compute test coverage ratio as test nodes divided by non-test callable nodes when available
-  - [ ] flag large/highly connected files using configured percentile or threshold
-- [ ] implement module-level metric collection:
-  - [ ] group files/nodes by existing package/module ownership where available
-  - [ ] compute internal edge count within module
-  - [ ] compute external dependency edge count leaving module
-  - [ ] compute inbound dependency edge count entering module
-  - [ ] compute coupling score from external dependencies and inbound dependencies
-  - [ ] compute cohesion approximation from internal edges divided by possible internal relationships
-- [ ] compute distribution statistics:
-  - [ ] compute min, max, average, p50, p90, and p95 for fan-in, fan-out, LOC, cyclomatic complexity, cognitive complexity, nesting depth, branch count, file node count, and coupling
-  - [ ] detect outliers using configured percentile cutoffs
-  - [ ] include metric names, raw values, threshold values, and ranking reason in findings
-- [ ] add metrics tests:
-  - [ ] fan-in and fan-out on a known fixture graph
-  - [ ] dependency depth with cycle guard
-  - [ ] LOC from line ranges
-  - [ ] cyclomatic complexity from a fixture with branches and loops
-  - [ ] cognitive complexity increases with nested control flow
-  - [ ] max nesting depth from nested branch fixture
-  - [ ] unsupported language complexity metric reports `not_available`
-  - [ ] file import count
-  - [ ] module coupling score
-  - [ ] percentile/outlier detection
+- [x] implement node-level metric collection:
+  - [x] compute fan-in from inbound graph edges by node qualified name
+  - [x] compute fan-out from outbound graph edges by node qualified name
+  - [x] compute dependency depth as longest bounded outbound path, with cycle guard
+  - [x] compute reference count from `References`, `Calls`, `Imports`, and language-specific relationship edges
+  - [x] compute test adjacency from direct test edges, test nodes in same file, or existing test-adjacency helpers
+  - [x] compute line count / LOC for function and method nodes from `line_start` and `line_end`
+  - [x] mark large-function candidate when LOC is at or above configured threshold
+- [x] implement function complexity metric collection:
+  - [x] compute cyclomatic complexity for function and method nodes from parser-backed syntax where available
+  - [x] compute cognitive complexity for nested control-flow constructs where parser data supports it
+  - [x] compute branch/control-flow count for `if`, `else if`, `match`/`switch`, loops, boolean short-circuit branches, `catch`/exception branches, and early returns where language parser exposes them
+  - [x] compute max nesting depth for conditional, loop, match/switch, closure/lambda, and block constructs
+  - [x] mark high-complexity function candidate when any configured complexity threshold is exceeded
+  - [x] include per-language unsupported metrics as `not_available` instead of guessing from raw text
+- [x] implement file-level metric collection:
+  - [x] compute node count per file
+  - [x] compute edge count per file
+  - [x] compute average fan-in and fan-out for nodes in file
+  - [x] compute import count from import nodes or import edges
+  - [x] compute test coverage ratio as test nodes divided by non-test callable nodes when available
+  - [x] flag large/highly connected files using configured percentile or threshold
+- [x] implement module-level metric collection:
+  - [x] group files/nodes by existing package/module ownership where available
+  - [x] compute internal edge count within module
+  - [x] compute external dependency edge count leaving module
+  - [x] compute inbound dependency edge count entering module
+  - [x] compute coupling score from external dependencies and inbound dependencies
+  - [x] compute cohesion approximation from internal edges divided by possible internal relationships
+- [x] compute distribution statistics:
+  - [x] compute min, max, average, p50, p90, and p95 for fan-in, fan-out, LOC, cyclomatic complexity, cognitive complexity, nesting depth, branch count, file node count, and coupling
+  - [x] detect outliers using configured percentile cutoffs
+  - [x] include metric names, raw values, threshold values, and ranking reason in findings
+- [x] add metrics tests:
+  - [x] fan-in and fan-out on a known fixture graph
+  - [x] dependency depth with cycle guard
+  - [x] LOC from line ranges
+  - [x] cyclomatic complexity from a fixture with branches and loops
+  - [x] cognitive complexity increases with nested control flow
+  - [x] max nesting depth from nested branch fixture
+  - [x] unsupported language complexity metric reports `not_available`
+  - [x] file import count
+  - [x] module coupling score
+  - [x] percentile/outlier detection
 
 Why:
 - risk, large-function, architecture, and pattern reports depend on these metrics
@@ -165,59 +165,59 @@ Why:
 
 #### 29.3 Large function finder
 
-- [ ] implement `find_large_functions()`:
-  - [ ] scan `Function`, `Method`, and test callable nodes by line span
-  - [ ] exclude test nodes by default
-  - [ ] include test nodes only when `include_tests = true`
-  - [ ] support repo-wide mode
-  - [ ] support file-scoped mode with one or more repo-relative file paths
-  - [ ] apply configured LOC threshold unless request overrides threshold
-  - [ ] cap results by configured or requested limit
-- [ ] implement high-complexity function filtering in same service:
-  - [ ] support `--complexity-threshold` for cyclomatic complexity
-  - [ ] support `--cognitive-threshold` for cognitive complexity
-  - [ ] support `--nesting-threshold` for max nesting depth
-  - [ ] include functions that exceed either size or complexity threshold
-  - [ ] allow `--mode large`, `--mode complex`, and `--mode large-or-complex`
-- [ ] rank large-function findings:
-  - [ ] primary sort by LOC descending
-  - [ ] boost changed-file relevance when changed-file input is provided
-  - [ ] boost high fan-in and high fan-out using metrics from 29.2
-  - [ ] boost package/module boundary crossings when module ownership is available
-  - [ ] tie-break by file path, line_start, and qualified name
-  - [ ] include ranking reason with LOC, complexity values, thresholds, fan-in, fan-out, and changed-file boost
-- [ ] return complete finding payload:
-  - [ ] file path
-  - [ ] qualified name
-  - [ ] display name
-  - [ ] node kind
-  - [ ] line_start and line_end
-  - [ ] LOC
-  - [ ] cyclomatic complexity when available
-  - [ ] cognitive complexity when available
-  - [ ] max nesting depth when available
-  - [ ] branch count when available
-  - [ ] threshold
-  - [ ] ranking reason
-  - [ ] provenance/freshness metadata
-- [ ] add surfaces:
-  - [ ] CLI `atlas insights large-functions`
-  - [ ] CLI `atlas insights large-functions --files ...`
-  - [ ] CLI flags `--threshold`, `--complexity-threshold`, `--cognitive-threshold`, `--nesting-threshold`, `--mode`, `--limit`, `--include-tests`, and `--json`
-  - [ ] MCP `find_large_functions` with same inputs and defaults as CLI JSON
-  - [ ] compact MCP default output suitable for agent review
-- [ ] add large-function tests:
-  - [ ] default threshold matches review risk summary threshold
-  - [ ] file-scoped filtering returns only requested files
-  - [ ] threshold override changes result set
-  - [ ] complexity threshold includes short but complex functions
-  - [ ] `--mode large` excludes short complex functions
-  - [ ] `--mode complex` excludes large simple functions
-  - [ ] `--mode large-or-complex` includes either category
-  - [ ] limit caps result count after ranking
-  - [ ] test-node include/exclude behavior
-  - [ ] stable sort ties
-  - [ ] CLI JSON and MCP JSON parity
+- [x] implement `find_large_functions()`:
+  - [x] scan `Function`, `Method`, and test callable nodes by line span
+  - [x] exclude test nodes by default
+  - [x] include test nodes only when `include_tests = true`
+  - [x] support repo-wide mode
+  - [x] support file-scoped mode with one or more repo-relative file paths
+  - [x] apply configured LOC threshold unless request overrides threshold
+  - [x] cap results by configured or requested limit
+- [x] implement high-complexity function filtering in same service:
+  - [x] support `--complexity-threshold` for cyclomatic complexity
+  - [x] support `--cognitive-threshold` for cognitive complexity
+  - [x] support `--nesting-threshold` for max nesting depth
+  - [x] include functions that exceed either size or complexity threshold
+  - [x] allow `--mode large`, `--mode complex`, and `--mode large-or-complex`
+- [x] rank large-function findings:
+  - [x] primary sort by LOC descending
+  - [x] boost changed-file relevance when changed-file input is provided
+  - [x] boost high fan-in and high fan-out using metrics from 29.2
+  - [x] boost package/module boundary crossings when module ownership is available
+  - [x] tie-break by file path, line_start, and qualified name
+  - [x] include ranking reason with LOC, complexity values, thresholds, fan-in, fan-out, and changed-file boost
+- [x] return complete finding payload:
+  - [x] file path
+  - [x] qualified name
+  - [x] display name
+  - [x] node kind
+  - [x] line_start and line_end
+  - [x] LOC
+  - [x] cyclomatic complexity when available
+  - [x] cognitive complexity when available
+  - [x] max nesting depth when available
+  - [x] branch count when available
+  - [x] threshold
+  - [x] ranking reason
+  - [x] provenance/freshness metadata
+- [x] add surfaces:
+  - [x] CLI `atlas insights large-functions`
+  - [x] CLI `atlas insights large-functions --files ...`
+  - [x] CLI flags `--threshold`, `--complexity-threshold`, `--cognitive-threshold`, `--nesting-threshold`, `--mode`, `--limit`, `--include-tests`, and `--json`
+  - [x] MCP `find_large_functions` with same inputs and defaults as CLI JSON
+  - [x] compact MCP default output suitable for agent review
+- [x] add large-function tests:
+  - [x] default threshold matches review risk summary threshold
+  - [x] file-scoped filtering returns only requested files
+  - [x] threshold override changes result set
+  - [x] complexity threshold includes short but complex functions
+  - [x] `--mode large` excludes short complex functions
+  - [x] `--mode complex` excludes large simple functions
+  - [x] `--mode large-or-complex` includes either category
+  - [x] limit caps result count after ranking
+  - [x] test-node include/exclude behavior
+  - [x] stable sort ties
+  - [x] CLI JSON and MCP JSON parity
 
 Why:
 - current review code only flags large changed functions; agents need direct repo/file discovery and ranked evidence
@@ -225,37 +225,37 @@ Why:
 
 #### 29.4 Architecture analysis
 
-- [ ] build module-level graph:
-  - [ ] create module nodes from existing package/module/file ownership data
-  - [ ] aggregate file/node edges into module-to-module edges
-  - [ ] preserve source evidence edges that caused each module edge
-  - [ ] exclude ignored files/modules from config
-  - [ ] keep deterministic module IDs based on canonical repo paths or existing owner IDs
-- [ ] detect cycles:
-  - [ ] compute strongly connected components (SCC)
-  - [ ] identify cyclic dependencies from SCCs with more than one module or explicit self-cycle
-  - [ ] classify cycles as `local` when all modules share package/root and `cross-module` otherwise
-  - [ ] output at least one deterministic cycle path per finding
-  - [ ] include source file/node evidence for each cycle edge
-- [ ] enforce layer rules:
-  - [ ] parse configured layer names and path/module matchers
-  - [ ] map files and modules to layers
-  - [ ] reject invalid layer configs with clear diagnostics
-  - [ ] detect invalid dependency edges from lower/higher layers based on configured order
-  - [ ] output layer violation findings with source and target layer names
-- [ ] compute architecture health:
-  - [ ] compute coupling score per module using metrics from 29.2
-  - [ ] detect high-coupling modules using configured threshold
-  - [ ] detect tightly coupled clusters using SCC size and coupling score
-  - [ ] flag large/highly connected files using file metrics from 29.2
-- [ ] add architecture tests:
-  - [ ] SCC cycle detection
-  - [ ] local versus cross-module cycle classification
-  - [ ] deterministic cycle path output
-  - [ ] valid layer rule allows dependency
-  - [ ] invalid layer rule reports violation
-  - [ ] high-coupling module detection
-  - [ ] ignored module excluded
+- [x] build module-level graph:
+  - [x] create module nodes from existing package/module/file ownership data
+  - [x] aggregate file/node edges into module-to-module edges
+  - [x] preserve source evidence edges that caused each module edge
+  - [x] exclude ignored files/modules from config
+  - [x] keep deterministic module IDs based on canonical repo paths or existing owner IDs
+- [x] detect cycles:
+  - [x] compute strongly connected components (SCC)
+  - [x] identify cyclic dependencies from SCCs with more than one module or explicit self-cycle
+  - [x] classify cycles as `local` when all modules share package/root and `cross-module` otherwise
+  - [x] output at least one deterministic cycle path per finding
+  - [x] include source file/node evidence for each cycle edge
+- [x] enforce layer rules:
+  - [x] parse configured layer names and path/module matchers
+  - [x] map files and modules to layers
+  - [x] reject invalid layer configs with clear diagnostics
+  - [x] detect invalid dependency edges from lower/higher layers based on configured order
+  - [x] output layer violation findings with source and target layer names
+- [x] compute architecture health:
+  - [x] compute coupling score per module using metrics from 29.2
+  - [x] detect high-coupling modules using configured threshold
+  - [x] detect tightly coupled clusters using SCC size and coupling score
+  - [x] flag large/highly connected files using file metrics from 29.2
+- [x] add architecture tests:
+  - [x] SCC cycle detection
+  - [x] local versus cross-module cycle classification
+  - [x] deterministic cycle path output
+  - [x] valid layer rule allows dependency
+  - [x] invalid layer rule reports violation
+  - [x] high-coupling module detection
+  - [x] ignored module excluded
 
 Why:
 - architecture findings need module graph and metric foundation before risk and pattern analysis
@@ -263,40 +263,40 @@ Why:
 
 #### 29.5 Risk assessment engine
 
-- [ ] implement `assess_risk()`:
-  - [ ] accept symbol qualified name or resolved node target
-  - [ ] resolve ambiguous symbols using existing query/resolve-symbol behavior
-  - [ ] fail clearly when target cannot be resolved
-  - [ ] reuse metrics from 29.2 and architecture data from 29.4
-  - [ ] return one `RiskReport` for target node plus related evidence
-- [ ] score risk inputs:
-  - [ ] public API exposure
-  - [ ] fan-in
-  - [ ] fan-out
-  - [ ] cross-module dependency count
-  - [ ] test adjacency
-  - [ ] dependency depth
-  - [ ] unresolved edge count
-  - [ ] large-function flag, LOC, and complexity metrics when target is callable
-  - [ ] cycle participation when available
-- [ ] implement weighted formula:
-  - [ ] define default weights in config
-  - [ ] normalize final score to `0-100`
-  - [ ] classify `low`, `medium`, and `high` with configurable thresholds
-  - [ ] include factor contribution for each input
-  - [ ] include evidence nodes/edges for each non-zero factor
-- [ ] add risk tests:
-  - [ ] high fan-in increases score
-  - [ ] test adjacency lowers or mitigates score
-  - [ ] public API increases score
-  - [ ] unresolved edges increase score
-  - [ ] large function increases callable risk
-  - [ ] high cyclomatic complexity increases callable risk
-  - [ ] high cognitive complexity increases callable risk
-  - [ ] high nesting depth increases callable risk
-  - [ ] cycle participation increases score
-  - [ ] score normalization stays inside `0-100`
-  - [ ] low/medium/high boundaries are stable
+- [x] implement `assess_risk()`:
+  - [x] accept symbol qualified name or resolved node target
+  - [x] resolve ambiguous symbols using existing query/resolve-symbol behavior
+  - [x] fail clearly when target cannot be resolved
+  - [x] reuse metrics from 29.2 and architecture data from 29.4
+  - [x] return one `RiskReport` for target node plus related evidence
+- [x] score risk inputs:
+  - [x] public API exposure
+  - [x] fan-in
+  - [x] fan-out
+  - [x] cross-module dependency count
+  - [x] test adjacency
+  - [x] dependency depth
+  - [x] unresolved edge count
+  - [x] large-function flag, LOC, and complexity metrics when target is callable
+  - [x] cycle participation when available
+- [x] implement weighted formula:
+  - [x] define default weights in config
+  - [x] normalize final score to `0-100`
+  - [x] classify `low`, `medium`, and `high` with configurable thresholds
+  - [x] include factor contribution for each input
+  - [x] include evidence nodes/edges for each non-zero factor
+- [x] add risk tests:
+  - [x] high fan-in increases score
+  - [x] test adjacency lowers or mitigates score
+  - [x] public API increases score
+  - [x] unresolved edges increase score
+  - [x] large function increases callable risk
+  - [x] high cyclomatic complexity increases callable risk
+  - [x] high cognitive complexity increases callable risk
+  - [x] high nesting depth increases callable risk
+  - [x] cycle participation increases score
+  - [x] score normalization stays inside `0-100`
+  - [x] low/medium/high boundaries are stable
 
 Why:
 - risk scoring should be explainable from deterministic graph and metric factors
@@ -304,34 +304,34 @@ Why:
 
 #### 29.6 Pattern detection
 
-- [ ] detect duplicate or repeated graph patterns:
-  - [ ] find repeated call chains with same ordered simple-name sequence
-  - [ ] require minimum chain length from config
-  - [ ] group repeated chains by normalized sequence
-  - [ ] output files, qualified names, and edge evidence for each repeated chain
-  - [ ] skip chains crossing ignored modules/files
-- [ ] detect unused or isolated structures:
-  - [ ] find unused modules with no inbound edges outside their own module
-  - [ ] find isolated graph components with no incoming or outgoing external edges
-  - [ ] find orphan nodes with no meaningful inbound references and no test adjacency
-  - [ ] exclude entrypoints, tests, public APIs, and configured ignore patterns
-  - [ ] include blockers that prevent safe removal
-- [ ] detect high-centrality nodes:
-  - [ ] compute degree centrality from fan-in and fan-out
-  - [ ] identify hubs using percentile threshold
-  - [ ] identify bottlenecks with high fan-in and high fan-out
-  - [ ] include package/module context for each hub
-- [ ] detect deep chains:
-  - [ ] find call/dependency chains longer than configured depth
-  - [ ] cap traversal depth and node count
-  - [ ] avoid infinite loops through cycle guard
-  - [ ] output deterministic chain path and complexity reason
-- [ ] add pattern tests:
-  - [ ] repeated chain grouping
-  - [ ] unused module candidate with blockers
-  - [ ] isolated component detection
-  - [ ] hub and bottleneck detection
-  - [ ] deep-chain detection with cycle guard
+- [x] detect duplicate or repeated graph patterns:
+  - [x] find repeated call chains with same ordered simple-name sequence
+  - [x] require minimum chain length from config
+  - [x] group repeated chains by normalized sequence
+  - [x] output files, qualified names, and edge evidence for each repeated chain
+  - [x] skip chains crossing ignored modules/files
+- [x] detect unused or isolated structures:
+  - [x] find unused modules with no inbound edges outside their own module
+  - [x] find isolated graph components with no incoming or outgoing external edges
+  - [x] find orphan nodes with no meaningful inbound references and no test adjacency
+  - [x] exclude entrypoints, tests, public APIs, and configured ignore patterns
+  - [x] include blockers that prevent safe removal
+- [x] detect high-centrality nodes:
+  - [x] compute degree centrality from fan-in and fan-out
+  - [x] identify hubs using percentile threshold
+  - [x] identify bottlenecks with high fan-in and high fan-out
+  - [x] include package/module context for each hub
+- [x] detect deep chains:
+  - [x] find call/dependency chains longer than configured depth
+  - [x] cap traversal depth and node count
+  - [x] avoid infinite loops through cycle guard
+  - [x] output deterministic chain path and complexity reason
+- [x] add pattern tests:
+  - [x] repeated chain grouping
+  - [x] unused module candidate with blockers
+  - [x] isolated component detection
+  - [x] hub and bottleneck detection
+  - [x] deep-chain detection with cycle guard
 
 Why:
 - pattern findings must separate actionable candidates from graph noise
@@ -339,36 +339,36 @@ Why:
 
 #### 29.7 Public surfaces and documentation
 
-- [ ] add CLI commands:
-  - [ ] `atlas insights architecture`
-  - [ ] `atlas insights metrics`
-  - [ ] `atlas insights risk <symbol>`
-  - [ ] `atlas insights patterns`
-  - [ ] `atlas insights large-functions`
-  - [ ] `atlas insights complex-functions`
-  - [ ] support `--json` on every insights command
-  - [ ] support `--limit` where findings can be large
-  - [ ] support `--config <path>` if existing commands support config override
-- [ ] add MCP tools or extend existing tool registry:
-  - [ ] expose architecture insights
-  - [ ] expose metrics insights
-  - [ ] expose risk assessment
-  - [ ] expose pattern detection
-  - [ ] expose `find_large_functions`
-  - [ ] expose complex-function filtering through the same tool or a dedicated `find_complex_functions` alias
-  - [ ] include freshness/provenance metadata in every response
-  - [ ] use compact default output with optional verbose details
-- [ ] document usage:
-  - [ ] update README or command reference for `atlas insights ...`
-  - [ ] update MCP tool docs
-  - [ ] update installed AGENTS instructions only if workflow changes
-  - [ ] document threshold config and layer config examples
-- [ ] add surface tests:
-  - [ ] CLI JSON schema snapshots
-  - [ ] MCP response snapshots
-  - [ ] CLI/MCP parity for representative reports
-  - [ ] config override behavior
-  - [ ] freshness/provenance included
+- [x] add CLI commands:
+  - [x] `atlas insights architecture`
+  - [x] `atlas insights metrics`
+  - [x] `atlas insights risk <symbol>`
+  - [x] `atlas insights patterns`
+  - [x] `atlas insights large-functions`
+  - [x] `atlas insights complex-functions`
+  - [x] support `--json` on every insights command
+  - [x] support `--limit` where findings can be large
+  - [x] support `--config <path>` if existing commands support config override (not applicable; no existing config override on these surfaces)
+- [x] add MCP tools or extend existing tool registry:
+  - [x] expose architecture insights
+  - [x] expose metrics insights
+  - [x] expose risk assessment
+  - [x] expose pattern detection
+  - [x] expose `find_large_functions`
+  - [x] expose complex-function filtering through the same tool or a dedicated `find_complex_functions` alias
+  - [x] include freshness/provenance metadata in every response
+  - [x] use compact default output with optional verbose details
+- [x] document usage:
+  - [x] update README or command reference for `atlas insights ...`
+  - [x] update MCP tool docs
+  - [x] update installed AGENTS instructions only if workflow changes (not needed; workflow unchanged)
+  - [x] document threshold config and layer config examples
+- [x] add surface tests:
+  - [x] CLI JSON schema snapshots
+  - [x] MCP response snapshots
+  - [x] CLI/MCP parity for representative reports
+  - [x] config override behavior
+  - [x] freshness/provenance included
 
 Why:
 - service logic is only useful when CLI and MCP expose the same deterministic behavior
@@ -2371,7 +2371,7 @@ Why:
 ## Additional Backlog
 
 - [ ] add canonical `docs/error_codes.md` file and make README, MCP responses, and tests reference that single error-code catalog
-- [ ] add generated `MCP_TOOLS.md` from tool registry and test/docs check that catches drift from hand-maintained tool tables
+- [x] add generated `MCP_TOOLS.md` from tool registry and test/docs check that catches drift from hand-maintained tool tables
 - [ ] add build/query/MCP metrics counters and histograms for build duration, parsed file count, parser cache reuse ratio, query latency by mode, and MCP tool call counts
 - [ ] add informational `cargo-llvm-cov` coverage task and CI job that reports coverage without gating merge
 - [ ] add `criterion` bench suites per crate for build, incremental update, query modes, context engine, and history reconstruction workloads

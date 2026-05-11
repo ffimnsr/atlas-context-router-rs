@@ -64,9 +64,7 @@ fn atlas_cli_v1_schemas_validate_live_outputs() {
         ("src/lib.rs", "pub fn helper() {}\n"),
     ]);
 
-    run_atlas(repo.path(), &["init"]);
     run_atlas(repo.path(), &["build"]);
-    run_atlas(docs_repo.path(), &["init"]);
     run_atlas(docs_repo.path(), &["build"]);
 
     assert_valid_against_schema("status.schema.json", "status", run_atlas(repo.path(), &["--json", "status"]));
@@ -136,6 +134,56 @@ fn atlas_cli_v1_schemas_validate_live_outputs() {
         run_atlas(
             repo.path(),
             &["--json", "explain-change", "--base", "HEAD", "--max-nodes", "4"],
+        ),
+    );
+    assert_valid_against_schema(
+        "insights-architecture.schema.json",
+        "insights_architecture",
+        run_atlas(repo.path(), &["--json", "insights", "architecture"]),
+    );
+    assert_valid_against_schema(
+        "insights-metrics.schema.json",
+        "insights_metrics",
+        run_atlas(repo.path(), &["--json", "insights", "metrics"]),
+    );
+    assert_valid_against_schema(
+        "insights-risk.schema.json",
+        "insights_risk",
+        run_atlas(repo.path(), &["--json", "insights", "risk", "src/lib.rs::fn::helper"]),
+    );
+    assert_valid_against_schema(
+        "insights-patterns.schema.json",
+        "insights_patterns",
+        run_atlas(repo.path(), &["--json", "insights", "patterns"]),
+    );
+    assert_valid_against_schema(
+        "insights-large-functions.schema.json",
+        "insights_large_functions",
+        run_atlas(
+            repo.path(),
+            &[
+                "--json",
+                "insights",
+                "large-functions",
+                "--threshold",
+                "5",
+                "--mode",
+                "large",
+            ],
+        ),
+    );
+    assert_valid_against_schema(
+        "insights-complex-functions.schema.json",
+        "insights_complex_functions",
+        run_atlas(
+            repo.path(),
+            &[
+                "--json",
+                "insights",
+                "complex-functions",
+                "--complexity-threshold",
+                "1",
+            ],
         ),
     );
 }

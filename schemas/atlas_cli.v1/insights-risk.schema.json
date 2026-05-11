@@ -1,0 +1,114 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://atlas-context-router-rs/schemas/atlas_cli.v1/insights-risk.schema.json",
+  "title": "atlas_cli.v1 insights_risk",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "command", "data"],
+  "properties": {
+    "schema_version": { "const": "atlas_cli.v1" },
+    "command": { "const": "insights_risk" },
+    "data": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["summary", "findings", "atlas_provenance"],
+      "properties": {
+        "summary": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["total_findings", "generated_at"],
+          "properties": {
+            "total_findings": { "type": "integer", "minimum": 0 },
+            "highest_severity": {
+              "type": ["string", "null"],
+              "enum": ["info", "low", "medium", "high", null]
+            },
+            "generated_at": { "type": "string" }
+          }
+        },
+        "findings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "title",
+              "severity",
+              "category",
+              "message",
+              "ranking_reason",
+              "score"
+            ],
+            "properties": {
+              "id": { "type": "string" },
+              "title": { "type": "string" },
+              "severity": {
+                "type": "string",
+                "enum": ["info", "low", "medium", "high"]
+              },
+              "category": { "type": "string" },
+              "message": { "type": "string" },
+              "evidence": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "file_path": { "type": "string" },
+                    "qualified_name": { "type": "string" },
+                    "node_kind": { "type": "string" },
+                    "edge_kind": { "type": "string" },
+                    "line_range": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["start_line", "end_line"],
+                      "properties": {
+                        "start_line": { "type": "integer", "minimum": 1 },
+                        "end_line": { "type": "integer", "minimum": 1 }
+                      }
+                    },
+                    "confidence_tier": { "type": "string" }
+                  }
+                }
+              },
+              "ranking_reason": { "type": "string" },
+              "details": {
+                "type": ["object", "null"],
+                "additionalProperties": true
+              },
+              "score": { "type": "number" }
+            }
+          }
+        },
+        "atlas_provenance": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["indexed_file_count"],
+          "properties": {
+            "indexed_file_count": { "type": "integer", "minimum": 0 },
+            "last_indexed_at": { "type": ["string", "null"] }
+          }
+        },
+        "atlas_freshness": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "required": [
+            "stale",
+            "changed_files",
+            "stale_result_files",
+            "warning",
+            "suggested_recovery"
+          ],
+          "properties": {
+            "stale": { "type": "boolean" },
+            "changed_files": { "type": "array", "items": { "type": "string" } },
+            "stale_result_files": { "type": "array", "items": { "type": "string" } },
+            "warning": { "type": "string" },
+            "suggested_recovery": { "type": "array", "items": { "type": "string" } }
+          }
+        }
+      }
+    }
+  }
+}

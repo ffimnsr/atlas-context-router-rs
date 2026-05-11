@@ -129,6 +129,19 @@ fn wiki_mcp_reference_tools_match_exported_registry() {
     );
 }
 
+#[test]
+fn generated_mcp_tools_markdown_matches_exported_registry() {
+    let path = repo_root().join("MCP_TOOLS.md");
+    let actual = fs::read_to_string(&path).unwrap_or_else(|err| {
+        panic!(
+            "read generated MCP tools file {} failed: {err}",
+            path.display()
+        )
+    });
+
+    assert_eq!(actual, atlas_mcp::tool_list_markdown());
+}
+
 fn instruction_section_tool_names() -> BTreeSet<String> {
     INSTRUCTIONS_SECTION
         .lines()

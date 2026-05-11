@@ -484,6 +484,44 @@ atlas --json install --platform claude
 - `.codex/config.toml` entry for Codex installs
 - `.git/hooks/*` for installed git hooks
 
+## Insights
+
+Atlas also exposes deterministic insight reports through CLI:
+
+```bash
+atlas insights architecture
+atlas insights metrics --limit 20
+atlas insights risk src/service.rs::fn::compute
+atlas insights patterns --limit 20
+atlas insights large-functions --threshold 80 --mode large-or-complex
+atlas insights complex-functions --complexity-threshold 15
+atlas --json insights metrics
+```
+
+Thresholds and layer rules live under `.atlas/config.toml`:
+
+```toml
+[insights]
+large_function_loc = 80
+high_fan_in = 20
+high_fan_out = 10
+high_coupling = 15
+deep_chain_length = 6
+repeated_call_chain_min_length = 3
+risk_medium_threshold = 35.0
+risk_high_threshold = 70.0
+
+[[insights.layer_rules]]
+name = "api"
+path_prefixes = ["src/api"]
+module_prefixes = []
+
+[[insights.layer_rules]]
+name = "domain"
+path_prefixes = ["src/domain"]
+module_prefixes = []
+```
+
 ## MCP Tools
 
 The MCP server (`atlas serve`) exposes these tools to agents:
@@ -507,10 +545,16 @@ The MCP server (`atlas serve`) exposes these tools to agents:
 | `debug_graph` | Graph internals: node/edge kinds, top files, and anomalies |
 | `explain_query` | Explain how `query_graph` will tokenize and execute a request |
 | `resolve_symbol` | Resolve a symbol or QN alias to canonical `qualified_name` |
+| `analyze_architecture` | Deterministic architecture report with cycles, layers, and coupling hotspots |
+| `analyze_metrics` | Deterministic metrics report with outliers and complexity hotspots |
+| `assess_risk` | Deterministic risk assessment for one symbol with factor evidence |
+| `analyze_patterns` | Deterministic pattern detection for repeated chains and isolated structures |
 | `analyze_safety` | Refactor-safety analysis with callers, fan-out, and test adjacency |
 | `analyze_remove` | Removal-impact analysis with bounded evidence |
 | `analyze_dead_code` | Dead-code candidate detection with certainty tiers and blockers |
 | `analyze_dependency` | Dependency-removal validation for a symbol |
+| `find_large_functions` | Deterministic large/complex function discovery with thresholds and ranked evidence |
+| `find_complex_functions` | Deterministic complex-function discovery with complexity thresholds |
 | `get_impact_radius` | Graph traversal from changed files |
 | `get_review_context` | Review bundle: symbols, neighbors, risk summary |
 | `get_context` | General context engine: symbol, file, review, impact |

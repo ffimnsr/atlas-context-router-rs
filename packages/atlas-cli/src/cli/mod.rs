@@ -8,7 +8,7 @@ mod tests;
 
 pub use subcommands::{
     AnalyzeCommand, CommunitiesCommand, ConfigCommand, FlowsCommand, HistoryCommand,
-    RefactorCommand, SessionCommand,
+    InsightsCommand, RefactorCommand, SessionCommand,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -539,6 +539,20 @@ pub enum Command {
         /// Compute the summary without recording lifecycle state.
         #[arg(long)]
         dry_run: bool,
+    },
+
+    /// Run deterministic graph-backed insight reports.
+    Insights {
+        #[command(subcommand)]
+        subcommand: InsightsCommand,
+
+        /// Allow insight generation on a stale graph; prints a freshness warning.
+        #[arg(long)]
+        allow_stale: bool,
+
+        /// Allow insight generation on a partial (degraded) graph.
+        #[arg(long)]
+        allow_partial: bool,
     },
 
     /// Analyse a symbol or the whole graph for removal impact, dead code, safety, or dependencies.

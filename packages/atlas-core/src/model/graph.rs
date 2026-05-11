@@ -151,7 +151,7 @@ pub struct GraphStats {
 /// Compact provenance snapshot attached to every MCP tool response (MCP7).
 ///
 /// Intentionally kept minimal: two SQL queries, no breakdown tables.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProvenanceMeta {
     pub indexed_file_count: i64,
     pub last_indexed_at: Option<String>,

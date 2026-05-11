@@ -1,15 +1,294 @@
 use anyhow::{Context, Result};
-use atlas_core::{BudgetManager, BudgetPolicy, BudgetStatus, NodeKind};
+use atlas_core::{
+    BudgetManager, BudgetPolicy, BudgetStatus, InsightFinding, InsightSummary, NodeKind,
+};
 use atlas_reasoning::{
-    AnalysisRankingPrimitives, AnalysisTrimmingPrimitives, ReasoningEngine,
-    sort_dead_code_candidates, sort_dependency_result, sort_refactor_safety_result,
-    sort_removal_result,
+    AnalysisRankingPrimitives, AnalysisTrimmingPrimitives, InsightsEngine, LargeFunctionMode,
+    LargeFunctionRequest, ReasoningEngine, RiskAssessmentTarget, sort_dead_code_candidates,
+    sort_dependency_result, sort_refactor_safety_result, sort_removal_result,
 };
 
 use super::shared::{
     bool_arg, inject_budget_metadata, open_store, str_arg, string_array_arg, tool_result_value,
     u64_arg,
 };
+
+fn apply_finding_limit(
+    findings: &mut Vec<InsightFinding>,
+    summary: &mut InsightSummary,
+    limit: Option<usize>,
+) {
+    if let Some(limit) = limit {
+        *findings = std::mem::take(findings).into_iter().take(limit).collect();
+        summary.total_findings = findings.len();
+        summary.highest_severity = findings.iter().map(|finding| finding.severity).max();
+    }
+}
+
+fn report_files(findings: &[InsightFinding]) -> Vec<String> {
+    findings
+        .iter()
+        .flat_map(|finding| finding.evidence.iter())
+        .filter_map(|evidence| evidence.file_path.clone())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn insight_report_response<T: serde::Serialize>(
+    full_payload: &T,
+    compact_payload: serde_json::Value,
+    output_format: crate::output::OutputFormat,
+    verbose: bool,
+) -> Result<serde_json::Value> {
+    if output_format == crate::output::OutputFormat::Json || verbose {
+        tool_result_value(full_payload, output_format)
+    } else {
+        tool_result_value(&compact_payload, output_format)
+    }
+}
+
+pub(super) fn tool_analyze_architecture(
+    args: Option<&serde_json::Value>,
+    repo_root: &str,
+    db_path: &str,
+    output_format: crate::output::OutputFormat,
+) -> Result<serde_json::Value> {
+    let limit = u64_arg(args, "limit").map(|value| value as usize);
+    let verbose = bool_arg(args, "verbose").unwrap_or(false);
+    let store = open_store(db_path)?;
+    let config =
+        atlas_engine::Config::load(&atlas_engine::paths::atlas_dir(repo_root)).unwrap_or_default();
+    let engine = InsightsEngine::new(&store, config.insights.clone())
+        .context("cannot initialize insights engine")?;
+    let mut analysis = engine
+        .analyze_architecture(repo_root)
+        .context("architecture analysis failed")?;
+    apply_finding_limit(
+        &mut analysis.report.findings,
+        &mut analysis.report.summary,
+        limit,
+    );
+
+    let compact = serde_json::json!({
+        "summary": analysis.report.summary.clone(),
+        "top_findings": analysis.report.findings.clone(),
+        "module_count": analysis.modules.len(),
+        "module_edge_count": analysis.edges.len(),
+    });
+    let mut response = insight_report_response(&analysis.report, compact, output_format, verbose)?;
+    response["atlas_result_kind"] = serde_json::json!("architecture_report");
+    response["atlas_result_count"] = serde_json::json!(analysis.report.summary.total_findings);
+    response["atlas_result_files"] = serde_json::json!(report_files(&analysis.report.findings));
+    Ok(response)
+}
+
+pub(super) fn tool_analyze_metrics(
+    args: Option<&serde_json::Value>,
+    repo_root: &str,
+    db_path: &str,
+    output_format: crate::output::OutputFormat,
+) -> Result<serde_json::Value> {
+    let limit = u64_arg(args, "limit").map(|value| value as usize);
+    let verbose = bool_arg(args, "verbose").unwrap_or(false);
+    let store = open_store(db_path)?;
+    let config =
+        atlas_engine::Config::load(&atlas_engine::paths::atlas_dir(repo_root)).unwrap_or_default();
+    let engine = InsightsEngine::new(&store, config.insights.clone())
+        .context("cannot initialize insights engine")?;
+    let mut analysis = engine
+        .analyze_metrics(repo_root)
+        .context("metrics analysis failed")?;
+    apply_finding_limit(
+        &mut analysis.report.findings,
+        &mut analysis.report.summary,
+        limit,
+    );
+
+    let compact = serde_json::json!({
+        "summary": analysis.report.summary.clone(),
+        "top_findings": analysis.report.findings.clone(),
+        "node_metric_count": analysis.metrics.node_metrics.len(),
+        "file_metric_count": analysis.metrics.file_metrics.len(),
+        "module_metric_count": analysis.metrics.module_metrics.len(),
+    });
+    let mut response = insight_report_response(&analysis.report, compact, output_format, verbose)?;
+    response["atlas_result_kind"] = serde_json::json!("metrics_report");
+    response["atlas_result_count"] = serde_json::json!(analysis.report.summary.total_findings);
+    response["atlas_result_files"] = serde_json::json!(report_files(&analysis.report.findings));
+    Ok(response)
+}
+
+pub(super) fn tool_assess_risk(
+    args: Option<&serde_json::Value>,
+    repo_root: &str,
+    db_path: &str,
+    output_format: crate::output::OutputFormat,
+) -> Result<serde_json::Value> {
+    let symbol = str_arg(args, "symbol")?
+        .ok_or_else(|| anyhow::anyhow!("assess_risk requires 'symbol'"))?
+        .to_owned();
+    let verbose = bool_arg(args, "verbose").unwrap_or(false);
+    let store = open_store(db_path)?;
+    let config =
+        atlas_engine::Config::load(&atlas_engine::paths::atlas_dir(repo_root)).unwrap_or_default();
+    let engine = InsightsEngine::new(&store, config.insights.clone())
+        .context("cannot initialize insights engine")?;
+    let analysis = engine
+        .assess_risk(
+            repo_root,
+            RiskAssessmentTarget::Symbol {
+                symbol: symbol.clone(),
+            },
+        )
+        .with_context(|| format!("risk assessment failed for `{symbol}`"))?;
+
+    let compact = serde_json::json!({
+        "target": analysis.target.qualified_name,
+        "score": analysis.score,
+        "classification": analysis.classification,
+        "summary": analysis.report.summary.clone(),
+        "top_findings": analysis.report.findings.clone(),
+        "top_factors": analysis.factor_contributions.iter().take(5).collect::<Vec<_>>(),
+    });
+    let mut response = insight_report_response(&analysis.report, compact, output_format, verbose)?;
+    response["atlas_result_kind"] = serde_json::json!("risk_report");
+    response["atlas_result_count"] = serde_json::json!(analysis.report.summary.total_findings);
+    response["atlas_result_files"] = serde_json::json!(report_files(&analysis.report.findings));
+    Ok(response)
+}
+
+pub(super) fn tool_analyze_patterns(
+    args: Option<&serde_json::Value>,
+    repo_root: &str,
+    db_path: &str,
+    output_format: crate::output::OutputFormat,
+) -> Result<serde_json::Value> {
+    let limit = u64_arg(args, "limit").map(|value| value as usize);
+    let verbose = bool_arg(args, "verbose").unwrap_or(false);
+    let store = open_store(db_path)?;
+    let config =
+        atlas_engine::Config::load(&atlas_engine::paths::atlas_dir(repo_root)).unwrap_or_default();
+    let engine = InsightsEngine::new(&store, config.insights.clone())
+        .context("cannot initialize insights engine")?;
+    let mut report = engine
+        .analyze_patterns()
+        .context("pattern analysis failed")?;
+    apply_finding_limit(&mut report.findings, &mut report.summary, limit);
+
+    let compact = serde_json::json!({
+        "summary": report.summary.clone(),
+        "top_findings": report.findings.clone(),
+    });
+    let mut response = insight_report_response(&report, compact, output_format, verbose)?;
+    response["atlas_result_kind"] = serde_json::json!("pattern_report");
+    response["atlas_result_count"] = serde_json::json!(report.summary.total_findings);
+    response["atlas_result_files"] = serde_json::json!(report_files(&report.findings));
+    Ok(response)
+}
+
+fn tool_find_large_functions_impl(
+    args: Option<&serde_json::Value>,
+    repo_root: &str,
+    db_path: &str,
+    output_format: crate::output::OutputFormat,
+    forced_mode: Option<LargeFunctionMode>,
+    result_kind: &str,
+) -> Result<serde_json::Value> {
+    let files = string_array_arg(args, "files")?;
+    let threshold = u64_arg(args, "threshold").map(|value| value as usize);
+    let complexity_threshold = u64_arg(args, "complexity_threshold").map(|value| value as usize);
+    let cognitive_threshold = u64_arg(args, "cognitive_threshold").map(|value| value as usize);
+    let nesting_threshold = u64_arg(args, "nesting_threshold").map(|value| value as usize);
+    let limit = u64_arg(args, "limit").map(|value| value as usize);
+    let include_tests = bool_arg(args, "include_tests").unwrap_or(false);
+    let verbose = bool_arg(args, "verbose").unwrap_or(false);
+    let mode = match forced_mode {
+        Some(mode) => mode,
+        None => match str_arg(args, "mode")?.unwrap_or("large-or-complex") {
+            "large" => LargeFunctionMode::Large,
+            "complex" => LargeFunctionMode::Complex,
+            "large-or-complex" => LargeFunctionMode::LargeOrComplex,
+            other => {
+                anyhow::bail!(
+                    "find_large_functions unsupported mode '{other}'; expected 'large', 'complex', or 'large-or-complex'"
+                )
+            }
+        },
+    };
+
+    let store = open_store(db_path)?;
+    let config =
+        atlas_engine::Config::load(&atlas_engine::paths::atlas_dir(repo_root)).unwrap_or_default();
+    let engine = InsightsEngine::new(&store, config.insights.clone())
+        .context("cannot initialize insights engine")?;
+    let analysis = engine
+        .find_large_functions(
+            repo_root,
+            LargeFunctionRequest {
+                files: (!files.is_empty()).then_some(files),
+                changed_files: None,
+                threshold,
+                complexity_threshold,
+                cognitive_threshold,
+                nesting_threshold,
+                mode,
+                limit,
+                include_tests,
+            },
+        )
+        .context("large-function analysis failed")?;
+
+    let compact = serde_json::json!({
+        "summary": analysis.report.summary.clone(),
+        "top_findings": analysis.candidates.clone(),
+    });
+    let mut response = insight_report_response(&analysis.report, compact, output_format, verbose)?;
+    response["atlas_result_kind"] = serde_json::json!(result_kind);
+    response["atlas_result_count"] = serde_json::json!(analysis.report.summary.total_findings);
+    response["atlas_result_files"] = serde_json::json!(
+        analysis
+            .candidates
+            .iter()
+            .map(|candidate| candidate.file_path.clone())
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>()
+    );
+    Ok(response)
+}
+
+pub(super) fn tool_find_large_functions(
+    args: Option<&serde_json::Value>,
+    repo_root: &str,
+    db_path: &str,
+    output_format: crate::output::OutputFormat,
+) -> Result<serde_json::Value> {
+    tool_find_large_functions_impl(
+        args,
+        repo_root,
+        db_path,
+        output_format,
+        None,
+        "large_function_report",
+    )
+}
+
+pub(super) fn tool_find_complex_functions(
+    args: Option<&serde_json::Value>,
+    repo_root: &str,
+    db_path: &str,
+    output_format: crate::output::OutputFormat,
+) -> Result<serde_json::Value> {
+    tool_find_large_functions_impl(
+        args,
+        repo_root,
+        db_path,
+        output_format,
+        Some(LargeFunctionMode::Complex),
+        "complex_function_report",
+    )
+}
 
 pub(super) fn tool_analyze_safety(
     args: Option<&serde_json::Value>,

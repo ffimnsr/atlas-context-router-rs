@@ -72,6 +72,7 @@ fn run_cli() -> anyhow::Result<()> {
         Command::Flows { .. } => commands::run_flows(&cli),
         Command::Communities { .. } => commands::run_communities(&cli),
         Command::Postprocess { .. } => commands::run_postprocess(&cli),
+        Command::Insights { .. } => commands::run_insights(&cli),
         Command::Session { .. } => commands::run_session(&cli),
         Command::Hook { .. } => commands::run_hook(&cli),
         Command::History { .. } => commands::run_history(&cli),

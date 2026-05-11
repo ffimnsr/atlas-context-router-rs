@@ -15,6 +15,12 @@ const TOOL_REGISTRY_SNAPSHOT: &[&str] = &[
     "get_minimal_context",
     "explain_change",
     "get_context",
+    "analyze_architecture",
+    "analyze_metrics",
+    "assess_risk",
+    "analyze_patterns",
+    "find_large_functions",
+    "find_complex_functions",
     "get_session_status",
     "compact_session",
     "resume_session",
@@ -87,6 +93,18 @@ fn parity_args(tool_name: &str, source_id: &str) -> Value {
         "get_minimal_context" => json!({ "working_tree": true, "output_format": "json" }),
         "explain_change" => json!({ "files": ["src/service.rs"], "output_format": "json" }),
         "get_context" => json!({ "query": "compute", "output_format": "json" }),
+        "analyze_architecture" => json!({ "output_format": "json" }),
+        "analyze_metrics" => json!({ "output_format": "json" }),
+        "assess_risk" => {
+            json!({ "symbol": "src/service.rs::fn::compute", "output_format": "json" })
+        }
+        "analyze_patterns" => json!({ "output_format": "json" }),
+        "find_large_functions" => {
+            json!({ "threshold": 2, "mode": "large", "output_format": "json" })
+        }
+        "find_complex_functions" => {
+            json!({ "complexity_threshold": 1, "output_format": "json" })
+        }
         "get_session_status" => json!({ "output_format": "json" }),
         "compact_session" => json!({ "output_format": "json" }),
         "resume_session" => json!({ "mark_consumed": false, "output_format": "json" }),
@@ -340,10 +358,16 @@ fn search_content_invalid_regex_returns_strict_guidance() {
 }
 
 #[test]
-fn tool_list_includes_analysis_tools() {
+fn tool_list_includes_analysis_and_insight_tools() {
     let list = tool_list();
     let tools = list.get("tools").and_then(|t| t.as_array()).unwrap();
     for name in &[
+        "analyze_architecture",
+        "analyze_metrics",
+        "assess_risk",
+        "analyze_patterns",
+        "find_large_functions",
+        "find_complex_functions",
         "analyze_safety",
         "analyze_remove",
         "analyze_dead_code",

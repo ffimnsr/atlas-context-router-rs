@@ -19,6 +19,12 @@
 //! | `get_minimal_context`     | Compact auto-detected review context                     |
 //! | `explain_change`          | Advanced impact: risk, change kinds, boundary/test gaps  |
 //! | `get_session_status`      | CM7: current session identity and event count            |
+//! | `analyze_architecture`    | Deterministic architecture report: cycles, layers, coupling |
+//! | `analyze_metrics`         | Deterministic metrics report: outliers and hotspots      |
+//! | `assess_risk`             | Deterministic risk assessment for one symbol             |
+//! | `analyze_patterns`        | Deterministic pattern detection for graph structures     |
+//! | `find_large_functions`    | Ranked large/complex function discovery                  |
+//! | `find_complex_functions`  | Ranked complex-function discovery                        |
 //! | `compact_session`         | CM10: compact event ledger; merge, decay, dedup, promote |
 //! | `resume_session`          | CM7: retrieve and consume the resume snapshot            |
 //! | `search_saved_context`    | CM7: FTS + trigram search over saved artifacts           |
@@ -70,7 +76,7 @@ mod transport;
 pub mod transport_http;
 
 pub use tools::health::mark_server_started;
-pub use tools::tool_list;
+pub use tools::{tool_list, tool_list_markdown};
 pub use transport::{
     MCP_PROTOCOL_VERSION, ServerOptions, run_server, run_server_with_options,
     run_socket_server_with_options,

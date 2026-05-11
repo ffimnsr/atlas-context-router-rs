@@ -12,6 +12,7 @@ mod determinism;
 mod docs_section;
 mod health;
 mod history;
+mod insights;
 mod hooks;
 mod postprocess;
 mod query;
