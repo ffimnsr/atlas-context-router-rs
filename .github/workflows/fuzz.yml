@@ -1,0 +1,64 @@
+name: Fuzz
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fuzz-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fuzz:
+    name: Fuzz (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - parser_handlers
+          - language_parsers
+          - regex_sql_udf
+          - tree_cache_stateful
+          - update_graph_sequence
+          - parser_invariants
+          - ast_helpers_walk
+          - refactor_parse_validation
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Install Rust nightly toolchain
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: atlas-fuzz-${{ runner.os }}-nightly
+          cache-on-failure: "true"
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+
+      - name: Run fuzz target
+        working-directory: fuzz
+        env:
+          CARGO_TERM_COLOR: always
+        run: |
+          extra_args=()
+          if [ "${{ matrix.target }}" = "regex_sql_udf" ]; then
+            extra_args+=(-dict=regex.dict)
+          fi
+
+          cargo +nightly fuzz run "${{ matrix.target }}" -- -max_total_time=60 "${extra_args[@]}"
