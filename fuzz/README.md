@@ -29,6 +29,9 @@ cd fuzz
 cargo +nightly fuzz build parser_handlers
 ```
 
+`cargo install cargo-fuzz --locked` is intentionally avoided because older locked
+transitive `rustix` versions fail on current nightly toolchains.
+
 Committed seed corpus:
 
 - parser-centric targets consume fixture-derived seed files under `fuzz/corpus/`
