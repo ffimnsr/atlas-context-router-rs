@@ -1,1 +1,2 @@
 ignore = ["packages/atlas-parser/tests/fixtures"]
+style_edition = "2024"
