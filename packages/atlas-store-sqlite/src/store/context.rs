@@ -446,6 +446,7 @@ impl Store {
              WHERE n.is_test = 0
                AND n.kind IN ('function','method','class','struct','enum',
                               'trait','interface','constant','variable')
+               AND n.language NOT IN ('toml','json','markdown','html','css')
                AND NOT (
                    COALESCE(n.modifiers,'') LIKE '%pub%'
                    OR COALESCE(n.modifiers,'') LIKE '%export%'

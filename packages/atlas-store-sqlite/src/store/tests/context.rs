@@ -378,3 +378,61 @@ fn test_neighbors_missing_node_returns_empty() {
     let neighbors = store.test_neighbors("no::test::here", 10).unwrap();
     assert!(neighbors.is_empty());
 }
+
+// --- dead_code_candidates_filtered ----------------------------------------
+
+#[test]
+fn dead_code_excludes_non_code_language_nodes() {
+    let mut store = open_in_memory();
+    // Private Rust function — no inbound edges: should appear as dead-code.
+    let rust_fn = make_node(
+        NodeKind::Function,
+        "unused_fn",
+        "src/lib.rs::fn::unused_fn",
+        "src/lib.rs",
+        "rust",
+    );
+    // TOML variable with no inbound edges: must NOT appear.
+    let toml_var = make_node(
+        NodeKind::Variable,
+        "workspace.members",
+        "Cargo.toml::key::workspace.members",
+        "Cargo.toml",
+        "toml",
+    );
+    // Markdown variable with no inbound edges: must NOT appear.
+    let md_var = make_node(
+        NodeKind::Variable,
+        "code::1",
+        "README.md::code::1",
+        "README.md",
+        "markdown",
+    );
+    store
+        .replace_file_graph("src/lib.rs", "h1", Some("rust"), None, &[rust_fn], &[])
+        .unwrap();
+    store
+        .replace_file_graph("Cargo.toml", "h2", Some("toml"), None, &[toml_var], &[])
+        .unwrap();
+    store
+        .replace_file_graph("README.md", "h3", Some("markdown"), None, &[md_var], &[])
+        .unwrap();
+
+    let candidates = store.dead_code_candidates(100).unwrap();
+    let qnames: Vec<&str> = candidates
+        .iter()
+        .map(|n| n.qualified_name.as_str())
+        .collect();
+    assert!(
+        qnames.contains(&"src/lib.rs::fn::unused_fn"),
+        "rust fn must be a dead-code candidate"
+    );
+    assert!(
+        !qnames.contains(&"Cargo.toml::key::workspace.members"),
+        "toml variable must not appear in dead-code"
+    );
+    assert!(
+        !qnames.contains(&"README.md::code::1"),
+        "markdown variable must not appear in dead-code"
+    );
+}

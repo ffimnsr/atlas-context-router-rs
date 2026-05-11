@@ -121,9 +121,10 @@ jobs_json_file="$tmp_dir/jobs.json"
 selection_file="$tmp_dir/selection.tsv"
 
 gh api -H 'Accept: application/vnd.github+json' "repos/$repo/actions/runs/$run_id" >"$run_json_file"
-gh api -H 'Accept: application/vnd.github+json' "repos/$repo/actions/runs/$run_id/jobs?per_page=100" >"$jobs_json_file"
+gh api -H 'Accept: application/vnd.github+json' --paginate "repos/$repo/actions/runs/$run_id/jobs?per_page=100" \
+  --jq '.jobs[]' | python3 -c 'import sys,json; jobs=[json.loads(l) for l in sys.stdin]; print(json.dumps({"jobs":jobs}))' >"$jobs_json_file"
 
-python3 - "$run_json_file" "$jobs_json_file" "$failed_only" "$selection_file" "${requested_jobs[@]}" <<'PY'
+python3 - "$run_json_file" "$jobs_json_file" "$failed_only" "$selection_file" "${requested_jobs[@]+"${requested_jobs[@]}"}" <<'PY'
 import json
 import re
 import sys
@@ -195,7 +196,12 @@ while IFS=$'\t' read -r kind col1 col2 col3 col4 col5; do
       job_slug="$col4"
       job_name="$col5"
       destination="$out_dir/${job_id}-${job_slug}.log"
-      gh api -H 'Accept: application/vnd.github+json' "repos/$repo/actions/jobs/$job_id/logs" >"$destination"
+      if ! gh api -H 'Accept: application/vnd.github+json' "repos/$repo/actions/jobs/$job_id/logs" >"$destination" 2>"$tmp_dir/log_err_${job_id}"; then
+        err_msg="$(cat "$tmp_dir/log_err_${job_id}" 2>/dev/null || true)"
+        printf 'warning: skipping job %s (%s): %s\n' "$job_id" "$job_name" "$err_msg" >&2
+        rm -f "$destination"
+        continue
+      fi
       bytes_written="$(wc -c <"$destination" | tr -d '[:space:]')"
       downloaded_rows+=("$job_id|$job_status|$job_conclusion|$bytes_written|$destination|$job_name")
       downloaded_count=$((downloaded_count + 1))
