@@ -60,6 +60,7 @@ For active backlog, see ISSUES.md.
 
 ## CLI and MCP Interfaces
 
+- Product baseline is implemented with binary name `atlas`, hidden work dir `.atlas/`, graph DB path `.atlas/worldtree.db`, and config path `.atlas/config.toml`.
 - CLI command surfaces are implemented for init, build, update, detect-changes, status, query, impact, review-context, context, doctor, db-check, debug-style diagnostics, reasoning, refactor, install, and serve workflows.
 - MCP tool registry is implemented for graph queries, traversal, review/impact/context flows, health/debug tools, saved-context tools, content/file search tools, and reasoning analysis tools.
 - Docs-section lookup parity is implemented through shared CLI and MCP surfaces with heading-path or line-based resolution, bounded section excerpts, truncation metadata, and parity-tested not-found behavior.
@@ -96,6 +97,35 @@ For active backlog, see ISSUES.md.
 - Repo-scoped MCP backend brokering is implemented without breaking stdio compatibility.
 - Hook policy ownership, bounded payload routing, freshness handling, and review-refresh artifact flows are implemented.
 
+## Retrieval and Content Sidecar Hardening
+
+- Retrieval/content indexing lifecycle state is implemented with explicit indexing/indexed/index-failed states, persisted status metadata, searchable-now source of truth, CLI/MCP status surfaces, and interrupted-index recovery behavior.
+- Retrieval indexing guardrails are implemented with configurable retrieval and embedding batch sizes, hard caps for chunks per run and per file, oversized-run policy, indexing metrics, and regression coverage for chunk explosion and partial recovery.
+- Embedding dimension registry and freeze rules are implemented with provider/model/dimension metadata, frozen active index dimensions, insert/search mismatch rejection, cached dimension discovery, diagnostics, and provider-switch tests.
+- Stable content-derived chunk identity is implemented through `chunk_id` use for dedupe, chunk reuse, retrieval cache keys, and saved-context references, with tests for stable and changed content identity.
+- Retrieval/token-efficiency evaluation is implemented with recall/MRR/exact-hit metrics, retrieved/emitted token tracking, tool-call counts, graph-only versus retrieval benchmarks, fixed-budget evaluation, and acceptance thresholds before hybrid retrieval defaults.
+- Embedding configuration is implemented in `.atlas/config.toml` for `atlas-search` URL and model settings instead of relying on `ATLAS_EMBED_URL` and related environment getters.
+- Graph/content companion lookup is implemented as a coordinated retrieval contract: graph for structural code facts, content for non-code and context-adjacent assets, saved context for prior Atlas outputs, and context engine merging under one bounded selection, ranking, evidence, and truncation policy.
+- Mixed graph/content ranking evidence is implemented with source-kind envelopes, normalized signals across graph/content/session assets, selection reasons, truncation metadata, and prompt/MCP/installed-instruction wording that requires graph-first companion lookup.
+- `search_content` invalid-regex handling is strict and agent-friendly, returning clear errors with escaped-regex or literal-search guidance instead of silently falling back.
+
+## Parser Fuzz and Validation Hardening
+
+- Stateful `TreeCache` fuzz coverage is implemented for parse, reparse-with-old-tree, insert, remove, evict, rename-key, delete/rename transitions, and old-tree reuse with changed bytes.
+- Engine update-flow fuzz coverage is implemented against temp git repos and temp SQLite databases for add/modify/delete/rename sequences, supported and unsupported paths, working-tree diff mode, explicit file-list mode, old-tree reuse, and deleted-file cleanup.
+- Parser output invariant fuzzing is implemented across all built-in language handlers, asserting file-node presence, path consistency, non-empty node/edge identities, valid line spans, and size consistency.
+- AST helper fuzzing is implemented across built-in grammars, walking arbitrary parse trees and exercising `node_text`, line helpers, ancestor checks, common field lookups, and `find_all` without panics on malformed or invalid UTF-8 input.
+- Refactor validation parser-reuse fuzzing is implemented for supported/unsupported paths, empty files, malformed supported-language content, and UTF-8-safe validation diagnostics.
+- Parser fuzz corpora and dictionaries are seeded from parser fixtures and regex samples, with README/toolchain documentation and corpus refresh commands.
+
+## SQLite Store Concurrency Contract
+
+- Canonical SQLite ownership policy is documented and implemented across Atlas stores: each store owns one `rusqlite::Connection`, store structs are thread-confined, concurrent DB access uses separate connections, and current write behavior remains single-owner per store instance.
+- Store, content-store, session-store, and DB utility docs consistently describe single-connection-per-store ownership, WAL behavior across separate connections, and why graph DB opens with `SQLITE_OPEN_NO_MUTEX` under thread confinement.
+- Engine build/update boundaries keep Rayon parse work separate from sequential SQLite write/update phases, with regression coverage and trait-bound checks preventing store types from becoming `Send` or `Sync`.
+- Shared-connection wrappers such as `Arc<Mutex<Connection>>` or `RwLock<Connection>` are explicitly rejected for Atlas store concurrency.
+- Future read concurrency is documented as separate checked-out connections only; read pooling remains a measured, default-off follow-up rather than current behavior.
+
 ## Still Open
 
-- Insights (Phase 29), multi-repo federation (Phase 30.1), advanced features (Phase 30.2, Phase 31), large-function parity, corruption recovery, runtime enrichment, and several retrieval/context follow-up patches remain in ISSUES.md.
+- Insights (Phase 29), multi-repo federation (Phase 30.1), advanced features (Phase 30.2, Phase 31), retrieval follow-ups, large-function parity, corruption recovery, runtime enrichment, context escalation, dynamic agent policy, Rust parser query migration, shared parser query migration, Rust reachability, and measured SQLite read pooling remain in ISSUES.md.

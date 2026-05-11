@@ -39,20 +39,7 @@ For terms that are easy to misread in this document:
 
 ## Product Name and CLI
 
-- [x] Use binary name: `atlas`
-- [x] Use hidden work dir: `.atlas/`
-- [x] Use DB path: `.atlas/worldtree.db`
-- [x] Use config path: `.atlas/config.toml`
-- [x] Use CLI commands:
-  - [x] `atlas init`
-  - [x] `atlas build`
-  - [x] `atlas update`
-  - [x] `atlas detect-changes`
-  - [x] `atlas status`
-  - [x] `atlas query`
-  - [x] `atlas impact`
-  - [x] `atlas review-context`
-  - [x] `atlas serve` (later, MCP/stdin or JSON-RPC style)
+Product Name and CLI baseline is shipped. See SHIPPED.md for details.
 
 ---
 
@@ -60,12 +47,12 @@ For terms that are easy to misread in this document:
 
 - Part III. Remaining product expansion roadmap: Phases 29 through 31
 - Part IV. Remaining context continuity roadmap: Phases CM12, CM14, and CM15, plus ICM-inspired memory follow-on roadmap
-- Part V. Remaining focused follow-up patches: Retrieval Follow-Up Patch, Graph/Content Companion Patch, Parity Surface Patch, Runtime Event Enrichment and Graph Linking Patch, Context Escalation Contract Patch, Graph Store Corruption Recovery Patch, SQLite Connection Concurrency Policy Patch
+- Part V. Remaining focused follow-up patches: Retrieval Follow-Up Patch, Runtime Event Enrichment and Graph Linking Patch, Context Escalation Contract Patch, Graph Store Corruption Recovery Patch, SQLite Connection Concurrency Policy Patch
 
 ## Cross-Cutting Track Map
 
 - Historical and analytics work: Phase 17, Phase 29, Phase 30, Phase 31
-- Retrieval and search follow-ups: Retrieval Follow-Up Patch, Graph/Content Companion Patch, Parity Surface Patch
+- Retrieval and search follow-ups: Retrieval Follow-Up Patch
 - Context continuity and runtime memory: Phase CM12, Phase CM14, Phase CM15, ICM-inspired memory follow-on roadmap, Runtime Event Enrichment and Graph Linking Patch
 - Graph safety and workflow: Context Escalation Contract Patch, Graph Store Corruption Recovery Patch, SQLite Connection Concurrency Policy Patch
 
@@ -85,118 +72,325 @@ These phases extend v1 after core graph/build/update/query path is reliable.
 
 Deterministic analytics layer on top of graph + stored metadata. Produce explainable architecture insights, metrics, risk assessments, pattern detection. No LLM dependency.
 
-#### 29.1 Architecture analysis
+Implement Phase 29 in patch order. Do not start later patches until the preceding report types, metrics, and deterministic ranking helpers exist. Keep this layer read-only over graph/content/session stores; do not add new graph schema unless a later item explicitly says so.
 
-- [ ] build module-level graph
-- [ ] detect strongly connected components (SCC)
-- [ ] identify cyclic dependencies
-- [ ] classify cycles (`local` vs `cross-module`)
-- [ ] output cycle paths
-- [ ] define configurable layer rules
-- [ ] map files/modules to layers
-- [ ] detect invalid edges
-- [ ] output layer violations
-- [ ] compute coupling score per module
-- [ ] detect high-coupling modules
-- [ ] detect tightly coupled clusters
-- [ ] compute nodes per file
-- [ ] compute edges per file
-- [ ] flag large/highly connected files
+#### 29.1 Insights engine foundation
 
-#### 29.2 Code health metrics
-
-- [ ] node-level metrics:
-  - [ ] fan-in
-  - [ ] fan-out
-  - [ ] dependency depth
-  - [ ] reference count
-  - [ ] test adjacency
-- [ ] file-level metrics:
-  - [ ] node count
-  - [ ] edge count
-  - [ ] average fan-in/out
-  - [ ] import count
-  - [ ] test coverage ratio
-- [ ] module-level metrics:
-  - [ ] internal vs external dependencies
-  - [ ] coupling score
-  - [ ] cohesion approximation
-- [ ] compute percentiles
-- [ ] detect outliers
-
-#### 29.3 Risk assessment engine
-
-- [ ] score from inputs:
-  - [ ] public API
-  - [ ] fan-in/out
-  - [ ] cross-module dependencies
-  - [ ] test adjacency
-  - [ ] depth
-  - [ ] unresolved edges
-- [ ] implement weighted formula
-- [ ] normalize to `0–100`
-- [ ] classify `low` / `medium` / `high`
-- [ ] output:
-  - [ ] factors list
-  - [ ] evidence nodes/edges
-
-#### 29.4 Pattern detection
-
-- [ ] duplicate patterns:
-  - [ ] repeated call chains
-  - [ ] similar subgraphs
-- [ ] unused structures:
-  - [ ] unused modules
-  - [ ] isolated graphs
-  - [ ] orphan nodes
-- [ ] high centrality:
-  - [ ] compute centrality
-  - [ ] find hubs
-  - [ ] find bottlenecks
-- [ ] deep chains:
-  - [ ] detect long call chains
-  - [ ] flag complexity
-
-#### 29.5 APIs, outputs, CLI, config, tests
-
-- [ ] create `InsightsEngine`
-- [ ] implement:
-  - [ ] `analyze_architecture()`
-  - [ ] `compute_metrics()`
-  - [ ] `assess_risk()`
-  - [ ] `detect_patterns()`
-  - [ ] `find_cycles()`
-- [ ] define:
+- [ ] create `InsightsEngine` service:
+  - [ ] place service in engine or reasoning crate only after checking existing analysis service boundaries
+  - [ ] accept read-only graph/store handles or already-loaded graph summaries
+  - [ ] return deterministic report structs without writing to SQLite
+  - [ ] reuse existing ranking/truncation helpers before adding new ones
+  - [ ] reuse existing freshness/provenance metadata shape from graph/context tools
+- [ ] define shared report primitives:
+  - [ ] `InsightSummary` with total findings, highest severity, and generated-at metadata
+  - [ ] `InsightFinding` with `id`, `title`, `severity`, `category`, `message`, `evidence`, and `ranking_reason`
+  - [ ] `InsightEvidence` with file path, qualified name, node kind, edge kind, line range, and confidence tier when available
+  - [ ] deterministic severity values: `info`, `low`, `medium`, `high`
+  - [ ] deterministic sort order: severity desc, score desc, file path asc, line asc, qualified name asc
+- [ ] define top-level reports:
   - [ ] `ArchitectureReport`
   - [ ] `MetricsReport`
   - [ ] `RiskReport`
   - [ ] `PatternReport`
-- [ ] ensure each report includes:
-  - [ ] summary
-  - [ ] detailed findings
-  - [ ] evidence
-- [ ] CLI:
+  - [ ] `LargeFunctionReport`
+- [ ] define config surface:
+  - [ ] add insights thresholds under `.atlas/config.toml`
+  - [ ] include defaults for large-function LOC, high fan-in, high fan-out, high coupling, deep chain length, and max findings
+  - [ ] include defaults for high cyclomatic complexity, high cognitive complexity, max nesting depth, and branch count
+  - [ ] include ignore lists for files, modules, and node kinds
+  - [ ] include optional layer rules for architecture validation
+  - [ ] validate thresholds are positive and fail with actionable config errors
+- [ ] add foundation tests:
+  - [ ] report sorting is stable
+  - [ ] severity ordering is stable
+  - [ ] invalid threshold config fails clearly
+  - [ ] ignored files/modules are excluded from findings
+  - [ ] report JSON shape is stable
+
+Why:
+- every later insight needs same evidence, severity, ranking, and config contract
+- shared primitives prevent one-off report formats across CLI and MCP
+
+#### 29.2 Code health metrics engine
+
+- [ ] implement node-level metric collection:
+  - [ ] compute fan-in from inbound graph edges by node qualified name
+  - [ ] compute fan-out from outbound graph edges by node qualified name
+  - [ ] compute dependency depth as longest bounded outbound path, with cycle guard
+  - [ ] compute reference count from `References`, `Calls`, `Imports`, and language-specific relationship edges
+  - [ ] compute test adjacency from direct test edges, test nodes in same file, or existing test-adjacency helpers
+  - [ ] compute line count / LOC for function and method nodes from `line_start` and `line_end`
+  - [ ] mark large-function candidate when LOC is at or above configured threshold
+- [ ] implement function complexity metric collection:
+  - [ ] compute cyclomatic complexity for function and method nodes from parser-backed syntax where available
+  - [ ] compute cognitive complexity for nested control-flow constructs where parser data supports it
+  - [ ] compute branch/control-flow count for `if`, `else if`, `match`/`switch`, loops, boolean short-circuit branches, `catch`/exception branches, and early returns where language parser exposes them
+  - [ ] compute max nesting depth for conditional, loop, match/switch, closure/lambda, and block constructs
+  - [ ] mark high-complexity function candidate when any configured complexity threshold is exceeded
+  - [ ] include per-language unsupported metrics as `not_available` instead of guessing from raw text
+- [ ] implement file-level metric collection:
+  - [ ] compute node count per file
+  - [ ] compute edge count per file
+  - [ ] compute average fan-in and fan-out for nodes in file
+  - [ ] compute import count from import nodes or import edges
+  - [ ] compute test coverage ratio as test nodes divided by non-test callable nodes when available
+  - [ ] flag large/highly connected files using configured percentile or threshold
+- [ ] implement module-level metric collection:
+  - [ ] group files/nodes by existing package/module ownership where available
+  - [ ] compute internal edge count within module
+  - [ ] compute external dependency edge count leaving module
+  - [ ] compute inbound dependency edge count entering module
+  - [ ] compute coupling score from external dependencies and inbound dependencies
+  - [ ] compute cohesion approximation from internal edges divided by possible internal relationships
+- [ ] compute distribution statistics:
+  - [ ] compute min, max, average, p50, p90, and p95 for fan-in, fan-out, LOC, cyclomatic complexity, cognitive complexity, nesting depth, branch count, file node count, and coupling
+  - [ ] detect outliers using configured percentile cutoffs
+  - [ ] include metric names, raw values, threshold values, and ranking reason in findings
+- [ ] add metrics tests:
+  - [ ] fan-in and fan-out on a known fixture graph
+  - [ ] dependency depth with cycle guard
+  - [ ] LOC from line ranges
+  - [ ] cyclomatic complexity from a fixture with branches and loops
+  - [ ] cognitive complexity increases with nested control flow
+  - [ ] max nesting depth from nested branch fixture
+  - [ ] unsupported language complexity metric reports `not_available`
+  - [ ] file import count
+  - [ ] module coupling score
+  - [ ] percentile/outlier detection
+
+Why:
+- risk, large-function, architecture, and pattern reports depend on these metrics
+- metric definitions must be explicit before scoring uses them
+
+#### 29.3 Large function finder
+
+- [ ] implement `find_large_functions()`:
+  - [ ] scan `Function`, `Method`, and test callable nodes by line span
+  - [ ] exclude test nodes by default
+  - [ ] include test nodes only when `include_tests = true`
+  - [ ] support repo-wide mode
+  - [ ] support file-scoped mode with one or more repo-relative file paths
+  - [ ] apply configured LOC threshold unless request overrides threshold
+  - [ ] cap results by configured or requested limit
+- [ ] implement high-complexity function filtering in same service:
+  - [ ] support `--complexity-threshold` for cyclomatic complexity
+  - [ ] support `--cognitive-threshold` for cognitive complexity
+  - [ ] support `--nesting-threshold` for max nesting depth
+  - [ ] include functions that exceed either size or complexity threshold
+  - [ ] allow `--mode large`, `--mode complex`, and `--mode large-or-complex`
+- [ ] rank large-function findings:
+  - [ ] primary sort by LOC descending
+  - [ ] boost changed-file relevance when changed-file input is provided
+  - [ ] boost high fan-in and high fan-out using metrics from 29.2
+  - [ ] boost package/module boundary crossings when module ownership is available
+  - [ ] tie-break by file path, line_start, and qualified name
+  - [ ] include ranking reason with LOC, complexity values, thresholds, fan-in, fan-out, and changed-file boost
+- [ ] return complete finding payload:
+  - [ ] file path
+  - [ ] qualified name
+  - [ ] display name
+  - [ ] node kind
+  - [ ] line_start and line_end
+  - [ ] LOC
+  - [ ] cyclomatic complexity when available
+  - [ ] cognitive complexity when available
+  - [ ] max nesting depth when available
+  - [ ] branch count when available
+  - [ ] threshold
+  - [ ] ranking reason
+  - [ ] provenance/freshness metadata
+- [ ] add surfaces:
+  - [ ] CLI `atlas insights large-functions`
+  - [ ] CLI `atlas insights large-functions --files ...`
+  - [ ] CLI flags `--threshold`, `--complexity-threshold`, `--cognitive-threshold`, `--nesting-threshold`, `--mode`, `--limit`, `--include-tests`, and `--json`
+  - [ ] MCP `find_large_functions` with same inputs and defaults as CLI JSON
+  - [ ] compact MCP default output suitable for agent review
+- [ ] add large-function tests:
+  - [ ] default threshold matches review risk summary threshold
+  - [ ] file-scoped filtering returns only requested files
+  - [ ] threshold override changes result set
+  - [ ] complexity threshold includes short but complex functions
+  - [ ] `--mode large` excludes short complex functions
+  - [ ] `--mode complex` excludes large simple functions
+  - [ ] `--mode large-or-complex` includes either category
+  - [ ] limit caps result count after ranking
+  - [ ] test-node include/exclude behavior
+  - [ ] stable sort ties
+  - [ ] CLI JSON and MCP JSON parity
+
+Why:
+- current review code only flags large changed functions; agents need direct repo/file discovery and ranked evidence
+- one service prevents review, CLI, MCP, and insights thresholds from drifting
+
+#### 29.4 Architecture analysis
+
+- [ ] build module-level graph:
+  - [ ] create module nodes from existing package/module/file ownership data
+  - [ ] aggregate file/node edges into module-to-module edges
+  - [ ] preserve source evidence edges that caused each module edge
+  - [ ] exclude ignored files/modules from config
+  - [ ] keep deterministic module IDs based on canonical repo paths or existing owner IDs
+- [ ] detect cycles:
+  - [ ] compute strongly connected components (SCC)
+  - [ ] identify cyclic dependencies from SCCs with more than one module or explicit self-cycle
+  - [ ] classify cycles as `local` when all modules share package/root and `cross-module` otherwise
+  - [ ] output at least one deterministic cycle path per finding
+  - [ ] include source file/node evidence for each cycle edge
+- [ ] enforce layer rules:
+  - [ ] parse configured layer names and path/module matchers
+  - [ ] map files and modules to layers
+  - [ ] reject invalid layer configs with clear diagnostics
+  - [ ] detect invalid dependency edges from lower/higher layers based on configured order
+  - [ ] output layer violation findings with source and target layer names
+- [ ] compute architecture health:
+  - [ ] compute coupling score per module using metrics from 29.2
+  - [ ] detect high-coupling modules using configured threshold
+  - [ ] detect tightly coupled clusters using SCC size and coupling score
+  - [ ] flag large/highly connected files using file metrics from 29.2
+- [ ] add architecture tests:
+  - [ ] SCC cycle detection
+  - [ ] local versus cross-module cycle classification
+  - [ ] deterministic cycle path output
+  - [ ] valid layer rule allows dependency
+  - [ ] invalid layer rule reports violation
+  - [ ] high-coupling module detection
+  - [ ] ignored module excluded
+
+Why:
+- architecture findings need module graph and metric foundation before risk and pattern analysis
+- layer rules must be deterministic and config-driven
+
+#### 29.5 Risk assessment engine
+
+- [ ] implement `assess_risk()`:
+  - [ ] accept symbol qualified name or resolved node target
+  - [ ] resolve ambiguous symbols using existing query/resolve-symbol behavior
+  - [ ] fail clearly when target cannot be resolved
+  - [ ] reuse metrics from 29.2 and architecture data from 29.4
+  - [ ] return one `RiskReport` for target node plus related evidence
+- [ ] score risk inputs:
+  - [ ] public API exposure
+  - [ ] fan-in
+  - [ ] fan-out
+  - [ ] cross-module dependency count
+  - [ ] test adjacency
+  - [ ] dependency depth
+  - [ ] unresolved edge count
+  - [ ] large-function flag, LOC, and complexity metrics when target is callable
+  - [ ] cycle participation when available
+- [ ] implement weighted formula:
+  - [ ] define default weights in config
+  - [ ] normalize final score to `0-100`
+  - [ ] classify `low`, `medium`, and `high` with configurable thresholds
+  - [ ] include factor contribution for each input
+  - [ ] include evidence nodes/edges for each non-zero factor
+- [ ] add risk tests:
+  - [ ] high fan-in increases score
+  - [ ] test adjacency lowers or mitigates score
+  - [ ] public API increases score
+  - [ ] unresolved edges increase score
+  - [ ] large function increases callable risk
+  - [ ] high cyclomatic complexity increases callable risk
+  - [ ] high cognitive complexity increases callable risk
+  - [ ] high nesting depth increases callable risk
+  - [ ] cycle participation increases score
+  - [ ] score normalization stays inside `0-100`
+  - [ ] low/medium/high boundaries are stable
+
+Why:
+- risk scoring should be explainable from deterministic graph and metric factors
+- factor-level evidence lets users challenge or trust the score
+
+#### 29.6 Pattern detection
+
+- [ ] detect duplicate or repeated graph patterns:
+  - [ ] find repeated call chains with same ordered simple-name sequence
+  - [ ] require minimum chain length from config
+  - [ ] group repeated chains by normalized sequence
+  - [ ] output files, qualified names, and edge evidence for each repeated chain
+  - [ ] skip chains crossing ignored modules/files
+- [ ] detect unused or isolated structures:
+  - [ ] find unused modules with no inbound edges outside their own module
+  - [ ] find isolated graph components with no incoming or outgoing external edges
+  - [ ] find orphan nodes with no meaningful inbound references and no test adjacency
+  - [ ] exclude entrypoints, tests, public APIs, and configured ignore patterns
+  - [ ] include blockers that prevent safe removal
+- [ ] detect high-centrality nodes:
+  - [ ] compute degree centrality from fan-in and fan-out
+  - [ ] identify hubs using percentile threshold
+  - [ ] identify bottlenecks with high fan-in and high fan-out
+  - [ ] include package/module context for each hub
+- [ ] detect deep chains:
+  - [ ] find call/dependency chains longer than configured depth
+  - [ ] cap traversal depth and node count
+  - [ ] avoid infinite loops through cycle guard
+  - [ ] output deterministic chain path and complexity reason
+- [ ] add pattern tests:
+  - [ ] repeated chain grouping
+  - [ ] unused module candidate with blockers
+  - [ ] isolated component detection
+  - [ ] hub and bottleneck detection
+  - [ ] deep-chain detection with cycle guard
+
+Why:
+- pattern findings must separate actionable candidates from graph noise
+- blockers and evidence reduce false positives in dead-code and complexity reports
+
+#### 29.7 Public surfaces and documentation
+
+- [ ] add CLI commands:
   - [ ] `atlas insights architecture`
   - [ ] `atlas insights metrics`
   - [ ] `atlas insights risk <symbol>`
   - [ ] `atlas insights patterns`
-  - [ ] JSON output support
-- [ ] config:
-  - [ ] thresholds
-  - [ ] layer config
-  - [ ] ignore lists
-- [ ] tests:
-  - [ ] cycle detection
-  - [ ] coupling detection
-  - [ ] unused-node detection
-  - [ ] risk scoring validation
-  - [ ] outlier detection
-- [ ] completion criteria:
-  - [ ] accurate architecture insights
-  - [ ] correct metrics
-  - [ ] explainable risk scoring
-  - [ ] useful pattern detection
-  - [ ] structured outputs
+  - [ ] `atlas insights large-functions`
+  - [ ] `atlas insights complex-functions`
+  - [ ] support `--json` on every insights command
+  - [ ] support `--limit` where findings can be large
+  - [ ] support `--config <path>` if existing commands support config override
+- [ ] add MCP tools or extend existing tool registry:
+  - [ ] expose architecture insights
+  - [ ] expose metrics insights
+  - [ ] expose risk assessment
+  - [ ] expose pattern detection
+  - [ ] expose `find_large_functions`
+  - [ ] expose complex-function filtering through the same tool or a dedicated `find_complex_functions` alias
+  - [ ] include freshness/provenance metadata in every response
+  - [ ] use compact default output with optional verbose details
+- [ ] document usage:
+  - [ ] update README or command reference for `atlas insights ...`
+  - [ ] update MCP tool docs
+  - [ ] update installed AGENTS instructions only if workflow changes
+  - [ ] document threshold config and layer config examples
+- [ ] add surface tests:
+  - [ ] CLI JSON schema snapshots
+  - [ ] MCP response snapshots
+  - [ ] CLI/MCP parity for representative reports
+  - [ ] config override behavior
+  - [ ] freshness/provenance included
+
+Why:
+- service logic is only useful when CLI and MCP expose the same deterministic behavior
+- parity tests prevent command/tool drift
+
+#### 29.8 Phase 29 completion criteria
+
+- [ ] `InsightsEngine` exists with shared report primitives and deterministic sorting
+- [ ] metrics engine computes node, file, module, percentile, and outlier metrics
+- [ ] large-function finder works through service, CLI, and MCP with parity tests
+- [ ] function complexity metrics compute cyclomatic complexity, cognitive complexity, branch count, and nesting depth where parser support exists
+- [ ] high-complexity function discovery works through service, CLI, and MCP with parity tests
+- [ ] architecture analysis detects cycles, layer violations, coupling, and high-connectivity files
+- [ ] risk assessment returns explainable `0-100` scores with factor evidence
+- [ ] pattern detection reports repeated chains, unused/isolated structures, hubs, bottlenecks, and deep chains
+- [ ] config supports thresholds, layer rules, and ignore lists with validation
+- [ ] every insights report includes summary, findings, evidence, ranking reason, freshness, and provenance
+- [ ] tests cover cycle detection, coupling detection, layer violations, unused-node detection, large/complex-function ranking/filtering, risk scoring, outlier detection, and CLI/MCP parity
+- [ ] `cargo test -p atlas-engine` or owning insights crate test target passes
+- [ ] `cargo test -p atlas-cli` passes for insights commands
+- [ ] `cargo test -p atlas-mcp` passes for insights tools
+- [ ] `./scripts/test-workspace-summary.sh` passes
 
 ### Phase 30 — Optional Advanced Features
 
@@ -404,19 +598,26 @@ Priority order below is implementation order. Extend shipped Phase CM14 and Phas
 
 This grouped roadmap covers the full source document at theme level, except shell-first simplifications requested here: no slash-command track, no skill-install track, and no web dashboard track.
 
+Before implementing any ICM checklist item:
+
+- read the parent ICM section `Rules:` block
+- treat `Rules:` bullets as mandatory constraints, not tasks
+- do not mark `Rules:` bullets done; they are never checklist items
+- implement checklist items only under `Implementation structure` and `completion criteria`
+- if a checklist item conflicts with `Rules:`, follow `Rules:` and update the checklist wording before implementation
+
 #### ICM-A — Shared Memory Surface Over Existing Storage
 
-What to do:
+Rules:
 
-- [ ] add one shared memory service layer over existing continuity crates so CLI and MCP reuse identical validation, visibility, and storage behavior
-- [ ] restore detailed subphase structure here so `ISSUES.md` can replace source roadmap file without losing implementation guidance
+- add one shared memory service layer over existing continuity crates so CLI and MCP reuse identical validation, visibility, and storage behavior
+- restore detailed subphase structure here so `ISSUES.md` can replace source roadmap file without losing implementation guidance
+- do not create a separate memory architecture that bypasses shipped decision-memory and agent-partition services
+- do not store memory bodies or runtime artifacts in `worldtree.db`
+- do not require an active session for `project` or `global` writes
+- do not let CLI and MCP drift on record shape, defaults, or visibility rules
 
-What not to do:
-
-- [ ] do not create a separate memory architecture that bypasses shipped decision-memory and agent-partition services
-- [ ] do not store memory bodies or runtime artifacts in `worldtree.db`
-- [ ] do not require an active session for `project` or `global` writes
-- [ ] do not let CLI and MCP drift on record shape, defaults, or visibility rules
+Rules apply to every checklist item in this ICM section.
 
 Implementation structure:
 
@@ -470,17 +671,16 @@ Implementation structure:
 
 #### ICM-B — Memory Curation, Decay, Health, and Consolidation
 
-What to do:
+Rules:
 
-- [ ] add memory decay config with safe defaults and explicit critical-memory protection
-- [ ] preserve deterministic maintenance structure from source roadmap so cleanup work stays implementation-ready after source file deletion
+- add memory decay config with safe defaults and explicit critical-memory protection
+- preserve deterministic maintenance structure from source roadmap so cleanup work stays implementation-ready after source file deletion
+- do not auto-prune `critical` memories by default
+- do not hard-delete linked saved-context artifacts unless explicitly requested
+- do not make health scoring or consolidation depend on opaque LLM behavior
+- do not mutate state during `--dry-run`
 
-What not to do:
-
-- [ ] do not auto-prune `critical` memories by default
-- [ ] do not hard-delete linked saved-context artifacts unless explicitly requested
-- [ ] do not make health scoring or consolidation depend on opaque LLM behavior
-- [ ] do not mutate state during `--dry-run`
+Rules apply to every checklist item in this ICM section.
 
 Implementation structure:
 
@@ -523,16 +723,15 @@ Implementation structure:
 
 #### ICM-C — Feedback Memory and Analysis Confidence Adjustment
 
-What to do:
+Rules:
 
-- [ ] add feedback storage and search for predicted vs actual outcomes, correction text, related symbol/file, and `source_id`
-- [ ] keep feedback as first-class deterministic correction memory rather than loose comments or opaque notes
+- add feedback storage and search for predicted vs actual outcomes, correction text, related symbol/file, and `source_id`
+- keep feedback as first-class deterministic correction memory rather than loose comments or opaque notes
+- do not let feedback override deterministic graph evidence silently
+- do not lower confidence without explicit matching evidence
+- do not couple feedback storage to graph tables or graph-node lifecycle
 
-What not to do:
-
-- [ ] do not let feedback override deterministic graph evidence silently
-- [ ] do not lower confidence without explicit matching evidence
-- [ ] do not couple feedback storage to graph tables or graph-node lifecycle
+Rules apply to every checklist item in this ICM section.
 
 Implementation structure:
 
@@ -566,16 +765,15 @@ Implementation structure:
 
 #### ICM-D — Wake-Up Packs and Session Start Recall
 
-What to do:
+Rules:
 
-- [ ] define a bounded wake-up pack that summarizes current focus, critical memories, recent decisions, recent feedback, graph readiness, changed files, and retrieval hints
-- [ ] keep wake-up path compact, retrieval-backed, and consistent with resume architecture already shipped in continuity work
+- define a bounded wake-up pack that summarizes current focus, critical memories, recent decisions, recent feedback, graph readiness, changed files, and retrieval hints
+- keep wake-up path compact, retrieval-backed, and consistent with resume architecture already shipped in continuity work
+- do not inline raw large artifacts into wake-up or resume payloads
+- do not block session start on wake-up generation failure
+- do not replay raw command history as wake-up context
 
-What not to do:
-
-- [ ] do not inline raw large artifacts into wake-up or resume payloads
-- [ ] do not block session start on wake-up generation failure
-- [ ] do not replay raw command history as wake-up context
+Rules apply to every checklist item in this ICM section.
 
 Implementation structure:
 
@@ -607,16 +805,15 @@ Implementation structure:
 
 #### ICM-E — Cross-Session Recall Quality and Optional Semantic Recall
 
-What to do:
+Rules:
 
-- [ ] improve recall ranking with topic match, importance, recency, scope visibility, and source-backed evidence
-- [ ] preserve lexical-first default and make cross-session recall quality measurable before adding vector complexity
+- improve recall ranking with topic match, importance, recency, scope visibility, and source-backed evidence
+- preserve lexical-first default and make cross-session recall quality measurable before adding vector complexity
+- do not make embeddings required for baseline memory recall
+- do not let vector scores outrank exact lexical or stronger structural evidence by default
+- do not widen frontend-private or session-private recall unless caller explicitly asks for it
 
-What not to do:
-
-- [ ] do not make embeddings required for baseline memory recall
-- [ ] do not let vector scores outrank exact lexical or stronger structural evidence by default
-- [ ] do not widen frontend-private or session-private recall unless caller explicitly asks for it
+Rules apply to every checklist item in this ICM section.
 
 Implementation structure:
 
@@ -645,16 +842,15 @@ Implementation structure:
 
 #### ICM-F — Memoir Concept Graph as Separate Knowledge Layer
 
-What to do:
+Rules:
 
-- [ ] add separate memoir tables, concepts, relations, and graph ids outside the code graph schema
-- [ ] keep memoir path explicit and bounded so semantic memory does not leak into code graph semantics
+- add separate memoir tables, concepts, relations, and graph ids outside the code graph schema
+- keep memoir path explicit and bounded so semantic memory does not leak into code graph semantics
+- do not merge memoir concepts into code graph `nodes` and `edges`
+- do not allow unbounded custom relation types by default
+- do not auto-create missing concepts unless caller explicitly opts in
 
-What not to do:
-
-- [ ] do not merge memoir concepts into code graph `nodes` and `edges`
-- [ ] do not allow unbounded custom relation types by default
-- [ ] do not auto-create missing concepts unless caller explicitly opts in
+Rules apply to every checklist item in this ICM section.
 
 Implementation structure:
 
@@ -681,49 +877,228 @@ Implementation structure:
 - [ ] bounded inspect output includes relation direction and source evidence ids
 - [ ] code graph queries remain unaware of memoir tables unless explicit memoir surface is invoked
 
-#### ICM-G — Shell-First Install Modes, TUI, Docs, and Release Gates
+#### ICM-G — Code Overview Memory for External Analysis
 
-What to do:
+Rules:
 
-- [ ] add install/init mode split for `mcp`, `hook`, `cli`, and `all`, with idempotent generation and dry-run preview
-- [ ] keep shell-first and TUI-first operational structure from source roadmap while dropping slash-command, skill, and dashboard work
+- add a graph-linked overview memory layer for project, package, module, file, symbol, function, and method descriptions
+- let Atlas export bounded analysis packets and ingest externally produced LLM or human analysis
+- keep Atlas non-LLM by default; no built-in model provider, prompt runner, or hidden network call in this track
+- use overview memory as readable package/module/spec documentation and as guidance inside context/review payloads
+- keep overview records tied to commit SHA, graph freshness, canonical repo paths, and qualified names so stale guidance is detectable
+- do not store overview bodies in `worldtree.db`
+- do not make overview text a graph fact or merge it into graph `nodes` and `edges`
+- do not let stale overview records appear as fresh context without explicit stale metadata
+- do not require embeddings or an LLM provider for baseline overview search
+- do not add compatibility shims for old overview schemas until a first stable schema ships
+- do not auto-run external analyzers during normal `build`, `update`, `query`, `context`, or MCP flows unless user explicitly configures hooks
 
-What not to do:
-
-- [ ] do not add slash-command generators or skill-install surfaces for this track
-- [ ] do not add web dashboard routes for memory inspection in this track
-- [ ] do not build TUI surfaces before core service contracts and tests stabilize
-- [ ] do not introduce host-specific command generators that bypass shared service logic
+Rules apply to every checklist item in this ICM section.
 
 Implementation structure:
 
-##### ICM-G1 — Shell-first install and init modes
+##### ICM-G1 — Overview domain model and subject identity
+
+- [ ] define `OverviewSubjectKind` enum with exact values `project`, `package`, `module`, `file`, `symbol`, `function`, and `method`
+- [ ] define `OverviewFreshness` enum with exact values `fresh`, `possibly_stale`, `stale`, `orphaned`, and `unverified`
+- [ ] define `OverviewSourceKind` enum with exact values `external_llm`, `manual`, and `imported`
+- [ ] define `OverviewSubject` with `kind`, `repo_root`, `commit_sha`, optional `package_name`, optional `module_path`, optional `canonical_file_path`, optional `qualified_name`, optional `node_kind`, optional `line_start`, optional `line_end`, and optional `content_hash`
+- [ ] validate `project` subjects require only `repo_root` and `commit_sha`
+- [ ] validate `package` subjects require `package_name`
+- [ ] validate `module` subjects require `module_path`
+- [ ] validate `file` subjects require `canonical_file_path`
+- [ ] validate `symbol`, `function`, and `method` subjects require `qualified_name`, `canonical_file_path`, `line_start`, and `line_end`
+- [ ] canonicalize every subject path through `atlas_repo::CanonicalRepoPath` before hashing, persistence, dedupe, lookup, or stale matching
+- [ ] define deterministic `subject_id` as versioned hash over `repo_root`, `kind`, canonical subject fields, and schema version
+- [ ] reject local path-normalization helpers and add tests proving `./src/lib.rs` and `src/lib.rs` resolve to same subject identity
+- [ ] define `OverviewRecord` with subject, title, summary, description, responsibilities, flow, inputs, outputs, invariants, gotchas, examples, tags, source metadata, freshness, confidence, source ids, and timestamps
+- [ ] represent list fields as typed vectors at service boundary and JSON arrays at storage boundary
+- [ ] bound title, summary, description, and each list field through central budget policy before storage
+- [ ] route oversized overview bodies through existing content-store artifact routing and store only preview plus `source_id` in overview table
+- [ ] add unit tests for subject validation, enum parsing, subject-id stability, path canonicalization, and budget truncation metadata
+
+##### ICM-G2 — Overview storage schema and migrations
+
+- [ ] add overview tables to continuity-owned storage, preferably the memory/session-side persistence used by ICM-A unless a dedicated continuity DB is justified in code comments
+- [ ] create `overview_records` table with `id`, `repo_root`, `subject_id`, `subject_kind`, `package_name`, `module_path`, `canonical_file_path`, `qualified_name`, `node_kind`, `line_start`, `line_end`, `content_hash`, `title`, `summary`, `description_preview`, `responsibilities_json`, `flow_json`, `inputs_json`, `outputs_json`, `invariants_json`, `gotchas_json`, `examples_json`, `tags_json`, `source_kind`, `analyzer_name`, `analyzer_version`, `model_name`, `commit_sha`, `graph_last_indexed_at`, `freshness`, `confidence`, `source_id`, `supersedes_id`, `created_at`, `updated_at`, and `metadata_json`
+- [ ] create `overview_record_fts` over `title`, `summary`, `description_preview`, `responsibilities_json`, `flow_json`, `invariants_json`, `gotchas_json`, and `tags_json`
+- [ ] add indexes for `repo_root`, `subject_id`, `subject_kind`, `canonical_file_path`, `qualified_name`, `commit_sha`, `freshness`, `source_kind`, and `updated_at`
+- [ ] add uniqueness rule for active records by `repo_root`, `subject_id`, `commit_sha`, and `source_kind` unless `supersedes_id` is set
+- [ ] add supersession support so re-ingest creates a new active record and points to previous active record through `supersedes_id`
+- [ ] preserve old overview records for audit unless user later adds explicit prune command
+- [ ] add storage API methods `insert_overview_record`, `get_overview_record`, `search_overview_records`, `list_stale_overview_records`, `supersede_overview_record`, and `mark_overview_freshness`
+- [ ] make storage API reject invalid enum strings and malformed JSON arrays before writing
+- [ ] update `atlas db check` to validate overview schema, FTS integrity, orphan `source_id` references, invalid enum values, and noncanonical path rows
+- [ ] add migration golden tests, in-memory storage tests, FTS search tests, and db-check failure fixture tests
+
+##### ICM-G3 — Analysis packet export contract
+
+- [ ] add `OverviewExportRequest` with `scope`, `subjects`, `changed_only`, `since`, `limit`, `include_code_spans`, `include_callers`, `include_callees`, `include_tests`, `max_tokens`, and `json` fields
+- [ ] add `OverviewAnalysisPacket` with `schema_version`, `repo_root`, `commit_sha`, graph provenance, freshness metadata, subject, concise graph evidence, bounded code excerpt, callers, callees, related files, test adjacency, and retrieval hints
+- [ ] support export scopes `project`, `packages`, `modules`, `files`, `symbols`, `functions`, `methods`, and `changed`
+- [ ] implement `atlas overview export --scope <scope> --json`
+- [ ] implement `atlas overview export --subject <qualified_name_or_path> --json`
+- [ ] implement `atlas overview export --changed --since <rev> --json`
+- [ ] use graph-backed context resolution first for symbols and functions, then companion content lookup only for docs/config/assets surfaced by graph/context evidence
+- [ ] include canonical subject identity in every packet so ingest can validate exact target later
+- [ ] include stable packet id as hash over subject id, commit SHA, selected evidence ids, and export schema version
+- [ ] include `safe_to_answer`, graph freshness, omitted counts, and budget-hit metadata in every packet
+- [ ] fail export clearly when graph readiness is `corrupt`; allow stale export only with explicit stale metadata
+- [ ] add tests for project export, package export, changed-only export, function export, ambiguous subject failure, stale graph metadata, and budget truncation
+
+##### ICM-G4 — External analysis ingest contract
+
+- [ ] define `OverviewAnalysisInput` JSON schema with `schema_version`, `packet_id`, subject identity, title, summary, description, responsibilities, flow, inputs, outputs, invariants, gotchas, examples, tags, confidence, analyzer metadata, and optional source artifact ids
+- [ ] implement `atlas overview ingest <path>` for JSON file input
+- [ ] implement `atlas overview ingest -` for stdin input
+- [ ] validate input `schema_version` exactly before field validation
+- [ ] validate `packet_id` when present and return clear mismatch error when packet id does not match exported packet metadata
+- [ ] validate subject exists in current or indexed graph by canonical file path and qualified name where applicable
+- [ ] validate line ranges still overlap same graph node before marking ingested record `fresh`
+- [ ] mark record `possibly_stale` when commit SHA differs but subject identity still resolves
+- [ ] mark record `orphaned` when canonical path or qualified name no longer resolves
+- [ ] mark record `unverified` for manual/imported records without packet id
+- [ ] enforce confidence range `0.0..=1.0`
+- [ ] require `summary` for all records and require either `description` or at least one non-empty detail array
+- [ ] reject unknown top-level fields unless `metadata_json.extra` explicitly captures them through a controlled importer path
+- [ ] run overview text through central redaction policy before persistence
+- [ ] route large descriptions and examples through content-store when over inline budget
+- [ ] add JSON schema fixture tests for valid external LLM result, valid manual import, missing summary, bad confidence, subject mismatch, stale commit, orphan subject, and secret redaction
+
+##### ICM-G5 — Freshness, commit update, and refresh planning
+
+- [ ] add `OverviewFreshnessService` that compares overview records against current graph readiness, current commit SHA, changed files, content hashes, and line-span overlap
+- [ ] implement direct stale marking when record canonical file path changed since stored commit
+- [ ] implement direct stale marking when record content hash differs from current file hash
+- [ ] implement direct stale marking when record qualified name no longer resolves
+- [ ] implement `possibly_stale` marking for callers, containing modules, containing packages, and project records when dependent files changed
+- [ ] implement orphan marking for deleted files, removed symbols, and renamed subjects without confident canonical target
+- [ ] use `detect_changes`/history data when available; fall back to git diff only through existing repo/change services, not ad hoc shell parsing in service code
+- [ ] implement `atlas overview stale` with filters `--subject-kind`, `--file`, `--package`, `--module`, `--since`, `--limit`, and `--json`
+- [ ] implement `atlas overview refresh-plan --changed --since <rev> --json`
+- [ ] make refresh plan output include subject id, stale reason, suggested export command, affected dependents, previous record id, and priority
+- [ ] rank refresh plan priority by direct change before dependent change, subject kind specificity, current context relevance, confidence, and updated_at age
+- [ ] keep refresh planning read-only unless caller passes explicit apply flag for freshness marking
+- [ ] add tests for changed function, changed file, deleted file, renamed file, caller possibly stale, package possibly stale, and no-op unchanged commit
+
+##### ICM-G6 — Overview CLI read and maintenance surfaces
+
+- [ ] implement `atlas overview show <subject>` resolving exact subject id, qualified name, canonical file path, package name, or module path
+- [ ] make ambiguous `show` results fail with candidate list and required disambiguation fields
+- [ ] implement `atlas overview search <query>` with filters `--subject-kind`, `--freshness`, `--package`, `--module`, `--file`, `--source-kind`, `--limit`, and `--json`
+- [ ] rank search by exact subject match, exact title/tag match, FTS score, freshness, confidence, recency, and subject specificity
+- [ ] implement `atlas overview list` with filters `--subject-kind`, `--freshness`, `--source-kind`, `--older-than`, `--newer-than`, and `--json`
+- [ ] implement `atlas overview delete <overview_id> --dry-run --json`
+- [ ] require exact overview id for delete and keep routed content-store artifacts unless explicit artifact-delete behavior is added later
+- [ ] implement `atlas overview export-docs --format markdown --output <path>` for readable project/package/module specs
+- [ ] make exported docs group by project, package, module, file, then symbol, with stale records labeled visibly
+- [ ] make human output use `println!`/`eprintln!`; reserve tracing macros for diagnostics
+- [ ] add CLI smoke tests and JSON snapshot tests for show, search, list, stale, refresh-plan, delete dry-run, and markdown export
+
+##### ICM-G7 — Context engine and retrieval integration
+
+- [ ] extend context request controls with `include_overviews`, `overview_limit`, `overview_freshness`, `overview_subject_kinds`, and `overview_max_bytes`
+- [ ] include fresh overview records in `atlas context`, `atlas review-context`, MCP `get_context`, and MCP `get_review_context` when they match selected symbols, files, modules, packages, or changed files
+- [ ] include stale records only when request allows stale overviews and always emit stale reason
+- [ ] rank overview context by exact symbol match, exact file match, containing module/package, changed-file relevance, freshness, confidence, and recency
+- [ ] emit overview selection reasons such as `same_symbol`, `same_file`, `containing_module`, `package_summary`, `project_summary`, and `changed_dependency`
+- [ ] keep overview payload preview-only by default and expose `source_id` for full body retrieval
+- [ ] merge overview records under existing graph/content/session budget policy instead of adding separate truncation rules
+- [ ] ensure overview text cannot override graph facts in risk, impact, dead-code, or refactor analysis
+- [ ] add tests for graph-only context, overview-only companion context, mixed graph/overview context, stale overview exclusion, stale overview explicit inclusion, and budget trimming
+
+##### ICM-G8 — MCP parity and external analyzer handoff
+
+- [ ] add MCP `overview_export` with same request fields, defaults, and JSON shape as CLI export
+- [ ] add MCP `overview_ingest` with same validation and error shape as CLI ingest
+- [ ] add MCP `overview_search` with same filters and ranking evidence as CLI search
+- [ ] add MCP `overview_show` with same ambiguity behavior as CLI show
+- [ ] add MCP `overview_refresh_plan` with same read-only default behavior as CLI refresh-plan
+- [ ] keep MCP default output compact and include `source_id`, freshness, selection reason, and next export command where relevant
+- [ ] add parity tests proving CLI and MCP record shapes, validation failures, freshness states, and default limits match
+- [ ] expose optional external analyzer handoff only as packet generation plus documented command contract, not as built-in model execution
+
+##### ICM-G9 — Hook and manual trigger integration
+
+- [ ] add config section `overview` with `enabled`, `auto_export_on_commit`, `auto_mark_stale_on_commit`, `external_analyzer_command`, `ingest_after_external_command`, `max_subjects_per_run`, and `max_packet_bytes`
+- [ ] default `overview.enabled = true`, `auto_export_on_commit = false`, `auto_mark_stale_on_commit = true`, and `ingest_after_external_command = false`
+- [ ] validate external analyzer command is absent or explicit string path/command; never infer model provider from environment variables
+- [ ] add hook integration that can run `overview refresh-plan` after commit or manual hook trigger
+- [ ] keep hook failures best-effort and non-blocking for git/host flow
+- [ ] store hook-generated packet exports in content-store when oversized and reference them by `source_id`
+- [ ] record hook outcome as session event with command, status, packet count, ingested count, stale count, and source ids
+- [ ] add manual command `atlas overview run-external --dry-run --json` that prints exact external command invocations without executing them
+- [ ] add apply mode for `run-external` that executes configured command, requires JSON output, validates ingest, and reports per-subject success/failure
+- [ ] add tests for default config, invalid config, dry-run command generation, nonblocking hook failure, successful external ingest, malformed external output, and max-subject cap
+
+##### ICM-G10 — Overview docs, fixtures, and release gate
+
+- [ ] add `wiki/overview-memory.md` documenting storage ownership, external analyzer contract, JSON schemas, freshness states, context integration, hook behavior, and CLI/MCP parity
+- [ ] add reusable fixtures for project overview, package overview, module overview, file overview, function overview, stale function overview, orphaned symbol overview, manual overview, and oversized overview body
+- [ ] add JSON snapshots for `overview export`, `overview ingest --json`, `overview show --json`, `overview search --json`, `overview stale --json`, `overview refresh-plan --json`, and MCP overview tools
+- [ ] add markdown snapshot for `overview export-docs --format markdown`
+- [ ] add schema evolution note that first stable schema is `schema_version = 1` and later breaking changes must ship migration or explicit import rejection
+- [ ] update `wiki/memory-architecture.md` to explain overview memory as evidence-linked code documentation separate from generic memories, feedback records, and memoir concepts
+- [ ] define release gate `ICM Overview Memory Complete`
+- [ ] require for release gate: storage schema, export/ingest contracts, freshness planner, CLI read surfaces, context integration, MCP parity, hook/manual trigger path, docs, fixtures, and JSON snapshots
+- [ ] require for release gate: no overview body writes to `worldtree.db`, no built-in LLM provider, no stale overview emitted as fresh, and no path-derived identity without `CanonicalRepoPath`
+
+##### ICM-G completion criteria
+
+- [ ] `atlas overview export --scope functions --json` emits bounded packets with subject ids, commit SHA, graph freshness, and budget metadata
+- [ ] `atlas overview ingest analysis.json` stores a fresh record when packet id, commit SHA, canonical path, qualified name, and line span match current graph
+- [ ] `atlas overview ingest analysis.json` marks record `possibly_stale` when commit SHA differs but subject still resolves
+- [ ] `atlas overview ingest analysis.json` marks record `orphaned` when subject no longer resolves
+- [ ] `atlas overview refresh-plan --changed --since HEAD~1 --json` reports directly stale and possibly stale subjects with suggested export commands
+- [ ] `atlas context --include-overviews` includes fresh overview records with selection reasons and source ids
+- [ ] MCP overview tools match CLI JSON defaults and validation behavior
+- [ ] `atlas db check` reports invalid overview schema, invalid enum values, orphan source ids, and noncanonical overview paths
+- [ ] `./scripts/test-workspace-summary.sh` passes after overview memory implementation
+
+#### ICM-H — Shell-First Install Modes, TUI, Docs, and Release Gates
+
+Rules:
+
+- add install/init mode split for `mcp`, `hook`, `cli`, and `all`, with idempotent generation and dry-run preview
+- keep shell-first and TUI-first operational structure from source roadmap while dropping slash-command, skill, and dashboard work
+- do not add slash-command generators or skill-install surfaces for this track
+- do not add web dashboard routes for memory inspection in this track
+- do not build TUI surfaces before core service contracts and tests stabilize
+- do not introduce host-specific command generators that bypass shared service logic
+
+Rules apply to every checklist item in this ICM section.
+
+Implementation structure:
+
+##### ICM-H1 — Shell-first install and init modes
 
 - [ ] add supported `atlas init --mode` values `mcp`, `hook`, `cli`, and `all`
 - [ ] make each mode idempotent and emit files to be created during `--dry-run`
 - [ ] ensure `--mode all` installs only MCP config, hooks, and CLI config relevant to shell-first memory workflows
 
-##### ICM-G2 — TUI only, read-only first
+##### ICM-H2 — TUI only, read-only first
 
-- [ ] add `atlas memory tui` with read-only browsing for memories, topics, feedback, memoir concepts, health findings, and saved artifacts
+- [ ] add `atlas memory tui` with read-only browsing for memories, topics, feedback, memoir concepts, overview records, health findings, and saved artifacts
 - [ ] add filters for topic, scope, importance, and frontend
+- [ ] add overview filters for subject kind, freshness, package, module, file, source kind, and updated time
 - [ ] keep first version non-mutating and smoke-testable without panic
 
-##### ICM-G3 — Tests, docs, and release gates
+##### ICM-H3 — Tests, docs, and release gates
 
-- [ ] create reusable fixtures for critical decision memory, low-priority stale memory, dead-code false-positive feedback, memoir dependency graph, wake-up pack with saved artifact references, and frontend-private memory
-- [ ] snapshot JSON output for `atlas memory store --json`, `atlas memory recall --json`, `atlas memory health --json`, `atlas feedback record --json`, `atlas feedback search --json`, `atlas memoir inspect --json`, and `atlas wake-up --json`
-- [ ] add `wiki/memory-architecture.md` documenting memory DB ownership, importance and decay policy, scope and visibility rules, feedback integration, memoir graph separation, wake-up behavior, and CLI/MCP mapping
+- [ ] create reusable fixtures for critical decision memory, low-priority stale memory, dead-code false-positive feedback, memoir dependency graph, overview memory records, wake-up pack with saved artifact references, and frontend-private memory
+- [ ] snapshot JSON output for `atlas memory store --json`, `atlas memory recall --json`, `atlas memory health --json`, `atlas feedback record --json`, `atlas feedback search --json`, `atlas memoir inspect --json`, `atlas overview show --json`, `atlas overview search --json`, and `atlas wake-up --json`
+- [ ] add `wiki/memory-architecture.md` documenting memory DB ownership, importance and decay policy, scope and visibility rules, feedback integration, memoir graph separation, overview memory separation, wake-up behavior, and CLI/MCP mapping
 - [ ] define release gate `ICM Memory Layer Complete`
-- [ ] require for release gate: CLI and MCP memory store/recall parity, importance and decay policies, feedback-adjusted analysis, memoir typed relations, wake-up packs without raw large content, health audit coverage, shared/private visibility rules, complete docs, and JSON snapshot coverage
+- [ ] require for release gate: CLI and MCP memory store/recall parity, importance and decay policies, feedback-adjusted analysis, memoir typed relations, overview memory export/ingest/context parity, wake-up packs without raw large content, health audit coverage, shared/private visibility rules, complete docs, and JSON snapshot coverage
 
-##### ICM-G completion criteria
+##### ICM-H completion criteria
 
 - [ ] every new shell-first memory command has CLI smoke coverage
 - [ ] every MCP memory tool has handler tests and parity assertions where applicable
 - [ ] `cargo test --workspace` passes with fixtures and JSON snapshots committed
 - [ ] no memory feature writes directly to graph DB
 - [ ] no large artifact is inlined into wake-up or resume output by default
+- [ ] no overview memory feature treats external analysis text as authoritative graph fact
 
 ---
 
@@ -739,80 +1114,15 @@ They are meant to strengthen Atlas’s retrieval/content sidecar without changin
 
 #### Patch R1 — Retrieval index lifecycle state
 
-Atlas already has strong graph build/update state and separate content/session stores, but retrieval/content indexing should also have an explicit lifecycle model so “built”, “indexed”, “searchable”, and “failed” do not drift.
-
-- [x] add explicit retrieval index state model
-- [x] create retrieval/content index status table or snapshot
-- [x] track per repo / per source states:
-  - [x] `indexing`
-  - [x] `indexed`
-  - [x] `index_failed`
-- [x] persist:
-  - [x] total files discovered
-  - [x] files indexed
-  - [x] total chunks written
-  - [x] chunks reused
-  - [x] last successful index time
-  - [x] last error
-- [x] expose retrieval index status through CLI
-- [x] expose retrieval index status through MCP
-- [x] ensure one source of truth for “searchable now”
-- [x] ensure interrupted indexing can recover cleanly without manual cleanup
-
-Why:
-- prevents state drift between stored content, searchable content, and agent-visible status
-- improves crash recovery and diagnostics
+Patch R1 is shipped. See SHIPPED.md for details.
 
 #### Patch R2 — Retrieval batching and chunk explosion guardrails
 
-Current plan has chunking and retrieval, but operational safety limits should be explicit.
-
-- [x] add configurable `retrieval_batch_size`
-- [x] add configurable `embedding_batch_size`
-- [x] add hard `max_chunks_per_index_run`
-- [x] add hard `max_chunks_per_file`
-- [x] add policy for oversized indexing runs:
-  - [x] fail fast
-  - [x] partial index with warning
-  - [x] skip pathological file with error entry
-- [x] measure and log:
-  - [x] buffered chunk count
-  - [x] buffered bytes
-  - [x] staged vector bytes
-  - [x] batch flush count
-- [x] add tests for:
-  - [x] chunk explosion from large file
-  - [x] recursive fallback chunk explosion
-  - [x] partial indexing recovery after hard cap hit
-
-Why:
-- protects retrieval layer from pathological files and runaway indexing cost
-- makes retrieval/index behavior predictable under load
+Patch R2 is shipped. See SHIPPED.md for details.
 
 #### Patch R3 — Embedding dimension registry and freeze rules
 
-Atlas already has optional embeddings and hybrid retrieval roadmap, but dimension handling should be explicit and deterministic.
-
-- [x] create embedding provider registry metadata
-- [x] persist:
-  - [x] provider name
-  - [x] model name
-  - [x] embedding dimension
-  - [x] discovered_at
-  - [x] index schema version
-- [x] require dimension to be frozen at index creation time
-- [x] reject insert/search if dimension does not match active retrieval index
-- [x] cache discovered dimensions per provider/model
-- [x] add CLI / diagnostics surface for current embedding config
-- [x] add tests for:
-  - [x] dimension mismatch on insert
-  - [x] dimension mismatch on query
-  - [x] provider switch with incompatible existing index
-  - [x] explicit rebuild requirement after dimension change
-
-Why:
-- avoids one of the most common hybrid/vector indexing failure modes
-- keeps retrieval layer deterministic and debuggable
+Patch R3 is shipped. See SHIPPED.md for details.
 
 #### Patch R4 — Retrieval backend capability flags
 
@@ -840,56 +1150,11 @@ Why:
 
 #### Patch R5 — Stable content-derived chunk identity
 
-Current chunk storage should have a true stable identity separate from display order.
-
-- [x] add stable `chunk_id`
-- [x] define `chunk_id` from content-derived hash over:
-  - [x] source/file path
-  - [x] line span or chunk boundary
-  - [x] normalized content
-- [x] keep `chunk_index` or display order separately
-- [x] use `chunk_id` for:
-  - [x] dedupe
-  - [x] chunk reuse
-  - [x] retrieval cache keys
-  - [x] saved-context references
-- [x] add tests for:
-  - [x] same content same `chunk_id`
-  - [x] moved chunk with changed path policy documented
-  - [x] changed line span/content produces new `chunk_id`
-
-Why:
-- improves deduplication and retrieval consistency across rebuilds
-- helps saved-context and future historical retrieval features
+Patch R5 is shipped. See SHIPPED.md for details.
 
 #### Patch R6 — Retrieval/token-efficiency evaluation
 
-Atlas already measures correctness and performance in many places, but retrieval should also be evaluated as a context-efficiency system.
-
-- [x] add retrieval benchmark metrics:
-  - [x] `recall_at_k`
-  - [x] `mrr`
-  - [x] exact target hit rate
-  - [x] retrieved tokens per query
-  - [x] emitted tokens per query
-  - [x] tool calls per task
-- [x] benchmark:
-  - [x] graph-only context
-  - [x] lexical retrieval only
-  - [x] hybrid retrieval
-  - [x] hybrid retrieval + graph expansion
-- [x] add fixed-budget evaluation:
-  - [x] quality under small context budget
-  - [x] quality under medium context budget
-- [x] track whether retrieval actually reduces:
-  - [x] payload size
-  - [x] repeated search calls
-  - [x] context noise
-- [x] add acceptance thresholds before enabling hybrid retrieval by default
-
-Why:
-- keeps retrieval improvements aligned with actual user value
-- validates that the retrieval layer improves token efficiency, not just ranking complexity
+Patch R6 is shipped. See SHIPPED.md for details.
 
 #### Patch R7 — Later experimental post-retrieval compaction
 
@@ -912,12 +1177,12 @@ Why:
 
 This patch is complete when:
 
-- [ ] retrieval/content index has explicit searchable state
-- [ ] retrieval indexing has batch and chunk guardrails
-- [ ] embedding dimension rules are explicit and enforced
+- [x] retrieval/content index has explicit searchable state
+- [x] retrieval indexing has batch and chunk guardrails
+- [x] embedding dimension rules are explicit and enforced
 - [ ] retrieval backend capabilities are validated, not assumed
-- [ ] stable `chunk_id` exists and is used for dedupe/reuse
-- [ ] retrieval/token-efficiency benchmarks are in place
+- [x] stable `chunk_id` exists and is used for dedupe/reuse
+- [x] retrieval/token-efficiency benchmarks are in place
 - [ ] optional post-retrieval compaction is tracked as a late experiment only
 
 ---
@@ -930,160 +1195,7 @@ Retrieval Ranking Evidence Patch is shipped. See SHIPPED.md for details.
 
 ### Graph/Content Companion Patch
 
-Atlas already has graph search for symbols and relationships plus file/content/template/text-asset search for prompts, docs, config, SQL, and templates. The missing design rule is that these are coordinated retrieval surfaces, not separate universes or a simple fallback chain. Graph answers code structure questions; content lookup answers non-code and context-adjacent questions; the context engine should merge both under one bounded selection, ranking, evidence, and truncation policy.
-
-#### Patch N1 — Declare graph/content lookup contract
-
-- [x] document canonical responsibility split:
-  - [x] graph search answers symbols, ownership, callers, callees, tests, imports, and structural relationships
-  - [x] content lookup answers prompts, docs, config, SQL, templates, logs, and embedded text assets
-  - [x] saved-context lookup answers prior Atlas outputs and session artifacts
-  - [x] context engine decides how these surfaces combine for a task
-- [x] define graph/content lookup as companion systems, not fallback-only systems
-- [x] define when both should be queried for one request:
-  - [x] review changes touching config or templates
-  - [x] symbols whose behavior depends on prompts or SQL
-  - [x] docs/spec questions tied to implementation files
-  - [x] agent/task questions needing saved context plus graph facts
-- [x] document anti-patterns:
-  - [x] broad file search before graph resolution for symbol questions
-  - [x] graph-only review when changed files include config/templates/prompts
-  - [x] content-only answers for structural dependency questions
-  - [x] separate unbounded result lists from graph and content tools
-
-Why:
-- non-code artifacts are first-class context when they affect behavior
-- graph-first should not mean content-blind
-
-#### Patch N2 — Unified bounded selection policy
-
-- [x] define one context selection policy for mixed graph/content results:
-  - [x] direct graph targets first
-  - [x] changed files and changed symbols next
-  - [x] adjacent config/templates/prompts/SQL tied to changed files next
-  - [x] caller/callee/test evidence next
-  - [x] saved-session artifacts only when relevant to current task
-- [x] apply shared budgets across mixed results:
-  - [x] max graph nodes
-  - [x] max graph edges
-  - [x] max content assets
-  - [x] max saved artifacts
-  - [x] max total payload bytes/tokens
-- [x] ensure truncation reports mixed omissions:
-  - [x] omitted graph nodes
-  - [x] omitted graph edges
-  - [x] omitted content assets
-  - [x] omitted saved artifacts
-  - [x] omitted bytes/tokens
-- [x] add deterministic tie-breakers when graph and content scores compete
-- [x] add tests for mixed graph/content truncation order
-
-Why:
-- separate bounded lists can still create an unbounded combined context
-- agents need one budget story for the final answer context
-
-#### Patch N3 — Coordinated ranking and evidence
-
-- [x] define a mixed-result ranking envelope with source kind:
-  - [x] `graph_node`
-  - [x] `graph_edge`
-  - [x] `file_asset`
-  - [x] `content_match`
-  - [x] `template`
-  - [x] `text_asset`
-  - [x] `saved_context`
-- [x] normalize ranking signals across surfaces:
-  - [x] exact symbol match
-  - [x] graph distance
-  - [x] changed-file boost
-  - [x] same package/directory boost
-  - [x] BM25/content match score
-  - [x] trigram/fuzzy correction
-  - [x] proximity/title/path rerank
-  - [x] session recency/relevance
-- [x] expose why each mixed item was selected through ranking evidence
-- [x] include `selection_reason` for both graph and content assets
-- [x] add tests proving config/template/prompt matches can be selected with graph evidence when relevant
-
-Why:
-- mixed context should be explainable, not an opaque concatenation of tool outputs
-- ranking evidence must work for content assets as well as graph nodes
-
-#### Patch N4 — MCP and prompt workflow integration
-
-- [x] update MCP tool descriptions to describe graph/content companion rules
-- [x] improve `search_content` invalid-regex guidance:
-  - [x] keep `is_regex=true` strict; invalid regex returns error instead of fallback search
-  - [x] include escaped-regex suggestion for literal metacharacters, for example `Context \\{`
-  - [x] suggest `is_regex=false` when caller wants literal text search
-  - [x] add MCP regression test for invalid pattern like `Command::Context|Context {`
-- [x] update `review_change` prompt to query content assets when changed files include docs/config/templates/prompts/SQL
-- [x] update `inspect_symbol` prompt to look for context-adjacent assets only when graph evidence suggests dependency
-- [x] update installed AGENTS instructions:
-  - [x] graph tools first for structure
-  - [x] content tools as companion lookup for non-code assets
-  - [x] context engine should merge both under bounded policy
-- [x] add prompt/registry snapshot tests for companion-contract wording
-
-Why:
-- agents follow surface contracts more reliably than implicit architecture
-- prompt and install docs should not describe content lookup as mere fallback
-
-#### Patch N completion criteria
-
-- [x] graph/content companion contract is documented as a design rule
-- [x] mixed graph/content context has one bounded selection policy
-- [x] mixed results expose source kind, selection reason, ranking evidence, and truncation metadata
-- [x] MCP prompts, tool descriptions, README, and installed AGENTS instructions agree
-- [x] tests cover mixed code + config/template/prompt/doc context assembly
-
----
-
-### Parity Surface Patch
-
-Atlas already has pieces of the upstream parity surface: Markdown heading graph nodes, content search over docs, large-function risk flags in review summaries, and explicit build/update plus flows/communities commands. Missing work is to turn those pieces into first-class CLI/MCP surfaces with shared service logic, compact output, and parity tests.
-
-#### Patch PS1 — Docs section lookup parity
-
-Patch PS1 is shipped. See SHIPPED.md for details.
-
-#### Patch PS2 — Large-function finder parity
-
-- [ ] add large-function analysis service:
-  - [ ] scan function/method graph nodes by line span
-  - [ ] configurable threshold with default matching review risk summary
-  - [ ] rank by line count, fan-in/fan-out, changed-file relevance, and package/module boundary when available
-  - [ ] return file path, qualified name, kind, line range, LOC, and ranking reason
-  - [ ] support repo-wide and file-scoped modes
-- [ ] add CLI surface:
-  - [ ] `atlas find-large-functions`
-  - [ ] `atlas find-large-functions --files ...`
-  - [ ] `--threshold`, `--limit`, `--include-tests`, and `--json`
-- [ ] add MCP `find_large_functions`:
-  - [ ] same inputs and defaults as CLI JSON
-  - [ ] compact defaults suitable for agent review
-  - [ ] provenance and freshness metadata
-- [ ] add CLI/MCP parity tests:
-  - [ ] default threshold matches review large-function flag
-  - [ ] file-scoped filtering
-  - [ ] threshold and limit behavior
-  - [ ] test-node include/exclude behavior
-  - [ ] stable sort ties
-
-Why:
-- current review code only flags large changed functions; agents need direct repo/file discovery and ranked evidence
-- one service prevents review, CLI, and MCP thresholds from drifting
-
-#### Patch PS3 — Explicit postprocess command parity
-
-Patch PS3 is shipped. See SHIPPED.md for details.
-
-#### Patch PS completion criteria
-
-- [ ] `find_large_functions` exists as an MCP tool with matching CLI surface
-- [ ] large-function service shares ranking, truncation, and error rules with review summaries instead of drifting thresholds
-- [ ] CLI JSON and MCP JSON are parity-tested for representative large-function fixtures
-- [ ] README, MCP reference, installed AGENTS instructions, and prompt workflows document the remaining large-function surface consistently
+Graph/Content Companion Patch is shipped. See SHIPPED.md for details.
 
 ---
 
@@ -1494,147 +1606,352 @@ Why:
 
 ---
 
+### Rust Parser Query-Backed Extraction Patch
+
+Atlas Rust parser currently uses manual `node.kind()` AST walking for definition extraction, scope traversal, attribute detection, call extraction, and reference extraction. This works, but it makes grammar drift harder to audit and mixes syntax matching with Atlas graph semantics.
+
+This patch moves Rust syntax extraction to Atlas-owned tree-sitter query files while keeping graph semantics in Rust code. `.scm` queries identify syntax facts; Rust code still builds qualified names, parent scopes, `Contains`, `Calls`, `References`, `Implements`, confidence tiers, and Atlas-specific metadata.
+
+Use Helix Rust queries only as grammar reference for tree-sitter node names and scope patterns, especially `runtime/queries/rust/tags.scm` and `runtime/queries/rust/locals.scm`. Do not copy Helix query files verbatim unless license handling is added, because Helix is MPL-2.0. Atlas query files must be authored for Atlas captures.
+
+#### Patch Q1 — Query infrastructure and behavior-preserving Rust extraction
+
+- [ ] add `packages/atlas-parser/queries/rust.scm` with Atlas-owned captures:
+  - [ ] capture `function_item` as `@atlas.definition.function`
+  - [ ] capture `function_signature_item` as `@atlas.definition.function_signature`
+  - [ ] capture `mod_item` as `@atlas.definition.module`
+  - [ ] capture `struct_item` as `@atlas.definition.struct`
+  - [ ] capture `enum_item` as `@atlas.definition.enum`
+  - [ ] capture `trait_item` as `@atlas.definition.trait`
+  - [ ] capture `const_item` as `@atlas.definition.const`
+  - [ ] capture `static_item` as `@atlas.definition.static`
+  - [ ] capture `impl_item` as `@atlas.definition.impl`
+  - [ ] capture impl `type` field as `@atlas.impl.type`
+  - [ ] capture impl `trait` field as `@atlas.impl.trait`
+  - [ ] capture item `name` fields with stable capture names such as `@atlas.name`
+- [ ] add shared query helper module in `packages/atlas-parser/src/query_helpers.rs`:
+  - [ ] expose helper to compile `tree_sitter::Query` from static query text and language
+  - [ ] expose helper to run `tree_sitter::QueryCursor` against a root node and source bytes
+  - [ ] expose helper to group captures by query match without losing capture order
+  - [ ] expose helper to read capture text using existing `ast_helpers::node_text`
+  - [ ] return parse/query errors as test-visible failures, not silent empty capture sets
+- [ ] wire `query_helpers` into `packages/atlas-parser/src/lib.rs`
+- [ ] refactor `packages/atlas-parser/src/lang/rust.rs` definition extraction:
+  - [ ] replace manual top-level `Walker::visit` `node.kind()` matching for definitions with query capture processing
+  - [ ] keep `parse_runtime::parse_tree` unchanged
+  - [ ] keep `LangParser`, `ParseContext`, `ParserRegistry`, and `ParsedFile` public interfaces unchanged
+  - [ ] keep file node creation unchanged
+  - [ ] keep existing qualified-name strings unchanged
+  - [ ] keep existing `NodeKind` choices unchanged
+  - [ ] keep existing `Contains` edge behavior unchanged
+  - [ ] keep existing same-file `Implements` edge behavior unchanged
+  - [ ] keep current same-file call resolver unchanged
+  - [ ] keep current same-file reference resolver unchanged
+  - [ ] keep current test-module and test-function detection behavior unchanged in Q1
+- [ ] add Rust-only internal syntax fact structs:
+  - [ ] `RustSyntaxFacts`
+  - [ ] `RustItem`
+  - [ ] `RustItemKind`
+  - [ ] `RustImpl`
+  - [ ] store source byte ranges or `tree_sitter::Node` handles needed to assign parent scopes
+- [ ] preserve scope semantics:
+  - [ ] root scope starts at repo-relative file path
+  - [ ] inline `mod foo { ... }` pushes module qualified name
+  - [ ] `impl Type { ... }` pushes impl qualified name
+  - [ ] methods inside impl remain `NodeKind::Method`
+  - [ ] nested module suffixes remain compatible with current `qualified_suffix`
+- [ ] add tests proving behavior preservation:
+  - [ ] existing `lang::rust` unit tests pass without expectation changes
+  - [ ] `packages/atlas-parser/tests/fixtures/rust/core.golden.json` does not change
+  - [ ] `packages/atlas-parser/tests/fixtures/rust/bad_syntax.golden.json` does not change
+  - [ ] malformed Rust source still returns file node and best-effort symbols
+  - [ ] query helper test fails clearly on invalid query text
+  - [ ] query helper test captures at least one Rust function from a small fixture
+
+Why:
+- separates syntax matching from Atlas graph semantics
+- makes grammar drift easier to audit through one Rust query file
+- preserves graph output before semantic changes
+- creates shared query infrastructure for future parser migrations
+
+#### Patch Q2 — Rust semantic extraction fixes on query foundation
+
+- [ ] improve trait body extraction:
+  - [ ] capture methods declared in `trait_item` bodies via `function_signature_item`
+  - [ ] emit trait method declarations using the existing `NodeKind` that best matches current graph model
+  - [ ] set trait method parent to the trait qualified name
+  - [ ] add `Contains` edge from trait node to trait method node
+  - [ ] keep trait methods distinct from free functions with same name
+- [ ] replace substring-based attribute detection:
+  - [ ] parse `attribute_item` structure or query captures instead of using `text.contains("test")`
+  - [ ] detect exact `#[test]` attribute for test functions
+  - [ ] detect exact `#[cfg(test)]` attribute for test modules
+  - [ ] do not treat `#[cfg(not(test))]` as test
+  - [ ] do not treat custom attributes containing the word `test` as test
+- [ ] improve impl target handling:
+  - [ ] normalize local type name from simple and scoped impl type paths
+  - [ ] normalize local trait name from simple and scoped trait paths
+  - [ ] keep same-file `Implements` edge only when local type and local trait targets resolve uniquely
+  - [ ] do not emit dangling `Implements` edges for external traits or external types
+  - [ ] keep existing confidence tier for same-file implements edges
+- [ ] move call syntax extraction to queries while preserving resolver semantics:
+  - [ ] capture `call_expression` function target
+  - [ ] capture `method_call_expression` receiver and method name
+  - [ ] keep current same-file callee resolution rules
+  - [ ] keep unresolved call text target behavior
+  - [ ] keep current confidence values unless tests justify change
+- [ ] move reference syntax extraction to queries while preserving resolver semantics:
+  - [ ] capture `use_declaration` argument syntax
+  - [ ] capture type references from `type_identifier` and `scoped_type_identifier`
+  - [ ] ignore definition-name captures when producing references
+  - [ ] keep unique same-file target requirement for `References` edges
+- [ ] add focused semantic tests:
+  - [ ] trait method declaration is emitted and contained by trait
+  - [ ] free function and trait method with same name produce distinct qualified names
+  - [ ] `#[test] fn it_works()` emits `NodeKind::Test`
+  - [ ] `#[cfg(test)] mod tests { fn helper() {} }` marks nested function as test
+  - [ ] `#[cfg(not(test))] mod tests { fn helper() {} }` does not mark nested function as test
+  - [ ] custom attribute containing `test` does not mark function as test
+  - [ ] `impl local::Trait for local::Type` only emits `Implements` if local targets resolve uniquely
+  - [ ] `impl std::fmt::Display for Local` does not emit same-file `Implements` edge unless local trait exists
+  - [ ] generic function calls still resolve to same-file functions
+  - [ ] method calls still resolve to same-file methods when current resolver can disambiguate
+  - [ ] unresolved scoped calls still keep text target and `text` confidence tier
+
+Why:
+- query-backed extraction enables safer fixes after behavior-preserving migration
+- trait method, attribute, and impl handling are current correctness gaps
+- call/reference query captures reduce manual traversal without changing Atlas resolver policy
+
+#### Patch Q completion criteria
+
+- [ ] Rust parser uses Atlas-owned `.scm` query captures for definition extraction
+- [ ] Rust parser public API and `ParsedFile` schema remain unchanged
+- [ ] Q1 preserves existing Rust golden outputs
+- [ ] Q2 adds semantic fixes with targeted regression tests
+- [ ] Helix Rust queries are referenced only for grammar guidance unless MPL-2.0 compliance is explicitly added
+- [ ] `cargo test -p atlas-parser lang::rust` passes
+- [ ] `cargo test -p atlas-parser --test parser_golden` passes
+- [ ] `cargo test -p atlas-parser` passes
+- [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings` passes
+- [ ] `cargo fmt --all` has been run
+
+---
+
+### Shared Parser Query Migration Patch
+
+Implement this only after Patch Q is complete. Rust is the pilot for shared query infrastructure and capture conventions. This patch migrates the remaining tree-sitter-backed language parsers to the same query-backed extraction model without changing parser public APIs, database schemas, or graph output contracts.
+
+The migration rule is: `.scm` queries identify language syntax facts; Rust code in each language parser still owns Atlas graph semantics, including qualified names, parent scopes, edge kinds, confidence tiers, source metadata, and language-specific heuristics. Do not replace semantic resolution with query captures alone.
+
+#### Patch SQ1 — Shared query contract and migration harness
+
+- [ ] document the shared query-backed parser contract in `packages/atlas-parser/README.md`:
+  - [ ] query files live under `packages/atlas-parser/queries/<language>.scm`
+  - [ ] capture names use the `@atlas.*` namespace
+  - [ ] queries capture syntax facts only
+  - [ ] language parser code maps captures into `Node`, `Edge`, and `ParsedFile`
+  - [ ] language parser public APIs remain unchanged
+- [ ] harden shared query helpers created by Patch Q:
+  - [ ] support loading one static query per language via `include_str!`
+  - [ ] expose helper for capture lookup by exact capture name
+  - [ ] expose helper for optional and required captures with clear test failures
+  - [ ] expose helper to sort captures by byte range for deterministic output
+  - [ ] expose helper to preserve source-order traversal when multiple query matches overlap
+- [ ] define common capture naming conventions:
+  - [ ] `@atlas.definition.function`
+  - [ ] `@atlas.definition.method`
+  - [ ] `@atlas.definition.class`
+  - [ ] `@atlas.definition.module`
+  - [ ] `@atlas.definition.struct`
+  - [ ] `@atlas.definition.enum`
+  - [ ] `@atlas.definition.interface`
+  - [ ] `@atlas.definition.trait`
+  - [ ] `@atlas.definition.constant`
+  - [ ] `@atlas.definition.variable`
+  - [ ] `@atlas.import`
+  - [ ] `@atlas.call`
+  - [ ] `@atlas.reference`
+  - [ ] `@atlas.name`
+  - [ ] `@atlas.parameters`
+  - [ ] `@atlas.return_type`
+  - [ ] `@atlas.receiver`
+- [ ] add query helper tests:
+  - [ ] invalid query text returns a clear error
+  - [ ] missing required capture returns a clear error
+  - [ ] optional capture absence does not fail
+  - [ ] capture order is deterministic across repeated runs
+  - [ ] overlapping captures preserve match order before graph builder filtering
+- [ ] add migration checklist comments in each remaining parser file naming the existing manual extraction responsibilities before refactor starts
+
+Why:
+- prevents each language migration from inventing incompatible capture names
+- makes query-backed parser behavior testable before broad parser churn
+- keeps graph semantics explicit and separate from tree-sitter syntax matching
+
+#### Patch SQ2 — Migrate C-family compiled language parsers
+
+- [ ] migrate `packages/atlas-parser/src/lang/c.rs`:
+  - [ ] add `packages/atlas-parser/queries/c.scm`
+  - [ ] query functions, structs, enums, typedefs, includes, and calls
+  - [ ] preserve existing C qualified names and `NodeKind` choices
+  - [ ] preserve existing include/import edge behavior
+  - [ ] preserve existing same-file call behavior
+  - [ ] keep `tests/fixtures/c/*.golden.json` unchanged unless a semantic fix is explicitly itemized
+- [ ] migrate `packages/atlas-parser/src/lang/cpp.rs`:
+  - [ ] add `packages/atlas-parser/queries/cpp.scm`
+  - [ ] query functions, methods, classes, structs, namespaces, includes, and calls
+  - [ ] preserve existing C++ qualified names and `NodeKind` choices
+  - [ ] preserve existing namespace and class parent scope behavior
+  - [ ] keep `tests/fixtures/cpp/*.golden.json` unchanged unless a semantic fix is explicitly itemized
+- [ ] migrate `packages/atlas-parser/src/lang/csharp.rs`:
+  - [ ] add `packages/atlas-parser/queries/csharp.scm`
+  - [ ] query namespaces, classes, interfaces, methods, fields, using directives, and calls
+  - [ ] preserve existing C# qualified names and `NodeKind` choices
+  - [ ] preserve existing test detection behavior
+  - [ ] keep `tests/fixtures/csharp/*.golden.json` unchanged unless a semantic fix is explicitly itemized
+- [ ] run tests after this batch:
+  - [ ] `cargo test -p atlas-parser lang::c`
+  - [ ] `cargo test -p atlas-parser lang::cpp`
+  - [ ] `cargo test -p atlas-parser lang::csharp`
+  - [ ] `cargo test -p atlas-parser --test parser_golden`
+
+Why:
+- C-family parsers share enough syntax shape to validate query conventions for compiled languages
+- batch keeps blast radius bounded before dynamic-language migrations
+
+#### Patch SQ3 — Migrate JVM and static OO language parsers
+
+- [ ] migrate `packages/atlas-parser/src/lang/java.rs`:
+  - [ ] add `packages/atlas-parser/queries/java.scm`
+  - [ ] query packages, imports, classes, interfaces, enums, methods, fields, and calls
+  - [ ] preserve existing Java qualified names and `NodeKind` choices
+  - [ ] preserve existing parent scope behavior
+  - [ ] keep `tests/fixtures/java/*.golden.json` unchanged unless a semantic fix is explicitly itemized
+- [ ] migrate `packages/atlas-parser/src/lang/scala.rs`:
+  - [ ] add `packages/atlas-parser/queries/scala.scm`
+  - [ ] query packages, imports, classes, objects, traits, functions, vals, vars, and calls
+  - [ ] preserve existing Scala qualified names and `NodeKind` choices
+  - [ ] preserve existing object/class/trait scope behavior
+  - [ ] keep `tests/fixtures/scala/*.golden.json` unchanged unless a semantic fix is explicitly itemized
+- [ ] run tests after this batch:
+  - [ ] `cargo test -p atlas-parser lang::java`
+  - [ ] `cargo test -p atlas-parser lang::scala`
+  - [ ] `cargo test -p atlas-parser --test parser_golden`
+
+Why:
+- Java and Scala exercise package/import scope semantics after C-family migration
+- keeps static OO migration separate from JavaScript/TypeScript complexity
+
+#### Patch SQ4 — Migrate JavaScript and TypeScript parsers
+
+- [ ] migrate shared JavaScript/TypeScript parser code in `packages/atlas-parser/src/lang/javascript.rs`:
+  - [ ] add `packages/atlas-parser/queries/javascript.scm`
+  - [ ] add `packages/atlas-parser/queries/typescript.scm`
+  - [ ] query imports, exports, functions, arrow functions assigned to names, classes, methods, variables, and calls
+  - [ ] preserve existing JavaScript qualified names and `NodeKind` choices
+  - [ ] preserve existing TypeScript qualified names and `NodeKind` choices
+  - [ ] preserve existing JSX/TSX support behavior
+  - [ ] preserve existing call/reference confidence tiers
+  - [ ] keep `tests/fixtures/javascript/*.golden.json` unchanged unless a semantic fix is explicitly itemized
+  - [ ] keep `tests/fixtures/typescript/*.golden.json` unchanged unless a semantic fix is explicitly itemized
+- [ ] run tests after this batch:
+  - [ ] `cargo test -p atlas-parser lang::javascript`
+  - [ ] `cargo test -p atlas-parser --test parser_golden`
+
+Why:
+- JavaScript and TypeScript share parser code and must migrate together to avoid divergent behavior
+- this batch validates query helpers against two grammars behind one language module
+
+#### Patch SQ5 — Migrate dynamic language parsers
+
+- [ ] migrate `packages/atlas-parser/src/lang/python.rs`:
+  - [ ] add `packages/atlas-parser/queries/python.scm`
+  - [ ] query imports, classes, functions, methods, assignments, and calls
+  - [ ] preserve existing Python qualified names and `NodeKind` choices
+  - [ ] preserve existing indentation/scope behavior from AST parentage
+  - [ ] keep `tests/fixtures/python/*.golden.json` unchanged unless a semantic fix is explicitly itemized
+- [ ] migrate `packages/atlas-parser/src/lang/ruby.rs`:
+  - [ ] add `packages/atlas-parser/queries/ruby.scm`
+  - [ ] query requires, modules, classes, instance methods, singleton methods, constants, and calls
+  - [ ] preserve existing Ruby qualified names and `NodeKind` choices
+  - [ ] preserve existing current-owner behavior
+  - [ ] keep `tests/fixtures/ruby/*.golden.json` unchanged unless a semantic fix is explicitly itemized
+- [ ] migrate `packages/atlas-parser/src/lang/php.rs`:
+  - [ ] add `packages/atlas-parser/queries/php.scm`
+  - [ ] query namespaces, uses, classes, interfaces, traits, functions, methods, constants, and calls
+  - [ ] preserve existing PHP qualified names and `NodeKind` choices
+  - [ ] preserve existing PHP language mode setup
+  - [ ] keep `tests/fixtures/php/*.golden.json` unchanged unless a semantic fix is explicitly itemized
+- [ ] migrate `packages/atlas-parser/src/lang/bash.rs`:
+  - [ ] add `packages/atlas-parser/queries/bash.scm`
+  - [ ] query function definitions, command invocations, variables, and source/import-like commands
+  - [ ] preserve existing Bash qualified names and `NodeKind` choices
+  - [ ] keep `tests/fixtures/bash/*.golden.json` unchanged unless a semantic fix is explicitly itemized
+- [ ] run tests after this batch:
+  - [ ] `cargo test -p atlas-parser lang::python`
+  - [ ] `cargo test -p atlas-parser lang::ruby`
+  - [ ] `cargo test -p atlas-parser lang::php`
+  - [ ] `cargo test -p atlas-parser lang::bash`
+  - [ ] `cargo test -p atlas-parser --test parser_golden`
+
+Why:
+- dynamic languages rely heavily on scope heuristics, so they should migrate after query helpers are proven
+- batch validates method/function owner handling across multiple dynamic grammar styles
+
+#### Patch SQ6 — Migrate data, markup, and style parsers where queries add value
+
+- [ ] evaluate query migration for `packages/atlas-parser/src/lang/json.rs`:
+  - [ ] migrate to `packages/atlas-parser/queries/json.scm` only if it reduces manual traversal without losing object/key path semantics
+  - [ ] otherwise document why JSON remains manual
+  - [ ] keep `tests/fixtures/json/*.golden.json` unchanged unless a semantic fix is explicitly itemized
+- [ ] evaluate query migration for `packages/atlas-parser/src/lang/toml.rs`:
+  - [ ] migrate to `packages/atlas-parser/queries/toml.scm` only if it reduces manual traversal without losing table/key path semantics
+  - [ ] otherwise document why TOML remains manual
+  - [ ] keep `tests/fixtures/toml/*.golden.json` unchanged unless a semantic fix is explicitly itemized
+- [ ] evaluate query migration for `packages/atlas-parser/src/lang/html.rs`:
+  - [ ] migrate to `packages/atlas-parser/queries/html.scm` only if query captures improve element/script/style extraction
+  - [ ] otherwise document why HTML remains manual
+  - [ ] keep `tests/fixtures/html/*.golden.json` unchanged unless a semantic fix is explicitly itemized
+- [ ] evaluate query migration for `packages/atlas-parser/src/lang/css.rs`:
+  - [ ] migrate to `packages/atlas-parser/queries/css.scm` only if query captures improve selector/rule extraction
+  - [ ] otherwise document why CSS remains manual
+  - [ ] keep `tests/fixtures/css/*.golden.json` unchanged unless a semantic fix is explicitly itemized
+- [ ] evaluate query migration for `packages/atlas-parser/src/lang/markdown.rs`:
+  - [ ] migrate to `packages/atlas-parser/queries/markdown.scm` only if tree-sitter-md query behavior stays stable for malformed shorter inputs
+  - [ ] otherwise document why Markdown remains manual
+  - [ ] preserve current decision to avoid unstable incremental reuse for Markdown unless separately fixed
+  - [ ] keep `tests/fixtures/markdown/*.golden.json` unchanged unless a semantic fix is explicitly itemized
+- [ ] run tests after this batch:
+  - [ ] `cargo test -p atlas-parser lang::json`
+  - [ ] `cargo test -p atlas-parser lang::toml`
+  - [ ] `cargo test -p atlas-parser lang::html`
+  - [ ] `cargo test -p atlas-parser lang::css`
+  - [ ] `cargo test -p atlas-parser lang::markdown`
+  - [ ] `cargo test -p atlas-parser --test parser_golden`
+
+Why:
+- data/markup/style parsers may not benefit equally from queries
+- this batch requires explicit migrate-or-document decisions instead of forced churn
+
+#### Patch SQ completion criteria
+
+- [ ] every non-Rust parser has either an Atlas-owned query file or a documented reason to remain manual
+- [ ] all migrated parsers use shared query helpers instead of ad hoc `tree_sitter::QueryCursor` code
+- [ ] all migrated parsers keep public parser APIs unchanged
+- [ ] golden outputs remain unchanged unless semantic fixes are explicitly itemized in the corresponding patch
+- [ ] parser docs describe the query-backed extraction contract and capture naming convention
+- [ ] `cargo test -p atlas-parser --test parser_golden` passes after each migration batch
+- [ ] `cargo test -p atlas-parser` passes after the final migration batch
+- [ ] `./scripts/test-workspace-summary.sh` passes after the final migration batch
+- [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings` passes after the final migration batch
+- [ ] `cargo fmt --all` has been run after the final migration batch
+
+---
+
 ### Fuzz Patches
 
-Atlas now has initial `cargo-fuzz` coverage for parser registry dispatch, direct language handlers, and SQLite regex UDF execution. That is a good base, but tree-sitter-heavy paths still have integration and invariant gaps. Add focused fuzz patches to cover cache lifecycle, engine update flow, parser output invariants, AST helper safety, refactor validation reuse, and seed corpora quality.
-
-#### Patch F1 — Stateful `TreeCache` incremental-reparse fuzz target
-
-- [x] add `tree_cache_stateful` cargo-fuzz target under `fuzz/fuzz_targets/`
-- [x] define stateful fuzz input model:
-  - [x] sequence of operations over `TreeCache`: `parse`, `reparse_with_old_tree`, `insert`, `remove`, `evict`, `rename_key`
-  - [x] path selector over supported parser paths (`.rs`, `.go`, `.py`, `.js`, `.ts`, `.json`, `.toml`, `.html`, `.css`, `.sh`, `.md`, `.java`, `.cs`, `.php`, `.c`, `.cpp`, `.scala`, `.rb`)
-  - [x] source bytes per operation
-- [x] drive real `ParserRegistry::with_defaults()` plus real `TreeCache` from `atlas-parser`
-- [x] fuzz remove/reinsert path used by incremental update worker handoff
-- [x] fuzz delete/rename path transitions:
-  - [x] parse old path
-  - [x] remove cached tree
-  - [x] reinsert under new path
-  - [x] evict old path
-- [x] assert no panic when cached old tree is reused with changed bytes for same path
-- [x] add deterministic regression test alongside `TreeCache` tests for minimal cache rename/remove round-trip discovered during fuzzing
-
-Why:
-- current fuzz targets pass `old_tree`, but do not exercise actual `TreeCache` lifecycle semantics
-- tree ownership and path-key transitions are core to safe incremental reparse
-
-#### Patch F2 — `atlas-engine` update-flow fuzz target
-
-- [x] add `update_graph_sequence` cargo-fuzz target under `fuzz/fuzz_targets/`
-- [x] create temp repo fixture per fuzz case with minimal `.git` init and tracked files
-- [x] define fuzz input model:
-  - [x] initial file set
-  - [x] sequence of file mutations (`add`, `modify`, `delete`, `rename`)
-  - [x] path kinds spanning supported parser extensions plus unsupported files
-  - [x] base content bytes and mutated content bytes
-- [x] run real `atlas_engine::update::update_graph` against temp repo and temp SQLite db
-- [x] cover both:
-  - [x] working-tree diff mode
-  - [x] explicit file-list mode
-- [x] ensure fuzz sequence exercises:
-  - [x] old-tree reuse through `TreeCache`
-  - [x] unsupported-file skip path
-  - [x] deleted-file cleanup path
-  - [x] renamed-file path
-- [x] assert no panic and no hard error from benign malformed source in supported files
-- [x] add targeted regression tests for any crashers found in update pipeline
-
-Why:
-- parser-only fuzz misses actual engine integration path that moves trees through work items and persistence logic
-- update flow is where tree-sitter parse reuse meets repo state and file churn
-
-#### Patch F3 — Parser output invariant fuzz target
-
-- [x] add `parser_invariants` cargo-fuzz target under `fuzz/fuzz_targets/`
-- [x] feed all built-in language handlers through `ParserRegistry::parse`
-- [x] define invariant checks on returned `ParsedFile`:
-  - [x] exactly one `file` node exists for supported parse result
-  - [x] `ParsedFile.path` equals input relative path
-  - [x] every node `file_path` equals input relative path
-  - [x] every node `qualified_name` is non-empty
-  - [x] every edge `source_qn` is non-empty
-  - [x] every edge `target_qn` is non-empty
-  - [x] `line_start >= 1`
-  - [x] `line_end >= line_start`
-  - [x] `size` matches source length when populated
-- [x] document any intentional invariant exceptions in comments near the checks
-- [x] add optional duplicate-qualified-name detector:
-  - [x] fail only if duplicate QNs are invalid for that language/model
-  - [x] otherwise record as advisory and do not assert
-- [x] add regression tests for each new invariant that catches a real bug found by fuzzing
-
-Why:
-- current fuzz verifies “no crash” only
-- malformed tree-sitter outputs can still silently create invalid graph state
-
-#### Patch F4 — AST helper safety fuzz target
-
-- [x] add `ast_helpers_walk` cargo-fuzz target under `fuzz/fuzz_targets/`
-- [x] parse fuzz bytes with each built-in language grammar
-- [x] if parse returns a tree:
-  - [x] walk all nodes recursively
-  - [x] call `node_text`, `start_line`, `end_line`, and `has_ancestor_kind` on each node
-  - [x] call `field_text` across a bounded list of common field names (`name`, `parameters`, `return_type`, `body`, `value`, `type`, `result`, `object`, `function`)
-  - [x] call `find_all` for bounded common kinds relevant to each grammar
-- [x] assert helpers never panic on malformed parse trees or invalid UTF-8 source bytes
-- [x] add direct unit tests in `ast_helpers.rs` for any helper edge case discovered by fuzzing
-
-Why:
-- helper panics would affect every language parser
-- current language-handler fuzz only covers helper usage that happens to be reached by parser-specific traversal
-
-#### Patch F5 — Refactor validation parser-reuse fuzz target
-
-- [x] add `refactor_parse_validation` cargo-fuzz target under `fuzz/fuzz_targets/`
-- [x] expose minimal public or test-only harness in `atlas-refactor` for `parse_file_content` path without requiring full refactor scenario setup
-- [x] define fuzz input model:
-  - [x] file path
-  - [x] content bytes
-  - [x] supported and unsupported file extensions
-- [x] run parser revalidation path used by refactor engine
-- [x] assert behavior stays bounded:
-  - [x] unsupported files return `None`
-  - [x] empty files do not panic
-  - [x] malformed supported-language content does not panic
-  - [x] validation warnings/errors remain UTF-8 safe
-- [x] add regression tests for any parser-validation crash discovered
-
-Why:
-- refactor engine reuses parser stack through a different caller path with different assumptions about content and file support
-- parser safety should cover both graph build and refactor validation paths
-
-#### Patch F6 — Seed corpus and dictionary patch
-
-- [x] add initial corpora under `fuzz/corpus/` for all parser-centric targets
-- [x] seed `parser_handlers`, `language_parsers`, `tree_cache_stateful`, `parser_invariants`, and `ast_helpers_walk` from existing parser fixtures:
-  - [x] `packages/atlas-parser/tests/fixtures/*/core.*`
-  - [x] `packages/atlas-parser/tests/fixtures/*/bad_syntax.*`
-- [x] add regex corpus for `regex_sql_udf`:
-  - [x] literals
-  - [x] anchors
-  - [x] alternation
-  - [x] character classes
-  - [x] invalid patterns
-  - [x] Unicode-heavy samples
-- [x] add optional `regex.dict` with common regex metacharacters and flags
-- [x] add `README` commands for refreshing corpora from fixture files
-- [x] document nightly/toolchain and `cargo fuzz` setup in `fuzz/README.md`
-- [x] update gitignore for the seed corpus
-
-Why:
-- harnesses without corpora start colder and discover structural paths more slowly
-- existing parser fixtures already provide valid and invalid syntax seeds across languages
-
-#### Patch F completion criteria
-
-- [x] `tree_cache_stateful` fuzzes real `TreeCache` lifecycle operations with parser reuse
-- [x] `update_graph_sequence` fuzzes `atlas-engine` incremental update flow on temp repos
-- [x] `parser_invariants` asserts graph-shape invariants for every built-in language parser
-- [x] `ast_helpers_walk` stress-tests `ast_helpers` against arbitrary parse trees and byte input
-- [x] `refactor_parse_validation` fuzzes parser reuse through `atlas-refactor`
-- [x] corpora exist under `fuzz/corpus/` and seed parser and regex targets from real fixtures
-- [x] every new fuzz-discovered crash adds a deterministic regression test near affected code
+Fuzz Patches are shipped. See SHIPPED.md for details.
 
 ---
 
@@ -1992,55 +2309,15 @@ Atlas currently uses one `rusqlite::Connection` per store struct. That is safe f
 
 #### Patch T1 — Canonical connection ownership contract
 
-- [x] define one canonical SQLite thread/ownership policy in `atlas-db-utils`:
-  - [x] each Atlas store owns exactly one `rusqlite::Connection`
-  - [x] store structs are thread-confined and must not cross Rayon or worker-thread boundaries
-  - [x] concurrent DB access, when needed, must use separate connections; never shared ownership of one connection
-  - [x] current architecture is single-writer per store instance; no read pool exists yet
-- [x] align wording across `atlas-store-sqlite`, `atlas-contentstore`, `atlas-session`, and `atlas-db-utils`:
-  - [x] replace ambiguous `serialized-reader` wording with `single-connection per store instance`
-  - [x] document that WAL permits concurrent reads during writes only across separate connections
-  - [x] document why `worldtree.db` opens with `SQLITE_OPEN_NO_MUTEX` under thread-confined ownership
-- [x] add succinct comments near engine build/update Rayon phases stating DB work is intentionally outside parallel closures
-- [x] ensure parser docs stay explicit that parser crate has no SQLite access and is not part of DB-sharing risk
-
-Why:
-- avoids reviewer confusion from `rayon` presence in workspace dependencies
-- makes current concurrency guarantees explicit and consistent across crates
+Patch T1 is shipped. See SHIPPED.md for details.
 
 #### Patch T2 — Engine boundary enforcement and regression tests
 
-- [x] keep engine parallel parse phases structurally separated from SQLite write phases:
-  - [x] Rayon closures receive only parse inputs such as paths, hashes, bytes, and optional tree-cache entries
-  - [x] `Store` access stays in explicit sequential write/update phases after parallel collection completes
-- [x] add regression tests for current architecture:
-  - [x] full build path proves parallel parse completes before store write phase
-  - [x] incremental update path proves changed/dependent file parse phases complete before store write phase
-  - [x] existing WAL lock test continues to model concurrency with a second connection on a second thread, not a shared connection
-- [x] add compile-fail or equivalent trait-bound tests proving `Store`, `ContentStore`, and `SessionStore` cannot satisfy APIs that require `Send` or `Sync`
-- [x] reject any new abstraction that wraps one `Connection` in `Arc<Mutex<_>>`, `RwLock<_>`, or similar cross-thread sharing helper
-
-Why:
-- turns architecture intent into an enforceable boundary
-- catches refactors that accidentally move store access into worker threads
+Patch T2 is shipped. See SHIPPED.md for details.
 
 #### Patch T3 — Future separate-connection read concurrency contract
 
-- [x] document explicit non-goal for this patch: do not add `r2d2_sqlite` or any read pool yet
-- [x] define future upgrade rule:
-  - [x] if read concurrency is added later, use separate checked-out connections
-  - [x] do not share one `Connection` across threads behind a lock
-  - [x] keep write ownership/policy explicit before introducing mixed read/write pooling
-- [x] surface current mode in docs or diagnostics:
-  - [x] parallel parse plus sequential persistence
-  - [x] single-connection per store instance
-  - [x] separate-connection concurrency only
-  - [x] read-pool layer reserved for future measured need
-- [x] add note to `doctor`/`status` or crate-level docs that pooled graph reads are not implemented today
-
-Why:
-- answers pool question without adding premature complexity
-- preserves clean path for future measured read-parallel improvements
+Patch T3 is shipped. See SHIPPED.md for details.
 
 #### Patch T4 — Measured separate-connection read pool
 
@@ -2082,11 +2359,11 @@ Why:
 
 #### Patch T completion criteria
 
-- [ ] one canonical SQLite connection/thread policy exists and all Atlas stores reference it
-- [ ] engine Rayon parse code is explicitly separated from SQLite access
-- [ ] tests fail if store types become cross-thread sharable
-- [ ] docs say current mode is single-connection per store instance with separate-connection concurrency only
-- [ ] future pool direction is documented as separate-connection only, not shared-connection wrappers
+- [x] one canonical SQLite connection/thread policy exists and all Atlas stores reference it
+- [x] engine Rayon parse code is explicitly separated from SQLite access
+- [x] tests fail if store types become cross-thread sharable
+- [x] docs say current mode is single-connection per store instance with separate-connection concurrency only
+- [x] future pool direction is documented as separate-connection only, not shared-connection wrappers
 - [ ] any future read pool remains evidence-driven and preserves explicit writer ownership
 
 ---
@@ -2104,7 +2381,6 @@ Why:
 - [ ] add documented `budget_policy` block to `.atlas/config.toml` with defaults, environment overrides, and `--budget-profile` selection
 - [ ] add configurable layer-rules file surface for Phase 29.1 so architecture rules can change without recompiling
 - [ ] add configurable redaction-rules file surface for Patch X4 so sanitization policy can change without recompiling
-- [x] add `.atlas/config.toml` embedding config block for `atlas-search` URL/model settings instead of reading `ATLAS_EMBED_URL`. Move the ATLAS_EMBED_* envs to config, remove the env getters for this
 - [ ] add issue items for tokenizer-backed budget accounting using real token counts instead of byte/char heuristics
 - [ ] add `proptest` coverage for ranking/trimming, canonical-path normalization, and FTS query escaping
 
