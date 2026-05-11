@@ -2,10 +2,13 @@ use atlas_core::{Edge, EdgeKind, Node, NodeId, NodeKind, ParsedFile};
 use std::collections::{HashMap, HashSet};
 use tree_sitter::Node as TsNode;
 
-use crate::ast_helpers::{end_line, field_text, node_text, start_line};
+use crate::ast_helpers::{end_line, node_text, start_line};
+use crate::query_helpers::{QueryCaptureGroup, compile_query, run_query};
 use crate::traits::{LangParser, ParseContext};
 
 pub struct RustParser;
+
+const RUST_DEFINITION_QUERY: &str = include_str!("../../queries/rust.scm");
 
 impl LangParser for RustParser {
     fn language_name(&self) -> &'static str {
@@ -37,17 +40,17 @@ impl LangParser for RustParser {
         nodes.push(file_node(ctx.rel_path, ctx.file_hash, file_lines));
 
         if let Some(ref tree) = tree {
-            let mut walker = Walker {
+            let syntax_facts = RustSyntaxFacts::extract(tree.root_node(), ctx.source)
+                .unwrap_or_else(|err| panic!("rust definition query failed: {err}"));
+            let mut emitter = RustDefinitionEmitter {
                 source: ctx.source,
                 rel_path: ctx.rel_path,
                 file_hash: ctx.file_hash,
                 nodes: &mut nodes,
                 edges: &mut edges,
-                // Parent qualified-name stack; starts with the file node.
-                scope_stack: vec![ctx.rel_path.to_owned()],
-                in_test_mod: false,
+                scope_stack: Vec::new(),
             };
-            walker.walk_block(tree.root_node());
+            emitter.emit(&syntax_facts);
 
             // Second pass: same-file call resolution.
             let mut call_edges =
@@ -72,80 +75,383 @@ impl LangParser for RustParser {
 }
 
 // ---------------------------------------------------------------------------
-// Internal walker
+// Query-backed definition extraction
 // ---------------------------------------------------------------------------
 
-struct Walker<'s, 'o> {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RustItemKind {
+    Function,
+    FunctionSignature,
+    Module,
+    Struct,
+    Enum,
+    Trait,
+    Const,
+    Static,
+    Impl,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct RustImpl<'tree> {
+    node: TsNode<'tree>,
+    type_node: TsNode<'tree>,
+    trait_node: Option<TsNode<'tree>>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct RustItem<'tree> {
+    kind: RustItemKind,
+    node: TsNode<'tree>,
+    name_node: Option<TsNode<'tree>>,
+    rust_impl: Option<RustImpl<'tree>>,
+}
+
+#[derive(Debug)]
+struct RustSyntaxFacts<'tree> {
+    items: Vec<RustItem<'tree>>,
+    _impls: Vec<RustImpl<'tree>>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+struct RustNodeKey {
+    start_byte: usize,
+    end_byte: usize,
+}
+
+impl RustItemKind {
+    fn from_definition_capture(name: &str) -> Option<Self> {
+        match name {
+            "atlas.definition.function" => Some(Self::Function),
+            "atlas.definition.function_signature" => Some(Self::FunctionSignature),
+            "atlas.definition.module" => Some(Self::Module),
+            "atlas.definition.struct" => Some(Self::Struct),
+            "atlas.definition.enum" => Some(Self::Enum),
+            "atlas.definition.trait" => Some(Self::Trait),
+            "atlas.definition.const" => Some(Self::Const),
+            "atlas.definition.static" => Some(Self::Static),
+            "atlas.definition.impl" => Some(Self::Impl),
+            _ => None,
+        }
+    }
+}
+
+impl<'tree> RustItem<'tree> {
+    fn from_capture_group(group: &QueryCaptureGroup<'tree>) -> Result<Option<Self>, String> {
+        let _ = group.pattern_index;
+        let mut kind = None;
+        let mut definition_node = None;
+        let mut name_node = None;
+        let mut impl_type_node = None;
+        let mut impl_trait_node = None;
+
+        for capture in &group.captures {
+            if let Some(capture_kind) = RustItemKind::from_definition_capture(&capture.name) {
+                kind = Some(capture_kind);
+                definition_node = Some(capture.node);
+                continue;
+            }
+
+            match capture.name.as_str() {
+                "atlas.name" => name_node = Some(capture.node),
+                "atlas.impl.type" => impl_type_node = Some(capture.node),
+                "atlas.impl.trait" => impl_trait_node = Some(capture.node),
+                _ => {}
+            }
+        }
+
+        let Some(kind) = kind else {
+            return Ok(None);
+        };
+        let definition_node = definition_node
+            .ok_or_else(|| "rust query match missing definition capture".to_owned())?;
+        let rust_impl = if kind == RustItemKind::Impl {
+            Some(RustImpl {
+                node: definition_node,
+                type_node: impl_type_node
+                    .ok_or_else(|| "rust impl query match missing @atlas.impl.type".to_owned())?,
+                trait_node: impl_trait_node
+                    .or_else(|| definition_node.child_by_field_name("trait")),
+            })
+        } else {
+            None
+        };
+
+        Ok(Some(Self {
+            kind,
+            node: definition_node,
+            name_node,
+            rust_impl,
+        }))
+    }
+
+    fn name_text<'s>(&self, source: &'s [u8]) -> Option<&'s str> {
+        self.name_node.map(|node| node_text(node, source))
+    }
+}
+
+impl<'tree> RustSyntaxFacts<'tree> {
+    fn extract(root: TsNode<'tree>, source: &'tree [u8]) -> Result<Self, String> {
+        let language: tree_sitter::Language = tree_sitter_rust::LANGUAGE.into();
+        let query = compile_query(language, RUST_DEFINITION_QUERY)?;
+        let matches = run_query(&query, root, source);
+        let impl_trait_captures = collect_impl_trait_captures(&matches);
+        let mut items = Vec::new();
+        let mut impls = Vec::new();
+
+        for group in matches {
+            let Some(mut item) = RustItem::from_capture_group(&group)? else {
+                continue;
+            };
+            if let Some(rust_impl) = &mut item.rust_impl
+                && let Some(trait_node) = impl_trait_captures.get(&node_key(rust_impl.node))
+            {
+                rust_impl.trait_node = Some(*trait_node);
+            }
+            if let Some(rust_impl) = item.rust_impl {
+                impls.push(rust_impl);
+            }
+            items.push(item);
+        }
+
+        if items.is_empty() {
+            items = collect_fallback_rust_items(root);
+            impls = items.iter().filter_map(|item| item.rust_impl).collect();
+        }
+
+        items.sort_by_key(|item| (item.node.start_byte(), item.node.end_byte()));
+
+        Ok(Self {
+            items,
+            _impls: impls,
+        })
+    }
+}
+
+fn node_key(node: TsNode<'_>) -> RustNodeKey {
+    RustNodeKey {
+        start_byte: node.start_byte(),
+        end_byte: node.end_byte(),
+    }
+}
+
+fn collect_impl_trait_captures<'tree>(
+    matches: &[QueryCaptureGroup<'tree>],
+) -> HashMap<RustNodeKey, TsNode<'tree>> {
+    let mut trait_captures = HashMap::new();
+
+    for group in matches {
+        let mut impl_node = None;
+        let mut trait_node = None;
+
+        for capture in &group.captures {
+            match capture.name.as_str() {
+                "atlas.impl.item" => impl_node = Some(capture.node),
+                "atlas.impl.trait" => trait_node = Some(capture.node),
+                _ => {}
+            }
+        }
+
+        if let (Some(impl_node), Some(trait_node)) = (impl_node, trait_node) {
+            trait_captures.insert(node_key(impl_node), trait_node);
+        }
+    }
+
+    trait_captures
+}
+
+fn collect_fallback_rust_items(root: TsNode<'_>) -> Vec<RustItem<'_>> {
+    let mut items = Vec::new();
+    collect_fallback_rust_items_inner(root, &mut items);
+    items
+}
+
+fn collect_fallback_rust_items_inner<'tree>(node: TsNode<'tree>, items: &mut Vec<RustItem<'tree>>) {
+    let fallback_item = match node.kind() {
+        "function_item" => Some(RustItem {
+            kind: RustItemKind::Function,
+            node,
+            name_node: node.child_by_field_name("name"),
+            rust_impl: None,
+        }),
+        "function_signature_item" => Some(RustItem {
+            kind: RustItemKind::FunctionSignature,
+            node,
+            name_node: node.child_by_field_name("name"),
+            rust_impl: None,
+        }),
+        "mod_item" => Some(RustItem {
+            kind: RustItemKind::Module,
+            node,
+            name_node: node.child_by_field_name("name"),
+            rust_impl: None,
+        }),
+        "struct_item" => Some(RustItem {
+            kind: RustItemKind::Struct,
+            node,
+            name_node: node.child_by_field_name("name"),
+            rust_impl: None,
+        }),
+        "enum_item" => Some(RustItem {
+            kind: RustItemKind::Enum,
+            node,
+            name_node: node.child_by_field_name("name"),
+            rust_impl: None,
+        }),
+        "trait_item" => Some(RustItem {
+            kind: RustItemKind::Trait,
+            node,
+            name_node: node.child_by_field_name("name"),
+            rust_impl: None,
+        }),
+        "const_item" => Some(RustItem {
+            kind: RustItemKind::Const,
+            node,
+            name_node: node.child_by_field_name("name"),
+            rust_impl: None,
+        }),
+        "static_item" => Some(RustItem {
+            kind: RustItemKind::Static,
+            node,
+            name_node: node.child_by_field_name("name"),
+            rust_impl: None,
+        }),
+        "impl_item" => node.child_by_field_name("type").map(|type_node| RustItem {
+            kind: RustItemKind::Impl,
+            node,
+            name_node: None,
+            rust_impl: Some(RustImpl {
+                node,
+                type_node,
+                trait_node: node.child_by_field_name("trait"),
+            }),
+        }),
+        _ => None,
+    };
+
+    if let Some(item) = fallback_item {
+        items.push(item);
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_fallback_rust_items_inner(child, items);
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RustScopeKind {
+    Module,
+    Impl,
+    Trait,
+}
+
+#[derive(Clone, Debug)]
+struct RustScope {
+    kind: RustScopeKind,
+    qualified_name: String,
+    end_byte: usize,
+    in_test_mod: bool,
+}
+
+struct RustDefinitionEmitter<'s, 'o> {
     source: &'s [u8],
     rel_path: &'s str,
     file_hash: &'s str,
     nodes: &'o mut Vec<Node>,
     edges: &'o mut Vec<Edge>,
-    /// Current parent qualified-name (top = innermost scope).
-    scope_stack: Vec<String>,
-    /// True when we're inside a `#[cfg(test)]` module.
-    in_test_mod: bool,
+    scope_stack: Vec<RustScope>,
 }
 
-impl<'s, 'o> Walker<'s, 'o> {
+impl<'s, 'o> RustDefinitionEmitter<'s, 'o> {
+    fn emit(&mut self, facts: &RustSyntaxFacts<'_>) {
+        for item in &facts.items {
+            self.advance_to(item.node.start_byte());
+            match item.kind {
+                RustItemKind::Function => self.emit_fn(item),
+                RustItemKind::FunctionSignature => self.emit_trait_method_signature(item),
+                RustItemKind::Module => self.emit_mod(item),
+                RustItemKind::Struct => self.emit_named_item(item, NodeKind::Struct, "struct"),
+                RustItemKind::Enum => self.emit_named_item(item, NodeKind::Enum, "enum"),
+                RustItemKind::Trait => self.emit_named_item(item, NodeKind::Trait, "trait"),
+                RustItemKind::Const | RustItemKind::Static => {
+                    self.emit_named_item(item, NodeKind::Constant, "const")
+                }
+                RustItemKind::Impl => self.emit_impl(item),
+            }
+        }
+    }
+
+    fn advance_to(&mut self, start_byte: usize) {
+        while self
+            .scope_stack
+            .last()
+            .is_some_and(|scope| start_byte >= scope.end_byte)
+        {
+            self.scope_stack.pop();
+        }
+    }
+
     fn current_parent_qn(&self) -> &str {
         self.scope_stack
             .last()
-            .map(|s| s.as_str())
+            .map(|scope| scope.qualified_name.as_str())
             .unwrap_or(self.rel_path)
     }
 
-    fn local_type_qn(&self, name: &str) -> Option<String> {
-        self.nodes
+    fn current_in_test_mod(&self) -> bool {
+        self.scope_stack
+            .last()
+            .is_some_and(|scope| scope.in_test_mod)
+    }
+
+    fn inside_impl(&self) -> bool {
+        self.scope_stack
             .iter()
             .rev()
-            .find(|node| {
-                matches!(
-                    node.kind,
-                    NodeKind::Struct | NodeKind::Enum | NodeKind::Trait
-                ) && node.name == name
-            })
-            .map(|node| node.qualified_name.clone())
+            .any(|scope| scope.kind == RustScopeKind::Impl)
+    }
+
+    fn inside_trait(&self) -> bool {
+        self.scope_stack
+            .iter()
+            .rev()
+            .any(|scope| scope.kind == RustScopeKind::Trait)
+    }
+
+    fn unique_local_target_qn<F>(&self, name: &str, predicate: F) -> Option<String>
+    where
+        F: Fn(NodeKind) -> bool,
+    {
+        let mut matches = self
+            .nodes
+            .iter()
+            .filter(|node| predicate(node.kind) && node.name == name)
+            .map(|node| node.qualified_name.as_str());
+        let first = matches.next()?;
+        if matches.next().is_some() {
+            return None;
+        }
+        Some(first.to_owned())
+    }
+
+    fn local_type_qn(&self, name: &str) -> Option<String> {
+        self.unique_local_target_qn(name, |kind| {
+            matches!(kind, NodeKind::Struct | NodeKind::Enum | NodeKind::Trait)
+        })
     }
 
     fn local_trait_qn(&self, name: &str) -> Option<String> {
-        self.nodes
-            .iter()
-            .rev()
-            .find(|node| node.kind == NodeKind::Trait && node.name == name)
-            .map(|node| node.qualified_name.clone())
+        self.unique_local_target_qn(name, |kind| kind == NodeKind::Trait)
     }
 
-    /// Walk all children of a block/source_file.
-    fn walk_block(&mut self, node: TsNode<'_>) {
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            self.visit(child);
-        }
-    }
-
-    fn visit(&mut self, node: TsNode<'_>) {
-        match node.kind() {
-            "function_item" => self.visit_fn(node, false),
-            "mod_item" => self.visit_mod(node),
-            "struct_item" => self.visit_named_item(node, NodeKind::Struct, "struct"),
-            "enum_item" => self.visit_named_item(node, NodeKind::Enum, "enum"),
-            "trait_item" => self.visit_named_item(node, NodeKind::Trait, "trait"),
-            "const_item" => self.visit_named_item(node, NodeKind::Constant, "const"),
-            "static_item" => self.visit_named_item(node, NodeKind::Constant, "const"),
-            "impl_item" => self.visit_impl(node),
-            _ => {}
-        }
-    }
-
-    fn visit_fn(&mut self, node: TsNode<'_>, is_method: bool) {
-        let Some(name) = field_text(node, "name", self.source) else {
+    fn emit_fn(&mut self, item: &RustItem<'_>) {
+        let Some(name) = item.name_text(self.source) else {
             return;
         };
-        let is_test = self.in_test_mod || has_test_attr(node, self.source);
+        let is_test = self.current_in_test_mod() || has_test_attr(item.node, self.source);
         let kind = if is_test {
             NodeKind::Test
-        } else if is_method {
+        } else if self.inside_impl() || self.inside_trait() {
             NodeKind::Method
         } else {
             NodeKind::Function
@@ -163,8 +469,14 @@ impl<'s, 'o> Walker<'s, 'o> {
             type_prefix,
             qualified_suffix(&parent_qn, self.rel_path, name)
         );
-        let params = field_text(node, "parameters", self.source).map(|s| s.to_owned());
-        let ret = field_text(node, "return_type", self.source).map(|s| s.to_owned());
+        let params = item
+            .node
+            .child_by_field_name("parameters")
+            .map(|node| node_text(node, self.source).to_owned());
+        let ret = item
+            .node
+            .child_by_field_name("return_type")
+            .map(|node| node_text(node, self.source).to_owned());
 
         self.nodes.push(Node {
             id: NodeId::UNSET,
@@ -172,14 +484,14 @@ impl<'s, 'o> Walker<'s, 'o> {
             name: name.to_owned(),
             qualified_name: qn.clone(),
             file_path: self.rel_path.to_owned(),
-            line_start: start_line(node),
-            line_end: end_line(node),
+            line_start: start_line(item.node),
+            line_end: end_line(item.node),
             language: "rust".to_owned(),
             parent_name: Some(parent_qn.clone()),
             params,
             return_type: ret,
-            modifiers: visibility_modifier(node, self.source),
-            is_test: is_test || self.in_test_mod,
+            modifiers: visibility_modifier(item.node, self.source),
+            is_test: is_test || self.current_in_test_mod(),
             file_hash: self.file_hash.to_owned(),
             extra_json: serde_json::Value::Null,
         });
@@ -187,21 +499,64 @@ impl<'s, 'o> Walker<'s, 'o> {
             &parent_qn,
             &qn,
             self.rel_path,
-            start_line(node),
+            start_line(item.node),
         ));
     }
 
-    fn visit_mod(&mut self, node: TsNode<'_>) {
-        let Some(name) = field_text(node, "name", self.source) else {
+    fn emit_trait_method_signature(&mut self, item: &RustItem<'_>) {
+        if !self.inside_trait() {
+            return;
+        }
+        let Some(name) = item.name_text(self.source) else {
+            return;
+        };
+        let parent_qn = self.current_parent_qn().to_owned();
+        let qn = format!(
+            "{}::method::{}",
+            self.rel_path,
+            qualified_suffix(&parent_qn, self.rel_path, name)
+        );
+
+        self.nodes.push(Node {
+            id: NodeId::UNSET,
+            kind: NodeKind::Method,
+            name: name.to_owned(),
+            qualified_name: qn.clone(),
+            file_path: self.rel_path.to_owned(),
+            line_start: start_line(item.node),
+            line_end: end_line(item.node),
+            language: "rust".to_owned(),
+            parent_name: Some(parent_qn.clone()),
+            params: item
+                .node
+                .child_by_field_name("parameters")
+                .map(|node| node_text(node, self.source).to_owned()),
+            return_type: item
+                .node
+                .child_by_field_name("return_type")
+                .map(|node| node_text(node, self.source).to_owned()),
+            modifiers: visibility_modifier(item.node, self.source),
+            is_test: self.current_in_test_mod(),
+            file_hash: self.file_hash.to_owned(),
+            extra_json: serde_json::Value::Null,
+        });
+        self.edges.push(contains_edge(
+            &parent_qn,
+            &qn,
+            self.rel_path,
+            start_line(item.node),
+        ));
+    }
+
+    fn emit_mod(&mut self, item: &RustItem<'_>) {
+        let Some(name) = item.name_text(self.source) else {
             return;
         };
         let parent_qn = self.current_parent_qn().to_owned();
         let suffix = qualified_suffix(&parent_qn, self.rel_path, name);
         let qn = format!("{}::module::{}", self.rel_path, suffix);
 
-        // Detect #[cfg(test)] attribute on this mod.
-        let was_test_mod = self.in_test_mod;
-        let is_test_mod = self.in_test_mod || has_cfg_test(node, self.source);
+        let is_test_mod = self.current_in_test_mod() || has_cfg_test(item.node, self.source);
 
         self.nodes.push(Node {
             id: NodeId::UNSET,
@@ -209,13 +564,13 @@ impl<'s, 'o> Walker<'s, 'o> {
             name: name.to_owned(),
             qualified_name: qn.clone(),
             file_path: self.rel_path.to_owned(),
-            line_start: start_line(node),
-            line_end: end_line(node),
+            line_start: start_line(item.node),
+            line_end: end_line(item.node),
             language: "rust".to_owned(),
             parent_name: Some(parent_qn.clone()),
             params: None,
             return_type: None,
-            modifiers: visibility_modifier(node, self.source),
+            modifiers: visibility_modifier(item.node, self.source),
             is_test: is_test_mod,
             file_hash: self.file_hash.to_owned(),
             extra_json: serde_json::Value::Null,
@@ -224,21 +579,21 @@ impl<'s, 'o> Walker<'s, 'o> {
             &parent_qn,
             &qn,
             self.rel_path,
-            start_line(node),
+            start_line(item.node),
         ));
 
-        // Recurse into inline module body.
-        if let Some(body) = node.child_by_field_name("body") {
-            self.scope_stack.push(qn);
-            self.in_test_mod = is_test_mod;
-            self.walk_block(body);
-            self.scope_stack.pop();
-            self.in_test_mod = was_test_mod;
+        if let Some(body) = item.node.child_by_field_name("body") {
+            self.scope_stack.push(RustScope {
+                kind: RustScopeKind::Module,
+                qualified_name: qn,
+                end_byte: body.end_byte(),
+                in_test_mod: is_test_mod,
+            });
         }
     }
 
-    fn visit_named_item(&mut self, node: TsNode<'_>, kind: NodeKind, type_prefix: &str) {
-        let Some(name) = field_text(node, "name", self.source) else {
+    fn emit_named_item(&mut self, item: &RustItem<'_>, kind: NodeKind, type_prefix: &str) {
+        let Some(name) = item.name_text(self.source) else {
             return;
         };
         let parent_qn = self.current_parent_qn().to_owned();
@@ -251,14 +606,14 @@ impl<'s, 'o> Walker<'s, 'o> {
             name: name.to_owned(),
             qualified_name: qn.clone(),
             file_path: self.rel_path.to_owned(),
-            line_start: start_line(node),
-            line_end: end_line(node),
+            line_start: start_line(item.node),
+            line_end: end_line(item.node),
             language: "rust".to_owned(),
             parent_name: Some(parent_qn.clone()),
             params: None,
             return_type: None,
-            modifiers: visibility_modifier(node, self.source),
-            is_test: self.in_test_mod,
+            modifiers: visibility_modifier(item.node, self.source),
+            is_test: self.current_in_test_mod(),
             file_hash: self.file_hash.to_owned(),
             extra_json: serde_json::Value::Null,
         });
@@ -266,15 +621,30 @@ impl<'s, 'o> Walker<'s, 'o> {
             &parent_qn,
             &qn,
             self.rel_path,
-            start_line(node),
+            start_line(item.node),
         ));
+
+        if kind == NodeKind::Trait
+            && let Some(body) = item.node.child_by_field_name("body")
+        {
+            self.scope_stack.push(RustScope {
+                kind: RustScopeKind::Trait,
+                qualified_name: qn,
+                end_byte: body.end_byte(),
+                in_test_mod: self.current_in_test_mod(),
+            });
+        }
     }
 
-    fn visit_impl(&mut self, node: TsNode<'_>) {
-        let Some(type_name) = field_text(node, "type", self.source) else {
+    fn emit_impl(&mut self, item: &RustItem<'_>) {
+        let Some(rust_impl) = item.rust_impl else {
             return;
         };
-        let trait_name = field_text(node, "trait", self.source);
+        let type_name = node_text(rust_impl.type_node, self.source);
+        let local_type_name = normalized_local_type_name(rust_impl.type_node, self.source);
+        let trait_name = rust_impl
+            .trait_node
+            .and_then(|node| normalized_local_type_name(node, self.source));
         let parent_qn = self.current_parent_qn().to_owned();
         let suffix = qualified_suffix(&parent_qn, self.rel_path, type_name);
         let impl_scope = format!("{}::impl::{}", self.rel_path, suffix);
@@ -285,14 +655,14 @@ impl<'s, 'o> Walker<'s, 'o> {
             name: format!("impl {type_name}"),
             qualified_name: impl_scope.clone(),
             file_path: self.rel_path.to_owned(),
-            line_start: start_line(node),
-            line_end: end_line(node),
+            line_start: start_line(rust_impl.node),
+            line_end: end_line(rust_impl.node),
             language: "rust".to_owned(),
             parent_name: Some(parent_qn.clone()),
             params: None,
             return_type: None,
             modifiers: None,
-            is_test: self.in_test_mod,
+            is_test: self.current_in_test_mod(),
             file_hash: self.file_hash.to_owned(),
             extra_json: serde_json::json!({
                 "scope_kind": "impl",
@@ -304,14 +674,13 @@ impl<'s, 'o> Walker<'s, 'o> {
             &parent_qn,
             &impl_scope,
             self.rel_path,
-            start_line(node),
+            start_line(rust_impl.node),
         ));
 
-        // Emit an `Implements` edge if this is `impl Trait for Type`.
-        if let Some(trait_name) = trait_name
+        if let (Some(type_name), Some(trait_name)) = (local_type_name.as_deref(), trait_name)
             && let (Some(type_qn), Some(trait_qn)) = (
                 self.local_type_qn(type_name),
-                self.local_trait_qn(trait_name),
+                self.local_trait_qn(&trait_name),
             )
         {
             self.edges.push(Edge {
@@ -320,23 +689,20 @@ impl<'s, 'o> Walker<'s, 'o> {
                 source_qn: type_qn,
                 target_qn: trait_qn,
                 file_path: self.rel_path.to_owned(),
-                line: Some(start_line(node)),
+                line: Some(start_line(rust_impl.node)),
                 confidence: 0.9,
                 confidence_tier: Some("same_file".to_owned()),
                 extra_json: serde_json::Value::Null,
             });
         }
 
-        // Walk methods in the impl body.
-        if let Some(body) = node.child_by_field_name("body") {
-            self.scope_stack.push(impl_scope);
-            let mut cursor = body.walk();
-            for child in body.children(&mut cursor) {
-                if child.kind() == "function_item" {
-                    self.visit_fn(child, true);
-                }
-            }
-            self.scope_stack.pop();
+        if let Some(body) = rust_impl.node.child_by_field_name("body") {
+            self.scope_stack.push(RustScope {
+                kind: RustScopeKind::Impl,
+                qualified_name: impl_scope,
+                end_byte: body.end_byte(),
+                in_test_mod: self.current_in_test_mod(),
+            });
         }
     }
 }
@@ -406,36 +772,72 @@ fn visibility_modifier(node: TsNode<'_>, source: &[u8]) -> Option<String> {
     None
 }
 
-/// Returns true if the node has a preceding `#[test]` attribute sibling.
-fn has_test_attr(node: TsNode<'_>, source: &[u8]) -> bool {
-    let mut sib = node.prev_named_sibling();
-    while let Some(s) = sib {
-        if s.kind() != "attribute_item" {
-            break;
-        }
-        let text = node_text(s, source);
-        if text.contains("test") && !text.contains("cfg") {
-            return true;
-        }
-        sib = s.prev_named_sibling();
+fn attribute_signature(node: TsNode<'_>, source: &[u8]) -> Option<(String, Option<String>)> {
+    if node.kind() != "attribute_item" {
+        return None;
     }
-    false
+
+    let attribute = node.named_child(0)?;
+    let path = attribute.named_child(0)?;
+    let name = last_path_segment(node_text(path, source)).to_owned();
+    let arguments = attribute
+        .child_by_field_name("arguments")
+        .map(|args| normalize_attribute_arguments(node_text(args, source)));
+    Some((name, arguments))
 }
 
-/// Returns true if the node has a preceding `#[cfg(test)]` attribute sibling.
-fn has_cfg_test(node: TsNode<'_>, source: &[u8]) -> bool {
+fn normalize_attribute_arguments(text: &str) -> String {
+    text.chars().filter(|ch| !ch.is_whitespace()).collect()
+}
+
+fn preceding_attributes(node: TsNode<'_>) -> Vec<TsNode<'_>> {
+    let mut attrs = Vec::new();
     let mut sib = node.prev_named_sibling();
     while let Some(s) = sib {
         if s.kind() != "attribute_item" {
             break;
         }
-        let text = node_text(s, source);
-        if text.contains("cfg") && text.contains("test") {
-            return true;
-        }
+        attrs.push(s);
         sib = s.prev_named_sibling();
     }
-    false
+    attrs.reverse();
+    attrs
+}
+
+/// Returns true if the node has a preceding exact `#[test]` attribute sibling.
+fn has_test_attr(node: TsNode<'_>, source: &[u8]) -> bool {
+    preceding_attributes(node).into_iter().any(|attr| {
+        matches!(
+            attribute_signature(attr, source),
+            Some((name, None)) if name == "test"
+        )
+    })
+}
+
+/// Returns true if the node has a preceding exact `#[cfg(test)]` attribute sibling.
+fn has_cfg_test(node: TsNode<'_>, source: &[u8]) -> bool {
+    preceding_attributes(node).into_iter().any(|attr| {
+        matches!(
+            attribute_signature(attr, source),
+            Some((name, Some(arguments))) if name == "cfg" && arguments == "(test)"
+        )
+    })
+}
+
+fn normalized_local_type_name(node: TsNode<'_>, source: &[u8]) -> Option<String> {
+    match node.kind() {
+        "generic_type" => node
+            .child_by_field_name("type")
+            .and_then(|inner| normalized_local_type_name(inner, source)),
+        "scoped_identifier" | "scoped_type_identifier" => node
+            .child_by_field_name("name")
+            .map(|name| node_text(name, source).to_owned()),
+        "type_identifier" | "identifier" => Some(node_text(node, source).to_owned()),
+        _ => {
+            let text = last_path_segment(node_text(node, source)).trim();
+            (!text.is_empty()).then(|| text.to_owned())
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -452,10 +854,57 @@ fn resolve_same_file_calls(
     nodes: &[Node],
 ) -> Vec<Edge> {
     let callables = collect_callables(nodes);
+    let call_sites = extract_rust_call_sites(root, source)
+        .unwrap_or_else(|err| panic!("rust call query failed: {err}"));
 
     let mut edges = Vec::new();
-    let mut scope: Vec<String> = Vec::new();
-    walk_for_rust_calls(root, source, rel_path, &callables, &mut scope, &mut edges);
+
+    for site in call_sites {
+        let Some(caller_qn) = caller_qn_for_line(&callables, start_line(site.node)) else {
+            continue;
+        };
+        let called = match (site.receiver_node, site.method_node) {
+            (Some(receiver_node), Some(method_node)) => Some((
+                node_text(site.node, source).to_owned(),
+                node_text(method_node, source).to_owned(),
+                Some(node_text(receiver_node, source).to_owned()),
+            )),
+            _ => rust_call_target(site.target_node, source),
+        };
+        let Some((text, name, receiver)) = called else {
+            continue;
+        };
+        if !should_emit_rust_call(&name) {
+            continue;
+        }
+        if is_self_call(caller_qn, &name, receiver.as_deref()) {
+            continue;
+        }
+        if let Some(callee_qn) = resolve_local_callee(caller_qn, &name, &callables)
+            && callee_qn != caller_qn
+        {
+            edges.push(call_edge(
+                caller_qn,
+                &callee_qn,
+                rel_path,
+                start_line(site.node),
+                &text,
+                receiver.as_deref(),
+                true,
+            ));
+        } else {
+            edges.push(call_edge(
+                caller_qn,
+                &text,
+                rel_path,
+                start_line(site.node),
+                &text,
+                receiver.as_deref(),
+                false,
+            ));
+        }
+    }
+
     edges
 }
 
@@ -465,6 +914,15 @@ struct CallableNode {
     name: String,
     parent_qn: String,
     line_start: u32,
+    line_end: u32,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct RustCallSite<'tree> {
+    node: TsNode<'tree>,
+    target_node: TsNode<'tree>,
+    receiver_node: Option<TsNode<'tree>>,
+    method_node: Option<TsNode<'tree>>,
 }
 
 fn collect_callables(nodes: &[Node]) -> Vec<CallableNode> {
@@ -481,118 +939,68 @@ fn collect_callables(nodes: &[Node]) -> Vec<CallableNode> {
             name: n.name.clone(),
             parent_qn: n.parent_name.clone().unwrap_or_else(|| n.file_path.clone()),
             line_start: n.line_start,
+            line_end: n.line_end,
         })
         .collect()
 }
 
-fn walk_for_rust_calls<'a>(
-    node: TsNode<'a>,
-    source: &[u8],
-    rel_path: &str,
-    callables: &[CallableNode],
-    scope: &mut Vec<String>,
-    edges: &mut Vec<Edge>,
-) {
-    match node.kind() {
-        "function_item" => {
-            let line = start_line(node);
-            let caller_qn = callables
-                .iter()
-                .find(|callable| callable.line_start == line)
-                .map(|callable| &callable.qn);
-            let pushed = if let Some(qn) = caller_qn {
-                scope.push(qn.clone());
-                true
-            } else {
-                false
-            };
-            let mut cursor = node.walk();
-            for child in node.children(&mut cursor) {
-                walk_for_rust_calls(child, source, rel_path, callables, scope, edges);
-            }
-            if pushed {
-                scope.pop();
-            }
-            return; // already recursed
-        }
-        "call_expression" => {
-            if let Some(caller_qn) = scope.last() {
-                let called = node
-                    .child_by_field_name("function")
-                    .and_then(|f| rust_call_target(f, source));
-                if let Some((text, name, receiver)) = called {
-                    if !should_emit_rust_call(&name) {
-                        return;
-                    }
-                    if is_self_call(caller_qn, &name, receiver.as_deref()) {
-                        return;
-                    }
-                    if let Some(callee_qn) = resolve_local_callee(caller_qn, &name, callables)
-                        && callee_qn != *caller_qn
-                    {
-                        edges.push(call_edge(
-                            caller_qn,
-                            &callee_qn,
-                            rel_path,
-                            start_line(node),
-                            &text,
-                            receiver.as_deref(),
-                            true,
-                        ));
-                    } else {
-                        edges.push(call_edge(
-                            caller_qn,
-                            &text,
-                            rel_path,
-                            start_line(node),
-                            &text,
-                            receiver.as_deref(),
-                            false,
-                        ));
-                    }
-                }
+fn extract_rust_call_sites<'tree>(
+    root: TsNode<'tree>,
+    source: &'tree [u8],
+) -> Result<Vec<RustCallSite<'tree>>, String> {
+    let matches = rust_query_matches(root, source)?;
+    let mut call_sites: HashMap<RustNodeKey, RustCallSite<'tree>> = HashMap::new();
+
+    for group in matches {
+        let mut call_node = None;
+        let mut target_node = None;
+        let mut receiver_node = None;
+        let mut method_node = None;
+
+        for capture in &group.captures {
+            match capture.name.as_str() {
+                "atlas.call" => call_node = Some(capture.node),
+                "atlas.call.target" => target_node = Some(capture.node),
+                "atlas.call.receiver" => receiver_node = Some(capture.node),
+                "atlas.call.method" => method_node = Some(capture.node),
+                _ => {}
             }
         }
-        "method_call_expression" => {
-            if let Some(caller_qn) = scope.last() {
-                let called = rust_method_call_target(node, source);
-                if let Some((text, name, receiver)) = called {
-                    if is_self_call(caller_qn, &name, receiver.as_deref()) {
-                        return;
-                    }
-                    if let Some(callee_qn) = resolve_local_callee(caller_qn, &name, callables)
-                        && callee_qn != *caller_qn
-                    {
-                        edges.push(call_edge(
-                            caller_qn,
-                            &callee_qn,
-                            rel_path,
-                            start_line(node),
-                            &text,
-                            receiver.as_deref(),
-                            true,
-                        ));
-                    } else {
-                        edges.push(call_edge(
-                            caller_qn,
-                            &text,
-                            rel_path,
-                            start_line(node),
-                            &text,
-                            receiver.as_deref(),
-                            false,
-                        ));
-                    }
-                }
+
+        if let Some(node) = call_node {
+            let site = call_sites.entry(node_key(node)).or_insert(RustCallSite {
+                node,
+                target_node: node,
+                receiver_node: None,
+                method_node: None,
+            });
+            if let Some(target_node) = target_node {
+                site.target_node = target_node;
             }
+            site.receiver_node = site.receiver_node.or(receiver_node);
+            site.method_node = site.method_node.or(method_node);
         }
-        _ => {}
     }
-    // Default recursive walk.
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        walk_for_rust_calls(child, source, rel_path, callables, scope, edges);
-    }
+
+    let mut call_sites = call_sites
+        .into_values()
+        .filter(|site| site.target_node != site.node || site.receiver_node.is_some())
+        .collect::<Vec<_>>();
+    call_sites.sort_by_key(|site| (site.node.start_byte(), site.node.end_byte()));
+    Ok(call_sites)
+}
+
+fn caller_qn_for_line(callables: &[CallableNode], line: u32) -> Option<&str> {
+    callables
+        .iter()
+        .filter(|callable| callable.line_start <= line && line <= callable.line_end)
+        .min_by_key(|callable| {
+            (
+                callable.line_end.saturating_sub(callable.line_start),
+                callable.line_start,
+            )
+        })
+        .map(|callable| callable.qn.as_str())
 }
 
 fn resolve_local_callee(caller_qn: &str, name: &str, callables: &[CallableNode]) -> Option<String> {
@@ -648,6 +1056,15 @@ fn rust_call_target(node: TsNode<'_>, source: &[u8]) -> Option<(String, String, 
         "generic_function" => node
             .child_by_field_name("function")
             .and_then(|function| rust_call_target(function, source)),
+        "field_expression" => {
+            let receiver = node.child_by_field_name("value")?;
+            let method = node.child_by_field_name("field")?;
+            Some((
+                node_text(node, source).to_owned(),
+                node_text(method, source).to_owned(),
+                Some(node_text(receiver, source).to_owned()),
+            ))
+        }
         "scoped_identifier" => {
             let text = node_text(node, source).to_owned();
             let (receiver_text, callee_name) = text.rsplit_once("::")?;
@@ -664,21 +1081,6 @@ fn should_emit_rust_call(callee_name: &str) -> bool {
         .chars()
         .next()
         .is_some_and(|ch| !ch.is_uppercase())
-}
-
-fn rust_method_call_target(
-    node: TsNode<'_>,
-    source: &[u8],
-) -> Option<(String, String, Option<String>)> {
-    let method = node.child_by_field_name("method")?;
-    let receiver = node.child_by_field_name("receiver")?;
-    let method_name = node_text(method, source).to_owned();
-    let receiver_text = node_text(receiver, source).to_owned();
-    Some((
-        node_text(node, source).to_owned(),
-        method_name,
-        Some(receiver_text),
-    ))
 }
 
 fn is_self_call(caller_qn: &str, callee_name: &str, receiver: Option<&str>) -> bool {
@@ -734,6 +1136,8 @@ fn resolve_same_file_references(
     rel_path: &str,
     nodes: &[Node],
 ) -> Vec<Edge> {
+    let reference_sites = extract_rust_reference_sites(root, source)
+        .unwrap_or_else(|err| panic!("rust reference query failed: {err}"));
     let mut symbol_targets: HashMap<String, Vec<String>> = HashMap::new();
     let mut type_targets: HashMap<String, Vec<String>> = HashMap::new();
 
@@ -767,7 +1171,61 @@ fn resolve_same_file_references(
         seen: HashSet::new(),
         edges: Vec::new(),
     }
-    .resolve(root)
+    .resolve_sites(&reference_sites)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RustReferenceKind {
+    UseArgument,
+    Type,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct RustReferenceSite<'tree> {
+    node: TsNode<'tree>,
+    target_node: TsNode<'tree>,
+    kind: RustReferenceKind,
+}
+
+fn extract_rust_reference_sites<'tree>(
+    root: TsNode<'tree>,
+    source: &'tree [u8],
+) -> Result<Vec<RustReferenceSite<'tree>>, String> {
+    let matches = rust_query_matches(root, source)?;
+    let mut sites = Vec::new();
+
+    for group in matches {
+        let mut use_node = None;
+        let mut use_argument = None;
+        let mut type_reference = None;
+
+        for capture in &group.captures {
+            match capture.name.as_str() {
+                "atlas.reference.use" => use_node = Some(capture.node),
+                "atlas.reference.use_argument" => use_argument = Some(capture.node),
+                "atlas.reference.type" => type_reference = Some(capture.node),
+                _ => {}
+            }
+        }
+
+        if let (Some(node), Some(target_node)) = (use_node, use_argument) {
+            sites.push(RustReferenceSite {
+                node,
+                target_node,
+                kind: RustReferenceKind::UseArgument,
+            });
+        }
+        if let Some(target_node) = type_reference {
+            sites.push(RustReferenceSite {
+                node: target_node,
+                target_node,
+                kind: RustReferenceKind::Type,
+            });
+        }
+    }
+
+    sites.sort_by_key(|site| (site.node.start_byte(), site.node.end_byte()));
+    Ok(sites)
 }
 
 struct ReferenceResolver<'a> {
@@ -781,38 +1239,39 @@ struct ReferenceResolver<'a> {
 }
 
 impl<'a> ReferenceResolver<'a> {
-    fn resolve(mut self, root: TsNode<'_>) -> Vec<Edge> {
-        self.walk(root);
-        self.edges
-    }
-
-    fn walk(&mut self, node: TsNode<'_>) {
-        match node.kind() {
-            "use_declaration" => {
-                let source_qn = reference_source_qn(self.nodes, self.rel_path, start_line(node));
-                for name in use_reference_names(node, self.source) {
-                    let target_qn =
-                        unique_target_qn(&self.symbol_targets, &name).map(str::to_owned);
+    fn resolve_sites(mut self, sites: &[RustReferenceSite<'_>]) -> Vec<Edge> {
+        for site in sites {
+            match site.kind {
+                RustReferenceKind::UseArgument => {
+                    let source_qn =
+                        reference_source_qn(self.nodes, self.rel_path, start_line(site.node));
+                    for name in use_reference_names(site.target_node, self.source) {
+                        let target_qn =
+                            unique_target_qn(&self.symbol_targets, &name).map(str::to_owned);
+                        self.maybe_push_reference_edge(
+                            source_qn,
+                            target_qn.as_deref(),
+                            start_line(site.node),
+                        );
+                    }
+                }
+                RustReferenceKind::Type => {
+                    if is_definition_name(site.target_node) {
+                        continue;
+                    }
+                    let source_qn =
+                        reference_source_qn(self.nodes, self.rel_path, start_line(site.node));
+                    let name = type_reference_name(site.target_node, self.source);
+                    let target_qn = unique_target_qn(&self.type_targets, &name).map(str::to_owned);
                     self.maybe_push_reference_edge(
                         source_qn,
                         target_qn.as_deref(),
-                        start_line(node),
+                        start_line(site.node),
                     );
                 }
             }
-            "type_identifier" | "scoped_type_identifier" if !is_definition_name(node) => {
-                let source_qn = reference_source_qn(self.nodes, self.rel_path, start_line(node));
-                let name = type_reference_name(node, self.source);
-                let target_qn = unique_target_qn(&self.type_targets, &name).map(str::to_owned);
-                self.maybe_push_reference_edge(source_qn, target_qn.as_deref(), start_line(node));
-            }
-            _ => {}
         }
-
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            self.walk(child);
-        }
+        self.edges
     }
 
     fn maybe_push_reference_edge(&mut self, source_qn: &str, target_qn: Option<&str>, line: u32) {
@@ -863,8 +1322,12 @@ fn reference_source_qn<'a>(nodes: &'a [Node], rel_path: &'a str, line: u32) -> &
 
 fn use_reference_names(node: TsNode<'_>, source: &[u8]) -> Vec<String> {
     let mut names = Vec::new();
-    if let Some(argument) = node.child_by_field_name("argument") {
-        collect_use_reference_names(argument, source, &mut names);
+    if node.kind() == "use_declaration" {
+        if let Some(argument) = node.child_by_field_name("argument") {
+            collect_use_reference_names(argument, source, &mut names);
+        }
+    } else {
+        collect_use_reference_names(node, source, &mut names);
     }
     names.sort();
     names.dedup();
@@ -948,6 +1411,15 @@ fn reference_edge(
     }
 }
 
+fn rust_query_matches<'tree>(
+    root: TsNode<'tree>,
+    source: &'tree [u8],
+) -> Result<Vec<QueryCaptureGroup<'tree>>, String> {
+    let language: tree_sitter::Language = tree_sitter_rust::LANGUAGE.into();
+    let query = compile_query(language, RUST_DEFINITION_QUERY)?;
+    Ok(run_query(&query, root, source))
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -955,6 +1427,7 @@ fn reference_edge(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::query_helpers::{compile_query, read_capture_text, run_query};
     use crate::traits::ParseContext;
 
     fn parse(src: &str) -> ParsedFile {
@@ -1018,6 +1491,33 @@ mod tests {
     }
 
     #[test]
+    fn trait_method_declaration_emitted_and_contained_by_trait() {
+        let pf = parse("pub trait Drawable { fn draw(&self); }");
+        assert!(pf.nodes.iter().any(|n| {
+            n.kind == NodeKind::Method
+                && n.qualified_name == "src/lib.rs::method::Drawable::draw"
+                && n.parent_name.as_deref() == Some("src/lib.rs::trait::Drawable")
+        }));
+        assert!(pf.edges.iter().any(|e| {
+            e.kind == EdgeKind::Contains
+                && e.source_qn == "src/lib.rs::trait::Drawable"
+                && e.target_qn == "src/lib.rs::method::Drawable::draw"
+        }));
+    }
+
+    #[test]
+    fn free_function_and_trait_method_with_same_name_stay_distinct() {
+        let pf = parse("fn draw() {} trait Drawable { fn draw(&self); }");
+        assert!(pf
+            .nodes
+            .iter()
+            .any(|n| n.kind == NodeKind::Function && n.qualified_name == "src/lib.rs::fn::draw"));
+        assert!(pf.nodes.iter().any(|n| {
+            n.kind == NodeKind::Method && n.qualified_name == "src/lib.rs::method::Drawable::draw"
+        }));
+    }
+
+    #[test]
     fn extracts_method_and_impl_edge() {
         let src = "struct Foo; impl Foo { pub fn bar(&self) {} }";
         let pf = parse(src);
@@ -1062,6 +1562,24 @@ mod tests {
     }
 
     #[test]
+    fn scoped_local_trait_impl_emits_same_file_edge_when_targets_are_unique() {
+        let src = r#"
+mod local {
+    pub trait Trait {}
+    pub struct Type;
+}
+
+impl local::Trait for local::Type {}
+"#;
+        let pf = parse(src);
+        assert!(pf.edges.iter().any(|e| {
+            e.kind == EdgeKind::Implements
+                && e.source_qn == "src/lib.rs::struct::local::Type"
+                && e.target_qn == "src/lib.rs::trait::local::Trait"
+        }));
+    }
+
+    #[test]
     fn test_fn_detected() {
         let src = r#"
 #[cfg(test)]
@@ -1075,6 +1593,56 @@ mod tests {
             pf.nodes
                 .iter()
                 .any(|n| n.kind == NodeKind::Test && n.name == "it_works")
+        );
+    }
+
+    #[test]
+    fn top_level_test_attr_emits_test_node_kind() {
+        let pf = parse("#[test] fn it_works() {}");
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|n| n.kind == NodeKind::Test && n.name == "it_works")
+        );
+    }
+
+    #[test]
+    fn cfg_test_module_marks_nested_helper_as_test() {
+        let pf = parse("#[cfg(test)] mod tests { fn helper() {} }");
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|n| n.kind == NodeKind::Test && n.name == "helper")
+        );
+    }
+
+    #[test]
+    fn cfg_not_test_module_does_not_mark_nested_helper_as_test() {
+        let pf = parse("#[cfg(not(test))] mod tests { fn helper() {} }");
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|n| n.kind == NodeKind::Function && n.name == "helper")
+        );
+        assert!(
+            !pf.nodes
+                .iter()
+                .any(|n| n.kind == NodeKind::Test && n.name == "helper")
+        );
+    }
+
+    #[test]
+    fn custom_attribute_containing_test_does_not_mark_function_as_test() {
+        let pf = parse("#[mytest] fn helper() {}");
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|n| n.kind == NodeKind::Function && n.name == "helper")
+        );
+        assert!(
+            !pf.nodes
+                .iter()
+                .any(|n| n.kind == NodeKind::Test && n.name == "helper")
         );
     }
 
@@ -1154,6 +1722,27 @@ impl S {
                 .any(|e| e.kind == EdgeKind::Calls && e.target_qn.contains("helper")),
             "expected Calls edge to helper from method"
         );
+    }
+
+    #[test]
+    fn method_call_syntax_resolved_to_same_file_method() {
+        let src = r#"
+struct Worker;
+
+impl Worker {
+    fn run(&self) {}
+
+    fn execute(&self) {
+        self.run();
+    }
+}
+"#;
+        let pf = parse(src);
+        assert!(pf.edges.iter().any(|e| {
+            e.kind == EdgeKind::Calls
+                && e.source_qn == "src/lib.rs::method::Worker::execute"
+                && e.target_qn == "src/lib.rs::method::Worker::run"
+        }));
     }
 
     #[test]
@@ -1335,6 +1924,95 @@ mod alpha {
             e.kind == EdgeKind::Calls
                 && e.source_qn == "src/lib.rs::fn::alpha::caller"
                 && e.target_qn == "src/lib.rs::fn::helper"
+        }));
+    }
+
+    #[test]
+    fn malformed_source_keeps_file_node_and_best_effort_symbols() {
+        let pf = parse("pub fn broken(value: i32) -> i32 { value + 1 } @");
+        assert!(pf.nodes.iter().any(|node| node.kind == NodeKind::File));
+        assert!(
+            pf.nodes
+                .iter()
+                .any(|node| node.kind == NodeKind::Function && node.name == "broken")
+        );
+    }
+
+    #[test]
+    fn rust_definition_query_extracts_function_capture() {
+        let language: tree_sitter::Language = tree_sitter_rust::LANGUAGE.into();
+        let query = compile_query(language.clone(), RUST_DEFINITION_QUERY)
+            .expect("rust definition query should compile");
+        let source = b"fn helper() {}";
+
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&language)
+            .expect("tree-sitter-rust grammar failed to load");
+        let tree = parser
+            .parse(source.as_slice(), None)
+            .expect("fixture should parse");
+
+        let matches = run_query(&query, tree.root_node(), source);
+        assert!(matches.iter().any(|group| {
+            group.captures.iter().any(|capture| {
+                capture.name == "atlas.definition.function"
+                    && read_capture_text(capture, source).contains("fn helper")
+            })
+        }));
+    }
+
+    #[test]
+    fn rust_definition_query_extracts_impl_trait_capture() {
+        let language: tree_sitter::Language = tree_sitter_rust::LANGUAGE.into();
+        let query = compile_query(language.clone(), RUST_DEFINITION_QUERY)
+            .expect("rust definition query should compile");
+        let source = b"trait Draw {} struct Shape; impl Draw for Shape {}";
+
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&language)
+            .expect("tree-sitter-rust grammar failed to load");
+        let tree = parser
+            .parse(source.as_slice(), None)
+            .expect("fixture should parse");
+
+        let matches = run_query(&query, tree.root_node(), source);
+        assert!(matches.iter().any(|group| {
+            group.captures.iter().any(|capture| {
+                capture.name == "atlas.impl.trait" && read_capture_text(capture, source) == "Draw"
+            })
+        }));
+    }
+
+    #[test]
+    fn rust_definition_query_extracts_method_call_receiver_and_name() {
+        let language: tree_sitter::Language = tree_sitter_rust::LANGUAGE.into();
+        let query = compile_query(language.clone(), RUST_DEFINITION_QUERY)
+            .expect("rust definition query should compile");
+        let source = b"struct S; impl S { fn run(&self) {} fn call(&self) { self.run(); } }";
+
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&language)
+            .expect("tree-sitter-rust grammar failed to load");
+        let tree = parser
+            .parse(source.as_slice(), None)
+            .expect("fixture should parse");
+
+        let matches = run_query(&query, tree.root_node(), source);
+        assert!(matches.iter().any(|group| {
+            let names = group
+                .captures
+                .iter()
+                .map(|capture| capture.name.as_str())
+                .collect::<Vec<_>>();
+            names.contains(&"atlas.call.receiver")
+                && names.contains(&"atlas.call.method")
+                && group.captures.iter().any(|capture| {
+                    capture.name == "atlas.call.method"
+                        && read_capture_text(capture, source) == "run"
+                })
         }));
     }
 }

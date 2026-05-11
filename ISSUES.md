@@ -376,21 +376,21 @@ Why:
 
 #### 29.8 Phase 29 completion criteria
 
-- [ ] `InsightsEngine` exists with shared report primitives and deterministic sorting
-- [ ] metrics engine computes node, file, module, percentile, and outlier metrics
-- [ ] large-function finder works through service, CLI, and MCP with parity tests
-- [ ] function complexity metrics compute cyclomatic complexity, cognitive complexity, branch count, and nesting depth where parser support exists
-- [ ] high-complexity function discovery works through service, CLI, and MCP with parity tests
-- [ ] architecture analysis detects cycles, layer violations, coupling, and high-connectivity files
-- [ ] risk assessment returns explainable `0-100` scores with factor evidence
-- [ ] pattern detection reports repeated chains, unused/isolated structures, hubs, bottlenecks, and deep chains
-- [ ] config supports thresholds, layer rules, and ignore lists with validation
-- [ ] every insights report includes summary, findings, evidence, ranking reason, freshness, and provenance
-- [ ] tests cover cycle detection, coupling detection, layer violations, unused-node detection, large/complex-function ranking/filtering, risk scoring, outlier detection, and CLI/MCP parity
-- [ ] `cargo test -p atlas-engine` or owning insights crate test target passes
-- [ ] `cargo test -p atlas-cli` passes for insights commands
-- [ ] `cargo test -p atlas-mcp` passes for insights tools
-- [ ] `./scripts/test-workspace-summary.sh` passes
+- [x] `InsightsEngine` exists with shared report primitives and deterministic sorting
+- [x] metrics engine computes node, file, module, percentile, and outlier metrics
+- [x] large-function finder works through service, CLI, and MCP with parity tests
+- [x] function complexity metrics compute cyclomatic complexity, cognitive complexity, branch count, and nesting depth where parser support exists
+- [x] high-complexity function discovery works through service, CLI, and MCP with parity tests
+- [x] architecture analysis detects cycles, layer violations, coupling, and high-connectivity files
+- [x] risk assessment returns explainable `0-100` scores with factor evidence
+- [x] pattern detection reports repeated chains, unused/isolated structures, hubs, bottlenecks, and deep chains
+- [x] config supports thresholds, layer rules, and ignore lists with validation
+- [x] every insights report includes summary, findings, evidence, ranking reason, freshness, and provenance
+- [x] tests cover cycle detection, coupling detection, layer violations, unused-node detection, large/complex-function ranking/filtering, risk scoring, outlier detection, and CLI/MCP parity
+- [x] `cargo test -p atlas-engine` or owning insights crate test target passes
+- [x] `cargo test -p atlas-cli` passes for insights commands
+- [x] `cargo test -p atlas-mcp` passes for insights tools
+- [x] `./scripts/test-workspace-summary.sh` passes
 
 ### Phase 30 — Optional Advanced Features
 
@@ -1616,57 +1616,57 @@ Use Helix Rust queries only as grammar reference for tree-sitter node names and 
 
 #### Patch Q1 — Query infrastructure and behavior-preserving Rust extraction
 
-- [ ] add `packages/atlas-parser/queries/rust.scm` with Atlas-owned captures:
-  - [ ] capture `function_item` as `@atlas.definition.function`
-  - [ ] capture `function_signature_item` as `@atlas.definition.function_signature`
-  - [ ] capture `mod_item` as `@atlas.definition.module`
-  - [ ] capture `struct_item` as `@atlas.definition.struct`
-  - [ ] capture `enum_item` as `@atlas.definition.enum`
-  - [ ] capture `trait_item` as `@atlas.definition.trait`
-  - [ ] capture `const_item` as `@atlas.definition.const`
-  - [ ] capture `static_item` as `@atlas.definition.static`
-  - [ ] capture `impl_item` as `@atlas.definition.impl`
-  - [ ] capture impl `type` field as `@atlas.impl.type`
-  - [ ] capture impl `trait` field as `@atlas.impl.trait`
-  - [ ] capture item `name` fields with stable capture names such as `@atlas.name`
-- [ ] add shared query helper module in `packages/atlas-parser/src/query_helpers.rs`:
-  - [ ] expose helper to compile `tree_sitter::Query` from static query text and language
-  - [ ] expose helper to run `tree_sitter::QueryCursor` against a root node and source bytes
-  - [ ] expose helper to group captures by query match without losing capture order
-  - [ ] expose helper to read capture text using existing `ast_helpers::node_text`
-  - [ ] return parse/query errors as test-visible failures, not silent empty capture sets
-- [ ] wire `query_helpers` into `packages/atlas-parser/src/lib.rs`
-- [ ] refactor `packages/atlas-parser/src/lang/rust.rs` definition extraction:
-  - [ ] replace manual top-level `Walker::visit` `node.kind()` matching for definitions with query capture processing
-  - [ ] keep `parse_runtime::parse_tree` unchanged
-  - [ ] keep `LangParser`, `ParseContext`, `ParserRegistry`, and `ParsedFile` public interfaces unchanged
-  - [ ] keep file node creation unchanged
-  - [ ] keep existing qualified-name strings unchanged
-  - [ ] keep existing `NodeKind` choices unchanged
-  - [ ] keep existing `Contains` edge behavior unchanged
-  - [ ] keep existing same-file `Implements` edge behavior unchanged
-  - [ ] keep current same-file call resolver unchanged
-  - [ ] keep current same-file reference resolver unchanged
-  - [ ] keep current test-module and test-function detection behavior unchanged in Q1
-- [ ] add Rust-only internal syntax fact structs:
-  - [ ] `RustSyntaxFacts`
-  - [ ] `RustItem`
-  - [ ] `RustItemKind`
-  - [ ] `RustImpl`
-  - [ ] store source byte ranges or `tree_sitter::Node` handles needed to assign parent scopes
-- [ ] preserve scope semantics:
-  - [ ] root scope starts at repo-relative file path
-  - [ ] inline `mod foo { ... }` pushes module qualified name
-  - [ ] `impl Type { ... }` pushes impl qualified name
-  - [ ] methods inside impl remain `NodeKind::Method`
-  - [ ] nested module suffixes remain compatible with current `qualified_suffix`
-- [ ] add tests proving behavior preservation:
-  - [ ] existing `lang::rust` unit tests pass without expectation changes
-  - [ ] `packages/atlas-parser/tests/fixtures/rust/core.golden.json` does not change
-  - [ ] `packages/atlas-parser/tests/fixtures/rust/bad_syntax.golden.json` does not change
-  - [ ] malformed Rust source still returns file node and best-effort symbols
-  - [ ] query helper test fails clearly on invalid query text
-  - [ ] query helper test captures at least one Rust function from a small fixture
+- [x] add `packages/atlas-parser/queries/rust.scm` with Atlas-owned captures:
+  - [x] capture `function_item` as `@atlas.definition.function`
+  - [x] capture `function_signature_item` as `@atlas.definition.function_signature`
+  - [x] capture `mod_item` as `@atlas.definition.module`
+  - [x] capture `struct_item` as `@atlas.definition.struct`
+  - [x] capture `enum_item` as `@atlas.definition.enum`
+  - [x] capture `trait_item` as `@atlas.definition.trait`
+  - [x] capture `const_item` as `@atlas.definition.const`
+  - [x] capture `static_item` as `@atlas.definition.static`
+  - [x] capture `impl_item` as `@atlas.definition.impl`
+  - [x] capture impl `type` field as `@atlas.impl.type`
+  - [x] capture impl `trait` field as `@atlas.impl.trait`
+  - [x] capture item `name` fields with stable capture names such as `@atlas.name`
+- [x] add shared query helper module in `packages/atlas-parser/src/query_helpers.rs`:
+  - [x] expose helper to compile `tree_sitter::Query` from static query text and language
+  - [x] expose helper to run `tree_sitter::QueryCursor` against a root node and source bytes
+  - [x] expose helper to group captures by query match without losing capture order
+  - [x] expose helper to read capture text using existing `ast_helpers::node_text`
+  - [x] return parse/query errors as test-visible failures, not silent empty capture sets
+- [x] wire `query_helpers` into `packages/atlas-parser/src/lib.rs`
+- [x] refactor `packages/atlas-parser/src/lang/rust.rs` definition extraction:
+  - [x] replace manual top-level `Walker::visit` `node.kind()` matching for definitions with query capture processing
+  - [x] keep `parse_runtime::parse_tree` unchanged
+  - [x] keep `LangParser`, `ParseContext`, `ParserRegistry`, and `ParsedFile` public interfaces unchanged
+  - [x] keep file node creation unchanged
+  - [x] keep existing qualified-name strings unchanged
+  - [x] keep existing `NodeKind` choices unchanged
+  - [x] keep existing `Contains` edge behavior unchanged
+  - [x] keep existing same-file `Implements` edge behavior unchanged
+  - [x] keep current same-file call resolver unchanged
+  - [x] keep current same-file reference resolver unchanged
+  - [x] keep current test-module and test-function detection behavior unchanged in Q1
+- [x] add Rust-only internal syntax fact structs:
+  - [x] `RustSyntaxFacts`
+  - [x] `RustItem`
+  - [x] `RustItemKind`
+  - [x] `RustImpl`
+  - [x] store source byte ranges or `tree_sitter::Node` handles needed to assign parent scopes
+- [x] preserve scope semantics:
+  - [x] root scope starts at repo-relative file path
+  - [x] inline `mod foo { ... }` pushes module qualified name
+  - [x] `impl Type { ... }` pushes impl qualified name
+  - [x] methods inside impl remain `NodeKind::Method`
+  - [x] nested module suffixes remain compatible with current `qualified_suffix`
+- [x] add tests proving behavior preservation:
+  - [x] existing `lang::rust` unit tests pass without expectation changes
+  - [x] `packages/atlas-parser/tests/fixtures/rust/core.golden.json` does not change
+  - [x] `packages/atlas-parser/tests/fixtures/rust/bad_syntax.golden.json` does not change
+  - [x] malformed Rust source still returns file node and best-effort symbols
+  - [x] query helper test fails clearly on invalid query text
+  - [x] query helper test captures at least one Rust function from a small fixture
 
 Why:
 - separates syntax matching from Atlas graph semantics
@@ -1676,47 +1676,47 @@ Why:
 
 #### Patch Q2 — Rust semantic extraction fixes on query foundation
 
-- [ ] improve trait body extraction:
-  - [ ] capture methods declared in `trait_item` bodies via `function_signature_item`
-  - [ ] emit trait method declarations using the existing `NodeKind` that best matches current graph model
-  - [ ] set trait method parent to the trait qualified name
-  - [ ] add `Contains` edge from trait node to trait method node
-  - [ ] keep trait methods distinct from free functions with same name
-- [ ] replace substring-based attribute detection:
-  - [ ] parse `attribute_item` structure or query captures instead of using `text.contains("test")`
-  - [ ] detect exact `#[test]` attribute for test functions
-  - [ ] detect exact `#[cfg(test)]` attribute for test modules
-  - [ ] do not treat `#[cfg(not(test))]` as test
-  - [ ] do not treat custom attributes containing the word `test` as test
-- [ ] improve impl target handling:
-  - [ ] normalize local type name from simple and scoped impl type paths
-  - [ ] normalize local trait name from simple and scoped trait paths
-  - [ ] keep same-file `Implements` edge only when local type and local trait targets resolve uniquely
-  - [ ] do not emit dangling `Implements` edges for external traits or external types
-  - [ ] keep existing confidence tier for same-file implements edges
-- [ ] move call syntax extraction to queries while preserving resolver semantics:
-  - [ ] capture `call_expression` function target
-  - [ ] capture `method_call_expression` receiver and method name
-  - [ ] keep current same-file callee resolution rules
-  - [ ] keep unresolved call text target behavior
-  - [ ] keep current confidence values unless tests justify change
-- [ ] move reference syntax extraction to queries while preserving resolver semantics:
-  - [ ] capture `use_declaration` argument syntax
-  - [ ] capture type references from `type_identifier` and `scoped_type_identifier`
-  - [ ] ignore definition-name captures when producing references
-  - [ ] keep unique same-file target requirement for `References` edges
-- [ ] add focused semantic tests:
-  - [ ] trait method declaration is emitted and contained by trait
-  - [ ] free function and trait method with same name produce distinct qualified names
-  - [ ] `#[test] fn it_works()` emits `NodeKind::Test`
-  - [ ] `#[cfg(test)] mod tests { fn helper() {} }` marks nested function as test
-  - [ ] `#[cfg(not(test))] mod tests { fn helper() {} }` does not mark nested function as test
-  - [ ] custom attribute containing `test` does not mark function as test
-  - [ ] `impl local::Trait for local::Type` only emits `Implements` if local targets resolve uniquely
-  - [ ] `impl std::fmt::Display for Local` does not emit same-file `Implements` edge unless local trait exists
-  - [ ] generic function calls still resolve to same-file functions
-  - [ ] method calls still resolve to same-file methods when current resolver can disambiguate
-  - [ ] unresolved scoped calls still keep text target and `text` confidence tier
+- [x] improve trait body extraction:
+  - [x] capture methods declared in `trait_item` bodies via `function_signature_item`
+  - [x] emit trait method declarations using the existing `NodeKind` that best matches current graph model
+  - [x] set trait method parent to the trait qualified name
+  - [x] add `Contains` edge from trait node to trait method node
+  - [x] keep trait methods distinct from free functions with same name
+- [x] replace substring-based attribute detection:
+  - [x] parse `attribute_item` structure or query captures instead of using `text.contains("test")`
+  - [x] detect exact `#[test]` attribute for test functions
+  - [x] detect exact `#[cfg(test)]` attribute for test modules
+  - [x] do not treat `#[cfg(not(test))]` as test
+  - [x] do not treat custom attributes containing the word `test` as test
+- [x] improve impl target handling:
+  - [x] normalize local type name from simple and scoped impl type paths
+  - [x] normalize local trait name from simple and scoped trait paths
+  - [x] keep same-file `Implements` edge only when local type and local trait targets resolve uniquely
+  - [x] do not emit dangling `Implements` edges for external traits or external types
+  - [x] keep existing confidence tier for same-file implements edges
+- [x] move call syntax extraction to queries while preserving resolver semantics:
+  - [x] capture `call_expression` function target
+  - [x] capture method-call receiver and method name from Rust call target field expressions
+  - [x] keep current same-file callee resolution rules
+  - [x] keep unresolved call text target behavior
+  - [x] keep current confidence values unless tests justify change
+- [x] move reference syntax extraction to queries while preserving resolver semantics:
+  - [x] capture `use_declaration` argument syntax
+  - [x] capture type references from `type_identifier` and `scoped_type_identifier`
+  - [x] ignore definition-name captures when producing references
+  - [x] keep unique same-file target requirement for `References` edges
+- [x] add focused semantic tests:
+  - [x] trait method declaration is emitted and contained by trait
+  - [x] free function and trait method with same name produce distinct qualified names
+  - [x] `#[test] fn it_works()` emits `NodeKind::Test`
+  - [x] `#[cfg(test)] mod tests { fn helper() {} }` marks nested function as test
+  - [x] `#[cfg(not(test))] mod tests { fn helper() {} }` does not mark nested function as test
+  - [x] custom attribute containing `test` does not mark function as test
+  - [x] `impl local::Trait for local::Type` only emits `Implements` if local targets resolve uniquely
+  - [x] `impl std::fmt::Display for Local` does not emit same-file `Implements` edge unless local trait exists
+  - [x] generic function calls still resolve to same-file functions
+  - [x] method calls still resolve to same-file methods when current resolver can disambiguate
+  - [x] unresolved scoped calls still keep text target and `text` confidence tier
 
 Why:
 - query-backed extraction enables safer fixes after behavior-preserving migration
@@ -1725,16 +1725,16 @@ Why:
 
 #### Patch Q completion criteria
 
-- [ ] Rust parser uses Atlas-owned `.scm` query captures for definition extraction
-- [ ] Rust parser public API and `ParsedFile` schema remain unchanged
-- [ ] Q1 preserves existing Rust golden outputs
-- [ ] Q2 adds semantic fixes with targeted regression tests
-- [ ] Helix Rust queries are referenced only for grammar guidance unless MPL-2.0 compliance is explicitly added
-- [ ] `cargo test -p atlas-parser lang::rust` passes
-- [ ] `cargo test -p atlas-parser --test parser_golden` passes
-- [ ] `cargo test -p atlas-parser` passes
-- [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings` passes
-- [ ] `cargo fmt --all` has been run
+- [x] Rust parser uses Atlas-owned `.scm` query captures for definition extraction
+- [x] Rust parser public API and `ParsedFile` schema remain unchanged
+- [x] Q1 preserves existing Rust golden outputs
+- [x] Q2 adds semantic fixes with targeted regression tests
+- [x] Helix Rust queries are referenced only for grammar guidance unless MPL-2.0 compliance is explicitly added
+- [x] `cargo test -p atlas-parser lang::rust` passes
+- [x] `cargo test -p atlas-parser --test parser_golden` passes
+- [x] `cargo test -p atlas-parser` passes
+- [x] `cargo clippy --workspace --all-targets --all-features -- -D warnings` passes
+- [x] `cargo fmt --all` has been run
 
 ---
 
@@ -1743,6 +1743,10 @@ Why:
 Implement this only after Patch Q is complete. Rust is the pilot for shared query infrastructure and capture conventions. This patch migrates the remaining tree-sitter-backed language parsers to the same query-backed extraction model without changing parser public APIs, database schemas, or graph output contracts.
 
 The migration rule is: `.scm` queries identify language syntax facts; Rust code in each language parser still owns Atlas graph semantics, including qualified names, parent scopes, edge kinds, confidence tiers, source metadata, and language-specific heuristics. Do not replace semantic resolution with query captures alone.
+
+Check https://github.com/helix-editor/helix/tree/master/runtime/queries for scm grammar references for the languages.
+
+Use Helix queries only as grammar reference for tree-sitter node names and scope patterns, especially `runtime/queries/*/tags.scm` and `runtime/queries/*/locals.scm`. Do not copy Helix query files verbatim unless license handling is added, because Helix is MPL-2.0. Atlas query files must be authored for Atlas captures.
 
 #### Patch SQ1 — Shared query contract and migration harness
 
