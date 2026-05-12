@@ -495,14 +495,7 @@ fn fts_term_query(term: &str) -> String {
 }
 
 fn fts5_escape(input: &str) -> String {
-    let has_special = input
-        .chars()
-        .any(|ch| matches!(ch, '"' | '(' | ')' | '^' | '-' | '*'));
-    if has_special {
-        format!("\"{}\"", input.replace('"', "\"\""))
-    } else {
-        input.to_owned()
-    }
+    format!("\"{}\"", input.replace('"', "\"\""))
 }
 
 fn like_pattern(term: &str) -> String {
@@ -808,4 +801,50 @@ fn collect_evidence_values(value: Option<&Value>, output: &mut Vec<Value>) {
 fn dedup_strings(values: &mut Vec<String>) {
     let mut seen = BTreeSet::new();
     values.retain(|value| seen.insert(value.clone()));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proptest::collection::vec;
+    use proptest::prelude::*;
+    use proptest::sample::select;
+    use rusqlite::params;
+
+    fn fts_connection() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute("CREATE VIRTUAL TABLE docs USING fts5(content)", [])
+            .unwrap();
+        conn.execute(
+            "INSERT INTO docs(content) VALUES (?1), (?2)",
+            params!["decision memory search", "escape (query) syntax"],
+        )
+        .unwrap();
+        conn
+    }
+
+    fn visible_query_string() -> impl Strategy<Value = String> {
+        let alphabet = vec![
+            'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q',
+            'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z', 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H',
+            'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y',
+            'Z', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', ' ', '_', '-', '*', '"', '(',
+            ')', '^', '/', ':', '.', 'é',
+        ];
+        vec(select(alphabet), 1..32).prop_map(|chars| chars.into_iter().collect())
+    }
+
+    proptest! {
+        #[test]
+        fn escaped_decision_queries_execute_without_match_syntax_errors(input in visible_query_string()) {
+            let query = fts5_escape(&input);
+            let conn = fts_connection();
+            let result: rusqlite::Result<i64> = conn.query_row(
+                "SELECT count(*) FROM docs WHERE docs MATCH ?1",
+                params![query],
+                |row| row.get(0),
+            );
+            prop_assert!(result.is_ok(), "escaped query {:?} failed for input {:?}", query, input);
+        }
+    }
 }

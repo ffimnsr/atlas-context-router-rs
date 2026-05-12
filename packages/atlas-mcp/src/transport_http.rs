@@ -33,6 +33,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use anyhow::{Context as _, Result};
+use atlas_core::error_code_docs_ref;
 use axum::body::Body;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode, header};
@@ -324,7 +325,10 @@ async fn dispatch_tool_call(
                 "jsonrpc": "2.0",
                 "id": &id,
                 "error": { "code": -32001, "message": &err_msg,
-                    "data": { "atlas_error_code": "tool_execution_failed" } }
+                    "data": {
+                        "atlas_error_code": "tool_execution_failed",
+                        "atlas_error_code_docs": error_code_docs_ref("tool_execution_failed")
+                    } }
             });
             let _ = sse_tx.send(rsp.to_string());
             jsonrpc_error_response(id, -32001, err_msg)
@@ -397,7 +401,10 @@ fn jsonrpc_error_response(id: Value, code: i32, message: String) -> Response {
             "error": {
                 "code": code,
                 "message": message,
-                "data": { "atlas_error_code": "tool_execution_failed" }
+                "data": {
+                    "atlas_error_code": "tool_execution_failed",
+                    "atlas_error_code_docs": error_code_docs_ref("tool_execution_failed")
+                }
             }
         })),
     )

@@ -15,7 +15,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use atlas_core::user_facing_error_message;
+use atlas_core::{error_code_docs_ref, user_facing_error_message};
 use serde::{Deserialize, Serialize};
 
 use crate::{prompts, tools};
@@ -1749,13 +1749,17 @@ fn user_visible_error_message(error: &anyhow::Error) -> String {
 }
 
 fn jsonrpc_error(id: serde_json::Value, kind: JsonRpcErrorKind, message: String) -> String {
+    let atlas_error_code = kind.atlas_error_code();
     serde_json::json!({
         "jsonrpc": "2.0",
         "id": id,
         "error": {
             "code": kind.code(),
             "message": message,
-            "data": { "atlas_error_code": kind.atlas_error_code() }
+            "data": {
+                "atlas_error_code": atlas_error_code,
+                "atlas_error_code_docs": error_code_docs_ref(atlas_error_code)
+            }
         }
     })
     .to_string()
@@ -2150,6 +2154,20 @@ fn win_serve_pipe_connection(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use atlas_core::error_code_docs_ref;
+    use std::path::PathBuf;
+
+    fn assert_error_code_doc_link(actual: &serde_json::Value, error_code: &str) {
+        assert_eq!(actual, &serde_json::json!(error_code_docs_ref(error_code)));
+
+        let catalog_path =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/error_codes.md");
+        let catalog = std::fs::read_to_string(&catalog_path).expect("read docs/error_codes.md");
+        assert!(
+            catalog.contains(&format!("<a id=\"{error_code}\"></a>")),
+            "docs/error_codes.md missing anchor for {error_code}"
+        );
+    }
 
     use atlas_core::EdgeKind;
     use atlas_core::kinds::NodeKind;
@@ -2400,11 +2418,19 @@ mod tests {
             by_id[&serde_json::Value::Null]["error"]["data"]["atlas_error_code"],
             serde_json::json!("parse_error")
         );
+        assert_error_code_doc_link(
+            &by_id[&serde_json::Value::Null]["error"]["data"]["atlas_error_code_docs"],
+            "parse_error",
+        );
         assert_eq!(by_id[&serde_json::json!(6)]["id"], 6);
         assert_eq!(by_id[&serde_json::json!(6)]["error"]["code"], -32600);
         assert_eq!(
             by_id[&serde_json::json!(6)]["error"]["data"]["atlas_error_code"],
             serde_json::json!("invalid_request")
+        );
+        assert_error_code_doc_link(
+            &by_id[&serde_json::json!(6)]["error"]["data"]["atlas_error_code_docs"],
+            "invalid_request",
         );
         assert_eq!(by_id[&serde_json::json!(8)]["id"], 8);
         assert_eq!(by_id[&serde_json::json!(8)]["error"]["code"], -32602);
@@ -2412,11 +2438,19 @@ mod tests {
             by_id[&serde_json::json!(8)]["error"]["data"]["atlas_error_code"],
             serde_json::json!("invalid_params")
         );
+        assert_error_code_doc_link(
+            &by_id[&serde_json::json!(8)]["error"]["data"]["atlas_error_code_docs"],
+            "invalid_params",
+        );
         assert_eq!(by_id[&serde_json::json!(7)]["id"], 7);
         assert_eq!(by_id[&serde_json::json!(7)]["error"]["code"], -32601);
         assert_eq!(
             by_id[&serde_json::json!(7)]["error"]["data"]["atlas_error_code"],
             serde_json::json!("method_not_found")
+        );
+        assert_error_code_doc_link(
+            &by_id[&serde_json::json!(7)]["error"]["data"]["atlas_error_code_docs"],
+            "method_not_found",
         );
         assert!(
             by_id[&serde_json::json!(7)]["error"]["message"]
@@ -3151,6 +3185,10 @@ mod tests {
         assert_eq!(
             responses[0]["error"]["data"]["atlas_error_code"],
             serde_json::json!("request_timed_out")
+        );
+        assert_error_code_doc_link(
+            &responses[0]["error"]["data"]["atlas_error_code_docs"],
+            "request_timed_out",
         );
         assert!(
             responses[0]["error"]["message"]

@@ -100,6 +100,10 @@ Implement Phase 29 in patch order. Do not start later patches until the precedin
   - [x] include defaults for high cyclomatic complexity, high cognitive complexity, max nesting depth, and branch count
   - [x] include ignore lists for files, modules, and node kinds
   - [x] include optional layer rules for architecture validation
+  - [ ] add configurable layer-rules file surface for architecture validation:
+    - [ ] add config field for external layer-rules file path under `.atlas/config.toml`
+    - [ ] load layer rules from referenced file at runtime so architecture rules can change without recompiling
+    - [ ] validate missing, unreadable, or malformed layer-rules file with actionable config errors
   - [x] validate thresholds are positive and fail with actionable config errors
 - [x] add foundation tests:
   - [x] report sorting is stable
@@ -384,7 +388,8 @@ Why:
 - [x] architecture analysis detects cycles, layer violations, coupling, and high-connectivity files
 - [x] risk assessment returns explainable `0-100` scores with factor evidence
 - [x] pattern detection reports repeated chains, unused/isolated structures, hubs, bottlenecks, and deep chains
-- [x] config supports thresholds, layer rules, and ignore lists with validation
+- [x] config supports thresholds, inline layer rules, and ignore lists with validation
+- [ ] config supports runtime-loaded external layer-rules files with validation
 - [x] every insights report includes summary, findings, evidence, ranking reason, freshness, and provenance
 - [x] tests cover cycle detection, coupling detection, layer violations, unused-node detection, large/complex-function ranking/filtering, risk scoring, outlier detection, and CLI/MCP parity
 - [x] `cargo test -p atlas-engine` or owning insights crate test target passes
@@ -1319,6 +1324,10 @@ Why:
   - [ ] `symbols`
   - [ ] `classification`
 - [x] ensure secrets are redacted before persistence and previews
+- [ ] add configurable redaction-rules file surface for sanitization policy:
+  - [ ] add config field for external redaction-rules file path under `.atlas/config.toml`
+  - [ ] load redaction rules from referenced file at runtime so sanitization policy can change without recompiling
+  - [ ] validate missing, unreadable, or malformed redaction-rules file with actionable config errors
 - [ ] add tests for small, medium, large, oversized, and secret-bearing outputs
 
 Why:
@@ -1464,6 +1473,7 @@ Why:
 - [ ] no runtime data is stored in graph DB
 - [ ] large runtime outputs route through content store before session insertion
 - [x] enriched events are deterministic, bounded, redacted, and deduplicated
+- [ ] redaction policy supports runtime-loaded external rule files with validation
 - [ ] event-to-graph links use stable identifiers and treat row IDs as optional cache hints
 - [ ] graph linking obeys readiness state and budget policy
 - [ ] context engine can merge runtime events/artifacts with graph and saved context under one bounded ranking policy
@@ -2374,18 +2384,20 @@ Why:
 
 ## Additional Backlog
 
-- [ ] add canonical `docs/error_codes.md` file and make README, MCP responses, and tests reference that single error-code catalog
+- [x] add canonical `docs/error_codes.md` file and make README, MCP responses, and tests reference that single error-code catalog
 - [x] add generated `MCP_TOOLS.md` from tool registry and test/docs check that catches drift from hand-maintained tool tables
 - [ ] add build/query/MCP metrics counters and histograms for build duration, parsed file count, parser cache reuse ratio, query latency by mode, and MCP tool call counts
-- [ ] add informational `cargo-llvm-cov` coverage task and CI job that reports coverage without gating merge
-- [ ] add `criterion` bench suites per crate for build, incremental update, query modes, context engine, and history reconstruction workloads
-- [ ] add CI regression harness for `cargo bench --message-format=json` and store benchmark output as comparable artifact
+- [x] add informational `cargo-llvm-cov` coverage task and a new github workflow job that reports coverage without gating merge
+- [x] add `criterion` bench suites per crate for build, incremental update, query modes, context engine, and history reconstruction workloads
+- [x] add CI regression harness for `cargo bench --message-format=json` and store benchmark output as comparable artifact
 - [ ] add CI-visible parser cache hit-ratio metric and fail when cache reuse drops below configured threshold
 - [ ] add thin LSP shim that maps Atlas query/context/impact/reference flows onto standard LSP requests
-- [ ] add documented `budget_policy` block to `.atlas/config.toml` with defaults, environment overrides, and `--budget-profile` selection
-- [ ] add configurable layer-rules file surface for Phase 29.1 so architecture rules can change without recompiling
-- [ ] add configurable redaction-rules file surface for Patch X4 so sanitization policy can change without recompiling
-- [ ] add issue items for tokenizer-backed budget accounting using real token counts instead of byte/char heuristics
-- [ ] add `proptest` coverage for ranking/trimming, canonical-path normalization, and FTS query escaping
+- [ ] add documented `budget_policy` block to `.atlas/config.toml` with defaults and `--budget-profile` selection:
+  - [ ] document which budget limits are byte-based heuristics versus tokenizer-backed counts
+  - [ ] add tokenizer config fields for budget accounting provider, model, and fallback mode
+  - [ ] add tokenizer-backed budget accounting for context/review/export paths that already expose `max_tokens`
+  - [ ] keep deterministic byte/char fallback when tokenizer is unavailable and surface fallback metadata in JSON output
+  - [ ] add tests for tokenizer-backed counts, heuristic fallback, and stable truncation behavior across both modes
+- [x] add `proptest` coverage for ranking/trimming, canonical-path normalization, and FTS query escaping
 
 ---

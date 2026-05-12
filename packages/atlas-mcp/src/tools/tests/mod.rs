@@ -2,9 +2,11 @@ use super::{call, tool_list};
 use crate::output::OutputFormat;
 use atlas_contentstore::{ContentStore, IndexingStats};
 use atlas_core::EdgeKind;
+use atlas_core::error_code_docs_ref;
 use atlas_core::kinds::NodeKind;
 use atlas_core::model::{Edge, Node, NodeId};
 use atlas_store_sqlite::{BuildFinishStats, GraphBuildState, Store};
+use std::path::PathBuf;
 use std::process::Command;
 use tempfile::TempDir;
 
@@ -411,5 +413,16 @@ pub(super) fn assert_provenance(resp: &serde_json::Value, expected_repo: &str, e
     assert!(
         prov.get("last_indexed_at").is_some(),
         "provenance.last_indexed_at key must be present"
+    );
+}
+
+pub(super) fn assert_error_code_doc_link(actual: &str, error_code: &str) {
+    assert_eq!(actual, error_code_docs_ref(error_code));
+
+    let catalog_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/error_codes.md");
+    let catalog = std::fs::read_to_string(&catalog_path).expect("read docs/error_codes.md");
+    assert!(
+        catalog.contains(&format!("<a id=\"{error_code}\"></a>")),
+        "docs/error_codes.md missing anchor for {error_code}"
     );
 }

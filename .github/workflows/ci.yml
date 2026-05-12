@@ -87,6 +87,74 @@ jobs:
       - name: Compile benchmarks
         run: cargo bench --workspace --no-run --locked
 
+  bench-regression:
+    name: Bench Regression
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: atlas-rust-${{ runner.os }}
+          cache-on-failure: "true"
+
+      - name: Run bench JSON harness
+        run: bash scripts/bench-json-harness.sh
+
+      - name: Upload bench artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-regression-${{ github.run_id }}
+          path: target/bench-ci
+          if-no-files-found: warn
+
+  coverage:
+    name: Coverage Report
+    runs-on: ubuntu-latest
+    continue-on-error: true
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: atlas-rust-${{ runner.os }}
+          cache-on-failure: "true"
+
+      - name: Run cargo-llvm-cov
+        run: cargo llvm-cov --workspace --locked --lcov --output-path target/llvm-cov/lcov.info --html --output-dir target/llvm-cov/html
+
+      - name: Upload coverage artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report-${{ github.run_id }}
+          path: |
+            target/llvm-cov/lcov.info
+            target/llvm-cov/html
+          if-no-files-found: warn
+
   test:
     name: Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}

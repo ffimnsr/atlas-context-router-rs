@@ -50,10 +50,22 @@ tasks:
     commands:
       - cargo bench --workspace --no-run
     description: Run benchmarks without executing them to check for compilation issues.
+  bench-json-harness:
+    commands:
+      - bash scripts/bench-json-harness.sh
+    description: Run criterion benches with cargo JSON output and capture comparable artifacts.
   coverage:
     commands:
+      - cargo llvm-cov --workspace --locked --lcov --output-path target/llvm-cov/lcov.info --html --output-dir target/llvm-cov/html
+    description: Generate informational coverage reports using cargo-llvm-cov.
+  coverage-llvm-cov:
+    commands:
+      - cargo llvm-cov --workspace --locked --lcov --output-path target/llvm-cov/lcov.info --html --output-dir target/llvm-cov/html
+    description: Generate informational coverage reports using cargo-llvm-cov.
+  coverage-tarpaulin:
+    commands:
       - cargo tarpaulin --workspace --out Html
-    description: Run code coverage analysis using cargo-tarpaulin and output HTML report.
+    description: Run legacy cargo-tarpaulin coverage analysis and output HTML report.
   install:
     commands:
       - cargo install --path packages/atlas-cli

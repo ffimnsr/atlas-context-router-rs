@@ -29,5 +29,9 @@ static_assertions.workspace = true
 name = "pipeline_bench"
 harness = false
 
+[[bench]]
+name = "update_bench"
+harness = false
+
 [lints]
 workspace = true

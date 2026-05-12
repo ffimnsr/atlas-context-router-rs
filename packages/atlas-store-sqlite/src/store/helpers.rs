@@ -186,31 +186,89 @@ pub(super) fn repeat_placeholders(n: usize) -> String {
 }
 
 /// Wrap a user-provided FTS5 query so special characters don't break syntax.
-/// Simple approach: if the string has FTS5 operators, quote it as a phrase.
+/// Safe queries pass through unchanged; everything else is wrapped as a phrase.
 pub(super) fn fts5_escape(input: &str) -> String {
     if looks_like_safe_fts_query(input) {
         return input.to_string();
     }
 
-    // If it looks like a plain word/words without FTS5 syntax, leave it as-is
-    // so users can still use operators intentionally.  Otherwise wrap in "".
-    let has_special = input
-        .chars()
-        .any(|c| matches!(c, '"' | '(' | ')' | '^' | '-' | '*'));
-    if has_special {
-        // Escape internal double-quotes and wrap as phrase.
-        format!("\"{}\"", input.replace('"', "\"\""))
-    } else {
-        input.to_string()
-    }
+    format!("\"{}\"", input.replace('"', "\"\""))
 }
 
 pub(super) fn looks_like_safe_fts_query(input: &str) -> bool {
     !input.is_empty()
-        && input.split_whitespace().all(|token| {
-            token == "OR"
-                || token
-                    .chars()
-                    .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '*')
-        })
+        && input
+            .split_whitespace()
+            .all(|token| token == "OR" || looks_like_safe_fts_term(token))
+}
+
+fn looks_like_safe_fts_term(token: &str) -> bool {
+    let stem = token.strip_suffix('*').unwrap_or(token);
+
+    !stem.is_empty()
+        && stem
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proptest::collection::vec;
+    use proptest::prelude::*;
+    use proptest::sample::select;
+    use proptest::string::string_regex;
+    use rusqlite::{Connection, params};
+
+    fn fts_connection() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute("CREATE VIRTUAL TABLE docs USING fts5(content)", [])
+            .unwrap();
+        conn.execute(
+            "INSERT INTO docs(content) VALUES (?1), (?2)",
+            params!["alpha beta", "symbols (test) OR escape"],
+        )
+        .unwrap();
+        conn
+    }
+
+    fn visible_query_string() -> impl Strategy<Value = String> {
+        let alphabet = vec![
+            'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q',
+            'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z', 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H',
+            'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y',
+            'Z', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', ' ', '_', '-', '*', '"', '(',
+            ')', '^', '/', ':', '.', 'é',
+        ];
+        vec(select(alphabet), 1..32).prop_map(|chars| chars.into_iter().collect())
+    }
+
+    #[test]
+    fn bare_wildcard_is_quoted_as_phrase() {
+        assert!(!looks_like_safe_fts_query("*"));
+        assert_eq!(fts5_escape("*"), "\"*\"");
+    }
+
+    proptest! {
+        #[test]
+        fn safe_fts_queries_pass_through_unchanged(
+            tokens in proptest::collection::vec(string_regex(r"(?:OR|[A-Za-z0-9_]{1,8}\*?)").unwrap(), 1..6),
+        ) {
+            let query = tokens.join(" ");
+            prop_assert!(looks_like_safe_fts_query(&query));
+            prop_assert_eq!(fts5_escape(&query), query);
+        }
+
+        #[test]
+        fn escaped_queries_execute_without_match_syntax_errors(input in visible_query_string()) {
+            let query = fts5_escape(&input);
+            let conn = fts_connection();
+            let result: rusqlite::Result<i64> = conn.query_row(
+                "SELECT count(*) FROM docs WHERE docs MATCH ?1",
+                params![query],
+                |row| row.get(0),
+            );
+            prop_assert!(result.is_ok(), "escaped query {:?} failed for input {:?}", query, input);
+        }
+    }
 }

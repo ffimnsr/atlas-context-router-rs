@@ -4,8 +4,8 @@ use atlas_core::model::ContextIntent;
 use atlas_core::model::{ChangeType, ChangedFile};
 use atlas_core::{
     BudgetPolicy, BudgetReport, GraphHealthInput, GraphReadiness, GraphReadinessInput,
-    graph_health_error_message, graph_health_error_suggestions, is_schema_mismatch_error,
-    select_graph_health_error_code,
+    error_code_docs_ref, graph_health_error_message, graph_health_error_suggestions,
+    is_schema_mismatch_error, select_graph_health_error_code,
 };
 use atlas_parser::ParserRegistry;
 use atlas_repo::{DiffTarget, changed_files, find_repo_root, hash_file};
@@ -107,6 +107,10 @@ pub(super) fn error_message(error_code: &str) -> &'static str {
 
 pub(super) fn error_suggestions(error_code: &str) -> &'static [&'static str] {
     graph_health_error_suggestions(error_code)
+}
+
+pub(super) fn error_code_docs(error_code: &str) -> String {
+    error_code_docs_ref(error_code)
 }
 
 pub(super) fn graph_issue_code(error: &str) -> &'static str {

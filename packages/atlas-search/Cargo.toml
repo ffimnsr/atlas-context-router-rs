@@ -25,5 +25,9 @@ tempfile = "3"
 name = "retrieval_eval_bench"
 harness = false
 
+[[bench]]
+name = "query_modes_bench"
+harness = false
+
 [lints]
 workspace = true

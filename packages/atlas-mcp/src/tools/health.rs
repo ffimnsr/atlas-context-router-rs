@@ -7,9 +7,9 @@ use std::sync::OnceLock;
 use std::time::Instant;
 
 use super::shared::{
-    derive_graph_readiness, error_message, error_suggestions, failure_category, graph_issue_code,
-    inject_budget_metadata, load_budget_policy, open_store, pending_graph_relevant_changes,
-    tool_result_value, u64_arg,
+    derive_graph_readiness, error_code_docs, error_message, error_suggestions, failure_category,
+    graph_issue_code, inject_budget_metadata, load_budget_policy, open_store,
+    pending_graph_relevant_changes, tool_result_value, u64_arg,
 };
 
 #[derive(Serialize)]
@@ -301,6 +301,7 @@ pub(super) fn tool_status(
         "error_code": category,
         "message": error_message(category),
         "suggestions": error_suggestions(category),
+        "error_code_docs": error_code_docs(category),
         "execution_state": execution_state.as_str(),
         "repo_root": repo_root,
         "db_path": db_path,
@@ -651,6 +652,7 @@ pub(super) fn tool_doctor(
         "error_code": ec,
         "message": error_message(ec),
         "suggestions": error_suggestions(ec),
+        "error_code_docs": error_code_docs(ec),
         "checks": checks,
     });
     tool_result_value(&result, output_format)
@@ -727,6 +729,7 @@ pub(super) fn tool_db_check(
         "error_code": ec,
         "message": error_message(ec),
         "suggestions": error_suggestions(ec),
+        "error_code_docs": error_code_docs(ec),
         "db_path": db_path,
         "integrity_issues": issues,
         "orphan_node_count": orphans.len(),
@@ -830,6 +833,7 @@ pub(super) fn tool_debug_graph(
         "error_code": "none",
         "message": error_message("none"),
         "suggestions": error_suggestions("none"),
+        "error_code_docs": error_code_docs("none"),
         "nodes": stats.node_count,
         "edges": stats.edge_count,
         "files": stats.file_count,

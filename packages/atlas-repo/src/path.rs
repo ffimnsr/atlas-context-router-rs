@@ -345,6 +345,8 @@ fn canonicalize_existing_ancestor(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
+    use proptest::string::string_regex;
 
     #[test]
     fn basic_relative() {
@@ -614,5 +616,46 @@ mod tests {
     fn canonical_repo_relative_lowercases_on_windows() {
         let path = CanonicalRepoPath::from_repo_relative("Src\\Lib.rs").unwrap();
         assert_eq!(path.as_str(), "src/lib.rs");
+    }
+
+    proptest! {
+        #[test]
+        fn equivalent_relative_spellings_share_canonical_identity(
+            segments in proptest::collection::vec(string_regex("[a-z0-9_-]{1,8}").unwrap(), 1..8),
+            prefix_curdirs in 0usize..3,
+            separator_flags in proptest::collection::vec(any::<bool>(), 0..8),
+            curdir_flags in proptest::collection::vec(any::<bool>(), 0..8),
+        ) {
+            let expected = segments.join("/");
+            let mut raw = String::new();
+
+            for _ in 0..prefix_curdirs {
+                raw.push_str("./");
+            }
+
+            for (idx, segment) in segments.iter().enumerate() {
+                if idx > 0 {
+                    raw.push(if *separator_flags.get(idx - 1).unwrap_or(&false) {
+                        '\\'
+                    } else {
+                        '/'
+                    });
+                }
+
+                if *curdir_flags.get(idx).unwrap_or(&false) {
+                    raw.push('.');
+                    raw.push(if *separator_flags.get(idx).unwrap_or(&false) {
+                        '\\'
+                    } else {
+                        '/'
+                    });
+                }
+
+                raw.push_str(segment);
+            }
+
+            let canonical = CanonicalRepoPath::from_repo_relative(&raw).unwrap();
+            prop_assert_eq!(canonical.as_str(), expected);
+        }
     }
 }

@@ -3,7 +3,9 @@ use atlas_engine::{PostprocessOptions, postprocess_graph, supported_postprocess_
 use atlas_repo::find_repo_root;
 use camino::Utf8Path;
 
-use super::shared::{bool_arg, compute_freshness_warning, open_store, str_arg, tool_result_value};
+use super::shared::{
+    bool_arg, compute_freshness_warning, error_code_docs, open_store, str_arg, tool_result_value,
+};
 
 pub(super) fn tool_postprocess_graph(
     args: Option<&serde_json::Value>,
@@ -30,7 +32,15 @@ pub(super) fn tool_postprocess_graph(
     )?;
     crate::progress::report("postprocess complete", Some(100));
 
-    let mut response = tool_result_value(&summary, output_format)?;
+    let mut summary_value = serde_json::to_value(&summary)?;
+    if let Some(error_code) = summary_value
+        .get("error_code")
+        .and_then(|value| value.as_str())
+    {
+        summary_value["error_code_docs"] = serde_json::Value::String(error_code_docs(error_code));
+    }
+
+    let mut response = tool_result_value(&summary_value, output_format)?;
     let store = open_store(db_path)?;
     let build_state =
         store

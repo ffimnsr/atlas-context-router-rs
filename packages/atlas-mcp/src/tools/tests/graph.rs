@@ -661,6 +661,12 @@ fn symbol_neighbors_missing_qname_sets_error_code() {
     let resp = call("symbol_neighbors", Some(&args), "/repo", &fixture.db_path)
         .expect("symbol_neighbors should not error for missing symbol");
     assert_eq!(resp["atlas_error_code"].as_str(), Some("node_not_found"));
+    assert_error_code_doc_link(
+        resp["atlas_error_code_docs"]
+            .as_str()
+            .expect("atlas_error_code_docs"),
+        "node_not_found",
+    );
     assert!(resp["atlas_message"].as_str().is_some());
     let suggestions = resp["atlas_suggestions"]
         .as_array()

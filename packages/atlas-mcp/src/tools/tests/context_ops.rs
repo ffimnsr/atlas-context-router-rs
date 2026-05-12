@@ -457,6 +457,10 @@ fn postprocess_graph_surfaces_unknown_stage_error_code() {
     let value: serde_json::Value = serde_json::from_str(&text).expect("parse json");
     assert_eq!(value["ok"], serde_json::json!(false));
     assert_eq!(value["error_code"], serde_json::json!("unknown_stage"));
+    assert_error_code_doc_link(
+        value["error_code_docs"].as_str().expect("error_code_docs"),
+        "unknown_stage",
+    );
 }
 
 #[test]

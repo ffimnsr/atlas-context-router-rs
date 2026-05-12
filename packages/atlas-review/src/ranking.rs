@@ -201,6 +201,9 @@ pub(crate) fn compare_file_priorities(
 mod tests {
     use super::*;
     use atlas_core::Node;
+    use proptest::prelude::*;
+    use proptest::string::string_regex;
+    use std::cmp::Ordering;
 
     fn selected_node(reason: SelectionReason, qn: &str, file: &str) -> SelectedNode {
         SelectedNode {
@@ -363,5 +366,60 @@ mod tests {
             primitives.node_score(&same_file, "src/a.rs")
                 > primitives.node_score(&other_file, "src/a.rs")
         );
+    }
+
+    proptest! {
+        #[test]
+        fn node_ranking_trim_keeps_top_ranked_prefix(
+            entries in proptest::collection::vec(
+                (0i32..10_000, string_regex("[a-z]{1,8}").unwrap()),
+                1..40,
+            ),
+            trim_at in 0usize..40,
+        ) {
+            let mut ranked = entries
+                .into_iter()
+                .enumerate()
+                .map(|(idx, (score, stem))| {
+                    let qn = format!("src/{stem}_{idx}.rs::fn::{stem}_{idx}");
+                    (f64::from(score), qn)
+                })
+                .collect::<Vec<_>>();
+
+            ranked.sort_by(|left, right| compare_node_scores(left.0, right.0, &left.1, &right.1));
+            let keep = trim_at.min(ranked.len());
+            let dropped = ranked.split_off(keep);
+
+            for pair in ranked.windows(2) {
+                let ordering = compare_node_scores(pair[0].0, pair[1].0, &pair[0].1, &pair[1].1);
+                prop_assert_ne!(ordering, Ordering::Greater);
+            }
+
+            for kept in &ranked {
+                for lost in &dropped {
+                    let ordering = compare_node_scores(kept.0, lost.0, &kept.1, &lost.1);
+                    prop_assert_ne!(ordering, Ordering::Greater);
+                }
+            }
+        }
+
+        #[test]
+        fn trimming_primitives_apply_request_overrides_independently(
+            max_nodes in proptest::option::of(1usize..1_000),
+            max_edges in proptest::option::of(1usize..1_000),
+            max_files in proptest::option::of(1usize..1_000),
+        ) {
+            let request = ContextRequest {
+                max_nodes,
+                max_edges,
+                max_files,
+                ..ContextRequest::default()
+            };
+
+            let limits = TrimmingPrimitives::from_request(&request);
+            prop_assert_eq!(limits.max_nodes, max_nodes.unwrap_or(DEFAULT_MAX_NODES));
+            prop_assert_eq!(limits.max_edges, max_edges.unwrap_or(DEFAULT_MAX_EDGES));
+            prop_assert_eq!(limits.max_files, max_files.unwrap_or(DEFAULT_MAX_FILES));
+        }
     }
 }

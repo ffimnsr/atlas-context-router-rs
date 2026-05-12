@@ -12,8 +12,9 @@ use serde::Serialize;
 use std::collections::BTreeSet;
 
 use super::shared::{
-    bool_arg, error_message, error_suggestions, inject_budget_metadata, load_budget_policy,
-    open_store, parse_mcp_intent, str_arg, string_array_arg, tool_result_value, u64_arg,
+    bool_arg, error_code_docs, error_message, error_suggestions, inject_budget_metadata,
+    load_budget_policy, open_store, parse_mcp_intent, str_arg, string_array_arg, tool_result_value,
+    u64_arg,
 };
 use crate::context::{enforce_mcp_response_budget, package_context_result, package_impact};
 use crate::session_tools::{
@@ -1066,6 +1067,8 @@ pub(super) fn tool_get_context(
 
     if result.nodes.is_empty() {
         response["atlas_error_code"] = serde_json::Value::String("node_not_found".to_owned());
+        response["atlas_error_code_docs"] =
+            serde_json::Value::String(error_code_docs("node_not_found"));
         response["atlas_message"] =
             serde_json::Value::String(error_message("node_not_found").to_owned());
         response["atlas_suggestions"] = serde_json::json!(error_suggestions("node_not_found"));

@@ -193,6 +193,7 @@ Repository workflow and support docs live at the root:
 - [SUPPORT.md](SUPPORT.md)
 - [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
 - [CHANGELOG.md](CHANGELOG.md)
+- [docs/error_codes.md](docs/error_codes.md)
 
 GitHub triage defaults also live in `.github/`:
 

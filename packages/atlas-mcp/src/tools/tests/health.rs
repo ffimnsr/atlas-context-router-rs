@@ -31,6 +31,10 @@ fn status_healthy_repo_returns_ok() {
 
     assert_eq!(v["ok"].as_bool(), Some(true));
     assert_eq!(v["error_code"].as_str(), Some("none"));
+    assert_error_code_doc_link(
+        v["error_code_docs"].as_str().expect("error_code_docs"),
+        "none",
+    );
     assert!(v["message"].as_str().is_some());
     assert!(v["suggestions"].as_array().is_some());
     assert_eq!(v["build_state"].as_str(), Some("built"));
@@ -55,6 +59,10 @@ fn status_missing_db_returns_error_code() {
 
     assert_eq!(v["ok"].as_bool(), Some(false));
     assert_eq!(v["error_code"].as_str(), Some("missing_graph_db"));
+    assert_error_code_doc_link(
+        v["error_code_docs"].as_str().expect("error_code_docs"),
+        "missing_graph_db",
+    );
     assert!(v["message"].as_str().is_some());
     assert!(!v["suggestions"].as_array().expect("suggestions").is_empty());
     assert_eq!(v["db_exists"].as_bool(), Some(false));

@@ -9,9 +9,9 @@ use std::time::Instant;
 use crate::context::{compact_node, package_impact};
 
 use super::shared::{
-    bool_arg, error_message, error_suggestions, inject_budget_metadata, load_budget_policy,
-    load_embedding_config, open_store, resolve_kind_alias, str_arg, string_array_arg,
-    tool_result_value, u64_arg,
+    bool_arg, error_code_docs, error_message, error_suggestions, inject_budget_metadata,
+    load_budget_policy, load_embedding_config, open_store, resolve_kind_alias, str_arg,
+    string_array_arg, tool_result_value, u64_arg,
 };
 
 fn ranking_evidence_legend_json() -> serde_json::Value {
@@ -514,6 +514,8 @@ pub(super) fn tool_symbol_neighbors(
             .unwrap_or(false);
         if !exists {
             response["atlas_error_code"] = serde_json::Value::String("node_not_found".to_owned());
+            response["atlas_error_code_docs"] =
+                serde_json::Value::String(error_code_docs("node_not_found"));
             response["atlas_message"] =
                 serde_json::Value::String(error_message("node_not_found").to_owned());
             response["atlas_suggestions"] = serde_json::json!(error_suggestions("node_not_found"));
