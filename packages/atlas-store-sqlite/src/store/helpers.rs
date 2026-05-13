@@ -240,7 +240,12 @@ mod tests {
             'Z', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', ' ', '_', '-', '*', '"', '(',
             ')', '^', '/', ':', '.', 'é',
         ];
-        vec(select(alphabet), 1..32).prop_map(|chars| chars.into_iter().collect())
+        vec(select(alphabet), 1..32)
+            .prop_map(|chars| chars.into_iter().collect::<String>())
+            .prop_filter(
+                "query must contain at least one non-whitespace character",
+                |input| !input.trim().is_empty(),
+            )
     }
 
     #[test]

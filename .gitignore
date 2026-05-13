@@ -48,3 +48,6 @@ coverage/
 
 
 .patches
+
+# GH Run artifacts
+/gh-run-*

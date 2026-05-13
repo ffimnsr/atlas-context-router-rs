@@ -14,9 +14,22 @@ rm -rf "$criterion_dir"
 
 export CARGO_TERM_COLOR=never
 
-cargo bench --workspace --locked --message-format=json -- --noplot --save-baseline ci 2>&1 | tee "$raw_log"
+cargo bench --workspace --locked --no-run --message-format=json 2>&1 | tee "$raw_log"
 
-grep -E '^\{.*\}$' "$raw_log" > "$json_log" || true
+grep -E '^\{.*"kind":\["bench"\].*\}$' "$raw_log" > "$json_log" || true
+
+mapfile -t bench_bins < <(
+    sed -n 's/.*"kind":\["bench"\].*"executable":"\([^"]*\)".*/\1/p' "$json_log" | sort -u
+)
+
+if [[ ${#bench_bins[@]} -eq 0 ]]; then
+    echo "No benchmark executables found in cargo bench output" >&2
+    exit 1
+fi
+
+for bench_bin in "${bench_bins[@]}"; do
+    "$bench_bin" --noplot --save-baseline ci 2>&1 | tee -a "$raw_log"
+done
 
 if [[ -d "${target_dir}/criterion" ]]; then
     mkdir -p "$criterion_dir"

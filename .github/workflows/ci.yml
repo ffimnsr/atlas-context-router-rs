@@ -111,7 +111,7 @@ jobs:
 
       - name: Upload bench artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: bench-regression-${{ github.run_id }}
           path: target/bench-ci
@@ -143,11 +143,17 @@ jobs:
           cache-on-failure: "true"
 
       - name: Run cargo-llvm-cov
-        run: cargo llvm-cov --workspace --locked --lcov --output-path target/llvm-cov/lcov.info --html --output-dir target/llvm-cov/html
+        run: cargo llvm-cov --workspace --locked --no-report
+
+      - name: Generate lcov report
+        run: cargo llvm-cov report --lcov --output-path target/llvm-cov/lcov.info
+
+      - name: Generate html report
+        run: cargo llvm-cov report --html --output-dir target/llvm-cov/html
 
       - name: Upload coverage artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-report-${{ github.run_id }}
           path: |
