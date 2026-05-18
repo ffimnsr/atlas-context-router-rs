@@ -1,4 +1,5 @@
 use std::fs;
+use std::process::Command;
 
 use atlas_engine::{BuildOptions, UpdateOptions, UpdateTarget, build_graph, update_graph};
 use atlas_store_sqlite::Store;
@@ -20,6 +21,15 @@ fn write_file(root: &Utf8PathBuf, rel: &str, content: &str) {
         fs::create_dir_all(parent).expect("create parent dirs");
     }
     fs::write(path, content).expect("write fixture file");
+}
+
+fn init_git_repo(root: &Utf8PathBuf) {
+    let status = Command::new("git")
+        .args(["init", "--quiet"])
+        .current_dir(root)
+        .status()
+        .expect("git init");
+    assert!(status.success(), "git init should succeed");
 }
 
 fn workspace_manifest() -> &'static str {
@@ -86,6 +96,7 @@ fn make_fixture(module_count: usize) -> BenchFixture {
     for (idx, path) in module_paths.iter().enumerate() {
         write_file(&repo_root, path, &module_source(idx, module_count, 1));
     }
+    init_git_repo(&repo_root);
 
     let mut store = Store::open(&db_path).expect("open bench db");
     store.migrate().expect("migrate bench db");

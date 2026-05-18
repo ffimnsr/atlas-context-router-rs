@@ -145,6 +145,9 @@ jobs:
       - name: Run cargo-llvm-cov
         run: cargo llvm-cov --workspace --locked --no-report
 
+      - name: Prepare coverage output directory
+        run: mkdir -p target/llvm-cov
+
       - name: Generate lcov report
         run: cargo llvm-cov report --lcov --output-path target/llvm-cov/lcov.info
 
