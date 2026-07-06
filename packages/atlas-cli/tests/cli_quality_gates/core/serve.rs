@@ -17,20 +17,29 @@ fn serve_command_handles_stdio_jsonrpc_flow_end_to_end() {
     );
 
     let responses = parse_jsonrpc_lines(&output.stdout);
-    assert_eq!(responses.len(), 4, "initialized notification must not emit response");
+    assert_eq!(
+        responses.len(),
+        4,
+        "initialized notification must not emit response"
+    );
 
     let by_id: std::collections::HashMap<_, _> = responses
         .into_iter()
         .map(|response| (response["id"].clone(), response))
         .collect();
 
-    assert_eq!(by_id[&json!(1)]["result"]["protocolVersion"], json!("2024-11-05"));
+    assert_eq!(
+        by_id[&json!(1)]["result"]["protocolVersion"],
+        json!(atlas_mcp::MCP_PROTOCOL_VERSION)
+    );
 
     let tools = by_id[&json!(2)]["result"]["tools"]
         .as_array()
         .expect("tools/list result tools array");
     assert!(
-        tools.iter().any(|tool| tool["name"] == json!("get_context")),
+        tools
+            .iter()
+            .any(|tool| tool["name"] == json!("get_context")),
         "tools/list must expose get_context"
     );
 
@@ -42,13 +51,20 @@ fn serve_command_handles_stdio_jsonrpc_flow_end_to_end() {
         .as_str()
         .expect("query_graph text content");
     if query_format == "json" {
-        let query_value: Value = serde_json::from_str(query_text).expect("query_graph payload json");
-        assert_eq!(query_value[0]["qn"], json!("src/lib.rs::method::Greeter::greet_twice"));
+        let query_value: Value =
+            serde_json::from_str(query_text).expect("query_graph payload json");
+        assert_eq!(
+            query_value[0]["qn"],
+            json!("src/lib.rs::method::Greeter::greet_twice")
+        );
     } else {
         assert!(query_text.contains("src/lib.rs::method::Greeter::greet_twice"));
     }
 
-    assert_eq!(by_id[&json!(4)]["result"]["atlas_output_format"], json!("toon"));
+    assert_eq!(
+        by_id[&json!(4)]["result"]["atlas_output_format"],
+        json!("toon")
+    );
     let context_text = by_id[&json!(4)]["result"]["content"][0]["text"]
         .as_str()
         .expect("get_context text content");
@@ -65,7 +81,8 @@ fn serve_direct_stdio_handles_stdio_jsonrpc_flow_end_to_end() {
     run_atlas(repo.path(), &["init"]);
     run_atlas(repo.path(), &["build"]);
 
-    let output = run_serve_jsonrpc_session(repo.path(), &["serve", "--direct-stdio"], serve_requests());
+    let output =
+        run_serve_jsonrpc_session(repo.path(), &["serve", "--direct-stdio"], serve_requests());
 
     assert!(
         output.status.success(),
@@ -75,20 +92,29 @@ fn serve_direct_stdio_handles_stdio_jsonrpc_flow_end_to_end() {
     );
 
     let responses = parse_jsonrpc_lines(&output.stdout);
-    assert_eq!(responses.len(), 4, "initialized notification must not emit response");
+    assert_eq!(
+        responses.len(),
+        4,
+        "initialized notification must not emit response"
+    );
 
     let by_id: std::collections::HashMap<_, _> = responses
         .into_iter()
         .map(|response| (response["id"].clone(), response))
         .collect();
 
-    assert_eq!(by_id[&json!(1)]["result"]["protocolVersion"], json!("2024-11-05"));
+    assert_eq!(
+        by_id[&json!(1)]["result"]["protocolVersion"],
+        json!(atlas_mcp::MCP_PROTOCOL_VERSION)
+    );
 
     let tools = by_id[&json!(2)]["result"]["tools"]
         .as_array()
         .expect("tools/list result tools array");
     assert!(
-        tools.iter().any(|tool| tool["name"] == json!("get_context")),
+        tools
+            .iter()
+            .any(|tool| tool["name"] == json!("get_context")),
         "tools/list must expose get_context"
     );
 
@@ -108,7 +134,8 @@ fn serve_broker_preserves_saved_context_and_session_tools() {
     run_atlas(repo.path(), &["init"]);
     run_atlas(repo.path(), &["build"]);
 
-    let output = run_serve_jsonrpc_session(repo.path(), &["serve"], serve_requests_with_session_tools());
+    let output =
+        run_serve_jsonrpc_session(repo.path(), &["serve"], serve_requests_with_session_tools());
     assert!(
         output.status.success(),
         "atlas serve failed\nstdout:\n{}\nstderr:\n{}",
@@ -128,7 +155,10 @@ fn serve_broker_preserves_saved_context_and_session_tools() {
         .expect("save_context_artifact text");
     let artifact_value: Value = serde_json::from_str(artifact_text).expect("artifact payload json");
     assert!(
-        matches!(artifact_value["routing"].as_str(), Some("preview") | Some("pointer")),
+        matches!(
+            artifact_value["routing"].as_str(),
+            Some("preview") | Some("pointer")
+        ),
         "artifact should route to preview or pointer: {artifact_value:?}"
     );
     assert!(artifact_value["source_id"].as_str().is_some());
@@ -153,26 +183,44 @@ fn concurrent_brokers_for_same_repo_and_db_share_one_daemon() {
 
     let repo_a = repo.path().to_path_buf();
     let repo_b = repo.path().to_path_buf();
-    let first = std::thread::spawn(move || run_serve_jsonrpc_session(&repo_a, &["serve"], serve_requests()));
-    let second = std::thread::spawn(move || run_serve_jsonrpc_session(&repo_b, &["serve"], serve_requests()));
+    let first = std::thread::spawn(move || {
+        run_serve_jsonrpc_session(&repo_a, &["serve"], serve_requests())
+    });
+    let second = std::thread::spawn(move || {
+        run_serve_jsonrpc_session(&repo_b, &["serve"], serve_requests())
+    });
 
     let first_output = first.join().expect("first broker join");
     let second_output = second.join().expect("second broker join");
-    assert!(first_output.status.success(), "first broker failed: {}", String::from_utf8_lossy(&first_output.stderr));
-    assert!(second_output.status.success(), "second broker failed: {}", String::from_utf8_lossy(&second_output.stderr));
+    assert!(
+        first_output.status.success(),
+        "first broker failed: {}",
+        String::from_utf8_lossy(&first_output.stderr)
+    );
+    assert!(
+        second_output.status.success(),
+        "second broker failed: {}",
+        String::from_utf8_lossy(&second_output.stderr)
+    );
     let first_stderr = String::from_utf8_lossy(&first_output.stderr);
     let second_stderr = String::from_utf8_lossy(&second_output.stderr);
     assert!(
-        first_stderr.contains("atlas-mcp: broker spawn") || second_stderr.contains("atlas-mcp: broker spawn"),
+        first_stderr.contains("atlas-mcp: broker spawn")
+            || second_stderr.contains("atlas-mcp: broker spawn"),
         "one broker should spawn daemon\nfirst:\n{first_stderr}\nsecond:\n{second_stderr}"
     );
     assert!(
-        first_stderr.contains("atlas-mcp: broker attach") || second_stderr.contains("atlas-mcp: broker attach"),
+        first_stderr.contains("atlas-mcp: broker attach")
+            || second_stderr.contains("atlas-mcp: broker attach"),
         "one broker should attach to existing daemon\nfirst:\n{first_stderr}\nsecond:\n{second_stderr}"
     );
 
     let instances = list_mcp_instance_metadata(repo.path());
-    assert_eq!(instances.len(), 1, "same repo+db must create one daemon instance");
+    assert_eq!(
+        instances.len(),
+        1,
+        "same repo+db must create one daemon instance"
+    );
     let pid = instances[0]["pid"].as_u64().expect("daemon pid") as u32;
     assert!(pid_exists(pid), "shared daemon pid must be alive");
 
@@ -194,13 +242,33 @@ fn brokers_for_same_repo_and_different_dbs_start_separate_daemons() {
     run_atlas(repo.path(), &["--db", &db_two_str, "init"]);
     run_atlas(repo.path(), &["--db", &db_two_str, "build"]);
 
-    let output_one = run_serve_jsonrpc_session(repo.path(), &["--db", &db_one_str, "serve"], serve_requests());
-    let output_two = run_serve_jsonrpc_session(repo.path(), &["--db", &db_two_str, "serve"], serve_requests());
-    assert!(output_one.status.success(), "first db broker failed: {}", String::from_utf8_lossy(&output_one.stderr));
-    assert!(output_two.status.success(), "second db broker failed: {}", String::from_utf8_lossy(&output_two.stderr));
+    let output_one = run_serve_jsonrpc_session(
+        repo.path(),
+        &["--db", &db_one_str, "serve"],
+        serve_requests(),
+    );
+    let output_two = run_serve_jsonrpc_session(
+        repo.path(),
+        &["--db", &db_two_str, "serve"],
+        serve_requests(),
+    );
+    assert!(
+        output_one.status.success(),
+        "first db broker failed: {}",
+        String::from_utf8_lossy(&output_one.stderr)
+    );
+    assert!(
+        output_two.status.success(),
+        "second db broker failed: {}",
+        String::from_utf8_lossy(&output_two.stderr)
+    );
 
     let instances = list_mcp_instance_metadata(repo.path());
-    assert_eq!(instances.len(), 2, "different db paths must create separate daemon instances");
+    assert_eq!(
+        instances.len(),
+        2,
+        "different db paths must create separate daemon instances"
+    );
     let db_paths = instances
         .iter()
         .map(|metadata| metadata["db_path"].as_str().expect("db path").to_owned())
@@ -212,7 +280,10 @@ fn brokers_for_same_repo_and_different_dbs_start_separate_daemons() {
         .iter()
         .map(|metadata| metadata["pid"].as_u64().expect("pid") as u32)
         .collect::<Vec<_>>();
-    assert_ne!(pids[0], pids[1], "separate dbs must run separate daemon pids");
+    assert_ne!(
+        pids[0], pids[1],
+        "separate dbs must run separate daemon pids"
+    );
 
     cleanup_mcp_daemons(repo.path());
 }
@@ -225,22 +296,40 @@ fn broker_recovers_after_dead_daemon_pid() {
     run_atlas(repo.path(), &["build"]);
 
     let first_output = run_serve_jsonrpc_session(repo.path(), &["serve"], serve_requests());
-    assert!(first_output.status.success(), "initial broker failed: {}", String::from_utf8_lossy(&first_output.stderr));
+    assert!(
+        first_output.status.success(),
+        "initial broker failed: {}",
+        String::from_utf8_lossy(&first_output.stderr)
+    );
 
     let initial_instances = list_mcp_instance_metadata(repo.path());
     assert_eq!(initial_instances.len(), 1);
     let old_pid = initial_instances[0]["pid"].as_u64().expect("old pid") as u32;
-    let socket_path = PathBuf::from(initial_instances[0]["socket_path"].as_str().expect("socket path"));
+    let socket_path = PathBuf::from(
+        initial_instances[0]["socket_path"]
+            .as_str()
+            .expect("socket path"),
+    );
     assert!(pid_exists(old_pid));
 
     kill_pid(old_pid);
     wait_until(Duration::from_secs(2), || !pid_exists(old_pid));
-    assert!(socket_path.exists(), "killed daemon should leave stale socket path for recovery test");
+    assert!(
+        socket_path.exists(),
+        "killed daemon should leave stale socket path for recovery test"
+    );
 
     let second_output = run_serve_jsonrpc_session(repo.path(), &["serve"], serve_requests());
-    assert!(second_output.status.success(), "recovery broker failed: {}", String::from_utf8_lossy(&second_output.stderr));
+    assert!(
+        second_output.status.success(),
+        "recovery broker failed: {}",
+        String::from_utf8_lossy(&second_output.stderr)
+    );
     let recovery_stderr = String::from_utf8_lossy(&second_output.stderr);
-    assert!(recovery_stderr.contains("atlas-mcp: broker cleanup") || recovery_stderr.contains("cleaning stale daemon state"));
+    assert!(
+        recovery_stderr.contains("atlas-mcp: broker cleanup")
+            || recovery_stderr.contains("cleaning stale daemon state")
+    );
     assert!(recovery_stderr.contains("atlas-mcp: broker spawn"));
 
     let recovered_instances = list_mcp_instance_metadata(repo.path());
@@ -260,7 +349,9 @@ fn serve_daemon_clears_runtime_state_on_sigterm() {
     run_atlas(repo.path(), &["build"]);
 
     let child = spawn_command(repo.path(), env!("CARGO_BIN_EXE_atlas"), &["serve-daemon"]);
-    wait_until(Duration::from_secs(3), || !list_mcp_instance_metadata(repo.path()).is_empty());
+    wait_until(Duration::from_secs(3), || {
+        !list_mcp_instance_metadata(repo.path()).is_empty()
+    });
 
     send_signal(child.id(), libc::SIGTERM);
     let output = child.wait_with_output().expect("wait for serve-daemon");
@@ -270,7 +361,9 @@ fn serve_daemon_clears_runtime_state_on_sigterm() {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr),
     );
-    wait_until(Duration::from_secs(3), || list_mcp_instance_metadata(repo.path()).is_empty());
+    wait_until(Duration::from_secs(3), || {
+        list_mcp_instance_metadata(repo.path()).is_empty()
+    });
 }
 
 #[test]
@@ -281,7 +374,9 @@ fn serve_broker_exits_cleanly_on_sigint() {
     run_atlas(repo.path(), &["build"]);
 
     let child = spawn_command(repo.path(), env!("CARGO_BIN_EXE_atlas"), &["serve"]);
-    wait_until(Duration::from_secs(3), || !list_mcp_instance_metadata(repo.path()).is_empty());
+    wait_until(Duration::from_secs(3), || {
+        !list_mcp_instance_metadata(repo.path()).is_empty()
+    });
     std::thread::sleep(Duration::from_millis(250));
 
     send_signal(child.id(), libc::SIGINT);

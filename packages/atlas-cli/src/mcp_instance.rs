@@ -415,7 +415,8 @@ mod tests {
             repo.join(".atlas/worldtree.db").to_str().unwrap(),
         )
         .unwrap();
-        let metadata = instance.default_metadata(42, "2024-11-05", "2026-04-23T00:00:00Z");
+        let metadata =
+            instance.default_metadata(42, atlas_mcp::MCP_PROTOCOL_VERSION, "2026-04-23T00:00:00Z");
 
         instance.write_metadata(&metadata).unwrap();
 
@@ -432,8 +433,11 @@ mod tests {
             repo.join(".atlas/worldtree.db").to_str().unwrap(),
         )
         .unwrap();
-        let metadata =
-            instance.default_metadata(std::process::id(), "2024-11-05", "2026-04-23T00:00:00Z");
+        let metadata = instance.default_metadata(
+            std::process::id(),
+            atlas_mcp::MCP_PROTOCOL_VERSION,
+            "2026-04-23T00:00:00Z",
+        );
         instance.write_metadata(&metadata).unwrap();
 
         let status = instance.inspect_metadata().unwrap();
@@ -458,7 +462,11 @@ mod tests {
         .unwrap();
         fs::create_dir_all(&instance.instance_dir).unwrap();
         let _listener = UnixListener::bind(&instance.socket_path).unwrap();
-        let metadata = instance.default_metadata(u32::MAX, "2024-11-05", "2026-04-23T00:00:00Z");
+        let metadata = instance.default_metadata(
+            u32::MAX,
+            atlas_mcp::MCP_PROTOCOL_VERSION,
+            "2026-04-23T00:00:00Z",
+        );
         instance.write_metadata(&metadata).unwrap();
 
         let status = instance.inspect_metadata().unwrap();
@@ -491,7 +499,7 @@ mod tests {
                 .into_owned(),
             socket_path: instance.socket_path.to_string_lossy().into_owned(),
             pid: std::process::id(),
-            protocol_version: "2024-11-05".to_owned(),
+            protocol_version: atlas_mcp::MCP_PROTOCOL_VERSION.to_owned(),
             started_at: "2026-04-23T00:00:00Z".to_owned(),
         };
         fs::create_dir_all(&instance.instance_dir).unwrap();
@@ -523,8 +531,11 @@ mod tests {
         .unwrap();
         fs::create_dir_all(&instance.instance_dir).unwrap();
         let _listener = UnixListener::bind(&instance.socket_path).unwrap();
-        let metadata =
-            instance.default_metadata(std::process::id(), "2024-11-05", "2026-04-23T00:00:00Z");
+        let metadata = instance.default_metadata(
+            std::process::id(),
+            atlas_mcp::MCP_PROTOCOL_VERSION,
+            "2026-04-23T00:00:00Z",
+        );
         instance.write_metadata(&metadata).unwrap();
 
         let status = instance.inspect_metadata().unwrap();

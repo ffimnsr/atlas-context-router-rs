@@ -46,9 +46,9 @@ use tokio_stream::StreamExt as _;
 use tokio_stream::wrappers::BroadcastStream;
 use tower_http::cors::{Any, CorsLayer};
 
+use crate::spec;
 use crate::tools;
 use crate::tools::health::mark_server_started;
-use crate::transport::MCP_PROTOCOL_VERSION;
 
 const DEFAULT_BIND: &str = "127.0.0.1:7070";
 /// Broadcast channel capacity.  Slow SSE consumers lose old events.
@@ -195,22 +195,10 @@ async fn handle_jsonrpc(
     let params = request.get("params").cloned();
 
     match method.as_str() {
-        "initialize" => jsonrpc_ok_response(
-            id,
-            serde_json::json!({
-                "protocolVersion": MCP_PROTOCOL_VERSION,
-                "capabilities": {
-                    "tools": {},
-                    "prompts": { "listChanged": false },
-                    "logging": {},
-                    "experimental": { "progressNotifications": true }
-                },
-                "serverInfo": {
-                    "name": "atlas",
-                    "version": env!("CARGO_PKG_VERSION")
-                }
-            }),
-        ),
+        "initialize" => match spec::negotiate_initialize(params.as_ref()) {
+            Ok(result) => jsonrpc_ok_response(id, result),
+            Err(error) => jsonrpc_error_response(id, -32602, error.to_string()),
+        },
         "initialized" | "notifications/initialized" => StatusCode::NO_CONTENT.into_response(),
         m if m.starts_with("notifications/") => StatusCode::NO_CONTENT.into_response(),
         "tools/list" => jsonrpc_ok_response(id, tools::tool_list()),
@@ -393,6 +381,18 @@ fn jsonrpc_error_response(id: Value, code: i32, message: String) -> Response {
         -32700 | -32600 | -32601 | -32602 => StatusCode::BAD_REQUEST,
         _ => StatusCode::INTERNAL_SERVER_ERROR,
     };
+    let atlas_error_code = match code {
+        -32700 => "parse_error",
+        -32600 => "invalid_request",
+        -32601 => "method_not_found",
+        -32602 => "invalid_params",
+        -32603 => "internal_error",
+        -32001 => "tool_execution_failed",
+        -32002 => "worker_unavailable",
+        -32003 => "request_timed_out",
+        -32004 => "rate_limited",
+        _ => "internal_error",
+    };
     (
         status,
         Json(serde_json::json!({
@@ -402,8 +402,8 @@ fn jsonrpc_error_response(id: Value, code: i32, message: String) -> Response {
                 "code": code,
                 "message": message,
                 "data": {
-                    "atlas_error_code": "tool_execution_failed",
-                    "atlas_error_code_docs": error_code_docs_ref("tool_execution_failed")
+                    "atlas_error_code": atlas_error_code,
+                    "atlas_error_code_docs": error_code_docs_ref(atlas_error_code)
                 }
             }
         })),
@@ -416,6 +416,8 @@ fn jsonrpc_error_response(id: Value, code: i32, message: String) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::body::to_bytes;
+    use serde_json::json;
 
     fn make_state(token: Option<&str>) -> AppState {
         AppState {
@@ -424,6 +426,28 @@ mod tests {
             auth_token: token.map(|t| Arc::new(t.to_owned())),
             sse_tx: broadcast::channel(1).0,
         }
+    }
+
+    fn read_json_response(response: Response) -> Value {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("http test runtime");
+        runtime.block_on(async move {
+            let bytes = to_bytes(response.into_body(), usize::MAX)
+                .await
+                .expect("read response body");
+            serde_json::from_slice(&bytes).expect("response json")
+        })
+    }
+
+    fn initialize_body(protocol_version: &str, extra_fields: &str) -> axum::body::Bytes {
+        format!(
+            "{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{{\"protocolVersion\":\"{}\",\"capabilities\":{{}},\"clientInfo\":{{\"name\":\"zed\",\"version\":\"1.0.0\"}}{}}}}}",
+            protocol_version, extra_fields
+        )
+        .into_bytes()
+        .into()
     }
 
     #[test]
@@ -460,5 +484,80 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert(header::AUTHORIZATION, "Bearer secret".parse().unwrap());
         assert!(check_auth(&state, &headers).is_some());
+    }
+
+    #[test]
+    fn http_initialize_uses_shared_builder() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("http test runtime");
+        let response = runtime.block_on(handle_jsonrpc(
+            State(make_state(None)),
+            HeaderMap::new(),
+            initialize_body(
+                spec::MCP_PROTOCOL_VERSION,
+                ",\"_meta\":{\"clientTag\":\"abc\"}",
+            ),
+        ));
+        let value = read_json_response(response);
+
+        assert_eq!(
+            value["result"],
+            spec::negotiate_initialize(Some(&json!({
+                "protocolVersion": spec::MCP_PROTOCOL_VERSION,
+                "capabilities": {},
+                "clientInfo": { "name": "zed", "version": "1.0.0" },
+                "_meta": { "clientTag": "abc" }
+            })))
+            .expect("shared initialize result")
+        );
+    }
+
+    #[test]
+    fn http_initialize_rejects_missing_client_info() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("http test runtime");
+        let body: axum::body::Bytes = b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-11-25\",\"capabilities\":{}}}".as_slice().into();
+        let response = runtime.block_on(handle_jsonrpc(
+            State(make_state(None)),
+            HeaderMap::new(),
+            body,
+        ));
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let value = read_json_response(response);
+        assert_eq!(value["error"]["code"], json!(-32602));
+        assert_eq!(
+            value["error"]["message"],
+            json!("initialize requires object params.clientInfo")
+        );
+        assert_eq!(
+            value["error"]["data"]["atlas_error_code"],
+            json!("invalid_params")
+        );
+    }
+
+    #[test]
+    fn http_initialize_rejects_unsupported_protocol_version() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("http test runtime");
+        let response = runtime.block_on(handle_jsonrpc(
+            State(make_state(None)),
+            HeaderMap::new(),
+            initialize_body("2024-11-05", ""),
+        ));
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let value = read_json_response(response);
+        assert_eq!(value["error"]["code"], json!(-32602));
+        assert_eq!(
+            value["error"]["message"],
+            json!("unsupported protocol version '2024-11-05'; supported version: 2025-11-25")
+        );
     }
 }

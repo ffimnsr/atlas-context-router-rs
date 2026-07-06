@@ -2424,52 +2424,52 @@ Implement protocol-version upgrade first so all later phases share one spec base
 
 #### MCP1.1 Canonical protocol version source
 
-- [ ] create `packages/atlas-mcp/src/spec.rs` as single source of MCP protocol constants:
-  - [ ] add `pub const MCP_PROTOCOL_VERSION: &str = "2025-11-25"`
-  - [ ] add shared server identity builder returning `name`, `version`, and `description`
-  - [ ] add shared capability builder used by stdio and HTTP initialize handlers
-- [ ] remove duplicate hardcoded protocol-version strings from:
-  - [ ] `packages/atlas-mcp/src/transport.rs`
-  - [ ] `packages/atlas-mcp/src/transport_http.rs`
-  - [ ] `packages/atlas-cli/src/mcp_instance.rs`
-  - [ ] `packages/atlas-cli/tests/cli_quality_gates/core/serve.rs`
-- [ ] make instance metadata writers and readers use shared spec constant instead of inline string literals
-- [ ] add unit tests proving protocol version is emitted from one constant in transport and instance metadata paths
+- [x] create `packages/atlas-mcp/src/spec.rs` as single source of MCP protocol constants:
+  - [x] add `pub const MCP_PROTOCOL_VERSION: &str = "2025-11-25"`
+  - [x] add shared server identity builder returning `name`, `version`, and `description`
+  - [x] add shared capability builder used by stdio and HTTP initialize handlers
+- [x] remove duplicate hardcoded protocol-version strings from:
+  - [x] `packages/atlas-mcp/src/transport.rs`
+  - [x] `packages/atlas-mcp/src/transport_http.rs`
+  - [x] `packages/atlas-cli/src/mcp_instance.rs`
+  - [x] `packages/atlas-cli/tests/cli_quality_gates/core/serve.rs`
+- [x] make instance metadata writers and readers use shared spec constant instead of inline string literals
+- [x] add unit tests proving protocol version is emitted from one constant in transport and instance metadata paths
 
 #### MCP1.2 Initialize request parsing and version negotiation
 
-- [ ] replace ad-hoc `initialize` param handling with typed request parsing in shared transport code:
-  - [ ] require `protocolVersion`
-  - [ ] require `capabilities`
-  - [ ] require `clientInfo.name`
-  - [ ] require `clientInfo.version`
-- [ ] reject initialize requests missing required fields with JSON-RPC `invalid_params` response and stable error body
-- [ ] negotiate exact protocol version `2025-11-25` only:
-  - [ ] reject older protocol versions instead of silently downgrading
-  - [ ] return clear unsupported-version error listing exact supported version
-- [ ] add `serverInfo.description` to initialize result
-- [ ] add `_meta` passthrough support on initialize result where latest schema allows it
-- [ ] add tests for:
-  - [ ] successful stdio initialize with full 2025-11-25 payload
-  - [ ] successful HTTP initialize with full 2025-11-25 payload
-  - [ ] missing `clientInfo` rejection
-  - [ ] unsupported protocol version rejection
-  - [ ] `serverInfo.description` presence
+- [x] replace ad-hoc `initialize` param handling with typed request parsing in shared transport code:
+  - [x] require `protocolVersion`
+  - [x] require `capabilities`
+  - [x] require `clientInfo.name`
+  - [x] require `clientInfo.version`
+- [x] reject initialize requests missing required fields with JSON-RPC `invalid_params` response and stable error body
+- [x] negotiate exact protocol version `2025-11-25` only:
+  - [x] reject older protocol versions instead of silently downgrading
+  - [x] return clear unsupported-version error listing exact supported version
+- [x] add `serverInfo.description` to initialize result
+- [x] add `_meta` passthrough support on initialize result where latest schema allows it
+- [x] add tests for:
+  - [x] successful stdio initialize with full 2025-11-25 payload
+  - [x] successful HTTP initialize with full 2025-11-25 payload
+  - [x] missing `clientInfo` rejection
+  - [x] unsupported protocol version rejection
+  - [x] `serverInfo.description` presence
 
 #### MCP1.3 Capability contract cleanup
 
-- [ ] replace inline initialize capability maps with typed capability structs serialized by shared builder
-- [ ] advertise only capabilities actually implemented after each later phase lands:
-  - [ ] remove capability claims that lack concrete method handlers
-  - [ ] gate future capability fields behind implementation-ready tests
-- [ ] add snapshot tests for stdio and HTTP initialize results so capability drift fails CI
+- [x] replace inline initialize capability maps with typed capability structs serialized by shared builder
+- [x] advertise only capabilities actually implemented after each later phase lands:
+  - [x] remove capability claims that lack concrete method handlers
+  - [x] gate future capability fields behind implementation-ready tests
+- [x] add snapshot tests for stdio and HTTP initialize results so capability drift fails CI
 
 #### MCP1 completion criteria
 
-- [ ] every initialize response and instance metadata file reports `2025-11-25`
-- [ ] empty `{}` initialize payload no longer passes quality gates
-- [ ] stdio and HTTP initialize payloads serialize from same shared builder
-- [ ] unsupported protocol-version requests fail deterministically with stable error JSON
+- [x] every initialize response and instance metadata file reports `2025-11-25`
+- [x] empty `{}` initialize payload no longer passes quality gates
+- [x] stdio and HTTP initialize payloads serialize from same shared builder
+- [x] unsupported protocol-version requests fail deterministically with stable error JSON
 
 ### Phase MCP2 — Transport architecture migration to Streamable HTTP
 

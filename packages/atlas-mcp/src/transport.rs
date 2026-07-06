@@ -2,7 +2,7 @@
 //!
 //! Reads newline-delimited JSON from stdin, dispatches each request, and
 //! writes newline-delimited JSON responses to stdout.  Follows the MCP
-//! 2024-11-05 protocol specification.
+//! 2025-11-25 protocol specification.
 
 use std::collections::{HashMap, HashSet};
 use std::io::BufReader;
@@ -18,7 +18,7 @@ use anyhow::{Context, Result};
 use atlas_core::{error_code_docs_ref, user_facing_error_message};
 use serde::{Deserialize, Serialize};
 
-use crate::{prompts, tools};
+use crate::{MCP_PROTOCOL_VERSION, prompts, spec, tools};
 
 #[cfg(unix)]
 use std::net::Shutdown;
@@ -60,7 +60,6 @@ const MCP_WORKER_THREADS_ENV: &str = "ATLAS_MCP_WORKER_THREADS";
 const MCP_TOOL_TIMEOUT_MS_ENV: &str = "ATLAS_MCP_TOOL_TIMEOUT_MS";
 const DEFAULT_WORKER_THREADS: usize = 2;
 const DEFAULT_TOOL_TIMEOUT_MS: u64 = 300_000;
-pub const MCP_PROTOCOL_VERSION: &str = "2024-11-05";
 const JSONRPC_PARSE_ERROR: i32 = -32700;
 const JSONRPC_INVALID_REQUEST: i32 = -32600;
 const JSONRPC_METHOD_NOT_FOUND: i32 = -32601;
@@ -389,14 +388,15 @@ fn perform_socket_handshake<R: BufRead, W: Write>(
 
     let request: DaemonHandshakeRequest =
         serde_json::from_str(line.trim()).context("invalid daemon handshake")?;
-    let response = if request.protocol_version != MCP_PROTOCOL_VERSION {
+    let response = if request.protocol_version != spec::MCP_PROTOCOL_VERSION {
         DaemonHandshakeResponse::err(
-            MCP_PROTOCOL_VERSION,
+            spec::MCP_PROTOCOL_VERSION,
             repo_root,
             db_path,
             format!(
                 "protocol mismatch: client={} server={}",
-                request.protocol_version, MCP_PROTOCOL_VERSION
+                request.protocol_version,
+                spec::MCP_PROTOCOL_VERSION
             ),
         )
     } else if request.repo_root != repo_root {
@@ -1393,23 +1393,8 @@ fn dispatch(
     db_path: &str,
 ) -> std::result::Result<serde_json::Value, DispatchError> {
     match method {
-        "initialize" => Ok(serde_json::json!({
-            "protocolVersion": MCP_PROTOCOL_VERSION,
-            "capabilities": {
-                "tools": {},
-                "prompts": { "listChanged": false },
-                "logging": {},
-                "experimental": {
-                    "cancelRequest": true,
-                    "progressNotifications": true,
-                    "setTrace": true
-                }
-            },
-            "serverInfo": {
-                "name": "atlas",
-                "version": env!("CARGO_PKG_VERSION")
-            }
-        })),
+        "initialize" => spec::negotiate_initialize(params)
+            .map_err(|error| DispatchError::new(JsonRpcErrorKind::InvalidParams, error)),
 
         "tools/list" => Ok(tools::tool_list()),
 
@@ -2291,18 +2276,26 @@ mod tests {
         }
     }
 
+    fn initialize_request_line() -> String {
+        format!(
+            "{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{{\"protocolVersion\":\"{}\",\"capabilities\":{{}},\"clientInfo\":{{\"name\":\"zed\",\"version\":\"1.0.0\"}}}}}}\n",
+            MCP_PROTOCOL_VERSION
+        )
+    }
+
     #[test]
     fn stdio_transport_handles_initialize_list_and_tool_calls() {
         let fixture = setup_fixture();
-        let input = concat!(
-            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}\n",
-            "{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}\n",
-            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\",\"params\":{}}\n",
-            "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"prompts/list\",\"params\":{}}\n",
-            "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"prompts/get\",\"params\":{\"name\":\"inspect_symbol\",\"arguments\":{\"symbol\":\"compute\"}}}\n",
-            "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"tools/call\",\"params\":{\"name\":\"query_graph\",\"arguments\":{\"text\":\"compute\"}}}\n",
-            "{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"tools/call\",\"params\":{\"name\":\"get_context\",\"arguments\":{\"query\":\"compute\"}}}\n"
-        );
+        let input = [
+            initialize_request_line(),
+            "{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}\n".to_owned(),
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\",\"params\":{}}\n".to_owned(),
+            "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"prompts/list\",\"params\":{}}\n".to_owned(),
+            "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"prompts/get\",\"params\":{\"name\":\"inspect_symbol\",\"arguments\":{\"symbol\":\"compute\"}}}\n".to_owned(),
+            "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"tools/call\",\"params\":{\"name\":\"query_graph\",\"arguments\":{\"text\":\"compute\"}}}\n".to_owned(),
+            "{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"tools/call\",\"params\":{\"name\":\"get_context\",\"arguments\":{\"query\":\"compute\"}}}\n".to_owned(),
+        ]
+        .concat();
         let reader = BufReader::new(Cursor::new(input.as_bytes()));
         let mut writer = Vec::new();
 
@@ -2327,13 +2320,20 @@ mod tests {
             .map(|response| (response["id"].clone(), response))
             .collect();
 
+        let initialize_result = &by_id[&serde_json::json!(1)]["result"];
+        assert_eq!(initialize_result["protocolVersion"], MCP_PROTOCOL_VERSION);
         assert_eq!(
-            by_id[&serde_json::json!(1)]["result"]["protocolVersion"],
-            MCP_PROTOCOL_VERSION
+            initialize_result,
+            &crate::spec::negotiate_initialize(Some(&serde_json::json!({
+                "protocolVersion": MCP_PROTOCOL_VERSION,
+                "capabilities": {},
+                "clientInfo": { "name": "zed", "version": "1.0.0" }
+            })))
+            .expect("shared initialize result")
         );
-        assert!(
-            by_id[&serde_json::json!(1)]["result"]["capabilities"]["prompts"].is_object(),
-            "initialize must advertise prompts capability"
+        assert_eq!(
+            initialize_result["serverInfo"]["description"],
+            serde_json::json!(env!("CARGO_PKG_DESCRIPTION"))
         );
 
         let tools = by_id[&serde_json::json!(2)]["result"]["tools"]
@@ -2383,6 +2383,62 @@ mod tests {
             .expect("get_context text content");
         assert!(context_text.contains("intent: symbol"));
         assert!(context_text.contains("src/service.rs::fn::compute"));
+    }
+
+    #[test]
+    fn stdio_transport_rejects_initialize_without_client_info() {
+        let fixture = setup_fixture();
+        let input = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-11-25\",\"capabilities\":{}}}\n";
+        let reader = BufReader::new(Cursor::new(input.as_bytes()));
+        let mut writer = Vec::new();
+
+        run_server_io(
+            reader,
+            &mut writer,
+            "/ignored",
+            &fixture.db_path,
+            ServerOptions::default(),
+        )
+        .expect("run server io");
+
+        let responses = parse_output_lines(writer);
+        assert_eq!(responses.len(), 1);
+        assert_eq!(responses[0]["error"]["code"], serde_json::json!(-32602));
+        assert_eq!(
+            responses[0]["error"]["message"],
+            serde_json::json!("initialize requires object params.clientInfo")
+        );
+        assert_eq!(
+            responses[0]["error"]["data"]["atlas_error_code"],
+            serde_json::json!("invalid_params")
+        );
+    }
+
+    #[test]
+    fn stdio_transport_rejects_unsupported_initialize_protocol_version() {
+        let fixture = setup_fixture();
+        let input = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{},\"clientInfo\":{\"name\":\"zed\",\"version\":\"1.0.0\"}}}\n";
+        let reader = BufReader::new(Cursor::new(input.as_bytes()));
+        let mut writer = Vec::new();
+
+        run_server_io(
+            reader,
+            &mut writer,
+            "/ignored",
+            &fixture.db_path,
+            ServerOptions::default(),
+        )
+        .expect("run server io");
+
+        let responses = parse_output_lines(writer);
+        assert_eq!(responses.len(), 1);
+        assert_eq!(responses[0]["error"]["code"], serde_json::json!(-32602));
+        assert_eq!(
+            responses[0]["error"]["message"],
+            serde_json::json!(
+                "unsupported protocol version '2024-11-05'; supported version: 2025-11-25"
+            )
+        );
     }
 
     #[test]
@@ -2468,11 +2524,12 @@ mod tests {
             .expect("drop nodes table to force internal db error");
         drop(conn);
 
-        let input = concat!(
-            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}\n",
-            "{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}\n",
-            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"query_graph\",\"arguments\":{\"text\":\"compute\"}}}\n"
-        );
+        let input = [
+            initialize_request_line(),
+            "{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}\n".to_owned(),
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"query_graph\",\"arguments\":{\"text\":\"compute\"}}}\n".to_owned(),
+        ]
+        .concat();
         let reader = BufReader::new(Cursor::new(input.as_bytes()));
         let mut writer = Vec::new();
 
@@ -2656,14 +2713,15 @@ mod tests {
         .expect("write handshake");
         client_stream
             .write_all(
-            concat!(
-                "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}\n",
-                "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\",\"params\":{}}\n",
-                "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"query_graph\",\"arguments\":{\"text\":\"compute\"}}}\n",
-                "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"get_context\",\"arguments\":{\"query\":\"compute\"}}}\n"
+                [
+                    initialize_request_line(),
+                    "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\",\"params\":{}}\n".to_owned(),
+                    "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"query_graph\",\"arguments\":{\"text\":\"compute\"}}}\n".to_owned(),
+                    "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"get_context\",\"arguments\":{\"query\":\"compute\"}}}\n".to_owned(),
+                ]
+                .concat()
+                .as_bytes(),
             )
-            .as_bytes(),
-        )
         .expect("write requests");
         client_stream.flush().expect("flush requests");
         client_stream

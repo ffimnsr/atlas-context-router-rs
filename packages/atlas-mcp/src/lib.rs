@@ -69,17 +69,18 @@ mod output;
 pub mod progress;
 mod prompts;
 mod session_tools;
+pub mod spec;
 mod tools;
 mod transport;
 
 #[cfg(feature = "http-transport")]
 pub mod transport_http;
 
+pub use spec::MCP_PROTOCOL_VERSION;
 pub use tools::health::mark_server_started;
 pub use tools::{tool_list, tool_list_markdown};
 pub use transport::{
-    MCP_PROTOCOL_VERSION, ServerOptions, run_server, run_server_with_options,
-    run_socket_server_with_options,
+    ServerOptions, run_server, run_server_with_options, run_socket_server_with_options,
 };
 
 #[cfg(feature = "http-transport")]
