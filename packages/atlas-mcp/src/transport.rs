@@ -669,6 +669,16 @@ fn handle_input_line<W: Write>(
         }
     };
 
+    if request.is_array() {
+        let response = jsonrpc_error(
+            serde_json::Value::Null,
+            JsonRpcErrorKind::InvalidRequest,
+            "JSON-RPC batch requests are not supported".to_owned(),
+        );
+        write_response(writer, &response)?;
+        return Ok(());
+    }
+
     if !request.is_object()
         || request.get("jsonrpc").and_then(|value| value.as_str()) != Some("2.0")
         || request
@@ -2336,6 +2346,11 @@ mod tests {
             serde_json::json!(env!("CARGO_PKG_DESCRIPTION"))
         );
 
+        assert_eq!(
+            by_id[&serde_json::json!(2)]["result"],
+            crate::tools::tool_list(),
+            "stdio tools/list must serialize shared typed descriptor registry"
+        );
         let tools = by_id[&serde_json::json!(2)]["result"]["tools"]
             .as_array()
             .expect("tools/list result tools array");
@@ -2438,6 +2453,31 @@ mod tests {
             serde_json::json!(
                 "unsupported protocol version '2024-11-05'; supported version: 2025-11-25"
             )
+        );
+    }
+
+    #[test]
+    fn stdio_transport_rejects_jsonrpc_batch_requests() {
+        let fixture = setup_fixture();
+        let input = "[]\n";
+        let reader = BufReader::new(Cursor::new(input.as_bytes()));
+        let mut writer = Vec::new();
+
+        run_server_io(
+            reader,
+            &mut writer,
+            "/ignored",
+            &fixture.db_path,
+            ServerOptions::default(),
+        )
+        .expect("run server io");
+
+        let responses = parse_output_lines(writer);
+        assert_eq!(responses.len(), 1);
+        assert_eq!(responses[0]["error"]["code"], serde_json::json!(-32600));
+        assert_eq!(
+            responses[0]["error"]["message"],
+            serde_json::json!("JSON-RPC batch requests are not supported")
         );
     }
 

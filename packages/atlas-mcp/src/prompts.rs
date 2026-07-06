@@ -3,6 +3,11 @@
 use anyhow::Result;
 use serde::Serialize;
 
+use crate::descriptors::{
+    IconDescriptor, PromptArgumentDescriptor, PromptDescriptor, PromptRegistry, descriptor_meta,
+    human_title, validate_descriptor_name,
+};
+
 #[derive(Clone, Copy)]
 struct PromptDef {
     name: &'static str,
@@ -14,20 +19,6 @@ struct PromptDef {
 struct PromptArgDef {
     name: &'static str,
     description: &'static str,
-    required: bool,
-}
-
-#[derive(Serialize)]
-struct PromptDescriptor<'a> {
-    name: &'a str,
-    description: &'a str,
-    arguments: Vec<PromptArgument<'a>>,
-}
-
-#[derive(Serialize)]
-struct PromptArgument<'a> {
-    name: &'a str,
-    description: &'a str,
     required: bool,
 }
 
@@ -123,24 +114,47 @@ const PROMPTS: &[PromptDef] = &[
     },
 ];
 
-pub fn prompt_list() -> serde_json::Value {
-    let prompts = PROMPTS
+pub fn prompt_descriptors() -> Vec<PromptDescriptor> {
+    PROMPTS
         .iter()
-        .map(|prompt| PromptDescriptor {
-            name: prompt.name,
-            description: prompt.description,
-            arguments: prompt
-                .arguments
-                .iter()
-                .map(|arg| PromptArgument {
-                    name: arg.name,
-                    description: arg.description,
-                    required: arg.required,
-                })
-                .collect(),
+        .map(|prompt| {
+            validate_descriptor_name(prompt.name).expect("prompt name must satisfy MCP guidance");
+            PromptDescriptor {
+                name: prompt.name.to_owned(),
+                title: human_title(prompt.name),
+                description: prompt.description.to_owned(),
+                arguments: prompt
+                    .arguments
+                    .iter()
+                    .map(|arg| PromptArgumentDescriptor {
+                        name: arg.name.to_owned(),
+                        description: arg.description.to_owned(),
+                        required: arg.required,
+                    })
+                    .collect(),
+                icons: prompt_icons(prompt.name),
+                meta: descriptor_meta("prompt", "workflow"),
+            }
         })
-        .collect::<Vec<_>>();
-    serde_json::json!({ "prompts": prompts })
+        .collect()
+}
+
+pub fn prompt_list() -> serde_json::Value {
+    serde_json::to_value(PromptRegistry {
+        prompts: prompt_descriptors(),
+    })
+    .expect("prompt registry serialization")
+}
+
+fn prompt_icons(name: &str) -> Vec<IconDescriptor> {
+    let value = match name {
+        "review_change" => "🧪",
+        "inspect_symbol" => "🔎",
+        "plan_refactor" => "✂️",
+        "resume_prior_session" => "🧠",
+        _ => "📝",
+    };
+    vec![IconDescriptor::emoji("prompt", value)]
 }
 
 pub fn prompt_get(name: &str, args: Option<&serde_json::Value>) -> Result<serde_json::Value> {
@@ -239,7 +253,7 @@ fn required_string_arg(args: Option<&serde_json::Value>, key: &str) -> Result<St
 
 #[cfg(test)]
 mod tests {
-    use super::{prompt_get, prompt_list};
+    use super::{prompt_descriptors, prompt_get, prompt_list};
 
     #[test]
     fn prompt_list_exposes_expected_templates() {
@@ -259,6 +273,22 @@ mod tests {
                 "resume_prior_session"
             ]
         );
+    }
+
+    #[test]
+    fn prompt_descriptors_have_titles_and_icons() {
+        for prompt in prompt_descriptors() {
+            assert!(
+                !prompt.title.trim().is_empty(),
+                "missing title for {}",
+                prompt.name
+            );
+            assert!(
+                !prompt.icons.is_empty(),
+                "missing icons for {}",
+                prompt.name
+            );
+        }
     }
 
     #[test]

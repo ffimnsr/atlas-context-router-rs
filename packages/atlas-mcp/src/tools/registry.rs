@@ -1,4 +1,10 @@
 use super::shared::DEFAULT_OUTPUT_DESCRIPTION;
+use crate::descriptors::{
+    IconDescriptor, ToolAnnotations, ToolDescriptor, ToolRegistry, descriptor_meta,
+    ensure_schema_2020_12, human_title, tool_output_schema, validate_descriptor_name,
+};
+use serde::Deserialize;
+use serde_json::Value;
 
 pub fn tool_list_markdown() -> String {
     let mut markdown = String::from(
@@ -23,7 +29,7 @@ fn escape_markdown_table_cell(text: &str) -> String {
 }
 
 /// Return the MCP `tools/list` response body.
-pub fn tool_list() -> serde_json::Value {
+fn base_tool_list_json() -> Value {
     serde_json::json!({
         "tools": [
             {
@@ -832,4 +838,172 @@ pub fn tool_list() -> serde_json::Value {
             }
         ]
     })
+}
+
+#[derive(Deserialize)]
+struct ToolDescriptorSeed {
+    name: String,
+    description: String,
+    #[serde(rename = "inputSchema")]
+    input_schema: Value,
+}
+
+pub fn tool_descriptors() -> Vec<ToolDescriptor> {
+    let tools_value = base_tool_list_json()["tools"].clone();
+    let seeds: Vec<ToolDescriptorSeed> =
+        serde_json::from_value(tools_value).expect("base tool registry json must be valid");
+    seeds.into_iter().map(build_tool_descriptor).collect()
+}
+
+#[cfg(test)]
+pub fn tool_input_schema_by_name(name: &str) -> Option<Value> {
+    tool_descriptors()
+        .into_iter()
+        .find(|tool| tool.name == name)
+        .map(|tool| tool.input_schema)
+}
+
+pub fn tool_list() -> Value {
+    serde_json::to_value(ToolRegistry {
+        tools: tool_descriptors(),
+    })
+    .expect("tool registry serialization")
+}
+
+fn build_tool_descriptor(seed: ToolDescriptorSeed) -> ToolDescriptor {
+    validate_descriptor_name(&seed.name).expect("tool name must satisfy MCP guidance");
+    let category = tool_category(&seed.name);
+    ToolDescriptor {
+        title: human_title(&seed.name),
+        output_schema: tool_output_schema(),
+        annotations: tool_annotations(&seed.name),
+        icons: tool_icons(category),
+        meta: descriptor_meta("tool", category),
+        name: seed.name,
+        description: seed.description,
+        input_schema: ensure_schema_2020_12(seed.input_schema),
+    }
+}
+
+fn tool_annotations(name: &str) -> ToolAnnotations {
+    let destructive = matches!(name, "purge_saved_context");
+    let state_changing = matches!(
+        name,
+        "build_or_update_graph" | "postprocess_graph" | "compact_session" | "purge_saved_context"
+    );
+    ToolAnnotations {
+        read_only_hint: !state_changing,
+        state_changing_hint: state_changing,
+        destructive_hint: destructive,
+    }
+}
+
+fn tool_category(name: &str) -> &'static str {
+    match name {
+        "build_or_update_graph" | "postprocess_graph" => "maintenance",
+        "compact_session"
+        | "purge_saved_context"
+        | "resume_session"
+        | "save_context_artifact"
+        | "read_saved_context"
+        | "search_saved_context"
+        | "search_decisions"
+        | "get_context_stats"
+        | "get_session_status"
+        | "cross_session_search"
+        | "get_global_memory" => "memory",
+        "status" | "doctor" | "db_check" | "debug_graph" | "broker_status" => "health",
+        name if name.starts_with("analyze_")
+            || name.starts_with("assess_")
+            || name.starts_with("find_") =>
+        {
+            "analysis"
+        }
+        name if name.starts_with("search_") || name.starts_with("read_") => "content",
+        _ => "graph",
+    }
+}
+
+fn tool_icons(category: &str) -> Vec<IconDescriptor> {
+    match category {
+        "maintenance" => vec![IconDescriptor::emoji("maintenance", "🛠️")],
+        "memory" => vec![IconDescriptor::emoji("memory", "🧠")],
+        "health" => vec![IconDescriptor::emoji("health", "🩺")],
+        "analysis" => vec![IconDescriptor::emoji("analysis", "📊")],
+        "content" => vec![IconDescriptor::emoji("content", "📄")],
+        _ => vec![IconDescriptor::emoji("graph", "🕸️")],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{tool_descriptors, tool_input_schema_by_name, tool_list};
+    use crate::descriptors::JSON_SCHEMA_2020_12_URI;
+    use jsonschema::JSONSchema;
+    use serde_json::json;
+
+    fn compile_schema(schema: &serde_json::Value) {
+        JSONSchema::compile(schema).expect("valid 2020-12 schema");
+    }
+
+    #[test]
+    fn every_tool_name_title_annotations_and_icons_are_present() {
+        for tool in tool_descriptors() {
+            assert!(
+                !tool.title.trim().is_empty(),
+                "missing title for {}",
+                tool.name
+            );
+            assert!(!tool.icons.is_empty(), "missing icons for {}", tool.name);
+            if tool.annotations.state_changing_hint {
+                assert!(
+                    !tool.annotations.read_only_hint,
+                    "state-changing tool marked read-only: {}",
+                    tool.name
+                );
+            }
+            if tool.annotations.destructive_hint {
+                assert!(
+                    tool.annotations.state_changing_hint,
+                    "destructive tool must be state-changing: {}",
+                    tool.name
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn tool_registry_schemas_validate_as_2020_12() {
+        for tool in tool_descriptors() {
+            assert_eq!(tool.input_schema["$schema"], json!(JSON_SCHEMA_2020_12_URI));
+            assert_eq!(
+                tool.output_schema["$schema"],
+                json!(JSON_SCHEMA_2020_12_URI)
+            );
+            compile_schema(&tool.input_schema);
+            compile_schema(&tool.output_schema);
+        }
+    }
+
+    #[test]
+    fn schema_builder_output_matches_registry_entries() {
+        for tool in tool_descriptors() {
+            let built = tool_input_schema_by_name(&tool.name).expect("schema by name");
+            assert_eq!(
+                built, tool.input_schema,
+                "input schema mismatch for {}",
+                tool.name
+            );
+        }
+    }
+
+    #[test]
+    fn tool_list_serializes_typed_descriptors() {
+        let value = tool_list();
+        let tools = value["tools"].as_array().expect("tools array");
+        assert!(tools.iter().all(|tool| tool.get("title").is_some()));
+        assert!(tools.iter().all(|tool| tool.get("annotations").is_some()));
+        assert!(tools.iter().all(|tool| tool.get("icons").is_some()));
+        assert!(tools.iter().all(|tool| tool.get("outputSchema").is_some()));
+    }
 }

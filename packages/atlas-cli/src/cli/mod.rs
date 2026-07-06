@@ -272,7 +272,7 @@ pub enum Command {
     #[command(name = "serve-daemon", hide = true)]
     ServeDaemon,
 
-    /// Start an HTTP + Server-Sent Events MCP server.
+    /// Start Streamable HTTP MCP server.
     ///
     /// Binds to `ATLAS_HTTP_BIND` (default `127.0.0.1:7070`).
     /// Require a Bearer token with `ATLAS_HTTP_AUTH_TOKEN`.

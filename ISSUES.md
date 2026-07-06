@@ -2477,58 +2477,58 @@ Replace legacy HTTP+SSE transport with latest-spec Streamable HTTP semantics bef
 
 #### MCP2.1 Route and session architecture
 
-- [ ] replace legacy `/` + `/sse` transport in `packages/atlas-mcp/src/transport_http.rs` with Streamable HTTP routes:
-  - [ ] `POST /mcp` for client requests
-  - [ ] `GET /mcp` for server event stream and polling reconnect
-  - [ ] `DELETE /mcp` for session termination
-  - [ ] keep `GET /health` as non-protocol liveness probe
-- [ ] create `packages/atlas-mcp/src/http_sessions.rs` for negotiated-session state:
-  - [ ] store negotiated protocol version
-  - [ ] store client info
-  - [ ] store per-session outbound event queue
-  - [ ] store stream identity and last event id
-  - [ ] store expiration timestamp and closed state
-- [ ] issue `Mcp-Session-Id` header on successful HTTP initialize response
-- [ ] require valid `Mcp-Session-Id` on all non-initialize HTTP requests
-- [ ] add tests for session creation, reuse, missing-session rejection, and session delete behavior
+- [x] replace legacy `/` + `/sse` transport in `packages/atlas-mcp/src/transport_http.rs` with Streamable HTTP routes:
+  - [x] `POST /mcp` for client requests
+  - [x] `GET /mcp` for server event stream and polling reconnect
+  - [x] `DELETE /mcp` for session termination
+  - [x] keep `GET /health` as non-protocol liveness probe
+- [x] create `packages/atlas-mcp/src/http_sessions.rs` for negotiated-session state:
+  - [x] store negotiated protocol version
+  - [x] store client info
+  - [x] store per-session outbound event queue
+  - [x] store stream identity and last event id
+  - [x] store expiration timestamp and closed state
+- [x] issue `Mcp-Session-Id` header on successful HTTP initialize response
+- [x] require valid `Mcp-Session-Id` on all non-initialize HTTP requests
+- [x] add tests for session creation, reuse, missing-session rejection, and session delete behavior
 
 #### MCP2.2 Stream delivery, polling, and resumption
 
-- [ ] replace global broadcast stream with per-session outbound stream routing
-- [ ] assign deterministic event ids that encode session identity and per-session sequence number
-- [ ] support polling reconnect by honoring `Last-Event-ID` on `GET /mcp`
-- [ ] allow server-initiated stream closure without losing resumable state still inside retention window
-- [ ] add configurable event retention window and bounded queue size for resumed polling
-- [ ] drop expired retained events with deterministic `410 Gone` or equivalent latest-spec error path once resume window is exceeded
-- [ ] add tests for:
-  - [ ] resumed poll receives only missed events
-  - [ ] one session never receives another session's tool responses
-  - [ ] server-initiated disconnect can be resumed through `GET /mcp`
-  - [ ] expired `Last-Event-ID` fails with stable response
+- [x] replace global broadcast stream with per-session outbound stream routing
+- [x] assign deterministic event ids that encode session identity and per-session sequence number
+- [x] support polling reconnect by honoring `Last-Event-ID` on `GET /mcp`
+- [x] allow server-initiated stream closure without losing resumable state still inside retention window
+- [x] add configurable event retention window and bounded queue size for resumed polling
+- [x] drop expired retained events with deterministic `410 Gone` or equivalent latest-spec error path once resume window is exceeded
+- [x] add tests for:
+  - [x] resumed poll receives only missed events
+  - [x] one session never receives another session's tool responses
+  - [x] server-initiated disconnect can be resumed through `GET /mcp`
+  - [x] expired `Last-Event-ID` fails with stable response
 
 #### MCP2.3 Header, origin, and JSON-RPC envelope compliance
 
-- [ ] require `MCP-Protocol-Version: 2025-11-25` on all non-initialize HTTP protocol requests
-- [ ] reject mismatched `MCP-Protocol-Version` headers with deterministic protocol error response
-- [ ] remove permissive `CorsLayer::allow_origin(Any)` behavior
-- [ ] add explicit origin validation:
-  - [ ] allow absent `Origin` for trusted non-browser clients
-  - [ ] allow configured exact origins only when browser-origin requests are enabled
-  - [ ] return HTTP `403 Forbidden` for invalid origin per latest spec guidance
-- [ ] reject JSON-RPC batch arrays in stdio and HTTP transports
-- [ ] add regression tests for:
-  - [ ] missing version header on post-initialize HTTP request
-  - [ ] mismatched version header
-  - [ ] invalid origin returns `403`
-  - [ ] JSON-RPC batch request rejected on stdio
-  - [ ] JSON-RPC batch request rejected on HTTP
+- [x] require `MCP-Protocol-Version: 2025-11-25` on all non-initialize HTTP protocol requests
+- [x] reject mismatched `MCP-Protocol-Version` headers with deterministic protocol error response
+- [x] remove permissive `CorsLayer::allow_origin(Any)` behavior
+- [x] add explicit origin validation:
+  - [x] allow absent `Origin` for trusted non-browser clients
+  - [x] allow configured exact origins only when browser-origin requests are enabled
+  - [x] return HTTP `403 Forbidden` for invalid origin per latest spec guidance
+- [x] reject JSON-RPC batch arrays in stdio and HTTP transports
+- [x] add regression tests for:
+  - [x] missing version header on post-initialize HTTP request
+  - [x] mismatched version header
+  - [x] invalid origin returns `403`
+  - [x] JSON-RPC batch request rejected on stdio
+  - [x] JSON-RPC batch request rejected on HTTP
 
 #### MCP2 completion criteria
 
-- [ ] HTTP transport no longer depends on legacy `/sse` route
-- [ ] every HTTP session is isolated by `Mcp-Session-Id`
-- [ ] resumed polling works with deterministic event ids
-- [ ] invalid origin and invalid version-header paths are covered by tests
+- [x] HTTP transport no longer depends on legacy `/sse` route
+- [x] every HTTP session is isolated by `Mcp-Session-Id`
+- [x] resumed polling works with deterministic event ids
+- [x] invalid origin and invalid version-header paths are covered by tests
 
 ### Phase MCP3 — Canonical descriptor, schema, and registry layer
 
@@ -2536,55 +2536,55 @@ Move tool and prompt metadata to one typed descriptor system before adding outpu
 
 #### MCP3.1 Shared descriptor model
 
-- [ ] create `packages/atlas-mcp/src/descriptors.rs` holding typed descriptor structs for:
-  - [ ] tools
-  - [ ] prompts
-  - [ ] resources
-  - [ ] resource templates
-  - [ ] completions
-- [ ] include descriptor fields required by 2025-11-25 metadata surfaces:
-  - [ ] `name`
-  - [ ] `title`
-  - [ ] `description`
-  - [ ] `inputSchema`
-  - [ ] `outputSchema`
-  - [ ] `annotations`
-  - [ ] `icons`
-  - [ ] `_meta`
-- [ ] move `packages/atlas-mcp/src/tools/registry.rs` off hand-built JSON and onto descriptor serialization
-- [ ] add tests proving descriptor serialization is stable across stdio and HTTP `tools/list`
+- [x] create `packages/atlas-mcp/src/descriptors.rs` holding typed descriptor structs for:
+  - [x] tools
+  - [x] prompts
+  - [x] resources
+  - [x] resource templates
+  - [x] completions
+- [x] include descriptor fields required by 2025-11-25 metadata surfaces:
+  - [x] `name`
+  - [x] `title`
+  - [x] `description`
+  - [x] `inputSchema`
+  - [x] `outputSchema`
+  - [x] `annotations`
+  - [x] `icons`
+  - [x] `_meta`
+- [x] move `packages/atlas-mcp/src/tools/registry.rs` off hand-built JSON and onto descriptor serialization
+- [x] add tests proving descriptor serialization is stable across stdio and HTTP `tools/list`
 
 #### MCP3.2 JSON Schema 2020-12 upgrade
 
-- [ ] upgrade all MCP-advertised schemas to JSON Schema 2020-12:
-  - [ ] add `$schema: "https://json-schema.org/draft/2020-12/schema"`
-  - [ ] replace legacy schema patterns that rely on older draft assumptions
-  - [ ] validate every exported schema with test-time schema validation
-- [ ] decouple request parameter schemas from RPC method wiring:
-  - [ ] create standalone schema builders per method
-  - [ ] reuse same schema builder in registry output and request validation tests
-- [ ] add tests for:
-  - [ ] every `tools/list` entry includes valid 2020-12 `inputSchema`
-  - [ ] every `tools/list` entry includes valid 2020-12 `outputSchema`
-  - [ ] schema builder output matches registry snapshot
+- [x] upgrade all MCP-advertised schemas to JSON Schema 2020-12:
+  - [x] add `$schema: "https://json-schema.org/draft/2020-12/schema"`
+  - [x] replace legacy schema patterns that rely on older draft assumptions
+  - [x] validate every exported schema with test-time schema validation
+- [x] decouple request parameter schemas from RPC method wiring:
+  - [x] create standalone schema builders per method
+  - [x] reuse same schema builder in registry output and request validation tests
+- [x] add tests for:
+  - [x] every `tools/list` entry includes valid 2020-12 `inputSchema`
+  - [x] every `tools/list` entry includes valid 2020-12 `outputSchema`
+  - [x] schema builder output matches registry snapshot
 
 #### MCP3.3 Tool naming, titles, annotations, and icons
 
-- [ ] validate all exported tool names against latest tool-name guidance before registry emission
-- [ ] add human-readable `title` for each tool and prompt so identifiers stay machine-focused
-- [ ] add deterministic tool annotations where behavior is already known:
-  - [ ] mark read-only graph/query tools as read-only
-  - [ ] mark state-mutating tools like `build_or_update_graph`, `postprocess_graph`, `compact_session`, and `purge_saved_context` as state-changing
-  - [ ] mark destructive tools with destructive annotation when they delete persisted state
-- [ ] add static icon metadata constants for tools, prompts, resources, and resource templates; do not fetch icons at runtime
-- [ ] add tests for name validation, title presence, annotation presence, and icon metadata serialization
+- [x] validate all exported tool names against latest tool-name guidance before registry emission
+- [x] add human-readable `title` for each tool and prompt so identifiers stay machine-focused
+- [x] add deterministic tool annotations where behavior is already known:
+  - [x] mark read-only graph/query tools as read-only
+  - [x] mark state-mutating tools like `build_or_update_graph`, `postprocess_graph`, `compact_session`, and `purge_saved_context` as state-changing
+  - [x] mark destructive tools with destructive annotation when they delete persisted state
+- [x] add static icon metadata constants for tools, prompts, resources, and resource templates; do not fetch icons at runtime
+- [x] add tests for name validation, title presence, annotation presence, and icon metadata serialization
 
 #### MCP3 completion criteria
 
-- [ ] descriptor JSON is generated from typed structs, not hand-built ad-hoc maps
-- [ ] all exported schemas validate as JSON Schema 2020-12
-- [ ] every tool and prompt has `title`
-- [ ] every tool has deterministic annotations and output schema coverage
+- [x] descriptor JSON is generated from typed structs, not hand-built ad-hoc maps
+- [x] all exported schemas validate as JSON Schema 2020-12
+- [x] every tool and prompt has `title`
+- [x] every tool has deterministic annotations and output schema coverage
 
 ### Phase MCP4 — Server features: resources, completions, structured output, and logging
 

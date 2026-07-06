@@ -64,7 +64,10 @@
 //! - `resume_prior_session`: continuity and saved-context retrieval guidance
 
 mod context;
+mod descriptors;
 mod discovery_tools;
+#[cfg(feature = "http-transport")]
+mod http_sessions;
 mod output;
 pub mod progress;
 mod prompts;

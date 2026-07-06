@@ -52,6 +52,7 @@ windows-sys = { version = "0.52", features = [
 ] }
 
 [dev-dependencies]
+jsonschema = "0.18"
 rusqlite.workspace = true
 tempfile = "3"
 tiktoken-rs = "0.6"
