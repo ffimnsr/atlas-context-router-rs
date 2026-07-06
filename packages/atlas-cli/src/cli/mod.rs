@@ -262,7 +262,11 @@ pub enum Command {
     },
 
     /// Start a JSON-RPC / MCP stdio server.
-    Serve,
+    Serve {
+        /// Bypass repo-scoped broker/daemon indirection and serve MCP directly on stdio.
+        #[arg(long)]
+        direct_stdio: bool,
+    },
 
     /// Internal repo-scoped MCP daemon entrypoint.
     #[command(name = "serve-daemon", hide = true)]

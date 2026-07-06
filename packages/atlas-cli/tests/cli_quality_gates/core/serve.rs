@@ -59,6 +59,49 @@ fn serve_command_handles_stdio_jsonrpc_flow_end_to_end() {
 }
 
 #[test]
+fn serve_direct_stdio_handles_stdio_jsonrpc_flow_end_to_end() {
+    let repo = setup_fixture_repo();
+
+    run_atlas(repo.path(), &["init"]);
+    run_atlas(repo.path(), &["build"]);
+
+    let output = run_serve_jsonrpc_session(repo.path(), &["serve", "--direct-stdio"], serve_requests());
+
+    assert!(
+        output.status.success(),
+        "atlas serve --direct-stdio failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let responses = parse_jsonrpc_lines(&output.stdout);
+    assert_eq!(responses.len(), 4, "initialized notification must not emit response");
+
+    let by_id: std::collections::HashMap<_, _> = responses
+        .into_iter()
+        .map(|response| (response["id"].clone(), response))
+        .collect();
+
+    assert_eq!(by_id[&json!(1)]["result"]["protocolVersion"], json!("2024-11-05"));
+
+    let tools = by_id[&json!(2)]["result"]["tools"]
+        .as_array()
+        .expect("tools/list result tools array");
+    assert!(
+        tools.iter().any(|tool| tool["name"] == json!("get_context")),
+        "tools/list must expose get_context"
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("atlas-mcp: broker spawn") && !stderr.contains("atlas-mcp: broker attach"),
+        "direct stdio mode must bypass broker\n{stderr}"
+    );
+
+    cleanup_mcp_daemons(repo.path());
+}
+
+#[test]
 fn serve_broker_preserves_saved_context_and_session_tools() {
     let repo = setup_fixture_repo();
 

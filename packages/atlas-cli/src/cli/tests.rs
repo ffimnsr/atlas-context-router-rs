@@ -130,7 +130,18 @@ fn parse_build_dry_run() {
 #[test]
 fn parse_serve_command() {
     let cli = parse(&["atlas", "serve"]);
-    assert!(matches!(cli.command, Command::Serve));
+    assert!(matches!(
+        cli.command,
+        Command::Serve {
+            direct_stdio: false
+        }
+    ));
+}
+
+#[test]
+fn parse_serve_direct_stdio_command() {
+    let cli = parse(&["atlas", "serve", "--direct-stdio"]);
+    assert!(matches!(cli.command, Command::Serve { direct_stdio: true }));
 }
 
 #[test]

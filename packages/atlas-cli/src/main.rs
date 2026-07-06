@@ -50,7 +50,7 @@ fn run_cli() -> anyhow::Result<()> {
         Command::Embed { .. } => commands::run_embed(&cli),
         Command::Impact { .. } => commands::run_impact(&cli),
         Command::ReviewContext { .. } => commands::run_review_context(&cli),
-        Command::Serve => commands::run_serve(&cli),
+        Command::Serve { .. } => commands::run_serve(&cli),
         Command::ServeDaemon => commands::run_serve_daemon(&cli),
         Command::ServeHttp => commands::run_serve_http(&cli),
         Command::DbCheck => commands::run_db_check(&cli),

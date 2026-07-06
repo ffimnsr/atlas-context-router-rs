@@ -207,6 +207,8 @@ Atlas can install MCP configuration for popular AI coding tools and add repo hoo
 
 `atlas serve` remains a stdio MCP entrypoint for editors and agents, but on Linux it now acts as a repo-scoped broker: it attaches to one live daemon per canonical repo root plus DB path or starts one under lock when absent. Generated editor config stays `type = "stdio"`, `command = "atlas"`, `args = ["--repo", ..., "--db", ..., "serve"]`.
 
+If an editor MCP client is incompatible with broker/daemon indirection, use `atlas serve --direct-stdio` to run MCP directly in launched process with no relay layer.
+
 ### GitHub Copilot
 
 ```bash

@@ -11,13 +11,19 @@ use super::{db_path, print_json, resolve_repo};
 pub fn run_serve(cli: &Cli) -> Result<()> {
     let repo = resolve_repo(cli)?;
     let db_path = db_path(cli, &repo);
-    let instance = crate::mcp_instance::McpInstance::for_repo_and_db(&repo, &db_path)?;
     let config = atlas_engine::Config::load(&atlas_engine::paths::atlas_dir(&repo))?;
     let options = ServerOptions {
         worker_threads: config.mcp_worker_threads(),
         tool_timeout_ms: config.mcp_tool_timeout_ms(),
         tool_timeout_ms_by_tool: config.mcp_tool_timeout_ms_by_tool(),
     };
+    let direct_stdio = matches!(&cli.command, Command::Serve { direct_stdio: true });
+
+    if direct_stdio {
+        return atlas_mcp::run_server_with_options(&repo, &db_path, options);
+    }
+
+    let instance = crate::mcp_instance::McpInstance::for_repo_and_db(&repo, &db_path)?;
 
     #[cfg(any(unix, windows))]
     {
@@ -26,6 +32,7 @@ pub fn run_serve(cli: &Cli) -> Result<()> {
 
     #[cfg(not(any(unix, windows)))]
     {
+        let _ = instance;
         atlas_mcp::run_server_with_options(&repo, &db_path, options)
     }
 }
