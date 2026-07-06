@@ -1,0 +1,33 @@
+{
+  "method": "elicitation/create",
+  "mode": "form",
+  "message": "Confirm purge of saved context across all sessions older than keep_days. This cannot be undone.",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "confirmation": {
+        "type": "string",
+        "title": "Confirmation",
+        "oneOf": [
+          {
+            "const": "confirm",
+            "title": "Purge saved context"
+          },
+          {
+            "const": "cancel",
+            "title": "Do not purge"
+          }
+        ],
+        "default": "cancel"
+      }
+    },
+    "required": [
+      "confirmation"
+    ]
+  },
+  "result": {
+    "deleted_source_count": 0,
+    "deleted_bridge_file_count": 0,
+    "keep_days": 30
+  }
+}

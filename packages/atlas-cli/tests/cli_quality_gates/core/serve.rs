@@ -1,5 +1,85 @@
 use super::*;
 
+#[cfg(feature = "http-transport")]
+#[test]
+fn serve_http_streamable_headers_match_protocol_surface() {
+    let repo = setup_fixture_repo();
+
+    run_atlas(repo.path(), &["init"]);
+    run_atlas(repo.path(), &["build"]);
+
+    let db_path = repo
+        .path()
+        .join(".atlas")
+        .join("worldtree.db")
+        .to_string_lossy()
+        .into_owned();
+    let repo_root = repo.path().to_string_lossy().into_owned();
+    let harness = atlas_mcp::testing::HttpTestHarness::new(&repo_root, &db_path);
+
+    let initialize = harness
+        .post_jsonrpc(
+            &[],
+            &json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": atlas_mcp::MCP_PROTOCOL_VERSION,
+                    "capabilities": {
+                        "roots": { "listChanged": true },
+                        "sampling": {},
+                        "elicitation": { "form": {}, "url": {} }
+                    },
+                    "clientInfo": { "name": "zed", "version": "1.0.0" },
+                    "_meta": { "clientTag": "quality-gate" }
+                }
+            }),
+        )
+        .expect("http initialize");
+    assert_eq!(initialize.status, 200);
+    assert_eq!(
+        initialize.headers.get("mcp-protocol-version"),
+        Some(&atlas_mcp::MCP_PROTOCOL_VERSION.to_owned())
+    );
+    assert!(initialize.headers.contains_key("mcp-session-id"));
+    assert!(!initialize.headers.contains_key("mcp-sse-url"));
+
+    let session_id = initialize
+        .headers
+        .get("mcp-session-id")
+        .cloned()
+        .expect("session header");
+    harness
+        .post_jsonrpc(
+            &[
+                ("MCP-Protocol-Version", atlas_mcp::MCP_PROTOCOL_VERSION),
+                ("Mcp-Session-Id", session_id.as_str()),
+            ],
+            &json!({"jsonrpc":"2.0","method":"initialized","params":{}}),
+        )
+        .expect("initialized notification");
+    let poll = harness
+        .get_mcp(&[
+            ("MCP-Protocol-Version", atlas_mcp::MCP_PROTOCOL_VERSION),
+            ("Mcp-Session-Id", session_id.as_str()),
+        ])
+        .expect("streamable poll");
+    assert_eq!(poll.status, 200);
+    assert_eq!(
+        poll.headers.get("content-type"),
+        Some(&"text/event-stream".to_owned())
+    );
+    assert_eq!(
+        poll.headers.get("mcp-protocol-version"),
+        Some(&atlas_mcp::MCP_PROTOCOL_VERSION.to_owned())
+    );
+    assert_eq!(poll.headers.get("mcp-session-id"), Some(&session_id));
+    assert!(!poll.headers.contains_key("x-sse-url"));
+
+    cleanup_mcp_daemons(repo.path());
+}
+
 #[test]
 fn serve_command_handles_stdio_jsonrpc_flow_end_to_end() {
     let repo = setup_fixture_repo();
@@ -32,6 +112,11 @@ fn serve_command_handles_stdio_jsonrpc_flow_end_to_end() {
         by_id[&json!(1)]["result"]["protocolVersion"],
         json!(atlas_mcp::MCP_PROTOCOL_VERSION)
     );
+    assert_eq!(
+        by_id[&json!(1)]["result"]["_meta"]["clientTag"],
+        json!("quality-gate")
+    );
+    assert!(by_id[&json!(1)]["result"]["capabilities"]["tasks"].is_object());
 
     let tools = by_id[&json!(2)]["result"]["tools"]
         .as_array()
@@ -106,6 +191,10 @@ fn serve_direct_stdio_handles_stdio_jsonrpc_flow_end_to_end() {
     assert_eq!(
         by_id[&json!(1)]["result"]["protocolVersion"],
         json!(atlas_mcp::MCP_PROTOCOL_VERSION)
+    );
+    assert_eq!(
+        by_id[&json!(1)]["result"]["_meta"]["clientTag"],
+        json!("quality-gate")
     );
 
     let tools = by_id[&json!(2)]["result"]["tools"]
@@ -220,6 +309,14 @@ fn concurrent_brokers_for_same_repo_and_db_share_one_daemon() {
         instances.len(),
         1,
         "same repo+db must create one daemon instance"
+    );
+    assert_eq!(
+        instances[0]["protocol_version"],
+        json!(atlas_mcp::MCP_PROTOCOL_VERSION)
+    );
+    assert!(
+        instances[0].get("sse_url").is_none(),
+        "instance metadata must not preserve legacy SSE-only fields"
     );
     let pid = instances[0]["pid"].as_u64().expect("daemon pid") as u32;
     assert!(pid_exists(pid), "shared daemon pid must be alive");

@@ -20,6 +20,8 @@ pub struct InitializeCapabilities {
     pub completions: EmptyCapability,
     pub logging: EmptyCapability,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub tasks: Option<TasksCapabilities>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub experimental: Option<ExperimentalCapabilities>,
 }
 
@@ -43,6 +45,23 @@ pub struct ResourceCapabilities {
 #[serde(rename_all = "camelCase")]
 pub struct ExperimentalCapabilities {
     pub progress_notifications: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct TasksCapabilities {
+    pub list: EmptyCapability,
+    pub cancel: EmptyCapability,
+    pub requests: TaskRequestCapabilities,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct TaskRequestCapabilities {
+    pub tools: TaskToolCapabilities,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct TaskToolCapabilities {
+    pub call: EmptyCapability,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -89,6 +108,15 @@ pub fn initialize_capabilities() -> InitializeCapabilities {
         },
         completions: EmptyCapability::default(),
         logging: EmptyCapability::default(),
+        tasks: Some(TasksCapabilities {
+            list: EmptyCapability::default(),
+            cancel: EmptyCapability::default(),
+            requests: TaskRequestCapabilities {
+                tools: TaskToolCapabilities {
+                    call: EmptyCapability::default(),
+                },
+            },
+        }),
         experimental: Some(ExperimentalCapabilities {
             progress_notifications: true,
         }),

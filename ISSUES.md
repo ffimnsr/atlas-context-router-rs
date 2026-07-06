@@ -2696,51 +2696,51 @@ Add server-side advanced interaction only where Atlas already has long-running o
 
 #### MCP6.1 Reverse-request plumbing for server-initiated interactions
 
-- [ ] add shared reverse-request broker in `packages/atlas-mcp/src/transport.rs` for server-initiated requests tied to active client request scope
-- [ ] enforce correlation so every server-initiated request is associated with triggering client request context
-- [ ] add timeout, cancellation, and cleanup behavior for abandoned reverse requests
-- [ ] add tests for correlation, timeout cleanup, and transport parity
+- [x] add shared reverse-request broker in `packages/atlas-mcp/src/transport.rs` for server-initiated requests tied to active client request scope
+- [x] enforce correlation so every server-initiated request is associated with triggering client request context
+- [x] add timeout, cancellation, and cleanup behavior for abandoned reverse requests
+- [x] add tests for correlation, timeout cleanup, and transport parity
 
 #### MCP6.2 Elicitation support
 
-- [ ] implement latest `elicitation/create` request and response schema handling in reverse-request broker
-- [ ] support latest enum/result model:
-  - [ ] titled enum values
-  - [ ] untitled enum values
-  - [ ] single-select enums
-  - [ ] multi-select enums
-  - [ ] default values on primitive fields
-  - [ ] URL mode elicitation
-- [ ] use elicitation for one concrete Atlas destructive flow:
-  - [ ] require explicit elicitation confirmation before `purge_saved_context` runs without `session_id`
-- [ ] add tests for single-select, multi-select, URL-mode, default-value, and confirmation-flow elicitation paths with mock client responses
+- [x] implement latest `elicitation/create` request and response schema handling in reverse-request broker
+- [x] support latest enum/result model:
+  - [x] titled enum values
+  - [x] untitled enum values
+  - [x] single-select enums
+  - [x] multi-select enums
+  - [x] default values on primitive fields
+  - [x] URL mode elicitation
+- [x] use elicitation for one concrete Atlas destructive flow:
+  - [x] require explicit elicitation confirmation before `purge_saved_context` runs without `session_id`
+- [x] add tests for single-select, multi-select, URL-mode, default-value, and confirmation-flow elicitation paths with mock client responses
 
 #### MCP6.3 Durable tasks for long-running operations
 
-- [ ] create `packages/atlas-mcp/src/tasks.rs` and persist task state in continuity-owned SQLite storage instead of process-only memory
-- [ ] implement latest tasks extension methods and notifications exactly once through shared task service
-- [ ] register long-running Atlas operations on task path:
-  - [ ] `build_or_update_graph`
-  - [ ] `postprocess_graph`
-  - [ ] `doctor`
-  - [ ] high-cost analysis operations when runtime exceeds configured defer threshold
-- [ ] store task lifecycle fields:
-  - [ ] task id
-  - [ ] originating method
-  - [ ] created time
-  - [ ] updated time
-  - [ ] status
-  - [ ] progress snapshot
-  - [ ] final result or final error
-- [ ] support polling for task status, deferred result retrieval, and cancellation where underlying job is cancellable
-- [ ] add tests for task creation, polling, completion, cancellation, restart-safe persisted task lookup, and task/result parity with synchronous tool output
+- [x] create `packages/atlas-mcp/src/tasks.rs` and persist task state in continuity-owned SQLite storage instead of process-only memory
+- [x] implement latest tasks extension methods and notifications exactly once through shared task service
+- [x] register long-running Atlas operations on task path:
+  - [x] `build_or_update_graph`
+  - [x] `postprocess_graph`
+  - [x] `doctor`
+  - [x] high-cost analysis operations when runtime exceeds configured defer threshold
+- [x] store task lifecycle fields:
+  - [x] task id
+  - [x] originating method
+  - [x] created time
+  - [x] updated time
+  - [x] status
+  - [x] progress snapshot
+  - [x] final result or final error
+- [x] support polling for task status, deferred result retrieval, and cancellation where underlying job is cancellable
+- [x] add tests for task creation, polling, completion, cancellation, restart-safe persisted task lookup, and task/result parity with synchronous tool output
 
 #### MCP6 completion criteria
 
-- [ ] server can issue latest-spec elicitation requests and validate typed responses
-- [ ] destructive purge flow can require elicited confirmation
-- [ ] long-running graph operations can return durable task handles and later final results
-- [ ] reverse-request and task flows are covered on stdio and HTTP transports
+- [x] server can issue latest-spec elicitation requests and validate typed responses
+- [x] destructive purge flow can require elicited confirmation
+- [x] long-running graph operations can return durable task handles and later final results
+- [x] reverse-request and task flows are covered on stdio and HTTP transports
 
 ### Phase MCP7 — Conformance, parity, and regression gates
 
@@ -2748,34 +2748,34 @@ Land broad regression coverage last so future MCP work cannot drift from 2025-11
 
 #### MCP7.1 Shared spec fixtures
 
-- [ ] create `packages/atlas-mcp/tests/spec_2025_11_25/` integration suite with shared fixtures for stdio and HTTP
+- [x] create `packages/atlas-mcp/tests/spec_2025_11_25/` integration suite with shared fixtures for stdio and HTTP
 - [ ] add golden request/response fixtures for:
-  - [ ] initialize success
-  - [ ] initialize rejection
-  - [ ] tools/list
-  - [ ] tools/call structured output
-  - [ ] resources/list
-  - [ ] resources/read
-  - [ ] logging/setLevel
-  - [ ] protected-resource metadata
-  - [ ] task lifecycle
-  - [ ] elicitation round-trip
-- [ ] make fixture harness assert exact protocol version, capability surface, error classification, and header behavior
+  - [x] initialize success
+  - [x] initialize rejection
+  - [x] tools/list
+  - [x] tools/call structured output
+  - [x] resources/list
+  - [x] resources/read
+  - [x] logging/setLevel
+  - [x] protected-resource metadata
+  - [x] task lifecycle
+  - [x] elicitation round-trip
+- [x] make fixture harness assert exact protocol version, capability surface, error classification, and header behavior
 
 #### MCP7.2 CLI and runtime parity gates
 
-- [ ] update `packages/atlas-cli/tests/cli_quality_gates/core/serve.rs` to use full 2025-11-25 initialize payloads
-- [ ] add CLI quality-gate checks for metadata-file protocol version, Streamable HTTP session headers, and removal of legacy SSE route assumptions
-- [ ] add parity tests proving stdio and HTTP return equivalent bodies for same tool calls after removing transport-only envelope differences
-- [ ] add negative tests proving advertised-but-unimplemented methods are absent from capability and descriptor output
+- [x] update `packages/atlas-cli/tests/cli_quality_gates/core/serve.rs` to use full 2025-11-25 initialize payloads
+- [x] add CLI quality-gate checks for metadata-file protocol version, Streamable HTTP session headers, and removal of legacy SSE route assumptions
+- [x] add parity tests proving stdio and HTTP return equivalent bodies for same tool calls after removing transport-only envelope differences
+- [x] add negative tests proving advertised-but-unimplemented methods are absent from capability and descriptor output
 
 #### MCP7.3 Drift-prevention checks
 
-- [ ] add test that every advertised capability has method handlers and every method handler has descriptor coverage when required
-- [ ] add test that every tool descriptor name resolves through dispatcher
+- [x] add test that every advertised capability has method handlers and every method handler has descriptor coverage when required
+- [x] add test that every tool descriptor name resolves through dispatcher
 - [ ] add test that every JSON-producing tool with `outputSchema` emits schema-compatible `structuredContent`
-- [ ] add test that auth-protected HTTP routes all share same version-header, origin, and `WWW-Authenticate` enforcement
-- [ ] add test that protocol-version constant, instance metadata, and initialize responses stay identical
+- [x] add test that auth-protected HTTP routes all share same version-header, origin, and `WWW-Authenticate` enforcement
+- [x] add test that protocol-version constant, instance metadata, and initialize responses stay identical
 
 #### MCP7 completion criteria
 

@@ -59,7 +59,7 @@ impl SessionManager {
         }
     }
 
-    #[cfg(test)]
+    #[doc(hidden)]
     pub(crate) fn for_tests(
         retention_window: Duration,
         max_retained_events: usize,
@@ -84,6 +84,7 @@ impl SessionManager {
         &self,
         protocol_version: &str,
         client_info: Value,
+        client_capabilities: Value,
     ) -> Arc<HttpSession> {
         self.purge_expired_sessions();
         let counter = self.next_session_counter.fetch_add(1, Ordering::Relaxed) + 1;
@@ -92,6 +93,7 @@ impl SessionManager {
             session_id.clone(),
             protocol_version.to_owned(),
             client_info,
+            client_capabilities,
             self.retention_window,
             self.max_retained_events,
             self.session_ttl,
@@ -155,6 +157,7 @@ pub(crate) struct HttpSession {
     id: String,
     protocol_version: String,
     client_info: Value,
+    client_capabilities: Value,
     state: Mutex<HttpSessionState>,
     notify: Notify,
     retention_window: Duration,
@@ -167,6 +170,7 @@ impl HttpSession {
         id: String,
         protocol_version: String,
         client_info: Value,
+        client_capabilities: Value,
         retention_window: Duration,
         max_retained_events: usize,
         session_ttl: Duration,
@@ -175,6 +179,7 @@ impl HttpSession {
             id,
             protocol_version,
             client_info,
+            client_capabilities,
             state: Mutex::new(HttpSessionState {
                 events: VecDeque::new(),
                 next_sequence: 0,
@@ -202,6 +207,10 @@ impl HttpSession {
 
     pub(crate) fn client_info(&self) -> &Value {
         &self.client_info
+    }
+
+    pub(crate) fn client_capabilities(&self) -> &Value {
+        &self.client_capabilities
     }
 
     pub(crate) fn touch(&self) {
@@ -431,6 +440,7 @@ mod tests {
         let session = manager.create_session(
             "2025-11-25",
             serde_json::json!({"name": "zed", "version": "1.0.0"}),
+            serde_json::json!({}),
         );
         let first = session.enqueue_event("{\"step\":1}".to_owned());
         session.enqueue_event("{\"step\":2}".to_owned());
@@ -454,6 +464,7 @@ mod tests {
         let session = manager.create_session(
             "2025-11-25",
             serde_json::json!({"name": "zed", "version": "1.0.0"}),
+            serde_json::json!({}),
         );
         let first = session.enqueue_event("{\"step\":1}".to_owned());
         session.enqueue_event("{\"step\":2}".to_owned());
@@ -474,10 +485,12 @@ mod tests {
         let first = manager.create_session(
             "2025-11-25",
             serde_json::json!({"name": "zed", "version": "1.0.0"}),
+            serde_json::json!({}),
         );
         let second = manager.create_session(
             "2025-11-25",
             serde_json::json!({"name": "zed", "version": "1.0.0"}),
+            serde_json::json!({}),
         );
         let event_id = first.enqueue_event("{\"step\":1}".to_owned());
 

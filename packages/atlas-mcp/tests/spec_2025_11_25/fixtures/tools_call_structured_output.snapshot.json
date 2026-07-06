@@ -1,0 +1,14 @@
+{
+  "atlas_output_format": "json",
+  "structured": {
+    "file_count": 1,
+    "node_count": 2,
+    "edge_count": 1,
+    "nodes_by_kind": [
+      ["file", 1],
+      ["function", 1]
+    ],
+    "languages": ["rust"],
+    "last_indexed_at": "<timestamp>"
+  }
+}

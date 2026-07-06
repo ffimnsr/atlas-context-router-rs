@@ -9,8 +9,9 @@ use std::io::BufReader;
 use std::io::{BufRead, Write};
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc;
+use std::sync::{Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -28,8 +29,6 @@ use std::os::fd::AsRawFd;
 use std::os::unix::fs::PermissionsExt;
 #[cfg(unix)]
 use std::os::unix::net::{UnixListener, UnixStream};
-#[cfg(unix)]
-use std::sync::Mutex;
 #[cfg(unix)]
 use std::sync::atomic::AtomicBool;
 
@@ -69,6 +68,181 @@ const JSONRPC_TOOL_EXECUTION_FAILED: i32 = -32001;
 const JSONRPC_WORKER_UNAVAILABLE: i32 = -32002;
 const JSONRPC_REQUEST_TIMEOUT: i32 = -32003;
 const JSONRPC_RATE_LIMITED: i32 = -32004;
+const JSONRPC_TASK_NOT_FOUND: i32 = -32010;
+const JSONRPC_TASK_NOT_READY: i32 = -32011;
+const JSONRPC_TASK_CANCELLED: i32 = -32012;
+const JSONRPC_TASK_FAILED: i32 = -32013;
+
+pub(crate) trait ReverseRequestEmitter: Send + Sync {
+    fn emit_request(&self, request: serde_json::Value) -> Result<()>;
+    fn emit_task_status(&self, params: serde_json::Value) -> Result<()>;
+}
+
+#[derive(Clone)]
+pub(crate) struct ReverseRequestBroker {
+    next_request_id: Arc<AtomicU64>,
+    pending: Arc<Mutex<HashMap<String, PendingReverseRequest>>>,
+}
+
+impl ReverseRequestBroker {
+    pub(crate) fn new() -> Self {
+        Self {
+            next_request_id: Arc::new(AtomicU64::new(0)),
+            pending: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    pub(crate) fn issue_request(
+        &self,
+        scope_id: &str,
+        emitter: &Arc<dyn ReverseRequestEmitter>,
+        method: &str,
+        params: serde_json::Value,
+        timeout: Duration,
+    ) -> Result<serde_json::Value> {
+        let request_id = format!(
+            "atlas-reverse-{scope_id}-{}",
+            self.next_request_id.fetch_add(1, Ordering::Relaxed) + 1
+        );
+        let waiter = Arc::new((Mutex::new(None), Condvar::new()));
+        self.pending
+            .lock()
+            .expect("reverse request broker lock poisoned")
+            .insert(
+                request_id.clone(),
+                PendingReverseRequest {
+                    scope_id: scope_id.to_owned(),
+                    waiter: Arc::clone(&waiter),
+                },
+            );
+        emitter.emit_request(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": request_id.clone(),
+            "method": method,
+            "params": params,
+        }))?;
+        let deadline = Instant::now() + timeout;
+        let (lock, cv) = &*waiter;
+        let mut response = lock.lock().expect("reverse request waiter lock poisoned");
+        while response.is_none() {
+            let now = Instant::now();
+            if now >= deadline {
+                self.pending
+                    .lock()
+                    .expect("reverse request broker lock poisoned")
+                    .remove(&request_id);
+                return Err(anyhow::anyhow!(
+                    "reverse request '{method}' timed out after {} ms",
+                    timeout.as_millis()
+                ));
+            }
+            let wait = deadline.saturating_duration_since(now);
+            let (guard, timeout_result) = cv
+                .wait_timeout(response, wait)
+                .expect("reverse request wait_timeout failed unexpectedly");
+            response = guard;
+            if timeout_result.timed_out() && response.is_none() {
+                self.pending
+                    .lock()
+                    .expect("reverse request broker lock poisoned")
+                    .remove(&request_id);
+                return Err(anyhow::anyhow!(
+                    "reverse request '{method}' timed out after {} ms",
+                    timeout.as_millis()
+                ));
+            }
+        }
+        match response
+            .take()
+            .expect("reverse request response set before wake")
+        {
+            Ok(value) => Ok(value),
+            Err(message) => Err(anyhow::anyhow!(message)),
+        }
+    }
+
+    pub(crate) fn try_resolve_response(&self, response: &serde_json::Value) -> bool {
+        self.try_resolve_response_for_scope(None, response)
+    }
+
+    pub(crate) fn try_resolve_response_for_scope(
+        &self,
+        required_scope_prefix: Option<&str>,
+        response: &serde_json::Value,
+    ) -> bool {
+        let Some(id) = response.get("id") else {
+            return false;
+        };
+        let key = request_id_string(id);
+        let pending = {
+            let mut pending = self
+                .pending
+                .lock()
+                .expect("reverse request broker lock poisoned");
+            let Some(found) = pending.get(&key) else {
+                return false;
+            };
+            if let Some(prefix) = required_scope_prefix
+                && !found.scope_id.starts_with(prefix)
+            {
+                return false;
+            }
+            pending.remove(&key)
+        };
+        let Some(pending) = pending else {
+            return false;
+        };
+        let result = if let Some(error) = response.get("error") {
+            Err(error
+                .get("message")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("reverse request failed")
+                .to_owned())
+        } else {
+            Ok(response
+                .get("result")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null))
+        };
+        let (lock, cv) = &*pending.waiter;
+        *lock.lock().expect("reverse request waiter lock poisoned") = Some(result);
+        cv.notify_all();
+        true
+    }
+
+    pub(crate) fn cancel_scope(&self, scope_id: &str, reason: &str) {
+        let keys = self
+            .pending
+            .lock()
+            .expect("reverse request broker lock poisoned")
+            .iter()
+            .filter_map(|(key, pending)| (pending.scope_id == scope_id).then_some(key.clone()))
+            .collect::<Vec<_>>();
+        for key in keys {
+            if let Some(pending) = self
+                .pending
+                .lock()
+                .expect("reverse request broker lock poisoned")
+                .remove(&key)
+            {
+                let (lock, cv) = &*pending.waiter;
+                *lock.lock().expect("reverse request waiter lock poisoned") =
+                    Some(Err(reason.to_owned()));
+                cv.notify_all();
+            }
+        }
+    }
+}
+
+type ReverseResponseWaiter = Arc<(
+    Mutex<Option<std::result::Result<serde_json::Value, String>>>,
+    Condvar,
+)>;
+
+struct PendingReverseRequest {
+    scope_id: String,
+    waiter: ReverseResponseWaiter,
+}
 
 #[derive(Clone, Debug)]
 pub struct ServerOptions {
@@ -117,6 +291,148 @@ pub fn run_server_with_options(
     let _shutdown_guard = install_stdio_shutdown_handler()?;
 
     run_server_io(reader, &mut writer, repo_root, db_path, options)
+}
+
+#[doc(hidden)]
+pub fn run_stdio_jsonrpc_session_for_tests(
+    input: &str,
+    repo_root: &str,
+    db_path: &str,
+    options: ServerOptions,
+) -> Result<Vec<serde_json::Value>> {
+    let reader = BufReader::new(std::io::Cursor::new(input.as_bytes()));
+    let mut writer = Vec::new();
+    run_server_io(reader, &mut writer, repo_root, db_path, options)?;
+    String::from_utf8(writer)
+        .context("stdio test output must be utf-8")?
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str(line).context("stdio test output must be valid JSON"))
+        .collect()
+}
+
+#[doc(hidden)]
+pub struct InteractiveStdioTestSession {
+    event_tx: mpsc::Sender<TransportEvent>,
+    output_rx: mpsc::Receiver<serde_json::Value>,
+    join_handle: Option<std::thread::JoinHandle<Result<()>>>,
+}
+
+#[doc(hidden)]
+impl InteractiveStdioTestSession {
+    pub fn start(repo_root: &str, db_path: &str, options: ServerOptions) -> Result<Self> {
+        let (event_tx, event_rx) = mpsc::channel::<TransportEvent>();
+        let (output_tx, output_rx) = mpsc::channel::<serde_json::Value>();
+        let repo_root = repo_root.to_owned();
+        let db_path = db_path.to_owned();
+        let thread_event_tx = event_tx.clone();
+        let join_handle = std::thread::Builder::new()
+            .name("atlas-mcp:stdio-test-session".to_owned())
+            .spawn(move || {
+                let worker_pool = Arc::new(WorkerPool::from_env(
+                    "atlas-mcp:tool-worker",
+                    options.clone(),
+                )?);
+                let connection_state = ConnectionState {
+                    trace: TraceLevel::Off,
+                    initialized: false,
+                    log_level: None,
+                    client_capabilities: serde_json::Value::Null,
+                    canceled_tokens: Arc::new(Mutex::new(HashSet::new())),
+                    reverse_broker: ReverseRequestBroker::new(),
+                };
+                let mut writer = JsonValueChannelWriter::new(output_tx);
+                process_requests(
+                    &mut writer,
+                    &repo_root,
+                    &db_path,
+                    worker_pool.as_ref(),
+                    &options,
+                    thread_event_tx,
+                    event_rx,
+                    connection_state,
+                )
+            })
+            .context("cannot spawn stdio test session")?;
+        Ok(Self {
+            event_tx,
+            output_rx,
+            join_handle: Some(join_handle),
+        })
+    }
+
+    pub fn send_json(&self, value: &serde_json::Value) -> Result<()> {
+        self.event_tx
+            .send(TransportEvent::InputLine(serde_json::to_string(value)?))
+            .map_err(|_| anyhow::anyhow!("stdio test session disconnected"))
+    }
+
+    pub fn recv_json(&self, timeout: Duration) -> Result<Option<serde_json::Value>> {
+        match self.output_rx.recv_timeout(timeout) {
+            Ok(value) => Ok(Some(value)),
+            Err(mpsc::RecvTimeoutError::Timeout) => Ok(None),
+            Err(mpsc::RecvTimeoutError::Disconnected) => Ok(None),
+        }
+    }
+
+    pub fn finish(mut self) -> Result<Vec<serde_json::Value>> {
+        let _ = self.event_tx.send(TransportEvent::InputClosed);
+        let join_result = self
+            .join_handle
+            .take()
+            .expect("stdio test session join handle")
+            .join()
+            .map_err(|_| anyhow::anyhow!("stdio test session thread panicked"))?;
+        join_result?;
+        let mut remaining = Vec::new();
+        while let Ok(value) = self.output_rx.try_recv() {
+            remaining.push(value);
+        }
+        Ok(remaining)
+    }
+}
+
+struct JsonValueChannelWriter {
+    buffer: Vec<u8>,
+    output_tx: mpsc::Sender<serde_json::Value>,
+}
+
+impl JsonValueChannelWriter {
+    fn new(output_tx: mpsc::Sender<serde_json::Value>) -> Self {
+        Self {
+            buffer: Vec::new(),
+            output_tx,
+        }
+    }
+}
+
+impl Write for JsonValueChannelWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.buffer.extend_from_slice(buf);
+        while let Some(pos) = self.buffer.iter().position(|byte| *byte == b'\n') {
+            let line = self.buffer.drain(..=pos).collect::<Vec<_>>();
+            let line = String::from_utf8(line)
+                .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "utf-8"))?;
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            let value = serde_json::from_str(line).map_err(|error| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("invalid json from stdio test session: {error}"),
+                )
+            })?;
+            self.output_tx.send(value).map_err(|_| {
+                std::io::Error::new(std::io::ErrorKind::BrokenPipe, "stdio test output closed")
+            })?;
+        }
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 #[cfg(unix)]
@@ -327,7 +643,9 @@ fn serve_connection<R: BufRead + Send, W: Write>(
         trace: TraceLevel::Off,
         initialized: false,
         log_level: None,
+        client_capabilities: serde_json::Value::Null,
         canceled_tokens: Arc::new(Mutex::new(HashSet::new())),
+        reverse_broker: ReverseRequestBroker::new(),
     };
 
     thread::scope(|scope| -> Result<()> {
@@ -521,6 +839,7 @@ fn process_requests<W: Write>(
                 &mut stats,
                 &connection_state,
             )?,
+            Ok(TransportEvent::OutboundJson(message)) => write_response(writer, &message)?,
             Ok(TransportEvent::InputClosed) => {
                 input_closed = true;
             }
@@ -685,6 +1004,16 @@ fn handle_input_line<W: Write>(
         return Ok(());
     }
 
+    if request.get("jsonrpc").and_then(|value| value.as_str()) == Some("2.0")
+        && request.get("id").is_some()
+        && request.get("method").is_none()
+        && connection_state
+            .reverse_broker
+            .try_resolve_response(&request)
+    {
+        return Ok(());
+    }
+
     if !request.is_object()
         || request.get("jsonrpc").and_then(|value| value.as_str()) != Some("2.0")
         || request
@@ -721,6 +1050,12 @@ fn handle_input_line<W: Write>(
         method: method.clone(),
         tool_name: tool_name_from_request(&method, params),
     };
+
+    if method == "initialize"
+        && let Ok(parsed) = spec::parse_initialize_request(params)
+    {
+        connection_state.client_capabilities = parsed.capabilities;
+    }
 
     if method == "initialized" || method == "notifications/initialized" {
         stats.notifications += 1;
@@ -809,6 +1144,9 @@ fn handle_input_line<W: Write>(
         let request_log_for_worker = request_log.clone();
         let canceled_tokens = Arc::clone(&ctx.canceled_tokens);
         let progress_token = progress_token_from_params(params.as_ref());
+        let reverse_broker = connection_state.reverse_broker.clone();
+        let client_interactions =
+            parse_client_interaction_capabilities(&connection_state.client_capabilities);
         tracing::debug!(
             request_id = %request_log.request_id,
             method = %request_log.method,
@@ -848,6 +1186,34 @@ fn handle_input_line<W: Write>(
             ),
         )?;
         let submit_result = ctx.worker_pool.submit(move || {
+            let reverse_emitter: Arc<dyn ReverseRequestEmitter> = Arc::new(StdioReverseEmitter {
+                event_tx: event_tx.clone(),
+            });
+            let reverse_scope_id = format!("stdio:{token}");
+            let reverse_client = crate::runtime_context::ReverseRequestClient::new(
+                Arc::new({
+                    let reverse_broker = reverse_broker.clone();
+                    let reverse_emitter = Arc::clone(&reverse_emitter);
+                    let reverse_scope_id = reverse_scope_id.clone();
+                    move |method, params, timeout| {
+                        reverse_broker.issue_request(
+                            &reverse_scope_id,
+                            &reverse_emitter,
+                            method,
+                            params,
+                            timeout,
+                        )
+                    }
+                }),
+                Arc::new({
+                    let reverse_emitter = Arc::clone(&reverse_emitter);
+                    move |params| reverse_emitter.emit_task_status(params)
+                }),
+                client_interactions.clone(),
+                "stdio",
+                None,
+                request_id_string(&request_id),
+            );
             if canceled_tokens
                 .lock()
                 .expect("canceled token set lock poisoned")
@@ -871,6 +1237,8 @@ fn handle_input_line<W: Write>(
             // Install per-request progress reporter; tools call
             // crate::progress::report() / is_canceled() on this thread.
             let progress_event_tx = event_tx.clone();
+            crate::runtime_context::install(reverse_client);
+            crate::tasks::install_tool_call_request_params(params.as_ref());
             crate::progress::install(
                 move |msg, pct| {
                     let _ = progress_event_tx.send(TransportEvent::ProgressReport {
@@ -886,6 +1254,8 @@ fn handle_input_line<W: Write>(
                 dispatch(&method_name, params.as_ref(), &repo_root, &db_path)
             }));
             crate::progress::uninstall();
+            crate::tasks::uninstall_tool_call_request_params();
+            crate::runtime_context::uninstall();
             let execution_ms = dispatch_started_at.elapsed().as_millis();
             let (success, response) = match dispatch_result {
                 Ok(Ok(result)) => (true, jsonrpc_ok(request_id, result)),
@@ -989,6 +1359,9 @@ fn drain_expired_requests<W: Write>(
 
     for token in expired_tokens {
         if let Some(request) = pending.remove(&token) {
+            connection_state
+                .reverse_broker
+                .cancel_scope(&format!("stdio:{token}"), "parent request timed out");
             stats.timed_out += 1;
             tracing::warn!(
                 request_id = %request.request.request_id,
@@ -1136,6 +1509,29 @@ struct RequestDispatchContext<'a> {
     event_tx: &'a mpsc::Sender<TransportEvent>,
 }
 
+struct StdioReverseEmitter {
+    event_tx: mpsc::Sender<TransportEvent>,
+}
+
+impl ReverseRequestEmitter for StdioReverseEmitter {
+    fn emit_request(&self, request: serde_json::Value) -> Result<()> {
+        self.event_tx
+            .send(TransportEvent::OutboundJson(request.to_string()))
+            .map_err(|_| anyhow::anyhow!("stdio reverse-request channel disconnected"))?;
+        Ok(())
+    }
+
+    fn emit_task_status(&self, params: serde_json::Value) -> Result<()> {
+        self.event_tx
+            .send(TransportEvent::OutboundJson(jsonrpc_notification(
+                "notifications/tasks/status",
+                params,
+            )))
+            .map_err(|_| anyhow::anyhow!("stdio task notification channel disconnected"))?;
+        Ok(())
+    }
+}
+
 #[derive(Default)]
 struct TransportStats {
     received: u64,
@@ -1163,6 +1559,7 @@ enum TransportEvent {
         response: String,
         completion: RequestCompletion,
     },
+    OutboundJson(String),
     /// Mid-execution progress emitted by a running tool via [`crate::progress`].
     ProgressReport {
         token: u64,
@@ -1189,7 +1586,9 @@ struct ConnectionState {
     trace: TraceLevel,
     initialized: bool,
     log_level: Option<logging::LogLevel>,
+    client_capabilities: serde_json::Value,
     canceled_tokens: Arc<Mutex<HashSet<u64>>>,
+    reverse_broker: ReverseRequestBroker,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1271,6 +1670,21 @@ fn progress_token_from_params(params: Option<&serde_json::Value>) -> Option<serd
                 .cloned()
         })
         .or_else(|| params.and_then(|value| value.get("workDoneToken")).cloned())
+}
+
+pub(crate) fn parse_client_interaction_capabilities(
+    capabilities: &serde_json::Value,
+) -> crate::runtime_context::ClientInteractionCapabilities {
+    crate::runtime_context::ClientInteractionCapabilities {
+        supports_elicitation_form: capabilities
+            .get("elicitation")
+            .and_then(|value| value.get("form"))
+            .is_some(),
+        supports_elicitation_url: capabilities
+            .get("elicitation")
+            .and_then(|value| value.get("url"))
+            .is_some(),
+    }
 }
 
 fn parse_trace_level(params: Option<&serde_json::Value>) -> Result<TraceLevel> {
@@ -1390,6 +1804,9 @@ fn cancel_request<W: Write>(
     let request = pending
         .remove(&token)
         .expect("pending request must exist while canceling");
+    connection_state
+        .reverse_broker
+        .cancel_scope(&format!("stdio:{token}"), "parent request cancelled");
     // Signal any already-running tool to stop at its next cancellation
     // checkpoint (tools poll crate::progress::is_canceled()).
     request
@@ -1525,8 +1942,26 @@ fn dispatch(
                         anyhow::anyhow!("missing tool name"),
                     )
                 })?;
-            let args = params.and_then(|p| p.get("arguments"));
-            tools::call(name, args, repo_root, db_path).map_err(classify_tool_error)
+            let args = params.and_then(|p| p.get("arguments")).cloned();
+            crate::tasks::execute_tool_call(name, args, repo_root, db_path)
+                .map_err(classify_tool_error)
+        }
+
+        "tasks/list" => {
+            crate::tasks::tasks_list(params, repo_root, crate::output::OutputFormat::Json)
+                .map_err(classify_task_api_error)
+        }
+        "tasks/get" => {
+            crate::tasks::tasks_get(params, repo_root, crate::output::OutputFormat::Json)
+                .map_err(classify_task_api_error)
+        }
+        "tasks/result" => {
+            crate::tasks::tasks_result(params, repo_root, crate::output::OutputFormat::Json)
+                .map_err(classify_task_api_error)
+        }
+        "tasks/cancel" => {
+            crate::tasks::tasks_cancel(params, repo_root, crate::output::OutputFormat::Json)
+                .map_err(classify_task_api_error)
         }
 
         other => Err(DispatchError::new(
@@ -1866,6 +2301,10 @@ enum JsonRpcErrorKind {
     WorkerUnavailable,
     RequestTimedOut,
     RateLimited,
+    TaskNotFound,
+    TaskNotReady,
+    TaskCancelled,
+    TaskFailed,
 }
 
 impl JsonRpcErrorKind {
@@ -1880,6 +2319,10 @@ impl JsonRpcErrorKind {
             Self::WorkerUnavailable => JSONRPC_WORKER_UNAVAILABLE,
             Self::RequestTimedOut => JSONRPC_REQUEST_TIMEOUT,
             Self::RateLimited => JSONRPC_RATE_LIMITED,
+            Self::TaskNotFound => JSONRPC_TASK_NOT_FOUND,
+            Self::TaskNotReady => JSONRPC_TASK_NOT_READY,
+            Self::TaskCancelled => JSONRPC_TASK_CANCELLED,
+            Self::TaskFailed => JSONRPC_TASK_FAILED,
         }
     }
 
@@ -1894,6 +2337,10 @@ impl JsonRpcErrorKind {
             Self::WorkerUnavailable => "worker_unavailable",
             Self::RequestTimedOut => "request_timed_out",
             Self::RateLimited => "rate_limited",
+            Self::TaskNotFound => "task_not_found",
+            Self::TaskNotReady => "task_not_ready",
+            Self::TaskCancelled => "task_cancelled",
+            Self::TaskFailed => "task_failed",
         }
     }
 }
@@ -1931,6 +2378,18 @@ fn classify_prompt_error(error: anyhow::Error) -> DispatchError {
 
 fn classify_tool_error(error: anyhow::Error) -> DispatchError {
     DispatchError::new(JsonRpcErrorKind::ToolExecutionFailed, error)
+}
+
+fn classify_task_api_error(error: crate::tasks::TaskApiError) -> DispatchError {
+    let kind = match error.kind() {
+        crate::tasks::TaskApiErrorKind::InvalidParams => JsonRpcErrorKind::InvalidParams,
+        crate::tasks::TaskApiErrorKind::NotFound => JsonRpcErrorKind::TaskNotFound,
+        crate::tasks::TaskApiErrorKind::NotReady => JsonRpcErrorKind::TaskNotReady,
+        crate::tasks::TaskApiErrorKind::Cancelled => JsonRpcErrorKind::TaskCancelled,
+        crate::tasks::TaskApiErrorKind::Failed => JsonRpcErrorKind::TaskFailed,
+        crate::tasks::TaskApiErrorKind::Internal => JsonRpcErrorKind::InternalError,
+    };
+    DispatchError::new(kind, error.into_anyhow())
 }
 
 fn classify_resource_error(error: anyhow::Error) -> DispatchError {
@@ -2373,7 +2832,9 @@ mod tests {
             trace: TraceLevel::Off,
             initialized: false,
             log_level: None,
+            client_capabilities: serde_json::Value::Null,
             canceled_tokens: Arc::new(Mutex::new(HashSet::new())),
+            reverse_broker: ReverseRequestBroker::new(),
         }
     }
 
@@ -2382,6 +2843,233 @@ mod tests {
             "{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{{\"protocolVersion\":\"{}\",\"capabilities\":{{}},\"clientInfo\":{{\"name\":\"zed\",\"version\":\"1.0.0\"}}}}}}\n",
             MCP_PROTOCOL_VERSION
         )
+    }
+
+    fn stdio_single_response(
+        repo_root: &str,
+        db_path: &str,
+        request: serde_json::Value,
+    ) -> serde_json::Value {
+        let input = [
+            initialize_request_line(),
+            "{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}\n".to_owned(),
+            serde_json::to_string(&request).expect("serialize request") + "\n",
+        ]
+        .concat();
+        run_stdio_jsonrpc_session_for_tests(&input, repo_root, db_path, ServerOptions::default())
+            .expect("run stdio request")
+            .into_iter()
+            .find(|value| value["id"] == request["id"])
+            .expect("stdio response by id")
+    }
+
+    struct TestReverseEmitter {
+        sent: Arc<Mutex<Vec<serde_json::Value>>>,
+    }
+
+    impl ReverseRequestEmitter for TestReverseEmitter {
+        fn emit_request(&self, request: serde_json::Value) -> Result<()> {
+            self.sent
+                .lock()
+                .expect("test reverse emitter lock poisoned")
+                .push(request);
+            Ok(())
+        }
+
+        fn emit_task_status(&self, _params: serde_json::Value) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn advertised_capabilities_have_stdio_method_handlers_and_descriptor_backing() {
+        let fixture = setup_fixture();
+        let repo_root = fixture._dir.path().to_string_lossy().into_owned();
+        let capabilities = crate::spec::initialize_capabilities();
+
+        assert!(capabilities.tools == crate::spec::EmptyCapability::default());
+        assert!(capabilities.completions == crate::spec::EmptyCapability::default());
+        assert!(capabilities.logging == crate::spec::EmptyCapability::default());
+        assert!(capabilities.tasks.is_some());
+        assert!(capabilities.experimental.is_some());
+
+        for request in [
+            serde_json::json!({"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}),
+            serde_json::json!({
+                "jsonrpc":"2.0",
+                "id":3,
+                "method":"tools/call",
+                "params":{"name":"status","arguments":{"output_format":"json"}}
+            }),
+            serde_json::json!({"jsonrpc":"2.0","id":4,"method":"resources/list","params":{}}),
+            serde_json::json!({"jsonrpc":"2.0","id":5,"method":"resources/templates/list","params":{}}),
+            serde_json::json!({
+                "jsonrpc":"2.0",
+                "id":6,
+                "method":"resources/read",
+                "params":{"uri":"atlas://health/status"}
+            }),
+            serde_json::json!({
+                "jsonrpc":"2.0",
+                "id":7,
+                "method":"completion/complete",
+                "params":{"ref":{"name":"tools/call"},"argument":{"name":"output_format","value":"j"}}
+            }),
+            serde_json::json!({"jsonrpc":"2.0","id":8,"method":"logging/setLevel","params":{"level":"warning"}}),
+            serde_json::json!({"jsonrpc":"2.0","id":9,"method":"prompts/list","params":{}}),
+            serde_json::json!({
+                "jsonrpc":"2.0",
+                "id":10,
+                "method":"prompts/get",
+                "params":{"name":"inspect_symbol","arguments":{"symbol":"compute"}}
+            }),
+            serde_json::json!({"jsonrpc":"2.0","id":11,"method":"tasks/list","params":{}}),
+            serde_json::json!({"jsonrpc":"2.0","id":12,"method":"tasks/get","params":{"taskId":"missing"}}),
+            serde_json::json!({"jsonrpc":"2.0","id":13,"method":"tasks/result","params":{"taskId":"missing"}}),
+            serde_json::json!({"jsonrpc":"2.0","id":14,"method":"tasks/cancel","params":{"taskId":"missing"}}),
+        ] {
+            let response = stdio_single_response(&repo_root, &fixture.db_path, request.clone());
+            assert!(
+                response.get("result").is_some() || response.get("error").is_some(),
+                "method {} must produce result or typed error",
+                request["method"].as_str().expect("method")
+            );
+            assert_ne!(
+                response
+                    .get("error")
+                    .and_then(|value| value.get("code"))
+                    .and_then(serde_json::Value::as_i64),
+                Some(JsonRpcErrorKind::MethodNotFound.code() as i64),
+                "method {} must be handled",
+                request["method"].as_str().expect("method")
+            );
+        }
+
+        let tool_list = crate::tools::tool_list();
+        let tools = tool_list["tools"].as_array().expect("tool descriptors");
+        assert!(
+            !tools.is_empty(),
+            "tools/list descriptors must not be empty"
+        );
+
+        let prompt_list = crate::prompts::prompt_list();
+        let prompts = prompt_list["prompts"]
+            .as_array()
+            .expect("prompt descriptors");
+        assert!(
+            !prompts.is_empty(),
+            "prompts/list descriptors must not be empty"
+        );
+        for (name, args) in [
+            ("review_change", serde_json::json!({"files":"src/lib.rs"})),
+            ("inspect_symbol", serde_json::json!({"symbol":"compute"})),
+            ("plan_refactor", serde_json::json!({"target":"compute"})),
+            ("resume_prior_session", serde_json::json!({})),
+        ] {
+            crate::prompts::prompt_get(name, Some(&args)).unwrap_or_else(|error| {
+                panic!("prompt {name} must resolve from descriptor: {error}")
+            });
+        }
+
+        let resources =
+            crate::resources::resources_list(None).expect("resources/list")["resources"]
+                .as_array()
+                .expect("resources array")
+                .clone();
+        assert!(
+            !resources.is_empty(),
+            "resources/list descriptors must not be empty"
+        );
+        for resource in resources {
+            let uri = resource["uri"].as_str().expect("resource uri");
+            crate::resources::resources_read(
+                Some(&serde_json::json!({"uri": uri})),
+                &repo_root,
+                &fixture.db_path,
+            )
+            .unwrap_or_else(|error| panic!("resource {uri} must read from descriptor: {error}"));
+        }
+
+        let template_list =
+            crate::resources::resources_templates_list(None).expect("resources/templates/list");
+        let templates = template_list["resourceTemplates"]
+            .as_array()
+            .expect("resource templates array");
+        assert!(
+            !templates.is_empty(),
+            "resources/templates/list descriptors must not be empty"
+        );
+    }
+
+    #[test]
+    fn reverse_request_broker_times_out_and_cleans_up() {
+        let broker = ReverseRequestBroker::new();
+        let emitter: Arc<dyn ReverseRequestEmitter> = Arc::new(TestReverseEmitter {
+            sent: Arc::new(Mutex::new(Vec::new())),
+        });
+        let error = broker
+            .issue_request(
+                "stdio:1",
+                &emitter,
+                "elicitation/create",
+                serde_json::json!({"mode":"form"}),
+                Duration::from_millis(5),
+            )
+            .unwrap_err();
+        assert!(error.to_string().contains("timed out"));
+        assert!(
+            broker
+                .pending
+                .lock()
+                .expect("broker lock poisoned")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn reverse_request_broker_enforces_scope_correlation() {
+        let broker = ReverseRequestBroker::new();
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let emitter: Arc<dyn ReverseRequestEmitter> = Arc::new(TestReverseEmitter {
+            sent: Arc::clone(&sent),
+        });
+        let broker_for_thread = broker.clone();
+        let emitter_for_thread = Arc::clone(&emitter);
+        let handle = thread::spawn(move || {
+            broker_for_thread.issue_request(
+                "http:session-a:2",
+                &emitter_for_thread,
+                "elicitation/create",
+                serde_json::json!({"mode":"form"}),
+                Duration::from_secs(1),
+            )
+        });
+        let request_id = (0..50)
+            .find_map(|_| {
+                let maybe = sent
+                    .lock()
+                    .expect("sent lock poisoned")
+                    .first()
+                    .and_then(|value| value.get("id"))
+                    .cloned();
+                if maybe.is_none() {
+                    thread::sleep(Duration::from_millis(5));
+                }
+                maybe
+            })
+            .expect("reverse request id");
+        assert!(!broker.try_resolve_response_for_scope(
+            Some("http:session-b:"),
+            &serde_json::json!({"jsonrpc":"2.0","id": request_id.clone(),"result":{"ok":true}}),
+        ));
+        assert!(broker.try_resolve_response_for_scope(
+            Some("http:session-a:"),
+            &serde_json::json!({"jsonrpc":"2.0","id": request_id,"result":{"ok":true}}),
+        ));
+        assert_eq!(
+            handle.join().expect("join reverse request thread").unwrap(),
+            serde_json::json!({"ok":true})
+        );
     }
 
     #[test]
@@ -2544,6 +3232,41 @@ mod tests {
             serde_json::json!(
                 "unsupported protocol version '2024-11-05'; supported version: 2025-11-25"
             )
+        );
+    }
+
+    #[test]
+    fn stdio_transport_reports_unknown_task_with_task_not_found_error() {
+        let fixture = setup_fixture();
+        let repo_dir = tempfile::tempdir().expect("tempdir");
+        let input = concat!(
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-11-25\",\"capabilities\":{},\"clientInfo\":{\"name\":\"zed\",\"version\":\"1.0.0\"}}}\n",
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tasks/get\",\"params\":{\"taskId\":\"missing\"}}\n"
+        );
+        let reader = BufReader::new(Cursor::new(input.as_bytes()));
+        let mut writer = Vec::new();
+
+        run_server_io(
+            reader,
+            &mut writer,
+            repo_dir.path().to_str().expect("repo dir path"),
+            &fixture.db_path,
+            ServerOptions::default(),
+        )
+        .expect("run server io");
+
+        let responses = parse_output_lines(writer);
+        let by_id: std::collections::HashMap<_, _> = responses
+            .into_iter()
+            .filter_map(|value| value.get("id").cloned().map(|id| (id, value)))
+            .collect();
+        assert_eq!(
+            by_id[&serde_json::json!(2)]["error"]["code"],
+            serde_json::json!(-32010)
+        );
+        assert_eq!(
+            by_id[&serde_json::json!(2)]["error"]["data"]["atlas_error_code"],
+            serde_json::json!("task_not_found")
         );
     }
 

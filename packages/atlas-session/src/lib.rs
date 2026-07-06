@@ -9,7 +9,8 @@ pub use store::{
     AgentMemorySummary, AgentPartitionSummary, AgentResponsibilitySummary, CurationResult,
     DEFAULT_DEDUP_WINDOW_SECS, DEFAULT_MAX_SNAPSHOT_BYTES, DEFAULT_SESSION_DB,
     DEFAULT_SESSION_MAX_EVENTS, DecisionRecord, DecisionSearchHit, DelegatedTaskSummary,
-    EventCategory, GlobalAccessEntry, GlobalWorkflowPattern, MAX_INLINE_EVENT_PAYLOAD_BYTES,
+    DurableTaskListPage, DurableTaskRecord, DurableTaskStatus, DurableTaskUpdate, EventCategory,
+    GlobalAccessEntry, GlobalWorkflowPattern, MAX_INLINE_EVENT_PAYLOAD_BYTES, NewDurableTask,
     NewSessionEvent, ResumeSnapshot, SessionEventRow, SessionEventType, SessionMeta, SessionStats,
     SessionStore, SessionStoreConfig,
 };

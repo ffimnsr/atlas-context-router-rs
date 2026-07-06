@@ -1,0 +1,16 @@
+{
+  "status": 200,
+  "body": {
+    "authorization_servers": [
+      "<auth-server>"
+    ],
+    "bearer_methods_supported": [
+      "header"
+    ],
+    "resource": "https://atlas.test/mcp",
+    "scopes_supported": [
+      "atlas:mcp",
+      "atlas:read"
+    ]
+  }
+}

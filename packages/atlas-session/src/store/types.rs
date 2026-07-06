@@ -222,6 +222,99 @@ pub struct ResumeSnapshot {
     pub updated_at: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DurableTaskStatus {
+    Cancelled,
+    Completed,
+    Failed,
+    InputRequired,
+    Working,
+}
+
+impl DurableTaskStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Cancelled => "cancelled",
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+            Self::InputRequired => "input_required",
+            Self::Working => "working",
+        }
+    }
+}
+
+impl std::fmt::Display for DurableTaskStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for DurableTaskStatus {
+    type Err = AtlasError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "cancelled" => Ok(Self::Cancelled),
+            "completed" => Ok(Self::Completed),
+            "failed" => Ok(Self::Failed),
+            "input_required" => Ok(Self::InputRequired),
+            "working" => Ok(Self::Working),
+            other => Err(AtlasError::Other(format!(
+                "unknown durable task status: {other}"
+            ))),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DurableTaskRecord {
+    pub task_id: String,
+    pub originating_method: String,
+    pub request_id: Option<String>,
+    pub tool_name: Option<String>,
+    pub transport_kind: Option<String>,
+    pub session_id: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+    pub status: DurableTaskStatus,
+    pub status_message: Option<String>,
+    pub progress: Option<Value>,
+    pub result: Option<Value>,
+    pub error: Option<Value>,
+    pub ttl_ms: Option<u64>,
+    pub cancel_requested: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewDurableTask {
+    pub task_id: String,
+    pub originating_method: String,
+    pub request_id: Option<String>,
+    pub tool_name: Option<String>,
+    pub transport_kind: Option<String>,
+    pub session_id: Option<String>,
+    pub status: DurableTaskStatus,
+    pub status_message: Option<String>,
+    pub ttl_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct DurableTaskUpdate {
+    pub status: Option<DurableTaskStatus>,
+    pub status_message: Option<String>,
+    pub progress: Option<Value>,
+    pub result: Option<Value>,
+    pub error: Option<Value>,
+    pub cancel_requested: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DurableTaskListPage {
+    pub tasks: Vec<DurableTaskRecord>,
+    pub next_cursor: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentPartitionSummary {
     pub agent_id: Option<String>,

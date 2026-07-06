@@ -3,6 +3,7 @@
 use std::path::Path;
 
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
+use serde::Deserialize;
 use serde_json::Value;
 use tracing::info;
 
@@ -28,7 +29,8 @@ pub use self::types::{
     AgentMemorySummary, AgentPartitionSummary, AgentResponsibilitySummary, CurationResult,
     DEFAULT_DEDUP_WINDOW_SECS, DEFAULT_MAX_SNAPSHOT_BYTES, DEFAULT_SESSION_DB,
     DEFAULT_SESSION_MAX_EVENTS, DecisionRecord, DecisionSearchHit, DelegatedTaskSummary,
-    EventCategory, GlobalAccessEntry, GlobalWorkflowPattern, MAX_INLINE_EVENT_PAYLOAD_BYTES,
+    DurableTaskListPage, DurableTaskRecord, DurableTaskStatus, DurableTaskUpdate, EventCategory,
+    GlobalAccessEntry, GlobalWorkflowPattern, MAX_INLINE_EVENT_PAYLOAD_BYTES, NewDurableTask,
     NewSessionEvent, ResumeSnapshot, SessionEventRow, SessionEventType, SessionMeta, SessionStats,
     SessionStoreConfig,
 };
@@ -50,6 +52,13 @@ pub struct SessionStore {
     pub(super) config: SessionStoreConfig,
     /// Marker that opts this struct out of `Send` and `Sync`.
     _thread_bound: std::marker::PhantomData<*const ()>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DurableTaskListCursor {
+    updated_at: String,
+    created_at: String,
+    task_id: String,
 }
 
 impl SessionStore {
@@ -328,6 +337,154 @@ impl SessionStore {
             .map_err(|e| AtlasError::Db(e.to_string()))?;
 
         Ok(rows.filter_map(std::result::Result::ok).collect())
+    }
+
+    pub fn create_durable_task(&mut self, task: &NewDurableTask) -> Result<DurableTaskRecord> {
+        let now = format_now();
+        self.conn
+            .execute(
+                "INSERT INTO durable_tasks (
+                    task_id, originating_method, request_id, tool_name, transport_kind, session_id,
+                    created_at, updated_at, status, status_message, ttl_ms, cancel_requested
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 0)",
+                params![
+                    task.task_id,
+                    task.originating_method,
+                    task.request_id,
+                    task.tool_name,
+                    task.transport_kind,
+                    task.session_id,
+                    now,
+                    now,
+                    task.status.as_str(),
+                    task.status_message,
+                    task.ttl_ms.map(|value| value as i64),
+                ],
+            )
+            .map_err(|e| AtlasError::Db(e.to_string()))?;
+        self.get_durable_task(&task.task_id)?
+            .ok_or_else(|| AtlasError::Db("created durable task missing on reload".to_owned()))
+    }
+
+    pub fn update_durable_task(&mut self, task_id: &str, update: &DurableTaskUpdate) -> Result<()> {
+        let now = format_now();
+        let status = update.status.map(|value| value.as_str().to_owned());
+        let progress_json = update.progress.as_ref().map(canonical_json);
+        let result_json = update.result.as_ref().map(canonical_json);
+        let error_json = update.error.as_ref().map(canonical_json);
+        self.conn
+            .execute(
+                "UPDATE durable_tasks
+                 SET status = COALESCE(?2, status),
+                     status_message = COALESCE(?3, status_message),
+                     progress_json = COALESCE(?4, progress_json),
+                     result_json = COALESCE(?5, result_json),
+                     error_json = COALESCE(?6, error_json),
+                     cancel_requested = COALESCE(?7, cancel_requested),
+                     updated_at = ?8
+                 WHERE task_id = ?1",
+                params![
+                    task_id,
+                    status,
+                    update.status_message,
+                    progress_json,
+                    result_json,
+                    error_json,
+                    update.cancel_requested.map(i32::from),
+                    now,
+                ],
+            )
+            .map_err(|e| AtlasError::Db(e.to_string()))?;
+        Ok(())
+    }
+
+    pub fn delete_durable_task(&mut self, task_id: &str) -> Result<bool> {
+        let deleted = self
+            .conn
+            .execute(
+                "DELETE FROM durable_tasks WHERE task_id = ?1",
+                params![task_id],
+            )
+            .map_err(|e| AtlasError::Db(e.to_string()))?;
+        Ok(deleted > 0)
+    }
+
+    pub fn get_durable_task(&self, task_id: &str) -> Result<Option<DurableTaskRecord>> {
+        self.conn
+            .query_row(
+                "SELECT task_id, originating_method, request_id, tool_name, transport_kind, session_id,
+                        created_at, updated_at, status, status_message, progress_json, result_json,
+                        error_json, ttl_ms, cancel_requested
+                 FROM durable_tasks
+                 WHERE task_id = ?1",
+                params![task_id],
+                row_to_durable_task,
+            )
+            .optional()
+            .map_err(|e| AtlasError::Db(e.to_string()))
+    }
+
+    pub fn list_durable_tasks(
+        &self,
+        cursor: Option<&str>,
+        limit: usize,
+    ) -> Result<DurableTaskListPage> {
+        let limit = limit.clamp(1, 100);
+        let mut tasks = Vec::new();
+        let mut next_cursor = None;
+        let cursor = cursor.map(parse_durable_task_list_cursor).transpose()?;
+        let mut stmt = if cursor.is_some() {
+            self.conn
+                .prepare(
+                    "SELECT task_id, originating_method, request_id, tool_name, transport_kind, session_id,
+                            created_at, updated_at, status, status_message, progress_json, result_json,
+                            error_json, ttl_ms, cancel_requested
+                     FROM durable_tasks
+                     WHERE updated_at < ?1
+                        OR (updated_at = ?1 AND created_at < ?2)
+                        OR (updated_at = ?1 AND created_at = ?2 AND task_id < ?3)
+                     ORDER BY updated_at DESC, created_at DESC, task_id DESC
+                     LIMIT ?4",
+                )
+                .map_err(|e| AtlasError::Db(e.to_string()))?
+        } else {
+            self.conn
+                .prepare(
+                    "SELECT task_id, originating_method, request_id, tool_name, transport_kind, session_id,
+                            created_at, updated_at, status, status_message, progress_json, result_json,
+                            error_json, ttl_ms, cancel_requested
+                     FROM durable_tasks
+                     ORDER BY updated_at DESC, created_at DESC, task_id DESC
+                     LIMIT ?1",
+                )
+                .map_err(|e| AtlasError::Db(e.to_string()))?
+        };
+        if let Some(cursor) = cursor.as_ref() {
+            let rows = stmt
+                .query_map(
+                    params![
+                        &cursor.updated_at,
+                        &cursor.created_at,
+                        &cursor.task_id,
+                        (limit + 1) as i64
+                    ],
+                    row_to_durable_task,
+                )
+                .map_err(|e| AtlasError::Db(e.to_string()))?;
+            tasks.extend(rows.filter_map(std::result::Result::ok));
+        } else {
+            let rows = stmt
+                .query_map(params![(limit + 1) as i64], row_to_durable_task)
+                .map_err(|e| AtlasError::Db(e.to_string()))?;
+            tasks.extend(rows.filter_map(std::result::Result::ok));
+        }
+        if tasks.len() > limit {
+            tasks
+                .pop()
+                .expect("extra task exists when page exceeds limit");
+            next_cursor = tasks.last().map(encode_durable_task_list_cursor);
+        }
+        Ok(DurableTaskListPage { tasks, next_cursor })
     }
 
     pub fn put_resume_snapshot(
@@ -612,4 +769,81 @@ impl SessionStore {
         }
         Ok(())
     }
+}
+
+fn parse_durable_task_list_cursor(cursor: &str) -> Result<DurableTaskListCursor> {
+    serde_json::from_str(cursor)
+        .map_err(|error| AtlasError::Other(format!("invalid durable task cursor: {error}")))
+}
+
+fn encode_durable_task_list_cursor(task: &DurableTaskRecord) -> String {
+    serde_json::json!({
+        "updated_at": task.updated_at,
+        "created_at": task.created_at,
+        "task_id": task.task_id,
+    })
+    .to_string()
+}
+
+fn row_to_durable_task(row: &rusqlite::Row<'_>) -> rusqlite::Result<DurableTaskRecord> {
+    let status: String = row.get(8)?;
+    let progress_json: Option<String> = row.get(10)?;
+    let result_json: Option<String> = row.get(11)?;
+    let error_json: Option<String> = row.get(12)?;
+    Ok(DurableTaskRecord {
+        task_id: row.get(0)?,
+        originating_method: row.get(1)?,
+        request_id: row.get(2)?,
+        tool_name: row.get(3)?,
+        transport_kind: row.get(4)?,
+        session_id: row.get(5)?,
+        created_at: row.get(6)?,
+        updated_at: row.get(7)?,
+        status: status.parse().map_err(|error: AtlasError| {
+            rusqlite::Error::FromSqlConversionFailure(
+                8,
+                rusqlite::types::Type::Text,
+                Box::new(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    error.to_string(),
+                )),
+            )
+        })?,
+        status_message: row.get(9)?,
+        progress: progress_json
+            .as_deref()
+            .map(serde_json::from_str)
+            .transpose()
+            .map_err(|error| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    10,
+                    rusqlite::types::Type::Text,
+                    Box::new(error),
+                )
+            })?,
+        result: result_json
+            .as_deref()
+            .map(serde_json::from_str)
+            .transpose()
+            .map_err(|error| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    11,
+                    rusqlite::types::Type::Text,
+                    Box::new(error),
+                )
+            })?,
+        error: error_json
+            .as_deref()
+            .map(serde_json::from_str)
+            .transpose()
+            .map_err(|error| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    12,
+                    rusqlite::types::Type::Text,
+                    Box::new(error),
+                )
+            })?,
+        ttl_ms: row.get::<_, Option<i64>>(13)?.map(|value| value as u64),
+        cancel_requested: row.get::<_, i32>(14)? != 0,
+    })
 }

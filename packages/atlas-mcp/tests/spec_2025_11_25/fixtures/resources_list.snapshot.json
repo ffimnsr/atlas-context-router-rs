@@ -1,0 +1,14 @@
+{
+  "resources": [
+    {
+      "uri": "atlas://graph/provenance",
+      "name": "graph_provenance",
+      "mimeType": "application/json"
+    },
+    {
+      "uri": "atlas://health/status",
+      "name": "health_status",
+      "mimeType": "application/json"
+    }
+  ]
+}

@@ -69,6 +69,7 @@ mod completion;
 mod context;
 mod descriptors;
 mod discovery_tools;
+mod elicitation;
 #[cfg(feature = "http-transport")]
 mod http_sessions;
 mod logging;
@@ -76,8 +77,10 @@ mod output;
 pub mod progress;
 mod prompts;
 mod resources;
+mod runtime_context;
 mod session_tools;
 pub mod spec;
+mod tasks;
 mod tool_result;
 mod tools;
 mod transport;
@@ -91,6 +94,14 @@ pub use tools::{tool_list, tool_list_markdown};
 pub use transport::{
     ServerOptions, run_server, run_server_with_options, run_socket_server_with_options,
 };
+
+#[doc(hidden)]
+pub mod testing {
+    pub use crate::transport::{InteractiveStdioTestSession, run_stdio_jsonrpc_session_for_tests};
+
+    #[cfg(feature = "http-transport")]
+    pub use crate::transport_http::{HttpTestHarness, TestHttpResponse};
+}
 
 #[cfg(feature = "http-transport")]
 pub use auth::ProtectedResourceAuthConfig;

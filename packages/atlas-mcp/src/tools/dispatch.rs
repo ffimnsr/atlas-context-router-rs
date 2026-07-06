@@ -336,3 +336,121 @@ fn inject_provenance(response: &mut serde_json::Value, repo_root: &str, db_path:
         "last_indexed_at": last_indexed_at,
     });
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::descriptors::tool_output_schema;
+    use jsonschema::JSONSchema;
+    use serde_json::json;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
+    use tempfile::TempDir;
+
+    fn setup_repo() -> (TempDir, PathBuf, String) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src_dir = dir.path().join("src");
+        fs::create_dir_all(&src_dir).expect("create src dir");
+        fs::write(
+            src_dir.join("lib.rs"),
+            "pub fn greet() -> &'static str { \"hi\" }\n",
+        )
+        .expect("write fixture source");
+        git(dir.path(), &["init", "--quiet"]);
+        git(dir.path(), &["config", "user.name", "Atlas Tests"]);
+        git(
+            dir.path(),
+            &["config", "user.email", "atlas-tests@example.com"],
+        );
+        git(dir.path(), &["add", "."]);
+        git(dir.path(), &["commit", "--quiet", "-m", "fixture baseline"]);
+        let db_path = dir.path().join(".atlas").join("worldtree.db");
+        (dir, db_path.clone(), db_path.to_string_lossy().into_owned())
+    }
+
+    fn git(repo: &Path, args: &[&str]) {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(repo)
+            .output()
+            .expect("run git");
+        assert!(
+            output.status.success(),
+            "git {:?} failed\nstdout:\n{}\nstderr:\n{}",
+            args,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn every_tool_descriptor_name_routes_through_dispatcher() {
+        let (repo_dir, _db_path, db_path) = setup_repo();
+        let repo_root = repo_dir.path().to_string_lossy().into_owned();
+
+        for tool in super::super::registry::tool_list()["tools"]
+            .as_array()
+            .expect("tools array")
+        {
+            let name = tool["name"].as_str().expect("tool name");
+            let result = call(
+                name,
+                Some(&json!({"output_format": "json"})),
+                &repo_root,
+                &db_path,
+            );
+            if let Err(error) = result {
+                assert!(
+                    !error.to_string().starts_with("unknown tool:"),
+                    "descriptor name must dispatch: {name}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn representative_tool_outputs_match_shared_output_schema() {
+        let (repo_dir, _db_path, db_path) = setup_repo();
+        let repo_root = repo_dir.path().to_string_lossy().into_owned();
+        let build = call(
+            "build_or_update_graph",
+            Some(&json!({"mode": "build", "output_format": "json"})),
+            &repo_root,
+            &db_path,
+        )
+        .expect("build graph");
+        assert!(build["structuredContent"].is_object());
+
+        let schema = JSONSchema::options()
+            .compile(&tool_output_schema())
+            .expect("compile output schema");
+        for (name, args) in [
+            (
+                "build_or_update_graph",
+                json!({"mode": "build", "output_format": "json"}),
+            ),
+            ("status", json!({"output_format": "json"})),
+            ("broker_status", json!({"output_format": "json"})),
+            (
+                "query_graph",
+                json!({"text": "greet", "output_format": "json"}),
+            ),
+            ("get_context_stats", json!({"output_format": "json"})),
+        ] {
+            let value = call(name, Some(&args), &repo_root, &db_path)
+                .unwrap_or_else(|error| panic!("{name} should succeed for schema test: {error}"));
+            if let Err(errors) = schema.validate(&value) {
+                let details = errors
+                    .map(|error| error.to_string())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                panic!("{name} output schema mismatch:\n{details}\nvalue={value:#}");
+            }
+            assert!(
+                value.get("structuredContent").is_some(),
+                "{name} should emit structuredContent"
+            );
+        }
+    }
+}

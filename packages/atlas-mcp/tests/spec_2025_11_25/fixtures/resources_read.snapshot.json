@@ -1,0 +1,14 @@
+{
+  "uri": "atlas://health/status",
+  "mimeType": "application/json",
+  "status": {
+    "ok": false,
+    "error_code": "retrieval_index_unavailable",
+    "graph_built": true,
+    "build_state": "built",
+    "node_count": 2,
+    "edge_count": 1,
+    "file_count": 1,
+    "retrieval_available": false
+  }
+}

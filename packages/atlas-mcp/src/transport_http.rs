@@ -9,7 +9,7 @@
 //! - `DELETE /mcp` — explicit session termination.
 //! - `GET /health` — unauthenticated liveness probe.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -44,6 +44,44 @@ struct AppState {
     auth_policy: Option<Arc<ProtectedResourceAuthPolicy>>,
     allowed_origins: Arc<HashSet<String>>,
     sessions: SessionManager,
+    reverse_broker: crate::transport::ReverseRequestBroker,
+}
+
+struct HttpReverseEmitter {
+    session: Arc<HttpSession>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TestHttpResponse {
+    pub status: u16,
+    pub headers: BTreeMap<String, String>,
+    pub body_text: String,
+    pub json_body: Option<Value>,
+}
+
+#[derive(Clone)]
+pub struct HttpTestHarness {
+    state: AppState,
+    test_auth_issuer: Option<String>,
+}
+
+impl crate::transport::ReverseRequestEmitter for HttpReverseEmitter {
+    fn emit_request(&self, request: Value) -> Result<()> {
+        self.session.enqueue_event(request.to_string());
+        Ok(())
+    }
+
+    fn emit_task_status(&self, params: Value) -> Result<()> {
+        self.session.enqueue_event(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "method": "notifications/tasks/status",
+                "params": params,
+            })
+            .to_string(),
+        );
+        Ok(())
+    }
 }
 
 pub fn run_http_server(repo_root: &str, db_path: &str) -> Result<()> {
@@ -90,6 +128,7 @@ pub fn run_http_server_with_options(
                 auth_policy,
                 allowed_origins,
                 sessions: SessionManager::from_env(),
+                reverse_broker: crate::transport::ReverseRequestBroker::new(),
             };
             let app = build_router(state);
             let listener = tokio::net::TcpListener::bind(bind_addr)
@@ -99,6 +138,225 @@ pub fn run_http_server_with_options(
                 .await
                 .context("HTTP server error")
         })
+}
+
+impl HttpTestHarness {
+    pub fn new(repo_root: &str, db_path: &str) -> Self {
+        Self {
+            state: AppState {
+                repo_root: Arc::new(repo_root.to_owned()),
+                db_path: Arc::new(db_path.to_owned()),
+                auth_policy: None,
+                allowed_origins: Arc::new(HashSet::new()),
+                sessions: SessionManager::for_tests(
+                    std::time::Duration::from_secs(60),
+                    8,
+                    std::time::Duration::from_secs(60),
+                    std::time::Duration::from_millis(1),
+                ),
+                reverse_broker: crate::transport::ReverseRequestBroker::new(),
+            },
+            test_auth_issuer: None,
+        }
+    }
+
+    pub fn new_with_test_auth(
+        repo_root: &str,
+        db_path: &str,
+        allowed_origins: &[&str],
+    ) -> Result<Self> {
+        let (issuer, policy) = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .context("cannot build tokio runtime for HTTP auth test harness")?
+            .block_on(async move {
+                let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+                    .await
+                    .context("bind mock auth server")?;
+                let addr = listener.local_addr().context("mock auth addr")?;
+                let issuer = format!("http://{}", addr);
+                let discovery = serde_json::json!({
+                    "issuer": issuer,
+                    "jwks_uri": format!("{issuer}/jwks")
+                })
+                .to_string();
+                let jwks = serde_json::json!({
+                    "keys": [
+                        {
+                            "kty": "oct",
+                            "use": "sig",
+                            "kid": "atlas-test-key",
+                            "alg": "HS256",
+                            "k": "YXRsYXMtbWNwLXBoYXNlNS1zZWNyZXQ"
+                        }
+                    ]
+                })
+                .to_string();
+                let app = Router::new()
+                    .route(
+                        "/.well-known/openid-configuration",
+                        get(move || {
+                            let discovery = discovery.clone();
+                            async move { discovery }
+                        }),
+                    )
+                    .route(
+                        "/jwks",
+                        get(move || {
+                            let jwks = jwks.clone();
+                            async move { jwks }
+                        }),
+                    );
+                tokio::spawn(async move {
+                    let _ = axum::serve(listener, app).await;
+                });
+                let policy = ProtectedResourceAuthPolicy::load(auth::ProtectedResourceAuthConfig {
+                    issuer: issuer.clone(),
+                    discovery_url: None,
+                    jwks_url: None,
+                    resource: "https://atlas.test/mcp".to_owned(),
+                    required_scopes: HashMap::from([(
+                        auth::ROUTE_FAMILY_MCP.to_owned(),
+                        vec!["atlas:mcp".to_owned(), "atlas:read".to_owned()],
+                    )]),
+                    allowed_origins: allowed_origins
+                        .iter()
+                        .map(|value| (*value).to_owned())
+                        .collect(),
+                })
+                .await?;
+                Ok::<_, anyhow::Error>((issuer, policy))
+            })?;
+
+        Ok(Self {
+            state: AppState {
+                repo_root: Arc::new(repo_root.to_owned()),
+                db_path: Arc::new(db_path.to_owned()),
+                auth_policy: Some(Arc::new(policy)),
+                allowed_origins: Arc::new(
+                    allowed_origins
+                        .iter()
+                        .map(|value| (*value).to_owned())
+                        .collect(),
+                ),
+                sessions: SessionManager::for_tests(
+                    std::time::Duration::from_secs(60),
+                    8,
+                    std::time::Duration::from_secs(60),
+                    std::time::Duration::from_millis(1),
+                ),
+                reverse_broker: crate::transport::ReverseRequestBroker::new(),
+            },
+            test_auth_issuer: Some(issuer),
+        })
+    }
+
+    pub fn post_jsonrpc(&self, headers: &[(&str, &str)], body: &Value) -> Result<TestHttpResponse> {
+        let headers = make_test_header_map(headers)?;
+        let body = Bytes::from(serde_json::to_vec(body)?);
+        let response = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .context("cannot build tokio runtime for HTTP test harness")?
+            .block_on(handle_post_mcp(State(self.state.clone()), headers, body));
+        response_to_test_output(response)
+    }
+
+    pub fn get_mcp(&self, headers: &[(&str, &str)]) -> Result<TestHttpResponse> {
+        let headers = make_test_header_map(headers)?;
+        let response = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .context("cannot build tokio runtime for HTTP test harness")?
+            .block_on(handle_get_mcp(State(self.state.clone()), headers));
+        response_to_test_output(response)
+    }
+
+    pub fn delete_mcp(&self, headers: &[(&str, &str)]) -> Result<TestHttpResponse> {
+        let headers = make_test_header_map(headers)?;
+        let response = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .context("cannot build tokio runtime for HTTP test harness")?
+            .block_on(handle_delete_mcp(State(self.state.clone()), headers));
+        response_to_test_output(response)
+    }
+
+    pub fn get_metadata(&self, headers: &[(&str, &str)]) -> Result<TestHttpResponse> {
+        let headers = make_test_header_map(headers)?;
+        let response = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .context("cannot build tokio runtime for HTTP test harness")?
+            .block_on(handle_protected_resource_metadata(
+                State(self.state.clone()),
+                headers,
+            ));
+        response_to_test_output(response)
+    }
+
+    pub fn make_test_bearer_token(&self, scopes: &[&str]) -> Option<String> {
+        use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
+
+        const TEST_SECRET: &[u8] = b"atlas-mcp-phase5-secret";
+
+        let issuer = self.test_auth_issuer.as_ref()?;
+        let claims = serde_json::json!({
+            "iss": issuer,
+            "sub": "user-123",
+            "aud": "https://atlas.test/mcp",
+            "exp": 4_102_444_800u64,
+            "scope": scopes.join(" "),
+        });
+        let mut header = Header::new(Algorithm::HS256);
+        header.kid = Some("atlas-test-key".to_owned());
+        encode(&header, &claims, &EncodingKey::from_secret(TEST_SECRET)).ok()
+    }
+}
+
+fn make_test_header_map(headers: &[(&str, &str)]) -> Result<HeaderMap> {
+    let mut map = HeaderMap::new();
+    for (name, value) in headers {
+        map.insert(
+            axum::http::header::HeaderName::from_bytes(name.as_bytes())?,
+            HeaderValue::from_str(value)?,
+        );
+    }
+    Ok(map)
+}
+
+fn response_to_test_output(response: Response) -> Result<TestHttpResponse> {
+    let status = response.status().as_u16();
+    let headers = response
+        .headers()
+        .iter()
+        .map(|(name, value)| {
+            Ok((
+                name.as_str().to_owned(),
+                value
+                    .to_str()
+                    .context("HTTP test header must be utf-8")?
+                    .to_owned(),
+            ))
+        })
+        .collect::<Result<BTreeMap<_, _>>>()?;
+    let body_text = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("cannot build tokio runtime for HTTP test body read")?
+        .block_on(async move {
+            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .context("cannot read HTTP test response body")?;
+            String::from_utf8(bytes.to_vec()).context("HTTP test response body must be utf-8")
+        })?;
+    let json_body = serde_json::from_str(&body_text).ok();
+    Ok(TestHttpResponse {
+        status,
+        headers,
+        body_text,
+        json_body,
+    })
 }
 
 fn build_router(state: AppState) -> Router {
@@ -175,12 +433,17 @@ async fn handle_post_mcp(
         );
     }
 
-    if !request.is_object()
-        || request.get("jsonrpc").and_then(|value| value.as_str()) != Some("2.0")
-        || request
-            .get("method")
-            .and_then(|value| value.as_str())
-            .is_none()
+    let is_response = request.is_object()
+        && request.get("jsonrpc").and_then(|value| value.as_str()) == Some("2.0")
+        && request.get("id").is_some()
+        && request.get("method").is_none();
+    if !is_response
+        && (!request.is_object()
+            || request.get("jsonrpc").and_then(|value| value.as_str()) != Some("2.0")
+            || request
+                .get("method")
+                .and_then(|value| value.as_str())
+                .is_none())
     {
         let id = request.get("id").cloned().unwrap_or(Value::Null);
         return apply_origin_headers(
@@ -209,9 +472,16 @@ async fn handle_post_mcp(
                     .and_then(|value| value.get("clientInfo"))
                     .cloned()
                     .unwrap_or(Value::Null);
-                let session = state
-                    .sessions
-                    .create_session(spec::MCP_PROTOCOL_VERSION, client_info);
+                let client_capabilities = params
+                    .as_ref()
+                    .and_then(|value| value.get("capabilities"))
+                    .cloned()
+                    .unwrap_or(Value::Null);
+                let session = state.sessions.create_session(
+                    spec::MCP_PROTOCOL_VERSION,
+                    client_info,
+                    client_capabilities,
+                );
                 let mut response = jsonrpc_ok_response(id, result);
                 response.headers_mut().insert(
                     MCP_SESSION_ID_HEADER,
@@ -240,6 +510,19 @@ async fn handle_post_mcp(
     debug_assert_eq!(session.protocol_version(), spec::MCP_PROTOCOL_VERSION);
     let _ = session.client_info();
 
+    if is_response {
+        let scope_prefix = format!("http:{}:", session.id());
+        let status = if state
+            .reverse_broker
+            .try_resolve_response_for_scope(Some(&scope_prefix), &request)
+        {
+            StatusCode::NO_CONTENT
+        } else {
+            StatusCode::BAD_REQUEST
+        };
+        return apply_origin_headers(status.into_response(), origin.as_deref());
+    }
+
     let response = match method.as_str() {
         "initialized" | "notifications/initialized" => {
             session.mark_initialized();
@@ -267,6 +550,38 @@ async fn handle_post_mcp(
             Err(error) => jsonrpc_error_response(id, -32602, error.to_string()),
         },
         "tools/call" => dispatch_tool_call(state, session, id, params).await,
+        "tasks/list" => match crate::tasks::tasks_list(
+            params.as_ref(),
+            &state.repo_root,
+            crate::output::OutputFormat::Json,
+        ) {
+            Ok(result) => jsonrpc_ok_response(id, result),
+            Err(error) => jsonrpc_task_error_response(id, error),
+        },
+        "tasks/get" => match crate::tasks::tasks_get(
+            params.as_ref(),
+            &state.repo_root,
+            crate::output::OutputFormat::Json,
+        ) {
+            Ok(result) => jsonrpc_ok_response(id, result),
+            Err(error) => jsonrpc_task_error_response(id, error),
+        },
+        "tasks/result" => match crate::tasks::tasks_result(
+            params.as_ref(),
+            &state.repo_root,
+            crate::output::OutputFormat::Json,
+        ) {
+            Ok(result) => jsonrpc_ok_response(id, result),
+            Err(error) => jsonrpc_task_error_response(id, error),
+        },
+        "tasks/cancel" => match crate::tasks::tasks_cancel(
+            params.as_ref(),
+            &state.repo_root,
+            crate::output::OutputFormat::Json,
+        ) {
+            Ok(result) => jsonrpc_ok_response(id, result),
+            Err(error) => jsonrpc_task_error_response(id, error),
+        },
         "prompts/list" => jsonrpc_ok_response(id, crate::prompts::prompt_list()),
         "prompts/get" => {
             let name = match params
@@ -440,8 +755,47 @@ async fn dispatch_tool_call(
     let cancel_flag = Arc::new(AtomicBool::new(false));
     let cancel_flag_worker = Arc::clone(&cancel_flag);
     let name_for_log = name.clone();
+    let reverse_broker = state.reverse_broker.clone();
+    let interaction_capabilities =
+        crate::transport::parse_client_interaction_capabilities(session.client_capabilities());
+    let session_id = session.id().to_owned();
+    let request_id_for_context = match &id {
+        Value::String(value) => value.clone(),
+        _ => id.to_string(),
+    };
 
     let result = tokio::task::spawn_blocking(move || {
+        let reverse_emitter: Arc<dyn crate::transport::ReverseRequestEmitter> =
+            Arc::new(HttpReverseEmitter {
+                session: Arc::clone(&session_for_progress),
+            });
+        let reverse_scope_id = format!("http:{session_id}:{request_id_for_context}");
+        let reverse_client = crate::runtime_context::ReverseRequestClient::new(
+            Arc::new({
+                let reverse_broker = reverse_broker.clone();
+                let reverse_emitter = Arc::clone(&reverse_emitter);
+                let reverse_scope_id = reverse_scope_id.clone();
+                move |method, params, timeout| {
+                    reverse_broker.issue_request(
+                        &reverse_scope_id,
+                        &reverse_emitter,
+                        method,
+                        params,
+                        timeout,
+                    )
+                }
+            }),
+            Arc::new({
+                let reverse_emitter = Arc::clone(&reverse_emitter);
+                move |params| reverse_emitter.emit_task_status(params)
+            }),
+            interaction_capabilities.clone(),
+            "http",
+            Some(session_id.clone()),
+            request_id_for_context.clone(),
+        );
+        crate::runtime_context::install(reverse_client);
+        crate::tasks::install_tool_call_request_params(params.as_ref());
         crate::progress::install(
             move |message, percentage| {
                 if let Some(token) = &progress_token_for_closure {
@@ -462,8 +816,10 @@ async fn dispatch_tool_call(
             },
             cancel_flag_worker,
         );
-        let call_result = tools::call(&name, args.as_ref(), &repo_root, &db_path);
+        let call_result = crate::tasks::execute_tool_call(&name, args, &repo_root, &db_path);
         crate::progress::uninstall();
+        crate::tasks::uninstall_tool_call_request_params();
+        crate::runtime_context::uninstall();
         call_result.map_err(|error| error.to_string())
     })
     .await;
@@ -661,6 +1017,8 @@ fn jsonrpc_ok_response(id: Value, result: Value) -> Response {
 fn jsonrpc_error_response(id: Value, code: i32, message: String) -> Response {
     let status = match code {
         -32700 | -32600 | -32601 | -32602 => StatusCode::BAD_REQUEST,
+        -32010 => StatusCode::NOT_FOUND,
+        -32013..=-32011 => StatusCode::CONFLICT,
         _ => StatusCode::INTERNAL_SERVER_ERROR,
     };
     let atlas_error_code = match code {
@@ -673,6 +1031,10 @@ fn jsonrpc_error_response(id: Value, code: i32, message: String) -> Response {
         -32002 => "worker_unavailable",
         -32003 => "request_timed_out",
         -32004 => "rate_limited",
+        -32010 => "task_not_found",
+        -32011 => "task_not_ready",
+        -32012 => "task_cancelled",
+        -32013 => "task_failed",
         _ => "internal_error",
     };
     (
@@ -691,6 +1053,18 @@ fn jsonrpc_error_response(id: Value, code: i32, message: String) -> Response {
         })),
     )
         .into_response()
+}
+
+fn jsonrpc_task_error_response(id: Value, error: crate::tasks::TaskApiError) -> Response {
+    let code = match error.kind() {
+        crate::tasks::TaskApiErrorKind::InvalidParams => -32602,
+        crate::tasks::TaskApiErrorKind::NotFound => -32010,
+        crate::tasks::TaskApiErrorKind::NotReady => -32011,
+        crate::tasks::TaskApiErrorKind::Cancelled => -32012,
+        crate::tasks::TaskApiErrorKind::Failed => -32013,
+        crate::tasks::TaskApiErrorKind::Internal => -32603,
+    };
+    jsonrpc_error_response(id, code, error.message())
 }
 
 fn protocol_error_response(status: StatusCode, message: String) -> Response {
@@ -738,6 +1112,7 @@ mod tests {
     use serde_json::json;
     use std::collections::HashMap;
     use std::time::Duration;
+    use tempfile::TempDir;
 
     const TEST_SECRET: &[u8] = b"atlas-mcp-phase5-secret";
     const TEST_SECRET_B64U: &str = "YXRsYXMtbWNwLXBoYXNlNS1zZWNyZXQ";
@@ -754,7 +1129,26 @@ mod tests {
                 Duration::from_secs(60),
                 Duration::from_millis(1),
             ),
+            reverse_broker: crate::transport::ReverseRequestBroker::new(),
         }
+    }
+
+    fn make_task_state() -> (TempDir, AppState) {
+        let dir = TempDir::new().expect("tempdir");
+        let state = AppState {
+            repo_root: Arc::new(dir.path().to_string_lossy().to_string()),
+            db_path: Arc::new("db".to_owned()),
+            auth_policy: None,
+            allowed_origins: Arc::new(HashSet::new()),
+            sessions: SessionManager::for_tests(
+                Duration::from_secs(60),
+                8,
+                Duration::from_secs(60),
+                Duration::from_millis(1),
+            ),
+            reverse_broker: crate::transport::ReverseRequestBroker::new(),
+        };
+        (dir, state)
     }
 
     #[derive(Clone)]
@@ -1081,6 +1475,28 @@ mod tests {
         assert_eq!(
             value["error"]["message"],
             json!("unsupported protocol version '2024-11-05'; supported version: 2025-11-25")
+        );
+    }
+
+    #[tokio::test]
+    async fn http_tasks_get_unknown_task_uses_task_not_found_error() {
+        let (_dir, state) = make_task_state();
+        let (state, session_id) = initialize_session(state).await;
+        let response = handle_post_mcp(
+            State(state),
+            session_headers(&session_id),
+            Bytes::from_static(
+                br#"{"jsonrpc":"2.0","id":2,"method":"tasks/get","params":{"taskId":"missing"}}"#,
+            ),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        let value = read_json_response(response).await;
+        assert_eq!(value["error"]["code"], json!(-32010));
+        assert_eq!(
+            value["error"]["data"]["atlas_error_code"],
+            json!("task_not_found")
         );
     }
 

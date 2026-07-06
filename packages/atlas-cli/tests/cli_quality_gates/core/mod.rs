@@ -110,12 +110,17 @@ pub(super) fn read_json_tool_result(output: &Output, id: u64) -> Value {
     serde_json::from_str(text).expect("tool result JSON payload")
 }
 
+fn initialize_request_line(id: u64) -> String {
+    format!(
+        "{{\"jsonrpc\":\"2.0\",\"id\":{},\"method\":\"initialize\",\"params\":{{\"protocolVersion\":\"{}\",\"capabilities\":{{\"roots\":{{\"listChanged\":true}},\"sampling\":{{}},\"elicitation\":{{\"form\":{{}},\"url\":{{}}}}}},\"clientInfo\":{{\"name\":\"zed\",\"version\":\"1.0.0\"}},\"_meta\":{{\"clientTag\":\"quality-gate\"}}}}}}\n",
+        id,
+        atlas_mcp::MCP_PROTOCOL_VERSION
+    )
+}
+
 fn serve_requests() -> String {
     [
-        format!(
-            "{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{{\"protocolVersion\":\"{}\",\"capabilities\":{{}},\"clientInfo\":{{\"name\":\"zed\",\"version\":\"1.0.0\"}}}}}}\n",
-            atlas_mcp::MCP_PROTOCOL_VERSION
-        ),
+        initialize_request_line(1),
         "{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}\n".to_owned(),
         "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\",\"params\":{}}\n".to_owned(),
         "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"query_graph\",\"arguments\":{\"text\":\"greet_twice\"}}}\n".to_owned(),
@@ -127,10 +132,7 @@ fn serve_requests() -> String {
 fn serve_requests_with_session_tools() -> String {
     let artifact = "0123456789abcdefghijklmnopqrstuvwxyz".repeat(32);
     [
-        format!(
-            "{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{{\"protocolVersion\":\"{}\",\"capabilities\":{{}},\"clientInfo\":{{\"name\":\"zed\",\"version\":\"1.0.0\"}}}}}}\n",
-            atlas_mcp::MCP_PROTOCOL_VERSION
-        ),
+        initialize_request_line(1),
         "{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}\n".to_owned(),
         "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"query_graph\",\"arguments\":{\"text\":\"greet_twice\",\"output_format\":\"json\"}}}\n".to_owned(),
         format!(

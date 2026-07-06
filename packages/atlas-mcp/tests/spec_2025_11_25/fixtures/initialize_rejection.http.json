@@ -1,0 +1,15 @@
+{
+  "status": 400,
+  "body": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32602,
+      "message": "initialize requires object params.clientInfo",
+      "data": {
+        "atlas_error_code": "invalid_params",
+        "atlas_error_code_docs": "docs/error_codes.md#invalid_params"
+      }
+    }
+  }
+}

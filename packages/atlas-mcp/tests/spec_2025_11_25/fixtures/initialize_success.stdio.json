@@ -1,0 +1,28 @@
+{
+  "body": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "protocolVersion": "2025-11-25",
+      "capabilities": {
+        "tools": {},
+        "prompts": { "listChanged": false },
+        "resources": { "subscribe": false, "listChanged": false },
+        "completions": {},
+        "logging": {},
+        "tasks": {
+          "list": {},
+          "cancel": {},
+          "requests": { "tools": { "call": {} } }
+        },
+        "experimental": { "progressNotifications": true }
+      },
+      "serverInfo": {
+        "name": "atlas",
+        "version": "1.3.0",
+        "description": "MCP server exposing Atlas graph, impact, and review tools over stdio"
+      },
+      "_meta": { "clientTag": "spec-suite" }
+    }
+  }
+}

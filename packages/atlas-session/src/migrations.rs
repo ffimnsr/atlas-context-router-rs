@@ -28,9 +28,14 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "005_decision_memory_fts",
         up_sql: include_str!("migrations/005_decision_memory_fts.sql"),
     },
+    Migration {
+        version: 6,
+        name: "006_durable_tasks",
+        up_sql: include_str!("migrations/006_durable_tasks.sql"),
+    },
 ];
 
-pub const LATEST_VERSION: i32 = 5;
+pub const LATEST_VERSION: i32 = 6;
 
 pub const MIGRATION_SET: MigrationSet = MigrationSet {
     db_kind: "session",

@@ -1154,6 +1154,13 @@ pub fn tool_purge_saved_context(
     let deleted = if let Some(sid) = session_id_filter {
         cs.delete_session_sources(&sid, agent_id_filter.as_deref())?
     } else {
+        if crate::runtime_context::current().is_ok()
+            && !crate::elicitation::confirm_age_based_purge()?
+        {
+            return Err(anyhow::anyhow!(
+                "purge_saved_context without session_id requires explicit elicited confirmation"
+            ));
+        }
         cs.cleanup(keep_days)?
     };
 
@@ -1771,6 +1778,35 @@ mod tests {
         let body: Value = serde_json::from_str(content).unwrap();
         assert_eq!(body["deleted_source_count"].as_u64().unwrap(), 0);
         assert_eq!(body["deleted_bridge_file_count"].as_u64().unwrap(), 0);
+    }
+
+    #[test]
+    fn test_purge_saved_context_requires_confirmation_when_mcp_context_is_active() {
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join(".atlas")).unwrap();
+        let db_path = setup_db_path(&dir);
+        let repo_root = dir.path().to_str().unwrap();
+        let client = crate::runtime_context::ReverseRequestClient::new(
+            std::sync::Arc::new(|_, _, _| Ok(serde_json::json!({"action": "decline"}))),
+            std::sync::Arc::new(|_| Ok(())),
+            crate::runtime_context::ClientInteractionCapabilities {
+                supports_elicitation_form: true,
+                supports_elicitation_url: false,
+            },
+            "stdio",
+            None,
+            "1",
+        );
+        crate::runtime_context::install(client);
+        let args = serde_json::json!({"keep_days": 30});
+        let error = tool_purge_saved_context(Some(&args), repo_root, &db_path, OutputFormat::Json)
+            .unwrap_err();
+        crate::runtime_context::uninstall();
+        assert!(
+            error
+                .to_string()
+                .contains("requires explicit elicited confirmation")
+        );
     }
 
     #[test]
