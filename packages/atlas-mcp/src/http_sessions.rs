@@ -181,6 +181,8 @@ impl HttpSession {
                 stream_identity: 0,
                 last_event_id: None,
                 expires_at: Instant::now() + session_ttl,
+                initialized: false,
+                log_level: None,
                 closed: false,
             }),
             notify: Notify::new(),
@@ -239,6 +241,23 @@ impl HttpSession {
         let mut state = self.state.lock().expect("http session lock poisoned");
         state.stream_identity += 1;
         state.expires_at = Instant::now() + self.session_ttl;
+    }
+
+    pub(crate) fn mark_initialized(&self) {
+        let mut state = self.state.lock().expect("http session lock poisoned");
+        state.initialized = true;
+        state.expires_at = Instant::now() + self.session_ttl;
+    }
+
+    pub(crate) fn set_log_level(&self, level: crate::logging::LogLevel) {
+        let mut state = self.state.lock().expect("http session lock poisoned");
+        state.log_level = Some(level);
+        state.expires_at = Instant::now() + self.session_ttl;
+    }
+
+    pub(crate) fn should_emit_log(&self, level: crate::logging::LogLevel) -> bool {
+        let state = self.state.lock().expect("http session lock poisoned");
+        state.initialized && crate::logging::should_emit(state.log_level, level)
     }
 
     pub(crate) async fn wait_for_events(
@@ -315,6 +334,8 @@ struct HttpSessionState {
     stream_identity: u64,
     last_event_id: Option<String>,
     expires_at: Instant,
+    initialized: bool,
+    log_level: Option<crate::logging::LogLevel>,
     closed: bool,
 }
 

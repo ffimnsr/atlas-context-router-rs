@@ -2592,56 +2592,56 @@ Fill latest server-feature gaps using existing Atlas data and services instead o
 
 #### MCP4.1 Resource model and handlers
 
-- [ ] create `packages/atlas-mcp/src/resources.rs` with read-only resource registry backed by existing Atlas data
-- [ ] implement `resources/list` with deterministic ordering and cursor pagination
-- [ ] implement `resources/read` for concrete Atlas resource families:
-  - [ ] `atlas://health/status`
-  - [ ] `atlas://graph/provenance`
-  - [ ] `atlas://saved-context/{source_id}`
-  - [ ] `atlas://docs/{file}#{heading}`
-- [ ] implement `resources/templates/list` for URI templates matching supported dynamic resources:
-  - [ ] saved-context resource template
-  - [ ] docs-section resource template
-- [ ] add MIME type, title, description, icons, and `_meta` for every resource and template entry
-- [ ] add tests for `resources/list`, `resources/read`, template listing, pagination cursor stability, and not-found behavior
+- [x] create `packages/atlas-mcp/src/resources.rs` with read-only resource registry backed by existing Atlas data
+- [x] implement `resources/list` with deterministic ordering and cursor pagination
+- [x] implement `resources/read` for concrete Atlas resource families:
+  - [x] `atlas://health/status`
+  - [x] `atlas://graph/provenance`
+  - [x] `atlas://saved-context/{source_id}`
+  - [x] `atlas://docs/{file}#{heading}`
+- [x] implement `resources/templates/list` for URI templates matching supported dynamic resources:
+  - [x] saved-context resource template
+  - [x] docs-section resource template
+- [x] add MIME type, title, description, icons, and `_meta` for every resource and template entry
+- [x] add tests for `resources/list`, `resources/read`, template listing, pagination cursor stability, and not-found behavior
 
 #### MCP4.2 Completion handlers
 
-- [ ] implement `completion/complete` using descriptor-backed completion providers
-- [ ] add completion providers for currently structured inputs:
-  - [ ] `output_format`
-  - [ ] review/context `intent`
-  - [ ] known tool names in dispatcher-driven fields
-  - [ ] docs-section resource template variables
-- [ ] plumb `CompletionRequest.context` into provider logic where latest spec allows prior resolved variables
-- [ ] add tests for exact-match completions, context-sensitive completions, empty-result stability, and cursor-less deterministic ordering
+- [x] implement `completion/complete` using descriptor-backed completion providers
+- [x] add completion providers for currently structured inputs:
+  - [x] `output_format`
+  - [x] review/context `intent`
+  - [x] known tool names in dispatcher-driven fields
+  - [x] docs-section resource template variables
+- [x] plumb `CompletionRequest.context` into provider logic where latest spec allows prior resolved variables
+- [x] add tests for exact-match completions, context-sensitive completions, empty-result stability, and cursor-less deterministic ordering
 
 #### MCP4.3 Structured tool output and resource links
 
-- [ ] create shared `ToolResultBuilder` used by stdio and HTTP tool-call paths
-- [ ] emit `structuredContent` whenever tool output is native JSON object or array
-- [ ] keep human-readable `content` summary alongside `structuredContent`
-- [ ] add `resourceLinks` when tool output points at saved artifacts or docs sections already addressable through resource URIs
-- [ ] route tool-argument validation failures through tool-execution error bodies once `tools/call` dispatch has started
-- [ ] add tests for:
-  - [ ] `structuredContent` presence on JSON-producing tools
-  - [ ] content + structured-content parity on representative tools
-  - [ ] resource links on saved-context-producing flows
-  - [ ] invalid tool arguments return tool-execution classification, not protocol classification
+- [x] create shared `ToolResultBuilder` used by stdio and HTTP tool-call paths
+- [x] emit `structuredContent` whenever tool output is native JSON object or array
+- [x] keep human-readable `content` summary alongside `structuredContent`
+- [x] add `resourceLinks` when tool output points at saved artifacts or docs sections already addressable through resource URIs
+- [x] route tool-argument validation failures through tool-execution error bodies once `tools/call` dispatch has started
+- [x] add tests for:
+  - [x] `structuredContent` presence on JSON-producing tools
+  - [x] content + structured-content parity on representative tools
+  - [x] resource links on saved-context-producing flows
+  - [x] invalid tool arguments return tool-execution classification, not protocol classification
 
 #### MCP4.4 Logging capability implementation
 
-- [ ] implement `logging/setLevel` and shared server log-level state
-- [ ] emit MCP log notifications only after client initialization and only to subscribed session streams
-- [ ] route stdio transport logging to `stderr` while preserving MCP log notifications for protocol-aware consumers
-- [ ] add tests for log-level changes, stderr-only stdio diagnostics, and per-session log isolation on HTTP
+- [x] implement `logging/setLevel` and shared server log-level state
+- [x] emit MCP log notifications only after client initialization and only to subscribed session streams
+- [x] route stdio transport logging to `stderr` while preserving MCP log notifications for protocol-aware consumers
+- [x] add tests for log-level changes, stderr-only stdio diagnostics, and per-session log isolation on HTTP
 
 #### MCP4 completion criteria
 
-- [ ] `resources/list`, `resources/read`, and `resources/templates/list` all work with stable pagination
-- [ ] `completion/complete` returns deterministic suggestions for supported inputs
-- [ ] JSON-producing tools expose `structuredContent`
-- [ ] logging capability is implemented, not only advertised
+- [x] `resources/list`, `resources/read`, and `resources/templates/list` all work with stable pagination
+- [x] `completion/complete` returns deterministic suggestions for supported inputs
+- [x] JSON-producing tools expose `structuredContent`
+- [x] logging capability is implemented, not only advertised
 
 ### Phase MCP5 — Authorization and protected resource metadata
 

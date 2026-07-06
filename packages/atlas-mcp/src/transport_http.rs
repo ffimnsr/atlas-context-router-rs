@@ -28,6 +28,7 @@ use crate::http_sessions::{HttpSession, PollEventsError, SessionLookupError, Ses
 use crate::spec;
 use crate::tools;
 use crate::tools::health::mark_server_started;
+use crate::{completion, logging, resources};
 
 const DEFAULT_BIND: &str = "127.0.0.1:7070";
 const MCP_SESSION_ID_HEADER: &str = "Mcp-Session-Id";
@@ -222,9 +223,31 @@ async fn handle_post_mcp(
     let _ = session.client_info();
 
     let response = match method.as_str() {
-        "initialized" | "notifications/initialized" => StatusCode::NO_CONTENT.into_response(),
+        "initialized" | "notifications/initialized" => {
+            session.mark_initialized();
+            StatusCode::NO_CONTENT.into_response()
+        }
         m if m.starts_with("notifications/") => StatusCode::NO_CONTENT.into_response(),
+        "logging/setLevel" => dispatch_logging_set_level(session, id, params),
         "tools/list" => jsonrpc_ok_response(id, tools::tool_list()),
+        "resources/list" => match resources::resources_list(params.as_ref()) {
+            Ok(result) => jsonrpc_ok_response(id, result),
+            Err(error) => jsonrpc_error_response(id, -32602, error.to_string()),
+        },
+        "resources/templates/list" => match resources::resources_templates_list(params.as_ref()) {
+            Ok(result) => jsonrpc_ok_response(id, result),
+            Err(error) => jsonrpc_error_response(id, -32602, error.to_string()),
+        },
+        "resources/read" => {
+            match resources::resources_read(params.as_ref(), &state.repo_root, &state.db_path) {
+                Ok(result) => jsonrpc_ok_response(id, result),
+                Err(error) => jsonrpc_error_response(id, -32602, error.to_string()),
+            }
+        }
+        "completion/complete" => match completion::complete(params.as_ref(), &state.repo_root) {
+            Ok(result) => jsonrpc_ok_response(id, result),
+            Err(error) => jsonrpc_error_response(id, -32602, error.to_string()),
+        },
         "tools/call" => dispatch_tool_call(state, session, id, params).await,
         "prompts/list" => jsonrpc_ok_response(id, crate::prompts::prompt_list()),
         "prompts/get" => {
@@ -332,6 +355,38 @@ async fn handle_delete_mcp(State(state): State<AppState>, headers: HeaderMap) ->
     apply_origin_headers(response, origin.as_deref())
 }
 
+fn dispatch_logging_set_level(
+    session: Arc<HttpSession>,
+    id: Value,
+    params: Option<Value>,
+) -> Response {
+    let level = match logging::parse_set_level_params(params.as_ref()) {
+        Ok(level) => level,
+        Err(error) => return jsonrpc_error_response(id, -32602, error.to_string()),
+    };
+    logging::set_level(level);
+    session.set_log_level(level);
+    emit_http_log(
+        &session,
+        level,
+        "transport",
+        format!("log level set to {}", level.as_str()),
+    );
+    jsonrpc_ok_response(id, serde_json::json!({ "level": level.as_str() }))
+}
+
+fn emit_http_log(
+    session: &Arc<HttpSession>,
+    level: logging::LogLevel,
+    logger: &str,
+    message: String,
+) {
+    if !session.should_emit_log(level) {
+        return;
+    }
+    session.enqueue_event(logging::log_notification(level, logger, message).to_string());
+}
+
 async fn dispatch_tool_call(
     state: AppState,
     session: Arc<HttpSession>,
@@ -366,6 +421,7 @@ async fn dispatch_tool_call(
     let progress_token_for_closure = progress_token.clone();
     let cancel_flag = Arc::new(AtomicBool::new(false));
     let cancel_flag_worker = Arc::clone(&cancel_flag);
+    let name_for_log = name.clone();
 
     let result = tokio::task::spawn_blocking(move || {
         crate::progress::install(
@@ -396,6 +452,12 @@ async fn dispatch_tool_call(
 
     match result {
         Ok(Ok(tool_result)) => {
+            emit_http_log(
+                &session_for_result,
+                logging::LogLevel::Info,
+                "tools/call",
+                format!("tool={} success=true", name_for_log),
+            );
             let response_json = serde_json::json!({
                 "jsonrpc": "2.0",
                 "id": &id,
@@ -405,6 +467,15 @@ async fn dispatch_tool_call(
             jsonrpc_ok_response(id, tool_result)
         }
         Ok(Err(error_message)) => {
+            emit_http_log(
+                &session_for_result,
+                logging::LogLevel::Error,
+                "tools/call",
+                format!(
+                    "tool={} success=false error={}",
+                    name_for_log, error_message
+                ),
+            );
             let response_json = serde_json::json!({
                 "jsonrpc": "2.0",
                 "id": &id,
@@ -1085,6 +1156,65 @@ mod tests {
             value["error"]["message"],
             json!("JSON-RPC batch requests are not supported")
         );
+    }
+
+    #[tokio::test]
+    async fn logging_notifications_are_isolated_per_session() {
+        let (state, session_a) = initialize_session(make_state(None)).await;
+        let response = handle_post_mcp(
+            State(state.clone()),
+            HeaderMap::new(),
+            initialize_body(spec::MCP_PROTOCOL_VERSION, ""),
+        )
+        .await;
+        let session_b = header_value(&response, MCP_SESSION_ID_HEADER);
+
+        let _ = handle_post_mcp(
+            State(state.clone()),
+            session_headers(&session_a),
+            b"{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}"
+                .as_slice()
+                .into(),
+        )
+        .await;
+        let _ = handle_post_mcp(
+            State(state.clone()),
+            session_headers(&session_b),
+            b"{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}"
+                .as_slice()
+                .into(),
+        )
+        .await;
+
+        let response = handle_post_mcp(
+            State(state.clone()),
+            session_headers(&session_a),
+            b"{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"logging/setLevel\",\"params\":{\"level\":\"warning\"}}"
+                .as_slice()
+                .into(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let response = handle_post_mcp(
+            State(state.clone()),
+            session_headers(&session_a),
+            b"{\"jsonrpc\":\"2.0\",\"id\":8,\"method\":\"tools/call\",\"params\":{\"name\":\"query_graph\",\"arguments\":{\"output_format\":\"bogus\"}}}"
+                .as_slice()
+                .into(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        let response = handle_get_mcp(State(state.clone()), session_headers(&session_a)).await;
+        let body_a = read_body_string(response).await;
+        assert!(body_a.contains("notifications/message"));
+        assert!(body_a.contains("tool=query_graph success=false"));
+
+        let response = handle_get_mcp(State(state), session_headers(&session_b)).await;
+        let body_b = read_body_string(response).await;
+        assert!(!body_b.contains("notifications/message"));
+        assert!(!body_b.contains("tool=query_graph success=false"));
     }
 
     #[tokio::test]

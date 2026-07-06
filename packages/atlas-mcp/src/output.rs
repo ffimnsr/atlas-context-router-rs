@@ -80,6 +80,7 @@ pub fn resolve_output_format(
     Ok(default_format)
 }
 
+#[allow(dead_code)]
 pub fn render_serializable<T: Serialize>(
     value: &T,
     requested_format: OutputFormat,

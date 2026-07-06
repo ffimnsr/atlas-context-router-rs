@@ -13,12 +13,13 @@ use atlas_store_sqlite::Store;
 use camino::Utf8Path;
 use serde::Serialize;
 
-use crate::output::{OutputFormat, render_serializable};
+use crate::output::OutputFormat;
+use crate::tool_result::tool_result_value as build_tool_result_value;
 
 pub(super) const DEFAULT_OUTPUT_DESCRIPTION: &str =
     "Response body format: 'toon' (default) or 'json'";
 
-pub(super) fn parse_mcp_intent(s: &str) -> ContextIntent {
+pub(crate) fn parse_mcp_intent(s: &str) -> ContextIntent {
     match s {
         "file" => ContextIntent::File,
         "review" => ContextIntent::Review,
@@ -146,22 +147,7 @@ pub(super) fn tool_result_value<T: Serialize>(
     value: &T,
     output_format: OutputFormat,
 ) -> Result<serde_json::Value> {
-    let rendered = render_serializable(value, output_format)?;
-    let mut response = serde_json::json!({
-        "content": [{
-            "type": "text",
-            "text": rendered.text,
-            "mimeType": rendered.actual_format.mime_type(),
-        }],
-        "atlas_output_format": rendered.actual_format.as_str(),
-        "atlas_requested_output_format": rendered.requested_format.as_str(),
-    });
-
-    if let Some(reason) = rendered.fallback_reason {
-        response["atlas_fallback_reason"] = serde_json::Value::String(reason);
-    }
-
-    Ok(response)
+    build_tool_result_value(value, output_format)
 }
 
 pub(super) fn inject_budget_metadata(response: &mut serde_json::Value, budget: &BudgetReport) {

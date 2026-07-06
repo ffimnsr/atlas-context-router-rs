@@ -49,23 +49,27 @@ pub(crate) struct PromptArgumentDescriptor {
     pub(crate) required: bool,
 }
 
-#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct ResourceDescriptor {
+    pub(crate) uri: String,
     pub(crate) name: String,
     pub(crate) title: String,
     pub(crate) description: String,
+    pub(crate) mime_type: String,
     pub(crate) icons: Vec<IconDescriptor>,
     #[serde(rename = "_meta")]
     pub(crate) meta: Value,
 }
 
-#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct ResourceTemplateDescriptor {
+    pub(crate) uri_template: String,
     pub(crate) name: String,
     pub(crate) title: String,
     pub(crate) description: String,
+    pub(crate) mime_type: String,
     pub(crate) icons: Vec<IconDescriptor>,
     #[serde(rename = "_meta")]
     pub(crate) meta: Value,
@@ -172,6 +176,20 @@ pub(crate) fn tool_output_schema() -> Value {
                         "mimeType": { "type": "string" }
                     },
                     "required": ["type", "text"]
+                }
+            },
+            "structuredContent": {},
+            "resourceLinks": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "uri": { "type": "string" },
+                        "name": { "type": "string" },
+                        "title": { "type": "string" },
+                        "mimeType": { "type": "string" }
+                    },
+                    "required": ["uri", "name", "title"]
                 }
             },
             "atlas_output_format": { "type": "string" },

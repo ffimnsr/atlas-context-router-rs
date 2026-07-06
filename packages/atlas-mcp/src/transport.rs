@@ -18,7 +18,7 @@ use anyhow::{Context, Result};
 use atlas_core::{error_code_docs_ref, user_facing_error_message};
 use serde::{Deserialize, Serialize};
 
-use crate::{MCP_PROTOCOL_VERSION, prompts, spec, tools};
+use crate::{MCP_PROTOCOL_VERSION, completion, logging, prompts, resources, spec, tools};
 
 #[cfg(unix)]
 use std::net::Shutdown;
@@ -321,6 +321,8 @@ fn serve_connection<R: BufRead + Send, W: Write>(
     let (event_tx, event_rx) = mpsc::channel::<TransportEvent>();
     let connection_state = ConnectionState {
         trace: TraceLevel::Off,
+        initialized: false,
+        log_level: None,
         canceled_tokens: Arc::new(Mutex::new(HashSet::new())),
     };
 
@@ -716,7 +718,13 @@ fn handle_input_line<W: Write>(
         tool_name: tool_name_from_request(&method, params),
     };
 
-    if method == "initialized" || method.starts_with("notifications/") {
+    if method == "initialized" || method == "notifications/initialized" {
+        stats.notifications += 1;
+        connection_state.initialized = true;
+        return Ok(());
+    }
+
+    if method.starts_with("notifications/") {
         stats.notifications += 1;
         return Ok(());
     }
@@ -744,6 +752,41 @@ fn handle_input_line<W: Write>(
     if method == "$/cancelRequest" {
         stats.notifications += 1;
         let _ = cancel_request(writer, pending, params, stats, connection_state);
+        return Ok(());
+    }
+
+    if method == "logging/setLevel" {
+        let level = match logging::parse_set_level_params(params) {
+            Ok(level) => level,
+            Err(error) => {
+                if !is_notification {
+                    write_response(
+                        writer,
+                        &jsonrpc_error(id, JsonRpcErrorKind::InvalidParams, error.to_string()),
+                    )?;
+                }
+                return Ok(());
+            }
+        };
+        logging::set_level(level);
+        connection_state.log_level = Some(level);
+        logging::write_stdio_log(
+            level,
+            &format!("client set log level to {}", level.as_str()),
+        );
+        if !is_notification {
+            write_response(
+                writer,
+                &jsonrpc_ok(id.clone(), serde_json::json!({ "level": level.as_str() })),
+            )?;
+        }
+        emit_mcp_log_notification(
+            writer,
+            connection_state,
+            level,
+            "transport",
+            format!("log level set to {}", level.as_str()),
+        )?;
         return Ok(());
     }
 
@@ -1030,6 +1073,22 @@ fn handle_completion_event<W: Write>(
                 request.queued_at.elapsed().as_millis()
             ),
         )?;
+        emit_mcp_log_notification(
+            writer,
+            connection_state,
+            if completion.success {
+                logging::LogLevel::Info
+            } else {
+                logging::LogLevel::Error
+            },
+            "tools/call",
+            format!(
+                "tool={} success={} total_ms={}",
+                completion.request.tool_name.as_deref().unwrap_or("-"),
+                completion.success,
+                request.queued_at.elapsed().as_millis()
+            ),
+        )?;
         write_response(writer, &response)?;
     } else {
         stats.dropped_late += 1;
@@ -1124,6 +1183,8 @@ struct RequestCompletion {
 
 struct ConnectionState {
     trace: TraceLevel,
+    initialized: bool,
+    log_level: Option<logging::LogLevel>,
     canceled_tokens: Arc<Mutex<HashSet<u64>>>,
 }
 
@@ -1288,6 +1349,23 @@ fn emit_trace_log<W: Write>(
     )
 }
 
+fn emit_mcp_log_notification<W: Write>(
+    writer: &mut W,
+    connection_state: &ConnectionState,
+    level: logging::LogLevel,
+    logger: &str,
+    message: String,
+) -> Result<()> {
+    if !connection_state.initialized || !logging::should_emit(connection_state.log_level, level) {
+        return Ok(());
+    }
+
+    write_notification(
+        writer,
+        &logging::log_notification(level, logger, message).to_string(),
+    )
+}
+
 fn cancel_request<W: Write>(
     writer: &mut W,
     pending: &mut HashMap<u64, PendingRequest>,
@@ -1407,6 +1485,15 @@ fn dispatch(
             .map_err(|error| DispatchError::new(JsonRpcErrorKind::InvalidParams, error)),
 
         "tools/list" => Ok(tools::tool_list()),
+        "resources/list" => resources::resources_list(params)
+            .map_err(|error| DispatchError::new(JsonRpcErrorKind::InvalidParams, error)),
+        "resources/templates/list" => resources::resources_templates_list(params)
+            .map_err(|error| DispatchError::new(JsonRpcErrorKind::InvalidParams, error)),
+        "resources/read" => {
+            resources::resources_read(params, repo_root, db_path).map_err(classify_resource_error)
+        }
+        "completion/complete" => completion::complete(params, repo_root)
+            .map_err(|error| DispatchError::new(JsonRpcErrorKind::InvalidParams, error)),
 
         "prompts/list" => Ok(prompts::prompt_list()),
 
@@ -1839,13 +1926,11 @@ fn classify_prompt_error(error: anyhow::Error) -> DispatchError {
 }
 
 fn classify_tool_error(error: anyhow::Error) -> DispatchError {
-    let detail = error.to_string();
-    let kind = if detail.starts_with("unknown tool:") || is_invalid_params_message(&detail) {
-        JsonRpcErrorKind::InvalidParams
-    } else {
-        JsonRpcErrorKind::ToolExecutionFailed
-    };
-    DispatchError::new(kind, error)
+    DispatchError::new(JsonRpcErrorKind::ToolExecutionFailed, error)
+}
+
+fn classify_resource_error(error: anyhow::Error) -> DispatchError {
+    DispatchError::new(JsonRpcErrorKind::InvalidParams, error)
 }
 
 fn is_invalid_params_message(detail: &str) -> bool {
@@ -2282,6 +2367,8 @@ mod tests {
     fn test_connection_state() -> ConnectionState {
         ConnectionState {
             trace: TraceLevel::Off,
+            initialized: false,
+            log_level: None,
             canceled_tokens: Arc::new(Mutex::new(HashSet::new())),
         }
     }
@@ -2529,14 +2616,14 @@ mod tests {
             "invalid_request",
         );
         assert_eq!(by_id[&serde_json::json!(8)]["id"], 8);
-        assert_eq!(by_id[&serde_json::json!(8)]["error"]["code"], -32602);
+        assert_eq!(by_id[&serde_json::json!(8)]["error"]["code"], -32001);
         assert_eq!(
             by_id[&serde_json::json!(8)]["error"]["data"]["atlas_error_code"],
-            serde_json::json!("invalid_params")
+            serde_json::json!("tool_execution_failed")
         );
         assert_error_code_doc_link(
             &by_id[&serde_json::json!(8)]["error"]["data"]["atlas_error_code_docs"],
-            "invalid_params",
+            "tool_execution_failed",
         );
         assert_eq!(by_id[&serde_json::json!(7)]["id"], 7);
         assert_eq!(by_id[&serde_json::json!(7)]["error"]["code"], -32601);
@@ -2553,6 +2640,39 @@ mod tests {
                 .as_str()
                 .expect("error message")
                 .contains("method not found")
+        );
+    }
+
+    #[test]
+    fn stdio_transport_tool_argument_errors_use_tool_execution_classification() {
+        let fixture = setup_fixture();
+        let input = [
+            initialize_request_line(),
+            "{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}\n".to_owned(),
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"query_graph\",\"arguments\":{\"output_format\":\"bogus\"}}}\n".to_owned(),
+        ]
+        .concat();
+        let reader = BufReader::new(Cursor::new(input.as_bytes()));
+        let mut writer = Vec::new();
+
+        run_server_io(
+            reader,
+            &mut writer,
+            "/ignored",
+            &fixture.db_path,
+            ServerOptions::default(),
+        )
+        .expect("run server io");
+
+        let responses = parse_output_lines(writer);
+        let response = responses
+            .into_iter()
+            .find(|value| value["id"] == serde_json::json!(2))
+            .expect("query_graph response");
+        assert_eq!(response["error"]["code"], serde_json::json!(-32001));
+        assert_eq!(
+            response["error"]["data"]["atlas_error_code"],
+            serde_json::json!("tool_execution_failed")
         );
     }
 
@@ -2617,6 +2737,57 @@ mod tests {
         assert!(
             !reason.contains("no such table"),
             "reason must not leak raw schema failure: {reason}"
+        );
+    }
+
+    #[test]
+    fn stdio_transport_exposes_resources_completion_and_logging_methods() {
+        let fixture = setup_fixture();
+        let input = [
+            initialize_request_line(),
+            "{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}\n".to_owned(),
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"resources/list\",\"params\":{\"limit\":1}}\n".to_owned(),
+            "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"resources/templates/list\",\"params\":{}}\n".to_owned(),
+            "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"completion/complete\",\"params\":{\"ref\":{\"name\":\"tools/call\"},\"argument\":{\"name\":\"output_format\",\"value\":\"j\"}}}\n".to_owned(),
+            "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"logging/setLevel\",\"params\":{\"level\":\"warning\"}}\n".to_owned(),
+        ]
+        .concat();
+        let reader = BufReader::new(Cursor::new(input.as_bytes()));
+        let mut writer = Vec::new();
+
+        run_server_io(
+            reader,
+            &mut writer,
+            "/ignored",
+            &fixture.db_path,
+            ServerOptions::default(),
+        )
+        .expect("run server io");
+
+        let responses = parse_output_lines(writer);
+        let by_id: std::collections::HashMap<_, _> = responses
+            .into_iter()
+            .filter(|value| value.get("id").is_some())
+            .map(|response| (response["id"].clone(), response))
+            .collect();
+        assert_eq!(
+            by_id[&serde_json::json!(2)]["result"]["resources"][0]["uri"],
+            serde_json::json!("atlas://graph/provenance")
+        );
+        assert!(
+            by_id[&serde_json::json!(3)]["result"]["resourceTemplates"]
+                .as_array()
+                .expect("templates")
+                .len()
+                >= 2
+        );
+        assert_eq!(
+            by_id[&serde_json::json!(4)]["result"]["completion"]["values"][0]["value"],
+            serde_json::json!("json")
+        );
+        assert_eq!(
+            by_id[&serde_json::json!(5)]["result"]["level"],
+            serde_json::json!("warning")
         );
     }
 

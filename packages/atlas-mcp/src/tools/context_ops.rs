@@ -301,6 +301,14 @@ fn trim_context_response_metadata(response: &mut serde_json::Value, max_bytes: u
             continue;
         }
 
+        if response.get("structuredContent").is_some() {
+            response
+                .as_object_mut()
+                .expect("response object")
+                .remove("structuredContent");
+            continue;
+        }
+
         break;
     }
 }

@@ -16,6 +16,9 @@ pub struct ServerInfo {
 pub struct InitializeCapabilities {
     pub tools: EmptyCapability,
     pub prompts: PromptCapabilities,
+    pub resources: ResourceCapabilities,
+    pub completions: EmptyCapability,
+    pub logging: EmptyCapability,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub experimental: Option<ExperimentalCapabilities>,
 }
@@ -26,6 +29,13 @@ pub struct EmptyCapability {}
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PromptCapabilities {
+    pub list_changed: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResourceCapabilities {
+    pub subscribe: bool,
     pub list_changed: bool,
 }
 
@@ -73,6 +83,12 @@ pub fn initialize_capabilities() -> InitializeCapabilities {
         prompts: PromptCapabilities {
             list_changed: false,
         },
+        resources: ResourceCapabilities {
+            subscribe: false,
+            list_changed: false,
+        },
+        completions: EmptyCapability::default(),
+        logging: EmptyCapability::default(),
         experimental: Some(ExperimentalCapabilities {
             progress_notifications: true,
         }),

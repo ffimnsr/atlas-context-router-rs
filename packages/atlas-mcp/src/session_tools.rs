@@ -28,7 +28,8 @@ use serde::Serialize;
 use serde_json::Value;
 use tracing::warn;
 
-use crate::output::{OutputFormat, render_serializable};
+use crate::output::OutputFormat;
+use crate::tool_result::tool_result_value as build_tool_result_value;
 
 /// Derive the MCP session id for a given repo root.
 ///
@@ -1500,25 +1501,12 @@ fn inject_budget_metadata(response: &mut Value, budget: &BudgetReport) {
     response["safe_to_answer"] = serde_json::json!(budget.safe_to_answer);
 }
 
-/// Wrap structured output in an MCP tool-result content envelope.
+/// Wrap structured output in MCP tool-result envelope.
 pub(crate) fn tool_result_value<T: Serialize>(
     value: &T,
     output_format: OutputFormat,
 ) -> Result<Value> {
-    let rendered = render_serializable(value, output_format)?;
-    let mut response = serde_json::json!({
-        "content": [{
-            "type": "text",
-            "text": rendered.text,
-            "mimeType": rendered.actual_format.mime_type(),
-        }],
-        "atlas_output_format": rendered.actual_format.as_str(),
-        "atlas_requested_output_format": rendered.requested_format.as_str(),
-    });
-    if let Some(reason) = rendered.fallback_reason {
-        response["atlas_fallback_reason"] = Value::String(reason);
-    }
-    Ok(response)
+    build_tool_result_value(value, output_format)
 }
 
 // ---------------------------------------------------------------------------

@@ -63,16 +63,20 @@
 //! - `plan_refactor`: refactor-safety and blast-radius guidance
 //! - `resume_prior_session`: continuity and saved-context retrieval guidance
 
+mod completion;
 mod context;
 mod descriptors;
 mod discovery_tools;
 #[cfg(feature = "http-transport")]
 mod http_sessions;
+mod logging;
 mod output;
 pub mod progress;
 mod prompts;
+mod resources;
 mod session_tools;
 pub mod spec;
+mod tool_result;
 mod tools;
 mod transport;
 
