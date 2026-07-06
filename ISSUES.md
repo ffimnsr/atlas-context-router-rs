@@ -2401,3 +2401,387 @@ Why:
 - [x] add `proptest` coverage for ranking/trimming, canonical-path normalization, and FTS query escaping
 
 ---
+
+## Part VI — MCP 2025-11-25 Spec Upgrade Roadmap
+
+Use this part to move Atlas MCP from hardcoded `2024-11-05` behavior to `2025-11-25` behavior across stdio, HTTP transport, schema metadata, auth, resources, tasks, and conformance.
+
+Implementation order below is required. Do not start later phases until earlier phases land with tests.
+
+Rules:
+
+- treat Atlas as MCP server implementation first; do not add client-only `roots/*` or `sampling/*` reverse-RPC in this roadmap
+- replace legacy HTTP+SSE behavior instead of preserving dual protocol paths
+- keep stdio and HTTP transport behavior driven by one shared initialize, dispatch, schema, and error-classification layer
+- keep one canonical protocol-version constant and derive metadata files, initialize responses, headers, and tests from it
+- keep one canonical descriptor layer for tools, prompts, resources, completions, icons, and schemas; do not hand-maintain duplicate JSON blobs per transport
+- classify malformed tool arguments as tool-execution failures when `tools/call` reached dispatch; reserve protocol errors for JSON-RPC envelope and method contract failures
+- add automated coverage for every new capability before enabling it by default
+
+### Phase MCP1 — Version baseline and initialize contract
+
+Implement protocol-version upgrade first so all later phases share one spec baseline.
+
+#### MCP1.1 Canonical protocol version source
+
+- [ ] create `packages/atlas-mcp/src/spec.rs` as single source of MCP protocol constants:
+  - [ ] add `pub const MCP_PROTOCOL_VERSION: &str = "2025-11-25"`
+  - [ ] add shared server identity builder returning `name`, `version`, and `description`
+  - [ ] add shared capability builder used by stdio and HTTP initialize handlers
+- [ ] remove duplicate hardcoded protocol-version strings from:
+  - [ ] `packages/atlas-mcp/src/transport.rs`
+  - [ ] `packages/atlas-mcp/src/transport_http.rs`
+  - [ ] `packages/atlas-cli/src/mcp_instance.rs`
+  - [ ] `packages/atlas-cli/tests/cli_quality_gates/core/serve.rs`
+- [ ] make instance metadata writers and readers use shared spec constant instead of inline string literals
+- [ ] add unit tests proving protocol version is emitted from one constant in transport and instance metadata paths
+
+#### MCP1.2 Initialize request parsing and version negotiation
+
+- [ ] replace ad-hoc `initialize` param handling with typed request parsing in shared transport code:
+  - [ ] require `protocolVersion`
+  - [ ] require `capabilities`
+  - [ ] require `clientInfo.name`
+  - [ ] require `clientInfo.version`
+- [ ] reject initialize requests missing required fields with JSON-RPC `invalid_params` response and stable error body
+- [ ] negotiate exact protocol version `2025-11-25` only:
+  - [ ] reject older protocol versions instead of silently downgrading
+  - [ ] return clear unsupported-version error listing exact supported version
+- [ ] add `serverInfo.description` to initialize result
+- [ ] add `_meta` passthrough support on initialize result where latest schema allows it
+- [ ] add tests for:
+  - [ ] successful stdio initialize with full 2025-11-25 payload
+  - [ ] successful HTTP initialize with full 2025-11-25 payload
+  - [ ] missing `clientInfo` rejection
+  - [ ] unsupported protocol version rejection
+  - [ ] `serverInfo.description` presence
+
+#### MCP1.3 Capability contract cleanup
+
+- [ ] replace inline initialize capability maps with typed capability structs serialized by shared builder
+- [ ] advertise only capabilities actually implemented after each later phase lands:
+  - [ ] remove capability claims that lack concrete method handlers
+  - [ ] gate future capability fields behind implementation-ready tests
+- [ ] add snapshot tests for stdio and HTTP initialize results so capability drift fails CI
+
+#### MCP1 completion criteria
+
+- [ ] every initialize response and instance metadata file reports `2025-11-25`
+- [ ] empty `{}` initialize payload no longer passes quality gates
+- [ ] stdio and HTTP initialize payloads serialize from same shared builder
+- [ ] unsupported protocol-version requests fail deterministically with stable error JSON
+
+### Phase MCP2 — Transport architecture migration to Streamable HTTP
+
+Replace legacy HTTP+SSE transport with latest-spec Streamable HTTP semantics before adding newer server features.
+
+#### MCP2.1 Route and session architecture
+
+- [ ] replace legacy `/` + `/sse` transport in `packages/atlas-mcp/src/transport_http.rs` with Streamable HTTP routes:
+  - [ ] `POST /mcp` for client requests
+  - [ ] `GET /mcp` for server event stream and polling reconnect
+  - [ ] `DELETE /mcp` for session termination
+  - [ ] keep `GET /health` as non-protocol liveness probe
+- [ ] create `packages/atlas-mcp/src/http_sessions.rs` for negotiated-session state:
+  - [ ] store negotiated protocol version
+  - [ ] store client info
+  - [ ] store per-session outbound event queue
+  - [ ] store stream identity and last event id
+  - [ ] store expiration timestamp and closed state
+- [ ] issue `Mcp-Session-Id` header on successful HTTP initialize response
+- [ ] require valid `Mcp-Session-Id` on all non-initialize HTTP requests
+- [ ] add tests for session creation, reuse, missing-session rejection, and session delete behavior
+
+#### MCP2.2 Stream delivery, polling, and resumption
+
+- [ ] replace global broadcast stream with per-session outbound stream routing
+- [ ] assign deterministic event ids that encode session identity and per-session sequence number
+- [ ] support polling reconnect by honoring `Last-Event-ID` on `GET /mcp`
+- [ ] allow server-initiated stream closure without losing resumable state still inside retention window
+- [ ] add configurable event retention window and bounded queue size for resumed polling
+- [ ] drop expired retained events with deterministic `410 Gone` or equivalent latest-spec error path once resume window is exceeded
+- [ ] add tests for:
+  - [ ] resumed poll receives only missed events
+  - [ ] one session never receives another session's tool responses
+  - [ ] server-initiated disconnect can be resumed through `GET /mcp`
+  - [ ] expired `Last-Event-ID` fails with stable response
+
+#### MCP2.3 Header, origin, and JSON-RPC envelope compliance
+
+- [ ] require `MCP-Protocol-Version: 2025-11-25` on all non-initialize HTTP protocol requests
+- [ ] reject mismatched `MCP-Protocol-Version` headers with deterministic protocol error response
+- [ ] remove permissive `CorsLayer::allow_origin(Any)` behavior
+- [ ] add explicit origin validation:
+  - [ ] allow absent `Origin` for trusted non-browser clients
+  - [ ] allow configured exact origins only when browser-origin requests are enabled
+  - [ ] return HTTP `403 Forbidden` for invalid origin per latest spec guidance
+- [ ] reject JSON-RPC batch arrays in stdio and HTTP transports
+- [ ] add regression tests for:
+  - [ ] missing version header on post-initialize HTTP request
+  - [ ] mismatched version header
+  - [ ] invalid origin returns `403`
+  - [ ] JSON-RPC batch request rejected on stdio
+  - [ ] JSON-RPC batch request rejected on HTTP
+
+#### MCP2 completion criteria
+
+- [ ] HTTP transport no longer depends on legacy `/sse` route
+- [ ] every HTTP session is isolated by `Mcp-Session-Id`
+- [ ] resumed polling works with deterministic event ids
+- [ ] invalid origin and invalid version-header paths are covered by tests
+
+### Phase MCP3 — Canonical descriptor, schema, and registry layer
+
+Move tool and prompt metadata to one typed descriptor system before adding output schemas, icons, resources, and completions.
+
+#### MCP3.1 Shared descriptor model
+
+- [ ] create `packages/atlas-mcp/src/descriptors.rs` holding typed descriptor structs for:
+  - [ ] tools
+  - [ ] prompts
+  - [ ] resources
+  - [ ] resource templates
+  - [ ] completions
+- [ ] include descriptor fields required by 2025-11-25 metadata surfaces:
+  - [ ] `name`
+  - [ ] `title`
+  - [ ] `description`
+  - [ ] `inputSchema`
+  - [ ] `outputSchema`
+  - [ ] `annotations`
+  - [ ] `icons`
+  - [ ] `_meta`
+- [ ] move `packages/atlas-mcp/src/tools/registry.rs` off hand-built JSON and onto descriptor serialization
+- [ ] add tests proving descriptor serialization is stable across stdio and HTTP `tools/list`
+
+#### MCP3.2 JSON Schema 2020-12 upgrade
+
+- [ ] upgrade all MCP-advertised schemas to JSON Schema 2020-12:
+  - [ ] add `$schema: "https://json-schema.org/draft/2020-12/schema"`
+  - [ ] replace legacy schema patterns that rely on older draft assumptions
+  - [ ] validate every exported schema with test-time schema validation
+- [ ] decouple request parameter schemas from RPC method wiring:
+  - [ ] create standalone schema builders per method
+  - [ ] reuse same schema builder in registry output and request validation tests
+- [ ] add tests for:
+  - [ ] every `tools/list` entry includes valid 2020-12 `inputSchema`
+  - [ ] every `tools/list` entry includes valid 2020-12 `outputSchema`
+  - [ ] schema builder output matches registry snapshot
+
+#### MCP3.3 Tool naming, titles, annotations, and icons
+
+- [ ] validate all exported tool names against latest tool-name guidance before registry emission
+- [ ] add human-readable `title` for each tool and prompt so identifiers stay machine-focused
+- [ ] add deterministic tool annotations where behavior is already known:
+  - [ ] mark read-only graph/query tools as read-only
+  - [ ] mark state-mutating tools like `build_or_update_graph`, `postprocess_graph`, `compact_session`, and `purge_saved_context` as state-changing
+  - [ ] mark destructive tools with destructive annotation when they delete persisted state
+- [ ] add static icon metadata constants for tools, prompts, resources, and resource templates; do not fetch icons at runtime
+- [ ] add tests for name validation, title presence, annotation presence, and icon metadata serialization
+
+#### MCP3 completion criteria
+
+- [ ] descriptor JSON is generated from typed structs, not hand-built ad-hoc maps
+- [ ] all exported schemas validate as JSON Schema 2020-12
+- [ ] every tool and prompt has `title`
+- [ ] every tool has deterministic annotations and output schema coverage
+
+### Phase MCP4 — Server features: resources, completions, structured output, and logging
+
+Fill latest server-feature gaps using existing Atlas data and services instead of placeholder endpoints.
+
+#### MCP4.1 Resource model and handlers
+
+- [ ] create `packages/atlas-mcp/src/resources.rs` with read-only resource registry backed by existing Atlas data
+- [ ] implement `resources/list` with deterministic ordering and cursor pagination
+- [ ] implement `resources/read` for concrete Atlas resource families:
+  - [ ] `atlas://health/status`
+  - [ ] `atlas://graph/provenance`
+  - [ ] `atlas://saved-context/{source_id}`
+  - [ ] `atlas://docs/{file}#{heading}`
+- [ ] implement `resources/templates/list` for URI templates matching supported dynamic resources:
+  - [ ] saved-context resource template
+  - [ ] docs-section resource template
+- [ ] add MIME type, title, description, icons, and `_meta` for every resource and template entry
+- [ ] add tests for `resources/list`, `resources/read`, template listing, pagination cursor stability, and not-found behavior
+
+#### MCP4.2 Completion handlers
+
+- [ ] implement `completion/complete` using descriptor-backed completion providers
+- [ ] add completion providers for currently structured inputs:
+  - [ ] `output_format`
+  - [ ] review/context `intent`
+  - [ ] known tool names in dispatcher-driven fields
+  - [ ] docs-section resource template variables
+- [ ] plumb `CompletionRequest.context` into provider logic where latest spec allows prior resolved variables
+- [ ] add tests for exact-match completions, context-sensitive completions, empty-result stability, and cursor-less deterministic ordering
+
+#### MCP4.3 Structured tool output and resource links
+
+- [ ] create shared `ToolResultBuilder` used by stdio and HTTP tool-call paths
+- [ ] emit `structuredContent` whenever tool output is native JSON object or array
+- [ ] keep human-readable `content` summary alongside `structuredContent`
+- [ ] add `resourceLinks` when tool output points at saved artifacts or docs sections already addressable through resource URIs
+- [ ] route tool-argument validation failures through tool-execution error bodies once `tools/call` dispatch has started
+- [ ] add tests for:
+  - [ ] `structuredContent` presence on JSON-producing tools
+  - [ ] content + structured-content parity on representative tools
+  - [ ] resource links on saved-context-producing flows
+  - [ ] invalid tool arguments return tool-execution classification, not protocol classification
+
+#### MCP4.4 Logging capability implementation
+
+- [ ] implement `logging/setLevel` and shared server log-level state
+- [ ] emit MCP log notifications only after client initialization and only to subscribed session streams
+- [ ] route stdio transport logging to `stderr` while preserving MCP log notifications for protocol-aware consumers
+- [ ] add tests for log-level changes, stderr-only stdio diagnostics, and per-session log isolation on HTTP
+
+#### MCP4 completion criteria
+
+- [ ] `resources/list`, `resources/read`, and `resources/templates/list` all work with stable pagination
+- [ ] `completion/complete` returns deterministic suggestions for supported inputs
+- [ ] JSON-producing tools expose `structuredContent`
+- [ ] logging capability is implemented, not only advertised
+
+### Phase MCP5 — Authorization and protected resource metadata
+
+Upgrade HTTP auth from static bearer gate to latest-spec protected-resource behavior.
+
+#### MCP5.1 Auth config and validation module
+
+- [ ] create `packages/atlas-mcp/src/auth.rs` for HTTP auth policy and token validation
+- [ ] replace `ATLAS_HTTP_AUTH_TOKEN`-only runtime gate with config-driven protected-resource auth:
+  - [ ] issuer URL
+  - [ ] JWKS URL or OIDC discovery URL
+  - [ ] audience/resource indicator
+  - [ ] required scopes per route family
+  - [ ] optional allowed origins list for browser callers
+- [ ] validate config at startup and fail closed on inconsistent issuer/JWKS/resource settings
+- [ ] add tests for invalid auth config, missing auth config under protected mode, and exact config parsing
+
+#### MCP5.2 Protected resource metadata and discovery
+
+- [ ] expose OAuth protected resource metadata endpoint at `/.well-known/oauth-protected-resource`
+- [ ] publish metadata fields required for Atlas protected-resource discovery:
+  - [ ] resource identifier
+  - [ ] authorization server issuer URL
+  - [ ] supported bearer methods
+  - [ ] scope hints
+- [ ] support OIDC discovery input so auth-server metadata can be resolved from standard discovery document when only issuer is configured
+- [ ] add tests for protected-resource metadata body shape, issuer discovery, and startup failure on invalid discovery response
+
+#### MCP5.3 WWW-Authenticate and incremental scope consent
+
+- [ ] return `WWW-Authenticate` on unauthorized or insufficient-scope HTTP responses
+- [ ] include resource-indicator and required-scope hints in `WWW-Authenticate`
+- [ ] distinguish `401` unauthenticated from `403` authenticated-but-forbidden
+- [ ] implement incremental scope challenge path for methods requiring stronger scopes than current token grants
+- [ ] add tests for:
+  - [ ] missing bearer token
+  - [ ] invalid token
+  - [ ] insufficient scope
+  - [ ] forbidden origin with valid token
+  - [ ] incremental scope challenge header contents
+
+#### MCP5 completion criteria
+
+- [ ] Atlas HTTP transport exposes protected-resource metadata endpoint
+- [ ] bearer validation uses configured issuer/resource metadata, not static string equality
+- [ ] unauthorized and insufficient-scope responses emit latest-spec `WWW-Authenticate` guidance
+- [ ] origin rejection and auth rejection paths are covered independently
+
+### Phase MCP6 — Elicitation and durable tasks
+
+Add server-side advanced interaction only where Atlas already has long-running or destructive flows.
+
+#### MCP6.1 Reverse-request plumbing for server-initiated interactions
+
+- [ ] add shared reverse-request broker in `packages/atlas-mcp/src/transport.rs` for server-initiated requests tied to active client request scope
+- [ ] enforce correlation so every server-initiated request is associated with triggering client request context
+- [ ] add timeout, cancellation, and cleanup behavior for abandoned reverse requests
+- [ ] add tests for correlation, timeout cleanup, and transport parity
+
+#### MCP6.2 Elicitation support
+
+- [ ] implement latest `elicitation/create` request and response schema handling in reverse-request broker
+- [ ] support latest enum/result model:
+  - [ ] titled enum values
+  - [ ] untitled enum values
+  - [ ] single-select enums
+  - [ ] multi-select enums
+  - [ ] default values on primitive fields
+  - [ ] URL mode elicitation
+- [ ] use elicitation for one concrete Atlas destructive flow:
+  - [ ] require explicit elicitation confirmation before `purge_saved_context` runs without `session_id`
+- [ ] add tests for single-select, multi-select, URL-mode, default-value, and confirmation-flow elicitation paths with mock client responses
+
+#### MCP6.3 Durable tasks for long-running operations
+
+- [ ] create `packages/atlas-mcp/src/tasks.rs` and persist task state in continuity-owned SQLite storage instead of process-only memory
+- [ ] implement latest tasks extension methods and notifications exactly once through shared task service
+- [ ] register long-running Atlas operations on task path:
+  - [ ] `build_or_update_graph`
+  - [ ] `postprocess_graph`
+  - [ ] `doctor`
+  - [ ] high-cost analysis operations when runtime exceeds configured defer threshold
+- [ ] store task lifecycle fields:
+  - [ ] task id
+  - [ ] originating method
+  - [ ] created time
+  - [ ] updated time
+  - [ ] status
+  - [ ] progress snapshot
+  - [ ] final result or final error
+- [ ] support polling for task status, deferred result retrieval, and cancellation where underlying job is cancellable
+- [ ] add tests for task creation, polling, completion, cancellation, restart-safe persisted task lookup, and task/result parity with synchronous tool output
+
+#### MCP6 completion criteria
+
+- [ ] server can issue latest-spec elicitation requests and validate typed responses
+- [ ] destructive purge flow can require elicited confirmation
+- [ ] long-running graph operations can return durable task handles and later final results
+- [ ] reverse-request and task flows are covered on stdio and HTTP transports
+
+### Phase MCP7 — Conformance, parity, and regression gates
+
+Land broad regression coverage last so future MCP work cannot drift from 2025-11-25 behavior.
+
+#### MCP7.1 Shared spec fixtures
+
+- [ ] create `packages/atlas-mcp/tests/spec_2025_11_25/` integration suite with shared fixtures for stdio and HTTP
+- [ ] add golden request/response fixtures for:
+  - [ ] initialize success
+  - [ ] initialize rejection
+  - [ ] tools/list
+  - [ ] tools/call structured output
+  - [ ] resources/list
+  - [ ] resources/read
+  - [ ] logging/setLevel
+  - [ ] protected-resource metadata
+  - [ ] task lifecycle
+  - [ ] elicitation round-trip
+- [ ] make fixture harness assert exact protocol version, capability surface, error classification, and header behavior
+
+#### MCP7.2 CLI and runtime parity gates
+
+- [ ] update `packages/atlas-cli/tests/cli_quality_gates/core/serve.rs` to use full 2025-11-25 initialize payloads
+- [ ] add CLI quality-gate checks for metadata-file protocol version, Streamable HTTP session headers, and removal of legacy SSE route assumptions
+- [ ] add parity tests proving stdio and HTTP return equivalent bodies for same tool calls after removing transport-only envelope differences
+- [ ] add negative tests proving advertised-but-unimplemented methods are absent from capability and descriptor output
+
+#### MCP7.3 Drift-prevention checks
+
+- [ ] add test that every advertised capability has method handlers and every method handler has descriptor coverage when required
+- [ ] add test that every tool descriptor name resolves through dispatcher
+- [ ] add test that every JSON-producing tool with `outputSchema` emits schema-compatible `structuredContent`
+- [ ] add test that auth-protected HTTP routes all share same version-header, origin, and `WWW-Authenticate` enforcement
+- [ ] add test that protocol-version constant, instance metadata, and initialize responses stay identical
+
+#### MCP7 completion criteria
+
+- [ ] integration suite covers stdio and HTTP for latest-spec happy path and failure path behavior
+- [ ] legacy SSE-only assumptions are removed from tests and code
+- [ ] descriptor, dispatcher, schema, and capability drift fail CI automatically
+- [ ] MCP server behavior is locked to 2025-11-25 across versioning, transport, auth, metadata, resources, logging, elicitation, and tasks
+
+---
