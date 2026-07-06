@@ -16,6 +16,8 @@ pub fn run_serve(cli: &Cli) -> Result<()> {
         worker_threads: config.mcp_worker_threads(),
         tool_timeout_ms: config.mcp_tool_timeout_ms(),
         tool_timeout_ms_by_tool: config.mcp_tool_timeout_ms_by_tool(),
+        #[cfg(feature = "http-transport")]
+        http_auth: None,
     };
     let direct_stdio = matches!(&cli.command, Command::Serve { direct_stdio: true });
 
@@ -46,6 +48,8 @@ pub fn run_serve_daemon(cli: &Cli) -> Result<()> {
         worker_threads: config.mcp_worker_threads(),
         tool_timeout_ms: config.mcp_tool_timeout_ms(),
         tool_timeout_ms_by_tool: config.mcp_tool_timeout_ms_by_tool(),
+        #[cfg(feature = "http-transport")]
+        http_auth: None,
     };
 
     #[cfg(any(unix, windows))]
@@ -867,10 +871,21 @@ pub fn run_serve_http(cli: &Cli) -> Result<()> {
     let repo = resolve_repo(cli)?;
     let db_path = db_path(cli, &repo);
     let config = atlas_engine::Config::load(&atlas_engine::paths::atlas_dir(&repo))?;
+    let http_auth = config
+        .mcp_http_auth()?
+        .map(|auth| atlas_mcp::ProtectedResourceAuthConfig {
+            issuer: auth.issuer,
+            discovery_url: auth.discovery_url,
+            jwks_url: auth.jwks_url,
+            resource: auth.resource,
+            required_scopes: auth.required_scopes,
+            allowed_origins: auth.allowed_origins,
+        });
     let options = atlas_mcp::ServerOptions {
         worker_threads: config.mcp_worker_threads(),
         tool_timeout_ms: config.mcp_tool_timeout_ms(),
         tool_timeout_ms_by_tool: config.mcp_tool_timeout_ms_by_tool(),
+        http_auth,
     };
     atlas_mcp::run_http_server_with_options(&repo, &db_path, options)
 }

@@ -24,6 +24,7 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde_json::Value;
 
+use crate::auth::{self, ProtectedResourceAuthPolicy};
 use crate::http_sessions::{HttpSession, PollEventsError, SessionLookupError, SessionManager};
 use crate::spec;
 use crate::tools;
@@ -34,13 +35,13 @@ const DEFAULT_BIND: &str = "127.0.0.1:7070";
 const MCP_SESSION_ID_HEADER: &str = "Mcp-Session-Id";
 const MCP_PROTOCOL_VERSION_HEADER: &str = "MCP-Protocol-Version";
 const LAST_EVENT_ID_HEADER: &str = "Last-Event-ID";
-const HTTP_ALLOWED_ORIGINS_ENV: &str = "ATLAS_HTTP_ALLOWED_ORIGINS";
+const PROTECTED_RESOURCE_METADATA_PATH: &str = "/.well-known/oauth-protected-resource";
 
 #[derive(Clone)]
 struct AppState {
     repo_root: Arc<String>,
     db_path: Arc<String>,
-    auth_token: Option<Arc<String>>,
+    auth_policy: Option<Arc<ProtectedResourceAuthPolicy>>,
     allowed_origins: Arc<HashSet<String>>,
     sessions: SessionManager,
 }
@@ -56,7 +57,7 @@ pub fn run_http_server(repo_root: &str, db_path: &str) -> Result<()> {
 pub fn run_http_server_with_options(
     repo_root: &str,
     db_path: &str,
-    _options: crate::transport::ServerOptions,
+    options: crate::transport::ServerOptions,
 ) -> Result<()> {
     mark_server_started();
 
@@ -64,28 +65,6 @@ pub fn run_http_server_with_options(
         .unwrap_or_else(|_| DEFAULT_BIND.to_owned())
         .parse()
         .context("ATLAS_HTTP_BIND must be a valid socket address (e.g. 127.0.0.1:7070)")?;
-
-    let auth_token = std::env::var("ATLAS_HTTP_AUTH_TOKEN")
-        .ok()
-        .filter(|token| !token.trim().is_empty())
-        .map(Arc::new);
-    let allowed_origins = Arc::new(load_allowed_origins());
-
-    if auth_token.is_none() {
-        eprintln!(
-            "atlas-mcp[http]: WARNING — no auth token configured; set ATLAS_HTTP_AUTH_TOKEN for production use"
-        );
-    }
-
-    let state = AppState {
-        repo_root: Arc::new(repo_root.to_owned()),
-        db_path: Arc::new(db_path.to_owned()),
-        auth_token,
-        allowed_origins,
-        sessions: SessionManager::from_env(),
-    };
-
-    let app = build_router(state);
 
     eprintln!("atlas-mcp[http]: listening on http://{bind_addr} (repo={repo_root}, db={db_path})");
 
@@ -95,6 +74,24 @@ pub fn run_http_server_with_options(
         .build()
         .context("cannot build tokio runtime for HTTP transport")?
         .block_on(async move {
+            let auth_policy = match options.http_auth {
+                Some(config) => Some(Arc::new(ProtectedResourceAuthPolicy::load(config).await?)),
+                None => None,
+            };
+            let allowed_origins = Arc::new(
+                auth_policy
+                    .as_ref()
+                    .map(|policy| policy.allowed_origins().iter().cloned().collect())
+                    .unwrap_or_default(),
+            );
+            let state = AppState {
+                repo_root: Arc::new(repo_root.to_owned()),
+                db_path: Arc::new(db_path.to_owned()),
+                auth_policy,
+                allowed_origins,
+                sessions: SessionManager::from_env(),
+            };
+            let app = build_router(state);
             let listener = tokio::net::TcpListener::bind(bind_addr)
                 .await
                 .with_context(|| format!("cannot bind HTTP server to {bind_addr}"))?;
@@ -107,6 +104,10 @@ pub fn run_http_server_with_options(
 fn build_router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(handle_health))
+        .route(
+            PROTECTED_RESOURCE_METADATA_PATH,
+            get(handle_protected_resource_metadata),
+        )
         .route(
             "/mcp",
             post(handle_post_mcp)
@@ -123,12 +124,29 @@ async fn handle_health() -> impl IntoResponse {
     }))
 }
 
+async fn handle_protected_resource_metadata(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response {
+    let origin = match validate_origin(&state, &headers) {
+        Ok(origin) => origin,
+        Err(response) => return *response,
+    };
+    let Some(auth_policy) = state.auth_policy.as_ref() else {
+        return apply_origin_headers(StatusCode::NOT_FOUND.into_response(), origin.as_deref());
+    };
+    apply_origin_headers(
+        Json(auth_policy.metadata_json()).into_response(),
+        origin.as_deref(),
+    )
+}
+
 async fn handle_post_mcp(
     State(state): State<AppState>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    if let Some(response) = check_auth(&state, &headers) {
+    if let Some(response) = authorize_request(&state, &headers) {
         return response;
     }
     let origin = match validate_origin(&state, &headers) {
@@ -279,7 +297,7 @@ async fn handle_post_mcp(
 }
 
 async fn handle_get_mcp(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    if let Some(response) = check_auth(&state, &headers) {
+    if let Some(response) = authorize_request(&state, &headers) {
         return response;
     }
     let origin = match validate_origin(&state, &headers) {
@@ -324,7 +342,7 @@ async fn handle_get_mcp(State(state): State<AppState>, headers: HeaderMap) -> Re
 }
 
 async fn handle_delete_mcp(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    if let Some(response) = check_auth(&state, &headers) {
+    if let Some(response) = authorize_request(&state, &headers) {
         return response;
     }
     let origin = match validate_origin(&state, &headers) {
@@ -561,7 +579,7 @@ fn validate_origin(
     let Ok(origin) = origin.to_str() else {
         return Err(Box::new(forbidden_origin_response()));
     };
-    if state.allowed_origins.contains(origin) {
+    if state.allowed_origins.is_empty() || state.allowed_origins.contains(origin) {
         Ok(Some(origin.to_owned()))
     } else {
         Err(Box::new(forbidden_origin_response()))
@@ -579,52 +597,29 @@ fn forbidden_origin_response() -> Response {
         .into_response()
 }
 
-fn load_allowed_origins() -> HashSet<String> {
-    std::env::var(HTTP_ALLOWED_ORIGINS_ENV)
-        .ok()
-        .map(|origins| {
-            origins
-                .split(',')
-                .map(str::trim)
-                .filter(|origin| !origin.is_empty())
-                .map(str::to_owned)
-                .collect::<HashSet<_>>()
-        })
-        .unwrap_or_default()
+fn authorize_request(state: &AppState, headers: &HeaderMap) -> Option<Response> {
+    let policy = state.auth_policy.as_ref()?;
+    match policy.authorize(headers, auth::ROUTE_FAMILY_MCP) {
+        Ok(_) => None,
+        Err(challenge) => Some(auth_challenge_response(challenge)),
+    }
 }
 
-fn check_auth(state: &AppState, headers: &HeaderMap) -> Option<Response> {
-    let Some(expected) = &state.auth_token else {
-        return None;
-    };
-    let provided = headers
-        .get(header::AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.strip_prefix("Bearer "))
-        .unwrap_or("");
-
-    let expected_bytes = expected.as_bytes();
-    let provided_bytes = provided.as_bytes();
-    let lengths_equal = expected_bytes.len() == provided_bytes.len();
-    let diff = expected_bytes
-        .iter()
-        .zip(provided_bytes.iter().chain(std::iter::repeat(&0u8)))
-        .fold(0u8, |acc, (left, right)| acc | (left ^ right));
-
-    if lengths_equal && diff == 0 {
-        None
-    } else {
-        Some(
-            (
-                StatusCode::UNAUTHORIZED,
-                Json(serde_json::json!({
-                    "error": "unauthorized",
-                    "message": "valid Bearer token required",
-                })),
-            )
-                .into_response(),
-        )
+fn auth_challenge_response(challenge: auth::AuthChallenge) -> Response {
+    let mut response = (
+        challenge.status,
+        Json(serde_json::json!({
+            "error": challenge.body_error,
+            "message": challenge.body_message,
+        })),
+    )
+        .into_response();
+    if let Ok(value) = HeaderValue::from_str(&challenge.www_authenticate) {
+        response
+            .headers_mut()
+            .insert(header::WWW_AUTHENTICATE, value);
     }
+    response
 }
 
 fn sse_response(session_id: &str, events: Vec<crate::http_sessions::RetainedEvent>) -> Response {
@@ -735,15 +730,23 @@ fn apply_origin_headers(mut response: Response, origin: Option<&str>) -> Respons
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::Router;
     use axum::body::to_bytes;
+    use axum::extract::State as AxumState;
+    use axum::routing::get as axum_get;
+    use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
     use serde_json::json;
+    use std::collections::HashMap;
     use std::time::Duration;
 
-    fn make_state(token: Option<&str>) -> AppState {
+    const TEST_SECRET: &[u8] = b"atlas-mcp-phase5-secret";
+    const TEST_SECRET_B64U: &str = "YXRsYXMtbWNwLXBoYXNlNS1zZWNyZXQ";
+
+    fn make_state(_legacy_token: Option<&str>) -> AppState {
         AppState {
             repo_root: Arc::new("repo".to_owned()),
             db_path: Arc::new("db".to_owned()),
-            auth_token: token.map(|value| Arc::new(value.to_owned())),
+            auth_policy: None,
             allowed_origins: Arc::new(HashSet::new()),
             sessions: SessionManager::for_tests(
                 Duration::from_secs(60),
@@ -754,11 +757,108 @@ mod tests {
         }
     }
 
+    #[derive(Clone)]
+    struct MockAuthState {
+        discovery: Arc<String>,
+        jwks: Arc<String>,
+    }
+
+    async fn make_state_with_auth(origins: &[&str]) -> AppState {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind mock auth server");
+        let addr = listener.local_addr().expect("mock auth addr");
+        let base_url = format!("http://{}", addr);
+        let discovery = json!({
+            "issuer": base_url,
+            "jwks_uri": format!("{base_url}/jwks")
+        })
+        .to_string();
+        let jwks = json!({
+            "keys": [
+                {
+                    "kty": "oct",
+                    "use": "sig",
+                    "kid": "atlas-test-key",
+                    "alg": "HS256",
+                    "k": TEST_SECRET_B64U
+                }
+            ]
+        })
+        .to_string();
+        let app = Router::new()
+            .route(
+                "/.well-known/openid-configuration",
+                axum_get(|AxumState(state): AxumState<MockAuthState>| async move {
+                    state.discovery.as_str().to_owned()
+                }),
+            )
+            .route(
+                "/jwks",
+                axum_get(|AxumState(state): AxumState<MockAuthState>| async move {
+                    state.jwks.as_str().to_owned()
+                }),
+            )
+            .with_state(MockAuthState {
+                discovery: Arc::new(discovery),
+                jwks: Arc::new(jwks),
+            });
+        tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("serve mock auth server");
+        });
+
+        let policy = ProtectedResourceAuthPolicy::load(auth::ProtectedResourceAuthConfig {
+            issuer: base_url,
+            discovery_url: None,
+            jwks_url: None,
+            resource: "https://atlas.test/mcp".to_owned(),
+            required_scopes: HashMap::from([(
+                auth::ROUTE_FAMILY_MCP.to_owned(),
+                vec!["atlas:mcp".to_owned(), "atlas:read".to_owned()],
+            )]),
+            allowed_origins: origins.iter().map(|value| (*value).to_owned()).collect(),
+        })
+        .await
+        .expect("load auth policy");
+
+        AppState {
+            auth_policy: Some(Arc::new(policy)),
+            allowed_origins: Arc::new(origins.iter().map(|value| (*value).to_owned()).collect()),
+            ..make_state(None)
+        }
+    }
+
     fn make_state_with_origins(origins: &[&str]) -> AppState {
         AppState {
             allowed_origins: Arc::new(origins.iter().map(|value| (*value).to_owned()).collect()),
             ..make_state(None)
         }
+    }
+
+    fn bearer_headers(token: &str) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::AUTHORIZATION,
+            format!("Bearer {token}")
+                .parse()
+                .expect("authorization header"),
+        );
+        headers
+    }
+
+    fn make_token(issuer: &str, scopes: &[&str]) -> String {
+        let claims = json!({
+            "iss": issuer,
+            "sub": "user-123",
+            "aud": "https://atlas.test/mcp",
+            "exp": 4_102_444_800u64,
+            "scope": scopes.join(" "),
+        });
+        let mut header = Header::new(Algorithm::HS256);
+        header.kid = Some("atlas-test-key".to_owned());
+        encode(&header, &claims, &EncodingKey::from_secret(TEST_SECRET)).expect("encode token")
     }
 
     fn initialize_body(protocol_version: &str, extra_fields: &str) -> Bytes {
@@ -819,49 +919,109 @@ mod tests {
         headers
     }
 
-    #[test]
-    fn auth_passes_when_no_token_configured() {
-        let state = make_state(None);
-        assert!(check_auth(&state, &HeaderMap::new()).is_none());
-    }
-
-    #[test]
-    fn auth_rejects_missing_header() {
-        let state = make_state(Some("secret"));
-        assert!(check_auth(&state, &HeaderMap::new()).is_some());
-    }
-
-    #[test]
-    fn auth_rejects_wrong_token() {
-        let state = make_state(Some("correct"));
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            header::AUTHORIZATION,
-            HeaderValue::from_static("Bearer wrong"),
+    #[tokio::test]
+    async fn metadata_endpoint_returns_protected_resource_body_shape() {
+        let state = make_state_with_auth(&[]).await;
+        let response = handle_protected_resource_metadata(State(state), HeaderMap::new()).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let value = read_json_response(response).await;
+        assert_eq!(value["resource"], json!("https://atlas.test/mcp"));
+        assert_eq!(
+            value["authorization_servers"].as_array().map(Vec::len),
+            Some(1)
         );
-        assert!(check_auth(&state, &headers).is_some());
+        assert_eq!(value["bearer_methods_supported"], json!(["header"]));
+        assert_eq!(
+            value["scopes_supported"],
+            json!(["atlas:mcp", "atlas:read"])
+        );
     }
 
-    #[test]
-    fn auth_passes_with_correct_token() {
-        let state = make_state(Some("secret"));
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            header::AUTHORIZATION,
-            HeaderValue::from_static("Bearer secret"),
+    #[tokio::test]
+    async fn missing_bearer_token_returns_www_authenticate() {
+        let state = make_state_with_auth(&[]).await;
+        let response = handle_post_mcp(
+            State(state),
+            HeaderMap::new(),
+            initialize_body(spec::MCP_PROTOCOL_VERSION, ""),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            header_value(&response, header::WWW_AUTHENTICATE.as_str()),
+            "Bearer realm=\"atlas-mcp\", resource=\"https://atlas.test/mcp\", error=\"invalid_token\", error_description=\"Bearer token required\", scope=\"atlas:mcp atlas:read\""
         );
-        assert!(check_auth(&state, &headers).is_none());
+        let value = read_json_response(response).await;
+        assert_eq!(value["message"], json!("Bearer token required"));
     }
 
-    #[test]
-    fn auth_rejects_prefix_match() {
-        let state = make_state(Some("secret-long"));
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            header::AUTHORIZATION,
-            HeaderValue::from_static("Bearer secret"),
+    #[tokio::test]
+    async fn invalid_bearer_token_returns_www_authenticate() {
+        let state = make_state_with_auth(&[]).await;
+        let response = handle_post_mcp(
+            State(state),
+            bearer_headers("not-a-jwt"),
+            initialize_body(spec::MCP_PROTOCOL_VERSION, ""),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert!(
+            header_value(&response, header::WWW_AUTHENTICATE.as_str())
+                .contains("error=\"invalid_token\"")
         );
-        assert!(check_auth(&state, &headers).is_some());
+        let value = read_json_response(response).await;
+        assert_eq!(value["message"], json!("invalid bearer token"));
+    }
+
+    #[tokio::test]
+    async fn insufficient_scope_returns_incremental_scope_challenge() {
+        let state = make_state_with_auth(&[]).await;
+        let issuer = state
+            .auth_policy
+            .as_ref()
+            .expect("auth policy")
+            .issuer()
+            .to_owned();
+        let response = handle_post_mcp(
+            State(state),
+            bearer_headers(&make_token(&issuer, &["atlas:mcp"])),
+            initialize_body(spec::MCP_PROTOCOL_VERSION, ""),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let challenge = header_value(&response, header::WWW_AUTHENTICATE.as_str());
+        assert!(challenge.contains("error=\"insufficient_scope\""));
+        assert!(challenge.contains("scope=\"atlas:mcp atlas:read\""));
+        assert!(challenge.contains("resource=\"https://atlas.test/mcp\""));
+    }
+
+    #[tokio::test]
+    async fn forbidden_origin_with_valid_token_is_rejected_independently() {
+        let state = make_state_with_auth(&["https://good.test"]).await;
+        let issuer = state
+            .auth_policy
+            .as_ref()
+            .expect("auth policy")
+            .issuer()
+            .to_owned();
+        let mut headers = bearer_headers(&make_token(&issuer, &["atlas:mcp", "atlas:read"]));
+        headers.insert(
+            header::ORIGIN,
+            HeaderValue::from_static("https://evil.test"),
+        );
+        let response = handle_post_mcp(
+            State(state),
+            headers,
+            initialize_body(spec::MCP_PROTOCOL_VERSION, ""),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert!(response.headers().get(header::WWW_AUTHENTICATE).is_none());
+        let value = read_json_response(response).await;
+        assert_eq!(
+            value["message"],
+            json!("Origin is not allowed for this MCP server")
+        );
     }
 
     #[tokio::test]

@@ -135,6 +135,15 @@ fn config_runtime_json(config: &atlas_engine::Config) -> serde_json::Value {
             "tool_timeout_ms": config.mcp_tool_timeout_ms(),
             "tool_timeout_ms_by_tool": config.mcp_tool_timeout_ms_by_tool(),
             "max_mcp_response_bytes": config.mcp.max_mcp_response_bytes,
+            "http_auth": {
+                "enabled": config.mcp.http_auth.enabled,
+                "issuer": config.mcp.http_auth.issuer,
+                "discovery_url": config.mcp.http_auth.discovery_url,
+                "jwks_url": config.mcp.http_auth.jwks_url,
+                "resource": config.mcp.http_auth.resource,
+                "required_scopes": config.mcp.http_auth.required_scopes,
+                "allowed_origins": config.mcp.http_auth.allowed_origins,
+            },
         },
     })
 }
@@ -209,7 +218,7 @@ fn cli_runtime_overrides(cli: &Cli, repo: &str) -> Vec<(String, ConfigSourceValu
 }
 
 fn env_runtime_overrides() -> Vec<(String, ConfigSourceValue)> {
-    [("ATLAS_HTTP_BIND", false), ("ATLAS_HTTP_AUTH_TOKEN", true)]
+    [("ATLAS_HTTP_BIND", false)]
         .into_iter()
         .map(|(name, redacted)| {
             let value = match std::env::var(name) {

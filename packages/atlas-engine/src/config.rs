@@ -71,6 +71,37 @@ pub struct McpConfig {
     pub tool_timeout_ms_by_tool: HashMap<String, u64>,
     /// Maximum serialized MCP tool response size in bytes.
     pub max_mcp_response_bytes: u64,
+    /// Optional Streamable HTTP protected-resource auth config.
+    pub http_auth: McpHttpAuthConfig,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct McpHttpAuthConfig {
+    /// Enable protected-resource OAuth bearer validation for HTTP transport.
+    pub enabled: bool,
+    /// Authorization server issuer URL.
+    pub issuer: Option<String>,
+    /// Optional explicit OIDC discovery URL.
+    pub discovery_url: Option<String>,
+    /// Optional explicit JWKS URL.
+    pub jwks_url: Option<String>,
+    /// Resource identifier / audience expected by Atlas HTTP transport.
+    pub resource: Option<String>,
+    /// Required scopes per route family.
+    pub required_scopes: HashMap<String, Vec<String>>,
+    /// Optional browser origins allowed to call HTTP transport.
+    pub allowed_origins: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ValidatedMcpHttpAuthConfig {
+    pub issuer: String,
+    pub discovery_url: Option<String>,
+    pub jwks_url: Option<String>,
+    pub resource: String,
+    pub required_scopes: HashMap<String, Vec<String>>,
+    pub allowed_origins: Vec<String>,
 }
 
 impl Default for McpConfig {
@@ -83,6 +114,7 @@ impl Default for McpConfig {
                 .mcp_cli_payload_serialization
                 .mcp_response_bytes
                 .default_limit as u64,
+            http_auth: McpHttpAuthConfig::default(),
         }
     }
 }
@@ -712,6 +744,38 @@ impl Config {
             profile == ConfigTemplateProfile::Full,
         ));
 
+        lines.extend(render_section(
+            "mcp.http_auth",
+            &[
+                ("enabled", active.mcp.http_auth.enabled.to_string()),
+                (
+                    "issuer",
+                    render_optional_string(active.mcp.http_auth.issuer.as_deref()),
+                ),
+                (
+                    "discovery_url",
+                    render_optional_string(active.mcp.http_auth.discovery_url.as_deref()),
+                ),
+                (
+                    "jwks_url",
+                    render_optional_string(active.mcp.http_auth.jwks_url.as_deref()),
+                ),
+                (
+                    "resource",
+                    render_optional_string(active.mcp.http_auth.resource.as_deref()),
+                ),
+                (
+                    "required_scopes",
+                    render_string_array_map(&active.mcp.http_auth.required_scopes),
+                ),
+                (
+                    "allowed_origins",
+                    render_string_array(&active.mcp.http_auth.allowed_origins),
+                ),
+            ],
+            profile == ConfigTemplateProfile::Full,
+        ));
+
         Ok(lines.join("\n"))
     }
 
@@ -762,6 +826,14 @@ impl Config {
                     .mcp
                     .tool_timeout_ms_by_tool
                     .insert("get_review_context".to_owned(), 120_000);
+                config.mcp.http_auth.enabled = true;
+                config.mcp.http_auth.issuer = Some("https://auth.atlas.test".to_owned());
+                config.mcp.http_auth.resource = Some("https://atlas.test/mcp".to_owned());
+                config.mcp.http_auth.required_scopes.insert(
+                    "mcp".to_owned(),
+                    vec!["atlas:mcp".to_owned(), "atlas:read".to_owned()],
+                );
+                config.mcp.http_auth.allowed_origins = vec!["https://app.atlas.test".to_owned()];
             }
         }
         config
@@ -838,6 +910,84 @@ impl Config {
             .copied()
             .unwrap_or_else(|| self.mcp_tool_timeout_ms())
     }
+
+    pub fn mcp_http_auth(&self) -> Result<Option<ValidatedMcpHttpAuthConfig>> {
+        let auth = &self.mcp.http_auth;
+        if !auth.enabled {
+            return Ok(None);
+        }
+
+        let issuer = auth.issuer.as_deref().ok_or_else(|| {
+            anyhow::anyhow!(
+                "invalid config: mcp.http_auth.issuer is required when mcp.http_auth.enabled=true"
+            )
+        })?;
+        let resource = auth.resource.as_deref().ok_or_else(|| {
+            anyhow::anyhow!(
+                "invalid config: mcp.http_auth.resource is required when mcp.http_auth.enabled=true"
+            )
+        })?;
+        if auth.discovery_url.is_some() && auth.jwks_url.is_some() {
+            anyhow::bail!(
+                "invalid config: mcp.http_auth.discovery_url and mcp.http_auth.jwks_url are mutually exclusive"
+            );
+        }
+
+        let issuer = validate_nonempty_string("mcp.http_auth.issuer", issuer)?;
+        let resource = validate_nonempty_string("mcp.http_auth.resource", resource)?;
+        let discovery_url = auth
+            .discovery_url
+            .as_deref()
+            .map(|value| validate_nonempty_string("mcp.http_auth.discovery_url", value))
+            .transpose()?;
+        let jwks_url = auth
+            .jwks_url
+            .as_deref()
+            .map(|value| validate_nonempty_string("mcp.http_auth.jwks_url", value))
+            .transpose()?;
+
+        let mut required_scopes = HashMap::new();
+        for (route, scopes) in &auth.required_scopes {
+            let route = validate_nonempty_string("mcp.http_auth.required_scopes.<route>", route)?;
+            let mut cleaned = scopes
+                .iter()
+                .map(|scope| {
+                    validate_nonempty_string("mcp.http_auth.required_scopes.<scope>", scope)
+                })
+                .collect::<Result<Vec<_>>>()?;
+            cleaned.sort();
+            cleaned.dedup();
+            if cleaned.is_empty() {
+                anyhow::bail!(
+                    "invalid config: mcp.http_auth.required_scopes.{route} must contain at least one scope"
+                );
+            }
+            required_scopes.insert(route, cleaned);
+        }
+
+        if !required_scopes.contains_key("mcp") {
+            anyhow::bail!(
+                "invalid config: mcp.http_auth.required_scopes.mcp is required when mcp.http_auth.enabled=true"
+            );
+        }
+
+        let mut allowed_origins = auth
+            .allowed_origins
+            .iter()
+            .map(|origin| validate_nonempty_string("mcp.http_auth.allowed_origins[]", origin))
+            .collect::<Result<Vec<_>>>()?;
+        allowed_origins.sort();
+        allowed_origins.dedup();
+
+        Ok(Some(ValidatedMcpHttpAuthConfig {
+            issuer,
+            discovery_url,
+            jwks_url,
+            resource,
+            required_scopes,
+            allowed_origins,
+        }))
+    }
 }
 
 fn render_section(name: &str, fields: &[(&str, String)], active: bool) -> Vec<String> {
@@ -853,6 +1003,20 @@ fn render_section(name: &str, fields: &[(&str, String)], active: bool) -> Vec<St
     lines
 }
 
+fn render_optional_string(value: Option<&str>) -> String {
+    match value {
+        Some(value) => format!("\"{value}\""),
+        None => "\"\"".to_owned(),
+    }
+}
+
+fn render_optional_example_string(value: Option<&str>, example: &str) -> String {
+    match value {
+        Some(value) => format!("\"{value}\""),
+        None => format!("\"{example}\""),
+    }
+}
+
 fn render_string_array(values: &[String]) -> String {
     let rendered = values
         .iter()
@@ -862,18 +1026,15 @@ fn render_string_array(values: &[String]) -> String {
     format!("[{rendered}]")
 }
 
-fn render_optional_string(value: Option<&str>) -> String {
-    match value {
-        Some(value) => format!("\"{value}\""),
-        None => "\"path/to/framework-conventions.toml\"".to_owned(),
-    }
-}
-
-fn render_optional_example_string(value: Option<&str>, example: &str) -> String {
-    match value {
-        Some(value) => format!("\"{value}\""),
-        None => format!("\"{example}\""),
-    }
+fn render_string_array_map(values: &HashMap<String, Vec<String>>) -> String {
+    let mut items = values.iter().collect::<Vec<_>>();
+    items.sort_by(|left, right| left.0.cmp(right.0));
+    let rendered = items
+        .into_iter()
+        .map(|(key, value)| format!("{key} = {}", render_string_array(value)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("{{ {rendered} }}")
 }
 
 fn render_timeout_map(values: &HashMap<String, u64>) -> String {
@@ -1641,6 +1802,73 @@ mod tests {
     }
 
     #[test]
+    fn mcp_http_auth_exact_config_parsing_round_trips() {
+        let dir = tempdir().expect("tempdir");
+        let atlas_dir = dir.path();
+        fs::write(
+            atlas_dir.join(crate::paths::ATLAS_CONFIG),
+            "[mcp.http_auth]\nenabled = true\nissuer = \"https://auth.example\"\ndiscovery_url = \"https://auth.example/.well-known/openid-configuration\"\nresource = \"https://atlas.example/mcp\"\nrequired_scopes = { mcp = [\"atlas:mcp\", \"atlas:read\"] }\nallowed_origins = [\"https://app.example\"]\n",
+        )
+        .expect("write config");
+
+        let config = Config::load(atlas_dir).expect("load config");
+        let auth = config
+            .mcp_http_auth()
+            .expect("validated auth config")
+            .expect("auth config present");
+        assert_eq!(auth.issuer, "https://auth.example");
+        assert_eq!(
+            auth.discovery_url.as_deref(),
+            Some("https://auth.example/.well-known/openid-configuration")
+        );
+        assert_eq!(auth.jwks_url, None);
+        assert_eq!(auth.resource, "https://atlas.example/mcp");
+        assert_eq!(
+            auth.required_scopes.get("mcp"),
+            Some(&vec!["atlas:mcp".to_owned(), "atlas:read".to_owned()])
+        );
+        assert_eq!(auth.allowed_origins, vec!["https://app.example".to_owned()]);
+    }
+
+    #[test]
+    fn mcp_http_auth_missing_required_fields_fail_closed() {
+        let dir = tempdir().expect("tempdir");
+        let atlas_dir = dir.path();
+        fs::write(
+            atlas_dir.join(crate::paths::ATLAS_CONFIG),
+            "[mcp.http_auth]\nenabled = true\nissuer = \"https://auth.example\"\n",
+        )
+        .expect("write config");
+
+        let config = Config::load(atlas_dir).expect("load config");
+        let error = config
+            .mcp_http_auth()
+            .expect_err("auth config should fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains("mcp.http_auth.resource is required")
+        );
+    }
+
+    #[test]
+    fn mcp_http_auth_rejects_discovery_and_jwks_together() {
+        let dir = tempdir().expect("tempdir");
+        let atlas_dir = dir.path();
+        fs::write(
+            atlas_dir.join(crate::paths::ATLAS_CONFIG),
+            "[mcp.http_auth]\nenabled = true\nissuer = \"https://auth.example\"\ndiscovery_url = \"https://auth.example/.well-known/openid-configuration\"\njwks_url = \"https://auth.example/jwks\"\nresource = \"https://atlas.example/mcp\"\nrequired_scopes = { mcp = [\"atlas:mcp\"] }\n",
+        )
+        .expect("write config");
+
+        let config = Config::load(atlas_dir).expect("load config");
+        let error = config
+            .mcp_http_auth()
+            .expect_err("discovery+jwks should be rejected");
+        assert!(error.to_string().contains("mutually exclusive"));
+    }
+
+    #[test]
     fn render_template_minimal_comments_all_keys() {
         let template = Config::render_template(ConfigTemplateProfile::Minimal).expect("template");
 
@@ -1651,6 +1879,7 @@ mod tests {
         assert!(template.contains("# outlier_percentile_cutoff = 95"));
         assert!(template.contains("# [[insights.layer_rules]]\n# name = \"layer_1\""));
         assert!(template.contains("# worker_threads = 2"));
+        assert!(template.contains("[mcp.http_auth]\n# enabled = false"));
         assert!(!template.contains("\nparse_batch_size = 64\n"));
     }
 
@@ -1679,6 +1908,8 @@ mod tests {
         assert!(template.contains("outlier_percentile_cutoff = 90"));
         assert!(template.contains("ignore_node_kinds = [\"import\"]"));
         assert!(template.contains("[[insights.layer_rules]]\nname = \"api\""));
+        assert!(template.contains("[mcp.http_auth]\nenabled = true"));
+        assert!(template.contains("required_scopes = { mcp = [\"atlas:mcp\", \"atlas:read\"] }"));
     }
 
     #[test]

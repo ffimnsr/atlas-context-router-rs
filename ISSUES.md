@@ -2649,46 +2649,46 @@ Upgrade HTTP auth from static bearer gate to latest-spec protected-resource beha
 
 #### MCP5.1 Auth config and validation module
 
-- [ ] create `packages/atlas-mcp/src/auth.rs` for HTTP auth policy and token validation
-- [ ] replace `ATLAS_HTTP_AUTH_TOKEN`-only runtime gate with config-driven protected-resource auth:
-  - [ ] issuer URL
-  - [ ] JWKS URL or OIDC discovery URL
-  - [ ] audience/resource indicator
-  - [ ] required scopes per route family
-  - [ ] optional allowed origins list for browser callers
-- [ ] validate config at startup and fail closed on inconsistent issuer/JWKS/resource settings
-- [ ] add tests for invalid auth config, missing auth config under protected mode, and exact config parsing
+- [x] create `packages/atlas-mcp/src/auth.rs` for HTTP auth policy and token validation
+- [x] replace `ATLAS_HTTP_AUTH_TOKEN`-only runtime gate with config-driven protected-resource auth:
+  - [x] issuer URL
+  - [x] JWKS URL or OIDC discovery URL
+  - [x] audience/resource indicator
+  - [x] required scopes per route family
+  - [x] optional allowed origins list for browser callers
+- [x] validate config at startup and fail closed on inconsistent issuer/JWKS/resource settings
+- [x] add tests for invalid auth config, missing auth config under protected mode, and exact config parsing
 
 #### MCP5.2 Protected resource metadata and discovery
 
-- [ ] expose OAuth protected resource metadata endpoint at `/.well-known/oauth-protected-resource`
-- [ ] publish metadata fields required for Atlas protected-resource discovery:
-  - [ ] resource identifier
-  - [ ] authorization server issuer URL
-  - [ ] supported bearer methods
-  - [ ] scope hints
-- [ ] support OIDC discovery input so auth-server metadata can be resolved from standard discovery document when only issuer is configured
-- [ ] add tests for protected-resource metadata body shape, issuer discovery, and startup failure on invalid discovery response
+- [x] expose OAuth protected resource metadata endpoint at `/.well-known/oauth-protected-resource`
+- [x] publish metadata fields required for Atlas protected-resource discovery:
+  - [x] resource identifier
+  - [x] authorization server issuer URL
+  - [x] supported bearer methods
+  - [x] scope hints
+- [x] support OIDC discovery input so auth-server metadata can be resolved from standard discovery document when only issuer is configured
+- [x] add tests for protected-resource metadata body shape, issuer discovery, and startup failure on invalid discovery response
 
 #### MCP5.3 WWW-Authenticate and incremental scope consent
 
-- [ ] return `WWW-Authenticate` on unauthorized or insufficient-scope HTTP responses
-- [ ] include resource-indicator and required-scope hints in `WWW-Authenticate`
-- [ ] distinguish `401` unauthenticated from `403` authenticated-but-forbidden
-- [ ] implement incremental scope challenge path for methods requiring stronger scopes than current token grants
-- [ ] add tests for:
-  - [ ] missing bearer token
-  - [ ] invalid token
-  - [ ] insufficient scope
-  - [ ] forbidden origin with valid token
-  - [ ] incremental scope challenge header contents
+- [x] return `WWW-Authenticate` on unauthorized or insufficient-scope HTTP responses
+- [x] include resource-indicator and required-scope hints in `WWW-Authenticate`
+- [x] distinguish `401` unauthenticated from `403` authenticated-but-forbidden
+- [x] implement incremental scope challenge path for methods requiring stronger scopes than current token grants
+- [x] add tests for:
+  - [x] missing bearer token
+  - [x] invalid token
+  - [x] insufficient scope
+  - [x] forbidden origin with valid token
+  - [x] incremental scope challenge header contents
 
 #### MCP5 completion criteria
 
-- [ ] Atlas HTTP transport exposes protected-resource metadata endpoint
-- [ ] bearer validation uses configured issuer/resource metadata, not static string equality
-- [ ] unauthorized and insufficient-scope responses emit latest-spec `WWW-Authenticate` guidance
-- [ ] origin rejection and auth rejection paths are covered independently
+- [x] Atlas HTTP transport exposes protected-resource metadata endpoint
+- [x] bearer validation uses configured issuer/resource metadata, not static string equality
+- [x] unauthorized and insufficient-scope responses emit latest-spec `WWW-Authenticate` guidance
+- [x] origin rejection and auth rejection paths are covered independently
 
 ### Phase MCP6 — Elicitation and durable tasks
 

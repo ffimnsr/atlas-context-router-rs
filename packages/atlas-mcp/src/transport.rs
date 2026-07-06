@@ -75,6 +75,8 @@ pub struct ServerOptions {
     pub worker_threads: usize,
     pub tool_timeout_ms: u64,
     pub tool_timeout_ms_by_tool: HashMap<String, u64>,
+    #[cfg(feature = "http-transport")]
+    pub http_auth: Option<crate::auth::ProtectedResourceAuthConfig>,
 }
 
 impl Default for ServerOptions {
@@ -83,6 +85,8 @@ impl Default for ServerOptions {
             worker_threads: DEFAULT_WORKER_THREADS,
             tool_timeout_ms: DEFAULT_TOOL_TIMEOUT_MS,
             tool_timeout_ms_by_tool: HashMap::new(),
+            #[cfg(feature = "http-transport")]
+            http_auth: None,
         }
     }
 }
@@ -2861,6 +2865,8 @@ mod tests {
                 worker_threads: 1,
                 tool_timeout_ms: 1_000,
                 tool_timeout_ms_by_tool: HashMap::from([("__test_sleep".to_owned(), 1_000)]),
+                #[cfg(feature = "http-transport")]
+                http_auth: None,
             },
         )
         .expect("run server io");
@@ -3123,6 +3129,8 @@ mod tests {
                 worker_threads: 1,
                 tool_timeout_ms: 2_000,
                 tool_timeout_ms_by_tool: HashMap::new(),
+                #[cfg(feature = "http-transport")]
+                http_auth: None,
             },
         )
         .expect("server must not crash");
@@ -3259,6 +3267,8 @@ mod tests {
                 worker_threads: 1,
                 tool_timeout_ms: 1000,
                 tool_timeout_ms_by_tool: HashMap::new(),
+                #[cfg(feature = "http-transport")]
+                http_auth: None,
             },
         )
         .expect("pool from env");
@@ -3319,6 +3329,8 @@ mod tests {
                 worker_threads: 4,
                 tool_timeout_ms: 4321,
                 tool_timeout_ms_by_tool: HashMap::new(),
+                #[cfg(feature = "http-transport")]
+                http_auth: None,
             },
         )
         .expect("pool from options");
@@ -3343,6 +3355,8 @@ mod tests {
                 worker_threads: 1,
                 tool_timeout_ms: 2_000,
                 tool_timeout_ms_by_tool: HashMap::from([("__test_sleep".to_owned(), 1_000)]),
+                #[cfg(feature = "http-transport")]
+                http_auth: None,
             },
         )
         .expect("run server io");
@@ -3376,6 +3390,8 @@ mod tests {
                 worker_threads: 1,
                 tool_timeout_ms: 1_000,
                 tool_timeout_ms_by_tool: HashMap::from([("__test_sleep".to_owned(), 1_000)]),
+                #[cfg(feature = "http-transport")]
+                http_auth: None,
             },
         )
         .expect("run server io");

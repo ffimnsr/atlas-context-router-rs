@@ -63,6 +63,8 @@
 //! - `plan_refactor`: refactor-safety and blast-radius guidance
 //! - `resume_prior_session`: continuity and saved-context retrieval guidance
 
+#[cfg(feature = "http-transport")]
+pub mod auth;
 mod completion;
 mod context;
 mod descriptors;
@@ -90,6 +92,8 @@ pub use transport::{
     ServerOptions, run_server, run_server_with_options, run_socket_server_with_options,
 };
 
+#[cfg(feature = "http-transport")]
+pub use auth::ProtectedResourceAuthConfig;
 #[cfg(feature = "http-transport")]
 pub use transport_http::{run_http_server, run_http_server_with_options};
 

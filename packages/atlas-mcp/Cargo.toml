@@ -8,7 +8,7 @@ publish = false
 [features]
 default = []
 # Enable optional HTTP + SSE transport (requires tokio + axum).
-http-transport = ["dep:tokio", "dep:axum", "dep:tower-http", "dep:tokio-stream"]
+http-transport = ["dep:tokio", "dep:axum", "dep:tower-http", "dep:tokio-stream", "dep:reqwest", "dep:jsonwebtoken"]
 
 [dependencies]
 atlas-core.workspace = true
@@ -42,6 +42,8 @@ tokio         = { version = "1", features = ["rt-multi-thread", "macros", "sync"
 axum          = { version = "0.8", optional = true }
 tower-http    = { version = "0.6", features = ["cors"], optional = true }
 tokio-stream  = { version = "0.1", features = ["sync"], optional = true }
+reqwest       = { workspace = true, optional = true }
+jsonwebtoken  = { version = "9", optional = true }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.52", features = [

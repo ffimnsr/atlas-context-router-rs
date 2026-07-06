@@ -275,7 +275,8 @@ pub enum Command {
     /// Start Streamable HTTP MCP server.
     ///
     /// Binds to `ATLAS_HTTP_BIND` (default `127.0.0.1:7070`).
-    /// Require a Bearer token with `ATLAS_HTTP_AUTH_TOKEN`.
+    /// Protected-resource OAuth bearer validation reads from `.atlas/config.toml`
+    /// under `[mcp.http_auth]`.
     ///
     /// Requires the `http-transport` feature (build with
     /// `cargo build --features http-transport`).
