@@ -2749,7 +2749,7 @@ Land broad regression coverage last so future MCP work cannot drift from 2025-11
 #### MCP7.1 Shared spec fixtures
 
 - [x] create `packages/atlas-mcp/tests/spec_2025_11_25/` integration suite with shared fixtures for stdio and HTTP
-- [ ] add golden request/response fixtures for:
+- [x] add golden request/response fixtures for:
   - [x] initialize success
   - [x] initialize rejection
   - [x] tools/list
@@ -2773,15 +2773,15 @@ Land broad regression coverage last so future MCP work cannot drift from 2025-11
 
 - [x] add test that every advertised capability has method handlers and every method handler has descriptor coverage when required
 - [x] add test that every tool descriptor name resolves through dispatcher
-- [ ] add test that every JSON-producing tool with `outputSchema` emits schema-compatible `structuredContent`
+- [x] add test that every JSON-producing tool with `outputSchema` emits schema-compatible `structuredContent`
 - [x] add test that auth-protected HTTP routes all share same version-header, origin, and `WWW-Authenticate` enforcement
 - [x] add test that protocol-version constant, instance metadata, and initialize responses stay identical
 
 #### MCP7 completion criteria
 
-- [ ] integration suite covers stdio and HTTP for latest-spec happy path and failure path behavior
-- [ ] legacy SSE-only assumptions are removed from tests and code
-- [ ] descriptor, dispatcher, schema, and capability drift fail CI automatically
-- [ ] MCP server behavior is locked to 2025-11-25 across versioning, transport, auth, metadata, resources, logging, elicitation, and tasks
+- [x] integration suite covers stdio and HTTP for latest-spec happy path and failure path behavior
+- [x] legacy SSE-only assumptions are removed from tests and code
+- [x] descriptor, dispatcher, schema, and capability drift fail CI automatically
+- [x] MCP server behavior is locked to 2025-11-25 across versioning, transport, auth, metadata, resources, logging, elicitation, and tasks
 
 ---

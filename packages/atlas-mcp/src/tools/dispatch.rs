@@ -357,6 +357,23 @@ mod tests {
             "pub fn greet() -> &'static str { \"hi\" }\n",
         )
         .expect("write fixture source");
+        fs::write(
+            dir.path().join("README.md"),
+            "# Fixture Repo\n\n## Status\n\nFixture status content.\n",
+        )
+        .expect("write fixture readme");
+        fs::create_dir_all(dir.path().join("config")).expect("create config dir");
+        fs::write(dir.path().join("config/app.toml"), "name = \"fixture\"\n")
+            .expect("write fixture config");
+        fs::create_dir_all(dir.path().join("templates")).expect("create templates dir");
+        fs::write(
+            dir.path().join("templates/index.html"),
+            "<html><body>{{ greet }}</body></html>\n",
+        )
+        .expect("write fixture template");
+        fs::create_dir_all(dir.path().join("queries")).expect("create queries dir");
+        fs::write(dir.path().join("queries/example.sql"), "select 1;\n")
+            .expect("write fixture sql");
         git(dir.path(), &["init", "--quiet"]);
         git(dir.path(), &["config", "user.name", "Atlas Tests"]);
         git(
@@ -409,10 +426,112 @@ mod tests {
         }
     }
 
+    fn assert_matches_shared_output_schema(
+        name: &str,
+        value: &serde_json::Value,
+        schema: &JSONSchema,
+    ) {
+        if let Err(errors) = schema.validate(value) {
+            let details = errors
+                .map(|error| error.to_string())
+                .collect::<Vec<_>>()
+                .join("\n");
+            panic!("{name} output schema mismatch:\n{details}\nvalue={value:#}");
+        }
+        assert!(
+            value.get("structuredContent").is_some(),
+            "{name} should emit structuredContent"
+        );
+    }
+
+    fn schema_test_artifact_content() -> String {
+        "schema-test artifact payload ".repeat(32)
+    }
+
+    fn schema_test_args(name: &str, saved_source_id: &str) -> serde_json::Value {
+        match name {
+            "list_graph_stats" => json!({"output_format": "json"}),
+            "query_graph" => json!({"text": "greet", "output_format": "json"}),
+            "batch_query_graph" => json!({"text": "greet", "output_format": "json"}),
+            "get_impact_radius" => json!({"files": ["src/lib.rs"], "output_format": "json"}),
+            "get_review_context" => json!({"files": ["src/lib.rs"], "output_format": "json"}),
+            "detect_changes" => json!({"working_tree": true, "output_format": "json"}),
+            "build_or_update_graph" => json!({"mode": "build", "output_format": "json"}),
+            "postprocess_graph" => json!({"dry_run": true, "output_format": "json"}),
+            "traverse_graph" => {
+                json!({"from_qn": "src/lib.rs::fn::greet", "output_format": "json"})
+            }
+            "get_minimal_context" => json!({"output_format": "json"}),
+            "explain_change" => json!({"files": ["src/lib.rs"], "output_format": "json"}),
+            "get_context" => json!({"query": "greet", "output_format": "json"}),
+            "analyze_architecture" => json!({"output_format": "json"}),
+            "analyze_metrics" => json!({"output_format": "json"}),
+            "assess_risk" => json!({"symbol": "src/lib.rs::fn::greet", "output_format": "json"}),
+            "analyze_patterns" => json!({"output_format": "json"}),
+            "find_large_functions" => json!({"output_format": "json"}),
+            "find_complex_functions" => json!({"output_format": "json"}),
+            "get_session_status" => json!({"output_format": "json"}),
+            "compact_session" => json!({"output_format": "json"}),
+            "resume_session" => json!({"output_format": "json"}),
+            "search_saved_context" => json!({"query": "schema-test", "output_format": "json"}),
+            "search_decisions" => json!({"query": "schema-test", "output_format": "json"}),
+            "read_saved_context" => json!({"source_id": saved_source_id, "output_format": "json"}),
+            "save_context_artifact" => json!({
+                "content": schema_test_artifact_content(),
+                "label": "schema-test-artifact-second",
+                "source_type": "mcp_artifact",
+                "content_type": "text/plain",
+                "output_format": "json"
+            }),
+            "get_context_stats" => json!({"output_format": "json"}),
+            "purge_saved_context" => json!({"keep_days": 36500, "output_format": "json"}),
+            "cross_session_search" => json!({"query": "schema-test", "output_format": "json"}),
+            "get_global_memory" => json!({"output_format": "json"}),
+            "symbol_neighbors" => {
+                json!({"qname": "src/lib.rs::fn::greet", "output_format": "json"})
+            }
+            "cross_file_links" => json!({"file": "src/lib.rs", "output_format": "json"}),
+            "concept_clusters" => json!({"files": ["src/lib.rs"], "output_format": "json"}),
+            "search_files" => json!({"pattern": "*.rs", "output_format": "json"}),
+            "search_content" => json!({"query": "greet", "output_format": "json"}),
+            "read_file_excerpt" => {
+                json!({"file": "src/lib.rs", "start_line": 1, "end_line": 1, "output_format": "json"})
+            }
+            "get_docs_section" => {
+                json!({"file": "README.md", "heading": "Status", "output_format": "json"})
+            }
+            "read_file_around_match" => {
+                json!({"file": "src/lib.rs", "query": "greet", "output_format": "json"})
+            }
+            "search_templates" => json!({"output_format": "json"}),
+            "search_text_assets" => json!({"output_format": "json"}),
+            "broker_status" => json!({"output_format": "json"}),
+            "status" => json!({"output_format": "json"}),
+            "doctor" => json!({"output_format": "json"}),
+            "db_check" => json!({"output_format": "json"}),
+            "debug_graph" => json!({"output_format": "json"}),
+            "explain_query" => json!({"text": "greet", "output_format": "json"}),
+            "resolve_symbol" => json!({"name": "greet", "output_format": "json"}),
+            "analyze_safety" => json!({"symbol": "src/lib.rs::fn::greet", "output_format": "json"}),
+            "analyze_remove" => {
+                json!({"symbols": ["src/lib.rs::fn::greet"], "output_format": "json"})
+            }
+            "analyze_dead_code" => json!({"output_format": "json"}),
+            "analyze_dependency" => {
+                json!({"symbol": "src/lib.rs::fn::greet", "output_format": "json"})
+            }
+            other => panic!("missing schema test args for {other}"),
+        }
+    }
+
     #[test]
-    fn representative_tool_outputs_match_shared_output_schema() {
+    fn every_json_tool_emits_schema_compatible_structured_content() {
         let (repo_dir, _db_path, db_path) = setup_repo();
         let repo_root = repo_dir.path().to_string_lossy().into_owned();
+        let schema = JSONSchema::options()
+            .compile(&tool_output_schema())
+            .expect("compile output schema");
+
         let build = call(
             "build_or_update_graph",
             Some(&json!({"mode": "build", "output_format": "json"})),
@@ -420,37 +539,32 @@ mod tests {
             &db_path,
         )
         .expect("build graph");
-        assert!(build["structuredContent"].is_object());
+        assert_matches_shared_output_schema("build_or_update_graph", &build, &schema);
 
-        let schema = JSONSchema::options()
-            .compile(&tool_output_schema())
-            .expect("compile output schema");
-        for (name, args) in [
-            (
-                "build_or_update_graph",
-                json!({"mode": "build", "output_format": "json"}),
-            ),
-            ("status", json!({"output_format": "json"})),
-            ("broker_status", json!({"output_format": "json"})),
-            (
-                "query_graph",
-                json!({"text": "greet", "output_format": "json"}),
-            ),
-            ("get_context_stats", json!({"output_format": "json"})),
-        ] {
+        let saved = call(
+            "save_context_artifact",
+            Some(&json!({
+                "content": schema_test_artifact_content(),
+                "label": "schema-test-artifact-seed",
+                "source_type": "mcp_artifact",
+                "content_type": "text/plain",
+                "output_format": "json"
+            })),
+            &repo_root,
+            &db_path,
+        )
+        .expect("seed saved context artifact");
+        assert_matches_shared_output_schema("save_context_artifact(seed)", &saved, &schema);
+        let saved_source_id = saved["structuredContent"]["source_id"]
+            .as_str()
+            .expect("saved source id");
+
+        for tool in super::super::registry::tool_descriptors() {
+            let name = tool.name.as_str();
+            let args = schema_test_args(name, saved_source_id);
             let value = call(name, Some(&args), &repo_root, &db_path)
                 .unwrap_or_else(|error| panic!("{name} should succeed for schema test: {error}"));
-            if let Err(errors) = schema.validate(&value) {
-                let details = errors
-                    .map(|error| error.to_string())
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                panic!("{name} output schema mismatch:\n{details}\nvalue={value:#}");
-            }
-            assert!(
-                value.get("structuredContent").is_some(),
-                "{name} should emit structuredContent"
-            );
+            assert_matches_shared_output_schema(name, &value, &schema);
         }
     }
 }
