@@ -2,6 +2,8 @@ use std::process::Stdio;
 
 use anyhow::{Context, Result};
 use atlas_mcp::ServerOptions;
+use atlas_repo::find_repo_root;
+use camino::Utf8Path;
 use serde::{Deserialize, Serialize};
 
 use crate::cli::{Cli, Command};
@@ -20,9 +22,19 @@ pub fn run_serve(cli: &Cli) -> Result<()> {
         http_auth: None,
     };
     let direct_stdio = matches!(&cli.command, Command::Serve { direct_stdio: true });
+    let cwd = std::env::current_dir().context("cannot determine cwd")?;
+    let cwd_repo_root = Utf8Path::from_path(&cwd)
+        .and_then(|path| find_repo_root(path).ok())
+        .map(|path| path.into_string());
+    let should_defer_repo_resolution =
+        cli.repo.is_none() && cli.db.is_none() && cwd_repo_root.is_none();
 
     if direct_stdio {
         return atlas_mcp::run_server_with_options(&repo, &db_path, options);
+    }
+
+    if should_defer_repo_resolution {
+        return atlas_mcp::run_server_with_dynamic_roots(options);
     }
 
     let instance = crate::mcp_instance::McpInstance::for_repo_and_db(&repo, &db_path)?;

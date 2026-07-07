@@ -17,7 +17,10 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use atlas_core::{error_code_docs_ref, user_facing_error_message};
+use atlas_repo::{canonical_filesystem_path, find_repo_root};
+use camino::Utf8PathBuf;
 use serde::{Deserialize, Serialize};
+use url::Url;
 
 use crate::{MCP_PROTOCOL_VERSION, completion, logging, prompts, resources, spec, tools};
 
@@ -59,6 +62,7 @@ const MCP_WORKER_THREADS_ENV: &str = "ATLAS_MCP_WORKER_THREADS";
 const MCP_TOOL_TIMEOUT_MS_ENV: &str = "ATLAS_MCP_TOOL_TIMEOUT_MS";
 const DEFAULT_WORKER_THREADS: usize = 2;
 const DEFAULT_TOOL_TIMEOUT_MS: u64 = 300_000;
+const ROOTS_LIST_TIMEOUT_MS: u64 = 5_000;
 const JSONRPC_PARSE_ERROR: i32 = -32700;
 const JSONRPC_INVALID_REQUEST: i32 = -32600;
 const JSONRPC_METHOD_NOT_FOUND: i32 = -32601;
@@ -292,6 +296,21 @@ pub fn run_server_with_options(
     run_server_io(reader, &mut writer, repo_root, db_path, options)
 }
 
+pub fn run_server_with_dynamic_roots(options: ServerOptions) -> Result<()> {
+    crate::tools::health::mark_server_started();
+    eprintln!("atlas-mcp: server ready (repo=<deferred>, db=<deferred>)");
+    eprintln!("atlas-mcp: reading JSON-RPC requests from stdin");
+
+    let stdin = std::io::stdin();
+    let stdout = std::io::stdout();
+    let reader = BufReader::new(stdin);
+    let mut writer = std::io::BufWriter::new(stdout.lock());
+    #[cfg(unix)]
+    let _shutdown_guard = install_stdio_shutdown_handler()?;
+
+    run_server_io_with_state(reader, &mut writer, None, None, true, options)
+}
+
 #[doc(hidden)]
 pub fn run_stdio_jsonrpc_session_for_tests(
     input: &str,
@@ -320,10 +339,23 @@ pub struct InteractiveStdioTestSession {
 #[doc(hidden)]
 impl InteractiveStdioTestSession {
     pub fn start(repo_root: &str, db_path: &str, options: ServerOptions) -> Result<Self> {
+        Self::start_with_state(Some(repo_root), Some(db_path), false, options)
+    }
+
+    pub fn start_dynamic(options: ServerOptions) -> Result<Self> {
+        Self::start_with_state(None, None, true, options)
+    }
+
+    fn start_with_state(
+        repo_root: Option<&str>,
+        db_path: Option<&str>,
+        dynamic_roots: bool,
+        options: ServerOptions,
+    ) -> Result<Self> {
         let (event_tx, event_rx) = mpsc::channel::<TransportEvent>();
         let (output_tx, output_rx) = mpsc::channel::<serde_json::Value>();
-        let repo_root = repo_root.to_owned();
-        let db_path = db_path.to_owned();
+        let repo_root = repo_root.map(str::to_owned);
+        let db_path = db_path.map(str::to_owned);
         let thread_event_tx = event_tx.clone();
         let join_handle = std::thread::Builder::new()
             .name("atlas-mcp:stdio-test-session".to_owned())
@@ -332,19 +364,11 @@ impl InteractiveStdioTestSession {
                     "atlas-mcp:tool-worker",
                     options.clone(),
                 )?);
-                let connection_state = ConnectionState {
-                    trace: TraceLevel::Off,
-                    initialized: false,
-                    log_level: None,
-                    client_capabilities: serde_json::Value::Null,
-                    canceled_tokens: Arc::new(Mutex::new(HashSet::new())),
-                    reverse_broker: ReverseRequestBroker::new(),
-                };
+                let connection_state =
+                    connection_state(repo_root.as_deref(), db_path.as_deref(), dynamic_roots);
                 let mut writer = JsonValueChannelWriter::new(output_tx);
                 process_requests(
                     &mut writer,
-                    &repo_root,
-                    &db_path,
                     worker_pool.as_ref(),
                     &options,
                     thread_event_tx,
@@ -622,38 +646,56 @@ fn run_server_io<R: BufRead + Send, W: Write>(
     db_path: &str,
     options: ServerOptions,
 ) -> Result<()> {
+    run_server_io_with_state(
+        reader,
+        writer,
+        Some(repo_root),
+        Some(db_path),
+        false,
+        options,
+    )
+}
+
+fn run_server_io_with_state<R: BufRead + Send, W: Write>(
+    reader: R,
+    writer: &mut W,
+    repo_root: Option<&str>,
+    db_path: Option<&str>,
+    dynamic_roots: bool,
+    options: ServerOptions,
+) -> Result<()> {
     let worker_pool = Arc::new(WorkerPool::from_env(
         "atlas-mcp:tool-worker",
         options.clone(),
     )?);
-    serve_connection(reader, writer, repo_root, db_path, worker_pool, options)
+    serve_connection(
+        reader,
+        writer,
+        repo_root,
+        db_path,
+        dynamic_roots,
+        worker_pool,
+        options,
+    )
 }
 
 fn serve_connection<R: BufRead + Send, W: Write>(
     reader: R,
     writer: &mut W,
-    repo_root: &str,
-    db_path: &str,
+    repo_root: Option<&str>,
+    db_path: Option<&str>,
+    dynamic_roots: bool,
     worker_pool: Arc<WorkerPool>,
     server_options: ServerOptions,
 ) -> Result<()> {
     let (event_tx, event_rx) = mpsc::channel::<TransportEvent>();
-    let connection_state = ConnectionState {
-        trace: TraceLevel::Off,
-        initialized: false,
-        log_level: None,
-        client_capabilities: serde_json::Value::Null,
-        canceled_tokens: Arc::new(Mutex::new(HashSet::new())),
-        reverse_broker: ReverseRequestBroker::new(),
-    };
+    let connection_state = connection_state(repo_root, db_path, dynamic_roots);
 
     thread::scope(|scope| -> Result<()> {
         let reader_tx = event_tx.clone();
         scope.spawn(move || read_requests(reader, reader_tx));
         process_requests(
             writer,
-            repo_root,
-            db_path,
             worker_pool.as_ref(),
             &server_options,
             event_tx,
@@ -690,8 +732,9 @@ fn serve_socket_connection(
     serve_connection(
         reader,
         &mut writer,
-        repo_root,
-        db_path,
+        Some(repo_root),
+        Some(db_path),
+        false,
         worker_pool,
         server_options,
     )
@@ -760,8 +803,6 @@ fn perform_socket_handshake<R: BufRead, W: Write>(
 #[allow(clippy::too_many_arguments)]
 fn process_requests<W: Write>(
     writer: &mut W,
-    repo_root: &str,
-    db_path: &str,
     worker_pool: &WorkerPool,
     server_options: &ServerOptions,
     event_tx: mpsc::Sender<TransportEvent>,
@@ -773,8 +814,6 @@ fn process_requests<W: Write>(
     let mut pending = HashMap::<u64, PendingRequest>::new();
     let mut stats = TransportStats::default();
     let request_ctx = RequestDispatchContext {
-        repo_root,
-        db_path,
         worker_pool,
         server_options,
         canceled_tokens: Arc::clone(&connection_state.canceled_tokens),
@@ -1062,6 +1101,12 @@ fn handle_input_line<W: Write>(
         return Ok(());
     }
 
+    if method == "notifications/roots/list_changed" {
+        stats.notifications += 1;
+        connection_state.repo_resolution.active = None;
+        return Ok(());
+    }
+
     if method.starts_with("notifications/") {
         stats.notifications += 1;
         return Ok(());
@@ -1134,8 +1179,6 @@ fn handle_input_line<W: Write>(
         let token = *next_token;
         let request_id = id.clone();
         let params = params.cloned();
-        let repo_root = ctx.repo_root.to_owned();
-        let db_path = ctx.db_path.to_owned();
         let event_tx = ctx.event_tx.clone();
         let method_name = method.clone();
         let timeout = resolve_request_timeout(ctx.server_options, &request_log);
@@ -1144,6 +1187,9 @@ fn handle_input_line<W: Write>(
         let canceled_tokens = Arc::clone(&ctx.canceled_tokens);
         let progress_token = progress_token_from_params(params.as_ref());
         let reverse_broker = connection_state.reverse_broker.clone();
+        let repo_resolution = connection_state.repo_resolution.clone();
+        let client_capabilities = connection_state.client_capabilities.clone();
+        let initialized = connection_state.initialized;
         let client_interactions =
             parse_client_interaction_capabilities(&connection_state.client_capabilities);
         tracing::debug!(
@@ -1248,9 +1294,40 @@ fn handle_input_line<W: Write>(
                 },
                 cancel_flag,
             );
+            let repo_context = match resolve_repo_context_for_tool_call(
+                &repo_resolution,
+                &client_capabilities,
+                initialized,
+                &reverse_broker,
+                &reverse_emitter,
+            ) {
+                Ok(repo_context) => repo_context,
+                Err(error) => {
+                    let _ = event_tx.send(TransportEvent::Response {
+                        token,
+                        response: jsonrpc_error(
+                            request_id.clone(),
+                            JsonRpcErrorKind::InvalidParams,
+                            error.to_string(),
+                        ),
+                        completion: RequestCompletion {
+                            request: request_log_for_worker.clone(),
+                            queue_wait_ms,
+                            execution_ms: 0,
+                            success: false,
+                        },
+                    });
+                    return;
+                }
+            };
             let dispatch_started_at = Instant::now();
             let dispatch_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                dispatch(&method_name, params.as_ref(), &repo_root, &db_path)
+                dispatch(
+                    &method_name,
+                    params.as_ref(),
+                    &repo_context.repo_root,
+                    &repo_context.db_path,
+                )
             }));
             crate::progress::uninstall();
             crate::tasks::uninstall_tool_call_request_params();
@@ -1295,12 +1372,36 @@ fn handle_input_line<W: Write>(
         return Ok(());
     }
 
+    let active_repo = match ensure_repo_context(&method, connection_state, ctx) {
+        Ok(active_repo) => active_repo,
+        Err(error) => {
+            if !is_notification {
+                write_response(
+                    writer,
+                    &jsonrpc_error(id, JsonRpcErrorKind::InvalidParams, error.to_string()),
+                )?;
+            }
+            return Ok(());
+        }
+    };
+
     let dispatch_started_at = Instant::now();
     // Synchronous dispatch path (initialize, tools/list, prompts/get, etc.).
     // Wrap in catch_unwind so a bug in any of these methods cannot kill the
     // event-loop thread and take down the whole server.
     let sync_dispatch_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        dispatch(&method, params, ctx.repo_root, ctx.db_path)
+        dispatch(
+            &method,
+            params,
+            active_repo
+                .as_ref()
+                .map(|ctx| ctx.repo_root.as_str())
+                .unwrap_or(""),
+            active_repo
+                .as_ref()
+                .map(|ctx| ctx.db_path.as_str())
+                .unwrap_or(""),
+        )
     }));
     let elapsed_ms = dispatch_started_at.elapsed().as_millis();
     let response = match sync_dispatch_result {
@@ -1500,8 +1601,6 @@ struct PendingRequest {
 }
 
 struct RequestDispatchContext<'a> {
-    repo_root: &'a str,
-    db_path: &'a str,
     worker_pool: &'a WorkerPool,
     server_options: &'a ServerOptions,
     canceled_tokens: Arc<Mutex<HashSet<u64>>>,
@@ -1588,6 +1687,20 @@ struct ConnectionState {
     client_capabilities: serde_json::Value,
     canceled_tokens: Arc<Mutex<HashSet<u64>>>,
     reverse_broker: ReverseRequestBroker,
+    repo_resolution: RepoResolutionState,
+}
+
+#[derive(Clone, Debug)]
+struct ActiveRepoContext {
+    repo_root: String,
+    db_path: String,
+}
+
+#[derive(Clone, Debug)]
+struct RepoResolutionState {
+    startup: Option<ActiveRepoContext>,
+    active: Option<ActiveRepoContext>,
+    dynamic_roots: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1608,6 +1721,35 @@ enum ProgressEventKind {
     Begin,
     Report,
     End,
+}
+
+fn connection_state(
+    repo_root: Option<&str>,
+    db_path: Option<&str>,
+    dynamic_roots: bool,
+) -> ConnectionState {
+    let startup = match (repo_root, db_path) {
+        (Some(repo_root), Some(db_path)) if !repo_root.is_empty() && !db_path.is_empty() => {
+            Some(ActiveRepoContext {
+                repo_root: repo_root.to_owned(),
+                db_path: db_path.to_owned(),
+            })
+        }
+        _ => None,
+    };
+    ConnectionState {
+        trace: TraceLevel::Off,
+        initialized: false,
+        log_level: None,
+        client_capabilities: serde_json::Value::Null,
+        canceled_tokens: Arc::new(Mutex::new(HashSet::new())),
+        reverse_broker: ReverseRequestBroker::new(),
+        repo_resolution: RepoResolutionState {
+            startup: startup.clone(),
+            active: startup,
+            dynamic_roots,
+        },
+    }
 }
 
 fn request_id_string(id: &serde_json::Value) -> String {
@@ -1683,6 +1825,127 @@ pub(crate) fn parse_client_interaction_capabilities(
             .get("elicitation")
             .and_then(|value| value.get("url"))
             .is_some(),
+    }
+}
+
+fn ensure_repo_context(
+    method: &str,
+    connection_state: &mut ConnectionState,
+    _ctx: &RequestDispatchContext<'_>,
+) -> Result<Option<ActiveRepoContext>> {
+    if !method_requires_repo_context(method) {
+        return Ok(connection_state.repo_resolution.active.clone());
+    }
+    if let Some(active) = connection_state.repo_resolution.active.clone() {
+        return Ok(Some(active));
+    }
+    if !connection_state.repo_resolution.dynamic_roots {
+        return connection_state
+            .repo_resolution
+            .startup
+            .clone()
+            .map(Some)
+            .ok_or_else(|| anyhow::anyhow!("atlas repo context missing; pass --repo"));
+    }
+    Err(anyhow::anyhow!(
+        "atlas repo context not yet resolved for method `{method}`; use tools/call first or pass --repo"
+    ))
+}
+
+fn resolve_repo_context_for_tool_call(
+    repo_resolution: &RepoResolutionState,
+    client_capabilities: &serde_json::Value,
+    initialized: bool,
+    reverse_broker: &ReverseRequestBroker,
+    reverse_emitter: &Arc<dyn ReverseRequestEmitter>,
+) -> Result<ActiveRepoContext> {
+    if let Some(active) = repo_resolution.active.clone() {
+        return Ok(active);
+    }
+    if !repo_resolution.dynamic_roots {
+        return repo_resolution
+            .startup
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("atlas repo context missing; pass --repo"));
+    }
+    if !client_supports_roots(client_capabilities) {
+        return Err(anyhow::anyhow!(
+            "MCP client did not advertise roots capability; pass --repo or launch atlas from inside target repo"
+        ));
+    }
+    if !initialized {
+        return Err(anyhow::anyhow!(
+            "atlas cannot resolve client roots before initialized notification"
+        ));
+    }
+
+    let response = reverse_broker.issue_request(
+        "stdio:roots",
+        reverse_emitter,
+        "roots/list",
+        serde_json::json!({}),
+        Duration::from_millis(ROOTS_LIST_TIMEOUT_MS),
+    )?;
+    let repo_root = select_repo_root_from_roots(response.get("roots"))?;
+    Ok(ActiveRepoContext {
+        db_path: atlas_engine::paths::default_db_path(&repo_root),
+        repo_root,
+    })
+}
+
+fn method_requires_repo_context(method: &str) -> bool {
+    matches!(
+        method,
+        "resources/read"
+            | "completion/complete"
+            | "tools/call"
+            | "tasks/list"
+            | "tasks/get"
+            | "tasks/result"
+            | "tasks/cancel"
+    )
+}
+
+fn client_supports_roots(capabilities: &serde_json::Value) -> bool {
+    capabilities.get("roots").is_some()
+}
+
+fn select_repo_root_from_roots(roots: Option<&serde_json::Value>) -> Result<String> {
+    let roots = roots
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| anyhow::anyhow!("roots/list response missing result.roots array"))?;
+    let mut candidates = Vec::new();
+    for root in roots {
+        let Some(uri) = root.get("uri").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        let url = Url::parse(uri).with_context(|| format!("invalid root URI: {uri}"))?;
+        let path = url
+            .to_file_path()
+            .map_err(|_| anyhow::anyhow!("root URI must use file:// scheme: {uri}"))?;
+        let utf8 = Utf8PathBuf::from_path_buf(path)
+            .map_err(|path| anyhow::anyhow!("root path is not valid UTF-8: {}", path.display()))?;
+        let start = if utf8.is_file() {
+            utf8.parent()
+                .map(|parent| parent.to_owned())
+                .unwrap_or_else(|| utf8.clone())
+        } else {
+            utf8.clone()
+        };
+        let repo_root = find_repo_root(start.as_path()).unwrap_or(start);
+        let canonical = canonical_filesystem_path(repo_root.as_path())?;
+        let candidate = canonical.into_string();
+        if !candidates.contains(&candidate) {
+            candidates.push(candidate);
+        }
+    }
+    match candidates.len() {
+        0 => Err(anyhow::anyhow!("roots/list returned no usable file roots")),
+        1 => Ok(candidates.remove(0)),
+        _ => Err(anyhow::anyhow!(
+            "multiple workspace roots available; pass --repo or narrow client roots: {}",
+            candidates.join(", ")
+        )),
     }
 }
 
@@ -2709,8 +2972,9 @@ fn win_serve_pipe_connection(
     serve_connection(
         reader,
         &mut writer,
-        repo_root,
-        db_path,
+        Some(repo_root),
+        Some(db_path),
+        false,
         worker_pool,
         server_options,
     )
@@ -2850,14 +3114,7 @@ mod tests {
     }
 
     fn test_connection_state() -> ConnectionState {
-        ConnectionState {
-            trace: TraceLevel::Off,
-            initialized: false,
-            log_level: None,
-            client_capabilities: serde_json::Value::Null,
-            canceled_tokens: Arc::new(Mutex::new(HashSet::new())),
-            reverse_broker: ReverseRequestBroker::new(),
-        }
+        connection_state(None, None, false)
     }
 
     fn initialize_request_line() -> String {
@@ -3092,6 +3349,100 @@ mod tests {
             handle.join().expect("join reverse request thread").unwrap(),
             serde_json::json!({"ok":true})
         );
+    }
+
+    #[test]
+    fn dynamic_roots_resolve_repo_before_first_tool_call() {
+        let fixture = setup_fixture();
+        let repo_root = fixture._dir.path().to_string_lossy().into_owned();
+        let derived_db_path = fixture._dir.path().join(".atlas").join("worldtree.db");
+        std::fs::create_dir_all(derived_db_path.parent().expect("atlas dir")).unwrap();
+        std::fs::copy(&fixture.db_path, &derived_db_path).unwrap();
+        let session = InteractiveStdioTestSession::start_dynamic(ServerOptions::default()).unwrap();
+
+        session
+            .send_json(&serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": MCP_PROTOCOL_VERSION,
+                    "capabilities": { "roots": { "listChanged": true } },
+                    "clientInfo": { "name": "zed", "version": "1.0.0" }
+                }
+            }))
+            .unwrap();
+        let initialize = session
+            .recv_json(Duration::from_secs(1))
+            .unwrap()
+            .expect("initialize response");
+        assert_eq!(initialize["id"], serde_json::json!(1));
+
+        session
+            .send_json(&serde_json::json!({
+                "jsonrpc": "2.0",
+                "method": "initialized",
+                "params": {}
+            }))
+            .unwrap();
+        session
+            .send_json(&serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {
+                    "name": "query_graph",
+                    "arguments": { "text": "compute", "output_format": "json" }
+                }
+            }))
+            .unwrap();
+
+        let roots_request = session
+            .recv_json(Duration::from_secs(1))
+            .unwrap()
+            .expect("roots/list request");
+        assert_eq!(roots_request["method"], serde_json::json!("roots/list"));
+        let roots_id = roots_request["id"].clone();
+        let roots_uri = Url::from_directory_path(fixture._dir.path())
+            .expect("fixture root url")
+            .to_string();
+        session
+            .send_json(&serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": roots_id,
+                "result": {
+                    "roots": [
+                        { "uri": roots_uri.clone(), "name": "fixture" }
+                    ]
+                }
+            }))
+            .unwrap();
+
+        let response = session
+            .recv_json(Duration::from_secs(1))
+            .unwrap()
+            .expect("query_graph response");
+        let format = response["result"]["_meta"]["atlas:outputFormat"]
+            .as_str()
+            .unwrap_or("toon");
+        let text = response["result"]["content"][0]["text"]
+            .as_str()
+            .expect("query_graph response text");
+        if format == "json" {
+            let query_value: serde_json::Value =
+                serde_json::from_str(text).expect("query_graph payload json");
+            assert_eq!(
+                query_value[0]["qn"],
+                serde_json::json!("src/service.rs::fn::compute")
+            );
+            assert_eq!(query_value[0]["file"], serde_json::json!("src/service.rs"));
+        } else {
+            assert!(text.contains("src/service.rs::fn::compute"));
+            assert!(text.contains("src/service.rs"));
+        }
+
+        let _ = session.finish().unwrap();
+        assert!(roots_uri.contains(&repo_root));
     }
 
     #[test]

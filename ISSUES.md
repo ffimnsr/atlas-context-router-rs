@@ -492,6 +492,7 @@ Registry-first design, not raw path merge. Current recursive submodule scan, own
 - [ ] MCP:
   - [ ] expose registry inspection tool
   - [ ] add optional repo scoping to graph/context tools
+  - [ ] add per-root broker sessions discovered from client `roots/list`
   - [ ] return repo identity in ambiguity candidates and provenance payloads
 - [ ] human-readable output must show repo labels anywhere same symbol exists in multiple repos
 - [ ] JSON output must include repo metadata in stable fields, not ad hoc strings

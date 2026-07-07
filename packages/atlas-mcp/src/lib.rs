@@ -92,7 +92,8 @@ pub use spec::MCP_PROTOCOL_VERSION;
 pub use tools::health::mark_server_started;
 pub use tools::{tool_list, tool_list_markdown};
 pub use transport::{
-    ServerOptions, run_server, run_server_with_options, run_socket_server_with_options,
+    ServerOptions, run_server, run_server_with_dynamic_roots, run_server_with_options,
+    run_socket_server_with_options,
 };
 
 #[doc(hidden)]

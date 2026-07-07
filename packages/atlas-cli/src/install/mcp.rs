@@ -25,7 +25,7 @@ pub(super) fn install_copilot_scoped(
             .join("User")
             .join("mcp.json"),
     };
-    let server_entry = copilot_server_entry(repo_root);
+    let server_entry = copilot_server_entry(repo_root, scope);
     merge_json_mcp(
         &config_path,
         "servers",
@@ -51,7 +51,7 @@ pub(super) fn install_claude_scoped(
         InstallScope::Repo => scope_root.join(".mcp.json"),
         InstallScope::User => scope_root.join(".mcp.json"),
     };
-    let server_entry = stdio_server_entry(repo_root);
+    let server_entry = stdio_server_entry(repo_root, scope);
     merge_json_mcp(
         &config_path,
         "mcpServers",
@@ -77,21 +77,18 @@ pub(super) fn install_codex_scoped(
         InstallScope::Repo => scope_root.join(".codex").join("config.toml"),
         InstallScope::User => scope_root.join(".codex").join("config.toml"),
     };
-    merge_toml_mcp(&config_path, repo_root, "atlas", dry_run, "Codex")
+    merge_toml_mcp(&config_path, repo_root, scope, "atlas", dry_run, "Codex")
 }
 
-pub(super) fn stdio_server_args(repo_root: &Path) -> Vec<String> {
-    vec![
-        "--repo".to_owned(),
-        repo_root.display().to_string(),
-        "--db".to_owned(),
-        repo_root
-            .join(".atlas")
-            .join("worldtree.db")
-            .display()
-            .to_string(),
-        "serve".to_owned(),
-    ]
+pub(super) fn stdio_server_args(repo_root: &Path, scope: InstallScope) -> Vec<String> {
+    match scope {
+        InstallScope::Repo => vec![
+            "--repo".to_owned(),
+            repo_root.display().to_string(),
+            "serve".to_owned(),
+        ],
+        InstallScope::User => vec!["serve".to_owned()],
+    }
 }
 
 fn toml_basic_string(value: &str) -> String {
@@ -214,19 +211,19 @@ fn is_legacy_toml_section(section: &str) -> bool {
     command.as_deref() == Some("atlas") && args.as_deref() == Some(&["serve".to_owned()])
 }
 
-fn copilot_server_entry(repo_root: &Path) -> Value {
+fn copilot_server_entry(repo_root: &Path, scope: InstallScope) -> Value {
     serde_json::json!({
         "type": "stdio",
         "command": "atlas",
-        "args": stdio_server_args(repo_root)
+        "args": stdio_server_args(repo_root, scope)
     })
 }
 
-fn stdio_server_entry(repo_root: &Path) -> Value {
+fn stdio_server_entry(repo_root: &Path, scope: InstallScope) -> Value {
     serde_json::json!({
         "type": "stdio",
         "command": "atlas",
-        "args": stdio_server_args(repo_root)
+        "args": stdio_server_args(repo_root, scope)
     })
 }
 
@@ -296,6 +293,7 @@ fn merge_json_mcp(
 fn merge_toml_mcp(
     path: &Path,
     repo_root: &Path,
+    scope: InstallScope,
     server_name: &str,
     dry_run: bool,
     display_name: &str,
@@ -308,7 +306,7 @@ fn merge_toml_mcp(
         String::new()
     };
 
-    let args = toml_string_array(&stdio_server_args(repo_root));
+    let args = toml_string_array(&stdio_server_args(repo_root, scope));
     let section = format!(
         "\n{section_header}\ncommand = \"atlas\"\nargs = {}\ntype = \"stdio\"\n",
         args

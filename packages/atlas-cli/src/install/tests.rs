@@ -12,7 +12,10 @@ use super::instructions::{
     INSTRUCTIONS_END_MARKER, INSTRUCTIONS_MARKER, INSTRUCTIONS_SECTION, inject_instructions,
     instruction_targets,
 };
-use super::mcp::{install_claude, install_codex, install_copilot};
+use super::mcp::{
+    install_claude, install_claude_scoped, install_codex, install_codex_scoped, install_copilot,
+    install_copilot_scoped,
+};
 use super::platform_hooks::{
     claude_hooks_value, codex_hooks_value, copilot_hooks_value, install_atlas_hook_runner,
     install_claude_agent_hooks, install_codex_agent_hooks, install_copilot_agent_hooks,
@@ -214,17 +217,11 @@ fn repo_root() -> PathBuf {
 }
 
 fn expected_stdio_args(repo_root: &Path) -> Value {
-    serde_json::json!([
-        "--repo",
-        repo_root.display().to_string(),
-        "--db",
-        repo_root
-            .join(".atlas")
-            .join("worldtree.db")
-            .display()
-            .to_string(),
-        "serve"
-    ])
+    serde_json::json!(["--repo", repo_root.display().to_string(), "serve"])
+}
+
+fn expected_global_stdio_args() -> Value {
+    serde_json::json!(["serve"])
 }
 
 fn assert_json_stdio_server_entry(server: &Value, repo_root: &Path) {
@@ -324,10 +321,44 @@ fn install_codex_writes_repo_local_config_toml() {
     assert!(content.contains("command = \"atlas\""));
     assert!(content.contains("type = \"stdio\""));
     assert!(content.contains(&format!(
-        "args = [\"--repo\", \"{}\", \"--db\", \"{}\", \"serve\"]",
-        tmp.path().display(),
-        tmp.path().join(".atlas").join("worldtree.db").display()
+        "args = [\"--repo\", \"{}\", \"serve\"]",
+        tmp.path().display()
     )));
+}
+
+#[test]
+fn install_claude_user_scope_writes_global_mcp_json() {
+    let repo = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
+    let result =
+        install_claude_scoped(repo.path(), home.path(), InstallScope::User, false).unwrap();
+    assert!(matches!(result, PlatformResult::Configured(_)));
+    let mcp_path = home.path().join(".mcp.json");
+    let val: Value = serde_json::from_str(&fs::read_to_string(&mcp_path).unwrap()).unwrap();
+    assert_eq!(
+        val["mcpServers"]["atlas"]["args"],
+        expected_global_stdio_args()
+    );
+}
+
+#[test]
+fn install_copilot_user_scope_writes_global_mcp_json() {
+    let repo = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
+    let result =
+        install_copilot_scoped(repo.path(), home.path(), InstallScope::User, false).unwrap();
+    assert!(matches!(result, PlatformResult::Configured(_)));
+    let mcp_path = home
+        .path()
+        .join(".config")
+        .join("Code")
+        .join("User")
+        .join("mcp.json");
+    let val: Value = serde_json::from_str(&fs::read_to_string(&mcp_path).unwrap()).unwrap();
+    assert_eq!(
+        val["servers"]["atlas"]["args"],
+        expected_global_stdio_args()
+    );
 }
 
 #[test]
@@ -355,11 +386,20 @@ fn install_codex_migrates_legacy_config_toml() {
     assert!(content.contains("type = \"stdio\""));
     assert!(content.contains("command = \"atlas\""));
     assert!(content.contains(&format!(
-        "args = [\"--repo\", \"{}\", \"--db\", \"{}\", \"serve\"]",
-        tmp.path().display(),
-        tmp.path().join(".atlas").join("worldtree.db").display()
+        "args = [\"--repo\", \"{}\", \"serve\"]",
+        tmp.path().display()
     )));
     assert_eq!(content.matches("[mcp_servers.atlas]").count(), 1);
+}
+
+#[test]
+fn install_codex_user_scope_writes_global_config_toml() {
+    let repo = TempDir::new().unwrap();
+    let home = TempDir::new().unwrap();
+    let result = install_codex_scoped(repo.path(), home.path(), InstallScope::User, false).unwrap();
+    assert!(matches!(result, PlatformResult::Configured(_)));
+    let content = fs::read_to_string(home.path().join(".codex").join("config.toml")).unwrap();
+    assert!(content.contains("args = [\"serve\"]"));
 }
 
 #[test]

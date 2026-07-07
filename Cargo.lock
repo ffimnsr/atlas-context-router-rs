@@ -299,6 +299,7 @@ dependencies = [
  "toon-format",
  "tower-http",
  "tracing",
+ "url",
  "windows-sys 0.52.0",
 ]
 
