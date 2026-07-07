@@ -4,6 +4,28 @@ All notable changes to this project should be recorded in this file.
 
 Versioning policy may evolve while Atlas is still moving quickly, but release notes should still group changes by user-visible impact.
 
+## 1.4.0 - 2026-07-07
+
+### Features
+
+- add bench and proptests and fix some bugs (`a85c6e9`)
+- fix ci errors and benches (`50ea37b`)
+- update the serve tool to have new direct stdio flag (`114b851`)
+- add new issues for mcp spec (`31c5686`)
+- implement MCP spec first phase (`bd4f8ce`)
+- add changes for second and third phase of MCP upgrade (`5ed91e7`)
+- add new tools and completions for the new spec (`dd6b13b`)
+- implement the phase 5 mcp changes (`8771a38`)
+- add all gates test (`5ebb6bb`)
+- complete the phase 7 of MCP upgrade implementation (`da17b2c`)
+- add fixes for mcp upgrade (`8ef8b4d`)
+
+
+### CI
+
+- update bench for git init and ci workflow (`f42a277`)
+
+
 ## 1.3.0 - 2026-05-11
 
 ### Features
