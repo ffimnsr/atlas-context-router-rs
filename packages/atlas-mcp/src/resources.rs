@@ -6,7 +6,7 @@ use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::descriptors::{
-    IconDescriptor, ResourceDescriptor, ResourceTemplateDescriptor, descriptor_meta, human_title,
+    ResourceDescriptor, ResourceTemplateDescriptor, descriptor_meta, human_title,
     validate_descriptor_name,
 };
 use crate::tool_result::structured_content;
@@ -164,7 +164,7 @@ pub(crate) fn resource_descriptors() -> Vec<ResourceDescriptor> {
             title: human_title("graph_provenance"),
             description: "Atlas graph provenance metadata for current repo and DB.".to_owned(),
             mime_type: "application/json".to_owned(),
-            icons: vec![IconDescriptor::emoji("resource", "🧬")],
+            icons: Vec::new(),
             meta: descriptor_meta("resource", "health"),
         },
         ResourceDescriptor {
@@ -173,7 +173,7 @@ pub(crate) fn resource_descriptors() -> Vec<ResourceDescriptor> {
             title: human_title("health_status"),
             description: "Compact Atlas graph health summary for current repo.".to_owned(),
             mime_type: "application/json".to_owned(),
-            icons: vec![IconDescriptor::emoji("resource", "🩺")],
+            icons: Vec::new(),
             meta: descriptor_meta("resource", "health"),
         },
     ];
@@ -193,7 +193,7 @@ pub(crate) fn resource_template_descriptors() -> Vec<ResourceTemplateDescriptor>
             description: "Read Markdown docs section by repo-relative file and heading path/slug."
                 .to_owned(),
             mime_type: "text/markdown".to_owned(),
-            icons: vec![IconDescriptor::emoji("resource-template", "📚")],
+            icons: Vec::new(),
             meta: json!({
                 "atlas:descriptorKind": "resource_template",
                 "atlas:category": "content",
@@ -209,7 +209,7 @@ pub(crate) fn resource_template_descriptors() -> Vec<ResourceTemplateDescriptor>
             title: human_title("saved_context"),
             description: "Read saved artifact content by source_id.".to_owned(),
             mime_type: "text/plain".to_owned(),
-            icons: vec![IconDescriptor::emoji("resource-template", "🧠")],
+            icons: Vec::new(),
             meta: json!({
                 "atlas:descriptorKind": "resource_template",
                 "atlas:category": "memory",
@@ -442,13 +442,13 @@ mod tests {
         for resource in resource_descriptors() {
             assert!(!resource.uri.is_empty());
             assert!(!resource.mime_type.is_empty());
-            assert!(!resource.icons.is_empty());
+            assert!(resource.icons.is_empty());
             assert!(resource.meta.get("atlas:descriptorKind").is_some());
         }
         for template in resource_template_descriptors() {
             assert!(!template.uri_template.is_empty());
             assert!(!template.mime_type.is_empty());
-            assert!(!template.icons.is_empty());
+            assert!(template.icons.is_empty());
         }
     }
 
@@ -503,7 +503,9 @@ mod tests {
             .to_string_lossy()
             .into_owned();
 
-        let payload = "x".repeat(700);
+        let payload = std::iter::repeat_n("saved context payload with safe spacing", 30)
+            .collect::<Vec<_>>()
+            .join(" ");
         let saved = tool_save_context_artifact(
             Some(&json!({
                 "label": "artifact",
@@ -525,7 +527,7 @@ mod tests {
             &db_path,
         )
         .expect("resource read");
-        assert_eq!(result["contents"][0]["text"], json!("x".repeat(700)));
+        assert_eq!(result["contents"][0]["text"], json!(payload));
     }
 
     #[test]

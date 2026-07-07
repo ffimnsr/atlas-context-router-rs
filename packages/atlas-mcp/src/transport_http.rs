@@ -545,10 +545,12 @@ async fn handle_post_mcp(
                 Err(error) => jsonrpc_error_response(id, -32602, error.to_string()),
             }
         }
-        "completion/complete" => match completion::complete(params.as_ref(), &state.repo_root) {
-            Ok(result) => jsonrpc_ok_response(id, result),
-            Err(error) => jsonrpc_error_response(id, -32602, error.to_string()),
-        },
+        "completion/complete" => {
+            match completion::complete(params.as_ref(), &state.repo_root, &state.db_path) {
+                Ok(result) => jsonrpc_ok_response(id, result),
+                Err(error) => jsonrpc_error_response(id, -32602, error.to_string()),
+            }
+        }
         "tools/call" => dispatch_tool_call(state, session, id, params).await,
         "tasks/list" => match crate::tasks::tasks_list(
             params.as_ref(),

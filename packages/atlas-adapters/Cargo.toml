@@ -12,9 +12,12 @@ atlas-session = { path = "../atlas-session" , version = "1.3.0"}
 atlas-contextsave = { path = "../atlas-contextsave" , version = "1.3.0"}
 atlas-repo = { path = "../atlas-repo" , version = "1.3.0"}
 camino.workspace = true
+anyhow.workspace = true
+regex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+toml.workspace = true
 tracing.workspace = true
 
 [lints]

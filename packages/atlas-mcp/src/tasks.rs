@@ -10,9 +10,10 @@ use atlas_session::{
 };
 use serde_json::{Value, json};
 
-use crate::output::OutputFormat;
+use crate::output::{OutputFormat, resolve_output_format};
 use crate::progress;
 use crate::runtime_context::{self, ReverseRequestClient};
+use crate::tool_result::tool_execution_error_value;
 
 pub(crate) type TaskApiResult<T> = std::result::Result<T, TaskApiError>;
 
@@ -82,7 +83,11 @@ pub(crate) fn execute_tool_call(
     let explicit_task = task_ttl_from_context_args();
     let auto_defer = explicit_task.is_none() && is_auto_defer_candidate(name);
     if explicit_task.is_none() && !auto_defer {
-        return crate::tools::call(name, args.as_ref(), repo_root, db_path);
+        return normalize_tool_call_result(
+            name,
+            args.as_ref(),
+            crate::tools::call(name, args.as_ref(), repo_root, db_path),
+        );
     }
 
     let request_id = request_context
@@ -213,7 +218,11 @@ fn run_task_worker(
         },
         cancel_flag,
     );
-    let result = crate::tools::call(tool_name, args.as_ref(), repo_root, db_path);
+    let result = normalize_tool_call_result(
+        tool_name,
+        args.as_ref(),
+        crate::tools::call(tool_name, args.as_ref(), repo_root, db_path),
+    );
     progress::uninstall();
     runtime_context::uninstall();
 
@@ -484,6 +493,42 @@ fn resolve_defer_threshold_ms() -> u64 {
 
 fn create_task_result(task: &DurableTaskRecord) -> Value {
     json!({ "task": task_wire_json(task) })
+}
+
+fn normalize_tool_call_result(
+    tool_name: &str,
+    args: Option<&Value>,
+    result: Result<Value>,
+) -> Result<Value> {
+    match result {
+        Ok(value) => Ok(value),
+        Err(error) => {
+            let output_format =
+                resolve_output_format(args, OutputFormat::Toon).unwrap_or(OutputFormat::Toon);
+            let detail = format!("{error:#}");
+            let retry_guidance = tool_retry_guidance(error.to_string().as_str());
+            tool_execution_error_value(
+                tool_name,
+                output_format,
+                &error.to_string(),
+                &detail,
+                Some(retry_guidance),
+                None,
+            )
+        }
+    }
+}
+
+fn tool_retry_guidance(detail: &str) -> &'static str {
+    if detail.contains("invalid regex pattern") {
+        "Fix regex syntax, or switch to literal-search mode if regex is not required, then retry."
+    } else if detail.contains("unsupported output_format") {
+        "Use supported output_format value 'toon' or 'json', then retry."
+    } else if detail.contains("missing required") || detail.contains("missing ") {
+        "Add required tool arguments, then retry."
+    } else {
+        "Fix tool arguments or graph state, then retry."
+    }
 }
 
 fn task_wire_json(task: &DurableTaskRecord) -> Value {
@@ -855,5 +900,46 @@ mod tests {
         )
         .unwrap();
         assert_eq!(result["slept_ms"], json!(100));
+    }
+
+    #[test]
+    fn explicit_task_tool_failure_is_persisted_as_is_error_result() {
+        let dir = TempDir::new().unwrap();
+        install_tool_call_request_params(Some(&json!({"task": {"ttl": 1000}})));
+        let created = execute_tool_call(
+            "search_content",
+            Some(json!({"query": "(", "is_regex": true})),
+            dir.path().to_str().unwrap(),
+            "db",
+        )
+        .unwrap();
+        uninstall_tool_call_request_params();
+
+        let task_id = created["task"]["taskId"].as_str().unwrap().to_owned();
+        for _ in 0..50 {
+            let task = tasks_get(
+                Some(&json!({"taskId": &task_id})),
+                dir.path().to_str().unwrap(),
+                OutputFormat::Json,
+            )
+            .unwrap();
+            if task["status"] == json!("completed") {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        let result = tasks_result(
+            Some(&json!({"taskId": &task_id})),
+            dir.path().to_str().unwrap(),
+            OutputFormat::Json,
+        )
+        .unwrap();
+        assert_eq!(result["isError"], json!(true));
+        assert!(
+            result["structuredContent"]["message"]
+                .as_str()
+                .expect("message")
+                .contains("invalid regex pattern")
+        );
     }
 }

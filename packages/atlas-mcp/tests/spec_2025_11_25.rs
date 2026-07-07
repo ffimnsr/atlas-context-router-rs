@@ -185,6 +185,8 @@ fn normalize_dynamic(value: &mut Value) {
                         }
                     }
                     "taskId" => *child = json!("<task-id>"),
+                    "pid" => *child = json!("<pid>"),
+                    "uptime_secs" => *child = json!("<uptime-secs>"),
                     _ => normalize_dynamic(child),
                 }
             }
@@ -231,7 +233,7 @@ fn list_graph_stats_snapshot(tool_call_response: &Value) -> Value {
     let mut structured = structured;
     normalize_dynamic(&mut structured);
     json!({
-        "atlas_output_format": tool_call_response["result"]["atlas_output_format"],
+        "atlas_output_format": tool_call_response["result"]["_meta"]["atlas:outputFormat"],
         "structured": structured,
     })
 }
@@ -457,6 +459,20 @@ fn parse_sse_json(body: &str) -> Value {
         .find(|line| line.starts_with("data: "))
         .expect("SSE data line");
     serde_json::from_str(data_line.trim_start_matches("data: ")).expect("SSE json payload")
+}
+
+fn normalized_tool_result_contract(result: &Value) -> Value {
+    let mut copy = result.clone();
+    normalize_dynamic(&mut copy);
+    json!({
+        "isError": copy.get("isError").cloned().unwrap_or(Value::Bool(false)),
+        "meta": copy.get("_meta").cloned().unwrap_or(Value::Null),
+        "content_types": copy["content"]
+            .as_array()
+            .map(|items| items.iter().filter_map(|item| item.get("type").cloned()).collect::<Vec<_>>())
+            .unwrap_or_default(),
+        "structuredContent": copy.get("structuredContent").cloned().unwrap_or(Value::Null),
+    })
 }
 
 fn elicitation_round_trip_snapshot(reverse_request: &Value, final_response: &Value) -> Value {
@@ -1110,4 +1126,231 @@ fn spec_capabilities_and_descriptors_omit_unimplemented_methods() {
             "non-tool or unimplemented method {absent} must not appear in tool descriptors"
         );
     }
+}
+
+fn stdio_wait_for_task_result(repo_root: &str, db_path: &str, task_id: &str) -> Value {
+    for _ in 0..50 {
+        let get = stdio_initialized_call(
+            repo_root,
+            db_path,
+            json!({
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "tasks/get",
+                "params": { "taskId": task_id }
+            }),
+        );
+        if get["result"]["status"] != json!("working") {
+            break;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    stdio_initialized_call(
+        repo_root,
+        db_path,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 4,
+            "method": "tasks/result",
+            "params": { "taskId": task_id }
+        }),
+    )["result"]
+        .clone()
+}
+
+fn http_wait_for_task_result(harness: &HttpTestHarness, session_id: &str, task_id: &str) -> Value {
+    for _ in 0..50 {
+        let get = harness
+            .post_jsonrpc(
+                &http_headers(session_id),
+                &json!({
+                    "jsonrpc": "2.0",
+                    "id": 3,
+                    "method": "tasks/get",
+                    "params": { "taskId": task_id }
+                }),
+            )
+            .expect("http task get");
+        let body = get.json_body.expect("get json body");
+        if body["result"]["status"] != json!("working") {
+            break;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    harness
+        .post_jsonrpc(
+            &http_headers(session_id),
+            &json!({
+                "jsonrpc": "2.0",
+                "id": 4,
+                "method": "tasks/result",
+                "params": { "taskId": task_id }
+            }),
+        )
+        .expect("http task result")
+        .json_body
+        .expect("result json body")["result"]
+        .clone()
+}
+
+#[test]
+fn spec_broker_status_direct_and_deferred_contracts_match_across_stdio_and_http() {
+    let (_dir, repo_root, db_path) = setup_repo();
+
+    let stdio_direct = stdio_initialized_call(
+        &repo_root,
+        &db_path,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "tools/call",
+            "params": { "name": "broker_status", "arguments": { "output_format": "json" } }
+        }),
+    );
+    let stdio_deferred_create = stdio_initialized_call(
+        &repo_root,
+        &db_path,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "tools/call",
+            "params": {
+                "name": "broker_status",
+                "task": { "ttl": 1000 },
+                "arguments": { "output_format": "json" }
+            }
+        }),
+    );
+    let stdio_task_id = stdio_deferred_create["result"]["task"]["taskId"]
+        .as_str()
+        .expect("stdio task id");
+    let stdio_deferred = stdio_wait_for_task_result(&repo_root, &db_path, stdio_task_id);
+
+    let harness = HttpTestHarness::new(&repo_root, &db_path);
+    let session_id = http_session(&harness);
+    let http_direct = harness
+        .post_jsonrpc(
+            &http_headers(&session_id),
+            &json!({
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": { "name": "broker_status", "arguments": { "output_format": "json" } }
+            }),
+        )
+        .expect("http direct broker_status")
+        .json_body
+        .expect("http direct json body");
+    let http_deferred_create = harness
+        .post_jsonrpc(
+            &http_headers(&session_id),
+            &json!({
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {
+                    "name": "broker_status",
+                    "task": { "ttl": 1000 },
+                    "arguments": { "output_format": "json" }
+                }
+            }),
+        )
+        .expect("http deferred broker_status create")
+        .json_body
+        .expect("http deferred create body");
+    let http_task_id = http_deferred_create["result"]["task"]["taskId"]
+        .as_str()
+        .expect("http task id");
+    let http_deferred = http_wait_for_task_result(&harness, &session_id, http_task_id);
+
+    let direct_stdio = normalized_tool_result_contract(&stdio_direct["result"]);
+    let deferred_stdio = normalized_tool_result_contract(&stdio_deferred);
+    let direct_http = normalized_tool_result_contract(&http_direct["result"]);
+    let deferred_http = normalized_tool_result_contract(&http_deferred);
+
+    assert_eq!(direct_stdio, deferred_stdio);
+    assert_eq!(direct_stdio, direct_http);
+    assert_eq!(direct_stdio, deferred_http);
+}
+
+#[test]
+fn spec_tool_error_contract_matches_across_direct_and_deferred_stdio_and_http() {
+    let (_dir, repo_root, db_path) = setup_repo();
+    let invalid_args = json!({ "query": "(", "is_regex": true, "output_format": "json" });
+
+    let stdio_direct = stdio_initialized_call(
+        &repo_root,
+        &db_path,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "tools/call",
+            "params": { "name": "search_content", "arguments": invalid_args.clone() }
+        }),
+    );
+    let stdio_deferred_create = stdio_initialized_call(
+        &repo_root,
+        &db_path,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "tools/call",
+            "params": {
+                "name": "search_content",
+                "task": { "ttl": 1000 },
+                "arguments": invalid_args.clone()
+            }
+        }),
+    );
+    let stdio_task_id = stdio_deferred_create["result"]["task"]["taskId"]
+        .as_str()
+        .expect("stdio task id");
+    let stdio_deferred = stdio_wait_for_task_result(&repo_root, &db_path, stdio_task_id);
+
+    let harness = HttpTestHarness::new(&repo_root, &db_path);
+    let session_id = http_session(&harness);
+    let http_direct = harness
+        .post_jsonrpc(
+            &http_headers(&session_id),
+            &json!({
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": { "name": "search_content", "arguments": invalid_args.clone() }
+            }),
+        )
+        .expect("http direct search_content")
+        .json_body
+        .expect("http direct json body");
+    let http_deferred_create = harness
+        .post_jsonrpc(
+            &http_headers(&session_id),
+            &json!({
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {
+                    "name": "search_content",
+                    "task": { "ttl": 1000 },
+                    "arguments": invalid_args
+                }
+            }),
+        )
+        .expect("http deferred search_content create")
+        .json_body
+        .expect("http deferred create body");
+    let http_task_id = http_deferred_create["result"]["task"]["taskId"]
+        .as_str()
+        .expect("http task id");
+    let http_deferred = http_wait_for_task_result(&harness, &session_id, http_task_id);
+
+    let direct_stdio = normalized_tool_result_contract(&stdio_direct["result"]);
+    let deferred_stdio = normalized_tool_result_contract(&stdio_deferred);
+    let direct_http = normalized_tool_result_contract(&http_direct["result"]);
+    let deferred_http = normalized_tool_result_contract(&http_deferred);
+
+    assert_eq!(direct_stdio["isError"], json!(true));
+    assert_eq!(direct_stdio, deferred_stdio);
+    assert_eq!(direct_stdio, direct_http);
+    assert_eq!(direct_stdio, deferred_http);
 }

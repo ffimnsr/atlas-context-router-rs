@@ -6,6 +6,7 @@ description = "Shared build and incremental update pipeline for Atlas graphs"
 publish = false
 
 [dependencies]
+atlas-adapters = { path = "../atlas-adapters" , version = "1.3.0"}
 atlas-core.workspace = true
 atlas-parser = { path = "../atlas-parser" , version = "1.3.0"}
 atlas-repo = { path = "../atlas-repo" , version = "1.3.0"}

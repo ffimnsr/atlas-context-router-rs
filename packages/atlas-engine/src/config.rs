@@ -45,6 +45,8 @@ pub struct Config {
     #[serde(default)]
     pub insights: InsightsConfig,
     #[serde(default)]
+    pub sanitization: SanitizationConfig,
+    #[serde(default)]
     pub context: ContextConfig,
     #[serde(default)]
     pub mcp: McpConfig,
@@ -372,6 +374,7 @@ impl Config {
         let config: Self =
             toml::from_str(&raw).with_context(|| format!("cannot parse {}", path.display()))?;
         config.insights.validate()?;
+        config.sanitization.validate(atlas_dir)?;
         Ok(config)
     }
 
@@ -679,6 +682,22 @@ impl Config {
         ));
 
         lines.extend(render_section(
+            "sanitization",
+            &[(
+                "redaction_rules_file",
+                if profile == ConfigTemplateProfile::Full {
+                    render_optional_string(active.sanitization.redaction_rules_file.as_deref())
+                } else {
+                    render_optional_example_string(
+                        active.sanitization.redaction_rules_file.as_deref(),
+                        "redaction-rules.toml",
+                    )
+                },
+            )],
+            profile == ConfigTemplateProfile::Full,
+        ));
+
+        lines.extend(render_section(
             "context",
             &[
                 (
@@ -851,6 +870,13 @@ impl Config {
     pub fn insights_config(&self) -> Result<InsightsConfig> {
         self.insights.validate()?;
         Ok(self.insights.clone())
+    }
+
+    pub fn resolve_redaction_rules_file(
+        &self,
+        atlas_dir: &Path,
+    ) -> Result<Option<std::path::PathBuf>> {
+        self.sanitization.resolve_redaction_rules_file(atlas_dir)
     }
 
     pub fn embedding_backend(&self) -> Result<Option<EmbeddingBackendConfig>> {
@@ -1140,6 +1166,56 @@ pub struct InsightsLayerRule {
     pub name: String,
     pub path_prefixes: Vec<String>,
     pub module_prefixes: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct SanitizationConfig {
+    pub redaction_rules_file: Option<String>,
+}
+
+impl SanitizationConfig {
+    pub fn resolve_redaction_rules_file(
+        &self,
+        atlas_dir: &Path,
+    ) -> Result<Option<std::path::PathBuf>> {
+        let Some(raw_path) = self.redaction_rules_file.as_deref() else {
+            return Ok(None);
+        };
+        let trimmed = validate_nonempty_string("sanitization.redaction_rules_file", raw_path)?;
+        let candidate = Path::new(&trimmed);
+        let resolved = if candidate.is_absolute() {
+            candidate.to_path_buf()
+        } else {
+            atlas_dir.join(candidate)
+        };
+        Ok(Some(resolved))
+    }
+
+    pub fn validate(&self, atlas_dir: &Path) -> Result<()> {
+        let Some(path) = self.resolve_redaction_rules_file(atlas_dir)? else {
+            return Ok(());
+        };
+        if !path.exists() {
+            anyhow::bail!(
+                "invalid config: sanitization.redaction_rules_file points to missing file {}",
+                path.display()
+            );
+        }
+        if !path.is_file() {
+            anyhow::bail!(
+                "invalid config: sanitization.redaction_rules_file must point to a readable file, got {}",
+                path.display()
+            );
+        }
+        atlas_adapters::load_redaction_rules_file(&path).with_context(|| {
+            format!(
+                "invalid config: sanitization.redaction_rules_file={} failed validation",
+                path.display()
+            )
+        })?;
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1878,6 +1954,9 @@ mod tests {
         assert!(template.contains("# repeated_call_chain_min_length = 3"));
         assert!(template.contains("# outlier_percentile_cutoff = 95"));
         assert!(template.contains("# [[insights.layer_rules]]\n# name = \"layer_1\""));
+        assert!(
+            template.contains("[sanitization]\n# redaction_rules_file = \"redaction-rules.toml\"")
+        );
         assert!(template.contains("# worker_threads = 2"));
         assert!(template.contains("[mcp.http_auth]\n# enabled = false"));
         assert!(!template.contains("\nparse_batch_size = 64\n"));
@@ -1908,6 +1987,7 @@ mod tests {
         assert!(template.contains("outlier_percentile_cutoff = 90"));
         assert!(template.contains("ignore_node_kinds = [\"import\"]"));
         assert!(template.contains("[[insights.layer_rules]]\nname = \"api\""));
+        assert!(template.contains("[sanitization]\nredaction_rules_file = \"\""));
         assert!(template.contains("[mcp.http_auth]\nenabled = true"));
         assert!(template.contains("required_scopes = { mcp = [\"atlas:mcp\", \"atlas:read\"] }"));
     }
@@ -1992,6 +2072,84 @@ mod tests {
         assert!(
             err.to_string()
                 .contains("insights.layer_rules[0] must define path_prefixes or module_prefixes")
+        );
+    }
+
+    #[test]
+    fn load_accepts_valid_external_redaction_rules_file() {
+        let dir = tempdir().expect("tempdir");
+        fs::write(
+            dir.path().join("redaction-rules.toml"),
+            "token_prefixes = [\"zz-\"]\nsecret_key_patterns = [\"sessionid\"]\ntoken_min_len = 3\nhex_secret_min_len = 16\nbase64_secret_min_len = 20\n",
+        )
+        .expect("write rules");
+        fs::write(
+            dir.path().join(crate::paths::ATLAS_CONFIG),
+            "[sanitization]\nredaction_rules_file = \"redaction-rules.toml\"\n",
+        )
+        .expect("write config");
+
+        let config = Config::load(dir.path()).expect("config should load");
+        let resolved = config
+            .resolve_redaction_rules_file(dir.path())
+            .expect("resolve path")
+            .expect("configured path");
+        assert!(resolved.ends_with("redaction-rules.toml"));
+    }
+
+    #[test]
+    fn load_rejects_missing_external_redaction_rules_file() {
+        let dir = tempdir().expect("tempdir");
+        fs::write(
+            dir.path().join(crate::paths::ATLAS_CONFIG),
+            "[sanitization]\nredaction_rules_file = \"missing-rules.toml\"\n",
+        )
+        .expect("write config");
+
+        let err = Config::load(dir.path()).expect_err("missing rules must fail");
+        assert!(
+            err.to_string()
+                .contains("sanitization.redaction_rules_file points to missing file")
+        );
+    }
+
+    #[test]
+    fn load_rejects_unreadable_external_redaction_rules_file() {
+        let dir = tempdir().expect("tempdir");
+        fs::create_dir_all(dir.path().join("rules-dir")).expect("create rules dir");
+        fs::write(
+            dir.path().join(crate::paths::ATLAS_CONFIG),
+            "[sanitization]\nredaction_rules_file = \"rules-dir\"\n",
+        )
+        .expect("write config");
+
+        let err = Config::load(dir.path()).expect_err("directory path must fail");
+        assert!(
+            err.to_string()
+                .contains("sanitization.redaction_rules_file must point to a readable file")
+        );
+    }
+
+    #[test]
+    fn load_rejects_malformed_external_redaction_rules_file() {
+        let dir = tempdir().expect("tempdir");
+        fs::write(
+            dir.path().join("redaction-rules.toml"),
+            "token_prefixes = [",
+        )
+        .expect("write malformed rules");
+        fs::write(
+            dir.path().join(crate::paths::ATLAS_CONFIG),
+            "[sanitization]\nredaction_rules_file = \"redaction-rules.toml\"\n",
+        )
+        .expect("write config");
+
+        let err = Config::load(dir.path()).expect_err("malformed rules must fail");
+        let message = err.to_string();
+        assert!(message.contains("sanitization.redaction_rules_file"));
+        assert!(
+            message.contains("cannot parse redaction rules file")
+                || message.contains("failed validation")
         );
     }
 

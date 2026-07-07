@@ -56,7 +56,9 @@ const TOOL_REGISTRY_SNAPSHOT: &[&str] = &[
 ];
 
 fn parity_seed_source_id(repo_root: &str, db_path: &str) -> String {
-    let content = "x".repeat(600);
+    let content = std::iter::repeat_n("parity seed artifact content with safe spacing", 20)
+        .collect::<Vec<_>>()
+        .join(" ");
     let args = json!({
         "content": content,
         "label": "parity-seed",
@@ -294,7 +296,7 @@ fn tool_result_value_falls_back_to_json_when_toon_is_empty() {
         tool_result_value(&serde_json::json!({}), OutputFormat::Toon).expect("tool result");
 
     assert_eq!(unwrap_tool_format(&rendered), "json");
-    assert!(rendered.get("atlas_fallback_reason").is_some());
+    assert!(fallback_reason(&rendered).is_some());
 }
 
 #[test]

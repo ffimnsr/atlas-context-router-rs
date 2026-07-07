@@ -10,7 +10,7 @@ use crate::chunking::chunk_text;
 use super::util::{extract_vocab_terms, format_days_ago, format_now};
 use super::{
     ChunkResult, ContentStore, IndexRunStats, OutputRouting, OversizedPolicy, RoutingStats,
-    SourceMeta, SourceRow,
+    SearchFilters, SourceMeta, SourceRow,
 };
 
 impl ContentStore {
@@ -431,6 +431,57 @@ impl ContentStore {
         } else {
             Ok(None)
         }
+    }
+
+    pub fn recent_source_ids_by_prefix(
+        &self,
+        prefix: &str,
+        filters: &SearchFilters,
+        limit: usize,
+    ) -> Result<Vec<String>> {
+        let mut where_parts = vec!["1 = 1".to_owned()];
+        let mut extra_params: Vec<String> = Vec::new();
+
+        if !prefix.is_empty() {
+            extra_params.push(format!("{prefix}%"));
+            where_parts.push(format!("id LIKE ?{}", extra_params.len()));
+        }
+        if let Some(ref sid) = filters.session_id {
+            extra_params.push(sid.clone());
+            where_parts.push(format!("session_id = ?{}", extra_params.len()));
+        }
+        if let Some(ref agent_id) = filters.agent_id {
+            extra_params.push(agent_id.clone());
+            where_parts.push(format!("agent_id = ?{}", extra_params.len()));
+        }
+        if let Some(ref source_type) = filters.source_type {
+            extra_params.push(source_type.clone());
+            where_parts.push(format!("source_type = ?{}", extra_params.len()));
+        }
+        if let Some(ref repo_root) = filters.repo_root {
+            extra_params.push(repo_root.clone());
+            where_parts.push(format!("repo_root = ?{}", extra_params.len()));
+        }
+
+        let limit = limit.clamp(1, 100);
+        let sql = format!(
+            "SELECT id FROM sources WHERE {} ORDER BY created_at DESC LIMIT {}",
+            where_parts.join(" AND "),
+            limit
+        );
+        let mut stmt = self
+            .conn
+            .prepare(&sql)
+            .map_err(|e| AtlasError::Db(e.to_string()))?;
+        let mut rows = stmt
+            .query(rusqlite::params_from_iter(extra_params))
+            .map_err(|e| AtlasError::Db(e.to_string()))?;
+
+        let mut source_ids = Vec::new();
+        while let Some(row) = rows.next().map_err(|e| AtlasError::Db(e.to_string()))? {
+            source_ids.push(row.get(0).map_err(|e| AtlasError::Db(e.to_string()))?);
+        }
+        Ok(source_ids)
     }
 
     /// Retrieve all chunks for given source, ordered by chunk_index.

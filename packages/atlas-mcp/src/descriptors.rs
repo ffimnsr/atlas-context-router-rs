@@ -18,9 +18,10 @@ pub(crate) struct ToolDescriptor {
     pub(crate) description: String,
     #[serde(rename = "inputSchema")]
     pub(crate) input_schema: Value,
-    #[serde(rename = "outputSchema")]
-    pub(crate) output_schema: Value,
+    #[serde(rename = "outputSchema", skip_serializing_if = "Option::is_none")]
+    pub(crate) output_schema: Option<Value>,
     pub(crate) annotations: ToolAnnotations,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) icons: Vec<IconDescriptor>,
     #[serde(rename = "_meta")]
     pub(crate) meta: Value,
@@ -37,6 +38,7 @@ pub(crate) struct PromptDescriptor {
     pub(crate) title: String,
     pub(crate) description: String,
     pub(crate) arguments: Vec<PromptArgumentDescriptor>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) icons: Vec<IconDescriptor>,
     #[serde(rename = "_meta")]
     pub(crate) meta: Value,
@@ -57,6 +59,7 @@ pub(crate) struct ResourceDescriptor {
     pub(crate) title: String,
     pub(crate) description: String,
     pub(crate) mime_type: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) icons: Vec<IconDescriptor>,
     #[serde(rename = "_meta")]
     pub(crate) meta: Value,
@@ -70,6 +73,7 @@ pub(crate) struct ResourceTemplateDescriptor {
     pub(crate) title: String,
     pub(crate) description: String,
     pub(crate) mime_type: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) icons: Vec<IconDescriptor>,
     #[serde(rename = "_meta")]
     pub(crate) meta: Value,
@@ -81,6 +85,7 @@ pub(crate) struct CompletionDescriptor {
     pub(crate) name: String,
     pub(crate) title: String,
     pub(crate) description: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) icons: Vec<IconDescriptor>,
     #[serde(rename = "_meta")]
     pub(crate) meta: Value,
@@ -97,20 +102,13 @@ pub(crate) struct ToolAnnotations {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct IconDescriptor {
-    pub(crate) kind: String,
-    pub(crate) label: String,
-    pub(crate) value: String,
-}
-
-impl IconDescriptor {
-    pub(crate) fn emoji(label: &str, value: &str) -> Self {
-        Self {
-            kind: "emoji".to_owned(),
-            label: label.to_owned(),
-            value: value.to_owned(),
-        }
-    }
+    pub(crate) src: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) mime_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) sizes: Option<Vec<String>>,
 }
 
 pub(crate) fn validate_descriptor_name(name: &str) -> Result<()> {
@@ -160,44 +158,6 @@ pub(crate) fn ensure_schema_2020_12(mut schema: Value) -> Value {
         Value::String(JSON_SCHEMA_2020_12_URI.to_owned()),
     );
     schema
-}
-
-pub(crate) fn tool_output_schema() -> Value {
-    ensure_schema_2020_12(json!({
-        "type": "object",
-        "properties": {
-            "content": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "type": { "type": "string" },
-                        "text": { "type": "string" },
-                        "mimeType": { "type": "string" }
-                    },
-                    "required": ["type", "text"]
-                }
-            },
-            "structuredContent": {},
-            "resourceLinks": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "uri": { "type": "string" },
-                        "name": { "type": "string" },
-                        "title": { "type": "string" },
-                        "mimeType": { "type": "string" }
-                    },
-                    "required": ["uri", "name", "title"]
-                }
-            },
-            "atlas_output_format": { "type": "string" },
-            "atlas_requested_output_format": { "type": "string" },
-            "atlas_fallback_reason": { "type": "string" }
-        },
-        "required": ["content", "atlas_output_format", "atlas_requested_output_format"]
-    }))
 }
 
 pub(crate) fn descriptor_meta(descriptor_kind: &str, category: &str) -> Value {

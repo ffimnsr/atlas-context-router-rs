@@ -64,7 +64,6 @@ const JSONRPC_INVALID_REQUEST: i32 = -32600;
 const JSONRPC_METHOD_NOT_FOUND: i32 = -32601;
 const JSONRPC_INVALID_PARAMS: i32 = -32602;
 const JSONRPC_INTERNAL_ERROR: i32 = -32603;
-const JSONRPC_TOOL_EXECUTION_FAILED: i32 = -32001;
 const JSONRPC_WORKER_UNAVAILABLE: i32 = -32002;
 const JSONRPC_REQUEST_TIMEOUT: i32 = -32003;
 const JSONRPC_RATE_LIMITED: i32 = -32004;
@@ -1913,7 +1912,7 @@ fn dispatch(
         "resources/read" => {
             resources::resources_read(params, repo_root, db_path).map_err(classify_resource_error)
         }
-        "completion/complete" => completion::complete(params, repo_root)
+        "completion/complete" => completion::complete(params, repo_root, db_path)
             .map_err(|error| DispatchError::new(JsonRpcErrorKind::InvalidParams, error)),
 
         "prompts/list" => Ok(prompts::prompt_list()),
@@ -1933,8 +1932,20 @@ fn dispatch(
         }
 
         "tools/call" => {
-            let name = params
-                .and_then(|p| p.get("name"))
+            let params = params.ok_or_else(|| {
+                DispatchError::new(
+                    JsonRpcErrorKind::InvalidParams,
+                    anyhow::anyhow!("missing tools/call params object"),
+                )
+            })?;
+            let params_object = params.as_object().ok_or_else(|| {
+                DispatchError::new(
+                    JsonRpcErrorKind::InvalidParams,
+                    anyhow::anyhow!("tools/call params must be an object"),
+                )
+            })?;
+            let name = params_object
+                .get("name")
                 .and_then(|n| n.as_str())
                 .ok_or_else(|| {
                     DispatchError::new(
@@ -1942,9 +1953,24 @@ fn dispatch(
                         anyhow::anyhow!("missing tool name"),
                     )
                 })?;
-            let args = params.and_then(|p| p.get("arguments")).cloned();
+            if !crate::tools::is_known_tool_name(name) {
+                return Err(DispatchError::new(
+                    JsonRpcErrorKind::MethodNotFound,
+                    anyhow::anyhow!("unknown tool: {name}"),
+                ));
+            }
+            let args = match params_object.get("arguments") {
+                None | Some(serde_json::Value::Null) => None,
+                Some(value) if value.is_object() => Some(value.clone()),
+                Some(_) => {
+                    return Err(DispatchError::new(
+                        JsonRpcErrorKind::InvalidParams,
+                        anyhow::anyhow!("tools/call arguments must be an object when provided"),
+                    ));
+                }
+            };
             crate::tasks::execute_tool_call(name, args, repo_root, db_path)
-                .map_err(classify_tool_error)
+                .map_err(classify_tool_call_dispatch_error)
         }
 
         "tasks/list" => {
@@ -2297,7 +2323,7 @@ enum JsonRpcErrorKind {
     MethodNotFound,
     InvalidParams,
     InternalError,
-    ToolExecutionFailed,
+
     WorkerUnavailable,
     RequestTimedOut,
     RateLimited,
@@ -2315,7 +2341,6 @@ impl JsonRpcErrorKind {
             Self::MethodNotFound => JSONRPC_METHOD_NOT_FOUND,
             Self::InvalidParams => JSONRPC_INVALID_PARAMS,
             Self::InternalError => JSONRPC_INTERNAL_ERROR,
-            Self::ToolExecutionFailed => JSONRPC_TOOL_EXECUTION_FAILED,
             Self::WorkerUnavailable => JSONRPC_WORKER_UNAVAILABLE,
             Self::RequestTimedOut => JSONRPC_REQUEST_TIMEOUT,
             Self::RateLimited => JSONRPC_RATE_LIMITED,
@@ -2333,7 +2358,6 @@ impl JsonRpcErrorKind {
             Self::MethodNotFound => "method_not_found",
             Self::InvalidParams => "invalid_params",
             Self::InternalError => "internal_error",
-            Self::ToolExecutionFailed => "tool_execution_failed",
             Self::WorkerUnavailable => "worker_unavailable",
             Self::RequestTimedOut => "request_timed_out",
             Self::RateLimited => "rate_limited",
@@ -2358,9 +2382,7 @@ impl DispatchError {
 
     fn message(&self) -> String {
         match self.kind {
-            JsonRpcErrorKind::ToolExecutionFailed | JsonRpcErrorKind::InternalError => {
-                user_visible_error_message(&self.source)
-            }
+            JsonRpcErrorKind::InternalError => user_visible_error_message(&self.source),
             _ => self.source.to_string(),
         }
     }
@@ -2376,8 +2398,8 @@ fn classify_prompt_error(error: anyhow::Error) -> DispatchError {
     DispatchError::new(kind, error)
 }
 
-fn classify_tool_error(error: anyhow::Error) -> DispatchError {
-    DispatchError::new(JsonRpcErrorKind::ToolExecutionFailed, error)
+fn classify_tool_call_dispatch_error(error: anyhow::Error) -> DispatchError {
+    DispatchError::new(JsonRpcErrorKind::InternalError, error)
 }
 
 fn classify_task_api_error(error: crate::tasks::TaskApiError) -> DispatchError {
@@ -3156,7 +3178,7 @@ mod tests {
         assert!(prompt_text.contains("symbol_neighbors"));
 
         assert_eq!(
-            by_id[&serde_json::json!(5)]["result"]["atlas_output_format"],
+            by_id[&serde_json::json!(5)]["result"]["_meta"]["atlas:outputFormat"],
             "json",
             "query_graph transport response must preserve JSON default"
         );
@@ -3168,7 +3190,7 @@ mod tests {
         assert_eq!(query_value[0]["qn"], "src/service.rs::fn::compute");
 
         assert_eq!(
-            by_id[&serde_json::json!(6)]["result"]["atlas_output_format"],
+            by_id[&serde_json::json!(6)]["result"]["_meta"]["atlas:outputFormat"],
             "toon",
             "get_context transport response must preserve TOON default"
         );
@@ -3301,8 +3323,8 @@ mod tests {
         let input = concat!(
             "not-json\n",
             "{\"id\":6,\"method\":\"initialize\",\"params\":{}}\n",
-            "{\"jsonrpc\":\"2.0\",\"id\":8,\"method\":\"tools/call\",\"params\":{\"name\":\"query_graph\",\"arguments\":{}}}\n",
-            "{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"missing/method\",\"params\":{}}\n"
+            "{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"missing/method\",\"params\":{}}\n",
+            "{\"jsonrpc\":\"2.0\",\"id\":8,\"method\":\"tools/call\",\"params\":{\"name\":\"unknown_tool_xyz\",\"arguments\":{}}}\n"
         );
         let reader = BufReader::new(Cursor::new(input.as_bytes()));
         let mut writer = Vec::new();
@@ -3343,14 +3365,14 @@ mod tests {
             "invalid_request",
         );
         assert_eq!(by_id[&serde_json::json!(8)]["id"], 8);
-        assert_eq!(by_id[&serde_json::json!(8)]["error"]["code"], -32001);
+        assert_eq!(by_id[&serde_json::json!(8)]["error"]["code"], -32601);
         assert_eq!(
             by_id[&serde_json::json!(8)]["error"]["data"]["atlas_error_code"],
-            serde_json::json!("tool_execution_failed")
+            serde_json::json!("method_not_found")
         );
         assert_error_code_doc_link(
             &by_id[&serde_json::json!(8)]["error"]["data"]["atlas_error_code_docs"],
-            "tool_execution_failed",
+            "method_not_found",
         );
         assert_eq!(by_id[&serde_json::json!(7)]["id"], 7);
         assert_eq!(by_id[&serde_json::json!(7)]["error"]["code"], -32601);
@@ -3371,7 +3393,7 @@ mod tests {
     }
 
     #[test]
-    fn stdio_transport_tool_argument_errors_use_tool_execution_classification() {
+    fn stdio_transport_tool_argument_errors_return_is_error_tool_results() {
         let fixture = setup_fixture();
         let input = [
             initialize_request_line(),
@@ -3396,10 +3418,91 @@ mod tests {
             .into_iter()
             .find(|value| value["id"] == serde_json::json!(2))
             .expect("query_graph response");
-        assert_eq!(response["error"]["code"], serde_json::json!(-32001));
+        let result = &response["result"];
+        assert_eq!(result["isError"], serde_json::json!(true));
         assert_eq!(
-            response["error"]["data"]["atlas_error_code"],
-            serde_json::json!("tool_execution_failed")
+            result["structuredContent"]["retry_guidance"],
+            serde_json::json!("Use supported output_format value 'toon' or 'json', then retry.")
+        );
+        assert_eq!(
+            result["_meta"]["atlas:outputFormat"],
+            serde_json::json!("toon")
+        );
+    }
+
+    #[test]
+    fn stdio_transport_invalid_regex_tool_input_returns_is_error_tool_result() {
+        let fixture = setup_fixture();
+        let input = [
+            initialize_request_line(),
+            "{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}\n".to_owned(),
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"query_graph\",\"arguments\":{\"text\":\"compute\",\"regex\":\"(\"}}}\n".to_owned(),
+        ]
+        .concat();
+        let reader = BufReader::new(Cursor::new(input.as_bytes()));
+        let mut writer = Vec::new();
+
+        run_server_io(
+            reader,
+            &mut writer,
+            "/ignored",
+            &fixture.db_path,
+            ServerOptions::default(),
+        )
+        .expect("run server io");
+
+        let response = parse_output_lines(writer)
+            .into_iter()
+            .find(|value| value["id"] == serde_json::json!(2))
+            .expect("query_graph response");
+        assert!(
+            response.get("error").is_none(),
+            "tool validation must not be protocol error"
+        );
+        assert_eq!(response["result"]["isError"], serde_json::json!(true));
+        assert!(
+            response["result"]["structuredContent"]["message"]
+                .as_str()
+                .expect("message")
+                .contains("invalid regex pattern")
+        );
+    }
+
+    #[test]
+    fn stdio_transport_tools_call_request_shape_errors_use_invalid_params() {
+        let fixture = setup_fixture();
+        let input = [
+            initialize_request_line(),
+            "{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}\n".to_owned(),
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"arguments\":{}}}\n".to_owned(),
+            "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"query_graph\",\"arguments\":\"bad\"}}\n".to_owned(),
+        ]
+        .concat();
+        let reader = BufReader::new(Cursor::new(input.as_bytes()));
+        let mut writer = Vec::new();
+
+        run_server_io(
+            reader,
+            &mut writer,
+            "/ignored",
+            &fixture.db_path,
+            ServerOptions::default(),
+        )
+        .expect("run server io");
+
+        let responses = parse_output_lines(writer);
+        let by_id: std::collections::HashMap<_, _> = responses
+            .into_iter()
+            .filter(|value| value["id"].is_number())
+            .map(|response| (response["id"].clone(), response))
+            .collect();
+        assert_eq!(
+            by_id[&serde_json::json!(2)]["error"]["code"],
+            serde_json::json!(-32602)
+        );
+        assert_eq!(
+            by_id[&serde_json::json!(3)]["error"]["code"],
+            serde_json::json!(-32602)
         );
     }
 

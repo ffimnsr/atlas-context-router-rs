@@ -102,7 +102,7 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 tokio = { version = "1", features = ["rt", "time"] }
 
 # regex
-regex = { version = "1", default-features = false, features = ["std", "unicode-perl"] }
+regex = { version = "1", default-features = false, features = ["std", "unicode-perl", "unicode-case"] }
 
 # concurrency
 rayon = "1"

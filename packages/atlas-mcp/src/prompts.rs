@@ -146,15 +146,8 @@ pub fn prompt_list() -> serde_json::Value {
     .expect("prompt registry serialization")
 }
 
-fn prompt_icons(name: &str) -> Vec<IconDescriptor> {
-    let value = match name {
-        "review_change" => "🧪",
-        "inspect_symbol" => "🔎",
-        "plan_refactor" => "✂️",
-        "resume_prior_session" => "🧠",
-        _ => "📝",
-    };
-    vec![IconDescriptor::emoji("prompt", value)]
+fn prompt_icons(_name: &str) -> Vec<IconDescriptor> {
+    Vec::new()
 }
 
 pub fn prompt_get(name: &str, args: Option<&serde_json::Value>) -> Result<serde_json::Value> {
@@ -276,7 +269,7 @@ mod tests {
     }
 
     #[test]
-    fn prompt_descriptors_have_titles_and_icons() {
+    fn prompt_descriptors_have_titles_and_spec_safe_icons_contract() {
         for prompt in prompt_descriptors() {
             assert!(
                 !prompt.title.trim().is_empty(),
@@ -284,8 +277,8 @@ mod tests {
                 prompt.name
             );
             assert!(
-                !prompt.icons.is_empty(),
-                "missing icons for {}",
+                prompt.icons.is_empty(),
+                "prompt icons should be omitted until MCP-compatible icon sources exist for {}",
                 prompt.name
             );
         }

@@ -105,6 +105,64 @@ pub fn call(
     result
 }
 
+pub(crate) fn is_known_tool_name(name: &str) -> bool {
+    match name {
+        #[cfg(test)]
+        "__test_sleep" | "__test_panic" => true,
+        "list_graph_stats"
+        | "query_graph"
+        | "batch_query_graph"
+        | "get_impact_radius"
+        | "get_review_context"
+        | "detect_changes"
+        | "build_or_update_graph"
+        | "postprocess_graph"
+        | "traverse_graph"
+        | "get_minimal_context"
+        | "explain_change"
+        | "get_context"
+        | "analyze_architecture"
+        | "analyze_metrics"
+        | "assess_risk"
+        | "analyze_patterns"
+        | "find_large_functions"
+        | "find_complex_functions"
+        | "get_session_status"
+        | "compact_session"
+        | "resume_session"
+        | "search_saved_context"
+        | "search_decisions"
+        | "read_saved_context"
+        | "save_context_artifact"
+        | "get_context_stats"
+        | "purge_saved_context"
+        | "cross_session_search"
+        | "get_global_memory"
+        | "symbol_neighbors"
+        | "cross_file_links"
+        | "concept_clusters"
+        | "search_files"
+        | "search_content"
+        | "read_file_excerpt"
+        | "get_docs_section"
+        | "read_file_around_match"
+        | "search_templates"
+        | "search_text_assets"
+        | "broker_status"
+        | "status"
+        | "doctor"
+        | "db_check"
+        | "debug_graph"
+        | "explain_query"
+        | "resolve_symbol"
+        | "analyze_safety"
+        | "analyze_remove"
+        | "analyze_dead_code"
+        | "analyze_dependency" => true,
+        _ => false,
+    }
+}
+
 fn call_inner(
     name: &str,
     args: Option<&serde_json::Value>,
@@ -340,8 +398,7 @@ fn inject_provenance(response: &mut serde_json::Value, repo_root: &str, db_path:
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::descriptors::tool_output_schema;
-    use jsonschema::JSONSchema;
+    use jsonschema::{Draft, JSONSchema};
     use serde_json::json;
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -426,22 +483,22 @@ mod tests {
         }
     }
 
-    fn assert_matches_shared_output_schema(
-        name: &str,
-        value: &serde_json::Value,
-        schema: &JSONSchema,
-    ) {
-        if let Err(errors) = schema.validate(value) {
+    fn assert_matches_output_schema(name: &str, response: &serde_json::Value, schema: &JSONSchema) {
+        let structured = response
+            .get("structuredContent")
+            .expect("structuredContent")
+            .clone();
+        assert!(
+            structured.is_object(),
+            "{name} structuredContent must be object when outputSchema exists"
+        );
+        if let Err(errors) = schema.validate(&structured) {
             let details = errors
                 .map(|error| error.to_string())
                 .collect::<Vec<_>>()
                 .join("\n");
-            panic!("{name} output schema mismatch:\n{details}\nvalue={value:#}");
+            panic!("{name} output schema mismatch:\n{details}\nvalue={structured:#}");
         }
-        assert!(
-            value.get("structuredContent").is_some(),
-            "{name} should emit structuredContent"
-        );
     }
 
     fn schema_test_artifact_content() -> String {
@@ -525,12 +582,9 @@ mod tests {
     }
 
     #[test]
-    fn every_json_tool_emits_schema_compatible_structured_content() {
+    fn tools_with_output_schema_emit_schema_compatible_structured_content() {
         let (repo_dir, _db_path, db_path) = setup_repo();
         let repo_root = repo_dir.path().to_string_lossy().into_owned();
-        let schema = JSONSchema::options()
-            .compile(&tool_output_schema())
-            .expect("compile output schema");
 
         let build = call(
             "build_or_update_graph",
@@ -539,7 +593,7 @@ mod tests {
             &db_path,
         )
         .expect("build graph");
-        assert_matches_shared_output_schema("build_or_update_graph", &build, &schema);
+        let _ = build;
 
         let saved = call(
             "save_context_artifact",
@@ -554,17 +608,25 @@ mod tests {
             &db_path,
         )
         .expect("seed saved context artifact");
-        assert_matches_shared_output_schema("save_context_artifact(seed)", &saved, &schema);
         let saved_source_id = saved["structuredContent"]["source_id"]
             .as_str()
             .expect("saved source id");
 
         for tool in super::super::registry::tool_descriptors() {
+            let Some(output_schema) = tool.output_schema.as_ref() else {
+                continue;
+            };
+            let schema = JSONSchema::options()
+                .with_draft(Draft::Draft202012)
+                .compile(output_schema)
+                .unwrap_or_else(|error| {
+                    panic!("{} output schema should compile: {error}", tool.name)
+                });
             let name = tool.name.as_str();
             let args = schema_test_args(name, saved_source_id);
             let value = call(name, Some(&args), &repo_root, &db_path)
                 .unwrap_or_else(|error| panic!("{name} should succeed for schema test: {error}"));
-            assert_matches_shared_output_schema(name, &value, &schema);
+            assert_matches_output_schema(name, &value, &schema);
         }
     }
 }

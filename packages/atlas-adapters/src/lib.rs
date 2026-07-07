@@ -22,4 +22,7 @@ pub use events::{
     extract_rule_event, extract_tool_event, extract_user_event, hash_event, normalize_event,
 };
 pub use hooks::{AdapterHooks, CliAdapter, McpAdapter};
-pub use redact::redact_payload;
+pub use redact::{
+    RedactionRules, load_redaction_rules_file, redact_payload, redact_payload_with_rules,
+    redact_text, redact_text_with_rules,
+};

@@ -100,16 +100,19 @@ checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 name = "atlas-adapters"
 version = "1.3.0"
 dependencies = [
+ "anyhow",
  "atlas-contentstore",
  "atlas-contextsave",
  "atlas-core",
  "atlas-repo",
  "atlas-session",
  "camino",
+ "regex",
  "serde",
  "serde_json",
  "sha2",
  "tempfile",
+ "toml",
  "tracing",
 ]
 
@@ -210,6 +213,7 @@ name = "atlas-engine"
 version = "1.3.0"
 dependencies = [
  "anyhow",
+ "atlas-adapters",
  "atlas-core",
  "atlas-parser",
  "atlas-repo",

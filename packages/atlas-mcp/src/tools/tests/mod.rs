@@ -385,9 +385,14 @@ pub(super) fn unwrap_tool_text(resp: serde_json::Value) -> String {
 }
 
 pub(super) fn unwrap_tool_format(resp: &serde_json::Value) -> &str {
-    resp.get("atlas_output_format")
+    resp.pointer("/_meta/atlas:outputFormat")
         .and_then(|value| value.as_str())
-        .expect("tool response atlas_output_format")
+        .expect("tool response _meta.atlas:outputFormat")
+}
+
+pub(super) fn fallback_reason(resp: &serde_json::Value) -> Option<&str> {
+    resp.pointer("/_meta/atlas:fallbackReason")
+        .and_then(|value| value.as_str())
 }
 
 pub(super) fn assert_provenance(resp: &serde_json::Value, expected_repo: &str, expected_db: &str) {

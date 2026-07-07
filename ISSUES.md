@@ -1318,21 +1318,6 @@ Why:
 - [ ] index routed artifacts with metadata:
   - [ ] `session_id`
   - [ ] `source_type`
-  - [ ] `tool_or_command`
-  - [ ] `repo_root`
-  - [ ] `file_paths`
-  - [ ] `symbols`
-  - [ ] `classification`
-- [x] ensure secrets are redacted before persistence and previews
-- [ ] add configurable redaction-rules file surface for sanitization policy:
-  - [ ] add config field for external redaction-rules file path under `.atlas/config.toml`
-  - [ ] load redaction rules from referenced file at runtime so sanitization policy can change without recompiling
-  - [ ] validate missing, unreadable, or malformed redaction-rules file with actionable config errors
-- [ ] add tests for small, medium, large, oversized, and secret-bearing outputs
-
-Why:
-- `SessionStore::append_event` already rejects oversized inline payloads
-- content store is the correct place for searchable runtime text
 
 #### Patch X5 — Graph linking without storing runtime data in graph DB
 
@@ -2785,3 +2770,94 @@ Land broad regression coverage last so future MCP work cannot drift from 2025-11
 - [x] MCP server behavior is locked to 2025-11-25 across versioning, transport, auth, metadata, resources, logging, elicitation, and tasks
 
 ---
+
+### MCP Tools Schema Compliance Patch
+
+Align Atlas MCP `tools/list` and `tools/call` behavior with MCP 2025-11-25 tools specification, especially `structuredContent`, `outputSchema`, tool-result content item shapes, and protocol-error vs tool-execution-error separation. Keep CLI behavior unchanged unless needed for shared service correctness. Prefer removing custom MCP-only result fields over preserving compatibility shims.
+
+#### Patch M1 — Tool descriptor shape and schema contract
+
+- [x] audit every MCP tool descriptor emitted from `atlas_mcp::tool_list()` against MCP 2025-11-25 tools spec fields and JSON shapes
+- [x] replace custom icon descriptor shape in `packages/atlas-mcp/src/descriptors.rs` with MCP-compatible `icons` entries using `src`, optional `mimeType`, and optional `sizes`, or remove `icons` entirely when no compliant source exists
+- [x] stop advertising one shared generic `outputSchema` for every tool result envelope in `packages/atlas-mcp/src/descriptors.rs`
+- [x] define `outputSchema` to describe only `result.structuredContent` for tools that have stable structured object output
+- [x] omit `outputSchema` for tools whose structured output is not yet stable enough to express as one bounded object schema
+- [x] keep every `inputSchema` a valid JSON Schema object with `$schema` set to 2020-12
+- [x] add tests that `tools/list` descriptors serialize only MCP-supported fields and that each emitted schema compiles under JSON Schema 2020-12
+
+Why:
+- MCP `outputSchema` is contract for `structuredContent`, not whole tool result envelope
+- custom descriptor fields create client interoperability risk
+
+#### Patch M2 — Tool result shape and `structuredContent` rules
+
+- [x] update `packages/atlas-mcp/src/tool_result.rs` so `structuredContent` is emitted only when payload is JSON object
+- [x] stop emitting array-valued `structuredContent`
+- [x] keep backward-compatible text summary in `content` when `structuredContent` exists
+- [x] replace top-level `resourceLinks` result field with MCP `content` items of type `resource_link`
+- [x] ensure resource-link items use MCP field names and payload shape instead of Atlas-only wrapper objects
+- [x] move Atlas-specific diagnostics like `atlas_output_format`, `atlas_requested_output_format`, and `atlas_fallback_reason` under `_meta` or remove them from MCP result bodies when they are not spec-safe
+- [x] add tests for object payload, scalar payload, array payload, saved-context link payload, docs-section link payload, and toon-fallback payload
+
+Why:
+- MCP tool results allow typed `content` items plus optional object `structuredContent`
+- top-level custom result fields weaken compatibility with strict clients
+
+#### Patch M3 — `tools/call` protocol errors vs tool execution errors
+
+- [x] classify unknown tool name in `tools/call` as JSON-RPC protocol error instead of tool execution error
+- [x] classify malformed `tools/call` request shape, missing tool name, and invalid `arguments` container as JSON-RPC `invalid params`
+- [x] classify tool-level input validation failures, business-rule failures, and downstream API/tool failures as MCP tool results with `isError: true`
+- [x] keep JSON-RPC internal errors only for transport failures, worker failures, panics, and true server-side faults
+- [x] add helper result builder for structured tool execution errors so tools can return actionable retry guidance in `content` and optional `structuredContent`
+- [x] update dispatcher and transport mapping in `packages/atlas-mcp/src/tools/dispatch.rs`, `packages/atlas-mcp/src/tasks.rs`, and `packages/atlas-mcp/src/transport.rs` so error kind is preserved across async execution and deferred task execution
+- [x] ensure readiness-blocked graph tools continue returning `result.isError = true` and do not regress to protocol errors
+- [x] add tests for unknown tool, missing tool name, invalid request params, invalid regex tool input, blocked graph readiness, task-deferred tool failure, and panic recovery
+
+Why:
+- MCP separates malformed request errors from tool execution failures so clients and models can retry correctly
+- Atlas currently mixes these paths and loses self-correction signal
+
+#### Patch M4 — Per-tool structured output inventory and parity cleanup
+
+- [x] inventory every MCP tool and group it into: stable object `structuredContent`, text-only result, or mixed/needs redesign
+- [x] for stable object tools, define exact per-tool `outputSchema` matching actual `structuredContent`
+- [x] for text-only tools, remove `outputSchema` and keep result content valid MCP text content
+- [x] for mixed tools, normalize output to one stable object shape or split tool behavior so schema stays deterministic
+- [x] ensure deferred task result payloads preserve same MCP result contract as non-deferred `tools/call`
+- [x] update `MCP_TOOLS.md` generation and any wiki/reference docs to describe structured output guarantees accurately
+- [x] add parity tests proving direct tool call, deferred task completion, stdio transport, and HTTP transport expose same result/error contract for representative tools
+
+Why:
+- one shared fake schema is worse than no schema
+- per-tool contract clarity reduces drift between transports and clients
+
+#### Patch completion criteria
+
+This patch is complete when:
+
+- [x] `tools/list` emits MCP-compliant descriptor fields and valid JSON Schemas
+- [x] no MCP tool descriptor uses custom nonstandard icon shape
+- [x] `outputSchema`, when present, validates actual `result.structuredContent` for that specific tool
+- [x] no MCP result uses top-level `resourceLinks`
+- [x] no MCP result emits non-object `structuredContent`
+- [x] unknown tool and malformed `tools/call` requests return JSON-RPC protocol errors
+- [x] tool validation and business logic failures return MCP tool results with `isError: true`
+- [x] stdio and HTTP transports preserve same protocol-error vs execution-error behavior
+- [x] registry, transport, and result-shape tests cover representative success and failure cases
+- [x] `./scripts/test-workspace-summary.sh` passes after compliance patch implementation
+  - [x] `./scripts/test-workspace-summary.sh`
+  - [x] `repo_root`
+  - [x] `file_paths`
+  - [x] `symbols`
+  - [x] `classification`
+- [x] ensure secrets are redacted before persistence and previews
+- [x] add configurable redaction-rules file surface for sanitization policy:
+  - [x] add config field for external redaction-rules file path under `.atlas/config.toml`
+  - [x] load redaction rules from referenced file at runtime so sanitization policy can change without recompiling
+  - [x] validate missing, unreadable, or malformed redaction-rules file with actionable config errors
+- [x] add tests for small, medium, large, oversized, and secret-bearing outputs
+
+Why:
+- `SessionStore::append_event` already rejects oversized inline payloads
+- content store is the correct place for searchable runtime text

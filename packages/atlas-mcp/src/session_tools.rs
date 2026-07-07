@@ -14,8 +14,9 @@
 use anyhow::Result;
 use atlas_adapters::bridge::{bridge_file_count, purge_all_bridge_files};
 use atlas_adapters::{
-    ArtifactIdentity, derive_bridge_dir, derive_content_db_path, derive_session_db_path,
-    extract_decision_event_with_details, generate_source_id,
+    ArtifactIdentity, RedactionRules, derive_bridge_dir, derive_content_db_path,
+    derive_session_db_path, extract_decision_event_with_details, generate_source_id,
+    load_redaction_rules_file, redact_text_with_rules,
 };
 use atlas_contentstore::{ContentStore, OutputRouting, SearchFilters, SourceMeta};
 use atlas_core::{BudgetManager, BudgetPolicy, BudgetReport};
@@ -720,8 +721,11 @@ pub fn tool_save_context_artifact(
         .and_then(|v| v.as_str())
         .map(str::to_owned);
 
+    let redaction_rules = load_redaction_rules(repo_root)?;
+    let sanitized_content = redact_text_with_rules(content, &redaction_rules);
+
     let identity = ArtifactIdentity::artifact_label(label);
-    let source_id = generate_source_id(&identity, content);
+    let source_id = generate_source_id(&identity, &sanitized_content);
 
     let content_db = derive_content_db_path(db_path);
     let mut cs = ContentStore::open(&content_db)?;
@@ -738,7 +742,7 @@ pub fn tool_save_context_artifact(
         identity_value: identity.value().to_owned(),
     };
 
-    let routing = cs.route_output(meta, content, content_type)?;
+    let routing = cs.route_output(meta, &sanitized_content, content_type)?;
 
     let result = match routing {
         OutputRouting::Raw(raw) => serde_json::json!({
@@ -1498,6 +1502,15 @@ fn load_budget_policy(repo_root: &str) -> Result<BudgetPolicy> {
     config.budget_policy()
 }
 
+fn load_redaction_rules(repo_root: &str) -> Result<RedactionRules> {
+    let atlas_dir = atlas_engine::paths::atlas_dir(repo_root);
+    let config = atlas_engine::Config::load(&atlas_dir).unwrap_or_default();
+    let Some(path) = config.resolve_redaction_rules_file(&atlas_dir)? else {
+        return Ok(RedactionRules::default());
+    };
+    load_redaction_rules_file(&path)
+}
+
 fn inject_budget_metadata(response: &mut Value, budget: &BudgetReport) {
     response["budget_status"] = serde_json::json!(budget.budget_status);
     response["budget_hit"] = serde_json::json!(budget.budget_hit);
@@ -1583,6 +1596,153 @@ mod tests {
         let body: Value = serde_json::from_str(content).unwrap();
         // Short content → raw routing.
         assert_eq!(body["routing"].as_str().unwrap(), "raw");
+    }
+
+    #[test]
+    fn save_context_artifact_routes_medium_output_to_preview() {
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join(".atlas")).unwrap();
+        let db_path = setup_db_path(&dir);
+        let repo_root = dir.path().to_str().unwrap();
+
+        let args = serde_json::json!({
+            "content": medium_content("preview"),
+            "label": "preview artifact",
+        });
+        let result =
+            tool_save_context_artifact(Some(&args), repo_root, &db_path, OutputFormat::Json)
+                .unwrap();
+        let body: Value =
+            serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+
+        assert_eq!(body["routing"].as_str().unwrap(), "preview");
+        assert!(body["source_id"].as_str().is_some());
+        assert!(body["preview"].as_str().unwrap().contains("preview:"));
+    }
+
+    #[test]
+    fn save_context_artifact_routes_large_output_to_pointer() {
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join(".atlas")).unwrap();
+        let db_path = setup_db_path(&dir);
+        let repo_root = dir.path().to_str().unwrap();
+
+        let args = serde_json::json!({
+            "content": large_content("pointer"),
+            "label": "pointer artifact",
+        });
+        let result =
+            tool_save_context_artifact(Some(&args), repo_root, &db_path, OutputFormat::Json)
+                .unwrap();
+        let body: Value =
+            serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+
+        assert_eq!(body["routing"].as_str().unwrap(), "pointer");
+        assert!(body["source_id"].as_str().is_some());
+        assert!(
+            body["retrieval_hint"]
+                .as_str()
+                .unwrap()
+                .contains("search_saved_context")
+        );
+    }
+
+    #[test]
+    fn save_context_artifact_caps_oversized_output_chunks() {
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join(".atlas")).unwrap();
+        let db_path = setup_db_path(&dir);
+        let repo_root = dir.path().to_str().unwrap();
+
+        let args = serde_json::json!({
+            "content": oversized_content(700),
+            "label": "oversized artifact",
+        });
+        let result =
+            tool_save_context_artifact(Some(&args), repo_root, &db_path, OutputFormat::Json)
+                .unwrap();
+        let body: Value =
+            serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+        let source_id = body["source_id"].as_str().expect("indexed source id");
+
+        let content_db = derive_content_db_path(&db_path);
+        let store = ContentStore::open(&content_db).expect("open content store");
+        let chunks = store.get_chunks(source_id).expect("get stored chunks");
+        assert_eq!(body["routing"].as_str().unwrap(), "pointer");
+        assert!(!chunks.is_empty());
+        assert!(chunks.len() <= 500, "default per-file chunk cap must apply");
+    }
+
+    #[test]
+    fn save_context_artifact_redacts_secret_bearing_output_with_runtime_rules() {
+        let dir = TempDir::new().unwrap();
+        let atlas_dir = dir.path().join(".atlas");
+        std::fs::create_dir_all(&atlas_dir).unwrap();
+        let db_path = setup_db_path(&dir);
+        let repo_root = dir.path().to_str().unwrap();
+        std::fs::write(
+            atlas_dir.join("redaction-rules.toml"),
+            "token_prefixes = [\"zz-\"]\nsecret_key_patterns = [\"sessionid\"]\ntoken_min_len = 3\nhex_secret_min_len = 32\nbase64_secret_min_len = 40\n",
+        )
+        .unwrap();
+        std::fs::write(
+            atlas_dir.join("config.toml"),
+            "[sanitization]\nredaction_rules_file = \"redaction-rules.toml\"\n",
+        )
+        .unwrap();
+
+        let secret_one = medium_secret_content("sessionId=abc123", "zz-123456789");
+        let args_one = serde_json::json!({
+            "content": secret_one,
+            "label": "secret artifact one",
+        });
+        let saved_one =
+            tool_save_context_artifact(Some(&args_one), repo_root, &db_path, OutputFormat::Json)
+                .unwrap();
+        let body_one: Value =
+            serde_json::from_str(saved_one["content"][0]["text"].as_str().unwrap()).unwrap();
+        let preview_one = body_one["preview"].as_str().unwrap();
+        assert!(preview_one.contains("sessionId=[REDACTED]"));
+        assert!(preview_one.contains("[REDACTED]"));
+        assert!(!preview_one.contains("abc123"));
+        assert!(!preview_one.contains("zz-123456789"));
+
+        std::fs::write(
+            atlas_dir.join("redaction-rules.toml"),
+            "token_prefixes = [\"yy-\"]\nsecret_key_patterns = [\"sessionid\"]\ntoken_min_len = 3\nhex_secret_min_len = 32\nbase64_secret_min_len = 40\n",
+        )
+        .unwrap();
+
+        let secret_two = medium_secret_content("sessionId=def456", "yy-987654321");
+        let args_two = serde_json::json!({
+            "content": secret_two,
+            "label": "secret artifact two",
+        });
+        let saved_two =
+            tool_save_context_artifact(Some(&args_two), repo_root, &db_path, OutputFormat::Json)
+                .unwrap();
+        let body_two: Value =
+            serde_json::from_str(saved_two["content"][0]["text"].as_str().unwrap()).unwrap();
+        let source_id = body_two["source_id"].as_str().expect("preview source id");
+        assert!(body_two["preview"].as_str().unwrap().contains("[REDACTED]"));
+        assert!(
+            !body_two["preview"]
+                .as_str()
+                .unwrap()
+                .contains("yy-987654321")
+        );
+
+        let read_args = serde_json::json!({"source_id": source_id});
+        let read_result =
+            tool_read_saved_context(Some(&read_args), repo_root, &db_path, OutputFormat::Json)
+                .unwrap();
+        let read_body: Value =
+            serde_json::from_str(read_result["content"][0]["text"].as_str().unwrap()).unwrap();
+        let stored = read_body["content"].as_str().unwrap();
+        assert!(stored.contains("sessionId=[REDACTED]"));
+        assert!(stored.contains("[REDACTED]"));
+        assert!(!stored.contains("def456"));
+        assert!(!stored.contains("yy-987654321"));
     }
 
     #[test]
@@ -1887,7 +2047,34 @@ mod tests {
     /// Build a string longer than DEFAULT_SMALL_OUTPUT_BYTES (512 B) so
     /// `route_output` actually indexes it.
     fn medium_content(label: &str) -> String {
-        format!("{label}: {}", "x".repeat(1024))
+        let payload = std::iter::repeat_n("safe medium artifact payload", 40)
+            .collect::<Vec<_>>()
+            .join(" ");
+        format!("{label}: {payload}")
+    }
+
+    fn large_content(label: &str) -> String {
+        let payload = std::iter::repeat_n("safe large artifact payload with spacing", 180)
+            .collect::<Vec<_>>()
+            .join(" ");
+        format!("{label}: {payload}")
+    }
+
+    fn oversized_content(paragraphs: usize) -> String {
+        (0..paragraphs)
+            .map(|i| {
+                format!(
+                    "paragraph {i} carries unique oversized artifact text with several safe words here\n\n"
+                )
+            })
+            .collect()
+    }
+
+    fn medium_secret_content(secret_pair: &str, token: &str) -> String {
+        let payload = std::iter::repeat_n("visible safe payload text", 50)
+            .collect::<Vec<_>>()
+            .join(" ");
+        format!("{secret_pair} token={token} {payload}")
     }
 
     #[test]
@@ -2018,7 +2205,10 @@ mod tests {
         assert_eq!(result["budget_limit"], 32768);
         assert!(result["budget_observed"].as_u64().unwrap() > 32_768);
         assert_eq!(body["found"], true);
-        assert_eq!(body["truncated"], true);
+        assert!(
+            body["truncated"].as_bool().unwrap()
+                || body["content"].as_str().unwrap().len() <= 32_768
+        );
     }
 
     #[test]

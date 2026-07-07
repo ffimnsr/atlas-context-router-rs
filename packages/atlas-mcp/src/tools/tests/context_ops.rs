@@ -381,7 +381,7 @@ fn mcp_agent_facing_flows_pass_usability_acceptance_gate() {
     .expect("get_impact_radius call");
     let impact_text = unwrap_tool_text(impact_resp.clone());
     assert_eq!(unwrap_tool_format(&impact_resp), "toon");
-    assert!(impact_resp.get("atlas_fallback_reason").is_none());
+    assert!(fallback_reason(&impact_resp).is_none());
     assert!(impact_text.contains("changed_file_count: 1"));
     assert!(impact_text.contains("src/api.rs::fn::handle_request"));
     assert!(impact_text.contains("tests/service_test.rs::fn::compute_test"));
@@ -396,7 +396,7 @@ fn mcp_agent_facing_flows_pass_usability_acceptance_gate() {
     .expect("get_review_context call");
     let review_text = unwrap_tool_text(review_resp.clone());
     assert_eq!(unwrap_tool_format(&review_resp), "toon");
-    assert!(review_resp.get("atlas_fallback_reason").is_none());
+    assert!(fallback_reason(&review_resp).is_none());
     assert!(review_text.contains("intent: review"));
     assert!(review_text.contains("file_count:"));
     assert!(review_text.contains("src/service.rs"));
@@ -412,7 +412,7 @@ fn mcp_agent_facing_flows_pass_usability_acceptance_gate() {
     .expect("get_context call");
     let context_text = unwrap_tool_text(context_resp.clone());
     assert_eq!(unwrap_tool_format(&context_resp), "toon");
-    assert!(context_resp.get("atlas_fallback_reason").is_none());
+    assert!(fallback_reason(&context_resp).is_none());
     assert!(context_text.contains("intent: symbol"));
     assert!(context_text.contains("src/service.rs::fn::compute"));
     assert!(context_text.contains("src/api.rs::fn::handle_request"));

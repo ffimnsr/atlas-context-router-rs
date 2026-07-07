@@ -1,22 +1,79 @@
 use super::shared::DEFAULT_OUTPUT_DESCRIPTION;
 use crate::descriptors::{
     IconDescriptor, ToolAnnotations, ToolDescriptor, ToolRegistry, descriptor_meta,
-    ensure_schema_2020_12, human_title, tool_output_schema, validate_descriptor_name,
+    ensure_schema_2020_12, human_title, validate_descriptor_name,
 };
 use serde::Deserialize;
 use serde_json::Value;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ToolResultContract {
+    StableObject,
+    TextOnly,
+    MixedNeedsRedesign,
+}
+
+impl ToolResultContract {
+    fn label(self) -> &'static str {
+        match self {
+            Self::StableObject => "stable-object",
+            Self::TextOnly => "text-only",
+            Self::MixedNeedsRedesign => "mixed-needs-redesign",
+        }
+    }
+
+    fn output_schema_note(self) -> &'static str {
+        match self {
+            Self::StableObject => "exact structuredContent schema",
+            Self::TextOnly | Self::MixedNeedsRedesign => "none",
+        }
+    }
+
+    fn guidance(self) -> &'static str {
+        match self {
+            Self::StableObject => {
+                "Returns object structuredContent in JSON mode; outputSchema validates that object."
+            }
+            Self::TextOnly => {
+                "Do not rely on structuredContent; consume text content or resource links only."
+            }
+            Self::MixedNeedsRedesign => {
+                "Current output may vary by mode or payload shape; no outputSchema advertised yet."
+            }
+        }
+    }
+}
+
+pub(crate) fn tool_result_contract(name: &str) -> ToolResultContract {
+    match name {
+        "list_graph_stats" | "broker_status" | "get_context_stats" => {
+            ToolResultContract::StableObject
+        }
+        "query_graph"
+        | "batch_query_graph"
+        | "search_saved_context"
+        | "search_decisions"
+        | "cross_session_search" => ToolResultContract::TextOnly,
+        _ => ToolResultContract::MixedNeedsRedesign,
+    }
+}
+
 pub fn tool_list_markdown() -> String {
     let mut markdown = String::from(
-        "# MCP Tools\n\nThis file is generated from `atlas_mcp::tool_list()`. Do not edit by hand.\n\n| Tool | Description |\n|------|-------------|\n",
+        "# MCP Tools\n\nThis file is generated from `atlas_mcp::tool_list()`. Do not edit by hand.\n\nResult contract legend:\n- `stable-object`: JSON mode returns object `structuredContent`; `outputSchema` validates that object.\n- `text-only`: consume MCP `content`; no `outputSchema` advertised.\n- `mixed-needs-redesign`: output not yet normalized to one deterministic object contract; no `outputSchema` advertised.\n\n| Tool | Result contract | Output schema | Description |\n|------|-----------------|---------------|-------------|\n",
     );
 
     for tool in tool_list()["tools"].as_array().expect("tools array") {
         let name = tool["name"].as_str().expect("tool name");
         let description = tool["description"].as_str().expect("tool description");
+        let contract = tool_result_contract(name);
         markdown.push_str("| `");
         markdown.push_str(name);
+        markdown.push_str("` | `");
+        markdown.push_str(contract.label());
         markdown.push_str("` | ");
+        markdown.push_str(contract.output_schema_note());
+        markdown.push_str(" | ");
         markdown.push_str(&escape_markdown_table_cell(description));
         markdown.push_str(" |\n");
     }
@@ -873,16 +930,149 @@ pub fn tool_list() -> Value {
 fn build_tool_descriptor(seed: ToolDescriptorSeed) -> ToolDescriptor {
     validate_descriptor_name(&seed.name).expect("tool name must satisfy MCP guidance");
     let category = tool_category(&seed.name);
+    let contract = tool_result_contract(&seed.name);
+    let mut meta = descriptor_meta("tool", category);
+    meta["atlas:resultContract"] = serde_json::json!(contract.label());
+    meta["atlas:resultContractGuidance"] = serde_json::json!(contract.guidance());
     ToolDescriptor {
         title: human_title(&seed.name),
-        output_schema: tool_output_schema(),
+        output_schema: tool_output_schema_for(&seed.name),
         annotations: tool_annotations(&seed.name),
         icons: tool_icons(category),
-        meta: descriptor_meta("tool", category),
+        meta,
         name: seed.name,
         description: seed.description,
         input_schema: ensure_schema_2020_12(seed.input_schema),
     }
+}
+
+fn tool_output_schema_for(name: &str) -> Option<Value> {
+    match name {
+        "list_graph_stats" => Some(list_graph_stats_output_schema()),
+        "broker_status" => Some(broker_status_output_schema()),
+        "get_context_stats" => Some(get_context_stats_output_schema()),
+        _ => None,
+    }
+}
+
+fn list_graph_stats_output_schema() -> Value {
+    ensure_schema_2020_12(serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "file_count": { "type": "integer" },
+            "node_count": { "type": "integer" },
+            "edge_count": { "type": "integer" },
+            "nodes_by_kind": {
+                "type": "array",
+                "items": {
+                    "type": "array",
+                    "prefixItems": [
+                        { "type": "string" },
+                        { "type": "integer" }
+                    ],
+                    "minItems": 2,
+                    "maxItems": 2
+                }
+            },
+            "languages": {
+                "type": "array",
+                "items": { "type": "string" }
+            },
+            "last_indexed_at": {
+                "type": ["string", "null"]
+            }
+        },
+        "required": [
+            "file_count",
+            "node_count",
+            "edge_count",
+            "nodes_by_kind",
+            "languages",
+            "last_indexed_at"
+        ]
+    }))
+}
+
+fn broker_status_output_schema() -> Value {
+    ensure_schema_2020_12(serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "ok": { "type": "boolean" },
+            "pid": { "type": "integer" },
+            "version": { "type": "string" },
+            "uptime_secs": { "type": "integer" },
+            "worker_threads_configured": { "type": "integer" },
+            "repo_root": { "type": "string" },
+            "db_path": { "type": "string" }
+        },
+        "required": [
+            "ok",
+            "pid",
+            "version",
+            "uptime_secs",
+            "worker_threads_configured",
+            "repo_root",
+            "db_path"
+        ]
+    }))
+}
+
+fn get_context_stats_output_schema() -> Value {
+    ensure_schema_2020_12(serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "session_id": { "type": "string" },
+            "agent_id": { "type": ["string", "null"] },
+            "event_count": { "type": "integer" },
+            "source_count": { "type": "integer" },
+            "chunk_count": { "type": "integer" },
+            "bridge_file_count": { "type": "integer" },
+            "content_db_path": { "type": "string" },
+            "session_db_path": { "type": "string" },
+            "bridge_dir_path": { "type": "string" },
+            "retrieval_index": {
+                "type": ["object", "null"],
+                "additionalProperties": false,
+                "properties": {
+                    "state": { "type": "string" },
+                    "files_discovered": { "type": "integer" },
+                    "files_indexed": { "type": "integer" },
+                    "chunks_written": { "type": "integer" },
+                    "chunks_reused": { "type": "integer" },
+                    "last_indexed_at": { "type": ["string", "null"] },
+                    "last_error": { "type": ["string", "null"] },
+                    "updated_at": { "type": "string" },
+                    "searchable": { "type": "boolean" }
+                },
+                "required": [
+                    "state",
+                    "files_discovered",
+                    "files_indexed",
+                    "chunks_written",
+                    "chunks_reused",
+                    "last_indexed_at",
+                    "last_error",
+                    "updated_at",
+                    "searchable"
+                ]
+            }
+        },
+        "required": [
+            "session_id",
+            "agent_id",
+            "event_count",
+            "source_count",
+            "chunk_count",
+            "bridge_file_count",
+            "content_db_path",
+            "session_db_path",
+            "bridge_dir_path",
+            "retrieval_index"
+        ]
+    }))
 }
 
 fn tool_annotations(name: &str) -> ToolAnnotations {
@@ -924,37 +1114,47 @@ fn tool_category(name: &str) -> &'static str {
     }
 }
 
-fn tool_icons(category: &str) -> Vec<IconDescriptor> {
-    match category {
-        "maintenance" => vec![IconDescriptor::emoji("maintenance", "🛠️")],
-        "memory" => vec![IconDescriptor::emoji("memory", "🧠")],
-        "health" => vec![IconDescriptor::emoji("health", "🩺")],
-        "analysis" => vec![IconDescriptor::emoji("analysis", "📊")],
-        "content" => vec![IconDescriptor::emoji("content", "📄")],
-        _ => vec![IconDescriptor::emoji("graph", "🕸️")],
-    }
+fn tool_icons(_category: &str) -> Vec<IconDescriptor> {
+    Vec::new()
 }
 
 #[cfg(test)]
+const ALLOWED_TOOL_DESCRIPTOR_FIELDS: &[&str] = &[
+    "name",
+    "title",
+    "description",
+    "inputSchema",
+    "outputSchema",
+    "annotations",
+    "icons",
+    "_meta",
+];
+
+#[cfg(test)]
 mod tests {
-    use super::{tool_descriptors, tool_input_schema_by_name, tool_list};
+    use super::{
+        ToolResultContract, tool_descriptors, tool_input_schema_by_name, tool_list,
+        tool_list_markdown, tool_result_contract,
+    };
     use crate::descriptors::JSON_SCHEMA_2020_12_URI;
-    use jsonschema::JSONSchema;
+    use jsonschema::{Draft, JSONSchema};
     use serde_json::json;
 
     fn compile_schema(schema: &serde_json::Value) {
-        JSONSchema::compile(schema).expect("valid 2020-12 schema");
+        JSONSchema::options()
+            .with_draft(Draft::Draft202012)
+            .compile(schema)
+            .expect("valid 2020-12 schema");
     }
 
     #[test]
-    fn every_tool_name_title_annotations_and_icons_are_present() {
+    fn every_tool_name_title_and_annotations_are_present() {
         for tool in tool_descriptors() {
             assert!(
                 !tool.title.trim().is_empty(),
                 "missing title for {}",
                 tool.name
             );
-            assert!(!tool.icons.is_empty(), "missing icons for {}", tool.name);
             if tool.annotations.state_changing_hint {
                 assert!(
                     !tool.annotations.read_only_hint,
@@ -976,12 +1176,37 @@ mod tests {
     fn tool_registry_schemas_validate_as_2020_12() {
         for tool in tool_descriptors() {
             assert_eq!(tool.input_schema["$schema"], json!(JSON_SCHEMA_2020_12_URI));
-            assert_eq!(
-                tool.output_schema["$schema"],
-                json!(JSON_SCHEMA_2020_12_URI)
-            );
             compile_schema(&tool.input_schema);
-            compile_schema(&tool.output_schema);
+            if let Some(output_schema) = tool.output_schema.as_ref() {
+                assert_eq!(output_schema["$schema"], json!(JSON_SCHEMA_2020_12_URI));
+                compile_schema(output_schema);
+            }
+        }
+    }
+
+    #[test]
+    fn every_tool_has_inventory_contract_and_matching_schema_policy() {
+        for tool in tool_descriptors() {
+            match tool_result_contract(&tool.name) {
+                ToolResultContract::StableObject => {
+                    assert!(
+                        tool.output_schema.is_some(),
+                        "{} must advertise outputSchema",
+                        tool.name
+                    );
+                }
+                ToolResultContract::TextOnly | ToolResultContract::MixedNeedsRedesign => {
+                    assert!(
+                        tool.output_schema.is_none(),
+                        "{} must omit outputSchema",
+                        tool.name
+                    );
+                }
+            }
+            assert_eq!(
+                tool.meta["atlas:resultContract"],
+                json!(tool_result_contract(&tool.name).label())
+            );
         }
     }
 
@@ -1003,7 +1228,84 @@ mod tests {
         let tools = value["tools"].as_array().expect("tools array");
         assert!(tools.iter().all(|tool| tool.get("title").is_some()));
         assert!(tools.iter().all(|tool| tool.get("annotations").is_some()));
-        assert!(tools.iter().all(|tool| tool.get("icons").is_some()));
-        assert!(tools.iter().all(|tool| tool.get("outputSchema").is_some()));
+        assert!(tools.iter().all(|tool| tool.get("icons").is_none()));
+        assert!(tools.iter().any(|tool| tool.get("outputSchema").is_some()));
+        assert!(tools.iter().any(|tool| tool.get("outputSchema").is_none()));
+        assert!(
+            tools
+                .iter()
+                .all(|tool| tool.pointer("/_meta/atlas:resultContract").is_some())
+        );
+    }
+
+    #[test]
+    fn tool_list_markdown_documents_result_contract_inventory() {
+        let markdown = tool_list_markdown();
+        assert!(markdown.contains("| Tool | Result contract | Output schema | Description |"));
+        assert!(markdown.contains("`stable-object`"));
+        assert!(markdown.contains("`mixed-needs-redesign`"));
+        assert!(
+            markdown.contains("`broker_status` | `stable-object` | exact structuredContent schema")
+        );
+    }
+}
+
+#[cfg(test)]
+mod schema_contract_tests {
+    use super::tool_list;
+    use crate::descriptors::JSON_SCHEMA_2020_12_URI;
+    use jsonschema::{Draft, JSONSchema};
+    use std::collections::BTreeSet;
+
+    #[test]
+    fn tools_list_serializes_only_mcp_supported_descriptor_fields() {
+        let tools = tool_list()["tools"]
+            .as_array()
+            .expect("tools array")
+            .clone();
+        let allowed = super::ALLOWED_TOOL_DESCRIPTOR_FIELDS
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>();
+
+        for tool in tools {
+            let keys = tool
+                .as_object()
+                .expect("tool descriptor object")
+                .keys()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>();
+            assert!(
+                keys.is_subset(&allowed),
+                "descriptor keys not allowed: {:?}",
+                keys.difference(&allowed).copied().collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn tools_list_emitted_schemas_compile_under_json_schema_2020_12() {
+        for tool in tool_list()["tools"].as_array().expect("tools array") {
+            let input_schema = tool.get("inputSchema").expect("input schema");
+            assert_eq!(
+                input_schema["$schema"],
+                serde_json::json!(JSON_SCHEMA_2020_12_URI)
+            );
+            JSONSchema::options()
+                .with_draft(Draft::Draft202012)
+                .compile(input_schema)
+                .expect("input schema compiles");
+
+            if let Some(output_schema) = tool.get("outputSchema") {
+                assert_eq!(
+                    output_schema["$schema"],
+                    serde_json::json!(JSON_SCHEMA_2020_12_URI)
+                );
+                JSONSchema::options()
+                    .with_draft(Draft::Draft202012)
+                    .compile(output_schema)
+                    .expect("output schema compiles");
+            }
+        }
     }
 }

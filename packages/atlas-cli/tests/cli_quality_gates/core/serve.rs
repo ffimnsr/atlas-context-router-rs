@@ -128,7 +128,7 @@ fn serve_command_handles_stdio_jsonrpc_flow_end_to_end() {
         "tools/list must expose get_context"
     );
 
-    let query_format = by_id[&json!(3)]["result"]["atlas_output_format"]
+    let query_format = by_id[&json!(3)]["result"]["_meta"]["atlas:outputFormat"]
         .as_str()
         .expect("query_graph output format");
     assert!(query_format == "toon" || query_format == "json");
@@ -147,7 +147,7 @@ fn serve_command_handles_stdio_jsonrpc_flow_end_to_end() {
     }
 
     assert_eq!(
-        by_id[&json!(4)]["result"]["atlas_output_format"],
+        by_id[&json!(4)]["result"]["_meta"]["atlas:outputFormat"],
         json!("toon")
     );
     let context_text = by_id[&json!(4)]["result"]["content"][0]["text"]

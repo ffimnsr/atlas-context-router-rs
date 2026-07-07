@@ -103,7 +103,10 @@ pub(super) fn read_json_tool_result(output: &Output, id: u64) -> Value {
         .into_iter()
         .find(|response| response["id"] == json!(id))
         .unwrap_or_else(|| panic!("missing JSON-RPC response id={id}"));
-    assert_eq!(response["result"]["atlas_output_format"], json!("json"));
+    assert_eq!(
+        response["result"]["_meta"]["atlas:outputFormat"],
+        json!("json")
+    );
     let text = response["result"]["content"][0]["text"]
         .as_str()
         .expect("tool result content text");
@@ -130,7 +133,9 @@ fn serve_requests() -> String {
 }
 
 fn serve_requests_with_session_tools() -> String {
-    let artifact = "0123456789abcdefghijklmnopqrstuvwxyz".repeat(32);
+    let artifact = std::iter::repeat_n("broker artifact payload with safe spacing", 40)
+        .collect::<Vec<_>>()
+        .join(" ");
     [
         initialize_request_line(1),
         "{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}\n".to_owned(),

@@ -401,19 +401,23 @@ pub fn enforce_mcp_response_budget(
 
 fn rendered_response_bytes(value: &Value, output_format: OutputFormat) -> anyhow::Result<usize> {
     let rendered = render_value(value, output_format)?;
-    let mut response = serde_json::json!({
+    let mut meta = serde_json::json!({
+        "atlas:outputFormat": rendered.actual_format.as_str(),
+        "atlas:requestedOutputFormat": rendered.requested_format.as_str(),
+    });
+
+    if let Some(reason) = rendered.fallback_reason {
+        meta["atlas:fallbackReason"] = Value::String(reason);
+    }
+
+    let response = serde_json::json!({
         "content": [{
             "type": "text",
             "text": rendered.text,
             "mimeType": rendered.actual_format.mime_type(),
         }],
-        "atlas_output_format": rendered.actual_format.as_str(),
-        "atlas_requested_output_format": rendered.requested_format.as_str(),
+        "_meta": meta,
     });
-
-    if let Some(reason) = rendered.fallback_reason {
-        response["atlas_fallback_reason"] = Value::String(reason);
-    }
 
     Ok(serde_json::to_vec(&response)?.len())
 }
