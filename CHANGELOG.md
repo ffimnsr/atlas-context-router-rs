@@ -4,6 +4,13 @@ All notable changes to this project should be recorded in this file.
 
 Versioning policy may evolve while Atlas is still moving quickly, but release notes should still group changes by user-visible impact.
 
+## 1.4.1 - 2026-07-07
+
+### Features
+
+- add roots/list instead of repo flag on serve (`919f53e`)
+
+
 ## 1.4.0 - 2026-07-07
 
 ### Features
