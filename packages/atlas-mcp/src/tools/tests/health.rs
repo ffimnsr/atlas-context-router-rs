@@ -400,8 +400,9 @@ fn db_check_on_path_in_missing_dir_returns_error() {
         .to_string_lossy()
         .to_string();
 
-    let result = call("db_check", None, "/repo", &bad_path);
-    assert!(result.is_err());
+    let result = call("db_check", None, "/repo", &bad_path)
+        .expect("db_check should return tool error result");
+    assert_eq!(result["isError"], serde_json::json!(true));
 }
 
 #[test]

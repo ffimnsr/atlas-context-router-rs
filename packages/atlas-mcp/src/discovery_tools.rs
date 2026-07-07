@@ -18,7 +18,9 @@ use serde::Serialize;
 use std::path::{Path, PathBuf};
 
 use crate::output::OutputFormat;
-use crate::tool_result::tool_result_value as build_tool_result_value;
+use crate::tool_result::{
+    normalize_tool_execution_error, tool_result_value as build_tool_result_value,
+};
 
 /// Validate a user-supplied `subpath` and return the absolute walk root.
 ///
@@ -54,6 +56,14 @@ fn invalid_search_content_regex_error(query: &str, error: impl std::fmt::Display
          search_content keeps is_regex=true strict and does not fall back to literal search. \
          Set is_regex=false for literal text search, or escape regex metacharacters, e.g. {escaped_example}"
     )
+}
+
+fn discovery_tool_error_result(
+    tool_name: &str,
+    output_format: OutputFormat,
+    error: anyhow::Error,
+) -> Result<serde_json::Value> {
+    normalize_tool_execution_error(tool_name, output_format, error)
 }
 
 // ---------------------------------------------------------------------------
@@ -364,143 +374,146 @@ pub(crate) fn tool_read_file_excerpt(
     repo_root: &str,
     output_format: OutputFormat,
 ) -> Result<serde_json::Value> {
-    let policy = load_budget_policy(repo_root)?;
-    let mut budgets = BudgetManager::new();
-    let file =
-        str_arg(args, "file")?.ok_or_else(|| anyhow::anyhow!("missing required argument: file"))?;
-    let requested_max_lines = u64_arg(args, "max_lines").unwrap_or(200) as usize;
-    let max_lines = budgets.resolve_limit(
-        policy.review_context_extraction.nodes,
-        "review_context_extraction.max_nodes",
-        Some(requested_max_lines),
-    );
-    let (file, abs_path) = resolve_repo_file_path(repo_root, file)?;
-    if !abs_path.is_file() {
-        anyhow::bail!("file not found: {file}");
-    }
-
-    let (requested_ranges, mode) = parse_excerpt_selection(args)?;
-    let contents = std::fs::read_to_string(&abs_path)
-        .with_context(|| format!("cannot read UTF-8 text file '{file}'"))?;
-    let lines: Vec<&str> = contents.lines().collect();
-    let total_lines = lines.len();
-
-    let mut resolved_ranges = Vec::with_capacity(requested_ranges.len());
-    for range in requested_ranges {
-        if total_lines == 0 {
-            break;
-        }
-        if range.start_line > total_lines {
-            anyhow::bail!(
-                "requested start_line {} exceeds file length {} for {}",
-                range.start_line,
-                total_lines,
-                file
-            );
-        }
-        resolved_ranges.push(RequestedLineRange {
-            start_line: range.start_line,
-            end_line: range.end_line.min(total_lines),
-        });
-    }
-
-    let total_selected_lines: usize = resolved_ranges
-        .iter()
-        .map(|range| range.end_line - range.start_line + 1)
-        .sum();
-    let mut remaining_lines = max_lines;
-    let mut excerpts = Vec::with_capacity(resolved_ranges.len());
-    let mut truncated = false;
-
-    for range in resolved_ranges {
-        if remaining_lines == 0 {
-            truncated = true;
-            break;
-        }
-
-        let available_lines = range.end_line - range.start_line + 1;
-        let excerpt_end = if available_lines > remaining_lines {
-            truncated = true;
-            range.start_line + remaining_lines - 1
-        } else {
-            range.end_line
-        };
-
-        let excerpt_lines: Vec<ExcerptLine> = (range.start_line..=excerpt_end)
-            .map(|line_number| ExcerptLine {
-                line: line_number as u64,
-                text: lines[line_number - 1].trim_end_matches('\r').to_owned(),
-            })
-            .collect();
-        let content = excerpt_lines
-            .iter()
-            .map(|entry| entry.text.as_str())
-            .collect::<Vec<_>>()
-            .join("\n");
-        remaining_lines = remaining_lines.saturating_sub(excerpt_lines.len());
-        excerpts.push(FileExcerpt {
-            start_line: range.start_line as u64,
-            end_line: excerpt_end as u64,
-            line_count: excerpt_lines.len(),
-            content,
-            lines: excerpt_lines,
-        });
-    }
-
-    if truncated {
-        budgets.record_usage(
+    (|| {
+        let policy = load_budget_policy(repo_root)?;
+        let mut budgets = BudgetManager::new();
+        let file = str_arg(args, "file")?
+            .ok_or_else(|| anyhow::anyhow!("missing required argument: file"))?;
+        let requested_max_lines = u64_arg(args, "max_lines").unwrap_or(200) as usize;
+        let max_lines = budgets.resolve_limit(
             policy.review_context_extraction.nodes,
             "review_context_extraction.max_nodes",
-            max_lines,
-            total_selected_lines,
-            true,
+            Some(requested_max_lines),
         );
-    }
+        let (file, abs_path) = resolve_repo_file_path(repo_root, file)?;
+        if !abs_path.is_file() {
+            anyhow::bail!("file not found: {file}");
+        }
 
-    let atlas_hint = if total_lines == 0 {
-        Some(format!("{file} is empty."))
-    } else if truncated {
-        Some(format!(
-            "Excerpt truncated to {max_lines} lines. Narrow line_ranges or raise max_lines within policy limits."
-        ))
-    } else {
-        None
-    };
+        let (requested_ranges, mode) = parse_excerpt_selection(args)?;
+        let contents = std::fs::read_to_string(&abs_path)
+            .with_context(|| format!("cannot read UTF-8 text file '{file}'"))?;
+        let lines: Vec<&str> = contents.lines().collect();
+        let total_lines = lines.len();
 
-    #[derive(Serialize)]
-    struct ReadFileExcerptResult {
-        file: String,
-        mode: &'static str,
-        total_lines: usize,
-        excerpts: Vec<FileExcerpt>,
-        excerpt_count: usize,
-        truncated: bool,
-        atlas_result_kind: &'static str,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        atlas_hint: Option<String>,
-    }
+        let mut resolved_ranges = Vec::with_capacity(requested_ranges.len());
+        for range in requested_ranges {
+            if total_lines == 0 {
+                break;
+            }
+            if range.start_line > total_lines {
+                anyhow::bail!(
+                    "requested start_line {} exceeds file length {} for {}",
+                    range.start_line,
+                    total_lines,
+                    file
+                );
+            }
+            resolved_ranges.push(RequestedLineRange {
+                start_line: range.start_line,
+                end_line: range.end_line.min(total_lines),
+            });
+        }
 
-    let result = ReadFileExcerptResult {
-        file,
-        mode,
-        total_lines,
-        excerpt_count: excerpts.len(),
-        excerpts,
-        truncated,
-        atlas_result_kind: "file_excerpt",
-        atlas_hint,
-    };
+        let total_selected_lines: usize = resolved_ranges
+            .iter()
+            .map(|range| range.end_line - range.start_line + 1)
+            .sum();
+        let mut remaining_lines = max_lines;
+        let mut excerpts = Vec::with_capacity(resolved_ranges.len());
+        let mut truncated = false;
 
-    let mut response = render_tool_result(&result, output_format)?;
-    inject_budget_metadata(
-        &mut response,
-        &budgets.summary(
-            "review_context_extraction.max_nodes",
-            max_lines,
-            requested_max_lines.max(total_selected_lines),
-        ),
-    );
-    Ok(response)
+        for range in resolved_ranges {
+            if remaining_lines == 0 {
+                truncated = true;
+                break;
+            }
+
+            let available_lines = range.end_line - range.start_line + 1;
+            let excerpt_end = if available_lines > remaining_lines {
+                truncated = true;
+                range.start_line + remaining_lines - 1
+            } else {
+                range.end_line
+            };
+
+            let excerpt_lines: Vec<ExcerptLine> = (range.start_line..=excerpt_end)
+                .map(|line_number| ExcerptLine {
+                    line: line_number as u64,
+                    text: lines[line_number - 1].trim_end_matches('\r').to_owned(),
+                })
+                .collect();
+            let content = excerpt_lines
+                .iter()
+                .map(|entry| entry.text.as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
+            remaining_lines = remaining_lines.saturating_sub(excerpt_lines.len());
+            excerpts.push(FileExcerpt {
+                start_line: range.start_line as u64,
+                end_line: excerpt_end as u64,
+                line_count: excerpt_lines.len(),
+                content,
+                lines: excerpt_lines,
+            });
+        }
+
+        if truncated {
+            budgets.record_usage(
+                policy.review_context_extraction.nodes,
+                "review_context_extraction.max_nodes",
+                max_lines,
+                total_selected_lines,
+                true,
+            );
+        }
+
+        let atlas_hint = if total_lines == 0 {
+            Some(format!("{file} is empty."))
+        } else if truncated {
+            Some(format!(
+                "Excerpt truncated to {max_lines} lines. Narrow line_ranges or raise max_lines within policy limits."
+            ))
+        } else {
+            None
+        };
+
+        #[derive(Serialize)]
+        struct ReadFileExcerptResult {
+            file: String,
+            mode: &'static str,
+            total_lines: usize,
+            excerpts: Vec<FileExcerpt>,
+            excerpt_count: usize,
+            truncated: bool,
+            atlas_result_kind: &'static str,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            atlas_hint: Option<String>,
+        }
+
+        let result = ReadFileExcerptResult {
+            file,
+            mode,
+            total_lines,
+            excerpt_count: excerpts.len(),
+            excerpts,
+            truncated,
+            atlas_result_kind: "file_excerpt",
+            atlas_hint,
+        };
+
+        let mut response = render_tool_result(&result, output_format)?;
+        inject_budget_metadata(
+            &mut response,
+            &budgets.summary(
+                "review_context_extraction.max_nodes",
+                max_lines,
+                requested_max_lines.max(total_selected_lines),
+            ),
+        );
+        Ok(response)
+    })()
+    .or_else(|error| discovery_tool_error_result("read_file_excerpt", output_format, error))
 }
 
 /// MCP tool: `get_docs_section` — resolve a Markdown section by heading path/slug or line.
@@ -510,34 +523,37 @@ pub(crate) fn tool_get_docs_section(
     db_path: &str,
     output_format: OutputFormat,
 ) -> Result<serde_json::Value> {
-    let file =
-        str_arg(args, "file")?.ok_or_else(|| anyhow::anyhow!("missing required argument: file"))?;
-    let heading = str_arg(args, "heading")?.map(str::to_owned);
-    let line = u64_arg(args, "line").map(|value| value as u32);
-    if usize::from(heading.is_some()) + usize::from(line.is_some()) != 1 {
-        anyhow::bail!("provide exactly one selector: heading or line");
-    }
+    (|| {
+        let file = str_arg(args, "file")?
+            .ok_or_else(|| anyhow::anyhow!("missing required argument: file"))?;
+        let heading = str_arg(args, "heading")?.map(str::to_owned);
+        let line = u64_arg(args, "line").map(|value| value as u32);
+        if usize::from(heading.is_some()) + usize::from(line.is_some()) != 1 {
+            anyhow::bail!("provide exactly one selector: heading or line");
+        }
 
-    let max_bytes = u64_arg(args, "max_bytes").unwrap_or(16_384) as usize;
-    let (file, _) = resolve_repo_file_path(repo_root, file)?;
-    let store =
-        Store::open(db_path).with_context(|| format!("cannot open atlas store at '{db_path}'"))?;
-    let selector = if let Some(selector) = heading {
-        DocsSectionSelector::Heading(selector)
-    } else {
-        DocsSectionSelector::Line(line.expect("validated line selector"))
-    };
-    let result = lookup_docs_section(
-        &store,
-        camino::Utf8Path::new(repo_root),
-        &file,
-        selector,
-        max_bytes,
-    )?;
+        let max_bytes = u64_arg(args, "max_bytes").unwrap_or(16_384) as usize;
+        let (file, _) = resolve_repo_file_path(repo_root, file)?;
+        let store = Store::open(db_path)
+            .with_context(|| format!("cannot open atlas store at '{db_path}'"))?;
+        let selector = if let Some(selector) = heading {
+            DocsSectionSelector::Heading(selector)
+        } else {
+            DocsSectionSelector::Line(line.expect("validated line selector"))
+        };
+        let result = lookup_docs_section(
+            &store,
+            camino::Utf8Path::new(repo_root),
+            &file,
+            selector,
+            max_bytes,
+        )?;
 
-    let mut response = render_tool_result(&result, output_format)?;
-    response["file"] = serde_json::Value::String(result.file.clone());
-    Ok(response)
+        let mut response = render_tool_result(&result, output_format)?;
+        response["file"] = serde_json::Value::String(result.file.clone());
+        Ok(response)
+    })()
+    .or_else(|error| discovery_tool_error_result("get_docs_section", output_format, error))
 }
 
 /// MCP tool: `read_file_around_match` — read merged snippets around matches in one file.
@@ -546,132 +562,135 @@ pub(crate) fn tool_read_file_around_match(
     repo_root: &str,
     output_format: OutputFormat,
 ) -> Result<serde_json::Value> {
-    let policy = load_budget_policy(repo_root)?;
-    let mut budgets = BudgetManager::new();
-    let file =
-        str_arg(args, "file")?.ok_or_else(|| anyhow::anyhow!("missing required argument: file"))?;
-    let query = str_arg(args, "query")?
-        .ok_or_else(|| anyhow::anyhow!("missing required argument: query"))?;
-    let is_regex = bool_arg(args, "is_regex").unwrap_or(false);
-    let case_sensitive = bool_arg(args, "case_sensitive").unwrap_or(is_regex);
-    let before = u64_arg(args, "before").unwrap_or(2) as usize;
-    let after = u64_arg(args, "after").unwrap_or(2) as usize;
-    let requested_max_matches = u64_arg(args, "max_matches").unwrap_or(20) as usize;
-    let max_matches = budgets.resolve_limit(
-        policy.review_context_extraction.nodes,
-        "review_context_extraction.max_nodes",
-        Some(requested_max_matches),
-    );
-    let requested_max_lines = u64_arg(args, "max_lines").unwrap_or(200) as usize;
-    let max_lines = budgets.resolve_limit(
-        policy.review_context_extraction.nodes,
-        "review_context_extraction.max_nodes",
-        Some(requested_max_lines),
-    );
-    let (file, abs_path) = resolve_repo_file_path(repo_root, file)?;
-    if !abs_path.is_file() {
-        anyhow::bail!("file not found: {file}");
-    }
-
-    let contents = std::fs::read_to_string(&abs_path)
-        .with_context(|| format!("cannot read UTF-8 text file '{file}'"))?;
-    let lines: Vec<&str> = contents.lines().collect();
-    let pattern = if is_regex {
-        query.to_owned()
-    } else {
-        regex::escape(query)
-    };
-    let matcher = regex::RegexBuilder::new(&pattern)
-        .case_insensitive(!case_sensitive)
-        .build()
-        .map_err(|error| invalid_search_content_regex_error(query, error))?;
-
-    let mut match_lines = lines
-        .iter()
-        .enumerate()
-        .filter_map(|(index, line)| matcher.is_match(line).then_some(index + 1))
-        .collect::<Vec<_>>();
-    let total_matches = match_lines.len();
-    let match_limit_hit = match_lines.len() > max_matches;
-    if match_limit_hit {
-        match_lines.truncate(max_matches);
-        budgets.record_usage(
+    (|| {
+        let policy = load_budget_policy(repo_root)?;
+        let mut budgets = BudgetManager::new();
+        let file = str_arg(args, "file")?
+            .ok_or_else(|| anyhow::anyhow!("missing required argument: file"))?;
+        let query = str_arg(args, "query")?
+            .ok_or_else(|| anyhow::anyhow!("missing required argument: query"))?;
+        let is_regex = bool_arg(args, "is_regex").unwrap_or(false);
+        let case_sensitive = bool_arg(args, "case_sensitive").unwrap_or(is_regex);
+        let before = u64_arg(args, "before").unwrap_or(2) as usize;
+        let after = u64_arg(args, "after").unwrap_or(2) as usize;
+        let requested_max_matches = u64_arg(args, "max_matches").unwrap_or(20) as usize;
+        let max_matches = budgets.resolve_limit(
             policy.review_context_extraction.nodes,
             "review_context_extraction.max_nodes",
-            max_matches,
+            Some(requested_max_matches),
+        );
+        let requested_max_lines = u64_arg(args, "max_lines").unwrap_or(200) as usize;
+        let max_lines = budgets.resolve_limit(
+            policy.review_context_extraction.nodes,
+            "review_context_extraction.max_nodes",
+            Some(requested_max_lines),
+        );
+        let (file, abs_path) = resolve_repo_file_path(repo_root, file)?;
+        if !abs_path.is_file() {
+            anyhow::bail!("file not found: {file}");
+        }
+
+        let contents = std::fs::read_to_string(&abs_path)
+            .with_context(|| format!("cannot read UTF-8 text file '{file}'"))?;
+        let lines: Vec<&str> = contents.lines().collect();
+        let pattern = if is_regex {
+            query.to_owned()
+        } else {
+            regex::escape(query)
+        };
+        let matcher = regex::RegexBuilder::new(&pattern)
+            .case_insensitive(!case_sensitive)
+            .build()
+            .map_err(|error| invalid_search_content_regex_error(query, error))?;
+
+        let mut match_lines = lines
+            .iter()
+            .enumerate()
+            .filter_map(|(index, line)| matcher.is_match(line).then_some(index + 1))
+            .collect::<Vec<_>>();
+        let total_matches = match_lines.len();
+        let match_limit_hit = match_lines.len() > max_matches;
+        if match_limit_hit {
+            match_lines.truncate(max_matches);
+            budgets.record_usage(
+                policy.review_context_extraction.nodes,
+                "review_context_extraction.max_nodes",
+                max_matches,
+                total_matches,
+                true,
+            );
+        }
+
+        let (snippets, line_limit_hit, observed_lines) =
+            build_around_match_snippets(&lines, &match_lines, before, after, max_lines);
+        if line_limit_hit {
+            budgets.record_usage(
+                policy.review_context_extraction.nodes,
+                "review_context_extraction.max_nodes",
+                max_lines,
+                observed_lines,
+                true,
+            );
+        }
+
+        let truncated = match_limit_hit || line_limit_hit;
+        let atlas_hint = if total_matches == 0 {
+            Some(format!("No matches for '{query}' in {file}."))
+        } else if truncated {
+            Some("Snippets truncated by max_matches or max_lines budget.".to_owned())
+        } else {
+            None
+        };
+
+        #[derive(Serialize)]
+        struct AroundMatchResult {
+            file: String,
+            query: String,
+            is_regex: bool,
+            case_sensitive: bool,
+            total_matches: usize,
+            returned_matches: usize,
+            snippet_count: usize,
+            snippets: Vec<AroundMatchSnippet>,
+            truncated: bool,
+            atlas_result_kind: &'static str,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            atlas_hint: Option<String>,
+        }
+
+        let returned_matches = snippets
+            .iter()
+            .map(|snippet| snippet.match_lines.len())
+            .sum();
+        let result = AroundMatchResult {
+            file,
+            query: query.to_owned(),
+            is_regex,
+            case_sensitive,
             total_matches,
-            true,
+            returned_matches,
+            snippet_count: snippets.len(),
+            snippets,
+            truncated,
+            atlas_result_kind: "file_match_snippets",
+            atlas_hint,
+        };
+
+        let mut response = render_tool_result(&result, output_format)?;
+        inject_budget_metadata(
+            &mut response,
+            &budgets.summary(
+                "review_context_extraction.max_nodes",
+                max_matches.min(max_lines),
+                requested_max_matches
+                    .max(requested_max_lines)
+                    .max(total_matches)
+                    .max(observed_lines),
+            ),
         );
-    }
-
-    let (snippets, line_limit_hit, observed_lines) =
-        build_around_match_snippets(&lines, &match_lines, before, after, max_lines);
-    if line_limit_hit {
-        budgets.record_usage(
-            policy.review_context_extraction.nodes,
-            "review_context_extraction.max_nodes",
-            max_lines,
-            observed_lines,
-            true,
-        );
-    }
-
-    let truncated = match_limit_hit || line_limit_hit;
-    let atlas_hint = if total_matches == 0 {
-        Some(format!("No matches for '{query}' in {file}."))
-    } else if truncated {
-        Some("Snippets truncated by max_matches or max_lines budget.".to_owned())
-    } else {
-        None
-    };
-
-    #[derive(Serialize)]
-    struct AroundMatchResult {
-        file: String,
-        query: String,
-        is_regex: bool,
-        case_sensitive: bool,
-        total_matches: usize,
-        returned_matches: usize,
-        snippet_count: usize,
-        snippets: Vec<AroundMatchSnippet>,
-        truncated: bool,
-        atlas_result_kind: &'static str,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        atlas_hint: Option<String>,
-    }
-
-    let returned_matches = snippets
-        .iter()
-        .map(|snippet| snippet.match_lines.len())
-        .sum();
-    let result = AroundMatchResult {
-        file,
-        query: query.to_owned(),
-        is_regex,
-        case_sensitive,
-        total_matches,
-        returned_matches,
-        snippet_count: snippets.len(),
-        snippets,
-        truncated,
-        atlas_result_kind: "file_match_snippets",
-        atlas_hint,
-    };
-
-    let mut response = render_tool_result(&result, output_format)?;
-    inject_budget_metadata(
-        &mut response,
-        &budgets.summary(
-            "review_context_extraction.max_nodes",
-            max_matches.min(max_lines),
-            requested_max_matches
-                .max(requested_max_lines)
-                .max(total_matches)
-                .max(observed_lines),
-        ),
-    );
-    Ok(response)
+        Ok(response)
+    })()
+    .or_else(|error| discovery_tool_error_result("read_file_around_match", output_format, error))
 }
 
 /// MCP tool: `search_files` — file-path discovery by glob pattern.
@@ -684,148 +703,150 @@ pub(crate) fn tool_search_files(
     repo_root: &str,
     output_format: OutputFormat,
 ) -> Result<serde_json::Value> {
-    let policy = load_budget_policy(repo_root)?;
-    let mut budgets = BudgetManager::new();
-    let pattern = str_arg(args, "pattern")?
-        .ok_or_else(|| anyhow::anyhow!("missing required argument: pattern"))?
-        .to_owned();
-    let globs = string_array_arg(args, "globs")?;
-    let exclude_globs = string_array_arg(args, "exclude_globs")?;
-    let case_sensitive = bool_arg(args, "case_sensitive").unwrap_or(false);
-    let subpath = str_arg(args, "subpath")?.map(str::to_owned);
-    let result_limit = budgets.resolve_limit(
-        policy.review_context_extraction.files,
-        "review_context_extraction.max_files",
-        None,
-    );
-
-    let name_matcher = build_globset(&[&pattern], case_sensitive)
-        .with_context(|| format!("invalid pattern glob: {pattern}"))?;
-
-    let include_filter = if globs.is_empty() {
-        None
-    } else {
-        Some(build_globset(&globs, case_sensitive).context("invalid globs filter")?)
-    };
-
-    let exclude_filter = if exclude_globs.is_empty() {
-        None
-    } else {
-        Some(build_globset(&exclude_globs, false).context("invalid exclude_globs filter")?)
-    };
-
-    let walk_root = match subpath.as_deref() {
-        Some(sp) => resolve_subpath_walk_root(repo_root, sp)?,
-        None => repo_root.to_owned(),
-    };
-
-    let atlasignore_path = Path::new(repo_root).join(".atlasignore");
-    let mut walker = ignore::WalkBuilder::new(&walk_root);
-    walker
-        .hidden(false)
-        .git_ignore(true)
-        .git_global(true)
-        .git_exclude(true)
-        .ignore(true);
-    if atlasignore_path.exists() {
-        walker.add_ignore(&atlasignore_path);
-    }
-
-    let mut files: Vec<String> = Vec::new();
-    let mut truncated = false;
-
-    for entry in walker.build().flatten() {
-        if files.len() >= result_limit {
-            truncated = true;
-            break;
-        }
-        let ft = match entry.file_type() {
-            Some(ft) => ft,
-            None => continue,
-        };
-        if !ft.is_file() {
-            continue;
-        }
-
-        let full_path = entry.path();
-        let rel_path = match full_path.strip_prefix(repo_root) {
-            Ok(r) => r.to_string_lossy().replace('\\', "/"),
-            Err(_) => continue,
-        };
-
-        if let Some(ref filter) = include_filter
-            && !filter.is_match(&*rel_path)
-        {
-            continue;
-        }
-
-        if let Some(ref excl) = exclude_filter
-            && excl.is_match(&*rel_path)
-        {
-            continue;
-        }
-
-        // Match against filename component and full repo-relative path.
-        let file_name = full_path
-            .file_name()
-            .map(|n| n.to_string_lossy())
-            .unwrap_or_default();
-        if !name_matcher.is_match(file_name.as_ref()) && !name_matcher.is_match(&*rel_path) {
-            continue;
-        }
-
-        files.push(rel_path);
-    }
-
-    files.sort_unstable();
-
-    let result_count = files.len();
-    if truncated {
-        budgets.record_usage(
+    (|| {
+        let policy = load_budget_policy(repo_root)?;
+        let mut budgets = BudgetManager::new();
+        let pattern = str_arg(args, "pattern")?
+            .ok_or_else(|| anyhow::anyhow!("missing required argument: pattern"))?
+            .to_owned();
+        let globs = string_array_arg(args, "globs")?;
+        let exclude_globs = string_array_arg(args, "exclude_globs")?;
+        let case_sensitive = bool_arg(args, "case_sensitive").unwrap_or(false);
+        let subpath = str_arg(args, "subpath")?.map(str::to_owned);
+        let result_limit = budgets.resolve_limit(
             policy.review_context_extraction.files,
             "review_context_extraction.max_files",
-            result_limit,
-            result_limit.saturating_add(1),
-            true,
+            None,
         );
-    }
-    let atlas_hint = if result_count == 0 {
-        Some(
-            "No files matched. Try a broader glob (e.g. '*.rs' instead of 'foo*.rs'), \
-             verify the pattern syntax, or use search_content for content-based lookup.",
-        )
-    } else {
-        None
-    };
 
-    #[derive(Serialize)]
-    struct SearchFilesResult<'a> {
-        files: Vec<String>,
-        result_count: usize,
-        truncated: bool,
-        atlas_result_kind: &'static str,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        atlas_hint: Option<&'a str>,
-    }
+        let name_matcher = build_globset(&[&pattern], case_sensitive)
+            .with_context(|| format!("invalid pattern glob: {pattern}"))?;
 
-    let result = SearchFilesResult {
-        files,
-        result_count,
-        truncated,
-        atlas_result_kind: "file_paths",
-        atlas_hint,
-    };
+        let include_filter = if globs.is_empty() {
+            None
+        } else {
+            Some(build_globset(&globs, case_sensitive).context("invalid globs filter")?)
+        };
 
-    let mut response = render_tool_result(&result, output_format)?;
-    inject_budget_metadata(
-        &mut response,
-        &budgets.summary(
-            "review_context_extraction.max_files",
-            result_limit,
+        let exclude_filter = if exclude_globs.is_empty() {
+            None
+        } else {
+            Some(build_globset(&exclude_globs, false).context("invalid exclude_globs filter")?)
+        };
+
+        let walk_root = match subpath.as_deref() {
+            Some(sp) => resolve_subpath_walk_root(repo_root, sp)?,
+            None => repo_root.to_owned(),
+        };
+
+        let atlasignore_path = Path::new(repo_root).join(".atlasignore");
+        let mut walker = ignore::WalkBuilder::new(&walk_root);
+        walker
+            .hidden(false)
+            .git_ignore(true)
+            .git_global(true)
+            .git_exclude(true)
+            .ignore(true);
+        if atlasignore_path.exists() {
+            walker.add_ignore(&atlasignore_path);
+        }
+
+        let mut files: Vec<String> = Vec::new();
+        let mut truncated = false;
+
+        for entry in walker.build().flatten() {
+            if files.len() >= result_limit {
+                truncated = true;
+                break;
+            }
+            let ft = match entry.file_type() {
+                Some(ft) => ft,
+                None => continue,
+            };
+            if !ft.is_file() {
+                continue;
+            }
+
+            let full_path = entry.path();
+            let rel_path = match full_path.strip_prefix(repo_root) {
+                Ok(r) => r.to_string_lossy().replace('\\', "/"),
+                Err(_) => continue,
+            };
+
+            if let Some(ref filter) = include_filter
+                && !filter.is_match(&*rel_path)
+            {
+                continue;
+            }
+
+            if let Some(ref excl) = exclude_filter
+                && excl.is_match(&*rel_path)
+            {
+                continue;
+            }
+
+            let file_name = full_path
+                .file_name()
+                .map(|n| n.to_string_lossy())
+                .unwrap_or_default();
+            if !name_matcher.is_match(file_name.as_ref()) && !name_matcher.is_match(&*rel_path) {
+                continue;
+            }
+
+            files.push(rel_path);
+        }
+
+        files.sort_unstable();
+
+        let result_count = files.len();
+        if truncated {
+            budgets.record_usage(
+                policy.review_context_extraction.files,
+                "review_context_extraction.max_files",
+                result_limit,
+                result_limit.saturating_add(1),
+                true,
+            );
+        }
+        let atlas_hint = if result_count == 0 {
+            Some(
+                "No files matched. Try a broader glob (e.g. '*.rs' instead of 'foo*.rs'), \
+                 verify the pattern syntax, or use search_content for content-based lookup.",
+            )
+        } else {
+            None
+        };
+
+        #[derive(Serialize)]
+        struct SearchFilesResult<'a> {
+            files: Vec<String>,
+            result_count: usize,
+            truncated: bool,
+            atlas_result_kind: &'static str,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            atlas_hint: Option<&'a str>,
+        }
+
+        let result = SearchFilesResult {
+            files,
             result_count,
-        ),
-    );
-    Ok(response)
+            truncated,
+            atlas_result_kind: "file_paths",
+            atlas_hint,
+        };
+
+        let mut response = render_tool_result(&result, output_format)?;
+        inject_budget_metadata(
+            &mut response,
+            &budgets.summary(
+                "review_context_extraction.max_files",
+                result_limit,
+                result_count,
+            ),
+        );
+        Ok(response)
+    })()
+    .or_else(|error| discovery_tool_error_result("search_files", output_format, error))
 }
 
 // ---------------------------------------------------------------------------
@@ -842,246 +863,244 @@ pub(crate) fn tool_search_content(
     repo_root: &str,
     output_format: OutputFormat,
 ) -> Result<serde_json::Value> {
-    let policy = load_budget_policy(repo_root)?;
-    let mut budgets = BudgetManager::new();
-    let query = str_arg(args, "query")?
-        .ok_or_else(|| anyhow::anyhow!("missing required argument: query"))?
-        .to_owned();
-    let globs = string_array_arg(args, "globs")?;
-    let exclude_globs = string_array_arg(args, "exclude_globs")?;
-    let exclude_generated = bool_arg(args, "exclude_generated").unwrap_or(true);
-    let is_regex = bool_arg(args, "is_regex").unwrap_or(false);
-    let context_lines = u64_arg(args, "context_lines").unwrap_or(0) as usize;
-    let requested_max_results = u64_arg(args, "max_results").unwrap_or(50) as usize;
-    let max_results = budgets.resolve_limit(
-        policy.review_context_extraction.nodes,
-        "review_context_extraction.max_nodes",
-        Some(requested_max_results),
-    );
-    let rich_snippets = bool_arg(args, "rich_snippets").unwrap_or(false);
-    let snippet_context_lines = u64_arg(args, "snippet_context_lines")
-        .map(|value| value as usize)
-        .unwrap_or_else(|| {
-            if rich_snippets {
-                context_lines.max(2)
-            } else {
-                0
-            }
-        });
-    let subpath = str_arg(args, "subpath")?.map(str::to_owned);
-
-    // Escape for literal search; use as-is for regex.
-    let pattern = if is_regex {
-        query.clone()
-    } else {
-        regex::escape(&query)
-    };
-
-    let matcher = RegexMatcherBuilder::new()
-        // Literal queries are case-insensitive by default; regex queries respect user intent.
-        .case_insensitive(!is_regex)
-        .build(&pattern)
-        .map_err(|error| invalid_search_content_regex_error(&query, error))?;
-
-    let rich_snippet_regex = if rich_snippets {
-        Some(
-            regex::RegexBuilder::new(&pattern)
-                .case_insensitive(!is_regex)
-                .build()
-                .map_err(|error| invalid_search_content_regex_error(&query, error))?,
-        )
-    } else {
-        None
-    };
-
-    let searcher_proto = SearcherBuilder::new()
-        .binary_detection(BinaryDetection::quit(b'\x00'))
-        .before_context(context_lines)
-        .after_context(context_lines)
-        .build();
-
-    let include_filter = if globs.is_empty() {
-        None
-    } else {
-        Some(build_globset(&globs, false).context("invalid globs filter")?)
-    };
-
-    let exclude_filter = if exclude_globs.is_empty() {
-        None
-    } else {
-        Some(build_globset(&exclude_globs, false).context("invalid exclude_globs filter")?)
-    };
-
-    let generated_filter = if exclude_generated {
-        Some(
-            build_globset(GENERATED_PATTERNS, false)
-                .context("generated-patterns compile failed")?,
-        )
-    } else {
-        None
-    };
-
-    let walk_root = match subpath.as_deref() {
-        Some(sp) => resolve_subpath_walk_root(repo_root, sp)?,
-        None => repo_root.to_owned(),
-    };
-
-    let atlasignore_path = Path::new(repo_root).join(".atlasignore");
-    let mut walker = ignore::WalkBuilder::new(&walk_root);
-    walker
-        .hidden(false)
-        .git_ignore(true)
-        .git_global(true)
-        .git_exclude(true)
-        .ignore(true);
-    if atlasignore_path.exists() {
-        walker.add_ignore(&atlasignore_path);
-    }
-
-    let mut matches: Vec<ContentMatch> = Vec::new();
-    let mut rich_snippet_results: Vec<RichSnippet> = Vec::new();
-    let mut truncated = false;
-
-    'walk: for entry in walker.build().flatten() {
-        let ft = match entry.file_type() {
-            Some(ft) => ft,
-            None => continue,
-        };
-        if !ft.is_file() {
-            continue;
-        }
-
-        let full_path = entry.path().to_path_buf();
-        let rel_path = match full_path.strip_prefix(repo_root) {
-            Ok(r) => r.to_string_lossy().replace('\\', "/"),
-            Err(_) => continue,
-        };
-
-        if let Some(ref filter) = include_filter
-            && !filter.is_match(&*rel_path)
-        {
-            continue;
-        }
-        if let Some(ref excl) = exclude_filter
-            && excl.is_match(&*rel_path)
-        {
-            continue;
-        }
-        if let Some(ref generated) = generated_filter
-            && generated.is_match(&*rel_path)
-        {
-            continue;
-        }
-
-        let remaining = max_results.saturating_sub(matches.len());
-        if remaining == 0 {
-            truncated = true;
-            break 'walk;
-        }
-
-        let file_hits = search_file(
-            &full_path,
-            &rel_path,
-            &matcher,
-            searcher_proto.clone(),
-            remaining,
+    (|| {
+        let policy = load_budget_policy(repo_root)?;
+        let mut budgets = BudgetManager::new();
+        let query = str_arg(args, "query")?
+            .ok_or_else(|| anyhow::anyhow!("missing required argument: query"))?
+            .to_owned();
+        let globs = string_array_arg(args, "globs")?;
+        let exclude_globs = string_array_arg(args, "exclude_globs")?;
+        let exclude_generated = bool_arg(args, "exclude_generated").unwrap_or(true);
+        let is_regex = bool_arg(args, "is_regex").unwrap_or(false);
+        let context_lines = u64_arg(args, "context_lines").unwrap_or(0) as usize;
+        let requested_max_results = u64_arg(args, "max_results").unwrap_or(50) as usize;
+        let max_results = budgets.resolve_limit(
+            policy.review_context_extraction.nodes,
+            "review_context_extraction.max_nodes",
+            Some(requested_max_results),
         );
-        match file_hits {
-            Ok(hits) => {
-                let would_overflow = matches.len() + hits.len() > max_results;
-                for hit in hits {
-                    if matches.len() >= max_results {
+        let rich_snippets = bool_arg(args, "rich_snippets").unwrap_or(false);
+        let snippet_context_lines = u64_arg(args, "snippet_context_lines")
+            .map(|value| value as usize)
+            .unwrap_or_else(|| {
+                if rich_snippets {
+                    context_lines.max(2)
+                } else {
+                    0
+                }
+            });
+        let subpath = str_arg(args, "subpath")?.map(str::to_owned);
+
+        let pattern = if is_regex {
+            query.clone()
+        } else {
+            regex::escape(&query)
+        };
+
+        let matcher = RegexMatcherBuilder::new()
+            .case_insensitive(!is_regex)
+            .build(&pattern)
+            .map_err(|error| invalid_search_content_regex_error(&query, error))?;
+
+        let rich_snippet_regex = if rich_snippets {
+            Some(
+                regex::RegexBuilder::new(&pattern)
+                    .case_insensitive(!is_regex)
+                    .build()
+                    .map_err(|error| invalid_search_content_regex_error(&query, error))?,
+            )
+        } else {
+            None
+        };
+
+        let searcher_proto = SearcherBuilder::new()
+            .binary_detection(BinaryDetection::quit(b'\x00'))
+            .before_context(context_lines)
+            .after_context(context_lines)
+            .build();
+
+        let include_filter = if globs.is_empty() {
+            None
+        } else {
+            Some(build_globset(&globs, false).context("invalid globs filter")?)
+        };
+
+        let exclude_filter = if exclude_globs.is_empty() {
+            None
+        } else {
+            Some(build_globset(&exclude_globs, false).context("invalid exclude_globs filter")?)
+        };
+
+        let generated_filter = if exclude_generated {
+            Some(
+                build_globset(GENERATED_PATTERNS, false)
+                    .context("generated-patterns compile failed")?,
+            )
+        } else {
+            None
+        };
+
+        let walk_root = match subpath.as_deref() {
+            Some(sp) => resolve_subpath_walk_root(repo_root, sp)?,
+            None => repo_root.to_owned(),
+        };
+
+        let atlasignore_path = Path::new(repo_root).join(".atlasignore");
+        let mut walker = ignore::WalkBuilder::new(&walk_root);
+        walker
+            .hidden(false)
+            .git_ignore(true)
+            .git_global(true)
+            .git_exclude(true)
+            .ignore(true);
+        if atlasignore_path.exists() {
+            walker.add_ignore(&atlasignore_path);
+        }
+
+        let mut matches: Vec<ContentMatch> = Vec::new();
+        let mut rich_snippet_results: Vec<RichSnippet> = Vec::new();
+        let mut truncated = false;
+
+        'walk: for entry in walker.build().flatten() {
+            let ft = match entry.file_type() {
+                Some(ft) => ft,
+                None => continue,
+            };
+            if !ft.is_file() {
+                continue;
+            }
+
+            let full_path = entry.path().to_path_buf();
+            let rel_path = match full_path.strip_prefix(repo_root) {
+                Ok(r) => r.to_string_lossy().replace('\\', "/"),
+                Err(_) => continue,
+            };
+
+            if let Some(ref filter) = include_filter
+                && !filter.is_match(&*rel_path)
+            {
+                continue;
+            }
+            if let Some(ref excl) = exclude_filter
+                && excl.is_match(&*rel_path)
+            {
+                continue;
+            }
+            if let Some(ref generated) = generated_filter
+                && generated.is_match(&*rel_path)
+            {
+                continue;
+            }
+
+            let remaining = max_results.saturating_sub(matches.len());
+            if remaining == 0 {
+                truncated = true;
+                break 'walk;
+            }
+
+            let file_hits = search_file(
+                &full_path,
+                &rel_path,
+                &matcher,
+                searcher_proto.clone(),
+                remaining,
+            );
+            match file_hits {
+                Ok(hits) => {
+                    let would_overflow = matches.len() + hits.len() > max_results;
+                    for hit in hits {
+                        if matches.len() >= max_results {
+                            truncated = true;
+                            break 'walk;
+                        }
+                        matches.push(hit);
+                    }
+                    if would_overflow {
                         truncated = true;
                         break 'walk;
                     }
-                    matches.push(hit);
-                }
-                if would_overflow {
-                    truncated = true;
-                    break 'walk;
-                }
-                if let Some(ref regex) = rich_snippet_regex {
-                    let remaining_snippets = max_results.saturating_sub(rich_snippet_results.len());
-                    if remaining_snippets > 0
-                        && let Ok(snippets) = collect_rich_snippets(
-                            &full_path,
-                            &rel_path,
-                            regex,
-                            snippet_context_lines,
-                            remaining_snippets,
-                        )
-                    {
-                        rich_snippet_results.extend(snippets);
+                    if let Some(ref regex) = rich_snippet_regex {
+                        let remaining_snippets = max_results.saturating_sub(rich_snippet_results.len());
+                        if remaining_snippets > 0
+                            && let Ok(snippets) = collect_rich_snippets(
+                                &full_path,
+                                &rel_path,
+                                regex,
+                                snippet_context_lines,
+                                remaining_snippets,
+                            )
+                        {
+                            rich_snippet_results.extend(snippets);
+                        }
                     }
                 }
+                Err(_) => continue,
             }
-            // Skip unreadable / binary files silently.
-            Err(_) => continue,
         }
-    }
 
-    let result_count = matches.len();
+        let result_count = matches.len();
+        let looks_like_symbol = !query.contains(' ')
+            && !query.contains('.')
+            && query.chars().all(|c| c.is_alphanumeric() || c == '_');
 
-    // Hint: if the query looks like a symbol name, suggest query_graph.
-    let looks_like_symbol = !query.contains(' ')
-        && !query.contains('.')
-        && query.chars().all(|c| c.is_alphanumeric() || c == '_');
+        let atlas_hint = if result_count == 0 {
+            Some(format!(
+                "No matches for '{query}'. Try broadening the query, enabling is_regex=true \
+                 for pattern matching, or check that the file type is covered by your globs filter.",
+            ))
+        } else if looks_like_symbol {
+            Some(format!(
+                "'{query}' looks like a symbol name. For callers, callees, and graph context \
+                 prefer query_graph or symbol_neighbors.",
+            ))
+        } else {
+            None
+        };
 
-    let atlas_hint = if result_count == 0 {
-        Some(format!(
-            "No matches for '{query}'. Try broadening the query, enabling is_regex=true \
-             for pattern matching, or check that the file type is covered by your globs filter.",
-        ))
-    } else if looks_like_symbol {
-        Some(format!(
-            "'{query}' looks like a symbol name. For callers, callees, and graph context \
-             prefer query_graph or symbol_neighbors.",
-        ))
-    } else {
-        None
-    };
+        #[derive(Serialize)]
+        struct SearchContentResult {
+            matches: Vec<ContentMatch>,
+            #[serde(skip_serializing_if = "Vec::is_empty")]
+            rich_snippets: Vec<RichSnippet>,
+            result_count: usize,
+            truncated: bool,
+            atlas_result_kind: &'static str,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            atlas_hint: Option<String>,
+        }
 
-    #[derive(Serialize)]
-    struct SearchContentResult {
-        matches: Vec<ContentMatch>,
-        #[serde(skip_serializing_if = "Vec::is_empty")]
-        rich_snippets: Vec<RichSnippet>,
-        result_count: usize,
-        truncated: bool,
-        atlas_result_kind: &'static str,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        atlas_hint: Option<String>,
-    }
+        let result = SearchContentResult {
+            matches,
+            rich_snippets: rich_snippet_results,
+            result_count,
+            truncated,
+            atlas_result_kind: "content_matches",
+            atlas_hint,
+        };
 
-    let result = SearchContentResult {
-        matches,
-        rich_snippets: rich_snippet_results,
-        result_count,
-        truncated,
-        atlas_result_kind: "content_matches",
-        atlas_hint,
-    };
+        if truncated {
+            budgets.record_usage(
+                policy.review_context_extraction.nodes,
+                "review_context_extraction.max_nodes",
+                max_results,
+                max_results.saturating_add(1),
+                true,
+            );
+        }
 
-    if truncated {
-        budgets.record_usage(
-            policy.review_context_extraction.nodes,
-            "review_context_extraction.max_nodes",
-            max_results,
-            max_results.saturating_add(1),
-            true,
+        let mut response = render_tool_result(&result, output_format)?;
+        inject_budget_metadata(
+            &mut response,
+            &budgets.summary(
+                "review_context_extraction.max_nodes",
+                max_results,
+                requested_max_results.max(result_count),
+            ),
         );
-    }
-
-    let mut response = render_tool_result(&result, output_format)?;
-    inject_budget_metadata(
-        &mut response,
-        &budgets.summary(
-            "review_context_extraction.max_nodes",
-            max_results,
-            requested_max_results.max(result_count),
-        ),
-    );
-    Ok(response)
+        Ok(response)
+    })()
+    .or_else(|error| discovery_tool_error_result("search_content", output_format, error))
 }
 
 fn collect_rich_snippets(
@@ -1171,162 +1190,164 @@ pub(crate) fn tool_search_templates(
     repo_root: &str,
     output_format: OutputFormat,
 ) -> Result<serde_json::Value> {
-    let policy = load_budget_policy(repo_root)?;
-    let mut budgets = BudgetManager::new();
-    let kind = str_arg(args, "kind")?.map(str::to_owned);
-    let globs = string_array_arg(args, "globs")?;
-    let exclude_globs = string_array_arg(args, "exclude_globs")?;
-    let subpath = str_arg(args, "subpath")?.map(str::to_owned);
-    let case_sensitive = bool_arg(args, "case_sensitive").unwrap_or(false);
-    let requested_max_results = u64_arg(args, "max_results").unwrap_or(100) as usize;
-    let max_results = budgets.resolve_limit(
-        policy.review_context_extraction.files,
-        "review_context_extraction.max_files",
-        Some(requested_max_results),
-    );
-
-    // Determine which extension patterns to use based on `kind`.
-    let extension_patterns: Vec<&str> = match kind.as_deref() {
-        Some("html") => vec!["*.html", "*.htm"],
-        Some("jinja") => vec!["*.j2", "*.jinja", "*.jinja2"],
-        Some("handlebars") => vec!["*.hbs", "*.handlebars"],
-        Some("tera") => vec!["*.tera"],
-        Some("mako") => vec!["*.mako"],
-        Some("mustache") => vec!["*.mustache"],
-        Some("twig") => vec!["*.twig"],
-        Some("liquid") => vec!["*.liquid"],
-        Some("erb") => vec!["*.erb"],
-        Some("haml") => vec!["*.haml"],
-        Some("pug") => vec!["*.pug"],
-        None | Some(_) => TEMPLATE_EXTENSIONS.to_vec(),
-    };
-
-    let name_matcher = build_globset(&extension_patterns, case_sensitive)
-        .context("invalid template extension patterns")?;
-
-    let include_filter = if globs.is_empty() {
-        None
-    } else {
-        Some(build_globset(&globs, case_sensitive).context("invalid globs filter")?)
-    };
-
-    let exclude_filter = if exclude_globs.is_empty() {
-        None
-    } else {
-        Some(build_globset(&exclude_globs, false).context("invalid exclude_globs filter")?)
-    };
-
-    let walk_root = match subpath.as_deref() {
-        Some(sp) => resolve_subpath_walk_root(repo_root, sp)?,
-        None => repo_root.to_owned(),
-    };
-
-    let atlasignore_path = Path::new(repo_root).join(".atlasignore");
-    let mut walker = ignore::WalkBuilder::new(&walk_root);
-    walker
-        .hidden(false)
-        .git_ignore(true)
-        .git_global(true)
-        .git_exclude(true)
-        .ignore(true);
-    if atlasignore_path.exists() {
-        walker.add_ignore(&atlasignore_path);
-    }
-
-    let mut files: Vec<String> = Vec::new();
-    let mut truncated = false;
-
-    for entry in walker.build().flatten() {
-        if files.len() >= max_results {
-            truncated = true;
-            break;
-        }
-        let ft = match entry.file_type() {
-            Some(ft) => ft,
-            None => continue,
-        };
-        if !ft.is_file() {
-            continue;
-        }
-
-        let full_path = entry.path();
-        let rel_path = match full_path.strip_prefix(repo_root) {
-            Ok(r) => r.to_string_lossy().replace('\\', "/"),
-            Err(_) => continue,
-        };
-
-        if let Some(ref filter) = include_filter
-            && !filter.is_match(&*rel_path)
-        {
-            continue;
-        }
-        if let Some(ref excl) = exclude_filter
-            && excl.is_match(&*rel_path)
-        {
-            continue;
-        }
-
-        let file_name = full_path
-            .file_name()
-            .map(|n| n.to_string_lossy())
-            .unwrap_or_default();
-        if !name_matcher.is_match(file_name.as_ref()) {
-            continue;
-        }
-
-        files.push(rel_path);
-    }
-
-    files.sort_unstable();
-
-    let result_count = files.len();
-    if truncated {
-        budgets.record_usage(
+    (|| {
+        let policy = load_budget_policy(repo_root)?;
+        let mut budgets = BudgetManager::new();
+        let kind = str_arg(args, "kind")?.map(str::to_owned);
+        let globs = string_array_arg(args, "globs")?;
+        let exclude_globs = string_array_arg(args, "exclude_globs")?;
+        let subpath = str_arg(args, "subpath")?.map(str::to_owned);
+        let case_sensitive = bool_arg(args, "case_sensitive").unwrap_or(false);
+        let requested_max_results = u64_arg(args, "max_results").unwrap_or(100) as usize;
+        let max_results = budgets.resolve_limit(
             policy.review_context_extraction.files,
             "review_context_extraction.max_files",
-            max_results,
-            max_results.saturating_add(1),
-            true,
+            Some(requested_max_results),
         );
-    }
-    let atlas_hint = if result_count == 0 {
-        let kind_hint = kind.as_deref().unwrap_or("any template");
-        Some(format!(
-            "No {kind_hint} template files found. Verify the repo contains template files or \
-             widen the search with a broader `kind` or by removing `globs` filters.",
-        ))
-    } else {
-        None
-    };
 
-    #[derive(Serialize)]
-    struct SearchTemplatesResult {
-        files: Vec<String>,
-        result_count: usize,
-        truncated: bool,
-        atlas_result_kind: &'static str,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        atlas_hint: Option<String>,
-    }
+        let extension_patterns: Vec<&str> = match kind.as_deref() {
+            Some("html") => vec!["*.html", "*.htm"],
+            Some("jinja") => vec!["*.j2", "*.jinja", "*.jinja2"],
+            Some("handlebars") => vec!["*.hbs", "*.handlebars"],
+            Some("tera") => vec!["*.tera"],
+            Some("mako") => vec!["*.mako"],
+            Some("mustache") => vec!["*.mustache"],
+            Some("twig") => vec!["*.twig"],
+            Some("liquid") => vec!["*.liquid"],
+            Some("erb") => vec!["*.erb"],
+            Some("haml") => vec!["*.haml"],
+            Some("pug") => vec!["*.pug"],
+            None | Some(_) => TEMPLATE_EXTENSIONS.to_vec(),
+        };
 
-    let result = SearchTemplatesResult {
-        files,
-        result_count,
-        truncated,
-        atlas_result_kind: "template_files",
-        atlas_hint,
-    };
+        let name_matcher = build_globset(&extension_patterns, case_sensitive)
+            .context("invalid template extension patterns")?;
 
-    let mut response = render_tool_result(&result, output_format)?;
-    inject_budget_metadata(
-        &mut response,
-        &budgets.summary(
-            "review_context_extraction.max_files",
-            max_results,
-            requested_max_results.max(result_count),
-        ),
-    );
-    Ok(response)
+        let include_filter = if globs.is_empty() {
+            None
+        } else {
+            Some(build_globset(&globs, case_sensitive).context("invalid globs filter")?)
+        };
+
+        let exclude_filter = if exclude_globs.is_empty() {
+            None
+        } else {
+            Some(build_globset(&exclude_globs, false).context("invalid exclude_globs filter")?)
+        };
+
+        let walk_root = match subpath.as_deref() {
+            Some(sp) => resolve_subpath_walk_root(repo_root, sp)?,
+            None => repo_root.to_owned(),
+        };
+
+        let atlasignore_path = Path::new(repo_root).join(".atlasignore");
+        let mut walker = ignore::WalkBuilder::new(&walk_root);
+        walker
+            .hidden(false)
+            .git_ignore(true)
+            .git_global(true)
+            .git_exclude(true)
+            .ignore(true);
+        if atlasignore_path.exists() {
+            walker.add_ignore(&atlasignore_path);
+        }
+
+        let mut files: Vec<String> = Vec::new();
+        let mut truncated = false;
+
+        for entry in walker.build().flatten() {
+            if files.len() >= max_results {
+                truncated = true;
+                break;
+            }
+            let ft = match entry.file_type() {
+                Some(ft) => ft,
+                None => continue,
+            };
+            if !ft.is_file() {
+                continue;
+            }
+
+            let full_path = entry.path();
+            let rel_path = match full_path.strip_prefix(repo_root) {
+                Ok(r) => r.to_string_lossy().replace('\\', "/"),
+                Err(_) => continue,
+            };
+
+            if let Some(ref filter) = include_filter
+                && !filter.is_match(&*rel_path)
+            {
+                continue;
+            }
+            if let Some(ref excl) = exclude_filter
+                && excl.is_match(&*rel_path)
+            {
+                continue;
+            }
+
+            let file_name = full_path
+                .file_name()
+                .map(|n| n.to_string_lossy())
+                .unwrap_or_default();
+            if !name_matcher.is_match(file_name.as_ref()) {
+                continue;
+            }
+
+            files.push(rel_path);
+        }
+
+        files.sort_unstable();
+
+        let result_count = files.len();
+        if truncated {
+            budgets.record_usage(
+                policy.review_context_extraction.files,
+                "review_context_extraction.max_files",
+                max_results,
+                max_results.saturating_add(1),
+                true,
+            );
+        }
+        let atlas_hint = if result_count == 0 {
+            let kind_hint = kind.as_deref().unwrap_or("any template");
+            Some(format!(
+                "No {kind_hint} template files found. Verify the repo contains template files or \
+                 widen the search with a broader `kind` or by removing `globs` filters.",
+            ))
+        } else {
+            None
+        };
+
+        #[derive(Serialize)]
+        struct SearchTemplatesResult {
+            files: Vec<String>,
+            result_count: usize,
+            truncated: bool,
+            atlas_result_kind: &'static str,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            atlas_hint: Option<String>,
+        }
+
+        let result = SearchTemplatesResult {
+            files,
+            result_count,
+            truncated,
+            atlas_result_kind: "template_files",
+            atlas_hint,
+        };
+
+        let mut response = render_tool_result(&result, output_format)?;
+        inject_budget_metadata(
+            &mut response,
+            &budgets.summary(
+                "review_context_extraction.max_files",
+                max_results,
+                requested_max_results.max(result_count),
+            ),
+        );
+        Ok(response)
+    })()
+    .or_else(|error| discovery_tool_error_result("search_templates", output_format, error))
 }
 
 // ---------------------------------------------------------------------------
@@ -1372,155 +1393,157 @@ pub(crate) fn tool_search_text_assets(
     repo_root: &str,
     output_format: OutputFormat,
 ) -> Result<serde_json::Value> {
-    let policy = load_budget_policy(repo_root)?;
-    let mut budgets = BudgetManager::new();
-    let kind = str_arg(args, "kind")?.map(str::to_owned);
-    let globs = string_array_arg(args, "globs")?;
-    let exclude_globs = string_array_arg(args, "exclude_globs")?;
-    let subpath = str_arg(args, "subpath")?.map(str::to_owned);
-    let case_sensitive = bool_arg(args, "case_sensitive").unwrap_or(false);
-    let requested_max_results = u64_arg(args, "max_results").unwrap_or(100) as usize;
-    let max_results = budgets.resolve_limit(
-        policy.review_context_extraction.files,
-        "review_context_extraction.max_files",
-        Some(requested_max_results),
-    );
-
-    let extension_patterns: Vec<&str> = match kind.as_deref() {
-        Some("sql") => TEXT_ASSET_SQL.to_vec(),
-        Some("config") => TEXT_ASSET_CONFIG.to_vec(),
-        Some("env") => TEXT_ASSET_ENV.to_vec(),
-        Some("prompt") => TEXT_ASSET_PROMPT.to_vec(),
-        None | Some(_) => TEXT_ASSET_ALL.to_vec(),
-    };
-
-    let name_matcher = build_globset(&extension_patterns, case_sensitive)
-        .context("invalid text-asset extension patterns")?;
-
-    let include_filter = if globs.is_empty() {
-        None
-    } else {
-        Some(build_globset(&globs, case_sensitive).context("invalid globs filter")?)
-    };
-
-    let exclude_filter = if exclude_globs.is_empty() {
-        None
-    } else {
-        Some(build_globset(&exclude_globs, false).context("invalid exclude_globs filter")?)
-    };
-
-    let walk_root = match subpath.as_deref() {
-        Some(sp) => resolve_subpath_walk_root(repo_root, sp)?,
-        None => repo_root.to_owned(),
-    };
-
-    let atlasignore_path = Path::new(repo_root).join(".atlasignore");
-    let mut walker = ignore::WalkBuilder::new(&walk_root);
-    walker
-        .hidden(false)
-        .git_ignore(true)
-        .git_global(true)
-        .git_exclude(true)
-        .ignore(true);
-    if atlasignore_path.exists() {
-        walker.add_ignore(&atlasignore_path);
-    }
-
-    let mut files: Vec<String> = Vec::new();
-    let mut truncated = false;
-
-    for entry in walker.build().flatten() {
-        if files.len() >= max_results {
-            truncated = true;
-            break;
-        }
-        let ft = match entry.file_type() {
-            Some(ft) => ft,
-            None => continue,
-        };
-        if !ft.is_file() {
-            continue;
-        }
-
-        let full_path = entry.path();
-        let rel_path = match full_path.strip_prefix(repo_root) {
-            Ok(r) => r.to_string_lossy().replace('\\', "/"),
-            Err(_) => continue,
-        };
-
-        if let Some(ref filter) = include_filter
-            && !filter.is_match(&*rel_path)
-        {
-            continue;
-        }
-        if let Some(ref excl) = exclude_filter
-            && excl.is_match(&*rel_path)
-        {
-            continue;
-        }
-
-        let file_name = full_path
-            .file_name()
-            .map(|n| n.to_string_lossy())
-            .unwrap_or_default();
-        // Also match the full repo-relative path for patterns like `prompts/*.md`.
-        if !name_matcher.is_match(file_name.as_ref()) && !name_matcher.is_match(&*rel_path) {
-            continue;
-        }
-
-        files.push(rel_path);
-    }
-
-    files.sort_unstable();
-
-    let result_count = files.len();
-    if truncated {
-        budgets.record_usage(
+    (|| {
+        let policy = load_budget_policy(repo_root)?;
+        let mut budgets = BudgetManager::new();
+        let kind = str_arg(args, "kind")?.map(str::to_owned);
+        let globs = string_array_arg(args, "globs")?;
+        let exclude_globs = string_array_arg(args, "exclude_globs")?;
+        let subpath = str_arg(args, "subpath")?.map(str::to_owned);
+        let case_sensitive = bool_arg(args, "case_sensitive").unwrap_or(false);
+        let requested_max_results = u64_arg(args, "max_results").unwrap_or(100) as usize;
+        let max_results = budgets.resolve_limit(
             policy.review_context_extraction.files,
             "review_context_extraction.max_files",
-            max_results,
-            max_results.saturating_add(1),
-            true,
+            Some(requested_max_results),
         );
-    }
-    let atlas_hint = if result_count == 0 {
-        let kind_hint = kind.as_deref().unwrap_or("any text asset");
-        Some(format!(
-            "No {kind_hint} files found. Supported kinds: sql, config, env, prompt. \
-             Try broadening with `kind` omitted or check the subpath.",
-        ))
-    } else {
-        None
-    };
 
-    #[derive(Serialize)]
-    struct SearchTextAssetsResult {
-        files: Vec<String>,
-        result_count: usize,
-        truncated: bool,
-        atlas_result_kind: &'static str,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        atlas_hint: Option<String>,
-    }
+        let extension_patterns: Vec<&str> = match kind.as_deref() {
+            Some("sql") => TEXT_ASSET_SQL.to_vec(),
+            Some("config") => TEXT_ASSET_CONFIG.to_vec(),
+            Some("env") => TEXT_ASSET_ENV.to_vec(),
+            Some("prompt") => TEXT_ASSET_PROMPT.to_vec(),
+            None | Some(_) => TEXT_ASSET_ALL.to_vec(),
+        };
 
-    let result = SearchTextAssetsResult {
-        files,
-        result_count,
-        truncated,
-        atlas_result_kind: "text_asset_files",
-        atlas_hint,
-    };
+        let name_matcher = build_globset(&extension_patterns, case_sensitive)
+            .context("invalid text-asset extension patterns")?;
 
-    let mut response = render_tool_result(&result, output_format)?;
-    inject_budget_metadata(
-        &mut response,
-        &budgets.summary(
-            "review_context_extraction.max_files",
-            max_results,
-            requested_max_results.max(result_count),
-        ),
-    );
-    Ok(response)
+        let include_filter = if globs.is_empty() {
+            None
+        } else {
+            Some(build_globset(&globs, case_sensitive).context("invalid globs filter")?)
+        };
+
+        let exclude_filter = if exclude_globs.is_empty() {
+            None
+        } else {
+            Some(build_globset(&exclude_globs, false).context("invalid exclude_globs filter")?)
+        };
+
+        let walk_root = match subpath.as_deref() {
+            Some(sp) => resolve_subpath_walk_root(repo_root, sp)?,
+            None => repo_root.to_owned(),
+        };
+
+        let atlasignore_path = Path::new(repo_root).join(".atlasignore");
+        let mut walker = ignore::WalkBuilder::new(&walk_root);
+        walker
+            .hidden(false)
+            .git_ignore(true)
+            .git_global(true)
+            .git_exclude(true)
+            .ignore(true);
+        if atlasignore_path.exists() {
+            walker.add_ignore(&atlasignore_path);
+        }
+
+        let mut files: Vec<String> = Vec::new();
+        let mut truncated = false;
+
+        for entry in walker.build().flatten() {
+            if files.len() >= max_results {
+                truncated = true;
+                break;
+            }
+            let ft = match entry.file_type() {
+                Some(ft) => ft,
+                None => continue,
+            };
+            if !ft.is_file() {
+                continue;
+            }
+
+            let full_path = entry.path();
+            let rel_path = match full_path.strip_prefix(repo_root) {
+                Ok(r) => r.to_string_lossy().replace('\\', "/"),
+                Err(_) => continue,
+            };
+
+            if let Some(ref filter) = include_filter
+                && !filter.is_match(&*rel_path)
+            {
+                continue;
+            }
+            if let Some(ref excl) = exclude_filter
+                && excl.is_match(&*rel_path)
+            {
+                continue;
+            }
+
+            let file_name = full_path
+                .file_name()
+                .map(|n| n.to_string_lossy())
+                .unwrap_or_default();
+            if !name_matcher.is_match(file_name.as_ref()) && !name_matcher.is_match(&*rel_path) {
+                continue;
+            }
+
+            files.push(rel_path);
+        }
+
+        files.sort_unstable();
+
+        let result_count = files.len();
+        if truncated {
+            budgets.record_usage(
+                policy.review_context_extraction.files,
+                "review_context_extraction.max_files",
+                max_results,
+                max_results.saturating_add(1),
+                true,
+            );
+        }
+        let atlas_hint = if result_count == 0 {
+            let kind_hint = kind.as_deref().unwrap_or("any text asset");
+            Some(format!(
+                "No {kind_hint} files found. Supported kinds: sql, config, env, prompt. \
+                 Try broadening with `kind` omitted or check the subpath.",
+            ))
+        } else {
+            None
+        };
+
+        #[derive(Serialize)]
+        struct SearchTextAssetsResult {
+            files: Vec<String>,
+            result_count: usize,
+            truncated: bool,
+            atlas_result_kind: &'static str,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            atlas_hint: Option<String>,
+        }
+
+        let result = SearchTextAssetsResult {
+            files,
+            result_count,
+            truncated,
+            atlas_result_kind: "text_asset_files",
+            atlas_hint,
+        };
+
+        let mut response = render_tool_result(&result, output_format)?;
+        inject_budget_metadata(
+            &mut response,
+            &budgets.summary(
+                "review_context_extraction.max_files",
+                max_results,
+                requested_max_results.max(result_count),
+            ),
+        );
+        Ok(response)
+    })()
+    .or_else(|error| discovery_tool_error_result("search_text_assets", output_format, error))
 }
 
 // ---------------------------------------------------------------------------
@@ -1949,9 +1972,12 @@ mod tests {
                 "start_line": 1,
                 "end_line": 1,
             });
-            let result = tool_read_file_excerpt(Some(&args), &root, OutputFormat::Json);
-            assert!(
-                result.is_err(),
+            let result = tool_read_file_excerpt(Some(&args), &root, OutputFormat::Json)
+                .expect("path traversal should return tool error result");
+            assert_eq!(result["isError"], serde_json::json!(true));
+            assert_eq!(
+                result["structuredContent"]["code"],
+                serde_json::json!("invalid_input"),
                 "file path '{bad}' should be rejected as traversal attempt"
             );
         }
@@ -2101,8 +2127,18 @@ mod tests {
             "file": "../etc/passwd",
             "query": "target",
         });
-        let result = tool_read_file_around_match(Some(&args), &root, OutputFormat::Json);
-        assert!(result.is_err());
+        let result = tool_read_file_around_match(Some(&args), &root, OutputFormat::Json)
+            .expect("path traversal should return tool error result");
+
+        assert_eq!(result["isError"], serde_json::json!(true));
+        assert_eq!(
+            result["structuredContent"]["code"],
+            serde_json::json!("invalid_input")
+        );
+        assert_eq!(
+            result["structuredContent"]["details"]["path"],
+            serde_json::json!("../etc/passwd")
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -2161,21 +2197,31 @@ mod tests {
             "exclude_generated": false
         });
 
-        let error = tool_search_content(Some(&args), &root, OutputFormat::Json)
-            .expect_err("invalid regex must return error");
-        let message = error.to_string();
+        let result = tool_search_content(Some(&args), &root, OutputFormat::Json)
+            .expect("invalid regex must return tool error result");
+        let message = result["structuredContent"]["message"]
+            .as_str()
+            .expect("message");
+        let detail = result["structuredContent"]["details"]["detail"]
+            .as_str()
+            .expect("detail");
 
+        assert_eq!(result["isError"], serde_json::json!(true));
+        assert_eq!(
+            result["structuredContent"]["code"],
+            serde_json::json!("invalid_input")
+        );
         assert!(
             message.contains("invalid regex pattern for search_content"),
             "expected invalid regex guidance, got: {message}"
         );
         assert!(
-            message.contains("Set is_regex=false for literal text search"),
-            "expected literal-search guidance, got: {message}"
+            detail.contains("Set is_regex=false for literal text search"),
+            "expected literal-search guidance, got detail: {detail}"
         );
         assert!(
-            message.contains(r"Command::Context|Context \{"),
-            "expected escaped regex guidance, got: {message}"
+            detail.contains(r"Command::Context|Context \{"),
+            "expected escaped regex guidance, got detail: {detail}"
         );
     }
 
@@ -2334,12 +2380,14 @@ mod tests {
     #[test]
     fn search_files_subpath_path_traversal_is_rejected() {
         let (_dir, root) = make_repo(&[("src/lib.rs", "fn x() {}")]);
-        // ".." and absolute paths must be rejected rather than allowed to walk outside repo.
         for bad in &["../", "../../etc", "/etc", "../sibling"] {
             let args = serde_json::json!({ "pattern": "*.rs", "subpath": bad });
-            let result = tool_search_files(Some(&args), &root, OutputFormat::Json);
-            assert!(
-                result.is_err(),
+            let result = tool_search_files(Some(&args), &root, OutputFormat::Json)
+                .expect("path traversal should return tool error result");
+            assert_eq!(result["isError"], serde_json::json!(true));
+            assert_eq!(
+                result["structuredContent"]["code"],
+                serde_json::json!("invalid_input"),
                 "subpath '{bad}' should be rejected as traversal attempt"
             );
         }
@@ -2354,9 +2402,12 @@ mod tests {
                 "subpath": bad,
                 "exclude_generated": false
             });
-            let result = tool_search_content(Some(&args), &root, OutputFormat::Json);
-            assert!(
-                result.is_err(),
+            let result = tool_search_content(Some(&args), &root, OutputFormat::Json)
+                .expect("path traversal should return tool error result");
+            assert_eq!(result["isError"], serde_json::json!(true));
+            assert_eq!(
+                result["structuredContent"]["code"],
+                serde_json::json!("invalid_input"),
                 "subpath '{bad}' should be rejected as traversal attempt"
             );
         }
@@ -2464,6 +2515,31 @@ mod tests {
             ms.iter()
                 .any(|m| m["file"].as_str().unwrap().ends_with("lib.rs")),
             "lib.rs missing: {ms:?}"
+        );
+    }
+
+    #[test]
+    fn get_docs_section_invalid_selector_returns_tool_error_result() {
+        let (_dir, root) = make_repo(&[("README.md", "# Overview\nintro\n## Install\nstep one\n")]);
+        let db_path = seed_docs_index(
+            &root,
+            &[
+                markdown_heading("Overview", "document.overview", 1, 1),
+                markdown_heading("Install", "document.overview.install", 2, 3),
+            ],
+        );
+        let args = serde_json::json!({
+            "file": "README.md",
+            "heading": "document.overview.install",
+            "line": 3,
+        });
+        let result = tool_get_docs_section(Some(&args), &root, &db_path, OutputFormat::Json)
+            .expect("invalid selector must return tool error result");
+
+        assert_eq!(result["isError"], serde_json::json!(true));
+        assert_eq!(
+            result["structuredContent"]["code"],
+            serde_json::json!("invalid_input")
         );
     }
 
@@ -2593,6 +2669,22 @@ mod tests {
             !files.iter().any(|f| f.contains("vendor")),
             "vendor leaked: {files:?}"
         );
+    }
+
+    #[test]
+    fn search_templates_subpath_path_traversal_is_rejected() {
+        let (_dir, root) = make_repo(&[("templates/index.html", "<html></html>")]);
+        for bad in &["../", "../../etc", "/etc"] {
+            let args = serde_json::json!({ "kind": "html", "subpath": bad });
+            let result = tool_search_templates(Some(&args), &root, OutputFormat::Json)
+                .expect("path traversal should return tool error result");
+            assert_eq!(result["isError"], serde_json::json!(true));
+            assert_eq!(
+                result["structuredContent"]["code"],
+                serde_json::json!("invalid_input"),
+                "subpath '{bad}' should be rejected as traversal attempt"
+            );
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -2726,6 +2818,22 @@ mod tests {
             !files.iter().any(|f| f.contains("billing")),
             "billing leaked: {files:?}"
         );
+    }
+
+    #[test]
+    fn search_text_assets_subpath_path_traversal_is_rejected() {
+        let (_dir, root) = make_repo(&[("services/auth/db.sql", "SELECT 1;")]);
+        for bad in &["../", "../../etc", "/etc"] {
+            let args = serde_json::json!({ "kind": "sql", "subpath": bad });
+            let result = tool_search_text_assets(Some(&args), &root, OutputFormat::Json)
+                .expect("path traversal should return tool error result");
+            assert_eq!(result["isError"], serde_json::json!(true));
+            assert_eq!(
+                result["structuredContent"]["code"],
+                serde_json::json!("invalid_input"),
+                "subpath '{bad}' should be rejected as traversal attempt"
+            );
+        }
     }
 
     #[test]

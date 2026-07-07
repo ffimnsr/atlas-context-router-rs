@@ -112,11 +112,22 @@ fn assert_tool_blocked_missing(tool: &str, args: serde_json::Value) {
         Some(true),
         "{tool}: expected isError=true when db missing"
     );
+    assert_eq!(resp["content"][0]["type"].as_str(), Some("text"));
+    assert_eq!(
+        resp["structuredContent"]["code"].as_str(),
+        Some("graph_stale")
+    );
+    assert_eq!(resp["structuredContent"]["tool"].as_str(), Some(tool));
     let es = resp["atlas_readiness"]["execution_state"].as_str();
     assert_eq!(
         es,
         Some("missing"),
         "{tool}: expected atlas_readiness.execution_state=missing"
+    );
+    assert_eq!(
+        resp["structuredContent"]["details"]["execution_state"].as_str(),
+        Some("missing"),
+        "{tool}: expected structuredContent.details.execution_state=missing"
     );
     let blocked = resp["atlas_readiness"]["blocked"].as_bool();
     assert_eq!(
@@ -357,5 +368,26 @@ fn blocked_response_includes_atlas_provenance() {
     assert_eq!(
         resp["atlas_provenance"]["repo_root"].as_str(),
         Some("/repo")
+    );
+}
+
+#[test]
+fn blocked_response_does_not_emit_legacy_text_wrapper_shape() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let missing = dir.path().join("no_such.db").to_string_lossy().to_string();
+
+    let args = serde_json::json!({ "text": "compute", "output_format": "json" });
+    let resp =
+        call("query_graph", Some(&args), "/repo", &missing).expect("blocked tool should return Ok");
+
+    assert!(
+        resp.get("Text").is_none(),
+        "legacy Text wrapper must not appear at top level"
+    );
+    assert!(
+        resp["content"]
+            .as_array()
+            .is_some_and(|content| content.iter().all(|item| item.get("Text").is_none())),
+        "legacy Text wrapper must not appear inside content blocks"
     );
 }

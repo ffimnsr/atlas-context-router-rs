@@ -79,10 +79,12 @@ fn get_context_missing_args_returns_error() {
         Some(&serde_json::json!({})),
         "/ignored",
         &db_path,
-    );
-    assert!(
-        result.is_err(),
-        "empty get_context args must return an error"
+    )
+    .expect("empty get_context args must return tool error result");
+    assert_eq!(result["isError"], serde_json::json!(true));
+    assert_eq!(
+        result["structuredContent"]["code"],
+        serde_json::json!("invalid_input")
     );
 }
 
@@ -842,10 +844,15 @@ fn change_source_invalid_combinations_return_clear_errors() {
         "/repo",
         &fixture.db_path,
     )
-    .expect_err("impact must reject ambiguous change source");
-    assert!(impact_err.to_string().contains(
-        "ambiguous change source: provide either files or one of base/staged/working_tree"
-    ));
+    .expect("impact must reject ambiguous change source as tool error result");
+    assert_eq!(impact_err["isError"], serde_json::json!(true));
+    assert!(
+        impact_err["structuredContent"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains(
+                "ambiguous change source: provide either files or one of base/staged/working_tree"
+            ))
+    );
 
     let review_err = call(
         "get_review_context",
@@ -856,11 +863,13 @@ fn change_source_invalid_combinations_return_clear_errors() {
         "/repo",
         &fixture.db_path,
     )
-    .expect_err("review must reject ambiguous change source");
+    .expect("review must reject ambiguous change source as tool error result");
+    assert_eq!(review_err["isError"], serde_json::json!(true));
     assert!(
-        review_err
-            .to_string()
-            .contains("ambiguous change source: base and working_tree cannot be combined")
+        review_err["structuredContent"]["message"]
+            .as_str()
+            .is_some_and(|message| message
+                .contains("ambiguous change source: base and working_tree cannot be combined"))
     );
 }
 
@@ -1204,9 +1213,12 @@ fn get_context_fails_closed_when_mcp_response_budget_is_impossible() {
         "output_format": "json"
     });
     let err = call("get_context", Some(&args), &repo_root, &fixture.db_path)
-        .expect_err("response budget under impossible cap must fail closed");
+        .expect("response budget under impossible cap must return tool error result");
+    assert_eq!(err["isError"], serde_json::json!(true));
     assert!(
-        err.to_string().contains("max_mcp_response_bytes"),
-        "unexpected error: {err:#}"
+        err["structuredContent"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("max_mcp_response_bytes")),
+        "unexpected error payload: {err:#}"
     );
 }

@@ -24,10 +24,13 @@ fn query_graph_regex_param_filters_results() {
 fn query_graph_invalid_regex_returns_error() {
     let fixture = setup_mcp_fixture();
     let args = serde_json::json!({ "regex": "[invalid", "output_format": "json" });
-    let result = call("query_graph", Some(&args), "/ignored", &fixture.db_path);
-    assert!(result.is_err(), "invalid regex must return an error");
+    let result = call("query_graph", Some(&args), "/ignored", &fixture.db_path)
+        .expect("invalid regex must return tool error result");
+    assert_eq!(result["isError"], serde_json::json!(true));
     assert!(
-        result.unwrap_err().to_string().contains("invalid regex"),
+        result["structuredContent"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("invalid regex")),
         "error message should mention invalid regex"
     );
 }
@@ -311,9 +314,12 @@ fn batch_query_graph_empty_queries_returns_error() {
         Some(&args),
         "/ignored",
         &fixture.db_path,
-    );
-    assert!(result.is_err(), "expected error for empty queries array");
-    let msg = result.unwrap_err().to_string();
+    )
+    .expect("expected tool error for empty queries array");
+    assert_eq!(result["isError"], serde_json::json!(true));
+    let msg = result["structuredContent"]["message"]
+        .as_str()
+        .unwrap_or("");
     assert!(msg.contains("non-empty") || msg.contains("requires"));
 }
 
@@ -357,9 +363,12 @@ fn batch_query_graph_over_limit_returns_error() {
         Some(&args),
         "/ignored",
         &fixture.db_path,
-    );
-    assert!(result.is_err(), "expected error for >20 queries");
-    let msg = result.unwrap_err().to_string();
+    )
+    .expect("expected tool error for >20 queries");
+    assert_eq!(result["isError"], serde_json::json!(true));
+    let msg = result["structuredContent"]["message"]
+        .as_str()
+        .unwrap_or("");
     assert!(
         msg.contains("maximum"),
         "error should mention maximum: {msg}"
@@ -734,8 +743,9 @@ fn explain_query_describes_fts_path() {
 fn explain_query_missing_input_returns_error() {
     let fixture = setup_mcp_fixture();
     let args = serde_json::json!({ "output_format": "json" });
-    let result = call("explain_query", Some(&args), "/repo", &fixture.db_path);
-    assert!(result.is_err());
+    let result = call("explain_query", Some(&args), "/repo", &fixture.db_path)
+        .expect("missing input must return tool error result");
+    assert_eq!(result["isError"], serde_json::json!(true));
 }
 
 #[test]
@@ -804,16 +814,18 @@ fn resolve_symbol_finds_exact_match() {
 fn resolve_symbol_missing_name_returns_error() {
     let fixture = setup_mcp_fixture();
     let args = serde_json::json!({ "output_format": "json" });
-    let result = call("resolve_symbol", Some(&args), "/repo", &fixture.db_path);
-    assert!(result.is_err());
+    let result = call("resolve_symbol", Some(&args), "/repo", &fixture.db_path)
+        .expect("missing name must return tool error result");
+    assert_eq!(result["isError"], serde_json::json!(true));
 }
 
 #[test]
 fn resolve_symbol_empty_name_returns_error() {
     let fixture = setup_mcp_fixture();
     let args = serde_json::json!({ "name": "", "output_format": "json" });
-    let result = call("resolve_symbol", Some(&args), "/repo", &fixture.db_path);
-    assert!(result.is_err());
+    let result = call("resolve_symbol", Some(&args), "/repo", &fixture.db_path)
+        .expect("empty name must return tool error result");
+    assert_eq!(result["isError"], serde_json::json!(true));
 }
 
 #[test]

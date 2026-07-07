@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 use crate::output::{OutputFormat, resolve_output_format};
 use crate::progress;
 use crate::runtime_context::{self, ReverseRequestClient};
-use crate::tool_result::tool_execution_error_value;
+use crate::tool_result::normalize_tool_execution_error;
 
 pub(crate) type TaskApiResult<T> = std::result::Result<T, TaskApiError>;
 
@@ -505,29 +505,8 @@ fn normalize_tool_call_result(
         Err(error) => {
             let output_format =
                 resolve_output_format(args, OutputFormat::Toon).unwrap_or(OutputFormat::Toon);
-            let detail = format!("{error:#}");
-            let retry_guidance = tool_retry_guidance(error.to_string().as_str());
-            tool_execution_error_value(
-                tool_name,
-                output_format,
-                &error.to_string(),
-                &detail,
-                Some(retry_guidance),
-                None,
-            )
+            normalize_tool_execution_error(tool_name, output_format, error)
         }
-    }
-}
-
-fn tool_retry_guidance(detail: &str) -> &'static str {
-    if detail.contains("invalid regex pattern") {
-        "Fix regex syntax, or switch to literal-search mode if regex is not required, then retry."
-    } else if detail.contains("unsupported output_format") {
-        "Use supported output_format value 'toon' or 'json', then retry."
-    } else if detail.contains("missing required") || detail.contains("missing ") {
-        "Add required tool arguments, then retry."
-    } else {
-        "Fix tool arguments or graph state, then retry."
     }
 }
 
@@ -935,11 +914,31 @@ mod tests {
         )
         .unwrap();
         assert_eq!(result["isError"], json!(true));
+        assert_eq!(result["structuredContent"]["code"], json!("invalid_input"));
         assert!(
             result["structuredContent"]["message"]
                 .as_str()
                 .expect("message")
                 .contains("invalid regex pattern")
+        );
+    }
+
+    #[test]
+    fn normalize_tool_call_result_maps_missing_file_to_file_not_found_code() {
+        let dir = TempDir::new().unwrap();
+        let result = execute_tool_call(
+            "read_file_around_match",
+            Some(json!({"file": "src/missing.rs", "query": "needle"})),
+            dir.path().to_str().unwrap(),
+            "db",
+        )
+        .unwrap();
+
+        assert_eq!(result["isError"], json!(true));
+        assert_eq!(result["structuredContent"]["code"], json!("file_not_found"));
+        assert_eq!(
+            result["structuredContent"]["details"]["path"],
+            json!("src/missing.rs")
         );
     }
 }

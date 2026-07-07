@@ -14,6 +14,9 @@ use crate::session_tools::{
     tool_read_saved_context, tool_resume_session, tool_save_context_artifact,
     tool_search_decisions, tool_search_saved_context,
 };
+use crate::tool_result::{
+    ToolErrorCode, ToolErrorPayload, normalize_tool_execution_error, tool_execution_error_value,
+};
 
 use super::analysis::{
     tool_analyze_architecture, tool_analyze_dead_code, tool_analyze_dependency,
@@ -188,7 +191,20 @@ fn call_inner(
         panic!("{msg}");
     }
 
-    let output_format = resolve_output_format(args, default_output_format_for_tool(name))?;
+    if !is_known_tool_name(name) {
+        return Err(anyhow::anyhow!("unknown tool: {name}"));
+    }
+
+    let output_format = match resolve_output_format(args, default_output_format_for_tool(name)) {
+        Ok(format) => format,
+        Err(error) => {
+            return normalize_tool_execution_error(
+                name,
+                default_output_format_for_tool(name),
+                error,
+            );
+        }
+    };
 
     // Derive canonical readiness once for graph-backed tools.
     // Non-graph tools (file search, session, broker) skip this.
@@ -217,22 +233,33 @@ fn call_inner(
             suggestions,
         } = readiness.check_tool(req, overrides)
         {
-            let mut blocked = serde_json::json!({
-                "content": [{"type": "text", "text": format!("Graph not ready: {reason}")}],
-                "isError": true,
-                "atlas_readiness": {
-                    "execution_state": execution_state.as_str(),
-                    "blocked": true,
-                    "reason": reason,
-                    "suggestions": suggestions,
-                },
+            let payload = ToolErrorPayload::new(
+                ToolErrorCode::GraphStale,
+                format!("Graph not ready: {reason}"),
+            )
+            .with_tool(name)
+            .with_retry_guidance(
+                "Run graph build/update or allow stale/partial mode when supported, then retry.",
+            )
+            .with_details(serde_json::json!({
+                "detail": format!("graph readiness blocked: {reason}"),
+                "execution_state": execution_state.as_str(),
+                "reason": reason,
+                "suggestions": suggestions,
+            }));
+            let mut blocked = tool_execution_error_value(output_format, &payload)?;
+            blocked["atlas_readiness"] = serde_json::json!({
+                "execution_state": execution_state.as_str(),
+                "blocked": true,
+                "reason": reason,
+                "suggestions": suggestions,
             });
             inject_provenance(&mut blocked, repo_root, db_path);
             return Ok(blocked);
         }
     }
 
-    let mut response = match name {
+    let dispatch_result = match name {
         "list_graph_stats" => tool_list_graph_stats(db_path, output_format),
         "query_graph" => tool_query_graph(args, repo_root, db_path, output_format),
         "batch_query_graph" => tool_batch_query_graph(args, repo_root, db_path, output_format),
@@ -297,8 +324,13 @@ fn call_inner(
         "analyze_remove" => tool_analyze_remove(args, db_path, output_format),
         "analyze_dead_code" => tool_analyze_dead_code(args, db_path, output_format),
         "analyze_dependency" => tool_analyze_dependency(args, db_path, output_format),
-        other => return Err(anyhow::anyhow!("unknown tool: {other}")),
-    }?;
+        _ => unreachable!("known tool set checked before dispatch"),
+    };
+
+    let mut response = match dispatch_result {
+        Ok(response) => response,
+        Err(error) => return normalize_tool_execution_error(name, output_format, error),
+    };
 
     inject_provenance(&mut response, repo_root, db_path);
     inject_freshness_warning(&mut response, name, repo_root, db_path);

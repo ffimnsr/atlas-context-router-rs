@@ -22,7 +22,7 @@
       },
       "serverInfo": {
         "name": "atlas",
-        "version": "1.3.0",
+        "version": "1.4.1",
         "description": "MCP server exposing Atlas graph, impact, and review tools over stdio"
       },
       "_meta": { "clientTag": "spec-suite" }

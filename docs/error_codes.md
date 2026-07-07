@@ -2,6 +2,24 @@
 
 Canonical catalog for user-facing Atlas error codes.
 
+## MCP Error Handling Contract
+
+Atlas expose MCP failures in two layers:
+
+- **protocol error**: top-level JSON-RPC `error`; request failed before valid tool execution
+- **tool execution error**: JSON-RPC `result` with `isError: true`; request reached tool dispatch and failed after that boundary
+
+Machine-readable fields:
+
+- protocol error => `error.data.atlas_error_code`
+- tool execution error => `structuredContent.code`
+
+Human-readable field:
+
+- tool execution error => `content[0].text`
+
+Clients should classify from machine-readable code fields, not by parsing free text.
+
 Atlas surfaces these codes in two places:
 
 - `error_code` in CLI JSON and MCP tool JSON payloads
@@ -112,6 +130,26 @@ Server hit an internal failure before producing tool result.
 ### `tool_execution_failed`
 
 Tool dispatch started but failed during execution.
+
+## Tool Execution Error Codes
+
+These codes appear in MCP tool `structuredContent.code` and CLI JSON `error_code`.
+
+| code | meaning | retryability | stable `details` keys |
+|------|---------|--------------|------------------------|
+| `invalid_input` | business-valid request shape reached tool, but handler-specific validation failed | retry after fixing input | `detail`, sometimes `path` |
+| `file_not_found` | requested repo-relative file does not exist | retry after fixing path or creating file | `detail`, `path` |
+| `symbol_not_found` | requested symbol or qualified name could not be resolved by tool | retry after fixing symbol or refreshing graph | `detail`, `qualified_name` when available |
+| `graph_stale` | graph readiness blocked execution or handler detected stale graph state | retry after `build_or_update_graph` or with allowed stale mode when supported | `detail`, `execution_state`, `reason`, `suggestions`, `pending_change_count` when available |
+| `timeout` | tool timed out after dispatch started | retry with narrower scope, higher timeout, or healthier dependency | `detail`, `timeout_ms`, `request_id`, `method` |
+| `dependency_failed` | downstream dependency or service failed | retry after dependency recovers | `detail`, `service`, `status` when available |
+| `internal_tool_error` | unexpected internal failure happened inside tool execution boundary | retry only after server state or code issue is fixed | `detail` |
+
+Notes:
+
+- `detail` is stable as key name, not stable in exact text.
+- listed keys are stable when present; tools may omit keys that do not apply.
+- `content[0].text` should stay concise and display-oriented; parse `structuredContent` instead.
 
 <a id="worker_unavailable"></a>
 ### `worker_unavailable`

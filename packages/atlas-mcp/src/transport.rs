@@ -22,6 +22,8 @@ use camino::Utf8PathBuf;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
+use crate::output::{OutputFormat, resolve_output_format};
+use crate::tool_result::{ToolErrorCode, ToolErrorPayload, tool_execution_error_value};
 use crate::{MCP_PROTOCOL_VERSION, completion, logging, prompts, resources, spec, tools};
 
 #[cfg(unix)]
@@ -69,7 +71,6 @@ const JSONRPC_METHOD_NOT_FOUND: i32 = -32601;
 const JSONRPC_INVALID_PARAMS: i32 = -32602;
 const JSONRPC_INTERNAL_ERROR: i32 = -32603;
 const JSONRPC_WORKER_UNAVAILABLE: i32 = -32002;
-const JSONRPC_REQUEST_TIMEOUT: i32 = -32003;
 const JSONRPC_RATE_LIMITED: i32 = -32004;
 const JSONRPC_TASK_NOT_FOUND: i32 = -32010;
 const JSONRPC_TASK_NOT_READY: i32 = -32011;
@@ -904,6 +905,8 @@ fn process_requests<W: Write>(
         completed = stats.completed,
         completed_ok = stats.completed_ok,
         completed_err = stats.completed_err,
+        protocol_errors = stats.protocol_errors,
+        tool_execution_errors = stats.tool_execution_errors,
         timed_out = stats.timed_out,
         canceled = stats.canceled,
         dropped_late = stats.dropped_late,
@@ -1022,10 +1025,22 @@ fn handle_input_line<W: Write>(
         Ok(v) => v,
         Err(error) => {
             stats.parse_errors += 1;
+            stats.protocol_errors += 1;
+            let request = RequestLogContext {
+                request_id: "null".to_owned(),
+                method: "<parse>".to_owned(),
+                tool_name: None,
+            };
+            log_protocol_error_observation(
+                "stdio",
+                &request,
+                JsonRpcErrorKind::ParseError.atlas_error_code(),
+                &format!("invalid JSON-RPC message: {error}"),
+            );
             let response = jsonrpc_error(
                 serde_json::Value::Null,
                 JsonRpcErrorKind::ParseError,
-                format!("parse error: {error}"),
+                format!("invalid JSON-RPC message: {error}"),
             );
             write_response(writer, &response)?;
             return Ok(());
@@ -1200,6 +1215,13 @@ fn handle_input_line<W: Write>(
             "queued MCP request"
         );
         let cancel_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        // Audit/classification for `tools/call` branches:
+        // - request shape failures stay JSON-RPC errors in `dispatch()` before this point
+        // - post-dispatch domain failures are normalized by `execute_tool_call()` into
+        //   `CallToolResult { isError: true }`
+        // - transport timeouts after valid dispatch are also surfaced as tool execution
+        //   errors so clients do not need special JSON-RPC handling for tool failures
+        let output_format = tool_call_output_format(params.as_ref());
         pending.insert(
             token,
             PendingRequest {
@@ -1208,6 +1230,7 @@ fn handle_input_line<W: Write>(
                 queued_at,
                 deadline: Instant::now() + timeout,
                 timeout_ms: timeout.as_millis(),
+                output_format,
                 progress_token: progress_token.clone(),
                 cancel_flag: Arc::clone(&cancel_flag),
             },
@@ -1411,6 +1434,13 @@ fn handle_input_line<W: Write>(
         }
         Ok(Err(error)) => {
             log_request_finished(&request_log, false, 0, elapsed_ms, elapsed_ms);
+            stats.protocol_errors += 1;
+            log_protocol_error_observation(
+                "stdio",
+                &request_log,
+                error.kind.atlas_error_code(),
+                &error.message(),
+            );
             tracing::warn!(
                 request_id = %request_log.request_id,
                 method = %request_log.method,
@@ -1471,14 +1501,14 @@ fn drain_expired_requests<W: Write>(
                 timeout_ms = request.timeout_ms as u64,
                 "MCP request timed out"
             );
-            let response = jsonrpc_error(
-                request.id,
-                JsonRpcErrorKind::RequestTimedOut,
-                format!(
-                    "worker pool timed out after {} ms while handling request",
-                    request.timeout_ms
+            let response = match timeout_tool_call_result(&request) {
+                Ok(result) => jsonrpc_ok(request.id.clone(), result),
+                Err(error) => jsonrpc_error(
+                    request.id.clone(),
+                    JsonRpcErrorKind::InternalError,
+                    user_visible_error_message(&error),
                 ),
-            );
+            };
             emit_progress_notification(
                 writer,
                 request.progress_token.as_ref(),
@@ -1519,6 +1549,13 @@ fn handle_completion_event<W: Write>(
             stats.completed_ok += 1;
         } else {
             stats.completed_err += 1;
+        }
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(&response)
+            && let Some(result) = value.get("result")
+            && result.get("isError").and_then(serde_json::Value::as_bool) == Some(true)
+        {
+            stats.tool_execution_errors += 1;
+            log_tool_execution_error_observation("stdio", &completion.request, result);
         }
         log_request_finished(
             &completion.request,
@@ -1593,6 +1630,7 @@ struct PendingRequest {
     queued_at: Instant,
     deadline: Instant,
     timeout_ms: u128,
+    output_format: OutputFormat,
     progress_token: Option<serde_json::Value>,
     /// Shared flag set to `true` when the client cancels this request after it
     /// has already started executing.  Long-running tools poll
@@ -1639,6 +1677,8 @@ struct TransportStats {
     completed: u64,
     completed_ok: u64,
     completed_err: u64,
+    protocol_errors: u64,
+    tool_execution_errors: u64,
     timed_out: u64,
     canceled: u64,
     dropped_late: u64,
@@ -1667,10 +1707,10 @@ enum TransportEvent {
 }
 
 #[derive(Clone)]
-struct RequestLogContext {
-    request_id: String,
-    method: String,
-    tool_name: Option<String>,
+pub(crate) struct RequestLogContext {
+    pub(crate) request_id: String,
+    pub(crate) method: String,
+    pub(crate) tool_name: Option<String>,
 }
 
 struct RequestCompletion {
@@ -1798,6 +1838,93 @@ fn resolve_request_timeout(options: &ServerOptions, request: &RequestLogContext)
         .unwrap_or(options.tool_timeout_ms)
         .clamp(1_000, 3_600_000);
     Duration::from_millis(timeout_ms)
+}
+
+pub(crate) fn tool_execution_error_fields(result: &serde_json::Value) -> Option<(String, String)> {
+    if result.get("isError").and_then(serde_json::Value::as_bool) != Some(true) {
+        return None;
+    }
+    let structured = result.get("structuredContent")?;
+    let code = structured.get("code")?.as_str()?.to_owned();
+    let tool = structured
+        .get("tool")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned)
+        .or_else(|| {
+            result
+                .pointer("/atlas_readiness/tool")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        })
+        .unwrap_or_else(|| "-".to_owned());
+    Some((tool, code))
+}
+
+pub(crate) fn log_protocol_error_observation(
+    channel: &str,
+    request: &RequestLogContext,
+    error_code: &str,
+    message: &str,
+) {
+    tracing::warn!(
+        request_id = %request.request_id,
+        method = %request.method,
+        tool = request.tool_name.as_deref().unwrap_or("-"),
+        error_code,
+        classification = "protocol_error",
+        channel,
+        message,
+        "MCP protocol error"
+    );
+}
+
+pub(crate) fn log_tool_execution_error_observation(
+    channel: &str,
+    request: &RequestLogContext,
+    result: &serde_json::Value,
+) {
+    if let Some((tool, error_code)) = tool_execution_error_fields(result) {
+        tracing::warn!(
+            request_id = %request.request_id,
+            method = %request.method,
+            tool,
+            error_code,
+            classification = "tool_execution_error",
+            channel,
+            "MCP tool execution error"
+        );
+    }
+}
+
+fn tool_call_output_format(params: Option<&serde_json::Value>) -> OutputFormat {
+    let args = params.and_then(|value| value.get("arguments"));
+    resolve_output_format(args, OutputFormat::Toon).unwrap_or(OutputFormat::Toon)
+}
+
+fn timeout_tool_call_result(request: &PendingRequest) -> Result<serde_json::Value> {
+    let tool_name = request
+        .request
+        .tool_name
+        .clone()
+        .unwrap_or_else(|| "tools/call".to_owned());
+    let payload = ToolErrorPayload::new(
+        ToolErrorCode::Timeout,
+        format!("Tool '{tool_name}' timed out after {} ms", request.timeout_ms),
+    )
+    .with_tool(tool_name)
+    .with_retry_guidance(
+        "Reduce request scope, increase timeout if configurable, or retry when dependencies are responsive.",
+    )
+    .with_details(serde_json::json!({
+        "detail": format!(
+            "worker pool timed out after {} ms while handling request",
+            request.timeout_ms
+        ),
+        "timeout_ms": request.timeout_ms,
+        "request_id": request.request.request_id,
+        "method": request.request.method,
+    }));
+    tool_execution_error_value(request.output_format, &payload)
 }
 
 fn progress_token_from_params(params: Option<&serde_json::Value>) -> Option<serde_json::Value> {
@@ -2588,7 +2715,6 @@ enum JsonRpcErrorKind {
     InternalError,
 
     WorkerUnavailable,
-    RequestTimedOut,
     RateLimited,
     TaskNotFound,
     TaskNotReady,
@@ -2605,7 +2731,6 @@ impl JsonRpcErrorKind {
             Self::InvalidParams => JSONRPC_INVALID_PARAMS,
             Self::InternalError => JSONRPC_INTERNAL_ERROR,
             Self::WorkerUnavailable => JSONRPC_WORKER_UNAVAILABLE,
-            Self::RequestTimedOut => JSONRPC_REQUEST_TIMEOUT,
             Self::RateLimited => JSONRPC_RATE_LIMITED,
             Self::TaskNotFound => JSONRPC_TASK_NOT_FOUND,
             Self::TaskNotReady => JSONRPC_TASK_NOT_READY,
@@ -2622,7 +2747,6 @@ impl JsonRpcErrorKind {
             Self::InvalidParams => "invalid_params",
             Self::InternalError => "internal_error",
             Self::WorkerUnavailable => "worker_unavailable",
-            Self::RequestTimedOut => "request_timed_out",
             Self::RateLimited => "rate_limited",
             Self::TaskNotFound => "task_not_found",
             Self::TaskNotReady => "task_not_ready",
@@ -2662,6 +2786,14 @@ fn classify_prompt_error(error: anyhow::Error) -> DispatchError {
 }
 
 fn classify_tool_call_dispatch_error(error: anyhow::Error) -> DispatchError {
+    // Boundary rule for `tools/call`:
+    // - pre-dispatch failures (missing params, bad shapes, unknown tool) stay as
+    //   JSON-RPC protocol errors in `dispatch()` above
+    // - post-dispatch tool-originated failures should already have been converted
+    //   by `tasks::normalize_tool_call_result()` into `CallToolResult`
+    //   payloads with `isError: true`
+    // Any error that reaches this point is therefore an exceptional server-side
+    // dispatch/runtime failure, not a recoverable tool execution error.
     DispatchError::new(JsonRpcErrorKind::InternalError, error)
 }
 
@@ -3771,13 +3903,102 @@ mod tests {
             .expect("query_graph response");
         let result = &response["result"];
         assert_eq!(result["isError"], serde_json::json!(true));
+        assert_eq!(result["content"][0]["type"], serde_json::json!("text"));
+        assert_eq!(
+            result["structuredContent"]["code"],
+            serde_json::json!("invalid_input")
+        );
         assert_eq!(
             result["structuredContent"]["retry_guidance"],
             serde_json::json!("Use supported output_format value 'toon' or 'json', then retry.")
         );
+        assert!(
+            result.get("Text").is_none(),
+            "legacy Text wrapper must not appear"
+        );
         assert_eq!(
             result["_meta"]["atlas:outputFormat"],
             serde_json::json!("toon")
+        );
+    }
+
+    #[test]
+    fn stdio_transport_missing_file_returns_is_error_tool_result() {
+        let fixture = setup_fixture();
+        let input = [
+            initialize_request_line(),
+            "{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}\n".to_owned(),
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"read_file_around_match\",\"arguments\":{\"file\":\"src/missing.rs\",\"query\":\"needle\",\"output_format\":\"json\"}}}\n".to_owned(),
+        ]
+        .concat();
+        let reader = BufReader::new(Cursor::new(input.as_bytes()));
+        let mut writer = Vec::new();
+
+        run_server_io(
+            reader,
+            &mut writer,
+            "/ignored",
+            &fixture.db_path,
+            ServerOptions::default(),
+        )
+        .expect("run server io");
+
+        let response = parse_output_lines(writer)
+            .into_iter()
+            .find(|value| value["id"] == serde_json::json!(2))
+            .expect("read_file_around_match response");
+        assert!(
+            response.get("error").is_none(),
+            "missing file must be reported as tool execution error"
+        );
+        assert_eq!(response["result"]["isError"], serde_json::json!(true));
+        assert_eq!(
+            response["result"]["structuredContent"]["code"],
+            serde_json::json!("file_not_found")
+        );
+        assert_eq!(
+            response["result"]["structuredContent"]["details"]["path"],
+            serde_json::json!("src/missing.rs")
+        );
+        assert_eq!(
+            response["result"]["content"][0]["text"],
+            serde_json::json!("file not found: src/missing.rs")
+        );
+    }
+
+    #[test]
+    fn stdio_transport_unknown_tool_still_returns_jsonrpc_error() {
+        let fixture = setup_fixture();
+        let input = [
+            initialize_request_line(),
+            "{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}\n".to_owned(),
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"unknown_tool_xyz\",\"arguments\":{}}}\n".to_owned(),
+        ]
+        .concat();
+        let reader = BufReader::new(Cursor::new(input.as_bytes()));
+        let mut writer = Vec::new();
+
+        run_server_io(
+            reader,
+            &mut writer,
+            "/ignored",
+            &fixture.db_path,
+            ServerOptions::default(),
+        )
+        .expect("run server io");
+
+        let response = parse_output_lines(writer)
+            .into_iter()
+            .find(|value| value["id"] == serde_json::json!(2))
+            .expect("unknown tool response");
+        assert!(
+            response.get("result").is_none(),
+            "unknown tool must not be normalized into result.isError"
+        );
+        assert_eq!(response["error"]["code"], serde_json::json!(-32601));
+        assert_eq!(
+            response["error"]["data"]["atlas_error_code"],
+            serde_json::json!("method_not_found")
         );
     }
 
@@ -3811,11 +4032,23 @@ mod tests {
             "tool validation must not be protocol error"
         );
         assert_eq!(response["result"]["isError"], serde_json::json!(true));
+        assert_eq!(
+            response["result"]["content"][0]["type"],
+            serde_json::json!("text")
+        );
+        assert_eq!(
+            response["result"]["structuredContent"]["code"],
+            serde_json::json!("invalid_input")
+        );
         assert!(
             response["result"]["structuredContent"]["message"]
                 .as_str()
                 .expect("message")
                 .contains("invalid regex pattern")
+        );
+        assert!(
+            response["result"].get("Text").is_none(),
+            "legacy Text wrapper must not appear"
         );
     }
 
@@ -4543,7 +4776,15 @@ mod tests {
             .iter()
             .find(|value| value["id"] == serde_json::json!(1))
             .expect("sleep response");
-        assert_eq!(response["error"]["code"], serde_json::json!(-32003));
+        assert!(
+            response.get("error").is_none(),
+            "timeout after dispatch should stay inside result envelope"
+        );
+        assert_eq!(response["result"]["isError"], serde_json::json!(true));
+        assert_eq!(
+            response["result"]["structuredContent"]["code"],
+            serde_json::json!("timeout")
+        );
     }
 
     #[test]
@@ -4603,6 +4844,7 @@ mod tests {
                 queued_at: Instant::now() - Duration::from_millis(20),
                 deadline: Instant::now() - Duration::from_millis(1),
                 timeout_ms: 10,
+                output_format: OutputFormat::Json,
                 progress_token: None,
                 cancel_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             },
@@ -4643,20 +4885,26 @@ mod tests {
             "late completion must not emit duplicate response"
         );
         assert_eq!(responses[0]["id"], request_id);
-        assert_eq!(responses[0]["error"]["code"], serde_json::json!(-32003));
-        assert_eq!(
-            responses[0]["error"]["data"]["atlas_error_code"],
-            serde_json::json!("request_timed_out")
-        );
-        assert_error_code_doc_link(
-            &responses[0]["error"]["data"]["atlas_error_code_docs"],
-            "request_timed_out",
-        );
         assert!(
-            responses[0]["error"]["message"]
-                .as_str()
-                .expect("timeout error message")
-                .contains("timed out")
+            responses[0].get("error").is_none(),
+            "post-dispatch timeout must stay in tool result envelope"
+        );
+        assert_eq!(responses[0]["result"]["isError"], serde_json::json!(true));
+        assert_eq!(
+            responses[0]["result"]["structuredContent"]["code"],
+            serde_json::json!("timeout")
+        );
+        assert_eq!(
+            responses[0]["result"]["structuredContent"]["tool"],
+            serde_json::json!("slow_tool")
+        );
+        assert_eq!(
+            responses[0]["result"]["structuredContent"]["details"]["timeout_ms"],
+            serde_json::json!(10)
+        );
+        assert_eq!(
+            responses[0]["result"]["content"][0]["text"],
+            serde_json::json!("Tool 'slow_tool' timed out after 10 ms")
         );
         assert_eq!(
             stats.completed, 0,

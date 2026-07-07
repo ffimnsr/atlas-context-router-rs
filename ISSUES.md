@@ -2862,3 +2862,88 @@ This patch is complete when:
 Why:
 - `SessionStore::append_event` already rejects oversized inline payloads
 - content store is the correct place for searchable runtime text
+
+
+---
+
+## MCP Tool Error Payload Normalization Patch
+
+Goal:
+
+- convert tool execution failures from ad-hoc text blobs into MCP spec-aligned `CallToolResult` payloads
+- keep protocol failures in JSON-RPC `error` responses only
+- add machine-readable error fields without dropping concise human-readable text
+
+Rules:
+
+- classify `tools/call` failures at dispatcher boundary before choosing response shape
+- return tool-originated failures in `result` with `content` and `isError: true`
+- keep one stable machine-readable error envelope for all tool execution failures
+- include short actionable human text in `content[0].text`
+- do not emit custom MCP-boundary text wrappers such as uppercase `Text` objects
+- do not use protocol errors for missing files, stale graph, invalid in-range business inputs, or downstream dependency failures inside tool handlers
+- preserve backward-readable text while adding structured machine-readable fields
+
+Implementation structure:
+
+### E1 — Error classification boundary
+
+- [x] audit `tools/call` request path and list every branch that currently returns JSON-RPC `error`, plain text, thrown exception, or wrapper-specific tool failure payload
+- [x] classify each branch as `protocol_error` or `tool_execution_error`
+- [x] define rule in code comments and tests: pre-dispatch failures use JSON-RPC `error`; post-dispatch domain failures use `CallToolResult.isError = true`
+- [x] keep unknown tool, malformed `CallToolRequest`, unsupported tool capability, and request decode failures on JSON-RPC `error`
+- [x] move missing file, invalid repo-relative path, stale graph, symbol not found, timeout, and dependency failures into tool execution error handling
+
+### E2 — Canonical tool error model
+
+- [x] add shared `ToolErrorPayload` type with `code`, `message`, optional `retry_guidance`, optional `tool`, and optional `details`
+- [x] add stable error code set for common tool failures such as `invalid_input`, `file_not_found`, `symbol_not_found`, `graph_stale`, `timeout`, `dependency_failed`, and `internal_tool_error`
+- [x] add internal mapping from existing handler error kinds into stable payload `code` values
+- [x] validate payload messages stay concise and single-purpose while `details` carries machine-readable context
+- [x] document which `details` keys are stable for common codes such as `path`, `qualified_name`, `pending_change_count`, `service`, and `status`
+
+### E3 — Spec-aligned result renderer
+
+- [x] add one shared helper that converts `ToolErrorPayload` into `CallToolResult`
+- [x] make helper always return `content` with at least one `{ "type": "text", "text": ... }` block
+- [x] make helper always set `isError: true` for tool execution failures
+- [x] serialize `ToolErrorPayload` into `structuredContent` for machine-readable clients
+- [x] keep MCP-facing result shape free of custom uppercase or wrapper-specific text fields
+
+### E4 — Incremental tool migration
+
+- [x] migrate `read_file_around_match` to shared tool error renderer for missing-file and invalid-path cases
+- [x] migrate `read_file`, `read_file_excerpt`, and `read_file`-adjacent helpers to shared tool error renderer
+- [x] migrate graph/readiness tools to return `graph_stale` and related domain failures through `isError: true` results
+- [x] migrate content/file discovery tools to shared renderer for not-found, invalid-pattern, and bounded search failures that originate inside handlers
+- [x] migrate mutating file tools and build/update tools to shared renderer for domain failures that occur after valid dispatch
+
+### E5 — Backward-readable compatibility
+
+- [x] keep concise human-readable failure text in `content[0].text` for every migrated tool
+- [x] include same essential information in `structuredContent` so clients do not need to parse free text
+- [x] remove direct MCP-boundary emission of legacy text blob shapes once all migrated tools use shared renderer
+
+### E6 — Validation and tests
+
+- [x] add unit tests for shared renderer covering `content`, `structuredContent`, and `isError: true`
+- [x] add integration test proving missing file on `read_file_around_match` returns `CallToolResult` instead of JSON-RPC `error`
+- [x] add integration test proving unknown tool still returns JSON-RPC `error` instead of `result.isError`
+- [x] add integration test proving schema-valid but business-invalid input returns tool execution error payload with stable `code`
+- [x] add regression test proving MCP tool results never expose legacy uppercase `Text` wrapper shape at server boundary
+- [x] add snapshot or schema tests for representative error payloads so CLI/MCP-facing contracts stay stable
+
+### E7 — Documentation and observability
+
+- [x] document protocol-error versus tool-execution-error classification in MCP docs and developer notes
+- [x] document stable error code table with meaning, retryability, and expected `details` keys
+- [x] add logging or metrics counters for protocol errors versus tool execution errors by tool name and error code
+- [x] include migration note if any client currently parses legacy text blobs directly
+
+Completion criteria:
+
+- [x] tool execution failures return MCP `CallToolResult` with valid `content` blocks and `isError: true`
+- [x] machine-readable error data is available in `structuredContent`
+- [x] only protocol-level failures use JSON-RPC `error`
+- [x] `read_file_around_match` missing-file case returns spec-aligned payload
+- [x] no MCP server boundary path emits legacy uppercase `Text` error wrapper

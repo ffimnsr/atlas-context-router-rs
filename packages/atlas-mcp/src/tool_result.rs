@@ -1,9 +1,11 @@
 use anyhow::Result;
 use atlas_core::user_facing_error_message;
 use serde::Serialize;
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 
 use crate::output::{OutputFormat, render_value};
+
+const MAX_TOOL_ERROR_TEXT_LEN: usize = 240;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -82,39 +84,216 @@ pub(crate) fn tool_result_value<T: Serialize>(
     ToolResultBuilder::new(output_format).build_serializable(value)
 }
 
-pub(crate) fn tool_execution_error_value(
-    tool_name: &str,
-    output_format: OutputFormat,
-    message: &str,
-    detail: &str,
-    retry_guidance: Option<&str>,
-    structured: Option<Value>,
-) -> Result<Value> {
-    let mut object = Map::new();
-    object.insert("tool".to_owned(), Value::String(tool_name.to_owned()));
-    object.insert(
-        "message".to_owned(),
-        Value::String(user_facing_error_message(message, detail)),
-    );
-    object.insert(
-        "retry_guidance".to_owned(),
-        Value::String(
-            retry_guidance
-                .unwrap_or("Fix tool arguments or graph state, then retry.")
-                .to_owned(),
-        ),
-    );
-    if let Some(structured) = structured.and_then(|value| value.as_object().cloned()) {
-        object.extend(structured);
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ToolErrorCode {
+    InvalidInput,
+    FileNotFound,
+    SymbolNotFound,
+    GraphStale,
+    Timeout,
+    DependencyFailed,
+    InternalToolError,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub(crate) struct ToolErrorPayload {
+    pub(crate) code: ToolErrorCode,
+    pub(crate) message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) retry_guidance: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) tool: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) details: Option<Value>,
+}
+
+impl ToolErrorPayload {
+    pub(crate) fn new(code: ToolErrorCode, message: impl Into<String>) -> Self {
+        Self {
+            code,
+            message: normalize_tool_error_text(message.into()),
+            retry_guidance: None,
+            tool: None,
+            details: None,
+        }
     }
 
-    let mut response = ToolResultBuilder::new(output_format).build_value(Value::Object(object))?;
-    response["isError"] = Value::Bool(true);
-    Ok(response)
+    pub(crate) fn from_tool_error(
+        tool_name: &str,
+        code: ToolErrorCode,
+        message: &str,
+        detail: &str,
+    ) -> Self {
+        Self::new(code, user_facing_error_message(message, detail)).with_tool(tool_name)
+    }
+
+    pub(crate) fn with_retry_guidance(mut self, retry_guidance: impl Into<String>) -> Self {
+        self.retry_guidance = Some(normalize_tool_error_text(retry_guidance.into()));
+        self
+    }
+
+    pub(crate) fn with_tool(mut self, tool_name: impl Into<String>) -> Self {
+        self.tool = Some(tool_name.into());
+        self
+    }
+
+    pub(crate) fn with_details(mut self, details: Value) -> Self {
+        if details.is_object() {
+            self.details = Some(details);
+        }
+        self
+    }
+
+    fn normalized(&self) -> Self {
+        Self {
+            code: self.code,
+            message: normalize_tool_error_text(&self.message),
+            retry_guidance: self.retry_guidance.as_ref().map(normalize_tool_error_text),
+            tool: self.tool.clone(),
+            details: self.details.clone(),
+        }
+    }
+}
+
+pub(crate) fn tool_execution_error_value(
+    output_format: OutputFormat,
+    payload: &ToolErrorPayload,
+) -> Result<Value> {
+    let payload = payload.normalized();
+    let structured = serde_json::to_value(&payload)?;
+    Ok(json!({
+        "content": [{
+            "type": "text",
+            "text": payload.message,
+            "mimeType": "text/plain",
+        }],
+        "structuredContent": structured,
+        "isError": true,
+        "_meta": result_meta(output_format.as_str(), output_format.as_str(), None),
+    }))
+}
+
+pub(crate) fn normalize_tool_execution_error(
+    tool_name: &str,
+    output_format: OutputFormat,
+    error: anyhow::Error,
+) -> Result<Value> {
+    let detail = format!("{error:#}");
+    let message = error.to_string();
+    let (code, details) = classify_tool_execution_error(message.as_str(), detail.as_str());
+    let payload = ToolErrorPayload::from_tool_error(tool_name, code, &message, &detail)
+        .with_retry_guidance(tool_retry_guidance(message.as_str()))
+        .with_details(details);
+    tool_execution_error_value(output_format, &payload)
 }
 
 pub(crate) fn structured_content(value: &Value) -> Option<&Value> {
     value.get("structuredContent")
+}
+
+fn normalize_tool_error_text(text: impl AsRef<str>) -> String {
+    let mut normalized = text
+        .as_ref()
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    if normalized.chars().count() > MAX_TOOL_ERROR_TEXT_LEN {
+        normalized = normalized
+            .chars()
+            .take(MAX_TOOL_ERROR_TEXT_LEN.saturating_sub(1))
+            .collect();
+        normalized.push('…');
+    }
+    if normalized.is_empty() {
+        "internal tool error".to_owned()
+    } else {
+        normalized
+    }
+}
+
+fn tool_retry_guidance(detail: &str) -> &'static str {
+    if detail.contains("invalid regex pattern") {
+        "Fix regex syntax, or switch to literal-search mode if regex is not required, then retry."
+    } else if detail.contains("unsupported output_format") {
+        "Use supported output_format value 'toon' or 'json', then retry."
+    } else if detail.contains("graph not ready") || detail.contains("stale graph") {
+        "Run graph build/update or allow stale/partial mode when supported, then retry."
+    } else if detail.contains("missing required")
+        || detail.contains("missing ")
+        || detail.contains("invalid ")
+        || detail.contains("must be ")
+        || detail.contains("provide exactly one selector")
+    {
+        "Fix tool arguments, then retry."
+    } else if detail.contains("file not found") {
+        "Use repo-relative file path inside current root, then retry."
+    } else {
+        "Fix tool arguments or graph state, then retry."
+    }
+}
+
+fn classify_tool_execution_error(message: &str, detail: &str) -> (ToolErrorCode, Value) {
+    let lowered = detail.to_ascii_lowercase();
+    let mut details = json!({ "detail": detail });
+
+    if let Some(path) = message.strip_prefix("file not found: ") {
+        details["path"] = Value::String(path.to_owned());
+        return (ToolErrorCode::FileNotFound, details);
+    }
+
+    if let Some(path) = message
+        .strip_prefix("invalid file path '")
+        .and_then(|rest| rest.split_once('\'').map(|(path, _)| path))
+    {
+        details["path"] = Value::String(path.to_owned());
+    }
+    if let Some(path) = message
+        .strip_prefix("invalid subpath '")
+        .and_then(|rest| rest.split_once('\'').map(|(path, _)| path))
+    {
+        details["path"] = Value::String(path.to_owned());
+    }
+
+    let code = if lowered.contains("file not found") {
+        ToolErrorCode::FileNotFound
+    } else if lowered.contains("symbol not found") {
+        ToolErrorCode::SymbolNotFound
+    } else if lowered.contains("graph not ready") || lowered.contains("stale graph") {
+        ToolErrorCode::GraphStale
+    } else if lowered.contains("timeout") || lowered.contains("timed out") {
+        ToolErrorCode::Timeout
+    } else if lowered.contains("dependency failed")
+        || lowered.contains("service unavailable")
+        || lowered.contains("connection refused")
+    {
+        ToolErrorCode::DependencyFailed
+    } else if lowered.contains("invalid regex pattern")
+        || lowered.contains("unsupported output_format")
+        || lowered.contains("invalid subpath")
+        || lowered.contains("invalid file path")
+        || lowered.contains("invalid pattern glob")
+        || lowered.contains("invalid globs filter")
+        || lowered.contains("invalid exclude_globs filter")
+        || lowered.contains("invalid template extension patterns")
+        || lowered.contains("invalid text-asset extension patterns")
+        || lowered.contains("missing required")
+        || lowered.contains("provide exactly one selector")
+        || lowered.contains("line numbers are 1-based")
+        || lowered.contains("invalid line range")
+        || lowered.contains("exceeds file length")
+        || lowered.contains("ambiguous change source")
+        || lowered.contains("non-empty")
+        || lowered.contains("requires")
+    {
+        ToolErrorCode::InvalidInput
+    } else {
+        ToolErrorCode::InternalToolError
+    };
+
+    (code, details)
 }
 
 fn infer_resource_links(raw: &Value) -> Vec<ResourceLink> {
@@ -166,7 +345,10 @@ fn infer_resource_links(raw: &Value) -> Vec<ResourceLink> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ToolResultBuilder, structured_content, tool_execution_error_value};
+    use super::{
+        ToolErrorCode, ToolErrorPayload, ToolResultBuilder, normalize_tool_error_text,
+        structured_content, tool_execution_error_value,
+    };
     use crate::output::OutputFormat;
     use serde_json::json;
 
@@ -256,23 +438,90 @@ mod tests {
 
     #[test]
     fn tool_execution_error_builder_emits_is_error_and_structured_content() {
-        let response = tool_execution_error_value(
+        let payload = ToolErrorPayload::from_tool_error(
             "query_graph",
-            OutputFormat::Json,
+            ToolErrorCode::InvalidInput,
             "invalid regex pattern: unclosed group",
             "invalid regex pattern: unclosed group",
-            Some("Fix regex syntax or remove is_regex-style input, then retry."),
-            None,
         )
-        .expect("tool execution error result");
+        .with_retry_guidance("Fix regex syntax or remove is_regex-style input, then retry.")
+        .with_details(json!({"detail": "invalid regex pattern: unclosed group"}));
+        let response = tool_execution_error_value(OutputFormat::Json, &payload)
+            .expect("tool execution error result");
 
         assert_eq!(response["isError"], json!(true));
         assert_eq!(response["structuredContent"]["tool"], json!("query_graph"));
-        assert!(
-            response["content"][0]["text"]
-                .as_str()
-                .expect("text")
-                .contains("retry_guidance")
+        assert_eq!(
+            response["structuredContent"]["code"],
+            json!("invalid_input")
+        );
+        assert_eq!(
+            response["structuredContent"]["details"]["detail"],
+            json!("invalid regex pattern: unclosed group")
+        );
+        assert_eq!(
+            response["content"][0]["text"],
+            json!("invalid regex pattern: unclosed group")
+        );
+        assert_eq!(response["content"][0]["mimeType"], json!("text/plain"));
+    }
+
+    #[test]
+    fn tool_error_text_is_single_line_and_concise() {
+        let normalized = normalize_tool_error_text(
+            "  invalid regex pattern:\n\n  unclosed group with extra detail that should stay concise  ",
+        );
+        assert_eq!(
+            normalized,
+            "invalid regex pattern: unclosed group with extra detail that should stay concise"
+        );
+
+        let long = format!("{} tail", "x".repeat(300));
+        let normalized_long = normalize_tool_error_text(long);
+        assert!(normalized_long.chars().count() <= 240);
+        assert!(normalized_long.ends_with('…'));
+    }
+
+    #[test]
+    fn tool_execution_error_value_matches_expected_schema() {
+        let payload = ToolErrorPayload::new(
+            ToolErrorCode::FileNotFound,
+            "file not found: src/missing.rs",
+        )
+        .with_tool("read_file_around_match")
+        .with_retry_guidance("Use repo-relative file path inside current root, then retry.")
+        .with_details(json!({
+            "detail": "file not found: src/missing.rs",
+            "path": "src/missing.rs"
+        }));
+
+        let response = tool_execution_error_value(OutputFormat::Toon, &payload)
+            .expect("tool execution error result");
+
+        assert_eq!(
+            response,
+            json!({
+                "content": [{
+                    "type": "text",
+                    "text": "file not found: src/missing.rs",
+                    "mimeType": "text/plain"
+                }],
+                "structuredContent": {
+                    "code": "file_not_found",
+                    "message": "file not found: src/missing.rs",
+                    "retry_guidance": "Use repo-relative file path inside current root, then retry.",
+                    "tool": "read_file_around_match",
+                    "details": {
+                        "detail": "file not found: src/missing.rs",
+                        "path": "src/missing.rs"
+                    }
+                },
+                "isError": true,
+                "_meta": {
+                    "atlas:outputFormat": "toon",
+                    "atlas:requestedOutputFormat": "toon"
+                }
+            })
         );
     }
 }

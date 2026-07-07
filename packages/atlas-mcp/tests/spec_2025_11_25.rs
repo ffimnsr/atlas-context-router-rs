@@ -120,14 +120,16 @@ fn stdio_messages(repo_root: &str, db_path: &str, messages: &[Value]) -> Vec<Val
 }
 
 fn stdio_initialized_call(repo_root: &str, db_path: &str, request: Value) -> Value {
-    stdio_messages(
+    let request_id = request["id"].clone();
+    let responses = stdio_messages(
         repo_root,
         db_path,
         &[initialize_request(1), initialized_notification(), request],
-    )
-    .into_iter()
-    .find(|value| value["id"] == json!(3))
-    .expect("response id=3")
+    );
+    responses
+        .into_iter()
+        .find(|value| value["id"] == request_id)
+        .unwrap_or_else(|| panic!("missing stdio response for request id"))
 }
 
 fn build_fixture_graph(repo_root: &str, db_path: &str) {

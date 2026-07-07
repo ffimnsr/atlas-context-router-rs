@@ -728,27 +728,89 @@ async fn dispatch_tool_call(
     id: Value,
     params: Option<Value>,
 ) -> Response {
-    let name = match params
-        .as_ref()
-        .and_then(|value| value.get("name"))
-        .and_then(|value| value.as_str())
-    {
-        Some(name) => name.to_owned(),
-        None => return jsonrpc_error_response(id, -32602, "missing tool name".to_owned()),
+    let request = crate::transport::RequestLogContext {
+        request_id: match &id {
+            Value::String(value) => value.clone(),
+            _ => id.to_string(),
+        },
+        method: "tools/call".to_owned(),
+        tool_name: params
+            .as_ref()
+            .and_then(|value| value.get("name"))
+            .and_then(|value| value.as_str())
+            .map(str::to_owned),
     };
-    let args = params
-        .as_ref()
-        .and_then(|value| value.get("arguments"))
-        .cloned();
-    let progress_token = params
-        .as_ref()
-        .and_then(|value| {
-            value
-                .get("_meta")
-                .and_then(|meta| meta.get("progressToken"))
-                .or_else(|| value.get("progressToken"))
-        })
-        .cloned();
+    let Some(params) = params else {
+        crate::transport::log_protocol_error_observation(
+            "http",
+            &request,
+            "invalid_params",
+            "missing tools/call params object",
+        );
+        return jsonrpc_error_response(id, -32602, "missing tools/call params object".to_owned());
+    };
+    let (name, args, progress_token) = {
+        let Some(params_object) = params.as_object() else {
+            crate::transport::log_protocol_error_observation(
+                "http",
+                &request,
+                "invalid_params",
+                "tools/call params must be an object",
+            );
+            return jsonrpc_error_response(
+                id,
+                -32602,
+                "tools/call params must be an object".to_owned(),
+            );
+        };
+        let Some(name) = params_object.get("name").and_then(|value| value.as_str()) else {
+            crate::transport::log_protocol_error_observation(
+                "http",
+                &request,
+                "invalid_params",
+                "missing tool name",
+            );
+            return jsonrpc_error_response(id, -32602, "missing tool name".to_owned());
+        };
+        if !crate::tools::is_known_tool_name(name) {
+            crate::transport::log_protocol_error_observation(
+                "http",
+                &request,
+                "method_not_found",
+                &format!("unknown tool: {name}"),
+            );
+            return jsonrpc_error_response(id, -32601, format!("unknown tool: {name}"));
+        }
+        let args = match params_object.get("arguments") {
+            None | Some(Value::Null) => None,
+            Some(value) if value.is_object() => Some(value.clone()),
+            Some(_) => {
+                crate::transport::log_protocol_error_observation(
+                    "http",
+                    &request,
+                    "invalid_params",
+                    "tools/call arguments must be an object when provided",
+                );
+                return jsonrpc_error_response(
+                    id,
+                    -32602,
+                    "tools/call arguments must be an object when provided".to_owned(),
+                );
+            }
+        };
+        // Boundary audit for HTTP `tools/call`:
+        // - missing params object, non-object params, missing tool name, unknown tool,
+        //   and non-object `arguments` stay JSON-RPC protocol errors here
+        // - once dispatch enters `execute_tool_call()`, domain failures become
+        //   `CallToolResult { isError: true }`
+        // - only worker/runtime failures in spawn/join path fall back to JSON-RPC errors
+        let progress_token = params_object
+            .get("_meta")
+            .and_then(|meta| meta.get("progressToken"))
+            .or_else(|| params_object.get("progressToken"))
+            .cloned();
+        (name.to_owned(), args, progress_token)
+    };
     let repo_root = Arc::clone(&state.repo_root);
     let db_path = Arc::clone(&state.db_path);
     let session_for_progress = Arc::clone(&session);
@@ -797,7 +859,7 @@ async fn dispatch_tool_call(
             request_id_for_context.clone(),
         );
         crate::runtime_context::install(reverse_client);
-        crate::tasks::install_tool_call_request_params(params.as_ref());
+        crate::tasks::install_tool_call_request_params(Some(&params));
         crate::progress::install(
             move |message, percentage| {
                 if let Some(token) = &progress_token_for_closure {
@@ -828,11 +890,23 @@ async fn dispatch_tool_call(
 
     match result {
         Ok(Ok(tool_result)) => {
+            let is_tool_error = tool_result.get("isError").and_then(Value::as_bool) == Some(true);
+            if is_tool_error {
+                crate::transport::log_tool_execution_error_observation(
+                    "http",
+                    &request,
+                    &tool_result,
+                );
+            }
             emit_http_log(
                 &session_for_result,
-                logging::LogLevel::Info,
+                if is_tool_error {
+                    logging::LogLevel::Error
+                } else {
+                    logging::LogLevel::Info
+                },
                 "tools/call",
-                format!("tool={} success=true", name_for_log),
+                format!("tool={} success={}", name_for_log, !is_tool_error),
             );
             let response_json = serde_json::json!({
                 "jsonrpc": "2.0",
@@ -1481,6 +1555,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn http_tools_call_unknown_tool_uses_method_not_found_error() {
+        let (state, session_id) = initialize_session(make_state(None)).await;
+        let response = handle_post_mcp(
+            State(state),
+            session_headers(&session_id),
+            Bytes::from_static(
+                b"{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"unknown_tool_xyz\",\"arguments\":{}}}",
+            ),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let value = read_json_response(response).await;
+        assert!(value.get("result").is_none());
+        assert_eq!(value["error"]["code"], json!(-32601));
+        assert_eq!(
+            value["error"]["data"]["atlas_error_code"],
+            json!("method_not_found")
+        );
+    }
+
+    #[tokio::test]
+    async fn http_tools_call_missing_file_returns_is_error_result() {
+        let (state, session_id) = initialize_session(make_state(None)).await;
+        let response = handle_post_mcp(
+            State(state),
+            session_headers(&session_id),
+            Bytes::from_static(
+                b"{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"read_file_around_match\",\"arguments\":{\"file\":\"src/missing.rs\",\"query\":\"needle\",\"output_format\":\"json\"}}}",
+            ),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let value = read_json_response(response).await;
+        assert!(value.get("error").is_none());
+        assert_eq!(value["result"]["isError"], json!(true));
+        assert_eq!(
+            value["result"]["structuredContent"]["code"],
+            json!("file_not_found")
+        );
+        assert_eq!(
+            value["result"]["structuredContent"]["details"]["path"],
+            json!("src/missing.rs")
+        );
+        assert_eq!(
+            value["result"]["content"][0]["text"],
+            json!("file not found: src/missing.rs")
+        );
+        assert!(value["result"].get("Text").is_none());
+    }
+
+    #[tokio::test]
     async fn http_tasks_get_unknown_task_uses_task_not_found_error() {
         let (_dir, state) = make_task_state();
         let (state, session_id) = initialize_session(state).await;
@@ -1782,7 +1907,17 @@ mod tests {
                 .into(),
         )
         .await;
-        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .expect("read body");
+        let json: serde_json::Value = serde_json::from_slice(&body).expect("json response");
+        assert_eq!(json["result"]["isError"], serde_json::json!(true));
+        assert_eq!(
+            json["result"]["structuredContent"]["code"],
+            serde_json::json!("invalid_input")
+        );
 
         let response = handle_get_mcp(State(state.clone()), session_headers(&session_a)).await;
         let body_a = read_body_string(response).await;

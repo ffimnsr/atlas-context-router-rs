@@ -22,3 +22,22 @@ MCP server exposing Atlas graph, impact, and review tools over stdio. Implements
 - Plus: `traverse_graph`, `symbol_neighbors`, `resolve_symbol`, `search_content`, `analyze_safety`, `analyze_removal`, `analyze_dead_code`, and more
 
 Listens on stdio or Unix socket; supports JSON-RPC 2.0 message framing.
+
+## Error Boundary
+
+Atlas split MCP failures into two layers:
+
+- **protocol error**: top-level JSON-RPC `error`; request failed before valid tool execution
+- **tool execution error**: top-level JSON-RPC `result` with `isError: true`; request reached tool dispatch and failed after that boundary
+
+`tools/call` examples:
+
+- protocol errors: missing params object, non-object params, missing tool name, unknown tool, non-object `arguments`
+- tool execution errors: missing file, invalid repo-relative path, handler validation failure, stale graph block, dependency failure, timeout after dispatch started
+
+Developer note:
+
+- keep human display text in `result.content[0].text`
+- keep machine contract in `result.structuredContent`
+- do not reintroduce legacy uppercase `Text` wrappers at server boundary
+- if UI needs alternate presentation, adapt client-side

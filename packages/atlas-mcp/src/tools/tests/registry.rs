@@ -307,14 +307,14 @@ fn invalid_output_format_returns_error() {
     let _ = Store::open(&db_path).expect("open store");
 
     let args = serde_json::json!({ "query": "compute", "output_format": "xml" });
-    let result = call("get_context", Some(&args), "/ignored", &db_path);
+    let result = call("get_context", Some(&args), "/ignored", &db_path)
+        .expect("invalid output_format should return tool error result");
 
-    assert!(result.is_err());
+    assert_eq!(result["isError"], serde_json::json!(true));
     assert!(
-        result
-            .unwrap_err()
-            .to_string()
-            .contains("unsupported output_format")
+        result["structuredContent"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("unsupported output_format"))
     );
 }
 
@@ -341,21 +341,28 @@ fn search_content_invalid_regex_returns_strict_guidance() {
         Some(&args),
         dir.path().to_str().expect("repo root"),
         &db_path,
-    );
+    )
+    .expect("invalid regex must return tool error result");
 
-    assert!(result.is_err(), "invalid regex must return an error");
-    let message = result.unwrap_err().to_string();
+    assert_eq!(result["isError"], json!(true));
+    assert_eq!(result["structuredContent"]["code"], json!("invalid_input"));
+    let message = result["structuredContent"]["message"]
+        .as_str()
+        .expect("message");
+    let detail = result["structuredContent"]["details"]["detail"]
+        .as_str()
+        .expect("detail");
     assert!(
-        message.contains("search_content keeps is_regex=true strict"),
+        message.contains("invalid regex pattern for search_content"),
         "expected strict regex guidance, got: {message}"
     );
     assert!(
-        message.contains("Set is_regex=false for literal text search"),
-        "expected literal-search guidance, got: {message}"
+        detail.contains("Set is_regex=false for literal text search"),
+        "expected literal-search guidance, got detail: {detail}"
     );
     assert!(
-        message.contains(r"Command::Context|Context \{"),
-        "expected escaped regex example, got: {message}"
+        detail.contains(r"Command::Context|Context \{"),
+        "expected escaped regex example, got detail: {detail}"
     );
 }
 

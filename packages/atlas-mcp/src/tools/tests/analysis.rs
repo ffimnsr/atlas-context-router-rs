@@ -31,16 +31,22 @@ fn analyze_safety_returns_score_and_band() {
 fn analyze_safety_missing_symbol_returns_error() {
     let fixture = setup_mcp_fixture();
     let args = serde_json::json!({ "output_format": "json" });
-    let result = call("analyze_safety", Some(&args), "/repo", &fixture.db_path);
-    assert!(result.is_err());
+    let result = call("analyze_safety", Some(&args), "/repo", &fixture.db_path)
+        .expect("missing symbol should return tool error result");
+    assert_eq!(result["isError"], serde_json::json!(true));
+    assert_eq!(
+        result["structuredContent"]["code"],
+        serde_json::json!("invalid_input")
+    );
 }
 
 #[test]
 fn analyze_safety_unknown_symbol_returns_error() {
     let fixture = setup_mcp_fixture();
     let args = serde_json::json!({ "symbol": "nonexistent::fn::ghost", "output_format": "json" });
-    let result = call("analyze_safety", Some(&args), "/repo", &fixture.db_path);
-    assert!(result.is_err());
+    let result = call("analyze_safety", Some(&args), "/repo", &fixture.db_path)
+        .expect("unknown symbol should return tool error result");
+    assert_eq!(result["isError"], serde_json::json!(true));
 }
 
 #[test]
@@ -93,8 +99,13 @@ fn analyze_remove_returns_impact_summary() {
 fn analyze_remove_empty_symbols_returns_error() {
     let fixture = setup_mcp_fixture();
     let args = serde_json::json!({ "symbols": [], "output_format": "json" });
-    let result = call("analyze_remove", Some(&args), "/repo", &fixture.db_path);
-    assert!(result.is_err());
+    let result = call("analyze_remove", Some(&args), "/repo", &fixture.db_path)
+        .expect("empty symbols should return tool error result");
+    assert_eq!(result["isError"], serde_json::json!(true));
+    assert_eq!(
+        result["structuredContent"]["code"],
+        serde_json::json!("invalid_input")
+    );
 }
 
 #[test]
@@ -299,8 +310,13 @@ fn analyze_dependency_returns_removable_verdict() {
 fn analyze_dependency_missing_symbol_returns_error() {
     let fixture = setup_mcp_fixture();
     let args = serde_json::json!({ "output_format": "json" });
-    let result = call("analyze_dependency", Some(&args), "/repo", &fixture.db_path);
-    assert!(result.is_err());
+    let result = call("analyze_dependency", Some(&args), "/repo", &fixture.db_path)
+        .expect("missing symbol should return tool error result");
+    assert_eq!(result["isError"], serde_json::json!(true));
+    assert_eq!(
+        result["structuredContent"]["code"],
+        serde_json::json!("invalid_input")
+    );
 }
 
 #[test]
