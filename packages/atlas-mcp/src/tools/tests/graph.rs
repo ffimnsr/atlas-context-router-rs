@@ -36,6 +36,79 @@ fn query_graph_invalid_regex_returns_error() {
 }
 
 #[test]
+fn query_graph_empty_regex_is_treated_as_missing_when_text_present() {
+    let fixture = setup_mcp_fixture();
+    let args = serde_json::json!({
+        "text": "compute",
+        "regex": "",
+        "output_format": "json"
+    });
+
+    let response = call("query_graph", Some(&args), "/ignored", &fixture.db_path)
+        .expect("empty regex with text should still search by text");
+    let text = unwrap_tool_text(response);
+    let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
+    let items = v.as_array().expect("result array");
+    assert!(!items.is_empty(), "expected text search results");
+}
+
+#[test]
+fn query_graph_empty_text_and_regex_returns_actionable_error() {
+    let fixture = setup_mcp_fixture();
+    let args = serde_json::json!({
+        "text": "   ",
+        "regex": "",
+        "output_format": "json"
+    });
+
+    let result = call("query_graph", Some(&args), "/ignored", &fixture.db_path)
+        .expect("empty text and regex must return tool error result");
+    let message = result["structuredContent"]["message"]
+        .as_str()
+        .expect("message");
+    let details = &result["structuredContent"]["details"];
+
+    assert_eq!(result["isError"], serde_json::json!(true));
+    assert_eq!(
+        result["structuredContent"]["code"],
+        serde_json::json!("invalid_input")
+    );
+    assert!(
+        message.contains("query_graph needs non-empty 'text', non-empty 'regex', or both"),
+        "expected actionable empty-input message, got: {message}"
+    );
+    assert_eq!(
+        details["offending_fields"],
+        serde_json::json!(["text", "regex"])
+    );
+    assert_eq!(
+        details["accepted_argument_families"],
+        serde_json::json!(["text", "regex", "text + regex"])
+    );
+    assert_eq!(
+        details["retry_example"],
+        serde_json::json!({"text": "compute"})
+    );
+    assert_eq!(
+        details["alternate_retry_example"],
+        serde_json::json!({"regex": "compute|handle_request"})
+    );
+    assert_eq!(
+        details["normalization_performed"],
+        serde_json::json!([
+            "trimmed whitespace-only text to empty",
+            "normalized empty regex to missing"
+        ])
+    );
+    assert_eq!(
+        details["fail_closed_reason"],
+        serde_json::json!(
+            "Atlas refused to guess because both searchable inputs were empty after normalization"
+        )
+    );
+}
+
+#[test]
 fn query_graph_fuzzy_typo_prefers_symbol_over_markdown_file() {
     let dir = tempfile::tempdir().expect("tempdir");
     let db_path = dir.path().join("atlas.db").to_string_lossy().to_string();

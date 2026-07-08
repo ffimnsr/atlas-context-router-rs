@@ -102,7 +102,7 @@ fn base_tool_list_json() -> Value {
             },
             {
                 "name": "query_graph",
-                "description": "Full-text search the code graph by symbol name or identifier. Returns a compact, ranked list of matching symbols by default; set include_files=true when file-level hits are also useful. It does not return caller/callee usage edges. IMPORTANT: text is matched against indexed symbol names and qualified names (identifiers like 'BalancesTab', 'useFilteredBalances'), NOT against natural language — use short exact symbol names, not descriptive phrases. Follow up with symbol_neighbors, traverse_graph, or get_context when you need relationships.",
+                "description": "Full-text search the code graph by symbol name or identifier. Returns a compact, ranked list of matching symbols by default; set include_files=true when file-level hits are also useful. It does not return caller/callee usage edges. Empty `regex` is treated like omitted; truly empty `text`+`regex` requests return a self-correcting retry example instead of a bare validation failure. IMPORTANT: text is matched against indexed symbol names and qualified names (identifiers like 'BalancesTab', 'useFilteredBalances'), NOT against natural language — use short exact symbol names, not descriptive phrases. Follow up with symbol_neighbors, traverse_graph, or get_context when you need relationships.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -113,7 +113,7 @@ fn base_tool_list_json() -> Value {
                         "semantic": { "type": "boolean", "description": "Graph-neighbour expansion on top of FTS: re-ranks initial FTS hits using graph edges (default false). NOT vector/embedding search — still requires FTS to find at least one initial symbol-name hit. If FTS returns nothing (e.g. text was a phrase not a symbol name), semantic expansion also returns nothing. Use regex instead for pattern-based fallback." },
                         "expand":   { "type": "boolean", "description": "Expand results through graph edges after ranking (default false). Subsumed by semantic=true; setting both is redundant." },
                         "expand_hops": { "type": "integer", "description": "Max edge hops when expand=true (default 1)" },
-                        "regex":    { "type": "string",  "description": "Regex pattern matched against name and qualified_name via SQL UDF. Three modes: (1) regex-only structural scan when text is empty — filters every node in the DB; (2) text+regex: FTS5 runs first then the UDF post-filters its candidates inside SQLite; (3) invalid pattern returns an error with details. Supports regex crate alternation syntax (e.g. 'handle|HANDLE|Handle_'). Must be valid regex crate syntax." },
+                        "regex":    { "type": "string",  "description": "Regex pattern matched against name and qualified_name via SQL UDF. Empty string is treated like omitted. Three modes: (1) regex-only structural scan when text is empty — filters every node in the DB; (2) text+regex: FTS5 runs first then the UDF post-filters its candidates inside SQLite; (3) invalid pattern returns an error with details. Supports regex crate alternation syntax (e.g. 'handle|HANDLE|Handle_'). Must be valid regex crate syntax." },
                         "subpath":  { "type": "string",  "description": "Restrict results to nodes whose file_path starts with this prefix (e.g. 'src/auth', 'packages/atlas-core'). Filtering happens in SQL before ranking." },
                         "fuzzy":    { "type": "boolean", "description": "Enable fuzzy (edit-distance) typo recovery for near-miss symbol names (default false). Uses relaxed candidate expansion plus stronger code-symbol ranking so close symbol typos outrank weaker docs/config matches." },
                         "hybrid":   { "type": "boolean", "description": "Enable hybrid FTS + vector retrieval with Reciprocal Rank Fusion (default false). Requires search.embedding.url in .atlas/config.toml; falls back to FTS-only when no embedding backend is configured." },
@@ -163,10 +163,11 @@ fn base_tool_list_json() -> Value {
             },
             {
                 "name": "get_impact_radius",
-                "description": "Compute nodes and files affected when the given files change. Returns compact, capped results.",
+                "description": "Compute nodes and files affected when the given files change. Returns compact, capped results. Change-source conflicts return structured retry guidance instead of a bare ambiguity error.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
+                        "mode":      { "type": "string",  "description": "Optional change-source mode: files, base, staged, or working_tree. When set, provide only that mode's required fields and omit other mode families." },
                         "files":     { "type": "array",   "items": { "type": "string" }, "description": "Repo-relative changed file paths. Alternative to base/staged/working_tree." },
                         "base":      { "type": "string",  "description": "Base git ref (e.g. 'origin/main'). Infers changed files from git diff when files not provided." },
                         "staged":    { "type": "boolean", "description": "Diff staged changes only (default false). Mutually exclusive with files/base/working_tree." },
@@ -180,10 +181,11 @@ fn base_tool_list_json() -> Value {
             },
             {
                 "name": "get_review_context",
-                "description": "Assemble review context for the given files: changed symbols, impacted neighbors, critical edges, and risk summary. Agent-optimized output.",
+                "description": "Assemble review context for the given files: changed symbols, impacted neighbors, critical edges, and risk summary. Agent-optimized output. Change-source conflicts return structured retry guidance instead of a bare ambiguity error.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
+                        "mode": { "type": "string", "description": "Optional change-source mode: files, base, staged, or working_tree. When set, provide only that mode's required fields and omit other mode families." },
                         "files": { "type": "array", "items": { "type": "string" }, "description": "Repo-relative changed file paths. Alternative to base/staged/working_tree." },
                         "base": { "type": "string", "description": "Base git ref (e.g. 'origin/main'). Infers changed files from git diff when files not provided." },
                         "staged": { "type": "boolean", "description": "Diff staged changes only (default false). Mutually exclusive with files/base/working_tree." },
@@ -198,10 +200,11 @@ fn base_tool_list_json() -> Value {
             },
             {
                 "name": "detect_changes",
-                "description": "List files changed since a base git ref, with per-file node counts from the graph.",
+                "description": "List files changed since a base git ref, with per-file node counts from the graph. Change-source conflicts return structured retry guidance instead of a bare ambiguity error.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
+                        "mode":   { "type": "string",  "description": "Optional change-source mode: base, staged, or working_tree. When set, provide only that mode's required fields and omit other mode families." },
                         "base":   { "type": "string",  "description": "Base ref (e.g. 'origin/main'). Omit to diff working tree." },
                         "staged": { "type": "boolean", "description": "Diff staged changes only (default false)" },
                         "working_tree": { "type": "boolean", "description": "Diff working-tree changes only. Mutually exclusive with base/staged." },
@@ -255,12 +258,14 @@ fn base_tool_list_json() -> Value {
             },
             {
                 "name": "get_minimal_context",
-                "description": "Auto-detect changed files from git, then return a compact review bundle: changed symbols, immediate impact, risk flags. Lower token overhead than get_review_context.",
+                "description": "Auto-detect changed files from git, then return a compact review bundle: changed symbols, immediate impact, risk flags. Lower token overhead than get_review_context. Change-source conflicts return structured retry guidance instead of a bare ambiguity error.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
+                        "mode":      { "type": "string",  "description": "Optional change-source mode: base, staged, or working_tree. When set, provide only that mode's required fields and omit other mode families." },
                         "base":      { "type": "string",  "description": "Base git ref (e.g. 'origin/main'). Omit to diff working tree." },
                         "staged":    { "type": "boolean", "description": "Diff staged changes only (default false)" },
+                        "working_tree": { "type": "boolean", "description": "Diff working-tree changes only. Mutually exclusive with base/staged." },
                         "max_depth": { "type": "integer", "description": "Traversal depth limit (default 2)" },
                         "max_nodes": { "type": "integer", "description": "Maximum impacted nodes (default 50)" },
                         "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
@@ -270,13 +275,15 @@ fn base_tool_list_json() -> Value {
             },
             {
                 "name": "explain_change",
-                "description": "Advanced impact analysis for a set of changed files: risk level, changed-symbol breakdown by change kind (api/signature/internal), boundary violations, test coverage gaps, and a compact summary. Deterministic, LLM-free.",
+                "description": "Advanced impact analysis for a set of changed files: risk level, changed-symbol breakdown by change kind (api/signature/internal), boundary violations, test coverage gaps, and a compact summary. Deterministic, LLM-free. Change-source conflicts return structured retry guidance instead of a bare ambiguity error.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "files":     { "type": "array", "items": { "type": "string" }, "description": "Repo-relative changed file paths. Required unless using base/staged." },
+                        "mode":      { "type": "string",  "description": "Optional change-source mode: files, base, staged, or working_tree. When set, provide only that mode's required fields and omit other mode families." },
+                        "files":     { "type": "array", "items": { "type": "string" }, "description": "Repo-relative changed file paths. Required unless using base/staged/working_tree." },
                         "base":      { "type": "string",  "description": "Base git ref (e.g. 'origin/main'). Infers changed files from git diff when files not provided." },
                         "staged":    { "type": "boolean", "description": "Diff staged changes only (default false). Used when inferring files from git." },
+                        "working_tree": { "type": "boolean", "description": "Diff working-tree changes only. Mutually exclusive with files/base/staged." },
                         "max_depth": { "type": "integer", "description": "Traversal depth limit for impact (default 5)" },
                         "max_nodes": { "type": "integer", "description": "Maximum impacted nodes (default 200)" },
                         "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
@@ -607,14 +614,14 @@ fn base_tool_list_json() -> Value {
             },
             {
                 "name": "search_files",
-                "description": "Discover files by name or path glob. Use as a graph/content companion lookup for non-code assets — docs, config, SQL, Markdown, templates — after graph tools have surfaced structural context. Do not use before graph resolution for symbol questions. For symbol/relationship questions use query_graph instead.",
+                "description": "Discover files by name or path glob. Use as a graph/content companion lookup for non-code assets — docs, config, SQL, Markdown, templates — after graph tools have surfaced structural context. Empty or omitted `subpath` means repo-root scope. Do not use before graph resolution for symbol questions. For symbol/relationship questions use query_graph instead.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
                         "pattern":        { "type": "string",  "description": "Glob pattern matched against file names and repo-relative paths (e.g. '*.sql', '**/*.toml', 'config/*')." },
                         "globs":          { "type": "array", "items": { "type": "string" }, "description": "Optional include-path filters: only files whose repo-relative path matches at least one of these globs are considered." },
                         "exclude_globs":  { "type": "array", "items": { "type": "string" }, "description": "Optional exclusion filters: files matching any of these globs are skipped (e.g. ['**/generated/**', '**/*.min.js'])." },
-                        "subpath":        { "type": "string",  "description": "Scope the walk to a repo sub-directory (e.g. 'packages/api'). Useful for monorepos." },
+                        "subpath":        { "type": "string",  "description": "Scope the walk to a repo sub-directory (e.g. 'packages/api'). Empty or omitted value means repo root." },
                         "case_sensitive": { "type": "boolean", "description": "Match pattern case-sensitively (default false)." },
                         "output_format":  { "type": "string",  "description": DEFAULT_OUTPUT_DESCRIPTION }
                     },
@@ -623,7 +630,7 @@ fn base_tool_list_json() -> Value {
             },
             {
                 "name": "search_content",
-                "description": "Search file contents by literal string or regex. Use as a graph/content companion lookup when changed symbols depend on non-code text — config keys, SQL queries, prompt content, error messages, comments. Generated and vendored files are excluded by default. Do not use before graph resolution for symbol questions; use as companion after graph tools surface relevant context. For symbol/relationship questions use query_graph instead.",
+                "description": "Search file contents by literal string or regex. Use as a graph/content companion lookup when changed symbols depend on non-code text — config keys, SQL queries, prompt content, error messages, comments. Generated and vendored files are excluded by default. Empty or omitted `subpath` means repo-root scope. Do not use before graph resolution for symbol questions; use as companion after graph tools surface relevant context. For symbol/relationship questions use query_graph instead.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -636,7 +643,7 @@ fn base_tool_list_json() -> Value {
                         "rich_snippets":      { "type": "boolean", "description": "When true, also return grouped per-match snippets with before/match/after context lines. Default false to keep payloads compact." },
                         "snippet_context_lines": { "type": "integer", "description": "Context lines per grouped rich snippet (default: max(context_lines, 2) when rich_snippets=true)." },
                         "max_results":        { "type": "integer", "description": "Maximum match lines to return (default 50)." },
-                        "subpath":            { "type": "string",  "description": "Scope the walk to a repo sub-directory (e.g. 'services/auth'). Useful for monorepos." },
+                        "subpath":            { "type": "string",  "description": "Scope the walk to a repo sub-directory (e.g. 'services/auth'). Empty or omitted value means repo root." },
                         "output_format":      { "type": "string",  "description": DEFAULT_OUTPUT_DESCRIPTION }
                     },
                     "required": ["query"]
@@ -644,7 +651,7 @@ fn base_tool_list_json() -> Value {
             },
             {
                 "name": "read_file_excerpt",
-                "description": "Read bounded file content from a repo-relative path using either explicit line range(s) or a single line with surrounding context. Use this when you already know the file path and need precise excerpts instead of content search.",
+                "description": "Read bounded file content from a repo-relative path using either explicit line range(s) or a single line with surrounding context. Wrapper-emitted absent-equivalent selector fields like `0`, `[]`, and `null` are ignored when exactly one selector family is materially set. Use this when you already know the file path and need precise excerpts instead of content search.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -667,6 +674,7 @@ fn base_tool_list_json() -> Value {
                             }
                         },
                         "max_lines": { "type": "integer", "description": "Maximum excerpt lines to return across all ranges (default 200, clamped by policy)." },
+                        "repo_root": { "type": "string", "description": "Optional repo-root assertion. When provided, Atlas fails if it does not match current repo identity." },
                         "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
                     },
                     "required": ["file"]
@@ -682,6 +690,7 @@ fn base_tool_list_json() -> Value {
                         "heading": { "type": "string", "description": "Heading path, slug, or title to resolve. Mutually exclusive with line." },
                         "line": { "type": "integer", "description": "1-based line number to resolve to the containing Markdown section. Mutually exclusive with heading." },
                         "max_bytes": { "type": "integer", "description": "Maximum bytes of section content to emit before truncating (default 16384)." },
+                        "repo_root": { "type": "string", "description": "Optional repo-root assertion. When provided, Atlas fails if it does not match current repo identity." },
                         "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
                     },
                     "required": ["file"]
@@ -701,6 +710,7 @@ fn base_tool_list_json() -> Value {
                         "after": { "type": "integer", "description": "Context lines after each match window (default 2)." },
                         "max_matches": { "type": "integer", "description": "Maximum matched lines to consider before truncating (default 20, clamped by policy)." },
                         "max_lines": { "type": "integer", "description": "Maximum lines to emit across returned snippets (default 200, clamped by policy)." },
+                        "repo_root": { "type": "string", "description": "Optional repo-root assertion. When provided, Atlas fails if it does not match current repo identity." },
                         "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
                     },
                     "required": ["file", "query"]
@@ -708,14 +718,14 @@ fn base_tool_list_json() -> Value {
             },
             {
                 "name": "search_templates",
-                "description": "Discover template files (HTML, Jinja2, Handlebars, Tera, Mako, Mustache, Twig, Liquid, ERB, HAML, Pug) by extension. Use as a graph/content companion lookup when changed files or graph evidence suggests a dependency on template behavior. Narrows by `kind` when you know the template engine. Prefer this over search_files for template-specific discovery. For symbol/relationship questions use query_graph instead.",
+                "description": "Discover template files (HTML, Jinja2, Handlebars, Tera, Mako, Mustache, Twig, Liquid, ERB, HAML, Pug) by extension. Use as a graph/content companion lookup when changed files or graph evidence suggests a dependency on template behavior. Empty or omitted `subpath` means repo-root scope. Narrows by `kind` when you know the template engine. Prefer this over search_files for template-specific discovery. For symbol/relationship questions use query_graph instead.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
                         "kind":           { "type": "string",  "description": "Template engine: html, jinja, handlebars, tera, mako, mustache, twig, liquid, erb, haml, pug. Omit to search all template types." },
                         "globs":          { "type": "array", "items": { "type": "string" }, "description": "Optional include-path filters." },
                         "exclude_globs":  { "type": "array", "items": { "type": "string" }, "description": "Optional exclusion filters." },
-                        "subpath":        { "type": "string",  "description": "Scope the walk to a repo sub-directory. Useful for monorepos." },
+                        "subpath":        { "type": "string",  "description": "Scope the walk to a repo sub-directory. Empty or omitted value means repo root." },
                         "case_sensitive": { "type": "boolean", "description": "Match case-sensitively (default false)." },
                         "max_results":    { "type": "integer", "description": "Maximum files to return (default 100)." },
                         "output_format":  { "type": "string",  "description": DEFAULT_OUTPUT_DESCRIPTION }
@@ -725,14 +735,14 @@ fn base_tool_list_json() -> Value {
             },
             {
                 "name": "search_text_assets",
-                "description": "Discover SQL, config (TOML/YAML/INI), environment (.env), and prompt files. Use as a graph/content companion lookup when changed files include SQL, config, or prompt assets, or when graph evidence suggests a non-code dependency. Use `kind` to narrow to a specific asset type. These files are not indexed as graph symbols; use query_graph for symbol/relationship questions.",
+                "description": "Discover SQL, config (TOML/YAML/INI), environment (.env), and prompt files. Use as a graph/content companion lookup when changed files include SQL, config, or prompt assets, or when graph evidence suggests a non-code dependency. Empty or omitted `subpath` means repo-root scope. Use `kind` to narrow to a specific asset type. These files are not indexed as graph symbols; use query_graph for symbol/relationship questions.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
                         "kind":           { "type": "string",  "description": "Asset type: sql, config, env, prompt. Omit to search all text asset types." },
                         "globs":          { "type": "array", "items": { "type": "string" }, "description": "Optional include-path filters." },
                         "exclude_globs":  { "type": "array", "items": { "type": "string" }, "description": "Optional exclusion filters." },
-                        "subpath":        { "type": "string",  "description": "Scope the walk to a repo sub-directory. Useful for monorepos." },
+                        "subpath":        { "type": "string",  "description": "Scope the walk to a repo sub-directory. Empty or omitted value means repo root." },
                         "case_sensitive": { "type": "boolean", "description": "Match case-sensitively (default false)." },
                         "max_results":    { "type": "integer", "description": "Maximum files to return (default 100)." },
                         "output_format":  { "type": "string",  "description": DEFAULT_OUTPUT_DESCRIPTION }

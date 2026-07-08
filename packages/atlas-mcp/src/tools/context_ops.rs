@@ -20,6 +20,9 @@ use crate::context::{enforce_mcp_response_budget, package_context_result, packag
 use crate::session_tools::{
     decision_hits_json, record_mcp_decision_best_effort, search_decisions_best_effort,
 };
+use crate::tool_result::{
+    InputShapeErrorSpec, ToolErrorPayload, input_shape_error_payload, tool_execution_error_value,
+};
 
 fn context_ranking_evidence_legend_json() -> serde_json::Value {
     atlas_core::context_ranking_evidence_legend()
@@ -42,7 +45,7 @@ fn context_decision_lookup_query(request: &ContextRequest) -> Option<String> {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ChangeSourceMode {
     ExplicitFiles,
     BaseRef,
@@ -59,6 +62,14 @@ impl ChangeSourceMode {
             Self::WorkingTree => "working_tree",
         }
     }
+}
+
+struct ChangeSourceRequest {
+    mode: ChangeSourceMode,
+    files: Vec<String>,
+    base: Option<String>,
+    staged: bool,
+    working_tree: bool,
 }
 
 struct ResolvedChangeSource {
@@ -97,45 +108,370 @@ fn resolve_diff_target(
     }
 }
 
-fn resolve_change_source(
-    args: Option<&serde_json::Value>,
-    repo_root: &str,
+fn change_source_examples(allow_explicit_files: bool) -> Vec<serde_json::Value> {
+    let mut examples = Vec::new();
+    if allow_explicit_files {
+        examples.push(serde_json::json!({
+            "mode": "files",
+            "files": ["src/service.rs"]
+        }));
+    }
+    examples.push(serde_json::json!({
+        "mode": "base",
+        "base": "origin/main"
+    }));
+    examples.push(serde_json::json!({
+        "mode": "staged",
+        "staged": true
+    }));
+    examples.push(serde_json::json!({
+        "mode": "working_tree",
+        "working_tree": true
+    }));
+    examples
+}
+
+fn accepted_change_source_modes(allow_explicit_files: bool) -> Vec<&'static str> {
+    let mut modes = Vec::new();
+    if allow_explicit_files {
+        modes.push("files");
+    }
+    modes.extend(["base", "staged", "working_tree"]);
+    modes
+}
+
+fn change_source_error_payload(
+    tool_name: &str,
+    message: impl Into<String>,
+    detail: impl Into<String>,
     allow_explicit_files: bool,
-) -> Result<ResolvedChangeSource> {
-    let base = str_arg(args, "base")?.map(str::to_owned);
+    offending_fields: Vec<&'static str>,
+    present_mode_families: Vec<&'static str>,
+    requested_mode: Option<&str>,
+) -> ToolErrorPayload {
+    let accepted_modes = accepted_change_source_modes(allow_explicit_files);
+    let accepted_argument_families = accepted_modes
+        .iter()
+        .map(|mode| (*mode).to_owned())
+        .collect::<Vec<_>>();
+    let examples = change_source_examples(allow_explicit_files);
+    let retry_example = examples.first().cloned();
+    let mode_contract = if allow_explicit_files {
+        "Provide exactly one change-source mode: files, base, staged, or working_tree. Atlas refuses to guess when multiple mode families are present."
+    } else {
+        "Provide exactly one change-source mode: base, staged, or working_tree. Atlas refuses to guess when multiple mode families are present."
+    };
+    let mut extra_details = serde_json::json!({
+        "present_mode_families": present_mode_families,
+        "accepted_modes": accepted_modes,
+        "accepted_mode_examples": examples,
+        "mode_contract": mode_contract,
+    });
+    if let Some(mode) = requested_mode {
+        extra_details["requested_mode"] = serde_json::Value::String(mode.to_owned());
+    }
+
+    input_shape_error_payload(
+        tool_name,
+        message,
+        detail,
+        InputShapeErrorSpec {
+            offending_fields: offending_fields.into_iter().map(str::to_owned).collect(),
+            normalization_performed: Vec::new(),
+            accepted_argument_families,
+            retry_example,
+            fail_closed_reason: Some(
+                "Atlas refused to guess because multiple change-source mode families were present"
+                    .to_owned(),
+            ),
+            retry_guidance: Some(
+                "Pick exactly one change-source mode and provide only its required fields, then retry."
+                    .to_owned(),
+            ),
+            extra_details: Some(extra_details),
+        },
+    )
+}
+
+fn validate_change_source_request(
+    tool_name: &str,
+    args: Option<&serde_json::Value>,
+    allow_explicit_files: bool,
+) -> std::result::Result<ChangeSourceRequest, Box<ToolErrorPayload>> {
+    let mode = str_arg(args, "mode")
+        .map_err(|error| {
+            Box::new(change_source_error_payload(
+                tool_name,
+                "invalid change source arguments",
+                error.to_string(),
+                allow_explicit_files,
+                vec!["mode"],
+                Vec::new(),
+                None,
+            ))
+        })?
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let base = str_arg(args, "base")
+        .map_err(|error| {
+            Box::new(change_source_error_payload(
+                tool_name,
+                "invalid change source arguments",
+                error.to_string(),
+                allow_explicit_files,
+                vec!["base"],
+                Vec::new(),
+                mode,
+            ))
+        })?
+        .map(str::to_owned);
     let staged = bool_arg(args, "staged").unwrap_or(false);
     let working_tree = bool_arg(args, "working_tree").unwrap_or(false);
     let files = if allow_explicit_files {
-        string_array_arg(args, "files")?
+        string_array_arg(args, "files").map_err(|error| {
+            Box::new(change_source_error_payload(
+                tool_name,
+                "invalid change source arguments",
+                error.to_string(),
+                allow_explicit_files,
+                vec!["files"],
+                Vec::new(),
+                mode,
+            ))
+        })?
     } else {
         Vec::new()
     };
 
-    if !files.is_empty() && (base.is_some() || staged || working_tree) {
-        return Err(anyhow::anyhow!(
-            "ambiguous change source: provide either files or one of base/staged/working_tree"
-        ));
+    let mut present_mode_families = Vec::new();
+    let mut offending_fields = Vec::new();
+    if !files.is_empty() {
+        present_mode_families.push("files");
+        offending_fields.push("files");
     }
-    if staged && working_tree {
-        return Err(anyhow::anyhow!(
-            "ambiguous change source: staged and working_tree cannot be combined"
-        ));
+    if base.is_some() {
+        present_mode_families.push("base");
+        offending_fields.push("base");
     }
-    if base.is_some() && staged {
-        return Err(anyhow::anyhow!(
-            "ambiguous change source: base and staged cannot be combined"
-        ));
+    if staged {
+        present_mode_families.push("staged");
+        offending_fields.push("staged");
     }
-    if base.is_some() && working_tree {
-        return Err(anyhow::anyhow!(
-            "ambiguous change source: base and working_tree cannot be combined"
-        ));
+    if working_tree {
+        present_mode_families.push("working_tree");
+        offending_fields.push("working_tree");
+    }
+
+    if let Some(mode_name) = mode {
+        let allowed = accepted_change_source_modes(allow_explicit_files);
+        if !allowed.contains(&mode_name) {
+            return Err(Box::new(change_source_error_payload(
+                tool_name,
+                format!("invalid change source mode '{mode_name}'"),
+                format!(
+                    "invalid change source mode '{mode_name}'. Accepted modes: {}",
+                    allowed.join(", ")
+                ),
+                allow_explicit_files,
+                vec!["mode"],
+                present_mode_families,
+                Some(mode_name),
+            )));
+        }
+
+        match mode_name {
+            "files" => {
+                if !allow_explicit_files {
+                    return Err(Box::new(change_source_error_payload(
+                        tool_name,
+                        "invalid change source mode 'files'",
+                        "this tool does not accept explicit files mode",
+                        allow_explicit_files,
+                        vec!["mode"],
+                        present_mode_families,
+                        Some(mode_name),
+                    )));
+                }
+                if files.is_empty() {
+                    return Err(Box::new(change_source_error_payload(
+                        tool_name,
+                        "mode 'files' requires non-empty 'files'",
+                        "files mode requires a non-empty files array",
+                        allow_explicit_files,
+                        vec!["mode", "files"],
+                        present_mode_families,
+                        Some(mode_name),
+                    )));
+                }
+                if base.is_some() || staged || working_tree {
+                    return Err(Box::new(change_source_error_payload(
+                        tool_name,
+                        "ambiguous change source: mode 'files' cannot be combined with base/staged/working_tree",
+                        "mode 'files' conflicts with one or more legacy mode fields",
+                        allow_explicit_files,
+                        offending_fields,
+                        present_mode_families,
+                        Some(mode_name),
+                    )));
+                }
+                return Ok(ChangeSourceRequest {
+                    mode: ChangeSourceMode::ExplicitFiles,
+                    files,
+                    base: None,
+                    staged: false,
+                    working_tree: false,
+                });
+            }
+            "base" => {
+                if base.is_none() {
+                    return Err(Box::new(change_source_error_payload(
+                        tool_name,
+                        "mode 'base' requires non-empty 'base'",
+                        "base mode requires base ref string",
+                        allow_explicit_files,
+                        vec!["mode", "base"],
+                        present_mode_families,
+                        Some(mode_name),
+                    )));
+                }
+                if !files.is_empty() || staged || working_tree {
+                    return Err(Box::new(change_source_error_payload(
+                        tool_name,
+                        "ambiguous change source: mode 'base' cannot be combined with files/staged/working_tree",
+                        "mode 'base' conflicts with one or more legacy mode fields",
+                        allow_explicit_files,
+                        offending_fields,
+                        present_mode_families,
+                        Some(mode_name),
+                    )));
+                }
+            }
+            "staged" => {
+                if !staged {
+                    return Err(Box::new(change_source_error_payload(
+                        tool_name,
+                        "mode 'staged' requires staged=true",
+                        "staged mode requires staged=true",
+                        allow_explicit_files,
+                        vec!["mode", "staged"],
+                        present_mode_families,
+                        Some(mode_name),
+                    )));
+                }
+                if !files.is_empty() || base.is_some() || working_tree {
+                    return Err(Box::new(change_source_error_payload(
+                        tool_name,
+                        "ambiguous change source: mode 'staged' cannot be combined with files/base/working_tree",
+                        "mode 'staged' conflicts with one or more legacy mode fields",
+                        allow_explicit_files,
+                        offending_fields,
+                        present_mode_families,
+                        Some(mode_name),
+                    )));
+                }
+            }
+            "working_tree" => {
+                if !working_tree {
+                    return Err(Box::new(change_source_error_payload(
+                        tool_name,
+                        "mode 'working_tree' requires working_tree=true",
+                        "working_tree mode requires working_tree=true",
+                        allow_explicit_files,
+                        vec!["mode", "working_tree"],
+                        present_mode_families,
+                        Some(mode_name),
+                    )));
+                }
+                if !files.is_empty() || base.is_some() || staged {
+                    return Err(Box::new(change_source_error_payload(
+                        tool_name,
+                        "ambiguous change source: mode 'working_tree' cannot be combined with files/base/staged",
+                        "mode 'working_tree' conflicts with one or more legacy mode fields",
+                        allow_explicit_files,
+                        offending_fields,
+                        present_mode_families,
+                        Some(mode_name),
+                    )));
+                }
+            }
+            _ => unreachable!("validated mode"),
+        }
+    }
+
+    if present_mode_families.len() > 1 {
+        return Err(Box::new(change_source_error_payload(
+            tool_name,
+            "ambiguous change source: provide exactly one mode family",
+            "multiple change-source mode families were provided in one call",
+            allow_explicit_files,
+            offending_fields,
+            present_mode_families,
+            None,
+        )));
     }
 
     if !files.is_empty() {
+        return Ok(ChangeSourceRequest {
+            mode: ChangeSourceMode::ExplicitFiles,
+            files,
+            base: None,
+            staged: false,
+            working_tree: false,
+        });
+    }
+    if let Some(base_ref) = base {
+        return Ok(ChangeSourceRequest {
+            mode: ChangeSourceMode::BaseRef,
+            files: Vec::new(),
+            base: Some(base_ref),
+            staged: false,
+            working_tree: false,
+        });
+    }
+    if staged {
+        return Ok(ChangeSourceRequest {
+            mode: ChangeSourceMode::Staged,
+            files: Vec::new(),
+            base: None,
+            staged: true,
+            working_tree: false,
+        });
+    }
+    if working_tree {
+        return Ok(ChangeSourceRequest {
+            mode: ChangeSourceMode::WorkingTree,
+            files: Vec::new(),
+            base: None,
+            staged: false,
+            working_tree: true,
+        });
+    }
+
+    Ok(ChangeSourceRequest {
+        mode: ChangeSourceMode::WorkingTree,
+        files: Vec::new(),
+        base: None,
+        staged: false,
+        working_tree: true,
+    })
+}
+
+fn resolve_change_source(
+    request: ChangeSourceRequest,
+    repo_root: &str,
+) -> Result<ResolvedChangeSource> {
+    let ChangeSourceRequest {
+        mode,
+        files,
+        base,
+        staged,
+        working_tree,
+    } = request;
+
+    if mode == ChangeSourceMode::ExplicitFiles {
         let files = normalize_explicit_files(files)?;
         return Ok(ResolvedChangeSource {
-            mode: ChangeSourceMode::ExplicitFiles,
+            mode,
             files,
             changes: Vec::new(),
             deleted_files: Vec::new(),
@@ -149,7 +485,7 @@ fn resolve_change_source(
         find_repo_root(Utf8Path::new(repo_root)).context("cannot find git repo root")?;
     let repo_root_path = repo_root_path.as_path();
 
-    let (mode, diff_target) = resolve_diff_target(base.clone(), staged, working_tree);
+    let (_, diff_target) = resolve_diff_target(base.clone(), staged, working_tree);
     let changes =
         changed_files(repo_root_path, &diff_target).context("cannot detect changed files")?;
     let files: Vec<String> = changes
@@ -335,7 +671,11 @@ pub(super) fn tool_get_impact_radius(
     db_path: &str,
     output_format: crate::output::OutputFormat,
 ) -> Result<serde_json::Value> {
-    let resolved = resolve_change_source(args, repo_root, true)?;
+    let request = match validate_change_source_request("get_impact_radius", args, true) {
+        Ok(request) => request,
+        Err(payload) => return tool_execution_error_value(output_format, &payload),
+    };
+    let resolved = resolve_change_source(request, repo_root)?;
     let max_depth = u64_arg(args, "max_depth").unwrap_or(5) as u32;
     let max_nodes = u64_arg(args, "max_nodes").unwrap_or(200) as usize;
 
@@ -364,7 +704,11 @@ pub(super) fn tool_get_review_context(
     db_path: &str,
     output_format: crate::output::OutputFormat,
 ) -> Result<serde_json::Value> {
-    let resolved = resolve_change_source(args, repo_root, true)?;
+    let request = match validate_change_source_request("get_review_context", args, true) {
+        Ok(request) => request,
+        Err(payload) => return tool_execution_error_value(output_format, &payload),
+    };
+    let resolved = resolve_change_source(request, repo_root)?;
     let max_depth = u64_arg(args, "max_depth").unwrap_or(3) as u32;
     let max_nodes = u64_arg(args, "max_nodes").unwrap_or(200) as usize;
     let token_budget = u64_arg(args, "token_budget").map(|n| n as usize);
@@ -430,7 +774,11 @@ pub(super) fn tool_detect_changes(
     db_path: &str,
     output_format: crate::output::OutputFormat,
 ) -> Result<serde_json::Value> {
-    let resolved = resolve_change_source(args, repo_root, false)?;
+    let request = match validate_change_source_request("detect_changes", args, false) {
+        Ok(request) => request,
+        Err(payload) => return tool_execution_error_value(output_format, &payload),
+    };
+    let resolved = resolve_change_source(request, repo_root)?;
     let changes = &resolved.changes;
     let store_opt = Store::open(db_path).ok();
 
@@ -708,24 +1056,15 @@ pub(super) fn tool_get_minimal_context(
     db_path: &str,
     output_format: crate::output::OutputFormat,
 ) -> Result<serde_json::Value> {
-    let base = str_arg(args, "base")?.map(str::to_owned);
-    let staged = bool_arg(args, "staged").unwrap_or(false);
+    let request = match validate_change_source_request("get_minimal_context", args, false) {
+        Ok(request) => request,
+        Err(payload) => return tool_execution_error_value(output_format, &payload),
+    };
     let max_depth = u64_arg(args, "max_depth").unwrap_or(2) as u32;
     let max_nodes = u64_arg(args, "max_nodes").unwrap_or(50) as usize;
 
-    let repo_root_path =
-        find_repo_root(Utf8Path::new(repo_root)).context("cannot find git repo root")?;
-
-    let diff_target = if staged {
-        DiffTarget::Staged
-    } else if let Some(ref b) = base {
-        DiffTarget::BaseRef(b.clone())
-    } else {
-        DiffTarget::WorkingTree
-    };
-
-    let changes = changed_files(repo_root_path.as_path(), &diff_target)
-        .context("cannot detect changed files")?;
+    let resolved = resolve_change_source(request, repo_root)?;
+    let changes = &resolved.changes;
 
     let changed_file_paths: Vec<String> = changes
         .iter()
@@ -769,6 +1108,7 @@ pub(super) fn tool_get_minimal_context(
 
     let mut response = tool_result_value(&ctx, output_format)?;
     inject_budget_metadata(&mut response, &impact.budget);
+    inject_change_source_metadata(&mut response, &resolved);
     Ok(response)
 }
 
@@ -782,30 +1122,18 @@ pub(super) fn tool_explain_change(
     let max_depth = u64_arg(args, "max_depth").unwrap_or(5) as u32;
     let max_nodes = u64_arg(args, "max_nodes").unwrap_or(200) as usize;
 
-    let mut files = string_array_arg(args, "files")?;
-    if files.is_empty() {
-        let staged = bool_arg(args, "staged").unwrap_or(false);
-        let base = str_arg(args, "base")?.map(str::to_owned);
-        let repo_root_path =
-            find_repo_root(Utf8Path::new(repo_root)).context("cannot find git repo root")?;
-        let diff_target = if staged {
-            DiffTarget::Staged
-        } else if let Some(b) = base {
-            DiffTarget::BaseRef(b)
-        } else {
-            DiffTarget::WorkingTree
-        };
-        let changes = changed_files(repo_root_path.as_path(), &diff_target)
-            .context("cannot detect changed files")?;
-        files = changes
-            .into_iter()
-            .filter(|cf| cf.change_type != atlas_core::ChangeType::Deleted)
-            .map(|cf| cf.path)
-            .collect();
-    }
+    let request = match validate_change_source_request("explain_change", args, true) {
+        Ok(request) => request,
+        Err(payload) => return tool_execution_error_value(output_format, &payload),
+    };
+    let resolved = resolve_change_source(request, repo_root)?;
+    let files = resolved.files.clone();
 
     if files.is_empty() {
-        return tool_result_value(&atlas_review::empty_explain_change_summary(), output_format);
+        let mut response =
+            tool_result_value(&atlas_review::empty_explain_change_summary(), output_format)?;
+        inject_change_source_metadata(&mut response, &resolved);
+        return Ok(response);
     }
 
     let store = open_store(db_path)?;
@@ -823,7 +1151,9 @@ pub(super) fn tool_explain_change(
     )
     .context("explain_change summary generation failed")?;
 
-    tool_result_value(&summary, output_format)
+    let mut response = tool_result_value(&summary, output_format)?;
+    inject_change_source_metadata(&mut response, &resolved);
+    Ok(response)
 }
 
 pub(super) fn tool_get_context(

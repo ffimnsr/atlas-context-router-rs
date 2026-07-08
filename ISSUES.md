@@ -2947,3 +2947,116 @@ Completion criteria:
 - [x] only protocol-level failures use JSON-RPC `error`
 - [x] `read_file_around_match` missing-file case returns spec-aligned payload
 - [x] no MCP server boundary path emits legacy uppercase `Text` error wrapper
+
+---
+
+## MCP Transcript Failure Hardening Patch
+
+Transcript review exposed repeated tool-call failures caused by strict argument validation, empty-value rejection, and path/root ambiguity. These failures did not reveal new graph or parser correctness bugs; they showed MCP ergonomics gaps that make models repeat invalid calls instead of self-correcting. This patch hardens Atlas MCP tools against common malformed-but-recoverable inputs while keeping deterministic behavior, canonical path identity, and MCP 2025-11-25 compliance.
+
+Rules:
+
+- normalize recoverable empty and null inputs before returning hard failure when safe
+- keep one shared input-normalization and validation layer so CLI and MCP do not drift
+- return actionable tool-execution errors with exact offending fields, accepted shapes, and one valid retry example
+- preserve fail-closed behavior for ambiguous or unsafe operations; do not silently guess across repos or conflicting selectors
+- expose repo identity and canonical path hints whenever path/root confusion is likely
+- add regression coverage from transcript-derived fixtures so repeated model failures stay fixed
+
+### H1 — Optional-empty input normalization for search and graph query tools
+
+- [x] treat omitted and empty `subpath` identically for root-scoped content and file-discovery tools:
+  - [x] `search_content`
+  - [x] `search_files`
+  - [x] `search_templates`
+  - [x] `search_text_assets`
+- [x] normalize `subpath = ""` and equivalent null/absent forms to repo-root scope instead of returning `canonical repo path must not be empty`
+- [x] keep canonical-path validation after normalization so non-empty invalid subpaths still fail clearly
+- [x] for `query_graph`, reject truly empty search requests with one shared actionable error:
+  - [x] distinguish `text` missing and `regex` missing from invalid regex syntax
+  - [x] say query needs non-empty `text`, non-empty `regex`, or both
+  - [x] include one minimal valid example for text search and one for regex-only search
+- [x] ensure normalized empty optional fields do not alter ranking, scope, or provenance semantics for valid calls
+- [x] add regression tests covering empty-string, null, omitted, and invalid non-empty `subpath` inputs
+
+Why:
+- transcript showed repeated `invalid subpath ''` failures on root-scoped searches
+- models frequently serialize optional strings as empty values instead of omitting them
+
+### H2 — Selector normalization and exact diagnostics for bounded file-read tools
+
+- [x] harden `read_file_excerpt` selector parsing to ignore absent-equivalent fields when exactly one selector family is meaningfully set
+- [x] define selector families explicitly:
+  - [x] `start_line` + `end_line`
+  - [x] `line` with optional `before` / `after`
+  - [x] `line_ranges`
+- [x] treat `0`, empty array, and null defaults consistently when client/schema wrappers emit all fields
+- [x] fail only when multiple selector families are materially populated or no selector is materially populated
+- [x] return structured error details naming which selector families were seen and which one valid example to retry
+- [x] keep `read_file_excerpt` deterministic; do not guess between conflicting non-empty selector families
+- [x] add transcript-derived regression tests for calls that currently fail with `provide exactly one selector...` despite only one intended selector
+
+Why:
+- transcript showed this error 20 times, indicating schema shape fights common client behavior
+- bounded file-read tools should be resilient to harmless default-field emission
+
+### H3 — Path/root identity hints and repo-scoping recovery
+
+- [x] include `repo_root`, accepted root prefixes, and canonical path guidance in file-path validation errors for file tools
+- [x] when path starts with duplicated or foreign root prefix, return structured hint showing expected repo-relative form instead of only `file not found`
+- [x] add nearest-path suggestion when one canonical candidate is obvious and deterministic
+- [x] expose repo identity consistently in tool provenance and path-validation failures so multi-root or nested-repo confusion is visible immediately
+- [x] add optional repo-scoping input where existing MCP roadmap work requires it, but do not guess repo automatically when ambiguity remains
+- [x] add regression tests for:
+  - [x] duplicated root prefix such as `repo-name/...`
+  - [x] nested-subdir mistaken as project root
+  - [x] valid repo-relative path under current root
+  - [x] ambiguous multi-root path that must still fail closed
+
+Why:
+- transcript showed path errors like `mach-one-frontend/...` vs `mach-one/...` and `Path ... is not in the project`
+- models need explicit root guidance more than raw not-found text
+
+### H4 — Mutually-exclusive mode inputs and self-correcting change-detection errors
+
+- [x] replace ad-hoc mutual-exclusion failure paths in change-detection surfaces with one shared validator
+- [x] for `detect_changes`, return structured conflict details when `base`, `staged`, and `working_tree` are combined illegally
+- [x] include accepted mode combinations and one valid retry example for each mode
+- [x] evaluate whether shared `mode` enum should replace current boolean/optional combination on MCP surface while preserving CLI compatibility where practical
+- [x] apply same mutual-exclusion validation style to other tools with selector or mode families where repeated model mistakes are likely
+- [x] add regression tests for conflicting mode inputs and valid single-mode inputs
+
+Why:
+- transcript showed `ambiguous change source: base and working_tree cannot be combined`
+- models recover faster when mutually-exclusive fields are explained as a contract, not only as rejection text
+
+### H5 — Shared tool retry guidance and transcript-fixture coverage
+
+- [x] add one shared MCP tool-error helper for input-shape failures that emits:
+  - [x] offending fields
+  - [x] normalization performed, if any
+  - [x] accepted selector/mode families
+  - [x] one valid retry example
+  - [x] fail-closed reason when Atlas refuses to guess
+- [x] keep guidance concise in `content` and structured in `structuredContent`
+- [x] add transcript-derived MCP fixtures for repeated failure classes:
+  - [x] empty optional `subpath`
+  - [x] empty `query_graph` request
+  - [x] `read_file_excerpt` wrapper-populated selector fields
+  - [x] conflicting change-detection mode fields
+  - [x] wrong repo-relative path prefix
+- [x] add handler and transport tests proving stdio and HTTP expose same self-correcting error contract
+- [x] update generated `MCP_TOOLS.md` and relevant tool descriptions where accepted empty/omitted behavior changes
+
+Why:
+- one-off fixes per tool will drift
+- transcript failures should become locked regression fixtures, not anecdotal bugs
+
+Completion criteria:
+
+- [x] root-scoped search tools accept omitted/empty `subpath` safely
+- [x] `read_file_excerpt` no longer rejects calls that differ only by wrapper-emitted absent-equivalent fields
+- [x] path-validation failures expose repo/root guidance and deterministic retry hints
+- [x] change-detection and similar selector-family tools return structured self-correcting errors
+- [x] transcript-derived regression fixtures cover each repeated failure class
+- [x] MCP docs/tool metadata reflect new normalization and retry-guidance behavior

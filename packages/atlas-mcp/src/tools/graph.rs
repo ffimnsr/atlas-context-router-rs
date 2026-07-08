@@ -7,6 +7,9 @@ use serde::Serialize;
 use std::time::Instant;
 
 use crate::context::{compact_node, package_impact};
+use crate::tool_result::{
+    InputShapeErrorSpec, input_shape_error_payload, tool_execution_error_value,
+};
 
 use super::shared::{
     bool_arg, error_code_docs, error_message, error_suggestions, inject_budget_metadata,
@@ -16,6 +19,81 @@ use super::shared::{
 
 fn ranking_evidence_legend_json() -> serde_json::Value {
     atlas_core::ranking_evidence_legend()
+}
+
+fn normalized_optional_query_regex(raw: Option<&str>) -> Option<String> {
+    raw.and_then(|pattern| {
+        let trimmed = pattern.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_owned())
+        }
+    })
+}
+
+fn validate_query_graph_inputs(
+    tool_name: &str,
+    text: &str,
+    regex: &Option<String>,
+    had_text_input: bool,
+    had_regex_input: bool,
+) -> std::result::Result<(), Box<crate::tool_result::ToolErrorPayload>> {
+    if text.trim().is_empty() && regex.is_none() {
+        let mut normalization_performed = Vec::new();
+        if had_text_input && text.trim().is_empty() {
+            normalization_performed.push("trimmed whitespace-only text to empty".to_owned());
+        }
+        if had_regex_input {
+            normalization_performed.push("normalized empty regex to missing".to_owned());
+        }
+        return Err(Box::new(input_shape_error_payload(
+            tool_name,
+            format!("{tool_name} needs non-empty 'text', non-empty 'regex', or both"),
+            "Provide a non-empty text query, a non-empty regex pattern, or both. Atlas refused to guess because both searchable inputs were empty after normalization.",
+            InputShapeErrorSpec {
+                offending_fields: vec!["text".to_owned(), "regex".to_owned()],
+                normalization_performed,
+                accepted_argument_families: vec![
+                    "text".to_owned(),
+                    "regex".to_owned(),
+                    "text + regex".to_owned(),
+                ],
+                retry_example: Some(serde_json::json!({ "text": "compute" })),
+                fail_closed_reason: Some(
+                    "Atlas refused to guess because both searchable inputs were empty after normalization"
+                        .to_owned(),
+                ),
+                retry_guidance: Some("Provide one accepted query shape and retry.".to_owned()),
+                extra_details: Some(serde_json::json!({
+                    "alternate_retry_example": { "regex": "compute|handle_request" }
+                })),
+            },
+        )));
+    }
+
+    if let Some(pat) = regex {
+        regex::Regex::new(pat)
+            .map_err(|e| Box::new(input_shape_error_payload(
+                tool_name,
+                format!("invalid regex pattern: {e}"),
+                format!("invalid regex pattern: {e}"),
+                InputShapeErrorSpec {
+                    offending_fields: vec!["regex".to_owned()],
+                    normalization_performed: Vec::new(),
+                    accepted_argument_families: vec!["regex".to_owned(), "text + regex".to_owned()],
+                    retry_example: Some(serde_json::json!({ "regex": "compute|handle_request" })),
+                    fail_closed_reason: None,
+                    retry_guidance: Some(
+                        "Fix regex syntax, or switch to literal text search if regex is not required, then retry."
+                            .to_owned(),
+                    ),
+                    extra_details: None,
+                },
+            )))?;
+    }
+
+    Ok(())
 }
 
 pub(super) fn tool_list_graph_stats(
@@ -33,29 +111,31 @@ pub(super) fn tool_query_graph(
     db_path: &str,
     output_format: crate::output::OutputFormat,
 ) -> Result<serde_json::Value> {
-    let text = str_arg(args, "text")?
-        .map(str::to_owned)
-        .unwrap_or_default();
+    let raw_text = str_arg(args, "text")?;
+    let had_text_input = raw_text.is_some();
+    let text = raw_text.map(str::to_owned).unwrap_or_default();
     let kind = str_arg(args, "kind")?.map(str::to_owned);
     let language = str_arg(args, "language")?.map(str::to_owned);
     let requested_limit = u64_arg(args, "limit").unwrap_or(20) as usize;
     let semantic = bool_arg(args, "semantic").unwrap_or(false);
     let expand = bool_arg(args, "expand").unwrap_or(false);
     let expand_hops = u64_arg(args, "expand_hops").unwrap_or(1) as u32;
-    let regex = str_arg(args, "regex")?.map(str::to_owned);
+    let raw_regex = str_arg(args, "regex")?;
+    let had_regex_input = raw_regex.is_some();
+    let regex = normalized_optional_query_regex(raw_regex);
     let subpath = str_arg(args, "subpath")?.map(str::to_owned);
     let fuzzy = bool_arg(args, "fuzzy").unwrap_or(false);
     let hybrid = bool_arg(args, "hybrid").unwrap_or(false);
     let include_files = bool_arg(args, "include_files").unwrap_or(false);
 
-    if text.trim().is_empty() && regex.is_none() {
-        anyhow::bail!("query_graph requires non-empty text or a regex pattern");
-    }
-    if let Some(ref pat) = regex {
-        if pat.trim().is_empty() {
-            anyhow::bail!("regex pattern must not be empty");
-        }
-        regex::Regex::new(pat).map_err(|e| anyhow::anyhow!("invalid regex pattern: {e}"))?;
+    if let Err(payload) = validate_query_graph_inputs(
+        "query_graph",
+        &text,
+        &regex,
+        had_text_input,
+        had_regex_input,
+    ) {
+        return tool_execution_error_value(output_format, &payload);
     }
 
     let store = open_store(db_path)?;
@@ -230,16 +310,18 @@ pub(super) fn tool_batch_query_graph(
 
     for (idx, q) in queries_val.iter().enumerate() {
         let q_args = Some(q);
-        let text = str_arg(q_args, "text")?
-            .map(str::to_owned)
-            .unwrap_or_default();
+        let raw_text = str_arg(q_args, "text")?;
+        let had_text_input = raw_text.is_some();
+        let text = raw_text.map(str::to_owned).unwrap_or_default();
         let kind = str_arg(q_args, "kind")?.map(str::to_owned);
         let language = str_arg(q_args, "language")?.map(str::to_owned);
         let requested_limit = u64_arg(q_args, "limit").unwrap_or(20) as usize;
         let semantic = bool_arg(q_args, "semantic").unwrap_or(false);
         let expand = bool_arg(q_args, "expand").unwrap_or(false);
         let expand_hops = u64_arg(q_args, "expand_hops").unwrap_or(1) as u32;
-        let regex = str_arg(q_args, "regex")?.map(str::to_owned);
+        let raw_regex = str_arg(q_args, "regex")?;
+        let had_regex_input = raw_regex.is_some();
+        let regex = normalized_optional_query_regex(raw_regex);
         let subpath = str_arg(q_args, "subpath")?.map(str::to_owned);
         let fuzzy = bool_arg(q_args, "fuzzy").unwrap_or(false);
         let hybrid = bool_arg(q_args, "hybrid").unwrap_or(false);
@@ -253,16 +335,14 @@ pub(super) fn tool_batch_query_graph(
             Some(requested_limit),
         );
 
-        if text.trim().is_empty() && regex.is_none() {
-            anyhow::bail!("query at index {idx} requires non-empty 'text' or a 'regex' pattern");
-        }
-        if let Some(ref pat) = regex {
-            if pat.trim().is_empty() {
-                anyhow::bail!("query at index {idx}: regex pattern must not be empty");
-            }
-            regex::Regex::new(pat)
-                .map_err(|e| anyhow::anyhow!("query at index {idx}: invalid regex pattern: {e}"))?;
-        }
+        validate_query_graph_inputs(
+            &format!("query at index {idx}"),
+            &text,
+            &regex,
+            had_text_input,
+            had_regex_input,
+        )
+        .map_err(|payload| anyhow::anyhow!(payload.message.clone()))?;
 
         let query = SearchQuery {
             text: text.clone(),

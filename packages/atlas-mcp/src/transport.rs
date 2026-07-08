@@ -3923,6 +3923,55 @@ mod tests {
     }
 
     #[test]
+    fn stdio_transport_query_graph_empty_request_returns_self_correcting_contract() {
+        let fixture = setup_fixture();
+        let input = [
+            initialize_request_line(),
+            "{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}\n".to_owned(),
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"query_graph\",\"arguments\":{\"text\":\"   \",\"regex\":\"\",\"output_format\":\"json\"}}}\n".to_owned(),
+        ]
+        .concat();
+        let reader = BufReader::new(Cursor::new(input.as_bytes()));
+        let mut writer = Vec::new();
+
+        run_server_io(
+            reader,
+            &mut writer,
+            "/ignored",
+            &fixture.db_path,
+            ServerOptions::default(),
+        )
+        .expect("run server io");
+
+        let responses = parse_output_lines(writer);
+        let response = responses
+            .into_iter()
+            .find(|value| value["id"] == serde_json::json!(2))
+            .expect("query_graph response");
+        let result = &response["result"];
+        let details = &result["structuredContent"]["details"];
+        assert_eq!(result["isError"], serde_json::json!(true));
+        assert_eq!(
+            result["structuredContent"]["code"],
+            serde_json::json!("invalid_input")
+        );
+        assert_eq!(
+            details["offending_fields"],
+            serde_json::json!(["text", "regex"])
+        );
+        assert_eq!(
+            details["retry_example"],
+            serde_json::json!({"text": "compute"})
+        );
+        assert_eq!(
+            result["content"][0]["text"],
+            serde_json::json!(
+                "query_graph needs non-empty 'text', non-empty 'regex', or both Provide one accepted query shape and retry."
+            )
+        );
+    }
+
+    #[test]
     fn stdio_transport_missing_file_returns_is_error_tool_result() {
         let fixture = setup_fixture();
         let input = [
@@ -3962,7 +4011,9 @@ mod tests {
         );
         assert_eq!(
             response["result"]["content"][0]["text"],
-            serde_json::json!("file not found: src/missing.rs")
+            serde_json::json!(
+                "file not found: src/missing.rs Use exact repo-relative file path inside current Atlas repo, then retry."
+            )
         );
     }
 

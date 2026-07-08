@@ -1600,7 +1600,39 @@ mod tests {
         );
         assert_eq!(
             value["result"]["content"][0]["text"],
-            json!("file not found: src/missing.rs")
+            json!(
+                "file not found: src/missing.rs Use exact repo-relative file path inside current Atlas repo, then retry."
+            )
+        );
+        assert!(value["result"].get("Text").is_none());
+    }
+
+    #[tokio::test]
+    async fn http_tools_call_query_graph_empty_request_returns_self_correcting_contract() {
+        let (state, session_id) = initialize_session(make_state(None)).await;
+        let response = handle_post_mcp(
+            State(state),
+            session_headers(&session_id),
+            Bytes::from_static(
+                b"{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"query_graph\",\"arguments\":{\"text\":\"   \",\"regex\":\"\",\"output_format\":\"json\"}}}",
+            ),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let value = read_json_response(response).await;
+        let details = &value["result"]["structuredContent"]["details"];
+        assert_eq!(value["result"]["isError"], json!(true));
+        assert_eq!(
+            value["result"]["structuredContent"]["code"],
+            json!("invalid_input")
+        );
+        assert_eq!(details["offending_fields"], json!(["text", "regex"]));
+        assert_eq!(details["retry_example"], json!({"text": "compute"}));
+        assert_eq!(
+            value["result"]["content"][0]["text"],
+            json!(
+                "query_graph needs non-empty 'text', non-empty 'regex', or both Provide one accepted query shape and retry."
+            )
         );
         assert!(value["result"].get("Text").is_none());
     }

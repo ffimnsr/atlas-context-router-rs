@@ -96,6 +96,17 @@ pub(crate) enum ToolErrorCode {
     InternalToolError,
 }
 
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct InputShapeErrorSpec {
+    pub(crate) offending_fields: Vec<String>,
+    pub(crate) normalization_performed: Vec<String>,
+    pub(crate) accepted_argument_families: Vec<String>,
+    pub(crate) retry_example: Option<Value>,
+    pub(crate) fail_closed_reason: Option<String>,
+    pub(crate) retry_guidance: Option<String>,
+    pub(crate) extra_details: Option<Value>,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub(crate) struct ToolErrorPayload {
     pub(crate) code: ToolErrorCode,
@@ -145,6 +156,35 @@ impl ToolErrorPayload {
         self
     }
 
+    pub(crate) fn with_input_shape_details(
+        mut self,
+        detail: impl Into<String>,
+        spec: InputShapeErrorSpec,
+    ) -> Self {
+        let mut details = json!({
+            "detail": detail.into(),
+            "offending_fields": spec.offending_fields,
+            "accepted_argument_families": spec.accepted_argument_families,
+        });
+        if !spec.normalization_performed.is_empty() {
+            details["normalization_performed"] =
+                serde_json::to_value(spec.normalization_performed).unwrap_or(Value::Null);
+        }
+        if let Some(retry_example) = spec.retry_example {
+            details["retry_example"] = retry_example;
+        }
+        if let Some(reason) = spec.fail_closed_reason {
+            details["fail_closed_reason"] = Value::String(reason);
+        }
+        if let Some(extra) = spec.extra_details {
+            merge_detail_objects(&mut details, extra);
+        }
+        if let Some(retry_guidance) = spec.retry_guidance {
+            self = self.with_retry_guidance(retry_guidance);
+        }
+        self.with_details(details)
+    }
+
     fn normalized(&self) -> Self {
         Self {
             code: self.code,
@@ -165,7 +205,7 @@ pub(crate) fn tool_execution_error_value(
     Ok(json!({
         "content": [{
             "type": "text",
-            "text": payload.message,
+            "text": concise_tool_error_text(&payload),
             "mimeType": "text/plain",
         }],
         "structuredContent": structured,
@@ -190,6 +230,42 @@ pub(crate) fn normalize_tool_execution_error(
 
 pub(crate) fn structured_content(value: &Value) -> Option<&Value> {
     value.get("structuredContent")
+}
+
+fn concise_tool_error_text(payload: &ToolErrorPayload) -> String {
+    let should_append_guidance = matches!(
+        payload.code,
+        ToolErrorCode::InvalidInput | ToolErrorCode::FileNotFound
+    );
+    match (should_append_guidance, payload.retry_guidance.as_deref()) {
+        (true, Some(guidance)) if !payload.message.contains(guidance) => {
+            normalize_tool_error_text(format!("{} {}", payload.message, guidance))
+        }
+        _ => payload.message.clone(),
+    }
+}
+
+fn merge_detail_objects(target: &mut Value, extra: Value) {
+    let Some(target_obj) = target.as_object_mut() else {
+        return;
+    };
+    let Some(extra_obj) = extra.as_object() else {
+        return;
+    };
+    for (key, value) in extra_obj {
+        target_obj.insert(key.clone(), value.clone());
+    }
+}
+
+pub(crate) fn input_shape_error_payload(
+    tool_name: &str,
+    message: impl Into<String>,
+    detail: impl Into<String>,
+    spec: InputShapeErrorSpec,
+) -> ToolErrorPayload {
+    ToolErrorPayload::new(ToolErrorCode::InvalidInput, message)
+        .with_tool(tool_name)
+        .with_input_shape_details(detail, spec)
 }
 
 fn normalize_tool_error_text(text: impl AsRef<str>) -> String {
@@ -284,6 +360,8 @@ fn classify_tool_execution_error(message: &str, detail: &str) -> (ToolErrorCode,
         || lowered.contains("line numbers are 1-based")
         || lowered.contains("invalid line range")
         || lowered.contains("exceeds file length")
+        || lowered.contains("line-context selector")
+        || lowered.contains("single-range selector")
         || lowered.contains("ambiguous change source")
         || lowered.contains("non-empty")
         || lowered.contains("requires")
@@ -346,8 +424,9 @@ fn infer_resource_links(raw: &Value) -> Vec<ResourceLink> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ToolErrorCode, ToolErrorPayload, ToolResultBuilder, normalize_tool_error_text,
-        structured_content, tool_execution_error_value,
+        InputShapeErrorSpec, ToolErrorCode, ToolErrorPayload, ToolResultBuilder,
+        input_shape_error_payload, normalize_tool_error_text, structured_content,
+        tool_execution_error_value,
     };
     use crate::output::OutputFormat;
     use serde_json::json;
@@ -461,7 +540,9 @@ mod tests {
         );
         assert_eq!(
             response["content"][0]["text"],
-            json!("invalid regex pattern: unclosed group")
+            json!(
+                "invalid regex pattern: unclosed group Fix regex syntax or remove is_regex-style input, then retry."
+            )
         );
         assert_eq!(response["content"][0]["mimeType"], json!("text/plain"));
     }
@@ -503,7 +584,7 @@ mod tests {
             json!({
                 "content": [{
                     "type": "text",
-                    "text": "file not found: src/missing.rs",
+                    "text": "file not found: src/missing.rs Use repo-relative file path inside current root, then retry.",
                     "mimeType": "text/plain"
                 }],
                 "structuredContent": {
@@ -522,6 +603,59 @@ mod tests {
                     "atlas:requestedOutputFormat": "toon"
                 }
             })
+        );
+    }
+
+    #[test]
+    fn input_shape_error_helper_emits_shared_retry_contract_fields() {
+        let payload = input_shape_error_payload(
+            "query_graph",
+            "query_graph needs non-empty 'text', non-empty 'regex', or both",
+            "query_graph rejected empty text and regex after normalization",
+            InputShapeErrorSpec {
+                offending_fields: vec!["text".to_owned(), "regex".to_owned()],
+                normalization_performed: vec![
+                    "trimmed whitespace-only text to empty".to_owned(),
+                    "normalized empty regex to missing".to_owned(),
+                ],
+                accepted_argument_families: vec![
+                    "text".to_owned(),
+                    "regex".to_owned(),
+                    "text + regex".to_owned(),
+                ],
+                retry_example: Some(json!({"text": "compute"})),
+                fail_closed_reason: Some(
+                    "Atlas refused to guess because both searchable inputs were empty".to_owned(),
+                ),
+                retry_guidance: Some("Provide one accepted query shape and retry.".to_owned()),
+                extra_details: None,
+            },
+        );
+
+        let response = tool_execution_error_value(OutputFormat::Json, &payload).expect("result");
+        let details = &response["structuredContent"]["details"];
+        assert_eq!(details["offending_fields"], json!(["text", "regex"]));
+        assert_eq!(
+            details["normalization_performed"],
+            json!([
+                "trimmed whitespace-only text to empty",
+                "normalized empty regex to missing"
+            ])
+        );
+        assert_eq!(
+            details["accepted_argument_families"],
+            json!(["text", "regex", "text + regex"])
+        );
+        assert_eq!(details["retry_example"], json!({"text": "compute"}));
+        assert_eq!(
+            details["fail_closed_reason"],
+            json!("Atlas refused to guess because both searchable inputs were empty")
+        );
+        assert_eq!(
+            response["content"][0]["text"],
+            json!(
+                "query_graph needs non-empty 'text', non-empty 'regex', or both Provide one accepted query shape and retry."
+            )
         );
     }
 }

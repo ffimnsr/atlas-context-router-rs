@@ -832,44 +832,189 @@ fn get_impact_radius_empty_diff_returns_empty_result() {
 }
 
 #[test]
-fn change_source_invalid_combinations_return_clear_errors() {
+fn change_source_invalid_combinations_return_structured_errors() {
     let fixture = setup_mcp_fixture();
 
     let impact_err = call(
         "get_impact_radius",
         Some(&serde_json::json!({
             "files": ["src/service.rs"],
-            "staged": true
+            "staged": true,
+            "output_format": "json"
         })),
         "/repo",
         &fixture.db_path,
     )
     .expect("impact must reject ambiguous change source as tool error result");
+    let impact_details = &impact_err["structuredContent"]["details"];
     assert_eq!(impact_err["isError"], serde_json::json!(true));
+    assert_eq!(
+        impact_err["structuredContent"]["code"],
+        serde_json::json!("invalid_input")
+    );
     assert!(
         impact_err["structuredContent"]["message"]
             .as_str()
-            .is_some_and(|message| message.contains(
-                "ambiguous change source: provide either files or one of base/staged/working_tree"
-            ))
+            .is_some_and(|message| message.contains("provide exactly one mode family"))
+    );
+    assert_eq!(
+        impact_details["offending_fields"],
+        serde_json::json!(["files", "staged"])
+    );
+    assert_eq!(
+        impact_details["present_mode_families"],
+        serde_json::json!(["files", "staged"])
+    );
+    assert_eq!(
+        impact_details["accepted_modes"],
+        serde_json::json!(["files", "base", "staged", "working_tree"])
+    );
+    assert_eq!(
+        impact_details["accepted_argument_families"],
+        serde_json::json!(["files", "base", "staged", "working_tree"])
+    );
+    assert_eq!(
+        impact_details["accepted_mode_examples"][0],
+        serde_json::json!({"mode": "files", "files": ["src/service.rs"]})
+    );
+    assert_eq!(
+        impact_details["retry_example"],
+        serde_json::json!({"mode": "files", "files": ["src/service.rs"]})
+    );
+    assert_eq!(
+        impact_details["fail_closed_reason"],
+        serde_json::json!(
+            "Atlas refused to guess because multiple change-source mode families were present"
+        )
     );
 
     let review_err = call(
         "get_review_context",
         Some(&serde_json::json!({
             "base": "HEAD",
-            "working_tree": true
+            "working_tree": true,
+            "output_format": "json"
         })),
         "/repo",
         &fixture.db_path,
     )
     .expect("review must reject ambiguous change source as tool error result");
+    let review_details = &review_err["structuredContent"]["details"];
     assert_eq!(review_err["isError"], serde_json::json!(true));
+    assert_eq!(
+        review_err["structuredContent"]["code"],
+        serde_json::json!("invalid_input")
+    );
+    assert_eq!(
+        review_details["offending_fields"],
+        serde_json::json!(["base", "working_tree"])
+    );
+    assert_eq!(
+        review_details["present_mode_families"],
+        serde_json::json!(["base", "working_tree"])
+    );
+    assert_eq!(
+        review_details["retry_example"],
+        serde_json::json!({"mode": "files", "files": ["src/service.rs"]})
+    );
+}
+
+#[test]
+fn detect_changes_accepts_explicit_mode_field() {
+    let fixture = setup_git_mcp_fixture();
+    write_repo_file(
+        std::path::Path::new(&fixture.repo_root),
+        "src/service.rs",
+        "pub fn compute() -> i32 { 9 }\n",
+    );
+    let args = serde_json::json!({
+        "mode": "working_tree",
+        "working_tree": true,
+        "output_format": "json"
+    });
+
+    let resp = call(
+        "detect_changes",
+        Some(&args),
+        &fixture.repo_root,
+        &fixture.db_path,
+    )
+    .expect("detect_changes with explicit mode");
+
+    assert_eq!(
+        resp.pointer("/atlas_change_source/mode")
+            .and_then(|value| value.as_str()),
+        Some("working_tree")
+    );
+}
+
+#[test]
+fn detect_changes_rejects_conflicting_mode_and_fields_with_examples() {
+    let fixture = setup_git_mcp_fixture();
+    let args = serde_json::json!({
+        "mode": "base",
+        "base": "HEAD",
+        "working_tree": true,
+        "output_format": "json"
+    });
+
+    let resp = call(
+        "detect_changes",
+        Some(&args),
+        &fixture.repo_root,
+        &fixture.db_path,
+    )
+    .expect("detect_changes conflict should return tool error result");
+    let details = &resp["structuredContent"]["details"];
+
+    assert_eq!(resp["isError"], serde_json::json!(true));
+    assert_eq!(
+        resp["structuredContent"]["code"],
+        serde_json::json!("invalid_input")
+    );
+    assert_eq!(details["requested_mode"], serde_json::json!("base"));
+    assert_eq!(
+        details["accepted_modes"],
+        serde_json::json!(["base", "staged", "working_tree"])
+    );
+    assert_eq!(
+        details["accepted_mode_examples"][0],
+        serde_json::json!({"mode": "base", "base": "origin/main"})
+    );
+    assert_eq!(
+        details["retry_example"],
+        serde_json::json!({"mode": "base", "base": "origin/main"})
+    );
     assert!(
-        review_err["structuredContent"]["message"]
+        details["mode_contract"]
             .as_str()
-            .is_some_and(|message| message
-                .contains("ambiguous change source: base and working_tree cannot be combined"))
+            .is_some_and(|value| value.contains("Provide exactly one change-source mode"))
+    );
+}
+
+#[test]
+fn get_minimal_context_rejects_conflicting_change_source_modes() {
+    let fixture = setup_mcp_fixture();
+    let resp = call(
+        "get_minimal_context",
+        Some(&serde_json::json!({
+            "base": "HEAD",
+            "staged": true,
+            "output_format": "json"
+        })),
+        "/repo",
+        &fixture.db_path,
+    )
+    .expect("minimal context conflict should return tool error result");
+
+    assert_eq!(resp["isError"], serde_json::json!(true));
+    assert_eq!(
+        resp["structuredContent"]["code"],
+        serde_json::json!("invalid_input")
+    );
+    assert_eq!(
+        resp["structuredContent"]["details"]["accepted_modes"],
+        serde_json::json!(["base", "staged", "working_tree"])
     );
 }
 
