@@ -68,7 +68,7 @@ pub mod auth;
 mod completion;
 mod context;
 mod descriptors;
-mod discovery_tools;
+mod discovery;
 mod elicitation;
 #[cfg(feature = "http-transport")]
 mod http_sessions;

@@ -3,7 +3,7 @@ use atlas_adapters::{AdapterHooks, McpAdapter};
 use atlas_core::{GraphToolRequirement, ReadinessOverride, ReadinessVerdict};
 use atlas_store_sqlite::Store;
 
-use crate::discovery_tools::{
+use crate::discovery::{
     tool_get_docs_section, tool_read_file_around_match, tool_read_file_excerpt,
     tool_search_content, tool_search_files, tool_search_templates, tool_search_text_assets,
 };
