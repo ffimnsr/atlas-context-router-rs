@@ -12,6 +12,7 @@ Atlas expose MCP failures in two layers:
 Machine-readable fields:
 
 - protocol error => `error.data.atlas_error_code`
+- protocol repo-selection failures => `error.data.atlas_repo_selection`
 - tool execution error => `structuredContent.code`
 
 Human-readable field:
@@ -120,6 +121,16 @@ Requested JSON-RPC or MCP method name is unknown.
 ### `invalid_params`
 
 Method arguments failed validation.
+
+For dynamic MCP repo-selection failures, Atlas may also include `error.data.atlas_repo_selection` with fields such as:
+
+- `failure_kind`
+- `candidate_roots`
+- `selection_attempts`
+- `selection_source`
+- `tool_name`
+- `recommended_fix`
+- `session_mode`
 
 <a id="internal_error"></a>
 ### `internal_error`

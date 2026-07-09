@@ -264,6 +264,10 @@ pub enum Command {
     /// Start a JSON-RPC / MCP stdio server.
     Serve {
         /// Bypass repo-scoped broker/daemon indirection and serve MCP directly on stdio.
+        ///
+        /// Without `--repo` and `--db`, direct stdio now starts in deferred dynamic-root mode.
+        /// Atlas resolves repo from MCP workspace roots instead of inherited process cwd.
+        /// Query-only multi-root requests still need `_meta.atlas.activeRootUri` or explicit `--repo`.
         #[arg(long)]
         direct_stdio: bool,
     },

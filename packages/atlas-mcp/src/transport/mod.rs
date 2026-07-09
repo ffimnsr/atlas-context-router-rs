@@ -13,6 +13,7 @@ pub(crate) mod input;
 pub(crate) mod io;
 mod jsonrpc;
 pub(crate) mod notify;
+pub(crate) mod repo_selection;
 mod socket;
 pub(crate) mod stdio;
 mod types;

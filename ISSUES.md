@@ -3060,3 +3060,197 @@ Completion criteria:
 - [x] change-detection and similar selector-family tools return structured self-correcting errors
 - [x] transcript-derived regression fixtures cover each repeated failure class
 - [x] MCP docs/tool metadata reflect new normalization and retry-guidance behavior
+
+---
+
+## Part VII — Dynamic MCP Repo Resolution for Multi-Workspace Editors
+
+Use this part to make `atlas serve --direct-stdio` resolve repository context from MCP client workspace roots instead of inherited process cwd so Atlas works correctly in single-process editors with multiple windows or workspaces.
+
+Implementation order below is required. Do not start later phases until earlier phases land with tests.
+
+Rules:
+
+- treat explicit `--repo` and `--db` as fixed-mode overrides that always win over dynamic client-root selection
+- for stdio MCP sessions without explicit `--repo` or `--db`, do not bind repo from process cwd
+- use MCP client root information as canonical repo-selection input for dynamic stdio sessions
+- fail closed on ambiguous multi-root selection; do not guess between candidate repos
+- canonicalize all selected repo roots before deriving DB paths, session IDs, cache keys, or runtime metadata
+- keep repo-selection logic shared between stdio transport, brokered stdio transport, and future HTTP session transports where practical
+- add tests for every new repo-selection path before enabling it by default
+
+### Phase V2.1 — Dynamic direct-stdio startup without cwd binding
+
+Implement the startup policy shift first so single-root editor windows stop inheriting the wrong repo from a long-lived parent editor process.
+
+#### V2.1.1 Direct-stdio deferred repo mode
+
+- [x] update `packages/atlas-cli/src/commands/platform.rs` so `atlas serve --direct-stdio` uses dynamic MCP root resolution when both `--repo` and `--db` are absent
+- [x] avoid calling cwd-based repo resolution before mode selection in `run_serve`
+- [x] keep current fixed repo behavior unchanged when `--repo` or `--db` is provided
+- [x] ensure non-stdio daemon/broker startup keeps explicit fixed repo identity as it does today
+- [x] keep startup log output explicit when repo is deferred, including deferred repo/db placeholders
+- [x] add tests proving direct-stdio with no explicit repo starts in deferred mode instead of binding to process cwd
+
+Why:
+- current stdio startup binds to the parent editor cwd, which is wrong for single-process multi-workspace editors
+- deferred startup is required before later phases can resolve repo from MCP roots safely
+
+#### V2.1.2 Single-root MCP resolution baseline
+
+- [x] reuse existing MCP `roots/list` reverse-request path as the first repo-resolution source for deferred stdio sessions
+- [x] resolve repo on first repo-bound tool call after `initialized`
+- [x] derive default DB path from selected canonical repo root
+- [x] cache resolved active repo context for the connection after first successful selection
+- [x] return actionable error when client does not advertise roots capability in deferred mode
+- [x] return actionable error when repo-bound request arrives before `initialized`
+- [x] add tests proving wrong process cwd plus one MCP root still resolves correct repo
+- [x] add tests proving explicit `--repo` ignores conflicting MCP roots and remains fixed
+
+Why:
+- single-root workspace correctness is the minimum viable dynamic mode
+- cached active repo context keeps normal tool-call cost low after first resolution
+
+### Phase V2.2 — Deterministic multi-root selection from request evidence
+
+After deferred startup works for single-root clients, add deterministic disambiguation for multi-root workspaces using tool-call evidence before adding any client-specific hint extensions.
+
+#### V2.2.1 Shared multi-root selection helper
+
+- [ ] add shared repo-selection helper module under `packages/atlas-mcp/src/transport/` for dynamic root selection
+- [x] add shared repo-selection helper module under `packages/atlas-mcp/src/transport/`
+- [x] move root canonicalization and candidate-root collection into shared helper functions
+- [x] define deterministic selection-source metadata:
+  - [x] `explicit_cli`
+  - [x] `single_root`
+  - [x] `tool_arg_inference`
+  - [x] `cached_active_root`
+  - [x] `client_hint`
+- [x] store selection source in connection state for logging, debugging, and future status surfaces
+- [x] add unit tests for root candidate parsing, canonicalization, dedupe, and selection-source reporting
+
+Why:
+- selection logic will grow beyond single-root handling and should not stay embedded in one helper function
+- explicit selection-source tracking prevents hidden fallback behavior
+
+#### V2.2.2 Tool-argument path inference
+
+- [x] add deterministic repo inference from path-bearing tool arguments when multiple roots are available
+- [x] support single-file argument extraction for tools such as:
+  - [x] `cross_file_links`
+  - [x] `get_docs_section`
+  - [x] `read_file_excerpt`
+  - [x] `read_file_around_match`
+- [x] support multi-file argument extraction for tools such as:
+  - [x] `get_context`
+  - [x] `get_review_context`
+  - [x] `get_impact_radius`
+  - [x] `build_or_update_graph`
+  - [x] `concept_clusters`
+- [x] resolve a candidate root only when exactly one advertised root contains all extracted repo-relative paths
+- [x] reject `subpath`-only inference as insufficient evidence unless exactly one candidate root exists
+- [x] reject ambiguous cases where the same relative path exists under more than one candidate root
+- [x] keep query-only calls without file evidence unresolved unless a prior active root is already cached
+- [x] add tests proving file-bearing tool calls select the correct root in a two-root workspace
+- [x] add tests proving same-relative-path collisions fail with ambiguity instead of guessing
+
+Why:
+- many Atlas tools already carry repo-relative file evidence strong enough to disambiguate workspace roots
+- file-evidence inference avoids requiring editor-specific extensions for common multi-root workflows
+
+#### V2.2.3 Root cache invalidation and runtime root changes
+
+- [x] cache the last successful dynamic repo selection per connection after resolution
+- [x] invalidate cached active repo and cached root candidates on `notifications/roots/list_changed`
+- [x] require re-resolution on the next repo-bound request after root-change notification
+- [x] ensure root-change invalidation does not affect fixed-mode sessions started with explicit `--repo`
+- [x] add tests proving a session resolves repo A, receives roots-changed, then re-resolves to repo B on the next request
+
+Why:
+- editor workspace roots can change during a live MCP session
+- cached dynamic resolution must not survive stale root lists
+
+### Phase V2.3 — Optional client hint extension for active-root disambiguation
+
+After request-evidence inference exists, add an Atlas-specific hint channel so editor integrations can identify the active root for query-only requests in multi-root workspaces.
+
+#### V2.3.1 Atlas request metadata hint
+
+- [x] accept optional request metadata hint such as `_meta.atlas.activeRootUri` on MCP requests
+- [x] validate hinted root against currently advertised `roots/list` candidates before using it
+- [x] canonicalize validated hint before deriving DB path or session metadata
+- [x] ignore or reject malformed, non-file, or out-of-scope hint URIs with actionable errors
+- [x] prefer validated request hint over cached active root when both are present
+- [x] add tests proving valid root hint selects intended repo in multi-root query-only calls
+- [x] add tests proving invalid or out-of-scope hints do not silently redirect repo context
+
+Why:
+- query-only requests like `query_graph` and `resolve_symbol` may lack file evidence in a multi-root workspace
+- request-scoped hints let clients identify active workspace root without relying on process cwd
+
+#### V2.3.2 Initialize/session-level preferred root hint
+
+- [x] evaluate optional initialize-time or session-level preferred-root hint for clients that can declare active workspace root early
+- [x] keep request-scoped hint authoritative over session-scoped hint when both are present
+- [x] require preferred-root hint to be revalidated after `roots/list_changed`
+- [x] document whether initialize/session hint is implemented or explicitly deferred after request-scoped hint lands
+- [x] add tests for precedence between session-scoped hint, request-scoped hint, and cached active root
+
+Implementation note:
+- initialize/session preference implemented via `initialize.params._meta.atlas.preferredRootUri`
+
+Why:
+- some clients may know the active root at initialize time and benefit from one stable session preference
+- precedence rules must stay explicit before multiple hint channels exist
+
+### Phase V2.4 — Error surfaces, observability, and docs
+
+After selection behavior is stable, make failures and selection choices visible so users and agents can understand why Atlas picked one repo or refused to pick any.
+
+#### V2.4.1 Structured ambiguity and resolution metadata
+
+- [x] add structured ambiguity errors for dynamic multi-root failures with fields such as:
+  - [x] `candidate_roots`
+  - [x] `selection_attempts`
+  - [x] `selection_source`
+  - [x] `tool_name`
+  - [x] `recommended_fix`
+- [x] surface dynamic repo-selection metadata in debug-friendly outputs where appropriate:
+  - [x] active repo root
+  - [x] selection source
+  - [x] whether selection was cached or freshly resolved
+  - [x] whether current session is fixed-mode or dynamic-mode
+- [x] ensure errors clearly distinguish:
+  - [x] no client roots available
+  - [x] client lacks roots capability
+  - [x] request arrived before initialization
+  - [x] multiple roots with insufficient evidence
+  - [x] invalid client hint
+- [x] add tests for stable error wording or machine-readable fields where existing output contracts require it
+
+Why:
+- multi-root failures should explain exactly why Atlas could not choose a repo
+- dynamic-selection metadata makes broker and session debugging practical in editors
+
+#### V2.4.2 Documentation and install guidance
+
+- [x] update CLI help and docs for `atlas serve` to describe deferred dynamic root resolution when `--repo` is absent
+- [x] update MCP-facing docs to state that stdio sessions in editors should prefer dynamic root resolution over process cwd
+- [x] document fixed-mode versus dynamic-mode behavior and explicit precedence rules for `--repo`, file-evidence inference, cached root, and client hint
+- [x] document first-pass limitation that ambiguous multi-root query-only calls require explicit hint or explicit `--repo`
+- [x] add or update tests/snapshots that protect help text and docs where repo behavior is described
+
+Why:
+- users need one clear explanation of why Atlas works in single-root windows and when multi-root workspaces still need disambiguation
+- docs should match transport behavior so agents and editor users do not cargo-cult cwd-based launch advice
+
+#### Phase V2 completion criteria
+
+- [x] `atlas serve --direct-stdio` no longer binds repo from inherited process cwd when `--repo` and `--db` are absent
+- [x] single-root MCP clients resolve repo correctly from `roots/list` in deferred stdio mode
+- [x] multi-root workspaces can resolve repo deterministically from file-bearing tool arguments when one candidate root matches
+- [x] cached dynamic repo selection is invalidated correctly on `notifications/roots/list_changed`
+- [x] query-only multi-root calls fail closed unless explicit fixed repo or validated client hint disambiguates root selection
+- [x] explicit `--repo` and `--db` continue to force fixed-mode behavior unchanged
+- [x] dynamic repo-selection errors expose actionable ambiguity details instead of silently guessing
+- [x] tests cover wrong-cwd startup, single-root dynamic resolution, multi-root file inference, root-change invalidation, client hint precedence, and ambiguity failures

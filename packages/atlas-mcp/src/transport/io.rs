@@ -243,6 +243,24 @@ pub(crate) fn process_requests<W: Write>(
                 &mut stats,
                 &connection_state,
             )?,
+            Ok(TransportEvent::RepoContextResolved {
+                repo_context,
+                selection_source,
+                candidate_roots,
+            }) => {
+                tracing::debug!(
+                    repo_root = %repo_context.repo_root,
+                    db_path = %repo_context.db_path,
+                    selection_source = %selection_source.as_str(),
+                    dynamic_roots = connection_state.repo_resolution.dynamic_roots,
+                    "updated MCP repo resolution state"
+                );
+                connection_state.repo_resolution.active = Some(repo_context);
+                connection_state.repo_resolution.active_selection_source = Some(selection_source);
+                if candidate_roots.is_some() {
+                    connection_state.repo_resolution.candidate_roots = candidate_roots;
+                }
+            }
             Ok(TransportEvent::OutboundJson(message)) => write_response(writer, &message)?,
             Ok(TransportEvent::InputClosed) => {
                 input_closed = true;

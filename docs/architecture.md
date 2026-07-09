@@ -165,6 +165,35 @@ Store split exists so one subsystem can degrade without corrupting others.
 
 Use `worldtree.db` for code truth, `context.db` for large text, and `session.db` for continuity. Frontends differ. Storage contract does not.
 
+## MCP stdio repo resolution in editors
+
+`atlas serve --direct-stdio` has two modes:
+
+- **fixed mode**: `--repo` or `--db` passed. Repo binding happens at startup and ignores client workspace-root changes.
+- **dynamic mode**: both `--repo` and `--db` absent. Repo binding is deferred until MCP request evidence or client root hints resolve active workspace root.
+
+Dynamic stdio rule:
+
+- do not trust inherited process cwd for repo identity
+- prefer MCP `roots/list` workspace roots
+- cache last successful dynamic root per connection
+- invalidate cached dynamic root after `notifications/roots/list_changed`
+- fail closed when multi-root evidence is ambiguous
+
+Current dynamic selection precedence:
+
+1. explicit fixed CLI `--repo` / `--db`
+2. request-scoped `_meta.atlas.activeRootUri`
+3. initialize/session-scoped `_meta.atlas.preferredRootUri`
+4. cached active dynamic root
+5. deterministic file-evidence inference from tool arguments
+6. single advertised root from `roots/list`
+
+First-pass limitation:
+
+- query-only multi-root requests without file evidence require validated client hint or explicit fixed `--repo`
+- Atlas does not guess active repo from cwd or from ambiguous relative paths shared by multiple roots
+
 ---
 
 ## Graph/Content Companion Contract

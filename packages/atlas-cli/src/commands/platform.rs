@@ -2,39 +2,41 @@ use std::process::Stdio;
 
 use anyhow::{Context, Result};
 use atlas_mcp::ServerOptions;
-use atlas_repo::find_repo_root;
-use camino::Utf8Path;
 use serde::{Deserialize, Serialize};
 
 use crate::cli::{Cli, Command};
 
 use super::{db_path, print_json, resolve_repo};
 
-pub fn run_serve(cli: &Cli) -> Result<()> {
-    let repo = resolve_repo(cli)?;
-    let db_path = db_path(cli, &repo);
-    let config = atlas_engine::Config::load(&atlas_engine::paths::atlas_dir(&repo))?;
-    let options = ServerOptions {
+fn server_options_for_repo(repo: &str) -> Result<ServerOptions> {
+    let config = atlas_engine::Config::load(&atlas_engine::paths::atlas_dir(repo))?;
+    Ok(ServerOptions {
         worker_threads: config.mcp_worker_threads(),
         tool_timeout_ms: config.mcp_tool_timeout_ms(),
         tool_timeout_ms_by_tool: config.mcp_tool_timeout_ms_by_tool(),
         #[cfg(feature = "http-transport")]
         http_auth: None,
-    };
+    })
+}
+
+fn should_defer_direct_stdio_repo_resolution(cli: &Cli) -> bool {
+    matches!(&cli.command, Command::Serve { direct_stdio: true })
+        && cli.repo.is_none()
+        && cli.db.is_none()
+}
+
+pub fn run_serve(cli: &Cli) -> Result<()> {
+    if should_defer_direct_stdio_repo_resolution(cli) {
+        return atlas_mcp::run_server_with_dynamic_roots(ServerOptions::default());
+    }
+
+    let repo = resolve_repo(cli)?;
+    let db_path = db_path(cli, &repo);
+    let options = server_options_for_repo(&repo)?;
     let direct_stdio = matches!(&cli.command, Command::Serve { direct_stdio: true });
-    let cwd = std::env::current_dir().context("cannot determine cwd")?;
-    let cwd_repo_root = Utf8Path::from_path(&cwd)
-        .and_then(|path| find_repo_root(path).ok())
-        .map(|path| path.into_string());
-    let should_defer_repo_resolution =
-        cli.repo.is_none() && cli.db.is_none() && cwd_repo_root.is_none();
 
     if direct_stdio {
         return atlas_mcp::run_server_with_options(&repo, &db_path, options);
-    }
-
-    if should_defer_repo_resolution {
-        return atlas_mcp::run_server_with_dynamic_roots(options);
     }
 
     let instance = crate::mcp_instance::McpInstance::for_repo_and_db(&repo, &db_path)?;
@@ -55,14 +57,7 @@ pub fn run_serve_daemon(cli: &Cli) -> Result<()> {
     let repo = resolve_repo(cli)?;
     let db_path = db_path(cli, &repo);
     let instance = crate::mcp_instance::McpInstance::for_repo_and_db(&repo, &db_path)?;
-    let config = atlas_engine::Config::load(&atlas_engine::paths::atlas_dir(&repo))?;
-    let options = ServerOptions {
-        worker_threads: config.mcp_worker_threads(),
-        tool_timeout_ms: config.mcp_tool_timeout_ms(),
-        tool_timeout_ms_by_tool: config.mcp_tool_timeout_ms_by_tool(),
-        #[cfg(feature = "http-transport")]
-        http_auth: None,
-    };
+    let options = server_options_for_repo(&repo)?;
 
     #[cfg(any(unix, windows))]
     {
@@ -912,6 +907,32 @@ pub fn run_serve_http(_cli: &Cli) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use clap::Parser;
+
+    use crate::cli::Cli;
+
+    fn parse(args: &[&str]) -> Cli {
+        Cli::try_parse_from(args).expect("parse should succeed")
+    }
+
+    #[test]
+    fn direct_stdio_without_explicit_repo_or_db_defers_repo_resolution() {
+        let cli = parse(&["atlas", "serve", "--direct-stdio"]);
+        assert!(super::should_defer_direct_stdio_repo_resolution(&cli));
+    }
+
+    #[test]
+    fn direct_stdio_with_explicit_repo_stays_fixed_mode() {
+        let cli = parse(&["atlas", "--repo", "/tmp/demo", "serve", "--direct-stdio"]);
+        assert!(!super::should_defer_direct_stdio_repo_resolution(&cli));
+    }
+
+    #[test]
+    fn broker_stdio_without_direct_mode_stays_fixed_mode() {
+        let cli = parse(&["atlas", "serve"]);
+        assert!(!super::should_defer_direct_stdio_repo_resolution(&cli));
+    }
+
     #[cfg(unix)]
     #[test]
     fn broker_stdin_disconnect_classifier_keeps_expected_socket_teardowns_nonfatal() {

@@ -161,17 +161,34 @@ pub(crate) fn jsonrpc_error(
     kind: JsonRpcErrorKind,
     message: String,
 ) -> String {
+    jsonrpc_error_with_data(id, kind, message, None)
+}
+
+pub(crate) fn jsonrpc_error_with_data(
+    id: serde_json::Value,
+    kind: JsonRpcErrorKind,
+    message: String,
+    extra_data: Option<serde_json::Value>,
+) -> String {
     let atlas_error_code = kind.atlas_error_code();
+    let mut data = serde_json::json!({
+        "atlas_error_code": atlas_error_code,
+        "atlas_error_code_docs": error_code_docs_ref(atlas_error_code)
+    });
+    if let Some(extra) = extra_data
+        && let (Some(base), Some(extra)) = (data.as_object_mut(), extra.as_object())
+    {
+        for (key, value) in extra {
+            base.insert(key.clone(), value.clone());
+        }
+    }
     serde_json::json!({
         "jsonrpc": "2.0",
         "id": id,
         "error": {
             "code": kind.code(),
             "message": message,
-            "data": {
-                "atlas_error_code": atlas_error_code,
-                "atlas_error_code_docs": error_code_docs_ref(atlas_error_code)
-            }
+            "data": data
         }
     })
     .to_string()

@@ -1,4 +1,52 @@
 use super::*;
+use std::io::Write;
+use std::process::{Child, ChildStdin};
+use std::sync::mpsc;
+use std::time::Duration;
+
+struct InteractiveServeSession {
+    child: Child,
+    stdin: Option<ChildStdin>,
+    stdout_rx: mpsc::Receiver<String>,
+    stderr_rx: mpsc::Receiver<String>,
+}
+
+impl InteractiveServeSession {
+    fn start(cwd: &Path, args: &[&str]) -> Self {
+        let mut child = spawn_serve_child(cwd, args);
+        let stdin = child.stdin.take().expect("serve stdin");
+        let stdout = child.stdout.take().expect("serve stdout");
+        let stderr = child.stderr.take().expect("serve stderr");
+        Self {
+            child,
+            stdin: Some(stdin),
+            stdout_rx: spawn_line_reader(stdout),
+            stderr_rx: spawn_line_reader(stderr),
+        }
+    }
+
+    fn send_json(&mut self, value: &Value) {
+        let line = serde_json::to_string(value).expect("serialize jsonrpc line");
+        writeln!(self.stdin.as_mut().expect("serve stdin open"), "{line}")
+            .expect("write serve jsonrpc line");
+    }
+
+    fn recv_json(&self, timeout: Duration) -> Value {
+        let line = self.stdout_rx.recv_timeout(timeout).unwrap_or_else(|err| {
+            let stderr = drain_lines(&self.stderr_rx);
+            panic!("timed out waiting for serve stdout: {err}; stderr={stderr:?}")
+        });
+        serde_json::from_str(&line).expect("parse serve jsonrpc line")
+    }
+
+    fn finish(mut self) -> (std::process::ExitStatus, Vec<String>, Vec<String>) {
+        drop(self.stdin.take());
+        let status = self.child.wait().expect("wait for atlas serve child");
+        let stdout = drain_lines(&self.stdout_rx);
+        let stderr = drain_lines(&self.stderr_rx);
+        (status, stdout, stderr)
+    }
+}
 
 #[cfg(feature = "http-transport")]
 #[test]
@@ -160,60 +208,106 @@ fn serve_command_handles_stdio_jsonrpc_flow_end_to_end() {
 }
 
 #[test]
-fn serve_direct_stdio_handles_stdio_jsonrpc_flow_end_to_end() {
+fn serve_direct_stdio_help_mentions_dynamic_root_resolution() {
     let repo = setup_fixture_repo();
-
-    run_atlas(repo.path(), &["init"]);
-    run_atlas(repo.path(), &["build"]);
-
-    let output =
-        run_serve_jsonrpc_session(repo.path(), &["serve", "--direct-stdio"], serve_requests());
-
+    let output = run_atlas(repo.path(), &["serve", "--help"]);
+    assert!(output.status.success(), "serve --help failed");
+    let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        output.status.success(),
-        "atlas serve --direct-stdio failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr),
+        stdout.contains("deferred dynamic-root mode"),
+        "missing dynamic-root help: {stdout}"
     );
-
-    let responses = parse_jsonrpc_lines(&output.stdout);
-    assert_eq!(
-        responses.len(),
-        4,
-        "initialized notification must not emit response"
-    );
-
-    let by_id: std::collections::HashMap<_, _> = responses
-        .into_iter()
-        .map(|response| (response["id"].clone(), response))
-        .collect();
-
-    assert_eq!(
-        by_id[&json!(1)]["result"]["protocolVersion"],
-        json!(atlas_mcp::MCP_PROTOCOL_VERSION)
-    );
-    assert_eq!(
-        by_id[&json!(1)]["result"]["_meta"]["clientTag"],
-        json!("quality-gate")
-    );
-
-    let tools = by_id[&json!(2)]["result"]["tools"]
-        .as_array()
-        .expect("tools/list result tools array");
     assert!(
-        tools
-            .iter()
-            .any(|tool| tool["name"] == json!("get_context")),
-        "tools/list must expose get_context"
+        stdout.contains("workspace roots instead of inherited process cwd"),
+        "missing cwd guidance: {stdout}"
     );
+    assert!(
+        stdout.contains("activeRootUri"),
+        "missing query-only hint guidance: {stdout}"
+    );
+}
 
-    let stderr = String::from_utf8_lossy(&output.stderr);
+#[test]
+fn serve_direct_stdio_defers_repo_binding_and_resolves_from_client_root() {
+    let target_repo = setup_fixture_repo();
+    run_atlas(target_repo.path(), &["init"]);
+    run_atlas(target_repo.path(), &["build"]);
+
+    let wrong_cwd_repo = setup_repo(&[("README.md", "wrong repo\n")]);
+    let mut session =
+        InteractiveServeSession::start(wrong_cwd_repo.path(), &["serve", "--direct-stdio"]);
+
+    session.send_json(&json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": atlas_mcp::MCP_PROTOCOL_VERSION,
+            "capabilities": {
+                "roots": { "listChanged": true },
+                "sampling": {},
+                "elicitation": { "form": {}, "url": {} }
+            },
+            "clientInfo": { "name": "zed", "version": "1.0.0" },
+            "_meta": { "clientTag": "quality-gate" }
+        }
+    }));
+    let initialize = session.recv_json(Duration::from_secs(1));
+    assert_eq!(initialize["id"], json!(1));
+
+    session.send_json(&json!({
+        "jsonrpc": "2.0",
+        "method": "initialized",
+        "params": {}
+    }));
+    session.send_json(&json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {
+            "name": "query_graph",
+            "arguments": { "text": "greet_twice" }
+        }
+    }));
+
+    let roots_request = session.recv_json(Duration::from_secs(1));
+    assert_eq!(roots_request["method"], json!("roots/list"));
+    let roots_id = roots_request["id"].clone();
+    let roots_uri = format!("file://{}", target_repo.path().display());
+    session.send_json(&json!({
+        "jsonrpc": "2.0",
+        "id": roots_id,
+        "result": {
+            "roots": [
+                { "uri": roots_uri, "name": "target" }
+            ]
+        }
+    }));
+
+    let query_response = session.recv_json(Duration::from_secs(2));
+    assert_eq!(query_response["id"], json!(2));
+    let query_text = query_response["result"]["content"][0]["text"]
+        .as_str()
+        .expect("query_graph text content");
+    assert!(query_text.contains("src/lib.rs::method::Greeter::greet_twice"));
+
+    let (status, _stdout_tail, stderr_lines) = session.finish();
+    assert!(
+        status.success(),
+        "atlas serve --direct-stdio failed: {stderr_lines:?}"
+    );
+    let stderr = stderr_lines.join("\n");
+    assert!(
+        stderr.contains("atlas-mcp: server ready (repo=<deferred>, db=<deferred>)"),
+        "direct stdio must log deferred repo/db placeholders\n{stderr}"
+    );
     assert!(
         !stderr.contains("atlas-mcp: broker spawn") && !stderr.contains("atlas-mcp: broker attach"),
         "direct stdio mode must bypass broker\n{stderr}"
     );
 
-    cleanup_mcp_daemons(repo.path());
+    cleanup_mcp_daemons(target_repo.path());
+    cleanup_mcp_daemons(wrong_cwd_repo.path());
 }
 
 #[test]

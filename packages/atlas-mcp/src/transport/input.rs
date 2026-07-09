@@ -13,15 +13,19 @@ use crate::spec;
 
 use super::dispatch::dispatch;
 use super::helpers::{
-    ensure_repo_context, log_protocol_error_observation, log_request_finished,
-    panic_payload_message, parse_client_interaction_capabilities, parse_trace_level,
-    progress_token_from_params, resolve_repo_context_for_tool_call, resolve_request_timeout,
-    tool_call_output_format, tool_name_from_request,
+    ToolRepoResolutionContext, annotate_tool_result_with_repo_selection, ensure_repo_context,
+    log_protocol_error_observation, log_request_finished, panic_payload_message,
+    parse_client_interaction_capabilities, parse_trace_level, progress_token_from_params,
+    resolve_repo_context_for_tool_call, resolve_request_timeout, tool_call_output_format,
+    tool_name_from_request,
 };
-use super::jsonrpc::{JsonRpcErrorKind, jsonrpc_dispatch_error, jsonrpc_error, jsonrpc_ok};
+use super::jsonrpc::{
+    JsonRpcErrorKind, jsonrpc_dispatch_error, jsonrpc_error, jsonrpc_error_with_data, jsonrpc_ok,
+};
 use super::notify::{
     emit_mcp_log_notification, emit_progress_notification, emit_trace_log, write_response,
 };
+use super::repo_selection::{preferred_root_hint_uri, request_active_root_hint_uri};
 use super::types::{
     ConnectionState, PendingRequest, ProgressEventKind, RequestCompletion, RequestDispatchContext,
     RequestLogContext, StdioReverseEmitter, TraceThreshold, TransportEvent, TransportStats,
@@ -134,6 +138,8 @@ pub(crate) fn handle_input_line<W: Write>(
         && let Ok(parsed) = spec::parse_initialize_request(params)
     {
         connection_state.client_capabilities = parsed.capabilities;
+        connection_state.repo_resolution.preferred_root_hint_uri =
+            preferred_root_hint_uri(parsed.meta.as_ref());
     }
 
     if method == "initialized" || method == "notifications/initialized" {
@@ -144,7 +150,11 @@ pub(crate) fn handle_input_line<W: Write>(
 
     if method == "notifications/roots/list_changed" {
         stats.notifications += 1;
-        connection_state.repo_resolution.active = None;
+        if connection_state.repo_resolution.dynamic_roots {
+            connection_state.repo_resolution.active = None;
+            connection_state.repo_resolution.active_selection_source = None;
+            connection_state.repo_resolution.candidate_roots = None;
+        }
         return Ok(());
     }
 
@@ -228,6 +238,7 @@ pub(crate) fn handle_input_line<W: Write>(
         let request_log_for_worker = request_log.clone();
         let canceled_tokens = Arc::clone(&ctx.canceled_tokens);
         let progress_token = progress_token_from_params(params.as_ref());
+        let request_active_root_hint_uri = request_active_root_hint_uri(&request);
         let reverse_broker = connection_state.reverse_broker.clone();
         let repo_resolution = connection_state.repo_resolution.clone();
         let client_capabilities = connection_state.client_capabilities.clone();
@@ -337,21 +348,28 @@ pub(crate) fn handle_input_line<W: Write>(
                 },
                 cancel_flag,
             );
-            let repo_context = match resolve_repo_context_for_tool_call(
+            let tool_args = params.as_ref().and_then(|value| value.get("arguments"));
+            let selection = match resolve_repo_context_for_tool_call(
                 &repo_resolution,
-                &client_capabilities,
-                initialized,
-                &reverse_broker,
-                &reverse_emitter,
+                request_log_for_worker.tool_name.as_deref(),
+                tool_args,
+                ToolRepoResolutionContext {
+                    request_active_root_hint_uri: request_active_root_hint_uri.as_deref(),
+                    client_capabilities: &client_capabilities,
+                    initialized,
+                    reverse_broker: &reverse_broker,
+                    reverse_emitter: &reverse_emitter,
+                },
             ) {
-                Ok(repo_context) => repo_context,
+                Ok(selection) => selection,
                 Err(error) => {
                     let _ = event_tx.send(TransportEvent::Response {
                         token,
-                        response: jsonrpc_error(
+                        response: jsonrpc_error_with_data(
                             request_id.clone(),
                             JsonRpcErrorKind::InvalidParams,
-                            error.to_string(),
+                            error.message(),
+                            Some(error.error_data()),
                         ),
                         completion: RequestCompletion {
                             request: request_log_for_worker.clone(),
@@ -363,6 +381,14 @@ pub(crate) fn handle_input_line<W: Write>(
                     return;
                 }
             };
+            let repo_context = selection.repo_context.clone();
+            if repo_resolution.dynamic_roots {
+                let _ = event_tx.send(TransportEvent::RepoContextResolved {
+                    repo_context: selection.repo_context,
+                    selection_source: selection.selection_source,
+                    candidate_roots: selection.candidate_roots,
+                });
+            }
             let dispatch_started_at = Instant::now();
             let dispatch_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 dispatch(
@@ -377,7 +403,15 @@ pub(crate) fn handle_input_line<W: Write>(
             crate::runtime_context::uninstall();
             let execution_ms = dispatch_started_at.elapsed().as_millis();
             let (success, response) = match dispatch_result {
-                Ok(Ok(result)) => (true, jsonrpc_ok(request_id, result)),
+                Ok(Ok(mut result)) => {
+                    annotate_tool_result_with_repo_selection(
+                        &mut result,
+                        &repo_context.repo_root,
+                        selection.selection_source,
+                        repo_resolution.dynamic_roots,
+                    );
+                    (true, jsonrpc_ok(request_id, result))
+                }
                 Ok(Err(error)) => (false, jsonrpc_dispatch_error(request_id, &error)),
                 Err(payload) => {
                     tracing::error!(

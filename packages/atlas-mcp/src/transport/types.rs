@@ -6,6 +6,7 @@ use std::sync::{Condvar, Mutex};
 use std::time::Instant;
 
 use super::broker::ReverseRequestBroker;
+use super::repo_selection::RepoSelectionSource;
 use crate::logging;
 use crate::output::OutputFormat;
 
@@ -124,6 +125,11 @@ pub(crate) enum TransportEvent {
         response: String,
         completion: RequestCompletion,
     },
+    RepoContextResolved {
+        repo_context: ActiveRepoContext,
+        selection_source: RepoSelectionSource,
+        candidate_roots: Option<Vec<String>>,
+    },
     OutboundJson(String),
     ProgressReport {
         token: u64,
@@ -160,7 +166,7 @@ pub(crate) struct ConnectionState {
     pub(crate) repo_resolution: RepoResolutionState,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ActiveRepoContext {
     pub(crate) repo_root: String,
     pub(crate) db_path: String,
@@ -170,6 +176,9 @@ pub(crate) struct ActiveRepoContext {
 pub(crate) struct RepoResolutionState {
     pub(crate) startup: Option<ActiveRepoContext>,
     pub(crate) active: Option<ActiveRepoContext>,
+    pub(crate) active_selection_source: Option<RepoSelectionSource>,
+    pub(crate) candidate_roots: Option<Vec<String>>,
+    pub(crate) preferred_root_hint_uri: Option<String>,
     pub(crate) dynamic_roots: bool,
 }
 
@@ -221,6 +230,9 @@ pub(crate) fn connection_state(
         repo_resolution: RepoResolutionState {
             startup: startup.clone(),
             active: startup,
+            active_selection_source: None,
+            candidate_roots: None,
+            preferred_root_hint_uri: None,
             dynamic_roots,
         },
     }
