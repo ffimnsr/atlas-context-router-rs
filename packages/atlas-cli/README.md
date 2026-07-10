@@ -15,6 +15,7 @@ Command-line interface for building, updating, and querying Atlas code graphs. P
 - `atlas status` — health check and graph stats
 - `atlas debug-config` / `atlas config show` — print resolved config values with source metadata
 - `atlas query` — search graph by symbol name or regex
+- `atlas man mcp <mcp_tool_name>` — runtime manual derived from live MCP tool registry metadata
 - `atlas impact` — impact radius from changed files
 - `atlas review-context` — review bundle for changes, with `--format markdown` for PR comments
 - `atlas selfupdate` — explicit refusal with reinstall guidance

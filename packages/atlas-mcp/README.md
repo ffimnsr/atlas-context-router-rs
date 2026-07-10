@@ -6,6 +6,7 @@ MCP server exposing Atlas graph, impact, and review tools over stdio. Implements
 
 **Tools** (20+)
 - `list_graph_stats` — node/edge counts and language breakdown
+- `man` — runtime manual docs for one visible exported MCP tool
 - `query_graph` — FTS5 keyword search over symbols
 - `batch_query_graph` — run up to 20 queries in one round-trip
 - `read_file_excerpt` — repo-scoped file excerpt reads by line range or line-with-context

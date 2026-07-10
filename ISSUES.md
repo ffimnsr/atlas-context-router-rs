@@ -549,43 +549,43 @@ Registry-first design, not raw path merge. Current recursive submodule scan, own
 
 Add built-in manual and schema-introspection surface for MCP tools so agents and users can request authoritative tool docs at runtime instead of relying on external docs or stale prompt text.
 
-- [ ] add shared manual-documentation service for MCP tools:
-  - [ ] load tool metadata from live MCP tool registry instead of duplicating per-tool docs in separate hardcoded tables
-  - [ ] require canonical tool identity lookup by exact tool name and preserve case-sensitive output name
-  - [ ] allow manual namespace `mcp` first and reject unknown manual namespaces with clear validation errors
-  - [ ] return deterministic document payload without executing target tool
-  - [ ] keep service read-only and safe to call in restricted environments
-- [ ] define `man` response shape for MCP tool docs:
-  - [ ] include requested namespace and requested tool name
-  - [ ] include resolved tool name and description from registry
-  - [ ] include tool structure section describing tool purpose, exposed operation name, and top-level request/response shape
-  - [ ] include input-args section with field name, type, required/optional state, default value when available, accepted enum values when applicable, and per-field description
-  - [ ] include output-response section with response fields, field meanings, optional/required state, and metadata/error payload shape when available
-  - [ ] include usage section with exact form `man mcp <mcp_tool_name>` plus direct target-tool invocation examples when available
-  - [ ] include error section for unknown tool, deprecated tool, hidden/internal tool, or schema-unavailable cases
-  - [ ] keep field ordering deterministic so CLI output, MCP output, snapshots, and future generated docs stay stable
-- [ ] add MCP surface:
-  - [ ] expose MCP tool `man`
-  - [ ] accept exact arguments representing `man mcp <mcp_tool_name>` request
-  - [ ] require namespace `mcp` and target tool name
-  - [ ] return compact default output suitable for agent consumption
-  - [ ] add optional verbose or structured output mode if existing MCP tool patterns already support it
-- [ ] add CLI parity surface:
-  - [ ] add `atlas man mcp <mcp_tool_name>`
-  - [ ] keep human-readable output aligned with MCP default text
-  - [ ] add `--json` output that matches MCP structured payload as closely as current CLI/MCP parity rules allow
-- [ ] implement lookup and rendering behavior:
-  - [ ] resolve visible registered tools only and exclude disabled or non-exported tools unless explicit internal-doc mode is added later
-  - [ ] derive structure, input-args, output-response, and usage sections from registry/schema data when available instead of duplicating static prose
-  - [ ] suggest nearest tool names on unknown target using existing deterministic ranking helper if available
-  - [ ] truncate oversized examples or descriptions using same bounded-output policy used by other MCP-facing surfaces without dropping required structure, input, output, or usage sections
-  - [ ] include freshness/provenance metadata when manual output depends on generated registry state
-- [ ] add docs and tests:
-  - [ ] document `atlas man mcp <mcp_tool_name>` and MCP `man` in README and MCP tool docs
-  - [ ] add snapshot tests for human-readable output and JSON output
-  - [ ] add unknown-tool test with deterministic suggestion order
-  - [ ] add hidden-tool or disabled-tool behavior test
-  - [ ] add CLI/MCP parity test for at least one representative tool with required and optional args
+- [x] add shared manual-documentation service for MCP tools:
+  - [x] load tool metadata from live MCP tool registry instead of duplicating per-tool docs in separate hardcoded tables
+  - [x] require canonical tool identity lookup by exact tool name and preserve case-sensitive output name
+  - [x] allow manual namespace `mcp` first and reject unknown manual namespaces with clear validation errors
+  - [x] return deterministic document payload without executing target tool
+  - [x] keep service read-only and safe to call in restricted environments
+- [x] define `man` response shape for MCP tool docs:
+  - [x] include requested namespace and requested tool name
+  - [x] include resolved tool name and description from registry
+  - [x] include tool structure section describing tool purpose, exposed operation name, and top-level request/response shape
+  - [x] include input-args section with field name, type, required/optional state, default value when available, accepted enum values when applicable, and per-field description
+  - [x] include output-response section with response fields, field meanings, optional/required state, and metadata/error payload shape when available
+  - [x] include usage section with exact form `man mcp <mcp_tool_name>` plus direct target-tool invocation examples when available
+  - [x] include error section for unknown tool, deprecated tool, hidden/internal tool, or schema-unavailable cases
+  - [x] keep field ordering deterministic so CLI output, MCP output, snapshots, and future generated docs stay stable
+- [x] add MCP surface:
+  - [x] expose MCP tool `man`
+  - [x] accept exact arguments representing `man mcp <mcp_tool_name>` request
+  - [x] require namespace `mcp` and target tool name
+  - [x] return compact default output suitable for agent consumption
+  - [x] add optional verbose or structured output mode if existing MCP tool patterns already support it
+- [x] add CLI parity surface:
+  - [x] add `atlas man mcp <mcp_tool_name>`
+  - [x] keep human-readable output aligned with MCP default text
+  - [x] add `--json` output that matches MCP structured payload as closely as current CLI/MCP parity rules allow
+- [x] implement lookup and rendering behavior:
+  - [x] resolve visible registered tools only and exclude disabled or non-exported tools unless explicit internal-doc mode is added later
+  - [x] derive structure, input-args, output-response, and usage sections from registry/schema data when available instead of duplicating static prose
+  - [x] suggest nearest tool names on unknown target using existing deterministic ranking helper if available
+  - [x] truncate oversized examples or descriptions using same bounded-output policy used by other MCP-facing surfaces without dropping required structure, input, output, or usage sections
+  - [x] include freshness/provenance metadata when manual output depends on generated registry state
+- [x] add docs and tests:
+  - [x] document `atlas man mcp <mcp_tool_name>` and MCP `man` in README and MCP tool docs
+  - [x] add snapshot tests for human-readable output and JSON output
+  - [x] add unknown-tool test with deterministic suggestion order
+  - [x] add hidden-tool or disabled-tool behavior test
+  - [x] add CLI/MCP parity test for at least one representative tool with required and optional args
 
 Why:
 - agents need fast authoritative tool docs during tool selection and argument construction
@@ -1190,7 +1190,7 @@ Atlas should make backend capability checks explicit instead of assuming all ret
 - [x] validate requested retrieval mode against backend capabilities before query/index
 - [x] disable unsupported hybrid mode automatically with explicit warning
 - [x] ensure MCP/CLI surfaces report active retrieval mode clearly
-- [ ] add tests for:
+- [x] add tests for:
   - [x] lexical-only backend
   - [x] dense-only backend
   - [x] hybrid-capable backend

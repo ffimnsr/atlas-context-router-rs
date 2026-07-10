@@ -12,6 +12,24 @@ use super::{
     print_json, readiness_overrides, resolve_repo,
 };
 
+pub fn run_man(cli: &Cli) -> Result<()> {
+    let Command::Man {
+        namespace,
+        tool_name,
+    } = &cli.command
+    else {
+        anyhow::bail!("man command required");
+    };
+
+    let document = atlas_mcp::tool_manual(namespace, tool_name)?;
+    if cli.json {
+        print_json("man", serde_json::to_value(document)?)
+    } else {
+        println!("{}", atlas_mcp::render_tool_manual_text(&document));
+        Ok(())
+    }
+}
+
 pub fn run_docs_section(cli: &Cli) -> Result<()> {
     let Command::DocsSection {
         path,

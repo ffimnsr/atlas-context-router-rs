@@ -177,6 +177,15 @@ pub enum Command {
         allow_partial: bool,
     },
 
+    /// Show runtime manual for one visible exported MCP tool.
+    Man {
+        /// Manual namespace. Must be `mcp`.
+        namespace: String,
+
+        /// Exact exported MCP tool name.
+        tool_name: String,
+    },
+
     /// Read one indexed Markdown docs section by heading path/slug or line.
     #[command(name = "docs-section")]
     DocsSection {

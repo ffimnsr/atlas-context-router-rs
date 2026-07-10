@@ -4,6 +4,7 @@ use std::collections::BTreeSet;
 
 const TOOL_REGISTRY_SNAPSHOT: &[&str] = &[
     "list_graph_stats",
+    "man",
     "query_graph",
     "batch_query_graph",
     "get_impact_radius",
@@ -78,6 +79,7 @@ fn parity_seed_source_id(repo_root: &str, db_path: &str) -> String {
 fn parity_args(tool_name: &str, source_id: &str) -> Value {
     match tool_name {
         "list_graph_stats" => json!({ "output_format": "json" }),
+        "man" => json!({ "namespace": "mcp", "tool_name": "query_graph", "output_format": "json" }),
         "query_graph" => json!({ "text": "compute", "output_format": "json" }),
         "batch_query_graph" => json!({ "text": "compute handle_request", "output_format": "json" }),
         "get_impact_radius" => json!({ "files": ["src/service.rs"], "output_format": "json" }),
@@ -159,6 +161,85 @@ fn parity_args(tool_name: &str, source_id: &str) -> Value {
         }
         other => panic!("missing parity args for tool {other}"),
     }
+}
+
+#[test]
+fn tool_list_includes_man() {
+    let list = tool_list();
+    let tools = list.get("tools").and_then(|t| t.as_array()).unwrap();
+    assert!(tools.iter().any(|t| t.get("name") == Some(&"man".into())));
+}
+
+#[test]
+fn man_tool_returns_structured_manual_payload() {
+    let fixture = setup_git_mcp_fixture();
+    let response = call(
+        "man",
+        Some(&json!({
+            "namespace": "mcp",
+            "tool_name": "query_graph",
+            "output_format": "json"
+        })),
+        &fixture.repo_root,
+        &fixture.db_path,
+    )
+    .expect("man response");
+
+    assert_eq!(unwrap_tool_format(&response), "json");
+    let payload: Value =
+        serde_json::from_str(&unwrap_tool_text(response.clone())).expect("json payload");
+    assert_eq!(payload["resolved_tool_name"], json!("query_graph"));
+    assert_eq!(payload["usage"]["cli"], json!("man mcp query_graph"));
+    assert!(
+        payload["input_args"]
+            .as_array()
+            .is_some_and(|items| !items.is_empty())
+    );
+    assert_provenance(&response, &fixture.repo_root, &fixture.db_path);
+}
+
+#[test]
+fn man_unknown_tool_suggestions_are_deterministic() {
+    let fixture = setup_git_mcp_fixture();
+    let response = call(
+        "man",
+        Some(&json!({
+            "namespace": "mcp",
+            "tool_name": "query_grap",
+            "output_format": "json"
+        })),
+        &fixture.repo_root,
+        &fixture.db_path,
+    )
+    .expect("man error response");
+
+    assert_eq!(response["isError"], json!(true));
+    assert_eq!(
+        response["structuredContent"]["details"]["suggestions"][0],
+        json!("query_graph")
+    );
+}
+
+#[test]
+fn man_hidden_internal_tool_is_not_documented() {
+    let fixture = setup_git_mcp_fixture();
+    let response = call(
+        "man",
+        Some(&json!({
+            "namespace": "mcp",
+            "tool_name": "__test_sleep",
+            "output_format": "json"
+        })),
+        &fixture.repo_root,
+        &fixture.db_path,
+    )
+    .expect("man hidden error response");
+
+    assert_eq!(response["isError"], json!(true));
+    assert_eq!(
+        response["structuredContent"]["details"]["reason"],
+        json!("hidden_or_internal_tool")
+    );
 }
 
 #[test]

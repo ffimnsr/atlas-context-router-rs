@@ -1,0 +1,56 @@
+resolve_symbol — Resolve a symbol name to its exact qualified_name in the graph. Eliminates the manual workflow of query_graph → copy qualified_name → call symbol_neighbors. Returns the best match, an ambiguity list when multiple symbol…
+
+structure:
+  purpose: Resolve a symbol name to its exact qualified_name in the graph. Eliminates the manual workflow of query_graph → copy qualified_name → call symbol_neighbors. Returns the best match, an ambiguity list when multiple symbol…
+  operation_name: resolve_symbol
+  request_shape: request object: object with 6 top-level fields (1 required)
+  response_shape: MCP tool result envelope with content text, metadata fields, and no advertised structuredContent schema
+  result_contract: mixed-needs-redesign
+  annotations: read_only=true, state_changing=false, destructive=false
+
+input_args:
+  - file: string (optional)
+    Optional file path filter. Only returns matches whose file_path contains this string (e.g. 'internal/requestctx/context.go' or 'src/').
+  - kind: string (optional)
+    Optional kind filter. Accepts public aliases: 'function'/'fn'/'func', 'method', 'class', 'struct'/'record', 'interface'/'iface', 'trait', 'enum', 'module'/'mod', 'variable'/'var', 'constant'/'const', 'test', 'import', '…
+  - language: string (optional)
+    Optional language filter (e.g. 'rust', 'go', 'typescript').
+  - limit: integer (optional), default=10
+    Maximum matches to return (default 10).
+  - name: string (required)
+    Symbol name to resolve (e.g. 'LoadIdentityMessages', 'compute'). Matched against indexed symbol names using FTS.
+  - output_format: string (optional), default=toon
+    Response body format: 'toon' (default) or 'json'
+
+output_response:
+  response_shape: structuredContent schema unavailable for this tool; rely on content text, metadata, and error envelope
+  structured_content_available: false
+  response_fields:
+    - schema unavailable for structuredContent; consume content text and metadata fields
+  metadata_fields:
+    - content: array<object> (required) — Human-readable rendered payload. Present on success and error results.
+    - structuredContent: object (optional) — Machine-readable payload when the tool returns object-shaped structured output.
+    - _meta: object (required) — Atlas output metadata including requested and actual output format, plus fallback reason when TOON falls back to JSON.
+    - atlas_provenance: object (required) — Atlas repo/db provenance metadata injected by dispatch for authoritative runtime context.
+    - atlas_freshness: object (optional) — Freshness warning metadata when working-tree changes can make graph-backed answers stale.
+    - atlas_readiness: object (optional) — Readiness gating metadata for graph-backed tools when Atlas evaluates safe-to-answer state.
+  error_payload_fields:
+    - isError: boolean (required) — True when the tool returned a structured execution error payload.
+    - structuredContent.code: string (required) — Stable Atlas tool error code.
+    - structuredContent.message: string (required) — User-facing tool failure summary.
+    - structuredContent.retry_guidance: string (optional) — Deterministic retry guidance when Atlas can suggest a next action.
+    - structuredContent.details: object (optional) — Additional structured error details when available.
+
+usage:
+  cli: man mcp resolve_symbol
+  mcp_manual_tool_call: {"name":"man","arguments":{"namespace":"mcp","tool_name":"resolve_symbol","output_format":"json"}}
+  target_tool_call_examples:
+    - {"name":"resolve_symbol","arguments":{"name":"<name>"}}
+
+error_cases:
+  - unknown_tool: requested tool name does not match any visible exported MCP tool exactly. returns invalid_input with deterministic nearest-tool suggestions when available
+  - deprecated_tool: requested tool remains in registry but is explicitly marked deprecated. manual should return deprecation guidance instead of treating legacy prose as authoritative
+  - hidden_internal_tool: requested tool exists internally but is not exported in the visible MCP registry. returns invalid_input and refuses to expose internal-only manual details
+  - schema_unavailable: tool exports no outputSchema or field-level schema metadata is unavailable. manual keeps response and usage sections but marks structuredContent schema unavailable
+
+truncation: description_truncated=true, usage_examples_truncated=false

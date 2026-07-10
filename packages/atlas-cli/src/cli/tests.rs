@@ -246,6 +246,26 @@ fn parse_query_text_only() {
 }
 
 #[test]
+fn parse_man_command() {
+    let cli = parse(&["atlas", "man", "mcp", "query_graph"]);
+    if let Command::Man {
+        namespace,
+        tool_name,
+    } = cli.command
+    {
+        assert_eq!(namespace, "mcp");
+        assert_eq!(tool_name, "query_graph");
+    } else {
+        panic!("expected Man command");
+    }
+}
+
+#[test]
+fn parse_man_missing_tool_name_fails() {
+    assert!(Cli::try_parse_from(["atlas", "man", "mcp"]).is_err());
+}
+
+#[test]
 fn parse_docs_section_heading_selector() {
     let cli = parse(&[
         "atlas",

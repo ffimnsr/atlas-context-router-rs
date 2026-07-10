@@ -7,6 +7,7 @@
 //! | Tool                      | Description                                              |
 //! |---------------------------|----------------------------------------------------------|
 //! | `list_graph_stats`        | Node/edge counts and language breakdown                  |
+//! | `man`                     | Runtime manual for one visible exported MCP tool         |
 //! | `query_graph`             | FTS5 keyword search, returns compact symbol list only    |
 //! | `batch_query_graph`       | Run up to 20 query_graph searches in one round-trip     |
 //! | `get_impact_radius`       | Graph traversal from changed files                       |
@@ -90,7 +91,9 @@ pub mod transport_http;
 
 pub use spec::MCP_PROTOCOL_VERSION;
 pub use tools::health::mark_server_started;
-pub use tools::{tool_list, tool_list_markdown};
+pub use tools::{
+    ToolManualDocument, render_tool_manual_text, tool_list, tool_list_markdown, tool_manual,
+};
 pub use transport::{
     ServerOptions, run_server, run_server_with_dynamic_roots, run_server_with_options,
     run_socket_server_with_options,

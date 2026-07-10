@@ -532,6 +532,7 @@ The MCP server (`atlas serve`) exposes these tools to agents:
 | Tool | Description |
 |------|-------------|
 | `list_graph_stats` | Node/edge counts and language breakdown |
+| `man` | Runtime manual for one visible exported MCP tool |
 | `query_graph` | Keyword search with optional `regex` SQL-UDF filter; returns compact symbol list |
 | `batch_query_graph` | Run up to 20 `query_graph` searches in a single round-trip |
 | `search_files` | File-path discovery for config, templates, SQL, Markdown, and other non-code assets |
@@ -583,6 +584,11 @@ The MCP server (`atlas serve`) exposes these tools to agents:
 | `concept_clusters` | Related file groups around seed files by coupling density |
 
 Graph tools answer code structure questions; content tools answer non-code context-adjacent questions (docs, config, templates, SQL, prompts). Use both as companion surfaces, not as a fallback chain.
+
+Manual surface:
+
+- `atlas man mcp <mcp_tool_name>` prints runtime docs derived from live MCP registry metadata
+- MCP `man` returns same manual payload without executing target tool
 
 Search tool selection rules:
 

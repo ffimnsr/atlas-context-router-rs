@@ -46,7 +46,7 @@ impl ToolResultContract {
 
 pub(crate) fn tool_result_contract(name: &str) -> ToolResultContract {
     match name {
-        "list_graph_stats" | "broker_status" | "get_context_stats" => {
+        "list_graph_stats" | "broker_status" | "get_context_stats" | "man" => {
             ToolResultContract::StableObject
         }
         "query_graph"
@@ -98,6 +98,19 @@ fn base_tool_list_json() -> Value {
                         "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
                     },
                     "required": []
+                }
+            },
+            {
+                "name": "man",
+                "description": "Return authoritative runtime manual documentation for one visible exported MCP tool without executing that target tool. Requires namespace='mcp' and exact case-sensitive tool_name lookup from the live registry.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "namespace": { "type": "string", "description": "Manual namespace. Must be exactly 'mcp'." },
+                        "tool_name": { "type": "string", "description": "Exact exported MCP tool name to document. Case-sensitive." },
+                        "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
+                    },
+                    "required": ["namespace", "tool_name"]
                 }
             },
             {
@@ -922,6 +935,12 @@ pub fn tool_descriptors() -> Vec<ToolDescriptor> {
     seeds.into_iter().map(build_tool_descriptor).collect()
 }
 
+pub(crate) fn tool_descriptor_by_name(name: &str) -> Option<ToolDescriptor> {
+    tool_descriptors()
+        .into_iter()
+        .find(|tool| tool.name == name)
+}
+
 #[cfg(test)]
 pub fn tool_input_schema_by_name(name: &str) -> Option<Value> {
     tool_descriptors()
@@ -961,6 +980,7 @@ fn tool_output_schema_for(name: &str) -> Option<Value> {
         "list_graph_stats" => Some(list_graph_stats_output_schema()),
         "broker_status" => Some(broker_status_output_schema()),
         "get_context_stats" => Some(get_context_stats_output_schema()),
+        "man" => Some(man_output_schema()),
         _ => None,
     }
 }
@@ -1025,6 +1045,151 @@ fn broker_status_output_schema() -> Value {
             "worker_threads_configured",
             "repo_root",
             "db_path"
+        ]
+    }))
+}
+
+fn man_output_schema() -> Value {
+    ensure_schema_2020_12(serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "requested_namespace": { "type": "string" },
+            "requested_tool_name": { "type": "string" },
+            "resolved_tool_name": { "type": "string" },
+            "description": { "type": "string" },
+            "tool_structure": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "purpose": { "type": "string" },
+                    "operation_name": { "type": "string" },
+                    "request_shape": { "type": "string" },
+                    "response_shape": { "type": "string" },
+                    "result_contract": { "type": "string" },
+                    "annotations": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                            "read_only": { "type": "boolean" },
+                            "state_changing": { "type": "boolean" },
+                            "destructive": { "type": "boolean" }
+                        },
+                        "required": ["read_only", "state_changing", "destructive"]
+                    }
+                },
+                "required": [
+                    "purpose",
+                    "operation_name",
+                    "request_shape",
+                    "response_shape",
+                    "result_contract",
+                    "annotations"
+                ]
+            },
+            "input_args": {
+                "type": "array",
+                "items": { "$ref": "#/$defs/manual_field" }
+            },
+            "output_response": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "response_shape": { "type": "string" },
+                    "structured_content_available": { "type": "boolean" },
+                    "response_fields": {
+                        "type": "array",
+                        "items": { "$ref": "#/$defs/manual_field" }
+                    },
+                    "metadata_fields": {
+                        "type": "array",
+                        "items": { "$ref": "#/$defs/manual_field" }
+                    },
+                    "error_payload_fields": {
+                        "type": "array",
+                        "items": { "$ref": "#/$defs/manual_field" }
+                    }
+                },
+                "required": [
+                    "response_shape",
+                    "structured_content_available",
+                    "response_fields",
+                    "metadata_fields",
+                    "error_payload_fields"
+                ]
+            },
+            "usage": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "cli": { "type": "string" },
+                    "mcp_manual_tool_call": { "type": "string" },
+                    "target_tool_call_examples": {
+                        "type": "array",
+                        "items": { "type": "string" }
+                    }
+                },
+                "required": ["cli", "mcp_manual_tool_call", "target_tool_call_examples"]
+            },
+            "error_cases": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "code": { "type": "string" },
+                        "when": { "type": "string" },
+                        "behavior": { "type": "string" }
+                    },
+                    "required": ["code", "when", "behavior"]
+                }
+            },
+            "truncation": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "description_truncated": { "type": "boolean" },
+                    "usage_examples_truncated": { "type": "boolean" }
+                },
+                "required": ["description_truncated", "usage_examples_truncated"]
+            }
+        },
+        "$defs": {
+            "manual_field": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "name": { "type": "string" },
+                    "field_type": { "type": "string" },
+                    "required": { "type": "boolean" },
+                    "default_value": { "type": ["string", "null"] },
+                    "enum_values": {
+                        "type": "array",
+                        "items": { "type": "string" }
+                    },
+                    "description": { "type": "string" }
+                },
+                "required": [
+                    "name",
+                    "field_type",
+                    "required",
+                    "default_value",
+                    "enum_values",
+                    "description"
+                ]
+            }
+        },
+        "required": [
+            "requested_namespace",
+            "requested_tool_name",
+            "resolved_tool_name",
+            "description",
+            "tool_structure",
+            "input_args",
+            "output_response",
+            "usage",
+            "error_cases",
+            "truncation"
         ]
     }))
 }

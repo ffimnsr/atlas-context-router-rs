@@ -1,0 +1,210 @@
+{
+  "schema_version": "atlas_cli.v1",
+  "command": "man",
+  "data": {
+    "requested_namespace": "mcp",
+    "requested_tool_name": "resolve_symbol",
+    "resolved_tool_name": "resolve_symbol",
+    "description": "Resolve a symbol name to its exact qualified_name in the graph. Eliminates the manual workflow of query_graph → copy qualified_name → call symbol_neighbors. Returns the best match, an ambiguity list when multiple symbol…",
+    "tool_structure": {
+      "purpose": "Resolve a symbol name to its exact qualified_name in the graph. Eliminates the manual workflow of query_graph → copy qualified_name → call symbol_neighbors. Returns the best match, an ambiguity list when multiple symbol…",
+      "operation_name": "resolve_symbol",
+      "request_shape": "request object: object with 6 top-level fields (1 required)",
+      "response_shape": "MCP tool result envelope with content text, metadata fields, and no advertised structuredContent schema",
+      "result_contract": "mixed-needs-redesign",
+      "annotations": {
+        "read_only": true,
+        "state_changing": false,
+        "destructive": false
+      }
+    },
+    "input_args": [
+      {
+        "name": "file",
+        "field_type": "string",
+        "required": false,
+        "default_value": null,
+        "enum_values": [],
+        "description": "Optional file path filter. Only returns matches whose file_path contains this string (e.g. 'internal/requestctx/context.go' or 'src/')."
+      },
+      {
+        "name": "kind",
+        "field_type": "string",
+        "required": false,
+        "default_value": null,
+        "enum_values": [],
+        "description": "Optional kind filter. Accepts public aliases: 'function'/'fn'/'func', 'method', 'class', 'struct'/'record', 'interface'/'iface', 'trait', 'enum', 'module'/'mod', 'variable'/'var', 'constant'/'const', 'test', 'import', '…"
+      },
+      {
+        "name": "language",
+        "field_type": "string",
+        "required": false,
+        "default_value": null,
+        "enum_values": [],
+        "description": "Optional language filter (e.g. 'rust', 'go', 'typescript')."
+      },
+      {
+        "name": "limit",
+        "field_type": "integer",
+        "required": false,
+        "default_value": "10",
+        "enum_values": [],
+        "description": "Maximum matches to return (default 10)."
+      },
+      {
+        "name": "name",
+        "field_type": "string",
+        "required": true,
+        "default_value": null,
+        "enum_values": [],
+        "description": "Symbol name to resolve (e.g. 'LoadIdentityMessages', 'compute'). Matched against indexed symbol names using FTS."
+      },
+      {
+        "name": "output_format",
+        "field_type": "string",
+        "required": false,
+        "default_value": "toon",
+        "enum_values": [],
+        "description": "Response body format: 'toon' (default) or 'json'"
+      }
+    ],
+    "output_response": {
+      "response_shape": "structuredContent schema unavailable for this tool; rely on content text, metadata, and error envelope",
+      "structured_content_available": false,
+      "response_fields": [],
+      "metadata_fields": [
+        {
+          "name": "content",
+          "field_type": "array<object>",
+          "required": true,
+          "default_value": null,
+          "enum_values": [],
+          "description": "Human-readable rendered payload. Present on success and error results."
+        },
+        {
+          "name": "structuredContent",
+          "field_type": "object",
+          "required": false,
+          "default_value": null,
+          "enum_values": [],
+          "description": "Machine-readable payload when the tool returns object-shaped structured output."
+        },
+        {
+          "name": "_meta",
+          "field_type": "object",
+          "required": true,
+          "default_value": null,
+          "enum_values": [],
+          "description": "Atlas output metadata including requested and actual output format, plus fallback reason when TOON falls back to JSON."
+        },
+        {
+          "name": "atlas_provenance",
+          "field_type": "object",
+          "required": true,
+          "default_value": null,
+          "enum_values": [],
+          "description": "Atlas repo/db provenance metadata injected by dispatch for authoritative runtime context."
+        },
+        {
+          "name": "atlas_freshness",
+          "field_type": "object",
+          "required": false,
+          "default_value": null,
+          "enum_values": [],
+          "description": "Freshness warning metadata when working-tree changes can make graph-backed answers stale."
+        },
+        {
+          "name": "atlas_readiness",
+          "field_type": "object",
+          "required": false,
+          "default_value": null,
+          "enum_values": [],
+          "description": "Readiness gating metadata for graph-backed tools when Atlas evaluates safe-to-answer state."
+        }
+      ],
+      "error_payload_fields": [
+        {
+          "name": "isError",
+          "field_type": "boolean",
+          "required": true,
+          "default_value": null,
+          "enum_values": [],
+          "description": "True when the tool returned a structured execution error payload."
+        },
+        {
+          "name": "structuredContent.code",
+          "field_type": "string",
+          "required": true,
+          "default_value": null,
+          "enum_values": [
+            "invalid_input",
+            "file_not_found",
+            "symbol_not_found",
+            "graph_stale",
+            "timeout",
+            "dependency_failed",
+            "internal_tool_error"
+          ],
+          "description": "Stable Atlas tool error code."
+        },
+        {
+          "name": "structuredContent.message",
+          "field_type": "string",
+          "required": true,
+          "default_value": null,
+          "enum_values": [],
+          "description": "User-facing tool failure summary."
+        },
+        {
+          "name": "structuredContent.retry_guidance",
+          "field_type": "string",
+          "required": false,
+          "default_value": null,
+          "enum_values": [],
+          "description": "Deterministic retry guidance when Atlas can suggest a next action."
+        },
+        {
+          "name": "structuredContent.details",
+          "field_type": "object",
+          "required": false,
+          "default_value": null,
+          "enum_values": [],
+          "description": "Additional structured error details when available."
+        }
+      ]
+    },
+    "usage": {
+      "cli": "man mcp resolve_symbol",
+      "mcp_manual_tool_call": "{\"name\":\"man\",\"arguments\":{\"namespace\":\"mcp\",\"tool_name\":\"resolve_symbol\",\"output_format\":\"json\"}}",
+      "target_tool_call_examples": [
+        "{\"name\":\"resolve_symbol\",\"arguments\":{\"name\":\"<name>\"}}"
+      ]
+    },
+    "error_cases": [
+      {
+        "code": "unknown_tool",
+        "when": "requested tool name does not match any visible exported MCP tool exactly",
+        "behavior": "returns invalid_input with deterministic nearest-tool suggestions when available"
+      },
+      {
+        "code": "deprecated_tool",
+        "when": "requested tool remains in registry but is explicitly marked deprecated",
+        "behavior": "manual should return deprecation guidance instead of treating legacy prose as authoritative"
+      },
+      {
+        "code": "hidden_internal_tool",
+        "when": "requested tool exists internally but is not exported in the visible MCP registry",
+        "behavior": "returns invalid_input and refuses to expose internal-only manual details"
+      },
+      {
+        "code": "schema_unavailable",
+        "when": "tool exports no outputSchema or field-level schema metadata is unavailable",
+        "behavior": "manual keeps response and usage sections but marks structuredContent schema unavailable"
+      }
+    ],
+    "truncation": {
+      "description_truncated": true,
+      "usage_examples_truncated": false
+    }
+  }
+}

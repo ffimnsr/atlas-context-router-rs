@@ -46,6 +46,7 @@ fn run_cli() -> anyhow::Result<()> {
         Command::Status { .. } => commands::run_status(&cli),
         Command::DetectChanges { .. } => commands::run_detect_changes(&cli),
         Command::Query { .. } => commands::run_query(&cli),
+        Command::Man { .. } => commands::run_man(&cli),
         Command::DocsSection { .. } => commands::run_docs_section(&cli),
         Command::Embed { .. } => commands::run_embed(&cli),
         Command::Impact { .. } => commands::run_impact(&cli),

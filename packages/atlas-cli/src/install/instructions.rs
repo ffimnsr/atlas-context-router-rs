@@ -36,6 +36,7 @@ Do not treat `query_graph` as caller/callee search. Fall back to file tools **on
 | Tool | Use when |
 | ---- | -------- |
 | `list_graph_stats` | Overall graph metrics and language breakdown |
+| `man` | Read runtime manual docs for one visible exported MCP tool |
 | `query_graph` | Search graph nodes by keyword, kind, or language; returns symbol matches, not usage edges |
 | `batch_query_graph` | Run up to 20 query_graph searches in one call |
 | `search_files` | Find config, template, SQL, Markdown, and other files by path or glob |
