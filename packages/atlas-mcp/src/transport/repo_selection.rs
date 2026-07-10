@@ -18,6 +18,7 @@ pub(crate) enum RepoSelectionSource {
     ToolArgInference,
     CachedActiveRoot,
     ClientHint,
+    LaunchCwdFallback,
 }
 
 impl RepoSelectionSource {
@@ -28,6 +29,7 @@ impl RepoSelectionSource {
             Self::ToolArgInference => "tool_arg_inference",
             Self::CachedActiveRoot => "cached_active_root",
             Self::ClientHint => "client_hint",
+            Self::LaunchCwdFallback => "launch_cwd_fallback",
         }
     }
 }
@@ -154,6 +156,15 @@ pub(crate) fn preferred_root_hint_uri(meta: Option<&Value>) -> Option<String> {
     })
 }
 
+pub(crate) fn launch_cwd_repo_root() -> Option<String> {
+    let current_dir = std::env::current_dir().ok()?;
+    let utf8 = Utf8PathBuf::from_path_buf(current_dir).ok()?;
+    let repo_root = find_repo_root(utf8.as_path()).unwrap_or(utf8);
+    canonical_filesystem_path(repo_root.as_path())
+        .ok()
+        .map(|path| path.into_string())
+}
+
 fn root_uri_to_candidate_repo_root(uri: &str) -> Result<String> {
     uri_to_candidate_repo_root(uri, "root")
 }
@@ -273,6 +284,14 @@ mod tests {
         assert_eq!(outcome.selection_source, RepoSelectionSource::SingleRoot);
         assert_eq!(outcome.repo_context.repo_root, "/tmp/repo");
         assert_eq!(outcome.selection_source.as_str(), "single_root");
+    }
+
+    #[test]
+    fn launch_cwd_fallback_reports_expected_source_name() {
+        assert_eq!(
+            RepoSelectionSource::LaunchCwdFallback.as_str(),
+            "launch_cwd_fallback"
+        );
     }
 
     #[test]

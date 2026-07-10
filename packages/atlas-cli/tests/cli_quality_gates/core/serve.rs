@@ -222,9 +222,74 @@ fn serve_direct_stdio_help_mentions_dynamic_root_resolution() {
         "missing cwd guidance: {stdout}"
     );
     assert!(
+        stdout.contains("falls back to launch cwd when roots are unavailable"),
+        "missing launch-cwd fallback guidance: {stdout}"
+    );
+    assert!(
         stdout.contains("activeRootUri"),
         "missing query-only hint guidance: {stdout}"
     );
+}
+
+#[test]
+fn serve_direct_stdio_falls_back_to_launch_cwd_when_client_lacks_roots_support() {
+    let target_repo = setup_fixture_repo();
+    run_atlas(target_repo.path(), &["init"]);
+    run_atlas(target_repo.path(), &["build"]);
+
+    let mut session =
+        InteractiveServeSession::start(target_repo.path(), &["serve", "--direct-stdio"]);
+
+    session.send_json(&json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": atlas_mcp::MCP_PROTOCOL_VERSION,
+            "capabilities": {},
+            "clientInfo": { "name": "zed", "version": "1.0.0" },
+            "_meta": { "clientTag": "quality-gate" }
+        }
+    }));
+    let initialize = session.recv_json(Duration::from_secs(1));
+    assert_eq!(initialize["id"], json!(1));
+
+    session.send_json(&json!({
+        "jsonrpc": "2.0",
+        "method": "initialized",
+        "params": {}
+    }));
+    session.send_json(&json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {
+            "name": "query_graph",
+            "arguments": { "text": "greet_twice", "output_format": "json" }
+        }
+    }));
+
+    let query_response = session.recv_json(Duration::from_secs(2));
+    assert_eq!(query_response["id"], json!(2));
+    assert_eq!(
+        query_response["result"]["_meta"]["atlas:repoSelection"]["selectionSource"],
+        json!("launch_cwd_fallback")
+    );
+    let query_text = query_response["result"]["content"][0]["text"]
+        .as_str()
+        .expect("query_graph text content");
+    let query_value: Value = serde_json::from_str(query_text).expect("query_graph payload json");
+    assert_eq!(
+        query_value[0]["qn"],
+        json!("src/lib.rs::method::Greeter::greet_twice")
+    );
+
+    let (status, _stdout_tail, stderr_lines) = session.finish();
+    assert!(
+        status.success(),
+        "atlas serve --direct-stdio failed: {stderr_lines:?}"
+    );
+    cleanup_mcp_daemons(target_repo.path());
 }
 
 #[test]

@@ -179,6 +179,7 @@ pub(crate) struct RepoResolutionState {
     pub(crate) active_selection_source: Option<RepoSelectionSource>,
     pub(crate) candidate_roots: Option<Vec<String>>,
     pub(crate) preferred_root_hint_uri: Option<String>,
+    pub(crate) launch_cwd_fallback: Option<ActiveRepoContext>,
     pub(crate) dynamic_roots: bool,
 }
 
@@ -210,6 +211,7 @@ pub(crate) fn connection_state(
     repo_root: Option<&str>,
     db_path: Option<&str>,
     dynamic_roots: bool,
+    launch_cwd_repo_root: Option<&str>,
 ) -> ConnectionState {
     let startup = match (repo_root, db_path) {
         (Some(repo_root), Some(db_path)) if !repo_root.is_empty() && !db_path.is_empty() => {
@@ -220,6 +222,10 @@ pub(crate) fn connection_state(
         }
         _ => None,
     };
+    let launch_cwd_fallback = launch_cwd_repo_root.map(|repo_root| ActiveRepoContext {
+        repo_root: repo_root.to_owned(),
+        db_path: atlas_engine::paths::default_db_path(repo_root),
+    });
     ConnectionState {
         trace: TraceLevel::Off,
         initialized: false,
@@ -233,6 +239,7 @@ pub(crate) fn connection_state(
             active_selection_source: None,
             candidate_roots: None,
             preferred_root_hint_uri: None,
+            launch_cwd_fallback,
             dynamic_roots,
         },
     }

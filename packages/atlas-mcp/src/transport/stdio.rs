@@ -5,7 +5,8 @@ use std::sync::mpsc;
 
 use anyhow::{Context, Result};
 
-use super::io::{process_requests, run_server_io, run_server_io_with_state};
+use super::io::{ConnectionStartup, process_requests, run_server_io, run_server_io_with_state};
+use super::repo_selection::launch_cwd_repo_root;
 use super::types::{ServerOptions, TransportEvent};
 use super::worker::WorkerPool;
 #[cfg(unix)]
@@ -51,7 +52,18 @@ pub fn run_server_with_dynamic_roots(options: ServerOptions) -> Result<()> {
     #[cfg(unix)]
     let _shutdown_guard = install_stdio_shutdown_handler()?;
 
-    run_server_io_with_state(reader, &mut writer, None, None, true, options)
+    let launch_cwd_repo_root = launch_cwd_repo_root();
+    run_server_io_with_state(
+        reader,
+        &mut writer,
+        ConnectionStartup {
+            repo_root: None,
+            db_path: None,
+            dynamic_roots: true,
+            launch_cwd_repo_root: launch_cwd_repo_root.as_deref(),
+        },
+        options,
+    )
 }
 
 #[doc(hidden)]
@@ -86,23 +98,32 @@ pub struct InteractiveStdioTestSession {
 #[doc(hidden)]
 impl InteractiveStdioTestSession {
     pub fn start(repo_root: &str, db_path: &str, options: ServerOptions) -> Result<Self> {
-        Self::start_with_state(Some(repo_root), Some(db_path), false, options)
+        Self::start_with_state(Some(repo_root), Some(db_path), false, None, options)
     }
 
     pub fn start_dynamic(options: ServerOptions) -> Result<Self> {
-        Self::start_with_state(None, None, true, options)
+        Self::start_with_state(None, None, true, None, options)
+    }
+
+    pub fn start_dynamic_with_launch_cwd(
+        launch_cwd_repo_root: &str,
+        options: ServerOptions,
+    ) -> Result<Self> {
+        Self::start_with_state(None, None, true, Some(launch_cwd_repo_root), options)
     }
 
     fn start_with_state(
         repo_root: Option<&str>,
         db_path: Option<&str>,
         dynamic_roots: bool,
+        launch_cwd_repo_root: Option<&str>,
         options: ServerOptions,
     ) -> Result<Self> {
         let (event_tx, event_rx) = mpsc::channel::<TransportEvent>();
         let (output_tx, output_rx) = mpsc::channel::<serde_json::Value>();
         let repo_root = repo_root.map(str::to_owned);
         let db_path = db_path.map(str::to_owned);
+        let launch_cwd_repo_root = launch_cwd_repo_root.map(str::to_owned);
         let thread_event_tx = event_tx.clone();
         let join_handle = std::thread::Builder::new()
             .name("atlas-mcp:stdio-test-session".to_owned())
@@ -111,8 +132,12 @@ impl InteractiveStdioTestSession {
                     "atlas-mcp:tool-worker",
                     options.clone(),
                 )?);
-                let connection_state =
-                    connection_state(repo_root.as_deref(), db_path.as_deref(), dynamic_roots);
+                let connection_state = connection_state(
+                    repo_root.as_deref(),
+                    db_path.as_deref(),
+                    dynamic_roots,
+                    launch_cwd_repo_root.as_deref(),
+                );
                 let mut writer = JsonValueChannelWriter::new(output_tx);
                 process_requests(
                     &mut writer,

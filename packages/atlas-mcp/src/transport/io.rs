@@ -29,6 +29,14 @@ use super::worker::WorkerPool;
 // I/O entry points
 // ---------------------------------------------------------------------------
 
+#[derive(Clone, Copy)]
+pub(crate) struct ConnectionStartup<'a> {
+    pub(crate) repo_root: Option<&'a str>,
+    pub(crate) db_path: Option<&'a str>,
+    pub(crate) dynamic_roots: bool,
+    pub(crate) launch_cwd_repo_root: Option<&'a str>,
+}
+
 pub(crate) fn run_server_io<R: BufRead + Send, W: Write>(
     reader: R,
     writer: &mut W,
@@ -39,9 +47,12 @@ pub(crate) fn run_server_io<R: BufRead + Send, W: Write>(
     run_server_io_with_state(
         reader,
         writer,
-        Some(repo_root),
-        Some(db_path),
-        false,
+        ConnectionStartup {
+            repo_root: Some(repo_root),
+            db_path: Some(db_path),
+            dynamic_roots: false,
+            launch_cwd_repo_root: None,
+        },
         options,
     )
 }
@@ -49,37 +60,30 @@ pub(crate) fn run_server_io<R: BufRead + Send, W: Write>(
 pub(crate) fn run_server_io_with_state<R: BufRead + Send, W: Write>(
     reader: R,
     writer: &mut W,
-    repo_root: Option<&str>,
-    db_path: Option<&str>,
-    dynamic_roots: bool,
+    startup: ConnectionStartup<'_>,
     options: super::types::ServerOptions,
 ) -> Result<()> {
     let worker_pool = Arc::new(WorkerPool::from_env(
         "atlas-mcp:tool-worker",
         options.clone(),
     )?);
-    serve_connection(
-        reader,
-        writer,
-        repo_root,
-        db_path,
-        dynamic_roots,
-        worker_pool,
-        options,
-    )
+    serve_connection(reader, writer, startup, worker_pool, options)
 }
 
 pub(crate) fn serve_connection<R: BufRead + Send, W: Write>(
     reader: R,
     writer: &mut W,
-    repo_root: Option<&str>,
-    db_path: Option<&str>,
-    dynamic_roots: bool,
+    startup: ConnectionStartup<'_>,
     worker_pool: Arc<WorkerPool>,
     server_options: super::types::ServerOptions,
 ) -> Result<()> {
     let (event_tx, event_rx) = mpsc::channel::<TransportEvent>();
-    let connection_state = connection_state(repo_root, db_path, dynamic_roots);
+    let connection_state = connection_state(
+        startup.repo_root,
+        startup.db_path,
+        startup.dynamic_roots,
+        startup.launch_cwd_repo_root,
+    );
 
     std::thread::scope(|scope| -> Result<()> {
         let reader_tx = event_tx.clone();

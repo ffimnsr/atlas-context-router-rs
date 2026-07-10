@@ -174,8 +174,9 @@ Use `worldtree.db` for code truth, `context.db` for large text, and `session.db`
 
 Dynamic stdio rule:
 
-- do not trust inherited process cwd for repo identity
+- do not trust inherited process cwd for repo identity when client workspace roots are available
 - prefer MCP `roots/list` workspace roots
+- fall back to repo root discovered from launch cwd only when client roots are unavailable
 - cache last successful dynamic root per connection
 - invalidate cached dynamic root after `notifications/roots/list_changed`
 - fail closed when multi-root evidence is ambiguous
@@ -188,11 +189,12 @@ Current dynamic selection precedence:
 4. cached active dynamic root
 5. deterministic file-evidence inference from tool arguments
 6. single advertised root from `roots/list`
+7. launch-cwd repo fallback when client roots are unavailable
 
 First-pass limitation:
 
 - query-only multi-root requests without file evidence require validated client hint or explicit fixed `--repo`
-- Atlas does not guess active repo from cwd or from ambiguous relative paths shared by multiple roots
+- Atlas does not guess active repo from ambiguous relative paths shared by multiple roots; launch-cwd fallback applies only when client roots are unavailable
 
 ---
 

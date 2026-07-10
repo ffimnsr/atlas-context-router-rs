@@ -267,6 +267,7 @@ pub enum Command {
         ///
         /// Without `--repo` and `--db`, direct stdio now starts in deferred dynamic-root mode.
         /// Atlas resolves repo from MCP workspace roots instead of inherited process cwd.
+        /// Atlas falls back to launch cwd when roots are unavailable.
         /// Query-only multi-root requests still need `_meta.atlas.activeRootUri` or explicit `--repo`.
         #[arg(long)]
         direct_stdio: bool,

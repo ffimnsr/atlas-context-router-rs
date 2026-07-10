@@ -563,7 +563,17 @@ fn dynamic_roots_resolve_repo_before_first_tool_call() {
     );
 
     let _ = session.finish().unwrap();
-    assert!(roots_uri.contains(&repo_root));
+    let resolved_root = Url::parse(&roots_uri)
+        .expect("parse roots uri")
+        .to_file_path()
+        .expect("roots uri file path");
+    let resolved_root = Utf8Path::from_path(&resolved_root).expect("roots uri utf-8 path");
+    assert_eq!(
+        canonical_filesystem_path(resolved_root)
+            .expect("canonical roots uri path")
+            .as_str(),
+        repo_root
+    );
 }
 
 #[test]
@@ -607,6 +617,60 @@ fn dynamic_roots_require_initialized_before_repo_bound_tool_call() {
     assert_eq!(
         response["error"]["data"]["atlas_repo_selection"]["failure_kind"],
         serde_json::json!("request_before_initialized")
+    );
+    let _ = session.finish().unwrap();
+}
+
+#[test]
+fn dynamic_roots_fall_back_to_launch_cwd_when_client_lacks_roots_capability() {
+    let fixture = setup_fixture();
+    let repo_root = canonical_tempdir_path(&fixture._dir);
+    let session = InteractiveStdioTestSession::start_dynamic_with_launch_cwd(
+        &repo_root,
+        ServerOptions::default(),
+    )
+    .unwrap();
+    let _ = initialize_dynamic_session(&session, false);
+    session
+        .send_json(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "query_graph",
+                "arguments": { "text": "compute", "output_format": "json" }
+            }
+        }))
+        .unwrap();
+    let response = session
+        .recv_json(Duration::from_secs(1))
+        .unwrap()
+        .expect("launch cwd fallback response");
+    assert_eq!(response["id"], serde_json::json!(2));
+    assert_eq!(
+        response["result"]["_meta"]["atlas:repoSelection"]["selectionSource"],
+        serde_json::json!("launch_cwd_fallback")
+    );
+    assert_eq!(
+        response["result"]["_meta"]["atlas:repoRoot"],
+        serde_json::json!(repo_root)
+    );
+    let query_value: serde_json::Value = serde_json::from_str(
+        response["result"]["content"][0]["text"]
+            .as_str()
+            .expect("query_graph json payload"),
+    )
+    .expect("parse query_graph payload");
+    assert_eq!(
+        query_value[0]["qn"],
+        serde_json::json!("src/service.rs::fn::compute")
+    );
+    assert!(
+        session
+            .recv_json(Duration::from_millis(150))
+            .unwrap()
+            .is_none(),
+        "launch cwd fallback must skip roots/list reverse requests"
     );
     let _ = session.finish().unwrap();
 }

@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 
-use super::io::{perform_socket_handshake, serve_connection};
+use super::io::{ConnectionStartup, perform_socket_handshake, serve_connection};
 use super::types::ServerOptions;
 use super::worker::{ActiveStreamGuard, WorkerPool, install_socket_shutdown_handler};
 
@@ -164,9 +164,12 @@ fn serve_socket_connection(
     serve_connection(
         reader,
         &mut writer,
-        Some(repo_root),
-        Some(db_path),
-        false,
+        ConnectionStartup {
+            repo_root: Some(repo_root),
+            db_path: Some(db_path),
+            dynamic_roots: false,
+            launch_cwd_repo_root: None,
+        },
         worker_pool,
         server_options,
     )
@@ -480,9 +483,12 @@ fn win_serve_pipe_connection(
     serve_connection(
         reader,
         &mut writer,
-        Some(repo_root),
-        Some(db_path),
-        false,
+        ConnectionStartup {
+            repo_root: Some(repo_root),
+            db_path: Some(db_path),
+            dynamic_roots: false,
+            launch_cwd_repo_root: None,
+        },
         worker_pool,
         server_options,
     )

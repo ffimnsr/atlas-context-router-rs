@@ -147,18 +147,7 @@ pub(crate) fn resolve_repo_context_for_tool_call(
             candidate_roots: repo_resolution.candidate_roots.clone(),
         });
     }
-    if !client_supports_roots(ctx.client_capabilities) {
-        return Err(Box::new(RepoSelectionError {
-            kind: RepoSelectionFailureKind::ClientLacksRootsCapability,
-            message: "MCP client did not advertise roots capability; pass --repo or use an MCP client that supports workspace roots".to_owned(),
-            candidate_roots: Vec::new(),
-            selection_attempts: vec!["roots_capability_check".to_owned()],
-            selection_source: None,
-            tool_name: tool_name.to_owned(),
-            recommended_fix: "Pass --repo for fixed-mode MCP, or use an MCP client that advertises workspace roots.".to_owned(),
-            session_mode: "dynamic",
-        }));
-    }
+
     if !ctx.initialized {
         return Err(Box::new(RepoSelectionError {
             kind: RepoSelectionFailureKind::RequestBeforeInitialized,
@@ -171,22 +160,50 @@ pub(crate) fn resolve_repo_context_for_tool_call(
             session_mode: "dynamic",
         }));
     }
+    if !client_supports_roots(ctx.client_capabilities) {
+        if let Some(repo_context) = repo_resolution.launch_cwd_fallback.clone() {
+            return Ok(RepoSelectionOutcome {
+                repo_context,
+                selection_source: RepoSelectionSource::LaunchCwdFallback,
+                candidate_roots: repo_resolution.candidate_roots.clone(),
+            });
+        }
+        return Err(Box::new(RepoSelectionError {
+            kind: RepoSelectionFailureKind::ClientLacksRootsCapability,
+            message: "MCP client did not advertise roots capability; pass --repo or use an MCP client that supports workspace roots".to_owned(),
+            candidate_roots: Vec::new(),
+            selection_attempts: vec!["roots_capability_check".to_owned()],
+            selection_source: None,
+            tool_name: tool_name.to_owned(),
+            recommended_fix: "Pass --repo for fixed-mode MCP, or use an MCP client that advertises workspace roots.".to_owned(),
+            session_mode: "dynamic",
+        }));
+    }
 
     let candidates = if let Some(cached) = repo_resolution.candidate_roots.clone() {
         cached
     } else {
         const ROOTS_LIST_TIMEOUT_MS: u64 = 5_000;
-        let response = ctx
-            .reverse_broker
-            .issue_request(
-                "stdio:roots",
-                ctx.reverse_emitter,
-                "roots/list",
-                serde_json::json!({}),
-                Duration::from_millis(ROOTS_LIST_TIMEOUT_MS),
-            )
-            .map_err(|error| {
-                Box::new(RepoSelectionError {
+        let response = match ctx.reverse_broker.issue_request(
+            "stdio:roots",
+            ctx.reverse_emitter,
+            "roots/list",
+            serde_json::json!({}),
+            Duration::from_millis(ROOTS_LIST_TIMEOUT_MS),
+        ) {
+            Ok(response) => response,
+            Err(error) => {
+                if ctx.request_active_root_hint_uri.is_none()
+                    && preferred_root_hint_uri.is_none()
+                    && let Some(repo_context) = repo_resolution.launch_cwd_fallback.clone()
+                {
+                    return Ok(RepoSelectionOutcome {
+                        repo_context,
+                        selection_source: RepoSelectionSource::LaunchCwdFallback,
+                        candidate_roots: None,
+                    });
+                }
+                return Err(Box::new(RepoSelectionError {
                     kind: RepoSelectionFailureKind::NoClientRootsAvailable,
                     message: format!("failed to request client workspace roots: {error}"),
                     candidate_roots: Vec::new(),
@@ -195,20 +212,34 @@ pub(crate) fn resolve_repo_context_for_tool_call(
                     tool_name: tool_name.to_owned(),
                     recommended_fix: "Ensure the MCP client supports and answers roots/list, or pass --repo for fixed-mode MCP.".to_owned(),
                     session_mode: "dynamic",
-                })
-            })?;
-        parse_root_candidates(response.get("roots")).map_err(|error| {
-            Box::new(RepoSelectionError {
-                kind: RepoSelectionFailureKind::NoClientRootsAvailable,
-                message: error.to_string(),
-                candidate_roots: Vec::new(),
-                selection_attempts: vec!["roots_list_request".to_owned(), "roots_list_parse".to_owned()],
-                selection_source: None,
-                tool_name: tool_name.to_owned(),
-                recommended_fix: "Ensure roots/list returns at least one usable file:// workspace root, or pass --repo for fixed-mode MCP.".to_owned(),
-                session_mode: "dynamic",
-            })
-        })?
+                }));
+            }
+        };
+        match parse_root_candidates(response.get("roots")) {
+            Ok(candidates) => candidates,
+            Err(error) => {
+                if ctx.request_active_root_hint_uri.is_none()
+                    && preferred_root_hint_uri.is_none()
+                    && let Some(repo_context) = repo_resolution.launch_cwd_fallback.clone()
+                {
+                    return Ok(RepoSelectionOutcome {
+                        repo_context,
+                        selection_source: RepoSelectionSource::LaunchCwdFallback,
+                        candidate_roots: None,
+                    });
+                }
+                return Err(Box::new(RepoSelectionError {
+                    kind: RepoSelectionFailureKind::NoClientRootsAvailable,
+                    message: error.to_string(),
+                    candidate_roots: Vec::new(),
+                    selection_attempts: vec!["roots_list_request".to_owned(), "roots_list_parse".to_owned()],
+                    selection_source: None,
+                    tool_name: tool_name.to_owned(),
+                    recommended_fix: "Ensure roots/list returns at least one usable file:// workspace root, or pass --repo for fixed-mode MCP.".to_owned(),
+                    session_mode: "dynamic",
+                }));
+            }
+        }
     };
     if let Some(hint_uri) = ctx.request_active_root_hint_uri {
         let hinted_root = validate_hinted_root_uri(&candidates, hint_uri).map_err(|error| {
