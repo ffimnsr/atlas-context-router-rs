@@ -3300,3 +3300,405 @@ Why:
 - [x] explicit `--repo` and `--db` continue to force fixed-mode behavior unchanged
 - [x] dynamic repo-selection errors expose actionable ambiguity details instead of silently guessing
 - [x] tests cover wrong-cwd startup, single-root dynamic resolution, multi-root file inference, root-change invalidation, client hint precedence, and ambiguity failures
+
+---
+
+## MCP Mixed Result Contract Normalization Patch
+
+Normalize every MCP tool still marked `mixed-needs-redesign` in `MCP_TOOLS.md` into one deterministic object `structuredContent` contract per tool, or split the tool surface when one tool currently multiplexes materially different result families. Keep CLI behavior and human-readable toon output, but make MCP JSON mode schema-stable and spec-aligned.
+
+Rules:
+
+- make each tool emit exactly one success-object family in JSON mode; do not switch between scalar, array, and unrelated object envelopes based on payload size or mode
+- keep tool execution failures on shared `ToolErrorPayload` path; redesign here covers success-shape normalization, not error-schema divergence
+- prefer shared top-level success metadata fields across tools where practical: `tool`, `repo_root`, `generated_at`, `truncated`, `truncation_reason`, `warnings`, and `atlas_provenance` / `atlas_freshness` when already applicable
+- when one tool currently serves multiple workflows with incompatible payload shapes, either add one discriminant field with stable optional sections or split the behavior into separate MCP tools
+- keep toon output compact, but derive it from normalized structured object so text and JSON cannot drift
+- add exact per-tool `outputSchema` only after result shape is locked and covered by direct-call, deferred-task, stdio, and HTTP parity tests
+
+### R1 — Shared normalization foundation for all mixed tools
+
+- [ ] add one shared `ToolSuccessEnvelope<T>` helper in `packages/atlas-mcp/src/tool_result.rs` or adjacent shared module for tools that now return ad-hoc JSON objects
+- [ ] define shared optional metadata fields for normalized success payloads: `tool`, `generated_at`, `truncated`, `truncation_reason`, `warnings`, `atlas_provenance`, and `atlas_freshness`
+- [ ] add helper for toon rendering from normalized structured objects so text summary cannot diverge from JSON payload facts
+- [ ] add helper for schema registration so each normalized tool can declare exact `outputSchema` beside descriptor definition instead of ad-hoc manual JSON
+- [ ] add shared regression test proving normalized tools never emit array-valued or scalar `structuredContent`
+- [ ] add shared regression test proving normalized tools keep stable field ordering in snapshot fixtures where deterministic serialization matters
+
+Why:
+- many mixed tools already return object-like data but do so with inconsistent top-level keys and mode-dependent wrappers
+- one shared success envelope reduces copy-paste drift while keeping per-tool schemas exact
+
+### R2 — Change, review, traversal, and context tools
+
+#### R2.1 `detect_changes`
+
+- [ ] define stable `DetectChangesResult` object with `mode`, `base_ref`, `files`, `summary`, `warnings`, and `atlas_provenance`
+- [ ] move per-file node counts, language hints, and change-kind flags into one stable `files[]` item schema instead of mode-specific text rendering only
+- [ ] represent `staged`, `working_tree`, and `base` selection through stable `mode` enum in result even when inputs came from legacy flag combinations
+- [ ] keep conflict retry guidance on tool-error path; do not encode ambiguity as alternate success payload
+- [ ] add `outputSchema` for `detect_changes`
+- [ ] add tests for `base`, `staged`, and `working_tree` modes proving identical object contract with only field values changing
+
+#### R2.2 `get_impact_radius`
+
+- [ ] define stable `ImpactRadiusResult` object with `seed_files`, `changed_symbols`, `impacted_symbols`, `impacted_files`, `summary`, `truncated`, and `atlas_provenance`
+- [ ] normalize compact versus expanded impact output into same object with capped arrays and explicit summary counts instead of alternate payload families
+- [ ] add stable `impact_tiers` or `distance_bands` field if current implementation distinguishes direct versus transitive impact
+- [ ] keep change-source ambiguity on tool-error path; do not return retry objects as success variants
+- [ ] add `outputSchema` for `get_impact_radius`
+- [ ] add tests for direct-only and deeper-impact cases proving same schema under different depths and caps
+
+#### R2.3 `get_review_context`
+
+- [ ] define stable `ReviewContextResult` object with `changed_files`, `changed_symbols`, `neighbors`, `critical_edges`, `risk_summary`, `artifacts`, and `atlas_provenance`
+- [ ] fold agent-optimized compact output into stable object fields instead of tool-specific text-only sections
+- [ ] model optional saved-artifact pointers as stable `artifacts[]` entries with resource-link parity instead of alternate result body
+- [ ] keep truncation data explicit with per-section counts and caps
+- [ ] add `outputSchema` for `get_review_context`
+- [ ] add tests for small review set, capped review set, and artifact-linked review set proving identical object shape
+
+#### R2.4 `get_minimal_context`
+
+- [ ] define stable `MinimalContextResult` object with `change_source`, `changed_symbols`, `immediate_impact`, `risk_flags`, `summary`, and `atlas_provenance`
+- [ ] keep lower-token output as reduced populated sections inside same object instead of distinct summary shape
+- [ ] normalize auto-detected-change metadata into explicit `change_source` object so clients can tell what was inferred
+- [ ] add `outputSchema` for `get_minimal_context`
+- [ ] add tests proving empty-risk, high-risk, and truncated result cases keep same schema
+
+#### R2.5 `explain_change`
+
+- [ ] define stable `ExplainChangeResult` object with `changed_files`, `change_kinds`, `risk_level`, `boundary_violations`, `coverage_gaps`, `summary`, and `atlas_provenance`
+- [ ] encode deterministic risk details and finding lists under stable arrays/objects instead of mode-specific prose blocks
+- [ ] normalize optional boundary and coverage sections as always-present arrays, empty when absent
+- [ ] add `outputSchema` for `explain_change`
+- [ ] add tests for API-only, internal-only, and mixed change sets proving same object shape and deterministic enum values
+
+#### R2.6 `traverse_graph`
+
+- [ ] define stable `TraverseGraphResult` object with `root_symbol`, `direction`, `depth`, `nodes`, `edges`, `summary`, `truncated`, and `atlas_provenance`
+- [ ] normalize caller-only, callee-only, and bidirectional traversals into one schema with stable edge records carrying direction tags
+- [ ] keep empty traversal as success with empty arrays, not alternate text-only payload
+- [ ] add `outputSchema` for `traverse_graph`
+- [ ] add tests for inbound, outbound, and bidirectional traversals proving identical object contract
+
+#### R2.7 `get_context`
+
+- [ ] decide whether `get_context` remains one tool with stable discriminated `mode` field or is split into `get_symbol_context`, `get_file_context`, and `get_change_context`
+- [ ] if kept unified, define stable `GetContextResult` object with `mode`, `query`, `file`, `files`, `ranked_symbols`, `ranked_edges`, `ranked_files`, `assets`, `ambiguity`, `truncated`, and `atlas_provenance`
+- [ ] normalize symbol-query, single-file, and multi-file/change-set workflows into same object with explicit nullable selector fields and always-present arrays
+- [ ] move ambiguity guidance that is still a valid successful disambiguation set into stable `ambiguity` field; keep invalid-input retry guidance on tool-error path
+- [ ] add merged asset section for docs/config/template/SQL companion results so non-code context does not change top-level shape
+- [ ] add `outputSchema` for unified or split replacement tool(s)
+- [ ] add tests for query mode, file mode, files mode, ambiguity mode, and truncation mode proving deterministic schema
+
+Why:
+- these tools power core agent workflows and currently vary most by mode, truncation, and ambiguity handling
+- `get_context` especially needs explicit design choice between discriminated union and tool split before schema can stabilize
+
+### R3 — Build, postprocess, and health/diagnostic tools
+
+#### R3.1 `build_or_update_graph`
+
+- [ ] define stable `BuildOrUpdateGraphResult` object with `mode`, `status`, `files_scanned`, `files_changed`, `nodes_written`, `edges_written`, `duration_ms`, `stages`, `warnings`, and `atlas_provenance`
+- [ ] normalize full-build and incremental-update summaries into same object with explicit zero/empty values for non-applicable counters
+- [ ] represent deferred/background execution state through stable `status` and `stages[]` fields instead of alternate wrapper payloads
+- [ ] move dry operational notes into `warnings[]` rather than free-form top-level text fragments
+- [ ] add `outputSchema` for `build_or_update_graph`
+- [ ] add tests for `mode=build`, `mode=update`, readiness-blocked error path, and deferred completion parity
+
+#### R3.2 `postprocess_graph`
+
+- [ ] define stable `PostprocessGraphResult` object with `mode`, `scope`, `dry_run`, `planned_stages`, `executed_stages`, `summary`, `warnings`, and `atlas_provenance`
+- [ ] normalize dry-run lifecycle preview and executed postprocess summary into same schema with explicit `dry_run` boolean and separate `planned_stages[]` / `executed_stages[]`
+- [ ] model single-stage execution through stable stage records instead of alternate text summary path
+- [ ] add `outputSchema` for `postprocess_graph`
+- [ ] add tests for full run, changed-only run, single-stage run, and dry-run preview proving same object contract
+
+#### R3.3 `status`
+
+- [ ] define stable `StatusResult` object with `graph_state`, `db_state`, `indexed_file_count`, `node_count`, `edge_count`, `last_indexed_at`, `failure_category`, and `atlas_provenance`
+- [ ] keep missing-DB and unhealthy-graph states inside same success schema instead of alternate sparse objects or text-only fallback
+- [ ] make machine-readable readiness booleans explicit so clients do not parse prose to decide whether follow-up graph tools are safe
+- [ ] add `outputSchema` for `status`
+- [ ] add tests for healthy graph, missing DB, stale graph, and failed-build cases proving same schema
+
+#### R3.4 `doctor`
+
+- [ ] define stable `DoctorResult` object with `overall_status`, `checks`, `summary`, `warnings`, and `atlas_provenance`
+- [ ] normalize each check row into stable fields: `name`, `status`, `message`, `details`, and optional `fix_hint`
+- [ ] keep pass/fail/warn counts in top-level `summary` instead of deriving from prose
+- [ ] add `outputSchema` for `doctor`
+- [ ] add tests for all-pass and mixed-failure health checks proving same object contract
+
+#### R3.5 `db_check`
+
+- [ ] define stable `DbCheckResult` object with `ok`, `integrity`, `orphan_nodes`, `dangling_edges`, `noncanonical_path_rows`, `summary`, and `atlas_provenance`
+- [ ] normalize empty-anomaly and non-empty-anomaly cases into same arrays/summary fields
+- [ ] keep remediation hints in `summary` or `warnings[]`, not alternate top-level message blobs
+- [ ] add `outputSchema` for `db_check`
+- [ ] add tests for clean DB and corrupt/anomalous DB cases proving same schema
+
+#### R3.6 `debug_graph`
+
+- [ ] define stable `DebugGraphResult` object with `node_counts_by_kind`, `edge_counts_by_kind`, `top_files`, `orphan_nodes`, `dangling_edges`, `summary`, and `atlas_provenance`
+- [ ] keep all diagnostic buckets present even when empty so clients can rely on fixed paths
+- [ ] add `outputSchema` for `debug_graph`
+- [ ] add tests for normal and anomalous graphs proving same schema and deterministic bucket ordering
+
+#### R3.7 `explain_query`
+
+- [ ] define stable `ExplainQueryResult` object with `input`, `normalized_query`, `tokenization`, `fts_plan`, `regex_plan`, `warnings`, and `atlas_provenance`
+- [ ] normalize text-only, regex-only, and text-plus-regex explanations into same schema with explicit disabled/null sections where not applicable
+- [ ] keep invalid-regex cases on tool-error path; successful explanation should always use same success object
+- [ ] add `outputSchema` for `explain_query`
+- [ ] add tests for text-only, regex-only, and hybrid query explanation cases proving deterministic schema
+
+Why:
+- lifecycle and health tools often succeed in degraded states; they need stable success objects more than any text contract
+- dry-run and unhealthy-state handling currently risk alternate payload shapes
+
+### R4 — Insights and deterministic analysis report tools
+
+#### R4.1 `analyze_architecture`
+
+- [ ] define MCP `ArchitectureAnalysisResult` object equal to CLI report shape plus shared metadata envelope, not a separate MCP-only summary shape
+- [ ] keep compact toon rendering derived from report object instead of using alternate compact payload structure
+- [ ] normalize cycles, layer violations, and coupling hotspots as always-present arrays
+- [ ] add `outputSchema` for `analyze_architecture`
+- [ ] add parity tests proving CLI JSON report and MCP `structuredContent` are field-for-field compatible apart from MCP envelope metadata
+
+#### R4.2 `analyze_metrics`
+
+- [ ] define MCP `MetricsAnalysisResult` object equal to CLI metrics report shape plus shared metadata envelope
+- [ ] keep unsupported metrics represented with stable `not_available` markers inside report, not omitted sections or prose-only notes
+- [ ] add `outputSchema` for `analyze_metrics`
+- [ ] add CLI/MCP parity and truncation tests for `analyze_metrics`
+
+#### R4.3 `assess_risk`
+
+- [ ] define MCP `RiskAssessmentResult` object equal to CLI risk report shape plus shared metadata envelope
+- [ ] normalize safety/risk factors, evidence, and suggested validations as stable arrays and enums
+- [ ] add `outputSchema` for `assess_risk`
+- [ ] add tests for low-, medium-, and high-risk symbols proving same object contract
+
+#### R4.4 `analyze_patterns`
+
+- [ ] define MCP `PatternAnalysisResult` object equal to CLI pattern report shape plus shared metadata envelope
+- [ ] normalize repeated chains, hubs, bottlenecks, isolated structures, and deep paths as named always-present sections
+- [ ] add `outputSchema` for `analyze_patterns`
+- [ ] add tests for empty-findings and multi-category findings proving same schema
+
+#### R4.5 `find_large_functions`
+
+- [ ] define MCP `LargeFunctionsResult` object equal to CLI large-functions report shape plus shared metadata envelope
+- [ ] represent result mode (`large`, `complex`, `large-or-complex`) in explicit field instead of only in text summary
+- [ ] keep finding arrays stable whether results came from repo-wide or file-scoped search
+- [ ] add `outputSchema` for `find_large_functions`
+- [ ] add CLI/MCP parity tests for file-scoped, threshold-override, and mixed-mode result sets
+
+#### R4.6 `find_complex_functions`
+
+- [ ] define MCP `ComplexFunctionsResult` object equal to CLI complex-functions report shape plus shared metadata envelope
+- [ ] normalize complexity-threshold metadata and unsupported-metric markers into stable fields
+- [ ] add `outputSchema` for `find_complex_functions`
+- [ ] add CLI/MCP parity tests for cyclomatic, cognitive, and nesting-threshold result sets
+
+Why:
+- these tools already have well-defined deterministic report services; MCP should reuse those report structs directly instead of inventing compact alternate result bodies
+- CLI/MCP report parity is highest-value low-risk redesign path in this patch
+
+### R5 — Session, memory, and saved-context tools
+
+#### R5.1 `get_session_status`
+
+- [ ] define stable `SessionStatusResult` object with `session_id`, `event_count`, `resume_snapshot_exists`, `last_compaction_at`, `repo_root`, `summary`, and `warnings`
+- [ ] normalize missing-resume and active-resume states into same object with booleans/null timestamps
+- [ ] add `outputSchema` for `get_session_status`
+- [ ] add tests for empty session, active session, and resumable session states proving same schema
+
+#### R5.2 `compact_session`
+
+- [ ] define stable `CompactSessionResult` object with `session_id`, `before_counts`, `after_counts`, `promoted_events`, `removed_events`, `merged_groups`, `summary`, and `warnings`
+- [ ] keep no-op compaction and high-change compaction inside same object shape
+- [ ] add `outputSchema` for `compact_session`
+- [ ] add tests for no-op and effective compaction cases proving same schema
+
+#### R5.3 `resume_session`
+
+- [ ] define stable `ResumeSessionResult` object with `session_id`, `snapshot_status`, `snapshot`, `consumed`, `summary`, and `warnings`
+- [ ] normalize existing snapshot, on-demand-built snapshot, and consume-after-read behavior into explicit `snapshot_status` enum instead of alternate payload bodies
+- [ ] add `outputSchema` for `resume_session`
+- [ ] add tests for existing snapshot, built snapshot, and consume mode proving same schema
+
+#### R5.4 `read_saved_context`
+
+- [ ] define stable `ReadSavedContextResult` object with `source_id`, `content`, `content_format`, `chunk_offset`, `next_chunk_offset`, `truncated`, `summary`, and `atlas_provenance`
+- [ ] keep paged and unpaged reads inside same object; do not switch to bare string for small content
+- [ ] include stable content-size metadata so clients can page without parsing text
+- [ ] add `outputSchema` for `read_saved_context`
+- [ ] add tests for small content, paged large content, and end-of-content page proving same schema
+
+#### R5.5 `save_context_artifact`
+
+- [ ] replace current pointer/preview/raw-string split with stable `SaveContextArtifactResult` object containing `storage_mode`, `source_id`, `preview`, `content_size_bytes`, `chunk_count`, `resource_link`, and `summary`
+- [ ] keep small content inline through `preview` or explicit bounded `inline_content` field, but never return bare string as success payload
+- [ ] make large-content pointer result and small-content inline result share same top-level fields with nullable non-applicable fields
+- [ ] add `outputSchema` for `save_context_artifact`
+- [ ] add tests for small, medium, and large artifact sizes proving same schema and resource-link parity
+
+#### R5.6 `purge_saved_context`
+
+- [ ] define stable `PurgeSavedContextResult` object with `mode`, `session_id`, `cutoff_days`, `deleted_sources`, `deleted_chunks`, `summary`, and `warnings`
+- [ ] normalize session-targeted purge and age-based purge into same object with explicit `mode`
+- [ ] add `outputSchema` for `purge_saved_context`
+- [ ] add tests for targeted and age-based purge proving same schema
+
+#### R5.7 `get_global_memory`
+
+- [ ] define stable `GlobalMemoryResult` object with `repo_root`, `frequent_symbols`, `frequent_files`, `workflow_patterns`, `relevant_sessions`, `summary`, and `warnings`
+- [ ] normalize focus-free summary and focus-constrained lookup into same object with optional `focus` subsection instead of alternate body shape
+- [ ] add `outputSchema` for `get_global_memory`
+- [ ] add tests for unfocused and focused memory queries proving same schema
+
+Why:
+- saved-context tools currently have strongest payload-size and mode-driven shape drift
+- `save_context_artifact` is currently explicit mixed-contract by design and should be prioritized early
+
+### R6 — Symbol relationship and dependency-analysis tools
+
+#### R6.1 `symbol_neighbors`
+
+- [ ] define stable `SymbolNeighborsResult` object with `symbol`, `callers`, `callees`, `call_sites`, `tests`, `siblings`, `imports`, `summary`, and `atlas_provenance`
+- [ ] keep all neighborhood buckets present even when empty; do not omit absent sections
+- [ ] add `outputSchema` for `symbol_neighbors`
+- [ ] add tests for symbol with full neighborhood and symbol with sparse neighborhood proving same schema
+
+#### R6.2 `cross_file_links`
+
+- [ ] define stable `CrossFileLinksResult` object with `source_file`, `linked_files`, `coupling_metric`, `summary`, and `atlas_provenance`
+- [ ] normalize zero-link and many-link cases into same array-based payload
+- [ ] add `outputSchema` for `cross_file_links`
+- [ ] add tests for isolated file and heavily linked file proving same schema
+
+#### R6.3 `concept_clusters`
+
+- [ ] define stable `ConceptClustersResult` object with `seed_files`, `clusters`, `summary`, `truncated`, and `atlas_provenance`
+- [ ] keep cluster records stable with `files`, `shared_symbols`, `density`, and `rank`
+- [ ] add `outputSchema` for `concept_clusters`
+- [ ] add tests for single-cluster, multi-cluster, and no-cluster cases proving same schema
+
+#### R6.4 `analyze_safety`
+
+- [ ] define stable `AnalyzeSafetyResult` object with `symbol`, `fan_in`, `fan_out`, `test_adjacency`, `cross_module_callers`, `safety_score`, `safety_band`, `suggested_validations`, and `atlas_provenance`
+- [ ] keep score explanation and factor evidence in stable arrays instead of prose-only detail
+- [ ] add `outputSchema` for `analyze_safety`
+- [ ] add tests for safe, moderate, and risky symbols proving same schema
+
+#### R6.5 `analyze_remove`
+
+- [ ] define stable `AnalyzeRemoveResult` object with `symbols`, `definite_impacts`, `probable_impacts`, `weak_impacts`, `tests`, `uncertainty_flags`, `summary`, and `atlas_provenance`
+- [ ] normalize single-symbol and multi-symbol removal analysis into same array-based payload
+- [ ] add `outputSchema` for `analyze_remove`
+- [ ] add tests for removable and non-removable symbol sets proving same schema
+
+#### R6.6 `analyze_dead_code`
+
+- [ ] define stable `AnalyzeDeadCodeResult` object with `scope`, `candidates`, `blockers`, `summary`, `truncated`, and `atlas_provenance`
+- [ ] normalize code-only default scope and broader configured scopes into same object with explicit `scope`
+- [ ] add `outputSchema` for `analyze_dead_code`
+- [ ] add tests for empty-candidate and populated-candidate runs proving same schema
+
+#### R6.7 `analyze_dependency`
+
+- [ ] define stable `AnalyzeDependencyResult` object with `symbol`, `removable`, `blocking_references`, `confidence_tier`, `suggested_cleanups`, `summary`, and `atlas_provenance`
+- [ ] keep removable and blocked outcomes inside same object schema instead of alternate payloads
+- [ ] add `outputSchema` for `analyze_dependency`
+- [ ] add tests for removable and blocked symbols proving same schema
+
+#### R6.8 `resolve_symbol`
+
+- [ ] define stable `ResolveSymbolResult` object with `query`, `best_match`, `ambiguity`, `suggestions`, `summary`, and `atlas_provenance`
+- [ ] normalize exact match, alias-kind match, and ambiguous match into same object with nullable `best_match` and explicit `ambiguity.matches[]`
+- [ ] keep symbol-not-found and invalid kind alias on tool-error path; successful ambiguous lookup should remain stable success object
+- [ ] add `outputSchema` for `resolve_symbol`
+- [ ] add tests for exact, ambiguous, alias-kind, and no-match cases proving correct success/error split and stable schema
+
+Why:
+- relationship and dependency tools often omit sections when evidence is absent, which makes clients branch on field existence instead of stable contract
+- `resolve_symbol` needs especially clear exact-match versus ambiguity success semantics
+
+### R7 — File, docs, template, and content discovery tools
+
+#### R7.1 `search_files`
+
+- [ ] define stable `SearchFilesResult` object with `query`, `subpath`, `matches`, `summary`, `truncated`, and `atlas_provenance`
+- [ ] normalize literal-name and glob/path-style searches into same `matches[]` schema with stable file metadata fields
+- [ ] add `outputSchema` for `search_files`
+- [ ] add tests for root-scoped and subpath-scoped searches proving same schema
+
+#### R7.2 `search_content`
+
+- [ ] define stable `SearchContentResult` object with `query`, `mode`, `subpath`, `matches`, `summary`, `truncated`, and `atlas_provenance`
+- [ ] normalize literal and regex search success into same grouped match schema with stable line/snippet fields
+- [ ] keep invalid regex on tool-error path; successful searches should always return same object shape
+- [ ] add `outputSchema` for `search_content`
+- [ ] add tests for literal, regex, empty-result, and capped-result searches proving same schema
+
+#### R7.3 `read_file_excerpt`
+
+- [ ] define stable `ReadFileExcerptResult` object with `file`, `selection_mode`, `ranges`, `snippets`, `summary`, and `atlas_provenance`
+- [ ] normalize line-range, single-line-with-context, and multi-range selection into same object with explicit `selection_mode`
+- [ ] keep conflicting-selector and missing-file cases on tool-error path only
+- [ ] add `outputSchema` for `read_file_excerpt`
+- [ ] add tests for each selector family proving same success schema
+
+#### R7.4 `get_docs_section`
+
+- [ ] define stable `GetDocsSectionResult` object with `file`, `selector_mode`, `heading`, `slug`, `line_start`, `line_end`, `content`, `file_hash`, and `atlas_provenance`
+- [ ] normalize heading-path/slug lookup and line-number lookup into same object with explicit `selector_mode`
+- [ ] add `outputSchema` for `get_docs_section`
+- [ ] add tests for heading-based and line-based section resolution proving same schema
+
+#### R7.5 `read_file_around_match`
+
+- [ ] define stable `ReadFileAroundMatchResult` object with `file`, `match_mode`, `matches`, `before`, `after`, `summary`, and `atlas_provenance`
+- [ ] normalize literal and regex matching into same grouped snippet schema
+- [ ] keep invalid regex and missing-file cases on tool-error path
+- [ ] add `outputSchema` for `read_file_around_match`
+- [ ] add tests for literal, regex, and multi-match grouped snippet cases proving same schema
+
+#### R7.6 `search_templates`
+
+- [ ] define stable `SearchTemplatesResult` object with `kind`, `subpath`, `matches`, `summary`, `truncated`, and `atlas_provenance`
+- [ ] normalize engine-filtered and all-template searches into same `matches[]` schema
+- [ ] add `outputSchema` for `search_templates`
+- [ ] add tests for filtered and unfiltered template discovery proving same schema
+
+#### R7.7 `search_text_assets`
+
+- [ ] define stable `SearchTextAssetsResult` object with `kind`, `subpath`, `matches`, `summary`, `truncated`, and `atlas_provenance`
+- [ ] normalize SQL/config/env/prompt asset discovery into same object with stable match metadata and explicit asset-kind enum per result row
+- [ ] add `outputSchema` for `search_text_assets`
+- [ ] add tests for each asset kind and mixed-kind discovery proving same schema
+
+Why:
+- these tools already have clear domain outputs; main redesign work is eliminating selector-family and mode-specific alternate payload wrappers
+- file/content tools are high-frequency agent calls and should become schema-safe early
+
+### R8 — Descriptor inventory cleanup and contract enforcement after per-tool redesign
+
+- [ ] move each tool from `MixedNeedsRedesign` to `StableObject` in `packages/atlas-mcp/src/tools/registry.rs` immediately after its schema lands
+- [ ] keep `MCP_TOOLS.md` generation in sync so result-contract inventory reflects actual implementation state after each migrated tool
+- [ ] add one registry test asserting no tool remains in `MixedNeedsRedesign` once this patch completes
+- [ ] add one dispatcher/transport test matrix covering representative tool from each redesigned family: context, lifecycle, health, insights, session, dependency, and discovery
+- [ ] add one documentation pass updating crate docs and manual output so each normalized tool documents exact JSON contract expectations
+
+Completion criteria:
+
+- [ ] every tool currently marked `mixed-needs-redesign` in `MCP_TOOLS.md` emits deterministic object `structuredContent` on successful JSON-mode calls
+- [ ] every redesigned tool advertises exact per-tool `outputSchema` that validates actual `structuredContent`
+- [ ] no redesigned tool returns bare string, bare array, or alternate success envelope based on mode, payload size, or selector family
+- [ ] direct tool call, deferred task completion, stdio transport, and HTTP transport all expose same result contract per tool
+- [ ] `packages/atlas-mcp/src/tools/registry.rs` no longer classifies any current tool as `MixedNeedsRedesign`
+- [ ] generated `MCP_TOOLS.md` shows only `stable-object` or `text-only` result contracts
