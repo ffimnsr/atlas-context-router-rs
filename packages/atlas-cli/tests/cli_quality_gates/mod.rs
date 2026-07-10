@@ -6,10 +6,10 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use crate::core::read_json_tool_result;
 use atlas_core::{EdgeKind, NodeKind};
 use atlas_store_sqlite::Store;
-use crate::core::read_json_tool_result;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tempfile::TempDir;
 
 const GIT_LOCAL_ENV_VARS: &[&str] = &[
@@ -113,11 +113,7 @@ fn setup_repo_with_submodule(
     temp_dir
 }
 
-fn init_committed_submodule(
-    parent: &Path,
-    path: &str,
-    files: &[(&str, &str)],
-) -> TempDir {
+fn init_committed_submodule(parent: &Path, path: &str, files: &[(&str, &str)]) -> TempDir {
     let submodule_dir = tempfile::tempdir().expect("submodule temp dir");
     for (relative_path, content) in files {
         let file_path = submodule_dir.path().join(relative_path);
@@ -140,7 +136,11 @@ fn init_committed_submodule(
             path,
         ],
     );
-    run_command(parent, "git", &["commit", "--quiet", "-am", "add submodule"]);
+    run_command(
+        parent,
+        "git",
+        &["commit", "--quiet", "-am", "add submodule"],
+    );
 
     submodule_dir
 }
@@ -317,10 +317,10 @@ fn pid_exists(pid: u32) -> bool {
             return true;
         }
 
-        return matches!(
+        matches!(
             std::io::Error::last_os_error().raw_os_error(),
             Some(libc::EPERM)
-        );
+        )
     }
 
     #[cfg(not(unix))]
@@ -351,7 +351,10 @@ fn wait_until(timeout: Duration, mut predicate: impl FnMut() -> bool) {
         }
         thread::sleep(Duration::from_millis(25));
     }
-    assert!(predicate(), "condition did not become true within {timeout:?}");
+    assert!(
+        predicate(),
+        "condition did not become true within {timeout:?}"
+    );
 }
 
 fn read_json_data_output(command: &str, output: Output) -> Value {
@@ -507,7 +510,9 @@ fn plain_grep_ranked_candidates(
 
     let mut qnames = Vec::new();
     for (file, _) in candidates {
-        let nodes = store.nodes_by_file(&file).expect("nodes by file from grep baseline");
+        let nodes = store
+            .nodes_by_file(&file)
+            .expect("nodes by file from grep baseline");
         for node in nodes {
             let name_matches = node.name.eq_ignore_ascii_case(query);
             let qname_matches = node
@@ -599,12 +604,10 @@ struct SpawnedWatch {
 
 impl SpawnedWatch {
     fn recv_stdout_line(&mut self, timeout: Duration) -> String {
-        self.stdout_rx
-            .recv_timeout(timeout)
-            .unwrap_or_else(|err| {
-                let stderr = drain_lines(&self.stderr_rx);
-                panic!("timed out waiting for watch stdout: {err}; stderr={stderr:?}")
-            })
+        self.stdout_rx.recv_timeout(timeout).unwrap_or_else(|err| {
+            let stderr = drain_lines(&self.stderr_rx);
+            panic!("timed out waiting for watch stdout: {err}; stderr={stderr:?}")
+        })
     }
 }
 

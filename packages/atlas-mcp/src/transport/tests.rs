@@ -11,7 +11,9 @@ use atlas_core::EdgeKind;
 use atlas_core::error_code_docs_ref;
 use atlas_core::kinds::NodeKind;
 use atlas_core::model::{Edge, Node, NodeId};
+use atlas_repo::canonical_filesystem_path;
 use atlas_store_sqlite::Store;
+use camino::Utf8Path;
 use rusqlite::Connection;
 use tempfile::TempDir;
 use url::Url;
@@ -148,6 +150,13 @@ fn setup_text_repo(files: &[(&str, &str)]) -> TextRepoFixture {
         std::fs::write(abs, content).expect("write text repo file");
     }
     TextRepoFixture { _dir: dir }
+}
+
+fn canonical_tempdir_path(dir: &TempDir) -> String {
+    let utf8 = Utf8Path::from_path(dir.path()).expect("tempdir path utf-8");
+    canonical_filesystem_path(utf8)
+        .expect("canonical tempdir path")
+        .into_string()
 }
 
 fn initialize_dynamic_session(
@@ -425,7 +434,7 @@ fn reverse_request_broker_enforces_scope_correlation() {
 #[test]
 fn dynamic_roots_resolve_repo_before_first_tool_call() {
     let fixture = setup_fixture();
-    let repo_root = fixture._dir.path().to_string_lossy().into_owned();
+    let repo_root = canonical_tempdir_path(&fixture._dir);
     let session = InteractiveStdioTestSession::start_dynamic(ServerOptions::default()).unwrap();
 
     session
