@@ -4,6 +4,25 @@ All notable changes to this project should be recorded in this file.
 
 Versioning policy may evolve while Atlas is still moving quickly, but release notes should still group changes by user-visible impact.
 
+## 1.5.0 - 2026-07-10
+
+### Features
+
+- update and harden some tools (`5cf327f`)
+- refactor the transport.rs to module (`569f89c`)
+- refactor discovery tools from monolithic to modular (`91b0c28`)
+- use dynamic root captured from client root list (`39545a4`)
+- update the tests path canonicalization and fix lint errors (`86b44f6`)
+- add cwd fallback if there's no dynamic root (`1e03c82`)
+- add man tools (`9f4dccc`)
+
+
+### Documentation
+
+- add new feature man tool for help docs on mcp (`f0e99e5`)
+- update new issues.md (`a5f9317`)
+
+
 ## 1.4.2 - 2026-07-07
 
 ### Features
