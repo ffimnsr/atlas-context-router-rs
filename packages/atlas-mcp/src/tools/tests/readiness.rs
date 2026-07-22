@@ -59,10 +59,10 @@ fn status_emits_execution_state_fresh_after_build() {
     let body = parse_body(&resp);
 
     assert_eq!(
-        body["execution_state"].as_str(),
+        body["graph_state"]["execution_state"].as_str(),
         Some("fresh"),
         "expected execution_state=fresh after a successful build, got: {:?}",
-        body["execution_state"]
+        body["graph_state"]["execution_state"]
     );
 }
 
@@ -75,7 +75,7 @@ fn status_emits_execution_state_missing_when_no_db() {
     let body = parse_body(&resp);
 
     assert_eq!(
-        body["execution_state"].as_str(),
+        body["graph_state"]["execution_state"].as_str(),
         Some("missing"),
         "expected execution_state=missing when db absent"
     );
@@ -94,7 +94,7 @@ fn status_emits_execution_state_partial_after_degraded_build() {
     let body = parse_body(&resp);
 
     assert_eq!(
-        body["execution_state"].as_str(),
+        body["graph_state"]["execution_state"].as_str(),
         Some("partial"),
         "expected execution_state=partial after a degraded build"
     );
@@ -259,9 +259,9 @@ fn status_and_query_graph_agree_on_execution_state() {
 
     let status_resp = call_json("status", serde_json::json!({}), "/repo", &fixture.db_path);
     let status_body = parse_body(&status_resp);
-    let status_es = status_body["execution_state"]
+    let status_es = status_body["graph_state"]["execution_state"]
         .as_str()
-        .expect("status.execution_state");
+        .expect("status.graph_state.execution_state");
 
     let qg_args = serde_json::json!({ "text": "compute", "output_format": "json" });
     let qg_resp =

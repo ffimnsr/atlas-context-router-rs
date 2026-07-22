@@ -317,15 +317,17 @@ fn explain_change_reports_change_kind_counts() {
     let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
 
     assert_eq!(
-        v.get("changed_file_count").and_then(|n| n.as_u64()),
+        v.pointer("/summary/changed_file_count")
+            .and_then(|n| n.as_u64()),
         Some(1)
     );
     assert_eq!(
-        v.get("changed_symbol_count").and_then(|n| n.as_u64()),
+        v.pointer("/summary/changed_symbol_count")
+            .and_then(|n| n.as_u64()),
         Some(1)
     );
     assert_eq!(
-        v.pointer("/changed_by_kind/signature_change")
+        v.pointer("/change_kinds/signature_change")
             .and_then(|n| n.as_u64()),
         Some(1)
     );
@@ -439,9 +441,9 @@ fn postprocess_graph_returns_noop_when_graph_missing() {
         .expect("postprocess_graph call");
     let text = unwrap_tool_text(response);
     let value: serde_json::Value = serde_json::from_str(&text).expect("parse json");
-    assert_eq!(value["ok"], serde_json::json!(true));
-    assert_eq!(value["noop"], serde_json::json!(true));
-    assert_eq!(value["graph_built"], serde_json::json!(false));
+    assert_eq!(value["summary"]["ok"], serde_json::json!(true));
+    assert_eq!(value["summary"]["noop"], serde_json::json!(true));
+    assert_eq!(value["summary"]["graph_built"], serde_json::json!(false));
 }
 
 #[test]
@@ -457,10 +459,15 @@ fn postprocess_graph_surfaces_unknown_stage_error_code() {
     .expect("postprocess_graph call");
     let text = unwrap_tool_text(response);
     let value: serde_json::Value = serde_json::from_str(&text).expect("parse json");
-    assert_eq!(value["ok"], serde_json::json!(false));
-    assert_eq!(value["error_code"], serde_json::json!("unknown_stage"));
+    assert_eq!(value["summary"]["ok"], serde_json::json!(false));
+    assert_eq!(
+        value["summary"]["error_code"],
+        serde_json::json!("unknown_stage")
+    );
     assert_error_code_doc_link(
-        value["error_code_docs"].as_str().expect("error_code_docs"),
+        value["summary"]["error_code_docs"]
+            .as_str()
+            .expect("error_code_docs"),
         "unknown_stage",
     );
 }
@@ -487,12 +494,12 @@ fn postprocess_graph_supports_single_stage_changed_only() {
     .expect("postprocess_graph call");
     let text = unwrap_tool_text(response);
     let value: serde_json::Value = serde_json::from_str(&text).expect("parse json");
-    assert_eq!(value["requested_mode"], serde_json::json!("changed_only"));
+    assert_eq!(value["mode"], serde_json::json!("changed_only"));
     assert_eq!(
-        value["stage_filter"],
+        value["scope"]["stage_filter"],
         serde_json::json!("large_function_summaries")
     );
-    assert_eq!(value["stages"].as_array().map(Vec::len), Some(1));
+    assert_eq!(value["executed_stages"].as_array().map(Vec::len), Some(1));
 }
 
 #[test]
@@ -647,7 +654,9 @@ fn get_impact_radius_accepts_explicit_files_and_reports_change_source_metadata()
     let value: serde_json::Value = serde_json::from_str(&text).expect("parse json");
 
     assert_eq!(
-        value.get("changed_file_count").and_then(|n| n.as_u64()),
+        value
+            .pointer("/summary/changed_file_count")
+            .and_then(|n| n.as_u64()),
         Some(1)
     );
     assert_eq!(
@@ -712,7 +721,9 @@ fn get_impact_radius_resolves_base_diff_files() {
     let value: serde_json::Value = serde_json::from_str(&text).expect("parse json");
 
     assert_eq!(
-        value.get("changed_file_count").and_then(|n| n.as_u64()),
+        value
+            .pointer("/summary/changed_file_count")
+            .and_then(|n| n.as_u64()),
         Some(1)
     );
     assert_eq!(
@@ -811,11 +822,15 @@ fn get_impact_radius_empty_diff_returns_empty_result() {
     let value: serde_json::Value = serde_json::from_str(&text).expect("parse json");
 
     assert_eq!(
-        value.get("changed_file_count").and_then(|n| n.as_u64()),
+        value
+            .pointer("/summary/changed_file_count")
+            .and_then(|n| n.as_u64()),
         Some(0)
     );
     assert_eq!(
-        value.get("impacted_file_count").and_then(|n| n.as_u64()),
+        value
+            .pointer("/summary/impacted_file_count")
+            .and_then(|n| n.as_u64()),
         Some(0)
     );
     assert_eq!(

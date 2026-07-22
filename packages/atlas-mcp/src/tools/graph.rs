@@ -484,11 +484,16 @@ pub(super) fn tool_traverse_graph(
     let seeds = vec![from_qn.clone()];
     let packaged = package_impact(&result, &seeds);
     let mut payload = Map::new();
-    let changed_nodes = serde_json::to_value(&packaged.changed_nodes)?;
-    let impacted_nodes = serde_json::to_value(&packaged.impacted_nodes)?;
-    let relevant_edges = serde_json::to_value(&packaged.relevant_edges)?;
-    let mut combined_nodes = changed_nodes.as_array().cloned().unwrap_or_default();
-    combined_nodes.extend(impacted_nodes.as_array().cloned().unwrap_or_default());
+    let mut combined_nodes = serde_json::to_value(&packaged.changed_nodes)?
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    combined_nodes.extend(
+        serde_json::to_value(&packaged.impacted_nodes)?
+            .as_array()
+            .cloned()
+            .unwrap_or_default(),
+    );
     payload.insert("root_symbol".to_owned(), json!(from_qn));
     payload.insert("direction".to_owned(), json!("bidirectional"));
     payload.insert("depth".to_owned(), json!(max_depth));
@@ -526,30 +531,7 @@ pub(super) fn tool_traverse_graph(
         }),
     );
     payload.insert("truncated".to_owned(), json!(packaged.truncated));
-    payload.insert("changed_nodes".to_owned(), changed_nodes);
-    payload.insert("impacted_nodes".to_owned(), impacted_nodes);
-    payload.insert("relevant_edges".to_owned(), relevant_edges);
-    payload.insert(
-        "changed_file_count".to_owned(),
-        json!(packaged.changed_file_count),
-    );
-    payload.insert(
-        "changed_node_count".to_owned(),
-        json!(packaged.changed_node_count),
-    );
-    payload.insert(
-        "impacted_node_count".to_owned(),
-        json!(packaged.impacted_node_count),
-    );
-    payload.insert(
-        "impacted_file_count".to_owned(),
-        json!(packaged.impacted_file_count),
-    );
     payload.insert("impacted_files".to_owned(), json!(packaged.impacted_files));
-    payload.insert(
-        "relevant_edge_count".to_owned(),
-        json!(packaged.relevant_edge_count),
-    );
     payload.insert("seed_budgets".to_owned(), json!(packaged.seed_budgets));
     payload.insert(
         "traversal_budget".to_owned(),
@@ -814,9 +796,9 @@ pub(super) fn tool_explain_query(
 ) -> Result<serde_json::Value> {
     let policy = load_budget_policy(repo_root)?;
     let mut budgets = BudgetManager::new();
-    let text = str_arg(args, "text")?
-        .map(str::to_owned)
-        .unwrap_or_default();
+    let raw_text = str_arg(args, "text")?;
+    let had_text_input = raw_text.is_some();
+    let text = raw_text.map(str::to_owned).unwrap_or_default();
     let kind = str_arg(args, "kind")?.map(str::to_owned);
     let language = str_arg(args, "language")?.map(str::to_owned);
     let requested_limit = u64_arg(args, "limit").unwrap_or(20) as usize;
@@ -826,14 +808,22 @@ pub(super) fn tool_explain_query(
         Some(requested_limit),
     );
     let semantic = bool_arg(args, "semantic").unwrap_or(false);
-    let regex = str_arg(args, "regex")?.map(str::to_owned);
+    let raw_regex = str_arg(args, "regex")?;
+    let had_regex_input = raw_regex.is_some();
+    let regex = normalized_optional_query_regex(raw_regex);
     let subpath = str_arg(args, "subpath")?.map(str::to_owned);
     let fuzzy = bool_arg(args, "fuzzy").unwrap_or(false);
     let hybrid = bool_arg(args, "hybrid").unwrap_or(false);
     let include_files = bool_arg(args, "include_files").unwrap_or(false);
 
-    if text.trim().is_empty() && regex.is_none() {
-        anyhow::bail!("explain_query requires non-empty text or a regex pattern");
+    if let Err(payload) = validate_query_graph_inputs(
+        "explain_query",
+        &text,
+        &regex,
+        had_text_input,
+        had_regex_input,
+    ) {
+        return tool_execution_error_value(output_format, &payload);
     }
 
     let db_exists = std::path::Path::new(db_path).exists();
@@ -863,7 +853,47 @@ pub(super) fn tool_explain_query(
         embed_cfg.as_ref(),
     );
 
-    let mut response = tool_result_value(&result, output_format)?;
+    let fts_token_count = result.fts_tokens.len();
+    let fts_phrase = result.fts_phrase.clone();
+    let matches = result.matches.clone().unwrap_or_default();
+    let payload = json!({
+        "input": result.input,
+        "normalized_query": {
+            "active_query_mode": result.active_query_mode,
+            "search_path": result.search_path,
+            "indexed_node_count": result.indexed_node_count,
+            "db_exists": result.db_exists,
+            "ranking_factors": result.ranking_factors,
+            "filters_applied": result.filters_applied,
+            "active_capabilities": result.active_capabilities,
+        },
+        "tokenization": {
+            "fts_tokens": result.fts_tokens,
+            "fts_phrase": fts_phrase.clone(),
+        },
+        "fts_plan": {
+            "enabled": !query.text.trim().is_empty(),
+            "phrase": fts_phrase,
+            "token_count": fts_token_count,
+            "limit": query.limit,
+            "semantic": semantic,
+            "expand": query.graph_expand,
+            "include_files": query.include_files,
+        },
+        "regex_plan": {
+            "enabled": query.regex_pattern.is_some(),
+            "pattern": query.regex_pattern,
+            "valid": result.regex_valid,
+            "error": result.regex_error,
+        },
+        "warnings": result.warnings,
+        "latency_ms": result.latency_ms.map(|value| value as u64),
+        "result_count": result.result_count.unwrap_or(matches.len()),
+        "matches": matches,
+    });
+
+    let envelope = ToolSuccessEnvelope::new("explain_query", payload);
+    let mut response = normalized_tool_result_value(&envelope, output_format)?;
     response["atlas_ranking_evidence_legend"] = ranking_evidence_legend_json();
     inject_budget_metadata(
         &mut response,

@@ -14,8 +14,7 @@ use std::collections::BTreeSet;
 
 use super::shared::{
     bool_arg, error_code_docs, error_message, error_suggestions, inject_budget_metadata,
-    load_budget_policy, open_store, parse_mcp_intent, str_arg, string_array_arg, tool_result_value,
-    u64_arg,
+    load_budget_policy, open_store, parse_mcp_intent, str_arg, string_array_arg, u64_arg,
 };
 use crate::context::{enforce_mcp_response_budget, package_context_result, package_impact};
 use crate::session_tools::{
@@ -738,17 +737,11 @@ pub(super) fn tool_get_impact_radius(
     payload.insert("seed_files".to_owned(), json!(resolved.files));
     payload.insert(
         "changed_symbols".to_owned(),
-        payload
-            .get("changed_nodes")
-            .cloned()
-            .unwrap_or_else(|| json!([])),
+        serde_json::to_value(&packaged.changed_nodes)?,
     );
     payload.insert(
         "impacted_symbols".to_owned(),
-        payload
-            .get("impacted_nodes")
-            .cloned()
-            .unwrap_or_else(|| json!([])),
+        serde_json::to_value(&packaged.impacted_nodes)?,
     );
     payload.insert(
         "summary".to_owned(),
@@ -762,6 +755,14 @@ pub(super) fn tool_get_impact_radius(
             "traversal_budget_applied": packaged.traversal_budget.is_some(),
         }),
     );
+    payload.remove("changed_file_count");
+    payload.remove("changed_node_count");
+    payload.remove("changed_nodes");
+    payload.remove("impacted_node_count");
+    payload.remove("impacted_nodes");
+    payload.remove("impacted_file_count");
+    payload.remove("relevant_edge_count");
+    payload.remove("budget_status");
 
     let mut response = build_normalized_success_response(
         "get_impact_radius",
@@ -866,6 +867,7 @@ pub(super) fn tool_get_review_context(
         })
         .collect::<Vec<_>>();
     let mut normalized_payload = as_object_map(packaged_value.clone());
+    normalized_payload.remove("saved_context_sources");
     normalized_payload.insert("changed_files".to_owned(), json!(resolved.files.clone()));
     normalized_payload.insert("changed_symbols".to_owned(), Value::Array(changed_symbols));
     normalized_payload.insert("neighbors".to_owned(), Value::Array(neighbors));
@@ -1057,16 +1059,34 @@ pub(super) fn tool_build_or_update_graph(
         })
     }
 
+    fn budget_status_label(status: atlas_core::BudgetStatus) -> &'static str {
+        match status {
+            atlas_core::BudgetStatus::WithinBudget => "within_budget",
+            atlas_core::BudgetStatus::OverrideClamped => "override_clamped",
+            atlas_core::BudgetStatus::PartialResult => "partial_result",
+            atlas_core::BudgetStatus::Blocked => "blocked",
+        }
+    }
+
     if mode == "update" {
         let base = str_arg(args, "base")?.map(str::to_owned);
         let staged = bool_arg(args, "staged").unwrap_or(false);
         let files = string_array_arg(args, "files")?;
 
+        let target_kind = if !files.is_empty() {
+            "explicit_files"
+        } else if staged {
+            "staged"
+        } else if base.is_some() {
+            "base_ref"
+        } else {
+            "working_tree"
+        };
         let target = if !files.is_empty() {
             UpdateTarget::Files(files)
         } else if staged {
             UpdateTarget::Staged
-        } else if let Some(b) = base {
+        } else if let Some(b) = base.clone() {
             UpdateTarget::BaseRef(b)
         } else {
             UpdateTarget::WorkingTree
@@ -1138,26 +1158,81 @@ pub(super) fn tool_build_or_update_graph(
         crate::progress::report("writing results", Some(90));
         let summary = update_result?;
         crate::progress::report("update complete", Some(100));
-        tool_result_value(
-            &serde_json::json!({
-                "mode": "update",
-                "deleted": summary.deleted,
-                "renamed": summary.renamed,
-                "parsed": summary.parsed,
-                "skipped_unsupported": summary.skipped_unsupported,
-                "parse_errors": summary.parse_errors,
-                "chunk_upsert_failures": summary.chunk_upsert_failures,
-                "call_target_reconcile_failures": summary.call_target_reconcile_failures,
-                "nodes_updated": summary.nodes_updated,
-                "edges_updated": summary.edges_updated,
-                "warnings": summary.warnings,
-                "budget": summary.budget,
+
+        let status = if matches!(
+            summary.budget.budget_status,
+            atlas_core::BudgetStatus::Blocked
+        ) {
+            "blocked"
+        } else if summary.is_degraded() {
+            "degraded"
+        } else {
+            "completed"
+        };
+        let warnings = summary.warnings.clone();
+        let payload = json!({
+            "mode": "update",
+            "status": status,
+            "source": {
+                "target_kind": target_kind,
+                "base_ref": base,
+                "staged": staged,
+            },
+            "files_scanned": summary.parsed + summary.deleted + summary.renamed,
+            "files_changed": summary.parsed + summary.deleted + summary.renamed,
+            "files_parsed": summary.parsed,
+            "files_deleted": summary.deleted,
+            "files_renamed": summary.renamed,
+            "files_skipped_unsupported": summary.skipped_unsupported,
+            "files_skipped_unchanged": 0,
+            "parse_error_count": summary.parse_errors,
+            "chunk_upsert_failure_count": summary.chunk_upsert_failures,
+            "call_target_reconcile_failure_count": summary.call_target_reconcile_failures,
+            "nodes_written": summary.nodes_updated,
+            "edges_written": summary.edges_updated,
+            "duration_ms": summary.elapsed_ms as u64,
+            "warnings": warnings,
+            "stages": [
+                {
+                    "name": "detect_changes",
+                    "status": "completed",
+                    "item_count": summary.parsed + summary.deleted + summary.renamed,
+                    "details": {
+                        "target_kind": target_kind,
+                    }
+                },
+                {
+                    "name": "update_graph",
+                    "status": status,
+                    "item_count": summary.parsed,
+                    "details": {
+                        "skipped_unsupported": summary.skipped_unsupported,
+                        "parse_errors": summary.parse_errors,
+                    }
+                },
+                {
+                    "name": "persist_graph",
+                    "status": status,
+                    "item_count": summary.nodes_updated + summary.edges_updated,
+                    "details": {
+                        "nodes_written": summary.nodes_updated,
+                        "edges_written": summary.edges_updated,
+                    }
+                }
+            ],
+            "summary": {
+                "budget_status": budget_status_label(summary.budget.budget_status),
+                "budget_hit": summary.budget.budget_hit,
+                "partial": summary.budget.partial,
+                "safe_to_answer": summary.budget.safe_to_answer,
                 "budget_counters": summary.budget_counters,
-                "elapsed_ms": summary.elapsed_ms,
-                "build_status": build_status_json(db_path, repo_root_str),
-            }),
-            output_format,
-        )
+            },
+            "build_status": build_status_json(db_path, repo_root_str),
+        });
+        let envelope = ToolSuccessEnvelope::new("build_or_update_graph", payload);
+        let mut response = normalized_tool_result_value(&envelope, output_format)?;
+        inject_budget_metadata(&mut response, &summary.budget);
+        Ok(response)
     } else {
         let config = atlas_engine::Config::load(&atlas_engine::paths::atlas_dir(repo_root))
             .unwrap_or_default();
@@ -1224,26 +1299,82 @@ pub(super) fn tool_build_or_update_graph(
         crate::progress::report("writing results", Some(90));
         let summary = build_result?;
         crate::progress::report("build complete", Some(100));
-        tool_result_value(
-            &serde_json::json!({
-                "mode": "build",
-                "scanned": summary.scanned,
-                "skipped_unsupported": summary.skipped_unsupported,
-                "skipped_unchanged": summary.skipped_unchanged,
-                "parsed": summary.parsed,
-                "parse_errors": summary.parse_errors,
-                "chunk_upsert_failures": summary.chunk_upsert_failures,
-                "call_target_reconcile_failures": summary.call_target_reconcile_failures,
-                "nodes_inserted": summary.nodes_inserted,
-                "edges_inserted": summary.edges_inserted,
-                "warnings": summary.warnings,
-                "budget": summary.budget,
+
+        let status = if matches!(
+            summary.budget.budget_status,
+            atlas_core::BudgetStatus::Blocked
+        ) {
+            "blocked"
+        } else if summary.is_degraded() {
+            "degraded"
+        } else {
+            "completed"
+        };
+        let warnings = summary.warnings.clone();
+        let payload = json!({
+            "mode": "build",
+            "status": status,
+            "source": {
+                "target_kind": "full_build",
+                "base_ref": Value::Null,
+                "staged": false,
+            },
+            "files_scanned": summary.scanned,
+            "files_changed": 0,
+            "files_parsed": summary.parsed,
+            "files_deleted": 0,
+            "files_renamed": 0,
+            "files_skipped_unsupported": summary.skipped_unsupported,
+            "files_skipped_unchanged": summary.skipped_unchanged,
+            "parse_error_count": summary.parse_errors,
+            "chunk_upsert_failure_count": summary.chunk_upsert_failures,
+            "call_target_reconcile_failure_count": summary.call_target_reconcile_failures,
+            "nodes_written": summary.nodes_inserted,
+            "edges_written": summary.edges_inserted,
+            "duration_ms": summary.elapsed_ms as u64,
+            "warnings": warnings,
+            "stages": [
+                {
+                    "name": "scan_repo",
+                    "status": "completed",
+                    "item_count": summary.scanned,
+                    "details": {
+                        "files_scanned": summary.scanned,
+                    }
+                },
+                {
+                    "name": "parse_repo",
+                    "status": status,
+                    "item_count": summary.parsed,
+                    "details": {
+                        "skipped_unsupported": summary.skipped_unsupported,
+                        "skipped_unchanged": summary.skipped_unchanged,
+                        "parse_errors": summary.parse_errors,
+                    }
+                },
+                {
+                    "name": "persist_graph",
+                    "status": status,
+                    "item_count": summary.nodes_inserted + summary.edges_inserted,
+                    "details": {
+                        "nodes_written": summary.nodes_inserted,
+                        "edges_written": summary.edges_inserted,
+                    }
+                }
+            ],
+            "summary": {
+                "budget_status": budget_status_label(summary.budget.budget_status),
+                "budget_hit": summary.budget.budget_hit,
+                "partial": summary.budget.partial,
+                "safe_to_answer": summary.budget.safe_to_answer,
                 "budget_counters": summary.budget_counters,
-                "elapsed_ms": summary.elapsed_ms,
-                "build_status": build_status_json(db_path, repo_root_str),
-            }),
-            output_format,
-        )
+            },
+            "build_status": build_status_json(db_path, repo_root_str),
+        });
+        let envelope = ToolSuccessEnvelope::new("build_or_update_graph", payload);
+        let mut response = normalized_tool_result_value(&envelope, output_format)?;
+        inject_budget_metadata(&mut response, &summary.budget);
+        Ok(response)
     }
 }
 
@@ -1325,11 +1456,7 @@ pub(super) fn tool_get_minimal_context(
             "impacted_symbol_count": packaged.impacted_node_count,
             "impacted_file_count": packaged.impacted_file_count,
             "truncated": packaged.truncated,
-        },
-        "changed_file_count": changed_file_paths.len(),
-        "deleted_file_count": deleted_count,
-        "changed_files": changed_file_paths.iter().map(String::as_str).collect::<Vec<_>>(),
-        "impact": serde_json::to_value(&packaged)?,
+        }
     });
 
     let mut response = build_normalized_success_response(
@@ -1389,7 +1516,12 @@ pub(super) fn tool_explain_change(
                 "impacted_node_count": 0,
             }),
         );
-        payload.insert("summary_text".to_owned(), Value::String(String::new()));
+        payload.remove("changed_file_count");
+        payload.remove("changed_symbol_count");
+        payload.remove("changed_by_kind");
+        payload.remove("impacted_file_count");
+        payload.remove("impacted_node_count");
+        payload.remove("summary_text");
         let mut response = build_normalized_success_response(
             "explain_change",
             Value::Object(payload),
@@ -1449,10 +1581,12 @@ pub(super) fn tool_explain_change(
             "impacted_node_count": summary.impacted_node_count,
         }),
     );
-    payload.insert(
-        "summary_text".to_owned(),
-        Value::String(summary.summary.clone()),
-    );
+    payload.remove("changed_file_count");
+    payload.remove("changed_symbol_count");
+    payload.remove("changed_by_kind");
+    payload.remove("impacted_file_count");
+    payload.remove("impacted_node_count");
+    payload.remove("summary_text");
 
     let mut response = build_normalized_success_response(
         "explain_change",
@@ -1732,6 +1866,7 @@ pub(super) fn tool_get_context(
             .unwrap_or_else(|| json!([])),
     });
     let mut normalized_payload = as_object_map(packaged_value.clone());
+    normalized_payload.remove("saved_context_sources");
     normalized_payload.insert("mode".to_owned(), json!(mode));
     normalized_payload.insert(
         "query".to_owned(),

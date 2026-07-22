@@ -3400,59 +3400,59 @@ Why:
 
 #### R3.1 `build_or_update_graph`
 
-- [ ] define stable `BuildOrUpdateGraphResult` object with `mode`, `status`, `files_scanned`, `files_changed`, `nodes_written`, `edges_written`, `duration_ms`, `stages`, `warnings`, and `atlas_provenance`
-- [ ] normalize full-build and incremental-update summaries into same object with explicit zero/empty values for non-applicable counters
-- [ ] represent deferred/background execution state through stable `status` and `stages[]` fields instead of alternate wrapper payloads
-- [ ] move dry operational notes into `warnings[]` rather than free-form top-level text fragments
-- [ ] add `outputSchema` for `build_or_update_graph`
-- [ ] add tests for `mode=build`, `mode=update`, readiness-blocked error path, and deferred completion parity
+- [x] define stable `BuildOrUpdateGraphResult` object with `mode`, `status`, `files_scanned`, `files_changed`, `nodes_written`, `edges_written`, `duration_ms`, `stages`, `warnings`, and `atlas_provenance`
+- [x] normalize full-build and incremental-update summaries into same object with explicit zero/empty values for non-applicable counters
+- [x] represent deferred/background execution state through stable `status` and `stages[]` fields instead of alternate wrapper payloads
+- [x] move dry operational notes into `warnings[]` rather than free-form top-level text fragments
+- [x] add `outputSchema` for `build_or_update_graph`
+- [x] add tests for `mode=build`, `mode=update`, readiness-blocked error path, and deferred completion parity
 
 #### R3.2 `postprocess_graph`
 
-- [ ] define stable `PostprocessGraphResult` object with `mode`, `scope`, `dry_run`, `planned_stages`, `executed_stages`, `summary`, `warnings`, and `atlas_provenance`
-- [ ] normalize dry-run lifecycle preview and executed postprocess summary into same schema with explicit `dry_run` boolean and separate `planned_stages[]` / `executed_stages[]`
-- [ ] model single-stage execution through stable stage records instead of alternate text summary path
-- [ ] add `outputSchema` for `postprocess_graph`
-- [ ] add tests for full run, changed-only run, single-stage run, and dry-run preview proving same object contract
+- [x] define stable `PostprocessGraphResult` object with `mode`, `scope`, `dry_run`, `planned_stages`, `executed_stages`, `summary`, `warnings`, and `atlas_provenance`
+- [x] normalize dry-run lifecycle preview and executed postprocess summary into same schema with explicit `dry_run` boolean and separate `planned_stages[]` / `executed_stages[]`
+- [x] model single-stage execution through stable stage records instead of alternate text summary path
+- [x] add `outputSchema` for `postprocess_graph`
+- [x] add tests for full run, changed-only run, single-stage run, and dry-run preview proving same object contract
 
 #### R3.3 `status`
 
-- [ ] define stable `StatusResult` object with `graph_state`, `db_state`, `indexed_file_count`, `node_count`, `edge_count`, `last_indexed_at`, `failure_category`, and `atlas_provenance`
-- [ ] keep missing-DB and unhealthy-graph states inside same success schema instead of alternate sparse objects or text-only fallback
-- [ ] make machine-readable readiness booleans explicit so clients do not parse prose to decide whether follow-up graph tools are safe
-- [ ] add `outputSchema` for `status`
-- [ ] add tests for healthy graph, missing DB, stale graph, and failed-build cases proving same schema
+- [x] define stable `StatusResult` object with `graph_state`, `db_state`, `indexed_file_count`, `node_count`, `edge_count`, `last_indexed_at`, `failure_category`, and `atlas_provenance`
+- [x] keep missing-DB and unhealthy-graph states inside same success schema instead of alternate sparse objects or text-only fallback
+- [x] make machine-readable readiness booleans explicit so clients do not parse prose to decide whether follow-up graph tools are safe
+- [x] add `outputSchema` for `status`
+- [x] add tests for healthy graph, missing DB, stale graph, and failed-build cases proving same schema
 
 #### R3.4 `doctor`
 
-- [ ] define stable `DoctorResult` object with `overall_status`, `checks`, `summary`, `warnings`, and `atlas_provenance`
-- [ ] normalize each check row into stable fields: `name`, `status`, `message`, `details`, and optional `fix_hint`
-- [ ] keep pass/fail/warn counts in top-level `summary` instead of deriving from prose
-- [ ] add `outputSchema` for `doctor`
-- [ ] add tests for all-pass and mixed-failure health checks proving same object contract
+- [x] define stable `DoctorResult` object with `overall_status`, `checks`, `summary`, `warnings`, and `atlas_provenance`
+- [x] normalize each check row into stable fields: `name`, `status`, `message`, `details`, and optional `fix_hint`
+- [x] keep pass/fail/warn counts in top-level `summary` instead of deriving from prose
+- [x] add `outputSchema` for `doctor`
+- [x] add tests for all-pass and mixed-failure health checks proving same object contract
 
 #### R3.5 `db_check`
 
-- [ ] define stable `DbCheckResult` object with `ok`, `integrity`, `orphan_nodes`, `dangling_edges`, `noncanonical_path_rows`, `summary`, and `atlas_provenance`
-- [ ] normalize empty-anomaly and non-empty-anomaly cases into same arrays/summary fields
-- [ ] keep remediation hints in `summary` or `warnings[]`, not alternate top-level message blobs
-- [ ] add `outputSchema` for `db_check`
-- [ ] add tests for clean DB and corrupt/anomalous DB cases proving same schema
+- [x] define stable `DbCheckResult` object with `ok`, `integrity`, `orphan_nodes`, `dangling_edges`, `noncanonical_path_rows`, `summary`, and `atlas_provenance`
+- [x] normalize empty-anomaly and non-empty-anomaly cases into same arrays/summary fields
+- [x] keep remediation hints in `summary` or `warnings[]`, not alternate top-level message blobs
+- [x] add `outputSchema` for `db_check`
+- [x] add tests for clean DB and corrupt/anomalous DB cases proving same schema
 
 #### R3.6 `debug_graph`
 
-- [ ] define stable `DebugGraphResult` object with `node_counts_by_kind`, `edge_counts_by_kind`, `top_files`, `orphan_nodes`, `dangling_edges`, `summary`, and `atlas_provenance`
-- [ ] keep all diagnostic buckets present even when empty so clients can rely on fixed paths
-- [ ] add `outputSchema` for `debug_graph`
-- [ ] add tests for normal and anomalous graphs proving same schema and deterministic bucket ordering
+- [x] define stable `DebugGraphResult` object with `node_counts_by_kind`, `edge_counts_by_kind`, `top_files`, `orphan_nodes`, `dangling_edges`, `summary`, and `atlas_provenance`
+- [x] keep all diagnostic buckets present even when empty so clients can rely on fixed paths
+- [x] add `outputSchema` for `debug_graph`
+- [x] add tests for normal and anomalous graphs proving same schema and deterministic bucket ordering
 
 #### R3.7 `explain_query`
 
-- [ ] define stable `ExplainQueryResult` object with `input`, `normalized_query`, `tokenization`, `fts_plan`, `regex_plan`, `warnings`, and `atlas_provenance`
-- [ ] normalize text-only, regex-only, and text-plus-regex explanations into same schema with explicit disabled/null sections where not applicable
-- [ ] keep invalid-regex cases on tool-error path; successful explanation should always use same success object
-- [ ] add `outputSchema` for `explain_query`
-- [ ] add tests for text-only, regex-only, and hybrid query explanation cases proving deterministic schema
+- [x] define stable `ExplainQueryResult` object with `input`, `normalized_query`, `tokenization`, `fts_plan`, `regex_plan`, `warnings`, and `atlas_provenance`
+- [x] normalize text-only, regex-only, and text-plus-regex explanations into same schema with explicit disabled/null sections where not applicable
+- [x] keep invalid-regex cases on tool-error path; successful explanation should always use same success object
+- [x] add `outputSchema` for `explain_query`
+- [x] add tests for text-only, regex-only, and hybrid query explanation cases proving deterministic schema
 
 Why:
 - lifecycle and health tools often succeed in degraded states; they need stable success objects more than any text contract

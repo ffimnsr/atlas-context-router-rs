@@ -59,7 +59,14 @@ pub(crate) fn tool_result_contract(name: &str) -> ToolResultContract {
         | "get_minimal_context"
         | "explain_change"
         | "traverse_graph"
-        | "get_context" => ToolResultContract::StableObject,
+        | "get_context"
+        | "build_or_update_graph"
+        | "postprocess_graph"
+        | "status"
+        | "doctor"
+        | "db_check"
+        | "debug_graph"
+        | "explain_query" => ToolResultContract::StableObject,
         "query_graph"
         | "batch_query_graph"
         | "search_saved_context"
@@ -1030,6 +1037,13 @@ fn tool_output_schema_for(name: &str) -> Option<Value> {
         "tool_search" => Some(tool_search_output_schema()),
         "tool_help" => Some(man_output_schema()),
         "broker_status" => Some(broker_status_output_schema()),
+        "build_or_update_graph" => Some(build_or_update_graph_output_schema()),
+        "postprocess_graph" => Some(postprocess_graph_output_schema()),
+        "status" => Some(status_output_schema()),
+        "doctor" => Some(doctor_output_schema()),
+        "db_check" => Some(db_check_output_schema()),
+        "debug_graph" => Some(debug_graph_output_schema()),
+        "explain_query" => Some(explain_query_output_schema()),
         "detect_changes" => Some(detect_changes_output_schema()),
         "get_impact_radius" => Some(get_impact_radius_output_schema()),
         "get_review_context" => Some(get_review_context_output_schema()),
@@ -1236,6 +1250,190 @@ fn broker_status_output_schema() -> Value {
         ],
         None,
     )
+}
+
+fn build_stage_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "name": { "type": "string" },
+            "status": { "type": "string" },
+            "item_count": { "type": "integer" },
+            "details": { "type": "object" }
+        },
+        "required": ["name", "status", "item_count", "details"]
+    })
+}
+
+fn postprocess_stage_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "stage": { "type": "string" },
+            "status": { "type": "string" },
+            "mode": { "type": "string" },
+            "affected_file_count": { "type": "integer" },
+            "item_count": { "type": "integer" },
+            "elapsed_ms": { "type": "integer" },
+            "error_code": { "type": ["string", "null"] },
+            "message": { "type": ["string", "null"] },
+            "details": { "type": "object" }
+        },
+        "required": [
+            "stage",
+            "status",
+            "mode",
+            "affected_file_count",
+            "item_count",
+            "elapsed_ms",
+            "error_code",
+            "message",
+            "details"
+        ]
+    })
+}
+
+fn orphan_node_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "kind": { "type": "string" },
+            "qualified_name": { "type": "string" },
+            "file_path": { "type": "string" },
+            "line_start": { "type": "integer" }
+        },
+        "required": ["kind", "qualified_name", "file_path", "line_start"]
+    })
+}
+
+fn dangling_edge_diagnostic_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "id": { "type": "integer" },
+            "kind": { "type": "string" },
+            "source_qn": { "type": "string" },
+            "target_qn": { "type": "string" },
+            "missing_side": { "type": "string" }
+        },
+        "required": ["id", "kind", "source_qn", "target_qn", "missing_side"]
+    })
+}
+
+fn doctor_check_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "name": { "type": "string" },
+            "status": { "type": "string" },
+            "message": { "type": "string" },
+            "details": { "type": "object" },
+            "fix_hint": { "type": ["string", "null"] }
+        },
+        "required": ["name", "status", "message", "details", "fix_hint"]
+    })
+}
+
+fn debug_top_file_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "path": { "type": "string" },
+            "node_count": { "type": "integer" }
+        },
+        "required": ["path", "node_count"]
+    })
+}
+
+fn explain_query_input_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "text": { "type": "string" },
+            "kind": { "type": ["string", "null"] },
+            "language": { "type": ["string", "null"] },
+            "limit": { "type": "integer" },
+            "semantic": { "type": "boolean" },
+            "expand": { "type": "boolean" },
+            "expand_hops": { "type": "integer" },
+            "regex": { "type": ["string", "null"] },
+            "subpath": { "type": ["string", "null"] },
+            "fuzzy": { "type": "boolean" },
+            "hybrid": { "type": "boolean" },
+            "include_files": { "type": "boolean" }
+        },
+        "required": [
+            "text",
+            "kind",
+            "language",
+            "limit",
+            "semantic",
+            "expand",
+            "expand_hops",
+            "regex",
+            "subpath",
+            "fuzzy",
+            "hybrid",
+            "include_files"
+        ]
+    })
+}
+
+fn explain_query_filters_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "kind": { "type": "boolean" },
+            "language": { "type": "boolean" },
+            "subpath": { "type": "boolean" },
+            "fuzzy": { "type": "boolean" },
+            "hybrid": { "type": "boolean" },
+            "semantic": { "type": "boolean" },
+            "expand": { "type": "boolean" },
+            "include_files": { "type": "boolean" }
+        },
+        "required": ["kind", "language", "subpath", "fuzzy", "hybrid", "semantic", "expand", "include_files"]
+    })
+}
+
+fn backend_capabilities_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "lexical_fts": { "type": "boolean" },
+            "dense_vector": { "type": "boolean" },
+            "hybrid_lexical_vector": { "type": "boolean" },
+            "sparse_bm25_native": { "type": "boolean" },
+            "metadata_filtering": { "type": "boolean" }
+        },
+        "required": ["lexical_fts", "dense_vector", "hybrid_lexical_vector", "sparse_bm25_native", "metadata_filtering"]
+    })
+}
+
+fn explain_query_match_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "score": { "type": "number" },
+            "kind": { "type": "string" },
+            "qualified_name": { "type": "string" },
+            "file_path": { "type": "string" },
+            "line_start": { "type": "integer" },
+            "language": { "type": "string" },
+            "ranking_evidence": { "type": "object" }
+        },
+        "required": ["score", "kind", "qualified_name", "file_path", "line_start", "language"]
+    })
 }
 
 fn compact_node_schema() -> Value {
@@ -1759,6 +1957,413 @@ fn traverse_edge_schema() -> Value {
     })
 }
 
+fn build_or_update_graph_output_schema() -> Value {
+    normalized_tool_output_schema(
+        serde_json::json!({
+            "mode": { "type": "string" },
+            "status": { "type": "string" },
+            "source": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "target_kind": { "type": "string" },
+                    "base_ref": { "type": ["string", "null"] },
+                    "staged": { "type": "boolean" }
+                },
+                "required": ["target_kind", "base_ref", "staged"]
+            },
+            "files_scanned": { "type": "integer" },
+            "files_changed": { "type": "integer" },
+            "files_parsed": { "type": "integer" },
+            "files_deleted": { "type": "integer" },
+            "files_renamed": { "type": "integer" },
+            "files_skipped_unsupported": { "type": "integer" },
+            "files_skipped_unchanged": { "type": "integer" },
+            "parse_error_count": { "type": "integer" },
+            "chunk_upsert_failure_count": { "type": "integer" },
+            "call_target_reconcile_failure_count": { "type": "integer" },
+            "nodes_written": { "type": "integer" },
+            "edges_written": { "type": "integer" },
+            "duration_ms": { "type": "integer" },
+            "warnings": { "type": "array", "items": { "type": "string" } },
+            "stages": { "type": "array", "items": { "$ref": "#/$defs/build_stage" } },
+            "summary": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "budget_status": { "type": "string" },
+                    "budget_hit": { "type": "boolean" },
+                    "partial": { "type": "boolean" },
+                    "safe_to_answer": { "type": "boolean" },
+                    "budget_counters": { "type": "object" }
+                },
+                "required": ["budget_status", "budget_hit", "partial", "safe_to_answer", "budget_counters"]
+            },
+            "build_status": { "type": ["object", "null"] },
+            "atlas_provenance": { "type": "object" },
+            "atlas_freshness": { "type": "object" }
+        }),
+        &[
+            "tool",
+            "mode",
+            "status",
+            "files_scanned",
+            "files_changed",
+            "nodes_written",
+            "edges_written",
+            "duration_ms",
+            "stages",
+            "warnings",
+            "atlas_provenance",
+        ],
+        Some(serde_json::json!({
+            "build_stage": build_stage_schema(),
+        })),
+    )
+}
+
+fn postprocess_graph_output_schema() -> Value {
+    normalized_tool_output_schema(
+        serde_json::json!({
+            "mode": { "type": "string" },
+            "scope": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "changed_only": { "type": "boolean" },
+                    "stage_filter": { "type": ["string", "null"] },
+                    "changed_file_count": { "type": "integer" },
+                    "changed_files": { "type": "array", "items": { "type": "string" } }
+                },
+                "required": ["changed_only", "stage_filter", "changed_file_count", "changed_files"]
+            },
+            "dry_run": { "type": "boolean" },
+            "planned_stages": { "type": "array", "items": { "$ref": "#/$defs/postprocess_stage" } },
+            "executed_stages": { "type": "array", "items": { "$ref": "#/$defs/postprocess_stage" } },
+            "summary": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "ok": { "type": "boolean" },
+                    "noop": { "type": "boolean" },
+                    "noop_reason": { "type": ["string", "null"] },
+                    "error_code": { "type": "string" },
+                    "error_code_docs": { "type": "string" },
+                    "message": { "type": "string" },
+                    "suggestions": { "type": "array", "items": { "type": "string" } },
+                    "graph_built": { "type": "boolean" },
+                    "state": { "type": "string" },
+                    "started_at_ms": { "type": "integer" },
+                    "finished_at_ms": { "type": "integer" },
+                    "duration_ms": { "type": "integer" },
+                    "stage_count": { "type": "integer" },
+                    "supported_stage_count": { "type": "integer" }
+                },
+                "required": ["ok", "noop", "noop_reason", "error_code", "error_code_docs", "message", "suggestions", "graph_built", "state", "started_at_ms", "finished_at_ms", "duration_ms", "stage_count", "supported_stage_count"]
+            },
+            "warnings": { "type": "array", "items": { "type": "string" } },
+            "atlas_provenance": { "type": "object" },
+            "atlas_freshness": { "type": "object" }
+        }),
+        &[
+            "tool",
+            "mode",
+            "scope",
+            "dry_run",
+            "planned_stages",
+            "executed_stages",
+            "summary",
+            "warnings",
+            "atlas_provenance",
+        ],
+        Some(serde_json::json!({
+            "postprocess_stage": postprocess_stage_schema(),
+        })),
+    )
+}
+
+fn status_output_schema() -> Value {
+    normalized_tool_output_schema(
+        serde_json::json!({
+            "graph_state": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "graph_built": { "type": "boolean" },
+                    "build_state": { "type": ["string", "null"] },
+                    "build_last_error": { "type": ["string", "null"] },
+                    "build_budget_stop_reason": { "type": ["string", "null"] },
+                    "stale_index": { "type": "boolean" },
+                    "pending_graph_change_count": { "type": "integer" },
+                    "pending_graph_changes": { "type": "array", "items": { "type": "string" } },
+                    "execution_state": { "type": "string" },
+                    "connection_mode": { "type": "string" },
+                    "read_pool_active": { "type": "boolean" }
+                },
+                "required": ["graph_built", "build_state", "build_last_error", "build_budget_stop_reason", "stale_index", "pending_graph_change_count", "pending_graph_changes", "execution_state", "connection_mode", "read_pool_active"]
+            },
+            "db_state": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "path": { "type": "string" },
+                    "exists": { "type": "boolean" },
+                    "open_ok": { "type": "boolean" },
+                    "open_error": { "type": ["string", "null"] },
+                    "query_error": { "type": ["string", "null"] },
+                    "build_status": { "type": ["object", "null"] }
+                },
+                "required": ["path", "exists", "open_ok", "open_error", "query_error", "build_status"]
+            },
+            "indexed_file_count": { "type": "integer" },
+            "node_count": { "type": "integer" },
+            "edge_count": { "type": "integer" },
+            "last_indexed_at": { "type": ["string", "null"] },
+            "failure_category": { "type": "string" },
+            "ready": { "type": "boolean" },
+            "safe_for_symbol_lookup": { "type": "boolean" },
+            "safe_for_analysis": { "type": "boolean" },
+            "retrieval_index": { "type": "object" },
+            "summary": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "message": { "type": "string" },
+                    "suggestions": { "type": "array", "items": { "type": "string" } },
+                    "error_code_docs": { "type": "string" }
+                },
+                "required": ["message", "suggestions", "error_code_docs"]
+            },
+            "warnings": { "type": "array", "items": { "type": "string" } },
+            "atlas_provenance": { "type": "object" },
+            "atlas_freshness": { "type": "object" }
+        }),
+        &[
+            "tool",
+            "graph_state",
+            "db_state",
+            "indexed_file_count",
+            "node_count",
+            "edge_count",
+            "last_indexed_at",
+            "failure_category",
+            "atlas_provenance",
+        ],
+        None,
+    )
+}
+
+fn doctor_output_schema() -> Value {
+    normalized_tool_output_schema(
+        serde_json::json!({
+            "overall_status": { "type": "string" },
+            "checks": { "type": "array", "items": { "$ref": "#/$defs/doctor_check" } },
+            "summary": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "total_count": { "type": "integer" },
+                    "pass_count": { "type": "integer" },
+                    "fail_count": { "type": "integer" },
+                    "message": { "type": "string" },
+                    "suggestions": { "type": "array", "items": { "type": "string" } },
+                    "error_code_docs": { "type": "string" }
+                },
+                "required": ["total_count", "pass_count", "fail_count", "message", "suggestions", "error_code_docs"]
+            },
+            "warnings": { "type": "array", "items": { "type": "string" } },
+            "atlas_provenance": { "type": "object" },
+            "atlas_freshness": { "type": "object" }
+        }),
+        &[
+            "tool",
+            "overall_status",
+            "checks",
+            "summary",
+            "atlas_provenance",
+        ],
+        Some(serde_json::json!({
+            "doctor_check": doctor_check_schema(),
+        })),
+    )
+}
+
+fn db_check_output_schema() -> Value {
+    normalized_tool_output_schema(
+        serde_json::json!({
+            "ok": { "type": "boolean" },
+            "integrity": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "ok": { "type": "boolean" },
+                    "issues": { "type": "array", "items": { "type": "string" } },
+                    "issue_count": { "type": "integer" }
+                },
+                "required": ["ok", "issues", "issue_count"]
+            },
+            "orphan_nodes": { "type": "array", "items": { "$ref": "#/$defs/orphan_node" } },
+            "dangling_edges": { "type": "array", "items": { "$ref": "#/$defs/dangling_edge_diagnostic" } },
+            "noncanonical_path_rows": { "type": "array", "items": { "type": "string" } },
+            "summary": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "ok": { "type": "boolean" },
+                    "failure_category": { "type": "string" },
+                    "message": { "type": "string" },
+                    "suggestions": { "type": "array", "items": { "type": "string" } },
+                    "error_code_docs": { "type": "string" },
+                    "orphan_node_count": { "type": "integer" },
+                    "dangling_edge_count": { "type": "integer" },
+                    "noncanonical_path_row_count": { "type": "integer" }
+                },
+                "required": ["ok", "failure_category", "message", "suggestions", "error_code_docs", "orphan_node_count", "dangling_edge_count", "noncanonical_path_row_count"]
+            },
+            "warnings": { "type": "array", "items": { "type": "string" } },
+            "db_path": { "type": "string" },
+            "atlas_provenance": { "type": "object" },
+            "atlas_freshness": { "type": "object" }
+        }),
+        &[
+            "tool",
+            "ok",
+            "integrity",
+            "orphan_nodes",
+            "dangling_edges",
+            "noncanonical_path_rows",
+            "summary",
+            "atlas_provenance",
+        ],
+        Some(serde_json::json!({
+            "orphan_node": orphan_node_schema(),
+            "dangling_edge_diagnostic": dangling_edge_diagnostic_schema(),
+        })),
+    )
+}
+
+fn debug_graph_output_schema() -> Value {
+    normalized_tool_output_schema(
+        serde_json::json!({
+            "node_counts_by_kind": { "type": "array", "items": { "type": "array" } },
+            "edge_counts_by_kind": { "type": "array", "items": { "type": "array" } },
+            "top_files": { "type": "array", "items": { "$ref": "#/$defs/debug_top_file" } },
+            "orphan_nodes": { "type": "array", "items": { "$ref": "#/$defs/orphan_node" } },
+            "dangling_edges": { "type": "array", "items": { "$ref": "#/$defs/dangling_edge_diagnostic" } },
+            "summary": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "node_count": { "type": "integer" },
+                    "edge_count": { "type": "integer" },
+                    "file_count": { "type": "integer" },
+                    "top_file_count": { "type": "integer" },
+                    "orphan_node_count": { "type": "integer" },
+                    "dangling_edge_count": { "type": "integer" }
+                },
+                "required": ["node_count", "edge_count", "file_count", "top_file_count", "orphan_node_count", "dangling_edge_count"]
+            },
+            "warnings": { "type": "array", "items": { "type": "string" } },
+            "atlas_provenance": { "type": "object" },
+            "atlas_freshness": { "type": "object" }
+        }),
+        &[
+            "tool",
+            "node_counts_by_kind",
+            "edge_counts_by_kind",
+            "top_files",
+            "orphan_nodes",
+            "dangling_edges",
+            "summary",
+            "atlas_provenance",
+        ],
+        Some(serde_json::json!({
+            "debug_top_file": debug_top_file_schema(),
+            "orphan_node": orphan_node_schema(),
+            "dangling_edge_diagnostic": dangling_edge_diagnostic_schema(),
+        })),
+    )
+}
+
+fn explain_query_output_schema() -> Value {
+    normalized_tool_output_schema(
+        serde_json::json!({
+            "input": { "$ref": "#/$defs/explain_query_input" },
+            "normalized_query": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "active_query_mode": { "type": "string" },
+                    "search_path": { "type": "string" },
+                    "indexed_node_count": { "type": ["integer", "null"] },
+                    "db_exists": { "type": "boolean" },
+                    "ranking_factors": { "type": "array", "items": { "type": "string" } },
+                    "filters_applied": { "$ref": "#/$defs/explain_query_filters" },
+                    "active_capabilities": { "$ref": "#/$defs/backend_capabilities" }
+                },
+                "required": ["active_query_mode", "search_path", "indexed_node_count", "db_exists", "ranking_factors", "filters_applied", "active_capabilities"]
+            },
+            "tokenization": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "fts_tokens": { "type": "array", "items": { "type": "string" } },
+                    "fts_phrase": { "type": ["string", "null"] }
+                },
+                "required": ["fts_tokens", "fts_phrase"]
+            },
+            "fts_plan": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "enabled": { "type": "boolean" },
+                    "phrase": { "type": ["string", "null"] },
+                    "token_count": { "type": "integer" },
+                    "limit": { "type": "integer" },
+                    "semantic": { "type": "boolean" },
+                    "expand": { "type": "boolean" },
+                    "include_files": { "type": "boolean" }
+                },
+                "required": ["enabled", "phrase", "token_count", "limit", "semantic", "expand", "include_files"]
+            },
+            "regex_plan": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "enabled": { "type": "boolean" },
+                    "pattern": { "type": ["string", "null"] },
+                    "valid": { "type": "boolean" },
+                    "error": { "type": ["string", "null"] }
+                },
+                "required": ["enabled", "pattern", "valid", "error"]
+            },
+            "warnings": { "type": "array", "items": { "type": "string" } },
+            "latency_ms": { "type": ["integer", "null"] },
+            "result_count": { "type": "integer" },
+            "matches": { "type": "array", "items": { "$ref": "#/$defs/explain_query_match" } },
+            "atlas_provenance": { "type": "object" },
+            "atlas_freshness": { "type": "object" }
+        }),
+        &[
+            "tool",
+            "input",
+            "normalized_query",
+            "tokenization",
+            "fts_plan",
+            "regex_plan",
+            "warnings",
+            "matches",
+            "atlas_provenance",
+        ],
+        Some(serde_json::json!({
+            "explain_query_input": explain_query_input_schema(),
+            "explain_query_filters": explain_query_filters_schema(),
+            "backend_capabilities": backend_capabilities_schema(),
+            "explain_query_match": explain_query_match_schema(),
+        })),
+    )
+}
+
 fn detect_changes_output_schema() -> Value {
     normalized_tool_output_schema(
         serde_json::json!({
@@ -1861,13 +2466,6 @@ fn get_impact_radius_output_schema() -> Value {
                 ]
             },
             "truncated": { "type": "boolean" },
-            "changed_file_count": { "type": "integer" },
-            "changed_node_count": { "type": "integer" },
-            "changed_nodes": { "type": "array", "items": { "$ref": "#/$defs/compact_node" } },
-            "impacted_node_count": { "type": "integer" },
-            "impacted_nodes": { "type": "array", "items": { "$ref": "#/$defs/compact_node" } },
-            "impacted_file_count": { "type": "integer" },
-            "relevant_edge_count": { "type": "integer" },
             "relevant_edges": { "type": "array", "items": { "$ref": "#/$defs/compact_edge" } },
             "seed_budgets": { "type": "array", "items": { "$ref": "#/$defs/seed_budget" } },
             "traversal_budget": {
@@ -1876,7 +2474,6 @@ fn get_impact_radius_output_schema() -> Value {
                     { "type": "null" }
                 ]
             },
-            "budget_status": { "type": "string" },
             "atlas_provenance": { "type": "object" },
             "atlas_freshness": { "type": "object" }
         }),
@@ -1921,7 +2518,6 @@ fn get_review_context_output_schema() -> Value {
             "files_dropped": { "type": "integer" },
             "ambiguity_query": { "type": ["string", "null"] },
             "ambiguity_candidates": { "type": "array", "items": { "type": "string" } },
-            "saved_context_sources": { "type": "array", "items": { "$ref": "#/$defs/packaged_saved_source" } },
             "seed_budgets": { "type": "array", "items": { "$ref": "#/$defs/seed_budget" } },
             "traversal_budget": {
                 "oneOf": [
@@ -2005,58 +2601,7 @@ fn get_minimal_context_output_schema() -> Value {
                     "truncated"
                 ]
             },
-            "changed_file_count": { "type": "integer" },
-            "deleted_file_count": { "type": "integer" },
-            "changed_files": { "type": "array", "items": { "type": "string" } },
-            "impact": {
-                "type": "object",
-                "additionalProperties": false,
-                "properties": {
-                    "truncated": { "type": "boolean" },
-                    "changed_file_count": { "type": "integer" },
-                    "changed_node_count": { "type": "integer" },
-                    "changed_nodes": { "type": "array", "items": { "$ref": "#/$defs/compact_node" } },
-                    "impacted_node_count": { "type": "integer" },
-                    "impacted_nodes": { "type": "array", "items": { "$ref": "#/$defs/compact_node" } },
-                    "impacted_file_count": { "type": "integer" },
-                    "impacted_files": { "type": "array", "items": { "type": "string" } },
-                    "relevant_edge_count": { "type": "integer" },
-                    "relevant_edges": { "type": "array", "items": { "$ref": "#/$defs/compact_edge" } },
-                    "seed_budgets": { "type": "array", "items": { "$ref": "#/$defs/seed_budget" } },
-                    "traversal_budget": {
-                        "oneOf": [
-                            { "$ref": "#/$defs/traversal_budget" },
-                            { "type": "null" }
-                        ]
-                    },
-                    "budget_status": { "type": "string" },
-                    "budget_hit": { "type": "boolean" },
-                    "budget_name": { "type": "string" },
-                    "budget_limit": { "type": "integer" },
-                    "budget_observed": { "type": "integer" },
-                    "partial": { "type": "boolean" },
-                    "safe_to_answer": { "type": "boolean" }
-                },
-                "required": [
-                    "truncated",
-                    "changed_file_count",
-                    "changed_node_count",
-                    "changed_nodes",
-                    "impacted_node_count",
-                    "impacted_nodes",
-                    "impacted_file_count",
-                    "impacted_files",
-                    "relevant_edge_count",
-                    "relevant_edges",
-                    "budget_status",
-                    "budget_hit",
-                    "budget_name",
-                    "budget_limit",
-                    "budget_observed",
-                    "partial",
-                    "safe_to_answer"
-                ]
-            },
+
             "atlas_provenance": { "type": "object" },
             "atlas_freshness": { "type": "object" }
         }),
@@ -2105,14 +2650,8 @@ fn explain_change_output_schema() -> Value {
                     "impacted_node_count"
                 ]
             },
-            "summary_text": { "type": "string" },
-            "changed_file_count": { "type": "integer" },
-            "changed_symbol_count": { "type": "integer" },
-            "changed_by_kind": { "$ref": "#/$defs/explain_changed_by_kind" },
             "diff_summary": { "$ref": "#/$defs/explain_diff_summary" },
             "changed_symbols": { "type": "array", "items": { "$ref": "#/$defs/explain_changed_symbol" } },
-            "impacted_file_count": { "type": "integer" },
-            "impacted_node_count": { "type": "integer" },
             "high_impact_nodes": { "type": "array", "items": { "$ref": "#/$defs/workflow_focus_node" } },
             "impacted_components": { "type": "array", "items": { "$ref": "#/$defs/workflow_component" } },
             "call_chains": { "type": "array", "items": { "$ref": "#/$defs/workflow_call_chain" } },
@@ -2175,15 +2714,7 @@ fn traverse_graph_output_schema() -> Value {
                 ]
             },
             "truncated": { "type": "boolean" },
-            "changed_nodes": { "type": "array", "items": { "$ref": "#/$defs/compact_node" } },
-            "impacted_nodes": { "type": "array", "items": { "$ref": "#/$defs/compact_node" } },
-            "relevant_edges": { "type": "array", "items": { "$ref": "#/$defs/compact_edge" } },
-            "changed_file_count": { "type": "integer" },
-            "changed_node_count": { "type": "integer" },
-            "impacted_node_count": { "type": "integer" },
-            "impacted_file_count": { "type": "integer" },
             "impacted_files": { "type": "array", "items": { "type": "string" } },
-            "relevant_edge_count": { "type": "integer" },
             "seed_budgets": { "type": "array", "items": { "$ref": "#/$defs/seed_budget" } },
             "traversal_budget": {
                 "oneOf": [
@@ -2191,7 +2722,6 @@ fn traverse_graph_output_schema() -> Value {
                     { "type": "null" }
                 ]
             },
-            "budget_status": { "type": "string" },
             "atlas_provenance": { "type": "object" },
             "atlas_freshness": { "type": "object" }
         }),
@@ -2238,7 +2768,6 @@ fn get_context_output_schema() -> Value {
             "truncated": { "type": "boolean" },
             "nodes_dropped": { "type": "integer" },
             "edges_dropped": { "type": "integer" },
-            "saved_context_sources": { "type": "array", "items": { "$ref": "#/$defs/packaged_saved_source" } },
             "seed_budgets": { "type": "array", "items": { "$ref": "#/$defs/seed_budget" } },
             "traversal_budget": {
                 "oneOf": [

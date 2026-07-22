@@ -71,6 +71,13 @@ fn normalized_contract_tool(name: &str) -> bool {
             | "explain_change"
             | "traverse_graph"
             | "get_context"
+            | "build_or_update_graph"
+            | "postprocess_graph"
+            | "status"
+            | "doctor"
+            | "db_check"
+            | "debug_graph"
+            | "explain_query"
     )
 }
 

@@ -29,16 +29,21 @@ fn status_healthy_repo_returns_ok() {
     let text = unwrap_tool_text(resp);
     let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
 
-    assert_eq!(v["ok"].as_bool(), Some(true));
-    assert_eq!(v["error_code"].as_str(), Some("none"));
+    assert_eq!(v["ready"].as_bool(), Some(true));
+    assert_eq!(v["failure_category"].as_str(), Some("none"));
     assert_error_code_doc_link(
-        v["error_code_docs"].as_str().expect("error_code_docs"),
+        v["summary"]["error_code_docs"]
+            .as_str()
+            .expect("error_code_docs"),
         "none",
     );
-    assert!(v["message"].as_str().is_some());
-    assert!(v["suggestions"].as_array().is_some());
-    assert_eq!(v["build_state"].as_str(), Some("built"));
-    assert_eq!(v["build_status"]["files_accepted"].as_i64(), Some(3));
+    assert!(v["summary"]["message"].as_str().is_some());
+    assert!(v["summary"]["suggestions"].as_array().is_some());
+    assert_eq!(v["graph_state"]["build_state"].as_str(), Some("built"));
+    assert_eq!(
+        v["db_state"]["build_status"]["files_accepted"].as_i64(),
+        Some(3)
+    );
     assert!(v["node_count"].as_i64().unwrap_or(0) > 0);
 }
 
@@ -57,15 +62,22 @@ fn status_missing_db_returns_error_code() {
     let text = unwrap_tool_text(resp);
     let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
 
-    assert_eq!(v["ok"].as_bool(), Some(false));
-    assert_eq!(v["error_code"].as_str(), Some("missing_graph_db"));
+    assert_eq!(v["ready"].as_bool(), Some(false));
+    assert_eq!(v["failure_category"].as_str(), Some("missing_graph_db"));
     assert_error_code_doc_link(
-        v["error_code_docs"].as_str().expect("error_code_docs"),
+        v["summary"]["error_code_docs"]
+            .as_str()
+            .expect("error_code_docs"),
         "missing_graph_db",
     );
-    assert!(v["message"].as_str().is_some());
-    assert!(!v["suggestions"].as_array().expect("suggestions").is_empty());
-    assert_eq!(v["db_exists"].as_bool(), Some(false));
+    assert!(v["summary"]["message"].as_str().is_some());
+    assert!(
+        !v["summary"]["suggestions"]
+            .as_array()
+            .expect("suggestions")
+            .is_empty()
+    );
+    assert_eq!(v["db_state"]["exists"].as_bool(), Some(false));
 }
 
 #[test]
@@ -82,10 +94,13 @@ fn status_build_failed_returns_error_code() {
     let text = unwrap_tool_text(resp);
     let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
 
-    assert_eq!(v["ok"].as_bool(), Some(false));
-    assert_eq!(v["error_code"].as_str(), Some("failed_build"));
-    assert!(v["message"].as_str().is_some());
-    assert_eq!(v["build_state"].as_str(), Some("build_failed"));
+    assert_eq!(v["ready"].as_bool(), Some(false));
+    assert_eq!(v["failure_category"].as_str(), Some("failed_build"));
+    assert!(v["summary"]["message"].as_str().is_some());
+    assert_eq!(
+        v["graph_state"]["build_state"].as_str(),
+        Some("build_failed")
+    );
 }
 
 #[test]
@@ -99,10 +114,10 @@ fn status_interrupted_build_returns_category() {
     let text = unwrap_tool_text(resp);
     let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
 
-    assert_eq!(v["ok"].as_bool(), Some(false));
-    assert_eq!(v["error_code"].as_str(), Some("interrupted_build"));
-    assert!(v["message"].as_str().is_some());
-    assert_eq!(v["build_state"].as_str(), Some("building"));
+    assert_eq!(v["ready"].as_bool(), Some(false));
+    assert_eq!(v["failure_category"].as_str(), Some("interrupted_build"));
+    assert!(v["summary"]["message"].as_str().is_some());
+    assert_eq!(v["graph_state"]["build_state"].as_str(), Some("building"));
 }
 
 #[test]
@@ -120,12 +135,15 @@ fn status_stale_graph_returns_error_code() {
     let text = unwrap_tool_text(resp);
     let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
 
-    assert_eq!(v["ok"].as_bool(), Some(false));
-    assert_eq!(v["error_code"].as_str(), Some("stale_index"));
-    assert_eq!(v["stale_index"].as_bool(), Some(true));
-    assert_eq!(v["pending_graph_change_count"].as_u64(), Some(1));
+    assert_eq!(v["ready"].as_bool(), Some(false));
+    assert_eq!(v["failure_category"].as_str(), Some("stale_index"));
+    assert_eq!(v["graph_state"]["stale_index"].as_bool(), Some(true));
     assert_eq!(
-        v["pending_graph_changes"][0].as_str(),
+        v["graph_state"]["pending_graph_change_count"].as_u64(),
+        Some(1)
+    );
+    assert_eq!(
+        v["graph_state"]["pending_graph_changes"][0].as_str(),
         Some("src/service.rs")
     );
 }
@@ -153,13 +171,17 @@ fn status_dirty_file_is_not_stale_after_update_indexes_worktree() {
     let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
 
     assert_ne!(
-        v["error_code"].as_str(),
+        v["failure_category"].as_str(),
         Some("stale_index"),
         "status={v:?}"
     );
-    assert_eq!(v["stale_index"].as_bool(), Some(false), "status={v:?}");
     assert_eq!(
-        v["pending_graph_change_count"].as_u64(),
+        v["graph_state"]["stale_index"].as_bool(),
+        Some(false),
+        "status={v:?}"
+    );
+    assert_eq!(
+        v["graph_state"]["pending_graph_change_count"].as_u64(),
         Some(0),
         "status={v:?}"
     );
@@ -223,10 +245,10 @@ fn status_schema_mismatch_returns_error_code() {
     let text = unwrap_tool_text(resp);
     let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
 
-    assert_eq!(v["ok"].as_bool(), Some(false));
-    assert_eq!(v["error_code"].as_str(), Some("schema_mismatch"));
+    assert_eq!(v["ready"].as_bool(), Some(false));
+    assert_eq!(v["failure_category"].as_str(), Some("schema_mismatch"));
     assert!(
-        v["graph_query_error"]
+        v["db_state"]["query_error"]
             .as_str()
             .is_some_and(|text| text.contains("graph_build_state"))
     );
@@ -277,21 +299,20 @@ fn doctor_returns_checks_array() {
     let text = unwrap_tool_text(resp);
     let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
 
-    assert!(v.get("ok").is_some());
-    assert!(v["error_code"].as_str().is_some());
-    assert!(v["message"].as_str().is_some());
-    assert!(v["suggestions"].as_array().is_some());
+    assert!(v["overall_status"].as_str().is_some());
+    assert!(v["summary"]["message"].as_str().is_some());
+    assert!(v["summary"]["suggestions"].as_array().is_some());
     let checks = v["checks"].as_array().expect("checks must be an array");
     assert!(!checks.is_empty());
     for item in checks {
-        assert!(item.get("check").is_some());
-        assert!(item.get("label").is_some());
-        assert!(item.get("ok").is_some());
-        assert!(item.get("detail").is_some());
+        assert!(item.get("name").is_some());
+        assert!(item.get("status").is_some());
+        assert!(item.get("message").is_some());
+        assert!(item.get("details").is_some());
     }
-    let db_item = checks.iter().find(|c| c["check"] == "db_file");
+    let db_item = checks.iter().find(|c| c["name"] == "db_file");
     assert!(db_item.is_some());
-    assert_eq!(db_item.unwrap()["ok"].as_bool(), Some(true));
+    assert_eq!(db_item.unwrap()["status"].as_str(), Some("pass"));
 }
 
 #[test]
@@ -310,13 +331,12 @@ fn doctor_missing_db_fails_db_check() {
     let text = unwrap_tool_text(resp);
     let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
 
-    assert_eq!(v["ok"].as_bool(), Some(false));
-    assert_eq!(v["error_code"].as_str(), Some("checks_failed"));
-    assert!(v["message"].as_str().is_some());
+    assert_eq!(v["overall_status"].as_str(), Some("fail"));
+    assert!(v["summary"]["message"].as_str().is_some());
     let checks = v["checks"].as_array().expect("checks array");
-    let db_file_item = checks.iter().find(|c| c["check"] == "db_file");
+    let db_file_item = checks.iter().find(|c| c["name"] == "db_file");
     assert!(db_file_item.is_some());
-    assert_eq!(db_file_item.unwrap()["ok"].as_bool(), Some(false));
+    assert_eq!(db_file_item.unwrap()["status"].as_str(), Some("fail"));
 }
 
 #[test]
@@ -334,11 +354,11 @@ fn doctor_retrieval_index_unavailable_sets_issue_code() {
     let checks = v["checks"].as_array().expect("checks array");
     let retrieval = checks
         .iter()
-        .find(|item| item["check"] == "retrieval_index")
+        .find(|item| item["name"] == "retrieval_index")
         .expect("retrieval check");
-    assert_eq!(retrieval["ok"].as_bool(), Some(false));
+    assert_eq!(retrieval["status"].as_str(), Some("fail"));
     assert_eq!(
-        retrieval["issue_code"].as_str(),
+        retrieval["details"]["issue_code"].as_str(),
         Some("retrieval_index_unavailable")
     );
 }
@@ -359,12 +379,15 @@ fn db_check_reports_noncanonical_path_rows() {
     let text = unwrap_tool_text(resp);
     let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
 
-    assert_eq!(v["ok"].as_bool(), Some(false));
-    assert_eq!(v["error_code"].as_str(), Some("noncanonical_path_rows"));
+    assert_eq!(v["summary"]["ok"].as_bool(), Some(false));
+    assert_eq!(
+        v["summary"]["failure_category"].as_str(),
+        Some("noncanonical_path_rows")
+    );
     assert!(
-        v["integrity_issues"]
+        v["noncanonical_path_rows"]
             .as_array()
-            .expect("integrity_issues array")
+            .expect("noncanonical_path_rows array")
             .iter()
             .any(|issue| issue
                 .as_str()
@@ -381,12 +404,12 @@ fn db_check_healthy_returns_ok() {
     let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
 
     assert_eq!(v["ok"].as_bool(), Some(true));
-    assert_eq!(v["error_code"].as_str(), Some("none"));
-    assert!(v["message"].as_str().is_some());
-    assert!(v["suggestions"].as_array().is_some());
-    let issues = v["integrity_issues"]
+    assert_eq!(v["summary"]["failure_category"].as_str(), Some("none"));
+    assert!(v["summary"]["message"].as_str().is_some());
+    assert!(v["summary"]["suggestions"].as_array().is_some());
+    let issues = v["integrity"]["issues"]
         .as_array()
-        .expect("integrity_issues array");
+        .expect("integrity issues array");
     assert_eq!(issues.len(), 0);
 }
 
@@ -414,11 +437,11 @@ fn debug_graph_returns_node_counts() {
     let text = unwrap_tool_text(resp);
     let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
 
-    assert!(v["nodes"].as_i64().unwrap_or(0) > 0);
-    assert!(v["edges"].as_i64().unwrap_or(0) > 0);
-    assert!(v["files"].as_i64().unwrap_or(0) > 0);
-    assert!(v.get("edges_by_kind").is_some());
-    assert!(v.get("top_files_by_node_count").is_some());
+    assert!(v["summary"]["node_count"].as_i64().unwrap_or(0) > 0);
+    assert!(v["summary"]["edge_count"].as_i64().unwrap_or(0) > 0);
+    assert!(v["summary"]["file_count"].as_i64().unwrap_or(0) > 0);
+    assert!(v.get("edge_counts_by_kind").is_some());
+    assert!(v.get("top_files").is_some());
 }
 
 #[test]

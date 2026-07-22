@@ -3,8 +3,11 @@ use atlas_core::BudgetManager;
 use atlas_core::NodeKind;
 use camino::Utf8Path;
 use serde::Serialize;
+use serde_json::json;
 use std::sync::OnceLock;
 use std::time::Instant;
+
+use crate::tool_result::{ToolSuccessEnvelope, normalized_tool_result_value};
 
 use super::shared::{
     derive_graph_readiness, error_code_docs, error_message, error_suggestions, failure_category,
@@ -266,15 +269,6 @@ pub(super) fn tool_status(
     );
     let ok = category == "none" && graph_built;
 
-    // Derive canonical execution state from the same inputs already computed
-    // above. This ensures `execution_state` in the response is authoritative
-    // and consistent with what graph-backed tools use to gate themselves.
-    //
-    // When the store is open, delegate to the shared derivation helper.
-    // When the store could not be opened (or was never attempted because
-    // db_exists=false), reconstruct a minimal readiness record directly so
-    // the db_open_error is passed verbatim: a genuine open failure may signal
-    // corruption, while a missing db (db_open_error=None) produces Missing.
     let execution_state = if let Some(store) = store.as_ref() {
         derive_graph_readiness(store, repo_root, db_path).execution_state
     } else {
@@ -296,56 +290,81 @@ pub(super) fn tool_status(
         .execution_state
     };
 
-    let result = serde_json::json!({
-        "ok": ok,
-        "error_code": category,
-        "message": error_message(category),
-        "suggestions": error_suggestions(category),
-        "error_code_docs": error_code_docs(category),
-        "execution_state": execution_state.as_str(),
-        "repo_root": repo_root,
-        "db_path": db_path,
-        "db_exists": db_exists,
-        "db_open_error": db_open_error,
-        "graph_query_error": graph_query_error,
-        "graph_built": graph_built,
-        "build_state": build_state_str,
-        "build_last_error": build_status.as_ref().and_then(|bs| bs.last_error.as_deref()),
-        "build_budget_stop_reason": build_status
-            .as_ref()
-            .and_then(|bs| bs.budget_stop_reason.as_deref()),
-        "build_status": build_status.as_ref().map(|bs| {
-            serde_json::json!({
-                "state": build_state_str,
-                "files_discovered": bs.files_discovered,
-                "files_processed": bs.files_processed,
-                "files_accepted": bs.files_accepted,
-                "files_skipped_by_byte_budget": bs.files_skipped_by_byte_budget,
-                "files_failed": bs.files_failed,
-                "bytes_accepted": bs.bytes_accepted,
-                "bytes_skipped": bs.bytes_skipped,
-                "nodes_written": bs.nodes_written,
-                "edges_written": bs.edges_written,
-                "budget_stop_reason": bs.budget_stop_reason,
-                "last_built_at": bs.last_built_at,
-                "last_error": bs.last_error,
-            })
-        }),
-        "node_count": node_count,
-        "edge_count": edge_count,
-        "file_count": file_count,
-        "last_indexed_at": last_indexed_at,
-        "stale_index": stale_index,
-        "pending_graph_change_count": pending_graph_changes.len(),
-        "pending_graph_changes": pending_graph_changes,
-        "retrieval_index": retrieval_index,
-        // Current SQLite connection/concurrency mode. Pooled graph reads are
-        // not implemented; a future read pool would change this field.
-        "connection_mode": "single_connection_per_store",
-        "read_pool_active": false,
+    let mut warnings = Vec::new();
+    if stale_index {
+        warnings.push(format!(
+            "graph index is stale for {} graph-relevant file(s)",
+            pending_graph_changes.len()
+        ));
+    }
+    if let Some(error) = db_open_error.clone() {
+        warnings.push(format!("database open failed: {error}"));
+    }
+    if let Some(error) = graph_query_error.clone() {
+        warnings.push(format!("graph query failed: {error}"));
+    }
+    if let Some(error) = retrieval_index.last_error.clone() {
+        warnings.push(format!("retrieval index unavailable: {error}"));
+    }
+
+    let build_status_value = build_status.as_ref().map(|bs| {
+        json!({
+            "state": build_state_str,
+            "files_discovered": bs.files_discovered,
+            "files_processed": bs.files_processed,
+            "files_accepted": bs.files_accepted,
+            "files_skipped_by_byte_budget": bs.files_skipped_by_byte_budget,
+            "files_failed": bs.files_failed,
+            "bytes_accepted": bs.bytes_accepted,
+            "bytes_skipped": bs.bytes_skipped,
+            "nodes_written": bs.nodes_written,
+            "edges_written": bs.edges_written,
+            "budget_stop_reason": bs.budget_stop_reason,
+            "last_built_at": bs.last_built_at,
+            "last_error": bs.last_error,
+        })
     });
 
-    tool_result_value(&result, output_format)
+    let payload = json!({
+        "node_count": node_count,
+        "edge_count": edge_count,
+        "last_indexed_at": last_indexed_at,
+        "graph_state": {
+            "graph_built": graph_built,
+            "build_state": build_state_str,
+            "build_last_error": build_status.as_ref().and_then(|bs| bs.last_error.clone()),
+            "build_budget_stop_reason": build_status.as_ref().and_then(|bs| bs.budget_stop_reason.clone()),
+            "stale_index": stale_index,
+            "pending_graph_change_count": pending_graph_changes.len(),
+            "pending_graph_changes": pending_graph_changes,
+            "execution_state": execution_state.as_str(),
+            "connection_mode": "single_connection_per_store",
+            "read_pool_active": false,
+        },
+        "db_state": {
+            "path": db_path,
+            "exists": db_exists,
+            "open_ok": store.is_some(),
+            "open_error": db_open_error,
+            "query_error": graph_query_error,
+            "build_status": build_status_value,
+        },
+        "indexed_file_count": file_count,
+        "failure_category": category,
+        "ready": ok,
+        "safe_for_symbol_lookup": matches!(execution_state, atlas_core::GraphExecutionState::Fresh | atlas_core::GraphExecutionState::Stale),
+        "safe_for_analysis": matches!(execution_state, atlas_core::GraphExecutionState::Fresh),
+        "retrieval_index": retrieval_index,
+        "summary": {
+            "message": error_message(category),
+            "suggestions": error_suggestions(category),
+            "error_code_docs": error_code_docs(category),
+        },
+        "warnings": warnings,
+    });
+
+    let envelope = ToolSuccessEnvelope::new("status", payload);
+    normalized_tool_result_value(&envelope, output_format)
 }
 
 pub(super) fn tool_doctor(
@@ -358,7 +377,7 @@ pub(super) fn tool_doctor(
     use atlas_store_sqlite::GraphBuildState;
 
     #[derive(Serialize)]
-    struct CheckItem {
+    struct LegacyCheckItem {
         check: &'static str,
         label: &'static str,
         ok: bool,
@@ -374,9 +393,31 @@ pub(super) fn tool_doctor(
         }
     }
 
+    fn fix_hint_for(issue_code: Option<&str>, name: &str) -> Option<String> {
+        match (issue_code, name) {
+            (Some("stale_index"), _) => {
+                Some("run build_or_update_graph to refresh graph state".to_owned())
+            }
+            (Some("retrieval_index_unavailable"), _) => {
+                Some("rebuild retrieval index after graph build completes".to_owned())
+            }
+            (Some("noncanonical_path_rows"), _) => {
+                Some("rebuild graph/content state from canonical repo paths".to_owned())
+            }
+            (Some("failed_build"), _)
+            | (Some("degraded_build"), _)
+            | (Some("interrupted_build"), _) => {
+                Some("rerun build_or_update_graph and inspect build warnings".to_owned())
+            }
+            (None, "config_file") => Some("run atlas init to create .atlas/config.toml".to_owned()),
+            (None, "db_file") => Some("run atlas init then build_or_update_graph".to_owned()),
+            _ => None,
+        }
+    }
+
     macro_rules! pass {
         ($name:expr, $detail:expr) => {
-            CheckItem {
+            LegacyCheckItem {
                 check: $name,
                 label: check_label($name),
                 ok: true,
@@ -387,7 +428,7 @@ pub(super) fn tool_doctor(
     }
     macro_rules! fail {
         ($name:expr, $detail:expr) => {
-            CheckItem {
+            LegacyCheckItem {
                 check: $name,
                 label: check_label($name),
                 ok: false,
@@ -396,7 +437,7 @@ pub(super) fn tool_doctor(
             }
         };
         ($name:expr, $detail:expr, $issue_code:expr) => {
-            CheckItem {
+            LegacyCheckItem {
                 check: $name,
                 label: check_label($name),
                 ok: false,
@@ -406,7 +447,7 @@ pub(super) fn tool_doctor(
         };
     }
 
-    let mut checks: Vec<CheckItem> = Vec::new();
+    let mut checks: Vec<LegacyCheckItem> = Vec::new();
 
     match find_repo_root(Utf8Path::new(repo_root)) {
         Ok(root) => checks.push(pass!("git_root", root.as_str())),
@@ -612,7 +653,7 @@ pub(super) fn tool_doctor(
 
                 match cs.noncanonical_repo_path_sources(100) {
                     Ok(issues) if issues.is_empty() => {
-                        checks.push(pass!("content_path_identity", "ok"));
+                        checks.push(pass!("content_path_identity", "ok"))
                     }
                     Ok(issues) => checks.push(fail!(
                         "content_path_identity",
@@ -634,28 +675,56 @@ pub(super) fn tool_doctor(
         }
     }
 
-    let all_ok = checks.iter().all(|c| c.ok);
-
-    // Informational check: surface the current SQLite connection/concurrency
-    // mode so operators and agents know pooled graph reads are not active.
-    // This check always passes; it documents the current mode, not a failure
-    // state. A future read pool would update this detail string.
     checks.push(pass!(
         "connection_mode",
-        "single_connection_per_store; parallel_parse+sequential_persistence; \
-         no_read_pool (pooled graph reads not implemented)"
+        "single_connection_per_store; parallel_parse+sequential_persistence; no_read_pool (pooled graph reads not implemented)"
     ));
 
-    let ec = if all_ok { "none" } else { "checks_failed" };
-    let result = serde_json::json!({
-        "ok": all_ok,
-        "error_code": ec,
-        "message": error_message(ec),
-        "suggestions": error_suggestions(ec),
-        "error_code_docs": error_code_docs(ec),
-        "checks": checks,
+    let ok_count = checks.iter().filter(|c| c.ok).count();
+    let fail_count = checks.len().saturating_sub(ok_count);
+    let warnings = checks
+        .iter()
+        .filter(|check| !check.ok)
+        .filter_map(|check| {
+            check
+                .issue_code
+                .map(|issue| format!("{}: {issue}", check.check))
+        })
+        .collect::<Vec<_>>();
+    let normalized_checks = checks
+        .iter()
+        .map(|check| {
+            json!({
+                "name": check.check,
+                "status": if check.ok { "pass" } else { "fail" },
+                "message": &check.detail,
+                "details": {
+                    "label": check.label,
+                    "ok": check.ok,
+                    "issue_code": check.issue_code,
+                },
+                "fix_hint": fix_hint_for(check.issue_code, check.check),
+            })
+        })
+        .collect::<Vec<_>>();
+    let overall_status = if fail_count == 0 { "ok" } else { "fail" };
+
+    let payload = json!({
+        "overall_status": overall_status,
+        "checks": normalized_checks,
+        "summary": {
+            "total_count": checks.len(),
+            "pass_count": ok_count,
+            "fail_count": fail_count,
+            "message": error_message(if fail_count == 0 { "none" } else { "checks_failed" }),
+            "suggestions": error_suggestions(if fail_count == 0 { "none" } else { "checks_failed" }),
+            "error_code_docs": error_code_docs(if fail_count == 0 { "none" } else { "checks_failed" }),
+        },
+        "warnings": warnings,
     });
-    tool_result_value(&result, output_format)
+
+    let envelope = ToolSuccessEnvelope::new("doctor", payload);
+    normalized_tool_result_value(&envelope, output_format)
 }
 
 pub(super) fn tool_db_check(
@@ -679,63 +748,82 @@ pub(super) fn tool_db_check(
     let orphans = structural_orphans(&store, limit);
     let dangling = structural_dangling_edges(&store, limit);
 
-    let ok = issues.is_empty() && orphans.is_empty() && dangling.is_empty();
-    let ec = if ok {
+    let noncanonical_path_rows = issues
+        .iter()
+        .filter(|issue| issue.starts_with("noncanonical_path:"))
+        .cloned()
+        .collect::<Vec<_>>();
+    let integrity_issues = issues
+        .iter()
+        .filter(|issue| !issue.starts_with("noncanonical_path:"))
+        .cloned()
+        .collect::<Vec<_>>();
+
+    let orphan_nodes = orphans
+        .iter()
+        .map(|n| {
+            json!({
+                "kind": n.kind.as_str(),
+                "qualified_name": &n.qualified_name,
+                "file_path": &n.file_path,
+                "line_start": n.line_start,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let dangling_edges = dangling
+        .iter()
+        .map(|(id, src, tgt, kind, side)| {
+            json!({
+                "id": id,
+                "kind": kind,
+                "source_qn": src,
+                "target_qn": tgt,
+                "missing_side": side,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let ok = integrity_issues.is_empty()
+        && noncanonical_path_rows.is_empty()
+        && orphan_nodes.is_empty()
+        && dangling_edges.is_empty();
+    let failure_category = if ok {
         "none"
     } else {
         integrity_issue_code(&issues, !orphans.is_empty() || !dangling.is_empty())
     };
+    let warnings = if noncanonical_path_rows.is_empty() {
+        Vec::new()
+    } else {
+        vec![
+            "noncanonical path rows detected; rebuild graph/content state from canonical inputs"
+                .to_owned(),
+        ]
+    };
 
-    #[derive(Serialize)]
-    struct OrphanEntry<'a> {
-        kind: &'a str,
-        qualified_name: &'a str,
-        file_path: &'a str,
-        line_start: u32,
-    }
-
-    #[derive(Serialize)]
-    struct DanglingEntry {
-        id: i64,
-        kind: String,
-        source_qn: String,
-        target_qn: String,
-        missing_side: String,
-    }
-
-    let orphan_nodes: Vec<OrphanEntry<'_>> = orphans
-        .iter()
-        .map(|n| OrphanEntry {
-            kind: n.kind.as_str(),
-            qualified_name: &n.qualified_name,
-            file_path: &n.file_path,
-            line_start: n.line_start,
-        })
-        .collect();
-
-    let dangling_edges: Vec<DanglingEntry> = dangling
-        .iter()
-        .map(|(id, src, tgt, kind, side)| DanglingEntry {
-            id: *id,
-            kind: kind.clone(),
-            source_qn: src.clone(),
-            target_qn: tgt.clone(),
-            missing_side: side.to_string(),
-        })
-        .collect();
-
-    let result = serde_json::json!({
+    let payload = json!({
         "ok": ok,
-        "error_code": ec,
-        "message": error_message(ec),
-        "suggestions": error_suggestions(ec),
-        "error_code_docs": error_code_docs(ec),
-        "db_path": db_path,
-        "integrity_issues": issues,
-        "orphan_node_count": orphans.len(),
-        "dangling_edge_count": dangling.len(),
+        "integrity": {
+            "ok": integrity_issues.is_empty() && noncanonical_path_rows.is_empty(),
+            "issues": integrity_issues,
+            "issue_count": issues.len(),
+        },
         "orphan_nodes": orphan_nodes,
         "dangling_edges": dangling_edges,
+        "noncanonical_path_rows": noncanonical_path_rows,
+        "summary": {
+            "ok": ok,
+            "failure_category": failure_category,
+            "message": error_message(failure_category),
+            "suggestions": error_suggestions(failure_category),
+            "error_code_docs": error_code_docs(failure_category),
+            "orphan_node_count": orphans.len(),
+            "dangling_edge_count": dangling.len(),
+            "noncanonical_path_row_count": issues.iter().filter(|issue| issue.starts_with("noncanonical_path:")).count(),
+        },
+        "warnings": warnings,
+        "db_path": db_path,
     });
 
     let observed = issues.len().max(orphans.len()).max(dangling.len());
@@ -749,7 +837,8 @@ pub(super) fn tool_db_check(
         );
     }
 
-    let mut response = tool_result_value(&result, output_format)?;
+    let envelope = ToolSuccessEnvelope::new("db_check", payload);
+    let mut response = normalized_tool_result_value(&envelope, output_format)?;
     inject_budget_metadata(
         &mut response,
         &budgets.summary(
@@ -790,60 +879,51 @@ pub(super) fn tool_debug_graph(
         .dangling_edges(limit)
         .context("dangling edge query failed")?;
 
-    #[derive(Serialize)]
-    struct OrphanEntry<'a> {
-        kind: &'a str,
-        qualified_name: &'a str,
-        file_path: &'a str,
-        line_start: u32,
-    }
-
-    #[derive(Serialize)]
-    struct DanglingEntry {
-        id: i64,
-        kind: String,
-        source_qn: String,
-        target_qn: String,
-        missing_side: String,
-    }
-
-    let orphan_nodes: Vec<OrphanEntry<'_>> = orphans
+    let orphan_nodes = orphans
         .iter()
-        .map(|n| OrphanEntry {
-            kind: n.kind.as_str(),
-            qualified_name: &n.qualified_name,
-            file_path: &n.file_path,
-            line_start: n.line_start,
+        .map(|n| {
+            json!({
+                "kind": n.kind.as_str(),
+                "qualified_name": &n.qualified_name,
+                "file_path": &n.file_path,
+                "line_start": n.line_start,
+            })
         })
-        .collect();
+        .collect::<Vec<_>>();
 
-    let dangling_edges: Vec<DanglingEntry> = dangling
+    let dangling_edges = dangling
         .iter()
-        .map(|(id, src, tgt, kind, side)| DanglingEntry {
-            id: *id,
-            kind: kind.clone(),
-            source_qn: src.clone(),
-            target_qn: tgt.clone(),
-            missing_side: side.to_string(),
+        .map(|(id, src, tgt, kind, side)| {
+            json!({
+                "id": id,
+                "kind": kind,
+                "source_qn": src,
+                "target_qn": tgt,
+                "missing_side": side,
+            })
         })
-        .collect();
+        .collect::<Vec<_>>();
 
-    let result = serde_json::json!({
-        "ok": true,
-        "error_code": "none",
-        "message": error_message("none"),
-        "suggestions": error_suggestions("none"),
-        "error_code_docs": error_code_docs("none"),
-        "nodes": stats.node_count,
-        "edges": stats.edge_count,
-        "files": stats.file_count,
-        "nodes_by_kind": stats.nodes_by_kind,
-        "edges_by_kind": edge_kinds,
-        "top_files_by_node_count": top_files,
-        "orphan_node_count": orphans.len(),
-        "dangling_edge_count": dangling.len(),
+    let top_file_rows = top_files
+        .iter()
+        .map(|(path, count)| json!({ "path": path, "node_count": count }))
+        .collect::<Vec<_>>();
+
+    let payload = json!({
+        "node_counts_by_kind": stats.nodes_by_kind,
+        "edge_counts_by_kind": edge_kinds,
+        "top_files": top_file_rows,
         "orphan_nodes": orphan_nodes,
         "dangling_edges": dangling_edges,
+        "summary": {
+            "node_count": stats.node_count,
+            "edge_count": stats.edge_count,
+            "file_count": stats.file_count,
+            "top_file_count": top_files.len(),
+            "orphan_node_count": orphans.len(),
+            "dangling_edge_count": dangling.len(),
+        },
+        "warnings": Vec::<String>::new(),
     });
 
     let observed = top_files.len().max(orphans.len()).max(dangling.len());
@@ -857,7 +937,8 @@ pub(super) fn tool_debug_graph(
         );
     }
 
-    let mut response = tool_result_value(&result, output_format)?;
+    let envelope = ToolSuccessEnvelope::new("debug_graph", payload);
+    let mut response = normalized_tool_result_value(&envelope, output_format)?;
     inject_budget_metadata(
         &mut response,
         &budgets.summary(

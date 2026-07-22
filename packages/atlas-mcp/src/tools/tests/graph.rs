@@ -613,10 +613,7 @@ fn traverse_graph_normalizes_alias_qname() {
     let text = unwrap_tool_text(response);
     let value: serde_json::Value = serde_json::from_str(&text).expect("parse json");
 
-    assert_eq!(
-        value["changed_nodes"][0]["qn"],
-        "src/service.rs::fn::compute"
-    );
+    assert_eq!(value["nodes"][0]["qn"], "src/service.rs::fn::compute");
 }
 
 #[test]
@@ -805,11 +802,16 @@ fn explain_query_describes_fts_path() {
     let text = unwrap_tool_text(resp);
     let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
 
-    assert_eq!(v["search_path"].as_str(), Some("fts5"));
-    let tokens = v["fts_tokens"].as_array().expect("fts_tokens array");
+    assert_eq!(v["normalized_query"]["search_path"].as_str(), Some("fts5"));
+    let tokens = v["tokenization"]["fts_tokens"]
+        .as_array()
+        .expect("fts_tokens array");
     assert!(tokens.iter().any(|t| t.as_str() == Some("compute")));
-    assert_eq!(v["fts_phrase"].as_str(), Some("\"compute\""));
-    assert_eq!(v["regex_valid"].as_bool(), Some(true));
+    assert_eq!(
+        v["tokenization"]["fts_phrase"].as_str(),
+        Some("\"compute\"")
+    );
+    assert_eq!(v["regex_plan"]["valid"].as_bool(), Some(true));
 }
 
 #[test]
@@ -825,18 +827,18 @@ fn explain_query_missing_input_returns_error() {
 fn explain_query_validates_invalid_regex() {
     let fixture = setup_mcp_fixture();
     let args = serde_json::json!({ "regex": "[invalid", "output_format": "json" });
-    let resp = call("explain_query", Some(&args), "/repo", &fixture.db_path)
-        .expect("explain_query should not error on invalid regex");
-    let text = unwrap_tool_text(resp);
-    let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
+    let result = call("explain_query", Some(&args), "/repo", &fixture.db_path)
+        .expect("invalid regex must return tool error result");
 
-    assert_eq!(v["regex_valid"].as_bool(), Some(false));
-    assert!(v["regex_error"].as_str().is_some());
-    let warnings = v["warnings"].as_array().expect("warnings array");
+    assert_eq!(result["isError"], serde_json::json!(true));
+    assert_eq!(
+        result["structuredContent"]["code"],
+        serde_json::json!("invalid_input")
+    );
     assert!(
-        warnings
-            .iter()
-            .any(|w| w.as_str().is_some_and(|s| s.contains("invalid")))
+        result["structuredContent"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("invalid regex"))
     );
 }
 
@@ -849,8 +851,11 @@ fn explain_query_with_regex_only_uses_structural_scan_path() {
     let text = unwrap_tool_text(resp);
     let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
 
-    assert_eq!(v["search_path"].as_str(), Some("regex_structural_scan"));
-    assert_eq!(v["regex_valid"].as_bool(), Some(true));
+    assert_eq!(
+        v["normalized_query"]["search_path"].as_str(),
+        Some("regex_structural_scan")
+    );
+    assert_eq!(v["regex_plan"]["valid"].as_bool(), Some(true));
 }
 
 #[test]
@@ -1110,8 +1115,11 @@ fn explain_query_reports_active_query_mode_and_ranking_factors() {
         call("explain_query", Some(&args), "/repo", &fixture.db_path).expect("explain_query call");
     let text = unwrap_tool_text(resp);
     let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
-    assert_eq!(v["active_query_mode"].as_str(), Some("fts5"));
-    let factors = v["ranking_factors"]
+    assert_eq!(
+        v["normalized_query"]["active_query_mode"].as_str(),
+        Some("fts5")
+    );
+    let factors = v["normalized_query"]["ranking_factors"]
         .as_array()
         .expect("ranking_factors array");
     assert!(
@@ -1143,6 +1151,9 @@ fn explain_query_reports_subpath_filter() {
         call("explain_query", Some(&args), "/repo", &fixture.db_path).expect("explain_query call");
     let text = unwrap_tool_text(resp);
     let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
-    assert_eq!(v["filters_applied"]["subpath"].as_bool(), Some(true));
+    assert_eq!(
+        v["normalized_query"]["filters_applied"]["subpath"].as_bool(),
+        Some(true)
+    );
     assert_eq!(v["input"]["subpath"].as_str(), Some("src/auth"));
 }
