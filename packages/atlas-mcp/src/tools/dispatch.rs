@@ -35,7 +35,8 @@ use super::graph::{
 use super::health::{
     tool_broker_status, tool_db_check, tool_debug_graph, tool_doctor, tool_status,
 };
-use super::manual::tool_man;
+use super::inventory::{tool_tool_list, tool_tool_search};
+use super::manual::{tool_help, tool_man};
 use super::postprocess::tool_postprocess_graph;
 use super::shared::{bool_arg, derive_graph_readiness, derive_graph_readiness_open_failed};
 
@@ -114,6 +115,9 @@ pub(crate) fn is_known_tool_name(name: &str) -> bool {
         #[cfg(test)]
         "__test_sleep" | "__test_panic" => true,
         "list_graph_stats"
+        | "tool_list"
+        | "tool_search"
+        | "tool_help"
         | "man"
         | "query_graph"
         | "batch_query_graph"
@@ -263,6 +267,9 @@ fn call_inner(
 
     let dispatch_result = match name {
         "list_graph_stats" => tool_list_graph_stats(db_path, output_format),
+        "tool_list" => tool_tool_list(args, output_format),
+        "tool_search" => tool_tool_search(args, output_format),
+        "tool_help" => tool_help(args, output_format),
         "man" => tool_man(args, output_format),
         "query_graph" => tool_query_graph(args, repo_root, db_path, output_format),
         "batch_query_graph" => tool_batch_query_graph(args, repo_root, db_path, output_format),
@@ -543,6 +550,9 @@ mod tests {
     fn schema_test_args(name: &str, saved_source_id: &str) -> serde_json::Value {
         match name {
             "list_graph_stats" => json!({"output_format": "json"}),
+            "tool_list" => json!({"output_format": "json"}),
+            "tool_search" => json!({"query": "query", "output_format": "json"}),
+            "tool_help" => json!({"name": "query_graph", "output_format": "json"}),
             "man" => {
                 json!({"namespace": "mcp", "tool_name": "query_graph", "output_format": "json"})
             }

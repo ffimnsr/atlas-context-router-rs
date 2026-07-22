@@ -2053,14 +2053,14 @@ fn stdio_transport_exposes_resources_completion_and_logging_methods() {
         .collect();
     assert_eq!(
         by_id[&serde_json::json!(2)]["result"]["resources"][0]["uri"],
-        serde_json::json!("atlas://graph/provenance")
+        serde_json::json!("atlas://docs/index")
     );
     assert!(
         by_id[&serde_json::json!(3)]["result"]["resourceTemplates"]
             .as_array()
             .expect("templates")
             .len()
-            >= 2
+            >= 4
     );
     assert_eq!(
         by_id[&serde_json::json!(4)]["result"]["completion"]["values"][0]["value"],

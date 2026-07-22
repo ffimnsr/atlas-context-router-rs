@@ -247,6 +247,23 @@ pub fn render_tool_manual_text(document: &ToolManualDocument) -> String {
     lines.join("\n")
 }
 
+pub(crate) fn tool_help(args: Option<&Value>, output_format: OutputFormat) -> Result<Value> {
+    let tool_name = args
+        .and_then(|value| value.get("name"))
+        .and_then(Value::as_str)
+        .ok_or(ManualLookupError::MissingToolName);
+
+    let response = match tool_name {
+        Ok(tool_name) => match lookup_tool_manual("mcp", tool_name) {
+            Ok(document) => build_manual_tool_response(&document, output_format)?,
+            Err(error) => return tool_help_error_response(error, output_format),
+        },
+        Err(error) => return tool_help_error_response(error, output_format),
+    };
+
+    Ok(response)
+}
+
 pub(crate) fn tool_man(args: Option<&Value>, output_format: OutputFormat) -> Result<Value> {
     let namespace = args
         .and_then(|value| value.get("namespace"))
@@ -468,6 +485,58 @@ fn manual_lookup_error_response(
             "requested_tool_name": tool_name,
             "suggestions": suggestions,
         })),
+    };
+    tool_execution_error_value(output_format, &payload)
+}
+
+fn tool_help_error_response(
+    error: ManualLookupError,
+    output_format: OutputFormat,
+) -> Result<Value> {
+    let payload = match error {
+        ManualLookupError::MissingToolName => ToolErrorPayload::new(
+            ToolErrorCode::InvalidInput,
+            "missing MCP tool name for tool_help",
+        )
+        .with_tool("tool_help")
+        .with_retry_guidance("Use exact form: tool_help { name: \"query_graph\" }.")
+        .with_details(json!({
+            "retry_example": {
+                "name": "query_graph"
+            }
+        })),
+        ManualLookupError::HiddenInternalTool { tool_name } => ToolErrorPayload::new(
+            ToolErrorCode::InvalidInput,
+            format!(
+                "tool '{}' is hidden or internal and has no public help entry",
+                tool_name
+            ),
+        )
+        .with_tool("tool_help")
+        .with_retry_guidance("Use tool_list or tool_search to pick a visible exported MCP tool.")
+        .with_details(json!({
+            "requested_tool_name": tool_name,
+            "reason": "hidden_or_internal_tool"
+        })),
+        ManualLookupError::UnknownTool {
+            tool_name,
+            suggestions,
+        } => ToolErrorPayload::new(
+            ToolErrorCode::InvalidInput,
+            format!("unknown MCP tool '{}'", tool_name),
+        )
+        .with_tool("tool_help")
+        .with_retry_guidance("Use tool_search when the exact name is unclear, then retry tool_help with one exact exported name.")
+        .with_details(json!({
+            "requested_tool_name": tool_name,
+            "suggestions": suggestions,
+        })),
+        ManualLookupError::UnknownNamespace { .. } => ToolErrorPayload::new(
+            ToolErrorCode::InvalidInput,
+            "tool_help only supports exported MCP tools",
+        )
+        .with_tool("tool_help")
+        .with_retry_guidance("Use exact form: tool_help { name: \"query_graph\" }."),
     };
     tool_execution_error_value(output_format, &payload)
 }
@@ -875,7 +944,7 @@ fn example_value(field_name: &str, field: &Value) -> Value {
     }
 }
 
-fn suggest_tool_names(input: &str) -> Vec<String> {
+pub(crate) fn suggest_tool_names(input: &str) -> Vec<String> {
     let needle = input.to_ascii_lowercase();
     let mut scored = tool_descriptors()
         .into_iter()

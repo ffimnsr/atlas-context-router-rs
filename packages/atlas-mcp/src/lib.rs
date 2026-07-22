@@ -7,7 +7,10 @@
 //! | Tool                      | Description                                              |
 //! |---------------------------|----------------------------------------------------------|
 //! | `list_graph_stats`        | Node/edge counts and language breakdown                  |
-//! | `man`                     | Runtime manual for one visible exported MCP tool         |
+//! | `tool_list`               | Compact runtime inventory of visible exported MCP tools  |
+//! | `tool_search`             | Search visible exported MCP tools by name/description    |
+//! | `tool_help`               | Runtime manual for one visible exported MCP tool         |
+//! | `man`                     | Namespace-aware manual alias for exported MCP tools      |
 //! | `query_graph`             | FTS5 keyword search, returns compact symbol list only    |
 //! | `batch_query_graph`       | Run up to 20 query_graph searches in one round-trip     |
 //! | `get_impact_radius`       | Graph traversal from changed files                       |

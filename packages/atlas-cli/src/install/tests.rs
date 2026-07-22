@@ -68,8 +68,10 @@ fn instruction_targets_match_platform() {
 }
 
 #[test]
-fn instructions_section_mentions_current_mcp_tools() {
-    assert_eq!(instruction_section_tool_names(), exported_mcp_tool_names());
+fn instructions_section_mentions_tool_discovery_helpers() {
+    assert!(INSTRUCTIONS_SECTION.contains("`tool_list`"));
+    assert!(INSTRUCTIONS_SECTION.contains("`tool_search`"));
+    assert!(INSTRUCTIONS_SECTION.contains("`tool_help`"));
 }
 
 #[test]
@@ -95,7 +97,7 @@ fn inject_instructions_replaces_stale_section() {
 
     assert!(files.contains(&"AGENTS.md".to_owned()));
     assert!(content.contains(INSTRUCTIONS_END_MARKER));
-    assert!(content.contains("`concept_clusters`"));
+    assert!(content.contains("`tool_list`"));
     assert!(!content.contains("old stale block"));
 }
 
@@ -143,15 +145,6 @@ fn generated_mcp_tools_markdown_matches_exported_registry() {
     });
 
     assert_eq!(actual, atlas_mcp::tool_list_markdown());
-}
-
-fn instruction_section_tool_names() -> BTreeSet<String> {
-    INSTRUCTIONS_SECTION
-        .lines()
-        .filter(|line| line.starts_with("| `"))
-        .filter_map(|line| line.split('`').nth(1))
-        .map(str::to_owned)
-        .collect()
 }
 
 fn exported_mcp_tool_names() -> BTreeSet<String> {

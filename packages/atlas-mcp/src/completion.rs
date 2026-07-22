@@ -415,6 +415,16 @@ fn resource_uri_candidates(
         )?);
     }
 
+    let tool_docs_prefix = prefix.strip_prefix("atlas://tool-docs/");
+    if prefix.is_empty() || prefix == "atlas://" || tool_docs_prefix.is_some() {
+        values.extend(tool_docs_uris(tool_docs_prefix.unwrap_or_default()));
+    }
+
+    let prompt_docs_prefix = prefix.strip_prefix("atlas://prompt-docs/");
+    if prefix.is_empty() || prefix == "atlas://" || prompt_docs_prefix.is_some() {
+        values.extend(prompt_docs_uris(prompt_docs_prefix.unwrap_or_default()));
+    }
+
     values.extend(
         resource_template_descriptors()
             .into_iter()
@@ -458,6 +468,25 @@ fn saved_context_uris(repo_root: &str, db_path: &str, prefix: &str) -> Result<Ve
         .into_iter()
         .map(|source_id| format!("atlas://saved-context/{source_id}"))
         .collect())
+}
+
+fn tool_docs_uris(prefix: &str) -> Vec<String> {
+    crate::tool_list()["tools"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|tool| tool["name"].as_str())
+        .filter(|name| prefix.is_empty() || name.starts_with(prefix))
+        .map(|name| format!("atlas://tool-docs/{name}"))
+        .collect()
+}
+
+fn prompt_docs_uris(prefix: &str) -> Vec<String> {
+    prompt_names()
+        .into_iter()
+        .filter(|name| prefix.is_empty() || name.starts_with(prefix))
+        .map(|name| format!("atlas://prompt-docs/{name}"))
+        .collect()
 }
 
 fn saved_context_source_ids(repo_root: &str, db_path: &str, prefix: &str) -> Result<Vec<String>> {
@@ -783,11 +812,17 @@ mod tests {
             .iter()
             .filter_map(|value| value["value"].as_str())
             .collect::<Vec<_>>();
+        assert!(uri_values.contains(&"atlas://docs/index"));
         assert!(uri_values.contains(&"atlas://graph/provenance"));
         assert!(
             uri_values
                 .iter()
                 .any(|value| value.starts_with("atlas://docs/wiki/guide.md#"))
+        );
+        assert!(
+            uri_values
+                .iter()
+                .any(|value| value.starts_with("atlas://tool-docs/"))
         );
         assert!(uri_values.contains(&"atlas://saved-context/src-completion-123"));
 
@@ -807,6 +842,42 @@ mod tests {
             .filter_map(|value| value["value"].as_str())
             .collect::<Vec<_>>();
         assert!(source_values.contains(&"src-completion-123"));
+
+        let tool_docs = complete(
+            Some(&json!({
+                "ref": {"name": "resources/read"},
+                "argument": {"name": "uri", "value": "atlas://tool-docs/tool_"}
+            })),
+            &fixture.repo_root,
+            &fixture.db_path,
+        )
+        .expect("tool docs uri completion");
+        let tool_doc_values = tool_docs["completion"]["values"]
+            .as_array()
+            .expect("tool doc values")
+            .iter()
+            .filter_map(|value| value["value"].as_str())
+            .collect::<Vec<_>>();
+        assert!(tool_doc_values.contains(&"atlas://tool-docs/tool_help"));
+        assert!(tool_doc_values.contains(&"atlas://tool-docs/tool_list"));
+
+        let prompt_docs = complete(
+            Some(&json!({
+                "ref": {"name": "resources/read"},
+                "argument": {"name": "uri", "value": "atlas://prompt-docs/re"}
+            })),
+            &fixture.repo_root,
+            &fixture.db_path,
+        )
+        .expect("prompt docs uri completion");
+        let prompt_doc_values = prompt_docs["completion"]["values"]
+            .as_array()
+            .expect("prompt doc values")
+            .iter()
+            .filter_map(|value| value["value"].as_str())
+            .collect::<Vec<_>>();
+        assert!(prompt_doc_values.contains(&"atlas://prompt-docs/resume_prior_session"));
+        assert!(prompt_doc_values.contains(&"atlas://prompt-docs/review_change"));
     }
 
     #[test]

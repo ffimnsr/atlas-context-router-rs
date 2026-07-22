@@ -46,9 +46,8 @@ impl ToolResultContract {
 
 pub(crate) fn tool_result_contract(name: &str) -> ToolResultContract {
     match name {
-        "list_graph_stats" | "broker_status" | "get_context_stats" | "man" => {
-            ToolResultContract::StableObject
-        }
+        "list_graph_stats" | "tool_list" | "tool_search" | "tool_help" | "broker_status"
+        | "get_context_stats" | "man" => ToolResultContract::StableObject,
         "query_graph"
         | "batch_query_graph"
         | "search_saved_context"
@@ -98,6 +97,43 @@ fn base_tool_list_json() -> Value {
                         "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
                     },
                     "required": []
+                }
+            },
+            {
+                "name": "tool_list",
+                "description": "List visible exported MCP tools in compact runtime inventory form. Use this instead of hardcoding tool tables in agent instructions; pair with tool_search and tool_help for discovery.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "category": { "type": "string", "description": "Optional exact category filter: graph, content, analysis, health, memory, maintenance, or introspection." },
+                        "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
+                    },
+                    "required": []
+                }
+            },
+            {
+                "name": "tool_search",
+                "description": "Search visible exported MCP tools by name, title, or description without executing them. Ranks matches with explicit lexical score factors and typo-tolerant fuzzy name matching, and returns suggestions when no strong direct match exists.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "query": { "type": "string", "description": "Short tool-name fragment or capability phrase to search, such as 'query', 'review', 'context', or 'docs'. Exact/prefix/contains matches rank highest; fuzzy name matching tolerates small typos." },
+                        "limit": { "type": "integer", "description": "Maximum matches to return (default 10, max 50)." },
+                        "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
+                    },
+                    "required": ["query"]
+                }
+            },
+            {
+                "name": "tool_help",
+                "description": "Return runtime manual documentation for one visible exported MCP tool by exact name. Shorthand for man with namespace='mcp'.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "name": { "type": "string", "description": "Exact exported MCP tool name to document. Case-sensitive." },
+                        "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
+                    },
+                    "required": ["name"]
                 }
             },
             {
@@ -978,6 +1014,9 @@ fn build_tool_descriptor(seed: ToolDescriptorSeed) -> ToolDescriptor {
 fn tool_output_schema_for(name: &str) -> Option<Value> {
     match name {
         "list_graph_stats" => Some(list_graph_stats_output_schema()),
+        "tool_list" => Some(tool_list_output_schema()),
+        "tool_search" => Some(tool_search_output_schema()),
+        "tool_help" => Some(man_output_schema()),
         "broker_status" => Some(broker_status_output_schema()),
         "get_context_stats" => Some(get_context_stats_output_schema()),
         "man" => Some(man_output_schema()),
@@ -1021,6 +1060,129 @@ fn list_graph_stats_output_schema() -> Value {
             "languages",
             "last_indexed_at"
         ]
+    }))
+}
+
+fn tool_list_output_schema() -> Value {
+    ensure_schema_2020_12(serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "total_tools": { "type": "integer" },
+            "returned_tools": { "type": "integer" },
+            "applied_category": { "type": ["string", "null"] },
+            "tools": {
+                "type": "array",
+                "items": { "$ref": "#/$defs/tool_inventory_entry" }
+            },
+            "guidance": { "$ref": "#/$defs/tool_inventory_guidance" }
+        },
+        "$defs": {
+            "tool_inventory_entry": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "name": { "type": "string" },
+                    "title": { "type": "string" },
+                    "description": { "type": "string" },
+                    "category": { "type": "string" },
+                    "result_contract": { "type": "string" },
+                    "read_only": { "type": "boolean" },
+                    "state_changing": { "type": "boolean" },
+                    "destructive": { "type": "boolean" }
+                },
+                "required": [
+                    "name",
+                    "title",
+                    "description",
+                    "category",
+                    "result_contract",
+                    "read_only",
+                    "state_changing",
+                    "destructive"
+                ]
+            },
+            "tool_inventory_guidance": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "list": { "type": "string" },
+                    "search": { "type": "string" },
+                    "help": { "type": "string" }
+                },
+                "required": ["list", "search", "help"]
+            }
+        },
+        "required": ["total_tools", "returned_tools", "applied_category", "tools", "guidance"]
+    }))
+}
+
+fn tool_search_output_schema() -> Value {
+    ensure_schema_2020_12(serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "query": { "type": "string" },
+            "total_matches": { "type": "integer" },
+            "returned_matches": { "type": "integer" },
+            "matches": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "name": { "type": "string" },
+                        "title": { "type": "string" },
+                        "description": { "type": "string" },
+                        "category": { "type": "string" },
+                        "result_contract": { "type": "string" },
+                        "score": { "type": "integer" },
+                        "match_reasons": {
+                            "type": "array",
+                            "items": { "type": "string" }
+                        },
+                        "score_factors": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "properties": {
+                                    "factor": { "type": "string" },
+                                    "contribution": { "type": "integer" },
+                                    "detail": { "type": ["string", "null"] }
+                                },
+                                "required": ["factor", "contribution", "detail"]
+                            }
+                        }
+                    },
+                    "required": [
+                        "name",
+                        "title",
+                        "description",
+                        "category",
+                        "result_contract",
+                        "score",
+                        "match_reasons",
+                        "score_factors"
+                    ]
+                }
+            },
+            "suggestions": {
+                "type": "array",
+                "items": { "type": "string" }
+            },
+            "guidance": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "list": { "type": "string" },
+                    "search": { "type": "string" },
+                    "help": { "type": "string" }
+                },
+                "required": ["list", "search", "help"]
+            }
+        },
+        "required": ["query", "total_matches", "returned_matches", "matches", "suggestions", "guidance"]
     }))
 }
 
@@ -1277,6 +1439,7 @@ fn tool_category(name: &str) -> &'static str {
         | "get_session_status"
         | "cross_session_search"
         | "get_global_memory" => "memory",
+        "tool_list" | "tool_search" | "tool_help" | "man" => "introspection",
         "status" | "doctor" | "db_check" | "debug_graph" | "broker_status" => "health",
         name if name.starts_with("analyze_")
             || name.starts_with("assess_")

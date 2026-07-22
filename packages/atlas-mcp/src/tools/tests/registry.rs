@@ -4,6 +4,9 @@ use std::collections::BTreeSet;
 
 const TOOL_REGISTRY_SNAPSHOT: &[&str] = &[
     "list_graph_stats",
+    "tool_list",
+    "tool_search",
+    "tool_help",
     "man",
     "query_graph",
     "batch_query_graph",
@@ -79,6 +82,9 @@ fn parity_seed_source_id(repo_root: &str, db_path: &str) -> String {
 fn parity_args(tool_name: &str, source_id: &str) -> Value {
     match tool_name {
         "list_graph_stats" => json!({ "output_format": "json" }),
+        "tool_list" => json!({ "output_format": "json" }),
+        "tool_search" => json!({ "query": "query", "output_format": "json" }),
+        "tool_help" => json!({ "name": "query_graph", "output_format": "json" }),
         "man" => json!({ "namespace": "mcp", "tool_name": "query_graph", "output_format": "json" }),
         "query_graph" => json!({ "text": "compute", "output_format": "json" }),
         "batch_query_graph" => json!({ "text": "compute handle_request", "output_format": "json" }),
@@ -164,10 +170,94 @@ fn parity_args(tool_name: &str, source_id: &str) -> Value {
 }
 
 #[test]
-fn tool_list_includes_man() {
+fn exported_registry_includes_tool_inventory_helpers() {
     let list = tool_list();
     let tools = list.get("tools").and_then(|t| t.as_array()).unwrap();
+    assert!(
+        tools
+            .iter()
+            .any(|t| t.get("name") == Some(&"tool_list".into()))
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|t| t.get("name") == Some(&"tool_search".into()))
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|t| t.get("name") == Some(&"tool_help".into()))
+    );
     assert!(tools.iter().any(|t| t.get("name") == Some(&"man".into())));
+}
+
+#[test]
+fn tool_inventory_list_returns_compact_runtime_catalog() {
+    let fixture = setup_git_mcp_fixture();
+    let response = call(
+        "tool_list",
+        Some(&json!({
+            "output_format": "json"
+        })),
+        &fixture.repo_root,
+        &fixture.db_path,
+    )
+    .expect("tool_list response");
+
+    let payload: Value =
+        serde_json::from_str(&unwrap_tool_text(response.clone())).expect("json payload");
+    assert!(payload["total_tools"].as_u64().unwrap() >= 4);
+    assert!(
+        payload["tools"]
+            .as_array()
+            .is_some_and(|items| items.iter().any(|item| item["name"] == json!("tool_help")))
+    );
+    assert_provenance(&response, &fixture.repo_root, &fixture.db_path);
+}
+
+#[test]
+fn tool_inventory_search_finds_query_graph() {
+    let fixture = setup_git_mcp_fixture();
+    let response = call(
+        "tool_search",
+        Some(&json!({
+            "query": "query",
+            "output_format": "json"
+        })),
+        &fixture.repo_root,
+        &fixture.db_path,
+    )
+    .expect("tool_search response");
+
+    let payload: Value =
+        serde_json::from_str(&unwrap_tool_text(response.clone())).expect("json payload");
+    assert!(payload["matches"].as_array().is_some_and(|items| {
+        items
+            .iter()
+            .any(|item| item["name"] == json!("query_graph"))
+    }));
+    assert_provenance(&response, &fixture.repo_root, &fixture.db_path);
+}
+
+#[test]
+fn tool_help_returns_same_manual_payload_shape() {
+    let fixture = setup_git_mcp_fixture();
+    let response = call(
+        "tool_help",
+        Some(&json!({
+            "name": "query_graph",
+            "output_format": "json"
+        })),
+        &fixture.repo_root,
+        &fixture.db_path,
+    )
+    .expect("tool_help response");
+
+    let payload: Value =
+        serde_json::from_str(&unwrap_tool_text(response.clone())).expect("json payload");
+    assert_eq!(payload["resolved_tool_name"], json!("query_graph"));
+    assert_eq!(payload["requested_namespace"], json!("mcp"));
+    assert_provenance(&response, &fixture.repo_root, &fixture.db_path);
 }
 
 #[test]

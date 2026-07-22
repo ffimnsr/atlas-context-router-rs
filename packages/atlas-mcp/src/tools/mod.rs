@@ -3,6 +3,7 @@ mod context_ops;
 mod dispatch;
 mod graph;
 pub mod health;
+mod inventory;
 mod manual;
 mod postprocess;
 mod registry;

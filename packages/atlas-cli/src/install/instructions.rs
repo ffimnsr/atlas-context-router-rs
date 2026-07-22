@@ -31,61 +31,20 @@ ALWAYS use TOON output everytime, and JSON when you expect there's floating numb
 
 Do not treat `query_graph` as caller/callee search. Fall back to file tools **only** after graph relationship tools do not cover what you need.
 
-### Tool list
+### Tool discovery
 
-| Tool | Use when |
-| ---- | -------- |
-| `list_graph_stats` | Overall graph metrics and language breakdown |
-| `man` | Read runtime manual docs for one visible exported MCP tool |
-| `query_graph` | Search graph nodes by keyword, kind, or language; returns symbol matches, not usage edges |
-| `batch_query_graph` | Run up to 20 query_graph searches in one call |
-| `search_files` | Find config, template, SQL, Markdown, and other files by path or glob |
-| `search_content` | Search file contents when you need text matches instead of graph symbols |
-| `read_file_excerpt` | Read precise line ranges or one line with surrounding context from a known file |
-| `get_docs_section` | Resolve a Markdown heading path or line number to a bounded docs section |
-| `read_file_around_match` | Read grouped snippets around literal or regex matches in a known file |
-| `search_templates` | Discover template files by engine or extension |
-| `search_text_assets` | Find SQL, config, env, and prompt files outside graph-symbol lookup |
-| `broker_status` | Verify MCP broker liveness, PID, uptime, and version |
-| `status` | Check graph health and basic build state before trusting graph-backed answers |
-| `doctor` | Run deeper repo, config, DB, and index health checks |
-| `db_check` | Validate SQLite integrity and detect orphan or dangling graph records |
-| `debug_graph` | Inspect node and edge breakdowns plus structural anomalies |
-| `explain_query` | See how query_graph tokenizes and executes a search |
-| `resolve_symbol` | Resolve a symbol or alias-qualified name to a canonical qualified_name |
-| `analyze_architecture` | Analyze cycles, layer violations, and coupling hotspots |
-| `analyze_metrics` | Analyze graph metrics, outliers, and complexity hotspots |
-| `assess_risk` | Assess deterministic risk for a symbol with factor evidence |
-| `analyze_patterns` | Detect repeated chains, isolated structures, hubs, and deep paths |
-| `analyze_safety` | Score refactor safety using callers, fan-out, and test adjacency |
-| `analyze_remove` | Estimate removal impact with bounded evidence and warnings |
-| `analyze_dead_code` | Find likely dead-code candidates with certainty and blockers |
-| `analyze_dependency` | Check whether a symbol can be removed without remaining references |
-| `find_large_functions` | Find large or complex functions with deterministic ranking and thresholds |
-| `find_complex_functions` | Find complexity-driven hotspots with deterministic thresholds |
-| `get_impact_radius` | Understand blast radius from a changed file set |
-| `get_review_context` | Build review bundle with symbols, neighbors, edges, and risk summary |
-| `detect_changes` | Ask Atlas for changed files instead of shelling out to git |
-| `build_or_update_graph` | Trigger full graph build or incremental update |
-| `postprocess_graph` | Refresh derived graph analytics after build/update without reparsing |
-| `traverse_graph` | Walk callers, callees, and nearby nodes from known qualified name |
-| `get_minimal_context` | Get lower-token review context with auto-detected changes |
-| `explain_change` | Get deterministic risk analysis, change kinds, and test gaps |
-| `get_context` | Build bounded context around symbol, file, or change-set |
-| `get_session_status` | Inspect current session identity, event count, and resume state |
-| `compact_session` | Compact session event ledger: merge repeated events, decay low-value, deduplicate reasoning, promote high-value |
-| `resume_session` | Restore prior session snapshot after reconnect or restart |
-| `search_saved_context` | Search saved artifacts from earlier large outputs |
-| `search_decisions` | Search persisted decision memory for prior conclusions |
-| `read_saved_context` | Retrieve full artifact content by source_id with optional paging |
-| `save_context_artifact` | Persist large context payloads for later retrieval |
-| `get_context_stats` | Inspect session and content-store stats |
-| `purge_saved_context` | Remove saved artifacts by session or age |
-| `cross_session_search` | CM11: search saved context across all sessions for this repo |
-| `get_global_memory` | CM11: frequent symbols/files/workflows and related past sessions |
-| `symbol_neighbors` | Inspect immediate callers, callees, tests, and local graph neighborhood |
-| `cross_file_links` | Find files coupled to a file through shared symbol references |
-| `concept_clusters` | Group related files around seed files by coupling density |
+- `tool_list`: list current visible exported MCP tools at runtime instead of hardcoding long tool tables in agent instructions
+- `tool_search`: search tools by name/title/description with explicit score factors and typo-tolerant fuzzy name matching when exact tool name is unclear
+- `tool_help`: read runtime docs for one exact exported MCP tool name
+- `man`: legacy namespace-aware manual alias; use when caller already speaks `namespace/tool_name`
+
+### Core workflow surfaces
+
+- `query_graph`, then `symbol_neighbors`, `traverse_graph`, or `get_context` for symbol lookup and relationships
+- `detect_changes`, `get_review_context`, `get_minimal_context`, `get_impact_radius`, and `explain_change` for change review and blast radius
+- `status`, `doctor`, `db_check`, `debug_graph`, and `list_graph_stats` for repo and graph health
+- `search_files`, `search_content`, `read_file_excerpt`, `get_docs_section`, `read_file_around_match`, `search_templates`, and `search_text_assets` for non-code or known-file companion lookup
+- `get_session_status`, `resume_session`, `search_saved_context`, `search_decisions`, and `save_context_artifact` for continuity
 
 ### Workflow
 

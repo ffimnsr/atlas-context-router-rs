@@ -532,7 +532,10 @@ The MCP server (`atlas serve`) exposes these tools to agents:
 | Tool | Description |
 |------|-------------|
 | `list_graph_stats` | Node/edge counts and language breakdown |
-| `man` | Runtime manual for one visible exported MCP tool |
+| `tool_list` | Compact runtime inventory of visible exported MCP tools |
+| `tool_search` | Search visible exported MCP tools by name/title/description with explicit score factors and typo-tolerant fuzzy name matching |
+| `tool_help` | Runtime manual for one visible exported MCP tool by exact name |
+| `man` | Namespace-aware manual alias for exported MCP tools |
 | `query_graph` | Keyword search with optional `regex` SQL-UDF filter; returns compact symbol list |
 | `batch_query_graph` | Run up to 20 `query_graph` searches in a single round-trip |
 | `search_files` | File-path discovery for config, templates, SQL, Markdown, and other non-code assets |
@@ -587,8 +590,18 @@ Graph tools answer code structure questions; content tools answer non-code conte
 
 Manual surface:
 
-- `atlas man mcp <mcp_tool_name>` prints runtime docs derived from live MCP registry metadata
-- MCP `man` returns same manual payload without executing target tool
+- MCP `tool_list` lists current visible exported tools in compact runtime form
+- MCP `tool_search` ranks likely tool matches with explicit lexical/fuzzy score factors when exact name is unclear or misspelled
+- MCP `tool_help` returns runtime docs for one exact exported tool name without executing it
+- `atlas man mcp <mcp_tool_name>` prints same runtime docs through CLI
+- MCP `man` remains namespace-aware alias for callers that already use `namespace` + `tool_name`
+
+Resource docs surface:
+
+- `resources/read { uri: "atlas://docs/index" }` returns Atlas docs index with discovery flow plus per-tool and per-prompt docs links
+- `resources/read { uri: "atlas://tool-docs/query_graph" }` returns generated Markdown docs with examples and usage for one tool
+- `resources/read { uri: "atlas://prompt-docs/review_change" }` returns generated Markdown docs and default body for one prompt
+- `resources/templates/list` exposes `atlas://tool-docs/{name}`, `atlas://prompt-docs/{name}`, and `atlas://docs/{file}#{heading}` templates
 
 Search tool selection rules:
 

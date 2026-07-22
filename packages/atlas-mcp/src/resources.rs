@@ -9,7 +9,9 @@ use crate::descriptors::{
     ResourceDescriptor, ResourceTemplateDescriptor, descriptor_meta, human_title,
     validate_descriptor_name,
 };
+use crate::prompts::{prompt_descriptors, prompt_get};
 use crate::tool_result::structured_content;
+use crate::{tool_list, tool_manual};
 
 const DEFAULT_PAGE_LIMIT: usize = 50;
 
@@ -73,7 +75,13 @@ pub(crate) fn resources_read(
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("missing resource uri"))?;
 
-    let content = if uri == "atlas://health/status" {
+    let content = if uri == "atlas://docs/index" {
+        ResourceContent {
+            uri: uri.to_owned(),
+            mime_type: "text/markdown".to_owned(),
+            text: render_docs_index_markdown()?,
+        }
+    } else if uri == "atlas://health/status" {
         json_resource_content(
             uri,
             "application/json",
@@ -120,6 +128,30 @@ pub(crate) fn resources_read(
         } else {
             json_resource_content(uri, "application/json", raw)?
         }
+    } else if let Some(name) = uri.strip_prefix("atlas://tool-docs/") {
+        if name.trim().is_empty() {
+            return Err(anyhow!(
+                "tool docs resource uri must include non-empty tool name"
+            ));
+        }
+        let document = tool_manual("mcp", name)?;
+        ResourceContent {
+            uri: uri.to_owned(),
+            mime_type: "text/markdown".to_owned(),
+            text: render_tool_manual_markdown(&document),
+        }
+    } else if let Some(name) = uri.strip_prefix("atlas://prompt-docs/") {
+        if name.trim().is_empty() {
+            return Err(anyhow!(
+                "prompt docs resource uri must include non-empty prompt name"
+            ));
+        }
+        let rendered = prompt_get(name, None)?;
+        ResourceContent {
+            uri: uri.to_owned(),
+            mime_type: "text/markdown".to_owned(),
+            text: render_prompt_markdown(name, &rendered),
+        }
     } else if let Some(path_with_heading) = uri.strip_prefix("atlas://docs/") {
         let (file, heading) = split_docs_uri(path_with_heading)?;
         let response = crate::tools::call(
@@ -158,6 +190,16 @@ pub(crate) fn resources_read(
 
 pub(crate) fn resource_descriptors() -> Vec<ResourceDescriptor> {
     let mut resources = vec![
+        ResourceDescriptor {
+            uri: "atlas://docs/index".to_owned(),
+            name: "docs_index".to_owned(),
+            title: human_title("docs_index"),
+            description: "Atlas docs index with resource usage, tool discovery flow, and per-tool docs links."
+                .to_owned(),
+            mime_type: "text/markdown".to_owned(),
+            icons: Vec::new(),
+            meta: descriptor_meta("resource", "content"),
+        },
         ResourceDescriptor {
             uri: "atlas://graph/provenance".to_owned(),
             name: "graph_provenance".to_owned(),
@@ -215,6 +257,38 @@ pub(crate) fn resource_template_descriptors() -> Vec<ResourceTemplateDescriptor>
                 "atlas:category": "memory",
                 "atlas:variables": [
                     {"name": "source_id", "description": "Saved artifact source identifier."}
+                ]
+            }),
+        },
+        ResourceTemplateDescriptor {
+            uri_template: "atlas://tool-docs/{name}".to_owned(),
+            name: "tool_docs".to_owned(),
+            title: human_title("tool_docs"),
+            description: "Read generated Markdown docs, examples, and usage for one exported MCP tool by exact name."
+                .to_owned(),
+            mime_type: "text/markdown".to_owned(),
+            icons: Vec::new(),
+            meta: json!({
+                "atlas:descriptorKind": "resource_template",
+                "atlas:category": "content",
+                "atlas:variables": [
+                    {"name": "name", "description": "Exact exported MCP tool name."}
+                ]
+            }),
+        },
+        ResourceTemplateDescriptor {
+            uri_template: "atlas://prompt-docs/{name}".to_owned(),
+            name: "prompt_docs".to_owned(),
+            title: human_title("prompt_docs"),
+            description: "Read generated Markdown docs and default prompt body for one exported MCP prompt by exact name."
+                .to_owned(),
+            mime_type: "text/markdown".to_owned(),
+            icons: Vec::new(),
+            meta: json!({
+                "atlas:descriptorKind": "resource_template",
+                "atlas:category": "content",
+                "atlas:variables": [
+                    {"name": "name", "description": "Exact exported MCP prompt name."}
                 ]
             }),
         },
@@ -400,6 +474,214 @@ fn json_resource_content(uri: &str, mime_type: &str, value: Value) -> Result<Res
     })
 }
 
+fn render_docs_index_markdown() -> Result<String> {
+    let tools = tool_list()["tools"]
+        .as_array()
+        .cloned()
+        .ok_or_else(|| anyhow!("tool registry missing tools array"))?;
+
+    let mut lines = vec![
+        "# Atlas Docs Index".to_owned(),
+        "".to_owned(),
+        "Atlas exposes docs through MCP resources so clients can discover usage without relying on injected prompt text.".to_owned(),
+        "".to_owned(),
+        "## Resource Usage".to_owned(),
+        "".to_owned(),
+        "- `resources/list`: enumerate static Atlas resources like `atlas://docs/index` and health/provenance resources".to_owned(),
+        "- `resources/templates/list`: enumerate dynamic resource templates like `atlas://docs/{file}#{heading}` and `atlas://tool-docs/{name}`".to_owned(),
+        "- `resources/read { uri: \"atlas://docs/index\" }`: read this index".to_owned(),
+        "- `resources/read { uri: \"atlas://tool-docs/query_graph\" }`: read per-tool docs with examples and usage".to_owned(),
+        "- `resources/read { uri: \"atlas://prompt-docs/review_change\" }`: read per-prompt docs and default prompt body".to_owned(),
+        "- `resources/read { uri: \"atlas://docs/README.md#document.mcp-tools\" }`: read bounded Markdown sections from repo docs".to_owned(),
+        "".to_owned(),
+        "## Tool Discovery Flow".to_owned(),
+        "".to_owned(),
+        "1. Call `tool_list` for compact live inventory.".to_owned(),
+        "2. Call `tool_search` when exact tool name is unclear.".to_owned(),
+        "3. Call `tool_help` or read `atlas://tool-docs/{name}` for examples and usage.".to_owned(),
+        "4. Read `atlas://prompt-docs/{name}` for exported MCP prompt docs and default prompt body.".to_owned(),
+        "".to_owned(),
+        "## Per-Tool Docs Resources".to_owned(),
+        "".to_owned(),
+    ];
+
+    for tool in tools {
+        let name = tool["name"].as_str().unwrap_or_default();
+        let description = tool["description"].as_str().unwrap_or_default();
+        lines.push(format!("- `atlas://tool-docs/{name}` — {description}"));
+    }
+
+    lines.extend([
+        "".to_owned(),
+        "## Per-Prompt Docs Resources".to_owned(),
+        "".to_owned(),
+    ]);
+    for prompt in prompt_descriptors() {
+        lines.push(format!(
+            "- `atlas://prompt-docs/{}` — {}",
+            prompt.name, prompt.description
+        ));
+    }
+
+    Ok(lines.join("\n"))
+}
+
+fn render_tool_manual_markdown(document: &crate::tools::ToolManualDocument) -> String {
+    let mut lines = vec![
+        format!("# Tool Docs: `{}`", document.resolved_tool_name),
+        "".to_owned(),
+        document.description.clone(),
+        "".to_owned(),
+        "## Structure".to_owned(),
+        "".to_owned(),
+        format!("- purpose: {}", document.tool_structure.purpose),
+        format!(
+            "- operation_name: `{}`",
+            document.tool_structure.operation_name
+        ),
+        format!("- request_shape: {}", document.tool_structure.request_shape),
+        format!(
+            "- response_shape: {}",
+            document.tool_structure.response_shape
+        ),
+        format!(
+            "- result_contract: `{}`",
+            document.tool_structure.result_contract
+        ),
+        format!(
+            "- annotations: read_only=`{}`, state_changing=`{}`, destructive=`{}`",
+            document.tool_structure.annotations.read_only,
+            document.tool_structure.annotations.state_changing,
+            document.tool_structure.annotations.destructive
+        ),
+        "".to_owned(),
+        "## Input Args".to_owned(),
+        "".to_owned(),
+    ];
+
+    if document.input_args.is_empty() {
+        lines.push("- none".to_owned());
+    } else {
+        for field in &document.input_args {
+            let mut line = format!(
+                "- `{}`: {} ({}) — {}",
+                field.name,
+                field.field_type,
+                if field.required {
+                    "required"
+                } else {
+                    "optional"
+                },
+                field.description
+            );
+            if let Some(default_value) = &field.default_value {
+                line.push_str(&format!(" default=`{default_value}`"));
+            }
+            if !field.enum_values.is_empty() {
+                line.push_str(&format!(" enum=`{}`", field.enum_values.join(", ")));
+            }
+            lines.push(line);
+        }
+    }
+
+    lines.extend([
+        "".to_owned(),
+        "## Usage".to_owned(),
+        "".to_owned(),
+        format!("- CLI: `{}`", document.usage.cli),
+        format!(
+            "- MCP manual call: `{}`",
+            document.usage.mcp_manual_tool_call
+        ),
+        "".to_owned(),
+        "### Target Tool Call Examples".to_owned(),
+        "".to_owned(),
+    ]);
+    for example in &document.usage.target_tool_call_examples {
+        lines.push(format!("- `{example}`"));
+    }
+
+    lines.extend([
+        "".to_owned(),
+        "## Output".to_owned(),
+        "".to_owned(),
+        format!(
+            "- structured_content_available: `{}`",
+            document.output_response.structured_content_available
+        ),
+        format!(
+            "- response_shape: {}",
+            document.output_response.response_shape
+        ),
+        "".to_owned(),
+        "## Error Cases".to_owned(),
+        "".to_owned(),
+    ]);
+    for error in &document.error_cases {
+        lines.push(format!(
+            "- `{}`: {} {}",
+            error.code, error.when, error.behavior
+        ));
+    }
+
+    lines.join("\n")
+}
+
+fn render_prompt_markdown(name: &str, rendered: &Value) -> String {
+    let descriptor = prompt_descriptors()
+        .into_iter()
+        .find(|prompt| prompt.name == name)
+        .expect("prompt descriptor must exist for rendered prompt docs");
+    let description = rendered["description"]
+        .as_str()
+        .unwrap_or(&descriptor.description);
+    let body = rendered["messages"][0]["content"]["text"]
+        .as_str()
+        .unwrap_or_default();
+
+    let mut lines = vec![
+        format!("# Prompt Docs: `{name}`"),
+        "".to_owned(),
+        description.to_owned(),
+        "".to_owned(),
+        "## Arguments".to_owned(),
+        "".to_owned(),
+    ];
+
+    if descriptor.arguments.is_empty() {
+        lines.push("- none".to_owned());
+    } else {
+        for argument in descriptor.arguments {
+            lines.push(format!(
+                "- `{}` ({}) — {}",
+                argument.name,
+                if argument.required {
+                    "required"
+                } else {
+                    "optional"
+                },
+                argument.description
+            ));
+        }
+    }
+
+    lines.extend([
+        "".to_owned(),
+        "## Usage".to_owned(),
+        "".to_owned(),
+        format!("- `prompts/get {{ name: \"{name}\" }}`"),
+        format!("- `resources/read {{ uri: \"atlas://prompt-docs/{name}\" }}`"),
+        "".to_owned(),
+        "## Default Prompt Body".to_owned(),
+        "".to_owned(),
+        "```text".to_owned(),
+        body.to_owned(),
+        "```".to_owned(),
+    ]);
+
+    lines.join("\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -421,7 +703,12 @@ mod tests {
         let second =
             resources_list(Some(&json!({"limit": 1, "cursor": "offset:1"}))).expect("next page");
         assert_eq!(second["resources"].as_array().expect("resources").len(), 1);
-        assert!(second.get("nextCursor").is_none());
+        assert_eq!(second["nextCursor"], json!("offset:2"));
+
+        let third =
+            resources_list(Some(&json!({"limit": 1, "cursor": "offset:2"}))).expect("third page");
+        assert_eq!(third["resources"].as_array().expect("resources").len(), 1);
+        assert!(third.get("nextCursor").is_none());
     }
 
     #[test]
@@ -435,6 +722,17 @@ mod tests {
             1
         );
         assert_eq!(first["nextCursor"], json!("offset:1"));
+
+        let second = resources_templates_list(Some(&json!({"limit": 1, "cursor": "offset:1"})))
+            .expect("next template page");
+        assert_eq!(
+            second["resourceTemplates"]
+                .as_array()
+                .expect("templates")
+                .len(),
+            1
+        );
+        assert_eq!(second["nextCursor"], json!("offset:2"));
     }
 
     #[test]
@@ -471,6 +769,30 @@ mod tests {
         )
         .expect("heading completion");
         assert_eq!(headings, vec!["document.guide.install"]);
+    }
+
+    #[test]
+    fn resources_read_docs_index_returns_markdown() {
+        let dir = TempDir::new().expect("tempdir");
+        let repo_root = dir.path().to_str().expect("repo root");
+        let db_path = dir
+            .path()
+            .join("worldtree.db")
+            .to_string_lossy()
+            .into_owned();
+
+        let result = resources_read(
+            Some(&json!({"uri": "atlas://docs/index"})),
+            repo_root,
+            &db_path,
+        )
+        .expect("resource read");
+        assert_eq!(result["contents"][0]["mimeType"], json!("text/markdown"));
+        let text = result["contents"][0]["text"]
+            .as_str()
+            .expect("markdown text");
+        assert!(text.contains("Atlas Docs Index"));
+        assert!(text.contains("atlas://tool-docs/query_graph"));
     }
 
     #[test]
@@ -528,6 +850,57 @@ mod tests {
         )
         .expect("resource read");
         assert_eq!(result["contents"][0]["text"], json!(payload));
+    }
+
+    #[test]
+    fn resources_read_tool_docs_returns_examples_and_usage() {
+        let dir = TempDir::new().expect("tempdir");
+        let repo_root = dir.path().to_str().expect("repo root");
+        let db_path = dir
+            .path()
+            .join("worldtree.db")
+            .to_string_lossy()
+            .into_owned();
+
+        let result = resources_read(
+            Some(&json!({"uri": "atlas://tool-docs/query_graph"})),
+            repo_root,
+            &db_path,
+        )
+        .expect("resource read");
+        assert_eq!(result["contents"][0]["mimeType"], json!("text/markdown"));
+        let text = result["contents"][0]["text"]
+            .as_str()
+            .expect("markdown text");
+        assert!(text.contains("# Tool Docs: `query_graph`"));
+        assert!(text.contains("## Usage"));
+        assert!(text.contains("### Target Tool Call Examples"));
+    }
+
+    #[test]
+    fn resources_read_prompt_docs_returns_prompt_body_and_args() {
+        let dir = TempDir::new().expect("tempdir");
+        let repo_root = dir.path().to_str().expect("repo root");
+        let db_path = dir
+            .path()
+            .join("worldtree.db")
+            .to_string_lossy()
+            .into_owned();
+
+        let result = resources_read(
+            Some(&json!({"uri": "atlas://prompt-docs/review_change"})),
+            repo_root,
+            &db_path,
+        )
+        .expect("resource read");
+        assert_eq!(result["contents"][0]["mimeType"], json!("text/markdown"));
+        let text = result["contents"][0]["text"]
+            .as_str()
+            .expect("markdown text");
+        assert!(text.contains("# Prompt Docs: `review_change`"));
+        assert!(text.contains("## Arguments"));
+        assert!(text.contains("## Default Prompt Body"));
+        assert!(text.contains("detect_changes"));
     }
 
     #[test]
