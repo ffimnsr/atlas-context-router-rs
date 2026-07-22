@@ -1,4 +1,8 @@
 {
+  "agent_scope": {
+    "agent_id": null,
+    "merge_agent_partitions": false
+  },
   "ambiguity": {
     "candidates": [],
     "query": null
@@ -9,6 +13,26 @@
   "budget_name": "review_context_extraction.max_edges",
   "budget_observed": 8,
   "budget_status": "partial_result",
+  "context_files": [
+    "src/lib.rs"
+  ],
+  "detail_controls": {
+    "agent_id": null,
+    "code_spans": false,
+    "imports": true,
+    "max_edges": 0,
+    "max_files": 1,
+    "max_nodes": 1,
+    "merge_agent_partitions": false,
+    "neighbors": false,
+    "omitted_sections": [
+      "tests",
+      "code_spans",
+      "neighbors"
+    ],
+    "semantic": false,
+    "tests": false
+  },
   "edge_count": 0,
   "edges": [],
   "edges_dropped": 8,
@@ -19,6 +43,14 @@
   ],
   "files_dropped": 1,
   "intent": "review",
+  "lookup": {
+    "error_code": null,
+    "error_code_docs": null,
+    "hint": null,
+    "message": null,
+    "status": "ok",
+    "suggestions": []
+  },
   "mode": "change_context",
   "node_count": 1,
   "nodes": [
@@ -58,6 +90,29 @@
       "reason": "direct_target"
     }
   ],
+  "ranking_evidence_legend": {
+    "base_score": "Initial context relevance score before impact or saved-context additive boosts.",
+    "bm25_score": "Raw BM25/FTS content-match score for content assets and saved-context sources retrieved via lexical search. Absent for graph nodes selected by graph traversal.",
+    "callee_neighbor": "Item was included as a callee of the target or neighbor.",
+    "caller_neighbor": "Item was included as a caller of the target or neighbor.",
+    "changed_file_boost": "Quantified additive boost applied because item is in or adjacent to a changed file.",
+    "changed_symbol": "Item is a changed symbol selected from changed-file or impact review seeds.",
+    "contract_scope": "Separate from retrieval ranking evidence: retrieval evidence explains why a result matched search, while context ranking evidence explains why a node, edge, or saved artifact was included and ranked inside a bounded context or review result.",
+    "direct_target": "Item is the primary target resolved from the request.",
+    "exact_symbol_match": "Item matched an exact symbol name from the request target (set for graph nodes that are direct resolutions and for content assets whose text contains an exact symbol name).",
+    "final_score": "Final context relevance score after all recorded contributions.",
+    "graph_distance_penalty": "Score penalty from graph hop distance from the seed node (graph nodes only).",
+    "impact_score_contribution": "Additive contribution from impact analysis weighting in review or impact context.",
+    "path_proximity_boost": "Additive boost from path-title proximity reranking when an asset path is similar to the target or changed-file paths.",
+    "recent_source_boost": "Additive boost for recently created saved-context artifacts (kept for backward compatibility; see also session_recency_boost).",
+    "same_package_dir_boost": "Additive boost applied for same-package or same-directory proximity relative to the request target.",
+    "same_session_boost": "Additive boost for saved-context artifacts from the active session (kept for backward compatibility; see also session_recency_boost).",
+    "saved_context_rank_score": "Base saved-context ranking contribution derived from retrieval rank.",
+    "session_recency_boost": "Unified normalized signal for session recency/relevance across all surfaces. Mirrors recent_source_boost and same_session_boost for saved context; also set for content assets when session context is available.",
+    "source_kind": "Which retrieval surface produced this item: graph_node, graph_edge, file_asset, content_match, template, text_asset, or saved_context. Allows interpretation of other evidence fields across heterogeneous mixed results.",
+    "test_adjacent": "Item was included because of test adjacency.",
+    "trigram_correction": "Score contribution from trigram or fuzzy-match correction bringing a near-miss symbol or path hit into the result."
+  },
   "safe_to_answer": true,
   "seed_budgets": [
     {

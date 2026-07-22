@@ -318,7 +318,7 @@ fn inventory_entries() -> Vec<ToolInventoryEntry> {
                 .meta
                 .get("atlas:resultContract")
                 .and_then(Value::as_str)
-                .unwrap_or("mixed-needs-redesign")
+                .unwrap_or("text-only")
                 .to_owned(),
             read_only: tool.annotations.read_only_hint,
             state_changing: tool.annotations.state_changing_hint,

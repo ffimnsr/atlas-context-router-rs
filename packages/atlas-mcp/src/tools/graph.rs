@@ -203,22 +203,14 @@ pub(super) fn tool_query_graph(
         .collect();
 
     let mut response = tool_result_value(&compact, output_format)?;
-    response["atlas_result_kind"] = serde_json::Value::String("symbol_search".to_owned());
     response["atlas_usage_edges_included"] = serde_json::Value::Bool(false);
     response["atlas_relationship_tools"] =
         serde_json::json!(["symbol_neighbors", "traverse_graph", "get_context"]);
-    response["atlas_result_count"] = serde_json::json!(compact.len());
-    response["atlas_result_files"] = serde_json::json!(
-        compact
-            .iter()
-            .map(|result| result.node.file.to_owned())
-            .collect::<Vec<_>>()
-    );
     response["atlas_truncated"] = serde_json::json!(compact.len() == limit);
     response["atlas_query_mode"] = serde_json::Value::String(explanation.active_query_mode);
     response["atlas_ranking_evidence_legend"] = ranking_evidence_legend_json();
     if compact.is_empty() && semantic {
-        response["atlas_hint"] = serde_json::Value::String(
+        response["hint"] = serde_json::Value::String(
             "FTS found no symbol names matching the query text. \
              FTS searches indexed identifiers, not natural language phrases. \
              Try: (1) a short exact symbol name like 'BalancesTab'; \
@@ -291,7 +283,7 @@ pub(super) fn tool_batch_query_graph(
         text: String,
         items: Vec<BatchResultNode>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        atlas_hint: Option<String>,
+        hint: Option<String>,
     }
 
     #[derive(Serialize)]
@@ -392,7 +384,7 @@ pub(super) fn tool_batch_query_graph(
             })
             .collect();
 
-        let atlas_hint = if items.is_empty() && semantic {
+        let hint = if items.is_empty() && semantic {
             Some(
                 "FTS found no symbol names matching the query text. \
                  FTS searches indexed identifiers, not natural language phrases. \
@@ -410,7 +402,7 @@ pub(super) fn tool_batch_query_graph(
             query_index: idx,
             text,
             items,
-            atlas_hint,
+            hint,
         });
         batch_budget_reports.push(
             budgets.summary(
@@ -425,7 +417,6 @@ pub(super) fn tool_batch_query_graph(
     }
 
     let mut response = tool_result_value(&batch_results, output_format)?;
-    response["atlas_result_kind"] = serde_json::Value::String("batch_symbol_search".to_owned());
     response["atlas_query_count"] =
         serde_json::Value::Number(serde_json::Number::from(batch_results.len()));
     response["atlas_ranking_evidence_legend"] = ranking_evidence_legend_json();
@@ -669,6 +660,13 @@ pub(super) fn tool_symbol_neighbors(
             "qname": qname,
             "found": exists,
         },
+        "lookup": {
+            "status": status,
+            "error_code": if exists { Value::Null } else { json!("node_not_found") },
+            "error_code_docs": if exists { Value::Null } else { json!(error_code_docs("node_not_found")) },
+            "message": if exists { Value::Null } else { json!(error_message("node_not_found")) },
+            "suggestions": if exists { json!([]) } else { json!(error_suggestions("node_not_found")) },
+        },
         "callers": callers,
         "callees": callees,
         "call_sites": call_sites,
@@ -688,14 +686,6 @@ pub(super) fn tool_symbol_neighbors(
     });
 
     let mut response = tool_result_value(&payload, output_format)?;
-    if !exists {
-        response["atlas_error_code"] = serde_json::Value::String("node_not_found".to_owned());
-        response["atlas_error_code_docs"] =
-            serde_json::Value::String(error_code_docs("node_not_found"));
-        response["atlas_message"] =
-            serde_json::Value::String(error_message("node_not_found").to_owned());
-        response["atlas_suggestions"] = serde_json::json!(error_suggestions("node_not_found"));
-    }
 
     let observed = caller_pairs.len()
         + callee_pairs.len()

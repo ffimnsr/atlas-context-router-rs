@@ -139,7 +139,11 @@ fn get_context_query_returns_packaged_result() {
             .is_some(),
         "packaged context node must include context ranking evidence"
     );
-    assert!(resp.get("atlas_context_ranking_evidence_legend").is_some());
+    assert!(
+        resp["structuredContent"]
+            .get("ranking_evidence_legend")
+            .is_some()
+    );
 }
 
 #[test]
@@ -365,7 +369,6 @@ fn mcp_agent_facing_flows_pass_usability_acceptance_gate() {
         "query_graph must return ranked results"
     );
     assert!(query_text.contains("src/service.rs::fn::compute"));
-    assert_eq!(query_resp["atlas_result_kind"], "symbol_search");
     assert_eq!(query_resp["atlas_usage_edges_included"], false);
     assert!(
         query_resp["atlas_relationship_tools"]
@@ -518,7 +521,11 @@ fn get_review_context_includes_provenance() {
     let resp = call("get_review_context", Some(&args), "/repo", &fixture.db_path)
         .expect("get_review_context");
     assert_provenance(&resp, "/repo", &fixture.db_path);
-    assert!(resp.get("atlas_context_ranking_evidence_legend").is_some());
+    assert!(
+        resp["structuredContent"]
+            .get("ranking_evidence_legend")
+            .is_some()
+    );
 }
 
 #[test]
@@ -539,7 +546,11 @@ fn get_review_context_json_includes_changed_symbol_evidence() {
         direct_target["context_ranking_evidence"]["changed_symbol"].as_bool(),
         Some(true)
     );
-    assert!(resp.get("atlas_context_ranking_evidence_legend").is_some());
+    assert!(
+        resp["structuredContent"]
+            .get("ranking_evidence_legend")
+            .is_some()
+    );
 }
 
 #[test]
@@ -660,12 +671,12 @@ fn get_impact_radius_accepts_explicit_files_and_reports_change_source_metadata()
         Some(1)
     );
     assert_eq!(
-        resp.pointer("/atlas_change_source/mode")
+        resp.pointer("/structuredContent/change_source/mode")
             .and_then(|value| value.as_str()),
         Some("explicit_files")
     );
     assert_eq!(
-        resp.pointer("/atlas_change_source/resolved_files/0")
+        resp.pointer("/structuredContent/change_source/resolved_files/0")
             .and_then(|value| value.as_str()),
         Some("src/service.rs")
     );
@@ -689,12 +700,12 @@ fn get_review_context_accepts_explicit_files_and_reports_change_source_metadata(
         Some("review")
     );
     assert_eq!(
-        resp.pointer("/atlas_change_source/mode")
+        resp.pointer("/structuredContent/change_source/mode")
             .and_then(|value| value.as_str()),
         Some("explicit_files")
     );
     assert_eq!(
-        resp.pointer("/atlas_change_source/resolved_files/0")
+        resp.pointer("/structuredContent/change_source/resolved_files/0")
             .and_then(|value| value.as_str()),
         Some("src/service.rs")
     );
@@ -727,12 +738,12 @@ fn get_impact_radius_resolves_base_diff_files() {
         Some(1)
     );
     assert_eq!(
-        resp.pointer("/atlas_change_source/mode")
+        resp.pointer("/structuredContent/change_source/mode")
             .and_then(|value| value.as_str()),
         Some("base_ref")
     );
     assert_eq!(
-        resp.pointer("/atlas_change_source/resolved_files/0")
+        resp.pointer("/structuredContent/change_source/resolved_files/0")
             .and_then(|value| value.as_str()),
         Some("src/service.rs")
     );
@@ -765,12 +776,12 @@ fn get_review_context_resolves_staged_diff_files() {
         Some("review")
     );
     assert_eq!(
-        resp.pointer("/atlas_change_source/mode")
+        resp.pointer("/structuredContent/change_source/mode")
             .and_then(|value| value.as_str()),
         Some("staged")
     );
     assert_eq!(
-        resp.pointer("/atlas_change_source/resolved_files/0")
+        resp.pointer("/structuredContent/change_source/resolved_files/0")
             .and_then(|value| value.as_str()),
         Some("src/service.rs")
     );
@@ -795,12 +806,12 @@ fn get_review_context_resolves_working_tree_diff_files() {
     .expect("get_review_context");
 
     assert_eq!(
-        resp.pointer("/atlas_change_source/mode")
+        resp.pointer("/structuredContent/change_source/mode")
             .and_then(|value| value.as_str()),
         Some("working_tree")
     );
     assert_eq!(
-        resp.pointer("/atlas_change_source/resolved_files/0")
+        resp.pointer("/structuredContent/change_source/resolved_files/0")
             .and_then(|value| value.as_str()),
         Some("src/service.rs")
     );
@@ -834,12 +845,12 @@ fn get_impact_radius_empty_diff_returns_empty_result() {
         Some(0)
     );
     assert_eq!(
-        resp.pointer("/atlas_change_source/mode")
+        resp.pointer("/structuredContent/change_source/mode")
             .and_then(|value| value.as_str()),
         Some("working_tree")
     );
     assert_eq!(
-        resp.pointer("/atlas_change_source/resolved_files")
+        resp.pointer("/structuredContent/change_source/resolved_files")
             .and_then(|value| value.as_array())
             .map(|items| items.len()),
         Some(0)
@@ -957,7 +968,7 @@ fn detect_changes_accepts_explicit_mode_field() {
     .expect("detect_changes with explicit mode");
 
     assert_eq!(
-        resp.pointer("/atlas_change_source/mode")
+        resp.pointer("/structuredContent/change_source/mode")
             .and_then(|value| value.as_str()),
         Some("working_tree")
     );
@@ -1043,7 +1054,8 @@ fn get_context_response_includes_detail_controls_metadata() {
     let args = serde_json::json!({ "query": "compute", "output_format": "json" });
     let resp = call("get_context", Some(&args), "/ignored", &fixture.db_path).expect("call");
     let controls = resp
-        .get("atlas_detail_controls")
+        .get("structuredContent")
+        .and_then(|v| v.get("detail_controls"))
         .expect("atlas_detail_controls");
     assert!(
         controls.get("code_spans").is_some(),
@@ -1064,7 +1076,7 @@ fn get_context_default_omits_tests_code_spans_neighbors() {
     let fixture = setup_mcp_fixture();
     let args = serde_json::json!({ "query": "compute", "output_format": "json" });
     let resp = call("get_context", Some(&args), "/ignored", &fixture.db_path).expect("call");
-    let controls = &resp["atlas_detail_controls"];
+    let controls = &resp["structuredContent"]["detail_controls"];
     let omitted = controls["omitted_sections"].as_array().expect("array");
     let omitted_strs: Vec<&str> = omitted.iter().flat_map(|v| v.as_str()).collect();
     assert!(omitted_strs.contains(&"tests"), "tests omitted by default");
@@ -1087,7 +1099,7 @@ fn get_context_tests_toggle_enables_test_nodes() {
         "output_format": "json"
     });
     let resp = call("get_context", Some(&args), "/ignored", &fixture.db_path).expect("call");
-    let controls = &resp["atlas_detail_controls"];
+    let controls = &resp["structuredContent"]["detail_controls"];
     assert_eq!(controls["tests"].as_bool(), Some(true));
     // omitted_sections must NOT contain "tests" when enabled
     let omitted = controls["omitted_sections"].as_array().expect("array");
@@ -1161,7 +1173,7 @@ fn get_context_code_spans_toggle_controls_line_ranges() {
         serde_json::json!({ "file": "src/ui.rs", "code_spans": true, "output_format": "json" });
     let resp_with = call("get_context", Some(&with_spans), "/ignored", &db_path).expect("call");
     assert_eq!(
-        resp_with["atlas_detail_controls"]["code_spans"].as_bool(),
+        resp_with["structuredContent"]["detail_controls"]["code_spans"].as_bool(),
         Some(true)
     );
 
@@ -1170,10 +1182,10 @@ fn get_context_code_spans_toggle_controls_line_ranges() {
     let resp_without =
         call("get_context", Some(&without_spans), "/ignored", &db_path).expect("call");
     assert_eq!(
-        resp_without["atlas_detail_controls"]["code_spans"].as_bool(),
+        resp_without["structuredContent"]["detail_controls"]["code_spans"].as_bool(),
         Some(false)
     );
-    let omitted = resp_without["atlas_detail_controls"]["omitted_sections"]
+    let omitted = resp_without["structuredContent"]["detail_controls"]["omitted_sections"]
         .as_array()
         .expect("array");
     let omitted_strs: Vec<&str> = omitted.iter().flat_map(|v| v.as_str()).collect();
@@ -1189,7 +1201,7 @@ fn get_context_imports_false_reflected_in_controls() {
     let args = serde_json::json!({ "query": "compute", "imports": false, "output_format": "json" });
     let resp = call("get_context", Some(&args), "/ignored", &fixture.db_path).expect("call");
     assert_eq!(
-        resp["atlas_detail_controls"]["imports"].as_bool(),
+        resp["structuredContent"]["detail_controls"]["imports"].as_bool(),
         Some(false)
     );
 }
@@ -1201,10 +1213,10 @@ fn get_context_neighbors_toggle_reflected_in_controls() {
         serde_json::json!({ "query": "compute", "neighbors": true, "output_format": "json" });
     let resp = call("get_context", Some(&args), "/ignored", &fixture.db_path).expect("call");
     assert_eq!(
-        resp["atlas_detail_controls"]["neighbors"].as_bool(),
+        resp["structuredContent"]["detail_controls"]["neighbors"].as_bool(),
         Some(true)
     );
-    let omitted = resp["atlas_detail_controls"]["omitted_sections"]
+    let omitted = resp["structuredContent"]["detail_controls"]["omitted_sections"]
         .as_array()
         .expect("array");
     let omitted_strs: Vec<&str> = omitted.iter().flat_map(|v| v.as_str()).collect();
@@ -1220,7 +1232,7 @@ fn get_context_max_files_reflected_in_controls() {
     let args = serde_json::json!({ "query": "compute", "max_files": 3, "output_format": "json" });
     let resp = call("get_context", Some(&args), "/ignored", &fixture.db_path).expect("call");
     assert_eq!(
-        resp["atlas_detail_controls"]["max_files"].as_u64(),
+        resp["structuredContent"]["detail_controls"]["max_files"].as_u64(),
         Some(3),
         "max_files echoed in controls"
     );
@@ -1239,7 +1251,7 @@ fn get_context_combined_toggles_applied_correctly() {
         "output_format": "json"
     });
     let resp = call("get_context", Some(&args), "/ignored", &fixture.db_path).expect("call");
-    let controls = &resp["atlas_detail_controls"];
+    let controls = &resp["structuredContent"]["detail_controls"];
     assert_eq!(controls["tests"].as_bool(), Some(true));
     assert_eq!(controls["code_spans"].as_bool(), Some(true));
     assert_eq!(controls["neighbors"].as_bool(), Some(true));
@@ -1259,7 +1271,7 @@ fn get_context_semantic_flag_reflected_in_controls() {
     let args = serde_json::json!({ "query": "compute", "semantic": true, "output_format": "json" });
     let resp = call("get_context", Some(&args), "/ignored", &fixture.db_path).expect("call");
     assert_eq!(
-        resp["atlas_detail_controls"]["semantic"].as_bool(),
+        resp["structuredContent"]["detail_controls"]["semantic"].as_bool(),
         Some(true),
         "semantic flag echoed in controls"
     );
@@ -1275,7 +1287,7 @@ fn get_context_files_with_max_files_cap_respected() {
     });
     let resp = call("get_context", Some(&args), "/ignored", &fixture.db_path).expect("call");
     assert_eq!(
-        resp["atlas_detail_controls"]["max_files"].as_u64(),
+        resp["structuredContent"]["detail_controls"]["max_files"].as_u64(),
         Some(1),
         "max_files echoed in controls for files-mode request"
     );
@@ -1295,7 +1307,10 @@ fn get_context_json_and_toon_output_both_include_controls() {
     )
     .expect("call json");
     assert!(
-        json_resp.get("atlas_detail_controls").is_some(),
+        json_resp
+            .get("structuredContent")
+            .and_then(|v| v.get("detail_controls"))
+            .is_some(),
         "json: controls present"
     );
 
@@ -1308,7 +1323,10 @@ fn get_context_json_and_toon_output_both_include_controls() {
     )
     .expect("call toon");
     assert!(
-        toon_resp.get("atlas_detail_controls").is_some(),
+        toon_resp
+            .get("structuredContent")
+            .and_then(|v| v.get("detail_controls"))
+            .is_some(),
         "toon: controls present"
     );
 }

@@ -263,7 +263,6 @@ fn query_graph_response_carries_relationship_guidance() {
     let response =
         call("query_graph", Some(&args), "/ignored", &fixture.db_path).expect("query_graph call");
 
-    assert_eq!(response["atlas_result_kind"], "symbol_search");
     assert_eq!(response["atlas_usage_edges_included"], false);
     assert_eq!(
         response["atlas_relationship_tools"],
@@ -285,10 +284,10 @@ fn semantic_empty_result_includes_hint() {
     let text = content[0]["text"].as_str().unwrap_or("");
     assert!(text.contains("[]"), "expected empty results, got: {text}");
     assert!(
-        response["atlas_hint"].as_str().is_some(),
-        "expected atlas_hint when semantic returns empty, got none"
+        response["hint"].as_str().is_some(),
+        "expected hint when semantic returns empty, got none"
     );
-    let hint = response["atlas_hint"].as_str().unwrap();
+    let hint = response["hint"].as_str().unwrap();
     assert!(
         hint.contains("FTS found no symbol names"),
         "hint should explain FTS limitation: {hint}"
@@ -314,7 +313,6 @@ fn batch_query_graph_returns_per_query_results() {
     )
     .expect("batch_query_graph call");
 
-    assert_eq!(response["atlas_result_kind"], "batch_symbol_search");
     assert_eq!(response["atlas_query_count"], 2);
 
     let text = response["content"][0]["text"].as_str().unwrap();
@@ -410,7 +408,6 @@ fn batch_query_graph_text_phrase_splits_and_queries_each_token() {
     )
     .expect("batch_query_graph with text phrase");
 
-    assert_eq!(response["atlas_result_kind"], "batch_symbol_search");
     assert_eq!(response["atlas_query_count"], 2);
 
     let text = response["content"][0]["text"].as_str().unwrap();
@@ -475,17 +472,14 @@ fn batch_query_graph_partial_empty_result_carries_hint() {
 
     let first_items = arr[0]["items"].as_array().expect("items");
     assert!(!first_items.is_empty());
-    assert!(
-        arr[0].get("atlas_hint").is_none(),
-        "no hint for successful query"
-    );
+    assert!(arr[0].get("hint").is_none(), "no hint for successful query");
 
     let second_items = arr[1]["items"].as_array().expect("items");
     assert!(
         second_items.is_empty(),
         "expected empty results for NL phrase"
     );
-    let hint = arr[1]["atlas_hint"].as_str().expect("atlas_hint present");
+    let hint = arr[1]["hint"].as_str().expect("hint present");
     assert!(
         hint.contains("FTS found no symbol names"),
         "hint should explain FTS limit: {hint}"
@@ -733,22 +727,29 @@ fn symbol_neighbors_missing_qname_sets_error_code() {
         serde_json::json!({ "qname": "src/nonexistent.rs::fn::ghost", "output_format": "json" });
     let resp = call("symbol_neighbors", Some(&args), "/repo", &fixture.db_path)
         .expect("symbol_neighbors should not error for missing symbol");
-    assert_eq!(resp["atlas_error_code"].as_str(), Some("node_not_found"));
+    assert_eq!(
+        resp["structuredContent"]["lookup"]["error_code"].as_str(),
+        Some("node_not_found")
+    );
     assert_eq!(
         resp["structuredContent"]["summary"]["status"],
         json!("node_not_found")
     );
     assert_eq!(resp["structuredContent"]["callers"], json!([]));
     assert_error_code_doc_link(
-        resp["atlas_error_code_docs"]
+        resp["structuredContent"]["lookup"]["error_code_docs"]
             .as_str()
-            .expect("atlas_error_code_docs"),
+            .expect("lookup.error_code_docs"),
         "node_not_found",
     );
-    assert!(resp["atlas_message"].as_str().is_some());
-    let suggestions = resp["atlas_suggestions"]
+    assert!(
+        resp["structuredContent"]["lookup"]["message"]
+            .as_str()
+            .is_some()
+    );
+    let suggestions = resp["structuredContent"]["lookup"]["suggestions"]
         .as_array()
-        .expect("atlas_suggestions");
+        .expect("lookup.suggestions");
     assert!(!suggestions.is_empty());
 }
 
@@ -1090,8 +1091,14 @@ fn query_graph_truncation_metadata_present() {
     let args = serde_json::json!({ "text": "compute" });
     let resp =
         call("query_graph", Some(&args), "/repo", &fixture.db_path).expect("query_graph call");
+    let text = unwrap_tool_text(resp.clone());
+    let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
+    let result_count = v.as_array().map(Vec::len).expect("result array");
     assert!(resp.get("atlas_truncated").is_some());
-    assert!(resp.get("atlas_result_count").is_some());
+    assert!(
+        result_count > 0,
+        "query_graph should return at least one result"
+    );
 }
 
 #[test]

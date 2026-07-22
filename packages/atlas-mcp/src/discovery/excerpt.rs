@@ -517,12 +517,6 @@ pub(crate) fn tool_read_file_excerpt(
             summary: ReadFileExcerptSummary,
             truncated: bool,
             warnings: Vec<String>,
-            mode: &'static str,
-            total_lines: usize,
-            excerpts: Vec<FileExcerpt>,
-            excerpt_count: usize,
-            atlas_result_kind: &'static str,
-            atlas_hint: Option<String>,
         }
 
         let normalized_ranges = resolved_ranges
@@ -591,10 +585,6 @@ pub(crate) fn tool_read_file_excerpt(
         } else {
             Vec::new()
         };
-        let atlas_hint = warnings.first().cloned();
-        let excerpt_count = snippets.len();
-        let legacy_excerpts = snippets.clone();
-
         let result = ReadFileExcerptResult {
             tool: "read_file_excerpt",
             file,
@@ -603,19 +593,13 @@ pub(crate) fn tool_read_file_excerpt(
             summary: ReadFileExcerptSummary {
                 total_lines,
                 requested_range_count,
-                returned_snippet_count: excerpt_count,
+                returned_snippet_count: snippets.len(),
                 total_selected_lines,
                 has_matches: !snippets.is_empty(),
             },
             snippets,
             truncated,
             warnings,
-            mode,
-            total_lines,
-            excerpts: legacy_excerpts,
-            excerpt_count,
-            atlas_result_kind: "file_excerpt",
-            atlas_hint,
         };
 
         let mut response = render_tool_result(&result, output_format)?;
@@ -710,11 +694,6 @@ pub(crate) fn tool_get_docs_section(
             summary: GetDocsSectionSummary,
             truncated: bool,
             warnings: Vec<String>,
-            heading_path: Option<String>,
-            heading_level: Option<u64>,
-            start_line: Option<u64>,
-            end_line: Option<u64>,
-            atlas_result_kind: &'static str,
         }
 
         let resolved = result.resolved;
@@ -758,11 +737,6 @@ pub(crate) fn tool_get_docs_section(
             },
             truncated: result.truncated,
             warnings,
-            heading_path: result.heading_path.clone(),
-            heading_level: result.heading_level.map(u64::from),
-            start_line: result.start_line.map(u64::from),
-            end_line: result.end_line.map(u64::from),
-            atlas_result_kind: "docs_section",
         };
 
         let mut response = render_tool_result(&normalized, output_format)?;
@@ -892,23 +866,12 @@ pub(crate) fn tool_read_file_around_match(
             summary: ReadFileAroundMatchSummary,
             truncated: bool,
             warnings: Vec<String>,
-            is_regex: bool,
-            case_sensitive: bool,
-            total_matches: usize,
-            returned_matches: usize,
-            snippet_count: usize,
-            snippets: Vec<AroundMatchSnippet>,
-            atlas_result_kind: &'static str,
-            atlas_hint: Option<String>,
         }
 
         let returned_matches = snippets
             .iter()
             .map(|snippet| snippet.match_lines.len())
             .sum();
-        let snippet_count = snippets.len();
-        let legacy_snippets = snippets.clone();
-        let atlas_hint = warnings.first().cloned();
         let result = AroundMatchResult {
             tool: "read_file_around_match",
             file,
@@ -919,20 +882,12 @@ pub(crate) fn tool_read_file_around_match(
             summary: ReadFileAroundMatchSummary {
                 total_matches,
                 returned_matches,
-                snippet_count,
+                snippet_count: snippets.len(),
                 observed_lines,
             },
             matches: snippets,
             truncated,
             warnings,
-            is_regex,
-            case_sensitive,
-            total_matches,
-            returned_matches,
-            snippet_count,
-            snippets: legacy_snippets,
-            atlas_result_kind: "file_match_snippets",
-            atlas_hint,
         };
 
         let mut response = render_tool_result(&result, output_format)?;

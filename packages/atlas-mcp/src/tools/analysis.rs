@@ -27,16 +27,6 @@ fn apply_finding_limit(
     }
 }
 
-fn report_files(findings: &[InsightFinding]) -> Vec<String> {
-    findings
-        .iter()
-        .flat_map(|finding| finding.evidence.iter())
-        .filter_map(|evidence| evidence.file_path.clone())
-        .collect::<std::collections::BTreeSet<_>>()
-        .into_iter()
-        .collect()
-}
-
 fn insight_report_response<T: serde::Serialize>(
     full_payload: &T,
     compact_payload: serde_json::Value,
@@ -94,11 +84,7 @@ pub(super) fn tool_analyze_architecture(
         "module_count": analysis.modules.len(),
         "module_edge_count": analysis.edges.len(),
     });
-    let mut response = insight_report_response(&analysis.report, compact, output_format, verbose)?;
-    response["atlas_result_kind"] = serde_json::json!("architecture_report");
-    response["atlas_result_count"] = serde_json::json!(analysis.report.summary.total_findings);
-    response["atlas_result_files"] = serde_json::json!(report_files(&analysis.report.findings));
-    Ok(response)
+    insight_report_response(&analysis.report, compact, output_format, verbose)
 }
 
 pub(super) fn tool_analyze_metrics(
@@ -130,11 +116,7 @@ pub(super) fn tool_analyze_metrics(
         "file_metric_count": analysis.metrics.file_metrics.len(),
         "module_metric_count": analysis.metrics.module_metrics.len(),
     });
-    let mut response = insight_report_response(&analysis.report, compact, output_format, verbose)?;
-    response["atlas_result_kind"] = serde_json::json!("metrics_report");
-    response["atlas_result_count"] = serde_json::json!(analysis.report.summary.total_findings);
-    response["atlas_result_files"] = serde_json::json!(report_files(&analysis.report.findings));
-    Ok(response)
+    insight_report_response(&analysis.report, compact, output_format, verbose)
 }
 
 pub(super) fn tool_assess_risk(
@@ -169,11 +151,7 @@ pub(super) fn tool_assess_risk(
         "top_findings": analysis.report.findings.clone(),
         "top_factors": analysis.factor_contributions.iter().take(5).collect::<Vec<_>>(),
     });
-    let mut response = insight_report_response(&analysis.report, compact, output_format, verbose)?;
-    response["atlas_result_kind"] = serde_json::json!("risk_report");
-    response["atlas_result_count"] = serde_json::json!(analysis.report.summary.total_findings);
-    response["atlas_result_files"] = serde_json::json!(report_files(&analysis.report.findings));
-    Ok(response)
+    insight_report_response(&analysis.report, compact, output_format, verbose)
 }
 
 pub(super) fn tool_analyze_patterns(
@@ -198,11 +176,7 @@ pub(super) fn tool_analyze_patterns(
         "summary": report.summary.clone(),
         "top_findings": report.findings.clone(),
     });
-    let mut response = insight_report_response(&report, compact, output_format, verbose)?;
-    response["atlas_result_kind"] = serde_json::json!("pattern_report");
-    response["atlas_result_count"] = serde_json::json!(report.summary.total_findings);
-    response["atlas_result_files"] = serde_json::json!(report_files(&report.findings));
-    Ok(response)
+    insight_report_response(&report, compact, output_format, verbose)
 }
 
 fn tool_find_large_functions_impl(
@@ -262,20 +236,8 @@ fn tool_find_large_functions_impl(
         "summary": analysis.report.summary.clone(),
         "top_findings": analysis.candidates.clone(),
     });
-    let mut response =
-        insight_report_response(&analysis.report_result(), compact, output_format, verbose)?;
-    response["atlas_result_kind"] = serde_json::json!(result_kind);
-    response["atlas_result_count"] = serde_json::json!(analysis.report.summary.total_findings);
-    response["atlas_result_files"] = serde_json::json!(
-        analysis
-            .candidates
-            .iter()
-            .map(|candidate| candidate.file_path.clone())
-            .collect::<std::collections::BTreeSet<_>>()
-            .into_iter()
-            .collect::<Vec<_>>()
-    );
-    Ok(response)
+    let _ = result_kind;
+    insight_report_response(&analysis.report_result(), compact, output_format, verbose)
 }
 
 pub(super) fn tool_find_large_functions(
@@ -480,8 +442,6 @@ pub(super) fn tool_analyze_remove(
             "error_code": w.error_code,
             "suggestions": w.suggestions,
         })).collect::<Vec<_>>(),
-        "evidence": result.evidence.iter().map(|e| serde_json::json!({ "key": e.key, "value": e.value })).collect::<Vec<_>>(),
-        "impacted_files": &result.impacted_files[..result.impacted_files.len().min(max_files)],
     });
     let mut response = tool_result_value(&payload, output_format)?;
     let budget = if result.budget.budget_hit {
@@ -690,7 +650,6 @@ pub(super) fn tool_analyze_dependency(
             "omitted_blocking_count": omitted,
         },
         "warnings": result.uncertainty_flags,
-        "evidence": result.evidence.iter().map(|e| serde_json::json!({ "key": e.key, "value": e.value })).collect::<Vec<_>>(),
     });
     let mut response = tool_result_value(&payload, output_format)?;
     inject_budget_metadata(&mut response, &result.budget);

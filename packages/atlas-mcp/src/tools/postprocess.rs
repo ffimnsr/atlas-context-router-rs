@@ -124,7 +124,6 @@ pub(super) fn tool_postprocess_graph(
 
     let envelope = ToolSuccessEnvelope::new("postprocess_graph", payload);
     let mut response = normalized_tool_result_value(&envelope, output_format)?;
-    response["atlas_result_kind"] = json!("postprocess_summary");
     response["atlas_readiness"] = json!({
         "graph_built": summary.graph_built,
         "build_state": build_state,

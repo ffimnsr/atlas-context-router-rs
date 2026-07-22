@@ -1006,7 +1006,6 @@ fn tool_result_contract_label(tool_name: &str) -> &'static str {
     match tool_result_contract(tool_name) {
         super::registry::ToolResultContract::StableObject => "stable-object",
         super::registry::ToolResultContract::TextOnly => "text-only",
-        super::registry::ToolResultContract::MixedNeedsRedesign => "mixed-needs-redesign",
     }
 }
 

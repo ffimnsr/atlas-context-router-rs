@@ -5,7 +5,6 @@ This file is generated from `atlas_mcp::tool_list()`. Do not edit by hand.
 Result contract legend:
 - `stable-object`: JSON mode returns object `structuredContent`; `outputSchema` validates that object.
 - `text-only`: consume MCP `content`; no `outputSchema` advertised.
-- `mixed-needs-redesign`: output not yet normalized to one deterministic object contract; no `outputSchema` advertised.
 
 | Tool | Result contract | Output schema | Description |
 |------|-----------------|---------------|-------------|

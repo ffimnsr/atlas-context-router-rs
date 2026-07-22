@@ -3688,17 +3688,17 @@ Why:
 
 ### R8 — Descriptor inventory cleanup and contract enforcement after per-tool redesign
 
-- [ ] move each tool from `MixedNeedsRedesign` to `StableObject` in `packages/atlas-mcp/src/tools/registry.rs` immediately after its schema lands
-- [ ] keep `MCP_TOOLS.md` generation in sync so result-contract inventory reflects actual implementation state after each migrated tool
-- [ ] add one registry test asserting no tool remains in `MixedNeedsRedesign` once this patch completes
-- [ ] add one dispatcher/transport test matrix covering representative tool from each redesigned family: context, lifecycle, health, insights, session, dependency, and discovery
-- [ ] add one documentation pass updating crate docs and manual output so each normalized tool documents exact JSON contract expectations
+- [x] move each tool from `MixedNeedsRedesign` to `StableObject` in `packages/atlas-mcp/src/tools/registry.rs` immediately after its schema lands
+- [x] keep `MCP_TOOLS.md` generation in sync so result-contract inventory reflects actual implementation state after each migrated tool
+- [x] add one registry test asserting no tool remains in `MixedNeedsRedesign` once this patch completes
+- [x] add one dispatcher/transport test matrix covering representative tool from each redesigned family: context, lifecycle, health, insights, session, dependency, and discovery
+- [x] add one documentation pass updating crate docs and manual output so each normalized tool documents exact JSON contract expectations
 
 Completion criteria:
 
-- [ ] every tool currently marked `mixed-needs-redesign` in `MCP_TOOLS.md` emits deterministic object `structuredContent` on successful JSON-mode calls
-- [ ] every redesigned tool advertises exact per-tool `outputSchema` that validates actual `structuredContent`
-- [ ] no redesigned tool returns bare string, bare array, or alternate success envelope based on mode, payload size, or selector family
-- [ ] direct tool call, deferred task completion, stdio transport, and HTTP transport all expose same result contract per tool
-- [ ] `packages/atlas-mcp/src/tools/registry.rs` no longer classifies any current tool as `MixedNeedsRedesign`
-- [ ] generated `MCP_TOOLS.md` shows only `stable-object` or `text-only` result contracts
+- [x] every tool currently marked `mixed-needs-redesign` in `MCP_TOOLS.md` emits deterministic object `structuredContent` on successful JSON-mode calls
+- [x] every redesigned tool advertises exact per-tool `outputSchema` that validates actual `structuredContent`
+- [x] no redesigned tool returns bare string, bare array, or alternate success envelope based on mode, payload size, or selector family
+- [x] direct tool call, deferred task completion, stdio transport, and HTTP transport all expose same result contract per tool
+- [x] `packages/atlas-mcp/src/tools/registry.rs` no longer classifies any current tool as `MixedNeedsRedesign`
+- [x] generated `MCP_TOOLS.md` shows only `stable-object` or `text-only` result contracts

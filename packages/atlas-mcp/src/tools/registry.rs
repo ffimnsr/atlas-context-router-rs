@@ -10,7 +10,6 @@ use serde_json::Value;
 pub(crate) enum ToolResultContract {
     StableObject,
     TextOnly,
-    MixedNeedsRedesign,
 }
 
 impl ToolResultContract {
@@ -18,14 +17,13 @@ impl ToolResultContract {
         match self {
             Self::StableObject => "stable-object",
             Self::TextOnly => "text-only",
-            Self::MixedNeedsRedesign => "mixed-needs-redesign",
         }
     }
 
     fn output_schema_note(self) -> &'static str {
         match self {
             Self::StableObject => "exact structuredContent schema",
-            Self::TextOnly | Self::MixedNeedsRedesign => "none",
+            Self::TextOnly => "none",
         }
     }
 
@@ -36,9 +34,6 @@ impl ToolResultContract {
             }
             Self::TextOnly => {
                 "Do not rely on structuredContent; consume text content or resource links only."
-            }
-            Self::MixedNeedsRedesign => {
-                "Current output may vary by mode or payload shape; no outputSchema advertised yet."
             }
         }
     }
@@ -100,13 +95,13 @@ pub(crate) fn tool_result_contract(name: &str) -> ToolResultContract {
         | "search_saved_context"
         | "search_decisions"
         | "cross_session_search" => ToolResultContract::TextOnly,
-        _ => ToolResultContract::MixedNeedsRedesign,
+        _ => panic!("tool_result_contract missing classification for {name}"),
     }
 }
 
 pub fn tool_list_markdown() -> String {
     let mut markdown = String::from(
-        "# MCP Tools\n\nThis file is generated from `atlas_mcp::tool_list()`. Do not edit by hand.\n\nResult contract legend:\n- `stable-object`: JSON mode returns object `structuredContent`; `outputSchema` validates that object.\n- `text-only`: consume MCP `content`; no `outputSchema` advertised.\n- `mixed-needs-redesign`: output not yet normalized to one deterministic object contract; no `outputSchema` advertised.\n\n| Tool | Result contract | Output schema | Description |\n|------|-----------------|---------------|-------------|\n",
+        "# MCP Tools\n\nThis file is generated from `atlas_mcp::tool_list()`. Do not edit by hand.\n\nResult contract legend:\n- `stable-object`: JSON mode returns object `structuredContent`; `outputSchema` validates that object.\n- `text-only`: consume MCP `content`; no `outputSchema` advertised.\n\n| Tool | Result contract | Output schema | Description |\n|------|-----------------|---------------|-------------|\n",
     );
 
     for tool in tool_list()["tools"].as_array().expect("tools array") {
@@ -2572,6 +2567,7 @@ fn detect_changes_output_schema() -> Value {
         serde_json::json!({
             "mode": { "type": "string" },
             "base_ref": { "type": ["string", "null"] },
+            "change_source": { "$ref": "#/$defs/change_source" },
             "files": {
                 "type": "array",
                 "items": {
@@ -2631,17 +2627,21 @@ fn detect_changes_output_schema() -> Value {
             "tool",
             "mode",
             "base_ref",
+            "change_source",
             "files",
             "summary",
             "atlas_provenance",
         ],
-        None,
+        Some(serde_json::json!({
+            "change_source": change_source_schema(),
+        })),
     )
 }
 
 fn get_impact_radius_output_schema() -> Value {
     normalized_tool_output_schema(
         serde_json::json!({
+            "change_source": { "$ref": "#/$defs/change_source" },
             "seed_files": { "type": "array", "items": { "type": "string" } },
             "changed_symbols": { "type": "array", "items": { "$ref": "#/$defs/compact_node" } },
             "impacted_symbols": { "type": "array", "items": { "$ref": "#/$defs/compact_node" } },
@@ -2682,6 +2682,7 @@ fn get_impact_radius_output_schema() -> Value {
         }),
         &[
             "tool",
+            "change_source",
             "seed_files",
             "changed_symbols",
             "impacted_symbols",
@@ -2691,6 +2692,7 @@ fn get_impact_radius_output_schema() -> Value {
             "atlas_provenance",
         ],
         Some(serde_json::json!({
+            "change_source": change_source_schema(),
             "compact_node": compact_node_schema(),
             "compact_edge": compact_edge_schema(),
             "seed_budget": seed_budget_schema(),
@@ -2702,6 +2704,7 @@ fn get_impact_radius_output_schema() -> Value {
 fn get_review_context_output_schema() -> Value {
     normalized_tool_output_schema(
         serde_json::json!({
+            "change_source": { "$ref": "#/$defs/change_source" },
             "changed_files": { "type": "array", "items": { "type": "string" } },
             "changed_symbols": { "type": "array", "items": { "$ref": "#/$defs/packaged_selected_node" } },
             "neighbors": { "type": "array", "items": { "$ref": "#/$defs/packaged_selected_node" } },
@@ -2739,11 +2742,13 @@ fn get_review_context_output_schema() -> Value {
             "budget_status": { "type": "string" },
             "linked_decisions": { "type": "array", "items": { "type": "object" } },
             "decision_lookup_query": { "type": "string" },
+            "ranking_evidence_legend": { "type": "object" },
             "atlas_provenance": { "type": "object" },
             "atlas_freshness": { "type": "object" }
         }),
         &[
             "tool",
+            "change_source",
             "changed_files",
             "changed_symbols",
             "neighbors",
@@ -2753,6 +2758,7 @@ fn get_review_context_output_schema() -> Value {
             "atlas_provenance",
         ],
         Some(serde_json::json!({
+            "change_source": change_source_schema(),
             "line_range": line_range_schema(),
             "packaged_selected_node": packaged_selected_node_schema(),
             "packaged_selected_edge": packaged_selected_edge_schema(),
@@ -2830,6 +2836,7 @@ fn get_minimal_context_output_schema() -> Value {
 fn explain_change_output_schema() -> Value {
     normalized_tool_output_schema(
         serde_json::json!({
+            "change_source": { "$ref": "#/$defs/change_source" },
             "changed_files": { "type": "array", "items": { "$ref": "#/$defs/explain_diff_file" } },
             "change_kinds": { "$ref": "#/$defs/explain_changed_by_kind" },
             "risk_level": { "type": "string" },
@@ -2867,6 +2874,7 @@ fn explain_change_output_schema() -> Value {
         }),
         &[
             "tool",
+            "change_source",
             "changed_files",
             "change_kinds",
             "risk_level",
@@ -2876,6 +2884,7 @@ fn explain_change_output_schema() -> Value {
             "atlas_provenance",
         ],
         Some(serde_json::json!({
+            "change_source": change_source_schema(),
             "explain_changed_by_kind": explain_changed_by_kind_schema(),
             "explain_changed_symbol": explain_changed_symbol_schema(),
             "explain_boundary_violation": explain_boundary_violation_schema(),
@@ -2961,6 +2970,11 @@ fn get_context_output_schema() -> Value {
             "ranked_files": { "type": "array", "items": { "$ref": "#/$defs/ranked_file_summary" } },
             "assets": { "type": "array", "items": { "$ref": "#/$defs/artifact_saved_context" } },
             "ambiguity": { "$ref": "#/$defs/ambiguity" },
+            "context_files": { "type": "array", "items": { "type": "string" } },
+            "detail_controls": { "type": "object" },
+            "agent_scope": { "type": "object" },
+            "ranking_evidence_legend": { "type": "object" },
+            "lookup": { "type": "object" },
             "intent": { "type": "string" },
             "node_count": { "type": "integer" },
             "nodes": { "type": "array", "items": { "$ref": "#/$defs/packaged_selected_node" } },
@@ -3003,6 +3017,10 @@ fn get_context_output_schema() -> Value {
             "ranked_files",
             "assets",
             "ambiguity",
+            "context_files",
+            "detail_controls",
+            "agent_scope",
+            "lookup",
             "truncated",
             "atlas_provenance",
         ],
@@ -3475,6 +3493,7 @@ fn symbol_neighbors_output_schema() -> Value {
             "tests": { "type": "array", "items": { "type": "object" } },
             "siblings": { "type": "array", "items": { "type": "object" } },
             "imports": { "type": "array", "items": { "type": "object" } },
+            "lookup": { "type": "object" },
             "summary": { "type": "object" },
             "warnings": { "type": "array", "items": { "type": "string" } },
             "atlas_provenance": { "type": "object" },
@@ -3489,6 +3508,7 @@ fn symbol_neighbors_output_schema() -> Value {
             "tests",
             "siblings",
             "imports",
+            "lookup",
             "summary",
             "warnings",
             "atlas_provenance",
@@ -3592,8 +3612,6 @@ fn analyze_remove_output_schema() -> Value {
             "uncertainty_flags": { "type": "array", "items": { "type": "string" } },
             "summary": { "type": "object" },
             "warnings": { "type": "array", "items": { "type": "object" } },
-            "evidence": { "type": "array", "items": { "type": "object" } },
-            "impacted_files": { "type": "array", "items": { "type": "string" } },
             "atlas_provenance": { "type": "object" },
             "atlas_freshness": { "type": "object" }
         }),
@@ -3649,7 +3667,6 @@ fn analyze_dependency_output_schema() -> Value {
             "suggested_cleanups": { "type": "array", "items": { "type": "string" } },
             "summary": { "type": "object" },
             "warnings": { "type": "array", "items": { "type": "string" } },
-            "evidence": { "type": "array", "items": { "type": "object" } },
             "atlas_provenance": { "type": "object" },
             "atlas_freshness": { "type": "object" }
         }),
@@ -3790,12 +3807,6 @@ fn read_file_excerpt_output_schema() -> Value {
             "summary": { "type": "object" },
             "truncated": { "type": "boolean" },
             "warnings": { "type": "array", "items": { "type": "string" } },
-            "mode": { "type": "string" },
-            "total_lines": { "type": "integer" },
-            "excerpts": { "type": "array", "items": { "type": "object" } },
-            "excerpt_count": { "type": "integer" },
-            "atlas_result_kind": { "type": "string" },
-            "atlas_hint": { "type": ["string", "null"] },
             "atlas_provenance": { "type": "object" },
             "atlas_freshness": { "type": "object" }
         }),
@@ -3832,11 +3843,6 @@ fn get_docs_section_output_schema() -> Value {
             "summary": { "type": "object" },
             "truncated": { "type": "boolean" },
             "warnings": { "type": "array", "items": { "type": "string" } },
-            "heading_path": { "type": ["string", "null"] },
-            "heading_level": { "type": ["integer", "null"] },
-            "start_line": { "type": ["integer", "null"] },
-            "end_line": { "type": ["integer", "null"] },
-            "atlas_result_kind": { "type": "string" },
             "atlas_provenance": { "type": "object" },
             "atlas_freshness": { "type": "object" }
         }),
@@ -3873,14 +3879,6 @@ fn read_file_around_match_output_schema() -> Value {
             "summary": { "type": "object" },
             "truncated": { "type": "boolean" },
             "warnings": { "type": "array", "items": { "type": "string" } },
-            "is_regex": { "type": "boolean" },
-            "case_sensitive": { "type": "boolean" },
-            "total_matches": { "type": "integer" },
-            "returned_matches": { "type": "integer" },
-            "snippet_count": { "type": "integer" },
-            "snippets": { "type": "array", "items": { "type": "object" } },
-            "atlas_result_kind": { "type": "string" },
-            "atlas_hint": { "type": ["string", "null"] },
             "atlas_provenance": { "type": "object" },
             "atlas_freshness": { "type": "object" }
         }),
@@ -4129,7 +4127,7 @@ mod tests {
                         tool.name
                     );
                 }
-                ToolResultContract::TextOnly | ToolResultContract::MixedNeedsRedesign => {
+                ToolResultContract::TextOnly => {
                     assert!(
                         tool.output_schema.is_none(),
                         "{} must omit outputSchema",
@@ -4177,10 +4175,25 @@ mod tests {
         let markdown = tool_list_markdown();
         assert!(markdown.contains("| Tool | Result contract | Output schema | Description |"));
         assert!(markdown.contains("`stable-object`"));
-        assert!(markdown.contains("`mixed-needs-redesign`"));
+        assert!(markdown.contains("`text-only`"));
+        assert!(!markdown.contains("mixed-needs-redesign"));
         assert!(
             markdown.contains("`broker_status` | `stable-object` | exact structuredContent schema")
         );
+    }
+
+    #[test]
+    fn no_current_tool_uses_mixed_needs_redesign_contract() {
+        for tool in tool_descriptors() {
+            assert!(
+                matches!(
+                    tool_result_contract(&tool.name),
+                    ToolResultContract::StableObject | ToolResultContract::TextOnly
+                ),
+                "{} must classify as stable-object or text-only",
+                tool.name
+            );
+        }
     }
 }
 

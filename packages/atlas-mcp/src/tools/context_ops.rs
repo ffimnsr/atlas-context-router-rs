@@ -522,11 +522,8 @@ fn change_source_json(resolved: &ResolvedChangeSource) -> Value {
     })
 }
 
-fn inject_change_source_metadata(
-    response: &mut serde_json::Value,
-    resolved: &ResolvedChangeSource,
-) {
-    response["atlas_change_source"] = change_source_json(resolved);
+fn insert_change_source_payload(payload: &mut Map<String, Value>, resolved: &ResolvedChangeSource) {
+    payload.insert("change_source".to_owned(), change_source_json(resolved));
 }
 
 fn as_object_map(value: Value) -> Map<String, Value> {
@@ -563,147 +560,6 @@ fn count_change_kinds(changes: &[ChangedFile]) -> (usize, usize, usize, usize, u
         }
     }
     (added, modified, deleted, renamed, copied)
-}
-
-fn metadata_reserve_bytes(value: &serde_json::Value) -> usize {
-    serde_json::to_vec(value)
-        .map(|bytes| bytes.len() + 256)
-        .unwrap_or(256)
-}
-
-fn trim_context_response_metadata(response: &mut serde_json::Value, max_bytes: usize) {
-    while serde_json::to_vec(response)
-        .map(|bytes| bytes.len())
-        .unwrap_or(0)
-        > max_bytes
-    {
-        if response
-            .get("atlas_context_ranking_evidence_legend")
-            .is_some()
-        {
-            response
-                .as_object_mut()
-                .expect("response object")
-                .remove("atlas_context_ranking_evidence_legend");
-            continue;
-        }
-
-        let removed_context_file = response
-            .get_mut("atlas_context_files")
-            .and_then(serde_json::Value::as_array_mut)
-            .is_some_and(|files| {
-                if files.is_empty() {
-                    false
-                } else {
-                    files.pop();
-                    true
-                }
-            });
-        if removed_context_file {
-            continue;
-        }
-
-        let removed_omitted_section = response
-            .get_mut("atlas_detail_controls")
-            .and_then(serde_json::Value::as_object_mut)
-            .and_then(|controls| controls.get_mut("omitted_sections"))
-            .and_then(serde_json::Value::as_array_mut)
-            .is_some_and(|sections| {
-                if sections.is_empty() {
-                    false
-                } else {
-                    sections.pop();
-                    true
-                }
-            });
-        if removed_omitted_section {
-            continue;
-        }
-
-        if response.get("atlas_context_files").is_some() {
-            response
-                .as_object_mut()
-                .expect("response object")
-                .remove("atlas_context_files");
-            continue;
-        }
-
-        if response.get("atlas_detail_controls").is_some() {
-            response
-                .as_object_mut()
-                .expect("response object")
-                .remove("atlas_detail_controls");
-            continue;
-        }
-
-        let removed_change_source_file = response
-            .get_mut("atlas_change_source")
-            .and_then(serde_json::Value::as_object_mut)
-            .and_then(|source| source.get_mut("resolved_files"))
-            .and_then(serde_json::Value::as_array_mut)
-            .is_some_and(|files| {
-                if files.is_empty() {
-                    false
-                } else {
-                    files.pop();
-                    true
-                }
-            });
-        if removed_change_source_file {
-            continue;
-        }
-
-        let removed_deleted_file = response
-            .get_mut("atlas_change_source")
-            .and_then(serde_json::Value::as_object_mut)
-            .and_then(|source| source.get_mut("deleted_files"))
-            .and_then(serde_json::Value::as_array_mut)
-            .is_some_and(|files| {
-                if files.is_empty() {
-                    false
-                } else {
-                    files.pop();
-                    true
-                }
-            });
-        if removed_deleted_file {
-            continue;
-        }
-
-        if response.get("atlas_change_source").is_some() {
-            response
-                .as_object_mut()
-                .expect("response object")
-                .remove("atlas_change_source");
-            continue;
-        }
-
-        if response.get("structuredContent").is_some() {
-            response
-                .as_object_mut()
-                .expect("response object")
-                .remove("structuredContent");
-            continue;
-        }
-
-        break;
-    }
-}
-
-fn ensure_final_response_budget(
-    response: &mut serde_json::Value,
-    max_bytes: usize,
-) -> Result<usize> {
-    trim_context_response_metadata(response, max_bytes);
-    let emitted_bytes = serde_json::to_vec(response)
-        .map(|bytes| bytes.len())
-        .unwrap_or(0);
-    if emitted_bytes > max_bytes {
-        anyhow::bail!(
-            "MCP response exceeds max_mcp_response_bytes after metadata trimming (emitted={emitted_bytes}, limit={max_bytes})"
-        );
-    }
-    Ok(emitted_bytes)
 }
 
 pub(super) fn tool_get_impact_radius(
@@ -764,6 +620,7 @@ pub(super) fn tool_get_impact_radius(
     payload.remove("relevant_edge_count");
     payload.remove("budget_status");
 
+    insert_change_source_payload(&mut payload, &resolved);
     let mut response = build_normalized_success_response(
         "get_impact_radius",
         Value::Object(payload),
@@ -775,7 +632,6 @@ pub(super) fn tool_get_impact_radius(
             .then_some("node or edge caps limited impact result"),
     )?;
     inject_budget_metadata(&mut response, &result.budget);
-    inject_change_source_metadata(&mut response, &resolved);
     Ok(response)
 }
 
@@ -815,17 +671,6 @@ pub(super) fn tool_get_review_context(
         .mcp_cli_payload_serialization
         .mcp_response_bytes
         .default_limit;
-    let response_budget_limit =
-        response_budget_limit.saturating_sub(metadata_reserve_bytes(&serde_json::json!({
-            "atlas_change_source": {
-                "mode": resolved.mode.as_str(),
-                "resolved_files": &resolved.files,
-                "deleted_files": &resolved.deleted_files,
-                "base": &resolved.base,
-                "staged": resolved.staged,
-                "working_tree": resolved.working_tree,
-            }
-        })));
     let response_budget_limit = response_budget_limit.saturating_sub(400);
     let stage_budget = if let Some(response_budget) =
         enforce_mcp_response_budget(&mut packaged_value, output_format, response_budget_limit)?
@@ -890,6 +735,13 @@ pub(super) fn tool_get_review_context(
                 .is_some_and(|items| !items.is_empty()),
         }),
     );
+    normalized_payload.insert("change_source".to_owned(), change_source_json(&resolved));
+    if include_context_ranking_evidence {
+        normalized_payload.insert(
+            "ranking_evidence_legend".to_owned(),
+            context_ranking_evidence_legend_json(),
+        );
+    }
 
     let mut response = build_normalized_success_response(
         "get_review_context",
@@ -901,18 +753,7 @@ pub(super) fn tool_get_review_context(
             .truncated
             .then_some("review context capped by node, edge, file, or payload budget"),
     )?;
-    if include_context_ranking_evidence {
-        response["atlas_context_ranking_evidence_legend"] = context_ranking_evidence_legend_json();
-    }
     inject_budget_metadata(&mut response, &stage_budget);
-    inject_change_source_metadata(&mut response, &resolved);
-    let _ = ensure_final_response_budget(
-        &mut response,
-        policy
-            .mcp_cli_payload_serialization
-            .mcp_response_bytes
-            .default_limit,
-    )?;
     Ok(response)
 }
 
@@ -985,6 +826,7 @@ pub(super) fn tool_detect_changes(
     let payload = json!({
         "mode": resolved.mode.as_str(),
         "base_ref": resolved.base,
+        "change_source": change_source_json(&resolved),
         "files": entries,
         "summary": {
             "changed_file_count": changes.len(),
@@ -1006,16 +848,14 @@ pub(super) fn tool_detect_changes(
         },
     });
 
-    let mut response = build_normalized_success_response(
+    build_normalized_success_response(
         "detect_changes",
         payload,
         output_format,
         Vec::new(),
         false,
         None,
-    )?;
-    inject_change_source_metadata(&mut response, &resolved);
-    Ok(response)
+    )
 }
 
 pub(super) fn tool_build_or_update_graph(
@@ -1459,6 +1299,10 @@ pub(super) fn tool_get_minimal_context(
         }
     });
 
+    let mut payload = payload;
+    if let Some(object) = payload.as_object_mut() {
+        object.insert("change_source".to_owned(), change_source_json(&resolved));
+    }
     let mut response = build_normalized_success_response(
         "get_minimal_context",
         payload,
@@ -1467,10 +1311,9 @@ pub(super) fn tool_get_minimal_context(
         packaged.truncated,
         packaged
             .truncated
-            .then_some("minimal context capped by traversal or payload budget"),
+            .then_some("minimal context capped by node or edge budgets"),
     )?;
     inject_budget_metadata(&mut response, &impact.budget);
-    inject_change_source_metadata(&mut response, &resolved);
     Ok(response)
 }
 
@@ -1522,7 +1365,8 @@ pub(super) fn tool_explain_change(
         payload.remove("impacted_file_count");
         payload.remove("impacted_node_count");
         payload.remove("summary_text");
-        let mut response = build_normalized_success_response(
+        insert_change_source_payload(&mut payload, &resolved);
+        let response = build_normalized_success_response(
             "explain_change",
             Value::Object(payload),
             output_format,
@@ -1530,7 +1374,6 @@ pub(super) fn tool_explain_change(
             false,
             None,
         )?;
-        inject_change_source_metadata(&mut response, &resolved);
         return Ok(response);
     }
 
@@ -1588,16 +1431,15 @@ pub(super) fn tool_explain_change(
     payload.remove("impacted_node_count");
     payload.remove("summary_text");
 
-    let mut response = build_normalized_success_response(
+    insert_change_source_payload(&mut payload, &resolved);
+    build_normalized_success_response(
         "explain_change",
         Value::Object(payload),
         output_format,
         Vec::new(),
         false,
         None,
-    )?;
-    inject_change_source_metadata(&mut response, &resolved);
-    Ok(response)
+    )
 }
 
 pub(super) fn tool_get_context(
@@ -1775,23 +1617,9 @@ pub(super) fn tool_get_context(
         .mcp_cli_payload_serialization
         .mcp_response_bytes
         .default_limit;
-    let response_budget_limit =
-        response_budget_limit.saturating_sub(metadata_reserve_bytes(&serde_json::json!({
-            "atlas_context_files": &context_files,
-            "atlas_detail_controls": {
-                "max_files": result.request.max_files,
-                "max_nodes": result.request.max_nodes,
-                "max_edges": result.request.max_edges,
-                "code_spans": result.request.include_code_spans,
-                "tests": result.request.include_tests,
-                "imports": result.request.include_imports,
-                "neighbors": result.request.include_neighbors,
-                "semantic": semantic,
-                "omitted_sections": &omitted,
-            }
-        })));
+
     let response_budget_limit = response_budget_limit.saturating_sub(500);
-    let mut stage_budget = if let Some(response_budget) =
+    let stage_budget = if let Some(response_budget) =
         enforce_mcp_response_budget(&mut packaged_value, output_format, response_budget_limit)?
     {
         result.budget.clone().merge(response_budget)
@@ -1896,83 +1724,79 @@ pub(super) fn tool_get_context(
     normalized_payload.insert("ranked_files".to_owned(), Value::Array(ranked_files));
     normalized_payload.insert("assets".to_owned(), Value::Array(assets));
     normalized_payload.insert("ambiguity".to_owned(), ambiguity);
+    if include_context_ranking_evidence {
+        normalized_payload.insert(
+            "ranking_evidence_legend".to_owned(),
+            context_ranking_evidence_legend_json(),
+        );
+    }
+    normalized_payload.insert("context_files".to_owned(), json!(context_files));
+    normalized_payload.insert(
+        "detail_controls".to_owned(),
+        serde_json::json!({
+            "max_files": result.request.max_files,
+            "max_nodes": result.request.max_nodes,
+            "max_edges": result.request.max_edges,
+            "code_spans": result.request.include_code_spans,
+            "tests": result.request.include_tests,
+            "imports": result.request.include_imports,
+            "neighbors": result.request.include_neighbors,
+            "semantic": semantic,
+            "agent_id": result.request.agent_id,
+            "merge_agent_partitions": result.request.merge_agent_partitions,
+            "omitted_sections": omitted,
+        }),
+    );
+    normalized_payload.insert(
+        "agent_scope".to_owned(),
+        serde_json::json!({
+            "agent_id": result.request.agent_id,
+            "merge_agent_partitions": result.request.merge_agent_partitions,
+        }),
+    );
+    let missing_lookup_hint = "No graph nodes matched this request. Possible causes: \
+         (1) the graph has not been built yet — run build_or_update_graph first; \
+         (2) 'query' contained a natural-language phrase instead of a symbol name or \
+         qualified name — try a short exact identifier (e.g. 'BalancesTab') or \
+         use query_graph with regex for pattern matching; \
+         (3) the file path is wrong or the file has no indexed symbols.";
+    let lookup = if result.nodes.is_empty() {
+        serde_json::json!({
+            "status": "node_not_found",
+            "error_code": "node_not_found",
+            "error_code_docs": error_code_docs("node_not_found"),
+            "message": error_message("node_not_found"),
+            "suggestions": error_suggestions("node_not_found"),
+            "hint": missing_lookup_hint,
+        })
+    } else {
+        serde_json::json!({
+            "status": "ok",
+            "error_code": Value::Null,
+            "error_code_docs": Value::Null,
+            "message": Value::Null,
+            "suggestions": [],
+            "hint": Value::Null,
+        })
+    };
+    normalized_payload.insert("lookup".to_owned(), lookup);
+    let warnings = if result.nodes.is_empty() {
+        vec![error_message("node_not_found").to_owned()]
+    } else {
+        Vec::new()
+    };
 
     let mut response = build_normalized_success_response(
         "get_context",
         Value::Object(normalized_payload),
         output_format,
-        Vec::new(),
+        warnings,
         packaged.truncated,
         packaged
             .truncated
             .then_some("context capped by node, edge, file, or payload budget"),
     )?;
-    if include_context_ranking_evidence {
-        response["atlas_context_ranking_evidence_legend"] = context_ranking_evidence_legend_json();
-    }
-    response["atlas_context_files"] = serde_json::json!(context_files);
-
-    // Emit applied-controls metadata so agents can inspect what was included/excluded.
-    response["atlas_detail_controls"] = serde_json::json!({
-        "max_files": result.request.max_files,
-        "max_nodes": result.request.max_nodes,
-        "max_edges": result.request.max_edges,
-        "code_spans": result.request.include_code_spans,
-        "tests": result.request.include_tests,
-        "imports": result.request.include_imports,
-        "neighbors": result.request.include_neighbors,
-        "semantic": semantic,
-            "agent_id": result.request.agent_id,
-            "merge_agent_partitions": result.request.merge_agent_partitions,
-        "omitted_sections": omitted,
-    });
-    response["atlas_agent_scope"] = serde_json::json!({
-        "agent_id": result.request.agent_id,
-        "merge_agent_partitions": result.request.merge_agent_partitions,
-    });
-    let response_bytes_before_trim = serde_json::to_vec(&response)
-        .map(|bytes| bytes.len())
-        .unwrap_or(0);
-    trim_context_response_metadata(
-        &mut response,
-        policy
-            .mcp_cli_payload_serialization
-            .mcp_response_bytes
-            .default_limit,
-    );
-    let response_bytes_after_trim = serde_json::to_vec(&response)
-        .map(|bytes| bytes.len())
-        .unwrap_or(0);
-    if response_bytes_after_trim < response_bytes_before_trim {
-        stage_budget = stage_budget.merge(atlas_core::BudgetReport::partial_result(
-            "mcp_cli_payload_serialization.max_mcp_response_bytes",
-            policy
-                .mcp_cli_payload_serialization
-                .mcp_response_bytes
-                .default_limit,
-            response_bytes_before_trim,
-            true,
-        ));
-    }
     inject_budget_metadata(&mut response, &stage_budget);
-
-    if result.nodes.is_empty() {
-        response["atlas_error_code"] = serde_json::Value::String("node_not_found".to_owned());
-        response["atlas_error_code_docs"] =
-            serde_json::Value::String(error_code_docs("node_not_found"));
-        response["atlas_message"] =
-            serde_json::Value::String(error_message("node_not_found").to_owned());
-        response["atlas_suggestions"] = serde_json::json!(error_suggestions("node_not_found"));
-        response["atlas_hint"] = serde_json::Value::String(
-            "No graph nodes matched this request. Possible causes: \
-             (1) the graph has not been built yet — run build_or_update_graph first; \
-             (2) 'query' contained a natural-language phrase instead of a symbol name or \
-             qualified name — try a short exact identifier (e.g. 'BalancesTab') or \
-             use query_graph with regex for pattern matching; \
-             (3) the file path is wrong or the file has no indexed symbols."
-                .to_owned(),
-        );
-    }
     if let Some((query, hits)) = linked_decisions {
         let source_ids = hits
             .iter()
@@ -1996,12 +1820,5 @@ pub(super) fn tool_get_context(
             }),
         );
     }
-    let _ = ensure_final_response_budget(
-        &mut response,
-        policy
-            .mcp_cli_payload_serialization
-            .mcp_response_bytes
-            .default_limit,
-    )?;
     Ok(response)
 }

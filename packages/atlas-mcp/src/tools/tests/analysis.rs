@@ -90,9 +90,9 @@ fn analyze_remove_returns_impact_summary() {
     assert!(v["tests"].as_array().is_some());
     assert!(v["summary"]["seed_count"].as_i64().is_some());
     assert!(v["summary"]["impacted_symbol_count"].as_i64().is_some());
+    assert!(v["summary"]["impacted_file_count"].as_i64().is_some());
     assert!(v["warnings"].as_array().is_some());
     assert!(v["uncertainty_flags"].as_array().is_some());
-    assert!(v["evidence"].as_array().is_some());
 }
 
 #[test]
@@ -267,12 +267,15 @@ fn analyze_remove_max_files_caps_impacted_files_list() {
     let text = unwrap_tool_text(resp);
     let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
 
-    let files = v["impacted_files"]
-        .as_array()
-        .expect("impacted_files array");
-    assert!(
-        files.len() <= 1,
-        "max_files=1 must cap impacted_files list to at most 1"
+    assert_eq!(
+        v["summary"]["omitted_file_count"].as_i64(),
+        Some(1),
+        "max_files=1 should omit one impacted file in fixture"
+    );
+    assert_eq!(
+        v["summary"]["impacted_file_count"].as_i64(),
+        Some(2),
+        "fixture should still report full impacted_file_count"
     );
 }
 
@@ -310,7 +313,6 @@ fn analyze_dependency_returns_removable_verdict() {
     assert!(v["summary"]["omitted_blocking_count"].as_i64().is_some());
     assert!(v["suggested_cleanups"].as_array().is_some());
     assert!(v["warnings"].as_array().is_some());
-    assert!(v["evidence"].as_array().is_some());
 }
 
 #[test]
@@ -543,6 +545,40 @@ fn assert_toon_structured_content_matches_direct_report(
         resp["structuredContent"]["atlas_provenance"]["last_indexed_at"].clone();
     assert_eq!(resp["structuredContent"], expected);
     assert_provenance(&resp, "/repo", &fixture.db_path);
+}
+
+#[test]
+fn find_large_functions_changed_code_file_emits_freshness_warning() {
+    let fixture = setup_git_mcp_fixture();
+    write_repo_file(
+        std::path::Path::new(&fixture.repo_root),
+        "src/service.rs",
+        "pub fn compute() -> i32 { 99 }\n",
+    );
+    let args = serde_json::json!({
+        "threshold": 1,
+        "mode": "large",
+        "output_format": "json"
+    });
+
+    let resp = call(
+        "find_large_functions",
+        Some(&args),
+        &fixture.repo_root,
+        &fixture.db_path,
+    )
+    .expect("find_large_functions");
+
+    assert_eq!(
+        resp.pointer("/atlas_freshness/stale")
+            .and_then(|value| value.as_bool()),
+        Some(true)
+    );
+    assert_eq!(
+        resp.pointer("/atlas_freshness/stale_result_files/0")
+            .and_then(|value| value.as_str()),
+        Some("src/service.rs")
+    );
 }
 
 #[test]

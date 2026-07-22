@@ -61,6 +61,49 @@ fn response_single_file(response: &serde_json::Value, pointer: &str) -> Vec<Stri
         .unwrap_or_default()
 }
 
+fn response_insight_finding_files(response: &serde_json::Value) -> Vec<String> {
+    let mut files = std::collections::BTreeSet::new();
+    if let Some(findings) = response.pointer("/structuredContent/findings")
+        && let Some(findings) = findings.as_array()
+    {
+        for finding in findings {
+            if let Some(evidence_items) = finding.get("evidence").and_then(|value| value.as_array())
+            {
+                for evidence in evidence_items {
+                    if let Some(file_path) =
+                        evidence.get("file_path").and_then(|value| value.as_str())
+                    {
+                        files.insert(file_path.to_owned());
+                    }
+                }
+            }
+        }
+    }
+    files.into_iter().collect()
+}
+
+fn response_query_graph_files(response: &serde_json::Value) -> Vec<String> {
+    let mut files = std::collections::BTreeSet::new();
+    let Some(text) = response
+        .pointer("/content/0/text")
+        .and_then(|value| value.as_str())
+    else {
+        return Vec::new();
+    };
+    let Ok(parsed) = serde_json::from_str::<serde_json::Value>(text) else {
+        return Vec::new();
+    };
+    let Some(items) = parsed.as_array() else {
+        return Vec::new();
+    };
+    for item in items {
+        if let Some(file) = item.get("file").and_then(|value| value.as_str()) {
+            files.insert(file.to_owned());
+        }
+    }
+    files.into_iter().collect()
+}
+
 fn normalized_contract_tool(name: &str) -> bool {
     matches!(
         name,
@@ -138,17 +181,17 @@ fn inject_freshness_warning(
     db_path: &str,
 ) {
     let relevant_files = match name {
-        "query_graph" => response_file_list(response, "/atlas_result_files"),
-        "get_context" => response_file_list(response, "/atlas_context_files"),
+        "query_graph" => response_query_graph_files(response),
+        "get_context" => response_file_list(response, "/structuredContent/context_files"),
         "get_review_context" | "get_impact_radius" => {
-            response_file_list(response, "/atlas_change_source/resolved_files")
+            response_file_list(response, "/structuredContent/change_source/resolved_files")
         }
         "analyze_architecture"
         | "analyze_metrics"
         | "assess_risk"
         | "analyze_patterns"
         | "find_large_functions"
-        | "find_complex_functions" => response_file_list(response, "/atlas_result_files"),
+        | "find_complex_functions" => response_insight_finding_files(response),
         "get_docs_section" => response_single_file(response, "/file"),
         _ => Vec::new(),
     };
