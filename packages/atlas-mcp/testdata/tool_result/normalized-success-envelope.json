@@ -1,0 +1,1 @@
+{"tool":"demo_tool","generated_at":"2026-07-22T00:00:00Z","truncated":true,"truncation_reason":"cap reached","warnings":["warning one"],"atlas_provenance":{"repo_root":"/repo","db_path":"/repo/.atlas/atlas.db"},"atlas_freshness":{"stale":false},"summary":{"count":2},"items":["a","b"]}

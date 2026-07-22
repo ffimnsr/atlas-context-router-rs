@@ -1,7 +1,7 @@
 use super::shared::DEFAULT_OUTPUT_DESCRIPTION;
 use crate::descriptors::{
     IconDescriptor, ToolAnnotations, ToolDescriptor, ToolRegistry, descriptor_meta,
-    ensure_schema_2020_12, human_title, validate_descriptor_name,
+    ensure_schema_2020_12, human_title, normalized_tool_output_schema, validate_descriptor_name,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -1025,10 +1025,8 @@ fn tool_output_schema_for(name: &str) -> Option<Value> {
 }
 
 fn list_graph_stats_output_schema() -> Value {
-    ensure_schema_2020_12(serde_json::json!({
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
+    normalized_tool_output_schema(
+        serde_json::json!({
             "file_count": { "type": "integer" },
             "node_count": { "type": "integer" },
             "edge_count": { "type": "integer" },
@@ -1051,23 +1049,22 @@ fn list_graph_stats_output_schema() -> Value {
             "last_indexed_at": {
                 "type": ["string", "null"]
             }
-        },
-        "required": [
+        }),
+        &[
             "file_count",
             "node_count",
             "edge_count",
             "nodes_by_kind",
             "languages",
-            "last_indexed_at"
-        ]
-    }))
+            "last_indexed_at",
+        ],
+        None,
+    )
 }
 
 fn tool_list_output_schema() -> Value {
-    ensure_schema_2020_12(serde_json::json!({
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
+    normalized_tool_output_schema(
+        serde_json::json!({
             "total_tools": { "type": "integer" },
             "returned_tools": { "type": "integer" },
             "applied_category": { "type": ["string", "null"] },
@@ -1076,8 +1073,15 @@ fn tool_list_output_schema() -> Value {
                 "items": { "$ref": "#/$defs/tool_inventory_entry" }
             },
             "guidance": { "$ref": "#/$defs/tool_inventory_guidance" }
-        },
-        "$defs": {
+        }),
+        &[
+            "total_tools",
+            "returned_tools",
+            "applied_category",
+            "tools",
+            "guidance",
+        ],
+        Some(serde_json::json!({
             "tool_inventory_entry": {
                 "type": "object",
                 "additionalProperties": false,
@@ -1112,16 +1116,13 @@ fn tool_list_output_schema() -> Value {
                 },
                 "required": ["list", "search", "help"]
             }
-        },
-        "required": ["total_tools", "returned_tools", "applied_category", "tools", "guidance"]
-    }))
+        })),
+    )
 }
 
 fn tool_search_output_schema() -> Value {
-    ensure_schema_2020_12(serde_json::json!({
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
+    normalized_tool_output_schema(
+        serde_json::json!({
             "query": { "type": "string" },
             "total_matches": { "type": "integer" },
             "returned_matches": { "type": "integer" },
@@ -1181,16 +1182,22 @@ fn tool_search_output_schema() -> Value {
                 },
                 "required": ["list", "search", "help"]
             }
-        },
-        "required": ["query", "total_matches", "returned_matches", "matches", "suggestions", "guidance"]
-    }))
+        }),
+        &[
+            "query",
+            "total_matches",
+            "returned_matches",
+            "matches",
+            "suggestions",
+            "guidance",
+        ],
+        None,
+    )
 }
 
 fn broker_status_output_schema() -> Value {
-    ensure_schema_2020_12(serde_json::json!({
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
+    normalized_tool_output_schema(
+        serde_json::json!({
             "ok": { "type": "boolean" },
             "pid": { "type": "integer" },
             "version": { "type": "string" },
@@ -1198,24 +1205,23 @@ fn broker_status_output_schema() -> Value {
             "worker_threads_configured": { "type": "integer" },
             "repo_root": { "type": "string" },
             "db_path": { "type": "string" }
-        },
-        "required": [
+        }),
+        &[
             "ok",
             "pid",
             "version",
             "uptime_secs",
             "worker_threads_configured",
             "repo_root",
-            "db_path"
-        ]
-    }))
+            "db_path",
+        ],
+        None,
+    )
 }
 
 fn man_output_schema() -> Value {
-    ensure_schema_2020_12(serde_json::json!({
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
+    normalized_tool_output_schema(
+        serde_json::json!({
             "requested_namespace": { "type": "string" },
             "requested_tool_name": { "type": "string" },
             "resolved_tool_name": { "type": "string" },
@@ -1315,8 +1321,20 @@ fn man_output_schema() -> Value {
                 },
                 "required": ["description_truncated", "usage_examples_truncated"]
             }
-        },
-        "$defs": {
+        }),
+        &[
+            "requested_namespace",
+            "requested_tool_name",
+            "resolved_tool_name",
+            "description",
+            "tool_structure",
+            "input_args",
+            "output_response",
+            "usage",
+            "error_cases",
+            "truncation",
+        ],
+        Some(serde_json::json!({
             "manual_field": {
                 "type": "object",
                 "additionalProperties": false,
@@ -1340,27 +1358,13 @@ fn man_output_schema() -> Value {
                     "description"
                 ]
             }
-        },
-        "required": [
-            "requested_namespace",
-            "requested_tool_name",
-            "resolved_tool_name",
-            "description",
-            "tool_structure",
-            "input_args",
-            "output_response",
-            "usage",
-            "error_cases",
-            "truncation"
-        ]
-    }))
+        })),
+    )
 }
 
 fn get_context_stats_output_schema() -> Value {
-    ensure_schema_2020_12(serde_json::json!({
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
+    normalized_tool_output_schema(
+        serde_json::json!({
             "session_id": { "type": "string" },
             "agent_id": { "type": ["string", "null"] },
             "event_count": { "type": "integer" },
@@ -1396,8 +1400,8 @@ fn get_context_stats_output_schema() -> Value {
                     "searchable"
                 ]
             }
-        },
-        "required": [
+        }),
+        &[
             "session_id",
             "agent_id",
             "event_count",
@@ -1407,9 +1411,10 @@ fn get_context_stats_output_schema() -> Value {
             "content_db_path",
             "session_db_path",
             "bridge_dir_path",
-            "retrieval_index"
-        ]
-    }))
+            "retrieval_index",
+        ],
+        None,
+    )
 }
 
 fn tool_annotations(name: &str) -> ToolAnnotations {

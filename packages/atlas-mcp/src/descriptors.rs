@@ -1,7 +1,7 @@
 use anyhow::{Result, bail};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use std::sync::OnceLock;
 
 pub(crate) const JSON_SCHEMA_2020_12_URI: &str = "https://json-schema.org/draft/2020-12/schema";
@@ -169,10 +169,57 @@ pub(crate) fn descriptor_meta(descriptor_kind: &str, category: &str) -> Value {
     })
 }
 
+fn normalized_success_metadata_properties() -> Map<String, Value> {
+    Map::from_iter([
+        ("tool".to_owned(), json!({ "type": "string" })),
+        (
+            "generated_at".to_owned(),
+            json!({ "type": "string", "description": "RFC 3339 generation timestamp for this success payload." }),
+        ),
+        ("truncated".to_owned(), json!({ "type": "boolean" })),
+        ("truncation_reason".to_owned(), json!({ "type": "string" })),
+        (
+            "warnings".to_owned(),
+            json!({ "type": "array", "items": { "type": "string" } }),
+        ),
+        ("atlas_provenance".to_owned(), json!({ "type": "object" })),
+        ("atlas_freshness".to_owned(), json!({ "type": "object" })),
+    ])
+}
+
+pub(crate) fn normalized_tool_output_schema(
+    properties: Value,
+    required: &[&str],
+    defs: Option<Value>,
+) -> Value {
+    let mut all_properties = normalized_success_metadata_properties();
+    if let Some(tool_properties) = properties.as_object() {
+        for (key, value) in tool_properties {
+            all_properties.insert(key.clone(), value.clone());
+        }
+    }
+
+    let mut schema = json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": Value::Object(all_properties),
+        "required": required,
+    });
+
+    if let Some(defs) = defs
+        && let Some(schema_object) = schema.as_object_mut()
+    {
+        schema_object.insert("$defs".to_owned(), defs);
+    }
+
+    ensure_schema_2020_12(schema)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        JSON_SCHEMA_2020_12_URI, ensure_schema_2020_12, human_title, validate_descriptor_name,
+        JSON_SCHEMA_2020_12_URI, ensure_schema_2020_12, human_title, normalized_tool_output_schema,
+        validate_descriptor_name,
     };
     use serde_json::json;
 
@@ -201,5 +248,32 @@ mod tests {
     fn schema_helper_injects_2020_12_draft_uri() {
         let schema = ensure_schema_2020_12(json!({"type": "object"}));
         assert_eq!(schema["$schema"], json!(JSON_SCHEMA_2020_12_URI));
+    }
+
+    #[test]
+    fn normalized_tool_output_schema_includes_shared_metadata_fields() {
+        let schema = normalized_tool_output_schema(
+            json!({
+                "summary": { "type": "object" },
+                "items": { "type": "array", "items": { "type": "string" } }
+            }),
+            &["summary", "items"],
+            Some(json!({
+                "demo": { "type": "string" }
+            })),
+        );
+
+        assert_eq!(schema["$schema"], json!(JSON_SCHEMA_2020_12_URI));
+        assert_eq!(schema["type"], json!("object"));
+        assert_eq!(schema["additionalProperties"], json!(false));
+        assert_eq!(schema["properties"]["tool"]["type"], json!("string"));
+        assert_eq!(
+            schema["properties"]["generated_at"]["type"],
+            json!("string")
+        );
+        assert_eq!(schema["properties"]["warnings"]["type"], json!("array"));
+        assert_eq!(schema["properties"]["summary"]["type"], json!("object"));
+        assert_eq!(schema["required"], json!(["summary", "items"]));
+        assert_eq!(schema["$defs"]["demo"]["type"], json!("string"));
     }
 }

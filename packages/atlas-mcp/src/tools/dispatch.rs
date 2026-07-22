@@ -630,6 +630,54 @@ mod tests {
     }
 
     #[test]
+    fn tools_with_output_schema_never_emit_array_or_scalar_structured_content() {
+        let (repo_dir, _db_path, db_path) = setup_repo();
+        let repo_root = repo_dir.path().to_string_lossy().into_owned();
+
+        let _build = call(
+            "build_or_update_graph",
+            Some(&json!({"mode": "build", "output_format": "json"})),
+            &repo_root,
+            &db_path,
+        )
+        .expect("build graph");
+
+        let saved = call(
+            "save_context_artifact",
+            Some(&json!({
+                "content": schema_test_artifact_content(),
+                "label": "schema-test-artifact-shape",
+                "source_type": "mcp_artifact",
+                "content_type": "text/plain",
+                "output_format": "json"
+            })),
+            &repo_root,
+            &db_path,
+        )
+        .expect("seed saved context artifact");
+        let saved_source_id = saved["structuredContent"]["source_id"]
+            .as_str()
+            .expect("saved source id");
+
+        for tool in super::super::registry::tool_descriptors() {
+            if tool.output_schema.is_none() {
+                continue;
+            }
+            let name = tool.name.as_str();
+            let args = schema_test_args(name, saved_source_id);
+            let value = call(name, Some(&args), &repo_root, &db_path)
+                .unwrap_or_else(|error| panic!("{name} should succeed for shape test: {error}"));
+            let structured = value
+                .get("structuredContent")
+                .unwrap_or_else(|| panic!("{name} missing structuredContent"));
+            assert!(
+                structured.is_object(),
+                "{name} structuredContent must stay object-valued for normalized tools"
+            );
+        }
+    }
+
+    #[test]
     fn tools_with_output_schema_emit_schema_compatible_structured_content() {
         let (repo_dir, _db_path, db_path) = setup_repo();
         let repo_root = repo_dir.path().to_string_lossy().into_owned();

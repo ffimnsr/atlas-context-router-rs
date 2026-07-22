@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use atlas_core::user_facing_error_message;
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -19,6 +19,76 @@ pub(crate) struct ResourceLink {
     pub(crate) mime_type: Option<String>,
 }
 
+#[allow(dead_code)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub(crate) struct ToolSuccessEnvelope<T> {
+    pub(crate) tool: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) generated_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) truncated: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) truncation_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) warnings: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) atlas_provenance: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) atlas_freshness: Option<Value>,
+    #[serde(flatten)]
+    pub(crate) payload: T,
+}
+
+#[allow(dead_code)]
+impl<T> ToolSuccessEnvelope<T> {
+    pub(crate) fn new(tool: impl Into<String>, payload: T) -> Self {
+        Self {
+            tool: tool.into(),
+            generated_at: None,
+            truncated: None,
+            truncation_reason: None,
+            warnings: Vec::new(),
+            atlas_provenance: None,
+            atlas_freshness: None,
+            payload,
+        }
+    }
+
+    pub(crate) fn with_generated_at(mut self, generated_at: impl Into<String>) -> Self {
+        self.generated_at = Some(generated_at.into());
+        self
+    }
+
+    pub(crate) fn with_truncation(
+        mut self,
+        truncated: bool,
+        truncation_reason: Option<impl Into<String>>,
+    ) -> Self {
+        self.truncated = Some(truncated);
+        self.truncation_reason = truncation_reason.map(Into::into);
+        self
+    }
+
+    pub(crate) fn with_warnings(mut self, warnings: Vec<String>) -> Self {
+        self.warnings = warnings;
+        self
+    }
+
+    pub(crate) fn with_atlas_provenance(mut self, atlas_provenance: Value) -> Self {
+        if atlas_provenance.is_object() {
+            self.atlas_provenance = Some(atlas_provenance);
+        }
+        self
+    }
+
+    pub(crate) fn with_atlas_freshness(mut self, atlas_freshness: Value) -> Self {
+        if atlas_freshness.is_object() {
+            self.atlas_freshness = Some(atlas_freshness);
+        }
+        self
+    }
+}
+
 pub(crate) struct ToolResultBuilder {
     output_format: OutputFormat,
 }
@@ -34,6 +104,46 @@ impl ToolResultBuilder {
     }
 
     pub(crate) fn build_value(&self, raw: Value) -> Result<Value> {
+        let rendered = render_value(&raw, self.output_format)?;
+        let mut content = vec![json!({
+            "type": "text",
+            "text": rendered.text,
+            "mimeType": rendered.actual_format.mime_type(),
+        })];
+        let resource_links = infer_resource_links(&raw);
+        for link in resource_links {
+            content.push(serde_json::to_value(link)?);
+        }
+
+        let mut response = json!({
+            "content": content,
+            "_meta": result_meta(
+                rendered.actual_format.as_str(),
+                rendered.requested_format.as_str(),
+                rendered.fallback_reason.as_deref(),
+            ),
+        });
+
+        if raw.is_object() {
+            response["structuredContent"] = raw;
+        }
+
+        Ok(response)
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn build_normalized_serializable<T: Serialize>(&self, value: &T) -> Result<Value> {
+        let raw = serde_json::to_value(value)?;
+        self.build_normalized_value(raw)
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn build_normalized_value(&self, raw: Value) -> Result<Value> {
+        if !raw.is_object() {
+            return Err(anyhow!(
+                "normalized tool success payload must serialize to JSON object"
+            ));
+        }
         let rendered = render_value(&raw, self.output_format)?;
         let mut content = vec![json!({
             "type": "text",
@@ -82,6 +192,14 @@ pub(crate) fn tool_result_value<T: Serialize>(
     output_format: OutputFormat,
 ) -> Result<Value> {
     ToolResultBuilder::new(output_format).build_serializable(value)
+}
+
+#[allow(dead_code)]
+pub(crate) fn normalized_tool_result_value<T: Serialize>(
+    value: &T,
+    output_format: OutputFormat,
+) -> Result<Value> {
+    ToolResultBuilder::new(output_format).build_normalized_serializable(value)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -425,8 +543,8 @@ fn infer_resource_links(raw: &Value) -> Vec<ResourceLink> {
 mod tests {
     use super::{
         InputShapeErrorSpec, ToolErrorCode, ToolErrorPayload, ToolResultBuilder,
-        input_shape_error_payload, normalize_tool_error_text, structured_content,
-        tool_execution_error_value,
+        ToolSuccessEnvelope, input_shape_error_payload, normalize_tool_error_text,
+        normalized_tool_result_value, structured_content, tool_execution_error_value,
     };
     use crate::output::OutputFormat;
     use serde_json::json;
@@ -500,6 +618,64 @@ mod tests {
                 .expect("text")
                 .contains("[\n  1,")
         );
+    }
+
+    #[test]
+    fn normalized_tool_result_rejects_array_payloads() {
+        let error = ToolResultBuilder::new(OutputFormat::Json)
+            .build_normalized_value(json!([1, 2, 3]))
+            .expect_err("normalized payload must reject arrays");
+        assert!(
+            error
+                .to_string()
+                .contains("normalized tool success payload must serialize to JSON object")
+        );
+    }
+
+    #[test]
+    fn normalized_tool_result_rejects_scalar_payloads() {
+        let error = ToolResultBuilder::new(OutputFormat::Json)
+            .build_normalized_value(json!("hello"))
+            .expect_err("normalized payload must reject scalars");
+        assert!(
+            error
+                .to_string()
+                .contains("normalized tool success payload must serialize to JSON object")
+        );
+    }
+
+    #[test]
+    fn normalized_tool_success_envelope_serializes_in_stable_field_order() {
+        let envelope = ToolSuccessEnvelope::new(
+            "demo_tool",
+            json!({
+                "summary": { "count": 2 },
+                "items": ["a", "b"]
+            }),
+        )
+        .with_generated_at("2026-07-22T00:00:00Z")
+        .with_truncation(true, Some("cap reached"))
+        .with_warnings(vec!["warning one".to_owned()])
+        .with_atlas_provenance(json!({
+            "repo_root": "/repo",
+            "db_path": "/repo/.atlas/atlas.db"
+        }))
+        .with_atlas_freshness(json!({ "stale": false }));
+
+        let serialized = serde_json::to_string(&envelope).expect("serialize envelope");
+        assert_eq!(
+            serialized,
+            include_str!("../testdata/tool_result/normalized-success-envelope.json").trim_end()
+        );
+    }
+
+    #[test]
+    fn normalized_tool_result_value_emits_object_structured_content() {
+        let envelope = ToolSuccessEnvelope::new("demo_tool", json!({"summary": {"count": 1}}));
+        let response = normalized_tool_result_value(&envelope, OutputFormat::Json).expect("result");
+        assert!(response["structuredContent"].is_object());
+        assert_eq!(response["structuredContent"]["tool"], json!("demo_tool"));
+        assert_eq!(response["structuredContent"]["summary"]["count"], json!(1));
     }
 
     #[test]

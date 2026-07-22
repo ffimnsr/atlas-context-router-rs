@@ -3318,12 +3318,12 @@ Rules:
 
 ### R1 — Shared normalization foundation for all mixed tools
 
-- [ ] add one shared `ToolSuccessEnvelope<T>` helper in `packages/atlas-mcp/src/tool_result.rs` or adjacent shared module for tools that now return ad-hoc JSON objects
-- [ ] define shared optional metadata fields for normalized success payloads: `tool`, `generated_at`, `truncated`, `truncation_reason`, `warnings`, `atlas_provenance`, and `atlas_freshness`
-- [ ] add helper for toon rendering from normalized structured objects so text summary cannot diverge from JSON payload facts
-- [ ] add helper for schema registration so each normalized tool can declare exact `outputSchema` beside descriptor definition instead of ad-hoc manual JSON
-- [ ] add shared regression test proving normalized tools never emit array-valued or scalar `structuredContent`
-- [ ] add shared regression test proving normalized tools keep stable field ordering in snapshot fixtures where deterministic serialization matters
+- [x] add one shared `ToolSuccessEnvelope<T>` helper in `packages/atlas-mcp/src/tool_result.rs` or adjacent shared module for tools that now return ad-hoc JSON objects
+- [x] define shared optional metadata fields for normalized success payloads: `tool`, `generated_at`, `truncated`, `truncation_reason`, `warnings`, `atlas_provenance`, and `atlas_freshness`
+- [x] add helper for toon rendering from normalized structured objects so text summary cannot diverge from JSON payload facts
+- [x] add helper for schema registration so each normalized tool can declare exact `outputSchema` beside descriptor definition instead of ad-hoc manual JSON
+- [x] add shared regression test proving normalized tools never emit array-valued or scalar `structuredContent`
+- [x] add shared regression test proving normalized tools keep stable field ordering in snapshot fixtures where deterministic serialization matters
 
 Why:
 - many mixed tools already return object-like data but do so with inconsistent top-level keys and mode-dependent wrappers
