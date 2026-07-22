@@ -4,6 +4,19 @@ All notable changes to this project should be recorded in this file.
 
 Versioning policy may evolve while Atlas is still moving quickly, but release notes should still group changes by user-visible impact.
 
+## 1.5.1 - 2026-07-22
+
+### Features
+
+- add tool searches and tool list on mcp (`7dbd170`)
+- lay the foundation for a stable mcp tool output (`17b622b`)
+- stabilize mcp tools part 2 (`16bc2a2`)
+- update mcp tools stability part 3 (`b0bf35f`)
+- do the 5th mcp tool stabilization (`836e05b`)
+- update tools stability part 5 (`425bee2`)
+- cleanup on tool response fields (`d208514`)
+
+
 ## 1.5.0 - 2026-07-10
 
 ### Features
