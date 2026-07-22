@@ -4,11 +4,13 @@ use atlas_core::{BudgetManager, BudgetStatus, RankingEvidence, SearchQuery};
 use atlas_review::{ResolvedTarget, normalize_qn_kind_tokens, resolve_target};
 use atlas_search::semantic as sem;
 use serde::Serialize;
+use serde_json::{Map, Value, json};
 use std::time::Instant;
 
 use crate::context::{compact_node, package_impact};
 use crate::tool_result::{
-    InputShapeErrorSpec, input_shape_error_payload, tool_execution_error_value,
+    InputShapeErrorSpec, ToolSuccessEnvelope, input_shape_error_payload,
+    normalized_tool_result_value, tool_execution_error_value,
 };
 
 use super::shared::{
@@ -479,9 +481,89 @@ pub(super) fn tool_traverse_graph(
         )
         .context("traverse_from_qnames failed")?;
 
-    let seeds = vec![from_qn];
+    let seeds = vec![from_qn.clone()];
     let packaged = package_impact(&result, &seeds);
-    let mut response = tool_result_value(&packaged, output_format)?;
+    let mut payload = Map::new();
+    let changed_nodes = serde_json::to_value(&packaged.changed_nodes)?;
+    let impacted_nodes = serde_json::to_value(&packaged.impacted_nodes)?;
+    let relevant_edges = serde_json::to_value(&packaged.relevant_edges)?;
+    let mut combined_nodes = changed_nodes.as_array().cloned().unwrap_or_default();
+    combined_nodes.extend(impacted_nodes.as_array().cloned().unwrap_or_default());
+    payload.insert("root_symbol".to_owned(), json!(from_qn));
+    payload.insert("direction".to_owned(), json!("bidirectional"));
+    payload.insert("depth".to_owned(), json!(max_depth));
+    payload.insert("nodes".to_owned(), Value::Array(combined_nodes));
+    payload.insert(
+        "edges".to_owned(),
+        Value::Array(
+            result
+                .relevant_edges
+                .iter()
+                .map(|edge| {
+                    json!({
+                        "from": edge.source_qn,
+                        "to": edge.target_qn,
+                        "kind": edge.kind.as_str(),
+                        "direction": if edge.source_qn == from_qn {
+                            "outbound"
+                        } else if edge.target_qn == from_qn {
+                            "inbound"
+                        } else {
+                            "transitive"
+                        }
+                    })
+                })
+                .collect(),
+        ),
+    );
+    payload.insert(
+        "summary".to_owned(),
+        json!({
+            "changed_symbol_count": packaged.changed_node_count,
+            "impacted_symbol_count": packaged.impacted_node_count,
+            "impacted_file_count": packaged.impacted_file_count,
+            "relevant_edge_count": packaged.relevant_edge_count,
+        }),
+    );
+    payload.insert("truncated".to_owned(), json!(packaged.truncated));
+    payload.insert("changed_nodes".to_owned(), changed_nodes);
+    payload.insert("impacted_nodes".to_owned(), impacted_nodes);
+    payload.insert("relevant_edges".to_owned(), relevant_edges);
+    payload.insert(
+        "changed_file_count".to_owned(),
+        json!(packaged.changed_file_count),
+    );
+    payload.insert(
+        "changed_node_count".to_owned(),
+        json!(packaged.changed_node_count),
+    );
+    payload.insert(
+        "impacted_node_count".to_owned(),
+        json!(packaged.impacted_node_count),
+    );
+    payload.insert(
+        "impacted_file_count".to_owned(),
+        json!(packaged.impacted_file_count),
+    );
+    payload.insert("impacted_files".to_owned(), json!(packaged.impacted_files));
+    payload.insert(
+        "relevant_edge_count".to_owned(),
+        json!(packaged.relevant_edge_count),
+    );
+    payload.insert("seed_budgets".to_owned(), json!(packaged.seed_budgets));
+    payload.insert(
+        "traversal_budget".to_owned(),
+        json!(packaged.traversal_budget),
+    );
+
+    let envelope = ToolSuccessEnvelope::new("traverse_graph", Value::Object(payload))
+        .with_truncation(
+            packaged.truncated,
+            packaged
+                .truncated
+                .then_some("traversal capped by node or edge limits"),
+        );
+    let mut response = normalized_tool_result_value(&envelope, output_format)?;
     inject_budget_metadata(&mut response, &result.budget);
     Ok(response)
 }

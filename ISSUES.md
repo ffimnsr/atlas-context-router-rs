@@ -3333,64 +3333,64 @@ Why:
 
 #### R2.1 `detect_changes`
 
-- [ ] define stable `DetectChangesResult` object with `mode`, `base_ref`, `files`, `summary`, `warnings`, and `atlas_provenance`
-- [ ] move per-file node counts, language hints, and change-kind flags into one stable `files[]` item schema instead of mode-specific text rendering only
-- [ ] represent `staged`, `working_tree`, and `base` selection through stable `mode` enum in result even when inputs came from legacy flag combinations
-- [ ] keep conflict retry guidance on tool-error path; do not encode ambiguity as alternate success payload
-- [ ] add `outputSchema` for `detect_changes`
-- [ ] add tests for `base`, `staged`, and `working_tree` modes proving identical object contract with only field values changing
+- [x] define stable `DetectChangesResult` object with `mode`, `base_ref`, `files`, `summary`, `warnings`, and `atlas_provenance`
+- [x] move per-file node counts, language hints, and change-kind flags into one stable `files[]` item schema instead of mode-specific text rendering only
+- [x] represent `staged`, `working_tree`, and `base` selection through stable `mode` enum in result even when inputs came from legacy flag combinations
+- [x] keep conflict retry guidance on tool-error path; do not encode ambiguity as alternate success payload
+- [x] add `outputSchema` for `detect_changes`
+- [x] add tests for `base`, `staged`, and `working_tree` modes proving identical object contract with only field values changing
 
 #### R2.2 `get_impact_radius`
 
-- [ ] define stable `ImpactRadiusResult` object with `seed_files`, `changed_symbols`, `impacted_symbols`, `impacted_files`, `summary`, `truncated`, and `atlas_provenance`
-- [ ] normalize compact versus expanded impact output into same object with capped arrays and explicit summary counts instead of alternate payload families
-- [ ] add stable `impact_tiers` or `distance_bands` field if current implementation distinguishes direct versus transitive impact
-- [ ] keep change-source ambiguity on tool-error path; do not return retry objects as success variants
-- [ ] add `outputSchema` for `get_impact_radius`
-- [ ] add tests for direct-only and deeper-impact cases proving same schema under different depths and caps
+- [x] define stable `ImpactRadiusResult` object with `seed_files`, `changed_symbols`, `impacted_symbols`, `impacted_files`, `summary`, `truncated`, and `atlas_provenance`
+- [x] normalize compact versus expanded impact output into same object with capped arrays and explicit summary counts instead of alternate payload families
+- [x] add stable `impact_tiers` or `distance_bands` field if current implementation distinguishes direct versus transitive impact
+- [x] keep change-source ambiguity on tool-error path; do not return retry objects as success variants
+- [x] add `outputSchema` for `get_impact_radius`
+- [x] add tests for direct-only and deeper-impact cases proving same schema under different depths and caps
 
 #### R2.3 `get_review_context`
 
-- [ ] define stable `ReviewContextResult` object with `changed_files`, `changed_symbols`, `neighbors`, `critical_edges`, `risk_summary`, `artifacts`, and `atlas_provenance`
-- [ ] fold agent-optimized compact output into stable object fields instead of tool-specific text-only sections
-- [ ] model optional saved-artifact pointers as stable `artifacts[]` entries with resource-link parity instead of alternate result body
-- [ ] keep truncation data explicit with per-section counts and caps
-- [ ] add `outputSchema` for `get_review_context`
-- [ ] add tests for small review set, capped review set, and artifact-linked review set proving identical object shape
+- [x] define stable `ReviewContextResult` object with `changed_files`, `changed_symbols`, `neighbors`, `critical_edges`, `risk_summary`, `artifacts`, and `atlas_provenance`
+- [x] fold agent-optimized compact output into stable object fields instead of tool-specific text-only sections
+- [x] model optional saved-artifact pointers as stable `artifacts[]` entries with resource-link parity instead of alternate result body
+- [x] keep truncation data explicit with per-section counts and caps
+- [x] add `outputSchema` for `get_review_context`
+- [x] add tests for small review set, capped review set, and artifact-linked review set proving identical object shape
 
 #### R2.4 `get_minimal_context`
 
-- [ ] define stable `MinimalContextResult` object with `change_source`, `changed_symbols`, `immediate_impact`, `risk_flags`, `summary`, and `atlas_provenance`
-- [ ] keep lower-token output as reduced populated sections inside same object instead of distinct summary shape
-- [ ] normalize auto-detected-change metadata into explicit `change_source` object so clients can tell what was inferred
-- [ ] add `outputSchema` for `get_minimal_context`
-- [ ] add tests proving empty-risk, high-risk, and truncated result cases keep same schema
+- [x] define stable `MinimalContextResult` object with `change_source`, `changed_symbols`, `immediate_impact`, `risk_flags`, `summary`, and `atlas_provenance`
+- [x] keep lower-token output as reduced populated sections inside same object instead of distinct summary shape
+- [x] normalize auto-detected-change metadata into explicit `change_source` object so clients can tell what was inferred
+- [x] add `outputSchema` for `get_minimal_context`
+- [x] add tests proving empty-risk, high-risk, and truncated result cases keep same schema
 
 #### R2.5 `explain_change`
 
-- [ ] define stable `ExplainChangeResult` object with `changed_files`, `change_kinds`, `risk_level`, `boundary_violations`, `coverage_gaps`, `summary`, and `atlas_provenance`
-- [ ] encode deterministic risk details and finding lists under stable arrays/objects instead of mode-specific prose blocks
-- [ ] normalize optional boundary and coverage sections as always-present arrays, empty when absent
-- [ ] add `outputSchema` for `explain_change`
-- [ ] add tests for API-only, internal-only, and mixed change sets proving same object shape and deterministic enum values
+- [x] define stable `ExplainChangeResult` object with `changed_files`, `change_kinds`, `risk_level`, `boundary_violations`, `coverage_gaps`, `summary`, and `atlas_provenance`
+- [x] encode deterministic risk details and finding lists under stable arrays/objects instead of mode-specific prose blocks
+- [x] normalize optional boundary and coverage sections as always-present arrays, empty when absent
+- [x] add `outputSchema` for `explain_change`
+- [x] add tests for API-only, internal-only, and mixed change sets proving same object shape and deterministic enum values
 
 #### R2.6 `traverse_graph`
 
-- [ ] define stable `TraverseGraphResult` object with `root_symbol`, `direction`, `depth`, `nodes`, `edges`, `summary`, `truncated`, and `atlas_provenance`
-- [ ] normalize caller-only, callee-only, and bidirectional traversals into one schema with stable edge records carrying direction tags
-- [ ] keep empty traversal as success with empty arrays, not alternate text-only payload
-- [ ] add `outputSchema` for `traverse_graph`
-- [ ] add tests for inbound, outbound, and bidirectional traversals proving identical object contract
+- [x] define stable `TraverseGraphResult` object with `root_symbol`, `direction`, `depth`, `nodes`, `edges`, `summary`, `truncated`, and `atlas_provenance`
+- [x] normalize caller-only, callee-only, and bidirectional traversals into one schema with stable edge records carrying direction tags
+- [x] keep empty traversal as success with empty arrays, not alternate text-only payload
+- [x] add `outputSchema` for `traverse_graph`
+- [x] add tests for inbound, outbound, and bidirectional traversals proving identical object contract
 
 #### R2.7 `get_context`
 
-- [ ] decide whether `get_context` remains one tool with stable discriminated `mode` field or is split into `get_symbol_context`, `get_file_context`, and `get_change_context`
-- [ ] if kept unified, define stable `GetContextResult` object with `mode`, `query`, `file`, `files`, `ranked_symbols`, `ranked_edges`, `ranked_files`, `assets`, `ambiguity`, `truncated`, and `atlas_provenance`
-- [ ] normalize symbol-query, single-file, and multi-file/change-set workflows into same object with explicit nullable selector fields and always-present arrays
-- [ ] move ambiguity guidance that is still a valid successful disambiguation set into stable `ambiguity` field; keep invalid-input retry guidance on tool-error path
-- [ ] add merged asset section for docs/config/template/SQL companion results so non-code context does not change top-level shape
-- [ ] add `outputSchema` for unified or split replacement tool(s)
-- [ ] add tests for query mode, file mode, files mode, ambiguity mode, and truncation mode proving deterministic schema
+- [x] decide whether `get_context` remains one tool with stable discriminated `mode` field or is split into `get_symbol_context`, `get_file_context`, and `get_change_context`
+- [x] if kept unified, define stable `GetContextResult` object with `mode`, `query`, `file`, `files`, `ranked_symbols`, `ranked_edges`, `ranked_files`, `assets`, `ambiguity`, `truncated`, and `atlas_provenance`
+- [x] normalize symbol-query, single-file, and multi-file/change-set workflows into same object with explicit nullable selector fields and always-present arrays
+- [x] move ambiguity guidance that is still a valid successful disambiguation set into stable `ambiguity` field; keep invalid-input retry guidance on tool-error path
+- [x] add merged asset section for docs/config/template/SQL companion results so non-code context does not change top-level shape
+- [x] add `outputSchema` for unified or split replacement tool(s)
+- [x] add tests for query mode, file mode, files mode, ambiguity mode, and truncation mode proving deterministic schema
 
 Why:
 - these tools power core agent workflows and currently vary most by mode, truncation, and ambiguity handling

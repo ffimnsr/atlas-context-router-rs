@@ -9,6 +9,7 @@ use atlas_search::semantic as sem;
 use atlas_store_sqlite::{BuildFinishStats, GraphBuildState, Store};
 use camino::Utf8Path;
 use serde::Serialize;
+use serde_json::{Map, Value, json};
 use std::collections::BTreeSet;
 
 use super::shared::{
@@ -21,7 +22,8 @@ use crate::session_tools::{
     decision_hits_json, record_mcp_decision_best_effort, search_decisions_best_effort,
 };
 use crate::tool_result::{
-    InputShapeErrorSpec, ToolErrorPayload, input_shape_error_payload, tool_execution_error_value,
+    InputShapeErrorSpec, ToolErrorPayload, ToolSuccessEnvelope, input_shape_error_payload,
+    normalized_tool_result_value, tool_execution_error_value,
 };
 
 fn context_ranking_evidence_legend_json() -> serde_json::Value {
@@ -510,18 +512,58 @@ fn resolve_change_source(
     })
 }
 
-fn inject_change_source_metadata(
-    response: &mut serde_json::Value,
-    resolved: &ResolvedChangeSource,
-) {
-    response["atlas_change_source"] = serde_json::json!({
+fn change_source_json(resolved: &ResolvedChangeSource) -> Value {
+    json!({
         "mode": resolved.mode.as_str(),
         "resolved_files": &resolved.files,
         "deleted_files": &resolved.deleted_files,
         "base": &resolved.base,
         "staged": resolved.staged,
         "working_tree": resolved.working_tree,
-    });
+    })
+}
+
+fn inject_change_source_metadata(
+    response: &mut serde_json::Value,
+    resolved: &ResolvedChangeSource,
+) {
+    response["atlas_change_source"] = change_source_json(resolved);
+}
+
+fn as_object_map(value: Value) -> Map<String, Value> {
+    value.as_object().cloned().unwrap_or_default()
+}
+
+fn build_normalized_success_response(
+    tool_name: &str,
+    payload: Value,
+    output_format: crate::output::OutputFormat,
+    warnings: Vec<String>,
+    truncated: bool,
+    truncation_reason: Option<&str>,
+) -> Result<Value> {
+    let envelope = ToolSuccessEnvelope::new(tool_name, payload)
+        .with_warnings(warnings)
+        .with_truncation(truncated, truncation_reason);
+    normalized_tool_result_value(&envelope, output_format)
+}
+
+fn count_change_kinds(changes: &[ChangedFile]) -> (usize, usize, usize, usize, usize) {
+    let mut added = 0;
+    let mut modified = 0;
+    let mut deleted = 0;
+    let mut renamed = 0;
+    let mut copied = 0;
+    for change in changes {
+        match change.change_type {
+            ChangeType::Added => added += 1,
+            ChangeType::Modified => modified += 1,
+            ChangeType::Deleted => deleted += 1,
+            ChangeType::Renamed => renamed += 1,
+            ChangeType::Copied => copied += 1,
+        }
+    }
+    (added, modified, deleted, renamed, copied)
 }
 
 fn metadata_reserve_bytes(value: &serde_json::Value) -> usize {
@@ -692,7 +734,45 @@ pub(super) fn tool_get_impact_radius(
         .context("impact_radius query failed")?;
 
     let packaged = package_impact(&result, &resolved.files);
-    let mut response = tool_result_value(&packaged, output_format)?;
+    let mut payload = as_object_map(serde_json::to_value(&packaged)?);
+    payload.insert("seed_files".to_owned(), json!(resolved.files));
+    payload.insert(
+        "changed_symbols".to_owned(),
+        payload
+            .get("changed_nodes")
+            .cloned()
+            .unwrap_or_else(|| json!([])),
+    );
+    payload.insert(
+        "impacted_symbols".to_owned(),
+        payload
+            .get("impacted_nodes")
+            .cloned()
+            .unwrap_or_else(|| json!([])),
+    );
+    payload.insert(
+        "summary".to_owned(),
+        json!({
+            "changed_file_count": packaged.changed_file_count,
+            "changed_symbol_count": packaged.changed_node_count,
+            "impacted_symbol_count": packaged.impacted_node_count,
+            "impacted_file_count": packaged.impacted_file_count,
+            "relevant_edge_count": packaged.relevant_edge_count,
+            "seed_budget_count": packaged.seed_budgets.len(),
+            "traversal_budget_applied": packaged.traversal_budget.is_some(),
+        }),
+    );
+
+    let mut response = build_normalized_success_response(
+        "get_impact_radius",
+        Value::Object(payload),
+        output_format,
+        Vec::new(),
+        packaged.truncated,
+        packaged
+            .truncated
+            .then_some("node or edge caps limited impact result"),
+    )?;
     inject_budget_metadata(&mut response, &result.budget);
     inject_change_source_metadata(&mut response, &resolved);
     Ok(response)
@@ -745,6 +825,7 @@ pub(super) fn tool_get_review_context(
                 "working_tree": resolved.working_tree,
             }
         })));
+    let response_budget_limit = response_budget_limit.saturating_sub(400);
     let stage_budget = if let Some(response_budget) =
         enforce_mcp_response_budget(&mut packaged_value, output_format, response_budget_limit)?
     {
@@ -752,7 +833,72 @@ pub(super) fn tool_get_review_context(
     } else {
         result.budget.clone()
     };
-    let mut response = tool_result_value(&packaged_value, output_format)?;
+    let changed_symbols = packaged_value
+        .get("nodes")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|node| node.get("reason").and_then(Value::as_str) == Some("direct_target"))
+        .collect::<Vec<_>>();
+    let neighbors = packaged_value
+        .get("nodes")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|node| node.get("reason").and_then(Value::as_str) != Some("direct_target"))
+        .collect::<Vec<_>>();
+    let critical_edges = packaged_value
+        .get("edges")
+        .cloned()
+        .unwrap_or_else(|| json!([]));
+    let artifacts = packaged_value
+        .get("saved_context_sources")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|asset| {
+            let mut object = as_object_map(asset);
+            object.insert("artifact_kind".to_owned(), json!("saved_context"));
+            Value::Object(object)
+        })
+        .collect::<Vec<_>>();
+    let mut normalized_payload = as_object_map(packaged_value.clone());
+    normalized_payload.insert("changed_files".to_owned(), json!(resolved.files.clone()));
+    normalized_payload.insert("changed_symbols".to_owned(), Value::Array(changed_symbols));
+    normalized_payload.insert("neighbors".to_owned(), Value::Array(neighbors));
+    normalized_payload.insert("critical_edges".to_owned(), critical_edges);
+    normalized_payload.insert("artifacts".to_owned(), Value::Array(artifacts));
+    normalized_payload.insert(
+        "risk_summary".to_owned(),
+        json!({
+            "intent": normalized_payload.get("intent").cloned().unwrap_or(Value::Null),
+            "node_count": normalized_payload.get("node_count").cloned().unwrap_or(Value::Null),
+            "edge_count": normalized_payload.get("edge_count").cloned().unwrap_or(Value::Null),
+            "file_count": normalized_payload.get("file_count").cloned().unwrap_or(Value::Null),
+            "truncated": normalized_payload.get("truncated").cloned().unwrap_or(Value::Bool(false)),
+            "nodes_dropped": normalized_payload.get("nodes_dropped").cloned().unwrap_or(Value::Null),
+            "edges_dropped": normalized_payload.get("edges_dropped").cloned().unwrap_or(Value::Null),
+            "files_dropped": normalized_payload.get("files_dropped").cloned().unwrap_or(Value::Null),
+            "ambiguity_present": normalized_payload
+                .get("ambiguity_candidates")
+                .and_then(Value::as_array)
+                .is_some_and(|items| !items.is_empty()),
+        }),
+    );
+
+    let mut response = build_normalized_success_response(
+        "get_review_context",
+        Value::Object(normalized_payload),
+        output_format,
+        Vec::new(),
+        packaged.truncated,
+        packaged
+            .truncated
+            .then_some("review context capped by node, edge, file, or payload budget"),
+    )?;
     if include_context_ranking_evidence {
         response["atlas_context_ranking_evidence_legend"] = context_ranking_evidence_legend_json();
     }
@@ -790,31 +936,82 @@ pub(super) fn tool_detect_changes(
         old_path: Option<&'a str>,
         #[serde(skip_serializing_if = "Option::is_none")]
         node_count: Option<usize>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        language: Option<String>,
+        is_added: bool,
+        is_modified: bool,
+        is_deleted: bool,
+        is_renamed: bool,
+        is_copied: bool,
     }
 
     let entries: Vec<ChangedEntry<'_>> = changes
         .iter()
         .map(|cf| {
-            let node_count = store_opt
+            let file_nodes = store_opt
                 .as_ref()
-                .and_then(|s| s.nodes_by_file(&cf.path).ok())
-                .map(|ns| ns.len());
+                .and_then(|s| s.nodes_by_file(&cf.path).ok());
+            let node_count = file_nodes.as_ref().map(Vec::len);
+            let language = file_nodes
+                .as_ref()
+                .and_then(|nodes| nodes.first())
+                .map(|node| node.language.clone());
+            let change_type = match cf.change_type {
+                ChangeType::Added => "added",
+                ChangeType::Modified => "modified",
+                ChangeType::Deleted => "deleted",
+                ChangeType::Renamed => "renamed",
+                ChangeType::Copied => "copied",
+            };
             ChangedEntry {
                 path: &cf.path,
-                change_type: match cf.change_type {
-                    ChangeType::Added => "added",
-                    ChangeType::Modified => "modified",
-                    ChangeType::Deleted => "deleted",
-                    ChangeType::Renamed => "renamed",
-                    ChangeType::Copied => "copied",
-                },
+                change_type,
                 old_path: cf.old_path.as_deref(),
                 node_count,
+                language,
+                is_added: matches!(cf.change_type, ChangeType::Added),
+                is_modified: matches!(cf.change_type, ChangeType::Modified),
+                is_deleted: matches!(cf.change_type, ChangeType::Deleted),
+                is_renamed: matches!(cf.change_type, ChangeType::Renamed),
+                is_copied: matches!(cf.change_type, ChangeType::Copied),
             }
         })
         .collect();
 
-    let mut response = tool_result_value(&entries, output_format)?;
+    let (added_count, modified_count, deleted_count, renamed_count, copied_count) =
+        count_change_kinds(changes);
+    let payload = json!({
+        "mode": resolved.mode.as_str(),
+        "base_ref": resolved.base,
+        "files": entries,
+        "summary": {
+            "changed_file_count": changes.len(),
+            "resolved_file_count": resolved.files.len(),
+            "deleted_file_count": deleted_count,
+            "added_file_count": added_count,
+            "modified_file_count": modified_count,
+            "renamed_file_count": renamed_count,
+            "copied_file_count": copied_count,
+            "files_with_graph_nodes": changes
+                .iter()
+                .filter(|cf| {
+                    store_opt
+                        .as_ref()
+                        .and_then(|s| s.nodes_by_file(&cf.path).ok())
+                        .is_some_and(|nodes| !nodes.is_empty())
+                })
+                .count(),
+        },
+    });
+
+    let mut response = build_normalized_success_response(
+        "detect_changes",
+        payload,
+        output_format,
+        Vec::new(),
+        false,
+        None,
+    )?;
     inject_change_source_metadata(&mut response, &resolved);
     Ok(response)
 }
@@ -1086,27 +1283,65 @@ pub(super) fn tool_get_minimal_context(
 
     let packaged = package_impact(&impact, &changed_file_paths);
 
-    #[derive(Serialize)]
-    struct MinimalContext<'a> {
-        changed_file_count: usize,
-        deleted_file_count: usize,
-        changed_files: Vec<&'a str>,
-        impact: crate::context::PackagedImpact<'a>,
-    }
-
     let deleted_count = changes
         .iter()
         .filter(|cf| cf.change_type == atlas_core::ChangeType::Deleted)
         .count();
 
-    let ctx = MinimalContext {
-        changed_file_count: changed_file_paths.len(),
-        deleted_file_count: deleted_count,
-        changed_files: changed_file_paths.iter().map(String::as_str).collect(),
-        impact: packaged,
-    };
+    let mut risk_flags = Vec::new();
+    if deleted_count > 0 {
+        risk_flags.push("deleted_files_present");
+    }
+    if impact.impacted_files.len() > changed_file_paths.len() {
+        risk_flags.push("transitive_file_impact");
+    }
+    if impact.impacted_nodes.len() > impact.changed_nodes.len() {
+        risk_flags.push("transitive_symbol_impact");
+    }
+    if packaged.truncated {
+        risk_flags.push("truncated");
+    }
+    if impact
+        .impacted_nodes
+        .iter()
+        .any(|node| node.is_test || node.qualified_name.contains("test"))
+    {
+        risk_flags.push("test_impact");
+    }
 
-    let mut response = tool_result_value(&ctx, output_format)?;
+    let payload = json!({
+        "change_source": change_source_json(&resolved),
+        "changed_symbols": packaged.changed_nodes,
+        "immediate_impact": {
+            "impacted_symbols": packaged.impacted_nodes,
+            "impacted_files": packaged.impacted_files,
+            "relevant_edges": packaged.relevant_edges,
+        },
+        "risk_flags": risk_flags,
+        "summary": {
+            "changed_file_count": changed_file_paths.len(),
+            "deleted_file_count": deleted_count,
+            "changed_symbol_count": packaged.changed_node_count,
+            "impacted_symbol_count": packaged.impacted_node_count,
+            "impacted_file_count": packaged.impacted_file_count,
+            "truncated": packaged.truncated,
+        },
+        "changed_file_count": changed_file_paths.len(),
+        "deleted_file_count": deleted_count,
+        "changed_files": changed_file_paths.iter().map(String::as_str).collect::<Vec<_>>(),
+        "impact": serde_json::to_value(&packaged)?,
+    });
+
+    let mut response = build_normalized_success_response(
+        "get_minimal_context",
+        payload,
+        output_format,
+        Vec::new(),
+        packaged.truncated,
+        packaged
+            .truncated
+            .then_some("minimal context capped by traversal or payload budget"),
+    )?;
     inject_budget_metadata(&mut response, &impact.budget);
     inject_change_source_metadata(&mut response, &resolved);
     Ok(response)
@@ -1130,8 +1365,39 @@ pub(super) fn tool_explain_change(
     let files = resolved.files.clone();
 
     if files.is_empty() {
-        let mut response =
-            tool_result_value(&atlas_review::empty_explain_change_summary(), output_format)?;
+        let summary = atlas_review::empty_explain_change_summary();
+        let mut payload = as_object_map(serde_json::to_value(&summary)?);
+        let summary_text = payload
+            .remove("summary")
+            .unwrap_or_else(|| Value::String(String::new()));
+        payload.insert("changed_files".to_owned(), json!([]));
+        payload.insert(
+            "change_kinds".to_owned(),
+            payload
+                .get("changed_by_kind")
+                .cloned()
+                .unwrap_or_else(|| json!({})),
+        );
+        payload.insert("coverage_gaps".to_owned(), json!([]));
+        payload.insert(
+            "summary".to_owned(),
+            json!({
+                "text": summary_text,
+                "changed_file_count": 0,
+                "changed_symbol_count": 0,
+                "impacted_file_count": 0,
+                "impacted_node_count": 0,
+            }),
+        );
+        payload.insert("summary_text".to_owned(), Value::String(String::new()));
+        let mut response = build_normalized_success_response(
+            "explain_change",
+            Value::Object(payload),
+            output_format,
+            Vec::new(),
+            false,
+            None,
+        )?;
         inject_change_source_metadata(&mut response, &resolved);
         return Ok(response);
     }
@@ -1151,7 +1417,51 @@ pub(super) fn tool_explain_change(
     )
     .context("explain_change summary generation failed")?;
 
-    let mut response = tool_result_value(&summary, output_format)?;
+    let mut payload = as_object_map(serde_json::to_value(&summary)?);
+    let summary_text = payload
+        .remove("summary")
+        .unwrap_or_else(|| Value::String(String::new()));
+    let coverage_gaps = summary
+        .test_impact
+        .uncovered_symbols
+        .iter()
+        .map(|symbol| json!({ "symbol": symbol }))
+        .collect::<Vec<_>>();
+    payload.insert(
+        "changed_files".to_owned(),
+        json!(summary.diff_summary.files),
+    );
+    payload.insert(
+        "change_kinds".to_owned(),
+        payload
+            .get("changed_by_kind")
+            .cloned()
+            .unwrap_or_else(|| json!({})),
+    );
+    payload.insert("coverage_gaps".to_owned(), Value::Array(coverage_gaps));
+    payload.insert(
+        "summary".to_owned(),
+        json!({
+            "text": summary_text,
+            "changed_file_count": summary.changed_file_count,
+            "changed_symbol_count": summary.changed_symbol_count,
+            "impacted_file_count": summary.impacted_file_count,
+            "impacted_node_count": summary.impacted_node_count,
+        }),
+    );
+    payload.insert(
+        "summary_text".to_owned(),
+        Value::String(summary.summary.clone()),
+    );
+
+    let mut response = build_normalized_success_response(
+        "explain_change",
+        Value::Object(payload),
+        output_format,
+        Vec::new(),
+        false,
+        None,
+    )?;
     inject_change_source_metadata(&mut response, &resolved);
     Ok(response)
 }
@@ -1346,6 +1656,7 @@ pub(super) fn tool_get_context(
                 "omitted_sections": &omitted,
             }
         })));
+    let response_budget_limit = response_budget_limit.saturating_sub(500);
     let mut stage_budget = if let Some(response_budget) =
         enforce_mcp_response_budget(&mut packaged_value, output_format, response_budget_limit)?
     {
@@ -1353,7 +1664,114 @@ pub(super) fn tool_get_context(
     } else {
         result.budget.clone()
     };
-    let mut response = tool_result_value(&packaged_value, output_format)?;
+    let mode = match &request.target {
+        ContextTarget::ChangedFiles { .. } => "change_context",
+        ContextTarget::FilePath { .. } => "file_context",
+        ContextTarget::QualifiedName { .. } | ContextTarget::SymbolName { .. } => "symbol_context",
+        ContextTarget::ChangedSymbols { .. } => "change_context",
+        ContextTarget::EdgeQuerySeed { .. } => "symbol_context",
+    };
+    let assets = packaged_value
+        .get("saved_context_sources")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|asset| {
+            let mut object = as_object_map(asset);
+            object.insert("artifact_kind".to_owned(), json!("saved_context"));
+            Value::Object(object)
+        })
+        .collect::<Vec<_>>();
+    let ranked_symbols = packaged_value
+        .get("nodes")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|node| {
+            json!({
+                "qn": node.get("qn").cloned().unwrap_or(Value::Null),
+                "reason": node.get("reason").cloned().unwrap_or(Value::Null),
+                "distance": node.get("distance").cloned().unwrap_or(Value::Null),
+            })
+        })
+        .collect::<Vec<_>>();
+    let ranked_edges = packaged_value
+        .get("edges")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|edge| {
+            json!({
+                "from": edge.get("from").cloned().unwrap_or(Value::Null),
+                "to": edge.get("to").cloned().unwrap_or(Value::Null),
+                "kind": edge.get("kind").cloned().unwrap_or(Value::Null),
+            })
+        })
+        .collect::<Vec<_>>();
+    let ranked_files = packaged_value
+        .get("files")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|file| {
+            json!({
+                "path": file.get("path").cloned().unwrap_or(Value::Null),
+                "reason": file.get("reason").cloned().unwrap_or(Value::Null),
+            })
+        })
+        .collect::<Vec<_>>();
+    let ambiguity = json!({
+        "query": packaged_value.get("ambiguity_query").cloned().unwrap_or(Value::Null),
+        "candidates": packaged_value
+            .get("ambiguity_candidates")
+            .cloned()
+            .unwrap_or_else(|| json!([])),
+    });
+    let mut normalized_payload = as_object_map(packaged_value.clone());
+    normalized_payload.insert("mode".to_owned(), json!(mode));
+    normalized_payload.insert(
+        "query".to_owned(),
+        match &request.target {
+            ContextTarget::QualifiedName { qname } => json!(qname),
+            ContextTarget::SymbolName { name } => json!(name),
+            ContextTarget::EdgeQuerySeed { source_qname, .. } => json!(source_qname),
+            _ => Value::Null,
+        },
+    );
+    normalized_payload.insert(
+        "file".to_owned(),
+        match &request.target {
+            ContextTarget::FilePath { path } => json!(path),
+            _ => Value::Null,
+        },
+    );
+    normalized_payload.insert(
+        "files".to_owned(),
+        match &request.target {
+            ContextTarget::ChangedFiles { paths } => json!(paths),
+            _ => json!([]),
+        },
+    );
+    normalized_payload.insert("ranked_symbols".to_owned(), Value::Array(ranked_symbols));
+    normalized_payload.insert("ranked_edges".to_owned(), Value::Array(ranked_edges));
+    normalized_payload.insert("ranked_files".to_owned(), Value::Array(ranked_files));
+    normalized_payload.insert("assets".to_owned(), Value::Array(assets));
+    normalized_payload.insert("ambiguity".to_owned(), ambiguity);
+
+    let mut response = build_normalized_success_response(
+        "get_context",
+        Value::Object(normalized_payload),
+        output_format,
+        Vec::new(),
+        packaged.truncated,
+        packaged
+            .truncated
+            .then_some("context capped by node, edge, file, or payload budget"),
+    )?;
     if include_context_ranking_evidence {
         response["atlas_context_ranking_evidence_legend"] = context_ranking_evidence_legend_json();
     }

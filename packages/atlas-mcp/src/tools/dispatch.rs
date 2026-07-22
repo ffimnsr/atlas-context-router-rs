@@ -61,6 +61,47 @@ fn response_single_file(response: &serde_json::Value, pointer: &str) -> Vec<Stri
         .unwrap_or_default()
 }
 
+fn normalized_contract_tool(name: &str) -> bool {
+    matches!(
+        name,
+        "detect_changes"
+            | "get_impact_radius"
+            | "get_review_context"
+            | "get_minimal_context"
+            | "explain_change"
+            | "traverse_graph"
+            | "get_context"
+    )
+}
+
+fn mirror_metadata_into_structured_content(
+    response: &mut serde_json::Value,
+    field: &str,
+    predicate: impl Fn(&str) -> bool,
+) {
+    let Some(value) = response.get(field).cloned() else {
+        return;
+    };
+    let Some(tool_name) = response
+        .get("structuredContent")
+        .and_then(|structured| structured.get("tool"))
+        .and_then(|value| value.as_str())
+        .map(str::to_owned)
+    else {
+        return;
+    };
+    if !predicate(&tool_name) {
+        return;
+    }
+    let Some(structured) = response.get_mut("structuredContent") else {
+        return;
+    };
+    let Some(structured_obj) = structured.as_object_mut() else {
+        return;
+    };
+    structured_obj.insert(field.to_owned(), value);
+}
+
 fn inject_freshness_warning(
     response: &mut serde_json::Value,
     name: &str,
@@ -344,6 +385,11 @@ fn call_inner(
 
     inject_provenance(&mut response, repo_root, db_path);
     inject_freshness_warning(&mut response, name, repo_root, db_path);
+    mirror_metadata_into_structured_content(
+        &mut response,
+        "atlas_freshness",
+        normalized_contract_tool,
+    );
 
     // Stamp canonical readiness on graph-backed tool responses.
     if let (Some(readiness), Some(req)) = (&readiness, requirement) {
@@ -435,6 +481,7 @@ fn inject_provenance(response: &mut serde_json::Value, repo_root: &str, db_path:
         "indexed_file_count": indexed_file_count,
         "last_indexed_at": last_indexed_at,
     });
+    mirror_metadata_into_structured_content(response, "atlas_provenance", normalized_contract_tool);
 }
 
 #[cfg(test)]

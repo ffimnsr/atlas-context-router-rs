@@ -46,8 +46,20 @@ impl ToolResultContract {
 
 pub(crate) fn tool_result_contract(name: &str) -> ToolResultContract {
     match name {
-        "list_graph_stats" | "tool_list" | "tool_search" | "tool_help" | "broker_status"
-        | "get_context_stats" | "man" => ToolResultContract::StableObject,
+        "list_graph_stats"
+        | "tool_list"
+        | "tool_search"
+        | "tool_help"
+        | "broker_status"
+        | "get_context_stats"
+        | "man"
+        | "detect_changes"
+        | "get_impact_radius"
+        | "get_review_context"
+        | "get_minimal_context"
+        | "explain_change"
+        | "traverse_graph"
+        | "get_context" => ToolResultContract::StableObject,
         "query_graph"
         | "batch_query_graph"
         | "search_saved_context"
@@ -1018,6 +1030,13 @@ fn tool_output_schema_for(name: &str) -> Option<Value> {
         "tool_search" => Some(tool_search_output_schema()),
         "tool_help" => Some(man_output_schema()),
         "broker_status" => Some(broker_status_output_schema()),
+        "detect_changes" => Some(detect_changes_output_schema()),
+        "get_impact_radius" => Some(get_impact_radius_output_schema()),
+        "get_review_context" => Some(get_review_context_output_schema()),
+        "get_minimal_context" => Some(get_minimal_context_output_schema()),
+        "explain_change" => Some(explain_change_output_schema()),
+        "traverse_graph" => Some(traverse_graph_output_schema()),
+        "get_context" => Some(get_context_output_schema()),
         "get_context_stats" => Some(get_context_stats_output_schema()),
         "man" => Some(man_output_schema()),
         _ => None,
@@ -1216,6 +1235,1060 @@ fn broker_status_output_schema() -> Value {
             "db_path",
         ],
         None,
+    )
+}
+
+fn compact_node_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "qn": { "type": "string" },
+            "kind": { "type": "string" },
+            "file": { "type": "string" },
+            "line": { "type": "integer" },
+            "parent": { "type": "string" },
+            "sig": { "type": "string" },
+            "lang": { "type": "string" }
+        },
+        "required": ["qn", "kind", "file", "line", "lang"]
+    })
+}
+
+fn compact_edge_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "from": { "type": "string" },
+            "to": { "type": "string" },
+            "kind": { "type": "string" }
+        },
+        "required": ["from", "to", "kind"]
+    })
+}
+
+fn line_range_schema() -> Value {
+    serde_json::json!({
+        "type": "array",
+        "prefixItems": [{ "type": "integer" }, { "type": "integer" }],
+        "minItems": 2,
+        "maxItems": 2
+    })
+}
+
+fn packaged_selected_node_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "reason": { "type": "string" },
+            "distance": { "type": "integer" },
+            "context_ranking_evidence": { "type": "object" },
+            "qn": { "type": "string" },
+            "kind": { "type": "string" },
+            "file": { "type": "string" },
+            "line": { "type": "integer" },
+            "parent": { "type": "string" },
+            "sig": { "type": "string" },
+            "lang": { "type": "string" }
+        },
+        "required": ["reason", "distance", "qn", "kind", "file", "line", "lang"]
+    })
+}
+
+fn packaged_selected_edge_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "reason": { "type": "string" },
+            "context_ranking_evidence": { "type": "object" },
+            "from": { "type": "string" },
+            "to": { "type": "string" },
+            "kind": { "type": "string" }
+        },
+        "required": ["reason", "from", "to", "kind"]
+    })
+}
+
+fn packaged_selected_file_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "path": { "type": "string" },
+            "reason": { "type": "string" },
+            "line_ranges": { "type": "array", "items": { "$ref": "#/$defs/line_range" } }
+        },
+        "required": ["path", "reason"]
+    })
+}
+
+fn change_source_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "mode": { "type": "string" },
+            "resolved_files": { "type": "array", "items": { "type": "string" } },
+            "deleted_files": { "type": "array", "items": { "type": "string" } },
+            "base": { "type": ["string", "null"] },
+            "staged": { "type": "boolean" },
+            "working_tree": { "type": "boolean" }
+        },
+        "required": ["mode", "resolved_files", "deleted_files", "base", "staged", "working_tree"]
+    })
+}
+
+fn seed_budget_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "seed_kind": { "type": "string" },
+            "requested_seed_count": { "type": "integer" },
+            "accepted_seed_count": { "type": "integer" },
+            "omitted_seed_count": { "type": "integer" },
+            "budget_hit": { "type": "boolean" },
+            "partial": { "type": "boolean" },
+            "safe_to_answer": { "type": "boolean" },
+            "suggested_narrower_query": { "type": "string" }
+        },
+        "required": [
+            "seed_kind",
+            "requested_seed_count",
+            "accepted_seed_count",
+            "omitted_seed_count",
+            "budget_hit",
+            "partial",
+            "safe_to_answer"
+        ]
+    })
+}
+
+fn traversal_budget_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "requested_depth": { "type": "integer" },
+            "accepted_depth": { "type": "integer" },
+            "requested_node_budget": { "type": "integer" },
+            "accepted_node_budget": { "type": "integer" },
+            "requested_edge_budget": { "type": "integer" },
+            "accepted_edge_budget": { "type": "integer" },
+            "emitted_node_count": { "type": "integer" },
+            "emitted_edge_count": { "type": "integer" },
+            "omitted_edge_count": { "type": "integer" },
+            "budget_hit": { "type": "boolean" },
+            "suggested_narrower_query": { "type": "string" }
+        },
+        "required": [
+            "requested_depth",
+            "accepted_depth",
+            "requested_node_budget",
+            "accepted_node_budget",
+            "requested_edge_budget",
+            "accepted_edge_budget",
+            "emitted_node_count",
+            "emitted_edge_count",
+            "omitted_edge_count",
+            "budget_hit"
+        ]
+    })
+}
+
+fn context_source_mix_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "source_kind": { "type": "string" },
+            "items_included": { "type": "integer" },
+            "items_dropped": { "type": "integer" },
+            "tokens_used": { "type": "integer" }
+        },
+        "required": ["source_kind", "items_included", "items_dropped", "tokens_used"]
+    })
+}
+
+fn payload_truncation_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "bytes_requested": { "type": "integer" },
+            "bytes_emitted": { "type": "integer" },
+            "tokens_estimated": { "type": "integer" },
+            "token_budget_applied": { "type": "integer" },
+            "omitted_node_count": { "type": "integer" },
+            "omitted_file_count": { "type": "integer" },
+            "omitted_source_count": { "type": "integer" },
+            "omitted_byte_count": { "type": "integer" },
+            "continuation_hint": { "type": "string" },
+            "source_mix": { "type": "array", "items": { "$ref": "#/$defs/context_source_mix" } }
+        },
+        "required": [
+            "bytes_requested",
+            "bytes_emitted",
+            "tokens_estimated",
+            "omitted_node_count",
+            "omitted_file_count",
+            "omitted_source_count",
+            "omitted_byte_count"
+        ]
+    })
+}
+
+fn packaged_saved_source_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "source_id": { "type": "string" },
+            "label": { "type": "string" },
+            "source_type": { "type": "string" },
+            "session_id": { "type": "string" },
+            "agent_id": { "type": "string" },
+            "preview": { "type": "string" },
+            "retrieval_hint": { "type": "string" },
+            "relevance_score": { "type": "number" },
+            "context_ranking_evidence": { "type": "object" }
+        },
+        "required": ["source_id", "label", "source_type", "preview", "retrieval_hint", "relevance_score"]
+    })
+}
+
+fn artifact_saved_context_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "artifact_kind": { "type": "string" },
+            "source_id": { "type": "string" },
+            "label": { "type": "string" },
+            "source_type": { "type": "string" },
+            "session_id": { "type": "string" },
+            "agent_id": { "type": "string" },
+            "preview": { "type": "string" },
+            "retrieval_hint": { "type": "string" },
+            "relevance_score": { "type": "number" },
+            "context_ranking_evidence": { "type": "object" }
+        },
+        "required": [
+            "artifact_kind",
+            "source_id",
+            "label",
+            "source_type",
+            "preview",
+            "retrieval_hint",
+            "relevance_score"
+        ]
+    })
+}
+
+fn ambiguity_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "query": { "type": ["string", "null"] },
+            "candidates": { "type": "array", "items": { "type": "string" } }
+        },
+        "required": ["query", "candidates"]
+    })
+}
+
+fn ranked_symbol_summary_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "qn": { "type": "string" },
+            "reason": { "type": "string" },
+            "distance": { "type": "integer" }
+        },
+        "required": ["qn", "reason", "distance"]
+    })
+}
+
+fn ranked_edge_summary_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "from": { "type": "string" },
+            "to": { "type": "string" },
+            "kind": { "type": "string" }
+        },
+        "required": ["from", "to", "kind"]
+    })
+}
+
+fn ranked_file_summary_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "path": { "type": "string" },
+            "reason": { "type": "string" }
+        },
+        "required": ["path", "reason"]
+    })
+}
+
+fn explain_changed_by_kind_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "api_change": { "type": "integer" },
+            "signature_change": { "type": "integer" },
+            "internal_change": { "type": "integer" }
+        },
+        "required": ["api_change", "signature_change", "internal_change"]
+    })
+}
+
+fn explain_changed_symbol_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "qn": { "type": "string" },
+            "kind": { "type": "string" },
+            "file": { "type": "string" },
+            "line": { "type": "integer" },
+            "change_kind": { "type": "string" },
+            "lang": { "type": "string" },
+            "sig": { "type": "string" }
+        },
+        "required": ["qn", "kind", "file", "line", "change_kind", "lang"]
+    })
+}
+
+fn explain_boundary_violation_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "kind": { "type": "string" },
+            "description": { "type": "string" },
+            "nodes": { "type": "array", "items": { "type": "string" } }
+        },
+        "required": ["kind", "description", "nodes"]
+    })
+}
+
+fn explain_diff_counts_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "added": { "type": "integer" },
+            "modified": { "type": "integer" },
+            "deleted": { "type": "integer" },
+            "renamed": { "type": "integer" },
+            "copied": { "type": "integer" }
+        },
+        "required": ["added", "modified", "deleted", "renamed", "copied"]
+    })
+}
+
+fn explain_diff_file_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "path": { "type": "string" },
+            "change_type": { "type": "string" },
+            "old_path": { "type": "string" },
+            "changed_symbol_count": { "type": "integer" },
+            "impacted_symbol_count": { "type": "integer" }
+        },
+        "required": ["path", "change_type", "changed_symbol_count", "impacted_symbol_count"]
+    })
+}
+
+fn explain_diff_summary_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "counts": { "$ref": "#/$defs/explain_diff_counts" },
+            "files": { "type": "array", "items": { "$ref": "#/$defs/explain_diff_file" } }
+        },
+        "required": ["counts", "files"]
+    })
+}
+
+fn workflow_focus_node_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "qualified_name": { "type": "string" },
+            "kind": { "type": "string" },
+            "file_path": { "type": "string" },
+            "relevance_score": { "type": "number" },
+            "selection_reason": { "type": "string" }
+        },
+        "required": ["qualified_name", "kind", "file_path", "relevance_score", "selection_reason"]
+    })
+}
+
+fn workflow_component_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "label": { "type": "string" },
+            "kind": { "type": "string" },
+            "changed_node_count": { "type": "integer" },
+            "impacted_node_count": { "type": "integer" },
+            "file_count": { "type": "integer" },
+            "summary": { "type": "string" }
+        },
+        "required": ["label", "kind", "changed_node_count", "impacted_node_count", "file_count", "summary"]
+    })
+}
+
+fn workflow_call_chain_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "summary": { "type": "string" },
+            "steps": { "type": "array", "items": { "type": "string" } },
+            "edge_kinds": { "type": "array", "items": { "type": "string" } }
+        },
+        "required": ["summary", "steps", "edge_kinds"]
+    })
+}
+
+fn noise_reduction_summary_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "retained_nodes": { "type": "integer" },
+            "retained_edges": { "type": "integer" },
+            "retained_files": { "type": "integer" },
+            "dropped_nodes": { "type": "integer" },
+            "dropped_edges": { "type": "integer" },
+            "dropped_files": { "type": "integer" },
+            "rules_applied": { "type": "array", "items": { "type": "string" } }
+        },
+        "required": [
+            "retained_nodes",
+            "retained_edges",
+            "retained_files",
+            "dropped_nodes",
+            "dropped_edges",
+            "dropped_files",
+            "rules_applied"
+        ]
+    })
+}
+
+fn explain_test_impact_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "affected_test_count": { "type": "integer" },
+            "uncovered_symbol_count": { "type": "integer" },
+            "uncovered_symbols": { "type": "array", "items": { "type": "string" } }
+        },
+        "required": ["affected_test_count", "uncovered_symbol_count", "uncovered_symbols"]
+    })
+}
+
+fn coverage_gap_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "symbol": { "type": "string" }
+        },
+        "required": ["symbol"]
+    })
+}
+
+fn review_risk_summary_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "intent": { "type": "string" },
+            "node_count": { "type": "integer" },
+            "edge_count": { "type": "integer" },
+            "file_count": { "type": "integer" },
+            "truncated": { "type": "boolean" },
+            "nodes_dropped": { "type": "integer" },
+            "edges_dropped": { "type": "integer" },
+            "files_dropped": { "type": "integer" },
+            "ambiguity_present": { "type": "boolean" }
+        },
+        "required": [
+            "intent",
+            "node_count",
+            "edge_count",
+            "file_count",
+            "truncated",
+            "nodes_dropped",
+            "edges_dropped",
+            "files_dropped",
+            "ambiguity_present"
+        ]
+    })
+}
+
+fn traverse_edge_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "from": { "type": "string" },
+            "to": { "type": "string" },
+            "kind": { "type": "string" },
+            "direction": { "type": "string" }
+        },
+        "required": ["from", "to", "kind", "direction"]
+    })
+}
+
+fn detect_changes_output_schema() -> Value {
+    normalized_tool_output_schema(
+        serde_json::json!({
+            "mode": { "type": "string" },
+            "base_ref": { "type": ["string", "null"] },
+            "files": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "path": { "type": "string" },
+                        "change_type": { "type": "string" },
+                        "old_path": { "type": ["string", "null"] },
+                        "node_count": { "type": ["integer", "null"] },
+                        "language": { "type": ["string", "null"] },
+                        "is_added": { "type": "boolean" },
+                        "is_modified": { "type": "boolean" },
+                        "is_deleted": { "type": "boolean" },
+                        "is_renamed": { "type": "boolean" },
+                        "is_copied": { "type": "boolean" }
+                    },
+                    "required": [
+                        "path",
+                        "change_type",
+                        "is_added",
+                        "is_modified",
+                        "is_deleted",
+                        "is_renamed",
+                        "is_copied"
+                    ]
+                }
+            },
+            "summary": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "changed_file_count": { "type": "integer" },
+                    "resolved_file_count": { "type": "integer" },
+                    "deleted_file_count": { "type": "integer" },
+                    "added_file_count": { "type": "integer" },
+                    "modified_file_count": { "type": "integer" },
+                    "renamed_file_count": { "type": "integer" },
+                    "copied_file_count": { "type": "integer" },
+                    "files_with_graph_nodes": { "type": "integer" }
+                },
+                "required": [
+                    "changed_file_count",
+                    "resolved_file_count",
+                    "deleted_file_count",
+                    "added_file_count",
+                    "modified_file_count",
+                    "renamed_file_count",
+                    "copied_file_count",
+                    "files_with_graph_nodes"
+                ]
+            },
+            "atlas_provenance": { "type": "object" },
+            "atlas_freshness": { "type": "object" }
+        }),
+        &[
+            "tool",
+            "mode",
+            "base_ref",
+            "files",
+            "summary",
+            "atlas_provenance",
+        ],
+        None,
+    )
+}
+
+fn get_impact_radius_output_schema() -> Value {
+    normalized_tool_output_schema(
+        serde_json::json!({
+            "seed_files": { "type": "array", "items": { "type": "string" } },
+            "changed_symbols": { "type": "array", "items": { "$ref": "#/$defs/compact_node" } },
+            "impacted_symbols": { "type": "array", "items": { "$ref": "#/$defs/compact_node" } },
+            "impacted_files": { "type": "array", "items": { "type": "string" } },
+            "summary": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "changed_file_count": { "type": "integer" },
+                    "changed_symbol_count": { "type": "integer" },
+                    "impacted_symbol_count": { "type": "integer" },
+                    "impacted_file_count": { "type": "integer" },
+                    "relevant_edge_count": { "type": "integer" },
+                    "seed_budget_count": { "type": "integer" },
+                    "traversal_budget_applied": { "type": "boolean" }
+                },
+                "required": [
+                    "changed_file_count",
+                    "changed_symbol_count",
+                    "impacted_symbol_count",
+                    "impacted_file_count",
+                    "relevant_edge_count",
+                    "seed_budget_count",
+                    "traversal_budget_applied"
+                ]
+            },
+            "truncated": { "type": "boolean" },
+            "changed_file_count": { "type": "integer" },
+            "changed_node_count": { "type": "integer" },
+            "changed_nodes": { "type": "array", "items": { "$ref": "#/$defs/compact_node" } },
+            "impacted_node_count": { "type": "integer" },
+            "impacted_nodes": { "type": "array", "items": { "$ref": "#/$defs/compact_node" } },
+            "impacted_file_count": { "type": "integer" },
+            "relevant_edge_count": { "type": "integer" },
+            "relevant_edges": { "type": "array", "items": { "$ref": "#/$defs/compact_edge" } },
+            "seed_budgets": { "type": "array", "items": { "$ref": "#/$defs/seed_budget" } },
+            "traversal_budget": {
+                "oneOf": [
+                    { "$ref": "#/$defs/traversal_budget" },
+                    { "type": "null" }
+                ]
+            },
+            "budget_status": { "type": "string" },
+            "atlas_provenance": { "type": "object" },
+            "atlas_freshness": { "type": "object" }
+        }),
+        &[
+            "tool",
+            "seed_files",
+            "changed_symbols",
+            "impacted_symbols",
+            "impacted_files",
+            "summary",
+            "truncated",
+            "atlas_provenance",
+        ],
+        Some(serde_json::json!({
+            "compact_node": compact_node_schema(),
+            "compact_edge": compact_edge_schema(),
+            "seed_budget": seed_budget_schema(),
+            "traversal_budget": traversal_budget_schema(),
+        })),
+    )
+}
+
+fn get_review_context_output_schema() -> Value {
+    normalized_tool_output_schema(
+        serde_json::json!({
+            "changed_files": { "type": "array", "items": { "type": "string" } },
+            "changed_symbols": { "type": "array", "items": { "$ref": "#/$defs/packaged_selected_node" } },
+            "neighbors": { "type": "array", "items": { "$ref": "#/$defs/packaged_selected_node" } },
+            "critical_edges": { "type": "array", "items": { "$ref": "#/$defs/packaged_selected_edge" } },
+            "risk_summary": { "$ref": "#/$defs/review_risk_summary" },
+            "artifacts": { "type": "array", "items": { "$ref": "#/$defs/artifact_saved_context" } },
+            "intent": { "type": "string" },
+            "node_count": { "type": "integer" },
+            "nodes": { "type": "array", "items": { "$ref": "#/$defs/packaged_selected_node" } },
+            "edge_count": { "type": "integer" },
+            "edges": { "type": "array", "items": { "$ref": "#/$defs/packaged_selected_edge" } },
+            "file_count": { "type": "integer" },
+            "files": { "type": "array", "items": { "$ref": "#/$defs/packaged_selected_file" } },
+            "truncated": { "type": "boolean" },
+            "nodes_dropped": { "type": "integer" },
+            "edges_dropped": { "type": "integer" },
+            "files_dropped": { "type": "integer" },
+            "ambiguity_query": { "type": ["string", "null"] },
+            "ambiguity_candidates": { "type": "array", "items": { "type": "string" } },
+            "saved_context_sources": { "type": "array", "items": { "$ref": "#/$defs/packaged_saved_source" } },
+            "seed_budgets": { "type": "array", "items": { "$ref": "#/$defs/seed_budget" } },
+            "traversal_budget": {
+                "oneOf": [
+                    { "$ref": "#/$defs/traversal_budget" },
+                    { "type": "null" }
+                ]
+            },
+            "payload_truncation": {
+                "oneOf": [
+                    { "$ref": "#/$defs/payload_truncation" },
+                    { "type": "null" }
+                ]
+            },
+            "source_mix": { "type": "array", "items": { "$ref": "#/$defs/context_source_mix" } },
+            "token_budget_applied": { "type": ["integer", "null"] },
+            "budget_status": { "type": "string" },
+            "linked_decisions": { "type": "array", "items": { "type": "object" } },
+            "decision_lookup_query": { "type": "string" },
+            "atlas_provenance": { "type": "object" },
+            "atlas_freshness": { "type": "object" }
+        }),
+        &[
+            "tool",
+            "changed_files",
+            "changed_symbols",
+            "neighbors",
+            "critical_edges",
+            "risk_summary",
+            "artifacts",
+            "atlas_provenance",
+        ],
+        Some(serde_json::json!({
+            "line_range": line_range_schema(),
+            "packaged_selected_node": packaged_selected_node_schema(),
+            "packaged_selected_edge": packaged_selected_edge_schema(),
+            "packaged_selected_file": packaged_selected_file_schema(),
+            "packaged_saved_source": packaged_saved_source_schema(),
+            "artifact_saved_context": artifact_saved_context_schema(),
+            "seed_budget": seed_budget_schema(),
+            "traversal_budget": traversal_budget_schema(),
+            "context_source_mix": context_source_mix_schema(),
+            "payload_truncation": payload_truncation_schema(),
+            "review_risk_summary": review_risk_summary_schema(),
+        })),
+    )
+}
+
+fn get_minimal_context_output_schema() -> Value {
+    normalized_tool_output_schema(
+        serde_json::json!({
+            "change_source": { "$ref": "#/$defs/change_source" },
+            "changed_symbols": { "type": "array", "items": { "$ref": "#/$defs/compact_node" } },
+            "immediate_impact": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "impacted_symbols": { "type": "array", "items": { "$ref": "#/$defs/compact_node" } },
+                    "impacted_files": { "type": "array", "items": { "type": "string" } },
+                    "relevant_edges": { "type": "array", "items": { "$ref": "#/$defs/compact_edge" } }
+                },
+                "required": ["impacted_symbols", "impacted_files", "relevant_edges"]
+            },
+            "risk_flags": { "type": "array", "items": { "type": "string" } },
+            "summary": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "changed_file_count": { "type": "integer" },
+                    "deleted_file_count": { "type": "integer" },
+                    "changed_symbol_count": { "type": "integer" },
+                    "impacted_symbol_count": { "type": "integer" },
+                    "impacted_file_count": { "type": "integer" },
+                    "truncated": { "type": "boolean" }
+                },
+                "required": [
+                    "changed_file_count",
+                    "deleted_file_count",
+                    "changed_symbol_count",
+                    "impacted_symbol_count",
+                    "impacted_file_count",
+                    "truncated"
+                ]
+            },
+            "changed_file_count": { "type": "integer" },
+            "deleted_file_count": { "type": "integer" },
+            "changed_files": { "type": "array", "items": { "type": "string" } },
+            "impact": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "truncated": { "type": "boolean" },
+                    "changed_file_count": { "type": "integer" },
+                    "changed_node_count": { "type": "integer" },
+                    "changed_nodes": { "type": "array", "items": { "$ref": "#/$defs/compact_node" } },
+                    "impacted_node_count": { "type": "integer" },
+                    "impacted_nodes": { "type": "array", "items": { "$ref": "#/$defs/compact_node" } },
+                    "impacted_file_count": { "type": "integer" },
+                    "impacted_files": { "type": "array", "items": { "type": "string" } },
+                    "relevant_edge_count": { "type": "integer" },
+                    "relevant_edges": { "type": "array", "items": { "$ref": "#/$defs/compact_edge" } },
+                    "seed_budgets": { "type": "array", "items": { "$ref": "#/$defs/seed_budget" } },
+                    "traversal_budget": {
+                        "oneOf": [
+                            { "$ref": "#/$defs/traversal_budget" },
+                            { "type": "null" }
+                        ]
+                    },
+                    "budget_status": { "type": "string" },
+                    "budget_hit": { "type": "boolean" },
+                    "budget_name": { "type": "string" },
+                    "budget_limit": { "type": "integer" },
+                    "budget_observed": { "type": "integer" },
+                    "partial": { "type": "boolean" },
+                    "safe_to_answer": { "type": "boolean" }
+                },
+                "required": [
+                    "truncated",
+                    "changed_file_count",
+                    "changed_node_count",
+                    "changed_nodes",
+                    "impacted_node_count",
+                    "impacted_nodes",
+                    "impacted_file_count",
+                    "impacted_files",
+                    "relevant_edge_count",
+                    "relevant_edges",
+                    "budget_status",
+                    "budget_hit",
+                    "budget_name",
+                    "budget_limit",
+                    "budget_observed",
+                    "partial",
+                    "safe_to_answer"
+                ]
+            },
+            "atlas_provenance": { "type": "object" },
+            "atlas_freshness": { "type": "object" }
+        }),
+        &[
+            "tool",
+            "change_source",
+            "changed_symbols",
+            "immediate_impact",
+            "risk_flags",
+            "summary",
+            "atlas_provenance",
+        ],
+        Some(serde_json::json!({
+            "change_source": change_source_schema(),
+            "compact_node": compact_node_schema(),
+            "compact_edge": compact_edge_schema(),
+            "seed_budget": seed_budget_schema(),
+            "traversal_budget": traversal_budget_schema(),
+        })),
+    )
+}
+
+fn explain_change_output_schema() -> Value {
+    normalized_tool_output_schema(
+        serde_json::json!({
+            "changed_files": { "type": "array", "items": { "$ref": "#/$defs/explain_diff_file" } },
+            "change_kinds": { "$ref": "#/$defs/explain_changed_by_kind" },
+            "risk_level": { "type": "string" },
+            "boundary_violations": { "type": "array", "items": { "$ref": "#/$defs/explain_boundary_violation" } },
+            "coverage_gaps": { "type": "array", "items": { "$ref": "#/$defs/coverage_gap" } },
+            "summary": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "text": { "type": "string" },
+                    "changed_file_count": { "type": "integer" },
+                    "changed_symbol_count": { "type": "integer" },
+                    "impacted_file_count": { "type": "integer" },
+                    "impacted_node_count": { "type": "integer" }
+                },
+                "required": [
+                    "text",
+                    "changed_file_count",
+                    "changed_symbol_count",
+                    "impacted_file_count",
+                    "impacted_node_count"
+                ]
+            },
+            "summary_text": { "type": "string" },
+            "changed_file_count": { "type": "integer" },
+            "changed_symbol_count": { "type": "integer" },
+            "changed_by_kind": { "$ref": "#/$defs/explain_changed_by_kind" },
+            "diff_summary": { "$ref": "#/$defs/explain_diff_summary" },
+            "changed_symbols": { "type": "array", "items": { "$ref": "#/$defs/explain_changed_symbol" } },
+            "impacted_file_count": { "type": "integer" },
+            "impacted_node_count": { "type": "integer" },
+            "high_impact_nodes": { "type": "array", "items": { "$ref": "#/$defs/workflow_focus_node" } },
+            "impacted_components": { "type": "array", "items": { "$ref": "#/$defs/workflow_component" } },
+            "call_chains": { "type": "array", "items": { "$ref": "#/$defs/workflow_call_chain" } },
+            "ripple_effects": { "type": "array", "items": { "type": "string" } },
+            "test_impact": { "$ref": "#/$defs/explain_test_impact" },
+            "noise_reduction": { "$ref": "#/$defs/noise_reduction_summary" },
+            "budget_status": { "type": "string" },
+            "atlas_provenance": { "type": "object" },
+            "atlas_freshness": { "type": "object" }
+        }),
+        &[
+            "tool",
+            "changed_files",
+            "change_kinds",
+            "risk_level",
+            "boundary_violations",
+            "coverage_gaps",
+            "summary",
+            "atlas_provenance",
+        ],
+        Some(serde_json::json!({
+            "explain_changed_by_kind": explain_changed_by_kind_schema(),
+            "explain_changed_symbol": explain_changed_symbol_schema(),
+            "explain_boundary_violation": explain_boundary_violation_schema(),
+            "explain_diff_counts": explain_diff_counts_schema(),
+            "explain_diff_file": explain_diff_file_schema(),
+            "explain_diff_summary": explain_diff_summary_schema(),
+            "workflow_focus_node": workflow_focus_node_schema(),
+            "workflow_component": workflow_component_schema(),
+            "workflow_call_chain": workflow_call_chain_schema(),
+            "noise_reduction_summary": noise_reduction_summary_schema(),
+            "explain_test_impact": explain_test_impact_schema(),
+            "coverage_gap": coverage_gap_schema(),
+        })),
+    )
+}
+
+fn traverse_graph_output_schema() -> Value {
+    normalized_tool_output_schema(
+        serde_json::json!({
+            "root_symbol": { "type": "string" },
+            "direction": { "type": "string" },
+            "depth": { "type": "integer" },
+            "nodes": { "type": "array", "items": { "$ref": "#/$defs/compact_node" } },
+            "edges": { "type": "array", "items": { "$ref": "#/$defs/traverse_edge" } },
+            "summary": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "changed_symbol_count": { "type": "integer" },
+                    "impacted_symbol_count": { "type": "integer" },
+                    "impacted_file_count": { "type": "integer" },
+                    "relevant_edge_count": { "type": "integer" }
+                },
+                "required": [
+                    "changed_symbol_count",
+                    "impacted_symbol_count",
+                    "impacted_file_count",
+                    "relevant_edge_count"
+                ]
+            },
+            "truncated": { "type": "boolean" },
+            "changed_nodes": { "type": "array", "items": { "$ref": "#/$defs/compact_node" } },
+            "impacted_nodes": { "type": "array", "items": { "$ref": "#/$defs/compact_node" } },
+            "relevant_edges": { "type": "array", "items": { "$ref": "#/$defs/compact_edge" } },
+            "changed_file_count": { "type": "integer" },
+            "changed_node_count": { "type": "integer" },
+            "impacted_node_count": { "type": "integer" },
+            "impacted_file_count": { "type": "integer" },
+            "impacted_files": { "type": "array", "items": { "type": "string" } },
+            "relevant_edge_count": { "type": "integer" },
+            "seed_budgets": { "type": "array", "items": { "$ref": "#/$defs/seed_budget" } },
+            "traversal_budget": {
+                "oneOf": [
+                    { "$ref": "#/$defs/traversal_budget" },
+                    { "type": "null" }
+                ]
+            },
+            "budget_status": { "type": "string" },
+            "atlas_provenance": { "type": "object" },
+            "atlas_freshness": { "type": "object" }
+        }),
+        &[
+            "tool",
+            "root_symbol",
+            "direction",
+            "depth",
+            "nodes",
+            "edges",
+            "summary",
+            "truncated",
+            "atlas_provenance",
+        ],
+        Some(serde_json::json!({
+            "compact_node": compact_node_schema(),
+            "compact_edge": compact_edge_schema(),
+            "seed_budget": seed_budget_schema(),
+            "traversal_budget": traversal_budget_schema(),
+            "traverse_edge": traverse_edge_schema(),
+        })),
+    )
+}
+
+fn get_context_output_schema() -> Value {
+    normalized_tool_output_schema(
+        serde_json::json!({
+            "mode": { "type": "string" },
+            "query": { "type": ["string", "null"] },
+            "file": { "type": ["string", "null"] },
+            "files": { "type": "array", "items": { "type": "string" } },
+            "ranked_symbols": { "type": "array", "items": { "$ref": "#/$defs/ranked_symbol_summary" } },
+            "ranked_edges": { "type": "array", "items": { "$ref": "#/$defs/ranked_edge_summary" } },
+            "ranked_files": { "type": "array", "items": { "$ref": "#/$defs/ranked_file_summary" } },
+            "assets": { "type": "array", "items": { "$ref": "#/$defs/artifact_saved_context" } },
+            "ambiguity": { "$ref": "#/$defs/ambiguity" },
+            "intent": { "type": "string" },
+            "node_count": { "type": "integer" },
+            "nodes": { "type": "array", "items": { "$ref": "#/$defs/packaged_selected_node" } },
+            "edge_count": { "type": "integer" },
+            "edges": { "type": "array", "items": { "$ref": "#/$defs/packaged_selected_edge" } },
+            "file_count": { "type": "integer" },
+            "files_dropped": { "type": "integer" },
+            "truncated": { "type": "boolean" },
+            "nodes_dropped": { "type": "integer" },
+            "edges_dropped": { "type": "integer" },
+            "saved_context_sources": { "type": "array", "items": { "$ref": "#/$defs/packaged_saved_source" } },
+            "seed_budgets": { "type": "array", "items": { "$ref": "#/$defs/seed_budget" } },
+            "traversal_budget": {
+                "oneOf": [
+                    { "$ref": "#/$defs/traversal_budget" },
+                    { "type": "null" }
+                ]
+            },
+            "payload_truncation": {
+                "oneOf": [
+                    { "$ref": "#/$defs/payload_truncation" },
+                    { "type": "null" }
+                ]
+            },
+            "source_mix": { "type": "array", "items": { "$ref": "#/$defs/context_source_mix" } },
+            "token_budget_applied": { "type": ["integer", "null"] },
+            "budget_status": { "type": "string" },
+            "linked_decisions": { "type": "array", "items": { "type": "object" } },
+            "decision_lookup_query": { "type": "string" },
+            "atlas_provenance": { "type": "object" },
+            "atlas_freshness": { "type": "object" }
+        }),
+        &[
+            "tool",
+            "mode",
+            "query",
+            "file",
+            "files",
+            "ranked_symbols",
+            "ranked_edges",
+            "ranked_files",
+            "assets",
+            "ambiguity",
+            "truncated",
+            "atlas_provenance",
+        ],
+        Some(serde_json::json!({
+            "line_range": line_range_schema(),
+            "ranked_symbol_summary": ranked_symbol_summary_schema(),
+            "ranked_edge_summary": ranked_edge_summary_schema(),
+            "ranked_file_summary": ranked_file_summary_schema(),
+            "artifact_saved_context": artifact_saved_context_schema(),
+            "ambiguity": ambiguity_schema(),
+            "packaged_selected_node": packaged_selected_node_schema(),
+            "packaged_selected_edge": packaged_selected_edge_schema(),
+            "packaged_saved_source": packaged_saved_source_schema(),
+            "seed_budget": seed_budget_schema(),
+            "traversal_budget": traversal_budget_schema(),
+            "context_source_mix": context_source_mix_schema(),
+            "payload_truncation": payload_truncation_schema(),
+        })),
     )
 }
 
@@ -1650,5 +2723,42 @@ mod schema_contract_tests {
                     .expect("output schema compiles");
             }
         }
+    }
+
+    #[test]
+    fn r2_output_schemas_expose_nested_defs_for_normalized_payloads() {
+        let registry = tool_list();
+        let tools = registry["tools"].as_array().expect("tools array");
+
+        let by_name = |name: &str| {
+            tools
+                .iter()
+                .find(|tool| tool.get("name") == Some(&serde_json::json!(name)))
+                .expect("tool present")
+        };
+
+        let impact = by_name("get_impact_radius");
+        assert_eq!(
+            impact["outputSchema"]["properties"]["changed_symbols"]["items"]["$ref"],
+            serde_json::json!("#/$defs/compact_node")
+        );
+        assert!(impact["outputSchema"].get("$defs").is_some());
+
+        let review = by_name("get_review_context");
+        assert_eq!(
+            review["outputSchema"]["properties"]["risk_summary"]["$ref"],
+            serde_json::json!("#/$defs/review_risk_summary")
+        );
+        assert!(review["outputSchema"].get("$defs").is_some());
+
+        let context = by_name("get_context");
+        assert_eq!(
+            context["outputSchema"]["properties"]["ranked_symbols"]["items"]["$ref"],
+            serde_json::json!("#/$defs/ranked_symbol_summary")
+        );
+        assert_eq!(
+            context["outputSchema"]["properties"]["ambiguity"]["$ref"],
+            serde_json::json!("#/$defs/ambiguity")
+        );
     }
 }

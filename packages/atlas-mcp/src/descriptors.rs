@@ -182,6 +182,13 @@ fn normalized_success_metadata_properties() -> Map<String, Value> {
             "warnings".to_owned(),
             json!({ "type": "array", "items": { "type": "string" } }),
         ),
+        ("budget_status".to_owned(), json!({ "type": "string" })),
+        ("budget_hit".to_owned(), json!({ "type": "boolean" })),
+        ("budget_name".to_owned(), json!({ "type": "string" })),
+        ("budget_limit".to_owned(), json!({ "type": "integer" })),
+        ("budget_observed".to_owned(), json!({ "type": "integer" })),
+        ("partial".to_owned(), json!({ "type": "boolean" })),
+        ("safe_to_answer".to_owned(), json!({ "type": "boolean" })),
         ("atlas_provenance".to_owned(), json!({ "type": "object" })),
         ("atlas_freshness".to_owned(), json!({ "type": "object" })),
     ])
