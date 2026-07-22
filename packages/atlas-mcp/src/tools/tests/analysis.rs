@@ -374,7 +374,7 @@ fn find_large_functions_matches_direct_report_json() {
             },
         )
         .expect("direct analysis");
-    let mut direct_value = serde_json::to_value(&direct.report).expect("serialize report");
+    let mut direct_value = serde_json::to_value(direct.report_result()).expect("serialize report");
     direct_value["summary"]["generated_at"] = tool_value["summary"]["generated_at"].clone();
 
     assert_eq!(tool_value, direct_value);
@@ -508,9 +508,132 @@ fn find_complex_functions_matches_direct_report_json() {
             },
         )
         .expect("direct analysis");
-    let mut direct_value = serde_json::to_value(&direct.report).expect("serialize report");
+    let mut direct_value = serde_json::to_value(direct.report_result()).expect("serialize report");
     direct_value["summary"]["generated_at"] = tool_value["summary"]["generated_at"].clone();
 
     assert_eq!(tool_value, direct_value);
     assert_provenance(&resp, "/repo", &fixture.db_path);
+}
+
+fn assert_toon_structured_content_matches_direct_report(
+    tool_name: &str,
+    args: serde_json::Value,
+    expected_report: serde_json::Value,
+) {
+    let fixture = setup_mcp_fixture();
+    let resp = call(tool_name, Some(&args), "/repo", &fixture.db_path)
+        .unwrap_or_else(|error| panic!("{tool_name} call failed: {error}"));
+    assert_eq!(
+        resp.pointer("/_meta/atlas:requestedOutputFormat")
+            .and_then(|value| value.as_str()),
+        Some("toon")
+    );
+
+    let mut expected = expected_report;
+    expected["summary"]["generated_at"] =
+        resp["structuredContent"]["summary"]["generated_at"].clone();
+    expected["atlas_provenance"]["last_indexed_at"] =
+        resp["structuredContent"]["atlas_provenance"]["last_indexed_at"].clone();
+    assert_eq!(resp["structuredContent"], expected);
+    assert_provenance(&resp, "/repo", &fixture.db_path);
+}
+
+#[test]
+fn r4_insight_tools_keep_full_report_in_toon_structured_content() {
+    let fixture = setup_mcp_fixture();
+    let store = Store::open(&fixture.db_path).expect("open store");
+    let engine = InsightsEngine::new(&store, atlas_engine::config::InsightsConfig::default())
+        .expect("insights engine");
+
+    let architecture = serde_json::to_value(
+        &engine
+            .analyze_architecture("/repo")
+            .expect("architecture direct")
+            .report,
+    )
+    .expect("serialize architecture report");
+    assert_toon_structured_content_matches_direct_report(
+        "analyze_architecture",
+        serde_json::json!({ "output_format": "toon" }),
+        architecture,
+    );
+
+    let metrics = serde_json::to_value(
+        &engine
+            .analyze_metrics("/repo")
+            .expect("metrics direct")
+            .report,
+    )
+    .expect("serialize metrics report");
+    assert_toon_structured_content_matches_direct_report(
+        "analyze_metrics",
+        serde_json::json!({ "output_format": "toon" }),
+        metrics,
+    );
+
+    let risk = serde_json::to_value(
+        &engine
+            .assess_risk(
+                "/repo",
+                RiskAssessmentTarget::Symbol {
+                    symbol: "src/service.rs::fn::compute".to_owned(),
+                },
+            )
+            .expect("risk direct")
+            .report,
+    )
+    .expect("serialize risk report");
+    assert_toon_structured_content_matches_direct_report(
+        "assess_risk",
+        serde_json::json!({ "symbol": "src/service.rs::fn::compute", "output_format": "toon" }),
+        risk,
+    );
+
+    let patterns = serde_json::to_value(engine.analyze_patterns().expect("patterns direct"))
+        .expect("serialize pattern report");
+    assert_toon_structured_content_matches_direct_report(
+        "analyze_patterns",
+        serde_json::json!({ "output_format": "toon" }),
+        patterns,
+    );
+
+    let large = serde_json::to_value(
+        engine
+            .find_large_functions(
+                "/repo",
+                LargeFunctionRequest {
+                    threshold: Some(2),
+                    mode: LargeFunctionMode::Large,
+                    ..Default::default()
+                },
+            )
+            .expect("large direct")
+            .report_result(),
+    )
+    .expect("serialize large report");
+    assert_toon_structured_content_matches_direct_report(
+        "find_large_functions",
+        serde_json::json!({ "threshold": 2, "mode": "large", "output_format": "toon" }),
+        large,
+    );
+
+    let complex = serde_json::to_value(
+        engine
+            .find_large_functions(
+                "/repo",
+                LargeFunctionRequest {
+                    complexity_threshold: Some(1),
+                    mode: LargeFunctionMode::Complex,
+                    ..Default::default()
+                },
+            )
+            .expect("complex direct")
+            .report_result(),
+    )
+    .expect("serialize complex report");
+    assert_toon_structured_content_matches_direct_report(
+        "find_complex_functions",
+        serde_json::json!({ "complexity_threshold": 1, "output_format": "toon" }),
+        complex,
+    );
 }

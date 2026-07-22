@@ -93,10 +93,26 @@ pub struct LargeFunctionCandidate {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LargeFunctionReportResult {
+    pub mode: LargeFunctionMode,
+    #[serde(flatten)]
+    pub report: LargeFunctionReport,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LargeFunctionAnalysis {
     pub request: LargeFunctionRequest,
     pub report: LargeFunctionReport,
     pub candidates: Vec<LargeFunctionCandidate>,
+}
+
+impl LargeFunctionAnalysis {
+    pub fn report_result(&self) -> LargeFunctionReportResult {
+        LargeFunctionReportResult {
+            mode: self.request.mode,
+            report: self.report.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]

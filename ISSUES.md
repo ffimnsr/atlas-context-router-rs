@@ -3462,47 +3462,47 @@ Why:
 
 #### R4.1 `analyze_architecture`
 
-- [ ] define MCP `ArchitectureAnalysisResult` object equal to CLI report shape plus shared metadata envelope, not a separate MCP-only summary shape
-- [ ] keep compact toon rendering derived from report object instead of using alternate compact payload structure
-- [ ] normalize cycles, layer violations, and coupling hotspots as always-present arrays
-- [ ] add `outputSchema` for `analyze_architecture`
-- [ ] add parity tests proving CLI JSON report and MCP `structuredContent` are field-for-field compatible apart from MCP envelope metadata
+- [x] define MCP `ArchitectureAnalysisResult` object equal to CLI report shape plus shared metadata envelope, not a separate MCP-only summary shape
+- [x] keep compact toon rendering derived from report object instead of using alternate compact payload structure
+- [x] normalize cycles, layer violations, and coupling hotspots as always-present arrays
+- [x] add `outputSchema` for `analyze_architecture`
+- [x] add parity tests proving CLI JSON report and MCP `structuredContent` are field-for-field compatible apart from MCP envelope metadata
 
 #### R4.2 `analyze_metrics`
 
-- [ ] define MCP `MetricsAnalysisResult` object equal to CLI metrics report shape plus shared metadata envelope
-- [ ] keep unsupported metrics represented with stable `not_available` markers inside report, not omitted sections or prose-only notes
-- [ ] add `outputSchema` for `analyze_metrics`
-- [ ] add CLI/MCP parity and truncation tests for `analyze_metrics`
+- [x] define MCP `MetricsAnalysisResult` object equal to CLI metrics report shape plus shared metadata envelope
+- [x] keep unsupported metrics represented with stable `not_available` markers inside report, not omitted sections or prose-only notes
+- [x] add `outputSchema` for `analyze_metrics`
+- [x] add CLI/MCP parity and truncation tests for `analyze_metrics`
 
 #### R4.3 `assess_risk`
 
-- [ ] define MCP `RiskAssessmentResult` object equal to CLI risk report shape plus shared metadata envelope
-- [ ] normalize safety/risk factors, evidence, and suggested validations as stable arrays and enums
-- [ ] add `outputSchema` for `assess_risk`
-- [ ] add tests for low-, medium-, and high-risk symbols proving same object contract
+- [x] define MCP `RiskAssessmentResult` object equal to CLI risk report shape plus shared metadata envelope
+- [x] normalize safety/risk factors, evidence, and suggested validations as stable arrays and enums
+- [x] add `outputSchema` for `assess_risk`
+- [x] add tests for low-, medium-, and high-risk symbols proving same object contract
 
 #### R4.4 `analyze_patterns`
 
-- [ ] define MCP `PatternAnalysisResult` object equal to CLI pattern report shape plus shared metadata envelope
-- [ ] normalize repeated chains, hubs, bottlenecks, isolated structures, and deep paths as named always-present sections
-- [ ] add `outputSchema` for `analyze_patterns`
-- [ ] add tests for empty-findings and multi-category findings proving same schema
+- [x] define MCP `PatternAnalysisResult` object equal to CLI pattern report shape plus shared metadata envelope
+- [x] normalize repeated chains, hubs, bottlenecks, isolated structures, and deep paths as named always-present sections
+- [x] add `outputSchema` for `analyze_patterns`
+- [x] add tests for empty-findings and multi-category findings proving same schema
 
 #### R4.5 `find_large_functions`
 
-- [ ] define MCP `LargeFunctionsResult` object equal to CLI large-functions report shape plus shared metadata envelope
-- [ ] represent result mode (`large`, `complex`, `large-or-complex`) in explicit field instead of only in text summary
-- [ ] keep finding arrays stable whether results came from repo-wide or file-scoped search
-- [ ] add `outputSchema` for `find_large_functions`
-- [ ] add CLI/MCP parity tests for file-scoped, threshold-override, and mixed-mode result sets
+- [x] define MCP `LargeFunctionsResult` object equal to CLI large-functions report shape plus shared metadata envelope
+- [x] represent result mode (`large`, `complex`, `large-or-complex`) in explicit field instead of only in text summary
+- [x] keep finding arrays stable whether results came from repo-wide or file-scoped search
+- [x] add `outputSchema` for `find_large_functions`
+- [x] add CLI/MCP parity tests for file-scoped, threshold-override, and mixed-mode result sets
 
 #### R4.6 `find_complex_functions`
 
-- [ ] define MCP `ComplexFunctionsResult` object equal to CLI complex-functions report shape plus shared metadata envelope
-- [ ] normalize complexity-threshold metadata and unsupported-metric markers into stable fields
-- [ ] add `outputSchema` for `find_complex_functions`
-- [ ] add CLI/MCP parity tests for cyclomatic, cognitive, and nesting-threshold result sets
+- [x] define MCP `ComplexFunctionsResult` object equal to CLI complex-functions report shape plus shared metadata envelope
+- [x] normalize complexity-threshold metadata and unsupported-metric markers into stable fields
+- [x] add `outputSchema` for `find_complex_functions`
+- [x] add CLI/MCP parity tests for cyclomatic, cognitive, and nesting-threshold result sets
 
 Why:
 - these tools already have well-defined deterministic report services; MCP should reuse those report structs directly instead of inventing compact alternate result bodies
@@ -3512,54 +3512,54 @@ Why:
 
 #### R5.1 `get_session_status`
 
-- [ ] define stable `SessionStatusResult` object with `session_id`, `event_count`, `resume_snapshot_exists`, `last_compaction_at`, `repo_root`, `summary`, and `warnings`
-- [ ] normalize missing-resume and active-resume states into same object with booleans/null timestamps
-- [ ] add `outputSchema` for `get_session_status`
-- [ ] add tests for empty session, active session, and resumable session states proving same schema
+- [x] define stable `SessionStatusResult` object with `session_id`, `event_count`, `resume_snapshot_exists`, `last_compaction_at`, `repo_root`, `summary`, and `warnings`
+- [x] normalize missing-resume and active-resume states into same object with booleans/null timestamps
+- [x] add `outputSchema` for `get_session_status`
+- [x] add tests for empty session, active session, and resumable session states proving same schema
 
 #### R5.2 `compact_session`
 
-- [ ] define stable `CompactSessionResult` object with `session_id`, `before_counts`, `after_counts`, `promoted_events`, `removed_events`, `merged_groups`, `summary`, and `warnings`
-- [ ] keep no-op compaction and high-change compaction inside same object shape
-- [ ] add `outputSchema` for `compact_session`
-- [ ] add tests for no-op and effective compaction cases proving same schema
+- [x] define stable `CompactSessionResult` object with `session_id`, `before_counts`, `after_counts`, `promoted_events`, `removed_events`, `merged_groups`, `summary`, and `warnings`
+- [x] keep no-op compaction and high-change compaction inside same object shape
+- [x] add `outputSchema` for `compact_session`
+- [x] add tests for no-op and effective compaction cases proving same schema
 
 #### R5.3 `resume_session`
 
-- [ ] define stable `ResumeSessionResult` object with `session_id`, `snapshot_status`, `snapshot`, `consumed`, `summary`, and `warnings`
-- [ ] normalize existing snapshot, on-demand-built snapshot, and consume-after-read behavior into explicit `snapshot_status` enum instead of alternate payload bodies
-- [ ] add `outputSchema` for `resume_session`
-- [ ] add tests for existing snapshot, built snapshot, and consume mode proving same schema
+- [x] define stable `ResumeSessionResult` object with `session_id`, `snapshot_status`, `snapshot`, `consumed`, `summary`, and `warnings`
+- [x] normalize existing snapshot, on-demand-built snapshot, and consume-after-read behavior into explicit `snapshot_status` enum instead of alternate payload bodies
+- [x] add `outputSchema` for `resume_session`
+- [x] add tests for existing snapshot, built snapshot, and consume mode proving same schema
 
 #### R5.4 `read_saved_context`
 
-- [ ] define stable `ReadSavedContextResult` object with `source_id`, `content`, `content_format`, `chunk_offset`, `next_chunk_offset`, `truncated`, `summary`, and `atlas_provenance`
-- [ ] keep paged and unpaged reads inside same object; do not switch to bare string for small content
-- [ ] include stable content-size metadata so clients can page without parsing text
-- [ ] add `outputSchema` for `read_saved_context`
-- [ ] add tests for small content, paged large content, and end-of-content page proving same schema
+- [x] define stable `ReadSavedContextResult` object with `source_id`, `content`, `content_format`, `chunk_offset`, `next_chunk_offset`, `truncated`, `summary`, and `atlas_provenance`
+- [x] keep paged and unpaged reads inside same object; do not switch to bare string for small content
+- [x] include stable content-size metadata so clients can page without parsing text
+- [x] add `outputSchema` for `read_saved_context`
+- [x] add tests for small content, paged large content, and end-of-content page proving same schema
 
 #### R5.5 `save_context_artifact`
 
-- [ ] replace current pointer/preview/raw-string split with stable `SaveContextArtifactResult` object containing `storage_mode`, `source_id`, `preview`, `content_size_bytes`, `chunk_count`, `resource_link`, and `summary`
-- [ ] keep small content inline through `preview` or explicit bounded `inline_content` field, but never return bare string as success payload
-- [ ] make large-content pointer result and small-content inline result share same top-level fields with nullable non-applicable fields
-- [ ] add `outputSchema` for `save_context_artifact`
-- [ ] add tests for small, medium, and large artifact sizes proving same schema and resource-link parity
+- [x] replace current pointer/preview/raw-string split with stable `SaveContextArtifactResult` object containing `storage_mode`, `source_id`, `preview`, `content_size_bytes`, `chunk_count`, `resource_link`, and `summary`
+- [x] keep small content inline through `preview` or explicit bounded `inline_content` field, but never return bare string as success payload
+- [x] make large-content pointer result and small-content inline result share same top-level fields with nullable non-applicable fields
+- [x] add `outputSchema` for `save_context_artifact`
+- [x] add tests for small, medium, and large artifact sizes proving same schema and resource-link parity
 
 #### R5.6 `purge_saved_context`
 
-- [ ] define stable `PurgeSavedContextResult` object with `mode`, `session_id`, `cutoff_days`, `deleted_sources`, `deleted_chunks`, `summary`, and `warnings`
-- [ ] normalize session-targeted purge and age-based purge into same object with explicit `mode`
-- [ ] add `outputSchema` for `purge_saved_context`
-- [ ] add tests for targeted and age-based purge proving same schema
+- [x] define stable `PurgeSavedContextResult` object with `mode`, `session_id`, `cutoff_days`, `deleted_sources`, `deleted_chunks`, `summary`, and `warnings`
+- [x] normalize session-targeted purge and age-based purge into same object with explicit `mode`
+- [x] add `outputSchema` for `purge_saved_context`
+- [x] add tests for targeted and age-based purge proving same schema
 
 #### R5.7 `get_global_memory`
 
-- [ ] define stable `GlobalMemoryResult` object with `repo_root`, `frequent_symbols`, `frequent_files`, `workflow_patterns`, `relevant_sessions`, `summary`, and `warnings`
-- [ ] normalize focus-free summary and focus-constrained lookup into same object with optional `focus` subsection instead of alternate body shape
-- [ ] add `outputSchema` for `get_global_memory`
-- [ ] add tests for unfocused and focused memory queries proving same schema
+- [x] define stable `GlobalMemoryResult` object with `repo_root`, `frequent_symbols`, `frequent_files`, `workflow_patterns`, `relevant_sessions`, `summary`, and `warnings`
+- [x] normalize focus-free summary and focus-constrained lookup into same object with optional `focus` subsection instead of alternate body shape
+- [x] add `outputSchema` for `get_global_memory`
+- [x] add tests for unfocused and focused memory queries proving same schema
 
 Why:
 - saved-context tools currently have strongest payload-size and mode-driven shape drift

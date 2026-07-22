@@ -78,6 +78,13 @@ fn normalized_contract_tool(name: &str) -> bool {
             | "db_check"
             | "debug_graph"
             | "explain_query"
+            | "get_session_status"
+            | "compact_session"
+            | "resume_session"
+            | "read_saved_context"
+            | "save_context_artifact"
+            | "purge_saved_context"
+            | "get_global_memory"
     )
 }
 

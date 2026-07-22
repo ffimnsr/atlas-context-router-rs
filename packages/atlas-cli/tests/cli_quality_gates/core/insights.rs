@@ -37,6 +37,7 @@ fn insights_large_functions_returns_structured_report() {
     let data = &value["data"];
 
     assert_eq!(value["command"], json!("insights_large_functions"));
+    assert_eq!(data["mode"], json!("large"));
     assert_eq!(data["summary"]["total_findings"], json!(1));
     assert_eq!(data["findings"][0]["category"], json!("large_functions"));
     assert_eq!(data["findings"][0]["details"]["loc"], json!(13));
@@ -69,6 +70,7 @@ fn insights_complex_functions_returns_structured_report() {
     let data = &value["data"];
 
     assert_eq!(value["command"], json!("insights_complex_functions"));
+    assert_eq!(data["mode"], json!("complex"));
     assert_eq!(data["summary"]["total_findings"], json!(1));
     assert_eq!(data["findings"][0]["category"], json!("large_functions"));
     assert_eq!(
@@ -219,9 +221,13 @@ fn insights_large_functions_cli_and_mcp_share_report() {
             "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"find_large_functions\",\"arguments\":{\"threshold\":5,\"mode\":\"large\",\"output_format\":\"json\"}}}\n"
         ),
     );
-    assert!(output.status.success(), "atlas serve find_large_functions failed");
+    assert!(
+        output.status.success(),
+        "atlas serve find_large_functions failed"
+    );
 
     let mcp_report = read_json_tool_result(&output, 2);
+    assert_eq!(cli_report["mode"], mcp_report["mode"]);
     assert_eq!(
         cli_report["summary"]["total_findings"],
         mcp_report["summary"]["total_findings"]

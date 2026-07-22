@@ -211,7 +211,7 @@ pub fn run_insights(cli: &Cli) -> Result<()> {
                 if cli.json {
                     print_json(
                         "insights_large_functions",
-                        serde_json::to_value(&analysis.report)?,
+                        serde_json::to_value(analysis.report_result())?,
                     )?;
                 } else if analysis.candidates.is_empty() {
                     println!("No large or complex functions matched current thresholds.");
@@ -263,7 +263,7 @@ pub fn run_insights(cli: &Cli) -> Result<()> {
                 if cli.json {
                     print_json(
                         "insights_complex_functions",
-                        serde_json::to_value(&analysis.report)?,
+                        serde_json::to_value(analysis.report_result())?,
                     )?;
                 } else if analysis.candidates.is_empty() {
                     println!("No complex functions matched current thresholds.");

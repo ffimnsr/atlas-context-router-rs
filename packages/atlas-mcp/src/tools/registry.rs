@@ -66,7 +66,20 @@ pub(crate) fn tool_result_contract(name: &str) -> ToolResultContract {
         | "doctor"
         | "db_check"
         | "debug_graph"
-        | "explain_query" => ToolResultContract::StableObject,
+        | "explain_query"
+        | "analyze_architecture"
+        | "analyze_metrics"
+        | "assess_risk"
+        | "analyze_patterns"
+        | "find_large_functions"
+        | "find_complex_functions"
+        | "get_session_status"
+        | "compact_session"
+        | "resume_session"
+        | "read_saved_context"
+        | "save_context_artifact"
+        | "purge_saved_context"
+        | "get_global_memory" => ToolResultContract::StableObject,
         "query_graph"
         | "batch_query_graph"
         | "search_saved_context"
@@ -1044,6 +1057,12 @@ fn tool_output_schema_for(name: &str) -> Option<Value> {
         "db_check" => Some(db_check_output_schema()),
         "debug_graph" => Some(debug_graph_output_schema()),
         "explain_query" => Some(explain_query_output_schema()),
+        "analyze_architecture" => Some(insight_report_output_schema()),
+        "analyze_metrics" => Some(insight_report_output_schema()),
+        "assess_risk" => Some(insight_report_output_schema()),
+        "analyze_patterns" => Some(insight_report_output_schema()),
+        "find_large_functions" => Some(large_function_report_output_schema()),
+        "find_complex_functions" => Some(large_function_report_output_schema()),
         "detect_changes" => Some(detect_changes_output_schema()),
         "get_impact_radius" => Some(get_impact_radius_output_schema()),
         "get_review_context" => Some(get_review_context_output_schema()),
@@ -1051,7 +1070,14 @@ fn tool_output_schema_for(name: &str) -> Option<Value> {
         "explain_change" => Some(explain_change_output_schema()),
         "traverse_graph" => Some(traverse_graph_output_schema()),
         "get_context" => Some(get_context_output_schema()),
+        "get_session_status" => Some(get_session_status_output_schema()),
+        "compact_session" => Some(compact_session_output_schema()),
+        "resume_session" => Some(resume_session_output_schema()),
+        "read_saved_context" => Some(read_saved_context_output_schema()),
+        "save_context_artifact" => Some(save_context_artifact_output_schema()),
         "get_context_stats" => Some(get_context_stats_output_schema()),
+        "purge_saved_context" => Some(purge_saved_context_output_schema()),
+        "get_global_memory" => Some(get_global_memory_output_schema()),
         "man" => Some(man_output_schema()),
         _ => None,
     }
@@ -1955,6 +1981,153 @@ fn traverse_edge_schema() -> Value {
         },
         "required": ["from", "to", "kind", "direction"]
     })
+}
+
+fn insight_severity_schema() -> Value {
+    serde_json::json!({
+        "type": "string",
+        "enum": ["info", "low", "medium", "high"]
+    })
+}
+
+fn confidence_tier_schema() -> Value {
+    serde_json::json!({
+        "type": "string",
+        "enum": ["low", "medium", "high"]
+    })
+}
+
+fn insight_line_range_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "start_line": { "type": "integer" },
+            "end_line": { "type": "integer" }
+        },
+        "required": ["start_line", "end_line"]
+    })
+}
+
+fn insight_evidence_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "file_path": { "type": "string" },
+            "qualified_name": { "type": "string" },
+            "node_kind": { "type": "string" },
+            "edge_kind": { "type": "string" },
+            "line_range": { "$ref": "#/$defs/insight_line_range" },
+            "confidence_tier": { "$ref": "#/$defs/confidence_tier" }
+        }
+    })
+}
+
+fn insight_finding_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "id": { "type": "string" },
+            "title": { "type": "string" },
+            "severity": { "$ref": "#/$defs/insight_severity" },
+            "category": { "type": "string" },
+            "message": { "type": "string" },
+            "evidence": { "type": "array", "items": { "$ref": "#/$defs/insight_evidence" } },
+            "ranking_reason": { "type": "string" },
+            "details": true,
+            "score": { "type": "number" }
+        },
+        "required": ["id", "title", "severity", "category", "message", "ranking_reason", "score"]
+    })
+}
+
+fn insight_summary_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "total_findings": { "type": "integer" },
+            "highest_severity": { "$ref": "#/$defs/insight_severity" },
+            "generated_at": { "type": "string" }
+        },
+        "required": ["total_findings", "generated_at"]
+    })
+}
+
+fn graph_freshness_warning_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "stale": { "type": "boolean" },
+            "changed_files": { "type": "array", "items": { "type": "string" } },
+            "stale_result_files": { "type": "array", "items": { "type": "string" } },
+            "warning": { "type": "string" },
+            "suggested_recovery": { "type": "array", "items": { "type": "string" } }
+        },
+        "required": ["stale", "changed_files", "stale_result_files", "warning", "suggested_recovery"]
+    })
+}
+
+fn insight_report_output_schema() -> Value {
+    normalized_tool_output_schema(
+        serde_json::json!({
+            "summary": { "$ref": "#/$defs/insight_summary" },
+            "findings": { "type": "array", "items": { "$ref": "#/$defs/insight_finding" } },
+            "atlas_provenance": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "indexed_file_count": { "type": "integer" },
+                    "last_indexed_at": { "type": ["string", "null"] }
+                },
+                "required": ["indexed_file_count"]
+            },
+            "atlas_freshness": { "$ref": "#/$defs/graph_freshness_warning" }
+        }),
+        &["summary", "findings", "atlas_provenance"],
+        Some(serde_json::json!({
+            "insight_severity": insight_severity_schema(),
+            "confidence_tier": confidence_tier_schema(),
+            "insight_line_range": insight_line_range_schema(),
+            "insight_evidence": insight_evidence_schema(),
+            "insight_finding": insight_finding_schema(),
+            "insight_summary": insight_summary_schema(),
+            "graph_freshness_warning": graph_freshness_warning_schema()
+        })),
+    )
+}
+
+fn large_function_report_output_schema() -> Value {
+    normalized_tool_output_schema(
+        serde_json::json!({
+            "mode": { "type": "string", "enum": ["large", "complex", "large-or-complex"] },
+            "summary": { "$ref": "#/$defs/insight_summary" },
+            "findings": { "type": "array", "items": { "$ref": "#/$defs/insight_finding" } },
+            "atlas_provenance": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "indexed_file_count": { "type": "integer" },
+                    "last_indexed_at": { "type": ["string", "null"] }
+                },
+                "required": ["indexed_file_count"]
+            },
+            "atlas_freshness": { "$ref": "#/$defs/graph_freshness_warning" }
+        }),
+        &["mode", "summary", "findings", "atlas_provenance"],
+        Some(serde_json::json!({
+            "insight_severity": insight_severity_schema(),
+            "confidence_tier": confidence_tier_schema(),
+            "insight_line_range": insight_line_range_schema(),
+            "insight_evidence": insight_evidence_schema(),
+            "insight_finding": insight_finding_schema(),
+            "insight_summary": insight_summary_schema(),
+            "graph_freshness_warning": graph_freshness_warning_schema()
+        })),
+    )
 }
 
 fn build_or_update_graph_output_schema() -> Value {
@@ -2961,6 +3134,304 @@ fn man_output_schema() -> Value {
                 ]
             }
         })),
+    )
+}
+
+fn get_session_status_output_schema() -> Value {
+    normalized_tool_output_schema(
+        serde_json::json!({
+            "session_id": { "type": "string" },
+            "agent_id": { "type": ["string", "null"] },
+            "merged_agent_view": { "type": "boolean" },
+            "status": { "type": "string" },
+            "repo_root": { "type": ["string", "null"] },
+            "frontend": { "type": ["string", "null"] },
+            "worktree_id": { "type": ["string", "null"] },
+            "created_at": { "type": ["string", "null"] },
+            "updated_at": { "type": ["string", "null"] },
+            "last_resume_at": { "type": ["string", "null"] },
+            "last_compaction_at": { "type": ["string", "null"] },
+            "event_count": { "type": "integer" },
+            "resume_snapshot_exists": { "type": "boolean" },
+            "snapshot_consumed": { "type": ["boolean", "null"] },
+            "agent_partitions": { "type": "array", "items": { "type": "object" } },
+            "delegated_tasks": { "type": "array", "items": { "type": "object" } },
+            "agent_responsibilities": { "type": "array", "items": { "type": "object" } },
+            "summary": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "status": { "type": "string" },
+                    "has_session": { "type": "boolean" },
+                    "event_count": { "type": "integer" },
+                    "partition_count": { "type": "integer" },
+                    "delegated_task_count": { "type": "integer" },
+                    "responsibility_count": { "type": "integer" },
+                    "resume_snapshot_exists": { "type": "boolean" }
+                },
+                "required": ["status", "has_session", "event_count", "partition_count", "delegated_task_count", "responsibility_count", "resume_snapshot_exists"]
+            },
+            "warnings": { "type": "array", "items": { "type": "string" } },
+            "atlas_provenance": { "type": "object" },
+            "atlas_freshness": { "type": "object" }
+        }),
+        &[
+            "tool",
+            "session_id",
+            "event_count",
+            "resume_snapshot_exists",
+            "last_compaction_at",
+            "repo_root",
+            "summary",
+            "warnings",
+            "atlas_provenance",
+        ],
+        None,
+    )
+}
+
+fn compact_session_output_schema() -> Value {
+    normalized_tool_output_schema(
+        serde_json::json!({
+            "session_id": { "type": "string" },
+            "before_counts": { "type": "object", "additionalProperties": false, "properties": { "events": { "type": "integer" } }, "required": ["events"] },
+            "after_counts": { "type": "object", "additionalProperties": false, "properties": { "events": { "type": "integer" } }, "required": ["events"] },
+            "promoted_events": { "type": "integer" },
+            "removed_events": { "type": "integer" },
+            "merged_groups": { "type": "integer" },
+            "decayed_events": { "type": "integer" },
+            "deduplicated_events": { "type": "integer" },
+            "summary": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "status": { "type": "string" },
+                    "no_op": { "type": "boolean" },
+                    "events_before": { "type": "integer" },
+                    "events_after": { "type": "integer" },
+                    "events_removed": { "type": "integer" }
+                },
+                "required": ["status", "no_op", "events_before", "events_after", "events_removed"]
+            },
+            "warnings": { "type": "array", "items": { "type": "string" } },
+            "atlas_provenance": { "type": "object" }
+        }),
+        &[
+            "tool",
+            "session_id",
+            "before_counts",
+            "after_counts",
+            "promoted_events",
+            "removed_events",
+            "merged_groups",
+            "summary",
+            "warnings",
+            "atlas_provenance",
+        ],
+        None,
+    )
+}
+
+fn resume_session_output_schema() -> Value {
+    normalized_tool_output_schema(
+        serde_json::json!({
+            "session_id": { "type": "string" },
+            "agent_id": { "type": ["string", "null"] },
+            "merged_agent_view": { "type": "boolean" },
+            "snapshot_status": { "type": "string" },
+            "snapshot": { "type": "object" },
+            "event_count": { "type": "integer" },
+            "consumed": { "type": "boolean" },
+            "created_at": { "type": ["string", "null"] },
+            "summary": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "event_count": { "type": "integer" },
+                    "merged_agent_view": { "type": "boolean" },
+                    "snapshot_consumed": { "type": "boolean" }
+                },
+                "required": ["event_count", "merged_agent_view", "snapshot_consumed"]
+            },
+            "warnings": { "type": "array", "items": { "type": "string" } },
+            "atlas_provenance": { "type": "object" }
+        }),
+        &[
+            "tool",
+            "session_id",
+            "snapshot_status",
+            "snapshot",
+            "consumed",
+            "summary",
+            "warnings",
+            "atlas_provenance",
+        ],
+        None,
+    )
+}
+
+fn read_saved_context_output_schema() -> Value {
+    normalized_tool_output_schema(
+        serde_json::json!({
+            "found": { "type": "boolean" },
+            "access_status": { "type": "string" },
+            "source_id": { "type": "string" },
+            "content": { "type": ["string", "null"] },
+            "content_format": { "type": ["string", "null"] },
+            "chunk_offset": { "type": "integer" },
+            "next_chunk_offset": { "type": ["integer", "null"] },
+            "truncated": { "type": "boolean" },
+            "summary": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "status": { "type": "string" },
+                    "byte_count": { "type": "integer" },
+                    "chunk_count": { "type": "integer" },
+                    "returned_chunk_count": { "type": "integer" }
+                },
+                "required": ["status", "byte_count", "chunk_count", "returned_chunk_count"]
+            },
+            "warnings": { "type": "array", "items": { "type": "string" } },
+            "artifact_kind": { "type": "string" },
+            "identity_kind": { "type": "string" },
+            "identity_value": { "type": "string" },
+            "created_at": { "type": "string" },
+            "session_id": { "type": ["string", "null"] },
+            "agent_id": { "type": ["string", "null"] },
+            "merged_agent_view": { "type": "boolean" },
+            "label": { "type": "string" },
+            "byte_count": { "type": "integer" },
+            "chunk_count": { "type": "integer" },
+            "last_included_chunk": { "type": ["integer", "null"] },
+            "last_included_chunk_id": { "type": ["string", "null"] },
+            "returned_chunk_ids": { "type": "array", "items": { "type": "string" } },
+            "next_chunk_id": { "type": ["string", "null"] },
+            "continuation_hint": { "type": ["string", "null"] },
+            "atlas_provenance": { "type": "object" }
+        }),
+        &[
+            "tool",
+            "source_id",
+            "content",
+            "content_format",
+            "chunk_offset",
+            "next_chunk_offset",
+            "truncated",
+            "summary",
+            "warnings",
+            "atlas_provenance",
+        ],
+        None,
+    )
+}
+
+fn save_context_artifact_output_schema() -> Value {
+    normalized_tool_output_schema(
+        serde_json::json!({
+            "storage_mode": { "type": "string" },
+            "source_id": { "type": ["string", "null"] },
+            "label": { "type": "string" },
+            "source_type": { "type": "string" },
+            "agent_id": { "type": ["string", "null"] },
+            "preview": { "type": ["string", "null"] },
+            "inline_content": { "type": ["string", "null"] },
+            "content_size_bytes": { "type": "integer" },
+            "chunk_count": { "type": "integer" },
+            "resource_link": { "type": ["object", "null"] },
+            "retrieval_hint": { "type": ["string", "null"] },
+            "summary": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "session_id": { "type": "string" },
+                    "stored": { "type": "boolean" },
+                    "inline": { "type": "boolean" },
+                    "content_type": { "type": "string" }
+                },
+                "required": ["session_id", "stored", "inline", "content_type"]
+            },
+            "atlas_provenance": { "type": "object" }
+        }),
+        &[
+            "tool",
+            "storage_mode",
+            "source_id",
+            "preview",
+            "content_size_bytes",
+            "chunk_count",
+            "resource_link",
+            "summary",
+            "atlas_provenance",
+        ],
+        None,
+    )
+}
+
+fn purge_saved_context_output_schema() -> Value {
+    normalized_tool_output_schema(
+        serde_json::json!({
+            "mode": { "type": "string" },
+            "session_id": { "type": ["string", "null"] },
+            "agent_id": { "type": ["string", "null"] },
+            "cutoff_days": { "type": "integer" },
+            "deleted_sources": { "type": "integer" },
+            "deleted_chunks": { "type": "integer" },
+            "deleted_bridge_files": { "type": "integer" },
+            "summary": { "type": "object" },
+            "warnings": { "type": "array", "items": { "type": "string" } },
+            "atlas_provenance": { "type": "object" }
+        }),
+        &[
+            "tool",
+            "mode",
+            "session_id",
+            "cutoff_days",
+            "deleted_sources",
+            "deleted_chunks",
+            "summary",
+            "warnings",
+            "atlas_provenance",
+        ],
+        None,
+    )
+}
+
+fn get_global_memory_output_schema() -> Value {
+    normalized_tool_output_schema(
+        serde_json::json!({
+            "repo_root": { "type": "string" },
+            "focus": { "type": ["object", "null"] },
+            "frequent_symbols": { "type": "array", "items": { "type": "object" } },
+            "frequent_files": { "type": "array", "items": { "type": "object" } },
+            "workflow_patterns": { "type": "array", "items": { "type": "object" } },
+            "relevant_sessions": { "type": "array", "items": { "type": "object" } },
+            "summary": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "frequent_symbol_count": { "type": "integer" },
+                    "frequent_file_count": { "type": "integer" },
+                    "workflow_pattern_count": { "type": "integer" },
+                    "relevant_session_count": { "type": "integer" }
+                },
+                "required": ["frequent_symbol_count", "frequent_file_count", "workflow_pattern_count", "relevant_session_count"]
+            },
+            "warnings": { "type": "array", "items": { "type": "string" } },
+            "atlas_provenance": { "type": "object" }
+        }),
+        &[
+            "tool",
+            "repo_root",
+            "frequent_symbols",
+            "frequent_files",
+            "workflow_patterns",
+            "relevant_sessions",
+            "summary",
+            "warnings",
+            "atlas_provenance",
+        ],
+        None,
     )
 }
 

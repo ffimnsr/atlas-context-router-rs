@@ -404,8 +404,8 @@ fn serve_broker_preserves_saved_context_and_session_tools() {
     let artifact_value: Value = serde_json::from_str(artifact_text).expect("artifact payload json");
     assert!(
         matches!(
-            artifact_value["routing"].as_str(),
-            Some("preview") | Some("pointer")
+            artifact_value["storage_mode"].as_str(),
+            Some("indexed_preview") | Some("indexed_pointer")
         ),
         "artifact should route to preview or pointer: {artifact_value:?}"
     );

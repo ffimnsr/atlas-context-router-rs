@@ -229,36 +229,44 @@ pub fn tool_get_session_status(
         .unwrap_or(false);
     let session_db = derive_session_db_path(db_path);
 
-    let store = match SessionStore::open(&session_db) {
-        Ok(s) => s,
-        Err(e) => {
-            return tool_result_value(
-                &serde_json::json!({
-                    "session_id": session_id.as_str(),
-                    "status": "no_session",
-                    "error": e.to_string(),
-                }),
-                output_format,
-            );
+    let (meta, event_count, snapshot, agent_summary, warnings): (
+        Option<SessionMeta>,
+        i64,
+        Option<ResumeSnapshot>,
+        AgentMemorySummary,
+        Vec<String>,
+    ) = match SessionStore::open(&session_db) {
+        Ok(store) => {
+            let meta = store.get_session_meta(&session_id)?;
+            if meta.is_some() {
+                let event_count = store
+                    .build_resume_view(&session_id, agent_id.as_deref(), merge_agent_partitions)?
+                    .get("event_count")
+                    .and_then(|value| value.as_i64())
+                    .unwrap_or(0);
+                let snapshot = store.get_resume_snapshot(&session_id)?;
+                let agent_summary = store.summarize_agent_memory(
+                    &session_id,
+                    agent_id.as_deref(),
+                    merge_agent_partitions,
+                )?;
+                (meta, event_count, snapshot, agent_summary, Vec::new())
+            } else {
+                (
+                    None,
+                    0,
+                    None,
+                    AgentMemorySummary {
+                        merged_view: merge_agent_partitions || agent_id.is_none(),
+                        requested_agent_id: agent_id.clone(),
+                        ..AgentMemorySummary::default()
+                    },
+                    Vec::new(),
+                )
+            }
         }
-    };
-
-    let meta: Option<SessionMeta> = store.get_session_meta(&session_id)?;
-    let (event_count, snapshot, agent_summary) = if meta.is_some() {
-        let event_count = store
-            .build_resume_view(&session_id, agent_id.as_deref(), merge_agent_partitions)?
-            .get("event_count")
-            .and_then(|value| value.as_i64())
-            .unwrap_or(0);
-        let snapshot = store.get_resume_snapshot(&session_id)?;
-        let agent_summary = store.summarize_agent_memory(
-            &session_id,
-            agent_id.as_deref(),
-            merge_agent_partitions,
-        )?;
-        (event_count, snapshot, agent_summary)
-    } else {
-        (
+        Err(e) => (
+            None,
             0,
             None,
             AgentMemorySummary {
@@ -266,43 +274,73 @@ pub fn tool_get_session_status(
                 requested_agent_id: agent_id.clone(),
                 ..AgentMemorySummary::default()
             },
+            vec![format!("session store unavailable: {e}")],
+        ),
+    };
+
+    let (
+        status,
+        repo_root_value,
+        frontend,
+        worktree_id,
+        created_at,
+        updated_at,
+        last_resume_at,
+        last_compaction_at,
+    ) = if let Some(meta) = &meta {
+        (
+            "active",
+            Some(meta.repo_root.clone()),
+            Some(meta.frontend.clone()),
+            meta.worktree_id.clone(),
+            Some(meta.created_at.clone()),
+            Some(meta.updated_at.clone()),
+            meta.last_resume_at.clone(),
+            meta.last_compaction_at.clone(),
+        )
+    } else {
+        (
+            "no_session",
+            Some(repo_root.to_owned()),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
         )
     };
 
-    let result = if let Some(m) = meta {
-        let snap_consumed = snapshot.as_ref().map(|s| s.consumed);
-        serde_json::json!({
-            "session_id": m.session_id.as_str(),
-            "agent_id": agent_id,
-            "merged_agent_view": agent_summary.merged_view,
-            "status": "active",
-            "repo_root": m.repo_root,
-            "frontend": m.frontend,
-            "worktree_id": m.worktree_id,
-            "created_at": m.created_at,
-            "updated_at": m.updated_at,
-            "last_resume_at": m.last_resume_at,
-            "last_compaction_at": m.last_compaction_at,
+    let result = serde_json::json!({
+        "tool": "get_session_status",
+        "session_id": session_id.as_str(),
+        "agent_id": agent_id,
+        "merged_agent_view": agent_summary.merged_view,
+        "status": status,
+        "repo_root": repo_root_value,
+        "frontend": frontend,
+        "worktree_id": worktree_id,
+        "created_at": created_at,
+        "updated_at": updated_at,
+        "last_resume_at": last_resume_at,
+        "last_compaction_at": last_compaction_at,
+        "event_count": event_count,
+        "resume_snapshot_exists": snapshot.is_some(),
+        "snapshot_consumed": snapshot.as_ref().map(|s| s.consumed),
+        "agent_partitions": agent_summary.partitions,
+        "delegated_tasks": agent_summary.delegated_tasks,
+        "agent_responsibilities": agent_summary.responsibilities,
+        "summary": {
+            "status": status,
+            "has_session": meta.is_some(),
             "event_count": event_count,
-            "has_resume_snapshot": snapshot.is_some(),
-            "snapshot_consumed": snap_consumed,
-            "agent_partitions": agent_summary.partitions,
-            "delegated_tasks": agent_summary.delegated_tasks,
-            "agent_responsibilities": agent_summary.responsibilities,
-        })
-    } else {
-        serde_json::json!({
-            "session_id": session_id.as_str(),
-            "agent_id": agent_id,
-            "merged_agent_view": agent_summary.merged_view,
-            "status": "no_session",
-            "event_count": 0,
-            "has_resume_snapshot": false,
-            "agent_partitions": agent_summary.partitions,
-            "delegated_tasks": agent_summary.delegated_tasks,
-            "agent_responsibilities": agent_summary.responsibilities,
-        })
-    };
+            "partition_count": agent_summary.partitions.len(),
+            "delegated_task_count": agent_summary.delegated_tasks.len(),
+            "responsibility_count": agent_summary.responsibilities.len(),
+            "resume_snapshot_exists": snapshot.is_some(),
+        },
+        "warnings": warnings,
+    });
 
     tool_result_value(&result, output_format)
 }
@@ -330,18 +368,29 @@ pub fn tool_compact_session(
     let mut store = match SessionStore::open(&session_db) {
         Ok(s) => s,
         Err(e) => {
-            return tool_result_value(
-                &serde_json::json!({
-                    "session_id": session_id.as_str(),
+            let result = serde_json::json!({
+                "tool": "compact_session",
+                "session_id": session_id.as_str(),
+                "before_counts": { "events": 0 },
+                "after_counts": { "events": 0 },
+                "promoted_events": 0,
+                "removed_events": 0,
+                "merged_groups": 0,
+                "decayed_events": 0,
+                "deduplicated_events": 0,
+                "summary": {
                     "status": "no_session",
-                    "error": e.to_string(),
-                }),
-                output_format,
-            );
+                    "no_op": true,
+                    "events_before": 0,
+                    "events_after": 0,
+                    "events_removed": 0,
+                },
+                "warnings": [format!("session store unavailable: {e}")],
+            });
+            return tool_result_value(&result, output_format);
         }
     };
 
-    // Ensure session meta exists before compacting.
     store.upsert_session_meta(session_id.clone(), repo_root, "mcp", None)?;
 
     let CurationResult {
@@ -352,16 +401,26 @@ pub fn tool_compact_session(
         deduplicated_count,
         promoted_count,
     } = store.compact_session(&session_id)?;
+    let removed_events = decayed_count + deduplicated_count;
 
     let result = serde_json::json!({
+        "tool": "compact_session",
         "session_id": session_id.as_str(),
-        "status": "ok",
-        "events_before": events_before,
-        "events_after": events_after,
-        "merged": merged_count,
-        "decayed": decayed_count,
-        "deduplicated": deduplicated_count,
-        "promoted": promoted_count,
+        "before_counts": { "events": events_before },
+        "after_counts": { "events": events_after },
+        "promoted_events": promoted_count,
+        "removed_events": removed_events,
+        "merged_groups": merged_count,
+        "decayed_events": decayed_count,
+        "deduplicated_events": deduplicated_count,
+        "summary": {
+            "status": "ok",
+            "no_op": events_before == events_after && merged_count == 0 && removed_events == 0 && promoted_count == 0,
+            "events_before": events_before,
+            "events_after": events_after,
+            "events_removed": removed_events,
+        },
+        "warnings": [],
     });
 
     let mut response = tool_result_value(&result, output_format)?;
@@ -410,13 +469,13 @@ pub fn tool_resume_session(
     let session_db = derive_session_db_path(db_path);
     let mut store = SessionStore::open(&session_db)?;
 
-    // Ensure session meta exists before building snapshot.
     store.upsert_session_meta(session_id.clone(), repo_root, "mcp", None)?;
 
-    let snapshot: ResumeSnapshot = match store.get_resume_snapshot(&session_id)? {
-        Some(s) => s,
-        None => store.build_resume(&session_id)?,
-    };
+    let (snapshot, snapshot_status): (ResumeSnapshot, &str) =
+        match store.get_resume_snapshot(&session_id)? {
+            Some(s) => (s, "existing_snapshot"),
+            None => (store.build_resume(&session_id)?, "built_snapshot"),
+        };
     let snapshot_view =
         store.build_resume_view(&session_id, agent_id.as_deref(), merge_agent_partitions)?;
 
@@ -424,7 +483,6 @@ pub fn tool_resume_session(
         let _ = store.mark_resume_consumed(&session_id, true);
     }
 
-    // Record the resume event (best-effort, failure ignored).
     let _ = store.append_event(NewSessionEvent {
         session_id: session_id.clone(),
         event_type: SessionEventType::SessionResume,
@@ -433,14 +491,28 @@ pub fn tool_resume_session(
         created_at: None,
     });
 
+    let event_count = snapshot_view
+        .get("event_count")
+        .and_then(|value| value.as_i64())
+        .unwrap_or(snapshot.event_count);
+    let merged_agent_view =
+        merge_agent_partitions || args.and_then(|a| a.get("agent_id")).is_none();
     let result = serde_json::json!({
+        "tool": "resume_session",
         "session_id": snapshot.session_id.as_str(),
         "agent_id": agent_id,
-        "merged_agent_view": merge_agent_partitions || args.and_then(|a| a.get("agent_id")).is_none(),
+        "merged_agent_view": merged_agent_view,
+        "snapshot_status": snapshot_status,
         "snapshot": snapshot_view,
-        "event_count": snapshot_view.get("event_count").and_then(|value| value.as_i64()).unwrap_or(snapshot.event_count),
+        "event_count": event_count,
         "consumed": mark_consumed,
         "created_at": snapshot.created_at,
+        "summary": {
+            "event_count": event_count,
+            "merged_agent_view": merged_agent_view,
+            "snapshot_consumed": mark_consumed,
+        },
+        "warnings": [],
     });
 
     tool_result_value(&result, output_format)
@@ -710,7 +782,6 @@ pub fn tool_save_context_artifact(
         .and_then(|a| a.get("content_type"))
         .and_then(|v| v.as_str())
         .unwrap_or("text/plain");
-    // Accept an explicit session_id or derive from repo_root.
     let session_id_str = args
         .and_then(|a| a.get("session_id"))
         .and_then(|v| v.as_str())
@@ -733,7 +804,7 @@ pub fn tool_save_context_artifact(
 
     let meta = SourceMeta {
         id: source_id,
-        session_id: Some(session_id_str),
+        session_id: Some(session_id_str.clone()),
         agent_id: agent_id.clone(),
         source_type: source_type.to_string(),
         label: label.to_string(),
@@ -743,32 +814,73 @@ pub fn tool_save_context_artifact(
     };
 
     let routing = cs.route_output(meta, &sanitized_content, content_type)?;
+    let content_size_bytes = sanitized_content.len();
 
-    let result = match routing {
-        OutputRouting::Raw(raw) => serde_json::json!({
-            "routing": "raw",
-            "source_id": Value::Null,
-            "agent_id": agent_id,
-            "content": raw,
-        }),
+    let (storage_mode, source_id_value, preview, inline_content, retrieval_hint) = match routing {
+        OutputRouting::Raw(raw) => (
+            "raw_inline",
+            Value::Null,
+            Value::String(raw.chars().take(256).collect()),
+            Value::String(raw),
+            Value::Null,
+        ),
         OutputRouting::Preview {
             source_id: sid,
             preview,
-        } => serde_json::json!({
-            "routing": "preview",
-            "source_id": sid,
-            "agent_id": agent_id,
-            "preview": preview,
-        }),
-        OutputRouting::Pointer { source_id: sid } => serde_json::json!({
-            "routing": "pointer",
-            "source_id": sid,
-            "agent_id": agent_id,
-            "retrieval_hint": format!(
-                "use search_saved_context to retrieve content for source_id={sid}"
-            ),
-        }),
+        } => (
+            "indexed_preview",
+            Value::String(sid.clone()),
+            Value::String(preview),
+            Value::Null,
+            Value::String(format!(
+                "use read_saved_context with source_id={sid} to retrieve full content"
+            )),
+        ),
+        OutputRouting::Pointer { source_id: sid } => (
+            "indexed_pointer",
+            Value::String(sid.clone()),
+            Value::Null,
+            Value::Null,
+            Value::String(format!(
+                "use read_saved_context with source_id={sid} to retrieve content"
+            )),
+        ),
     };
+
+    let chunk_count = source_id_value
+        .as_str()
+        .map(|sid| cs.get_chunks(sid).map(|chunks| chunks.len()).unwrap_or(0))
+        .unwrap_or(0);
+    let resource_link = source_id_value.as_str().map(|sid| {
+        serde_json::json!({
+            "type": "resource_link",
+            "uri": format!("atlas://saved-context/{sid}"),
+            "name": "saved_context",
+            "title": label,
+            "mime_type": content_type,
+        })
+    });
+
+    let result = serde_json::json!({
+        "tool": "save_context_artifact",
+        "storage_mode": storage_mode,
+        "source_id": source_id_value,
+        "label": label,
+        "source_type": source_type,
+        "agent_id": agent_id,
+        "preview": preview,
+        "inline_content": inline_content,
+        "content_size_bytes": content_size_bytes,
+        "chunk_count": chunk_count,
+        "resource_link": resource_link,
+        "retrieval_hint": retrieval_hint,
+        "summary": {
+            "session_id": session_id_str,
+            "stored": storage_mode != "raw_inline",
+            "inline": storage_mode == "raw_inline",
+            "content_type": content_type,
+        }
+    });
 
     tool_result_value(&result, output_format)
 }
@@ -929,50 +1041,58 @@ pub fn tool_read_saved_context(
     let mut cs = ContentStore::open(&content_db)?;
     let _ = cs.migrate();
 
-    // --- locate source ---
+    let summary_budget = |observed| {
+        budgets.summary(
+            "mcp_cli_payload_serialization.max_saved_context_bytes",
+            max_bytes,
+            requested_max_bytes.max(observed),
+        )
+    };
+
+    let build_error_result = |access_status: &str, warning: &str| {
+        serde_json::json!({
+            "tool": "read_saved_context",
+            "found": false,
+            "access_status": access_status,
+            "source_id": source_id,
+            "content": Value::Null,
+            "content_format": Value::Null,
+            "chunk_offset": chunk_offset,
+            "next_chunk_offset": Value::Null,
+            "truncated": false,
+            "summary": {
+                "status": access_status,
+                "byte_count": 0,
+                "chunk_count": 0,
+                "returned_chunk_count": 0,
+            },
+            "warnings": [warning],
+        })
+    };
+
     let source = match cs.get_source(source_id)? {
         Some(s) => s,
         None => {
             let mut response = tool_result_value(
-                &serde_json::json!({
-                    "found": false,
-                    "source_id": source_id,
-                    "error": "artifact not found",
-                }),
+                &build_error_result("not_found", "artifact not found"),
                 output_format,
             )?;
-            inject_budget_metadata(
-                &mut response,
-                &budgets.summary(
-                    "mcp_cli_payload_serialization.max_saved_context_bytes",
-                    max_bytes,
-                    requested_max_bytes.max(max_bytes),
-                ),
-            );
+            inject_budget_metadata(&mut response, &summary_budget(max_bytes));
             return Ok(response);
         }
     };
 
-    // --- enforce session scoping ---
     if let Some(ref caller_sid) = caller_session_id
         && source.session_id.as_deref() != Some(caller_sid.as_str())
     {
         let mut response = tool_result_value(
-            &serde_json::json!({
-                "found": false,
-                "source_id": source_id,
-                "error": "artifact not accessible from this session",
-            }),
+            &build_error_result(
+                "session_mismatch",
+                "artifact not accessible from this session",
+            ),
             output_format,
         )?;
-        inject_budget_metadata(
-            &mut response,
-            &budgets.summary(
-                "mcp_cli_payload_serialization.max_saved_context_bytes",
-                max_bytes,
-                requested_max_bytes.max(max_bytes),
-            ),
-        );
+        inject_budget_metadata(&mut response, &summary_budget(max_bytes));
         return Ok(response);
     }
 
@@ -981,59 +1101,41 @@ pub fn tool_read_saved_context(
         && source.agent_id.as_deref() != Some(caller_agent_id.as_str())
     {
         let mut response = tool_result_value(
-            &serde_json::json!({
-                "found": false,
-                "source_id": source_id,
-                "error": "artifact not accessible from this agent partition",
-            }),
+            &build_error_result(
+                "agent_mismatch",
+                "artifact not accessible from this agent partition",
+            ),
             output_format,
         )?;
-        inject_budget_metadata(
-            &mut response,
-            &budgets.summary(
-                "mcp_cli_payload_serialization.max_saved_context_bytes",
-                max_bytes,
-                requested_max_bytes.max(max_bytes),
-            ),
-        );
+        inject_budget_metadata(&mut response, &summary_budget(max_bytes));
         return Ok(response);
     }
 
-    // --- enforce repo scoping ---
-    // If the artifact has a recorded repo_root, the caller's repo_root must match.
     if let Some(ref artifact_repo) = source.repo_root
         && artifact_repo != repo_root
     {
         let mut response = tool_result_value(
-            &serde_json::json!({
-                "found": false,
-                "source_id": source_id,
-                "error": "artifact not accessible from this repository",
-            }),
+            &build_error_result(
+                "repo_mismatch",
+                "artifact not accessible from this repository",
+            ),
             output_format,
         )?;
-        inject_budget_metadata(
-            &mut response,
-            &budgets.summary(
-                "mcp_cli_payload_serialization.max_saved_context_bytes",
-                max_bytes,
-                requested_max_bytes.max(max_bytes),
-            ),
-        );
+        inject_budget_metadata(&mut response, &summary_budget(max_bytes));
         return Ok(response);
     }
 
-    // --- load chunks ---
     let all_chunks = cs.get_chunks(source_id)?;
     let total_chunks = all_chunks.len();
-
-    // Chunks from chunk_offset onwards, ordered by chunk_index.
+    let content_format = all_chunks
+        .first()
+        .map(|chunk| chunk.content_type.clone())
+        .unwrap_or_else(|| "text/plain".to_owned());
     let remaining_chunks: Vec<_> = all_chunks
         .into_iter()
         .filter(|c| c.chunk_index >= chunk_offset)
         .collect();
 
-    // Reassemble content within byte cap.
     let mut content_parts: Vec<String> = Vec::new();
     let mut returned_chunk_ids: Vec<String> = Vec::new();
     let mut bytes_used: usize = 0;
@@ -1060,36 +1162,6 @@ pub fn tool_read_saved_context(
 
     let content = content_parts.join("\n");
     let total_byte_count: usize = remaining_chunks.iter().map(|c| c.content.len()).sum();
-
-    let mut result = serde_json::json!({
-        "found": true,
-        "source_id": source.id,
-        "artifact_kind": source.source_type,
-        "identity_kind": source.identity_kind,
-        "identity_value": source.identity_value,
-        "created_at": source.created_at,
-        "session_id": source.session_id,
-        "agent_id": source.agent_id,
-        "merged_agent_view": merge_agent_partitions,
-        "label": source.label,
-        "byte_count": total_byte_count,
-        "chunk_count": total_chunks,
-        "chunk_offset": chunk_offset,
-        "last_included_chunk": last_included_index,
-        "last_included_chunk_id": last_included_chunk_id,
-        "returned_chunk_ids": returned_chunk_ids,
-        "content": content,
-        "truncated": truncated,
-    });
-
-    if truncated && let Some(next) = next_chunk_offset {
-        result["next_chunk_offset"] = serde_json::json!(next);
-        result["next_chunk_id"] = serde_json::json!(next_chunk_id);
-        result["continuation_hint"] = serde_json::json!(format!(
-            "call read_saved_context with source_id={source_id} chunk_offset={next} to read more"
-        ));
-    }
-
     if truncated {
         budgets.record_usage(
             policy.mcp_cli_payload_serialization.saved_context_bytes,
@@ -1099,6 +1171,42 @@ pub fn tool_read_saved_context(
             true,
         );
     }
+
+    let result = serde_json::json!({
+        "tool": "read_saved_context",
+        "found": true,
+        "access_status": "ok",
+        "source_id": source.id,
+        "artifact_kind": source.source_type,
+        "identity_kind": source.identity_kind,
+        "identity_value": source.identity_value,
+        "created_at": source.created_at,
+        "session_id": source.session_id,
+        "agent_id": source.agent_id,
+        "merged_agent_view": merge_agent_partitions,
+        "label": source.label,
+        "content": content,
+        "content_format": content_format,
+        "byte_count": total_byte_count,
+        "chunk_count": total_chunks,
+        "chunk_offset": chunk_offset,
+        "last_included_chunk": last_included_index,
+        "last_included_chunk_id": last_included_chunk_id,
+        "returned_chunk_ids": returned_chunk_ids,
+        "next_chunk_offset": next_chunk_offset,
+        "next_chunk_id": next_chunk_id,
+        "continuation_hint": next_chunk_offset.map(|next| format!(
+            "call read_saved_context with source_id={source_id} chunk_offset={next} to read more"
+        )),
+        "truncated": truncated,
+        "summary": {
+            "status": "ok",
+            "byte_count": total_byte_count,
+            "chunk_count": total_chunks,
+            "returned_chunk_count": content_parts.len(),
+        },
+        "warnings": [],
+    });
 
     let mut response = tool_result_value(&result, output_format)?;
     inject_budget_metadata(
@@ -1155,8 +1263,15 @@ pub fn tool_purge_saved_context(
     let mut cs = ContentStore::open(&content_db)?;
     let _ = cs.migrate();
 
-    let deleted = if let Some(sid) = session_id_filter {
-        cs.delete_session_sources(&sid, agent_id_filter.as_deref())?
+    let mode = if session_id_filter.is_some() {
+        "session"
+    } else {
+        "age_based"
+    };
+    let (before_sources, before_chunks) =
+        cs.stats(session_id_filter.as_deref(), agent_id_filter.as_deref())?;
+    let deleted_sources = if let Some(ref sid) = session_id_filter {
+        cs.delete_session_sources(sid, agent_id_filter.as_deref())?
     } else {
         if crate::runtime_context::current().is_ok()
             && !crate::elicitation::confirm_age_based_purge()?
@@ -1167,22 +1282,35 @@ pub fn tool_purge_saved_context(
         }
         cs.cleanup(keep_days)?
     };
-
+    let (after_sources, after_chunks) =
+        cs.stats(session_id_filter.as_deref(), agent_id_filter.as_deref())?;
+    let deleted_chunks = before_chunks.saturating_sub(after_chunks);
     let deleted_bridge = if purge_bridge {
         purge_all_bridge_files(&bridge_dir)
     } else {
         0
     };
 
-    let mut response = tool_result_value(
-        &serde_json::json!({
-            "deleted_source_count": deleted,
-            "agent_id": agent_id_filter,
-            "deleted_bridge_file_count": deleted_bridge,
-            "keep_days": keep_days,
-        }),
-        output_format,
-    )?;
+    let result = serde_json::json!({
+        "tool": "purge_saved_context",
+        "mode": mode,
+        "session_id": session_id_filter,
+        "agent_id": agent_id_filter,
+        "cutoff_days": keep_days,
+        "deleted_sources": deleted_sources,
+        "deleted_chunks": deleted_chunks,
+        "deleted_bridge_files": deleted_bridge,
+        "summary": {
+            "status": "ok",
+            "sources_before": before_sources,
+            "sources_after": after_sources,
+            "chunks_before": before_chunks,
+            "chunks_after": after_chunks,
+        },
+        "warnings": [],
+    });
+
+    let mut response = tool_result_value(&result, output_format)?;
     let emitted_bytes = serde_json::to_vec(&response)?.len();
     inject_budget_metadata(
         &mut response,
@@ -1420,7 +1548,7 @@ pub fn tool_get_global_memory(
             last_accessed: e.last_accessed,
         })
         .collect();
-    let recurring_workflows: Vec<WorkflowPreview> = workflows
+    let workflow_patterns: Vec<WorkflowPreview> = workflows
         .into_iter()
         .map(|w: GlobalWorkflowPattern| WorkflowPreview {
             pattern: w.pattern,
@@ -1429,8 +1557,7 @@ pub fn tool_get_global_memory(
         })
         .collect();
 
-    // Optionally find related sessions.
-    let related_sessions: Vec<RelatedSession> =
+    let relevant_sessions: Vec<RelatedSession> =
         if !focus_symbols.is_empty() || !focus_files.is_empty() {
             store
                 .find_relevant_sessions(repo_root, &focus_symbols, &focus_files, limit)?
@@ -1449,8 +1576,8 @@ pub fn tool_get_global_memory(
     let observed = frequent_symbols
         .len()
         .max(frequent_files.len())
-        .max(recurring_workflows.len())
-        .max(related_sessions.len());
+        .max(workflow_patterns.len())
+        .max(relevant_sessions.len());
     if observed > limit as usize {
         budgets.record_usage(
             policy.content_saved_context_lookup.sources,
@@ -1461,13 +1588,29 @@ pub fn tool_get_global_memory(
         );
     }
 
+    let focus = (!focus_symbols.is_empty() || !focus_files.is_empty()).then(|| {
+        serde_json::json!({
+            "symbols": focus_symbols,
+            "files": focus_files,
+        })
+    });
+
     let mut response = tool_result_value(
         &serde_json::json!({
+            "tool": "get_global_memory",
             "repo_root": repo_root,
+            "focus": focus,
             "frequent_symbols": frequent_symbols,
             "frequent_files": frequent_files,
-            "recurring_workflows": recurring_workflows,
-            "related_sessions": related_sessions,
+            "workflow_patterns": workflow_patterns,
+            "relevant_sessions": relevant_sessions,
+            "summary": {
+                "frequent_symbol_count": frequent_symbols.len(),
+                "frequent_file_count": frequent_files.len(),
+                "workflow_pattern_count": workflow_patterns.len(),
+                "relevant_session_count": relevant_sessions.len(),
+            },
+            "warnings": [],
         }),
         output_format,
     )?;
@@ -1546,21 +1689,196 @@ mod tests {
             .into_owned()
     }
 
+    fn tool_body(result: &Value) -> Value {
+        result
+            .get("structuredContent")
+            .cloned()
+            .or_else(|| {
+                result
+                    .get("content")
+                    .and_then(|content| content.get(0))
+                    .and_then(|item| item.get("text"))
+                    .and_then(|text| text.as_str())
+                    .and_then(|text| serde_json::from_str(text).ok())
+            })
+            .expect("tool body")
+    }
+
+    fn open_session_store(db_path: &str) -> SessionStore {
+        SessionStore::open(&derive_session_db_path(db_path)).unwrap()
+    }
+
+    fn seed_session_meta(store: &mut SessionStore, repo_root: &str) -> SessionId {
+        let session_id = SessionId::derive(repo_root, "", "mcp");
+        store
+            .upsert_session_meta(session_id.clone(), repo_root, "mcp", None)
+            .unwrap();
+        session_id
+    }
+
+    fn append_session_event(
+        store: &mut SessionStore,
+        session_id: &SessionId,
+        event_type: SessionEventType,
+        payload: Value,
+    ) {
+        store
+            .append_event(NewSessionEvent {
+                session_id: session_id.clone(),
+                event_type,
+                priority: 1,
+                payload,
+                created_at: None,
+            })
+            .unwrap();
+    }
+
     #[test]
     fn test_get_session_status_no_session() {
         let dir = TempDir::new().unwrap();
+        let repo_root = dir.path().to_str().unwrap();
         let db_path = setup_db_path(&dir);
-        let result = tool_get_session_status(
-            None,
-            dir.path().to_str().unwrap(),
+        let result =
+            tool_get_session_status(None, repo_root, &db_path, OutputFormat::Json).unwrap();
+        let body = tool_body(&result);
+        assert_eq!(body["status"], "no_session");
+        assert_eq!(body["summary"]["status"], "no_session");
+        assert_eq!(body["repo_root"], repo_root);
+        assert_eq!(body["resume_snapshot_exists"], false);
+        assert!(body["warnings"].as_array().is_some());
+    }
+
+    #[test]
+    fn get_session_status_active_and_resumable_share_shape() {
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join(".atlas")).unwrap();
+        let repo_root = dir.path().to_str().unwrap();
+        let db_path = setup_db_path(&dir);
+        let mut store = open_session_store(&db_path);
+        let session_id = seed_session_meta(&mut store, repo_root);
+        append_session_event(
+            &mut store,
+            &session_id,
+            SessionEventType::ContextRequest,
+            serde_json::json!({"query": "compute"}),
+        );
+        store.build_resume(&session_id).unwrap();
+
+        let result =
+            tool_get_session_status(None, repo_root, &db_path, OutputFormat::Json).unwrap();
+        let body = tool_body(&result);
+        assert_eq!(body["session_id"], session_id.as_str());
+        assert_eq!(body["status"], "active");
+        assert_eq!(body["resume_snapshot_exists"], true);
+        assert_eq!(body["summary"]["has_session"], true);
+        assert!(body["event_count"].as_i64().unwrap() >= 1);
+    }
+
+    #[test]
+    fn compact_session_no_op_returns_normalized_shape() {
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join(".atlas")).unwrap();
+        let repo_root = dir.path().to_str().unwrap();
+        let db_path = setup_db_path(&dir);
+
+        let result = tool_compact_session(None, repo_root, &db_path, OutputFormat::Json).unwrap();
+        let body = tool_body(&result);
+        assert_eq!(
+            body["session_id"],
+            SessionId::derive(repo_root, "", "mcp").as_str()
+        );
+        assert_eq!(body["summary"]["no_op"], true);
+        assert_eq!(body["before_counts"]["events"], 0);
+        assert_eq!(body["after_counts"]["events"], 0);
+    }
+
+    #[test]
+    fn compact_session_effective_returns_normalized_shape() {
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join(".atlas")).unwrap();
+        let repo_root = dir.path().to_str().unwrap();
+        let db_path = setup_db_path(&dir);
+        let mut store = open_session_store(&db_path);
+        let session_id = seed_session_meta(&mut store, repo_root);
+        for run in 0..5 {
+            append_session_event(
+                &mut store,
+                &session_id,
+                SessionEventType::CommandRun,
+                serde_json::json!({"command": "cargo build", "run": run}),
+            );
+        }
+        drop(store);
+
+        let result = tool_compact_session(None, repo_root, &db_path, OutputFormat::Json).unwrap();
+        let body = tool_body(&result);
+        assert_eq!(body["session_id"], session_id.as_str());
+        assert!(body["merged_groups"].as_i64().unwrap() >= 1);
+        assert!(
+            body["removed_events"].as_i64().unwrap() >= 1
+                || body["after_counts"]["events"].as_i64().unwrap()
+                    < body["before_counts"]["events"].as_i64().unwrap()
+        );
+        assert_eq!(body["summary"]["status"], "ok");
+    }
+
+    #[test]
+    fn resume_session_builds_snapshot_when_missing() {
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join(".atlas")).unwrap();
+        let repo_root = dir.path().to_str().unwrap();
+        let db_path = setup_db_path(&dir);
+        let mut store = open_session_store(&db_path);
+        let session_id = seed_session_meta(&mut store, repo_root);
+        append_session_event(
+            &mut store,
+            &session_id,
+            SessionEventType::UserIntent,
+            serde_json::json!({"intent": "review"}),
+        );
+        drop(store);
+
+        let result = tool_resume_session(
+            Some(&serde_json::json!({"mark_consumed": false})),
+            repo_root,
             &db_path,
             OutputFormat::Json,
         )
         .unwrap();
-        let content = result["content"][0]["text"].as_str().unwrap();
-        let body: Value = serde_json::from_str(content).unwrap();
-        // Session store doesn't exist yet — should return no_session.
-        assert_eq!(body["status"].as_str().unwrap(), "no_session");
+        let body = tool_body(&result);
+        assert_eq!(body["session_id"], session_id.as_str());
+        assert_eq!(body["snapshot_status"], "built_snapshot");
+        assert_eq!(body["consumed"], false);
+        assert!(body["snapshot"].is_object());
+        assert!(body["event_count"].as_i64().unwrap() >= 1);
+    }
+
+    #[test]
+    fn resume_session_reuses_existing_snapshot_and_marks_consumed() {
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join(".atlas")).unwrap();
+        let repo_root = dir.path().to_str().unwrap();
+        let db_path = setup_db_path(&dir);
+        let mut store = open_session_store(&db_path);
+        let session_id = seed_session_meta(&mut store, repo_root);
+        append_session_event(
+            &mut store,
+            &session_id,
+            SessionEventType::Decision,
+            serde_json::json!({"summary": "reuse context"}),
+        );
+        store.build_resume(&session_id).unwrap();
+        drop(store);
+
+        let result = tool_resume_session(None, repo_root, &db_path, OutputFormat::Json).unwrap();
+        let body = tool_body(&result);
+        assert_eq!(body["snapshot_status"], "existing_snapshot");
+        assert_eq!(body["consumed"], true);
+        assert_eq!(body["summary"]["snapshot_consumed"], true);
+
+        let store = open_session_store(&db_path);
+        let snapshot = store.get_resume_snapshot(&session_id).unwrap().unwrap();
+        assert!(snapshot.consumed);
     }
 
     #[test]
@@ -1583,7 +1901,6 @@ mod tests {
         let db_path = setup_db_path(&dir);
         let repo_root = dir.path().to_str().unwrap();
 
-        // Save a small artifact (will be routed as raw — under DEFAULT_SMALL_OUTPUT_BYTES).
         let args = serde_json::json!({
             "content": "hello world",
             "label": "test artifact",
@@ -1592,10 +1909,11 @@ mod tests {
         let result =
             tool_save_context_artifact(Some(&args), repo_root, &db_path, OutputFormat::Json)
                 .unwrap();
-        let content = result["content"][0]["text"].as_str().unwrap();
-        let body: Value = serde_json::from_str(content).unwrap();
-        // Short content → raw routing.
-        assert_eq!(body["routing"].as_str().unwrap(), "raw");
+        let body = tool_body(&result);
+        assert_eq!(body["storage_mode"], "raw_inline");
+        assert!(body["source_id"].is_null());
+        assert_eq!(body["inline_content"], "hello world");
+        assert_eq!(body["summary"]["inline"], true);
     }
 
     #[test]
@@ -1612,12 +1930,12 @@ mod tests {
         let result =
             tool_save_context_artifact(Some(&args), repo_root, &db_path, OutputFormat::Json)
                 .unwrap();
-        let body: Value =
-            serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+        let body = tool_body(&result);
 
-        assert_eq!(body["routing"].as_str().unwrap(), "preview");
+        assert_eq!(body["storage_mode"], "indexed_preview");
         assert!(body["source_id"].as_str().is_some());
         assert!(body["preview"].as_str().unwrap().contains("preview:"));
+        assert!(body["inline_content"].is_null());
     }
 
     #[test]
@@ -1634,16 +1952,19 @@ mod tests {
         let result =
             tool_save_context_artifact(Some(&args), repo_root, &db_path, OutputFormat::Json)
                 .unwrap();
-        let body: Value =
-            serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+        let body = tool_body(&result);
 
-        assert_eq!(body["routing"].as_str().unwrap(), "pointer");
-        assert!(body["source_id"].as_str().is_some());
+        let source_id = body["source_id"].as_str().unwrap();
+        assert_eq!(body["storage_mode"], "indexed_pointer");
         assert!(
             body["retrieval_hint"]
                 .as_str()
                 .unwrap()
-                .contains("search_saved_context")
+                .contains("read_saved_context")
+        );
+        assert_eq!(
+            body["resource_link"]["uri"],
+            serde_json::json!(format!("atlas://saved-context/{source_id}"))
         );
     }
 
@@ -1661,14 +1982,13 @@ mod tests {
         let result =
             tool_save_context_artifact(Some(&args), repo_root, &db_path, OutputFormat::Json)
                 .unwrap();
-        let body: Value =
-            serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+        let body = tool_body(&result);
         let source_id = body["source_id"].as_str().expect("indexed source id");
 
         let content_db = derive_content_db_path(&db_path);
         let store = ContentStore::open(&content_db).expect("open content store");
         let chunks = store.get_chunks(source_id).expect("get stored chunks");
-        assert_eq!(body["routing"].as_str().unwrap(), "pointer");
+        assert_eq!(body["storage_mode"], "indexed_pointer");
         assert!(!chunks.is_empty());
         assert!(chunks.len() <= 500, "default per-file chunk cap must apply");
     }
@@ -1934,10 +2254,10 @@ mod tests {
         let args = serde_json::json!({"keep_days": 30});
         let result =
             tool_purge_saved_context(Some(&args), repo_root, &db_path, OutputFormat::Json).unwrap();
-        let content = result["content"][0]["text"].as_str().unwrap();
-        let body: Value = serde_json::from_str(content).unwrap();
-        assert_eq!(body["deleted_source_count"].as_u64().unwrap(), 0);
-        assert_eq!(body["deleted_bridge_file_count"].as_u64().unwrap(), 0);
+        let body = tool_body(&result);
+        assert_eq!(body["mode"], "age_based");
+        assert_eq!(body["deleted_sources"], 0);
+        assert_eq!(body["deleted_bridge_files"], 0);
     }
 
     #[test]
@@ -1979,7 +2299,6 @@ mod tests {
         let db_path = setup_db_path(&dir);
         let repo_root = dir.path().to_str().unwrap();
 
-        // Write two bridge files so there is something to purge.
         let bridge_dir = derive_bridge_dir(&db_path);
         let sid = SessionId::derive(repo_root, "", "mcp");
         let ev = BridgeEvent {
@@ -1994,9 +2313,35 @@ mod tests {
         let args = serde_json::json!({"purge_bridge_files": true, "keep_days": 30});
         let result =
             tool_purge_saved_context(Some(&args), repo_root, &db_path, OutputFormat::Json).unwrap();
-        let content = result["content"][0]["text"].as_str().unwrap();
-        let body: Value = serde_json::from_str(content).unwrap();
-        assert_eq!(body["deleted_bridge_file_count"].as_u64().unwrap(), 2);
+        let body = tool_body(&result);
+        assert_eq!(body["mode"], "age_based");
+        assert_eq!(body["deleted_bridge_files"], 2);
+    }
+
+    #[test]
+    fn purge_saved_context_session_target_returns_normalized_shape() {
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join(".atlas")).unwrap();
+        let db_path = setup_db_path(&dir);
+        let repo_root = dir.path().to_str().unwrap();
+        let session_id = "session-purge";
+        let content = medium_content("session purge target");
+        let source_id =
+            save_indexed_artifact(repo_root, &db_path, "purge me", &content, Some(session_id));
+        assert!(!source_id.is_empty());
+
+        let result = tool_purge_saved_context(
+            Some(&serde_json::json!({"session_id": session_id})),
+            repo_root,
+            &db_path,
+            OutputFormat::Json,
+        )
+        .unwrap();
+        let body = tool_body(&result);
+        assert_eq!(body["mode"], "session");
+        assert_eq!(body["session_id"], session_id);
+        assert!(body["deleted_sources"].as_u64().unwrap() >= 1);
+        assert!(body["deleted_chunks"].as_u64().unwrap() >= 1);
     }
 
     #[test]
@@ -2101,10 +2446,10 @@ mod tests {
         let args = serde_json::json!({"source_id": "does_not_exist"});
         let result =
             tool_read_saved_context(Some(&args), repo_root, &db_path, OutputFormat::Json).unwrap();
-        let body: Value =
-            serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+        let body = tool_body(&result);
         assert!(!body["found"].as_bool().unwrap());
-        assert!(body["error"].as_str().unwrap().contains("not found"));
+        assert_eq!(body["access_status"], "not_found");
+        assert!(body["warnings"][0].as_str().unwrap().contains("not found"));
     }
 
     #[test]
@@ -2261,11 +2606,11 @@ mod tests {
         let args = serde_json::json!({"source_id": source_id, "session_id": "session-B"});
         let result =
             tool_read_saved_context(Some(&args), repo_root, &db_path, OutputFormat::Json).unwrap();
-        let body: Value =
-            serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+        let body = tool_body(&result);
         assert!(!body["found"].as_bool().unwrap());
+        assert_eq!(body["access_status"], "session_mismatch");
         assert!(
-            body["error"]
+            body["warnings"][0]
                 .as_str()
                 .unwrap()
                 .contains("not accessible from this session")
@@ -2283,19 +2628,95 @@ mod tests {
         let source_id = save_indexed_artifact(repo_root, &db_path, "repo-bound", &content, None);
         assert!(!source_id.is_empty());
 
-        // Read from a different repo_root — must be blocked.
         let args = serde_json::json!({"source_id": source_id});
         let result =
             tool_read_saved_context(Some(&args), "/different/repo", &db_path, OutputFormat::Json)
                 .unwrap();
-        let body: Value =
-            serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+        let body = tool_body(&result);
         assert!(!body["found"].as_bool().unwrap());
+        assert_eq!(body["access_status"], "repo_mismatch");
         assert!(
-            body["error"]
+            body["warnings"][0]
                 .as_str()
                 .unwrap()
                 .contains("not accessible from this repository")
         );
+    }
+
+    #[test]
+    fn get_global_memory_without_focus_returns_normalized_shape() {
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join(".atlas")).unwrap();
+        let db_path = setup_db_path(&dir);
+        let repo_root = dir.path().to_str().unwrap();
+        let store = open_session_store(&db_path);
+        store
+            .record_symbol_access(repo_root, "crate::compute")
+            .unwrap();
+        store.record_file_access(repo_root, "src/lib.rs").unwrap();
+        store
+            .record_workflow_pattern(
+                repo_root,
+                &["query_graph".to_string(), "get_context".to_string()],
+            )
+            .unwrap();
+
+        let result = tool_get_global_memory(None, repo_root, &db_path, OutputFormat::Json).unwrap();
+        let body = tool_body(&result);
+        assert_eq!(body["repo_root"], repo_root);
+        assert!(body["focus"].is_null());
+        assert!(!body["frequent_symbols"].as_array().unwrap().is_empty());
+        assert!(!body["frequent_files"].as_array().unwrap().is_empty());
+        assert!(!body["workflow_patterns"].as_array().unwrap().is_empty());
+        assert_eq!(body["summary"]["relevant_session_count"], 0);
+    }
+
+    #[test]
+    fn get_global_memory_with_focus_returns_relevant_sessions() {
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join(".atlas")).unwrap();
+        let db_path = setup_db_path(&dir);
+        let repo_root = dir.path().to_str().unwrap();
+        let mut store = open_session_store(&db_path);
+        let session_id = SessionId::derive(repo_root, "", "cli");
+        store
+            .upsert_session_meta(session_id.clone(), repo_root, "cli", None)
+            .unwrap();
+        append_session_event(
+            &mut store,
+            &session_id,
+            SessionEventType::ContextRequest,
+            serde_json::json!({"query": "crate::focused_symbol"}),
+        );
+        append_session_event(
+            &mut store,
+            &session_id,
+            SessionEventType::FileRead,
+            serde_json::json!({"file": "src/focused.rs"}),
+        );
+        store
+            .record_symbol_access(repo_root, "crate::focused_symbol")
+            .unwrap();
+        store
+            .record_file_access(repo_root, "src/focused.rs")
+            .unwrap();
+        drop(store);
+
+        let result = tool_get_global_memory(
+            Some(&serde_json::json!({
+                "focus_symbols": ["crate::focused_symbol"],
+                "focus_files": ["src/focused.rs"],
+                "limit": 5
+            })),
+            repo_root,
+            &db_path,
+            OutputFormat::Json,
+        )
+        .unwrap();
+        let body = tool_body(&result);
+        assert_eq!(body["focus"]["symbols"][0], "crate::focused_symbol");
+        assert_eq!(body["focus"]["files"][0], "src/focused.rs");
+        assert!(!body["relevant_sessions"].as_array().unwrap().is_empty());
+        assert!(body["summary"]["relevant_session_count"].as_u64().unwrap() >= 1);
     }
 }

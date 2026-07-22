@@ -24,7 +24,8 @@ pub use architecture::{
 };
 pub use insights::{InsightsEngine, InsightsGraphSummary};
 pub use large_functions::{
-    LargeFunctionAnalysis, LargeFunctionCandidate, LargeFunctionMode, LargeFunctionRequest,
+    LargeFunctionAnalysis, LargeFunctionCandidate, LargeFunctionMode, LargeFunctionReportResult,
+    LargeFunctionRequest,
 };
 pub use metrics::{
     CodeHealthMetrics, FileMetric, MetricDistribution, MetricOutlier, MetricValue, MetricsAnalysis,

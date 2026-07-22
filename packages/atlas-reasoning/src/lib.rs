@@ -17,9 +17,9 @@ pub use engine::ReasoningEngine;
 pub use engine::{
     ArchitectureAnalysis, ArchitectureEdgeEvidence, ArchitectureModuleEdge, ArchitectureModuleNode,
     CodeHealthMetrics, FileMetric, InsightsEngine, InsightsGraphSummary, LargeFunctionAnalysis,
-    LargeFunctionCandidate, LargeFunctionMode, LargeFunctionRequest, MetricDistribution,
-    MetricOutlier, MetricValue, MetricsAnalysis, ModuleMetric, NodeMetric, RiskAssessmentAnalysis,
-    RiskAssessmentTarget, RiskClassification, RiskFactorContribution,
+    LargeFunctionCandidate, LargeFunctionMode, LargeFunctionReportResult, LargeFunctionRequest,
+    MetricDistribution, MetricOutlier, MetricValue, MetricsAnalysis, ModuleMetric, NodeMetric,
+    RiskAssessmentAnalysis, RiskAssessmentTarget, RiskClassification, RiskFactorContribution,
 };
 pub use ranking::{
     AnalysisRankingPrimitives, AnalysisTrimmingPrimitives, sort_dead_code_candidates,

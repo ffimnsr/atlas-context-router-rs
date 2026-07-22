@@ -11,8 +11,12 @@
     "data": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["summary", "findings", "atlas_provenance"],
+      "required": ["mode", "summary", "findings", "atlas_provenance"],
       "properties": {
+        "mode": {
+          "type": "string",
+          "enum": ["large", "complex", "large-or-complex"]
+        },
         "summary": {
           "type": "object",
           "additionalProperties": false,

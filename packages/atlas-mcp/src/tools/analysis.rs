@@ -12,6 +12,8 @@ use super::shared::{
     bool_arg, inject_budget_metadata, open_store, str_arg, string_array_arg, tool_result_value,
     u64_arg,
 };
+use crate::output::{OutputFormat, render_value};
+use serde_json::json;
 
 fn apply_finding_limit(
     findings: &mut Vec<InsightFinding>,
@@ -38,14 +40,30 @@ fn report_files(findings: &[InsightFinding]) -> Vec<String> {
 fn insight_report_response<T: serde::Serialize>(
     full_payload: &T,
     compact_payload: serde_json::Value,
-    output_format: crate::output::OutputFormat,
+    output_format: OutputFormat,
     verbose: bool,
 ) -> Result<serde_json::Value> {
-    if output_format == crate::output::OutputFormat::Json || verbose {
-        tool_result_value(full_payload, output_format)
-    } else {
-        tool_result_value(&compact_payload, output_format)
+    let full_payload = serde_json::to_value(full_payload)?;
+    let mut response = tool_result_value(&full_payload, output_format)?;
+
+    if output_format != OutputFormat::Json && !verbose {
+        let rendered = render_value(&compact_payload, output_format)?;
+        response["content"][0]["text"] = json!(rendered.text);
+        response["content"][0]["mimeType"] = json!(rendered.actual_format.mime_type());
+        response["_meta"]["atlas:outputFormat"] = json!(rendered.actual_format.as_str());
+        response["_meta"]["atlas:requestedOutputFormat"] =
+            json!(rendered.requested_format.as_str());
+        if let Some(reason) = rendered.fallback_reason {
+            response["_meta"]["atlas:fallbackReason"] = json!(reason);
+        } else if let Some(meta) = response
+            .get_mut("_meta")
+            .and_then(|value| value.as_object_mut())
+        {
+            meta.remove("atlas:fallbackReason");
+        }
     }
+
+    Ok(response)
 }
 
 pub(super) fn tool_analyze_architecture(
@@ -240,10 +258,12 @@ fn tool_find_large_functions_impl(
         .context("large-function analysis failed")?;
 
     let compact = serde_json::json!({
+        "mode": analysis.request.mode,
         "summary": analysis.report.summary.clone(),
         "top_findings": analysis.candidates.clone(),
     });
-    let mut response = insight_report_response(&analysis.report, compact, output_format, verbose)?;
+    let mut response =
+        insight_report_response(&analysis.report_result(), compact, output_format, verbose)?;
     response["atlas_result_kind"] = serde_json::json!(result_kind);
     response["atlas_result_count"] = serde_json::json!(analysis.report.summary.total_findings);
     response["atlas_result_files"] = serde_json::json!(

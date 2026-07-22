@@ -1,4 +1,9 @@
 {
+  "ambiguity": {
+    "candidates": [],
+    "query": null
+  },
+  "assets": [],
   "budget_hit": true,
   "budget_limit": 0,
   "budget_name": "review_context_extraction.max_edges",
@@ -7,15 +12,14 @@
   "edge_count": 0,
   "edges": [],
   "edges_dropped": 8,
+  "file": null,
   "file_count": 1,
   "files": [
-    {
-      "path": "src/lib.rs",
-      "reason": "direct_target"
-    }
+    "src/lib.rs"
   ],
   "files_dropped": 1,
   "intent": "review",
+  "mode": "change_context",
   "node_count": 1,
   "nodes": [
     {
@@ -39,6 +43,21 @@
   ],
   "nodes_dropped": 6,
   "partial": true,
+  "query": null,
+  "ranked_edges": [],
+  "ranked_files": [
+    {
+      "path": "src/lib.rs",
+      "reason": "direct_target"
+    }
+  ],
+  "ranked_symbols": [
+    {
+      "distance": 0,
+      "qn": "src/lib.rs::struct::Greeter",
+      "reason": "direct_target"
+    }
+  ],
   "safe_to_answer": true,
   "seed_budgets": [
     {
@@ -51,6 +70,7 @@
       "seed_kind": "changed_files"
     }
   ],
+  "tool": "get_context",
   "traversal_budget": {
     "accepted_depth": 3,
     "accepted_edge_budget": 500,
@@ -63,5 +83,6 @@
     "requested_edge_budget": 500,
     "requested_node_budget": 200
   },
-  "truncated": true
+  "truncated": true,
+  "truncation_reason": "context capped by node, edge, file, or payload budget"
 }
