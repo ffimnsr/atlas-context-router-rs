@@ -17,14 +17,14 @@ fn analyze_safety_returns_score_and_band() {
     assert!(v["safety_band"].as_str().is_some());
     assert!(v["fan_in"].as_i64().is_some());
     assert!(v["fan_out"].as_i64().is_some());
-    assert!(v["linked_tests"].as_i64().is_some());
+    assert!(v["test_adjacency"]["linked_test_count"].as_i64().is_some());
     assert!(
-        v["coverage_strength"].as_str().is_some(),
+        v["test_adjacency"]["coverage_strength"].as_str().is_some(),
         "coverage_strength missing"
     );
-    assert!(v["reasons"].as_array().is_some());
+    assert!(v["summary"].as_object().is_some());
     assert!(v["suggested_validations"].as_array().is_some());
-    assert!(v["evidence"].as_array().is_some());
+    assert!(v["factor_evidence"].as_array().is_some());
 }
 
 #[test]
@@ -70,7 +70,7 @@ fn analyze_safety_normalizes_alias_qname() {
     let text = unwrap_tool_text(resp);
     let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
 
-    assert_eq!(v["symbol"], "src/service.rs::fn::compute");
+    assert_eq!(v["symbol"]["qname"], "src/service.rs::fn::compute");
 }
 
 #[test]
@@ -83,13 +83,13 @@ fn analyze_remove_returns_impact_summary() {
     let text = unwrap_tool_text(resp);
     let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
 
-    assert!(v["seed_count"].as_i64().is_some());
-    assert!(v["impacted_symbol_count"].as_i64().is_some());
-    assert!(v["impacted_file_count"].as_i64().is_some());
-    assert!(v["impacted_test_count"].as_i64().is_some());
-    assert!(v["impacted_symbols"].as_array().is_some());
-    assert!(v["impacted_files"].as_array().is_some());
-    assert!(v["omitted_symbol_count"].as_i64().is_some());
+    assert!(v["symbols"].as_array().is_some());
+    assert!(v["definite_impacts"].as_array().is_some());
+    assert!(v["probable_impacts"].as_array().is_some());
+    assert!(v["weak_impacts"].as_array().is_some());
+    assert!(v["tests"].as_array().is_some());
+    assert!(v["summary"]["seed_count"].as_i64().is_some());
+    assert!(v["summary"]["impacted_symbol_count"].as_i64().is_some());
     assert!(v["warnings"].as_array().is_some());
     assert!(v["uncertainty_flags"].as_array().is_some());
     assert!(v["evidence"].as_array().is_some());
@@ -146,11 +146,21 @@ fn analyze_remove_normalizes_alias_qname() {
     let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
 
     assert!(
-        v["impacted_symbols"]
+        v["definite_impacts"]
             .as_array()
             .unwrap_or(&vec![])
             .iter()
-            .any(|node| node["qn"] == "src/api.rs::fn::handle_request")
+            .any(|node| node["symbol"]["qname"] == "src/api.rs::fn::handle_request")
+            || v["probable_impacts"]
+                .as_array()
+                .unwrap_or(&vec![])
+                .iter()
+                .any(|node| node["symbol"]["qname"] == "src/api.rs::fn::handle_request")
+            || v["weak_impacts"]
+                .as_array()
+                .unwrap_or(&vec![])
+                .iter()
+                .any(|node| node["symbol"]["qname"] == "src/api.rs::fn::handle_request")
     );
 }
 
@@ -163,10 +173,10 @@ fn analyze_dead_code_returns_candidate_list() {
     let text = unwrap_tool_text(resp);
     let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
 
-    assert!(v["candidate_count"].as_i64().is_some());
-    assert!(v["omitted_count"].as_i64().is_some());
+    assert!(v["scope"].as_object().is_some());
     assert!(v["candidates"].as_array().is_some());
-    assert!(v["applied_limit"].as_i64().is_some());
+    assert!(v["blockers"].as_array().is_some());
+    assert!(v["summary"]["candidate_count"].as_i64().is_some());
 }
 
 #[test]
@@ -177,7 +187,7 @@ fn analyze_dead_code_subpath_is_echoed() {
         .expect("analyze_dead_code call");
     let text = unwrap_tool_text(resp);
     let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
-    assert_eq!(v["applied_subpath"].as_str(), Some("src"));
+    assert_eq!(v["scope"]["subpath"].as_str(), Some("src"));
 }
 
 #[test]
@@ -199,13 +209,10 @@ fn analyze_dead_code_summary_mode_returns_count_only() {
     let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
 
     assert!(
-        v["candidate_count"].as_i64().is_some(),
+        v["summary"]["candidate_count"].as_i64().is_some(),
         "summary must include candidate_count"
     );
-    assert!(
-        v.get("candidates").is_none(),
-        "summary must NOT include candidates list"
-    );
+    assert_eq!(v["candidates"], serde_json::json!([]));
 }
 
 #[test]
@@ -217,7 +224,7 @@ fn analyze_dead_code_exclude_kind_echoed_in_response() {
     let text = unwrap_tool_text(resp);
     let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
 
-    let excluded = v["excluded_kinds"]
+    let excluded = v["scope"]["excluded_kinds"]
         .as_array()
         .expect("excluded_kinds must be array");
     assert!(
@@ -237,11 +244,11 @@ fn analyze_remove_response_includes_compact_file_and_edge_omit_counts() {
     let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
 
     assert!(
-        v["omitted_file_count"].as_i64().is_some(),
+        v["summary"]["omitted_file_count"].as_i64().is_some(),
         "must include omitted_file_count"
     );
     assert!(
-        v["omitted_edge_count"].as_i64().is_some(),
+        v["summary"]["omitted_edge_count"].as_i64().is_some(),
         "must include omitted_edge_count"
     );
 }
@@ -297,12 +304,12 @@ fn analyze_dependency_returns_removable_verdict() {
     let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
 
     assert!(v["removable"].as_bool().is_some());
-    assert!(v["confidence"].as_str().is_some());
-    assert!(v["blocking_reference_count"].as_i64().is_some());
+    assert!(v["confidence_tier"].as_str().is_some());
+    assert!(v["summary"]["blocking_reference_count"].as_i64().is_some());
     assert!(v["blocking_references"].as_array().is_some());
-    assert!(v["omitted_blocking_count"].as_i64().is_some());
+    assert!(v["summary"]["omitted_blocking_count"].as_i64().is_some());
     assert!(v["suggested_cleanups"].as_array().is_some());
-    assert!(v["uncertainty_flags"].as_array().is_some());
+    assert!(v["warnings"].as_array().is_some());
     assert!(v["evidence"].as_array().is_some());
 }
 

@@ -42,6 +42,35 @@ const TEXT_ASSET_ALL: &[&str] = &[
     "*.p8",
 ];
 
+fn text_asset_kind_for_path(path: &Path, rel_path: &str) -> &'static str {
+    let lower_path = rel_path.to_ascii_lowercase();
+    let file_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if lower_path.ends_with(".sql") {
+        "sql"
+    } else if matches!(
+        path.extension().and_then(|value| value.to_str()),
+        Some("toml" | "yaml" | "yml" | "ini" | "cfg" | "conf")
+    ) {
+        "config"
+    } else if file_name == ".env" || file_name.starts_with(".env.") || lower_path.ends_with(".env")
+    {
+        "env"
+    } else if lower_path.ends_with(".prompt")
+        || lower_path.ends_with(".promptfile")
+        || lower_path.ends_with(".p8")
+        || lower_path.contains("prompts/") && lower_path.ends_with(".md")
+        || lower_path.ends_with(".prompt.md")
+    {
+        "prompt"
+    } else {
+        "unknown"
+    }
+}
+
 /// MCP tool: `search_text_assets` — discover SQL, config, env, and prompt files.
 ///
 /// Use this to locate non-template text assets that are not indexed as graph
@@ -108,11 +137,38 @@ pub(crate) fn tool_search_text_assets(
             walker.add_ignore(&atlasignore_path);
         }
 
-        let mut files: Vec<String> = Vec::new();
+        #[derive(Serialize)]
+        struct SearchTextAssetMatch {
+            path: String,
+            file_name: String,
+            extension: Option<String>,
+            asset_kind: String,
+        }
+
+        #[derive(Serialize)]
+        struct SearchTextAssetsSummary {
+            returned_count: usize,
+            result_limit: usize,
+            scope: &'static str,
+            has_matches: bool,
+        }
+
+        #[derive(Serialize)]
+        struct SearchTextAssetsResult {
+            tool: &'static str,
+            kind: Option<String>,
+            subpath: Option<String>,
+            matches: Vec<SearchTextAssetMatch>,
+            summary: SearchTextAssetsSummary,
+            truncated: bool,
+            warnings: Vec<String>,
+        }
+
+        let mut matches: Vec<SearchTextAssetMatch> = Vec::new();
         let mut truncated = false;
 
         for entry in walker.build().flatten() {
-            if files.len() >= max_results {
+            if matches.len() >= max_results {
                 truncated = true;
                 break;
             }
@@ -143,18 +199,25 @@ pub(crate) fn tool_search_text_assets(
 
             let file_name = full_path
                 .file_name()
-                .map(|n| n.to_string_lossy())
+                .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default();
-            if !name_matcher.is_match(file_name.as_ref()) && !name_matcher.is_match(&*rel_path) {
+            if !name_matcher.is_match(file_name.as_str()) && !name_matcher.is_match(&*rel_path) {
                 continue;
             }
 
-            files.push(rel_path);
+            matches.push(SearchTextAssetMatch {
+                path: rel_path.clone(),
+                file_name,
+                extension: full_path
+                    .extension()
+                    .map(|value| value.to_string_lossy().into_owned()),
+                asset_kind: text_asset_kind_for_path(full_path, &rel_path).to_owned(),
+            });
         }
 
-        files.sort_unstable();
+        matches.sort_unstable_by(|left, right| left.path.cmp(&right.path));
 
-        let result_count = files.len();
+        let result_count = matches.len();
         if truncated {
             budgets.record_usage(
                 policy.review_context_extraction.files,
@@ -164,32 +227,28 @@ pub(crate) fn tool_search_text_assets(
                 true,
             );
         }
-        let atlas_hint = if result_count == 0 {
+        let warnings = if result_count == 0 {
             let kind_hint = kind.as_deref().unwrap_or("any text asset");
-            Some(format!(
-                "No {kind_hint} files found. Supported kinds: sql, config, env, prompt. \
-                 Try broadening with `kind` omitted or check the subpath.",
-            ))
+            vec![format!(
+                "No {kind_hint} files found. Supported kinds: sql, config, env, prompt. Broaden search or check subpath."
+            )]
         } else {
-            None
+            Vec::new()
         };
 
-        #[derive(Serialize)]
-        struct SearchTextAssetsResult {
-            files: Vec<String>,
-            result_count: usize,
-            truncated: bool,
-            atlas_result_kind: &'static str,
-            #[serde(skip_serializing_if = "Option::is_none")]
-            atlas_hint: Option<String>,
-        }
-
         let result = SearchTextAssetsResult {
-            files,
-            result_count,
+            tool: "search_text_assets",
+            kind,
+            subpath,
+            matches,
+            summary: SearchTextAssetsSummary {
+                returned_count: result_count,
+                result_limit: max_results,
+                scope: if walk_root == repo_root { "repo_root" } else { "subpath" },
+                has_matches: result_count > 0,
+            },
             truncated,
-            atlas_result_kind: "text_asset_files",
-            atlas_hint,
+            warnings,
         };
 
         let mut response = render_tool_result(&result, output_format)?;

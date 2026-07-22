@@ -615,64 +615,95 @@ pub(super) fn tool_symbol_neighbors(
         nodes
     }
 
-    #[derive(Serialize)]
-    struct NeighborhoodResult<'a> {
-        qname: &'a str,
-        callers: Vec<crate::context::CompactNode<'a>>,
-        callees: Vec<crate::context::CompactNode<'a>>,
-        caller_edges: Vec<CompactCallEdge<'a>>,
-        callee_edges: Vec<CompactCallEdge<'a>>,
-        tests: Vec<crate::context::CompactNode<'a>>,
-        siblings: Vec<crate::context::CompactNode<'a>>,
-        import_neighbors: Vec<crate::context::CompactNode<'a>>,
-    }
-
-    let result = NeighborhoodResult {
-        qname: &qname,
-        callers: compact_unique_nodes_from_pairs(&caller_pairs),
-        callees: compact_unique_nodes_from_pairs(&callee_pairs),
-        caller_edges: caller_pairs
-            .iter()
-            .map(|(_, edge)| compact_call_edge(edge))
-            .collect(),
-        callee_edges: callee_pairs
-            .iter()
-            .map(|(_, edge)| compact_call_edge(edge))
-            .collect(),
-        tests: nbhd.tests.iter().map(compact_node).collect(),
-        siblings: nbhd.siblings.iter().map(compact_node).collect(),
-        import_neighbors: nbhd.import_neighbors.iter().map(compact_node).collect(),
+    let callers = compact_unique_nodes_from_pairs(&caller_pairs);
+    let callees = compact_unique_nodes_from_pairs(&callee_pairs);
+    let caller_edges: Vec<_> = caller_pairs
+        .iter()
+        .map(|(_, edge)| compact_call_edge(edge))
+        .collect();
+    let callee_edges: Vec<_> = callee_pairs
+        .iter()
+        .map(|(_, edge)| compact_call_edge(edge))
+        .collect();
+    let tests: Vec<_> = nbhd.tests.iter().map(compact_node).collect();
+    let siblings: Vec<_> = nbhd.siblings.iter().map(compact_node).collect();
+    let imports: Vec<_> = nbhd.import_neighbors.iter().map(compact_node).collect();
+    let exists = store
+        .node_by_qname(&qname)
+        .map(|n| n.is_some())
+        .unwrap_or(false);
+    let status = if exists { "ok" } else { "node_not_found" };
+    let warnings = if exists {
+        Vec::new()
+    } else {
+        vec![error_message("node_not_found").to_owned()]
     };
+    let call_sites = caller_edges
+        .iter()
+        .map(|edge| {
+            json!({
+                "direction": "incoming",
+                "from": edge.from,
+                "to": edge.to,
+                "file": edge.file,
+                "line": edge.line,
+                "confidence": edge.confidence,
+                "tier": edge.tier,
+            })
+        })
+        .chain(callee_edges.iter().map(|edge| {
+            json!({
+                "direction": "outgoing",
+                "from": edge.from,
+                "to": edge.to,
+                "file": edge.file,
+                "line": edge.line,
+                "confidence": edge.confidence,
+                "tier": edge.tier,
+            })
+        }))
+        .collect::<Vec<_>>();
+    let payload = json!({
+        "tool": "symbol_neighbors",
+        "symbol": {
+            "qname": qname,
+            "found": exists,
+        },
+        "callers": callers,
+        "callees": callees,
+        "call_sites": call_sites,
+        "tests": tests,
+        "siblings": siblings,
+        "imports": imports,
+        "summary": {
+            "status": status,
+            "caller_count": caller_pairs.len(),
+            "callee_count": callee_pairs.len(),
+            "call_site_count": caller_edges.len() + callee_edges.len(),
+            "test_count": nbhd.tests.len(),
+            "sibling_count": nbhd.siblings.len(),
+            "import_count": nbhd.import_neighbors.len(),
+        },
+        "warnings": warnings,
+    });
 
-    let all_empty = result.callers.is_empty()
-        && result.callees.is_empty()
-        && result.tests.is_empty()
-        && result.siblings.is_empty()
-        && result.import_neighbors.is_empty();
-
-    let mut response = tool_result_value(&result, output_format)?;
-    if all_empty {
-        let exists = store
-            .node_by_qname(&qname)
-            .map(|n| n.is_some())
-            .unwrap_or(false);
-        if !exists {
-            response["atlas_error_code"] = serde_json::Value::String("node_not_found".to_owned());
-            response["atlas_error_code_docs"] =
-                serde_json::Value::String(error_code_docs("node_not_found"));
-            response["atlas_message"] =
-                serde_json::Value::String(error_message("node_not_found").to_owned());
-            response["atlas_suggestions"] = serde_json::json!(error_suggestions("node_not_found"));
-        }
+    let mut response = tool_result_value(&payload, output_format)?;
+    if !exists {
+        response["atlas_error_code"] = serde_json::Value::String("node_not_found".to_owned());
+        response["atlas_error_code_docs"] =
+            serde_json::Value::String(error_code_docs("node_not_found"));
+        response["atlas_message"] =
+            serde_json::Value::String(error_message("node_not_found").to_owned());
+        response["atlas_suggestions"] = serde_json::json!(error_suggestions("node_not_found"));
     }
 
-    let observed = result.callers.len()
-        + result.callees.len()
-        + result.tests.len()
-        + result.siblings.len()
-        + result.import_neighbors.len()
-        + result.caller_edges.len()
-        + result.callee_edges.len();
+    let observed = caller_pairs.len()
+        + callee_pairs.len()
+        + nbhd.tests.len()
+        + nbhd.siblings.len()
+        + nbhd.import_neighbors.len()
+        + caller_edges.len()
+        + callee_edges.len();
     inject_budget_metadata(
         &mut response,
         &budgets.summary(
@@ -706,31 +737,51 @@ pub(super) fn tool_cross_file_links(
     let store = open_store(db_path)?;
     let links = sem::cross_file_links(&store, &file, limit).context("cross_file_links failed")?;
 
-    #[derive(Serialize)]
-    struct LinkResult {
-        from_file: String,
-        to_file: String,
-        via_symbols: Vec<String>,
-        strength: f64,
-    }
-
-    let result: Vec<LinkResult> = links
+    let linked_files: Vec<_> = links
         .into_iter()
-        .map(|l| LinkResult {
-            from_file: l.from_file,
-            to_file: l.to_file,
-            via_symbols: l.via_symbols,
-            strength: (l.strength * 10.0).round() / 10.0,
+        .enumerate()
+        .map(|(idx, l)| {
+            let coupling_metric = (l.strength * 10.0).round() / 10.0;
+            json!({
+                "file": l.to_file,
+                "via_symbols": l.via_symbols,
+                "coupling_metric": coupling_metric,
+                "rank": idx + 1,
+            })
         })
         .collect();
+    let total_strength = linked_files
+        .iter()
+        .filter_map(|item| item.get("coupling_metric").and_then(Value::as_f64))
+        .sum::<f64>();
+    let max_strength = linked_files
+        .iter()
+        .filter_map(|item| item.get("coupling_metric").and_then(Value::as_f64))
+        .fold(0.0_f64, f64::max);
+    let payload = json!({
+        "tool": "cross_file_links",
+        "source_file": file,
+        "linked_files": linked_files,
+        "coupling_metric": {
+            "linked_file_count": linked_files.len(),
+            "max_strength": max_strength,
+            "total_strength": ((total_strength * 10.0).round() / 10.0),
+        },
+        "summary": {
+            "status": "ok",
+            "linked_file_count": linked_files.len(),
+            "isolated": linked_files.is_empty(),
+        },
+        "warnings": [],
+    });
 
-    let mut response = tool_result_value(&result, output_format)?;
+    let mut response = tool_result_value(&payload, output_format)?;
     inject_budget_metadata(
         &mut response,
         &budgets.summary(
             "review_context_extraction.max_files",
             limit,
-            requested_limit.max(result.len()),
+            requested_limit.max(linked_files.len()),
         ),
     );
     Ok(response)
@@ -760,23 +811,33 @@ pub(super) fn tool_concept_clusters(
     let clusters = sem::cluster_by_shared_symbols(&store, &seed_refs, limit)
         .context("concept_clusters failed")?;
 
-    #[derive(Serialize)]
-    struct ClusterResult {
-        files: Vec<String>,
-        shared_symbols: Vec<String>,
-        density: f64,
-    }
-
-    let result: Vec<ClusterResult> = clusters
+    let truncated = clusters.len() >= limit;
+    let result: Vec<_> = clusters
         .into_iter()
-        .map(|c| ClusterResult {
-            files: c.files,
-            shared_symbols: c.shared_symbols,
-            density: (c.density * 1000.0).round() / 1000.0,
+        .enumerate()
+        .map(|(idx, c)| {
+            json!({
+                "files": c.files,
+                "shared_symbols": c.shared_symbols,
+                "density": (c.density * 1000.0).round() / 1000.0,
+                "rank": idx + 1,
+            })
         })
         .collect();
+    let payload = json!({
+        "tool": "concept_clusters",
+        "seed_files": files,
+        "clusters": result,
+        "summary": {
+            "status": "ok",
+            "cluster_count": result.len(),
+            "seed_file_count": seed_refs.len(),
+        },
+        "truncated": truncated,
+        "warnings": [],
+    });
 
-    let mut response = tool_result_value(&result, output_format)?;
+    let mut response = tool_result_value(&payload, output_format)?;
     inject_budget_metadata(
         &mut response,
         &budgets.summary(
@@ -967,18 +1028,28 @@ pub(super) fn tool_resolve_symbol(
                     None
                 };
                 let result = serde_json::json!({
-                    "qualified_name": m.qualified_name,
-                    "resolved": true,
-                    "ambiguous": false,
-                    "match_count": 1,
-                    "atlas_truncated": false,
-                    "matches": [m],
-                    "alias_note": alias_note,
+                    "tool": "resolve_symbol",
+                    "query": {
+                        "name": name,
+                        "kind": kind_input,
+                        "file": file_filter,
+                        "language": language,
+                    },
+                    "best_match": m,
+                    "ambiguity": {
+                        "ambiguous": false,
+                        "matches": [m],
+                    },
                     "suggestions": [{
-                        "hint": "Exact match resolved. Pass qualified_name to symbol_neighbors \
-                                 or traverse_graph for callers, callees, and relationships.",
+                        "hint": "Exact match resolved. Pass qualified_name to symbol_neighbors or traverse_graph for callers, callees, and relationships.",
                         "next_tools": ["symbol_neighbors", "traverse_graph", "get_context"]
                     }],
+                    "summary": {
+                        "status": "resolved",
+                        "match_count": 1,
+                        "truncated": false,
+                    },
+                    "warnings": alias_note.into_iter().collect::<Vec<_>>(),
                 });
                 let mut response = tool_result_value(&result, output_format)?;
                 inject_budget_metadata(
@@ -993,19 +1064,30 @@ pub(super) fn tool_resolve_symbol(
             }
             ResolvedTarget::Ambiguous(meta) => {
                 let result = serde_json::json!({
-                    "qualified_name": meta.candidates.first(),
-                    "resolved": false,
-                    "ambiguous": true,
-                    "match_count": meta.candidates.len(),
-                    "atlas_truncated": false,
-                    "matches": serde_json::Value::Array(
-                        meta.candidates.iter().map(|qn| serde_json::json!({"qualified_name": qn})).collect()
-                    ),
+                    "tool": "resolve_symbol",
+                    "query": {
+                        "name": name,
+                        "kind": kind_input,
+                        "file": file_filter,
+                        "language": language,
+                    },
+                    "best_match": Value::Null,
+                    "ambiguity": {
+                        "ambiguous": true,
+                        "matches": serde_json::Value::Array(
+                            meta.candidates.iter().map(|qn| serde_json::json!({"qualified_name": qn})).collect()
+                        ),
+                    },
                     "suggestions": [{
-                        "hint": "Multiple symbols match. Narrow with 'file', 'kind', or 'language'. \
-                                 Then pass the exact qualified_name to symbol_neighbors or traverse_graph.",
+                        "hint": "Multiple symbols match. Narrow with 'file', 'kind', or 'language'. Then pass the exact qualified_name to symbol_neighbors or traverse_graph.",
                         "next_tools": ["symbol_neighbors", "traverse_graph", "get_context"]
                     }],
+                    "summary": {
+                        "status": "ambiguous",
+                        "match_count": meta.candidates.len(),
+                        "truncated": false,
+                    },
+                    "warnings": [],
                 });
                 let mut response = tool_result_value(&result, output_format)?;
                 inject_budget_metadata(
@@ -1019,33 +1101,24 @@ pub(super) fn tool_resolve_symbol(
                 return Ok(response);
             }
             ResolvedTarget::NotFound { suggestions } => {
-                let result = serde_json::json!({
-                    "qualified_name": null,
-                    "resolved": false,
-                    "ambiguous": false,
-                    "match_count": 0,
-                    "atlas_truncated": false,
-                    "matches": [],
-                    "suggestions": [{
-                        "hint": format!(
-                            "No symbol matched '{}'. Verify canonical QN tokens (e.g. '::fn::' not '::function::'). \
-                             Candidates: {:?}. Try query_graph or resolve_symbol with a shorter name.",
-                            name, suggestions
-                        ),
-                        "candidates": suggestions,
-                        "next_tools": ["query_graph", "explain_query"]
-                    }],
-                });
-                let mut response = tool_result_value(&result, output_format)?;
-                inject_budget_metadata(
-                    &mut response,
-                    &budgets.summary(
-                        "query_candidates_and_seeds.max_candidates",
-                        limit,
-                        requested_limit.max(suggestions.len()),
+                let payload = input_shape_error_payload(
+                    "resolve_symbol",
+                    format!("no symbol matched '{name}'"),
+                    format!(
+                        "No symbol matched '{name}'. Verify canonical QN tokens (e.g. '::fn::' not '::function::'). Candidates: {:?}. Try query_graph or resolve_symbol with a shorter name.",
+                        suggestions
                     ),
+                    InputShapeErrorSpec {
+                        offending_fields: vec!["name".to_owned()],
+                        normalization_performed: Vec::new(),
+                        accepted_argument_families: vec!["name".to_owned(), "name + kind".to_owned(), "name + file".to_owned()],
+                        retry_example: Some(json!({"name": "compute"})),
+                        fail_closed_reason: Some("Atlas could not resolve the requested symbol name in the indexed graph".to_owned()),
+                        retry_guidance: Some("Use query_graph or explain_query to find exact symbol names, then retry resolve_symbol.".to_owned()),
+                        extra_details: Some(json!({"candidates": suggestions})),
+                    },
                 );
-                return Ok(response);
+                return tool_execution_error_value(output_format, &payload);
             }
             ResolvedTarget::File(_) => {}
         }
@@ -1089,6 +1162,24 @@ pub(super) fn tool_resolve_symbol(
         );
     }
 
+    if ranked.is_empty() {
+        let payload = input_shape_error_payload(
+            "resolve_symbol",
+            format!("no symbol matched '{name}'"),
+            "No symbol matched requested name in indexed graph. Use query_graph or explain_query to find exact identifiers, then retry resolve_symbol.".to_owned(),
+            InputShapeErrorSpec {
+                offending_fields: vec!["name".to_owned()],
+                normalization_performed: Vec::new(),
+                accepted_argument_families: vec!["name".to_owned(), "name + kind".to_owned(), "name + file".to_owned()],
+                retry_example: Some(json!({"name": "compute"})),
+                fail_closed_reason: Some("Atlas could not resolve the requested symbol name in the indexed graph".to_owned()),
+                retry_guidance: Some("Use query_graph or explain_query to discover exact symbol names, then retry resolve_symbol.".to_owned()),
+                extra_details: None,
+            },
+        );
+        return tool_execution_error_value(output_format, &payload);
+    }
+
     let best_qn = ranked.first().map(|r| r.node.qualified_name.as_str());
     let ambiguous = ranked.len() > 1;
 
@@ -1117,33 +1208,42 @@ pub(super) fn tool_resolve_symbol(
     let suggestions: Vec<serde_json::Value> = if best_qn.is_some() {
         if ambiguous {
             vec![serde_json::json!({
-                "hint": "Multiple symbols match. Narrow with 'file', 'kind', or 'language'. \
-                         Then pass the exact qualified_name to symbol_neighbors or traverse_graph.",
+                "hint": "Multiple symbols match. Narrow with 'file', 'kind', or 'language'. Then pass the exact qualified_name to symbol_neighbors or traverse_graph.",
                 "next_tools": ["symbol_neighbors", "traverse_graph", "get_context"]
             })]
         } else {
             vec![serde_json::json!({
-                "hint": "Exact match resolved. Pass qualified_name to symbol_neighbors \
-                         or traverse_graph for callers, callees, and relationships.",
+                "hint": "Exact match resolved. Pass qualified_name to symbol_neighbors or traverse_graph for callers, callees, and relationships.",
                 "next_tools": ["symbol_neighbors", "traverse_graph", "get_context"]
             })]
         }
     } else {
         vec![serde_json::json!({
-            "hint": "No symbol matched. Try query_graph with a regex pattern, \
-                     or use explain_query to validate the search input.",
+            "hint": "No symbol matched. Try query_graph with a regex pattern, or use explain_query to validate the search input.",
             "next_tools": ["query_graph", "explain_query"]
         })]
     };
 
     let result = serde_json::json!({
-        "qualified_name": best_qn,
-        "resolved": best_qn.is_some(),
-        "ambiguous": ambiguous,
-        "match_count": matches.len(),
-        "atlas_truncated": truncated,
-        "matches": matches,
+        "tool": "resolve_symbol",
+        "query": {
+            "name": name,
+            "kind": kind_input,
+            "file": file_filter,
+            "language": language,
+        },
+        "best_match": matches.first(),
+        "ambiguity": {
+            "ambiguous": ambiguous,
+            "matches": matches,
+        },
         "suggestions": suggestions,
+        "summary": {
+            "status": if best_qn.is_some() { if ambiguous { "ambiguous" } else { "resolved" } } else { "not_found" },
+            "match_count": total_before_limit.min(limit),
+            "truncated": truncated,
+        },
+        "warnings": [],
     });
 
     let mut response = tool_result_value(&result, output_format)?;

@@ -22,9 +22,14 @@ fn parse_tool_json(resp: serde_json::Value) -> serde_json::Value {
         .expect("parse json tool text")
 }
 
-// -----------------------------------------------------------------------
-// search_text_assets
-// -----------------------------------------------------------------------
+fn match_paths(value: &serde_json::Value) -> Vec<&str> {
+    value["matches"]
+        .as_array()
+        .expect("matches array")
+        .iter()
+        .map(|row| row["path"].as_str().expect("match path"))
+        .collect()
+}
 
 #[test]
 fn search_text_assets_finds_sql_files() {
@@ -34,20 +39,15 @@ fn search_text_assets_finds_sql_files() {
     ]);
     let args = serde_json::json!({ "kind": "sql" });
     let resp = tool_search_text_assets(Some(&args), &root, OutputFormat::Json).unwrap();
-    let v: serde_json::Value =
-        serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
-    let files: Vec<&str> = v["files"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|f| f.as_str().unwrap())
-        .collect();
+    let v = parse_tool_json(resp);
+    let files = match_paths(&v);
     assert!(
         files.iter().any(|f| f.ends_with("001_init.sql")),
         "{files:?}"
     );
     assert!(!files.iter().any(|f| f.ends_with("main.rs")), "{files:?}");
-    assert_eq!(v["atlas_result_kind"], "text_asset_files");
+    assert_eq!(v["tool"], "search_text_assets");
+    assert_eq!(v["kind"], "sql");
 }
 
 #[test]
@@ -59,14 +59,8 @@ fn search_text_assets_finds_config_files() {
     ]);
     let args = serde_json::json!({ "kind": "config" });
     let resp = tool_search_text_assets(Some(&args), &root, OutputFormat::Json).unwrap();
-    let v: serde_json::Value =
-        serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
-    let files: Vec<&str> = v["files"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|f| f.as_str().unwrap())
-        .collect();
+    let v = parse_tool_json(resp);
+    let files = match_paths(&v);
     assert!(files.iter().any(|f| f.ends_with("app.toml")), "{files:?}");
     assert!(files.iter().any(|f| f.ends_with("db.yaml")), "{files:?}");
 }
@@ -80,24 +74,16 @@ fn search_text_assets_finds_prompt_files() {
     ]);
     let args = serde_json::json!({ "kind": "prompt" });
     let resp = tool_search_text_assets(Some(&args), &root, OutputFormat::Json).unwrap();
-    let v: serde_json::Value =
-        serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
-    let files: Vec<&str> = v["files"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|f| f.as_str().unwrap())
-        .collect();
+    let v = parse_tool_json(resp);
+    let files = match_paths(&v);
     assert!(
         files.iter().any(|f| f.ends_with("system.prompt")),
         "system.prompt missing: {files:?}"
     );
-    // prompts/*.md should match
     assert!(
         files.iter().any(|f| f.contains("prompts/review.md")),
         "prompts/review.md missing: {files:?}"
     );
-    // docs/guide.md should NOT match (not in prompts/ and not a .prompt file)
     assert!(
         !files.iter().any(|f| f.ends_with("guide.md")),
         "guide.md leaked: {files:?}"
@@ -105,14 +91,14 @@ fn search_text_assets_finds_prompt_files() {
 }
 
 #[test]
-fn search_text_assets_no_results_hint() {
+fn search_text_assets_no_results_emit_stable_empty_schema() {
     let (_dir, root) = make_repo(&[("src/main.rs", "fn main() {}")]);
     let args = serde_json::json!({ "kind": "sql" });
     let resp = tool_search_text_assets(Some(&args), &root, OutputFormat::Json).unwrap();
-    let v: serde_json::Value =
-        serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
-    assert_eq!(v["result_count"], 0);
-    assert!(v["atlas_hint"].is_string(), "expected hint");
+    let v = parse_tool_json(resp);
+    assert_eq!(v["matches"], serde_json::json!([]));
+    assert_eq!(v["summary"]["returned_count"], serde_json::json!(0));
+    assert_eq!(v["warnings"].as_array().map(|rows| rows.len()), Some(1));
 }
 
 #[test]
@@ -124,9 +110,8 @@ fn search_text_assets_default_finds_multiple_kinds() {
     ]);
     let args = serde_json::json!({});
     let resp = tool_search_text_assets(Some(&args), &root, OutputFormat::Json).unwrap();
-    let v: serde_json::Value =
-        serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
-    assert!(v["result_count"].as_u64().unwrap() >= 3, "{v}");
+    let v = parse_tool_json(resp);
+    assert!(v["summary"]["returned_count"].as_u64().unwrap() >= 3, "{v}");
 }
 
 #[test]
@@ -137,14 +122,8 @@ fn search_text_assets_subpath_scoping() {
     ]);
     let args = serde_json::json!({ "kind": "sql", "subpath": "services/auth" });
     let resp = tool_search_text_assets(Some(&args), &root, OutputFormat::Json).unwrap();
-    let v: serde_json::Value =
-        serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
-    let files: Vec<&str> = v["files"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|f| f.as_str().unwrap())
-        .collect();
+    let v = parse_tool_json(resp);
+    let files = match_paths(&v);
     assert!(
         files.iter().any(|f| f.contains("auth/db.sql")),
         "auth/db.sql missing: {files:?}"
@@ -216,14 +195,8 @@ fn search_text_assets_atlasignore_respected() {
     ]);
     let args = serde_json::json!({ "kind": "sql" });
     let resp = tool_search_text_assets(Some(&args), &root, OutputFormat::Json).unwrap();
-    let v: serde_json::Value =
-        serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
-    let files: Vec<&str> = v["files"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|f| f.as_str().unwrap())
-        .collect();
+    let v = parse_tool_json(resp);
+    let files = match_paths(&v);
     assert!(
         !files.iter().any(|f| f.ends_with("secret.sql")),
         "secret.sql leaked: {files:?}"

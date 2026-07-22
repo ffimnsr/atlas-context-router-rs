@@ -1,4 +1,5 @@
 use super::*;
+use serde_json::json;
 
 #[test]
 fn query_graph_regex_param_filters_results() {
@@ -538,39 +539,32 @@ fn symbol_neighbors_includes_call_edge_sites() {
     let value: serde_json::Value = serde_json::from_str(&text).expect("parse json");
 
     assert_eq!(
-        value.pointer("/callers/0/qn").and_then(|v| v.as_str()),
-        Some("src/api.rs::fn::handle_request")
-    );
-    assert_eq!(
-        value.pointer("/callers/1").and_then(|v| v.as_object()),
-        None
-    );
-    assert_eq!(
-        value
-            .pointer("/caller_edges/0/from")
-            .and_then(|v| v.as_str()),
-        Some("src/api.rs::fn::handle_request")
-    );
-    assert_eq!(
-        value.pointer("/caller_edges/0/to").and_then(|v| v.as_str()),
+        value.pointer("/symbol/qname").and_then(|v| v.as_str()),
         Some("src/service.rs::fn::compute")
     );
     assert_eq!(
-        value
-            .pointer("/caller_edges/0/file")
-            .and_then(|v| v.as_str()),
+        value.pointer("/callers/0/qn").and_then(|v| v.as_str()),
+        Some("src/api.rs::fn::handle_request")
+    );
+    assert_eq!(value["call_sites"].as_array().map(|v| v.len()), Some(2));
+    assert_eq!(
+        value.pointer("/call_sites/0/from").and_then(|v| v.as_str()),
+        Some("src/api.rs::fn::handle_request")
+    );
+    assert_eq!(
+        value.pointer("/call_sites/0/to").and_then(|v| v.as_str()),
+        Some("src/service.rs::fn::compute")
+    );
+    assert_eq!(
+        value.pointer("/call_sites/0/file").and_then(|v| v.as_str()),
         Some("src/api.rs")
     );
     assert_eq!(
-        value
-            .pointer("/caller_edges/0/line")
-            .and_then(|v| v.as_u64()),
+        value.pointer("/call_sites/0/line").and_then(|v| v.as_u64()),
         Some(1)
     );
     assert_eq!(
-        value
-            .pointer("/caller_edges/1/line")
-            .and_then(|v| v.as_u64()),
+        value.pointer("/call_sites/1/line").and_then(|v| v.as_u64()),
         Some(2)
     );
 }
@@ -593,7 +587,7 @@ fn symbol_neighbors_normalizes_alias_qname() {
     let text = unwrap_tool_text(response);
     let value: serde_json::Value = serde_json::from_str(&text).expect("parse json");
 
-    assert_eq!(value["qname"], "src/service.rs::fn::compute");
+    assert_eq!(value["symbol"]["qname"], "src/service.rs::fn::compute");
     assert_eq!(
         value.pointer("/callers/0/qn").and_then(|v| v.as_str()),
         Some("src/api.rs::fn::handle_request")
@@ -740,6 +734,11 @@ fn symbol_neighbors_missing_qname_sets_error_code() {
     let resp = call("symbol_neighbors", Some(&args), "/repo", &fixture.db_path)
         .expect("symbol_neighbors should not error for missing symbol");
     assert_eq!(resp["atlas_error_code"].as_str(), Some("node_not_found"));
+    assert_eq!(
+        resp["structuredContent"]["summary"]["status"],
+        json!("node_not_found")
+    );
+    assert_eq!(resp["structuredContent"]["callers"], json!([]));
     assert_error_code_doc_link(
         resp["atlas_error_code_docs"]
             .as_str()
@@ -754,12 +753,73 @@ fn symbol_neighbors_missing_qname_sets_error_code() {
 }
 
 #[test]
+fn cross_file_links_returns_stable_shape_for_linked_and_isolated_files() {
+    let fixture = setup_mcp_fixture();
+    let linked_args = serde_json::json!({ "file": "src/service.rs", "output_format": "json" });
+    let linked_resp = call(
+        "cross_file_links",
+        Some(&linked_args),
+        "/repo",
+        &fixture.db_path,
+    )
+    .expect("cross_file_links linked");
+    let linked: serde_json::Value =
+        serde_json::from_str(&unwrap_tool_text(linked_resp)).expect("parse json");
+    assert_eq!(linked["source_file"], json!("src/service.rs"));
+    assert!(linked["linked_files"].as_array().is_some());
+    assert!(linked["coupling_metric"].as_object().is_some());
+    assert!(linked["summary"].as_object().is_some());
+
+    let isolated_args =
+        serde_json::json!({ "file": "tests/service_test.rs", "output_format": "json" });
+    let isolated_resp = call(
+        "cross_file_links",
+        Some(&isolated_args),
+        "/repo",
+        &fixture.db_path,
+    )
+    .expect("cross_file_links isolated");
+    let isolated: serde_json::Value =
+        serde_json::from_str(&unwrap_tool_text(isolated_resp)).expect("parse json");
+    assert_eq!(isolated["source_file"], json!("tests/service_test.rs"));
+    assert!(isolated["linked_files"].as_array().is_some());
+}
+
+#[test]
 fn cross_file_links_includes_provenance() {
     let fixture = setup_mcp_fixture();
     let args = serde_json::json!({ "file": "src/service.rs", "output_format": "json" });
     let resp =
         call("cross_file_links", Some(&args), "/repo", &fixture.db_path).expect("cross_file_links");
     assert_provenance(&resp, "/repo", &fixture.db_path);
+}
+
+#[test]
+fn concept_clusters_returns_stable_shape_for_present_and_empty_clusters() {
+    let fixture = setup_mcp_fixture();
+    let args = serde_json::json!({ "files": ["src/service.rs"], "output_format": "json" });
+    let resp =
+        call("concept_clusters", Some(&args), "/repo", &fixture.db_path).expect("concept_clusters");
+    let value: serde_json::Value =
+        serde_json::from_str(&unwrap_tool_text(resp)).expect("parse json");
+    assert_eq!(value["seed_files"], json!(["src/service.rs"]));
+    assert!(value["clusters"].as_array().is_some());
+    assert!(value["summary"].as_object().is_some());
+    assert!(value["truncated"].as_bool().is_some());
+
+    let empty_args =
+        serde_json::json!({ "files": ["tests/service_test.rs"], "output_format": "json" });
+    let empty_resp = call(
+        "concept_clusters",
+        Some(&empty_args),
+        "/repo",
+        &fixture.db_path,
+    )
+    .expect("concept_clusters empty");
+    let empty_value: serde_json::Value =
+        serde_json::from_str(&unwrap_tool_text(empty_resp)).expect("parse json");
+    assert_eq!(empty_value["seed_files"], json!(["tests/service_test.rs"]));
+    assert!(empty_value["clusters"].as_array().is_some());
 }
 
 #[test]
@@ -870,19 +930,20 @@ fn explain_query_includes_provenance() {
 #[test]
 fn resolve_symbol_finds_exact_match() {
     let fixture = setup_mcp_fixture();
-    let args = serde_json::json!({ "name": "compute", "output_format": "json" });
+    let args =
+        serde_json::json!({ "name": "compute", "file": "src/service.rs", "output_format": "json" });
     let resp = call("resolve_symbol", Some(&args), "/repo", &fixture.db_path)
         .expect("resolve_symbol call");
     let text = unwrap_tool_text(resp);
     let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
 
-    assert_eq!(v["resolved"].as_bool(), Some(true));
+    assert_eq!(v["summary"]["status"], json!("resolved"));
     assert_eq!(
-        v["qualified_name"].as_str(),
+        v["best_match"]["qualified_name"].as_str(),
         Some("src/service.rs::fn::compute")
     );
-    assert!(v["match_count"].as_i64().unwrap_or(0) >= 1);
-    let matches = v["matches"].as_array().expect("matches array");
+    assert!(v["summary"]["match_count"].as_i64().unwrap_or(0) >= 1);
+    let matches = v["ambiguity"]["matches"].as_array().expect("matches array");
     assert!(!matches.is_empty());
     assert_eq!(matches[0]["kind"].as_str(), Some("function"));
     assert_eq!(matches[0]["file_path"].as_str(), Some("src/service.rs"));
@@ -907,21 +968,14 @@ fn resolve_symbol_empty_name_returns_error() {
 }
 
 #[test]
-fn resolve_symbol_no_match_returns_unresolved() {
+fn resolve_symbol_no_match_returns_tool_error() {
     let fixture = setup_mcp_fixture();
     let args = serde_json::json!({ "name": "nonexistent_symbol_xyz", "output_format": "json" });
     let resp = call("resolve_symbol", Some(&args), "/repo", &fixture.db_path)
         .expect("resolve_symbol call");
-    let text = unwrap_tool_text(resp);
-    let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
 
-    assert_eq!(v["resolved"].as_bool(), Some(false));
-    assert!(v["qualified_name"].is_null());
-    assert_eq!(v["match_count"].as_i64(), Some(0));
-    let suggestions = v["suggestions"].as_array().expect("suggestions array");
-    assert!(!suggestions.is_empty());
-    let hint = suggestions[0]["hint"].as_str().expect("hint string");
-    assert!(hint.contains("query_graph") || hint.contains("explain_query"));
+    assert_eq!(resp["isError"], json!(true));
+    assert_eq!(resp["structuredContent"]["code"], json!("invalid_input"));
 }
 
 #[test]
@@ -933,9 +987,9 @@ fn resolve_symbol_kind_alias_fn_resolves_to_function() {
     let text = unwrap_tool_text(resp);
     let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
 
-    assert_eq!(v["resolved"].as_bool(), Some(true));
+    assert_eq!(v["summary"]["status"], json!("resolved"));
     assert_eq!(
-        v["qualified_name"].as_str(),
+        v["best_match"]["qualified_name"].as_str(),
         Some("src/service.rs::fn::compute")
     );
 }
@@ -949,15 +1003,46 @@ fn resolve_symbol_file_filter_narrows_results() {
     let text = unwrap_tool_text(resp);
     let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
 
-    assert_eq!(v["resolved"].as_bool(), Some(true));
+    assert_eq!(v["summary"]["status"], json!("resolved"));
     assert_eq!(
-        v["qualified_name"].as_str(),
+        v["best_match"]["qualified_name"].as_str(),
         Some("src/api.rs::fn::handle_request")
     );
-    let matches = v["matches"].as_array().expect("matches array");
+    let matches = v["ambiguity"]["matches"].as_array().expect("matches array");
     for m in matches {
         assert!(m["file_path"].as_str().unwrap_or("").contains("src/api.rs"));
     }
+}
+
+#[test]
+fn resolve_symbol_returns_ambiguous_success_shape() {
+    let fixture = setup_mcp_fixture();
+    let mut store = Store::open(&fixture.db_path).expect("open store");
+    let dupe = make_node(
+        NodeKind::Function,
+        "compute",
+        "src/extra.rs::fn::compute",
+        "src/extra.rs",
+    );
+    store
+        .replace_file_graph(
+            "src/extra.rs",
+            "hash:src/extra.rs",
+            Some("rust"),
+            Some(1),
+            &[dupe],
+            &[],
+        )
+        .expect("replace extra graph");
+
+    let args = serde_json::json!({ "name": "compute", "output_format": "json" });
+    let resp = call("resolve_symbol", Some(&args), "/repo", &fixture.db_path)
+        .expect("resolve_symbol call");
+    let v: serde_json::Value = serde_json::from_str(&unwrap_tool_text(resp)).expect("parse json");
+    assert_eq!(v["summary"]["status"], json!("ambiguous"));
+    assert!(v["best_match"].is_object() || v["best_match"].is_null());
+    assert!(v["ambiguity"]["ambiguous"].as_bool().unwrap_or(false));
+    assert!(v["ambiguity"]["matches"].as_array().unwrap().len() >= 2);
 }
 
 #[test]
@@ -996,7 +1081,7 @@ fn resolve_symbol_truncation_metadata_present() {
         .expect("resolve_symbol call");
     let text = unwrap_tool_text(resp.clone());
     let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
-    assert!(v.get("atlas_truncated").is_some());
+    assert!(v["summary"]["truncated"].as_bool().is_some());
 }
 
 #[test]

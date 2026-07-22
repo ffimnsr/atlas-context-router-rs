@@ -33,6 +33,23 @@ const TEMPLATE_EXTENSIONS: &[&str] = &[
     "*.pug",
 ];
 
+fn template_kind_for_path(path: &Path) -> &'static str {
+    match path.extension().and_then(|value| value.to_str()) {
+        Some("html") | Some("htm") => "html",
+        Some("j2") | Some("jinja") | Some("jinja2") => "jinja",
+        Some("hbs") | Some("handlebars") => "handlebars",
+        Some("tera") => "tera",
+        Some("mako") => "mako",
+        Some("mustache") => "mustache",
+        Some("twig") => "twig",
+        Some("liquid") => "liquid",
+        Some("erb") => "erb",
+        Some("haml") => "haml",
+        Some("pug") => "pug",
+        _ => "unknown",
+    }
+}
+
 /// MCP tool: `search_templates` — discover template files by extension.
 ///
 /// Defaults to all common template extensions. Pass `kind` to narrow to a
@@ -106,11 +123,38 @@ pub(crate) fn tool_search_templates(
             walker.add_ignore(&atlasignore_path);
         }
 
-        let mut files: Vec<String> = Vec::new();
+        #[derive(Serialize)]
+        struct SearchTemplateMatch {
+            path: String,
+            file_name: String,
+            extension: Option<String>,
+            kind: String,
+        }
+
+        #[derive(Serialize)]
+        struct SearchTemplatesSummary {
+            returned_count: usize,
+            result_limit: usize,
+            scope: &'static str,
+            has_matches: bool,
+        }
+
+        #[derive(Serialize)]
+        struct SearchTemplatesResult {
+            tool: &'static str,
+            kind: Option<String>,
+            subpath: Option<String>,
+            matches: Vec<SearchTemplateMatch>,
+            summary: SearchTemplatesSummary,
+            truncated: bool,
+            warnings: Vec<String>,
+        }
+
+        let mut matches: Vec<SearchTemplateMatch> = Vec::new();
         let mut truncated = false;
 
         for entry in walker.build().flatten() {
-            if files.len() >= max_results {
+            if matches.len() >= max_results {
                 truncated = true;
                 break;
             }
@@ -141,18 +185,25 @@ pub(crate) fn tool_search_templates(
 
             let file_name = full_path
                 .file_name()
-                .map(|n| n.to_string_lossy())
+                .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default();
-            if !name_matcher.is_match(file_name.as_ref()) {
+            if !name_matcher.is_match(file_name.as_str()) {
                 continue;
             }
 
-            files.push(rel_path);
+            matches.push(SearchTemplateMatch {
+                path: rel_path,
+                file_name,
+                extension: full_path
+                    .extension()
+                    .map(|value| value.to_string_lossy().into_owned()),
+                kind: template_kind_for_path(full_path).to_owned(),
+            });
         }
 
-        files.sort_unstable();
+        matches.sort_unstable_by(|left, right| left.path.cmp(&right.path));
 
-        let result_count = files.len();
+        let result_count = matches.len();
         if truncated {
             budgets.record_usage(
                 policy.review_context_extraction.files,
@@ -162,32 +213,28 @@ pub(crate) fn tool_search_templates(
                 true,
             );
         }
-        let atlas_hint = if result_count == 0 {
+        let warnings = if result_count == 0 {
             let kind_hint = kind.as_deref().unwrap_or("any template");
-            Some(format!(
-                "No {kind_hint} template files found. Verify the repo contains template files or \
-                 widen the search with a broader `kind` or by removing `globs` filters.",
-            ))
+            vec![format!(
+                "No {kind_hint} template files found. Verify repo contains template files or widen search by removing kind/globs filters."
+            )]
         } else {
-            None
+            Vec::new()
         };
 
-        #[derive(Serialize)]
-        struct SearchTemplatesResult {
-            files: Vec<String>,
-            result_count: usize,
-            truncated: bool,
-            atlas_result_kind: &'static str,
-            #[serde(skip_serializing_if = "Option::is_none")]
-            atlas_hint: Option<String>,
-        }
-
         let result = SearchTemplatesResult {
-            files,
-            result_count,
+            tool: "search_templates",
+            kind,
+            subpath,
+            matches,
+            summary: SearchTemplatesSummary {
+                returned_count: result_count,
+                result_limit: max_results,
+                scope: if walk_root == repo_root { "repo_root" } else { "subpath" },
+                has_matches: result_count > 0,
+            },
             truncated,
-            atlas_result_kind: "template_files",
-            atlas_hint,
+            warnings,
         };
 
         let mut response = render_tool_result(&result, output_format)?;

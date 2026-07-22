@@ -79,7 +79,22 @@ pub(crate) fn tool_result_contract(name: &str) -> ToolResultContract {
         | "read_saved_context"
         | "save_context_artifact"
         | "purge_saved_context"
-        | "get_global_memory" => ToolResultContract::StableObject,
+        | "get_global_memory"
+        | "symbol_neighbors"
+        | "cross_file_links"
+        | "concept_clusters"
+        | "analyze_safety"
+        | "analyze_remove"
+        | "analyze_dead_code"
+        | "analyze_dependency"
+        | "resolve_symbol"
+        | "search_files"
+        | "search_content"
+        | "read_file_excerpt"
+        | "get_docs_section"
+        | "read_file_around_match"
+        | "search_templates"
+        | "search_text_assets" => ToolResultContract::StableObject,
         "query_graph"
         | "batch_query_graph"
         | "search_saved_context"
@@ -1078,6 +1093,21 @@ fn tool_output_schema_for(name: &str) -> Option<Value> {
         "get_context_stats" => Some(get_context_stats_output_schema()),
         "purge_saved_context" => Some(purge_saved_context_output_schema()),
         "get_global_memory" => Some(get_global_memory_output_schema()),
+        "symbol_neighbors" => Some(symbol_neighbors_output_schema()),
+        "cross_file_links" => Some(cross_file_links_output_schema()),
+        "concept_clusters" => Some(concept_clusters_output_schema()),
+        "analyze_safety" => Some(analyze_safety_output_schema()),
+        "analyze_remove" => Some(analyze_remove_output_schema()),
+        "analyze_dead_code" => Some(analyze_dead_code_output_schema()),
+        "analyze_dependency" => Some(analyze_dependency_output_schema()),
+        "resolve_symbol" => Some(resolve_symbol_output_schema()),
+        "search_files" => Some(search_files_output_schema()),
+        "search_content" => Some(search_content_output_schema()),
+        "read_file_excerpt" => Some(read_file_excerpt_output_schema()),
+        "get_docs_section" => Some(get_docs_section_output_schema()),
+        "read_file_around_match" => Some(read_file_around_match_output_schema()),
+        "search_templates" => Some(search_templates_output_schema()),
+        "search_text_assets" => Some(search_text_assets_output_schema()),
         "man" => Some(man_output_schema()),
         _ => None,
     }
@@ -3428,6 +3458,494 @@ fn get_global_memory_output_schema() -> Value {
             "workflow_patterns",
             "relevant_sessions",
             "summary",
+            "warnings",
+            "atlas_provenance",
+        ],
+        None,
+    )
+}
+
+fn symbol_neighbors_output_schema() -> Value {
+    normalized_tool_output_schema(
+        serde_json::json!({
+            "symbol": { "type": "object" },
+            "callers": { "type": "array", "items": { "type": "object" } },
+            "callees": { "type": "array", "items": { "type": "object" } },
+            "call_sites": { "type": "array", "items": { "type": "object" } },
+            "tests": { "type": "array", "items": { "type": "object" } },
+            "siblings": { "type": "array", "items": { "type": "object" } },
+            "imports": { "type": "array", "items": { "type": "object" } },
+            "summary": { "type": "object" },
+            "warnings": { "type": "array", "items": { "type": "string" } },
+            "atlas_provenance": { "type": "object" },
+            "atlas_freshness": { "type": "object" }
+        }),
+        &[
+            "tool",
+            "symbol",
+            "callers",
+            "callees",
+            "call_sites",
+            "tests",
+            "siblings",
+            "imports",
+            "summary",
+            "warnings",
+            "atlas_provenance",
+        ],
+        None,
+    )
+}
+
+fn cross_file_links_output_schema() -> Value {
+    normalized_tool_output_schema(
+        serde_json::json!({
+            "source_file": { "type": "string" },
+            "linked_files": { "type": "array", "items": { "type": "object" } },
+            "coupling_metric": { "type": "object" },
+            "summary": { "type": "object" },
+            "warnings": { "type": "array", "items": { "type": "string" } },
+            "atlas_provenance": { "type": "object" },
+            "atlas_freshness": { "type": "object" }
+        }),
+        &[
+            "tool",
+            "source_file",
+            "linked_files",
+            "coupling_metric",
+            "summary",
+            "warnings",
+            "atlas_provenance",
+        ],
+        None,
+    )
+}
+
+fn concept_clusters_output_schema() -> Value {
+    normalized_tool_output_schema(
+        serde_json::json!({
+            "seed_files": { "type": "array", "items": { "type": "string" } },
+            "clusters": { "type": "array", "items": { "type": "object" } },
+            "summary": { "type": "object" },
+            "truncated": { "type": "boolean" },
+            "warnings": { "type": "array", "items": { "type": "string" } },
+            "atlas_provenance": { "type": "object" },
+            "atlas_freshness": { "type": "object" }
+        }),
+        &[
+            "tool",
+            "seed_files",
+            "clusters",
+            "summary",
+            "truncated",
+            "warnings",
+            "atlas_provenance",
+        ],
+        None,
+    )
+}
+
+fn analyze_safety_output_schema() -> Value {
+    normalized_tool_output_schema(
+        serde_json::json!({
+            "symbol": { "type": "object" },
+            "fan_in": { "type": "integer" },
+            "fan_out": { "type": "integer" },
+            "test_adjacency": { "type": "object" },
+            "cross_module_callers": { "type": "integer" },
+            "safety_score": { "type": "number" },
+            "safety_band": { "type": "string" },
+            "suggested_validations": { "type": "array", "items": { "type": "string" } },
+            "factor_evidence": { "type": "array", "items": { "type": "object" } },
+            "summary": { "type": "object" },
+            "warnings": { "type": "array", "items": { "type": "string" } },
+            "atlas_provenance": { "type": "object" },
+            "atlas_freshness": { "type": "object" }
+        }),
+        &[
+            "tool",
+            "symbol",
+            "fan_in",
+            "fan_out",
+            "test_adjacency",
+            "cross_module_callers",
+            "safety_score",
+            "safety_band",
+            "suggested_validations",
+            "factor_evidence",
+            "summary",
+            "warnings",
+            "atlas_provenance",
+        ],
+        None,
+    )
+}
+
+fn analyze_remove_output_schema() -> Value {
+    normalized_tool_output_schema(
+        serde_json::json!({
+            "symbols": { "type": "array", "items": { "type": "object" } },
+            "definite_impacts": { "type": "array", "items": { "type": "object" } },
+            "probable_impacts": { "type": "array", "items": { "type": "object" } },
+            "weak_impacts": { "type": "array", "items": { "type": "object" } },
+            "tests": { "type": "array", "items": { "type": "object" } },
+            "uncertainty_flags": { "type": "array", "items": { "type": "string" } },
+            "summary": { "type": "object" },
+            "warnings": { "type": "array", "items": { "type": "object" } },
+            "evidence": { "type": "array", "items": { "type": "object" } },
+            "impacted_files": { "type": "array", "items": { "type": "string" } },
+            "atlas_provenance": { "type": "object" },
+            "atlas_freshness": { "type": "object" }
+        }),
+        &[
+            "tool",
+            "symbols",
+            "definite_impacts",
+            "probable_impacts",
+            "weak_impacts",
+            "tests",
+            "uncertainty_flags",
+            "summary",
+            "warnings",
+            "atlas_provenance",
+        ],
+        None,
+    )
+}
+
+fn analyze_dead_code_output_schema() -> Value {
+    normalized_tool_output_schema(
+        serde_json::json!({
+            "scope": { "type": "object" },
+            "candidates": { "type": "array", "items": { "type": "object" } },
+            "blockers": { "type": "array", "items": { "type": "object" } },
+            "summary": { "type": "object" },
+            "truncated": { "type": "boolean" },
+            "warnings": { "type": "array", "items": { "type": "string" } },
+            "atlas_provenance": { "type": "object" },
+            "atlas_freshness": { "type": "object" }
+        }),
+        &[
+            "tool",
+            "scope",
+            "candidates",
+            "blockers",
+            "summary",
+            "truncated",
+            "warnings",
+            "atlas_provenance",
+        ],
+        None,
+    )
+}
+
+fn analyze_dependency_output_schema() -> Value {
+    normalized_tool_output_schema(
+        serde_json::json!({
+            "symbol": { "type": "string" },
+            "removable": { "type": "boolean" },
+            "blocking_references": { "type": "array", "items": { "type": "object" } },
+            "confidence_tier": { "type": "string" },
+            "suggested_cleanups": { "type": "array", "items": { "type": "string" } },
+            "summary": { "type": "object" },
+            "warnings": { "type": "array", "items": { "type": "string" } },
+            "evidence": { "type": "array", "items": { "type": "object" } },
+            "atlas_provenance": { "type": "object" },
+            "atlas_freshness": { "type": "object" }
+        }),
+        &[
+            "tool",
+            "symbol",
+            "removable",
+            "blocking_references",
+            "confidence_tier",
+            "suggested_cleanups",
+            "summary",
+            "warnings",
+            "atlas_provenance",
+        ],
+        None,
+    )
+}
+
+fn resolve_symbol_output_schema() -> Value {
+    normalized_tool_output_schema(
+        serde_json::json!({
+            "query": { "type": "object" },
+            "best_match": { "type": ["object", "null"] },
+            "ambiguity": { "type": "object" },
+            "suggestions": { "type": "array", "items": { "type": "object" } },
+            "summary": { "type": "object" },
+            "warnings": { "type": "array", "items": { "type": "string" } },
+            "atlas_provenance": { "type": "object" },
+            "atlas_freshness": { "type": "object" }
+        }),
+        &[
+            "tool",
+            "query",
+            "best_match",
+            "ambiguity",
+            "suggestions",
+            "summary",
+            "warnings",
+            "atlas_provenance",
+        ],
+        None,
+    )
+}
+
+fn search_files_output_schema() -> Value {
+    normalized_tool_output_schema(
+        serde_json::json!({
+            "query": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "pattern": { "type": "string" },
+                    "globs": { "type": "array", "items": { "type": "string" } },
+                    "exclude_globs": { "type": "array", "items": { "type": "string" } },
+                    "case_sensitive": { "type": "boolean" }
+                },
+                "required": ["pattern", "globs", "exclude_globs", "case_sensitive"]
+            },
+            "subpath": { "type": ["string", "null"] },
+            "matches": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "path": { "type": "string" },
+                        "file_name": { "type": "string" },
+                        "extension": { "type": ["string", "null"] }
+                    },
+                    "required": ["path", "file_name", "extension"]
+                }
+            },
+            "summary": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "returned_count": { "type": "integer" },
+                    "result_limit": { "type": "integer" },
+                    "scope": { "type": "string", "enum": ["repo_root", "subpath"] },
+                    "has_matches": { "type": "boolean" }
+                },
+                "required": ["returned_count", "result_limit", "scope", "has_matches"]
+            },
+            "truncated": { "type": "boolean" },
+            "warnings": { "type": "array", "items": { "type": "string" } },
+            "atlas_provenance": { "type": "object" },
+            "atlas_freshness": { "type": "object" }
+        }),
+        &[
+            "tool",
+            "query",
+            "subpath",
+            "matches",
+            "summary",
+            "truncated",
+            "warnings",
+            "atlas_provenance",
+        ],
+        None,
+    )
+}
+
+fn search_content_output_schema() -> Value {
+    normalized_tool_output_schema(
+        serde_json::json!({
+            "query": { "type": "object" },
+            "mode": { "type": "string", "enum": ["literal", "regex"] },
+            "subpath": { "type": ["string", "null"] },
+            "matches": { "type": "array", "items": { "type": "object" } },
+            "summary": { "type": "object" },
+            "truncated": { "type": "boolean" },
+            "warnings": { "type": "array", "items": { "type": "string" } },
+            "atlas_provenance": { "type": "object" },
+            "atlas_freshness": { "type": "object" }
+        }),
+        &[
+            "tool",
+            "query",
+            "mode",
+            "subpath",
+            "matches",
+            "summary",
+            "truncated",
+            "warnings",
+            "atlas_provenance",
+        ],
+        None,
+    )
+}
+
+fn read_file_excerpt_output_schema() -> Value {
+    normalized_tool_output_schema(
+        serde_json::json!({
+            "file": { "type": "string" },
+            "selection_mode": { "type": "string" },
+            "ranges": { "type": "array", "items": { "type": "object" } },
+            "snippets": { "type": "array", "items": { "type": "object" } },
+            "summary": { "type": "object" },
+            "truncated": { "type": "boolean" },
+            "warnings": { "type": "array", "items": { "type": "string" } },
+            "mode": { "type": "string" },
+            "total_lines": { "type": "integer" },
+            "excerpts": { "type": "array", "items": { "type": "object" } },
+            "excerpt_count": { "type": "integer" },
+            "atlas_result_kind": { "type": "string" },
+            "atlas_hint": { "type": ["string", "null"] },
+            "atlas_provenance": { "type": "object" },
+            "atlas_freshness": { "type": "object" }
+        }),
+        &[
+            "tool",
+            "file",
+            "selection_mode",
+            "ranges",
+            "snippets",
+            "summary",
+            "truncated",
+            "warnings",
+            "atlas_provenance",
+        ],
+        None,
+    )
+}
+
+fn get_docs_section_output_schema() -> Value {
+    normalized_tool_output_schema(
+        serde_json::json!({
+            "file": { "type": "string" },
+            "selector_mode": { "type": "string" },
+            "heading": { "type": ["object", "null"] },
+            "slug": { "type": ["string", "null"] },
+            "line_start": { "type": ["integer", "null"] },
+            "line_end": { "type": ["integer", "null"] },
+            "content": { "type": ["string", "null"] },
+            "file_hash": { "type": ["string", "null"] },
+            "resolved": { "type": "boolean" },
+            "query": { "type": ["string", "null"] },
+            "candidates": { "type": "array", "items": { "type": "object" } },
+            "lines": { "type": "array", "items": { "type": "object" } },
+            "summary": { "type": "object" },
+            "truncated": { "type": "boolean" },
+            "warnings": { "type": "array", "items": { "type": "string" } },
+            "heading_path": { "type": ["string", "null"] },
+            "heading_level": { "type": ["integer", "null"] },
+            "start_line": { "type": ["integer", "null"] },
+            "end_line": { "type": ["integer", "null"] },
+            "atlas_result_kind": { "type": "string" },
+            "atlas_provenance": { "type": "object" },
+            "atlas_freshness": { "type": "object" }
+        }),
+        &[
+            "tool",
+            "file",
+            "selector_mode",
+            "heading",
+            "slug",
+            "line_start",
+            "line_end",
+            "content",
+            "file_hash",
+            "resolved",
+            "candidates",
+            "summary",
+            "truncated",
+            "warnings",
+            "atlas_provenance",
+        ],
+        None,
+    )
+}
+
+fn read_file_around_match_output_schema() -> Value {
+    normalized_tool_output_schema(
+        serde_json::json!({
+            "file": { "type": "string" },
+            "match_mode": { "type": "string", "enum": ["literal", "regex"] },
+            "query": { "type": "string" },
+            "before": { "type": "integer" },
+            "after": { "type": "integer" },
+            "matches": { "type": "array", "items": { "type": "object" } },
+            "summary": { "type": "object" },
+            "truncated": { "type": "boolean" },
+            "warnings": { "type": "array", "items": { "type": "string" } },
+            "is_regex": { "type": "boolean" },
+            "case_sensitive": { "type": "boolean" },
+            "total_matches": { "type": "integer" },
+            "returned_matches": { "type": "integer" },
+            "snippet_count": { "type": "integer" },
+            "snippets": { "type": "array", "items": { "type": "object" } },
+            "atlas_result_kind": { "type": "string" },
+            "atlas_hint": { "type": ["string", "null"] },
+            "atlas_provenance": { "type": "object" },
+            "atlas_freshness": { "type": "object" }
+        }),
+        &[
+            "tool",
+            "file",
+            "match_mode",
+            "query",
+            "before",
+            "after",
+            "matches",
+            "summary",
+            "truncated",
+            "warnings",
+            "atlas_provenance",
+        ],
+        None,
+    )
+}
+
+fn search_templates_output_schema() -> Value {
+    normalized_tool_output_schema(
+        serde_json::json!({
+            "kind": { "type": ["string", "null"] },
+            "subpath": { "type": ["string", "null"] },
+            "matches": { "type": "array", "items": { "type": "object" } },
+            "summary": { "type": "object" },
+            "truncated": { "type": "boolean" },
+            "warnings": { "type": "array", "items": { "type": "string" } },
+            "atlas_provenance": { "type": "object" },
+            "atlas_freshness": { "type": "object" }
+        }),
+        &[
+            "tool",
+            "kind",
+            "subpath",
+            "matches",
+            "summary",
+            "truncated",
+            "warnings",
+            "atlas_provenance",
+        ],
+        None,
+    )
+}
+
+fn search_text_assets_output_schema() -> Value {
+    normalized_tool_output_schema(
+        serde_json::json!({
+            "kind": { "type": ["string", "null"] },
+            "subpath": { "type": ["string", "null"] },
+            "matches": { "type": "array", "items": { "type": "object" } },
+            "summary": { "type": "object" },
+            "truncated": { "type": "boolean" },
+            "warnings": { "type": "array", "items": { "type": "string" } },
+            "atlas_provenance": { "type": "object" },
+            "atlas_freshness": { "type": "object" }
+        }),
+        &[
+            "tool",
+            "kind",
+            "subpath",
+            "matches",
+            "summary",
+            "truncated",
             "warnings",
             "atlas_provenance",
         ],

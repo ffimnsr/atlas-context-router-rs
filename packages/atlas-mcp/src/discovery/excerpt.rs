@@ -5,6 +5,7 @@ use atlas_core::BudgetManager;
 use atlas_review::{DocsSectionSelector, lookup_docs_section};
 use atlas_store_sqlite::Store;
 use serde::Serialize;
+use serde_json::Value;
 
 use crate::output::OutputFormat;
 use crate::tool_result::{InputShapeErrorSpec, ToolErrorPayload, input_shape_error_payload};
@@ -25,13 +26,13 @@ pub(super) struct RequestedLineRange {
     end_line: usize,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 struct ExcerptLine {
     line: u64,
     text: String,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 struct FileExcerpt {
     start_line: u64,
     end_line: u64,
@@ -47,14 +48,14 @@ struct LineSnippetWindow {
     match_lines: Vec<usize>,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 struct AroundMatchLine {
     line: u64,
     text: String,
     kind: &'static str,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 struct AroundMatchSnippet {
     start_line: u64,
     end_line: u64,
@@ -467,7 +468,8 @@ pub(crate) fn tool_read_file_excerpt(
         let lines: Vec<&str> = contents.lines().collect();
         let total_lines = lines.len();
 
-        let mut resolved_ranges = Vec::with_capacity(requested_ranges.len());
+        let requested_range_count = requested_ranges.len();
+        let mut resolved_ranges = Vec::with_capacity(requested_range_count);
         for range in requested_ranges {
             if total_lines == 0 {
                 break;
@@ -490,8 +492,49 @@ pub(crate) fn tool_read_file_excerpt(
             .iter()
             .map(|range| range.end_line - range.start_line + 1)
             .sum();
+        #[derive(Serialize)]
+        struct ExcerptRange {
+            start_line: u64,
+            end_line: u64,
+        }
+
+        #[derive(Serialize)]
+        struct ReadFileExcerptSummary {
+            total_lines: usize,
+            requested_range_count: usize,
+            returned_snippet_count: usize,
+            total_selected_lines: usize,
+            has_matches: bool,
+        }
+
+        #[derive(Serialize)]
+        struct ReadFileExcerptResult {
+            tool: &'static str,
+            file: String,
+            selection_mode: &'static str,
+            ranges: Vec<ExcerptRange>,
+            snippets: Vec<FileExcerpt>,
+            summary: ReadFileExcerptSummary,
+            truncated: bool,
+            warnings: Vec<String>,
+            mode: &'static str,
+            total_lines: usize,
+            excerpts: Vec<FileExcerpt>,
+            excerpt_count: usize,
+            atlas_result_kind: &'static str,
+            atlas_hint: Option<String>,
+        }
+
+        let normalized_ranges = resolved_ranges
+            .iter()
+            .map(|range| ExcerptRange {
+                start_line: range.start_line as u64,
+                end_line: range.end_line as u64,
+            })
+            .collect::<Vec<_>>();
+
         let mut remaining_lines = max_lines;
-        let mut excerpts = Vec::with_capacity(resolved_ranges.len());
+        let mut snippets = Vec::with_capacity(resolved_ranges.len());
         let mut truncated = false;
 
         for range in resolved_ranges {
@@ -520,7 +563,7 @@ pub(crate) fn tool_read_file_excerpt(
                 .collect::<Vec<_>>()
                 .join("\n");
             remaining_lines = remaining_lines.saturating_sub(excerpt_lines.len());
-            excerpts.push(FileExcerpt {
+            snippets.push(FileExcerpt {
                 start_line: range.start_line as u64,
                 end_line: excerpt_end as u64,
                 line_count: excerpt_lines.len(),
@@ -539,36 +582,38 @@ pub(crate) fn tool_read_file_excerpt(
             );
         }
 
-        let atlas_hint = if total_lines == 0 {
-            Some(format!("{file} is empty."))
+        let warnings = if total_lines == 0 {
+            vec![format!("{file} is empty.")]
         } else if truncated {
-            Some(format!(
-                "Excerpt truncated to {max_lines} lines. Narrow line_ranges or raise max_lines within policy limits."
-            ))
+            vec![format!(
+                "Excerpt truncated to {max_lines} lines. Narrow selection or raise max_lines within policy limits."
+            )]
         } else {
-            None
+            Vec::new()
         };
-
-        #[derive(Serialize)]
-        struct ReadFileExcerptResult {
-            file: String,
-            mode: &'static str,
-            total_lines: usize,
-            excerpts: Vec<FileExcerpt>,
-            excerpt_count: usize,
-            truncated: bool,
-            atlas_result_kind: &'static str,
-            #[serde(skip_serializing_if = "Option::is_none")]
-            atlas_hint: Option<String>,
-        }
+        let atlas_hint = warnings.first().cloned();
+        let excerpt_count = snippets.len();
+        let legacy_excerpts = snippets.clone();
 
         let result = ReadFileExcerptResult {
+            tool: "read_file_excerpt",
             file,
+            selection_mode: mode,
+            ranges: normalized_ranges,
+            summary: ReadFileExcerptSummary {
+                total_lines,
+                requested_range_count,
+                returned_snippet_count: excerpt_count,
+                total_selected_lines,
+                has_matches: !snippets.is_empty(),
+            },
+            snippets,
+            truncated,
+            warnings,
             mode,
             total_lines,
-            excerpt_count: excerpts.len(),
-            excerpts,
-            truncated,
+            excerpts: legacy_excerpts,
+            excerpt_count,
             atlas_result_kind: "file_excerpt",
             atlas_hint,
         };
@@ -633,8 +678,95 @@ pub(crate) fn tool_get_docs_section(
             max_bytes,
         )?;
 
-        let mut response = render_tool_result(&result, output_format)?;
-        response["file"] = serde_json::Value::String(result.file.clone());
+        #[derive(Serialize)]
+        struct DocsHeading {
+            title: String,
+            path: String,
+            level: u64,
+        }
+
+        #[derive(Serialize)]
+        struct GetDocsSectionSummary {
+            resolved: bool,
+            candidate_count: usize,
+            line_count: usize,
+        }
+
+        #[derive(Serialize)]
+        struct GetDocsSectionResult {
+            tool: &'static str,
+            file: String,
+            selector_mode: String,
+            heading: Option<DocsHeading>,
+            slug: Option<String>,
+            line_start: Option<u64>,
+            line_end: Option<u64>,
+            content: Option<String>,
+            file_hash: Option<String>,
+            resolved: bool,
+            query: Option<String>,
+            candidates: Value,
+            lines: Value,
+            summary: GetDocsSectionSummary,
+            truncated: bool,
+            warnings: Vec<String>,
+            heading_path: Option<String>,
+            heading_level: Option<u64>,
+            start_line: Option<u64>,
+            end_line: Option<u64>,
+            atlas_result_kind: &'static str,
+        }
+
+        let resolved = result.resolved;
+        let heading = match (
+            result.title.clone(),
+            result.heading_path.clone(),
+            result.heading_level,
+        ) {
+            (Some(title), Some(path), Some(level)) => Some(DocsHeading {
+                title,
+                path,
+                level: u64::from(level),
+            }),
+            _ => None,
+        };
+        let warnings = if !resolved {
+            vec!["Heading selector resolved ambiguously. Inspect candidates and retry with exact heading path.".to_owned()]
+        } else if result.truncated {
+            vec![format!("Section content truncated; omitted {} bytes.", result.omitted_byte_count)]
+        } else {
+            Vec::new()
+        };
+        let normalized = GetDocsSectionResult {
+            tool: "get_docs_section",
+            file: result.file.clone(),
+            selector_mode: result.selector_kind.clone(),
+            heading,
+            slug: result.heading_slug.clone(),
+            line_start: result.start_line.map(u64::from),
+            line_end: result.end_line.map(u64::from),
+            content: result.content.clone(),
+            file_hash: result.file_hash.clone(),
+            resolved,
+            query: result.query.clone(),
+            candidates: serde_json::to_value(&result.candidates)?,
+            lines: serde_json::to_value(&result.lines)?,
+            summary: GetDocsSectionSummary {
+                resolved,
+                candidate_count: result.candidates.len(),
+                line_count: result.line_count.unwrap_or_default() as usize,
+            },
+            truncated: result.truncated,
+            warnings,
+            heading_path: result.heading_path.clone(),
+            heading_level: result.heading_level.map(u64::from),
+            start_line: result.start_line.map(u64::from),
+            end_line: result.end_line.map(u64::from),
+            atlas_result_kind: "docs_section",
+        };
+
+        let mut response = render_tool_result(&normalized, output_format)?;
+        response["file"] = serde_json::Value::String(normalized.file.clone());
         Ok(response)
     })()
     .or_else(|error| discovery_tool_error_result("get_docs_section", output_format, error))
@@ -732,27 +864,41 @@ pub(crate) fn tool_read_file_around_match(
         }
 
         let truncated = match_limit_hit || line_limit_hit;
-        let atlas_hint = if total_matches == 0 {
-            Some(format!("No matches for '{query}' in {file}."))
+        let warnings = if total_matches == 0 {
+            vec![format!("No matches for '{query}' in {file}.")]
         } else if truncated {
-            Some("Snippets truncated by max_matches or max_lines budget.".to_owned())
+            vec!["Snippets truncated by max_matches or max_lines budget.".to_owned()]
         } else {
-            None
+            Vec::new()
         };
 
         #[derive(Serialize)]
+        struct ReadFileAroundMatchSummary {
+            total_matches: usize,
+            returned_matches: usize,
+            snippet_count: usize,
+            observed_lines: usize,
+        }
+
+        #[derive(Serialize)]
         struct AroundMatchResult {
+            tool: &'static str,
             file: String,
+            match_mode: &'static str,
             query: String,
+            before: usize,
+            after: usize,
+            matches: Vec<AroundMatchSnippet>,
+            summary: ReadFileAroundMatchSummary,
+            truncated: bool,
+            warnings: Vec<String>,
             is_regex: bool,
             case_sensitive: bool,
             total_matches: usize,
             returned_matches: usize,
             snippet_count: usize,
             snippets: Vec<AroundMatchSnippet>,
-            truncated: bool,
             atlas_result_kind: &'static str,
-            #[serde(skip_serializing_if = "Option::is_none")]
             atlas_hint: Option<String>,
         }
 
@@ -760,16 +906,31 @@ pub(crate) fn tool_read_file_around_match(
             .iter()
             .map(|snippet| snippet.match_lines.len())
             .sum();
+        let snippet_count = snippets.len();
+        let legacy_snippets = snippets.clone();
+        let atlas_hint = warnings.first().cloned();
         let result = AroundMatchResult {
+            tool: "read_file_around_match",
             file,
+            match_mode: if is_regex { "regex" } else { "literal" },
             query: query.to_owned(),
+            before,
+            after,
+            summary: ReadFileAroundMatchSummary {
+                total_matches,
+                returned_matches,
+                snippet_count,
+                observed_lines,
+            },
+            matches: snippets,
+            truncated,
+            warnings,
             is_regex,
             case_sensitive,
             total_matches,
             returned_matches,
-            snippet_count: snippets.len(),
-            snippets,
-            truncated,
+            snippet_count,
+            snippets: legacy_snippets,
             atlas_result_kind: "file_match_snippets",
             atlas_hint,
         };

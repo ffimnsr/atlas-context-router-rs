@@ -3569,60 +3569,60 @@ Why:
 
 #### R6.1 `symbol_neighbors`
 
-- [ ] define stable `SymbolNeighborsResult` object with `symbol`, `callers`, `callees`, `call_sites`, `tests`, `siblings`, `imports`, `summary`, and `atlas_provenance`
-- [ ] keep all neighborhood buckets present even when empty; do not omit absent sections
-- [ ] add `outputSchema` for `symbol_neighbors`
-- [ ] add tests for symbol with full neighborhood and symbol with sparse neighborhood proving same schema
+- [x] define stable `SymbolNeighborsResult` object with `symbol`, `callers`, `callees`, `call_sites`, `tests`, `siblings`, `imports`, `summary`, and `atlas_provenance`
+- [x] keep all neighborhood buckets present even when empty; do not omit absent sections
+- [x] add `outputSchema` for `symbol_neighbors`
+- [x] add tests for symbol with full neighborhood and symbol with sparse neighborhood proving same schema
 
 #### R6.2 `cross_file_links`
 
-- [ ] define stable `CrossFileLinksResult` object with `source_file`, `linked_files`, `coupling_metric`, `summary`, and `atlas_provenance`
-- [ ] normalize zero-link and many-link cases into same array-based payload
-- [ ] add `outputSchema` for `cross_file_links`
-- [ ] add tests for isolated file and heavily linked file proving same schema
+- [x] define stable `CrossFileLinksResult` object with `source_file`, `linked_files`, `coupling_metric`, `summary`, and `atlas_provenance`
+- [x] normalize zero-link and many-link cases into same array-based payload
+- [x] add `outputSchema` for `cross_file_links`
+- [x] add tests for isolated file and heavily linked file proving same schema
 
 #### R6.3 `concept_clusters`
 
-- [ ] define stable `ConceptClustersResult` object with `seed_files`, `clusters`, `summary`, `truncated`, and `atlas_provenance`
-- [ ] keep cluster records stable with `files`, `shared_symbols`, `density`, and `rank`
-- [ ] add `outputSchema` for `concept_clusters`
-- [ ] add tests for single-cluster, multi-cluster, and no-cluster cases proving same schema
+- [x] define stable `ConceptClustersResult` object with `seed_files`, `clusters`, `summary`, `truncated`, and `atlas_provenance`
+- [x] keep cluster records stable with `files`, `shared_symbols`, `density`, and `rank`
+- [x] add `outputSchema` for `concept_clusters`
+- [x] add tests for single-cluster, multi-cluster, and no-cluster cases proving same schema
 
 #### R6.4 `analyze_safety`
 
-- [ ] define stable `AnalyzeSafetyResult` object with `symbol`, `fan_in`, `fan_out`, `test_adjacency`, `cross_module_callers`, `safety_score`, `safety_band`, `suggested_validations`, and `atlas_provenance`
-- [ ] keep score explanation and factor evidence in stable arrays instead of prose-only detail
-- [ ] add `outputSchema` for `analyze_safety`
-- [ ] add tests for safe, moderate, and risky symbols proving same schema
+- [x] define stable `AnalyzeSafetyResult` object with `symbol`, `fan_in`, `fan_out`, `test_adjacency`, `cross_module_callers`, `safety_score`, `safety_band`, `suggested_validations`, and `atlas_provenance`
+- [x] keep score explanation and factor evidence in stable arrays instead of prose-only detail
+- [x] add `outputSchema` for `analyze_safety`
+- [x] add tests for safe, moderate, and risky symbols proving same schema
 
 #### R6.5 `analyze_remove`
 
-- [ ] define stable `AnalyzeRemoveResult` object with `symbols`, `definite_impacts`, `probable_impacts`, `weak_impacts`, `tests`, `uncertainty_flags`, `summary`, and `atlas_provenance`
-- [ ] normalize single-symbol and multi-symbol removal analysis into same array-based payload
-- [ ] add `outputSchema` for `analyze_remove`
-- [ ] add tests for removable and non-removable symbol sets proving same schema
+- [x] define stable `AnalyzeRemoveResult` object with `symbols`, `definite_impacts`, `probable_impacts`, `weak_impacts`, `tests`, `uncertainty_flags`, `summary`, and `atlas_provenance`
+- [x] normalize single-symbol and multi-symbol removal analysis into same array-based payload
+- [x] add `outputSchema` for `analyze_remove`
+- [x] add tests for removable and non-removable symbol sets proving same schema
 
 #### R6.6 `analyze_dead_code`
 
-- [ ] define stable `AnalyzeDeadCodeResult` object with `scope`, `candidates`, `blockers`, `summary`, `truncated`, and `atlas_provenance`
-- [ ] normalize code-only default scope and broader configured scopes into same object with explicit `scope`
-- [ ] add `outputSchema` for `analyze_dead_code`
-- [ ] add tests for empty-candidate and populated-candidate runs proving same schema
+- [x] define stable `AnalyzeDeadCodeResult` object with `scope`, `candidates`, `blockers`, `summary`, `truncated`, and `atlas_provenance`
+- [x] normalize code-only default scope and broader configured scopes into same object with explicit `scope`
+- [x] add `outputSchema` for `analyze_dead_code`
+- [x] add tests for empty-candidate and populated-candidate runs proving same schema
 
 #### R6.7 `analyze_dependency`
 
-- [ ] define stable `AnalyzeDependencyResult` object with `symbol`, `removable`, `blocking_references`, `confidence_tier`, `suggested_cleanups`, `summary`, and `atlas_provenance`
-- [ ] keep removable and blocked outcomes inside same object schema instead of alternate payloads
-- [ ] add `outputSchema` for `analyze_dependency`
-- [ ] add tests for removable and blocked symbols proving same schema
+- [x] define stable `AnalyzeDependencyResult` object with `symbol`, `removable`, `blocking_references`, `confidence_tier`, `suggested_cleanups`, `summary`, and `atlas_provenance`
+- [x] keep removable and blocked outcomes inside same object schema instead of alternate payloads
+- [x] add `outputSchema` for `analyze_dependency`
+- [x] add tests for removable and blocked symbols proving same schema
 
 #### R6.8 `resolve_symbol`
 
-- [ ] define stable `ResolveSymbolResult` object with `query`, `best_match`, `ambiguity`, `suggestions`, `summary`, and `atlas_provenance`
-- [ ] normalize exact match, alias-kind match, and ambiguous match into same object with nullable `best_match` and explicit `ambiguity.matches[]`
-- [ ] keep symbol-not-found and invalid kind alias on tool-error path; successful ambiguous lookup should remain stable success object
-- [ ] add `outputSchema` for `resolve_symbol`
-- [ ] add tests for exact, ambiguous, alias-kind, and no-match cases proving correct success/error split and stable schema
+- [x] define stable `ResolveSymbolResult` object with `query`, `best_match`, `ambiguity`, `suggestions`, `summary`, and `atlas_provenance`
+- [x] normalize exact match, alias-kind match, and ambiguous match into same object with nullable `best_match` and explicit `ambiguity.matches[]`
+- [x] keep symbol-not-found and invalid kind alias on tool-error path; successful ambiguous lookup should remain stable success object
+- [x] add `outputSchema` for `resolve_symbol`
+- [x] add tests for exact, ambiguous, alias-kind, and no-match cases proving correct success/error split and stable schema
 
 Why:
 - relationship and dependency tools often omit sections when evidence is absent, which makes clients branch on field existence instead of stable contract
@@ -3632,55 +3632,55 @@ Why:
 
 #### R7.1 `search_files`
 
-- [ ] define stable `SearchFilesResult` object with `query`, `subpath`, `matches`, `summary`, `truncated`, and `atlas_provenance`
-- [ ] normalize literal-name and glob/path-style searches into same `matches[]` schema with stable file metadata fields
-- [ ] add `outputSchema` for `search_files`
-- [ ] add tests for root-scoped and subpath-scoped searches proving same schema
+- [x] define stable `SearchFilesResult` object with `query`, `subpath`, `matches`, `summary`, `truncated`, and `atlas_provenance`
+- [x] normalize literal-name and glob/path-style searches into same `matches[]` schema with stable file metadata fields
+- [x] add `outputSchema` for `search_files`
+- [x] add tests for root-scoped and subpath-scoped searches proving same schema
 
 #### R7.2 `search_content`
 
-- [ ] define stable `SearchContentResult` object with `query`, `mode`, `subpath`, `matches`, `summary`, `truncated`, and `atlas_provenance`
-- [ ] normalize literal and regex search success into same grouped match schema with stable line/snippet fields
-- [ ] keep invalid regex on tool-error path; successful searches should always return same object shape
-- [ ] add `outputSchema` for `search_content`
-- [ ] add tests for literal, regex, empty-result, and capped-result searches proving same schema
+- [x] define stable `SearchContentResult` object with `query`, `mode`, `subpath`, `matches`, `summary`, `truncated`, and `atlas_provenance`
+- [x] normalize literal and regex search success into same grouped match schema with stable line/snippet fields
+- [x] keep invalid regex on tool-error path; successful searches should always return same object shape
+- [x] add `outputSchema` for `search_content`
+- [x] add tests for literal, regex, empty-result, and capped-result searches proving same schema
 
 #### R7.3 `read_file_excerpt`
 
-- [ ] define stable `ReadFileExcerptResult` object with `file`, `selection_mode`, `ranges`, `snippets`, `summary`, and `atlas_provenance`
-- [ ] normalize line-range, single-line-with-context, and multi-range selection into same object with explicit `selection_mode`
-- [ ] keep conflicting-selector and missing-file cases on tool-error path only
-- [ ] add `outputSchema` for `read_file_excerpt`
-- [ ] add tests for each selector family proving same success schema
+- [x] define stable `ReadFileExcerptResult` object with `file`, `selection_mode`, `ranges`, `snippets`, `summary`, and `atlas_provenance`
+- [x] normalize line-range, single-line-with-context, and multi-range selection into same object with explicit `selection_mode`
+- [x] keep conflicting-selector and missing-file cases on tool-error path only
+- [x] add `outputSchema` for `read_file_excerpt`
+- [x] add tests for each selector family proving same success schema
 
 #### R7.4 `get_docs_section`
 
-- [ ] define stable `GetDocsSectionResult` object with `file`, `selector_mode`, `heading`, `slug`, `line_start`, `line_end`, `content`, `file_hash`, and `atlas_provenance`
-- [ ] normalize heading-path/slug lookup and line-number lookup into same object with explicit `selector_mode`
-- [ ] add `outputSchema` for `get_docs_section`
-- [ ] add tests for heading-based and line-based section resolution proving same schema
+- [x] define stable `GetDocsSectionResult` object with `file`, `selector_mode`, `heading`, `slug`, `line_start`, `line_end`, `content`, `file_hash`, and `atlas_provenance`
+- [x] normalize heading-path/slug lookup and line-number lookup into same object with explicit `selector_mode`
+- [x] add `outputSchema` for `get_docs_section`
+- [x] add tests for heading-based and line-based section resolution proving same schema
 
 #### R7.5 `read_file_around_match`
 
-- [ ] define stable `ReadFileAroundMatchResult` object with `file`, `match_mode`, `matches`, `before`, `after`, `summary`, and `atlas_provenance`
-- [ ] normalize literal and regex matching into same grouped snippet schema
-- [ ] keep invalid regex and missing-file cases on tool-error path
-- [ ] add `outputSchema` for `read_file_around_match`
-- [ ] add tests for literal, regex, and multi-match grouped snippet cases proving same schema
+- [x] define stable `ReadFileAroundMatchResult` object with `file`, `match_mode`, `matches`, `before`, `after`, `summary`, and `atlas_provenance`
+- [x] normalize literal and regex matching into same grouped snippet schema
+- [x] keep invalid regex and missing-file cases on tool-error path
+- [x] add `outputSchema` for `read_file_around_match`
+- [x] add tests for literal, regex, and multi-match grouped snippet cases proving same schema
 
 #### R7.6 `search_templates`
 
-- [ ] define stable `SearchTemplatesResult` object with `kind`, `subpath`, `matches`, `summary`, `truncated`, and `atlas_provenance`
-- [ ] normalize engine-filtered and all-template searches into same `matches[]` schema
-- [ ] add `outputSchema` for `search_templates`
-- [ ] add tests for filtered and unfiltered template discovery proving same schema
+- [x] define stable `SearchTemplatesResult` object with `kind`, `subpath`, `matches`, `summary`, `truncated`, and `atlas_provenance`
+- [x] normalize engine-filtered and all-template searches into same `matches[]` schema
+- [x] add `outputSchema` for `search_templates`
+- [x] add tests for filtered and unfiltered template discovery proving same schema
 
 #### R7.7 `search_text_assets`
 
-- [ ] define stable `SearchTextAssetsResult` object with `kind`, `subpath`, `matches`, `summary`, `truncated`, and `atlas_provenance`
-- [ ] normalize SQL/config/env/prompt asset discovery into same object with stable match metadata and explicit asset-kind enum per result row
-- [ ] add `outputSchema` for `search_text_assets`
-- [ ] add tests for each asset kind and mixed-kind discovery proving same schema
+- [x] define stable `SearchTextAssetsResult` object with `kind`, `subpath`, `matches`, `summary`, `truncated`, and `atlas_provenance`
+- [x] normalize SQL/config/env/prompt asset discovery into same object with stable match metadata and explicit asset-kind enum per result row
+- [x] add `outputSchema` for `search_text_assets`
+- [x] add tests for each asset kind and mixed-kind discovery proving same schema
 
 Why:
 - these tools already have clear domain outputs; main redesign work is eliminating selector-family and mode-specific alternate payload wrappers

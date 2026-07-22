@@ -22,6 +22,15 @@ fn parse_tool_json(resp: serde_json::Value) -> serde_json::Value {
         .expect("parse json tool text")
 }
 
+fn match_paths(value: &serde_json::Value) -> Vec<&str> {
+    value["matches"]
+        .as_array()
+        .expect("matches array")
+        .iter()
+        .map(|row| row["path"].as_str().expect("match path"))
+        .collect()
+}
+
 // -----------------------------------------------------------------------
 // search_files
 // -----------------------------------------------------------------------
@@ -35,18 +44,19 @@ fn search_files_finds_markdown() {
     ]);
     let args = serde_json::json!({ "pattern": "*.md" });
     let resp = tool_search_files(Some(&args), &root, OutputFormat::Json).unwrap();
-    let v: serde_json::Value =
-        serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
-    let files: Vec<&str> = v["files"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|f| f.as_str().unwrap())
-        .collect();
+    let v = parse_tool_json(resp.clone());
+    let files = match_paths(&v);
     assert!(files.iter().any(|f| f.ends_with("README.md")), "{files:?}");
     assert!(files.iter().any(|f| f.ends_with("guide.md")), "{files:?}");
     assert!(!files.iter().any(|f| f.ends_with("main.rs")), "{files:?}");
-    assert_eq!(v["atlas_result_kind"], "file_paths");
+    assert_eq!(v["tool"], "search_files");
+    assert_eq!(v["query"]["pattern"], "*.md");
+    assert_eq!(v["subpath"], serde_json::Value::Null);
+    assert_eq!(v["summary"]["returned_count"], serde_json::json!(2));
+    let first_match = &v["matches"].as_array().expect("matches")[0];
+    assert!(first_match["file_name"].is_string());
+    assert!(first_match["extension"].is_string() || first_match["extension"].is_null());
+    assert_eq!(resp["structuredContent"], v);
 }
 
 #[test]
@@ -64,14 +74,8 @@ fn search_files_finds_sql_config_template() {
     ] {
         let args = serde_json::json!({ "pattern": pattern });
         let resp = tool_search_files(Some(&args), &root, OutputFormat::Json).unwrap();
-        let v: serde_json::Value =
-            serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
-        let files: Vec<&str> = v["files"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|f| f.as_str().unwrap())
-            .collect();
+        let v = parse_tool_json(resp);
+        let files = match_paths(&v);
         assert!(
             files.iter().any(|f| f.ends_with(expected)),
             "pattern={pattern} expected={expected} got={files:?}"
@@ -88,14 +92,8 @@ fn search_files_gitignore_excludes_node_modules() {
     ]);
     let args = serde_json::json!({ "pattern": "*.js" });
     let resp = tool_search_files(Some(&args), &root, OutputFormat::Json).unwrap();
-    let v: serde_json::Value =
-        serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
-    let files: Vec<&str> = v["files"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|f| f.as_str().unwrap())
-        .collect();
+    let v = parse_tool_json(resp);
+    let files = match_paths(&v);
     assert!(
         !files.iter().any(|f| f.contains("node_modules")),
         "node_modules leaked: {files:?}"
@@ -112,14 +110,8 @@ fn search_files_atlasignore_respected() {
     ]);
     let args = serde_json::json!({ "pattern": "*.rs" });
     let resp = tool_search_files(Some(&args), &root, OutputFormat::Json).unwrap();
-    let v: serde_json::Value =
-        serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
-    let files: Vec<&str> = v["files"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|f| f.as_str().unwrap())
-        .collect();
+    let v = parse_tool_json(resp);
+    let files = match_paths(&v);
     assert!(
         !files.iter().any(|f| f.ends_with("secret.rs")),
         "secret.rs leaked: {files:?}"
@@ -128,14 +120,15 @@ fn search_files_atlasignore_respected() {
 }
 
 #[test]
-fn search_files_no_results_hint() {
+fn search_files_no_results_emit_stable_empty_schema() {
     let (_dir, root) = make_repo(&[("src/main.rs", "")]);
     let args = serde_json::json!({ "pattern": "*.nonexistent" });
     let resp = tool_search_files(Some(&args), &root, OutputFormat::Json).unwrap();
-    let v: serde_json::Value =
-        serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
-    assert_eq!(v["result_count"], 0);
-    assert!(v["atlas_hint"].is_string(), "expected hint on empty result");
+    let v = parse_tool_json(resp);
+    assert_eq!(v["matches"], serde_json::json!([]));
+    assert_eq!(v["summary"]["returned_count"], serde_json::json!(0));
+    assert_eq!(v["summary"]["has_matches"], serde_json::json!(false));
+    assert_eq!(v["warnings"].as_array().map(|rows| rows.len()), Some(1));
 }
 
 #[test]
@@ -196,14 +189,8 @@ fn search_files_subpath_limits_to_subdir() {
     ]);
     let args = serde_json::json!({ "pattern": "*.sql", "subpath": "services/auth" });
     let resp = tool_search_files(Some(&args), &root, OutputFormat::Json).unwrap();
-    let v: serde_json::Value =
-        serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
-    let files: Vec<&str> = v["files"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|f| f.as_str().unwrap())
-        .collect();
+    let v = parse_tool_json(resp);
+    let files = match_paths(&v);
     assert!(
         files.iter().any(|f| f.contains("auth/schema.sql")),
         "expected auth file: {files:?}"
@@ -212,6 +199,8 @@ fn search_files_subpath_limits_to_subdir() {
         !files.iter().any(|f| f.contains("billing")),
         "billing should be excluded by subpath: {files:?}"
     );
+    assert_eq!(v["subpath"], serde_json::json!("services/auth"));
+    assert_eq!(v["summary"]["scope"], serde_json::json!("subpath"));
 }
 
 #[test]
@@ -225,14 +214,8 @@ fn search_files_exclude_globs_skips_matched() {
         "exclude_globs": ["generated/**"]
     });
     let resp = tool_search_files(Some(&args), &root, OutputFormat::Json).unwrap();
-    let v: serde_json::Value =
-        serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
-    let files: Vec<&str> = v["files"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|f| f.as_str().unwrap())
-        .collect();
+    let v = parse_tool_json(resp);
+    let files = match_paths(&v);
     assert!(
         !files.iter().any(|f| f.contains("generated")),
         "generated leaked: {files:?}"

@@ -4,8 +4,8 @@ structure:
   purpose: Resolve a symbol name to its exact qualified_name in the graph. Eliminates the manual workflow of query_graph → copy qualified_name → call symbol_neighbors. Returns the best match, an ambiguity list when multiple symbol…
   operation_name: resolve_symbol
   request_shape: request object: object with 6 top-level fields (1 required)
-  response_shape: MCP tool result envelope with content text, metadata fields, and no advertised structuredContent schema
-  result_contract: mixed-needs-redesign
+  response_shape: MCP tool result envelope with structuredContent object and metadata fields
+  result_contract: stable-object
   annotations: read_only=true, state_changing=false, destructive=false
 
 input_args:
@@ -23,10 +23,28 @@ input_args:
     Response body format: 'toon' (default) or 'json'
 
 output_response:
-  response_shape: structuredContent schema unavailable for this tool; rely on content text, metadata, and error envelope
-  structured_content_available: false
+  response_shape: structuredContent follows advertised outputSchema when present
+  structured_content_available: true
   response_fields:
-    - schema unavailable for structuredContent; consume content text and metadata fields
+    - ambiguity: object (required) — No schema description available.
+    - atlas_freshness: object (optional) — No schema description available.
+    - atlas_provenance: object (required) — No schema description available.
+    - best_match: object | null (required) — No schema description available.
+    - budget_hit: boolean (optional) — No schema description available.
+    - budget_limit: integer (optional) — No schema description available.
+    - budget_name: string (optional) — No schema description available.
+    - budget_observed: integer (optional) — No schema description available.
+    - budget_status: string (optional) — No schema description available.
+    - generated_at: string (optional) — RFC 3339 generation timestamp for this success payload.
+    - partial: boolean (optional) — No schema description available.
+    - query: object (required) — No schema description available.
+    - safe_to_answer: boolean (optional) — No schema description available.
+    - suggestions: array<object> (required) — No schema description available.
+    - summary: object (required) — No schema description available.
+    - tool: string (required) — No schema description available.
+    - truncated: boolean (optional) — No schema description available.
+    - truncation_reason: string (optional) — No schema description available.
+    - warnings: array<string> (required) — No schema description available.
   metadata_fields:
     - content: array<object> (required) — Human-readable rendered payload. Present on success and error results.
     - structuredContent: object (optional) — Machine-readable payload when the tool returns object-shaped structured output.

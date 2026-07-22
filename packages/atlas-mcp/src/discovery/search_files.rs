@@ -5,6 +5,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use atlas_core::BudgetManager;
 use serde::Serialize;
+use serde_json::json;
 
 use crate::output::OutputFormat;
 
@@ -72,11 +73,18 @@ pub(crate) fn tool_search_files(
             walker.add_ignore(&atlasignore_path);
         }
 
-        let mut files: Vec<String> = Vec::new();
+        #[derive(Serialize)]
+        struct SearchFileMatch {
+            path: String,
+            file_name: String,
+            extension: Option<String>,
+        }
+
+        let mut matches: Vec<SearchFileMatch> = Vec::new();
         let mut truncated = false;
 
         for entry in walker.build().flatten() {
-            if files.len() >= result_limit {
+            if matches.len() >= result_limit {
                 truncated = true;
                 break;
             }
@@ -108,18 +116,25 @@ pub(crate) fn tool_search_files(
 
             let file_name = full_path
                 .file_name()
-                .map(|n| n.to_string_lossy())
+                .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default();
-            if !name_matcher.is_match(file_name.as_ref()) && !name_matcher.is_match(&*rel_path) {
+            if !name_matcher.is_match(file_name.as_str()) && !name_matcher.is_match(&*rel_path) {
                 continue;
             }
 
-            files.push(rel_path);
+            let extension = full_path
+                .extension()
+                .map(|ext| ext.to_string_lossy().into_owned());
+            matches.push(SearchFileMatch {
+                path: rel_path,
+                file_name,
+                extension,
+            });
         }
 
-        files.sort_unstable();
+        matches.sort_unstable_by(|left, right| left.path.cmp(&right.path));
 
-        let result_count = files.len();
+        let result_count = matches.len();
         if truncated {
             budgets.record_usage(
                 policy.review_context_extraction.files,
@@ -129,34 +144,63 @@ pub(crate) fn tool_search_files(
                 true,
             );
         }
-        let atlas_hint = if result_count == 0 {
-            Some(
-                "No files matched. Try a broader glob (e.g. '*.rs' instead of 'foo*.rs'), \
-                     verify the pattern syntax, or use search_content for content-based lookup.",
-            )
+        let warnings = if result_count == 0 {
+            vec![
+                "No files matched. Try a broader glob (for example '*.rs' instead of 'foo*.rs'), verify glob syntax, or use search_content for content-based lookup.".to_owned(),
+            ]
         } else {
-            None
+            Vec::new()
         };
 
         #[derive(Serialize)]
-        struct SearchFilesResult<'a> {
-            files: Vec<String>,
-            result_count: usize,
+        struct SearchFilesQuery {
+            pattern: String,
+            globs: Vec<String>,
+            exclude_globs: Vec<String>,
+            case_sensitive: bool,
+        }
+
+        #[derive(Serialize)]
+        struct SearchFilesSummary {
+            returned_count: usize,
+            result_limit: usize,
+            scope: &'static str,
+            has_matches: bool,
+        }
+
+        #[derive(Serialize)]
+        struct SearchFilesResult {
+            tool: &'static str,
+            query: SearchFilesQuery,
+            subpath: Option<String>,
+            matches: Vec<SearchFileMatch>,
+            summary: SearchFilesSummary,
             truncated: bool,
-            atlas_result_kind: &'static str,
-            #[serde(skip_serializing_if = "Option::is_none")]
-            atlas_hint: Option<&'a str>,
+            warnings: Vec<String>,
         }
 
         let result = SearchFilesResult {
-            files,
-            result_count,
+            tool: "search_files",
+            query: SearchFilesQuery {
+                pattern,
+                globs,
+                exclude_globs,
+                case_sensitive,
+            },
+            subpath,
+            matches,
+            summary: SearchFilesSummary {
+                returned_count: result_count,
+                result_limit,
+                scope: if walk_root == repo_root { "repo_root" } else { "subpath" },
+                has_matches: result_count > 0,
+            },
             truncated,
-            atlas_result_kind: "file_paths",
-            atlas_hint,
+            warnings,
         };
 
         let mut response = render_tool_result(&result, output_format)?;
+        response["structuredContent"] = json!(result);
         inject_budget_metadata(
             &mut response,
             &budgets.summary(

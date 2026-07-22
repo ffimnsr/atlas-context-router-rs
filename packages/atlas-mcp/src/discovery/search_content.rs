@@ -1,5 +1,6 @@
 //! MCP tool: `search_content` — content search by literal string or regex.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -409,39 +410,145 @@ pub(crate) fn tool_search_content(
             && !query.contains('.')
             && query.chars().all(|c| c.is_alphanumeric() || c == '_');
 
-        let atlas_hint = if result_count == 0 {
-            Some(format!(
-                "No matches for '{query}'. Try broadening the query, enabling is_regex=true \
-                 for pattern matching, or check that the file type is covered by your globs filter.",
-            ))
+        let warnings = if result_count == 0 {
+            vec![format!(
+                "No matches for '{query}'. Try broadening query, enabling regex mode, or checking file filters."
+            )]
         } else if looks_like_symbol {
-            Some(format!(
-                "'{query}' looks like a symbol name. For callers, callees, and graph context \
-                 prefer query_graph or symbol_neighbors.",
-            ))
+            vec![format!(
+                "'{query}' looks like symbol name. For callers, callees, and graph context prefer query_graph or symbol_neighbors."
+            )]
         } else {
-            None
+            Vec::new()
         };
 
         #[derive(Serialize)]
-        struct SearchContentResult {
-            matches: Vec<ContentMatch>,
-            #[serde(skip_serializing_if = "Vec::is_empty")]
-            rich_snippets: Vec<RichSnippet>,
-            result_count: usize,
-            truncated: bool,
-            atlas_result_kind: &'static str,
-            #[serde(skip_serializing_if = "Option::is_none")]
-            atlas_hint: Option<String>,
+        struct SearchContentHit {
+            line: u64,
+            text: String,
+            kind: String,
         }
 
+        #[derive(Serialize)]
+        struct SearchContentSnippetLine {
+            line: u64,
+            text: String,
+            kind: String,
+        }
+
+        #[derive(Serialize)]
+        struct SearchContentSnippet {
+            match_line: u64,
+            snippet: String,
+            lines: Vec<SearchContentSnippetLine>,
+        }
+
+        #[derive(Serialize)]
+        struct SearchContentMatchGroup {
+            file: String,
+            hits: Vec<SearchContentHit>,
+            snippets: Vec<SearchContentSnippet>,
+        }
+
+        #[derive(Serialize)]
+        struct SearchContentQuery {
+            query: String,
+            globs: Vec<String>,
+            exclude_globs: Vec<String>,
+            exclude_generated: bool,
+            context_lines: usize,
+            rich_snippets: bool,
+            snippet_context_lines: usize,
+            case_sensitive: bool,
+        }
+
+        #[derive(Serialize)]
+        struct SearchContentSummary {
+            match_group_count: usize,
+            hit_count: usize,
+            result_limit: usize,
+            scope: &'static str,
+            has_matches: bool,
+        }
+
+        #[derive(Serialize)]
+        struct SearchContentResult {
+            tool: &'static str,
+            query: SearchContentQuery,
+            mode: &'static str,
+            subpath: Option<String>,
+            matches: Vec<SearchContentMatchGroup>,
+            summary: SearchContentSummary,
+            truncated: bool,
+            warnings: Vec<String>,
+        }
+
+        let mut grouped_hits: BTreeMap<String, Vec<SearchContentHit>> = BTreeMap::new();
+        for hit in matches {
+            grouped_hits
+                .entry(hit.file)
+                .or_default()
+                .push(SearchContentHit {
+                    line: hit.line,
+                    text: hit.text,
+                    kind: hit.kind.unwrap_or("match").to_owned(),
+                });
+        }
+
+        let mut grouped_snippets: BTreeMap<String, Vec<SearchContentSnippet>> = BTreeMap::new();
+        for snippet in rich_snippet_results {
+            grouped_snippets
+                .entry(snippet.file)
+                .or_default()
+                .push(SearchContentSnippet {
+                    match_line: snippet.match_line,
+                    snippet: snippet.snippet,
+                    lines: snippet
+                        .lines
+                        .into_iter()
+                        .map(|line| SearchContentSnippetLine {
+                            line: line.line,
+                            text: line.text,
+                            kind: line.kind.to_owned(),
+                        })
+                        .collect(),
+                });
+        }
+
+        let mut grouped_matches = grouped_hits
+            .into_iter()
+            .map(|(file, hits)| SearchContentMatchGroup {
+                snippets: grouped_snippets.remove(&file).unwrap_or_default(),
+                file,
+                hits,
+            })
+            .collect::<Vec<_>>();
+        grouped_matches.sort_unstable_by(|left, right| left.file.cmp(&right.file));
+
         let result = SearchContentResult {
-            matches,
-            rich_snippets: rich_snippet_results,
-            result_count,
+            tool: "search_content",
+            query: SearchContentQuery {
+                query: query.clone(),
+                globs,
+                exclude_globs,
+                exclude_generated,
+                context_lines,
+                rich_snippets,
+                snippet_context_lines,
+                case_sensitive: is_regex,
+            },
+            mode: if is_regex { "regex" } else { "literal" },
+            subpath,
+            summary: SearchContentSummary {
+                match_group_count: grouped_matches.len(),
+                hit_count: result_count,
+                result_limit: max_results,
+                scope: if walk_root == repo_root { "repo_root" } else { "subpath" },
+                has_matches: result_count > 0,
+            },
+            matches: grouped_matches,
             truncated,
-            atlas_result_kind: "content_matches",
-            atlas_hint,
+            warnings,
         };
 
         if truncated {

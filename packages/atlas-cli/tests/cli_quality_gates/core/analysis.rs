@@ -735,17 +735,19 @@ fn analyze_remove_cli_and_mcp_share_ordering_primitives() {
     );
 
     let mcp_remove = read_json_tool_result(&output, 2);
-    let mcp_impacted = mcp_remove["impacted_symbols"]
-        .as_array()
-        .expect("mcp impacted symbols array");
+    let mcp_impacted: Vec<&serde_json::Value> =
+        ["definite_impacts", "probable_impacts", "weak_impacts"]
+            .into_iter()
+            .flat_map(|bucket| mcp_remove[bucket].as_array().into_iter().flatten())
+            .collect();
 
     assert_eq!(
         cli_impacted[0]["node"]["qualified_name"],
-        mcp_impacted[0]["qn"]
+        mcp_impacted[0]["symbol"]["qname"]
     );
     assert_eq!(
         cli_impacted[1]["node"]["qualified_name"],
-        mcp_impacted[1]["qn"]
+        mcp_impacted[1]["symbol"]["qname"]
     );
 
     cleanup_mcp_daemons(repo.path());
@@ -796,11 +798,11 @@ fn analyze_dead_code_cli_and_mcp_share_ordering_primitives() {
 
     assert_eq!(
         cli_candidates[0]["node"]["qualified_name"],
-        mcp_candidates[0]["qn"]
+        mcp_candidates[0]["symbol"]["qname"]
     );
     assert_eq!(
         cli_candidates[1]["node"]["qualified_name"],
-        mcp_candidates[1]["qn"]
+        mcp_candidates[1]["symbol"]["qname"]
     );
 
     cleanup_mcp_daemons(repo.path());

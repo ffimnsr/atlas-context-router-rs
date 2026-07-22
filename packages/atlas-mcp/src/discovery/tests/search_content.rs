@@ -22,9 +22,9 @@ fn parse_tool_json(resp: serde_json::Value) -> serde_json::Value {
         .expect("parse json tool text")
 }
 
-// -----------------------------------------------------------------------
-// search_content
-// -----------------------------------------------------------------------
+fn groups(value: &serde_json::Value) -> &Vec<serde_json::Value> {
+    value["matches"].as_array().expect("matches array")
+}
 
 #[test]
 fn search_content_literal_match() {
@@ -37,16 +37,16 @@ fn search_content_literal_match() {
     ]);
     let args = serde_json::json!({ "query": "verify_token", "exclude_generated": false });
     let resp = tool_search_content(Some(&args), &root, OutputFormat::Json).unwrap();
-    let v: serde_json::Value =
-        serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
-    let ms = v["matches"].as_array().unwrap();
+    let v = parse_tool_json(resp);
+    let ms = groups(&v);
     assert!(!ms.is_empty(), "expected at least one match");
     assert!(
         ms.iter()
             .any(|m| m["file"].as_str().unwrap().ends_with("auth.rs")),
         "{ms:?}"
     );
-    assert_eq!(v["atlas_result_kind"], "content_matches");
+    assert_eq!(v["tool"], "search_content");
+    assert_eq!(v["mode"], "literal");
 }
 
 #[test]
@@ -58,10 +58,10 @@ fn search_content_regex_match() {
         "exclude_generated": false
     });
     let resp = tool_search_content(Some(&args), &root, OutputFormat::Json).unwrap();
-    let v: serde_json::Value =
-        serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
+    let v = parse_tool_json(resp);
+    assert_eq!(v["mode"], "regex");
     assert!(
-        v["result_count"].as_u64().unwrap() >= 2,
+        v["summary"]["hit_count"].as_u64().unwrap() >= 2,
         "expected ≥2 matches: {v}"
     );
 }
@@ -114,9 +114,8 @@ fn search_content_exclude_generated_node_modules() {
     ]);
     let args = serde_json::json!({ "query": "function", "exclude_generated": true });
     let resp = tool_search_content(Some(&args), &root, OutputFormat::Json).unwrap();
-    let v: serde_json::Value =
-        serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
-    let ms = v["matches"].as_array().unwrap();
+    let v = parse_tool_json(resp);
+    let ms = groups(&v);
     assert!(
         !ms.iter()
             .any(|m| m["file"].as_str().unwrap().contains("node_modules")),
@@ -132,9 +131,8 @@ fn search_content_min_js_suppressed_by_default() {
     ]);
     let args = serde_json::json!({ "query": "function" });
     let resp = tool_search_content(Some(&args), &root, OutputFormat::Json).unwrap();
-    let v: serde_json::Value =
-        serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
-    let ms = v["matches"].as_array().unwrap();
+    let v = parse_tool_json(resp);
+    let ms = groups(&v);
     assert!(
         !ms.iter()
             .any(|m| m["file"].as_str().unwrap().ends_with(".min.js")),
@@ -158,11 +156,10 @@ fn search_content_max_results_truncates() {
         "exclude_generated": false
     });
     let resp = tool_search_content(Some(&args), &root, OutputFormat::Json).unwrap();
-    let v: serde_json::Value =
-        serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
+    let v = parse_tool_json(resp);
     assert!(
-        v["result_count"].as_u64().unwrap() <= 3,
-        "result_count exceeded max: {v}"
+        v["summary"]["hit_count"].as_u64().unwrap() <= 3,
+        "hit_count exceeded max: {v}"
     );
     assert!(v["truncated"].as_bool().unwrap(), "expected truncated=true");
 }
@@ -184,34 +181,33 @@ fn search_content_max_results_is_clamped_by_central_budget_policy() {
     });
 
     let resp = tool_search_content(Some(&args), &root, OutputFormat::Json).unwrap();
-    let body: serde_json::Value =
-        serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
+    let body = parse_tool_json(resp.clone());
 
     assert_eq!(resp["budget_status"], "partial_result");
     assert_eq!(resp["budget_hit"], true);
     assert_eq!(resp["budget_name"], "review_context_extraction.max_nodes");
     assert_eq!(resp["budget_limit"], 200);
     assert_eq!(resp["budget_observed"], 201);
-    assert_eq!(body["result_count"], 200);
+    assert_eq!(body["summary"]["hit_count"], 200);
     assert_eq!(body["truncated"], true);
 }
 
 #[test]
-fn search_content_symbol_hint_present() {
+fn search_content_symbol_hint_present_as_warning() {
     let (_dir, root) = make_repo(&[("src/lib.rs", "fn my_func() {}")]);
     let args = serde_json::json!({ "query": "my_func", "exclude_generated": false });
     let resp = tool_search_content(Some(&args), &root, OutputFormat::Json).unwrap();
-    let v: serde_json::Value =
-        serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
-    assert!(v["atlas_hint"].is_string(), "expected symbol hint: {v}");
+    let v = parse_tool_json(resp);
+    let warnings = v["warnings"].as_array().expect("warnings array");
+    assert_eq!(warnings.len(), 1, "expected symbol hint warning: {v}");
     assert!(
-        v["atlas_hint"].as_str().unwrap().contains("query_graph"),
-        "hint should mention query_graph: {v}"
+        warnings[0].as_str().unwrap().contains("query_graph"),
+        "warning should mention query_graph: {v}"
     );
 }
 
 #[test]
-fn search_content_rich_snippets_are_opt_in() {
+fn search_content_rich_snippets_are_grouped_under_match_rows() {
     let (_dir, root) = make_repo(&[(
         "src/lib.rs",
         "fn before() {}\nfn target() {}\nfn after() {}\n",
@@ -223,9 +219,9 @@ fn search_content_rich_snippets_are_opt_in() {
         "snippet_context_lines": 1
     });
     let resp = tool_search_content(Some(&args), &root, OutputFormat::Json).unwrap();
-    let v: serde_json::Value =
-        serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
-    let snippets = v["rich_snippets"].as_array().expect("rich snippets array");
+    let v = parse_tool_json(resp);
+    let group = &groups(&v)[0];
+    let snippets = group["snippets"].as_array().expect("rich snippets array");
     assert_eq!(snippets.len(), 1, "expected one grouped snippet: {v}");
     assert_eq!(snippets[0]["match_line"], 2);
     assert!(
@@ -242,16 +238,13 @@ fn search_content_rich_snippets_are_opt_in() {
 }
 
 #[test]
-fn search_content_default_payload_omits_rich_snippets() {
+fn search_content_default_payload_keeps_empty_snippets_array() {
     let (_dir, root) = make_repo(&[("src/lib.rs", "fn target() {}\n")]);
     let args = serde_json::json!({ "query": "target", "exclude_generated": false });
     let resp = tool_search_content(Some(&args), &root, OutputFormat::Json).unwrap();
-    let v: serde_json::Value =
-        serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
-    assert!(
-        v.get("rich_snippets").is_none(),
-        "default payload should stay compact: {v}"
-    );
+    let v = parse_tool_json(resp);
+    let group = &groups(&v)[0];
+    assert_eq!(group["snippets"], serde_json::json!([]));
 }
 
 #[test]
@@ -322,9 +315,8 @@ fn search_content_subpath_limits_to_subdir() {
         "exclude_generated": false
     });
     let resp = tool_search_content(Some(&args), &root, OutputFormat::Json).unwrap();
-    let v: serde_json::Value =
-        serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
-    let ms = v["matches"].as_array().unwrap();
+    let v = parse_tool_json(resp);
+    let ms = groups(&v);
     assert!(
         !ms.iter()
             .any(|m| m["file"].as_str().unwrap().contains("billing")),
@@ -344,9 +336,8 @@ fn search_content_exclude_globs_skips_matched() {
         "exclude_generated": false
     });
     let resp = tool_search_content(Some(&args), &root, OutputFormat::Json).unwrap();
-    let v: serde_json::Value =
-        serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
-    let ms = v["matches"].as_array().unwrap();
+    let v = parse_tool_json(resp);
+    let ms = groups(&v);
     assert!(
         !ms.iter()
             .any(|m| m["file"].as_str().unwrap().contains("generated")),

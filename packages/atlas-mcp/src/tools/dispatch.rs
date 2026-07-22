@@ -85,6 +85,21 @@ fn normalized_contract_tool(name: &str) -> bool {
             | "save_context_artifact"
             | "purge_saved_context"
             | "get_global_memory"
+            | "symbol_neighbors"
+            | "cross_file_links"
+            | "concept_clusters"
+            | "analyze_safety"
+            | "analyze_remove"
+            | "analyze_dead_code"
+            | "analyze_dependency"
+            | "resolve_symbol"
+            | "search_files"
+            | "search_content"
+            | "read_file_excerpt"
+            | "get_docs_section"
+            | "read_file_around_match"
+            | "search_templates"
+            | "search_text_assets"
     )
 }
 

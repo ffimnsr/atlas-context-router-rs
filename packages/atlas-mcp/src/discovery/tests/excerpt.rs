@@ -75,6 +75,10 @@ fn read_file_excerpt_reads_single_range() {
     let v: serde_json::Value =
         serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
 
+    assert_eq!(v["tool"], "read_file_excerpt");
+    assert_eq!(v["selection_mode"], "single_range");
+    assert_eq!(v["ranges"][0]["start_line"], 2);
+    assert_eq!(v["snippets"][0]["start_line"], 2);
     assert_eq!(v["atlas_result_kind"], "file_excerpt");
     assert_eq!(v["mode"], "single_range");
     assert_eq!(v["excerpt_count"], 1);
@@ -477,6 +481,9 @@ fn get_docs_section_by_heading_path_returns_section() {
     let v: serde_json::Value =
         serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
 
+    assert_eq!(v["tool"], "get_docs_section");
+    assert_eq!(v["selector_mode"], "heading");
+    assert_eq!(v["heading"]["path"], "document.overview.install");
     assert_eq!(v["atlas_result_kind"], "docs_section");
     assert_eq!(v["heading_path"], "document.overview.install");
     assert_eq!(v["heading_level"], 2);
@@ -559,6 +566,9 @@ fn read_file_around_match_groups_nearby_matches() {
     let v: serde_json::Value =
         serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
 
+    assert_eq!(v["tool"], "read_file_around_match");
+    assert_eq!(v["match_mode"], "literal");
+    assert_eq!(v["summary"]["total_matches"], 2);
     assert_eq!(v["atlas_result_kind"], "file_match_snippets");
     assert_eq!(v["total_matches"], 2);
     assert_eq!(v["snippet_count"], 1);

@@ -10,8 +10,8 @@
       "purpose": "Resolve a symbol name to its exact qualified_name in the graph. Eliminates the manual workflow of query_graph → copy qualified_name → call symbol_neighbors. Returns the best match, an ambiguity list when multiple symbol…",
       "operation_name": "resolve_symbol",
       "request_shape": "request object: object with 6 top-level fields (1 required)",
-      "response_shape": "MCP tool result envelope with content text, metadata fields, and no advertised structuredContent schema",
-      "result_contract": "mixed-needs-redesign",
+      "response_shape": "MCP tool result envelope with structuredContent object and metadata fields",
+      "result_contract": "stable-object",
       "annotations": {
         "read_only": true,
         "state_changing": false,
@@ -69,9 +69,162 @@
       }
     ],
     "output_response": {
-      "response_shape": "structuredContent schema unavailable for this tool; rely on content text, metadata, and error envelope",
-      "structured_content_available": false,
-      "response_fields": [],
+      "response_shape": "structuredContent follows advertised outputSchema when present",
+      "structured_content_available": true,
+      "response_fields": [
+        {
+          "name": "ambiguity",
+          "field_type": "object",
+          "required": true,
+          "default_value": null,
+          "enum_values": [],
+          "description": "No schema description available."
+        },
+        {
+          "name": "atlas_freshness",
+          "field_type": "object",
+          "required": false,
+          "default_value": null,
+          "enum_values": [],
+          "description": "No schema description available."
+        },
+        {
+          "name": "atlas_provenance",
+          "field_type": "object",
+          "required": true,
+          "default_value": null,
+          "enum_values": [],
+          "description": "No schema description available."
+        },
+        {
+          "name": "best_match",
+          "field_type": "object | null",
+          "required": true,
+          "default_value": null,
+          "enum_values": [],
+          "description": "No schema description available."
+        },
+        {
+          "name": "budget_hit",
+          "field_type": "boolean",
+          "required": false,
+          "default_value": null,
+          "enum_values": [],
+          "description": "No schema description available."
+        },
+        {
+          "name": "budget_limit",
+          "field_type": "integer",
+          "required": false,
+          "default_value": null,
+          "enum_values": [],
+          "description": "No schema description available."
+        },
+        {
+          "name": "budget_name",
+          "field_type": "string",
+          "required": false,
+          "default_value": null,
+          "enum_values": [],
+          "description": "No schema description available."
+        },
+        {
+          "name": "budget_observed",
+          "field_type": "integer",
+          "required": false,
+          "default_value": null,
+          "enum_values": [],
+          "description": "No schema description available."
+        },
+        {
+          "name": "budget_status",
+          "field_type": "string",
+          "required": false,
+          "default_value": null,
+          "enum_values": [],
+          "description": "No schema description available."
+        },
+        {
+          "name": "generated_at",
+          "field_type": "string",
+          "required": false,
+          "default_value": null,
+          "enum_values": [],
+          "description": "RFC 3339 generation timestamp for this success payload."
+        },
+        {
+          "name": "partial",
+          "field_type": "boolean",
+          "required": false,
+          "default_value": null,
+          "enum_values": [],
+          "description": "No schema description available."
+        },
+        {
+          "name": "query",
+          "field_type": "object",
+          "required": true,
+          "default_value": null,
+          "enum_values": [],
+          "description": "No schema description available."
+        },
+        {
+          "name": "safe_to_answer",
+          "field_type": "boolean",
+          "required": false,
+          "default_value": null,
+          "enum_values": [],
+          "description": "No schema description available."
+        },
+        {
+          "name": "suggestions",
+          "field_type": "array<object>",
+          "required": true,
+          "default_value": null,
+          "enum_values": [],
+          "description": "No schema description available."
+        },
+        {
+          "name": "summary",
+          "field_type": "object",
+          "required": true,
+          "default_value": null,
+          "enum_values": [],
+          "description": "No schema description available."
+        },
+        {
+          "name": "tool",
+          "field_type": "string",
+          "required": true,
+          "default_value": null,
+          "enum_values": [],
+          "description": "No schema description available."
+        },
+        {
+          "name": "truncated",
+          "field_type": "boolean",
+          "required": false,
+          "default_value": null,
+          "enum_values": [],
+          "description": "No schema description available."
+        },
+        {
+          "name": "truncation_reason",
+          "field_type": "string",
+          "required": false,
+          "default_value": null,
+          "enum_values": [],
+          "description": "No schema description available."
+        },
+        {
+          "name": "warnings",
+          "field_type": "array<string>",
+          "required": true,
+          "default_value": null,
+          "enum_values": [],
+          "description": "No schema description available."
+        }
+      ],
       "metadata_fields": [
         {
           "name": "content",

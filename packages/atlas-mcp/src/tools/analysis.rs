@@ -326,20 +326,38 @@ pub(super) fn tool_analyze_safety(
         .with_context(|| format!("safety scoring for `{symbol}` failed"))?;
     sort_refactor_safety_result(&mut result);
 
+    let cross_module_callers = result
+        .evidence
+        .iter()
+        .find(|e| e.key == "cross_module_callers")
+        .and_then(|e| e.value.parse::<usize>().ok())
+        .unwrap_or(0);
     let payload = serde_json::json!({
-        "symbol": result.node.qualified_name,
-        "kind": result.node.kind.as_str(),
-        "file": result.node.file_path,
-        "safety_score": result.safety.score,
-        "safety_band": format!("{:?}", result.safety.band),
+        "tool": "analyze_safety",
+        "symbol": {
+            "qname": result.node.qualified_name,
+            "kind": result.node.kind.as_str(),
+            "file": result.node.file_path,
+            "line": result.node.line_start,
+        },
         "fan_in": result.fan_in,
         "fan_out": result.fan_out,
-        "linked_tests": result.linked_test_count,
-        "coverage_strength": format!("{:?}", result.coverage_strength),
-        "unresolved_edges": result.unresolved_edge_count,
-        "reasons": result.safety.reasons,
+        "test_adjacency": {
+            "linked_test_count": result.linked_test_count,
+            "coverage_strength": format!("{:?}", result.coverage_strength),
+            "has_test_coverage": result.linked_test_count > 0,
+        },
+        "cross_module_callers": cross_module_callers,
+        "safety_score": result.safety.score,
+        "safety_band": result.safety.band.to_string(),
         "suggested_validations": result.safety.suggested_validations,
-        "evidence": result.evidence.iter().map(|e| serde_json::json!({ "key": e.key, "value": e.value })).collect::<Vec<_>>(),
+        "factor_evidence": result.evidence.iter().map(|e| serde_json::json!({ "key": e.key, "value": e.value })).collect::<Vec<_>>(),
+        "summary": {
+            "status": "ok",
+            "reason_count": result.safety.reasons.len(),
+            "unresolved_edge_count": result.unresolved_edge_count,
+        },
+        "warnings": result.safety.reasons,
     });
     let mut response = tool_result_value(&payload, output_format)?;
     inject_budget_metadata(&mut response, &result.budget);
@@ -390,42 +408,80 @@ pub(super) fn tool_analyze_remove(
         .len()
         .saturating_sub(trimming.removal_symbol_preview_limit);
 
-    let impacted_preview: Vec<_> = result
-        .impacted_symbols
-        .iter()
-        .take(trimming.removal_symbol_preview_limit)
-        .map(|im| {
-            serde_json::json!({
-                "qn": im.node.qualified_name,
+    let impact_entry = |im: &atlas_core::ImpactedNode| {
+        serde_json::json!({
+            "symbol": {
+                "qname": im.node.qualified_name,
                 "kind": im.node.kind.as_str(),
                 "file": im.node.file_path,
-                "depth": im.depth,
-                "impact_class": format!("{:?}", im.impact_class),
-            })
+                "line": im.node.line_start,
+            },
+            "depth": im.depth,
+            "impact_class": im.impact_class.to_string(),
+            "via_edge_kind": im.via_edge_kind.map(|kind| kind.as_str().to_owned()),
         })
+    };
+    let definite_impacts: Vec<_> = result
+        .impacted_symbols
+        .iter()
+        .filter(|im| matches!(im.impact_class, atlas_core::ImpactClass::Definite))
+        .take(trimming.removal_symbol_preview_limit)
+        .map(impact_entry)
+        .collect();
+    let probable_impacts: Vec<_> = result
+        .impacted_symbols
+        .iter()
+        .filter(|im| matches!(im.impact_class, atlas_core::ImpactClass::Probable))
+        .take(trimming.removal_symbol_preview_limit)
+        .map(impact_entry)
+        .collect();
+    let weak_impacts: Vec<_> = result
+        .impacted_symbols
+        .iter()
+        .filter(|im| matches!(im.impact_class, atlas_core::ImpactClass::Weak))
+        .take(trimming.removal_symbol_preview_limit)
+        .map(impact_entry)
         .collect();
 
     let omitted_files = result.impacted_files.len().saturating_sub(max_files);
     let omitted_edges = result.relevant_edges.len().saturating_sub(max_edges);
 
     let payload = serde_json::json!({
-        "seed_count": result.seed.len(),
-        "impacted_symbol_count": result.impacted_symbols.len(),
-        "impacted_file_count": result.impacted_files.len(),
-        "impacted_test_count": result.impacted_tests.len(),
-        "impacted_symbols": impacted_preview,
-        "impacted_files": &result.impacted_files[..result.impacted_files.len().min(max_files)],
-        "omitted_file_count": omitted_files,
-        "omitted_symbol_count": omitted,
-        "omitted_edge_count": omitted_edges,
+        "tool": "analyze_remove",
+        "symbols": result.seed.iter().map(|node| serde_json::json!({
+            "qname": node.qualified_name,
+            "kind": node.kind.as_str(),
+            "file": node.file_path,
+            "line": node.line_start,
+        })).collect::<Vec<_>>(),
+        "definite_impacts": definite_impacts,
+        "probable_impacts": probable_impacts,
+        "weak_impacts": weak_impacts,
+        "tests": result.impacted_tests.iter().map(|node| serde_json::json!({
+            "qname": node.qualified_name,
+            "kind": node.kind.as_str(),
+            "file": node.file_path,
+            "line": node.line_start,
+        })).collect::<Vec<_>>(),
+        "uncertainty_flags": result.uncertainty_flags,
+        "summary": {
+            "status": "ok",
+            "seed_count": result.seed.len(),
+            "impacted_symbol_count": result.impacted_symbols.len(),
+            "impacted_file_count": result.impacted_files.len(),
+            "impacted_test_count": result.impacted_tests.len(),
+            "omitted_symbol_count": omitted,
+            "omitted_file_count": omitted_files,
+            "omitted_edge_count": omitted_edges,
+        },
         "warnings": result.warnings.iter().map(|w| serde_json::json!({
             "message": w.message,
-            "confidence": format!("{:?}", w.confidence),
+            "confidence": w.confidence.to_string(),
             "error_code": w.error_code,
             "suggestions": w.suggestions,
         })).collect::<Vec<_>>(),
-        "uncertainty_flags": result.uncertainty_flags,
         "evidence": result.evidence.iter().map(|e| serde_json::json!({ "key": e.key, "value": e.value })).collect::<Vec<_>>(),
+        "impacted_files": &result.impacted_files[..result.impacted_files.len().min(max_files)],
     });
     let mut response = tool_result_value(&payload, output_format)?;
     let budget = if result.budget.budget_hit {
@@ -489,10 +545,23 @@ pub(super) fn tool_analyze_dead_code(
 
     if summary {
         let payload = serde_json::json!({
-            "candidate_count": candidates.len(),
-            "applied_limit": limit,
-            "applied_subpath": subpath,
-            "excluded_kinds": exclude_kind_strs,
+            "tool": "analyze_dead_code",
+            "scope": {
+                "code_only": true,
+                "summary_only": true,
+                "subpath": subpath,
+                "excluded_kinds": exclude_kind_strs,
+                "limit": limit,
+            },
+            "candidates": [],
+            "blockers": [],
+            "summary": {
+                "status": "ok",
+                "candidate_count": candidates.len(),
+                "blocker_count": 0,
+            },
+            "truncated": false,
+            "warnings": [],
         });
         let mut response = tool_result_value(&payload, output_format)?;
         inject_budget_metadata(
@@ -515,24 +584,50 @@ pub(super) fn tool_analyze_dead_code(
         .take(trimming.dead_code_candidate_preview_limit)
         .map(|c| {
             serde_json::json!({
-                "qn": c.node.qualified_name,
-                "kind": c.node.kind.as_str(),
-                "file": c.node.file_path,
-                "line": c.node.line_start,
-                "certainty": format!("{:?}", c.certainty),
+                "symbol": {
+                    "qname": c.node.qualified_name,
+                    "kind": c.node.kind.as_str(),
+                    "file": c.node.file_path,
+                    "line": c.node.line_start,
+                },
+                "certainty": c.certainty.to_string(),
                 "reasons": c.reasons,
                 "blockers": c.blockers,
             })
         })
         .collect();
+    let blockers: Vec<_> = candidates
+        .iter()
+        .take(trimming.dead_code_candidate_preview_limit)
+        .flat_map(|c| {
+            c.blockers.iter().map(|blocker| {
+                json!({
+                    "symbol": c.node.qualified_name,
+                    "message": blocker,
+                })
+            })
+        })
+        .collect();
 
     let payload = serde_json::json!({
-        "candidate_count": candidates.len(),
-        "omitted_count": omitted,
+        "tool": "analyze_dead_code",
+        "scope": {
+            "code_only": true,
+            "summary_only": false,
+            "subpath": subpath,
+            "excluded_kinds": exclude_kind_strs,
+            "limit": limit,
+        },
         "candidates": preview,
-        "applied_limit": limit,
-        "applied_subpath": subpath,
-        "excluded_kinds": exclude_kind_strs,
+        "blockers": blockers,
+        "summary": {
+            "status": "ok",
+            "candidate_count": candidates.len(),
+            "blocker_count": candidates.iter().map(|c| c.blockers.len()).sum::<usize>(),
+            "omitted_count": omitted,
+        },
+        "truncated": omitted > 0,
+        "warnings": [],
     });
     let mut response = tool_result_value(&payload, output_format)?;
     inject_budget_metadata(
@@ -583,14 +678,18 @@ pub(super) fn tool_analyze_dependency(
         .collect();
 
     let payload = serde_json::json!({
+        "tool": "analyze_dependency",
         "symbol": result.target_qname,
         "removable": result.removable,
-        "confidence": format!("{:?}", result.confidence),
-        "blocking_reference_count": result.blocking_references.len(),
         "blocking_references": blocking_preview,
-        "omitted_blocking_count": omitted,
+        "confidence_tier": result.confidence.to_string(),
         "suggested_cleanups": result.suggested_cleanups,
-        "uncertainty_flags": result.uncertainty_flags,
+        "summary": {
+            "status": if result.removable { "removable" } else { "blocked" },
+            "blocking_reference_count": result.blocking_references.len(),
+            "omitted_blocking_count": omitted,
+        },
+        "warnings": result.uncertainty_flags,
         "evidence": result.evidence.iter().map(|e| serde_json::json!({ "key": e.key, "value": e.value })).collect::<Vec<_>>(),
     });
     let mut response = tool_result_value(&payload, output_format)?;
