@@ -1,5 +1,5 @@
-//! Reverse-request broker for sending client-directed requests
-//! (e.g. roots/list, elicitation) and resolving the response.
+//! Reverse-request broker for legacy/internal client-directed requests
+//! and correlated response handling.
 
 use std::collections::HashMap;
 use std::sync::Arc;

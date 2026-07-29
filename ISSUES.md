@@ -3495,7 +3495,7 @@ Lock migration with fixtures, docs, and drift-prevention tests.
 - [x] add stdio fixtures for discover, per-request `_meta`, no initialize dependency, and MRTR retry
 - [x] update `MCP_TOOLS.md`, install docs, and client guidance for 2026 behavior
 - [x] add drift tests proving no active `roots/list`, `Mcp-Session-Id`, GET stream, old task methods, or server-initiated request paths remain
-- [ ] run `cargo fmt --all`, `cargo clippy --workspace --all-targets --all-features -- -D warnings`, `cargo test --quiet -p atlas-mcp`, and `./scripts/test-workspace-summary.sh`
+- [x] run `cargo fmt --all`, `cargo clippy --workspace --all-targets --all-features -- -D warnings`, `cargo test --quiet -p atlas-mcp`, and `./scripts/test-workspace-summary.sh`
 
 Why:
 - broad regression coverage prevents future MCP behavior from drifting back to deprecated 2025 patterns

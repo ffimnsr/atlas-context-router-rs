@@ -5,6 +5,19 @@ fn detached_current_repo_worktree_meets_large_repo_performance_gate() {
     let worktree = setup_current_repo_detached_worktree();
 
     run_atlas(worktree.path(), &["init"]);
+    fs::write(
+        worktree.path().join(".atlas").join("config.toml"),
+        r#"[build]
+parse_batch_size = 512
+max_files_per_run = 50000
+max_total_bytes_per_run = 536870912
+max_file_bytes = 67108864
+max_parse_failures = 10000
+max_parse_failure_ratio = 1.0
+max_wall_time_ms = 90000
+"#,
+    )
+    .expect("write representative repo budget config");
 
     let build = read_json_data_output("build", run_atlas(worktree.path(), &["--json", "build"]));
     assert!(

@@ -1433,7 +1433,7 @@ fn apply_origin_headers(mut response: Response, origin: Option<&str>) -> Respons
     response.headers_mut().insert(
         header::ACCESS_CONTROL_ALLOW_HEADERS,
         HeaderValue::from_static(
-            "Authorization, Content-Type, Accept, MCP-Protocol-Version, Mcp-Method, Mcp-Name, Mcp-Param-*, Mcp-Session-Id, Last-Event-ID",
+            "Authorization, Content-Type, Accept, MCP-Protocol-Version, Mcp-Method, Mcp-Name, Mcp-Param-*",
         ),
     );
     response
@@ -1465,6 +1465,21 @@ mod tests {
             auth_policy: None,
             allowed_origins: Arc::new(HashSet::new()),
         }
+    }
+
+    #[test]
+    fn cors_headers_do_not_advertise_removed_session_resume_headers() {
+        let response =
+            apply_origin_headers(StatusCode::OK.into_response(), Some("https://client.test"));
+        let allowed_headers = response
+            .headers()
+            .get(header::ACCESS_CONTROL_ALLOW_HEADERS)
+            .and_then(|value| value.to_str().ok())
+            .expect("allow headers");
+
+        assert!(allowed_headers.contains("MCP-Protocol-Version"));
+        assert!(!allowed_headers.contains("Mcp-Session-Id"));
+        assert!(!allowed_headers.contains("Last-Event-ID"));
     }
 
     async fn make_state_with_auth(origins: &[&str]) -> AppState {
