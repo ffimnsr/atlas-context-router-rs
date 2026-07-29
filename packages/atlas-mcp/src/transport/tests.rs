@@ -356,7 +356,6 @@ fn advertised_capabilities_have_stdio_method_handlers_and_descriptor_backing() {
 
     assert!(capabilities.tools == crate::spec::EmptyCapability::default());
     assert!(capabilities.completions == crate::spec::EmptyCapability::default());
-    assert!(capabilities.logging == crate::spec::EmptyCapability::default());
     assert!(capabilities.tasks.is_some());
     assert!(capabilities.experimental.is_some());
 
@@ -383,7 +382,6 @@ fn advertised_capabilities_have_stdio_method_handlers_and_descriptor_backing() {
             "method":"completion/complete",
             "params":{"ref":{"name":"tools/call"},"argument":{"name":"output_format","value":"j"}}
         }),
-        serde_json::json!({"jsonrpc":"2.0","id":8,"method":"logging/setLevel","params":{"level":"warning"}}),
         serde_json::json!({"jsonrpc":"2.0","id":9,"method":"prompts/list","params":{}}),
         serde_json::json!({
             "jsonrpc":"2.0",
@@ -412,6 +410,28 @@ fn advertised_capabilities_have_stdio_method_handlers_and_descriptor_backing() {
             request["method"].as_str().expect("method")
         );
     }
+
+    let removed_logging = stdio_single_response_2026(
+        &repo_root,
+        &fixture.db_path,
+        serde_json::json!({
+            "jsonrpc":"2.0",
+            "id":8,
+            "method":"logging/setLevel",
+            "params":{
+                "level":"warning",
+                "_meta": {
+                    crate::spec::META_PROTOCOL_VERSION: MCP_PROTOCOL_VERSION,
+                    crate::spec::META_CLIENT_CAPABILITIES: {},
+                    crate::spec::META_CLIENT_INFO: {"name": "zed", "version": "1.0.0"}
+                }
+            }
+        }),
+    );
+    assert_eq!(
+        removed_logging["error"]["code"],
+        serde_json::json!(JsonRpcErrorKind::MethodNotFound.code())
+    );
 
     let tool_list = crate::tools::tool_list();
     let tools = tool_list["tools"].as_array().expect("tool descriptors");
@@ -1475,7 +1495,7 @@ fn stdio_transport_redacts_internal_sql_errors_from_tool_failures() {
 }
 
 #[test]
-fn stdio_transport_exposes_resources_completion_and_logging_methods() {
+fn stdio_transport_exposes_resources_completion_methods_and_rejects_removed_logging_method() {
     let fixture = setup_fixture();
     let input = [
         initialize_request_line(),
@@ -1520,17 +1540,16 @@ fn stdio_transport_exposes_resources_completion_and_logging_methods() {
         serde_json::json!("json")
     );
     assert_eq!(
-        by_id[&serde_json::json!(5)]["result"]["level"],
-        serde_json::json!("warning")
+        by_id[&serde_json::json!(5)]["error"]["code"],
+        serde_json::json!(JsonRpcErrorKind::MethodNotFound.code())
     );
 }
 
 #[test]
-fn stdio_transport_emits_progress_and_log_notifications() {
+fn stdio_transport_emits_progress_without_mcp_log_notifications() {
     let fixture = setup_fixture();
     let input = concat!(
-        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"$/setTrace\",\"params\":{\"value\":\"messages\"}}\n",
-        "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"query_graph\",\"progressToken\":\"tok-1\",\"arguments\":{\"text\":\"compute\"},\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\",\"io.modelcontextprotocol/clientCapabilities\":{},\"io.modelcontextprotocol/clientInfo\":{\"name\":\"zed\",\"version\":\"1.0.0\"}}}}\n"
+        "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"query_graph\",\"progressToken\":\"tok-1\",\"arguments\":{\"text\":\"compute\"},\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\",\"io.modelcontextprotocol/clientCapabilities\":{},\"io.modelcontextprotocol/clientInfo\":{\"name\":\"zed\",\"version\":\"1.0.0\"},\"io.modelcontextprotocol/logLevel\":\"warning\"}}}\n"
     );
     let reader = BufReader::new(Cursor::new(input.as_bytes()));
     let mut writer = Vec::new();
@@ -1548,8 +1567,8 @@ fn stdio_transport_emits_progress_and_log_notifications() {
     assert!(
         responses
             .iter()
-            .any(|value| value["method"] == serde_json::json!("$/logMessage")),
-        "setTrace=messages should emit log notifications"
+            .all(|value| value["method"] != serde_json::json!("notifications/message")),
+        "removed MCP logging channel must not write notifications/message on stdout"
     );
     assert!(
         responses.iter().any(|value| {

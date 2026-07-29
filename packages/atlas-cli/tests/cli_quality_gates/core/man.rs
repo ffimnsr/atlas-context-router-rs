@@ -51,11 +51,11 @@ fn man_cli_and_mcp_payloads_match_for_resolve_symbol() {
     let output = run_serve_jsonrpc_session(
         repo.path(),
         &["serve"],
-        concat!(
-            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}\n",
-            "{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}\n",
+        format!(
+            "{}{}",
+            initialized_session_prelude(1),
             "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"man\",\"arguments\":{\"namespace\":\"mcp\",\"tool_name\":\"resolve_symbol\",\"output_format\":\"json\"}}}\n"
-        ),
+        )
     );
     assert!(output.status.success(), "serve man failed");
 

@@ -8,7 +8,6 @@ use std::sync::Mutex;
 use std::time::Instant;
 
 use super::repo_selection::RepoSelectionSource;
-use crate::logging;
 use crate::output::OutputFormat;
 
 // ---------------------------------------------------------------------------
@@ -64,6 +63,7 @@ pub(crate) struct PendingRequest {
     pub(crate) timeout_ms: u128,
     pub(crate) output_format: OutputFormat,
     pub(crate) progress_token: Option<serde_json::Value>,
+    pub(crate) request_log_level: Option<crate::logging::LogLevel>,
     pub(crate) cancel_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
@@ -137,7 +137,6 @@ pub(crate) struct RequestCompletion {
 pub(crate) struct ConnectionState {
     pub(crate) trace: TraceLevel,
     pub(crate) initialized: bool,
-    pub(crate) log_level: Option<logging::LogLevel>,
     pub(crate) client_capabilities: serde_json::Value,
     pub(crate) canceled_tokens: Arc<Mutex<HashSet<u64>>>,
     pub(crate) repo_resolution: RepoResolutionState,
@@ -199,7 +198,6 @@ pub(crate) fn connection_state(
     ConnectionState {
         trace: TraceLevel::Off,
         initialized: false,
-        log_level: None,
         client_capabilities: serde_json::Value::Null,
         canceled_tokens: Arc::new(Mutex::new(HashSet::new())),
         repo_resolution: RepoResolutionState {

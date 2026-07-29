@@ -59,6 +59,7 @@ jsonschema = { version = "0.18", features = ["draft202012"] }
 rusqlite.workspace = true
 tempfile = "3"
 tiktoken-rs = "0.6"
+tower = "0.5"
 
 [lints]
 workspace = true

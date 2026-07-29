@@ -9,7 +9,6 @@
         "prompts": { "listChanged": false },
         "resources": { "subscribe": false, "listChanged": false },
         "completions": {},
-        "logging": {},
         "tasks": {
           "list": {},
           "cancel": {},

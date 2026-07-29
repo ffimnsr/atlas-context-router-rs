@@ -297,6 +297,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "toon-format",
+ "tower",
  "tower-http",
  "tracing",
  "url",

@@ -3,6 +3,7 @@ use crate::descriptors::{
     IconDescriptor, ToolAnnotations, ToolDescriptor, ToolRegistry, descriptor_meta,
     ensure_schema_2020_12, human_title, normalized_tool_output_schema, validate_descriptor_name,
 };
+use crate::spec;
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -1006,11 +1007,16 @@ struct ToolDescriptorSeed {
     input_schema: Value,
 }
 
-pub fn tool_descriptors() -> Vec<ToolDescriptor> {
+pub(crate) fn tool_descriptors() -> Vec<ToolDescriptor> {
     let tools_value = base_tool_list_json()["tools"].clone();
     let seeds: Vec<ToolDescriptorSeed> =
         serde_json::from_value(tools_value).expect("base tool registry json must be valid");
-    seeds.into_iter().map(build_tool_descriptor).collect()
+    let mut descriptors = seeds
+        .into_iter()
+        .map(build_tool_descriptor)
+        .collect::<Vec<_>>();
+    descriptors.sort_by(|left, right| left.name.cmp(&right.name));
+    descriptors
 }
 
 pub(crate) fn tool_descriptor_by_name(name: &str) -> Option<ToolDescriptor> {
@@ -1027,11 +1033,16 @@ pub fn tool_input_schema_by_name(name: &str) -> Option<Value> {
         .map(|tool| tool.input_schema)
 }
 
+const TOOLS_LIST_CACHE_TTL_MS: u64 = 300_000;
+const TOOLS_LIST_CACHE_SCOPE: &str = spec::CACHE_SCOPE_PUBLIC;
+
 pub fn tool_list() -> Value {
-    serde_json::to_value(ToolRegistry {
+    let mut result = serde_json::to_value(ToolRegistry {
         tools: tool_descriptors(),
     })
-    .expect("tool registry serialization")
+    .expect("tool registry serialization");
+    spec::annotate_cacheable_result(&mut result, TOOLS_LIST_CACHE_TTL_MS, TOOLS_LIST_CACHE_SCOPE);
+    result
 }
 
 fn build_tool_descriptor(seed: ToolDescriptorSeed) -> ToolDescriptor {

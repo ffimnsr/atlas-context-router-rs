@@ -114,7 +114,7 @@ pub(super) fn read_json_tool_result(output: &Output, id: u64) -> Value {
     serde_json::from_str(text).expect("tool result JSON payload")
 }
 
-fn initialize_request_line(id: u64) -> String {
+pub(super) fn initialize_request_line(id: u64) -> String {
     format!(
         "{{\"jsonrpc\":\"2.0\",\"id\":{},\"method\":\"initialize\",\"params\":{{\"protocolVersion\":\"{}\",\"capabilities\":{{\"roots\":{{\"listChanged\":true}},\"sampling\":{{}},\"elicitation\":{{\"form\":{{}},\"url\":{{}}}}}},\"clientInfo\":{{\"name\":\"zed\",\"version\":\"1.0.0\"}},\"_meta\":{{\"clientTag\":\"quality-gate\"}}}}}}\n",
         id,
@@ -122,10 +122,22 @@ fn initialize_request_line(id: u64) -> String {
     )
 }
 
+pub(super) fn initialized_notification_line() -> &'static str {
+    "{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}\n"
+}
+
+pub(super) fn initialized_session_prelude(id: u64) -> String {
+    format!(
+        "{}{}",
+        initialize_request_line(id),
+        initialized_notification_line()
+    )
+}
+
 fn serve_requests() -> String {
     [
         initialize_request_line(1),
-        "{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}\n".to_owned(),
+        initialized_notification_line().to_owned(),
         "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\",\"params\":{}}\n".to_owned(),
         "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"query_graph\",\"arguments\":{\"text\":\"greet_twice\"}}}\n".to_owned(),
         "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"get_context\",\"arguments\":{\"query\":\"greet_twice\"}}}\n".to_owned(),
@@ -139,7 +151,7 @@ fn serve_requests_with_session_tools() -> String {
         .join(" ");
     [
         initialize_request_line(1),
-        "{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}\n".to_owned(),
+        initialized_notification_line().to_owned(),
         "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"query_graph\",\"arguments\":{\"text\":\"greet_twice\",\"output_format\":\"json\"}}}\n".to_owned(),
         format!(
             "{{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{{\"name\":\"save_context_artifact\",\"arguments\":{{\"label\":\"broker-artifact\",\"content\":\"{}\",\"content_type\":\"text/plain\",\"output_format\":\"json\"}}}}}}\n",

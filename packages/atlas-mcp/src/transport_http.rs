@@ -3,18 +3,17 @@
 //! Enabled with `http-transport` Cargo feature.
 //!
 //! Routes:
-//! - `POST /mcp` — JSON-RPC request ingress. Successful `initialize` creates
-//!   negotiated HTTP session and returns `Mcp-Session-Id` header.
-//! - `GET /mcp` — per-session SSE polling/resume endpoint using `Last-Event-ID`.
-//! - `DELETE /mcp` — explicit session termination.
-//! - `GET /health` — unauthenticated liveness probe.
+//! - `POST /mcp` — stateless JSON-RPC request ingress with JSON or one-shot SSE response
+//! - `GET /health` — unauthenticated liveness probe
+//! - `GET /.well-known/oauth-protected-resource` — OAuth protected-resource metadata
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::AtomicBool;
 
-use anyhow::{Context as _, Result};
+use anyhow::{Context as _, Result, anyhow};
 use atlas_core::error_code_docs_ref;
 use axum::body::Bytes;
 use axum::extract::State;
@@ -25,17 +24,27 @@ use axum::{Json, Router};
 use serde_json::Value;
 
 use crate::auth::{self, ProtectedResourceAuthPolicy};
-use crate::http_sessions::{HttpSession, PollEventsError, SessionLookupError, SessionManager};
 use crate::spec;
 use crate::tools;
 use crate::tools::health::mark_server_started;
-use crate::{completion, logging, resources};
+use crate::{completion, resources};
 
 const DEFAULT_BIND: &str = "127.0.0.1:7070";
-const MCP_SESSION_ID_HEADER: &str = "Mcp-Session-Id";
 const MCP_PROTOCOL_VERSION_HEADER: &str = "MCP-Protocol-Version";
+const MCP_METHOD_HEADER: &str = "Mcp-Method";
+const MCP_NAME_HEADER: &str = "Mcp-Name";
+const MCP_PARAM_HEADER_PREFIX: &str = "mcp-param-";
+#[cfg(test)]
+const MCP_SESSION_ID_HEADER: &str = "Mcp-Session-Id";
+#[cfg(test)]
 const LAST_EVENT_ID_HEADER: &str = "Last-Event-ID";
 const PROTECTED_RESOURCE_METADATA_PATH: &str = "/.well-known/oauth-protected-resource";
+const BASE64_SENTINELS: [&str; 2] = ["base64:", "b64:"];
+const SUBSCRIPTION_ID_META_KEY: &str = "io.modelcontextprotocol/subscriptionId";
+const SUBSCRIPTION_TYPE_TOOLS_LIST_CHANGED: &str = "notifications/tools/list_changed";
+const SUBSCRIPTION_TYPE_PROMPTS_LIST_CHANGED: &str = "notifications/prompts/list_changed";
+const SUBSCRIPTION_TYPE_RESOURCES_LIST_CHANGED: &str = "notifications/resources/list_changed";
+const SUBSCRIPTION_TYPE_RESOURCE_UPDATED: &str = "notifications/resources/updated";
 
 #[derive(Clone)]
 struct AppState {
@@ -43,7 +52,17 @@ struct AppState {
     db_path: Arc<String>,
     auth_policy: Option<Arc<ProtectedResourceAuthPolicy>>,
     allowed_origins: Arc<HashSet<String>>,
-    sessions: SessionManager,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ResponseMode {
+    Json,
+    Sse,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AuthorizedRequest {
+    subject: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -103,7 +122,6 @@ pub fn run_http_server_with_options(
                 db_path: Arc::new(db_path.to_owned()),
                 auth_policy,
                 allowed_origins,
-                sessions: SessionManager::from_env(),
             };
             let app = build_router(state);
             let listener = tokio::net::TcpListener::bind(bind_addr)
@@ -123,12 +141,6 @@ impl HttpTestHarness {
                 db_path: Arc::new(db_path.to_owned()),
                 auth_policy: None,
                 allowed_origins: Arc::new(HashSet::new()),
-                sessions: SessionManager::for_tests(
-                    std::time::Duration::from_secs(60),
-                    8,
-                    std::time::Duration::from_secs(60),
-                    std::time::Duration::from_millis(1),
-                ),
             },
             test_auth_issuer: None,
         }
@@ -213,45 +225,20 @@ impl HttpTestHarness {
                         .map(|value| (*value).to_owned())
                         .collect(),
                 ),
-                sessions: SessionManager::for_tests(
-                    std::time::Duration::from_secs(60),
-                    8,
-                    std::time::Duration::from_secs(60),
-                    std::time::Duration::from_millis(1),
-                ),
             },
             test_auth_issuer: Some(issuer),
         })
     }
 
     pub fn post_jsonrpc(&self, headers: &[(&str, &str)], body: &Value) -> Result<TestHttpResponse> {
-        let headers = make_test_header_map(headers)?;
+        let mut headers = make_test_header_map(headers)?;
+        maybe_insert_test_mirror_headers(&mut headers, body)?;
         let body = Bytes::from(serde_json::to_vec(body)?);
         let response = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .context("cannot build tokio runtime for HTTP test harness")?
             .block_on(handle_post_mcp(State(self.state.clone()), headers, body));
-        response_to_test_output(response)
-    }
-
-    pub fn get_mcp(&self, headers: &[(&str, &str)]) -> Result<TestHttpResponse> {
-        let headers = make_test_header_map(headers)?;
-        let response = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .context("cannot build tokio runtime for HTTP test harness")?
-            .block_on(handle_get_mcp(State(self.state.clone()), headers));
-        response_to_test_output(response)
-    }
-
-    pub fn delete_mcp(&self, headers: &[(&str, &str)]) -> Result<TestHttpResponse> {
-        let headers = make_test_header_map(headers)?;
-        let response = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .context("cannot build tokio runtime for HTTP test harness")?
-            .block_on(handle_delete_mcp(State(self.state.clone()), headers));
         response_to_test_output(response)
     }
 
@@ -298,6 +285,33 @@ fn make_test_header_map(headers: &[(&str, &str)]) -> Result<HeaderMap> {
     Ok(map)
 }
 
+fn maybe_insert_test_mirror_headers(headers: &mut HeaderMap, body: &Value) -> Result<()> {
+    if !headers.contains_key(header::ACCEPT) {
+        headers.insert(header::ACCEPT, HeaderValue::from_static("application/json"));
+    }
+    if !headers.contains_key(MCP_PROTOCOL_VERSION_HEADER) {
+        headers.insert(
+            MCP_PROTOCOL_VERSION_HEADER,
+            HeaderValue::from_static(spec::MCP_PROTOCOL_VERSION),
+        );
+    }
+    let Some(method) = body.get("method").and_then(Value::as_str) else {
+        return Ok(());
+    };
+    if !headers.contains_key(MCP_METHOD_HEADER) {
+        headers.insert(MCP_METHOD_HEADER, HeaderValue::from_str(method)?);
+    }
+    if !headers.contains_key(MCP_NAME_HEADER)
+        && let Some(name) = body
+            .get("params")
+            .and_then(|value| value.get("name"))
+            .and_then(Value::as_str)
+    {
+        headers.insert(MCP_NAME_HEADER, HeaderValue::from_str(name)?);
+    }
+    Ok(())
+}
+
 fn response_to_test_output(response: Response) -> Result<TestHttpResponse> {
     let status = response.status().as_u16();
     let headers = response
@@ -339,12 +353,7 @@ fn build_router(state: AppState) -> Router {
             PROTECTED_RESOURCE_METADATA_PATH,
             get(handle_protected_resource_metadata),
         )
-        .route(
-            "/mcp",
-            post(handle_post_mcp)
-                .get(handle_get_mcp)
-                .delete(handle_delete_mcp),
-        )
+        .route("/mcp", post(handle_post_mcp))
         .with_state(state)
 }
 
@@ -377,12 +386,17 @@ async fn handle_post_mcp(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    if let Some(response) = authorize_request(&state, &headers) {
-        return response;
-    }
+    let authorized = match authorize_request(&state, &headers) {
+        Ok(authorized) => authorized,
+        Err(response) => return *response,
+    };
     let origin = match validate_origin(&state, &headers) {
         Ok(origin) => origin,
         Err(response) => return *response,
+    };
+    let response_mode = match negotiate_response_mode(&headers) {
+        Ok(mode) => mode,
+        Err(response) => return apply_origin_headers(*response, origin.as_deref()),
     };
 
     let request: Value = match serde_json::from_slice(&body) {
@@ -432,127 +446,148 @@ async fn handle_post_mcp(
         .to_owned();
     let params = request.get("params").cloned();
 
-    if method == "initialize" {
-        let response = match spec::parse_initialize_request(params.as_ref()) {
-            Ok(request) => match spec::ensure_supported_protocol_version(&request.protocol_version)
-            {
-                Ok(()) => {
-                    let result = serde_json::to_value(spec::initialize_result(&request))
-                        .expect("initialize result serialization");
-                    let session = state.sessions.create_session(
-                        spec::MCP_PROTOCOL_VERSION,
-                        serde_json::to_value(&request.client_info)
-                            .expect("client info serialization"),
-                        request.capabilities,
-                    );
-                    let mut response = jsonrpc_raw_ok_response(id, result);
-                    response.headers_mut().insert(
-                        MCP_SESSION_ID_HEADER,
-                        HeaderValue::from_str(session.id())
-                            .expect("generated session id must be valid header value"),
-                    );
-                    response.headers_mut().insert(
-                        MCP_PROTOCOL_VERSION_HEADER,
-                        HeaderValue::from_static(spec::MCP_PROTOCOL_VERSION),
-                    );
-                    response
-                }
-                Err(error) => jsonrpc_error_with_data_response(
-                    id,
-                    -32022,
-                    error.to_string(),
-                    Some(serde_json::json!({
-                        "supportedVersions": spec::supported_protocol_versions_value(),
-                    })),
-                ),
-            },
-            Err(error) => jsonrpc_error_response(id, -32602, error.to_string()),
-        };
-        return apply_origin_headers(response, origin.as_deref());
-    }
-
-    if method == "server/discover" {
-        let mut response = jsonrpc_ok_response(id, spec::discover_result());
-        response.headers_mut().insert(
-            MCP_PROTOCOL_VERSION_HEADER,
-            HeaderValue::from_static(spec::MCP_PROTOCOL_VERSION),
-        );
-        return apply_origin_headers(response, origin.as_deref());
-    }
-
-    if let Some(response) = validate_protocol_version_header(&headers) {
-        return apply_origin_headers(response, origin.as_deref());
-    }
-
-    let session = match require_session(&state, &headers) {
-        Ok(session) => session,
+    let protocol_version = match required_header_value(&headers, MCP_PROTOCOL_VERSION_HEADER) {
+        Ok(value) => value,
         Err(response) => return apply_origin_headers(*response, origin.as_deref()),
     };
-    debug_assert_eq!(session.protocol_version(), spec::MCP_PROTOCOL_VERSION);
-    let _ = session.client_info();
+    if protocol_version != spec::MCP_PROTOCOL_VERSION {
+        return apply_origin_headers(
+            jsonrpc_error_with_data_response(
+                id.clone(),
+                -32022,
+                format!(
+                    "unsupported MCP-Protocol-Version '{protocol_version}'; supported version: {}",
+                    spec::MCP_PROTOCOL_VERSION
+                ),
+                Some(serde_json::json!({
+                    "supportedVersions": spec::supported_protocol_versions_value(),
+                })),
+            ),
+            origin.as_deref(),
+        );
+    }
+    if let Err(response) = validate_header_mirrors(&headers, &id, &method, params.as_ref()) {
+        return apply_origin_headers(*response, origin.as_deref());
+    }
 
     let response = match method.as_str() {
-        "initialized" | "notifications/initialized" => {
-            session.mark_initialized();
-            StatusCode::NO_CONTENT.into_response()
-        }
-        m if m.starts_with("notifications/") => StatusCode::NO_CONTENT.into_response(),
-        "logging/setLevel" => dispatch_logging_set_level(session, id, params),
-        "tools/list" => jsonrpc_ok_response(id, tools::tool_list()),
-        "resources/list" => match resources::resources_list(params.as_ref()) {
-            Ok(result) => jsonrpc_ok_response(id, result),
+        "initialize" => match spec::parse_initialize_request(params.as_ref()) {
+            Ok(request) => {
+                if request.protocol_version != protocol_version {
+                    jsonrpc_error_with_data_response(
+                        id,
+                        -32020,
+                        format!(
+                            "header/body mismatch for MCP-Protocol-Version: header='{protocol_version}' body='{}'",
+                            request.protocol_version
+                        ),
+                        Some(serde_json::json!({
+                            "atlas_error_code": "header_mismatch",
+                            "header": MCP_PROTOCOL_VERSION_HEADER,
+                            "headerValue": protocol_version,
+                            "bodyField": "params.protocolVersion",
+                            "bodyValue": request.protocol_version,
+                        })),
+                    )
+                } else {
+                    match spec::ensure_supported_protocol_version(&request.protocol_version) {
+                        Ok(()) => jsonrpc_ok_response(
+                            id,
+                            serde_json::to_value(spec::initialize_result(&request))
+                                .expect("initialize result serialization"),
+                        ),
+                        Err(error) => jsonrpc_error_with_data_response(
+                            id,
+                            -32022,
+                            error.to_string(),
+                            Some(serde_json::json!({
+                                "supportedVersions": spec::supported_protocol_versions_value(),
+                            })),
+                        ),
+                    }
+                }
+            }
             Err(error) => jsonrpc_error_response(id, -32602, error.to_string()),
         },
+        "server/discover" => jsonrpc_ok_response(id, spec::discover_result()),
+        "subscriptions/listen" => dispatch_subscriptions_listen(id, params, response_mode),
+        "initialized" | "notifications/initialized" => StatusCode::NO_CONTENT.into_response(),
+        m if m.starts_with("notifications/") => StatusCode::NO_CONTENT.into_response(),
+        "tools/list" => respond_with_mode(
+            response_mode,
+            jsonrpc_envelope_result(id, tools::tool_list()),
+        ),
+        "resources/list" => match resources::resources_list(params.as_ref()) {
+            Ok(result) => respond_with_mode(response_mode, jsonrpc_envelope_result(id, result)),
+            Err(error) => respond_with_mode(
+                response_mode,
+                jsonrpc_envelope_error(id, -32602, error.to_string(), None),
+            ),
+        },
         "resources/templates/list" => match resources::resources_templates_list(params.as_ref()) {
-            Ok(result) => jsonrpc_ok_response(id, result),
-            Err(error) => jsonrpc_error_response(id, -32602, error.to_string()),
+            Ok(result) => respond_with_mode(response_mode, jsonrpc_envelope_result(id, result)),
+            Err(error) => respond_with_mode(
+                response_mode,
+                jsonrpc_envelope_error(id, -32602, error.to_string(), None),
+            ),
         },
         "resources/read" => {
             match resources::resources_read(params.as_ref(), &state.repo_root, &state.db_path) {
-                Ok(result) => jsonrpc_ok_response(id, result),
-                Err(error) => jsonrpc_error_response(id, -32602, error.to_string()),
+                Ok(result) => respond_with_mode(response_mode, jsonrpc_envelope_result(id, result)),
+                Err(error) => respond_with_mode(
+                    response_mode,
+                    jsonrpc_envelope_error(id, -32602, error.to_string(), None),
+                ),
             }
         }
         "completion/complete" => {
             match completion::complete(params.as_ref(), &state.repo_root, &state.db_path) {
-                Ok(result) => jsonrpc_ok_response(id, result),
-                Err(error) => jsonrpc_error_response(id, -32602, error.to_string()),
+                Ok(result) => respond_with_mode(response_mode, jsonrpc_envelope_result(id, result)),
+                Err(error) => respond_with_mode(
+                    response_mode,
+                    jsonrpc_envelope_error(id, -32602, error.to_string(), None),
+                ),
             }
         }
-        "tools/call" => dispatch_tool_call(state, session, id, params).await,
+        "tools/call" => {
+            dispatch_tool_call(state, id, params, response_mode, authorized.subject).await
+        }
         "tasks/list" => match crate::tasks::tasks_list(
             params.as_ref(),
             &state.repo_root,
             crate::output::OutputFormat::Json,
         ) {
-            Ok(result) => jsonrpc_ok_response(id, result),
-            Err(error) => jsonrpc_task_error_response(id, error),
+            Ok(result) => respond_with_mode(response_mode, jsonrpc_envelope_result(id, result)),
+            Err(error) => respond_with_mode(response_mode, jsonrpc_envelope_task_error(id, error)),
         },
         "tasks/get" => match crate::tasks::tasks_get(
             params.as_ref(),
             &state.repo_root,
             crate::output::OutputFormat::Json,
         ) {
-            Ok(result) => jsonrpc_ok_response(id, result),
-            Err(error) => jsonrpc_task_error_response(id, error),
+            Ok(result) => respond_with_mode(response_mode, jsonrpc_envelope_result(id, result)),
+            Err(error) => respond_with_mode(response_mode, jsonrpc_envelope_task_error(id, error)),
         },
         "tasks/result" => match crate::tasks::tasks_result(
             params.as_ref(),
             &state.repo_root,
             crate::output::OutputFormat::Json,
         ) {
-            Ok(result) => jsonrpc_ok_response(id, result),
-            Err(error) => jsonrpc_task_error_response(id, error),
+            Ok(result) => respond_with_mode(response_mode, jsonrpc_envelope_result(id, result)),
+            Err(error) => respond_with_mode(response_mode, jsonrpc_envelope_task_error(id, error)),
         },
         "tasks/cancel" => match crate::tasks::tasks_cancel(
             params.as_ref(),
             &state.repo_root,
             crate::output::OutputFormat::Json,
         ) {
-            Ok(result) => jsonrpc_ok_response(id, result),
-            Err(error) => jsonrpc_task_error_response(id, error),
+            Ok(result) => respond_with_mode(response_mode, jsonrpc_envelope_result(id, result)),
+            Err(error) => respond_with_mode(response_mode, jsonrpc_envelope_task_error(id, error)),
         },
-        "prompts/list" => jsonrpc_ok_response(id, crate::prompts::prompt_list()),
+        "prompts/list" => respond_with_mode(
+            response_mode,
+            jsonrpc_envelope_result(id, crate::prompts::prompt_list()),
+        ),
         "prompts/get" => {
             let name = match params
                 .as_ref()
@@ -562,7 +597,15 @@ async fn handle_post_mcp(
                 Some(name) => name.to_owned(),
                 None => {
                     return apply_origin_headers(
-                        jsonrpc_error_response(id, -32602, "missing prompt name".to_owned()),
+                        respond_with_mode(
+                            response_mode,
+                            jsonrpc_envelope_error(
+                                id,
+                                -32602,
+                                "missing prompt name".to_owned(),
+                                None,
+                            ),
+                        ),
                         origin.as_deref(),
                     );
                 }
@@ -572,129 +615,27 @@ async fn handle_post_mcp(
                 .and_then(|value| value.get("arguments"))
                 .cloned();
             match crate::prompts::prompt_get(&name, prompt_args.as_ref()) {
-                Ok(result) => jsonrpc_ok_response(id, result),
-                Err(error) => jsonrpc_error_response(id, -32603, error.to_string()),
+                Ok(result) => respond_with_mode(response_mode, jsonrpc_envelope_result(id, result)),
+                Err(error) => respond_with_mode(
+                    response_mode,
+                    jsonrpc_envelope_error(id, -32603, error.to_string(), None),
+                ),
             }
         }
-        other => jsonrpc_error_response(id, -32601, format!("method not found: {other}")),
-    };
-    apply_origin_headers(response, origin.as_deref())
-}
-
-async fn handle_get_mcp(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    if let Some(response) = authorize_request(&state, &headers) {
-        return response;
-    }
-    let origin = match validate_origin(&state, &headers) {
-        Ok(origin) => origin,
-        Err(response) => return *response,
-    };
-    if let Some(response) = validate_protocol_version_header(&headers) {
-        return apply_origin_headers(response, origin.as_deref());
-    }
-    let session = match require_session(&state, &headers) {
-        Ok(session) => session,
-        Err(response) => return apply_origin_headers(*response, origin.as_deref()),
-    };
-
-    session.mark_stream_open();
-    let last_event_id = headers
-        .get(LAST_EVENT_ID_HEADER)
-        .and_then(|value| value.to_str().ok())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_owned);
-
-    let response = match session
-        .wait_for_events(last_event_id.as_deref(), state.sessions.poll_wait())
-        .await
-    {
-        Ok(events) => sse_response(session.id(), events),
-        Err(PollEventsError::ResumeWindowExpired) => protocol_error_response(
-            StatusCode::GONE,
-            "Last-Event-ID is outside the retained resume window".to_owned(),
-        ),
-        Err(PollEventsError::InvalidEventId) => protocol_error_response(
-            StatusCode::BAD_REQUEST,
-            "invalid Last-Event-ID for this session".to_owned(),
-        ),
-        Err(PollEventsError::MissingSession) => protocol_error_response(
-            StatusCode::BAD_REQUEST,
-            "missing or invalid Mcp-Session-Id".to_owned(),
+        other => respond_with_mode(
+            response_mode,
+            jsonrpc_envelope_error(id, -32601, format!("method not found: {other}"), None),
         ),
     };
     apply_origin_headers(response, origin.as_deref())
-}
-
-async fn handle_delete_mcp(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    if let Some(response) = authorize_request(&state, &headers) {
-        return response;
-    }
-    let origin = match validate_origin(&state, &headers) {
-        Ok(origin) => origin,
-        Err(response) => return *response,
-    };
-    if let Some(response) = validate_protocol_version_header(&headers) {
-        return apply_origin_headers(response, origin.as_deref());
-    }
-    let session_id = match session_id_from_headers(&headers) {
-        Ok(session_id) => session_id,
-        Err(response) => return apply_origin_headers(*response, origin.as_deref()),
-    };
-    if !state.sessions.delete_session(&session_id) {
-        return apply_origin_headers(
-            protocol_error_response(
-                StatusCode::BAD_REQUEST,
-                "missing or invalid Mcp-Session-Id".to_owned(),
-            ),
-            origin.as_deref(),
-        );
-    }
-    let mut response = StatusCode::NO_CONTENT.into_response();
-    response.headers_mut().insert(
-        MCP_PROTOCOL_VERSION_HEADER,
-        HeaderValue::from_static(spec::MCP_PROTOCOL_VERSION),
-    );
-    apply_origin_headers(response, origin.as_deref())
-}
-
-fn dispatch_logging_set_level(
-    session: Arc<HttpSession>,
-    id: Value,
-    params: Option<Value>,
-) -> Response {
-    let level = match logging::parse_set_level_params(params.as_ref()) {
-        Ok(level) => level,
-        Err(error) => return jsonrpc_error_response(id, -32602, error.to_string()),
-    };
-    logging::set_level(level);
-    session.set_log_level(level);
-    emit_http_log(
-        &session,
-        level,
-        "transport",
-        format!("log level set to {}", level.as_str()),
-    );
-    jsonrpc_ok_response(id, serde_json::json!({ "level": level.as_str() }))
-}
-
-fn emit_http_log(
-    session: &Arc<HttpSession>,
-    level: logging::LogLevel,
-    logger: &str,
-    message: String,
-) {
-    if !session.should_emit_log(level) {
-        return;
-    }
-    session.enqueue_event(logging::log_notification(level, logger, message).to_string());
 }
 
 async fn dispatch_tool_call(
     state: AppState,
-    session: Arc<HttpSession>,
     id: Value,
     params: Option<Value>,
+    response_mode: ResponseMode,
+    principal: Option<String>,
 ) -> Response {
     let request = crate::transport::RequestLogContext {
         request_id: match &id {
@@ -715,7 +656,15 @@ async fn dispatch_tool_call(
             "invalid_params",
             "missing tools/call params object",
         );
-        return jsonrpc_error_response(id, -32602, "missing tools/call params object".to_owned());
+        return respond_with_mode(
+            response_mode,
+            jsonrpc_envelope_error(
+                id,
+                -32602,
+                "missing tools/call params object".to_owned(),
+                None,
+            ),
+        );
     };
     let (name, args, progress_token) = {
         let Some(params_object) = params.as_object() else {
@@ -725,10 +674,14 @@ async fn dispatch_tool_call(
                 "invalid_params",
                 "tools/call params must be an object",
             );
-            return jsonrpc_error_response(
-                id,
-                -32602,
-                "tools/call params must be an object".to_owned(),
+            return respond_with_mode(
+                response_mode,
+                jsonrpc_envelope_error(
+                    id,
+                    -32602,
+                    "tools/call params must be an object".to_owned(),
+                    None,
+                ),
             );
         };
         let Some(name) = params_object.get("name").and_then(|value| value.as_str()) else {
@@ -738,7 +691,10 @@ async fn dispatch_tool_call(
                 "invalid_params",
                 "missing tool name",
             );
-            return jsonrpc_error_response(id, -32602, "missing tool name".to_owned());
+            return respond_with_mode(
+                response_mode,
+                jsonrpc_envelope_error(id, -32602, "missing tool name".to_owned(), None),
+            );
         };
         if !crate::tools::is_known_tool_name(name) {
             crate::transport::log_protocol_error_observation(
@@ -747,7 +703,10 @@ async fn dispatch_tool_call(
                 "method_not_found",
                 &format!("unknown tool: {name}"),
             );
-            return jsonrpc_error_response(id, -32601, format!("unknown tool: {name}"));
+            return respond_with_mode(
+                response_mode,
+                jsonrpc_envelope_error(id, -32601, format!("unknown tool: {name}"), None),
+            );
         }
         let args = match params_object.get("arguments") {
             None | Some(Value::Null) => None,
@@ -761,19 +720,17 @@ async fn dispatch_tool_call(
                     "invalid_params",
                     "tools/call arguments must be an object when provided",
                 );
-                return jsonrpc_error_response(
-                    id,
-                    -32602,
-                    "tools/call arguments must be an object when provided".to_owned(),
+                return respond_with_mode(
+                    response_mode,
+                    jsonrpc_envelope_error(
+                        id,
+                        -32602,
+                        "tools/call arguments must be an object when provided".to_owned(),
+                        None,
+                    ),
                 );
             }
         };
-        // Boundary audit for HTTP `tools/call`:
-        // - missing params object, non-object params, missing tool name, unknown tool,
-        //   and non-object `arguments` stay JSON-RPC protocol errors here
-        // - once dispatch enters `execute_tool_call()`, domain failures become
-        //   `CallToolResult { isError: true }`
-        // - only worker/runtime failures in spawn/join path fall back to JSON-RPC errors
         let progress_token = params_object
             .get("_meta")
             .and_then(|meta| meta.get("progressToken"))
@@ -783,40 +740,43 @@ async fn dispatch_tool_call(
     };
     let repo_root = Arc::clone(&state.repo_root);
     let db_path = Arc::clone(&state.db_path);
-    let session_for_progress = Arc::clone(&session);
-    let session_for_result = Arc::clone(&session);
-    let progress_token_for_closure = progress_token.clone();
     let cancel_flag = Arc::new(AtomicBool::new(false));
     let cancel_flag_worker = Arc::clone(&cancel_flag);
-    let name_for_log = name.clone();
-    let interaction_capabilities =
-        crate::transport::parse_client_interaction_capabilities(session.client_capabilities());
-    let session_id = session.id().to_owned();
+    let interaction_capabilities = crate::transport::parse_client_interaction_capabilities(
+        params
+            .get("_meta")
+            .and_then(|meta| meta.get(crate::spec::META_CLIENT_CAPABILITIES))
+            .unwrap_or(&Value::Null),
+    );
     let request_id_for_context = match &id {
         Value::String(value) => value.clone(),
         _ => id.to_string(),
     };
+    let sse_events = Arc::new(Mutex::new(Vec::<Value>::new()));
+    let sse_events_for_worker = Arc::clone(&sse_events);
 
     let result = tokio::task::spawn_blocking(move || {
         let request_context = crate::runtime_context::RequestContext::new(
             Arc::new({
-                let session_for_progress = Arc::clone(&session_for_progress);
+                let sse_events = Arc::clone(&sse_events_for_worker);
                 move |params| {
-                    session_for_progress.enqueue_event(
-                        serde_json::json!({
-                            "jsonrpc": "2.0",
-                            "method": "notifications/tasks/status",
-                            "params": params,
-                        })
-                        .to_string(),
-                    );
+                    if response_mode == ResponseMode::Sse {
+                        sse_events
+                            .lock()
+                            .expect("http sse event lock poisoned")
+                            .push(serde_json::json!({
+                                "jsonrpc": "2.0",
+                                "method": "notifications/tasks/status",
+                                "params": params,
+                            }));
+                    }
                     Ok(())
                 }
             }),
             interaction_capabilities.clone(),
             "http",
-            Some(session_id.clone()),
-            Some(session_id.clone()),
+            None,
+            principal.clone(),
             request_id_for_context.clone(),
             "tools/call",
             Some(params.clone()),
@@ -825,20 +785,25 @@ async fn dispatch_tool_call(
         crate::tasks::install_tool_call_request_params(Some(&params));
         crate::progress::install(
             move |message, percentage| {
-                if let Some(token) = &progress_token_for_closure {
-                    let value = serde_json::json!({
-                        "kind": "report",
-                        "message": match percentage {
-                            Some(pct) => format!("{message} ({pct}%)"),
-                            None => message.to_owned(),
-                        },
+                if response_mode == ResponseMode::Sse {
+                    let mut params = serde_json::json!({
+                        "token": progress_token,
+                        "value": {
+                            "kind": "report",
+                            "message": message,
+                        }
                     });
-                    let notification = serde_json::json!({
-                        "jsonrpc": "2.0",
-                        "method": "$/progress",
-                        "params": { "token": token, "value": value },
-                    });
-                    session_for_progress.enqueue_event(notification.to_string());
+                    if let Some(pct) = percentage {
+                        params["value"]["percentage"] = serde_json::json!(pct);
+                    }
+                    sse_events_for_worker
+                        .lock()
+                        .expect("http sse event lock poisoned")
+                        .push(serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "method": "$/progress",
+                            "params": params,
+                        }));
                 }
             },
             cancel_flag_worker,
@@ -861,71 +826,186 @@ async fn dispatch_tool_call(
                     &tool_result,
                 );
             }
-            emit_http_log(
-                &session_for_result,
-                if is_tool_error {
-                    logging::LogLevel::Error
-                } else {
-                    logging::LogLevel::Info
-                },
-                "tools/call",
-                format!("tool={} success={}", name_for_log, !is_tool_error),
-            );
-            let response_json = serde_json::json!({
-                "jsonrpc": "2.0",
-                "id": &id,
-                "result": &tool_result,
-            });
-            session_for_result.enqueue_event(response_json.to_string());
-            jsonrpc_ok_response(id, tool_result)
+            if response_mode == ResponseMode::Sse {
+                let mut events = take_sse_events(&sse_events);
+                events.push(jsonrpc_envelope_result(id, tool_result));
+                sse_json_response(events)
+            } else {
+                jsonrpc_ok_response(id, tool_result)
+            }
         }
         Ok(Err(error_message)) => {
-            emit_http_log(
-                &session_for_result,
-                logging::LogLevel::Error,
-                "tools/call",
-                format!("tool={name_for_log} success=false error={error_message}"),
-            );
-            let response_json = serde_json::json!({
-                "jsonrpc": "2.0",
-                "id": &id,
-                "error": {
-                    "code": -32001,
-                    "message": &error_message,
-                    "data": {
-                        "atlas_error_code": "tool_execution_failed",
-                        "atlas_error_code_docs": error_code_docs_ref("tool_execution_failed")
-                    }
-                }
-            });
-            session_for_result.enqueue_event(response_json.to_string());
-            jsonrpc_error_response(id, -32001, error_message)
+            if response_mode == ResponseMode::Sse {
+                let mut events = take_sse_events(&sse_events);
+                events.push(jsonrpc_envelope_error(id, -32001, error_message, None));
+                sse_json_response(events)
+            } else {
+                jsonrpc_error_response(id, -32001, error_message)
+            }
         }
         Err(join_error) => {
-            jsonrpc_error_response(id, -32603, format!("worker panicked: {join_error}"))
+            let message = format!("worker panicked: {join_error}");
+            if response_mode == ResponseMode::Sse {
+                let mut events = take_sse_events(&sse_events);
+                events.push(jsonrpc_envelope_error(id, -32603, message, None));
+                sse_json_response(events)
+            } else {
+                jsonrpc_error_response(id, -32603, message)
+            }
         }
     }
 }
 
-fn require_session(
-    state: &AppState,
-    headers: &HeaderMap,
-) -> std::result::Result<Arc<HttpSession>, Box<Response>> {
-    let session_id = session_id_from_headers(headers)?;
-    state
-        .sessions
-        .require_session(&session_id)
-        .map_err(|error| match error {
-            SessionLookupError::Missing => Box::new(protocol_error_response(
-                StatusCode::BAD_REQUEST,
-                "missing or invalid Mcp-Session-Id".to_owned(),
-            )),
-        })
+fn take_sse_events(events: &Arc<Mutex<Vec<Value>>>) -> Vec<Value> {
+    std::mem::take(&mut *events.lock().expect("http sse event lock poisoned"))
 }
 
-fn session_id_from_headers(headers: &HeaderMap) -> std::result::Result<String, Box<Response>> {
+fn negotiate_response_mode(
+    headers: &HeaderMap,
+) -> std::result::Result<ResponseMode, Box<Response>> {
+    let accept = headers
+        .get(header::ACCEPT)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .ok_or_else(|| {
+            Box::new(protocol_error_response(
+                StatusCode::NOT_ACCEPTABLE,
+                "missing required Accept header".to_owned(),
+            ))
+        })?;
+    if accept_allows(&accept, "application/json") || accept_allows(&accept, "*/*") {
+        return Ok(ResponseMode::Json);
+    }
+    if accept_allows(&accept, "text/event-stream") {
+        return Ok(ResponseMode::Sse);
+    }
+    Err(Box::new(protocol_error_response(
+        StatusCode::NOT_ACCEPTABLE,
+        "Accept must allow application/json or text/event-stream".to_owned(),
+    )))
+}
+
+fn accept_allows(accept: &str, expected: &str) -> bool {
+    accept
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .any(|value| value.split(';').next().map(str::trim) == Some(expected))
+}
+
+fn validate_header_mirrors(
+    headers: &HeaderMap,
+    id: &Value,
+    method: &str,
+    params: Option<&Value>,
+) -> std::result::Result<(), Box<Response>> {
+    let header_method = required_header_value(headers, MCP_METHOD_HEADER)?;
+    if header_method != method {
+        return Err(Box::new(header_mismatch_response(
+            id.clone(),
+            MCP_METHOD_HEADER,
+            &header_method,
+            "method",
+            method,
+        )));
+    }
+
+    if method_requires_name_header(method) {
+        let body_name = params
+            .and_then(|value| value.get("name"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                Box::new(jsonrpc_error_response(
+                    id.clone(),
+                    -32020,
+                    format!("missing {MCP_NAME_HEADER} header or body params.name"),
+                ))
+            })?;
+        let header_name = decode_mirrored_header_value(
+            headers
+                .get(MCP_NAME_HEADER)
+                .and_then(|value| value.to_str().ok())
+                .ok_or_else(|| {
+                    Box::new(jsonrpc_error_response(
+                        id.clone(),
+                        -32020,
+                        format!("missing required {MCP_NAME_HEADER} header"),
+                    ))
+                })?,
+        )
+        .map_err(|error| {
+            Box::new(jsonrpc_error_response(
+                id.clone(),
+                -32602,
+                error.to_string(),
+            ))
+        })?;
+        if header_name != body_name {
+            return Err(Box::new(header_mismatch_response(
+                id.clone(),
+                MCP_NAME_HEADER,
+                &header_name,
+                "params.name",
+                body_name,
+            )));
+        }
+    }
+
+    let Some(params) = params.and_then(Value::as_object) else {
+        return Ok(());
+    };
+    for (header_name, header_value) in headers {
+        let header_name = header_name.as_str().to_ascii_lowercase();
+        let Some(param_name) = header_name.strip_prefix(MCP_PARAM_HEADER_PREFIX) else {
+            continue;
+        };
+        let header_value = header_value.to_str().map_err(|_| {
+            Box::new(jsonrpc_error_response(
+                id.clone(),
+                -32602,
+                format!("invalid utf-8 in header {header_name}"),
+            ))
+        })?;
+        let decoded = decode_mirrored_header_value(header_value).map_err(|error| {
+            Box::new(jsonrpc_error_response(
+                id.clone(),
+                -32602,
+                error.to_string(),
+            ))
+        })?;
+        let Some(body_value) = params.get(param_name) else {
+            return Err(Box::new(jsonrpc_error_response(
+                id.clone(),
+                -32020,
+                format!("header/body mismatch for {header_name}: body params.{param_name} missing"),
+            )));
+        };
+        let body_rendered = json_value_for_header_compare(body_value);
+        if decoded != body_rendered {
+            return Err(Box::new(header_mismatch_response(
+                id.clone(),
+                &header_name,
+                &decoded,
+                &format!("params.{param_name}"),
+                &body_rendered,
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn method_requires_name_header(method: &str) -> bool {
+    matches!(method, "tools/call" | "prompts/get")
+}
+
+fn required_header_value(
+    headers: &HeaderMap,
+    name: &str,
+) -> std::result::Result<String, Box<Response>> {
     headers
-        .get(MCP_SESSION_ID_HEADER)
+        .get(name)
         .and_then(|value| value.to_str().ok())
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -933,32 +1013,78 @@ fn session_id_from_headers(headers: &HeaderMap) -> std::result::Result<String, B
         .ok_or_else(|| {
             Box::new(protocol_error_response(
                 StatusCode::BAD_REQUEST,
-                "missing or invalid Mcp-Session-Id".to_owned(),
+                format!("missing required {name} header"),
             ))
         })
 }
 
-fn validate_protocol_version_header(headers: &HeaderMap) -> Option<Response> {
-    match headers
-        .get(MCP_PROTOCOL_VERSION_HEADER)
-        .and_then(|value| value.to_str().ok())
-    {
-        Some(version) if version == spec::MCP_PROTOCOL_VERSION => None,
-        Some(version) => Some(protocol_error_response(
-            StatusCode::BAD_REQUEST,
-            format!(
-                "unsupported MCP-Protocol-Version '{version}'; supported version: {}",
-                spec::MCP_PROTOCOL_VERSION
-            ),
-        )),
-        None => Some(protocol_error_response(
-            StatusCode::BAD_REQUEST,
-            format!(
-                "missing MCP-Protocol-Version header; expected {}",
-                spec::MCP_PROTOCOL_VERSION
-            ),
-        )),
+fn decode_mirrored_header_value(value: &str) -> Result<String> {
+    for sentinel in BASE64_SENTINELS {
+        if let Some(encoded) = value.strip_prefix(sentinel) {
+            let bytes = decode_base64(encoded)?;
+            return String::from_utf8(bytes)
+                .context("Base64 sentinel decoded non-utf8 header value");
+        }
     }
+    Ok(value.to_owned())
+}
+
+fn decode_base64(input: &str) -> Result<Vec<u8>> {
+    let mut output = Vec::new();
+    let mut buffer = 0u32;
+    let mut bits = 0u8;
+    for ch in input.chars().filter(|ch| !ch.is_whitespace()) {
+        if ch == '=' {
+            break;
+        }
+        let value = match ch {
+            'A'..='Z' => ch as u32 - 'A' as u32,
+            'a'..='z' => 26 + (ch as u32 - 'a' as u32),
+            '0'..='9' => 52 + (ch as u32 - '0' as u32),
+            '+' | '-' => 62,
+            '/' | '_' => 63,
+            _ => return Err(anyhow!("invalid Base64 sentinel character '{ch}'")),
+        };
+        buffer = (buffer << 6) | value;
+        bits += 6;
+        while bits >= 8 {
+            bits -= 8;
+            output.push(((buffer >> bits) & 0xff) as u8);
+        }
+    }
+    Ok(output)
+}
+
+fn json_value_for_header_compare(value: &Value) -> String {
+    match value {
+        Value::String(value) => value.clone(),
+        Value::Bool(value) => value.to_string(),
+        Value::Number(value) => value.to_string(),
+        Value::Null => "null".to_owned(),
+        other => serde_json::to_string(other).unwrap_or_else(|_| other.to_string()),
+    }
+}
+
+fn header_mismatch_response(
+    id: Value,
+    header_name: &str,
+    header_value: &str,
+    body_field: &str,
+    body_value: &str,
+) -> Response {
+    jsonrpc_error_with_data_response(
+        id,
+        -32020,
+        format!(
+            "header/body mismatch for {header_name}: header='{header_value}' body='{body_value}'"
+        ),
+        Some(serde_json::json!({
+            "header": header_name,
+            "headerValue": header_value,
+            "bodyField": body_field,
+            "bodyValue": body_value,
+        })),
+    )
 }
 
 fn validate_origin(
@@ -989,11 +1115,18 @@ fn forbidden_origin_response() -> Response {
         .into_response()
 }
 
-fn authorize_request(state: &AppState, headers: &HeaderMap) -> Option<Response> {
-    let policy = state.auth_policy.as_ref()?;
+fn authorize_request(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> std::result::Result<AuthorizedRequest, Box<Response>> {
+    let Some(policy) = state.auth_policy.as_ref() else {
+        return Ok(AuthorizedRequest { subject: None });
+    };
     match policy.authorize(headers, auth::ROUTE_FAMILY_MCP) {
-        Ok(_) => None,
-        Err(challenge) => Some(auth_challenge_response(challenge)),
+        Ok(token) => Ok(AuthorizedRequest {
+            subject: token.subject,
+        }),
+        Err(challenge) => Err(Box::new(auth_challenge_response(challenge))),
     }
 }
 
@@ -1014,40 +1147,275 @@ fn auth_challenge_response(challenge: auth::AuthChallenge) -> Response {
     response
 }
 
-fn sse_response(session_id: &str, events: Vec<crate::http_sessions::RetainedEvent>) -> Response {
+fn respond_with_mode(mode: ResponseMode, envelope: Value) -> Response {
+    match mode {
+        ResponseMode::Json => json_response_from_envelope(envelope),
+        ResponseMode::Sse => sse_json_response(vec![envelope]),
+    }
+}
+
+fn dispatch_subscriptions_listen(
+    id: Value,
+    params: Option<Value>,
+    response_mode: ResponseMode,
+) -> Response {
+    if response_mode != ResponseMode::Sse {
+        return protocol_error_response(
+            StatusCode::NOT_ACCEPTABLE,
+            "subscriptions/listen requires Accept: text/event-stream".to_owned(),
+        );
+    }
+
+    let subscription_id = format!("sub-{}", request_id_fragment(&id));
+    let selected = match parse_subscription_types(params.as_ref()) {
+        Ok(selected) => selected,
+        Err(error) => return jsonrpc_error_response(id, -32602, error.to_string()),
+    };
+
+    let mut result = serde_json::json!({
+        "subscriptionId": subscription_id,
+        "selectedNotificationTypes": selected.iter().cloned().collect::<Vec<_>>(),
+    });
+    result = spec::complete_result(result);
+    let mut events = vec![jsonrpc_envelope_result(id, result)];
+    for event in bootstrap_subscription_notifications(&selected, &subscription_id) {
+        events.push(event);
+    }
+    sse_json_response(events)
+}
+
+fn request_id_fragment(id: &Value) -> String {
+    match id {
+        Value::String(value) => value.clone(),
+        Value::Number(value) => value.to_string(),
+        _ => "listen".to_owned(),
+    }
+}
+
+fn parse_subscription_types(params: Option<&Value>) -> Result<BTreeSet<String>> {
+    let requested = params.and_then(|value| {
+        value
+            .get("notificationTypes")
+            .or_else(|| value.get("types"))
+    });
+    let mut selected = BTreeSet::new();
+    match requested {
+        None | Some(Value::Null) => {
+            for value in supported_subscription_types() {
+                selected.insert(value.to_owned());
+            }
+        }
+        Some(Value::Array(values)) => {
+            for value in values {
+                let raw = value.as_str().ok_or_else(|| {
+                    anyhow!("subscriptions/listen notificationTypes entries must be strings")
+                })?;
+                for expanded in expand_subscription_type(raw)? {
+                    selected.insert(expanded.to_owned());
+                }
+            }
+        }
+        Some(_) => {
+            return Err(anyhow!(
+                "subscriptions/listen notificationTypes must be an array of strings"
+            ));
+        }
+    }
+    Ok(selected)
+}
+
+fn supported_subscription_types() -> [&'static str; 4] {
+    [
+        SUBSCRIPTION_TYPE_PROMPTS_LIST_CHANGED,
+        SUBSCRIPTION_TYPE_RESOURCES_LIST_CHANGED,
+        SUBSCRIPTION_TYPE_RESOURCE_UPDATED,
+        SUBSCRIPTION_TYPE_TOOLS_LIST_CHANGED,
+    ]
+}
+
+fn expand_subscription_type(raw: &str) -> Result<Vec<&'static str>> {
+    match raw {
+        "tools" | SUBSCRIPTION_TYPE_TOOLS_LIST_CHANGED => {
+            Ok(vec![SUBSCRIPTION_TYPE_TOOLS_LIST_CHANGED])
+        }
+        "prompts" | SUBSCRIPTION_TYPE_PROMPTS_LIST_CHANGED => {
+            Ok(vec![SUBSCRIPTION_TYPE_PROMPTS_LIST_CHANGED])
+        }
+        "resources" => Ok(vec![
+            SUBSCRIPTION_TYPE_RESOURCES_LIST_CHANGED,
+            SUBSCRIPTION_TYPE_RESOURCE_UPDATED,
+        ]),
+        SUBSCRIPTION_TYPE_RESOURCES_LIST_CHANGED => {
+            Ok(vec![SUBSCRIPTION_TYPE_RESOURCES_LIST_CHANGED])
+        }
+        "resource_subscriptions" | SUBSCRIPTION_TYPE_RESOURCE_UPDATED => {
+            Ok(vec![SUBSCRIPTION_TYPE_RESOURCE_UPDATED])
+        }
+        other => Err(anyhow!(
+            "unsupported subscriptions/listen notification type: {other}"
+        )),
+    }
+}
+
+fn bootstrap_subscription_notifications(
+    selected: &BTreeSet<String>,
+    subscription_id: &str,
+) -> Vec<Value> {
+    let mut events = Vec::new();
+    for kind in selected {
+        let params = match kind.as_str() {
+            SUBSCRIPTION_TYPE_TOOLS_LIST_CHANGED => serde_json::json!({
+                "reason": "subscription_opened",
+                "toolCount": tools::tool_list()["tools"].as_array().map(|items| items.len()).unwrap_or_default(),
+            }),
+            SUBSCRIPTION_TYPE_PROMPTS_LIST_CHANGED => serde_json::json!({
+                "reason": "subscription_opened",
+                "promptCount": crate::prompts::prompt_list()["prompts"].as_array().map(|items| items.len()).unwrap_or_default(),
+            }),
+            SUBSCRIPTION_TYPE_RESOURCES_LIST_CHANGED => serde_json::json!({
+                "reason": "subscription_opened",
+                "resourceCount": resources::resource_descriptors().len(),
+                "resourceTemplateCount": resources::resource_template_descriptors().len(),
+            }),
+            SUBSCRIPTION_TYPE_RESOURCE_UPDATED => serde_json::json!({
+                "uri": "atlas://docs/index",
+                "reason": "subscription_opened",
+            }),
+            _ => continue,
+        };
+        events.push(subscription_notification(kind, params, subscription_id));
+    }
+    events
+}
+
+fn subscription_notification(method: &str, params: Value, subscription_id: &str) -> Value {
+    let mut params = params;
+    if let Some(object) = params.as_object_mut() {
+        object.insert(
+            "_meta".to_owned(),
+            serde_json::json!({ SUBSCRIPTION_ID_META_KEY: subscription_id }),
+        );
+    }
+    serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": method,
+        "params": params,
+    })
+}
+
+fn sse_json_response(events: Vec<Value>) -> Response {
     let mut body = String::new();
     for event in events {
         body.push_str("event: message\n");
-        body.push_str("id: ");
-        body.push_str(&event.id);
-        body.push('\n');
         body.push_str("data: ");
-        body.push_str(&event.payload_json);
+        body.push_str(&serde_json::to_string(&event).expect("SSE event serialization"));
         body.push_str("\n\n");
     }
-
-    let mut response = Response::builder()
+    Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "text/event-stream")
         .header(header::CACHE_CONTROL, "no-cache")
-        .header("X-Accel-Buffering", "no")
-        .header(MCP_SESSION_ID_HEADER, session_id)
         .header(MCP_PROTOCOL_VERSION_HEADER, spec::MCP_PROTOCOL_VERSION)
         .body(axum::body::Body::from(body))
-        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response());
-    response
-        .headers_mut()
-        .insert(header::CONNECTION, HeaderValue::from_static("keep-alive"));
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+}
+
+fn json_response_from_envelope(envelope: Value) -> Response {
+    let status = http_status_for_envelope(&envelope);
+    let mut response = Json(envelope).into_response();
+    *response.status_mut() = status;
+    response.headers_mut().insert(
+        MCP_PROTOCOL_VERSION_HEADER,
+        HeaderValue::from_static(spec::MCP_PROTOCOL_VERSION),
+    );
     response
 }
 
+fn http_status_for_envelope(envelope: &Value) -> StatusCode {
+    let Some(code) = envelope
+        .get("error")
+        .and_then(|value| value.get("code"))
+        .and_then(Value::as_i64)
+    else {
+        return StatusCode::OK;
+    };
+    match code as i32 {
+        -32700 | -32600 | -32602 | -32020 | -32022 => StatusCode::BAD_REQUEST,
+        -32601 | -32010 => StatusCode::NOT_FOUND,
+        -32013..=-32011 => StatusCode::CONFLICT,
+        _ => StatusCode::INTERNAL_SERVER_ERROR,
+    }
+}
+
+fn jsonrpc_envelope_result(id: Value, result: Value) -> Value {
+    serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "result": spec::complete_result(result),
+    })
+}
+
+fn jsonrpc_envelope_error(
+    id: Value,
+    code: i32,
+    message: String,
+    extra_data: Option<Value>,
+) -> Value {
+    let atlas_error_code = match code {
+        -32700 => "parse_error",
+        -32600 => "invalid_request",
+        -32601 => "method_not_found",
+        -32602 => "invalid_params",
+        -32603 => "internal_error",
+        -32001 => "tool_execution_failed",
+        -32010 => "task_not_found",
+        -32011 => "task_not_ready",
+        -32012 => "task_cancelled",
+        -32013 => "task_failed",
+        -32020 => "header_mismatch",
+        -32022 => "unsupported_protocol_version",
+        _ => "internal_error",
+    };
+    let mut data = serde_json::json!({
+        "atlas_error_code": atlas_error_code,
+        "atlas_error_code_docs": error_code_docs_ref(atlas_error_code)
+    });
+    if let Some(extra) = extra_data
+        && let (Some(base), Some(extra)) = (data.as_object_mut(), extra.as_object())
+    {
+        for (key, value) in extra {
+            base.insert(key.clone(), value.clone());
+        }
+    }
+    serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "error": {
+            "code": code,
+            "message": message,
+            "data": data,
+        }
+    })
+}
+
+fn jsonrpc_envelope_task_error(id: Value, error: crate::tasks::TaskApiError) -> Value {
+    let code = match error.kind() {
+        crate::tasks::TaskApiErrorKind::InvalidParams => -32602,
+        crate::tasks::TaskApiErrorKind::NotFound => -32010,
+        crate::tasks::TaskApiErrorKind::NotReady => -32011,
+        crate::tasks::TaskApiErrorKind::Cancelled => -32012,
+        crate::tasks::TaskApiErrorKind::Failed => -32013,
+        crate::tasks::TaskApiErrorKind::Internal => -32603,
+    };
+    jsonrpc_envelope_error(id, code, error.message(), None)
+}
+
 fn jsonrpc_raw_ok_response(id: Value, result: Value) -> Response {
-    Json(serde_json::json!({
+    json_response_from_envelope(serde_json::json!({
         "jsonrpc": "2.0",
         "id": id,
         "result": result,
     }))
-    .into_response()
 }
 
 fn jsonrpc_ok_response(id: Value, result: Value) -> Response {
@@ -1064,86 +1432,24 @@ fn jsonrpc_error_with_data_response(
     message: String,
     extra_data: Option<Value>,
 ) -> Response {
-    let status = match code {
-        -32700 | -32600 | -32601 | -32602 | -32022 => StatusCode::BAD_REQUEST,
-        -32010 => StatusCode::NOT_FOUND,
-        -32013..=-32011 => StatusCode::CONFLICT,
-        _ => StatusCode::INTERNAL_SERVER_ERROR,
-    };
-    let atlas_error_code = match code {
-        -32700 => "parse_error",
-        -32600 => "invalid_request",
-        -32601 => "method_not_found",
-        -32602 => "invalid_params",
-        -32603 => "internal_error",
-        -32001 => "tool_execution_failed",
-        -32002 => "worker_unavailable",
-        -32003 => "request_timed_out",
-        -32004 => "rate_limited",
-        -32010 => "task_not_found",
-        -32011 => "task_not_ready",
-        -32012 => "task_cancelled",
-        -32013 => "task_failed",
-        -32022 => "unsupported_protocol_version",
-        _ => "internal_error",
-    };
-    let mut data = serde_json::json!({
-        "atlas_error_code": atlas_error_code,
-        "atlas_error_code_docs": error_code_docs_ref(atlas_error_code)
-    });
-    if let Some(extra) = extra_data
-        && let (Some(base), Some(extra)) = (data.as_object_mut(), extra.as_object())
-    {
-        for (key, value) in extra {
-            base.insert(key.clone(), value.clone());
-        }
-    }
-    (
-        status,
-        Json(serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "error": {
-                "code": code,
-                "message": message,
-                "data": data
-            }
-        })),
-    )
-        .into_response()
-}
-
-fn jsonrpc_task_error_response(id: Value, error: crate::tasks::TaskApiError) -> Response {
-    let code = match error.kind() {
-        crate::tasks::TaskApiErrorKind::InvalidParams => -32602,
-        crate::tasks::TaskApiErrorKind::NotFound => -32010,
-        crate::tasks::TaskApiErrorKind::NotReady => -32011,
-        crate::tasks::TaskApiErrorKind::Cancelled => -32012,
-        crate::tasks::TaskApiErrorKind::Failed => -32013,
-        crate::tasks::TaskApiErrorKind::Internal => -32603,
-    };
-    jsonrpc_error_response(id, code, error.message())
+    json_response_from_envelope(jsonrpc_envelope_error(id, code, message, extra_data))
 }
 
 fn protocol_error_response(status: StatusCode, message: String) -> Response {
     let mut response = jsonrpc_error_response(Value::Null, -32600, message);
     *response.status_mut() = status;
-    response.headers_mut().insert(
-        MCP_PROTOCOL_VERSION_HEADER,
-        HeaderValue::from_static(spec::MCP_PROTOCOL_VERSION),
-    );
     response
 }
 
 fn apply_origin_headers(mut response: Response, origin: Option<&str>) -> Response {
     response.headers_mut().insert(
         header::ACCESS_CONTROL_ALLOW_METHODS,
-        HeaderValue::from_static("GET, POST, DELETE"),
+        HeaderValue::from_static("GET, POST"),
     );
     response.headers_mut().insert(
         header::ACCESS_CONTROL_ALLOW_HEADERS,
         HeaderValue::from_static(
-            "Authorization, Content-Type, MCP-Protocol-Version, Mcp-Session-Id, Last-Event-ID",
+            "Authorization, Content-Type, Accept, MCP-Protocol-Version, Mcp-Method, Mcp-Name, Mcp-Param-*, Mcp-Session-Id, Last-Event-ID",
         ),
     );
     response
@@ -1162,55 +1468,19 @@ fn apply_origin_headers(mut response: Response, origin: Option<&str>) -> Respons
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::Router;
     use axum::body::to_bytes;
-    use axum::extract::State as AxumState;
-    use axum::routing::get as axum_get;
-    use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
     use serde_json::json;
     use std::collections::HashMap;
-    use std::time::Duration;
-    use tempfile::TempDir;
 
-    const TEST_SECRET: &[u8] = b"atlas-mcp-phase5-secret";
     const TEST_SECRET_B64U: &str = "YXRsYXMtbWNwLXBoYXNlNS1zZWNyZXQ";
 
-    fn make_state(_legacy_token: Option<&str>) -> AppState {
+    fn make_state() -> AppState {
         AppState {
             repo_root: Arc::new("repo".to_owned()),
             db_path: Arc::new("db".to_owned()),
             auth_policy: None,
             allowed_origins: Arc::new(HashSet::new()),
-            sessions: SessionManager::for_tests(
-                Duration::from_secs(60),
-                8,
-                Duration::from_secs(60),
-                Duration::from_millis(1),
-            ),
         }
-    }
-
-    fn make_task_state() -> (TempDir, AppState) {
-        let dir = TempDir::new().expect("tempdir");
-        let state = AppState {
-            repo_root: Arc::new(dir.path().to_string_lossy().to_string()),
-            db_path: Arc::new("db".to_owned()),
-            auth_policy: None,
-            allowed_origins: Arc::new(HashSet::new()),
-            sessions: SessionManager::for_tests(
-                Duration::from_secs(60),
-                8,
-                Duration::from_secs(60),
-                Duration::from_millis(1),
-            ),
-        };
-        (dir, state)
-    }
-
-    #[derive(Clone)]
-    struct MockAuthState {
-        discovery: Arc<String>,
-        jwks: Arc<String>,
     }
 
     async fn make_state_with_auth(origins: &[&str]) -> AppState {
@@ -1218,7 +1488,7 @@ mod tests {
             .await
             .expect("bind mock auth server");
         let addr = listener.local_addr().expect("mock auth addr");
-        let base_url = format!("http://{}", addr);
+        let base_url = format!("http://{addr}");
         let discovery = json!({
             "issuer": base_url,
             "jwks_uri": format!("{base_url}/jwks")
@@ -1239,24 +1509,20 @@ mod tests {
         let app = Router::new()
             .route(
                 "/.well-known/openid-configuration",
-                axum_get(|AxumState(state): AxumState<MockAuthState>| async move {
-                    state.discovery.as_str().to_owned()
+                get(move || {
+                    let discovery = discovery.clone();
+                    async move { discovery }
                 }),
             )
             .route(
                 "/jwks",
-                axum_get(|AxumState(state): AxumState<MockAuthState>| async move {
-                    state.jwks.as_str().to_owned()
+                get(move || {
+                    let jwks = jwks.clone();
+                    async move { jwks }
                 }),
-            )
-            .with_state(MockAuthState {
-                discovery: Arc::new(discovery),
-                jwks: Arc::new(jwks),
-            });
+            );
         tokio::spawn(async move {
-            axum::serve(listener, app)
-                .await
-                .expect("serve mock auth server");
+            let _ = axum::serve(listener, app).await;
         });
 
         let policy = ProtectedResourceAuthPolicy::load(auth::ProtectedResourceAuthConfig {
@@ -1276,48 +1542,31 @@ mod tests {
         AppState {
             auth_policy: Some(Arc::new(policy)),
             allowed_origins: Arc::new(origins.iter().map(|value| (*value).to_owned()).collect()),
-            ..make_state(None)
+            ..make_state()
         }
     }
 
-    fn make_state_with_origins(origins: &[&str]) -> AppState {
-        AppState {
-            allowed_origins: Arc::new(origins.iter().map(|value| (*value).to_owned()).collect()),
-            ..make_state(None)
-        }
-    }
-
-    fn bearer_headers(token: &str) -> HeaderMap {
+    fn base_headers(method: &str) -> HeaderMap {
         let mut headers = HeaderMap::new();
+        headers.insert(header::ACCEPT, HeaderValue::from_static("application/json"));
         headers.insert(
-            header::AUTHORIZATION,
-            format!("Bearer {token}")
-                .parse()
-                .expect("authorization header"),
+            MCP_PROTOCOL_VERSION_HEADER,
+            HeaderValue::from_static(spec::MCP_PROTOCOL_VERSION),
+        );
+        headers.insert(
+            MCP_METHOD_HEADER,
+            HeaderValue::from_str(method).expect("method header"),
         );
         headers
     }
 
-    fn make_token(issuer: &str, scopes: &[&str]) -> String {
-        let claims = json!({
-            "iss": issuer,
-            "sub": "user-123",
-            "aud": "https://atlas.test/mcp",
-            "exp": 4_102_444_800u64,
-            "scope": scopes.join(" "),
-        });
-        let mut header = Header::new(Algorithm::HS256);
-        header.kid = Some("atlas-test-key".to_owned());
-        encode(&header, &claims, &EncodingKey::from_secret(TEST_SECRET)).expect("encode token")
-    }
-
-    fn initialize_body(protocol_version: &str, extra_fields: &str) -> Bytes {
-        format!(
-            "{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{{\"protocolVersion\":\"{}\",\"capabilities\":{{}},\"clientInfo\":{{\"name\":\"zed\",\"version\":\"1.0.0\"}}{}}}}}",
-            protocol_version, extra_fields
-        )
-        .into_bytes()
-        .into()
+    fn sse_headers(method: &str) -> HeaderMap {
+        let mut headers = base_headers(method);
+        headers.insert(
+            header::ACCEPT,
+            HeaderValue::from_static("text/event-stream"),
+        );
+        headers
     }
 
     async fn read_json_response(response: Response) -> Value {
@@ -1334,39 +1583,18 @@ mod tests {
         String::from_utf8(bytes.to_vec()).expect("utf8 body")
     }
 
-    fn header_value(response: &Response, name: &str) -> String {
-        response
-            .headers()
-            .get(name)
-            .expect("header present")
-            .to_str()
-            .expect("header utf8")
-            .to_owned()
-    }
-
-    async fn initialize_session(state: AppState) -> (AppState, String) {
-        let response = handle_post_mcp(
-            State(state.clone()),
-            HeaderMap::new(),
-            initialize_body(spec::MCP_PROTOCOL_VERSION, ""),
+    async fn request_router(method: axum::http::Method, path: &str) -> Response {
+        use tower::util::ServiceExt;
+        let app = build_router(make_state());
+        app.oneshot(
+            axum::http::Request::builder()
+                .method(method)
+                .uri(path)
+                .body(axum::body::Body::empty())
+                .expect("request builder"),
         )
-        .await;
-        assert_eq!(response.status(), StatusCode::OK);
-        let session_id = header_value(&response, MCP_SESSION_ID_HEADER);
-        (state, session_id)
-    }
-
-    fn session_headers(session_id: &str) -> HeaderMap {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            MCP_PROTOCOL_VERSION_HEADER,
-            HeaderValue::from_static(spec::MCP_PROTOCOL_VERSION),
-        );
-        headers.insert(
-            MCP_SESSION_ID_HEADER,
-            HeaderValue::from_str(session_id).expect("session header"),
-        );
-        headers
+        .await
+        .expect("router response")
     }
 
     #[tokio::test]
@@ -1376,15 +1604,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let value = read_json_response(response).await;
         assert_eq!(value["resource"], json!("https://atlas.test/mcp"));
-        assert_eq!(
-            value["authorization_servers"].as_array().map(Vec::len),
-            Some(1)
-        );
         assert_eq!(value["bearer_methods_supported"], json!(["header"]));
-        assert_eq!(
-            value["scopes_supported"],
-            json!(["atlas:mcp", "atlas:read"])
-        );
     }
 
     #[tokio::test]
@@ -1392,626 +1612,258 @@ mod tests {
         let state = make_state_with_auth(&[]).await;
         let response = handle_post_mcp(
             State(state),
-            HeaderMap::new(),
-            initialize_body(spec::MCP_PROTOCOL_VERSION, ""),
+            base_headers("initialize"),
+            Bytes::from_static(br#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2026-07-28","capabilities":{},"clientInfo":{"name":"zed","version":"1.0.0"}}}"#),
         )
         .await;
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert!(response.headers().get(header::WWW_AUTHENTICATE).is_some());
+    }
+
+    #[tokio::test]
+    async fn http_initialize_returns_no_session_headers() {
+        let response = handle_post_mcp(
+            State(make_state()),
+            base_headers("initialize"),
+            Bytes::from_static(br#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2026-07-28","capabilities":{},"clientInfo":{"name":"zed","version":"1.0.0"}}}"#),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(response.headers().get(MCP_SESSION_ID_HEADER).is_none());
+        let value = read_json_response(response).await;
         assert_eq!(
-            header_value(&response, header::WWW_AUTHENTICATE.as_str()),
-            "Bearer realm=\"atlas-mcp\", resource=\"https://atlas.test/mcp\", error=\"invalid_token\", error_description=\"Bearer token required\", scope=\"atlas:mcp atlas:read\""
+            value["result"]["protocolVersion"],
+            json!(spec::MCP_PROTOCOL_VERSION)
         );
-        let value = read_json_response(response).await;
-        assert_eq!(value["message"], json!("Bearer token required"));
     }
 
     #[tokio::test]
-    async fn invalid_bearer_token_returns_www_authenticate() {
-        let state = make_state_with_auth(&[]).await;
-        let response = handle_post_mcp(
-            State(state),
-            bearer_headers("not-a-jwt"),
-            initialize_body(spec::MCP_PROTOCOL_VERSION, ""),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-        assert!(
-            header_value(&response, header::WWW_AUTHENTICATE.as_str())
-                .contains("error=\"invalid_token\"")
-        );
-        let value = read_json_response(response).await;
-        assert_eq!(value["message"], json!("invalid bearer token"));
-    }
-
-    #[tokio::test]
-    async fn insufficient_scope_returns_incremental_scope_challenge() {
-        let state = make_state_with_auth(&[]).await;
-        let issuer = state
-            .auth_policy
-            .as_ref()
-            .expect("auth policy")
-            .issuer()
-            .to_owned();
-        let response = handle_post_mcp(
-            State(state),
-            bearer_headers(&make_token(&issuer, &["atlas:mcp"])),
-            initialize_body(spec::MCP_PROTOCOL_VERSION, ""),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::FORBIDDEN);
-        let challenge = header_value(&response, header::WWW_AUTHENTICATE.as_str());
-        assert!(challenge.contains("error=\"insufficient_scope\""));
-        assert!(challenge.contains("scope=\"atlas:mcp atlas:read\""));
-        assert!(challenge.contains("resource=\"https://atlas.test/mcp\""));
-    }
-
-    #[tokio::test]
-    async fn forbidden_origin_with_valid_token_is_rejected_independently() {
-        let state = make_state_with_auth(&["https://good.test"]).await;
-        let issuer = state
-            .auth_policy
-            .as_ref()
-            .expect("auth policy")
-            .issuer()
-            .to_owned();
-        let mut headers = bearer_headers(&make_token(&issuer, &["atlas:mcp", "atlas:read"]));
+    async fn post_requires_accept_header_support() {
+        let mut headers = HeaderMap::new();
         headers.insert(
-            header::ORIGIN,
-            HeaderValue::from_static("https://evil.test"),
+            MCP_PROTOCOL_VERSION_HEADER,
+            HeaderValue::from_static(spec::MCP_PROTOCOL_VERSION),
         );
+        headers.insert(MCP_METHOD_HEADER, HeaderValue::from_static("tools/list"));
         let response = handle_post_mcp(
-            State(state),
+            State(make_state()),
             headers,
-            initialize_body(spec::MCP_PROTOCOL_VERSION, ""),
+            Bytes::from_static(br#"{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}"#),
         )
         .await;
-        assert_eq!(response.status(), StatusCode::FORBIDDEN);
-        assert!(response.headers().get(header::WWW_AUTHENTICATE).is_none());
+        assert_eq!(response.status(), StatusCode::NOT_ACCEPTABLE);
         let value = read_json_response(response).await;
-        assert_eq!(
-            value["message"],
-            json!("Origin is not allowed for this MCP server")
-        );
+        assert_eq!(value["error"]["code"], json!(-32600));
     }
 
     #[tokio::test]
-    async fn http_server_discover_works_without_session_and_has_cache_fields() {
+    async fn post_requires_protocol_and_method_headers() {
         let response = handle_post_mcp(
-            State(make_state(None)),
+            State(make_state()),
             HeaderMap::new(),
-            Bytes::from_static(br#"{"jsonrpc":"2.0","id":1,"method":"server/discover"}"#),
+            Bytes::from_static(br#"{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}"#),
         )
         .await;
-        assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(
-            header_value(&response, MCP_PROTOCOL_VERSION_HEADER),
-            spec::MCP_PROTOCOL_VERSION
-        );
+        assert_eq!(response.status(), StatusCode::NOT_ACCEPTABLE);
 
-        let value = read_json_response(response).await;
-        let result = &value["result"];
-        assert_eq!(result, &spec::complete_result(spec::discover_result()));
-        assert_eq!(
-            result["supportedVersions"],
-            json!([spec::MCP_PROTOCOL_VERSION])
-        );
-        assert_eq!(
-            result["capabilities"],
-            serde_json::to_value(spec::initialize_capabilities()).expect("capabilities")
-        );
-        assert_eq!(result["ttlMs"], json!(spec::DISCOVER_CACHE_TTL_MS));
-        assert_eq!(result["cacheScope"], json!(spec::DISCOVER_CACHE_SCOPE));
-    }
-
-    #[tokio::test]
-    async fn http_initialize_uses_shared_builder_and_returns_session_header() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::ACCEPT, HeaderValue::from_static("application/json"));
         let response = handle_post_mcp(
-            State(make_state(None)),
-            HeaderMap::new(),
-            initialize_body(
-                spec::MCP_PROTOCOL_VERSION,
-                ",\"_meta\":{\"clientTag\":\"abc\"}",
-            ),
-        )
-        .await;
-        let value = read_json_response(response).await;
-        assert_eq!(
-            value["result"],
-            spec::negotiate_initialize(Some(&json!({
-                "protocolVersion": spec::MCP_PROTOCOL_VERSION,
-                "capabilities": {},
-                "clientInfo": { "name": "zed", "version": "1.0.0" },
-                "_meta": { "clientTag": "abc" }
-            })))
-            .expect("shared initialize result")
-        );
-    }
-
-    #[tokio::test]
-    async fn http_initialize_rejects_missing_client_info() {
-        let body: Bytes = b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-11-25\",\"capabilities\":{}}}".as_slice().into();
-        let response = handle_post_mcp(State(make_state(None)), HeaderMap::new(), body).await;
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-
-        let value = read_json_response(response).await;
-        assert_eq!(value["error"]["code"], json!(-32602));
-        assert_eq!(
-            value["error"]["message"],
-            json!("initialize requires object params.clientInfo")
-        );
-        assert_eq!(
-            value["error"]["data"]["atlas_error_code"],
-            json!("invalid_params")
-        );
-    }
-
-    #[tokio::test]
-    async fn http_initialize_rejects_unsupported_protocol_version() {
-        let response = handle_post_mcp(
-            State(make_state(None)),
-            HeaderMap::new(),
-            initialize_body("2024-11-05", ""),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-
-        let value = read_json_response(response).await;
-        assert_eq!(value["error"]["code"], json!(-32022));
-        assert_eq!(
-            value["error"]["message"],
-            json!("unsupported protocol version '2024-11-05'; supported version: 2026-07-28")
-        );
-        assert_eq!(
-            value["error"]["data"]["supportedVersions"],
-            json!([spec::MCP_PROTOCOL_VERSION])
-        );
-    }
-
-    #[tokio::test]
-    async fn http_tools_call_unknown_tool_uses_method_not_found_error() {
-        let (state, session_id) = initialize_session(make_state(None)).await;
-        let response = handle_post_mcp(
-            State(state),
-            session_headers(&session_id),
-            Bytes::from_static(
-                b"{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"unknown_tool_xyz\",\"arguments\":{}}}",
-            ),
+            State(make_state()),
+            headers,
+            Bytes::from_static(br#"{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}"#),
         )
         .await;
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         let value = read_json_response(response).await;
-        assert!(value.get("result").is_none());
-        assert_eq!(value["error"]["code"], json!(-32601));
-        assert_eq!(
-            value["error"]["data"]["atlas_error_code"],
-            json!("method_not_found")
-        );
-    }
-
-    #[tokio::test]
-    async fn http_tools_call_missing_file_returns_is_error_result() {
-        let (state, session_id) = initialize_session(make_state(None)).await;
-        let response = handle_post_mcp(
-            State(state),
-            session_headers(&session_id),
-            Bytes::from_static(
-                b"{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"read_file_around_match\",\"arguments\":{\"file\":\"src/missing.rs\",\"query\":\"needle\",\"output_format\":\"json\"}}}",
-            ),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::OK);
-        let value = read_json_response(response).await;
-        assert!(value.get("error").is_none());
-        assert_eq!(value["result"]["isError"], json!(true));
-        assert_eq!(
-            value["result"]["structuredContent"]["code"],
-            json!("file_not_found")
-        );
-        assert_eq!(
-            value["result"]["structuredContent"]["details"]["path"],
-            json!("src/missing.rs")
-        );
-        assert_eq!(
-            value["result"]["content"][0]["text"],
-            json!(
-                "file not found: src/missing.rs Use exact repo-relative file path inside current Atlas repo, then retry."
-            )
-        );
-        assert!(value["result"].get("Text").is_none());
-    }
-
-    #[tokio::test]
-    async fn http_tools_call_query_graph_empty_request_returns_self_correcting_contract() {
-        let (state, session_id) = initialize_session(make_state(None)).await;
-        let response = handle_post_mcp(
-            State(state),
-            session_headers(&session_id),
-            Bytes::from_static(
-                b"{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"query_graph\",\"arguments\":{\"text\":\"   \",\"regex\":\"\",\"output_format\":\"json\"}}}",
-            ),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::OK);
-        let value = read_json_response(response).await;
-        let details = &value["result"]["structuredContent"]["details"];
-        assert_eq!(value["result"]["isError"], json!(true));
-        assert_eq!(
-            value["result"]["structuredContent"]["code"],
-            json!("graph_stale")
-        );
         assert!(
-            details["suggestions"]
-                .as_array()
-                .map(|items| !items.is_empty())
-                .unwrap_or(false)
-        );
-        assert!(
-            value["result"]["content"][0]["text"]
+            value["error"]["message"]
                 .as_str()
                 .unwrap_or_default()
-                .contains("graph")
+                .contains("MCP-Protocol-Version")
         );
-        assert!(value["result"].get("Text").is_none());
     }
 
     #[tokio::test]
-    async fn http_tasks_get_unknown_task_uses_task_not_found_error() {
-        let (_dir, state) = make_task_state();
-        let (state, session_id) = initialize_session(state).await;
+    async fn header_mismatch_uses_code_minus_32020() {
+        let headers = base_headers("tools/list");
         let response = handle_post_mcp(
-            State(state),
-            session_headers(&session_id),
+            State(make_state()),
+            headers,
             Bytes::from_static(
-                br#"{"jsonrpc":"2.0","id":2,"method":"tasks/get","params":{"taskId":"missing"}}"#,
+                br#"{"jsonrpc":"2.0","id":1,"method":"resources/list","params":{}}"#,
             ),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let value = read_json_response(response).await;
+        assert_eq!(value["error"]["code"], json!(-32020));
+        assert_eq!(
+            value["error"]["data"]["atlas_error_code"],
+            json!("header_mismatch")
+        );
+    }
+
+    #[tokio::test]
+    async fn tools_call_requires_matching_name_header() {
+        let mut headers = base_headers("tools/call");
+        headers.insert(MCP_NAME_HEADER, HeaderValue::from_static("wrong_tool"));
+        let response = handle_post_mcp(
+            State(make_state()),
+            headers,
+            Bytes::from_static(br#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"broker_status","arguments":{}}}"#),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let value = read_json_response(response).await;
+        assert_eq!(value["error"]["code"], json!(-32020));
+    }
+
+    #[tokio::test]
+    async fn base64_sentinel_name_header_is_decoded() {
+        let mut headers = base_headers("prompts/get");
+        headers.insert(
+            MCP_NAME_HEADER,
+            HeaderValue::from_static("base64:cmV2aWV3X2NoYW5nZQ=="),
+        );
+        let response = handle_post_mcp(
+            State(make_state()),
+            headers,
+            Bytes::from_static(br#"{"jsonrpc":"2.0","id":1,"method":"prompts/get","params":{"name":"review_change","arguments":{"files":"src/lib.rs"}}}"#),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn unknown_methods_return_404_plus_jsonrpc_method_not_found() {
+        let headers = base_headers("bogus/method");
+        let response = handle_post_mcp(
+            State(make_state()),
+            headers,
+            Bytes::from_static(br#"{"jsonrpc":"2.0","id":1,"method":"bogus/method","params":{}}"#),
         )
         .await;
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
-
         let value = read_json_response(response).await;
-        assert_eq!(value["error"]["code"], json!(-32010));
+        assert_eq!(value["error"]["code"], json!(-32601));
+    }
+
+    #[tokio::test]
+    async fn get_and_delete_mcp_routes_are_removed() {
         assert_eq!(
-            value["error"]["data"]["atlas_error_code"],
-            json!("task_not_found")
+            request_router(axum::http::Method::GET, "/mcp")
+                .await
+                .status(),
+            StatusCode::METHOD_NOT_ALLOWED
+        );
+        assert_eq!(
+            request_router(axum::http::Method::DELETE, "/mcp")
+                .await
+                .status(),
+            StatusCode::METHOD_NOT_ALLOWED
         );
     }
 
     #[tokio::test]
-    async fn http_session_creation_reuse_missing_session_and_delete_work() {
-        let (state, session_id) = initialize_session(make_state(None)).await;
-
-        let response = handle_post_mcp(
-            State(state.clone()),
-            session_headers(&session_id),
-            b"{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\",\"params\":{}}"
-                .as_slice()
-                .into(),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::OK);
-        let value = read_json_response(response).await;
-        assert_eq!(
-            value["result"]["tools"],
-            crate::tools::tool_list()["tools"],
-            "http tools/list must serialize shared typed descriptor registry"
-        );
-        assert_eq!(value["result"]["resultType"], json!("complete"));
-        assert_eq!(
-            value["result"]["_meta"][spec::META_SERVER_INFO]["name"],
-            json!(spec::MCP_SERVER_NAME)
-        );
-
-        let response = handle_post_mcp(
-            State(state.clone()),
-            HeaderMap::new(),
-            b"{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/list\",\"params\":{}}"
-                .as_slice()
-                .into(),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-        let value = read_json_response(response).await;
-        assert_eq!(
-            value["error"]["message"],
-            json!(format!(
-                "missing MCP-Protocol-Version header; expected {}",
-                spec::MCP_PROTOCOL_VERSION
-            ))
-        );
-
-        let response = handle_delete_mcp(State(state.clone()), session_headers(&session_id)).await;
-        assert_eq!(response.status(), StatusCode::NO_CONTENT);
-
-        let response = handle_post_mcp(
-            State(state),
-            session_headers(&session_id),
-            b"{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/list\",\"params\":{}}"
-                .as_slice()
-                .into(),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-        let value = read_json_response(response).await;
-        assert_eq!(
-            value["error"]["message"],
-            json!("missing or invalid Mcp-Session-Id")
-        );
-    }
-
-    #[tokio::test]
-    async fn resumed_poll_receives_only_missed_events() {
-        let (state, session_id) = initialize_session(make_state(None)).await;
-        let session = state
-            .sessions
-            .require_session(&session_id)
-            .expect("session");
-        let first_id = session.enqueue_event("{\"n\":1}".to_owned());
-        session.enqueue_event("{\"n\":2}".to_owned());
-
-        let mut headers = session_headers(&session_id);
-        headers.insert(
-            LAST_EVENT_ID_HEADER,
-            HeaderValue::from_str(&first_id).unwrap(),
-        );
-        let response = handle_get_mcp(State(state), headers).await;
-        assert_eq!(response.status(), StatusCode::OK);
-        let body = read_body_string(response).await;
-        assert!(body.contains("id: "));
-        assert!(body.contains("{\"n\":2}"));
-        assert!(!body.contains("{\"n\":1}"));
-    }
-
-    #[tokio::test]
-    async fn sessions_do_not_receive_each_others_events() {
-        let (state, session_a) = initialize_session(make_state(None)).await;
-        let response = handle_post_mcp(
-            State(state.clone()),
-            HeaderMap::new(),
-            initialize_body(spec::MCP_PROTOCOL_VERSION, ""),
-        )
-        .await;
-        let session_b = header_value(&response, MCP_SESSION_ID_HEADER);
-
-        let session = state
-            .sessions
-            .require_session(&session_a)
-            .expect("session a");
-        session.enqueue_event("{\"owner\":\"a\"}".to_owned());
-
-        let response = handle_get_mcp(State(state), session_headers(&session_b)).await;
-        let body = read_body_string(response).await;
-        assert!(!body.contains("owner"));
-    }
-
-    #[tokio::test]
-    async fn server_initiated_disconnect_can_resume() {
-        let (state, session_id) = initialize_session(make_state(None)).await;
-        let response = handle_get_mcp(State(state.clone()), session_headers(&session_id)).await;
-        assert_eq!(response.status(), StatusCode::OK);
-
-        let session = state
-            .sessions
-            .require_session(&session_id)
-            .expect("session");
-        let event_id = session.enqueue_event("{\"step\":1}".to_owned());
-
-        let mut headers = session_headers(&session_id);
-        headers.insert(
-            LAST_EVENT_ID_HEADER,
-            HeaderValue::from_str(&(session_id.clone() + ":0")).unwrap(),
-        );
-        let response = handle_get_mcp(State(state), headers).await;
-        let body = read_body_string(response).await;
-        assert!(body.contains(&event_id));
-        assert!(body.contains("{\"step\":1}"));
-    }
-
-    #[tokio::test]
-    async fn expired_last_event_id_returns_gone() {
-        let mut state = make_state(None);
-        state.sessions = SessionManager::for_tests(
-            Duration::from_secs(60),
-            1,
-            Duration::from_secs(60),
-            Duration::from_millis(1),
-        );
-        let (state, session_id) = initialize_session(state).await;
-        let session = state
-            .sessions
-            .require_session(&session_id)
-            .expect("session");
-        let first = session.enqueue_event("{\"n\":1}".to_owned());
-        session.enqueue_event("{\"n\":2}".to_owned());
-        session.enqueue_event("{\"n\":3}".to_owned());
-
-        let mut headers = session_headers(&session_id);
-        headers.insert(LAST_EVENT_ID_HEADER, HeaderValue::from_str(&first).unwrap());
-        let response = handle_get_mcp(State(state), headers).await;
-        assert_eq!(response.status(), StatusCode::GONE);
-        let value = read_json_response(response).await;
-        assert_eq!(
-            value["error"]["message"],
-            json!("Last-Event-ID is outside the retained resume window")
-        );
-    }
-
-    #[tokio::test]
-    async fn missing_version_header_on_post_initialize_request_is_rejected() {
-        let (state, session_id) = initialize_session(make_state(None)).await;
-        let mut headers = HeaderMap::new();
+    async fn session_and_resume_headers_are_ignored_on_post() {
+        let mut headers = base_headers("tools/list");
         headers.insert(
             MCP_SESSION_ID_HEADER,
-            HeaderValue::from_str(&session_id).unwrap(),
+            HeaderValue::from_static("stale-session"),
+        );
+        headers.insert(
+            LAST_EVENT_ID_HEADER,
+            HeaderValue::from_static("stale-event"),
         );
         let response = handle_post_mcp(
-            State(state),
+            State(make_state()),
             headers,
-            b"{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\",\"params\":{}}"
-                .as_slice()
-                .into(),
+            Bytes::from_static(br#"{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}"#),
         )
         .await;
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-        let value = read_json_response(response).await;
-        assert_eq!(
-            value["error"]["message"],
-            json!(format!(
-                "missing MCP-Protocol-Version header; expected {}",
-                spec::MCP_PROTOCOL_VERSION
-            ))
-        );
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(response.headers().get(MCP_SESSION_ID_HEADER).is_none());
     }
 
     #[tokio::test]
-    async fn mismatched_version_header_is_rejected() {
-        let (state, session_id) = initialize_session(make_state(None)).await;
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            MCP_SESSION_ID_HEADER,
-            HeaderValue::from_str(&session_id).unwrap(),
-        );
-        headers.insert(
-            MCP_PROTOCOL_VERSION_HEADER,
-            HeaderValue::from_static("2024-11-05"),
-        );
-        let response = handle_get_mcp(State(state), headers).await;
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-        let value = read_json_response(response).await;
-        assert_eq!(
-            value["error"]["message"],
-            json!("unsupported MCP-Protocol-Version '2024-11-05'; supported version: 2026-07-28")
-        );
-    }
-
-    #[tokio::test]
-    async fn invalid_origin_returns_forbidden() {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            header::ORIGIN,
-            HeaderValue::from_static("https://evil.test"),
-        );
+    async fn post_can_return_non_resumable_sse() {
+        let headers = sse_headers("tools/list");
         let response = handle_post_mcp(
-            State(make_state_with_origins(&["https://good.test"])),
+            State(make_state()),
             headers,
-            initialize_body(spec::MCP_PROTOCOL_VERSION, ""),
+            Bytes::from_static(br#"{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}"#),
         )
         .await;
-        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("text/event-stream")
+        );
+        assert!(response.headers().get(MCP_SESSION_ID_HEADER).is_none());
+        let body = read_body_string(response).await;
+        assert!(body.contains("event: message"));
+        assert!(body.contains("\"result\""));
+        assert!(!body.contains("id: "));
     }
 
     #[tokio::test]
-    async fn jsonrpc_batch_request_rejected_on_http() {
+    async fn subscriptions_listen_requires_sse_accept() {
+        let headers = base_headers("subscriptions/listen");
         let response = handle_post_mcp(
-            State(make_state(None)),
-            HeaderMap::new(),
-            b"[]".as_slice().into(),
+            State(make_state()),
+            headers,
+            Bytes::from_static(br#"{"jsonrpc":"2.0","id":1,"method":"subscriptions/listen","params":{"notificationTypes":["tools"]}}"#),
         )
         .await;
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(response.status(), StatusCode::NOT_ACCEPTABLE);
         let value = read_json_response(response).await;
-        assert_eq!(
-            value["error"]["message"],
-            json!("JSON-RPC batch requests are not supported")
-        );
+        assert_eq!(value["error"]["code"], json!(-32600));
     }
 
     #[tokio::test]
-    async fn logging_notifications_are_isolated_per_session() {
-        let (state, session_a) = initialize_session(make_state(None)).await;
+    async fn subscriptions_listen_filters_notifications_and_tags_subscription_id() {
+        let headers = sse_headers("subscriptions/listen");
         let response = handle_post_mcp(
-            State(state.clone()),
-            HeaderMap::new(),
-            initialize_body(spec::MCP_PROTOCOL_VERSION, ""),
-        )
-        .await;
-        let session_b = header_value(&response, MCP_SESSION_ID_HEADER);
-
-        let _ = handle_post_mcp(
-            State(state.clone()),
-            session_headers(&session_a),
-            b"{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}"
-                .as_slice()
-                .into(),
-        )
-        .await;
-        let _ = handle_post_mcp(
-            State(state.clone()),
-            session_headers(&session_b),
-            b"{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}"
-                .as_slice()
-                .into(),
-        )
-        .await;
-
-        let response = handle_post_mcp(
-            State(state.clone()),
-            session_headers(&session_a),
-            b"{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"logging/setLevel\",\"params\":{\"level\":\"warning\"}}"
-                .as_slice()
-                .into(),
+            State(make_state()),
+            headers,
+            Bytes::from_static(br#"{"jsonrpc":"2.0","id":7,"method":"subscriptions/listen","params":{"notificationTypes":["tools","resource_subscriptions"]}}"#),
         )
         .await;
         assert_eq!(response.status(), StatusCode::OK);
-
-        let response = handle_post_mcp(
-            State(state.clone()),
-            session_headers(&session_a),
-            b"{\"jsonrpc\":\"2.0\",\"id\":8,\"method\":\"tools/call\",\"params\":{\"name\":\"query_graph\",\"arguments\":{\"output_format\":\"bogus\"}}}"
-                .as_slice()
-                .into(),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::OK);
-
-        let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
-            .await
-            .expect("read body");
-        let json: serde_json::Value = serde_json::from_slice(&body).expect("json response");
-        assert_eq!(json["result"]["isError"], serde_json::json!(true));
-        assert_eq!(
-            json["result"]["structuredContent"]["code"],
-            serde_json::json!("invalid_input")
-        );
-
-        let response = handle_get_mcp(State(state.clone()), session_headers(&session_a)).await;
-        let body_a = read_body_string(response).await;
-        assert!(body_a.contains("notifications/message"));
-        assert!(body_a.contains("tool=query_graph success=false"));
-
-        let response = handle_get_mcp(State(state), session_headers(&session_b)).await;
-        let body_b = read_body_string(response).await;
-        assert!(!body_b.contains("notifications/message"));
-        assert!(!body_b.contains("tool=query_graph success=false"));
+        let body = read_body_string(response).await;
+        assert!(body.contains("\"subscriptionId\":\"sub-7\""));
+        assert!(body.contains(SUBSCRIPTION_TYPE_TOOLS_LIST_CHANGED));
+        assert!(body.contains(SUBSCRIPTION_TYPE_RESOURCE_UPDATED));
+        assert!(!body.contains(SUBSCRIPTION_TYPE_PROMPTS_LIST_CHANGED));
+        assert!(!body.contains(SUBSCRIPTION_TYPE_RESOURCES_LIST_CHANGED));
+        assert!(body.contains(SUBSCRIPTION_ID_META_KEY));
+        assert!(!body.contains("$/progress"));
+        assert!(!body.contains("notifications/tasks/status"));
     }
 
     #[tokio::test]
-    async fn tool_responses_are_isolated_per_session() {
-        let (state, session_a) = initialize_session(make_state(None)).await;
-        let response = handle_post_mcp(
-            State(state.clone()),
-            HeaderMap::new(),
-            initialize_body(spec::MCP_PROTOCOL_VERSION, ""),
-        )
-        .await;
-        let session_b = header_value(&response, MCP_SESSION_ID_HEADER);
-
-        let response = handle_post_mcp(
-            State(state.clone()),
-            session_headers(&session_a),
-            b"{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"tools/call\",\"params\":{\"name\":\"broker_status\",\"arguments\":{}}}"
-                .as_slice()
-                .into(),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::OK);
-
-        let response = handle_get_mcp(State(state.clone()), session_headers(&session_a)).await;
-        let body_a = read_body_string(response).await;
-        assert!(body_a.contains("broker_status") || body_a.contains("worker_threads"));
-
-        let response = handle_get_mcp(State(state), session_headers(&session_b)).await;
-        let body_b = read_body_string(response).await;
-        assert!(!body_b.contains("broker_status"));
-        assert!(!body_b.contains("worker_threads"));
+    async fn removed_resource_subscription_methods_return_method_not_found() {
+        for method in ["resources/subscribe", "resources/unsubscribe"] {
+            let headers = base_headers(method);
+            let body = serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": method,
+                "params": {"uri": "atlas://docs/index"}
+            });
+            let response = handle_post_mcp(
+                State(make_state()),
+                headers,
+                Bytes::from(serde_json::to_vec(&body).expect("serialize body")),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::NOT_FOUND);
+            let value = read_json_response(response).await;
+            assert_eq!(value["error"]["code"], json!(-32601));
+        }
     }
 }

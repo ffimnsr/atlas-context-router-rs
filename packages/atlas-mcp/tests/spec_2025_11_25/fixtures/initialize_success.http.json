@@ -1,7 +1,7 @@
 {
   "status": 200,
   "protocol_header": "2026-07-28",
-  "has_session_header": true,
+  "has_session_header": false,
   "body": {
     "jsonrpc": "2.0",
     "id": 1,
@@ -12,7 +12,6 @@
         "prompts": { "listChanged": false },
         "resources": { "subscribe": false, "listChanged": false },
         "completions": {},
-        "logging": {},
         "tasks": {
           "list": {},
           "cancel": {},
@@ -25,7 +24,15 @@
         "version": "1.5.1",
         "description": "MCP server exposing Atlas graph, impact, and review tools over stdio"
       },
-      "_meta": { "clientTag": "spec-suite" }
+      "_meta": {
+        "clientTag": "spec-suite",
+        "io.modelcontextprotocol/serverInfo": {
+          "name": "atlas",
+          "version": "1.5.1",
+          "description": "MCP server exposing Atlas graph, impact, and review tools over stdio"
+        }
+      },
+      "resultType": "complete"
     }
   }
 }

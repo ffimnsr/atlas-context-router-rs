@@ -1,12 +1,11 @@
-//! Notification emitters for progress, trace, and MCP log notifications.
+//! Notification emitters for progress and trace notifications.
 
 use std::io::Write;
 
 use anyhow::Result;
 
 use super::jsonrpc::jsonrpc_notification;
-use super::types::{ConnectionState, ProgressEventKind, TraceLevel, TraceThreshold};
-use crate::logging;
+use super::types::{ProgressEventKind, TraceLevel, TraceThreshold};
 
 // ---------------------------------------------------------------------------
 // Write helpers
@@ -94,26 +93,5 @@ pub(crate) fn emit_trace_log<W: Write>(
                 "message": message,
             }),
         ),
-    )
-}
-
-// ---------------------------------------------------------------------------
-// MCP log notification (logging channel)
-// ---------------------------------------------------------------------------
-
-pub(crate) fn emit_mcp_log_notification<W: Write>(
-    writer: &mut W,
-    connection_state: &ConnectionState,
-    level: logging::LogLevel,
-    logger: &str,
-    message: String,
-) -> Result<()> {
-    if !connection_state.initialized || !logging::should_emit(connection_state.log_level, level) {
-        return Ok(());
-    }
-
-    write_notification(
-        writer,
-        &logging::log_notification(level, logger, message).to_string(),
     )
 }

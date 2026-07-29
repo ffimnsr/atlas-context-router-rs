@@ -74,8 +74,7 @@ mod context;
 mod descriptors;
 mod discovery;
 mod elicitation;
-#[cfg(feature = "http-transport")]
-mod http_sessions;
+
 mod logging;
 mod mrtr;
 mod output;

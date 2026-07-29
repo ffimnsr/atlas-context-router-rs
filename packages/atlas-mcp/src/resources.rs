@@ -10,10 +10,17 @@ use crate::descriptors::{
     validate_descriptor_name,
 };
 use crate::prompts::{prompt_descriptors, prompt_get};
+use crate::spec;
 use crate::tool_result::structured_content;
 use crate::{tool_list, tool_manual};
 
 const DEFAULT_PAGE_LIMIT: usize = 50;
+const RESOURCES_LIST_CACHE_TTL_MS: u64 = 300_000;
+const RESOURCES_LIST_CACHE_SCOPE: &str = spec::CACHE_SCOPE_PUBLIC;
+const RESOURCE_TEMPLATES_LIST_CACHE_TTL_MS: u64 = 300_000;
+const RESOURCE_TEMPLATES_LIST_CACHE_SCOPE: &str = spec::CACHE_SCOPE_PUBLIC;
+const RESOURCES_READ_CACHE_TTL_MS: u64 = 60_000;
+const RESOURCES_READ_CACHE_SCOPE: &str = spec::CACHE_SCOPE_PRIVATE;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -48,21 +55,31 @@ struct ResourceContent {
 pub(crate) fn resources_list(args: Option<&Value>) -> Result<Value> {
     let resources = resource_descriptors();
     let (slice, next_cursor) = paginate(&resources, args)?;
-    serde_json::to_value(ResourceRegistry {
+    let mut result = serde_json::to_value(ResourceRegistry {
         resources: slice,
         next_cursor,
-    })
-    .map_err(Into::into)
+    })?;
+    spec::annotate_cacheable_result(
+        &mut result,
+        RESOURCES_LIST_CACHE_TTL_MS,
+        RESOURCES_LIST_CACHE_SCOPE,
+    );
+    Ok(result)
 }
 
 pub(crate) fn resources_templates_list(args: Option<&Value>) -> Result<Value> {
     let templates = resource_template_descriptors();
     let (slice, next_cursor) = paginate(&templates, args)?;
-    serde_json::to_value(ResourceTemplateRegistry {
+    let mut result = serde_json::to_value(ResourceTemplateRegistry {
         resource_templates: slice,
         next_cursor,
-    })
-    .map_err(Into::into)
+    })?;
+    spec::annotate_cacheable_result(
+        &mut result,
+        RESOURCE_TEMPLATES_LIST_CACHE_TTL_MS,
+        RESOURCE_TEMPLATES_LIST_CACHE_SCOPE,
+    );
+    Ok(result)
 }
 
 pub(crate) fn resources_read(
@@ -182,10 +199,15 @@ pub(crate) fn resources_read(
         return Err(anyhow!("unknown resource uri: {uri}"));
     };
 
-    serde_json::to_value(ResourceContentsEnvelope {
+    let mut result = serde_json::to_value(ResourceContentsEnvelope {
         contents: vec![content],
-    })
-    .map_err(Into::into)
+    })?;
+    spec::annotate_cacheable_result(
+        &mut result,
+        RESOURCES_READ_CACHE_TTL_MS,
+        RESOURCES_READ_CACHE_SCOPE,
+    );
+    Ok(result)
 }
 
 pub(crate) fn resource_descriptors() -> Vec<ResourceDescriptor> {
@@ -698,6 +720,9 @@ mod tests {
     fn resources_list_is_deterministic_and_paginates() {
         let first = resources_list(Some(&json!({"limit": 1}))).expect("list resources");
         assert_eq!(first["resources"].as_array().expect("resources").len(), 1);
+        assert_eq!(first["resultType"], json!("complete"));
+        assert_eq!(first["ttlMs"], json!(300000));
+        assert_eq!(first["cacheScope"], json!("public"));
         assert_eq!(first["nextCursor"], json!("offset:1"));
 
         let second =
@@ -721,6 +746,9 @@ mod tests {
                 .len(),
             1
         );
+        assert_eq!(first["resultType"], json!("complete"));
+        assert_eq!(first["ttlMs"], json!(300000));
+        assert_eq!(first["cacheScope"], json!("public"));
         assert_eq!(first["nextCursor"], json!("offset:1"));
 
         let second = resources_templates_list(Some(&json!({"limit": 1, "cursor": "offset:1"})))
@@ -787,6 +815,9 @@ mod tests {
             &db_path,
         )
         .expect("resource read");
+        assert_eq!(result["resultType"], json!("complete"));
+        assert_eq!(result["ttlMs"], json!(60000));
+        assert_eq!(result["cacheScope"], json!("private"));
         assert_eq!(result["contents"][0]["mimeType"], json!("text/markdown"));
         let text = result["contents"][0]["text"]
             .as_str()
@@ -811,6 +842,9 @@ mod tests {
             &db_path,
         )
         .expect("resource read");
+        assert_eq!(result["resultType"], json!("complete"));
+        assert_eq!(result["ttlMs"], json!(60000));
+        assert_eq!(result["cacheScope"], json!("private"));
         assert_eq!(result["contents"][0]["mimeType"], json!("application/json"));
         assert!(result["contents"][0]["text"].as_str().is_some());
     }

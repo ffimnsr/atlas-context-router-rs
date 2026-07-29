@@ -1,4 +1,7 @@
 {
+  "resultType": "complete",
+  "ttlMs": 60000,
+  "cacheScope": "private",
   "uri": "atlas://health/status",
   "mimeType": "application/json",
   "status": {

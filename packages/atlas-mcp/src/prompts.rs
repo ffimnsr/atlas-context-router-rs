@@ -7,6 +7,7 @@ use crate::descriptors::{
     IconDescriptor, PromptArgumentDescriptor, PromptDescriptor, PromptRegistry, descriptor_meta,
     human_title, validate_descriptor_name,
 };
+use crate::spec;
 
 #[derive(Clone, Copy)]
 struct PromptDef {
@@ -115,7 +116,7 @@ const PROMPTS: &[PromptDef] = &[
 ];
 
 pub fn prompt_descriptors() -> Vec<PromptDescriptor> {
-    PROMPTS
+    let mut prompts = PROMPTS
         .iter()
         .map(|prompt| {
             validate_descriptor_name(prompt.name).expect("prompt name must satisfy MCP guidance");
@@ -136,14 +137,25 @@ pub fn prompt_descriptors() -> Vec<PromptDescriptor> {
                 meta: descriptor_meta("prompt", "workflow"),
             }
         })
-        .collect()
+        .collect::<Vec<_>>();
+    prompts.sort_by(|left, right| left.name.cmp(&right.name));
+    prompts
 }
 
+const PROMPTS_LIST_CACHE_TTL_MS: u64 = 300_000;
+const PROMPTS_LIST_CACHE_SCOPE: &str = spec::CACHE_SCOPE_PUBLIC;
+
 pub fn prompt_list() -> serde_json::Value {
-    serde_json::to_value(PromptRegistry {
+    let mut result = serde_json::to_value(PromptRegistry {
         prompts: prompt_descriptors(),
     })
-    .expect("prompt registry serialization")
+    .expect("prompt registry serialization");
+    spec::annotate_cacheable_result(
+        &mut result,
+        PROMPTS_LIST_CACHE_TTL_MS,
+        PROMPTS_LIST_CACHE_SCOPE,
+    );
+    result
 }
 
 fn prompt_icons(_name: &str) -> Vec<IconDescriptor> {
@@ -260,12 +272,15 @@ mod tests {
         assert_eq!(
             names,
             vec![
-                "review_change",
                 "inspect_symbol",
                 "plan_refactor",
-                "resume_prior_session"
+                "resume_prior_session",
+                "review_change"
             ]
         );
+        assert_eq!(listed["resultType"], serde_json::json!("complete"));
+        assert_eq!(listed["ttlMs"], serde_json::json!(300000));
+        assert_eq!(listed["cacheScope"], serde_json::json!("public"));
     }
 
     #[test]

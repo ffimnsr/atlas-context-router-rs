@@ -3388,15 +3388,15 @@ Why:
 
 Rewrite HTTP transport around single POST endpoint semantics.
 
-- [ ] keep `POST /mcp`, `GET /health`, and protected-resource metadata endpoint only
-- [ ] remove `GET /mcp`, `DELETE /mcp`, `Mcp-Session-Id`, `Last-Event-ID`, resumability, and protocol session manager dependencies
-- [ ] require `Accept` support for `application/json` and `text/event-stream` on HTTP POST requests
-- [ ] require and validate `MCP-Protocol-Version`, `Mcp-Method`, and `Mcp-Name` where applicable
-- [ ] implement Base64 sentinel decoding for `Mcp-Name` and `Mcp-Param-*` header values
-- [ ] validate header/body mismatches as `HeaderMismatch` with code `-32020`
-- [ ] return HTTP `404` plus JSON-RPC `-32601` for unknown methods on modern endpoint
-- [ ] delete `packages/atlas-mcp/src/http_sessions.rs` after no users remain
-- [ ] add tests for required headers, mismatch errors, removed methods, ignored session/resume headers, and non-resumable SSE
+- [x] keep `POST /mcp`, `GET /health`, and protected-resource metadata endpoint only
+- [x] remove `GET /mcp`, `DELETE /mcp`, `Mcp-Session-Id`, `Last-Event-ID`, resumability, and protocol session manager dependencies
+- [x] require `Accept` support for `application/json` and `text/event-stream` on HTTP POST requests
+- [x] require and validate `MCP-Protocol-Version`, `Mcp-Method`, and `Mcp-Name` where applicable
+- [x] implement Base64 sentinel decoding for `Mcp-Name` and `Mcp-Param-*` header values
+- [x] validate header/body mismatches as `HeaderMismatch` with code `-32020`
+- [x] return HTTP `404` plus JSON-RPC `-32601` for unknown methods on modern endpoint
+- [x] delete `packages/atlas-mcp/src/http_sessions.rs` after no users remain
+- [x] add tests for required headers, mismatch errors, removed methods, ignored session/resume headers, and non-resumable SSE
 
 Why:
 - 2026-07-28 removes protocol-level sessions and GET stream endpoint from Streamable HTTP
@@ -3406,12 +3406,12 @@ Why:
 
 Remove protocol Logging adoption while preserving diagnostics.
 
-- [ ] remove logging capability advertisement from discovery/capabilities
-- [ ] remove `logging/setLevel` handler from stdio and HTTP dispatch
-- [ ] remove global MCP log-level state and normal MCP log notifications
-- [ ] keep stdio diagnostics on stderr only
-- [ ] parse per-request `_meta["io.modelcontextprotocol/logLevel"]` and emit request-scoped messages only when present
-- [ ] add tests proving `logging/setLevel` is method-not-found, logging capability is absent, and stdout remains protocol-clean
+- [x] remove logging capability advertisement from discovery/capabilities
+- [x] remove `logging/setLevel` handler from stdio and HTTP dispatch
+- [x] remove global MCP log-level state and normal MCP log notifications
+- [x] keep stdio diagnostics on stderr only
+- [x] parse per-request `_meta["io.modelcontextprotocol/logLevel"]` and emit request-scoped messages only when present
+- [x] add tests proving `logging/setLevel` is method-not-found, logging capability is absent, and stdout remains protocol-clean
 
 Why:
 - Logging is deprecated and `logging/setLevel` is removed in 2026-07-28
@@ -3421,10 +3421,10 @@ Why:
 
 Add 2026 cache fields to cacheable methods.
 
-- [ ] add `ttlMs`, `cacheScope`, and `resultType` to `tools/list`, `prompts/list`, `resources/list`, `resources/templates/list`, `resources/read`, and `server/discover`
-- [ ] choose explicit public/private cache policy for each result family
-- [ ] keep list outputs deterministic for client-side caching and prompt-cache stability
-- [ ] add tests proving cache fields exist and stable ordering is preserved
+- [x] add `ttlMs`, `cacheScope`, and `resultType` to `tools/list`, `prompts/list`, `resources/list`, `resources/templates/list`, `resources/read`, and `server/discover`
+- [x] choose explicit public/private cache policy for each result family
+- [x] keep list outputs deterministic for client-side caching and prompt-cache stability
+- [x] add tests proving cache fields exist and stable ordering is preserved
 
 Why:
 - 2026-07-28 requires cacheable result metadata for list/read/discover methods
@@ -3434,12 +3434,12 @@ Why:
 
 Replace old GET stream and resource subscription assumptions.
 
-- [ ] implement `subscriptions/listen` as long-lived POST response stream
-- [ ] support opted-in notification types for tools, prompts, resources list changes, and resource subscriptions
-- [ ] tag notifications with `_meta["io.modelcontextprotocol/subscriptionId"]`
-- [ ] keep request-scoped progress/log notifications on originating request streams only
-- [ ] remove `resources/subscribe` and `resources/unsubscribe` if present
-- [ ] add tests for opt-in filtering, subscription IDs, and request-scoped notification isolation
+- [x] implement `subscriptions/listen` as long-lived POST response stream
+- [x] support opted-in notification types for tools, prompts, resources list changes, and resource subscriptions
+- [x] tag notifications with `_meta["io.modelcontextprotocol/subscriptionId"]`
+- [x] keep request-scoped progress/log notifications on originating request streams only
+- [x] remove `resources/subscribe` and `resources/unsubscribe` if present
+- [x] add tests for opt-in filtering, subscription IDs, and request-scoped notification isolation
 
 Why:
 - 2026-07-28 replaces standalone GET stream and resource subscription methods with `subscriptions/listen`

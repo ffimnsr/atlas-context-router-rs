@@ -1,4 +1,7 @@
 {
+  "resultType": "complete",
+  "ttlMs": 300000,
+  "cacheScope": "public",
   "resources": [
     {
       "uri": "atlas://docs/index",

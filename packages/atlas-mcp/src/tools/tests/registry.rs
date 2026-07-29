@@ -3,60 +3,60 @@ use serde_json::{Value, json};
 use std::collections::BTreeSet;
 
 const TOOL_REGISTRY_SNAPSHOT: &[&str] = &[
-    "list_graph_stats",
-    "tool_list",
-    "tool_search",
-    "tool_help",
-    "man",
-    "query_graph",
-    "batch_query_graph",
-    "get_impact_radius",
-    "get_review_context",
-    "detect_changes",
-    "build_or_update_graph",
-    "postprocess_graph",
-    "traverse_graph",
-    "get_minimal_context",
-    "explain_change",
-    "get_context",
     "analyze_architecture",
-    "analyze_metrics",
-    "assess_risk",
-    "analyze_patterns",
-    "find_large_functions",
-    "find_complex_functions",
-    "get_session_status",
-    "compact_session",
-    "resume_session",
-    "search_saved_context",
-    "search_decisions",
-    "read_saved_context",
-    "save_context_artifact",
-    "get_context_stats",
-    "purge_saved_context",
-    "cross_session_search",
-    "get_global_memory",
-    "symbol_neighbors",
-    "cross_file_links",
-    "concept_clusters",
-    "search_files",
-    "search_content",
-    "read_file_excerpt",
-    "get_docs_section",
-    "read_file_around_match",
-    "search_templates",
-    "search_text_assets",
-    "broker_status",
-    "status",
-    "doctor",
-    "db_check",
-    "debug_graph",
-    "explain_query",
-    "analyze_safety",
-    "analyze_remove",
     "analyze_dead_code",
     "analyze_dependency",
+    "analyze_metrics",
+    "analyze_patterns",
+    "analyze_remove",
+    "analyze_safety",
+    "assess_risk",
+    "batch_query_graph",
+    "broker_status",
+    "build_or_update_graph",
+    "compact_session",
+    "concept_clusters",
+    "cross_file_links",
+    "cross_session_search",
+    "db_check",
+    "debug_graph",
+    "detect_changes",
+    "doctor",
+    "explain_change",
+    "explain_query",
+    "find_complex_functions",
+    "find_large_functions",
+    "get_context",
+    "get_context_stats",
+    "get_docs_section",
+    "get_global_memory",
+    "get_impact_radius",
+    "get_minimal_context",
+    "get_review_context",
+    "get_session_status",
+    "list_graph_stats",
+    "man",
+    "postprocess_graph",
+    "purge_saved_context",
+    "query_graph",
+    "read_file_around_match",
+    "read_file_excerpt",
+    "read_saved_context",
     "resolve_symbol",
+    "resume_session",
+    "save_context_artifact",
+    "search_content",
+    "search_decisions",
+    "search_files",
+    "search_saved_context",
+    "search_templates",
+    "search_text_assets",
+    "status",
+    "symbol_neighbors",
+    "tool_help",
+    "tool_list",
+    "tool_search",
+    "traverse_graph",
 ];
 
 fn parity_seed_source_id(repo_root: &str, db_path: &str) -> String {
@@ -344,7 +344,7 @@ fn tool_list_includes_explain_change() {
 }
 
 #[test]
-fn tool_list_includes_get_context() {
+fn tool_list_includes_get_context_and_is_cacheable_and_sorted() {
     let list = tool_list();
     let tools = list.get("tools").and_then(|t| t.as_array()).unwrap();
     assert!(
@@ -353,6 +353,19 @@ fn tool_list_includes_get_context() {
             .any(|t| t.get("name") == Some(&"get_context".into())),
         "tools/list must include get_context"
     );
+    let names = tools
+        .iter()
+        .map(|tool| tool["name"].as_str().expect("tool name"))
+        .collect::<Vec<_>>();
+    let mut sorted = names.clone();
+    sorted.sort();
+    assert_eq!(
+        names, sorted,
+        "tools/list must stay sorted for cache stability"
+    );
+    assert_eq!(list["resultType"], serde_json::json!("complete"));
+    assert_eq!(list["ttlMs"], serde_json::json!(300000));
+    assert_eq!(list["cacheScope"], serde_json::json!("public"));
 }
 
 #[test]

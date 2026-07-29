@@ -16,9 +16,7 @@ use super::helpers::{
 };
 use super::input::handle_input_line;
 use super::jsonrpc::{JsonRpcErrorKind, jsonrpc_error, jsonrpc_ok};
-use super::notify::{
-    emit_mcp_log_notification, emit_progress_notification, emit_trace_log, write_response,
-};
+use super::notify::{emit_progress_notification, emit_trace_log, write_response};
 use super::types::{
     ConnectionState, PendingRequest, ProgressEventKind, RequestCompletion, TransportEvent,
     TransportStats, connection_state,
@@ -495,22 +493,24 @@ fn handle_completion_event<W: Write>(
                 request.queued_at.elapsed().as_millis()
             ),
         )?;
-        emit_mcp_log_notification(
-            writer,
-            connection_state,
-            if completion.success {
-                logging::LogLevel::Info
-            } else {
-                logging::LogLevel::Error
-            },
-            "tools/call",
-            format!(
-                "tool={} success={} total_ms={}",
-                completion.request.tool_name.as_deref().unwrap_or("-"),
-                completion.success,
-                request.queued_at.elapsed().as_millis()
-            ),
-        )?;
+        let completion_log_level = if completion.success {
+            logging::LogLevel::Info
+        } else {
+            logging::LogLevel::Error
+        };
+        if logging::should_emit(request.request_log_level, completion_log_level) {
+            logging::write_stdio_log(
+                completion_log_level,
+                &format!(
+                    "request_id={} method={} tool={} success={} total_ms={}",
+                    completion.request.request_id,
+                    completion.request.method,
+                    completion.request.tool_name.as_deref().unwrap_or("-"),
+                    completion.success,
+                    request.queued_at.elapsed().as_millis()
+                ),
+            );
+        }
         write_response(writer, &response)?;
     } else {
         stats.dropped_late += 1;

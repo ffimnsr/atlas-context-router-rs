@@ -67,7 +67,11 @@ fn serve_http_streamable_headers_match_protocol_surface() {
 
     let initialize = harness
         .post_jsonrpc(
-            &[],
+            &[
+                ("Accept", "application/json"),
+                ("MCP-Protocol-Version", atlas_mcp::MCP_PROTOCOL_VERSION),
+                ("Mcp-Method", "initialize"),
+            ],
             &json!({
                 "jsonrpc": "2.0",
                 "id": 1,
@@ -90,40 +94,32 @@ fn serve_http_streamable_headers_match_protocol_surface() {
         initialize.headers.get("mcp-protocol-version"),
         Some(&atlas_mcp::MCP_PROTOCOL_VERSION.to_owned())
     );
-    assert!(initialize.headers.contains_key("mcp-session-id"));
+    assert!(!initialize.headers.contains_key("mcp-session-id"));
     assert!(!initialize.headers.contains_key("mcp-sse-url"));
 
-    let session_id = initialize
-        .headers
-        .get("mcp-session-id")
-        .cloned()
-        .expect("session header");
-    harness
+    let sse = harness
         .post_jsonrpc(
             &[
+                ("Accept", "text/event-stream"),
                 ("MCP-Protocol-Version", atlas_mcp::MCP_PROTOCOL_VERSION),
-                ("Mcp-Session-Id", session_id.as_str()),
+                ("Mcp-Method", "tools/list"),
             ],
-            &json!({"jsonrpc":"2.0","method":"initialized","params":{}}),
+            &json!({"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}),
         )
-        .expect("initialized notification");
-    let poll = harness
-        .get_mcp(&[
-            ("MCP-Protocol-Version", atlas_mcp::MCP_PROTOCOL_VERSION),
-            ("Mcp-Session-Id", session_id.as_str()),
-        ])
-        .expect("streamable poll");
-    assert_eq!(poll.status, 200);
+        .expect("streamable post");
+    assert_eq!(sse.status, 200);
     assert_eq!(
-        poll.headers.get("content-type"),
+        sse.headers.get("content-type"),
         Some(&"text/event-stream".to_owned())
     );
     assert_eq!(
-        poll.headers.get("mcp-protocol-version"),
+        sse.headers.get("mcp-protocol-version"),
         Some(&atlas_mcp::MCP_PROTOCOL_VERSION.to_owned())
     );
-    assert_eq!(poll.headers.get("mcp-session-id"), Some(&session_id));
-    assert!(!poll.headers.contains_key("x-sse-url"));
+    assert!(!sse.headers.contains_key("mcp-session-id"));
+    assert!(!sse.headers.contains_key("x-sse-url"));
+    assert!(sse.body_text.contains("event: message"));
+    assert!(sse.body_text.contains("\"result\""));
 
     cleanup_mcp_daemons(repo.path());
 }

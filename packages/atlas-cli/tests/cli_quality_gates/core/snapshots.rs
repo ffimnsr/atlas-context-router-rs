@@ -70,9 +70,9 @@ fn mcp_query_graph_output_matches_golden() {
     let output = run_serve_jsonrpc_session(
         repo.path(),
         &["serve"],
-        concat!(
-            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}\n",
-            "{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}\n",
+        format!(
+            "{}{}",
+            initialized_session_prelude(1),
             "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"query_graph\",\"arguments\":{\"text\":\"greet_twice\",\"output_format\":\"json\"}}}\n"
         ),
     );
@@ -105,11 +105,11 @@ fn mcp_get_context_output_matches_golden() {
     let output = run_serve_jsonrpc_session(
         repo.path(),
         &["serve"],
-        concat!(
-            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}\n",
-            "{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}\n",
+        format!(
+            "{}{}",
+            initialized_session_prelude(1),
             "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"get_context\",\"arguments\":{\"files\":[\"src/lib.rs\"],\"intent\":\"review\",\"max_nodes\":1,\"max_edges\":0,\"max_files\":1,\"output_format\":\"json\"}}}\n"
-        ),
+        )
     );
     assert!(output.status.success(), "serve get_context failed");
 

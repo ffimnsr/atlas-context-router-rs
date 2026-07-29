@@ -10,8 +10,10 @@ pub const META_CLIENT_INFO: &str = "io.modelcontextprotocol/clientInfo";
 pub const META_CLIENT_CAPABILITIES: &str = "io.modelcontextprotocol/clientCapabilities";
 pub const META_SERVER_INFO: &str = "io.modelcontextprotocol/serverInfo";
 pub const META_LOG_LEVEL: &str = "io.modelcontextprotocol/logLevel";
+pub const CACHE_SCOPE_PUBLIC: &str = "public";
+pub const CACHE_SCOPE_PRIVATE: &str = "private";
 pub const DISCOVER_CACHE_TTL_MS: u64 = 300_000;
-pub const DISCOVER_CACHE_SCOPE: &str = "public";
+pub const DISCOVER_CACHE_SCOPE: &str = CACHE_SCOPE_PUBLIC;
 pub const DISCOVER_INSTRUCTIONS: &str = "Use server/discover for capability negotiation. For 2026 requests after discovery, include params._meta with protocol version and client capabilities.";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -27,7 +29,6 @@ pub struct InitializeCapabilities {
     pub prompts: PromptCapabilities,
     pub resources: ResourceCapabilities,
     pub completions: EmptyCapability,
-    pub logging: EmptyCapability,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tasks: Option<TasksCapabilities>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -164,7 +165,6 @@ pub fn initialize_capabilities() -> InitializeCapabilities {
             list_changed: false,
         },
         completions: EmptyCapability::default(),
-        logging: EmptyCapability::default(),
         tasks: Some(TasksCapabilities {
             list: EmptyCapability::default(),
             cancel: EmptyCapability::default(),
@@ -287,14 +287,25 @@ pub fn initialize_result(request: &InitializeRequest) -> InitializeResult {
 }
 
 pub fn discover_result() -> Value {
-    json!({
+    let mut result = json!({
         "supportedVersions": supported_protocol_versions_value(),
         "capabilities": initialize_capabilities(),
         "serverInfo": server_info(),
         "instructions": DISCOVER_INSTRUCTIONS,
-        "ttlMs": DISCOVER_CACHE_TTL_MS,
-        "cacheScope": DISCOVER_CACHE_SCOPE,
-    })
+    });
+    annotate_cacheable_result(&mut result, DISCOVER_CACHE_TTL_MS, DISCOVER_CACHE_SCOPE);
+    result
+}
+
+pub fn annotate_cacheable_result(result: &mut Value, ttl_ms: u64, cache_scope: &str) {
+    let Some(object) = result.as_object_mut() else {
+        return;
+    };
+    object
+        .entry("resultType".to_owned())
+        .or_insert_with(|| Value::String("complete".to_owned()));
+    object.insert("ttlMs".to_owned(), json!(ttl_ms));
+    object.insert("cacheScope".to_owned(), json!(cache_scope));
 }
 
 pub fn complete_result(mut result: Value) -> Value {
@@ -533,6 +544,7 @@ mod tests {
         );
         assert_eq!(result["serverInfo"], server_info_meta_value());
         assert_eq!(result["instructions"], json!(DISCOVER_INSTRUCTIONS));
+        assert_eq!(result["resultType"], json!("complete"));
         assert_eq!(result["ttlMs"], json!(DISCOVER_CACHE_TTL_MS));
         assert_eq!(result["cacheScope"], json!(DISCOVER_CACHE_SCOPE));
     }

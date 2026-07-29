@@ -222,9 +222,9 @@ fn stdio_transport_representative_stable_tools_keep_object_structured_content() 
     let output = run_serve_jsonrpc_session(
         repo.path(),
         &["serve"],
-        concat!(
-            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}\n",
-            "{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}\n",
+        format!(
+            "{}{}{}{}{}{}{}{}",
+            initialized_session_prelude(1),
             "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"get_context\",\"arguments\":{\"query\":\"greet_twice\",\"output_format\":\"json\"}}}\n",
             "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"status\",\"arguments\":{\"output_format\":\"json\"}}}\n",
             "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"doctor\",\"arguments\":{\"output_format\":\"json\"}}}\n",

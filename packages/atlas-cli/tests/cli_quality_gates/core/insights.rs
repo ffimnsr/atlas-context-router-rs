@@ -215,9 +215,9 @@ fn insights_large_functions_cli_and_mcp_share_report() {
     let output = run_serve_jsonrpc_session(
         repo.path(),
         &["serve"],
-        concat!(
-            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}\n",
-            "{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}\n",
+        format!(
+            "{}{}",
+            initialized_session_prelude(1),
             "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"find_large_functions\",\"arguments\":{\"threshold\":5,\"mode\":\"large\",\"output_format\":\"json\"}}}\n"
         ),
     );
@@ -257,11 +257,11 @@ fn insights_risk_cli_and_mcp_share_report() {
     let output = run_serve_jsonrpc_session(
         repo.path(),
         &["serve"],
-        concat!(
-            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}\n",
-            "{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}\n",
+        format!(
+            "{}{}",
+            initialized_session_prelude(1),
             "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"assess_risk\",\"arguments\":{\"symbol\":\"src/lib.rs::fn::helper\",\"output_format\":\"json\"}}}\n"
-        ),
+        )
     );
     assert!(output.status.success(), "atlas serve assess_risk failed");
 

@@ -22,9 +22,7 @@ use super::helpers::{
 use super::jsonrpc::{
     JsonRpcErrorKind, jsonrpc_dispatch_error, jsonrpc_error, jsonrpc_error_with_data, jsonrpc_ok,
 };
-use super::notify::{
-    emit_mcp_log_notification, emit_progress_notification, emit_trace_log, write_response,
-};
+use super::notify::{emit_progress_notification, emit_trace_log, write_response};
 
 use super::types::{
     ConnectionState, PendingRequest, ProgressEventKind, RequestCompletion, RequestDispatchContext,
@@ -211,43 +209,29 @@ pub(crate) fn handle_input_line<W: Write>(
         return Ok(());
     }
 
-    if method == "logging/setLevel" {
-        let level = match logging::parse_set_level_params(params) {
-            Ok(level) => level,
+    let request_log_level = match request_meta
+        .as_ref()
+        .and_then(|meta| meta.log_level.as_deref())
+    {
+        None => None,
+        Some(raw) => match logging::LogLevel::parse(raw) {
+            Ok(level) => Some(level),
             Err(error) => {
+                stats.protocol_errors += 1;
                 if !is_notification {
                     write_response(
                         writer,
-                        &jsonrpc_error(id, JsonRpcErrorKind::InvalidParams, error.to_string()),
+                        &jsonrpc_error(
+                            id.clone(),
+                            JsonRpcErrorKind::InvalidParams,
+                            error.to_string(),
+                        ),
                     )?;
                 }
                 return Ok(());
             }
-        };
-        logging::set_level(level);
-        connection_state.log_level = Some(level);
-        logging::write_stdio_log(
-            level,
-            &format!("client set log level to {}", level.as_str()),
-        );
-        if !is_notification {
-            write_response(
-                writer,
-                &jsonrpc_ok(
-                    id.clone(),
-                    spec::complete_result(serde_json::json!({ "level": level.as_str() })),
-                ),
-            )?;
-        }
-        emit_mcp_log_notification(
-            writer,
-            connection_state,
-            level,
-            "transport",
-            format!("log level set to {}", level.as_str()),
-        )?;
-        return Ok(());
-    }
+        },
+    };
 
     // tools/call — async dispatch via worker pool
     if method == "tools/call" {
@@ -289,6 +273,7 @@ pub(crate) fn handle_input_line<W: Write>(
                 timeout_ms: timeout.as_millis(),
                 output_format,
                 progress_token: progress_token.clone(),
+                request_log_level,
                 cancel_flag: Arc::clone(&cancel_flag),
             },
         );
@@ -541,7 +526,6 @@ fn requires_request_meta(method: &str) -> bool {
             | "notifications/initialized"
             | "$/cancelRequest"
             | "$/setTrace"
-            | "logging/setLevel"
     ) && !method.starts_with("notifications/")
 }
 

@@ -202,9 +202,9 @@ fn explain_query_cli_and_mcp_share_execution_explanation() {
     let output = run_serve_jsonrpc_session(
         repo.path(),
         &["serve"],
-        concat!(
-            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}\n",
-            "{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}\n",
+        format!(
+            "{}{}",
+            initialized_session_prelude(1),
             "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"explain_query\",\"arguments\":{\"text\":\"greet_twice\",\"output_format\":\"json\"}}}\n"
         ),
     );
@@ -256,9 +256,9 @@ fn query_cli_and_mcp_share_ranked_results() {
     let output = run_serve_jsonrpc_session(
         repo.path(),
         &["serve"],
-        concat!(
-            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}\n",
-            "{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}\n",
+        format!(
+            "{}{}",
+            initialized_session_prelude(1),
             "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"query_graph\",\"arguments\":{\"text\":\"helper\",\"output_format\":\"json\"}}}\n"
         ),
     );
@@ -310,9 +310,9 @@ fn mcp_query_and_explain_query_share_match_order() {
     let output = run_serve_jsonrpc_session(
         repo.path(),
         &["serve"],
-        concat!(
-            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}\n",
-            "{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}\n",
+        format!(
+            "{}{}{}",
+            initialized_session_prelude(1),
             "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"query_graph\",\"arguments\":{\"text\":\"helper\",\"output_format\":\"json\"}}}\n",
             "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"explain_query\",\"arguments\":{\"text\":\"helper\",\"output_format\":\"json\"}}}\n"
         ),
@@ -368,9 +368,9 @@ fn explain_change_cli_and_mcp_share_summary_builder() {
     let output = run_serve_jsonrpc_session(
         repo.path(),
         &["serve"],
-        concat!(
-            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}\n",
-            "{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}\n",
+        format!(
+            "{}{}",
+            initialized_session_prelude(1),
             "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"explain_change\",\"arguments\":{\"base\":\"HEAD\",\"output_format\":\"json\"}}}\n"
         ),
     );
@@ -416,9 +416,9 @@ fn review_context_cli_and_get_context_share_review_seed_results() {
     let output = run_serve_jsonrpc_session(
         repo.path(),
         &["serve"],
-        concat!(
-            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}\n",
-            "{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}\n",
+        format!(
+            "{}{}",
+            initialized_session_prelude(1),
             "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"get_context\",\"arguments\":{\"files\":[\"src/lib.rs\"],\"intent\":\"review\",\"output_format\":\"json\"}}}\n"
         ),
     );
@@ -539,9 +539,9 @@ fn review_context_and_get_context_share_node_trimming_semantics() {
     let output = run_serve_jsonrpc_session(
         repo.path(),
         &["serve"],
-        concat!(
-            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}\n",
-            "{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}\n",
+        format!(
+            "{}{}",
+            initialized_session_prelude(1),
             "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"get_context\",\"arguments\":{\"files\":[\"src/lib.rs\"],\"intent\":\"review\",\"max_nodes\":1,\"output_format\":\"json\"}}}\n"
         ),
     );
@@ -721,9 +721,9 @@ fn analyze_remove_cli_and_mcp_share_ordering_primitives() {
     let output = run_serve_jsonrpc_session(
         repo.path(),
         &["serve"],
-        concat!(
-            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}\n",
-            "{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}\n",
+        format!(
+            "{}{}",
+            initialized_session_prelude(1),
             "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"analyze_remove\",\"arguments\":{\"symbols\":[\"src/a.rs::fn::target\"],\"output_format\":\"json\"}}}\n"
         ),
     );
@@ -778,9 +778,9 @@ fn analyze_dead_code_cli_and_mcp_share_ordering_primitives() {
     let output = run_serve_jsonrpc_session(
         repo.path(),
         &["serve"],
-        concat!(
-            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}\n",
-            "{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}\n",
+        format!(
+            "{}{}",
+            initialized_session_prelude(1),
             "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"analyze_dead_code\",\"arguments\":{\"output_format\":\"json\"}}}\n"
         ),
     );
@@ -843,9 +843,9 @@ fn analyze_dependency_cli_and_mcp_share_ordering_primitives() {
     let output = run_serve_jsonrpc_session(
         repo.path(),
         &["serve"],
-        concat!(
-            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}\n",
-            "{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}\n",
+        format!(
+            "{}{}",
+            initialized_session_prelude(1),
             "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"analyze_dependency\",\"arguments\":{\"symbol\":\"src/a.rs::fn::target\",\"output_format\":\"json\"}}}\n"
         ),
     );

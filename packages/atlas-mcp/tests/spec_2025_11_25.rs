@@ -6,6 +6,7 @@ use std::process::Command;
 use std::thread;
 use std::time::Duration;
 
+use atlas_mcp::spec;
 use atlas_mcp::testing::{InteractiveStdioTestSession, run_stdio_jsonrpc_session_for_tests};
 use atlas_mcp::{MCP_PROTOCOL_VERSION, ServerOptions};
 use serde_json::{Value, json};
@@ -157,18 +158,11 @@ fn http_session(harness: &HttpTestHarness) -> String {
         .post_jsonrpc(&[], &initialize_request(1))
         .expect("http initialize");
     assert_eq!(response.status, 200, "http initialize failed: {response:?}");
-    response
-        .headers
-        .get("mcp-session-id")
-        .cloned()
-        .expect("session header")
+    String::new()
 }
 
-fn http_headers(session_id: &str) -> [(&str, &str); 2] {
-    [
-        ("MCP-Protocol-Version", MCP_PROTOCOL_VERSION),
-        ("Mcp-Session-Id", session_id),
-    ]
+fn http_headers(_session_id: &str) -> [(&str, &str); 1] {
+    [("MCP-Protocol-Version", MCP_PROTOCOL_VERSION)]
 }
 
 fn normalize_dynamic(value: &mut Value) {
@@ -222,7 +216,12 @@ fn tool_name_snapshot(tools_list_response: &Value) -> Value {
         .iter()
         .map(|tool| tool["name"].as_str().expect("tool name").to_owned())
         .collect::<Vec<_>>();
-    json!({ "tool_names": names })
+    json!({
+        "resultType": tools_list_response["result"]["resultType"],
+        "ttlMs": tools_list_response["result"]["ttlMs"],
+        "cacheScope": tools_list_response["result"]["cacheScope"],
+        "tool_names": names
+    })
 }
 
 fn resource_list_snapshot(resources_list_response: &Value) -> Value {
@@ -238,7 +237,12 @@ fn resource_list_snapshot(resources_list_response: &Value) -> Value {
             })
         })
         .collect::<Vec<_>>();
-    json!({ "resources": resources })
+    json!({
+        "resultType": resources_list_response["result"]["resultType"],
+        "ttlMs": resources_list_response["result"]["ttlMs"],
+        "cacheScope": resources_list_response["result"]["cacheScope"],
+        "resources": resources
+    })
 }
 
 fn list_graph_stats_snapshot(tool_call_response: &Value) -> Value {
@@ -258,6 +262,9 @@ fn resource_read_status_snapshot(response: &Value) -> Value {
             .expect("parse embedded status json");
     normalize_dynamic(&mut parsed);
     json!({
+        "resultType": response["result"]["resultType"],
+        "ttlMs": response["result"]["ttlMs"],
+        "cacheScope": response["result"]["cacheScope"],
         "uri": content["uri"],
         "mimeType": content["mimeType"],
         "status": {
@@ -271,10 +278,6 @@ fn resource_read_status_snapshot(response: &Value) -> Value {
             "retrieval_available": parsed["retrieval_index"]["available"]
         }
     })
-}
-
-fn logging_set_level_snapshot(response: &Value) -> Value {
-    json!({ "level": response["result"]["level"] })
 }
 
 fn protected_resource_metadata_snapshot(response: &atlas_mcp::testing::TestHttpResponse) -> Value {
@@ -600,6 +603,15 @@ fn elicitation_round_trip_http_snapshot(harness: &HttpTestHarness) -> Value {
                     "arguments": {
                         "keep_days": 30,
                         "output_format": "json"
+                    },
+                    "_meta": {
+                        spec::META_CLIENT_CAPABILITIES: {
+                            "elicitation": { "form": {} }
+                        },
+                        spec::META_CLIENT_INFO: {
+                            "name": "zed",
+                            "version": "1.0.0"
+                        }
                     }
                 }
             }),
@@ -634,6 +646,15 @@ fn elicitation_round_trip_http_snapshot(harness: &HttpTestHarness) -> Value {
                             "content": {
                                 "confirmation": "confirm"
                             }
+                        }
+                    },
+                    "_meta": {
+                        spec::META_CLIENT_CAPABILITIES: {
+                            "elicitation": { "form": {} }
+                        },
+                        spec::META_CLIENT_INFO: {
+                            "name": "zed",
+                            "version": "1.0.0"
                         }
                     }
                 }
@@ -895,10 +916,7 @@ fn spec_fixture_stdio_and_http_runtime_surfaces_match_golden() {
             "params":{"level":"warning"}
         }),
     );
-    assert_eq!(
-        logging_set_level_snapshot(&stdio_logging),
-        read_fixture("logging_set_level.snapshot.json")
-    );
+    assert_eq!(stdio_logging["error"]["code"], json!(-32601));
     let http_logging = harness
         .post_jsonrpc(
             &http_headers(&session_id),
@@ -911,8 +929,8 @@ fn spec_fixture_stdio_and_http_runtime_surfaces_match_golden() {
         )
         .expect("http logging/setLevel");
     assert_eq!(
-        logging_set_level_snapshot(http_logging.json_body.as_ref().expect("logging json body")),
-        read_fixture("logging_set_level.snapshot.json")
+        http_logging.json_body.as_ref().expect("logging json body")["error"]["code"],
+        json!(-32601)
     );
 
     assert_eq!(
@@ -1013,37 +1031,27 @@ fn spec_auth_protected_http_routes_share_challenge_and_protocol_behavior() {
     let post_missing = harness
         .post_jsonrpc(&[], &initialize_request(1))
         .expect("post missing bearer");
-    let get_missing = harness.get_mcp(&[]).expect("get missing bearer");
-    let delete_missing = harness.delete_mcp(&[]).expect("delete missing bearer");
-    for response in [&post_missing, &get_missing, &delete_missing] {
-        assert_eq!(response.status, 401);
-        assert!(
-            response
-                .headers
-                .get("www-authenticate")
-                .expect("www-authenticate")
-                .contains("error=\"invalid_token\"")
-        );
-    }
+    assert_eq!(post_missing.status, 401);
+    assert!(
+        post_missing
+            .headers
+            .get("www-authenticate")
+            .expect("www-authenticate")
+            .contains("error=\"invalid_token\"")
+    );
 
     let invalid_auth = [("Authorization", "Bearer not-a-jwt")];
     let post_invalid = harness
         .post_jsonrpc(&invalid_auth, &initialize_request(1))
         .expect("post invalid bearer");
-    let get_invalid = harness.get_mcp(&invalid_auth).expect("get invalid bearer");
-    let delete_invalid = harness
-        .delete_mcp(&invalid_auth)
-        .expect("delete invalid bearer");
-    for response in [&post_invalid, &get_invalid, &delete_invalid] {
-        assert_eq!(response.status, 401);
-        assert!(
-            response
-                .headers
-                .get("www-authenticate")
-                .expect("www-authenticate")
-                .contains("invalid bearer token")
-        );
-    }
+    assert_eq!(post_invalid.status, 401);
+    assert!(
+        post_invalid
+            .headers
+            .get("www-authenticate")
+            .expect("www-authenticate")
+            .contains("invalid bearer token")
+    );
 
     let bearer = format!(
         "Bearer {}",
@@ -1057,37 +1065,8 @@ fn spec_auth_protected_http_routes_share_challenge_and_protocol_behavior() {
             &initialize_request(1),
         )
         .expect("authorized initialize");
-    let session_id = initialized
-        .headers
-        .get("mcp-session-id")
-        .cloned()
-        .expect("session header");
-    let post_missing_version = harness
-        .post_jsonrpc(
-            &[
-                ("Authorization", bearer.as_str()),
-                ("Mcp-Session-Id", session_id.as_str()),
-            ],
-            &json!({"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}),
-        )
-        .expect("post missing protocol header");
-    let get_missing_version = harness
-        .get_mcp(&[("Authorization", bearer.as_str())])
-        .expect("get missing protocol header");
-    let delete_missing_version = harness
-        .delete_mcp(&[("Authorization", bearer.as_str())])
-        .expect("delete missing protocol header");
-    for response in [
-        &post_missing_version,
-        &get_missing_version,
-        &delete_missing_version,
-    ] {
-        assert_eq!(response.status, 400);
-        assert_eq!(
-            response.headers.get("mcp-protocol-version"),
-            Some(&MCP_PROTOCOL_VERSION.to_owned())
-        );
-    }
+    assert_eq!(initialized.status, 200);
+    assert!(!initialized.headers.contains_key("mcp-session-id"));
 
     let forbidden_origin = [
         ("Authorization", bearer.as_str()),
@@ -1100,12 +1079,6 @@ fn spec_auth_protected_http_routes_share_challenge_and_protocol_behavior() {
         harness
             .post_jsonrpc(&forbidden_origin, &initialize_request(1))
             .expect("post forbidden origin"),
-        harness
-            .get_mcp(&forbidden_origin)
-            .expect("get forbidden origin"),
-        harness
-            .delete_mcp(&forbidden_origin)
-            .expect("delete forbidden origin"),
     ] {
         assert_eq!(response.status, 403);
         assert!(!response.headers.contains_key("www-authenticate"));
@@ -1129,13 +1102,13 @@ fn spec_capabilities_and_descriptors_omit_unimplemented_methods() {
         vec![
             "completions".to_owned(),
             "experimental".to_owned(),
-            "logging".to_owned(),
             "prompts".to_owned(),
             "resources".to_owned(),
             "tasks".to_owned(),
             "tools".to_owned(),
         ]
     );
+
     for absent in ["roots", "sampling", "elicitation"] {
         assert!(
             !capabilities.contains_key(absent),
