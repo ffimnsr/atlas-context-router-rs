@@ -4,6 +4,22 @@ All notable changes to this project should be recorded in this file.
 
 Versioning policy may evolve while Atlas is still moving quickly, but release notes should still group changes by user-visible impact.
 
+## 1.5.2 - 2026-07-30
+
+### Features
+
+- add initial base for upgrade to latest mcp spec (`afeafb2`)
+- remove deprecated roots and add mrtr on messages (`cfbb65b`)
+- update to phase 8 of MCP2026 (`5070970`)
+- use mcp2026 as default (`d16314f`)
+- full update for mcp2026 with fixes (`235a26c`)
+
+
+### Documentation
+
+- add new issues for new latest MCP spec (`112527e`)
+
+
 ## 1.5.1 - 2026-07-22
 
 ### Features
