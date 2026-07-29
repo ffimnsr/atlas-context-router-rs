@@ -909,7 +909,10 @@ pub(super) fn tool_build_or_update_graph(
     }
 
     if mode == "update" {
-        let base = str_arg(args, "base")?.map(str::to_owned);
+        let base = str_arg(args, "base")?
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned);
         let staged = bool_arg(args, "staged").unwrap_or(false);
         let files = string_array_arg(args, "files")?;
 

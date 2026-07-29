@@ -306,12 +306,12 @@ fn base_tool_list_json() -> Value {
             },
             {
                 "name": "build_or_update_graph",
-                "description": "Scan, parse, and persist (or incrementally update) the code graph. Use mode='build' for a full scan or mode='update' for a git-diff-based incremental update.",
+                "description": "Scan, parse, and persist (or incrementally update) the code graph. Use mode='build' for a full scan or mode='update' for a git-diff-based incremental update. In update mode, omitting 'base' or passing an empty string falls back to working-tree changes unless 'staged' or explicit 'files' are provided.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
                         "mode":   { "type": "string",  "description": "'build' (full scan, default) or 'update' (incremental)" },
-                        "base":   { "type": "string",  "description": "For update: base git ref (e.g. 'origin/main')" },
+                        "base":   { "type": "string",  "description": "For update: base git ref (e.g. 'origin/main'). Omit or pass an empty string to diff the working tree instead." },
                         "staged": { "type": "boolean", "description": "For update: diff staged changes only" },
                         "files":  { "type": "array", "items": { "type": "string" }, "description": "For update: explicit list of repo-relative file paths to re-index" },
                         "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }

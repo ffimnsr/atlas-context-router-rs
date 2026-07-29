@@ -946,6 +946,42 @@ fn change_source_invalid_combinations_return_structured_errors() {
 }
 
 #[test]
+fn build_or_update_graph_treats_empty_base_as_working_tree() {
+    let fixture = setup_git_mcp_fixture();
+    write_repo_file(
+        std::path::Path::new(&fixture.repo_root),
+        "src/service.rs",
+        "pub fn compute() -> i32 { 9 }\n",
+    );
+    let args = serde_json::json!({
+        "mode": "update",
+        "base": "",
+        "staged": false,
+        "files": [],
+        "output_format": "toon"
+    });
+
+    let resp = call(
+        "build_or_update_graph",
+        Some(&args),
+        &fixture.repo_root,
+        &fixture.db_path,
+    )
+    .expect("build_or_update_graph with empty base");
+
+    assert_ne!(resp.get("isError"), Some(&serde_json::json!(true)));
+    assert_eq!(
+        resp.pointer("/structuredContent/source/target_kind")
+            .and_then(|value| value.as_str()),
+        Some("working_tree")
+    );
+    assert_eq!(
+        resp.pointer("/structuredContent/source/base_ref"),
+        Some(&serde_json::Value::Null)
+    );
+}
+
+#[test]
 fn detect_changes_accepts_explicit_mode_field() {
     let fixture = setup_git_mcp_fixture();
     write_repo_file(
