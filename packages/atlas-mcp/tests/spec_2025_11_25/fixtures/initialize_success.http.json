@@ -12,10 +12,12 @@
         "prompts": { "listChanged": false },
         "resources": { "subscribe": false, "listChanged": false },
         "completions": {},
-        "tasks": {
-          "list": {},
-          "cancel": {},
-          "requests": { "tools": { "call": {} } }
+        "extensions": {
+          "tasks": {
+            "get": {},
+            "update": {},
+            "toolCallHandles": true
+          }
         },
         "experimental": { "progressNotifications": true }
       },

@@ -1,0 +1,8 @@
+{
+  "resultType": "input_required",
+  "requestType": "form",
+  "requestId": "confirmation",
+  "requestStatePresent": true,
+  "finalResultType": "complete",
+  "finalErrorCode": null
+}

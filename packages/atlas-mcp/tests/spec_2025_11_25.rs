@@ -101,6 +101,36 @@ fn initialized_notification() -> Value {
     })
 }
 
+fn request_meta_value() -> Value {
+    json!({
+        spec::META_PROTOCOL_VERSION: MCP_PROTOCOL_VERSION,
+        spec::META_CLIENT_CAPABILITIES: {
+            "elicitation": { "form": {}, "url": {} }
+        },
+        spec::META_CLIENT_INFO: { "name": "zed", "version": "1.0.0" }
+    })
+}
+
+fn stdio_request_with_meta(mut request: Value) -> Value {
+    let method = request
+        .get("method")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if matches!(
+        method,
+        "initialize" | "server/discover" | "initialized" | "notifications/initialized"
+    ) {
+        return request;
+    }
+    let Some(params) = request.get_mut("params").and_then(Value::as_object_mut) else {
+        return request;
+    };
+    params
+        .entry("_meta".to_owned())
+        .or_insert_with(request_meta_value);
+    request
+}
+
 fn as_lines(messages: &[Value]) -> String {
     let mut out = String::new();
     for value in messages {
@@ -121,6 +151,7 @@ fn stdio_messages(repo_root: &str, db_path: &str, messages: &[Value]) -> Vec<Val
 }
 
 fn stdio_initialized_call(repo_root: &str, db_path: &str, request: Value) -> Value {
+    let request = stdio_request_with_meta(request);
     let request_id = request["id"].clone();
     let responses = stdio_messages(
         repo_root,
@@ -390,10 +421,10 @@ fn task_lifecycle_stdio_snapshot(repo_root: &str, db_path: &str) -> Value {
         json!({
             "jsonrpc": "2.0",
             "id": 3,
-            "method": "tasks/result",
+            "method": "tasks/get",
             "params": { "taskId": task_id }
         }),
-    )["result"]
+    )["result"]["result"]
         .clone();
     normalize_dynamic(&mut result);
     json!({
@@ -457,12 +488,12 @@ fn task_lifecycle_http_snapshot(harness: &HttpTestHarness) -> Value {
             &json!({
                 "jsonrpc": "2.0",
                 "id": 4,
-                "method": "tasks/result",
+                "method": "tasks/get",
                 "params": { "taskId": task_id }
             }),
         )
-        .expect("http task result");
-    let mut result_body = result.json_body.expect("result json body")["result"].clone();
+        .expect("http task get result");
+    let mut result_body = result.json_body.expect("result json body")["result"]["result"].clone();
     normalize_dynamic(&mut result_body);
     json!({
         "created_status": create_body["result"]["task"]["status"],
@@ -542,7 +573,8 @@ fn elicitation_round_trip_stdio_snapshot(repo_root: &str, db_path: &str) -> Valu
                 "arguments": {
                     "keep_days": 30,
                     "output_format": "json"
-                }
+                },
+                "_meta": request_meta_value()
             }
         }))
         .expect("send purge_saved_context call");
@@ -573,7 +605,8 @@ fn elicitation_round_trip_stdio_snapshot(repo_root: &str, db_path: &str) -> Valu
                             "confirmation": "confirm"
                         }
                     }
-                }
+                },
+                "_meta": request_meta_value()
             }
         }))
         .expect("send stdio retry request");
@@ -1102,9 +1135,9 @@ fn spec_capabilities_and_descriptors_omit_unimplemented_methods() {
         vec![
             "completions".to_owned(),
             "experimental".to_owned(),
+            "extensions".to_owned(),
             "prompts".to_owned(),
             "resources".to_owned(),
-            "tasks".to_owned(),
             "tools".to_owned(),
         ]
     );
@@ -1132,6 +1165,7 @@ fn spec_capabilities_and_descriptors_omit_unimplemented_methods() {
         "roots/list",
         "sampling/createMessage",
         "tasks/get",
+        "tasks/update",
         "tasks/result",
         "tasks/list",
         "tasks/cancel",
@@ -1166,10 +1200,10 @@ fn stdio_wait_for_task_result(repo_root: &str, db_path: &str, task_id: &str) -> 
         json!({
             "jsonrpc": "2.0",
             "id": 4,
-            "method": "tasks/result",
+            "method": "tasks/get",
             "params": { "taskId": task_id }
         }),
-    )["result"]
+    )["result"]["result"]
         .clone()
 }
 
@@ -1198,13 +1232,13 @@ fn http_wait_for_task_result(harness: &HttpTestHarness, session_id: &str, task_i
             &json!({
                 "jsonrpc": "2.0",
                 "id": 4,
-                "method": "tasks/result",
+                "method": "tasks/get",
                 "params": { "taskId": task_id }
             }),
         )
-        .expect("http task result")
+        .expect("http task get result")
         .json_body
-        .expect("result json body")["result"]
+        .expect("result json body")["result"]["result"]
         .clone()
 }
 

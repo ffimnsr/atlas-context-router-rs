@@ -1,0 +1,11 @@
+{
+  "status": 200,
+  "contentType": "text/event-stream",
+  "hasSessionHeader": false,
+  "hasMessageEvent": true,
+  "hasSubscriptionId": true,
+  "hasToolsListChanged": true,
+  "hasResourceUpdated": true,
+  "hasPromptsListChanged": false,
+  "hasProgress": false
+}

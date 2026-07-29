@@ -1,0 +1,7 @@
+{
+  "status": 200,
+  "resultType": "input_required",
+  "requestType": "form",
+  "requestId": "confirmation",
+  "requestStatePresent": true
+}

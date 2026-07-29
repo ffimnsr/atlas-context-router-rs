@@ -2,6 +2,7 @@ use super::*;
 use atlas_adapters::normalize_event;
 use atlas_session::{SessionEventType, SessionId, SessionStore};
 use rusqlite::Connection;
+use serde_json::Value;
 use std::ffi::OsString;
 use std::io::Write;
 use std::process::{Output, Stdio};
@@ -73,6 +74,48 @@ fn spawn_serve_child(repo_root: &Path, args: &[&str]) -> std::process::Child {
         .unwrap_or_else(|err| panic!("failed to spawn atlas serve {:?}: {err}", args))
 }
 
+fn maybe_attach_request_meta(mut value: Value) -> Value {
+    let method = value
+        .get("method")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if matches!(
+        method,
+        "initialize" | "server/discover" | "initialized" | "notifications/initialized"
+    ) || method.starts_with("notifications/")
+    {
+        return value;
+    }
+    let Some(params) = value.get_mut("params").and_then(Value::as_object_mut) else {
+        return value;
+    };
+    params.entry("_meta".to_owned()).or_insert_with(|| {
+        json!({
+            atlas_mcp::spec::META_PROTOCOL_VERSION: atlas_mcp::MCP_PROTOCOL_VERSION,
+            atlas_mcp::spec::META_CLIENT_CAPABILITIES: {
+                "elicitation": { "form": {}, "url": {} }
+            },
+            atlas_mcp::spec::META_CLIENT_INFO: { "name": "zed", "version": "1.0.0" }
+        })
+    });
+    value
+}
+
+fn normalize_mcp_request_stream(requests: impl AsRef<[u8]>) -> Vec<u8> {
+    let input = String::from_utf8(requests.as_ref().to_vec()).expect("utf8 request stream");
+    let mut output = String::new();
+    for line in input.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let value: Value = serde_json::from_str(line).expect("parse request line");
+        let value = maybe_attach_request_meta(value);
+        output.push_str(&serde_json::to_string(&value).expect("serialize request line"));
+        output.push('\n');
+    }
+    output.into_bytes()
+}
+
 fn run_serve_jsonrpc_session(
     repo_root: &Path,
     args: &[&str],
@@ -84,7 +127,7 @@ fn run_serve_jsonrpc_session(
     // wait_with_output (which happens before the broker relay loop has a chance
     // to read) causes the relay to see EOF before any data arrives. Keeping
     // stdin open in the writer thread until write_all returns avoids that race.
-    let data = requests.as_ref().to_vec();
+    let data = normalize_mcp_request_stream(requests);
     let mut stdin = child.stdin.take().expect("serve stdin");
     let writer = std::thread::spawn(move || {
         stdin.write_all(&data).expect("write serve requests");
@@ -134,13 +177,24 @@ pub(super) fn initialized_session_prelude(id: u64) -> String {
     )
 }
 
+fn request_meta_json() -> String {
+    format!(
+        "\"_meta\":{{\"{}\":\"{}\",\"{}\":{{\"elicitation\":{{\"form\":{{}},\"url\":{{}}}}}},\"{}\":{{\"name\":\"zed\",\"version\":\"1.0.0\"}}}}",
+        atlas_mcp::spec::META_PROTOCOL_VERSION,
+        atlas_mcp::MCP_PROTOCOL_VERSION,
+        atlas_mcp::spec::META_CLIENT_CAPABILITIES,
+        atlas_mcp::spec::META_CLIENT_INFO,
+    )
+}
+
 fn serve_requests() -> String {
+    let meta = request_meta_json();
     [
         initialize_request_line(1),
         initialized_notification_line().to_owned(),
-        "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\",\"params\":{}}\n".to_owned(),
-        "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"query_graph\",\"arguments\":{\"text\":\"greet_twice\"}}}\n".to_owned(),
-        "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"get_context\",\"arguments\":{\"query\":\"greet_twice\"}}}\n".to_owned(),
+        format!("{{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\",\"params\":{{{meta}}}}}\n"),
+        format!("{{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{{\"name\":\"query_graph\",\"arguments\":{{\"text\":\"greet_twice\"}},{meta}}}}}\n"),
+        format!("{{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{{\"name\":\"get_context\",\"arguments\":{{\"query\":\"greet_twice\"}},{meta}}}}}\n"),
     ]
     .concat()
 }
@@ -149,15 +203,17 @@ fn serve_requests_with_session_tools() -> String {
     let artifact = std::iter::repeat_n("broker artifact payload with safe spacing", 40)
         .collect::<Vec<_>>()
         .join(" ");
+    let meta = request_meta_json();
     [
         initialize_request_line(1),
         initialized_notification_line().to_owned(),
-        "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"query_graph\",\"arguments\":{\"text\":\"greet_twice\",\"output_format\":\"json\"}}}\n".to_owned(),
+        format!("{{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{{\"name\":\"query_graph\",\"arguments\":{{\"text\":\"greet_twice\",\"output_format\":\"json\"}},{meta}}}}}\n"),
         format!(
-            "{{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{{\"name\":\"save_context_artifact\",\"arguments\":{{\"label\":\"broker-artifact\",\"content\":\"{}\",\"content_type\":\"text/plain\",\"output_format\":\"json\"}}}}}}\n",
-            artifact
+            "{{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{{\"name\":\"save_context_artifact\",\"arguments\":{{\"label\":\"broker-artifact\",\"content\":\"{}\",\"content_type\":\"text/plain\",\"output_format\":\"json\"}},{}}}}}\n",
+            artifact,
+            meta
         ),
-        "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"get_session_status\",\"arguments\":{\"output_format\":\"json\"}}}\n".to_owned(),
+        format!("{{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{{\"name\":\"get_session_status\",\"arguments\":{{\"output_format\":\"json\"}},{meta}}}}}\n"),
     ]
     .concat()
 }

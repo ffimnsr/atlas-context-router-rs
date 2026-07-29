@@ -169,6 +169,49 @@ pub(crate) fn descriptor_meta(descriptor_kind: &str, category: &str) -> Value {
     })
 }
 
+pub(crate) fn validate_mcp_schema(schema: &Value) -> Result<()> {
+    validate_mcp_schema_inner(schema, schema, "$")
+}
+
+fn validate_mcp_schema_inner(root: &Value, current: &Value, path: &str) -> Result<()> {
+    match current {
+        Value::Object(object) => {
+            if object.contains_key("x-mcp-header") {
+                bail!(
+                    "schema path {path} uses unsupported x-mcp-header annotation; Atlas does not expose header-bound schema fields"
+                );
+            }
+            if let Some(reference) = object.get("$ref") {
+                let reference = reference
+                    .as_str()
+                    .ok_or_else(|| anyhow::anyhow!("schema path {path} has non-string $ref"))?;
+                if !reference.starts_with("#/") {
+                    bail!(
+                        "schema path {path} uses non-local $ref '{reference}'; only local #/... references are allowed"
+                    );
+                }
+                let pointer = &reference[1..];
+                if root.pointer(pointer).is_none() {
+                    bail!("schema path {path} points to unresolved $ref '{reference}'");
+                }
+            }
+            for (key, value) in object {
+                let child_path = format!("{path}/{key}");
+                validate_mcp_schema_inner(root, value, &child_path)?;
+            }
+            Ok(())
+        }
+        Value::Array(items) => {
+            for (index, item) in items.iter().enumerate() {
+                let child_path = format!("{path}/{index}");
+                validate_mcp_schema_inner(root, item, &child_path)?;
+            }
+            Ok(())
+        }
+        _ => Ok(()),
+    }
+}
+
 fn normalized_success_metadata_properties() -> Map<String, Value> {
     Map::from_iter([
         ("tool".to_owned(), json!({ "type": "string" })),
@@ -226,7 +269,7 @@ pub(crate) fn normalized_tool_output_schema(
 mod tests {
     use super::{
         JSON_SCHEMA_2020_12_URI, ensure_schema_2020_12, human_title, normalized_tool_output_schema,
-        validate_descriptor_name,
+        validate_descriptor_name, validate_mcp_schema,
     };
     use serde_json::json;
 
@@ -282,5 +325,60 @@ mod tests {
         assert_eq!(schema["properties"]["summary"]["type"], json!("object"));
         assert_eq!(schema["required"], json!(["summary", "items"]));
         assert_eq!(schema["$defs"]["demo"]["type"], json!("string"));
+        validate_mcp_schema(&schema).expect("normalized output schema valid for MCP");
+    }
+
+    #[test]
+    fn mcp_schema_validation_accepts_local_resolvable_refs() {
+        let schema = ensure_schema_2020_12(json!({
+            "type": "object",
+            "properties": {
+                "node": { "$ref": "#/$defs/node" }
+            },
+            "$defs": {
+                "node": {
+                    "type": "object",
+                    "properties": {
+                        "name": { "type": "string" }
+                    }
+                }
+            }
+        }));
+        validate_mcp_schema(&schema).expect("local refs allowed");
+    }
+
+    #[test]
+    fn mcp_schema_validation_rejects_external_refs() {
+        let schema = ensure_schema_2020_12(json!({
+            "type": "object",
+            "properties": {
+                "node": { "$ref": "https://example.com/node.schema.json" }
+            }
+        }));
+        let error = validate_mcp_schema(&schema).expect_err("external refs rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("only local #/... references are allowed")
+        );
+    }
+
+    #[test]
+    fn mcp_schema_validation_rejects_x_mcp_header_annotations() {
+        let schema = ensure_schema_2020_12(json!({
+            "type": "object",
+            "properties": {
+                "authorization": {
+                    "type": "string",
+                    "x-mcp-header": "Authorization"
+                }
+            }
+        }));
+        let error = validate_mcp_schema(&schema).expect_err("x-mcp-header rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("unsupported x-mcp-header annotation")
+        );
     }
 }

@@ -136,7 +136,6 @@ pub(crate) struct RequestCompletion {
 
 pub(crate) struct ConnectionState {
     pub(crate) trace: TraceLevel,
-    pub(crate) initialized: bool,
     pub(crate) client_capabilities: serde_json::Value,
     pub(crate) canceled_tokens: Arc<Mutex<HashSet<u64>>>,
     pub(crate) repo_resolution: RepoResolutionState,
@@ -197,7 +196,6 @@ pub(crate) fn connection_state(
     };
     ConnectionState {
         trace: TraceLevel::Off,
-        initialized: false,
         client_capabilities: serde_json::Value::Null,
         canceled_tokens: Arc::new(Mutex::new(HashSet::new())),
         repo_resolution: RepoResolutionState {

@@ -18,6 +18,7 @@ use crate::tool_result::normalize_tool_execution_error;
 pub(crate) type TaskApiResult<T> = std::result::Result<T, TaskApiError>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(dead_code)]
 pub(crate) enum TaskApiErrorKind {
     Cancelled,
     Failed,
@@ -68,9 +69,7 @@ thread_local! {
 }
 
 #[derive(Clone)]
-struct LiveTaskHandle {
-    cancel_flag: Arc<std::sync::atomic::AtomicBool>,
-}
+struct LiveTaskHandle;
 
 pub(crate) fn execute_tool_call(
     name: &str,
@@ -118,12 +117,7 @@ pub(crate) fn execute_tool_call(
     live_tasks()
         .lock()
         .expect("live tasks lock poisoned")
-        .insert(
-            task_id.clone(),
-            LiveTaskHandle {
-                cancel_flag: Arc::clone(&cancel_flag),
-            },
-        );
+        .insert(task_id.clone(), LiveTaskHandle);
 
     let (completion_tx, completion_rx) = mpsc::channel();
     let tool_name = name.to_owned();
@@ -213,7 +207,7 @@ fn run_task_worker(
                     .ok()
                     .flatten()
                     .unwrap_or_else(|| fallback_task_status(&task_id_for_progress, message));
-                let _ = client.notify_task_status(task_wire_json(&task));
+                let _ = client.notify_task_status(task_status_notification_json(&task));
             }
         },
         cancel_flag,
@@ -235,14 +229,14 @@ fn run_task_worker(
             let update = DurableTaskUpdate {
                 status: Some(DurableTaskStatus::Completed),
                 status_message: Some("completed".to_owned()),
-                result: Some(value.clone()),
+                result: Some(crate::spec::complete_result(value.clone())),
                 ..Default::default()
             };
             update_task_store(repo_root, task_id, update)?;
             if let Some(client) = request_context.as_ref()
                 && let Some(task) = open_task_record(repo_root, task_id)?
             {
-                client.notify_task_status(task_wire_json(&task))?;
+                client.notify_task_status(task_status_notification_json(&task))?;
             }
             Ok(value)
         }
@@ -260,7 +254,7 @@ fn run_task_worker(
             if let Some(client) = request_context.as_ref()
                 && let Some(task) = open_task_record(repo_root, task_id)?
             {
-                client.notify_task_status(task_wire_json(&task))?;
+                client.notify_task_status(task_status_notification_json(&task))?;
             }
             Err(error)
         }
@@ -319,25 +313,6 @@ pub(crate) fn uninstall_tool_call_request_params() {
     TOOL_CALL_PARAMS.with(|slot| *slot.borrow_mut() = None);
 }
 
-pub(crate) fn tasks_list(
-    params: Option<&Value>,
-    repo_root: &str,
-    _output_format: OutputFormat,
-) -> TaskApiResult<Value> {
-    let cursor = params
-        .and_then(|value| value.get("cursor"))
-        .and_then(Value::as_str);
-    let store = SessionStore::open_in_repo(repo_root)
-        .map_err(|error| TaskApiError::new(TaskApiErrorKind::Internal, error.into()))?;
-    let page = store
-        .list_durable_tasks(cursor, 20)
-        .map_err(classify_task_store_error)?;
-    Ok(json!({
-        "tasks": page.tasks.iter().map(task_wire_json).collect::<Vec<_>>(),
-        "nextCursor": page.next_cursor,
-    }))
-}
-
 pub(crate) fn tasks_get(
     params: Option<&Value>,
     repo_root: &str,
@@ -352,15 +327,24 @@ pub(crate) fn tasks_get(
                 format!("unknown task_id '{task_id}'"),
             )
         })?;
-    Ok(task_wire_json(&task))
+    Ok(task_state_json(&task))
 }
 
-pub(crate) fn tasks_result(
+pub(crate) fn tasks_update(
     params: Option<&Value>,
     repo_root: &str,
     _output_format: OutputFormat,
 ) -> TaskApiResult<Value> {
     let task_id = required_task_id(params)?;
+    let input = params
+        .and_then(|value| value.get("input").or_else(|| value.get("payload")))
+        .cloned()
+        .ok_or_else(|| {
+            task_api_error(
+                TaskApiErrorKind::InvalidParams,
+                "missing required argument: input",
+            )
+        })?;
     let task = open_task_record(repo_root, task_id)
         .map_err(|error| TaskApiError::new(TaskApiErrorKind::Internal, error))?
         .ok_or_else(|| {
@@ -370,61 +354,21 @@ pub(crate) fn tasks_result(
             )
         })?;
     match task.status {
-        DurableTaskStatus::Completed => task.result.ok_or_else(|| {
-            task_api_error(
-                TaskApiErrorKind::Internal,
-                format!("task '{task_id}' completed without stored result"),
-            )
-        }),
-        DurableTaskStatus::Failed => Err(task_api_error(
-            TaskApiErrorKind::Failed,
-            task.error
-                .and_then(|value| {
-                    value
-                        .get("message")
-                        .and_then(Value::as_str)
-                        .map(str::to_owned)
-                })
-                .unwrap_or_else(|| format!("task '{task_id}' failed")),
-        )),
-        DurableTaskStatus::Cancelled => Err(task_api_error(
-            TaskApiErrorKind::Cancelled,
-            format!("task '{task_id}' was cancelled"),
-        )),
-        DurableTaskStatus::InputRequired => Err(task_api_error(
-            TaskApiErrorKind::NotReady,
-            format!("task '{task_id}' requires additional input"),
-        )),
-        DurableTaskStatus::Working => Err(task_api_error(
-            TaskApiErrorKind::NotReady,
-            format!("task '{task_id}' is still working"),
-        )),
-    }
-}
-
-pub(crate) fn tasks_cancel(
-    params: Option<&Value>,
-    repo_root: &str,
-    _output_format: OutputFormat,
-) -> TaskApiResult<Value> {
-    let task_id = required_task_id(params)?;
-    if let Some(handle) = live_tasks()
-        .lock()
-        .expect("live tasks lock poisoned")
-        .get(task_id)
-        .cloned()
-    {
-        handle
-            .cancel_flag
-            .store(true, std::sync::atomic::Ordering::Relaxed);
+        DurableTaskStatus::Completed | DurableTaskStatus::Failed | DurableTaskStatus::Cancelled => {
+            return Err(task_api_error(
+                TaskApiErrorKind::InvalidParams,
+                format!("task '{task_id}' no longer accepts updates"),
+            ));
+        }
+        DurableTaskStatus::InputRequired | DurableTaskStatus::Working => {}
     }
     update_task_store(
         repo_root,
         task_id,
         DurableTaskUpdate {
-            status: Some(DurableTaskStatus::Cancelled),
-            status_message: Some("cancelled".to_owned()),
-            cancel_requested: Some(true),
+            status: Some(DurableTaskStatus::Working),
+            status_message: Some("client input received".to_owned()),
+            progress: Some(json!({"clientInput": input})),
             ..Default::default()
         },
     )
@@ -438,9 +382,13 @@ pub(crate) fn tasks_cancel(
             )
         })?;
     if let Ok(client) = runtime_context::current() {
-        let _ = client.notify_task_status(task_wire_json(&task));
+        let _ = client.notify_task_status(task_status_notification_json(&task));
     }
-    Ok(task_wire_json(&task))
+    Ok(json!({
+        "task": task_handle_json(&task),
+        "accepted": true,
+        "updateKind": "client_input",
+    }))
 }
 
 fn required_task_id(params: Option<&Value>) -> TaskApiResult<&str> {
@@ -453,16 +401,6 @@ fn required_task_id(params: Option<&Value>) -> TaskApiResult<&str> {
                 "missing required argument: taskId",
             )
         })
-}
-
-fn classify_task_store_error(error: atlas_core::AtlasError) -> TaskApiError {
-    let detail = error.to_string();
-    let kind = if detail.starts_with("invalid durable task cursor:") {
-        TaskApiErrorKind::InvalidParams
-    } else {
-        TaskApiErrorKind::Internal
-    };
-    TaskApiError::new(kind, error.into())
 }
 
 fn task_api_error(kind: TaskApiErrorKind, message: impl Into<String>) -> TaskApiError {
@@ -492,7 +430,7 @@ fn resolve_defer_threshold_ms() -> u64 {
 }
 
 fn create_task_result(task: &DurableTaskRecord) -> Value {
-    json!({ "task": task_wire_json(task) })
+    json!({ "task": task_handle_json(task) })
 }
 
 fn normalize_tool_call_result(
@@ -510,9 +448,11 @@ fn normalize_tool_call_result(
     }
 }
 
-fn task_wire_json(task: &DurableTaskRecord) -> Value {
+fn task_handle_json(task: &DurableTaskRecord) -> Value {
     json!({
         "taskId": task.task_id,
+        "originatingMethod": task.originating_method,
+        "toolName": task.tool_name,
         "status": task.status.as_str(),
         "statusMessage": task.status_message,
         "createdAt": task.created_at,
@@ -520,6 +460,47 @@ fn task_wire_json(task: &DurableTaskRecord) -> Value {
         "ttl": task.ttl_ms,
         "pollInterval": DEFAULT_TASK_POLL_INTERVAL_MS,
     })
+}
+
+fn task_state_json(task: &DurableTaskRecord) -> Value {
+    let mut value = json!({
+        "task": task_handle_json(task),
+        "status": task.status.as_str(),
+        "statusMessage": task.status_message,
+        "cancelRequested": task.cancel_requested,
+        "progress": task.progress,
+    });
+    if let Some(object) = value.as_object_mut() {
+        match task.status {
+            DurableTaskStatus::Completed => {
+                object.insert(
+                    "result".to_owned(),
+                    task.result.clone().unwrap_or(Value::Null),
+                );
+            }
+            DurableTaskStatus::Failed => {
+                object.insert(
+                    "error".to_owned(),
+                    task.error.clone().unwrap_or_else(
+                        || json!({"message": format!("task '{}' failed", task.task_id)}),
+                    ),
+                );
+            }
+            DurableTaskStatus::InputRequired => {
+                object.insert("inputRequired".to_owned(), Value::Bool(true));
+            }
+            DurableTaskStatus::Cancelled | DurableTaskStatus::Working => {}
+        }
+    }
+    value
+}
+
+fn task_status_notification_json(task: &DurableTaskRecord) -> Value {
+    let mut value = task_state_json(task);
+    if let Some(object) = value.as_object_mut() {
+        object.insert("source".to_owned(), json!("tasks"));
+    }
+    value
 }
 
 fn fallback_task_status(task_id: &str, status_message: &str) -> DurableTaskRecord {
@@ -623,8 +604,9 @@ mod tests {
             ttl_ms: Some(5000),
             cancel_requested: false,
         };
-        assert_eq!(task_wire_json(&task)["taskId"], json!("task-1"));
-        assert_eq!(task_wire_json(&task)["status"], json!("working"));
+        assert_eq!(task_handle_json(&task)["taskId"], json!("task-1"));
+        assert_eq!(task_handle_json(&task)["status"], json!("working"));
+        assert_eq!(task_state_json(&task)["status"], json!("working"));
     }
 
     #[test]
@@ -693,13 +675,13 @@ mod tests {
             }
             thread::sleep(Duration::from_millis(10));
         }
-        let result = tasks_result(
+        let result = tasks_get(
             Some(&json!({"taskId": &task_id})),
             dir.path().to_str().unwrap(),
             OutputFormat::Json,
         )
         .unwrap();
-        assert_eq!(result["slept_ms"], json!(25));
+        assert_eq!(result["result"]["slept_ms"], json!(25));
 
         let reopened = SessionStore::open_in_repo(dir.path())
             .unwrap()
@@ -710,26 +692,24 @@ mod tests {
     }
 
     #[test]
-    fn explicit_task_cancel_marks_task_cancelled() {
+    fn tasks_update_accepts_client_input_for_input_required_task() {
         let dir = TempDir::new().unwrap();
-        install_tool_call_request_params(Some(&json!({"task": {"ttl": 1000}})));
-        let created = execute_tool_call(
-            "__test_sleep",
-            Some(json!({"sleep_ms": 200})),
-            dir.path().to_str().unwrap(),
-            "db",
-        )
-        .unwrap();
-        uninstall_tool_call_request_params();
-
-        let task_id = created["task"]["taskId"].as_str().unwrap().to_owned();
-        let cancelled = tasks_cancel(
-            Some(&json!({"taskId": &task_id})),
+        create_task_with_status(&dir, "task-input", DurableTaskStatus::InputRequired, None);
+        let updated = tasks_update(
+            Some(&json!({"taskId": "task-input", "input": {"answer": "yes"}})),
             dir.path().to_str().unwrap(),
             OutputFormat::Json,
         )
         .unwrap();
-        assert_eq!(cancelled["status"], json!("cancelled"));
+        assert_eq!(updated["accepted"], json!(true));
+        let task = tasks_get(
+            Some(&json!({"taskId": "task-input"})),
+            dir.path().to_str().unwrap(),
+            OutputFormat::Json,
+        )
+        .unwrap();
+        assert_eq!(task["status"], json!("working"));
+        assert_eq!(task["progress"]["clientInput"]["answer"], json!("yes"));
     }
 
     fn create_task_with_status(
@@ -779,45 +759,31 @@ mod tests {
     }
 
     #[test]
-    fn tasks_result_working_task_uses_not_ready_error_kind() {
-        let dir = TempDir::new().unwrap();
-        create_task_with_status(&dir, "task-working", DurableTaskStatus::Working, None);
-        let error = tasks_result(
-            Some(&json!({"taskId": "task-working"})),
-            dir.path().to_str().unwrap(),
-            OutputFormat::Json,
-        )
-        .unwrap_err();
-        assert_eq!(error.kind(), TaskApiErrorKind::NotReady);
-        assert!(error.message().contains("still working"));
-    }
-
-    #[test]
-    fn tasks_result_cancelled_task_uses_cancelled_error_kind() {
-        let dir = TempDir::new().unwrap();
-        create_task_with_status(&dir, "task-cancelled", DurableTaskStatus::Cancelled, None);
-        let error = tasks_result(
-            Some(&json!({"taskId": "task-cancelled"})),
-            dir.path().to_str().unwrap(),
-            OutputFormat::Json,
-        )
-        .unwrap_err();
-        assert_eq!(error.kind(), TaskApiErrorKind::Cancelled);
-        assert!(error.message().contains("was cancelled"));
-    }
-
-    #[test]
-    fn tasks_result_failed_task_uses_failed_error_kind() {
+    fn tasks_get_includes_terminal_error_state() {
         let dir = TempDir::new().unwrap();
         create_task_with_status(&dir, "task-failed", DurableTaskStatus::Failed, Some("boom"));
-        let error = tasks_result(
+        let task = tasks_get(
             Some(&json!({"taskId": "task-failed"})),
             dir.path().to_str().unwrap(),
             OutputFormat::Json,
         )
+        .unwrap();
+        assert_eq!(task["status"], json!("failed"));
+        assert_eq!(task["error"]["message"], json!("boom"));
+    }
+
+    #[test]
+    fn tasks_update_rejects_terminal_task() {
+        let dir = TempDir::new().unwrap();
+        create_task_with_status(&dir, "task-cancelled", DurableTaskStatus::Cancelled, None);
+        let error = tasks_update(
+            Some(&json!({"taskId": "task-cancelled", "input": {"answer": "no"}})),
+            dir.path().to_str().unwrap(),
+            OutputFormat::Json,
+        )
         .unwrap_err();
-        assert_eq!(error.kind(), TaskApiErrorKind::Failed);
-        assert_eq!(error.message(), "boom");
+        assert_eq!(error.kind(), TaskApiErrorKind::InvalidParams);
+        assert!(error.message().contains("no longer accepts updates"));
     }
 
     #[test]
@@ -872,13 +838,13 @@ mod tests {
             }
             thread::sleep(Duration::from_millis(10));
         }
-        let result = tasks_result(
+        let result = tasks_get(
             Some(&json!({"taskId": &task_id})),
             dir.path().to_str().unwrap(),
             OutputFormat::Json,
         )
         .unwrap();
-        assert_eq!(result["slept_ms"], json!(100));
+        assert_eq!(result["result"]["slept_ms"], json!(100));
     }
 
     #[test]
@@ -907,16 +873,19 @@ mod tests {
             }
             thread::sleep(Duration::from_millis(10));
         }
-        let result = tasks_result(
+        let result = tasks_get(
             Some(&json!({"taskId": &task_id})),
             dir.path().to_str().unwrap(),
             OutputFormat::Json,
         )
         .unwrap();
-        assert_eq!(result["isError"], json!(true));
-        assert_eq!(result["structuredContent"]["code"], json!("invalid_input"));
+        assert_eq!(result["result"]["isError"], json!(true));
+        assert_eq!(
+            result["result"]["structuredContent"]["code"],
+            json!("invalid_input")
+        );
         assert!(
-            result["structuredContent"]["message"]
+            result["result"]["structuredContent"]["message"]
                 .as_str()
                 .expect("message")
                 .contains("invalid regex pattern")

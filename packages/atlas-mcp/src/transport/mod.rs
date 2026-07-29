@@ -1,8 +1,8 @@
 //! JSON-RPC 2.0 / MCP transport layer.
 //!
 //! Reads newline-delimited JSON from stdin, dispatches each request, and
-//! writes newline-delimited JSON responses to stdout.  Follows the MCP
-//! 2025-11-25 protocol specification.
+//! writes newline-delimited JSON responses to stdout. Follows modern MCP
+//! 2026-07-28 behavior, with isolated legacy 2025 stdio compatibility.
 //!
 //! Also provides Unix socket (daemon) and Windows named-pipe transports.
 
@@ -13,6 +13,7 @@ pub(crate) mod helpers;
 pub(crate) mod input;
 pub(crate) mod io;
 mod jsonrpc;
+pub(crate) mod legacy_2025;
 pub(crate) mod notify;
 pub(crate) mod repo_selection;
 mod socket;

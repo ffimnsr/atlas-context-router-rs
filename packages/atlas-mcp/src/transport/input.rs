@@ -120,13 +120,11 @@ pub(crate) fn handle_input_line<W: Write>(
         tool_name: tool_name_from_request(&method, params),
     };
 
-    if method == "initialize"
-        && let Ok(parsed) = spec::parse_initialize_request(params)
-    {
-        connection_state.client_capabilities = parsed.capabilities;
+    if method == "initialize" {
+        super::legacy_2025::note_initialize_request(connection_state, params);
     }
 
-    let legacy_compat_active = connection_state.client_capabilities.is_object();
+    let legacy_compat_active = super::legacy_2025::allows_missing_request_meta(connection_state);
     let request_meta = if requires_request_meta(&method) {
         match spec::parse_request_meta(&method, params) {
             Ok(meta) => Some(meta),
@@ -172,9 +170,37 @@ pub(crate) fn handle_input_line<W: Write>(
         None
     };
 
-    if method == "initialized" || method == "notifications/initialized" {
+    if super::legacy_2025::is_legacy_initialized_notification(&method) {
         stats.notifications += 1;
-        connection_state.initialized = true;
+        return Ok(());
+    }
+
+    if method == "initialize"
+        && let Some(result) = super::legacy_2025::legacy_initialize_response(params)
+    {
+        match result {
+            Ok(result) => {
+                log_request_finished(&request_log, true, 0, 0, 0);
+                if !is_notification {
+                    write_response(writer, &jsonrpc_ok(id, result))?;
+                }
+            }
+            Err(error) => {
+                stats.protocol_errors += 1;
+                log_protocol_error_observation(
+                    "stdio",
+                    &request_log,
+                    JsonRpcErrorKind::InvalidParams.atlas_error_code(),
+                    &error.to_string(),
+                );
+                if !is_notification {
+                    write_response(
+                        writer,
+                        &jsonrpc_error(id, JsonRpcErrorKind::InvalidParams, error.to_string()),
+                    )?;
+                }
+            }
+        }
         return Ok(());
     }
 

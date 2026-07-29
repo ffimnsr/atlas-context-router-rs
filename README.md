@@ -205,7 +205,7 @@ GitHub triage defaults also live in `.github/`:
 
 Atlas can install MCP configuration for popular AI coding tools and add repo hooks so agents start with graph-aware context.
 
-`atlas serve` remains a stdio MCP entrypoint for editors and agents. Repo-scoped installs now pin only `--repo`, while user/global installs stay portable with `type = "stdio"`, `command = "atlas"`, `args = ["serve"]`. When no repo is pinned, Atlas resolves repo root from MCP client `roots/list` and derives DB path as `REPO_ROOT/.atlas/worldtree.db`; if roots are unavailable, Atlas falls back to repo root discovered from launch `cwd`.
+`atlas serve` remains a stdio MCP entrypoint for editors and agents. Repo-scoped installs now pin only `--repo`, while user/global installs stay portable with `type = "stdio"`, `command = "atlas"`, `args = ["serve"]`. Atlas now follows MCP `2026-07-28`: use `server/discover` for negotiation, then send per-request `params._meta` with protocol version and client capabilities. When no repo is pinned, Atlas resolves repo context from explicit `arguments.repo_root` or launch `cwd`; it no longer depends on MCP Roots or protocol-level HTTP sessions.
 
 If an editor MCP client is incompatible with broker/daemon indirection, use `atlas serve --direct-stdio` to run MCP directly in launched process with no relay layer.
 

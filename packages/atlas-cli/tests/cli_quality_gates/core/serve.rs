@@ -104,7 +104,18 @@ fn serve_http_streamable_headers_match_protocol_surface() {
                 ("MCP-Protocol-Version", atlas_mcp::MCP_PROTOCOL_VERSION),
                 ("Mcp-Method", "tools/list"),
             ],
-            &json!({"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}),
+            &json!({
+                "jsonrpc":"2.0",
+                "id":2,
+                "method":"tools/list",
+                "params": {
+                    "_meta": {
+                        atlas_mcp::spec::META_PROTOCOL_VERSION: atlas_mcp::MCP_PROTOCOL_VERSION,
+                        atlas_mcp::spec::META_CLIENT_CAPABILITIES: {},
+                        atlas_mcp::spec::META_CLIENT_INFO: { "name": "zed", "version": "1.0.0" }
+                    }
+                }
+            }),
         )
         .expect("streamable post");
     assert_eq!(sse.status, 200);
@@ -160,7 +171,11 @@ fn serve_command_handles_stdio_jsonrpc_flow_end_to_end() {
         by_id[&json!(1)]["result"]["_meta"]["clientTag"],
         json!("quality-gate")
     );
-    assert!(by_id[&json!(1)]["result"]["capabilities"]["tasks"].is_object());
+    let tasks = &by_id[&json!(1)]["result"]["capabilities"]["extensions"]["tasks"];
+    assert!(tasks.is_object());
+    assert!(tasks["get"].is_object());
+    assert!(tasks["update"].is_object());
+    assert_eq!(tasks["toolCallHandles"], json!(true));
 
     let tools = by_id[&json!(2)]["result"]["tools"]
         .as_array()
@@ -253,7 +268,12 @@ fn serve_direct_stdio_uses_launch_cwd_repo_without_roots_flow() {
         "method": "tools/call",
         "params": {
             "name": "query_graph",
-            "arguments": { "text": "greet_twice", "output_format": "json" }
+            "arguments": { "text": "greet_twice", "output_format": "json" },
+            "_meta": {
+                atlas_mcp::spec::META_PROTOCOL_VERSION: atlas_mcp::MCP_PROTOCOL_VERSION,
+                atlas_mcp::spec::META_CLIENT_CAPABILITIES: {},
+                atlas_mcp::spec::META_CLIENT_INFO: { "name": "zed", "version": "1.0.0" }
+            }
         }
     }));
 
@@ -318,6 +338,11 @@ fn serve_direct_stdio_allows_explicit_repo_root_override() {
             "arguments": {
                 "repo_root": target_repo.path().to_string_lossy().into_owned(),
                 "text": "greet_twice"
+            },
+            "_meta": {
+                atlas_mcp::spec::META_PROTOCOL_VERSION: atlas_mcp::MCP_PROTOCOL_VERSION,
+                atlas_mcp::spec::META_CLIENT_CAPABILITIES: {},
+                atlas_mcp::spec::META_CLIENT_INFO: { "name": "zed", "version": "1.0.0" }
             }
         }
     }));

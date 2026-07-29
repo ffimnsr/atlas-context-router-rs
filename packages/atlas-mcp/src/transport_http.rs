@@ -552,14 +552,6 @@ async fn handle_post_mcp(
         "tools/call" => {
             dispatch_tool_call(state, id, params, response_mode, authorized.subject).await
         }
-        "tasks/list" => match crate::tasks::tasks_list(
-            params.as_ref(),
-            &state.repo_root,
-            crate::output::OutputFormat::Json,
-        ) {
-            Ok(result) => respond_with_mode(response_mode, jsonrpc_envelope_result(id, result)),
-            Err(error) => respond_with_mode(response_mode, jsonrpc_envelope_task_error(id, error)),
-        },
         "tasks/get" => match crate::tasks::tasks_get(
             params.as_ref(),
             &state.repo_root,
@@ -568,15 +560,7 @@ async fn handle_post_mcp(
             Ok(result) => respond_with_mode(response_mode, jsonrpc_envelope_result(id, result)),
             Err(error) => respond_with_mode(response_mode, jsonrpc_envelope_task_error(id, error)),
         },
-        "tasks/result" => match crate::tasks::tasks_result(
-            params.as_ref(),
-            &state.repo_root,
-            crate::output::OutputFormat::Json,
-        ) {
-            Ok(result) => respond_with_mode(response_mode, jsonrpc_envelope_result(id, result)),
-            Err(error) => respond_with_mode(response_mode, jsonrpc_envelope_task_error(id, error)),
-        },
-        "tasks/cancel" => match crate::tasks::tasks_cancel(
+        "tasks/update" => match crate::tasks::tasks_update(
             params.as_ref(),
             &state.repo_root,
             crate::output::OutputFormat::Json,

@@ -1095,8 +1095,7 @@ pub(super) fn tool_resolve_symbol(
                     "resolve_symbol",
                     format!("no symbol matched '{name}'"),
                     format!(
-                        "No symbol matched '{name}'. Verify canonical QN tokens (e.g. '::fn::' not '::function::'). Candidates: {:?}. Try query_graph or resolve_symbol with a shorter name.",
-                        suggestions
+                        "No symbol matched '{name}'. Verify canonical QN tokens (e.g. '::fn::' not '::function::'). Candidates: {suggestions:?}. Try query_graph or resolve_symbol with a shorter name."
                     ),
                     InputShapeErrorSpec {
                         offending_fields: vec!["name".to_owned()],

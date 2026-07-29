@@ -30,7 +30,7 @@ pub struct InitializeCapabilities {
     pub resources: ResourceCapabilities,
     pub completions: EmptyCapability,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub tasks: Option<TasksCapabilities>,
+    pub extensions: Option<ExtensionsCapabilities>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub experimental: Option<ExperimentalCapabilities>,
 }
@@ -58,20 +58,17 @@ pub struct ExperimentalCapabilities {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct TasksCapabilities {
-    pub list: EmptyCapability,
-    pub cancel: EmptyCapability,
-    pub requests: TaskRequestCapabilities,
+pub struct ExtensionsCapabilities {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tasks: Option<TasksExtensionCapabilities>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct TaskRequestCapabilities {
-    pub tools: TaskToolCapabilities,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct TaskToolCapabilities {
-    pub call: EmptyCapability,
+#[serde(rename_all = "camelCase")]
+pub struct TasksExtensionCapabilities {
+    pub get: EmptyCapability,
+    pub update: EmptyCapability,
+    pub tool_call_handles: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -165,14 +162,12 @@ pub fn initialize_capabilities() -> InitializeCapabilities {
             list_changed: false,
         },
         completions: EmptyCapability::default(),
-        tasks: Some(TasksCapabilities {
-            list: EmptyCapability::default(),
-            cancel: EmptyCapability::default(),
-            requests: TaskRequestCapabilities {
-                tools: TaskToolCapabilities {
-                    call: EmptyCapability::default(),
-                },
-            },
+        extensions: Some(ExtensionsCapabilities {
+            tasks: Some(TasksExtensionCapabilities {
+                get: EmptyCapability::default(),
+                update: EmptyCapability::default(),
+                tool_call_handles: true,
+            }),
         }),
         experimental: Some(ExperimentalCapabilities {
             progress_notifications: true,

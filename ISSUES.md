@@ -3448,13 +3448,13 @@ Why:
 
 Move tasks out of core protocol and onto the 2026 extension shape.
 
-- [ ] advertise tasks under `extensions` instead of core capabilities
-- [ ] remove `tasks/list`, `tasks/result`, and `tasks/cancel` handlers
-- [ ] implement or keep `tasks/get` with 2026 wire shape
-- [ ] implement `tasks/update` for client-to-server task input
-- [ ] return task handles from long-running tool calls without per-request opt-in where appropriate
-- [ ] map existing persisted task records to the new extension shape when practical
-- [ ] add tests for removed methods, task-handle creation, `tasks/get`, `tasks/update`, and direct/deferred result parity
+- [x] advertise tasks under `extensions` instead of core capabilities
+- [x] remove `tasks/list`, `tasks/result`, and `tasks/cancel` handlers
+- [x] implement or keep `tasks/get` with 2026 wire shape
+- [x] implement `tasks/update` for client-to-server task input
+- [x] return task handles from long-running tool calls without per-request opt-in where appropriate
+- [x] map existing persisted task records to the new extension shape when practical
+- [x] add tests for removed methods, task-handle creation, `tasks/get`, `tasks/update`, and direct/deferred result parity
 
 Why:
 - 2026-07-28 moves tasks to official extension and redesigns polling/input paths
@@ -3463,11 +3463,11 @@ Why:
 
 Keep tools, resources, prompts, and schemas compatible with the latest schema rules.
 
-- [ ] keep all advertised schemas valid JSON Schema 2020-12
-- [ ] allow bounded/resolvable `$ref` only where needed and covered by tests
-- [ ] preserve Atlas stable-object `structuredContent` policy unless a specific tool needs broader 2026 JSON-value support
-- [ ] validate any `x-mcp-header` annotations and avoid adding them without strong routing/auth need
-- [ ] add tests for schema compilation, outputSchema-to-structuredContent parity, and invalid header annotation rejection
+- [x] keep all advertised schemas valid JSON Schema 2020-12
+- [x] allow bounded/resolvable `$ref` only where needed and covered by tests
+- [x] preserve Atlas stable-object `structuredContent` policy unless a specific tool needs broader 2026 JSON-value support
+- [x] validate any `x-mcp-header` annotations and avoid adding them without strong routing/auth need
+- [x] add tests for schema compilation, outputSchema-to-structuredContent parity, and invalid header annotation rejection
 
 Why:
 - 2026-07-28 loosens schema keywords but adds header annotation validation requirements
@@ -3476,12 +3476,12 @@ Why:
 
 Make stdio work without initialize and keep any legacy probe isolated.
 
-- [ ] accept per-request `_meta` on stdio requests
-- [ ] allow `server/discover` as first stdio request
-- [ ] allow `tools/list` as first stdio request when `_meta` is valid
-- [ ] remove initialized-notification handling from core 2026 flow
-- [ ] isolate any legacy initialize fallback in a separate `legacy_2025` module if retained
-- [ ] add tests for discover-first, tools-list-first, missing `_meta`, and legacy isolation if implemented
+- [x] accept per-request `_meta` on stdio requests
+- [x] allow `server/discover` as first stdio request
+- [x] allow `tools/list` as first stdio request when `_meta` is valid
+- [x] remove initialized-notification handling from core 2026 flow
+- [x] isolate any legacy initialize fallback in a separate `legacy_2025` module if retained
+- [x] add tests for discover-first, tools-list-first, missing `_meta`, and legacy isolation if implemented
 
 Why:
 - stdio has no HTTP status fallback, so modern discovery must work without handshake state
@@ -3490,11 +3490,11 @@ Why:
 
 Lock migration with fixtures, docs, and drift-prevention tests.
 
-- [ ] create `packages/atlas-mcp/tests/spec_2026_07_28/` integration suite
-- [ ] add HTTP fixtures for discover, cacheable `tools/list`, tool header validation, MRTR `input_required`, `subscriptions/listen`, and no-session behavior
-- [ ] add stdio fixtures for discover, per-request `_meta`, no initialize dependency, and MRTR retry
-- [ ] update `MCP_TOOLS.md`, install docs, and client guidance for 2026 behavior
-- [ ] add drift tests proving no active `roots/list`, `Mcp-Session-Id`, GET stream, old task methods, or server-initiated request paths remain
+- [x] create `packages/atlas-mcp/tests/spec_2026_07_28/` integration suite
+- [x] add HTTP fixtures for discover, cacheable `tools/list`, tool header validation, MRTR `input_required`, `subscriptions/listen`, and no-session behavior
+- [x] add stdio fixtures for discover, per-request `_meta`, no initialize dependency, and MRTR retry
+- [x] update `MCP_TOOLS.md`, install docs, and client guidance for 2026 behavior
+- [x] add drift tests proving no active `roots/list`, `Mcp-Session-Id`, GET stream, old task methods, or server-initiated request paths remain
 - [ ] run `cargo fmt --all`, `cargo clippy --workspace --all-targets --all-features -- -D warnings`, `cargo test --quiet -p atlas-mcp`, and `./scripts/test-workspace-summary.sh`
 
 Why:
@@ -3502,19 +3502,19 @@ Why:
 
 #### Part VIII completion criteria
 
-- [ ] protocol constant and current protocol fixtures use `2026-07-28`
-- [ ] `server/discover` works on stdio and HTTP
-- [ ] no active `roots/list` code path remains
-- [ ] no protocol-level HTTP session dependency remains
-- [ ] no `Mcp-Session-Id`, `GET /mcp`, `DELETE /mcp`, or `Last-Event-ID` dependency remains
-- [ ] every request uses `_meta` protocol/client fields
-- [ ] every success result has `resultType`
-- [ ] cacheable results have `ttlMs` and `cacheScope`
-- [ ] MRTR handles destructive confirmation and any future elicitation path
-- [ ] no server-initiated JSON-RPC requests are emitted
-- [ ] Logging feature is no longer advertised and `logging/setLevel` is removed
-- [ ] old task methods are removed and 2026 tasks extension path is tested
-- [ ] docs and install guidance describe explicit repo parameters, resource URIs, or server configuration instead of Roots
+- [x] protocol constant and current protocol fixtures use `2026-07-28`
+- [x] `server/discover` works on stdio and HTTP
+- [x] no active `roots/list` code path remains
+- [x] no protocol-level HTTP session dependency remains
+- [x] no `Mcp-Session-Id`, `GET /mcp`, `DELETE /mcp`, or `Last-Event-ID` dependency remains
+- [x] every request uses `_meta` protocol/client fields
+- [x] every success result has `resultType`
+- [x] cacheable results have `ttlMs` and `cacheScope`
+- [x] MRTR handles destructive confirmation and any future elicitation path
+- [x] no server-initiated JSON-RPC requests are emitted
+- [x] Logging feature is no longer advertised and `logging/setLevel` is removed
+- [x] old task methods are removed and 2026 tasks extension path is tested
+- [x] docs and install guidance describe explicit repo parameters, resource URIs, or server configuration instead of Roots
 
 ---
 

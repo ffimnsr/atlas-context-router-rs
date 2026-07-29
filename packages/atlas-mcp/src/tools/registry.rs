@@ -2,6 +2,7 @@ use super::shared::DEFAULT_OUTPUT_DESCRIPTION;
 use crate::descriptors::{
     IconDescriptor, ToolAnnotations, ToolDescriptor, ToolRegistry, descriptor_meta,
     ensure_schema_2020_12, human_title, normalized_tool_output_schema, validate_descriptor_name,
+    validate_mcp_schema,
 };
 use crate::spec;
 use serde::Deserialize;
@@ -102,7 +103,7 @@ pub(crate) fn tool_result_contract(name: &str) -> ToolResultContract {
 
 pub fn tool_list_markdown() -> String {
     let mut markdown = String::from(
-        "# MCP Tools\n\nThis file is generated from `atlas_mcp::tool_list()`. Do not edit by hand.\n\nResult contract legend:\n- `stable-object`: JSON mode returns object `structuredContent`; `outputSchema` validates that object.\n- `text-only`: consume MCP `content`; no `outputSchema` advertised.\n\n| Tool | Result contract | Output schema | Description |\n|------|-----------------|---------------|-------------|\n",
+        "# MCP Tools\n\nThis file is generated from `atlas_mcp::tool_list()`. Do not edit by hand.\n\nMCP 2026 quick guidance:\n- protocol version: `2026-07-28`\n- call `server/discover` for capability negotiation\n- on stdio and HTTP requests after discovery, include `params._meta` with protocol version and client capabilities\n- use explicit `arguments.repo_root` or server launch cwd for repo selection; do not rely on MCP Roots\n- HTTP transport is stateless at protocol level: no `Mcp-Session-Id`, `GET /mcp`, `DELETE /mcp`, or `Last-Event-ID` flow\n\nResult contract legend:\n- `stable-object`: JSON mode returns object `structuredContent`; `outputSchema` validates that object.\n- `text-only`: consume MCP `content`; no `outputSchema` advertised.\n\n| Tool | Result contract | Output schema | Description |\n|------|-----------------|---------------|-------------|\n",
     );
 
     for tool in tool_list()["tools"].as_array().expect("tools array") {
@@ -1052,15 +1053,23 @@ fn build_tool_descriptor(seed: ToolDescriptorSeed) -> ToolDescriptor {
     let mut meta = descriptor_meta("tool", category);
     meta["atlas:resultContract"] = serde_json::json!(contract.label());
     meta["atlas:resultContractGuidance"] = serde_json::json!(contract.guidance());
+    let input_schema = ensure_schema_2020_12(seed.input_schema);
+    validate_mcp_schema(&input_schema)
+        .unwrap_or_else(|error| panic!("{} input schema invalid for MCP: {error}", seed.name));
+    let output_schema = tool_output_schema_for(&seed.name);
+    if let Some(schema) = output_schema.as_ref() {
+        validate_mcp_schema(schema)
+            .unwrap_or_else(|error| panic!("{} output schema invalid for MCP: {error}", seed.name));
+    }
     ToolDescriptor {
         title: human_title(&seed.name),
-        output_schema: tool_output_schema_for(&seed.name),
+        output_schema,
         annotations: tool_annotations(&seed.name),
         icons: tool_icons(category),
         meta,
         name: seed.name,
         description: seed.description,
-        input_schema: ensure_schema_2020_12(seed.input_schema),
+        input_schema,
     }
 }
 

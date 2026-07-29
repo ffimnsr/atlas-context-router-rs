@@ -143,10 +143,7 @@ fn parse_output_lines(output: Vec<u8>) -> Vec<serde_json::Value> {
 }
 
 fn initialize_request_line() -> String {
-    format!(
-        "{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{{\"protocolVersion\":\"{}\",\"capabilities\":{{}},\"clientInfo\":{{\"name\":\"zed\",\"version\":\"1.0.0\"}}}}}}\n",
-        MCP_PROTOCOL_VERSION
-    )
+    "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-11-25\",\"capabilities\":{},\"clientInfo\":{\"name\":\"zed\",\"version\":\"1.0.0\"}}}\n".to_owned()
 }
 
 fn request_meta_params() -> serde_json::Value {
@@ -228,6 +225,69 @@ fn missing_request_meta_fails_without_legacy_initialize() {
     assert_eq!(response["error"]["code"], serde_json::json!(-32602));
     assert!(
         response["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("requires params._meta")
+    );
+}
+
+#[test]
+fn tools_list_works_as_first_stdio_request_with_valid_request_meta() {
+    let fixture = setup_fixture();
+    let repo_root = fixture._dir.path().to_string_lossy().into_owned();
+
+    let response = stdio_single_response_2026(
+        &repo_root,
+        &fixture.db_path,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/list",
+            "params": request_meta_params()
+        }),
+    );
+
+    assert!(response["result"]["tools"].is_array());
+    assert_eq!(
+        response["result"]["resultType"],
+        serde_json::json!("complete")
+    );
+}
+
+#[test]
+fn modern_initialize_does_not_enable_missing_meta_fallback() {
+    let fixture = setup_fixture();
+    let input = concat!(
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2026-07-28\",\"capabilities\":{},\"clientInfo\":{\"name\":\"zed\",\"version\":\"1.0.0\"}}}\n",
+        "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\",\"params\":{}}\n"
+    );
+    let reader = BufReader::new(Cursor::new(input.as_bytes()));
+    let mut writer = Vec::new();
+
+    run_server_io(
+        reader,
+        &mut writer,
+        "/ignored",
+        &fixture.db_path,
+        ServerOptions::default(),
+    )
+    .expect("run server io");
+
+    let responses = parse_output_lines(writer);
+    let by_id: std::collections::HashMap<_, _> = responses
+        .into_iter()
+        .filter_map(|value| value.get("id").cloned().map(|id| (id, value)))
+        .collect();
+    assert_eq!(
+        by_id[&serde_json::json!(1)]["result"]["protocolVersion"],
+        serde_json::json!(MCP_PROTOCOL_VERSION)
+    );
+    assert_eq!(
+        by_id[&serde_json::json!(2)]["error"]["code"],
+        serde_json::json!(-32602)
+    );
+    assert!(
+        by_id[&serde_json::json!(2)]["error"]["message"]
             .as_str()
             .unwrap_or_default()
             .contains("requires params._meta")
@@ -356,7 +416,7 @@ fn advertised_capabilities_have_stdio_method_handlers_and_descriptor_backing() {
 
     assert!(capabilities.tools == crate::spec::EmptyCapability::default());
     assert!(capabilities.completions == crate::spec::EmptyCapability::default());
-    assert!(capabilities.tasks.is_some());
+    assert!(capabilities.extensions.is_some());
     assert!(capabilities.experimental.is_some());
 
     for request in [
@@ -389,10 +449,8 @@ fn advertised_capabilities_have_stdio_method_handlers_and_descriptor_backing() {
             "method":"prompts/get",
             "params":{"name":"inspect_symbol","arguments":{"symbol":"compute"}}
         }),
-        serde_json::json!({"jsonrpc":"2.0","id":11,"method":"tasks/list","params":{}}),
         serde_json::json!({"jsonrpc":"2.0","id":12,"method":"tasks/get","params":{"taskId":"missing"}}),
-        serde_json::json!({"jsonrpc":"2.0","id":13,"method":"tasks/result","params":{"taskId":"missing"}}),
-        serde_json::json!({"jsonrpc":"2.0","id":14,"method":"tasks/cancel","params":{"taskId":"missing"}}),
+        serde_json::json!({"jsonrpc":"2.0","id":13,"method":"tasks/update","params":{"taskId":"missing","input":{"answer":"yes"}}}),
     ] {
         let response = stdio_single_response(&repo_root, &fixture.db_path, request.clone());
         assert!(
@@ -408,6 +466,31 @@ fn advertised_capabilities_have_stdio_method_handlers_and_descriptor_backing() {
             Some(JsonRpcErrorKind::MethodNotFound.code() as i64),
             "method {} must be handled",
             request["method"].as_str().expect("method")
+        );
+    }
+
+    for removed_method in ["tasks/list", "tasks/result", "tasks/cancel"] {
+        let removed = stdio_single_response_2026(
+            &repo_root,
+            &fixture.db_path,
+            serde_json::json!({
+                "jsonrpc":"2.0",
+                "id":15,
+                "method": removed_method,
+                "params": {
+                    "taskId":"missing",
+                    "_meta": {
+                        crate::spec::META_PROTOCOL_VERSION: MCP_PROTOCOL_VERSION,
+                        crate::spec::META_CLIENT_CAPABILITIES: {},
+                        crate::spec::META_CLIENT_INFO: {"name": "zed", "version": "1.0.0"}
+                    }
+                }
+            }),
+        );
+        assert_eq!(
+            removed["error"]["code"],
+            serde_json::json!(JsonRpcErrorKind::MethodNotFound.code()),
+            "removed method {removed_method} must return method-not-found"
         );
     }
 
@@ -664,7 +747,8 @@ fn fixed_repo_mode_never_emits_roots_list_or_invalidates_on_roots_notifications(
             "method": "tools/call",
             "params": {
                 "name": "query_graph",
-                "arguments": { "text": "compute", "output_format": "json" }
+                "arguments": { "text": "compute", "output_format": "json" },
+                "_meta": request_meta_params()["_meta"].clone()
             }
         }))
         .unwrap();
@@ -700,7 +784,8 @@ fn fixed_repo_mode_never_emits_roots_list_or_invalidates_on_roots_notifications(
             "method": "tools/call",
             "params": {
                 "name": "query_graph",
-                "arguments": { "text": "compute", "output_format": "json" }
+                "arguments": { "text": "compute", "output_format": "json" },
+                "_meta": request_meta_params()["_meta"].clone()
             }
         }))
         .unwrap();
@@ -766,7 +851,8 @@ fn explicit_repo_root_selector_switches_repo_for_tool_call() {
                     "repo_root": repo_b_root,
                     "text": "compute",
                     "output_format": "json"
-                }
+                },
+                "_meta": request_meta_params()["_meta"].clone()
             }
         }))
         .unwrap();
@@ -833,7 +919,8 @@ fn invalid_explicit_repo_selector_returns_actionable_error() {
                 "arguments": {
                     "repo_id": "demo",
                     "text": "compute"
-                }
+                },
+                "_meta": request_meta_params()["_meta"].clone()
             }
         }))
         .unwrap();
@@ -1548,9 +1635,7 @@ fn stdio_transport_exposes_resources_completion_methods_and_rejects_removed_logg
 #[test]
 fn stdio_transport_emits_progress_without_mcp_log_notifications() {
     let fixture = setup_fixture();
-    let input = concat!(
-        "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"query_graph\",\"progressToken\":\"tok-1\",\"arguments\":{\"text\":\"compute\"},\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\",\"io.modelcontextprotocol/clientCapabilities\":{},\"io.modelcontextprotocol/clientInfo\":{\"name\":\"zed\",\"version\":\"1.0.0\"},\"io.modelcontextprotocol/logLevel\":\"warning\"}}}\n"
-    );
+    let input = "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"query_graph\",\"progressToken\":\"tok-1\",\"arguments\":{\"text\":\"compute\"},\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\",\"io.modelcontextprotocol/clientCapabilities\":{},\"io.modelcontextprotocol/clientInfo\":{\"name\":\"zed\",\"version\":\"1.0.0\"},\"io.modelcontextprotocol/logLevel\":\"warning\"}}}\n";
     let reader = BufReader::new(Cursor::new(input.as_bytes()));
     let mut writer = Vec::new();
 

@@ -181,13 +181,7 @@ pub(crate) fn annotate_tool_result_with_repo_selection(
 pub(crate) fn method_requires_repo_context(method: &str) -> bool {
     matches!(
         method,
-        "resources/read"
-            | "completion/complete"
-            | "tools/call"
-            | "tasks/list"
-            | "tasks/get"
-            | "tasks/result"
-            | "tasks/cancel"
+        "resources/read" | "completion/complete" | "tools/call" | "tasks/get" | "tasks/update"
     )
 }
 

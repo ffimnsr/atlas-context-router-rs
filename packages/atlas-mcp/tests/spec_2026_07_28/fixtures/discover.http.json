@@ -1,0 +1,9 @@
+{
+  "status": 200,
+  "protocolHeader": "2026-07-28",
+  "hasSessionHeader": false,
+  "resultType": "complete",
+  "ttlMs": 300000,
+  "cacheScope": "public",
+  "serverName": "atlas"
+}

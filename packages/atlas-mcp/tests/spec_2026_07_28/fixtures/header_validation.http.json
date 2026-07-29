@@ -1,0 +1,6 @@
+{
+  "status": 400,
+  "code": -32020,
+  "atlas_error_code": "header_mismatch",
+  "message": "header/body mismatch for Mcp-Method: header='tools/list' body='resources/list'"
+}

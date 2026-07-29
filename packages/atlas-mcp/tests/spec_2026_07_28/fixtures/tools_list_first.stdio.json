@@ -1,0 +1,7 @@
+{
+  "resultType": "complete",
+  "ttlMs": 300000,
+  "cacheScope": "public",
+  "hasGetContext": true,
+  "hasTasksMethods": false
+}

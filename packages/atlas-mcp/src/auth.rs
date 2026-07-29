@@ -105,8 +105,7 @@ impl ProtectedResourceAuthPolicy {
                 }
                 discovery.jwks_uri.ok_or_else(|| {
                     anyhow::anyhow!(
-                        "OIDC discovery document at {} is missing jwks_uri",
-                        discovery_url
+                        "OIDC discovery document at {discovery_url} is missing jwks_uri"
                     )
                 })?
             }
@@ -477,7 +476,7 @@ mod tests {
             .await
             .expect("bind mock auth server");
         let addr = listener.local_addr().expect("mock auth addr");
-        let base_url = format!("http://{}", addr);
+        let base_url = format!("http://{addr}");
         let state = MockAuthState {
             discovery: Arc::new(discovery_document(&base_url)),
             jwks: Arc::new(jwks_document()),
@@ -532,7 +531,7 @@ mod tests {
     #[tokio::test]
     async fn metadata_body_shape_contains_required_fields() {
         let addr = spawn_mock_auth_server().await;
-        let base_url = format!("http://{}", addr);
+        let base_url = format!("http://{addr}");
         let policy = ProtectedResourceAuthPolicy::load(auth_config(&base_url))
             .await
             .expect("load auth policy");
@@ -549,7 +548,7 @@ mod tests {
     #[tokio::test]
     async fn load_resolves_oidc_discovery_from_issuer() {
         let addr = spawn_mock_auth_server().await;
-        let base_url = format!("http://{}", addr);
+        let base_url = format!("http://{addr}");
         let policy = ProtectedResourceAuthPolicy::load(auth_config(&base_url))
             .await
             .expect("load auth policy");
@@ -565,7 +564,7 @@ mod tests {
             jwks_document(),
         )
         .await;
-        let base_url = format!("http://{}", addr);
+        let base_url = format!("http://{addr}");
         let error = ProtectedResourceAuthPolicy::load(auth_config(&base_url))
             .await
             .expect_err("discovery should fail");
@@ -576,7 +575,7 @@ mod tests {
     #[tokio::test]
     async fn authorize_accepts_valid_token_and_rejects_scope_gaps() {
         let addr = spawn_mock_auth_server().await;
-        let base_url = format!("http://{}", addr);
+        let base_url = format!("http://{addr}");
         let policy = ProtectedResourceAuthPolicy::load(auth_config(&base_url))
             .await
             .expect("load auth policy");
@@ -608,7 +607,7 @@ mod tests {
     #[tokio::test]
     async fn authorize_rejects_missing_or_invalid_token() {
         let addr = spawn_mock_auth_server().await;
-        let base_url = format!("http://{}", addr);
+        let base_url = format!("http://{addr}");
         let policy = ProtectedResourceAuthPolicy::load(auth_config(&base_url))
             .await
             .expect("load auth policy");

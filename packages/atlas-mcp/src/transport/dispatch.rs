@@ -96,23 +96,13 @@ pub(crate) fn dispatch(
                 .map_err(classify_tool_call_dispatch_error)
         }
 
-        "tasks/list" => {
-            crate::tasks::tasks_list(params, repo_root, crate::output::OutputFormat::Json)
-                .map(spec::complete_result)
-                .map_err(classify_task_api_error)
-        }
         "tasks/get" => {
             crate::tasks::tasks_get(params, repo_root, crate::output::OutputFormat::Json)
                 .map(spec::complete_result)
                 .map_err(classify_task_api_error)
         }
-        "tasks/result" => {
-            crate::tasks::tasks_result(params, repo_root, crate::output::OutputFormat::Json)
-                .map(spec::complete_result)
-                .map_err(classify_task_api_error)
-        }
-        "tasks/cancel" => {
-            crate::tasks::tasks_cancel(params, repo_root, crate::output::OutputFormat::Json)
+        "tasks/update" => {
+            crate::tasks::tasks_update(params, repo_root, crate::output::OutputFormat::Json)
                 .map(spec::complete_result)
                 .map_err(classify_task_api_error)
         }

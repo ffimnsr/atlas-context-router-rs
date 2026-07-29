@@ -224,7 +224,7 @@ pub fn render_tool_manual_text(document: &ToolManualDocument) -> String {
     ));
     lines.push("  target_tool_call_examples:".to_owned());
     for example in &document.usage.target_tool_call_examples {
-        lines.push(format!("    - {}", example));
+        lines.push(format!("    - {example}"));
     }
 
     lines.push(String::new());
@@ -461,10 +461,7 @@ fn manual_lookup_error_response(
         })),
         ManualLookupError::HiddenInternalTool { tool_name } => ToolErrorPayload::new(
             ToolErrorCode::InvalidInput,
-            format!(
-                "tool '{}' is hidden or internal and has no public manual entry",
-                tool_name
-            ),
+            format!("tool '{tool_name}' is hidden or internal and has no public manual entry"),
         )
         .with_tool("man")
         .with_retry_guidance("Request a visible exported MCP tool name from tools/list.")
@@ -477,7 +474,7 @@ fn manual_lookup_error_response(
             suggestions,
         } => ToolErrorPayload::new(
             ToolErrorCode::InvalidInput,
-            format!("unknown MCP tool '{}'", tool_name),
+            format!("unknown MCP tool '{tool_name}'"),
         )
         .with_tool("man")
         .with_retry_guidance("Call tools/list or retry with an exact exported MCP tool name.")
@@ -507,10 +504,7 @@ fn tool_help_error_response(
         })),
         ManualLookupError::HiddenInternalTool { tool_name } => ToolErrorPayload::new(
             ToolErrorCode::InvalidInput,
-            format!(
-                "tool '{}' is hidden or internal and has no public help entry",
-                tool_name
-            ),
+            format!("tool '{tool_name}' is hidden or internal and has no public help entry"),
         )
         .with_tool("tool_help")
         .with_retry_guidance("Use tool_list or tool_search to pick a visible exported MCP tool.")
@@ -523,7 +517,7 @@ fn tool_help_error_response(
             suggestions,
         } => ToolErrorPayload::new(
             ToolErrorCode::InvalidInput,
-            format!("unknown MCP tool '{}'", tool_name),
+            format!("unknown MCP tool '{tool_name}'"),
         )
         .with_tool("tool_help")
         .with_retry_guidance("Use tool_search when the exact name is unclear, then retry tool_help with one exact exported name.")
@@ -553,21 +547,17 @@ fn manual_lookup_error_message(error: &ManualLookupError) -> String {
         ),
         ManualLookupError::MissingToolName => "missing MCP tool name for manual lookup".to_owned(),
         ManualLookupError::HiddenInternalTool { tool_name } => {
-            format!(
-                "tool '{}' is hidden or internal and has no public manual entry",
-                tool_name
-            )
+            format!("tool '{tool_name}' is hidden or internal and has no public manual entry")
         }
         ManualLookupError::UnknownTool {
             tool_name,
             suggestions,
         } => {
             if suggestions.is_empty() {
-                format!("unknown MCP tool '{}'", tool_name)
+                format!("unknown MCP tool '{tool_name}'")
             } else {
                 format!(
-                    "unknown MCP tool '{}'; nearest visible tools: {}",
-                    tool_name,
+                    "unknown MCP tool '{tool_name}'; nearest visible tools: {}",
                     suggestions.join(", ")
                 )
             }
