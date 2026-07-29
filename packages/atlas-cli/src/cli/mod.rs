@@ -274,10 +274,8 @@ pub enum Command {
     Serve {
         /// Bypass repo-scoped broker/daemon indirection and serve MCP directly on stdio.
         ///
-        /// Without `--repo` and `--db`, direct stdio now starts in deferred dynamic-root mode.
-        /// Atlas resolves repo from MCP workspace roots instead of inherited process cwd.
-        /// Atlas falls back to launch cwd when roots are unavailable.
-        /// Query-only multi-root requests still need `_meta.atlas.activeRootUri` or explicit `--repo`.
+        /// Without `--repo` and `--db`, Atlas resolves repo from launch cwd the same way as other
+        /// repo-scoped commands. For explicit cross-repo tool calls, pass `arguments.repo_root`.
         #[arg(long)]
         direct_stdio: bool,
     },

@@ -34,7 +34,6 @@ pub(crate) struct ConnectionStartup<'a> {
     pub(crate) repo_root: Option<&'a str>,
     pub(crate) db_path: Option<&'a str>,
     pub(crate) dynamic_roots: bool,
-    pub(crate) launch_cwd_repo_root: Option<&'a str>,
 }
 
 pub(crate) fn run_server_io<R: BufRead + Send, W: Write>(
@@ -51,7 +50,6 @@ pub(crate) fn run_server_io<R: BufRead + Send, W: Write>(
             repo_root: Some(repo_root),
             db_path: Some(db_path),
             dynamic_roots: false,
-            launch_cwd_repo_root: None,
         },
         options,
     )
@@ -78,12 +76,8 @@ pub(crate) fn serve_connection<R: BufRead + Send, W: Write>(
     server_options: super::types::ServerOptions,
 ) -> Result<()> {
     let (event_tx, event_rx) = mpsc::channel::<TransportEvent>();
-    let connection_state = connection_state(
-        startup.repo_root,
-        startup.db_path,
-        startup.dynamic_roots,
-        startup.launch_cwd_repo_root,
-    );
+    let connection_state =
+        connection_state(startup.repo_root, startup.db_path, startup.dynamic_roots);
 
     std::thread::scope(|scope| -> Result<()> {
         let reader_tx = event_tx.clone();
@@ -406,9 +400,6 @@ fn drain_expired_requests<W: Write>(
 
     for token in expired_tokens {
         if let Some(request) = pending.remove(&token) {
-            connection_state
-                .reverse_broker
-                .cancel_scope(&format!("stdio:{token}"), "parent request timed out");
             stats.timed_out += 1;
             tracing::warn!(
                 request_id = %request.request.request_id,

@@ -1,4 +1,6 @@
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::thread;
 
 use rusqlite::params;
 use serde_json::Value;
@@ -156,6 +158,26 @@ fn decision_memory_lookup_index_exists() {
         sql,
         "CREATE INDEX idx_decision_memory_repo_session_updated\n    ON decision_memory(repo_root, session_id, updated_at DESC, created_at DESC)"
     );
+}
+
+#[test]
+fn concurrent_open_in_repo_on_fresh_db_is_safe() {
+    let dir = TempDir::new().unwrap();
+    let repo_root = Arc::new(dir.path().to_path_buf());
+
+    let handles = (0..4)
+        .map(|_| {
+            let repo_root = Arc::clone(&repo_root);
+            thread::spawn(move || {
+                let store = SessionStore::open_in_repo(repo_root.as_path()).unwrap();
+                store.schema_version().unwrap()
+            })
+        })
+        .collect::<Vec<_>>();
+
+    for handle in handles {
+        assert_eq!(handle.join().unwrap(), LATEST_VERSION);
+    }
 }
 
 #[test]

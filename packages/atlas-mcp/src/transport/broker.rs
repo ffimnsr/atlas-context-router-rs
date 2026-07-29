@@ -14,7 +14,6 @@ use super::types::PendingReverseRequest;
 /// Trait for emitting outbound JSON-RPC requests to the client.
 pub(crate) trait ReverseRequestEmitter: Send + Sync {
     fn emit_request(&self, request: serde_json::Value) -> Result<()>;
-    fn emit_task_status(&self, params: serde_json::Value) -> Result<()>;
 }
 
 /// Broker that tracks pending reverse requests and matches responses.
@@ -101,10 +100,6 @@ impl ReverseRequestBroker {
         }
     }
 
-    pub(crate) fn try_resolve_response(&self, response: &serde_json::Value) -> bool {
-        self.try_resolve_response_for_scope(None, response)
-    }
-
     pub(crate) fn try_resolve_response_for_scope(
         &self,
         required_scope_prefix: Option<&str>,
@@ -157,29 +152,6 @@ impl ReverseRequestBroker {
             .lock()
             .expect("reverse request broker lock poisoned")
             .is_empty()
-    }
-
-    pub(crate) fn cancel_scope(&self, scope_id: &str, reason: &str) {
-        let keys = self
-            .pending
-            .lock()
-            .expect("reverse request broker lock poisoned")
-            .iter()
-            .filter_map(|(key, pending)| (pending.scope_id == scope_id).then_some(key.clone()))
-            .collect::<Vec<_>>();
-        for key in keys {
-            if let Some(pending) = self
-                .pending
-                .lock()
-                .expect("reverse request broker lock poisoned")
-                .remove(&key)
-            {
-                let (lock, cv) = &*pending.waiter;
-                *lock.lock().expect("reverse request waiter lock poisoned") =
-                    Some(Err(reason.to_owned()));
-                cv.notify_all();
-            }
-        }
     }
 }
 

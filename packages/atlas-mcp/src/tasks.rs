@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 
 use crate::output::{OutputFormat, resolve_output_format};
 use crate::progress;
-use crate::runtime_context::{self, ReverseRequestClient};
+use crate::runtime_context::{self, RequestContext};
 use crate::tool_result::normalize_tool_execution_error;
 
 pub(crate) type TaskApiResult<T> = std::result::Result<T, TaskApiError>;
@@ -184,7 +184,7 @@ fn run_task_worker(
     repo_root: &str,
     db_path: &str,
     cancel_flag: Arc<std::sync::atomic::AtomicBool>,
-    request_context: Option<ReverseRequestClient>,
+    request_context: Option<RequestContext>,
 ) -> Result<Value> {
     if let Some(client) = request_context.clone() {
         runtime_context::install(client);

@@ -25,11 +25,10 @@ use super::jsonrpc::{
 use super::notify::{
     emit_mcp_log_notification, emit_progress_notification, emit_trace_log, write_response,
 };
-use super::repo_selection::{preferred_root_hint_uri, request_active_root_hint_uri};
+
 use super::types::{
     ConnectionState, PendingRequest, ProgressEventKind, RequestCompletion, RequestDispatchContext,
-    RequestLogContext, StdioReverseEmitter, TraceThreshold, TransportEvent, TransportStats,
-    request_id_string,
+    RequestLogContext, TraceThreshold, TransportEvent, TransportStats, request_id_string,
 };
 
 pub(crate) fn handle_input_line<W: Write>(
@@ -85,17 +84,6 @@ pub(crate) fn handle_input_line<W: Write>(
         return Ok(());
     }
 
-    // Try to resolve as reverse-request response
-    if request.get("jsonrpc").and_then(|value| value.as_str()) == Some("2.0")
-        && request.get("id").is_some()
-        && request.get("method").is_none()
-        && connection_state
-            .reverse_broker
-            .try_resolve_response(&request)
-    {
-        return Ok(());
-    }
-
     // Validate basic JSON-RPC envelope
     if !request.is_object()
         || request.get("jsonrpc").and_then(|value| value.as_str()) != Some("2.0")
@@ -138,8 +126,6 @@ pub(crate) fn handle_input_line<W: Write>(
         && let Ok(parsed) = spec::parse_initialize_request(params)
     {
         connection_state.client_capabilities = parsed.capabilities;
-        connection_state.repo_resolution.preferred_root_hint_uri =
-            preferred_root_hint_uri(parsed.meta.as_ref());
     }
 
     let legacy_compat_active = connection_state.client_capabilities.is_object();
@@ -191,16 +177,6 @@ pub(crate) fn handle_input_line<W: Write>(
     if method == "initialized" || method == "notifications/initialized" {
         stats.notifications += 1;
         connection_state.initialized = true;
-        return Ok(());
-    }
-
-    if method == "notifications/roots/list_changed" {
-        stats.notifications += 1;
-        if connection_state.repo_resolution.dynamic_roots {
-            connection_state.repo_resolution.active = None;
-            connection_state.repo_resolution.active_selection_source = None;
-            connection_state.repo_resolution.candidate_roots = None;
-        }
         return Ok(());
     }
 
@@ -287,14 +263,11 @@ pub(crate) fn handle_input_line<W: Write>(
         let request_log_for_worker = request_log.clone();
         let canceled_tokens = Arc::clone(&ctx.canceled_tokens);
         let progress_token = progress_token_from_params(params.as_ref());
-        let request_active_root_hint_uri = request_active_root_hint_uri(&request);
-        let reverse_broker = connection_state.reverse_broker.clone();
         let repo_resolution = connection_state.repo_resolution.clone();
         let effective_client_capabilities = request_meta
             .as_ref()
             .map(|meta| meta.client_capabilities.clone())
             .unwrap_or_else(|| connection_state.client_capabilities.clone());
-        let initialized = request_meta.is_some() || connection_state.initialized;
         let client_interactions =
             parse_client_interaction_capabilities(&effective_client_capabilities);
         tracing::debug!(
@@ -338,34 +311,30 @@ pub(crate) fn handle_input_line<W: Write>(
             ),
         )?;
         let submit_result = ctx.worker_pool.submit(move || {
-            let reverse_emitter: Arc<dyn super::broker::ReverseRequestEmitter> =
-                Arc::new(StdioReverseEmitter {
-                    event_tx: event_tx.clone(),
-                });
-            let reverse_scope_id = format!("stdio:{token}");
-            let reverse_client = crate::runtime_context::ReverseRequestClient::new(
+            let request_context = crate::runtime_context::RequestContext::new(
                 Arc::new({
-                    let reverse_broker = reverse_broker.clone();
-                    let reverse_emitter = Arc::clone(&reverse_emitter);
-                    let reverse_scope_id = reverse_scope_id.clone();
-                    move |method, params, timeout| {
-                        reverse_broker.issue_request(
-                            &reverse_scope_id,
-                            &reverse_emitter,
-                            method,
-                            params,
-                            timeout,
-                        )
+                    let event_tx = event_tx.clone();
+                    move |params| {
+                        event_tx
+                            .send(TransportEvent::OutboundJson(
+                                crate::transport::jsonrpc::jsonrpc_notification(
+                                    "notifications/tasks/status",
+                                    params,
+                                ),
+                            ))
+                            .map_err(|_| {
+                                anyhow::anyhow!("stdio task notification channel disconnected")
+                            })?;
+                        Ok(())
                     }
-                }),
-                Arc::new({
-                    let reverse_emitter = Arc::clone(&reverse_emitter);
-                    move |params| reverse_emitter.emit_task_status(params)
                 }),
                 client_interactions.clone(),
                 "stdio",
                 None,
+                None,
                 request_id_string(&request_id),
+                method_name.clone(),
+                params.clone(),
             );
             if canceled_tokens
                 .lock()
@@ -388,7 +357,7 @@ pub(crate) fn handle_input_line<W: Write>(
                 "started MCP request"
             );
             let progress_event_tx = event_tx.clone();
-            crate::runtime_context::install(reverse_client);
+            crate::runtime_context::install(request_context);
             crate::tasks::install_tool_call_request_params(params.as_ref());
             crate::progress::install(
                 move |msg, pct| {
@@ -405,13 +374,7 @@ pub(crate) fn handle_input_line<W: Write>(
                 &repo_resolution,
                 request_log_for_worker.tool_name.as_deref(),
                 tool_args,
-                ToolRepoResolutionContext {
-                    request_active_root_hint_uri: request_active_root_hint_uri.as_deref(),
-                    client_capabilities: &effective_client_capabilities,
-                    initialized,
-                    reverse_broker: &reverse_broker,
-                    reverse_emitter: &reverse_emitter,
-                },
+                ToolRepoResolutionContext,
             ) {
                 Ok(selection) => selection,
                 Err(error) => {
@@ -434,13 +397,11 @@ pub(crate) fn handle_input_line<W: Write>(
                 }
             };
             let repo_context = selection.repo_context.clone();
-            if repo_resolution.dynamic_roots {
-                let _ = event_tx.send(TransportEvent::RepoContextResolved {
-                    repo_context: selection.repo_context,
-                    selection_source: selection.selection_source,
-                    candidate_roots: selection.candidate_roots,
-                });
-            }
+            let _ = event_tx.send(TransportEvent::RepoContextResolved {
+                repo_context: selection.repo_context,
+                selection_source: selection.selection_source,
+                candidate_roots: selection.candidate_roots,
+            });
             let dispatch_started_at = Instant::now();
             let dispatch_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 dispatch(
@@ -575,6 +536,7 @@ fn requires_request_meta(method: &str) -> bool {
     !matches!(
         method,
         "initialize"
+            | "server/discover"
             | "initialized"
             | "notifications/initialized"
             | "$/cancelRequest"
@@ -603,9 +565,6 @@ fn cancel_request<W: Write>(
     let request = pending
         .remove(&token)
         .expect("pending request must exist while canceling");
-    connection_state
-        .reverse_broker
-        .cancel_scope(&format!("stdio:{token}"), "parent request cancelled");
     request.cancel_flag.store(true, Ordering::Relaxed);
     connection_state
         .canceled_tokens

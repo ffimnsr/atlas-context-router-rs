@@ -208,31 +208,23 @@ fn serve_command_handles_stdio_jsonrpc_flow_end_to_end() {
 }
 
 #[test]
-fn serve_direct_stdio_help_mentions_dynamic_root_resolution() {
+fn serve_direct_stdio_help_mentions_launch_cwd_and_explicit_repo_root() {
     let repo = setup_fixture_repo();
     let output = run_atlas(repo.path(), &["serve", "--help"]);
     assert!(output.status.success(), "serve --help failed");
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("deferred dynamic-root mode"),
-        "missing dynamic-root help: {stdout}"
+        stdout.contains("launch cwd the same way as other"),
+        "missing launch cwd guidance: {stdout}"
     );
     assert!(
-        stdout.contains("workspace roots instead of inherited process cwd"),
-        "missing cwd guidance: {stdout}"
-    );
-    assert!(
-        stdout.contains("falls back to launch cwd when roots are unavailable"),
-        "missing launch-cwd fallback guidance: {stdout}"
-    );
-    assert!(
-        stdout.contains("activeRootUri"),
-        "missing query-only hint guidance: {stdout}"
+        stdout.contains("arguments.repo_root"),
+        "missing explicit repo_root guidance: {stdout}"
     );
 }
 
 #[test]
-fn serve_direct_stdio_falls_back_to_launch_cwd_when_client_lacks_roots_support() {
+fn serve_direct_stdio_uses_launch_cwd_repo_without_roots_flow() {
     let target_repo = setup_fixture_repo();
     run_atlas(target_repo.path(), &["init"]);
     run_atlas(target_repo.path(), &["build"]);
@@ -273,7 +265,7 @@ fn serve_direct_stdio_falls_back_to_launch_cwd_when_client_lacks_roots_support()
     assert_eq!(query_response["id"], json!(2));
     assert_eq!(
         query_response["result"]["_meta"]["atlas:repoSelection"]["selectionSource"],
-        json!("launch_cwd_fallback")
+        json!("cached_active_root")
     );
     let query_text = query_response["result"]["content"][0]["text"]
         .as_str()
@@ -293,7 +285,7 @@ fn serve_direct_stdio_falls_back_to_launch_cwd_when_client_lacks_roots_support()
 }
 
 #[test]
-fn serve_direct_stdio_defers_repo_binding_and_resolves_from_client_root() {
+fn serve_direct_stdio_allows_explicit_repo_root_override() {
     let target_repo = setup_fixture_repo();
     run_atlas(target_repo.path(), &["init"]);
     run_atlas(target_repo.path(), &["build"]);
@@ -308,11 +300,7 @@ fn serve_direct_stdio_defers_repo_binding_and_resolves_from_client_root() {
         "method": "initialize",
         "params": {
             "protocolVersion": atlas_mcp::MCP_PROTOCOL_VERSION,
-            "capabilities": {
-                "roots": { "listChanged": true },
-                "sampling": {},
-                "elicitation": { "form": {}, "url": {} }
-            },
+            "capabilities": {},
             "clientInfo": { "name": "zed", "version": "1.0.0" },
             "_meta": { "clientTag": "quality-gate" }
         }
@@ -331,26 +319,19 @@ fn serve_direct_stdio_defers_repo_binding_and_resolves_from_client_root() {
         "method": "tools/call",
         "params": {
             "name": "query_graph",
-            "arguments": { "text": "greet_twice" }
-        }
-    }));
-
-    let roots_request = session.recv_json(Duration::from_secs(1));
-    assert_eq!(roots_request["method"], json!("roots/list"));
-    let roots_id = roots_request["id"].clone();
-    let roots_uri = format!("file://{}", target_repo.path().display());
-    session.send_json(&json!({
-        "jsonrpc": "2.0",
-        "id": roots_id,
-        "result": {
-            "roots": [
-                { "uri": roots_uri, "name": "target" }
-            ]
+            "arguments": {
+                "repo_root": target_repo.path().to_string_lossy().into_owned(),
+                "text": "greet_twice"
+            }
         }
     }));
 
     let query_response = session.recv_json(Duration::from_secs(2));
     assert_eq!(query_response["id"], json!(2));
+    assert_eq!(
+        query_response["result"]["_meta"]["atlas:repoSelection"]["selectionSource"],
+        json!("explicit_request")
+    );
     let query_text = query_response["result"]["content"][0]["text"]
         .as_str()
         .expect("query_graph text content");
@@ -363,11 +344,11 @@ fn serve_direct_stdio_defers_repo_binding_and_resolves_from_client_root() {
     );
     let stderr = stderr_lines.join("\n");
     assert!(
-        stderr.contains("atlas-mcp: server ready (repo=<deferred>, db=<deferred>)"),
-        "direct stdio must log deferred repo/db placeholders\n{stderr}"
+        stderr.contains("atlas-mcp: server ready (repo="),
+        "direct stdio must log resolved repo root\n{stderr}"
     );
     assert!(
-        !stderr.contains("atlas-mcp: broker spawn") && !stderr.contains("atlas-mcp: broker attach"),
+        !stderr.contains("broker spawn") && !stderr.contains("broker attach"),
         "direct stdio mode must bypass broker\n{stderr}"
     );
 

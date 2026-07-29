@@ -1,6 +1,7 @@
 {
-  "method": "elicitation/create",
-  "mode": "form",
+  "resultType": "input_required",
+  "requestId": "confirmation",
+  "requestType": "form",
   "message": "Confirm purge of saved context across all sessions older than keep_days. This cannot be undone.",
   "schema": {
     "type": "object",
@@ -25,6 +26,7 @@
       "confirmation"
     ]
   },
+  "requestStatePresent": true,
   "result": {
     "deleted_source_count": null,
     "deleted_bridge_file_count": null,

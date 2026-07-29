@@ -469,14 +469,6 @@ fn task_lifecycle_http_snapshot(harness: &HttpTestHarness) -> Value {
     })
 }
 
-fn parse_sse_json(body: &str) -> Value {
-    let data_line = body
-        .lines()
-        .find(|line| line.starts_with("data: "))
-        .expect("SSE data line");
-    serde_json::from_str(data_line.trim_start_matches("data: ")).expect("SSE json payload")
-}
-
 fn normalized_tool_result_contract(result: &Value) -> Value {
     let mut copy = result.clone();
     normalize_dynamic(&mut copy);
@@ -504,12 +496,14 @@ fn normalized_tool_result_contract(result: &Value) -> Value {
     })
 }
 
-fn elicitation_round_trip_snapshot(reverse_request: &Value, final_response: &Value) -> Value {
+fn elicitation_round_trip_snapshot(input_required: &Value, final_response: &Value) -> Value {
     json!({
-        "method": reverse_request["method"],
-        "mode": reverse_request["params"]["mode"],
-        "message": reverse_request["params"]["message"],
-        "schema": reverse_request["params"]["requestedSchema"],
+        "resultType": input_required["result"]["resultType"],
+        "requestId": input_required["result"]["inputRequests"][0]["id"],
+        "requestType": input_required["result"]["inputRequests"][0]["type"],
+        "message": input_required["result"]["inputRequests"][0]["message"],
+        "schema": input_required["result"]["inputRequests"][0]["requestedSchema"],
+        "requestStatePresent": input_required["result"]["requestState"].is_string(),
         "result": {
             "deleted_source_count": final_response["result"]["structuredContent"]["deleted_source_count"],
             "deleted_bridge_file_count": final_response["result"]["structuredContent"]["deleted_bridge_file_count"],
@@ -549,29 +543,43 @@ fn elicitation_round_trip_stdio_snapshot(repo_root: &str, db_path: &str) -> Valu
             }
         }))
         .expect("send purge_saved_context call");
-    let reverse_request = session
+    let input_required = session
         .recv_json(Duration::from_secs(2))
-        .expect("recv stdio reverse request")
-        .expect("stdio reverse request");
-    let reverse_request_id = reverse_request["id"].clone();
+        .expect("recv stdio input_required response")
+        .expect("stdio input_required response");
+    let request_state = input_required["result"]["requestState"]
+        .as_str()
+        .expect("stdio requestState")
+        .to_owned();
     session
         .send_json(&json!({
             "jsonrpc": "2.0",
-            "id": reverse_request_id,
-            "result": {
-                "action": "accept",
-                "content": {
-                    "confirmation": "confirm"
+            "id": 3,
+            "method": "tools/call",
+            "params": {
+                "name": "purge_saved_context",
+                "arguments": {
+                    "keep_days": 30,
+                    "output_format": "json"
+                },
+                "requestState": request_state,
+                "inputResponses": {
+                    "confirmation": {
+                        "action": "accept",
+                        "content": {
+                            "confirmation": "confirm"
+                        }
+                    }
                 }
             }
         }))
-        .expect("send stdio reverse response");
+        .expect("send stdio retry request");
     let final_response = session
         .recv_json(Duration::from_secs(2))
         .expect("recv stdio final response")
         .expect("stdio final response");
     let _ = session.finish().expect("finish stdio session");
-    elicitation_round_trip_snapshot(&reverse_request, &final_response)
+    elicitation_round_trip_snapshot(&input_required, &final_response)
 }
 
 fn elicitation_round_trip_http_snapshot(harness: &HttpTestHarness) -> Value {
@@ -580,11 +588,9 @@ fn elicitation_round_trip_http_snapshot(harness: &HttpTestHarness) -> Value {
         .post_jsonrpc(&http_headers(&session_id), &initialized_notification())
         .expect("http initialized notification");
 
-    let session_id_for_worker = session_id.clone();
-    let harness_for_worker = harness.clone();
-    let worker = thread::spawn(move || {
-        harness_for_worker.post_jsonrpc(
-            &http_headers(&session_id_for_worker),
+    let input_required = harness
+        .post_jsonrpc(
+            &http_headers(&session_id),
             &json!({
                 "jsonrpc": "2.0",
                 "id": 2,
@@ -598,40 +604,47 @@ fn elicitation_round_trip_http_snapshot(harness: &HttpTestHarness) -> Value {
                 }
             }),
         )
-    });
+        .expect("http input_required response");
+    let input_required_json = input_required
+        .json_body
+        .as_ref()
+        .expect("http input_required json body");
+    let request_state = input_required_json["result"]["requestState"]
+        .as_str()
+        .expect("http requestState")
+        .to_owned();
 
-    let reverse_request = loop {
-        let poll = harness
-            .get_mcp(&http_headers(&session_id))
-            .expect("http reverse-request poll");
-        if poll.status == 200 && poll.body_text.contains("\"method\":\"elicitation/create\"") {
-            break parse_sse_json(&poll.body_text);
-        }
-        thread::sleep(Duration::from_millis(20));
-    };
-
-    harness
+    let final_response = harness
         .post_jsonrpc(
             &http_headers(&session_id),
             &json!({
                 "jsonrpc": "2.0",
-                "id": reverse_request["id"],
-                "result": {
-                    "action": "accept",
-                    "content": {
-                        "confirmation": "confirm"
+                "id": 3,
+                "method": "tools/call",
+                "params": {
+                    "name": "purge_saved_context",
+                    "arguments": {
+                        "keep_days": 30,
+                        "output_format": "json"
+                    },
+                    "requestState": request_state,
+                    "inputResponses": {
+                        "confirmation": {
+                            "action": "accept",
+                            "content": {
+                                "confirmation": "confirm"
+                            }
+                        }
                     }
                 }
             }),
         )
-        .expect("http reverse response");
-
-    let final_response = worker
-        .join()
-        .expect("join http tool call thread")
-        .expect("http final response");
+        .expect("http retry response");
     elicitation_round_trip_snapshot(
-        &reverse_request,
+        input_required
+            .json_body
+            .as_ref()
+            .expect("http input_required json body"),
         final_response
             .json_body
             .as_ref()

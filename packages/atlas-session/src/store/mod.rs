@@ -1,6 +1,8 @@
 //! SQLite-backed session metadata, event ledger, and resume snapshots.
 
+use std::collections::HashMap;
 use std::path::Path;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use serde::Deserialize;
@@ -44,6 +46,8 @@ use self::util::{
     is_corruption_error, normalize_event_payload_paths, path_to_str, quarantine_db, row_to_event,
 };
 
+static SESSION_DB_OPEN_LOCKS: OnceLock<Mutex<HashMap<String, Arc<Mutex<()>>>>> = OnceLock::new();
+
 pub struct SessionStore {
     // One connection per store instance. Keep thread-confined; do not share
     // across worker threads. The `_thread_bound` field explicitly opts out of
@@ -75,6 +79,9 @@ impl SessionStore {
         if let Some(parent) = Path::new(path).parent() {
             std::fs::create_dir_all(parent)?;
         }
+
+        let path_lock = session_db_open_lock(path);
+        let _path_guard = path_lock.lock().expect("session db open lock poisoned");
 
         match Self::try_open(path, config.clone()) {
             Ok(store) => Ok(store),
@@ -769,6 +776,16 @@ impl SessionStore {
         }
         Ok(())
     }
+}
+
+fn session_db_open_lock(path: &str) -> Arc<Mutex<()>> {
+    SESSION_DB_OPEN_LOCKS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .expect("session db open lock map poisoned")
+        .entry(path.to_owned())
+        .or_insert_with(|| Arc::new(Mutex::new(())))
+        .clone()
 }
 
 fn parse_durable_task_list_cursor(cursor: &str) -> Result<DurableTaskListCursor> {

@@ -11,12 +11,9 @@ use atlas_core::EdgeKind;
 use atlas_core::error_code_docs_ref;
 use atlas_core::kinds::NodeKind;
 use atlas_core::model::{Edge, Node, NodeId};
-use atlas_repo::canonical_filesystem_path;
 use atlas_store_sqlite::Store;
-use camino::Utf8Path;
 use rusqlite::Connection;
 use tempfile::TempDir;
-use url::Url;
 
 use crate::MCP_PROTOCOL_VERSION;
 
@@ -42,10 +39,6 @@ fn assert_error_code_doc_link(actual: &serde_json::Value, error_code: &str) {
 struct TransportFixture {
     _dir: TempDir,
     db_path: String,
-}
-
-struct TextRepoFixture {
-    _dir: TempDir,
 }
 
 fn make_node(kind: NodeKind, name: &str, qualified_name: &str, file_path: &str) -> Node {
@@ -140,60 +133,6 @@ fn setup_fixture() -> TransportFixture {
     fixture
 }
 
-fn setup_text_repo(files: &[(&str, &str)]) -> TextRepoFixture {
-    let dir = tempfile::tempdir().expect("text repo tempdir");
-    for (path, content) in files {
-        let abs = dir.path().join(path);
-        if let Some(parent) = abs.parent() {
-            std::fs::create_dir_all(parent).expect("create text repo parent");
-        }
-        std::fs::write(abs, content).expect("write text repo file");
-    }
-    TextRepoFixture { _dir: dir }
-}
-
-fn canonical_tempdir_path(dir: &TempDir) -> String {
-    let utf8 = Utf8Path::from_path(dir.path()).expect("tempdir path utf-8");
-    canonical_filesystem_path(utf8)
-        .expect("canonical tempdir path")
-        .into_string()
-}
-
-fn initialize_dynamic_session(
-    session: &InteractiveStdioTestSession,
-    roots_capability: bool,
-) -> serde_json::Value {
-    let capabilities = if roots_capability {
-        serde_json::json!({ "roots": { "listChanged": true } })
-    } else {
-        serde_json::json!({})
-    };
-    session
-        .send_json(&serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "initialize",
-            "params": {
-                "protocolVersion": MCP_PROTOCOL_VERSION,
-                "capabilities": capabilities,
-                "clientInfo": { "name": "zed", "version": "1.0.0" }
-            }
-        }))
-        .unwrap();
-    let initialize = session
-        .recv_json(Duration::from_secs(1))
-        .unwrap()
-        .expect("initialize response");
-    session
-        .send_json(&serde_json::json!({
-            "jsonrpc": "2.0",
-            "method": "initialized",
-            "params": {}
-        }))
-        .unwrap();
-    initialize
-}
-
 fn parse_output_lines(output: Vec<u8>) -> Vec<serde_json::Value> {
     String::from_utf8(output)
         .expect("utf8 output")
@@ -266,10 +205,6 @@ impl ReverseRequestEmitter for TestReverseEmitter {
             .push(request);
         Ok(())
     }
-
-    fn emit_task_status(&self, _params: serde_json::Value) -> Result<()> {
-        Ok(())
-    }
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────
@@ -328,6 +263,50 @@ fn unsupported_request_protocol_version_returns_mcp_error() {
 }
 
 #[test]
+fn server_discover_works_without_initialize_and_matches_initialize_capabilities() {
+    let fixture = setup_fixture();
+    let repo_root = fixture._dir.path().to_string_lossy().into_owned();
+
+    let response = stdio_single_response_2026(
+        &repo_root,
+        &fixture.db_path,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "server/discover"
+        }),
+    );
+
+    let result = &response["result"];
+    assert_eq!(
+        result["supportedVersions"],
+        serde_json::json!([MCP_PROTOCOL_VERSION])
+    );
+    assert_eq!(
+        result["capabilities"],
+        serde_json::to_value(crate::spec::initialize_capabilities()).expect("capabilities")
+    );
+    assert_eq!(result["serverInfo"], crate::spec::server_info_meta_value());
+    assert_eq!(
+        result["instructions"],
+        serde_json::json!(crate::spec::DISCOVER_INSTRUCTIONS)
+    );
+    assert_eq!(
+        result["ttlMs"],
+        serde_json::json!(crate::spec::DISCOVER_CACHE_TTL_MS)
+    );
+    assert_eq!(
+        result["cacheScope"],
+        serde_json::json!(crate::spec::DISCOVER_CACHE_SCOPE)
+    );
+    assert_eq!(result["resultType"], serde_json::json!("complete"));
+    assert_eq!(
+        result["_meta"][crate::spec::META_SERVER_INFO],
+        crate::spec::server_info_meta_value()
+    );
+}
+
+#[test]
 fn request_success_results_include_complete_type_and_server_info_meta() {
     let fixture = setup_fixture();
     let repo_root = fixture._dir.path().to_string_lossy().into_owned();
@@ -382,6 +361,7 @@ fn advertised_capabilities_have_stdio_method_handlers_and_descriptor_backing() {
     assert!(capabilities.experimental.is_some());
 
     for request in [
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"server/discover"}),
         serde_json::json!({"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}),
         serde_json::json!({
             "jsonrpc":"2.0",
@@ -553,10 +533,89 @@ fn reverse_request_broker_enforces_scope_correlation() {
 }
 
 #[test]
-fn dynamic_roots_resolve_repo_before_first_tool_call() {
+fn purge_saved_context_stdio_returns_input_required_without_reverse_request() {
     let fixture = setup_fixture();
-    let repo_root = canonical_tempdir_path(&fixture._dir);
-    let session = InteractiveStdioTestSession::start_dynamic(ServerOptions::default()).unwrap();
+    let session = InteractiveStdioTestSession::start(
+        fixture._dir.path().to_string_lossy().as_ref(),
+        &fixture.db_path,
+        ServerOptions::default(),
+    )
+    .unwrap();
+
+    session
+        .send_json(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": MCP_PROTOCOL_VERSION,
+                "capabilities": { "elicitation": { "form": {} } },
+                "clientInfo": { "name": "zed", "version": "1.0.0" }
+            }
+        }))
+        .unwrap();
+    let _ = session.recv_json(Duration::from_secs(1)).unwrap();
+    session
+        .send_json(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "initialized",
+            "params": {}
+        }))
+        .unwrap();
+    session
+        .send_json(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "purge_saved_context",
+                "arguments": { "keep_days": 30 },
+                "_meta": {
+                    crate::spec::META_PROTOCOL_VERSION: MCP_PROTOCOL_VERSION,
+                    crate::spec::META_CLIENT_CAPABILITIES: {
+                        "elicitation": { "form": {} }
+                    },
+                    crate::spec::META_CLIENT_INFO: {
+                        "name": "zed",
+                        "version": "1.0.0"
+                    }
+                }
+            }
+        }))
+        .unwrap();
+
+    let response = session
+        .recv_json(Duration::from_secs(1))
+        .unwrap()
+        .expect("tools/call response");
+    assert_eq!(
+        response["result"]["resultType"],
+        serde_json::json!("input_required")
+    );
+    assert_eq!(
+        response["result"]["inputRequests"][0]["id"],
+        serde_json::json!("confirmation")
+    );
+    assert!(
+        session
+            .recv_json(Duration::from_millis(100))
+            .unwrap()
+            .is_none(),
+        "server must not emit outbound elicitation/create reverse request"
+    );
+
+    let _ = session.finish().unwrap();
+}
+
+#[test]
+fn fixed_repo_mode_never_emits_roots_list_or_invalidates_on_roots_notifications() {
+    let fixture = setup_fixture();
+    let session = InteractiveStdioTestSession::start(
+        fixture._dir.path().to_string_lossy().as_ref(),
+        &fixture.db_path,
+        ServerOptions::default(),
+    )
+    .unwrap();
 
     session
         .send_json(&serde_json::json!({
@@ -570,12 +629,7 @@ fn dynamic_roots_resolve_repo_before_first_tool_call() {
             }
         }))
         .unwrap();
-    let initialize = session
-        .recv_json(Duration::from_secs(1))
-        .unwrap()
-        .expect("initialize response");
-    assert_eq!(initialize["id"], serde_json::json!(1));
-
+    let _ = session.recv_json(Duration::from_secs(1)).unwrap();
     session
         .send_json(&serde_json::json!({
             "jsonrpc": "2.0",
@@ -595,62 +649,30 @@ fn dynamic_roots_resolve_repo_before_first_tool_call() {
         }))
         .unwrap();
 
-    let roots_request = session
-        .recv_json(Duration::from_secs(1))
-        .unwrap()
-        .expect("roots/list request");
-    assert_eq!(roots_request["method"], serde_json::json!("roots/list"));
-    let roots_id = roots_request["id"].clone();
-    let roots_uri = Url::from_directory_path(fixture._dir.path())
-        .expect("fixture root url")
-        .to_string();
-    session
-        .send_json(&serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": roots_id,
-            "result": {
-                "roots": [
-                    { "uri": roots_uri.clone(), "name": "fixture" }
-                ]
-            }
-        }))
-        .unwrap();
-
     let response = session
         .recv_json(Duration::from_secs(1))
         .unwrap()
-        .expect("query_graph response");
-    assert_eq!(
-        response["result"]["_meta"]["atlas:repoSelection"]["sessionMode"],
-        serde_json::json!("dynamic")
-    );
+        .expect("fixed-mode query response");
+    assert_eq!(response["id"], serde_json::json!(2));
     assert_eq!(
         response["result"]["_meta"]["atlas:repoSelection"]["selectionSource"],
-        serde_json::json!("single_root")
+        serde_json::json!("cached_active_root")
     );
-    assert_eq!(
-        response["result"]["_meta"]["atlas:repoRoot"],
-        serde_json::json!(repo_root)
+    assert!(
+        session
+            .recv_json(Duration::from_millis(150))
+            .unwrap()
+            .is_none(),
+        "fixed mode must not emit roots/list"
     );
-    let format = response["result"]["_meta"]["atlas:outputFormat"]
-        .as_str()
-        .unwrap_or("toon");
-    let text = response["result"]["content"][0]["text"]
-        .as_str()
-        .expect("query_graph response text");
-    if format == "json" {
-        let query_value: serde_json::Value =
-            serde_json::from_str(text).expect("query_graph payload json");
-        assert_eq!(
-            query_value[0]["qn"],
-            serde_json::json!("src/service.rs::fn::compute")
-        );
-        assert_eq!(query_value[0]["file"], serde_json::json!("src/service.rs"));
-    } else {
-        assert!(text.contains("src/service.rs::fn::compute"));
-        assert!(text.contains("src/service.rs"));
-    }
 
+    session
+        .send_json(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/roots/list_changed",
+            "params": {}
+        }))
+        .unwrap();
     session
         .send_json(&serde_json::json!({
             "jsonrpc": "2.0",
@@ -662,143 +684,37 @@ fn dynamic_roots_resolve_repo_before_first_tool_call() {
             }
         }))
         .unwrap();
-    let cached_response = session
+    let second = session
         .recv_json(Duration::from_secs(1))
         .unwrap()
-        .expect("cached query_graph response");
-    assert_eq!(cached_response["id"], serde_json::json!(3));
+        .expect("post-roots-changed response");
+    assert_eq!(second["id"], serde_json::json!(3));
     assert_eq!(
-        cached_response["result"]["_meta"]["atlas:repoSelection"]["selectionSource"],
+        second["result"]["_meta"]["atlas:repoSelection"]["selectionSource"],
         serde_json::json!("cached_active_root")
-    );
-    assert_eq!(
-        cached_response["result"]["_meta"]["atlas:repoSelection"]["usedCachedSelection"],
-        serde_json::json!(true)
     );
     assert!(
         session
             .recv_json(Duration::from_millis(150))
             .unwrap()
             .is_none(),
-        "cached active repo must prevent a second roots/list reverse request"
-    );
-
-    let _ = session.finish().unwrap();
-    let resolved_root = Url::parse(&roots_uri)
-        .expect("parse roots uri")
-        .to_file_path()
-        .expect("roots uri file path");
-    let resolved_root = Utf8Path::from_path(&resolved_root).expect("roots uri utf-8 path");
-    assert_eq!(
-        canonical_filesystem_path(resolved_root)
-            .expect("canonical roots uri path")
-            .as_str(),
-        repo_root
-    );
-}
-
-#[test]
-fn dynamic_roots_require_initialized_before_repo_bound_tool_call() {
-    let session = InteractiveStdioTestSession::start_dynamic(ServerOptions::default()).unwrap();
-    session
-        .send_json(&serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "initialize",
-            "params": {
-                "protocolVersion": MCP_PROTOCOL_VERSION,
-                "capabilities": { "roots": { "listChanged": true } },
-                "clientInfo": { "name": "zed", "version": "1.0.0" }
-            }
-        }))
-        .unwrap();
-    let _ = session.recv_json(Duration::from_secs(1)).unwrap();
-    session
-        .send_json(&serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": 2,
-            "method": "tools/call",
-            "params": {
-                "name": "query_graph",
-                "arguments": { "text": "compute" }
-            }
-        }))
-        .unwrap();
-    let response = session
-        .recv_json(Duration::from_secs(1))
-        .unwrap()
-        .expect("pre-initialized error response");
-    assert_eq!(response["id"], serde_json::json!(2));
-    assert!(
-        response["error"]["message"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("wait for `initialized` before repo-bound tool calls")
-    );
-    assert_eq!(
-        response["error"]["data"]["atlas_repo_selection"]["failure_kind"],
-        serde_json::json!("request_before_initialized")
+        "roots/list_changed must not trigger reverse requests"
     );
     let _ = session.finish().unwrap();
 }
 
 #[test]
-fn dynamic_roots_fall_back_to_launch_cwd_when_client_lacks_roots_capability() {
-    let fixture = setup_fixture();
-    let repo_root = canonical_tempdir_path(&fixture._dir);
-    let session = InteractiveStdioTestSession::start_dynamic_with_launch_cwd(
-        &repo_root,
+fn explicit_repo_root_selector_switches_repo_for_tool_call() {
+    let repo_a = setup_graph_repo_fixture("src/alpha.rs", "compute", "src/alpha.rs::fn::compute");
+    let repo_b = setup_graph_repo_fixture("src/beta.rs", "compute", "src/beta.rs::fn::compute");
+    let repo_b_root = repo_b._dir.path().to_string_lossy().into_owned();
+    let session = InteractiveStdioTestSession::start(
+        repo_a._dir.path().to_string_lossy().as_ref(),
+        &repo_a.db_path,
         ServerOptions::default(),
     )
     .unwrap();
-    let _ = initialize_dynamic_session(&session, false);
-    session
-        .send_json(&serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": 2,
-            "method": "tools/call",
-            "params": {
-                "name": "query_graph",
-                "arguments": { "text": "compute", "output_format": "json" }
-            }
-        }))
-        .unwrap();
-    let response = session
-        .recv_json(Duration::from_secs(1))
-        .unwrap()
-        .expect("launch cwd fallback response");
-    assert_eq!(response["id"], serde_json::json!(2));
-    assert_eq!(
-        response["result"]["_meta"]["atlas:repoSelection"]["selectionSource"],
-        serde_json::json!("launch_cwd_fallback")
-    );
-    assert_eq!(
-        response["result"]["_meta"]["atlas:repoRoot"],
-        serde_json::json!(repo_root)
-    );
-    let query_value: serde_json::Value = serde_json::from_str(
-        response["result"]["content"][0]["text"]
-            .as_str()
-            .expect("query_graph json payload"),
-    )
-    .expect("parse query_graph payload");
-    assert_eq!(
-        query_value[0]["qn"],
-        serde_json::json!("src/service.rs::fn::compute")
-    );
-    assert!(
-        session
-            .recv_json(Duration::from_millis(150))
-            .unwrap()
-            .is_none(),
-        "launch cwd fallback must skip roots/list reverse requests"
-    );
-    let _ = session.finish().unwrap();
-}
 
-#[test]
-fn dynamic_roots_require_client_roots_capability() {
-    let session = InteractiveStdioTestSession::start_dynamic(ServerOptions::default()).unwrap();
     session
         .send_json(&serde_json::json!({
             "jsonrpc": "2.0",
@@ -826,133 +742,11 @@ fn dynamic_roots_require_client_roots_capability() {
             "method": "tools/call",
             "params": {
                 "name": "query_graph",
-                "arguments": { "text": "compute" }
-            }
-        }))
-        .unwrap();
-    let response = session
-        .recv_json(Duration::from_secs(1))
-        .unwrap()
-        .expect("missing roots capability response");
-    assert_eq!(response["id"], serde_json::json!(2));
-    assert!(
-        response["error"]["message"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("did not advertise roots capability")
-    );
-    assert_eq!(
-        response["error"]["data"]["atlas_repo_selection"]["failure_kind"],
-        serde_json::json!("client_lacks_roots_capability")
-    );
-    let _ = session.finish().unwrap();
-}
-
-#[test]
-fn fixed_repo_mode_ignores_conflicting_client_roots() {
-    let fixture = setup_fixture();
-    let session = InteractiveStdioTestSession::start(
-        fixture._dir.path().to_string_lossy().as_ref(),
-        &fixture.db_path,
-        ServerOptions::default(),
-    )
-    .unwrap();
-
-    let _ = initialize_dynamic_session(&session, true);
-    session
-        .send_json(&serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": 2,
-            "method": "tools/call",
-            "params": {
-                "name": "query_graph",
-                "arguments": { "text": "compute", "output_format": "json" }
-            }
-        }))
-        .unwrap();
-
-    let response = session
-        .recv_json(Duration::from_secs(1))
-        .unwrap()
-        .expect("fixed-mode query response");
-    assert_eq!(response["id"], serde_json::json!(2));
-    assert!(
-        session
-            .recv_json(Duration::from_millis(150))
-            .unwrap()
-            .is_none(),
-        "fixed mode must ignore client roots and skip roots/list reverse requests"
-    );
-    session
-        .send_json(&serde_json::json!({
-            "jsonrpc": "2.0",
-            "method": "notifications/roots/list_changed",
-            "params": {}
-        }))
-        .unwrap();
-    session
-        .send_json(&serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": 3,
-            "method": "tools/call",
-            "params": {
-                "name": "query_graph",
-                "arguments": { "text": "compute", "output_format": "json" }
-            }
-        }))
-        .unwrap();
-    let second = session
-        .recv_json(Duration::from_secs(1))
-        .unwrap()
-        .expect("fixed-mode post-roots-changed response");
-    assert_eq!(second["id"], serde_json::json!(3));
-    assert!(
-        session
-            .recv_json(Duration::from_millis(150))
-            .unwrap()
-            .is_none(),
-        "fixed mode must ignore roots/list_changed invalidation"
-    );
-    let _ = session.finish().unwrap();
-}
-
-#[test]
-fn multi_root_file_bearing_tool_selects_matching_root() {
-    let repo_a = setup_text_repo(&[("src/alpha.rs", "pub fn alpha() {}\n")]);
-    let repo_b = setup_text_repo(&[("src/beta.rs", "pub fn beta() {}\n")]);
-    let session = InteractiveStdioTestSession::start_dynamic(ServerOptions::default()).unwrap();
-
-    let _ = initialize_dynamic_session(&session, true);
-    session
-        .send_json(&serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": 2,
-            "method": "tools/call",
-            "params": {
-                "name": "read_file_excerpt",
                 "arguments": {
-                    "file": "src/beta.rs",
-                    "start_line": 1,
-                    "end_line": 1
+                    "repo_root": repo_b_root,
+                    "text": "compute",
+                    "output_format": "json"
                 }
-            }
-        }))
-        .unwrap();
-
-    let roots_request = session
-        .recv_json(Duration::from_secs(1))
-        .unwrap()
-        .expect("roots/list request");
-    let roots_id = roots_request["id"].clone();
-    session
-        .send_json(&serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": roots_id,
-            "result": {
-                "roots": [
-                    { "uri": Url::from_directory_path(repo_a._dir.path()).unwrap().to_string(), "name": "a" },
-                    { "uri": Url::from_directory_path(repo_b._dir.path()).unwrap().to_string(), "name": "b" }
-                ]
             }
         }))
         .unwrap();
@@ -960,225 +754,7 @@ fn multi_root_file_bearing_tool_selects_matching_root() {
     let response = session
         .recv_json(Duration::from_secs(1))
         .unwrap()
-        .expect("read_file_excerpt response");
-    let text = response["result"]["content"][0]["text"]
-        .as_str()
-        .expect("excerpt text");
-    assert!(text.contains("pub fn beta() {}"));
-    let _ = session.finish().unwrap();
-}
-
-#[test]
-fn multi_root_same_relative_path_collision_fails_closed() {
-    let repo_a = setup_text_repo(&[("src/shared.rs", "pub fn left() {}\n")]);
-    let repo_b = setup_text_repo(&[("src/shared.rs", "pub fn right() {}\n")]);
-    let session = InteractiveStdioTestSession::start_dynamic(ServerOptions::default()).unwrap();
-
-    let _ = initialize_dynamic_session(&session, true);
-    session
-        .send_json(&serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": 2,
-            "method": "tools/call",
-            "params": {
-                "name": "read_file_excerpt",
-                "arguments": {
-                    "file": "src/shared.rs",
-                    "start_line": 1,
-                    "end_line": 1
-                }
-            }
-        }))
-        .unwrap();
-
-    let roots_request = session
-        .recv_json(Duration::from_secs(1))
-        .unwrap()
-        .expect("roots/list request");
-    let roots_id = roots_request["id"].clone();
-    session
-        .send_json(&serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": roots_id,
-            "result": {
-                "roots": [
-                    { "uri": Url::from_directory_path(repo_a._dir.path()).unwrap().to_string(), "name": "a" },
-                    { "uri": Url::from_directory_path(repo_b._dir.path()).unwrap().to_string(), "name": "b" }
-                ]
-            }
-        }))
-        .unwrap();
-
-    let response = session
-        .recv_json(Duration::from_secs(1))
-        .unwrap()
-        .expect("collision error response");
-    assert!(
-        response["error"]["message"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("same relative paths exist in more than one root")
-    );
-    assert_eq!(
-        response["error"]["data"]["atlas_repo_selection"]["failure_kind"],
-        serde_json::json!("multiple_roots_insufficient_evidence")
-    );
-    assert_eq!(
-        response["error"]["data"]["atlas_repo_selection"]["tool_name"],
-        serde_json::json!("read_file_excerpt")
-    );
-    assert!(
-        response["error"]["data"]["atlas_repo_selection"]["candidate_roots"]
-            .as_array()
-            .map(|items| items.len() == 2)
-            .unwrap_or(false)
-    );
-    let _ = session.finish().unwrap();
-}
-
-#[test]
-fn roots_list_changed_invalidates_cached_dynamic_root_and_reresolves() {
-    let repo_a = setup_text_repo(&[("src/alpha.rs", "pub fn alpha() {}\n")]);
-    let repo_b = setup_text_repo(&[("src/beta.rs", "pub fn beta() {}\n")]);
-    let session = InteractiveStdioTestSession::start_dynamic(ServerOptions::default()).unwrap();
-
-    let _ = initialize_dynamic_session(&session, true);
-    session
-        .send_json(&serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": 2,
-            "method": "tools/call",
-            "params": {
-                "name": "read_file_excerpt",
-                "arguments": {
-                    "file": "src/alpha.rs",
-                    "start_line": 1,
-                    "end_line": 1
-                }
-            }
-        }))
-        .unwrap();
-    let first_roots = session
-        .recv_json(Duration::from_secs(1))
-        .unwrap()
-        .expect("first roots/list request");
-    session
-        .send_json(&serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": first_roots["id"].clone(),
-            "result": {
-                "roots": [
-                    { "uri": Url::from_directory_path(repo_a._dir.path()).unwrap().to_string(), "name": "a" }
-                ]
-            }
-        }))
-        .unwrap();
-    let first = session
-        .recv_json(Duration::from_secs(1))
-        .unwrap()
-        .expect("first excerpt response");
-    assert!(
-        first["result"]["content"][0]["text"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("pub fn alpha() {}")
-    );
-
-    session
-        .send_json(&serde_json::json!({
-            "jsonrpc": "2.0",
-            "method": "notifications/roots/list_changed",
-            "params": {}
-        }))
-        .unwrap();
-    session
-        .send_json(&serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": 3,
-            "method": "tools/call",
-            "params": {
-                "name": "read_file_excerpt",
-                "arguments": {
-                    "file": "src/beta.rs",
-                    "start_line": 1,
-                    "end_line": 1
-                }
-            }
-        }))
-        .unwrap();
-    let second_roots = session
-        .recv_json(Duration::from_secs(1))
-        .unwrap()
-        .expect("second roots/list request");
-    session
-        .send_json(&serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": second_roots["id"].clone(),
-            "result": {
-                "roots": [
-                    { "uri": Url::from_directory_path(repo_b._dir.path()).unwrap().to_string(), "name": "b" }
-                ]
-            }
-        }))
-        .unwrap();
-    let second = session
-        .recv_json(Duration::from_secs(1))
-        .unwrap()
-        .expect("second excerpt response");
-    assert!(
-        second["result"]["content"][0]["text"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("pub fn beta() {}")
-    );
-    let _ = session.finish().unwrap();
-}
-
-#[test]
-fn multi_root_query_only_tool_uses_request_active_root_hint() {
-    let repo_a = setup_graph_repo_fixture("src/alpha.rs", "compute", "src/alpha.rs::fn::compute");
-    let repo_b = setup_graph_repo_fixture("src/beta.rs", "compute", "src/beta.rs::fn::compute");
-    let session = InteractiveStdioTestSession::start_dynamic(ServerOptions::default()).unwrap();
-
-    let _ = initialize_dynamic_session(&session, true);
-    session
-        .send_json(&serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": 2,
-            "method": "tools/call",
-            "_meta": {
-                "atlas": {
-                    "activeRootUri": Url::from_directory_path(repo_b._dir.path()).unwrap().to_string()
-                }
-            },
-            "params": {
-                "name": "query_graph",
-                "arguments": { "text": "compute", "output_format": "json" }
-            }
-        }))
-        .unwrap();
-
-    let roots_request = session
-        .recv_json(Duration::from_secs(1))
-        .unwrap()
-        .expect("roots/list request");
-    session
-        .send_json(&serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": roots_request["id"].clone(),
-            "result": {
-                "roots": [
-                    { "uri": Url::from_directory_path(repo_a._dir.path()).unwrap().to_string(), "name": "a" },
-                    { "uri": Url::from_directory_path(repo_b._dir.path()).unwrap().to_string(), "name": "b" }
-                ]
-            }
-        }))
-        .unwrap();
-
-    let response = session
-        .recv_json(Duration::from_secs(1))
-        .unwrap()
-        .expect("query_graph response");
+        .expect("explicit repo_root query response");
     let query_value: serde_json::Value = serde_json::from_str(
         response["result"]["content"][0]["text"]
             .as_str()
@@ -1188,99 +764,24 @@ fn multi_root_query_only_tool_uses_request_active_root_hint() {
     assert_eq!(query_value[0]["file"], serde_json::json!("src/beta.rs"));
     assert_eq!(
         response["result"]["_meta"]["atlas:repoSelection"]["selectionSource"],
-        serde_json::json!("client_hint")
+        serde_json::json!("explicit_request")
+    );
+    assert_eq!(
+        response["result"]["_meta"]["atlas:repoRoot"],
+        serde_json::json!(repo_b._dir.path().canonicalize().unwrap().to_string_lossy())
     );
     let _ = session.finish().unwrap();
 }
 
 #[test]
-fn invalid_request_active_root_hint_fails_closed_even_with_cached_root() {
-    let repo_a = setup_graph_repo_fixture("src/alpha.rs", "compute", "src/alpha.rs::fn::compute");
-    let repo_b = setup_graph_repo_fixture("src/beta.rs", "compute", "src/beta.rs::fn::compute");
-    let session = InteractiveStdioTestSession::start_dynamic(ServerOptions::default()).unwrap();
-
-    let _ = initialize_dynamic_session(&session, true);
-    session
-        .send_json(&serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": 2,
-            "method": "tools/call",
-            "_meta": {
-                "atlas": {
-                    "activeRootUri": Url::from_directory_path(repo_a._dir.path()).unwrap().to_string()
-                }
-            },
-            "params": {
-                "name": "query_graph",
-                "arguments": { "text": "compute", "output_format": "json" }
-            }
-        }))
-        .unwrap();
-    let first_roots = session
-        .recv_json(Duration::from_secs(1))
-        .unwrap()
-        .expect("first roots/list request");
-    session
-        .send_json(&serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": first_roots["id"].clone(),
-            "result": {
-                "roots": [
-                    { "uri": Url::from_directory_path(repo_a._dir.path()).unwrap().to_string(), "name": "a" },
-                    { "uri": Url::from_directory_path(repo_b._dir.path()).unwrap().to_string(), "name": "b" }
-                ]
-            }
-        }))
-        .unwrap();
-    let _ = session
-        .recv_json(Duration::from_secs(1))
-        .unwrap()
-        .expect("cached repo seed response");
-
-    session
-        .send_json(&serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": 3,
-            "method": "tools/call",
-            "_meta": {
-                "atlas": {
-                    "activeRootUri": "https://example.com/not-a-file-root"
-                }
-            },
-            "params": {
-                "name": "query_graph",
-                "arguments": { "text": "compute", "output_format": "json" }
-            }
-        }))
-        .unwrap();
-
-    let response = session
-        .recv_json(Duration::from_secs(1))
-        .unwrap()
-        .expect("invalid hint response");
-    assert_eq!(response["id"], serde_json::json!(3));
-    assert!(
-        response["error"]["message"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("active-root hint URI must use file:// scheme")
-    );
-    assert_eq!(
-        response["error"]["data"]["atlas_repo_selection"]["failure_kind"],
-        serde_json::json!("invalid_client_hint")
-    );
-    assert_eq!(
-        response["error"]["data"]["atlas_repo_selection"]["selection_source"],
-        serde_json::json!("client_hint")
-    );
-    let _ = session.finish().unwrap();
-}
-
-#[test]
-fn request_hint_overrides_session_hint_and_session_hint_overrides_cached_root() {
-    let repo_a = setup_graph_repo_fixture("src/alpha.rs", "compute", "src/alpha.rs::fn::compute");
-    let repo_b = setup_graph_repo_fixture("src/beta.rs", "compute", "src/beta.rs::fn::compute");
-    let session = InteractiveStdioTestSession::start_dynamic(ServerOptions::default()).unwrap();
+fn invalid_explicit_repo_selector_returns_actionable_error() {
+    let fixture = setup_fixture();
+    let session = InteractiveStdioTestSession::start(
+        fixture._dir.path().to_string_lossy().as_ref(),
+        &fixture.db_path,
+        ServerOptions::default(),
+    )
+    .unwrap();
 
     session
         .send_json(&serde_json::json!({
@@ -1289,13 +790,8 @@ fn request_hint_overrides_session_hint_and_session_hint_overrides_cached_root() 
             "method": "initialize",
             "params": {
                 "protocolVersion": MCP_PROTOCOL_VERSION,
-                "capabilities": { "roots": { "listChanged": true } },
-                "clientInfo": { "name": "zed", "version": "1.0.0" },
-                "_meta": {
-                    "atlas": {
-                        "preferredRootUri": Url::from_directory_path(repo_a._dir.path()).unwrap().to_string()
-                    }
-                }
+                "capabilities": {},
+                "clientInfo": { "name": "zed", "version": "1.0.0" }
             }
         }))
         .unwrap();
@@ -1307,7 +803,6 @@ fn request_hint_overrides_session_hint_and_session_hint_overrides_cached_root() 
             "params": {}
         }))
         .unwrap();
-
     session
         .send_json(&serde_json::json!({
             "jsonrpc": "2.0",
@@ -1315,205 +810,34 @@ fn request_hint_overrides_session_hint_and_session_hint_overrides_cached_root() 
             "method": "tools/call",
             "params": {
                 "name": "query_graph",
-                "arguments": { "text": "compute", "output_format": "json" }
-            }
-        }))
-        .unwrap();
-    let roots_request = session
-        .recv_json(Duration::from_secs(1))
-        .unwrap()
-        .expect("roots/list request");
-    session
-        .send_json(&serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": roots_request["id"].clone(),
-            "result": {
-                "roots": [
-                    { "uri": Url::from_directory_path(repo_a._dir.path()).unwrap().to_string(), "name": "a" },
-                    { "uri": Url::from_directory_path(repo_b._dir.path()).unwrap().to_string(), "name": "b" }
-                ]
-            }
-        }))
-        .unwrap();
-    let first = session
-        .recv_json(Duration::from_secs(1))
-        .unwrap()
-        .expect("session-hinted response");
-    let first_value: serde_json::Value = serde_json::from_str(
-        first["result"]["content"][0]["text"]
-            .as_str()
-            .expect("first json payload"),
-    )
-    .expect("parse first payload");
-    assert_eq!(first_value[0]["file"], serde_json::json!("src/alpha.rs"));
-
-    session
-        .send_json(&serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": 3,
-            "method": "tools/call",
-            "_meta": {
-                "atlas": {
-                    "activeRootUri": Url::from_directory_path(repo_b._dir.path()).unwrap().to_string()
-                }
-            },
-            "params": {
-                "name": "query_graph",
-                "arguments": { "text": "compute", "output_format": "json" }
-            }
-        }))
-        .unwrap();
-    let second = session
-        .recv_json(Duration::from_secs(1))
-        .unwrap()
-        .expect("request-hinted response");
-    let second_value: serde_json::Value = serde_json::from_str(
-        second["result"]["content"][0]["text"]
-            .as_str()
-            .expect("second json payload"),
-    )
-    .expect("parse second payload");
-    assert_eq!(second_value[0]["file"], serde_json::json!("src/beta.rs"));
-
-    session
-        .send_json(&serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": 4,
-            "method": "tools/call",
-            "params": {
-                "name": "query_graph",
-                "arguments": { "text": "compute", "output_format": "json" }
-            }
-        }))
-        .unwrap();
-    let third = session
-        .recv_json(Duration::from_secs(1))
-        .unwrap()
-        .expect("session-hinted after cached-root response");
-    let third_value: serde_json::Value = serde_json::from_str(
-        third["result"]["content"][0]["text"]
-            .as_str()
-            .expect("third json payload"),
-    )
-    .expect("parse third payload");
-    assert_eq!(third_value[0]["file"], serde_json::json!("src/alpha.rs"));
-    assert_eq!(
-        third["result"]["_meta"]["atlas:repoSelection"]["selectionSource"],
-        serde_json::json!("client_hint")
-    );
-    let _ = session.finish().unwrap();
-}
-
-#[test]
-fn session_preferred_root_hint_revalidates_after_roots_list_changed() {
-    let repo_a = setup_graph_repo_fixture("src/alpha.rs", "compute", "src/alpha.rs::fn::compute");
-    let repo_b = setup_graph_repo_fixture("src/beta.rs", "compute", "src/beta.rs::fn::compute");
-    let session = InteractiveStdioTestSession::start_dynamic(ServerOptions::default()).unwrap();
-
-    session
-        .send_json(&serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "initialize",
-            "params": {
-                "protocolVersion": MCP_PROTOCOL_VERSION,
-                "capabilities": { "roots": { "listChanged": true } },
-                "clientInfo": { "name": "zed", "version": "1.0.0" },
-                "_meta": {
-                    "atlas": {
-                        "preferredRootUri": Url::from_directory_path(repo_a._dir.path()).unwrap().to_string()
-                    }
+                "arguments": {
+                    "repo_id": "demo",
+                    "text": "compute"
                 }
             }
         }))
         .unwrap();
-    let _ = session.recv_json(Duration::from_secs(1)).unwrap();
-    session
-        .send_json(&serde_json::json!({
-            "jsonrpc": "2.0",
-            "method": "initialized",
-            "params": {}
-        }))
-        .unwrap();
 
-    session
-        .send_json(&serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": 2,
-            "method": "tools/call",
-            "params": {
-                "name": "query_graph",
-                "arguments": { "text": "compute", "output_format": "json" }
-            }
-        }))
-        .unwrap();
-    let first_roots = session
-        .recv_json(Duration::from_secs(1))
-        .unwrap()
-        .expect("first roots/list request");
-    session
-        .send_json(&serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": first_roots["id"].clone(),
-            "result": {
-                "roots": [
-                    { "uri": Url::from_directory_path(repo_a._dir.path()).unwrap().to_string(), "name": "a" },
-                    { "uri": Url::from_directory_path(repo_b._dir.path()).unwrap().to_string(), "name": "b" }
-                ]
-            }
-        }))
-        .unwrap();
-    let _ = session
-        .recv_json(Duration::from_secs(1))
-        .unwrap()
-        .expect("first preferred response");
-
-    session
-        .send_json(&serde_json::json!({
-            "jsonrpc": "2.0",
-            "method": "notifications/roots/list_changed",
-            "params": {}
-        }))
-        .unwrap();
-    session
-        .send_json(&serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": 3,
-            "method": "tools/call",
-            "params": {
-                "name": "query_graph",
-                "arguments": { "text": "compute", "output_format": "json" }
-            }
-        }))
-        .unwrap();
-    let second_roots = session
-        .recv_json(Duration::from_secs(1))
-        .unwrap()
-        .expect("second roots/list request");
-    session
-        .send_json(&serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": second_roots["id"].clone(),
-            "result": {
-                "roots": [
-                    { "uri": Url::from_directory_path(repo_b._dir.path()).unwrap().to_string(), "name": "b" }
-                ]
-            }
-        }))
-        .unwrap();
     let response = session
         .recv_json(Duration::from_secs(1))
         .unwrap()
-        .expect("revalidated preferred hint error");
+        .expect("invalid repo selector response");
+    assert_eq!(response["id"], serde_json::json!(2));
     assert!(
         response["error"]["message"]
             .as_str()
             .unwrap_or_default()
-            .contains("does not match any advertised workspace root")
+            .contains("unsupported repo selector repo_id")
     );
     assert_eq!(
         response["error"]["data"]["atlas_repo_selection"]["failure_kind"],
-        serde_json::json!("invalid_client_hint")
+        serde_json::json!("invalid_explicit_repo_selector")
+    );
+    assert!(
+        response["error"]["data"]["atlas_repo_selection"]["recommended_fix"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("arguments.repo_root")
     );
     let _ = session.finish().unwrap();
 }

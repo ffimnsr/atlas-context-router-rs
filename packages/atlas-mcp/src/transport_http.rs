@@ -44,11 +44,6 @@ struct AppState {
     auth_policy: Option<Arc<ProtectedResourceAuthPolicy>>,
     allowed_origins: Arc<HashSet<String>>,
     sessions: SessionManager,
-    reverse_broker: crate::transport::ReverseRequestBroker,
-}
-
-struct HttpReverseEmitter {
-    session: Arc<HttpSession>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -63,25 +58,6 @@ pub struct TestHttpResponse {
 pub struct HttpTestHarness {
     state: AppState,
     test_auth_issuer: Option<String>,
-}
-
-impl crate::transport::ReverseRequestEmitter for HttpReverseEmitter {
-    fn emit_request(&self, request: Value) -> Result<()> {
-        self.session.enqueue_event(request.to_string());
-        Ok(())
-    }
-
-    fn emit_task_status(&self, params: Value) -> Result<()> {
-        self.session.enqueue_event(
-            serde_json::json!({
-                "jsonrpc": "2.0",
-                "method": "notifications/tasks/status",
-                "params": params,
-            })
-            .to_string(),
-        );
-        Ok(())
-    }
 }
 
 pub fn run_http_server(repo_root: &str, db_path: &str) -> Result<()> {
@@ -128,7 +104,6 @@ pub fn run_http_server_with_options(
                 auth_policy,
                 allowed_origins,
                 sessions: SessionManager::from_env(),
-                reverse_broker: crate::transport::ReverseRequestBroker::new(),
             };
             let app = build_router(state);
             let listener = tokio::net::TcpListener::bind(bind_addr)
@@ -154,7 +129,6 @@ impl HttpTestHarness {
                     std::time::Duration::from_secs(60),
                     std::time::Duration::from_millis(1),
                 ),
-                reverse_broker: crate::transport::ReverseRequestBroker::new(),
             },
             test_auth_issuer: None,
         }
@@ -174,7 +148,7 @@ impl HttpTestHarness {
                     .await
                     .context("bind mock auth server")?;
                 let addr = listener.local_addr().context("mock auth addr")?;
-                let issuer = format!("http://{}", addr);
+                let issuer = format!("http://{addr}");
                 let discovery = serde_json::json!({
                     "issuer": issuer,
                     "jwks_uri": format!("{issuer}/jwks")
@@ -245,7 +219,6 @@ impl HttpTestHarness {
                     std::time::Duration::from_secs(60),
                     std::time::Duration::from_millis(1),
                 ),
-                reverse_broker: crate::transport::ReverseRequestBroker::new(),
             },
             test_auth_issuer: Some(issuer),
         })
@@ -433,17 +406,12 @@ async fn handle_post_mcp(
         );
     }
 
-    let is_response = request.is_object()
-        && request.get("jsonrpc").and_then(|value| value.as_str()) == Some("2.0")
-        && request.get("id").is_some()
-        && request.get("method").is_none();
-    if !is_response
-        && (!request.is_object()
-            || request.get("jsonrpc").and_then(|value| value.as_str()) != Some("2.0")
-            || request
-                .get("method")
-                .and_then(|value| value.as_str())
-                .is_none())
+    if !request.is_object()
+        || request.get("jsonrpc").and_then(|value| value.as_str()) != Some("2.0")
+        || request
+            .get("method")
+            .and_then(|value| value.as_str())
+            .is_none()
     {
         let id = request.get("id").cloned().unwrap_or(Value::Null);
         return apply_origin_headers(
@@ -503,6 +471,15 @@ async fn handle_post_mcp(
         return apply_origin_headers(response, origin.as_deref());
     }
 
+    if method == "server/discover" {
+        let mut response = jsonrpc_ok_response(id, spec::discover_result());
+        response.headers_mut().insert(
+            MCP_PROTOCOL_VERSION_HEADER,
+            HeaderValue::from_static(spec::MCP_PROTOCOL_VERSION),
+        );
+        return apply_origin_headers(response, origin.as_deref());
+    }
+
     if let Some(response) = validate_protocol_version_header(&headers) {
         return apply_origin_headers(response, origin.as_deref());
     }
@@ -513,19 +490,6 @@ async fn handle_post_mcp(
     };
     debug_assert_eq!(session.protocol_version(), spec::MCP_PROTOCOL_VERSION);
     let _ = session.client_info();
-
-    if is_response {
-        let scope_prefix = format!("http:{}:", session.id());
-        let status = if state
-            .reverse_broker
-            .try_resolve_response_for_scope(Some(&scope_prefix), &request)
-        {
-            StatusCode::NO_CONTENT
-        } else {
-            StatusCode::BAD_REQUEST
-        };
-        return apply_origin_headers(status.into_response(), origin.as_deref());
-    }
 
     let response = match method.as_str() {
         "initialized" | "notifications/initialized" => {
@@ -787,7 +751,9 @@ async fn dispatch_tool_call(
         }
         let args = match params_object.get("arguments") {
             None | Some(Value::Null) => None,
-            Some(value) if value.is_object() => Some(value.clone()),
+            Some(value) if value.is_object() => {
+                Some(crate::transport::repo_selection::strip_repo_selector_fields(value.clone()))
+            }
             Some(_) => {
                 crate::transport::log_protocol_error_observation(
                     "http",
@@ -823,7 +789,6 @@ async fn dispatch_tool_call(
     let cancel_flag = Arc::new(AtomicBool::new(false));
     let cancel_flag_worker = Arc::clone(&cancel_flag);
     let name_for_log = name.clone();
-    let reverse_broker = state.reverse_broker.clone();
     let interaction_capabilities =
         crate::transport::parse_client_interaction_capabilities(session.client_capabilities());
     let session_id = session.id().to_owned();
@@ -833,36 +798,30 @@ async fn dispatch_tool_call(
     };
 
     let result = tokio::task::spawn_blocking(move || {
-        let reverse_emitter: Arc<dyn crate::transport::ReverseRequestEmitter> =
-            Arc::new(HttpReverseEmitter {
-                session: Arc::clone(&session_for_progress),
-            });
-        let reverse_scope_id = format!("http:{session_id}:{request_id_for_context}");
-        let reverse_client = crate::runtime_context::ReverseRequestClient::new(
+        let request_context = crate::runtime_context::RequestContext::new(
             Arc::new({
-                let reverse_broker = reverse_broker.clone();
-                let reverse_emitter = Arc::clone(&reverse_emitter);
-                let reverse_scope_id = reverse_scope_id.clone();
-                move |method, params, timeout| {
-                    reverse_broker.issue_request(
-                        &reverse_scope_id,
-                        &reverse_emitter,
-                        method,
-                        params,
-                        timeout,
-                    )
+                let session_for_progress = Arc::clone(&session_for_progress);
+                move |params| {
+                    session_for_progress.enqueue_event(
+                        serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "method": "notifications/tasks/status",
+                            "params": params,
+                        })
+                        .to_string(),
+                    );
+                    Ok(())
                 }
-            }),
-            Arc::new({
-                let reverse_emitter = Arc::clone(&reverse_emitter);
-                move |params| reverse_emitter.emit_task_status(params)
             }),
             interaction_capabilities.clone(),
             "http",
             Some(session_id.clone()),
+            Some(session_id.clone()),
             request_id_for_context.clone(),
+            "tools/call",
+            Some(params.clone()),
         );
-        crate::runtime_context::install(reverse_client);
+        crate::runtime_context::install(request_context);
         crate::tasks::install_tool_call_request_params(Some(&params));
         crate::progress::install(
             move |message, percentage| {
@@ -925,10 +884,7 @@ async fn dispatch_tool_call(
                 &session_for_result,
                 logging::LogLevel::Error,
                 "tools/call",
-                format!(
-                    "tool={} success=false error={}",
-                    name_for_log, error_message
-                ),
+                format!("tool={name_for_log} success=false error={error_message}"),
             );
             let response_json = serde_json::json!({
                 "jsonrpc": "2.0",
@@ -1231,7 +1187,6 @@ mod tests {
                 Duration::from_secs(60),
                 Duration::from_millis(1),
             ),
-            reverse_broker: crate::transport::ReverseRequestBroker::new(),
         }
     }
 
@@ -1248,7 +1203,6 @@ mod tests {
                 Duration::from_secs(60),
                 Duration::from_millis(1),
             ),
-            reverse_broker: crate::transport::ReverseRequestBroker::new(),
         };
         (dir, state)
     }
@@ -1518,6 +1472,35 @@ mod tests {
             value["message"],
             json!("Origin is not allowed for this MCP server")
         );
+    }
+
+    #[tokio::test]
+    async fn http_server_discover_works_without_session_and_has_cache_fields() {
+        let response = handle_post_mcp(
+            State(make_state(None)),
+            HeaderMap::new(),
+            Bytes::from_static(br#"{"jsonrpc":"2.0","id":1,"method":"server/discover"}"#),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            header_value(&response, MCP_PROTOCOL_VERSION_HEADER),
+            spec::MCP_PROTOCOL_VERSION
+        );
+
+        let value = read_json_response(response).await;
+        let result = &value["result"];
+        assert_eq!(result, &spec::complete_result(spec::discover_result()));
+        assert_eq!(
+            result["supportedVersions"],
+            json!([spec::MCP_PROTOCOL_VERSION])
+        );
+        assert_eq!(
+            result["capabilities"],
+            serde_json::to_value(spec::initialize_capabilities()).expect("capabilities")
+        );
+        assert_eq!(result["ttlMs"], json!(spec::DISCOVER_CACHE_TTL_MS));
+        assert_eq!(result["cacheScope"], json!(spec::DISCOVER_CACHE_SCOPE));
     }
 
     #[tokio::test]

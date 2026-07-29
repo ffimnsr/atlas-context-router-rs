@@ -3342,10 +3342,10 @@ Why:
 
 Add server discovery before other 2026 feature work so clients can negotiate without legacy initialize.
 
-- [ ] implement `server/discover` in stdio and HTTP dispatch paths
-- [ ] return `supportedVersions`, current capabilities, serverInfo `_meta`, instructions, `ttlMs`, and `cacheScope`
-- [ ] ensure `server/discover` works before any initialize-style state exists
-- [ ] add tests for stdio discover, HTTP discover, cache fields, and capability/handler parity
+- [x] implement `server/discover` in stdio and HTTP dispatch paths
+- [x] return `supportedVersions`, current capabilities, serverInfo `_meta`, instructions, `ttlMs`, and `cacheScope`
+- [x] ensure `server/discover` works before any initialize-style state exists
+- [x] add tests for stdio discover, HTTP discover, cache fields, and capability/handler parity
 
 Why:
 - 2026-07-28 requires servers to implement `server/discover`
@@ -3355,13 +3355,13 @@ Why:
 
 Remove deprecated Roots dependency and migrate repo identity to explicit inputs.
 
-- [ ] remove public dynamic Roots APIs such as `run_server_with_dynamic_roots` and dynamic stdio test helpers
-- [ ] remove `roots/list` parsing and root-candidate selection from `packages/atlas-mcp/src/transport/repo_selection.rs`
-- [ ] add explicit repo selectors where multi-repo operation is needed, using `repo_root`, `repo_id`, or repo-scoped resource URIs
-- [ ] reject ambiguous repo selection with actionable tool execution errors instead of Roots prompts
-- [ ] update tool provenance and path-validation errors to expose active repo identity and canonical path guidance
-- [ ] update `packages/atlas-cli/src/install/mcp.rs` so repo-scope installs keep `--repo <path> serve` and user-scope installs do not rely on Roots
-- [ ] add tests proving no code path emits `roots/list`, repo-scope config passes `--repo`, and path identity remains canonical
+- [x] remove public dynamic Roots APIs such as `run_server_with_dynamic_roots` and dynamic stdio test helpers
+- [x] remove `roots/list` parsing and root-candidate selection from `packages/atlas-mcp/src/transport/repo_selection.rs`
+- [x] add explicit repo selectors where multi-repo operation is needed, using `repo_root`, `repo_id`, or repo-scoped resource URIs
+- [x] reject ambiguous repo selection with actionable tool execution errors instead of Roots prompts
+- [x] update tool provenance and path-validation errors to expose active repo identity and canonical path guidance
+- [x] update `packages/atlas-cli/src/install/mcp.rs` so repo-scope installs keep `--repo <path> serve` and user-scope installs do not rely on Roots
+- [x] add tests proving no code path emits `roots/list`, repo-scope config passes `--repo`, and path identity remains canonical
 
 Why:
 - Roots is deprecated in 2026-07-28
@@ -3371,14 +3371,14 @@ Why:
 
 Replace server-initiated client requests with Multi Round-Trip Requests.
 
-- [ ] add `packages/atlas-mcp/src/mrtr.rs` with `InputRequiredResult`, `InputRequests`, `InputResponses`, and validated `requestState`
-- [ ] replace `runtime_context::ReverseRequestClient` request path with MRTR request/response handling
-- [ ] retire active `transport/broker.rs` usage for server-to-client JSON-RPC requests
-- [ ] migrate `elicitation.rs` to return `inputRequests` and consume `params.inputResponses` on retry
-- [ ] remove URL elicitation `elicitationId` handling from 2026 path
-- [ ] migrate destructive `purge_saved_context` confirmation to `resultType: "input_required"` and signed `requestState`
-- [ ] protect `requestState` integrity with method, tool, args digest, expiry, and authenticated principal where available
-- [ ] add tests for accept, cancel, tampered state, expired state, and absence of server-initiated JSON-RPC requests
+- [x] add `packages/atlas-mcp/src/mrtr.rs` with `InputRequiredResult`, `InputRequests`, `InputResponses`, and validated `requestState`
+- [x] replace `runtime_context::ReverseRequestClient` request path with MRTR request/response handling
+- [x] retire active `transport/broker.rs` usage for server-to-client JSON-RPC requests
+- [x] migrate `elicitation.rs` to return `inputRequests` and consume `params.inputResponses` on retry
+- [x] remove URL elicitation `elicitationId` handling from 2026 path
+- [x] migrate destructive `purge_saved_context` confirmation to `resultType: "input_required"` and signed `requestState`
+- [x] protect `requestState` integrity with method, tool, args digest, expiry, and authenticated principal where available
+- [x] add tests for accept, cancel, tampered state, expired state, and absence of server-initiated JSON-RPC requests
 
 Why:
 - 2026-07-28 removes previous server-initiated request pattern

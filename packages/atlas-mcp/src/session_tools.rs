@@ -1273,12 +1273,32 @@ pub fn tool_purge_saved_context(
     let deleted_sources = if let Some(ref sid) = session_id_filter {
         cs.delete_session_sources(sid, agent_id_filter.as_deref())?
     } else {
-        if crate::runtime_context::current().is_ok()
-            && !crate::elicitation::confirm_age_based_purge()?
-        {
-            return Err(anyhow::anyhow!(
-                "purge_saved_context without session_id requires explicit elicited confirmation"
-            ));
+        if crate::runtime_context::current().is_ok() {
+            match crate::elicitation::confirm_age_based_purge()? {
+                crate::elicitation::ConfirmationProgress::Confirmed => {}
+                crate::elicitation::ConfirmationProgress::Cancelled => {
+                    return Err(anyhow::anyhow!("purge_saved_context cancelled by client"));
+                }
+                crate::elicitation::ConfirmationProgress::InputRequired(input_required) => {
+                    let mut response = crate::mrtr::build_input_required_tool_result(
+                        &input_required,
+                        output_format,
+                    )?;
+                    let emitted_bytes = serde_json::to_vec(&response)?.len();
+                    inject_budget_metadata(
+                        &mut response,
+                        &BudgetReport::within_budget(
+                            "mcp_cli_payload_serialization.max_mcp_response_bytes",
+                            policy
+                                .mcp_cli_payload_serialization
+                                .mcp_response_bytes
+                                .default_limit,
+                            emitted_bytes,
+                        ),
+                    );
+                    return Ok(response);
+                }
+            }
         }
         cs.cleanup(keep_days)?
     };
@@ -1702,6 +1722,30 @@ mod tests {
                     .and_then(|text| serde_json::from_str(text).ok())
             })
             .expect("tool body")
+    }
+
+    fn install_purge_request_context(params: Value) {
+        let client = crate::runtime_context::RequestContext::new(
+            std::sync::Arc::new(|_| Ok(())),
+            crate::runtime_context::ClientInteractionCapabilities {
+                supports_elicitation_form: true,
+                supports_elicitation_url: false,
+            },
+            "stdio",
+            None,
+            None,
+            "1",
+            "tools/call",
+            Some(params),
+        );
+        crate::runtime_context::install(client);
+    }
+
+    fn purge_request_params(arguments: &Value) -> Value {
+        serde_json::json!({
+            "name": "purge_saved_context",
+            "arguments": arguments,
+        })
     }
 
     fn open_session_store(db_path: &str) -> SessionStore {
@@ -2266,26 +2310,150 @@ mod tests {
         std::fs::create_dir_all(dir.path().join(".atlas")).unwrap();
         let db_path = setup_db_path(&dir);
         let repo_root = dir.path().to_str().unwrap();
-        let client = crate::runtime_context::ReverseRequestClient::new(
-            std::sync::Arc::new(|_, _, _| Ok(serde_json::json!({"action": "decline"}))),
-            std::sync::Arc::new(|_| Ok(())),
-            crate::runtime_context::ClientInteractionCapabilities {
-                supports_elicitation_form: true,
-                supports_elicitation_url: false,
-            },
-            "stdio",
-            None,
-            "1",
-        );
-        crate::runtime_context::install(client);
         let args = serde_json::json!({"keep_days": 30});
-        let error = tool_purge_saved_context(Some(&args), repo_root, &db_path, OutputFormat::Json)
-            .unwrap_err();
+
+        install_purge_request_context(purge_request_params(&args));
+        let result =
+            tool_purge_saved_context(Some(&args), repo_root, &db_path, OutputFormat::Json).unwrap();
         crate::runtime_context::uninstall();
+
+        let body = tool_body(&result);
+        assert_eq!(result["resultType"], serde_json::json!("input_required"));
+        assert_eq!(body["resultType"], serde_json::json!("input_required"));
+        assert_eq!(
+            body["inputRequests"][0]["id"],
+            serde_json::json!("confirmation")
+        );
+        assert!(body["requestState"].as_str().is_some());
+    }
+
+    #[test]
+    fn test_purge_saved_context_accept_retry_executes_purge() {
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join(".atlas")).unwrap();
+        let db_path = setup_db_path(&dir);
+        let repo_root = dir.path().to_str().unwrap();
+        let args = serde_json::json!({"keep_days": 30});
+
+        install_purge_request_context(purge_request_params(&args));
+        let first =
+            tool_purge_saved_context(Some(&args), repo_root, &db_path, OutputFormat::Json).unwrap();
+        crate::runtime_context::uninstall();
+        let request_state = tool_body(&first)["requestState"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+
+        install_purge_request_context(serde_json::json!({
+            "name": "purge_saved_context",
+            "arguments": args,
+            "requestState": request_state,
+            "inputResponses": {
+                "confirmation": {
+                    "action": "accept",
+                    "content": {
+                        "confirmation": "confirm"
+                    }
+                }
+            }
+        }));
+        let result = tool_purge_saved_context(
+            Some(&serde_json::json!({"keep_days": 30})),
+            repo_root,
+            &db_path,
+            OutputFormat::Json,
+        )
+        .unwrap();
+        crate::runtime_context::uninstall();
+
+        let body = tool_body(&result);
+        assert_eq!(body["mode"], serde_json::json!("age_based"));
+        assert_eq!(body["summary"]["status"], serde_json::json!("ok"));
+    }
+
+    #[test]
+    fn test_purge_saved_context_cancel_retry_returns_cancelled_error() {
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join(".atlas")).unwrap();
+        let db_path = setup_db_path(&dir);
+        let repo_root = dir.path().to_str().unwrap();
+        let args = serde_json::json!({"keep_days": 30});
+
+        install_purge_request_context(purge_request_params(&args));
+        let first =
+            tool_purge_saved_context(Some(&args), repo_root, &db_path, OutputFormat::Json).unwrap();
+        crate::runtime_context::uninstall();
+        let request_state = tool_body(&first)["requestState"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+
+        install_purge_request_context(serde_json::json!({
+            "name": "purge_saved_context",
+            "arguments": args,
+            "requestState": request_state,
+            "inputResponses": {
+                "confirmation": {
+                    "action": "cancel"
+                }
+            }
+        }));
+        let error = tool_purge_saved_context(
+            Some(&serde_json::json!({"keep_days": 30})),
+            repo_root,
+            &db_path,
+            OutputFormat::Json,
+        )
+        .unwrap_err();
+        crate::runtime_context::uninstall();
+
+        assert!(error.to_string().contains("cancelled by client"));
+    }
+
+    #[test]
+    fn test_purge_saved_context_rejects_tampered_request_state() {
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join(".atlas")).unwrap();
+        let db_path = setup_db_path(&dir);
+        let repo_root = dir.path().to_str().unwrap();
+        let args = serde_json::json!({"keep_days": 30});
+
+        install_purge_request_context(purge_request_params(&args));
+        let first =
+            tool_purge_saved_context(Some(&args), repo_root, &db_path, OutputFormat::Json).unwrap();
+        crate::runtime_context::uninstall();
+        let first_body = tool_body(&first);
+        let request_state = first_body["requestState"].as_str().unwrap();
+        let mut envelope: Value = serde_json::from_str(request_state).unwrap();
+        envelope["payload"]["tool"] = serde_json::json!("other_tool");
+        let tampered_state = serde_json::to_string(&envelope).unwrap();
+
+        install_purge_request_context(serde_json::json!({
+            "name": "purge_saved_context",
+            "arguments": args,
+            "requestState": tampered_state,
+            "inputResponses": {
+                "confirmation": {
+                    "action": "accept",
+                    "content": {
+                        "confirmation": "confirm"
+                    }
+                }
+            }
+        }));
+        let error = tool_purge_saved_context(
+            Some(&serde_json::json!({"keep_days": 30})),
+            repo_root,
+            &db_path,
+            OutputFormat::Json,
+        )
+        .unwrap_err();
+        crate::runtime_context::uninstall();
+
         assert!(
             error
                 .to_string()
-                .contains("requires explicit elicited confirmation")
+                .contains("requestState signature mismatch")
         );
     }
 

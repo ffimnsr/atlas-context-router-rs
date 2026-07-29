@@ -2,10 +2,11 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::sync::{Condvar, Mutex};
+#[cfg(test)]
+use std::sync::Condvar;
+use std::sync::Mutex;
 use std::time::Instant;
 
-use super::broker::ReverseRequestBroker;
 use super::repo_selection::RepoSelectionSource;
 use crate::logging;
 use crate::output::OutputFormat;
@@ -14,11 +15,13 @@ use crate::output::OutputFormat;
 // Reverse-request machinery
 // ---------------------------------------------------------------------------
 
+#[cfg(test)]
 pub(crate) type ReverseResponseWaiter = Arc<(
     Mutex<Option<std::result::Result<serde_json::Value, String>>>,
     Condvar,
 )>;
 
+#[cfg(test)]
 pub(crate) struct PendingReverseRequest {
     pub(crate) scope_id: String,
     pub(crate) waiter: ReverseResponseWaiter,
@@ -69,31 +72,6 @@ pub(crate) struct RequestDispatchContext<'a> {
     pub(crate) server_options: &'a ServerOptions,
     pub(crate) canceled_tokens: Arc<Mutex<HashSet<u64>>>,
     pub(crate) event_tx: &'a std::sync::mpsc::Sender<TransportEvent>,
-}
-
-pub(crate) struct StdioReverseEmitter {
-    pub(crate) event_tx: std::sync::mpsc::Sender<TransportEvent>,
-}
-
-impl super::broker::ReverseRequestEmitter for StdioReverseEmitter {
-    fn emit_request(&self, request: serde_json::Value) -> anyhow::Result<()> {
-        self.event_tx
-            .send(TransportEvent::OutboundJson(request.to_string()))
-            .map_err(|_| anyhow::anyhow!("stdio reverse-request channel disconnected"))?;
-        Ok(())
-    }
-
-    fn emit_task_status(&self, params: serde_json::Value) -> anyhow::Result<()> {
-        self.event_tx
-            .send(TransportEvent::OutboundJson(
-                crate::transport::jsonrpc::jsonrpc_notification(
-                    "notifications/tasks/status",
-                    params,
-                ),
-            ))
-            .map_err(|_| anyhow::anyhow!("stdio task notification channel disconnected"))?;
-        Ok(())
-    }
 }
 
 #[derive(Default)]
@@ -162,7 +140,6 @@ pub(crate) struct ConnectionState {
     pub(crate) log_level: Option<logging::LogLevel>,
     pub(crate) client_capabilities: serde_json::Value,
     pub(crate) canceled_tokens: Arc<Mutex<HashSet<u64>>>,
-    pub(crate) reverse_broker: ReverseRequestBroker,
     pub(crate) repo_resolution: RepoResolutionState,
 }
 
@@ -178,8 +155,6 @@ pub(crate) struct RepoResolutionState {
     pub(crate) active: Option<ActiveRepoContext>,
     pub(crate) active_selection_source: Option<RepoSelectionSource>,
     pub(crate) candidate_roots: Option<Vec<String>>,
-    pub(crate) preferred_root_hint_uri: Option<String>,
-    pub(crate) launch_cwd_fallback: Option<ActiveRepoContext>,
     pub(crate) dynamic_roots: bool,
 }
 
@@ -211,7 +186,6 @@ pub(crate) fn connection_state(
     repo_root: Option<&str>,
     db_path: Option<&str>,
     dynamic_roots: bool,
-    launch_cwd_repo_root: Option<&str>,
 ) -> ConnectionState {
     let startup = match (repo_root, db_path) {
         (Some(repo_root), Some(db_path)) if !repo_root.is_empty() && !db_path.is_empty() => {
@@ -222,24 +196,17 @@ pub(crate) fn connection_state(
         }
         _ => None,
     };
-    let launch_cwd_fallback = launch_cwd_repo_root.map(|repo_root| ActiveRepoContext {
-        repo_root: repo_root.to_owned(),
-        db_path: atlas_engine::paths::default_db_path(repo_root),
-    });
     ConnectionState {
         trace: TraceLevel::Off,
         initialized: false,
         log_level: None,
         client_capabilities: serde_json::Value::Null,
         canceled_tokens: Arc::new(Mutex::new(HashSet::new())),
-        reverse_broker: ReverseRequestBroker::new(),
         repo_resolution: RepoResolutionState {
             startup: startup.clone(),
             active: startup,
             active_selection_source: None,
             candidate_roots: None,
-            preferred_root_hint_uri: None,
-            launch_cwd_fallback,
             dynamic_roots,
         },
     }

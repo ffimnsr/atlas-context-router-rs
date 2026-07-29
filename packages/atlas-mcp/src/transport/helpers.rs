@@ -1,6 +1,5 @@
 //! Helper functions for repo context, parameter parsing, and tool-call utilities.
 
-use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -9,10 +8,8 @@ use serde_json::json;
 use crate::output::{OutputFormat, resolve_output_format};
 use crate::tool_result::{ToolErrorCode, ToolErrorPayload, tool_execution_error_value};
 
-use super::broker::{ReverseRequestBroker, ReverseRequestEmitter};
 use super::repo_selection::{
-    RepoSelectionOutcome, RepoSelectionSource, parse_root_candidates, select_repo_from_candidates,
-    validate_hinted_root_uri,
+    RepoSelectionOutcome, RepoSelectionSource, explicit_repo_context_from_tool_args,
 };
 use super::types::{
     ActiveRepoContext, PendingRequest, RepoResolutionState, RequestLogContext, TraceLevel,
@@ -20,21 +17,15 @@ use super::types::{
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RepoSelectionFailureKind {
-    NoClientRootsAvailable,
-    ClientLacksRootsCapability,
-    RequestBeforeInitialized,
-    MultipleRootsInsufficientEvidence,
-    InvalidClientHint,
+    NoRepoContextAvailable,
+    InvalidExplicitRepoSelector,
 }
 
 impl RepoSelectionFailureKind {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
-            Self::NoClientRootsAvailable => "no_client_roots_available",
-            Self::ClientLacksRootsCapability => "client_lacks_roots_capability",
-            Self::RequestBeforeInitialized => "request_before_initialized",
-            Self::MultipleRootsInsufficientEvidence => "multiple_roots_insufficient_evidence",
-            Self::InvalidClientHint => "invalid_client_hint",
+            Self::NoRepoContextAvailable => "no_repo_context_available",
+            Self::InvalidExplicitRepoSelector => "invalid_explicit_repo_selector",
         }
     }
 }
@@ -49,6 +40,7 @@ pub(crate) struct RepoSelectionError {
     pub(crate) tool_name: String,
     pub(crate) recommended_fix: String,
     pub(crate) session_mode: &'static str,
+    pub(crate) active_repo_root: Option<String>,
 }
 
 impl RepoSelectionError {
@@ -66,6 +58,8 @@ impl RepoSelectionError {
                 "tool_name": self.tool_name,
                 "recommended_fix": self.recommended_fix,
                 "session_mode": self.session_mode,
+                "active_repo_root": self.active_repo_root,
+                "canonical_repo_path_guidance": "Use canonical absolute repo root in arguments.repo_root; use canonical repo-relative paths inside tool arguments.",
             }
         })
     }
@@ -86,235 +80,74 @@ pub(crate) fn ensure_repo_context(
     if let Some(active) = connection_state.repo_resolution.active.clone() {
         return Ok(Some(active));
     }
-    if !connection_state.repo_resolution.dynamic_roots {
-        return connection_state
-            .repo_resolution
-            .startup
-            .clone()
-            .map(Some)
-            .ok_or_else(|| anyhow::anyhow!("atlas repo context missing; pass --repo"));
-    }
-    Err(anyhow::anyhow!(
-        "atlas repo context not yet resolved for method `{method}`; use tools/call first or pass --repo"
-    ))
+    connection_state
+        .repo_resolution
+        .startup
+        .clone()
+        .map(Some)
+        .ok_or_else(|| anyhow::anyhow!("atlas repo context missing; pass --repo"))
 }
 
-pub(crate) struct ToolRepoResolutionContext<'a> {
-    pub(crate) request_active_root_hint_uri: Option<&'a str>,
-    pub(crate) client_capabilities: &'a serde_json::Value,
-    pub(crate) initialized: bool,
-    pub(crate) reverse_broker: &'a ReverseRequestBroker,
-    pub(crate) reverse_emitter: &'a Arc<dyn ReverseRequestEmitter>,
-}
+pub(crate) struct ToolRepoResolutionContext;
 
 pub(crate) fn resolve_repo_context_for_tool_call(
     repo_resolution: &RepoResolutionState,
     tool_name: Option<&str>,
     tool_args: Option<&serde_json::Value>,
-    ctx: ToolRepoResolutionContext<'_>,
+    _ctx: ToolRepoResolutionContext,
 ) -> std::result::Result<RepoSelectionOutcome, Box<RepoSelectionError>> {
     let tool_name = tool_name.unwrap_or("tools/call");
-    if !repo_resolution.dynamic_roots {
-        let repo_context = repo_resolution.startup.clone().ok_or_else(|| {
-            Box::new(RepoSelectionError {
-                kind: RepoSelectionFailureKind::NoClientRootsAvailable,
-                message: "atlas repo context missing; pass --repo".to_owned(),
-                candidate_roots: Vec::new(),
-                selection_attempts: vec!["explicit_cli".to_owned()],
-                selection_source: Some(RepoSelectionSource::ExplicitCli),
-                tool_name: tool_name.to_owned(),
-                recommended_fix: "Start Atlas with --repo or --db when running fixed-mode MCP."
-                    .to_owned(),
-                session_mode: "fixed",
-            })
-        })?;
+    let active_repo_root = repo_resolution
+        .active
+        .as_ref()
+        .or(repo_resolution.startup.as_ref())
+        .map(|repo| repo.repo_root.clone());
+    if let Some(repo_context) = explicit_repo_context_from_tool_args(tool_args).map_err(|error| {
+        Box::new(RepoSelectionError {
+            kind: RepoSelectionFailureKind::InvalidExplicitRepoSelector,
+            message: error.to_string(),
+            candidate_roots: Vec::new(),
+            selection_attempts: vec!["explicit_request_repo_root".to_owned()],
+            selection_source: Some(RepoSelectionSource::ExplicitRequest),
+            tool_name: tool_name.to_owned(),
+            recommended_fix: "Pass arguments.repo_root as canonical repo path, or start Atlas with --repo for fixed-mode MCP.".to_owned(),
+            session_mode: "fixed",
+            active_repo_root: active_repo_root.clone(),
+        })
+    })? {
         return Ok(RepoSelectionOutcome {
             repo_context,
-            selection_source: repo_resolution
-                .active_selection_source
-                .unwrap_or(RepoSelectionSource::ExplicitCli),
-            candidate_roots: repo_resolution.candidate_roots.clone(),
-        });
-    }
-    let preferred_root_hint_uri = repo_resolution.preferred_root_hint_uri.as_deref();
-    if ctx.request_active_root_hint_uri.is_none()
-        && preferred_root_hint_uri.is_none()
-        && let Some(active) = repo_resolution.active.clone()
-    {
-        return Ok(RepoSelectionOutcome {
-            repo_context: active,
-            selection_source: RepoSelectionSource::CachedActiveRoot,
-            candidate_roots: repo_resolution.candidate_roots.clone(),
-        });
-    }
-
-    if !ctx.initialized {
-        return Err(Box::new(RepoSelectionError {
-            kind: RepoSelectionFailureKind::RequestBeforeInitialized,
-            message: "atlas cannot resolve client roots before initialized notification; wait for `initialized` before repo-bound tool calls".to_owned(),
-            candidate_roots: Vec::new(),
-            selection_attempts: vec!["initialized_check".to_owned()],
-            selection_source: None,
-            tool_name: tool_name.to_owned(),
-            recommended_fix: "Send initialized before the first repo-bound MCP request, or pass --repo for fixed-mode MCP.".to_owned(),
-            session_mode: "dynamic",
-        }));
-    }
-    if !client_supports_roots(ctx.client_capabilities) {
-        if let Some(repo_context) = repo_resolution.launch_cwd_fallback.clone() {
-            return Ok(RepoSelectionOutcome {
-                repo_context,
-                selection_source: RepoSelectionSource::LaunchCwdFallback,
-                candidate_roots: repo_resolution.candidate_roots.clone(),
-            });
-        }
-        return Err(Box::new(RepoSelectionError {
-            kind: RepoSelectionFailureKind::ClientLacksRootsCapability,
-            message: "MCP client did not advertise roots capability; pass --repo or use an MCP client that supports workspace roots".to_owned(),
-            candidate_roots: Vec::new(),
-            selection_attempts: vec!["roots_capability_check".to_owned()],
-            selection_source: None,
-            tool_name: tool_name.to_owned(),
-            recommended_fix: "Pass --repo for fixed-mode MCP, or use an MCP client that advertises workspace roots.".to_owned(),
-            session_mode: "dynamic",
-        }));
-    }
-
-    let candidates = if let Some(cached) = repo_resolution.candidate_roots.clone() {
-        cached
-    } else {
-        const ROOTS_LIST_TIMEOUT_MS: u64 = 5_000;
-        let response = match ctx.reverse_broker.issue_request(
-            "stdio:roots",
-            ctx.reverse_emitter,
-            "roots/list",
-            serde_json::json!({}),
-            Duration::from_millis(ROOTS_LIST_TIMEOUT_MS),
-        ) {
-            Ok(response) => response,
-            Err(error) => {
-                if ctx.request_active_root_hint_uri.is_none()
-                    && preferred_root_hint_uri.is_none()
-                    && let Some(repo_context) = repo_resolution.launch_cwd_fallback.clone()
-                {
-                    return Ok(RepoSelectionOutcome {
-                        repo_context,
-                        selection_source: RepoSelectionSource::LaunchCwdFallback,
-                        candidate_roots: None,
-                    });
-                }
-                return Err(Box::new(RepoSelectionError {
-                    kind: RepoSelectionFailureKind::NoClientRootsAvailable,
-                    message: format!("failed to request client workspace roots: {error}"),
-                    candidate_roots: Vec::new(),
-                    selection_attempts: vec!["roots_list_request".to_owned()],
-                    selection_source: None,
-                    tool_name: tool_name.to_owned(),
-                    recommended_fix: "Ensure the MCP client supports and answers roots/list, or pass --repo for fixed-mode MCP.".to_owned(),
-                    session_mode: "dynamic",
-                }));
-            }
-        };
-        match parse_root_candidates(response.get("roots")) {
-            Ok(candidates) => candidates,
-            Err(error) => {
-                if ctx.request_active_root_hint_uri.is_none()
-                    && preferred_root_hint_uri.is_none()
-                    && let Some(repo_context) = repo_resolution.launch_cwd_fallback.clone()
-                {
-                    return Ok(RepoSelectionOutcome {
-                        repo_context,
-                        selection_source: RepoSelectionSource::LaunchCwdFallback,
-                        candidate_roots: None,
-                    });
-                }
-                return Err(Box::new(RepoSelectionError {
-                    kind: RepoSelectionFailureKind::NoClientRootsAvailable,
-                    message: error.to_string(),
-                    candidate_roots: Vec::new(),
-                    selection_attempts: vec!["roots_list_request".to_owned(), "roots_list_parse".to_owned()],
-                    selection_source: None,
-                    tool_name: tool_name.to_owned(),
-                    recommended_fix: "Ensure roots/list returns at least one usable file:// workspace root, or pass --repo for fixed-mode MCP.".to_owned(),
-                    session_mode: "dynamic",
-                }));
-            }
-        }
-    };
-    if let Some(hint_uri) = ctx.request_active_root_hint_uri {
-        let hinted_root = validate_hinted_root_uri(&candidates, hint_uri).map_err(|error| {
-            Box::new(RepoSelectionError {
-                kind: RepoSelectionFailureKind::InvalidClientHint,
-                message: error.to_string(),
-                candidate_roots: candidates.clone(),
-                selection_attempts: vec!["roots_list_request".to_owned(), "request_hint".to_owned()],
-                selection_source: Some(RepoSelectionSource::ClientHint),
-                tool_name: tool_name.to_owned(),
-                recommended_fix: "Send _meta.atlas.activeRootUri as one of the advertised file:// workspace roots, or pass --repo for fixed-mode MCP.".to_owned(),
-                session_mode: "dynamic",
-            })
-        })?;
-        return Ok(RepoSelectionOutcome {
-            repo_context: ActiveRepoContext {
-                db_path: atlas_engine::paths::default_db_path(&hinted_root),
-                repo_root: hinted_root,
-            },
-            selection_source: RepoSelectionSource::ClientHint,
-            candidate_roots: Some(candidates),
-        });
-    }
-    if let Some(hint_uri) = preferred_root_hint_uri {
-        let hinted_root = validate_hinted_root_uri(&candidates, hint_uri).map_err(|error| {
-            Box::new(RepoSelectionError {
-                kind: RepoSelectionFailureKind::InvalidClientHint,
-                message: error.to_string(),
-                candidate_roots: candidates.clone(),
-                selection_attempts: vec!["roots_list_request".to_owned(), "session_hint".to_owned()],
-                selection_source: Some(RepoSelectionSource::ClientHint),
-                tool_name: tool_name.to_owned(),
-                recommended_fix: "Send initialize.params._meta.atlas.preferredRootUri as one of the advertised file:// workspace roots, or pass --repo for fixed-mode MCP.".to_owned(),
-                session_mode: "dynamic",
-            })
-        })?;
-        return Ok(RepoSelectionOutcome {
-            repo_context: ActiveRepoContext {
-                db_path: atlas_engine::paths::default_db_path(&hinted_root),
-                repo_root: hinted_root,
-            },
-            selection_source: RepoSelectionSource::ClientHint,
-            candidate_roots: Some(candidates),
+            selection_source: RepoSelectionSource::ExplicitRequest,
+            candidate_roots: None,
         });
     }
     if let Some(active) = repo_resolution.active.clone() {
         return Ok(RepoSelectionOutcome {
             repo_context: active,
-            selection_source: RepoSelectionSource::CachedActiveRoot,
-            candidate_roots: Some(candidates),
+            selection_source: repo_resolution
+                .active_selection_source
+                .unwrap_or(RepoSelectionSource::CachedActiveRoot),
+            candidate_roots: None,
         });
     }
-    select_repo_from_candidates(&candidates, Some(tool_name), tool_args).map_err(|error| {
-        let (selection_attempts, recommended_fix) = if tool_args.is_some() {
-            (
-                vec!["roots_list_request".to_owned(), "tool_arg_inference".to_owned()],
-                "Pass file-bearing arguments that uniquely map to one advertised root, send _meta.atlas.activeRootUri, or pass --repo for fixed-mode MCP.".to_owned(),
-            )
-        } else {
-            (
-                vec!["roots_list_request".to_owned()],
-                "Send _meta.atlas.activeRootUri for query-only multi-root calls, or pass --repo for fixed-mode MCP.".to_owned(),
-            )
-        };
-        Box::new(RepoSelectionError {
-            kind: RepoSelectionFailureKind::MultipleRootsInsufficientEvidence,
-            message: error.to_string(),
-            candidate_roots: candidates.clone(),
-            selection_attempts,
-            selection_source: None,
-            tool_name: tool_name.to_owned(),
-            recommended_fix,
-            session_mode: "dynamic",
-        })
-    })
+    if let Some(repo_context) = repo_resolution.startup.clone() {
+        return Ok(RepoSelectionOutcome {
+            repo_context,
+            selection_source: RepoSelectionSource::ExplicitCli,
+            candidate_roots: None,
+        });
+    }
+    Err(Box::new(RepoSelectionError {
+        kind: RepoSelectionFailureKind::NoRepoContextAvailable,
+        message: "atlas repo context missing; pass --repo or include arguments.repo_root".to_owned(),
+        candidate_roots: Vec::new(),
+        selection_attempts: vec!["explicit_cli".to_owned(), "explicit_request_repo_root".to_owned()],
+        selection_source: None,
+        tool_name: tool_name.to_owned(),
+        recommended_fix: "Start Atlas with --repo, or pass arguments.repo_root using canonical repo path for repo-bound tools.".to_owned(),
+        session_mode: "fixed",
+        active_repo_root,
+    }))
 }
 
 pub(crate) fn annotate_tool_result_with_repo_selection(
@@ -356,10 +189,6 @@ pub(crate) fn method_requires_repo_context(method: &str) -> bool {
             | "tasks/result"
             | "tasks/cancel"
     )
-}
-
-fn client_supports_roots(capabilities: &serde_json::Value) -> bool {
-    capabilities.get("roots").is_some()
 }
 
 // ---------------------------------------------------------------------------

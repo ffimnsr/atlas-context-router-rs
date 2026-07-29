@@ -77,6 +77,7 @@ mod elicitation;
 #[cfg(feature = "http-transport")]
 mod http_sessions;
 mod logging;
+mod mrtr;
 mod output;
 pub mod progress;
 mod prompts;
@@ -98,8 +99,7 @@ pub use tools::{
     ToolManualDocument, render_tool_manual_text, tool_list, tool_list_markdown, tool_manual,
 };
 pub use transport::{
-    ServerOptions, run_server, run_server_with_dynamic_roots, run_server_with_options,
-    run_socket_server_with_options,
+    ServerOptions, run_server, run_server_with_options, run_socket_server_with_options,
 };
 
 #[doc(hidden)]

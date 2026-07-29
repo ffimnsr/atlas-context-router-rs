@@ -6,6 +6,7 @@ use super::jsonrpc::{
     DispatchError, JsonRpcErrorKind, classify_prompt_error, classify_resource_error,
     classify_task_api_error, classify_tool_call_dispatch_error,
 };
+use crate::transport::repo_selection::strip_repo_selector_fields;
 use crate::{completion, prompts, resources, spec, tools};
 
 /// Dispatch an MCP method to the appropriate handler.
@@ -18,6 +19,7 @@ pub(crate) fn dispatch(
     match method {
         "initialize" => spec::negotiate_initialize(params)
             .map_err(|error| DispatchError::new(JsonRpcErrorKind::InvalidParams, error)),
+        "server/discover" => Ok(spec::complete_result(spec::discover_result())),
 
         "tools/list" => Ok(spec::complete_result(tools::tool_list())),
         "resources/list" => resources::resources_list(params)
@@ -81,7 +83,7 @@ pub(crate) fn dispatch(
             }
             let args = match params_object.get("arguments") {
                 None | Some(serde_json::Value::Null) => None,
-                Some(value) if value.is_object() => Some(value.clone()),
+                Some(value) if value.is_object() => Some(strip_repo_selector_fields(value.clone())),
                 Some(_) => {
                     return Err(DispatchError::new(
                         JsonRpcErrorKind::InvalidParams,

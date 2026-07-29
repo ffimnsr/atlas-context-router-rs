@@ -6,6 +6,7 @@
 //!
 //! Also provides Unix socket (daemon) and Windows named-pipe transports.
 
+#[cfg(test)]
 pub(crate) mod broker;
 mod dispatch;
 pub(crate) mod helpers;
@@ -25,14 +26,12 @@ mod tests;
 // ── Re-export public API ──────────────────────────────────────────────────
 pub use self::socket::run_socket_server_with_options;
 pub use self::stdio::{
-    InteractiveStdioTestSession, run_server, run_server_with_dynamic_roots,
-    run_server_with_options, run_stdio_jsonrpc_session_for_tests,
+    InteractiveStdioTestSession, run_server, run_server_with_options,
+    run_stdio_jsonrpc_session_for_tests,
 };
 pub use self::types::ServerOptions;
 
 // ── Re-export pub(crate) API used by transport_http.rs ────────────────────
-#[cfg(feature = "http-transport")]
-pub(crate) use self::broker::{ReverseRequestBroker, ReverseRequestEmitter};
 #[cfg(feature = "http-transport")]
 pub(crate) use self::helpers::{
     log_protocol_error_observation, log_tool_execution_error_observation,

@@ -19,17 +19,7 @@ fn server_options_for_repo(repo: &str) -> Result<ServerOptions> {
     })
 }
 
-fn should_defer_direct_stdio_repo_resolution(cli: &Cli) -> bool {
-    matches!(&cli.command, Command::Serve { direct_stdio: true })
-        && cli.repo.is_none()
-        && cli.db.is_none()
-}
-
 pub fn run_serve(cli: &Cli) -> Result<()> {
-    if should_defer_direct_stdio_repo_resolution(cli) {
-        return atlas_mcp::run_server_with_dynamic_roots(ServerOptions::default());
-    }
-
     let repo = resolve_repo(cli)?;
     let db_path = db_path(cli, &repo);
     let options = server_options_for_repo(&repo)?;
@@ -909,28 +899,29 @@ pub fn run_serve_http(_cli: &Cli) -> Result<()> {
 mod tests {
     use clap::Parser;
 
-    use crate::cli::Cli;
+    use crate::cli::{Cli, Command};
 
     fn parse(args: &[&str]) -> Cli {
         Cli::try_parse_from(args).expect("parse should succeed")
     }
 
     #[test]
-    fn direct_stdio_without_explicit_repo_or_db_defers_repo_resolution() {
+    fn direct_stdio_without_explicit_repo_or_db_uses_cwd_repo_resolution() {
         let cli = parse(&["atlas", "serve", "--direct-stdio"]);
-        assert!(super::should_defer_direct_stdio_repo_resolution(&cli));
-    }
-
-    #[test]
-    fn direct_stdio_with_explicit_repo_stays_fixed_mode() {
-        let cli = parse(&["atlas", "--repo", "/tmp/demo", "serve", "--direct-stdio"]);
-        assert!(!super::should_defer_direct_stdio_repo_resolution(&cli));
+        assert!(matches!(cli.command, Command::Serve { direct_stdio: true }));
+        assert!(cli.repo.is_none());
+        assert!(cli.db.is_none());
     }
 
     #[test]
     fn broker_stdio_without_direct_mode_stays_fixed_mode() {
         let cli = parse(&["atlas", "serve"]);
-        assert!(!super::should_defer_direct_stdio_repo_resolution(&cli));
+        assert!(matches!(
+            cli.command,
+            Command::Serve {
+                direct_stdio: false
+            }
+        ));
     }
 
     #[cfg(unix)]
