@@ -19,18 +19,21 @@ pub(crate) fn dispatch(
         "initialize" => spec::negotiate_initialize(params)
             .map_err(|error| DispatchError::new(JsonRpcErrorKind::InvalidParams, error)),
 
-        "tools/list" => Ok(tools::tool_list()),
+        "tools/list" => Ok(spec::complete_result(tools::tool_list())),
         "resources/list" => resources::resources_list(params)
+            .map(spec::complete_result)
             .map_err(|error| DispatchError::new(JsonRpcErrorKind::InvalidParams, error)),
         "resources/templates/list" => resources::resources_templates_list(params)
+            .map(spec::complete_result)
             .map_err(|error| DispatchError::new(JsonRpcErrorKind::InvalidParams, error)),
-        "resources/read" => {
-            resources::resources_read(params, repo_root, db_path).map_err(classify_resource_error)
-        }
+        "resources/read" => resources::resources_read(params, repo_root, db_path)
+            .map(spec::complete_result)
+            .map_err(classify_resource_error),
         "completion/complete" => completion::complete(params, repo_root, db_path)
+            .map(spec::complete_result)
             .map_err(|error| DispatchError::new(JsonRpcErrorKind::InvalidParams, error)),
 
-        "prompts/list" => Ok(prompts::prompt_list()),
+        "prompts/list" => Ok(spec::complete_result(prompts::prompt_list())),
 
         "prompts/get" => {
             let name = params
@@ -43,7 +46,9 @@ pub(crate) fn dispatch(
                     )
                 })?;
             let args = params.and_then(|p| p.get("arguments"));
-            prompts::prompt_get(name, args).map_err(classify_prompt_error)
+            prompts::prompt_get(name, args)
+                .map(spec::complete_result)
+                .map_err(classify_prompt_error)
         }
 
         "tools/call" => {
@@ -85,23 +90,28 @@ pub(crate) fn dispatch(
                 }
             };
             crate::tasks::execute_tool_call(name, args, repo_root, db_path)
+                .map(spec::complete_result)
                 .map_err(classify_tool_call_dispatch_error)
         }
 
         "tasks/list" => {
             crate::tasks::tasks_list(params, repo_root, crate::output::OutputFormat::Json)
+                .map(spec::complete_result)
                 .map_err(classify_task_api_error)
         }
         "tasks/get" => {
             crate::tasks::tasks_get(params, repo_root, crate::output::OutputFormat::Json)
+                .map(spec::complete_result)
                 .map_err(classify_task_api_error)
         }
         "tasks/result" => {
             crate::tasks::tasks_result(params, repo_root, crate::output::OutputFormat::Json)
+                .map(spec::complete_result)
                 .map_err(classify_task_api_error)
         }
         "tasks/cancel" => {
             crate::tasks::tasks_cancel(params, repo_root, crate::output::OutputFormat::Json)
+                .map(spec::complete_result)
                 .map_err(classify_task_api_error)
         }
 

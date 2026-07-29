@@ -210,6 +210,19 @@ fn initialize_request_line() -> String {
     )
 }
 
+fn request_meta_params() -> serde_json::Value {
+    serde_json::json!({
+        "_meta": {
+            crate::spec::META_PROTOCOL_VERSION: MCP_PROTOCOL_VERSION,
+            crate::spec::META_CLIENT_CAPABILITIES: {},
+            crate::spec::META_CLIENT_INFO: {
+                "name": "zed",
+                "version": "1.0.0"
+            }
+        }
+    })
+}
+
 fn stdio_single_response(
     repo_root: &str,
     db_path: &str,
@@ -221,6 +234,19 @@ fn stdio_single_response(
         serde_json::to_string(&request).expect("serialize request") + "\n",
     ]
     .concat();
+    run_stdio_jsonrpc_session_for_tests(&input, repo_root, db_path, ServerOptions::default())
+        .expect("run stdio request")
+        .into_iter()
+        .find(|value| value["id"] == request["id"])
+        .expect("stdio response by id")
+}
+
+fn stdio_single_response_2026(
+    repo_root: &str,
+    db_path: &str,
+    request: serde_json::Value,
+) -> serde_json::Value {
+    let input = serde_json::to_string(&request).expect("serialize request") + "\n";
     run_stdio_jsonrpc_session_for_tests(&input, repo_root, db_path, ServerOptions::default())
         .expect("run stdio request")
         .into_iter()
@@ -247,6 +273,101 @@ impl ReverseRequestEmitter for TestReverseEmitter {
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────
+
+#[test]
+fn missing_request_meta_fails_without_legacy_initialize() {
+    let fixture = setup_fixture();
+    let repo_root = fixture._dir.path().to_string_lossy().into_owned();
+
+    let response = stdio_single_response_2026(
+        &repo_root,
+        &fixture.db_path,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/list",
+            "params": {}
+        }),
+    );
+
+    assert_eq!(response["error"]["code"], serde_json::json!(-32602));
+    assert!(
+        response["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("requires params._meta")
+    );
+}
+
+#[test]
+fn unsupported_request_protocol_version_returns_mcp_error() {
+    let fixture = setup_fixture();
+    let repo_root = fixture._dir.path().to_string_lossy().into_owned();
+
+    let response = stdio_single_response_2026(
+        &repo_root,
+        &fixture.db_path,
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/list",
+            "params": {
+                "_meta": {
+                    crate::spec::META_PROTOCOL_VERSION: "2025-11-25",
+                    crate::spec::META_CLIENT_CAPABILITIES: {}
+                }
+            }
+        }),
+    );
+
+    assert_eq!(response["error"]["code"], serde_json::json!(-32022));
+    assert_eq!(
+        response["error"]["data"]["supportedVersions"],
+        serde_json::json!([MCP_PROTOCOL_VERSION])
+    );
+}
+
+#[test]
+fn request_success_results_include_complete_type_and_server_info_meta() {
+    let fixture = setup_fixture();
+    let repo_root = fixture._dir.path().to_string_lossy().into_owned();
+
+    for request in [
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/list",
+            "params": request_meta_params()
+        }),
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "resources/read",
+            "params": {
+                "uri": "atlas://health/status",
+                "_meta": request_meta_params()["_meta"].clone()
+            }
+        }),
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "tools/call",
+            "params": {
+                "name": "status",
+                "arguments": { "output_format": "json" },
+                "_meta": request_meta_params()["_meta"].clone()
+            }
+        }),
+    ] {
+        let response = stdio_single_response_2026(&repo_root, &fixture.db_path, request.clone());
+        let result = &response["result"];
+        assert_eq!(result["resultType"], serde_json::json!("complete"));
+        assert_eq!(
+            result["_meta"][crate::spec::META_SERVER_INFO]["name"],
+            serde_json::json!(crate::spec::MCP_SERVER_NAME)
+        );
+    }
+}
 
 #[test]
 fn advertised_capabilities_have_stdio_method_handlers_and_descriptor_backing() {
@@ -1451,9 +1572,17 @@ fn stdio_transport_handles_initialize_list_and_tool_calls() {
     );
 
     assert_eq!(
-        by_id[&serde_json::json!(2)]["result"],
-        crate::tools::tool_list(),
+        by_id[&serde_json::json!(2)]["result"]["tools"],
+        crate::tools::tool_list()["tools"],
         "stdio tools/list must serialize shared typed descriptor registry"
+    );
+    assert_eq!(
+        by_id[&serde_json::json!(2)]["result"]["resultType"],
+        serde_json::json!("complete")
+    );
+    assert_eq!(
+        by_id[&serde_json::json!(2)]["result"]["_meta"][crate::spec::META_SERVER_INFO]["name"],
+        serde_json::json!(crate::spec::MCP_SERVER_NAME)
     );
     let tools = by_id[&serde_json::json!(2)]["result"]["tools"]
         .as_array()
@@ -1555,7 +1684,7 @@ fn stdio_transport_rejects_unsupported_initialize_protocol_version() {
     assert_eq!(
         responses[0]["error"]["message"],
         serde_json::json!(
-            "unsupported protocol version '2024-11-05'; supported version: 2025-11-25"
+            "unsupported protocol version '2024-11-05'; supported version: 2026-07-28"
         )
     );
 }
@@ -1626,8 +1755,8 @@ fn stdio_transport_returns_jsonrpc_errors_for_parse_and_method_failures() {
     let input = concat!(
         "not-json\n",
         "{\"id\":6,\"method\":\"initialize\",\"params\":{}}\n",
-        "{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"missing/method\",\"params\":{}}\n",
-        "{\"jsonrpc\":\"2.0\",\"id\":8,\"method\":\"tools/call\",\"params\":{\"name\":\"unknown_tool_xyz\",\"arguments\":{}}}\n"
+        "{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"missing/method\",\"params\":{\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\",\"io.modelcontextprotocol/clientCapabilities\":{},\"io.modelcontextprotocol/clientInfo\":{\"name\":\"zed\",\"version\":\"1.0.0\"}}}}\n",
+        "{\"jsonrpc\":\"2.0\",\"id\":8,\"method\":\"tools/call\",\"params\":{\"name\":\"unknown_tool_xyz\",\"arguments\":{},\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\",\"io.modelcontextprotocol/clientCapabilities\":{},\"io.modelcontextprotocol/clientInfo\":{\"name\":\"zed\",\"version\":\"1.0.0\"}}}}\n"
     );
     let reader = BufReader::new(Cursor::new(input.as_bytes()));
     let mut writer = Vec::new();
@@ -2077,7 +2206,7 @@ fn stdio_transport_emits_progress_and_log_notifications() {
     let fixture = setup_fixture();
     let input = concat!(
         "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"$/setTrace\",\"params\":{\"value\":\"messages\"}}\n",
-        "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"query_graph\",\"progressToken\":\"tok-1\",\"arguments\":{\"text\":\"compute\"}}}\n"
+        "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"query_graph\",\"progressToken\":\"tok-1\",\"arguments\":{\"text\":\"compute\"},\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\",\"io.modelcontextprotocol/clientCapabilities\":{},\"io.modelcontextprotocol/clientInfo\":{\"name\":\"zed\",\"version\":\"1.0.0\"}}}}\n"
     );
     let reader = BufReader::new(Cursor::new(input.as_bytes()));
     let mut writer = Vec::new();

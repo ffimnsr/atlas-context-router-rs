@@ -142,6 +142,52 @@ pub(crate) fn handle_input_line<W: Write>(
             preferred_root_hint_uri(parsed.meta.as_ref());
     }
 
+    let legacy_compat_active = connection_state.client_capabilities.is_object();
+    let request_meta = if requires_request_meta(&method) {
+        match spec::parse_request_meta(&method, params) {
+            Ok(meta) => Some(meta),
+            Err(error)
+                if legacy_compat_active
+                    && matches!(error.kind(), spec::RequestMetaErrorKind::MissingMeta) =>
+            {
+                None
+            }
+            Err(error) => {
+                stats.protocol_errors += 1;
+                let kind = match error.kind() {
+                    spec::RequestMetaErrorKind::UnsupportedProtocolVersion => {
+                        JsonRpcErrorKind::UnsupportedProtocolVersion
+                    }
+                    spec::RequestMetaErrorKind::MissingMeta
+                    | spec::RequestMetaErrorKind::InvalidMeta => JsonRpcErrorKind::InvalidParams,
+                };
+                log_protocol_error_observation(
+                    "stdio",
+                    &request_log,
+                    kind.atlas_error_code(),
+                    error.message(),
+                );
+                if !is_notification {
+                    let extra_data = match error.kind() {
+                        spec::RequestMetaErrorKind::UnsupportedProtocolVersion => {
+                            Some(serde_json::json!({
+                                "supportedVersions": spec::supported_protocol_versions_value(),
+                            }))
+                        }
+                        _ => None,
+                    };
+                    write_response(
+                        writer,
+                        &jsonrpc_error_with_data(id.clone(), kind, error.to_string(), extra_data),
+                    )?;
+                }
+                return Ok(());
+            }
+        }
+    } else {
+        None
+    };
+
     if method == "initialized" || method == "notifications/initialized" {
         stats.notifications += 1;
         connection_state.initialized = true;
@@ -211,7 +257,10 @@ pub(crate) fn handle_input_line<W: Write>(
         if !is_notification {
             write_response(
                 writer,
-                &jsonrpc_ok(id.clone(), serde_json::json!({ "level": level.as_str() })),
+                &jsonrpc_ok(
+                    id.clone(),
+                    spec::complete_result(serde_json::json!({ "level": level.as_str() })),
+                ),
             )?;
         }
         emit_mcp_log_notification(
@@ -241,10 +290,13 @@ pub(crate) fn handle_input_line<W: Write>(
         let request_active_root_hint_uri = request_active_root_hint_uri(&request);
         let reverse_broker = connection_state.reverse_broker.clone();
         let repo_resolution = connection_state.repo_resolution.clone();
-        let client_capabilities = connection_state.client_capabilities.clone();
-        let initialized = connection_state.initialized;
+        let effective_client_capabilities = request_meta
+            .as_ref()
+            .map(|meta| meta.client_capabilities.clone())
+            .unwrap_or_else(|| connection_state.client_capabilities.clone());
+        let initialized = request_meta.is_some() || connection_state.initialized;
         let client_interactions =
-            parse_client_interaction_capabilities(&connection_state.client_capabilities);
+            parse_client_interaction_capabilities(&effective_client_capabilities);
         tracing::debug!(
             request_id = %request_log.request_id,
             method = %request_log.method,
@@ -355,7 +407,7 @@ pub(crate) fn handle_input_line<W: Write>(
                 tool_args,
                 ToolRepoResolutionContext {
                     request_active_root_hint_uri: request_active_root_hint_uri.as_deref(),
-                    client_capabilities: &client_capabilities,
+                    client_capabilities: &effective_client_capabilities,
                     initialized,
                     reverse_broker: &reverse_broker,
                     reverse_emitter: &reverse_emitter,
@@ -517,6 +569,18 @@ pub(crate) fn handle_input_line<W: Write>(
         }
     };
     write_response(writer, &response)
+}
+
+fn requires_request_meta(method: &str) -> bool {
+    !matches!(
+        method,
+        "initialize"
+            | "initialized"
+            | "notifications/initialized"
+            | "$/cancelRequest"
+            | "$/setTrace"
+            | "logging/setLevel"
+    ) && !method.starts_with("notifications/")
 }
 
 fn cancel_request<W: Write>(

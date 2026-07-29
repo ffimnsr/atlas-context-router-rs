@@ -1,6 +1,11 @@
 {
   "resources": [
     {
+      "uri": "atlas://docs/index",
+      "name": "docs_index",
+      "mimeType": "text/markdown"
+    },
+    {
       "uri": "atlas://graph/provenance",
       "name": "graph_provenance",
       "mimeType": "application/json"

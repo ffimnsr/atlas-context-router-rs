@@ -1,6 +1,10 @@
 {
   "tool_names": [
     "list_graph_stats",
+    "tool_list",
+    "tool_search",
+    "tool_help",
+    "man",
     "query_graph",
     "batch_query_graph",
     "get_impact_radius",

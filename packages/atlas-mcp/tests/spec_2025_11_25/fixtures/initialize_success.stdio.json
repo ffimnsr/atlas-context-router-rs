@@ -3,7 +3,7 @@
     "jsonrpc": "2.0",
     "id": 1,
     "result": {
-      "protocolVersion": "2025-11-25",
+      "protocolVersion": "2026-07-28",
       "capabilities": {
         "tools": {},
         "prompts": { "listChanged": false },
@@ -19,7 +19,7 @@
       },
       "serverInfo": {
         "name": "atlas",
-        "version": "1.4.1",
+        "version": "1.5.1",
         "description": "MCP server exposing Atlas graph, impact, and review tools over stdio"
       },
       "_meta": { "clientTag": "spec-suite" }

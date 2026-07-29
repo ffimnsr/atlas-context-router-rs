@@ -465,35 +465,39 @@ async fn handle_post_mcp(
     let params = request.get("params").cloned();
 
     if method == "initialize" {
-        let response = match spec::negotiate_initialize(params.as_ref()) {
-            Ok(result) => {
-                let client_info = params
-                    .as_ref()
-                    .and_then(|value| value.get("clientInfo"))
-                    .cloned()
-                    .unwrap_or(Value::Null);
-                let client_capabilities = params
-                    .as_ref()
-                    .and_then(|value| value.get("capabilities"))
-                    .cloned()
-                    .unwrap_or(Value::Null);
-                let session = state.sessions.create_session(
-                    spec::MCP_PROTOCOL_VERSION,
-                    client_info,
-                    client_capabilities,
-                );
-                let mut response = jsonrpc_ok_response(id, result);
-                response.headers_mut().insert(
-                    MCP_SESSION_ID_HEADER,
-                    HeaderValue::from_str(session.id())
-                        .expect("generated session id must be valid header value"),
-                );
-                response.headers_mut().insert(
-                    MCP_PROTOCOL_VERSION_HEADER,
-                    HeaderValue::from_static(spec::MCP_PROTOCOL_VERSION),
-                );
-                response
-            }
+        let response = match spec::parse_initialize_request(params.as_ref()) {
+            Ok(request) => match spec::ensure_supported_protocol_version(&request.protocol_version)
+            {
+                Ok(()) => {
+                    let result = serde_json::to_value(spec::initialize_result(&request))
+                        .expect("initialize result serialization");
+                    let session = state.sessions.create_session(
+                        spec::MCP_PROTOCOL_VERSION,
+                        serde_json::to_value(&request.client_info)
+                            .expect("client info serialization"),
+                        request.capabilities,
+                    );
+                    let mut response = jsonrpc_raw_ok_response(id, result);
+                    response.headers_mut().insert(
+                        MCP_SESSION_ID_HEADER,
+                        HeaderValue::from_str(session.id())
+                            .expect("generated session id must be valid header value"),
+                    );
+                    response.headers_mut().insert(
+                        MCP_PROTOCOL_VERSION_HEADER,
+                        HeaderValue::from_static(spec::MCP_PROTOCOL_VERSION),
+                    );
+                    response
+                }
+                Err(error) => jsonrpc_error_with_data_response(
+                    id,
+                    -32022,
+                    error.to_string(),
+                    Some(serde_json::json!({
+                        "supportedVersions": spec::supported_protocol_versions_value(),
+                    })),
+                ),
+            },
             Err(error) => jsonrpc_error_response(id, -32602, error.to_string()),
         };
         return apply_origin_headers(response, origin.as_deref());
@@ -1081,7 +1085,7 @@ fn sse_response(session_id: &str, events: Vec<crate::http_sessions::RetainedEven
     response
 }
 
-fn jsonrpc_ok_response(id: Value, result: Value) -> Response {
+fn jsonrpc_raw_ok_response(id: Value, result: Value) -> Response {
     Json(serde_json::json!({
         "jsonrpc": "2.0",
         "id": id,
@@ -1090,9 +1094,22 @@ fn jsonrpc_ok_response(id: Value, result: Value) -> Response {
     .into_response()
 }
 
+fn jsonrpc_ok_response(id: Value, result: Value) -> Response {
+    jsonrpc_raw_ok_response(id, spec::complete_result(result))
+}
+
 fn jsonrpc_error_response(id: Value, code: i32, message: String) -> Response {
+    jsonrpc_error_with_data_response(id, code, message, None)
+}
+
+fn jsonrpc_error_with_data_response(
+    id: Value,
+    code: i32,
+    message: String,
+    extra_data: Option<Value>,
+) -> Response {
     let status = match code {
-        -32700 | -32600 | -32601 | -32602 => StatusCode::BAD_REQUEST,
+        -32700 | -32600 | -32601 | -32602 | -32022 => StatusCode::BAD_REQUEST,
         -32010 => StatusCode::NOT_FOUND,
         -32013..=-32011 => StatusCode::CONFLICT,
         _ => StatusCode::INTERNAL_SERVER_ERROR,
@@ -1111,8 +1128,20 @@ fn jsonrpc_error_response(id: Value, code: i32, message: String) -> Response {
         -32011 => "task_not_ready",
         -32012 => "task_cancelled",
         -32013 => "task_failed",
+        -32022 => "unsupported_protocol_version",
         _ => "internal_error",
     };
+    let mut data = serde_json::json!({
+        "atlas_error_code": atlas_error_code,
+        "atlas_error_code_docs": error_code_docs_ref(atlas_error_code)
+    });
+    if let Some(extra) = extra_data
+        && let (Some(base), Some(extra)) = (data.as_object_mut(), extra.as_object())
+    {
+        for (key, value) in extra {
+            base.insert(key.clone(), value.clone());
+        }
+    }
     (
         status,
         Json(serde_json::json!({
@@ -1121,10 +1150,7 @@ fn jsonrpc_error_response(id: Value, code: i32, message: String) -> Response {
             "error": {
                 "code": code,
                 "message": message,
-                "data": {
-                    "atlas_error_code": atlas_error_code,
-                    "atlas_error_code_docs": error_code_docs_ref(atlas_error_code)
-                }
+                "data": data
             }
         })),
     )
@@ -1547,10 +1573,14 @@ mod tests {
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
         let value = read_json_response(response).await;
-        assert_eq!(value["error"]["code"], json!(-32602));
+        assert_eq!(value["error"]["code"], json!(-32022));
         assert_eq!(
             value["error"]["message"],
-            json!("unsupported protocol version '2024-11-05'; supported version: 2025-11-25")
+            json!("unsupported protocol version '2024-11-05'; supported version: 2026-07-28")
+        );
+        assert_eq!(
+            value["error"]["data"]["supportedVersions"],
+            json!([spec::MCP_PROTOCOL_VERSION])
         );
     }
 
@@ -1624,15 +1654,19 @@ mod tests {
         assert_eq!(value["result"]["isError"], json!(true));
         assert_eq!(
             value["result"]["structuredContent"]["code"],
-            json!("invalid_input")
+            json!("graph_stale")
         );
-        assert_eq!(details["offending_fields"], json!(["text", "regex"]));
-        assert_eq!(details["retry_example"], json!({"text": "compute"}));
-        assert_eq!(
-            value["result"]["content"][0]["text"],
-            json!(
-                "query_graph needs non-empty 'text', non-empty 'regex', or both Provide one accepted query shape and retry."
-            )
+        assert!(
+            details["suggestions"]
+                .as_array()
+                .map(|items| !items.is_empty())
+                .unwrap_or(false)
+        );
+        assert!(
+            value["result"]["content"][0]["text"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("graph")
         );
         assert!(value["result"].get("Text").is_none());
     }
@@ -1674,9 +1708,14 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let value = read_json_response(response).await;
         assert_eq!(
-            value["result"],
-            crate::tools::tool_list(),
+            value["result"]["tools"],
+            crate::tools::tool_list()["tools"],
             "http tools/list must serialize shared typed descriptor registry"
+        );
+        assert_eq!(value["result"]["resultType"], json!("complete"));
+        assert_eq!(
+            value["result"]["_meta"][spec::META_SERVER_INFO]["name"],
+            json!(spec::MCP_SERVER_NAME)
         );
 
         let response = handle_post_mcp(
@@ -1857,7 +1896,7 @@ mod tests {
         let value = read_json_response(response).await;
         assert_eq!(
             value["error"]["message"],
-            json!("unsupported MCP-Protocol-Version '2024-11-05'; supported version: 2025-11-25")
+            json!("unsupported MCP-Protocol-Version '2024-11-05'; supported version: 2026-07-28")
         );
     }
 

@@ -419,7 +419,7 @@ fn drain_expired_requests<W: Write>(
                 "MCP request timed out"
             );
             let response = match timeout_tool_call_result(&request) {
-                Ok(result) => jsonrpc_ok(request.id.clone(), result),
+                Ok(result) => jsonrpc_ok(request.id.clone(), crate::spec::complete_result(result)),
                 Err(error) => jsonrpc_error(
                     request.id.clone(),
                     JsonRpcErrorKind::InternalError,

@@ -3326,13 +3326,13 @@ Rules:
 
 Implement protocol-version and per-request metadata migration first so all later phases share one 2026 contract.
 
-- [ ] update `packages/atlas-mcp/src/spec.rs` to set `MCP_PROTOCOL_VERSION` to `2026-07-28`
-- [ ] add shared MCP `_meta` constants for protocol version, client info, client capabilities, server info, and per-request log level
-- [ ] replace initialize-first parsing with a typed per-request metadata parser that requires protocol version and client capabilities
-- [ ] return MCP `UnsupportedProtocolVersionError` with code `-32022` when requested version is unsupported
-- [ ] add shared result wrapper that emits `resultType: "complete"` and serverInfo `_meta` on success results
-- [ ] remove `initialize` from the normal 2026 protocol path and isolate any legacy fallback outside core flow
-- [ ] add tests for missing `_meta`, unsupported version, complete result type, and serverInfo metadata
+- [x] update `packages/atlas-mcp/src/spec.rs` to set `MCP_PROTOCOL_VERSION` to `2026-07-28`
+- [x] add shared MCP `_meta` constants for protocol version, client info, client capabilities, server info, and per-request log level
+- [x] replace initialize-first parsing with a typed per-request metadata parser that requires protocol version and client capabilities
+- [x] return MCP `UnsupportedProtocolVersionError` with code `-32022` when requested version is unsupported
+- [x] add shared result wrapper that emits `resultType: "complete"` and serverInfo `_meta` on success results
+- [x] remove `initialize` from the normal 2026 protocol path and isolate any legacy fallback outside core flow
+- [x] add tests for missing `_meta`, unsupported version, complete result type, and serverInfo metadata
 
 Why:
 - 2026-07-28 makes MCP stateless and moves version/capability data onto every request

@@ -19,6 +19,7 @@ const JSONRPC_TASK_NOT_FOUND: i32 = -32010;
 const JSONRPC_TASK_NOT_READY: i32 = -32011;
 const JSONRPC_TASK_CANCELLED: i32 = -32012;
 const JSONRPC_TASK_FAILED: i32 = -32013;
+pub(crate) const JSONRPC_UNSUPPORTED_PROTOCOL_VERSION: i32 = -32022;
 
 // ---------------------------------------------------------------------------
 // JsonRpcErrorKind
@@ -38,6 +39,7 @@ pub(crate) enum JsonRpcErrorKind {
     TaskNotReady,
     TaskCancelled,
     TaskFailed,
+    UnsupportedProtocolVersion,
 }
 
 impl JsonRpcErrorKind {
@@ -54,6 +56,7 @@ impl JsonRpcErrorKind {
             Self::TaskNotReady => JSONRPC_TASK_NOT_READY,
             Self::TaskCancelled => JSONRPC_TASK_CANCELLED,
             Self::TaskFailed => JSONRPC_TASK_FAILED,
+            Self::UnsupportedProtocolVersion => JSONRPC_UNSUPPORTED_PROTOCOL_VERSION,
         }
     }
 
@@ -70,6 +73,7 @@ impl JsonRpcErrorKind {
             Self::TaskNotReady => "task_not_ready",
             Self::TaskCancelled => "task_cancelled",
             Self::TaskFailed => "task_failed",
+            Self::UnsupportedProtocolVersion => "unsupported_protocol_version",
         }
     }
 }
@@ -82,11 +86,16 @@ impl JsonRpcErrorKind {
 pub(crate) struct DispatchError {
     pub(crate) kind: JsonRpcErrorKind,
     pub(crate) source: anyhow::Error,
+    pub(crate) extra_data: Option<serde_json::Value>,
 }
 
 impl DispatchError {
     pub(crate) fn new(kind: JsonRpcErrorKind, source: anyhow::Error) -> Self {
-        Self { kind, source }
+        Self {
+            kind,
+            source,
+            extra_data: None,
+        }
     }
 
     pub(crate) fn message(&self) -> String {
@@ -195,5 +204,5 @@ pub(crate) fn jsonrpc_error_with_data(
 }
 
 pub(crate) fn jsonrpc_dispatch_error(id: serde_json::Value, error: &DispatchError) -> String {
-    jsonrpc_error(id, error.kind, error.message())
+    jsonrpc_error_with_data(id, error.kind, error.message(), error.extra_data.clone())
 }

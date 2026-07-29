@@ -198,9 +198,20 @@ fn normalize_dynamic(value: &mut Value) {
     }
 }
 
+fn strip_transport_result_meta(value: &mut Value) {
+    let Some(meta) = value.get_mut("_meta").and_then(Value::as_object_mut) else {
+        return;
+    };
+    meta.remove("atlas:repoRoot");
+    meta.remove("atlas:repoSelection");
+}
+
 fn normalize_http_body(body: &Value) -> Value {
     let mut copy = body.clone();
     normalize_dynamic(&mut copy);
+    if let Some(result) = copy.get_mut("result") {
+        strip_transport_result_meta(result);
+    }
     copy
 }
 
@@ -289,6 +300,9 @@ fn protected_resource_metadata_snapshot(response: &atlas_mcp::testing::TestHttpR
 fn normalized_jsonrpc_body(response: &Value) -> Value {
     let mut body = response.clone();
     normalize_dynamic(&mut body);
+    if let Some(result) = body.get_mut("result") {
+        strip_transport_result_meta(result);
+    }
     if let Some(object) = body.as_object_mut() {
         object.remove("id");
     }
@@ -466,6 +480,19 @@ fn parse_sse_json(body: &str) -> Value {
 fn normalized_tool_result_contract(result: &Value) -> Value {
     let mut copy = result.clone();
     normalize_dynamic(&mut copy);
+    strip_transport_result_meta(&mut copy);
+
+    let mut structured = copy
+        .get("structuredContent")
+        .cloned()
+        .unwrap_or(Value::Null);
+    if let Some(object) = structured.as_object_mut() {
+        object.remove("atlas_provenance");
+        if let Some(details) = object.get_mut("details").and_then(Value::as_object_mut) {
+            details.remove("atlas_provenance");
+        }
+    }
+
     json!({
         "isError": copy.get("isError").cloned().unwrap_or(Value::Bool(false)),
         "meta": copy.get("_meta").cloned().unwrap_or(Value::Null),
@@ -473,7 +500,7 @@ fn normalized_tool_result_contract(result: &Value) -> Value {
             .as_array()
             .map(|items| items.iter().filter_map(|item| item.get("type").cloned()).collect::<Vec<_>>())
             .unwrap_or_default(),
-        "structuredContent": copy.get("structuredContent").cloned().unwrap_or(Value::Null),
+        "structuredContent": structured,
     })
 }
 
