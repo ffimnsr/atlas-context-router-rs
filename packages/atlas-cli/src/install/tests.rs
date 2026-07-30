@@ -9,8 +9,8 @@ use super::git_hooks::{
     HOOK_END_MARKER, HOOK_START_MARKER, HOOK_VERSION_MARKER, LEGACY_HOOK_MARKER, install_git_hooks,
 };
 use super::instructions::{
-    INSTRUCTIONS_END_MARKER, INSTRUCTIONS_MARKER, INSTRUCTIONS_SECTION, inject_instructions,
-    instruction_targets,
+    INSTRUCTIONS_END_MARKER, INSTRUCTIONS_MARKER, INSTRUCTIONS_SECTION, InstructionsMode,
+    inject_instructions, instruction_targets,
 };
 use super::mcp::{
     install_claude, install_claude_scoped, install_codex, install_codex_scoped, install_copilot,
@@ -31,7 +31,8 @@ fn repo_with_git(dir: &Path) {
 #[test]
 fn inject_instructions_creates_agents_md() {
     let tmp = TempDir::new().unwrap();
-    let files = inject_instructions(tmp.path(), &["AGENTS.md"], false).unwrap();
+    let files =
+        inject_instructions(tmp.path(), &["AGENTS.md"], false, InstructionsMode::Refresh).unwrap();
     assert!(files.contains(&"AGENTS.md".to_owned()));
     let content = fs::read_to_string(tmp.path().join("AGENTS.md")).unwrap();
     assert!(content.contains(INSTRUCTIONS_MARKER));
@@ -40,8 +41,9 @@ fn inject_instructions_creates_agents_md() {
 #[test]
 fn inject_instructions_idempotent() {
     let tmp = TempDir::new().unwrap();
-    inject_instructions(tmp.path(), &["AGENTS.md"], false).unwrap();
-    let files = inject_instructions(tmp.path(), &["AGENTS.md"], false).unwrap();
+    inject_instructions(tmp.path(), &["AGENTS.md"], false, InstructionsMode::Refresh).unwrap();
+    let files =
+        inject_instructions(tmp.path(), &["AGENTS.md"], false, InstructionsMode::Refresh).unwrap();
     assert!(!files.contains(&"AGENTS.md".to_owned()));
 }
 
@@ -49,7 +51,7 @@ fn inject_instructions_idempotent() {
 fn inject_instructions_appends_to_existing() {
     let tmp = TempDir::new().unwrap();
     fs::write(tmp.path().join("AGENTS.md"), b"# Existing content\n").unwrap();
-    inject_instructions(tmp.path(), &["AGENTS.md"], false).unwrap();
+    inject_instructions(tmp.path(), &["AGENTS.md"], false, InstructionsMode::Refresh).unwrap();
     let content = fs::read_to_string(tmp.path().join("AGENTS.md")).unwrap();
     assert!(content.starts_with("# Existing content\n"));
     assert!(content.contains(INSTRUCTIONS_MARKER));
@@ -92,7 +94,8 @@ fn inject_instructions_replaces_stale_section() {
     let stale = format!("# Existing content\n\n{INSTRUCTIONS_MARKER}\nold stale block\n");
     fs::write(tmp.path().join("AGENTS.md"), stale).unwrap();
 
-    let files = inject_instructions(tmp.path(), &["AGENTS.md"], false).unwrap();
+    let files =
+        inject_instructions(tmp.path(), &["AGENTS.md"], false, InstructionsMode::Refresh).unwrap();
     let content = fs::read_to_string(tmp.path().join("AGENTS.md")).unwrap();
 
     assert!(files.contains(&"AGENTS.md".to_owned()));
@@ -109,11 +112,57 @@ fn inject_instructions_replaces_marked_section_without_touching_suffix() {
     );
     fs::write(tmp.path().join("AGENTS.md"), stale).unwrap();
 
-    inject_instructions(tmp.path(), &["AGENTS.md"], false).unwrap();
+    inject_instructions(tmp.path(), &["AGENTS.md"], false, InstructionsMode::Refresh).unwrap();
     let content = fs::read_to_string(tmp.path().join("AGENTS.md")).unwrap();
 
     assert!(content.contains("## User Notes\nkeep me\n"));
     assert!(!content.contains("old stale block"));
+}
+
+#[test]
+fn inject_instructions_replace_file_overwrites_existing_content() {
+    let tmp = TempDir::new().unwrap();
+    fs::write(
+        tmp.path().join("AGENTS.md"),
+        "# Existing content\n\n## User Notes\nkeep me\n",
+    )
+    .unwrap();
+
+    let files = inject_instructions(
+        tmp.path(),
+        &["AGENTS.md"],
+        false,
+        InstructionsMode::ReplaceFile,
+    )
+    .unwrap();
+    let content = fs::read_to_string(tmp.path().join("AGENTS.md")).unwrap();
+
+    assert!(files.contains(&"AGENTS.md".to_owned()));
+    assert_eq!(content, INSTRUCTIONS_SECTION);
+}
+
+#[test]
+fn run_install_replace_file_overwrites_agents_md() {
+    let tmp = TempDir::new().unwrap();
+    fs::write(tmp.path().join("AGENTS.md"), "# Existing content\n").unwrap();
+
+    let summary = run_install(
+        tmp.path(),
+        "codex",
+        "repo",
+        InstallOptions {
+            no_hooks: true,
+            instructions_mode: InstructionsMode::ReplaceFile,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    assert!(summary.instruction_files.contains(&"AGENTS.md".to_owned()));
+    assert_eq!(
+        fs::read_to_string(tmp.path().join("AGENTS.md")).unwrap(),
+        INSTRUCTIONS_SECTION
+    );
 }
 
 #[test]
@@ -429,6 +478,35 @@ fn run_install_codex_creates_only_agents_md() {
     assert!(!summary.instruction_files.contains(&"CLAUDE.md".to_owned()));
     assert!(tmp.path().join("AGENTS.md").exists());
     assert!(!tmp.path().join("CLAUDE.md").exists());
+}
+
+#[test]
+fn run_install_instructions_only_skips_platform_config_files() {
+    let tmp = TempDir::new().unwrap();
+
+    let summary = run_install(
+        tmp.path(),
+        "codex",
+        "repo",
+        InstallOptions {
+            no_platform_config: true,
+            no_hooks: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    assert!(summary.configured.is_empty());
+    assert!(summary.already_configured.is_empty());
+    assert!(summary.instruction_files.contains(&"AGENTS.md".to_owned()));
+    assert!(tmp.path().join("AGENTS.md").exists());
+    assert!(!tmp.path().join(".codex").join("config.toml").exists());
+    assert!(
+        summary
+            .validation_checks
+            .iter()
+            .all(|check| check.check != "codex_config")
+    );
 }
 
 #[test]
@@ -942,6 +1020,7 @@ fn user_scope_validation_passes_after_install() {
         home.path(),
         "codex",
         InstallScope::User,
+        false,
         false,
         true,
     )

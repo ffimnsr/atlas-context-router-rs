@@ -14,7 +14,7 @@ mod validation;
 mod tests;
 
 pub use git_hooks::install_git_hooks;
-pub use instructions::inject_instructions;
+pub use instructions::{InstructionsMode, inject_instructions};
 pub use platform_hooks::install_platform_agent_hooks;
 
 use instructions::instruction_targets;
@@ -40,8 +40,10 @@ pub struct InstallOptions {
     pub dry_run: bool,
     pub validate_only: bool,
     pub force: bool,
+    pub no_platform_config: bool,
     pub no_hooks: bool,
     pub no_instructions: bool,
+    pub instructions_mode: InstructionsMode,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -99,7 +101,7 @@ pub fn run_install(
             continue;
         }
 
-        if options.validate_only {
+        if options.validate_only || options.no_platform_config {
             continue;
         }
 
@@ -134,6 +136,7 @@ pub fn run_install(
             repo_root,
             &instruction_targets(platform, repo_root),
             options.dry_run,
+            options.instructions_mode,
         )?;
     }
 
@@ -143,6 +146,7 @@ pub fn run_install(
             &scope_root,
             platform,
             scope,
+            options.no_platform_config,
             options.no_hooks,
             options.no_instructions,
         )?;

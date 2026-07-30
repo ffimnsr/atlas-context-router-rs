@@ -754,27 +754,43 @@ struct DaemonHandshakeResponse {
 }
 
 pub fn run_install(cli: &Cli) -> Result<()> {
-    let (platform, scope, dry_run, validate_only, force, no_hooks, no_instructions) =
-        match &cli.command {
-            Command::Install {
-                platform,
-                scope,
-                dry_run,
-                validate_only,
-                force,
-                no_hooks,
-                no_instructions,
-            } => (
-                platform.clone(),
-                scope.clone(),
-                *dry_run,
-                *validate_only,
-                *force,
-                *no_hooks,
-                *no_instructions,
-            ),
-            _ => unreachable!(),
-        };
+    let (
+        platform,
+        scope,
+        dry_run,
+        validate_only,
+        force,
+        instructions_only,
+        no_platform_config,
+        no_hooks,
+        no_instructions,
+        instructions_mode,
+    ) = match &cli.command {
+        Command::Install {
+            platform,
+            scope,
+            dry_run,
+            validate_only,
+            force,
+            instructions_only,
+            no_platform_config,
+            no_hooks,
+            no_instructions,
+            instructions_mode,
+        } => (
+            platform.clone(),
+            scope.clone(),
+            *dry_run,
+            *validate_only,
+            *force,
+            *instructions_only,
+            *no_platform_config,
+            *no_hooks,
+            *no_instructions,
+            *instructions_mode,
+        ),
+        _ => unreachable!(),
+    };
 
     let repo = resolve_repo(cli)?;
     let repo_root = std::path::Path::new(&repo);
@@ -785,6 +801,9 @@ pub fn run_install(cli: &Cli) -> Result<()> {
         println!("Dry run — no files will be written.\n");
     }
 
+    let no_platform_config = no_platform_config || instructions_only;
+    let no_hooks = no_hooks || instructions_only;
+
     let summary = crate::install::run_install(
         repo_root,
         &platform,
@@ -793,8 +812,10 @@ pub fn run_install(cli: &Cli) -> Result<()> {
             dry_run,
             validate_only,
             force,
+            no_platform_config,
             no_hooks,
             no_instructions,
+            instructions_mode,
         },
     )?;
 
@@ -805,6 +826,10 @@ pub fn run_install(cli: &Cli) -> Result<()> {
                 "scope": summary.scope,
                 "dry_run": dry_run,
                 "validate_only": summary.validate_only,
+                "instructions_only": instructions_only,
+                "no_platform_config": no_platform_config,
+                "no_hooks": no_hooks,
+                "instructions_mode": instructions_mode.as_str(),
                 "configured": summary.configured,
                 "already_configured": summary.already_configured,
                 "hook_paths": summary.hook_paths.iter().map(|p| p.display().to_string()).collect::<Vec<_>>(),

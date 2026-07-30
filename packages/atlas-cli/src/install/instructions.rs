@@ -2,11 +2,28 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use clap::ValueEnum;
 
 use super::scope::should_auto_detect;
 
 pub(super) const INSTRUCTIONS_MARKER: &str = "<!-- atlas MCP tools -->";
 pub(super) const INSTRUCTIONS_END_MARKER: &str = "<!-- /atlas MCP tools -->";
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
+pub enum InstructionsMode {
+    #[default]
+    Refresh,
+    ReplaceFile,
+}
+
+impl InstructionsMode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Refresh => "refresh",
+            Self::ReplaceFile => "replace-file",
+        }
+    }
+}
 
 pub(super) const INSTRUCTIONS_SECTION: &str = r#"<!-- atlas MCP tools -->
 ## MCP Tools: atlas
@@ -102,6 +119,7 @@ pub fn inject_instructions(
     repo_root: &Path,
     filenames: &[&str],
     dry_run: bool,
+    mode: InstructionsMode,
 ) -> Result<Vec<String>> {
     let mut updated = Vec::new();
 
@@ -113,7 +131,7 @@ pub fn inject_instructions(
             String::new()
         };
 
-        let next_content = upsert_instructions_section(&existing);
+        let next_content = render_instructions_content(&existing, mode);
         if next_content == existing {
             continue;
         }
@@ -121,10 +139,18 @@ pub fn inject_instructions(
         if dry_run {
             if existing.is_empty() {
                 println!("  [dry-run] would create {filename}");
-            } else if existing.contains(INSTRUCTIONS_MARKER) {
-                println!("  [dry-run] would refresh atlas instructions in {filename}");
             } else {
-                println!("  [dry-run] would append atlas instructions to {filename}");
+                match mode {
+                    InstructionsMode::Refresh if existing.contains(INSTRUCTIONS_MARKER) => {
+                        println!("  [dry-run] would refresh atlas instructions in {filename}");
+                    }
+                    InstructionsMode::Refresh => {
+                        println!("  [dry-run] would append atlas instructions to {filename}");
+                    }
+                    InstructionsMode::ReplaceFile => {
+                        println!("  [dry-run] would replace all contents in {filename}");
+                    }
+                }
             }
             updated.push(filename.to_string());
             continue;
@@ -136,6 +162,13 @@ pub fn inject_instructions(
     }
 
     Ok(updated)
+}
+
+fn render_instructions_content(existing: &str, mode: InstructionsMode) -> String {
+    match mode {
+        InstructionsMode::Refresh => upsert_instructions_section(existing),
+        InstructionsMode::ReplaceFile => INSTRUCTIONS_SECTION.to_string(),
+    }
 }
 
 fn upsert_instructions_section(existing: &str) -> String {

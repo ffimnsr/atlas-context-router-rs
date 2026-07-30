@@ -248,6 +248,22 @@ atlas install
 atlas install --dry-run
 ```
 
+### Replace full instruction file
+
+```bash
+atlas install --platform codex --instructions-mode replace-file
+```
+
+Default mode is `refresh`: Atlas replaces only its managed instruction block when markers already exist, or appends that block when `AGENTS.md` / `CLAUDE.md` already contains user-managed text. Use `--instructions-mode replace-file` to overwrite the full instruction file with Atlas-managed content.
+
+### Update instructions only
+
+```bash
+atlas install --platform codex --instructions-only
+```
+
+`--instructions-only` is alias for `--no-platform-config --no-hooks`. It updates only `AGENTS.md` / `CLAUDE.md`.
+
 `atlas install` will:
 
 - write MCP server config for GitHub Copilot, Claude Code, or Codex

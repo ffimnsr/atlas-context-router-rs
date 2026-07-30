@@ -1,6 +1,8 @@
 use super::*;
 use clap::Parser;
 
+use crate::install::InstructionsMode;
+
 fn parse(args: &[&str]) -> Cli {
     Cli::try_parse_from(args).expect("parse should succeed")
 }
@@ -820,8 +822,11 @@ fn parse_install_defaults() {
         dry_run,
         validate_only,
         force,
+        instructions_only,
+        no_platform_config,
         no_hooks,
         no_instructions,
+        instructions_mode,
     } = cli.command
     {
         assert_eq!(platform, "all");
@@ -829,8 +834,11 @@ fn parse_install_defaults() {
         assert!(!dry_run);
         assert!(!validate_only);
         assert!(!force);
+        assert!(!instructions_only);
+        assert!(!no_platform_config);
         assert!(!no_hooks);
         assert!(!no_instructions);
+        assert_eq!(instructions_mode, InstructionsMode::Refresh);
     } else {
         panic!("expected Install command");
     }
@@ -897,6 +905,45 @@ fn parse_install_no_hooks_and_no_instructions() {
     {
         assert!(no_hooks);
         assert!(no_instructions);
+    } else {
+        panic!("expected Install command");
+    }
+}
+
+#[test]
+fn parse_install_instructions_only() {
+    let cli = parse(&["atlas", "install", "--instructions-only"]);
+    if let Command::Install {
+        instructions_only, ..
+    } = cli.command
+    {
+        assert!(instructions_only);
+    } else {
+        panic!("expected Install command");
+    }
+}
+
+#[test]
+fn parse_install_no_platform_config() {
+    let cli = parse(&["atlas", "install", "--no-platform-config"]);
+    if let Command::Install {
+        no_platform_config, ..
+    } = cli.command
+    {
+        assert!(no_platform_config);
+    } else {
+        panic!("expected Install command");
+    }
+}
+
+#[test]
+fn parse_install_replace_file_instructions_mode() {
+    let cli = parse(&["atlas", "install", "--instructions-mode", "replace-file"]);
+    if let Command::Install {
+        instructions_mode, ..
+    } = cli.command
+    {
+        assert_eq!(instructions_mode, InstructionsMode::ReplaceFile);
     } else {
         panic!("expected Install command");
     }

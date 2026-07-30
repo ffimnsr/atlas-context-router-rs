@@ -14,54 +14,57 @@ pub(super) fn validate_install(
     scope_root: &Path,
     platform: &str,
     scope: InstallScope,
+    no_platform_config: bool,
     no_hooks: bool,
     no_instructions: bool,
 ) -> Result<Vec<InstallValidation>> {
     let mut checks = Vec::new();
 
-    for name in ["copilot", "claude", "codex"] {
-        let skip = match platform {
-            "all" => !should_auto_detect(name, repo_root),
-            current => current != name,
-        };
-        if skip {
-            continue;
-        }
+    if !no_platform_config {
+        for name in ["copilot", "claude", "codex"] {
+            let skip = match platform {
+                "all" => !should_auto_detect(name, repo_root),
+                current => current != name,
+            };
+            if skip {
+                continue;
+            }
 
-        checks.push(match name {
-            "copilot" => validate_json_server_entry(
-                "copilot_config",
-                &match scope {
-                    InstallScope::Repo => scope_root.join(".vscode").join("mcp.json"),
-                    InstallScope::User => scope_root
-                        .join(".config")
-                        .join("Code")
-                        .join("User")
-                        .join("mcp.json"),
-                },
-                repo_root,
-                scope_root,
-                scope,
-                "servers",
-            ),
-            "claude" => validate_json_server_entry(
-                "claude_config",
-                &scope_root.join(".mcp.json"),
-                repo_root,
-                scope_root,
-                scope,
-                "mcpServers",
-            ),
-            "codex" => validate_toml_section(
-                "codex_config",
-                &scope_root.join(".codex").join("config.toml"),
-                repo_root,
-                scope_root,
-                scope,
-                "[mcp_servers.atlas]",
-            ),
-            _ => unreachable!(),
-        });
+            checks.push(match name {
+                "copilot" => validate_json_server_entry(
+                    "copilot_config",
+                    &match scope {
+                        InstallScope::Repo => scope_root.join(".vscode").join("mcp.json"),
+                        InstallScope::User => scope_root
+                            .join(".config")
+                            .join("Code")
+                            .join("User")
+                            .join("mcp.json"),
+                    },
+                    repo_root,
+                    scope_root,
+                    scope,
+                    "servers",
+                ),
+                "claude" => validate_json_server_entry(
+                    "claude_config",
+                    &scope_root.join(".mcp.json"),
+                    repo_root,
+                    scope_root,
+                    scope,
+                    "mcpServers",
+                ),
+                "codex" => validate_toml_section(
+                    "codex_config",
+                    &scope_root.join(".codex").join("config.toml"),
+                    repo_root,
+                    scope_root,
+                    scope,
+                    "[mcp_servers.atlas]",
+                ),
+                _ => unreachable!(),
+            });
+        }
     }
 
     if !no_hooks {

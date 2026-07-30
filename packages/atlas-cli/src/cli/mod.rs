@@ -11,6 +11,8 @@ pub use subcommands::{
     InsightsCommand, RefactorCommand, SessionCommand,
 };
 
+use crate::install::InstructionsMode;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 pub enum ReviewContextFormat {
     Text,
@@ -400,6 +402,14 @@ pub enum Command {
         #[arg(long)]
         force: bool,
 
+        /// Update only instruction files; implies --no-platform-config and --no-hooks.
+        #[arg(long)]
+        instructions_only: bool,
+
+        /// Skip writing platform MCP config files.
+        #[arg(long)]
+        no_platform_config: bool,
+
         /// Skip installing git hooks and platform agent hook configs.
         #[arg(long)]
         no_hooks: bool,
@@ -407,6 +417,10 @@ pub enum Command {
         /// Skip injecting platform-specific graph instructions.
         #[arg(long)]
         no_instructions: bool,
+
+        /// Instruction write mode: refresh managed atlas block or replace whole file.
+        #[arg(long, default_value = "refresh", value_enum)]
+        instructions_mode: InstructionsMode,
     },
 
     /// Explain supported update path for the installed atlas binary.
