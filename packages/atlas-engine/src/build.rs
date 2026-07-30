@@ -21,14 +21,18 @@ use crate::owner_graph::refresh_owner_graphs;
 
 /// Options controlling the build pipeline.
 pub struct BuildOptions {
-    /// Abort on the first parse or I/O failure instead of continuing.
+    /// Stop on the first parse error instead of continuing.
     pub fail_fast: bool,
-    /// Parse and summarize build work without mutating graph state.
+    /// If true, parse and summarize without writing to the database.
     pub dry_run: bool,
     /// Number of files parsed per parallel batch.
     pub batch_size: usize,
-    /// Centralized operational budget for build work.
+    /// Centralized operational budget for one build run.
     pub budget: BuildRunBudget,
+    /// Stable multi-repo registry id for rows written by this build.
+    pub source_repo_id: Option<String>,
+    /// Prefix qualified names so equal paths/symbols from separate repos cannot collide.
+    pub namespace_qualified_names: bool,
 }
 
 impl Default for BuildOptions {
@@ -38,6 +42,8 @@ impl Default for BuildOptions {
             dry_run: false,
             batch_size: crate::config::DEFAULT_PARSE_BATCH_SIZE,
             budget: BuildRunBudget::default(),
+            source_repo_id: None,
+            namespace_qualified_names: false,
         }
     }
 }
@@ -83,17 +89,21 @@ pub fn build_graph(
 
     let mut store =
         Store::open(db_path).with_context(|| format!("cannot open database at {db_path}"))?;
+    let source_repo_id = opts
+        .source_repo_id
+        .clone()
+        .unwrap_or_else(|| "legacy".to_owned());
     store
         .upsert_repo(repo_root.as_str())
         .context("cannot register repo root for build state and history")?;
 
     if !opts.dry_run {
         for path in store
-            .file_paths_with_prefix("")
+            .file_paths_with_prefix_for_repo(&source_repo_id, "")
             .context("cannot list existing graph files")?
         {
             store
-                .delete_file_graph(&path)
+                .delete_file_graph_for_repo(&source_repo_id, &path)
                 .with_context(|| format!("cannot clear stale graph for '{path}'"))?;
         }
     }
@@ -106,8 +116,9 @@ pub fn build_graph(
     // `file_hashes()` returns canonical graph file identities, so unchanged-file
     // reuse in full builds stays aligned with persisted graph keys and later
     // historical snapshot/file-hash reuse.
-    let stored_hashes: HashMap<String, String> =
-        store.file_hashes().context("cannot read stored hashes")?;
+    let stored_hashes: HashMap<String, String> = store
+        .file_hashes_for_repo(&source_repo_id)
+        .context("cannot read stored hashes")?;
 
     let (all_files, scan_stats) = collect_supported_files_with_stats(
         repo_root,
@@ -210,6 +221,11 @@ pub fn build_graph(
                 match registry.parse(rel_str, hash, &source, None) {
                     Some((mut pf, _tree)) => {
                         annotate_parsed_file_owner(&mut pf, owners.owner_for_path(rel_str));
+                        annotate_parsed_file_repo(
+                            &mut pf,
+                            &source_repo_id,
+                            opts.namespace_qualified_names,
+                        );
                         (rel_str.clone(), Ok(pf))
                     }
                     None => (rel_str.clone(), Err("unsupported (skipped)".into())),
@@ -255,7 +271,7 @@ pub fn build_graph(
             // Single-connection persistence phase: DB writes happen after the
             // parallel parse batch completes.
             let (n, e) = store
-                .replace_files_transactional(&parsed_files)
+                .replace_files_transactional_for_repo(&source_repo_id, &parsed_files)
                 .context("cannot store parsed files")?;
             for pf in &parsed_files {
                 store
@@ -266,15 +282,9 @@ pub fn build_graph(
             total_edges += e;
 
             // Index chunk text for retrieval (embeddings generated separately).
-            for pf in &parsed_files {
-                for node in &pf.nodes {
-                    if let Err(err) =
-                        store.upsert_chunk(&node.qualified_name, 0, &node.chunk_text())
-                    {
-                        chunk_upsert_failures += 1;
-                        tracing::warn!("chunk upsert failed for {}: {err:#}", node.qualified_name);
-                    }
-                }
+            if let Err(err) = store.replace_chunks_for_parsed_files(&parsed_files) {
+                chunk_upsert_failures += 1;
+                tracing::warn!("chunk batch upsert failed: {err:#}");
             }
         }
 
@@ -291,13 +301,20 @@ pub fn build_graph(
     drop(_parse_span);
 
     if !opts.dry_run {
-        refresh_owner_graphs(&mut store, repo_root, &owners)
-            .context("cannot refresh package/workspace nodes")?;
+        refresh_owner_graphs(
+            &mut store,
+            repo_root,
+            &owners,
+            &source_repo_id,
+            opts.namespace_qualified_names,
+        )
+        .context("cannot refresh package/workspace nodes")?;
     }
 
     if !resolved_paths.is_empty()
         && !opts.dry_run
-        && let Err(err) = reconcile_call_targets(&mut store, repo_root, &resolved_paths)
+        && let Err(err) =
+            reconcile_call_targets(&mut store, repo_root, &source_repo_id, &resolved_paths)
     {
         call_target_reconcile_failures += 1;
         tracing::warn!("late call-target resolution failed during build: {err:#}");
@@ -345,6 +362,48 @@ pub fn build_graph(
 #[allow(dead_code)]
 pub fn resolve_repo_root(start_dir: &str) -> Result<camino::Utf8PathBuf> {
     find_repo_root(Utf8Path::new(start_dir)).context("cannot find git repo root")
+}
+
+fn annotate_parsed_file_repo(parsed_file: &mut ParsedFile, repo_id: &str, namespace_qnames: bool) {
+    if namespace_qnames {
+        for node in &mut parsed_file.nodes {
+            let original = node.qualified_name.clone();
+            node.qualified_name = namespace_qname(repo_id, &original);
+            node.parent_name = node
+                .parent_name
+                .as_deref()
+                .map(|parent| namespace_qname(repo_id, parent));
+        }
+        for edge in &mut parsed_file.edges {
+            edge.source_qn = namespace_qname(repo_id, &edge.source_qn);
+            edge.target_qn = namespace_qname(repo_id, &edge.target_qn);
+        }
+    }
+
+    for node in &mut parsed_file.nodes {
+        let mut extra = node.extra_json.as_object().cloned().unwrap_or_default();
+        extra.insert(
+            "repo_id".to_owned(),
+            serde_json::Value::String(repo_id.to_owned()),
+        );
+        node.extra_json = serde_json::Value::Object(extra);
+    }
+    for edge in &mut parsed_file.edges {
+        let mut extra = edge.extra_json.as_object().cloned().unwrap_or_default();
+        extra.insert(
+            "repo_id".to_owned(),
+            serde_json::Value::String(repo_id.to_owned()),
+        );
+        edge.extra_json = serde_json::Value::Object(extra);
+    }
+}
+
+fn namespace_qname(repo_id: &str, qname: &str) -> String {
+    if qname.starts_with("repo::") {
+        qname.to_owned()
+    } else {
+        format!("repo::{repo_id}::{qname}")
+    }
 }
 
 fn annotate_parsed_file_owner(parsed_file: &mut ParsedFile, owner: Option<&PackageOwner>) {
@@ -454,6 +513,8 @@ mod tests {
                 dry_run: false,
                 batch_size: 16,
                 budget: BuildRunBudget::default(),
+                source_repo_id: None,
+                namespace_qualified_names: false,
             },
         )
         .unwrap();
@@ -505,6 +566,8 @@ mod tests {
                 dry_run: false,
                 batch_size: 16,
                 budget,
+                source_repo_id: None,
+                namespace_qualified_names: false,
             },
         )
         .unwrap();
@@ -545,6 +608,8 @@ mod tests {
                 dry_run: false,
                 batch_size: 16,
                 budget,
+                source_repo_id: None,
+                namespace_qualified_names: false,
             },
         )
         .unwrap();
@@ -590,6 +655,8 @@ mod tests {
                 dry_run: false,
                 batch_size: 1,
                 budget: BuildRunBudget::default(),
+                source_repo_id: None,
+                namespace_qualified_names: false,
             },
         )
         .unwrap();
@@ -631,5 +698,72 @@ mod tests {
         };
 
         assert!(summary.is_degraded());
+    }
+
+    #[test]
+    fn build_graph_namespaces_qualified_name_collisions_across_repos() {
+        let root_a = tempfile::tempdir().unwrap();
+        let root_b = tempfile::tempdir().unwrap();
+        let repo_a = root_a.path();
+        let repo_b = root_b.path();
+
+        git(repo_a, &["init", "--quiet"]);
+        git(repo_b, &["init", "--quiet"]);
+        std::fs::create_dir_all(repo_a.join("src")).unwrap();
+        std::fs::create_dir_all(repo_b.join("src")).unwrap();
+        std::fs::write(repo_a.join("src/lib.rs"), "pub fn helper() {}\n").unwrap();
+        std::fs::write(repo_b.join("src/lib.rs"), "pub fn helper() {}\n").unwrap();
+        git(repo_a, &["add", "."]);
+        git(repo_b, &["add", "."]);
+        git(repo_a, &["commit", "--quiet", "-m", "repo a"]);
+        git(repo_b, &["commit", "--quiet", "-m", "repo b"]);
+
+        let db_dir = tempfile::tempdir().unwrap();
+        let db_path = db_dir.path().join("worldtree.db");
+        let repo_a_id = atlas_repo::stable_repo_id(Utf8Path::from_path(repo_a).unwrap());
+        let repo_b_id = atlas_repo::stable_repo_id(Utf8Path::from_path(repo_b).unwrap());
+
+        build_graph(
+            Utf8Path::from_path(repo_a).unwrap(),
+            db_path.to_str().unwrap(),
+            &BuildOptions {
+                fail_fast: true,
+                dry_run: false,
+                batch_size: 16,
+                budget: BuildRunBudget::default(),
+                source_repo_id: Some(repo_a_id.clone()),
+                namespace_qualified_names: true,
+            },
+        )
+        .unwrap();
+        build_graph(
+            Utf8Path::from_path(repo_b).unwrap(),
+            db_path.to_str().unwrap(),
+            &BuildOptions {
+                fail_fast: true,
+                dry_run: false,
+                batch_size: 16,
+                budget: BuildRunBudget::default(),
+                source_repo_id: Some(repo_b_id.clone()),
+                namespace_qualified_names: true,
+            },
+        )
+        .unwrap();
+
+        let store = Store::open(db_path.to_str().unwrap()).unwrap();
+        let node_a = store
+            .node_by_qname(&format!("repo::{repo_a_id}::src/lib.rs::fn::helper"))
+            .unwrap()
+            .expect("repo a node");
+        let node_b = store
+            .node_by_qname(&format!("repo::{repo_b_id}::src/lib.rs::fn::helper"))
+            .unwrap()
+            .expect("repo b node");
+
+        assert_eq!(node_a.file_path, "src/lib.rs");
+        assert_eq!(node_b.file_path, "src/lib.rs");
+        assert_eq!(node_a.extra_json["repo_id"], serde_json::json!(repo_a_id));
+        assert_eq!(node_b.extra_json["repo_id"], serde_json::json!(repo_b_id));
+        assert_ne!(node_a.qualified_name, node_b.qualified_name);
     }
 }

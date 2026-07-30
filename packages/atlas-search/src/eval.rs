@@ -81,6 +81,7 @@ impl RetrievalMode {
             top_k_vector: 60,
             rrf_k: 60,
             regex_pattern: None,
+            repo_ids: Vec::new(),
         }
     }
 }

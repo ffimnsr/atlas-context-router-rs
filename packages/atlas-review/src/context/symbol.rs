@@ -1,5 +1,20 @@
 use super::*;
 
+fn node_repo_id(node: &atlas_core::model::Node) -> Option<&str> {
+    node.extra_json
+        .as_object()
+        .and_then(|extra| extra.get("repo_id"))
+        .and_then(|value| value.as_str())
+}
+
+fn keep_repo_local_neighbor(
+    seed_repo_id: Option<&str>,
+    candidate: &atlas_core::model::Node,
+    allow_cross_repo_edges: bool,
+) -> bool {
+    allow_cross_repo_edges || node_repo_id(candidate) == seed_repo_id
+}
+
 /// Build a symbol-centred [`ContextResult`] from a resolved seed node.
 pub(super) fn build_symbol_context(
     store: &Store,
@@ -7,6 +22,7 @@ pub(super) fn build_symbol_context(
     request: &ContextRequest,
 ) -> Result<ContextResult> {
     let qname = seed.qualified_name.clone();
+    let seed_repo_id = node_repo_id(&seed);
 
     let mut nodes: Vec<SelectedNode> = Vec::new();
     let mut edges: Vec<SelectedEdge> = Vec::new();
@@ -32,6 +48,13 @@ pub(super) fn build_symbol_context(
         for fqname in &frontier_qnames {
             if request.include_callers {
                 for (caller, edge) in store.direct_callers(fqname, BUCKET_CALLERS)? {
+                    if !keep_repo_local_neighbor(
+                        seed_repo_id,
+                        &caller,
+                        request.allow_cross_repo_edges,
+                    ) {
+                        continue;
+                    }
                     let cqn = caller.qualified_name.clone();
                     if seen_qnames.insert(cqn.clone()) {
                         next_frontier.push(cqn);
@@ -63,6 +86,13 @@ pub(super) fn build_symbol_context(
 
             if request.include_callees {
                 for (callee, edge) in store.direct_callees(fqname, BUCKET_CALLEES)? {
+                    if !keep_repo_local_neighbor(
+                        seed_repo_id,
+                        &callee,
+                        request.allow_cross_repo_edges,
+                    ) {
+                        continue;
+                    }
                     let cqn = callee.qualified_name.clone();
                     if seen_qnames.insert(cqn.clone()) {
                         next_frontier.push(cqn);

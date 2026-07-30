@@ -68,9 +68,14 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "013_postprocess_state",
         up_sql: include_str!("migrations/013_postprocess_state.sql"),
     },
+    Migration {
+        version: 14,
+        name: "014_multi_repo_identity",
+        up_sql: include_str!("migrations/014_multi_repo_identity.sql"),
+    },
 ];
 
-pub const LATEST_VERSION: i32 = 13;
+pub const LATEST_VERSION: i32 = 14;
 
 pub const MIGRATION_SET: MigrationSet = MigrationSet {
     db_kind: "worldtree",

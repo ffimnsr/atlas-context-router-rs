@@ -41,6 +41,7 @@ fn run_cli() -> anyhow::Result<()> {
     match &cli.command {
         Command::Init { .. } => commands::run_init(&cli),
         Command::Migrate => commands::run_migrate(&cli),
+        Command::Repo { .. } => commands::run_repo(&cli),
         Command::Build { .. } => commands::run_build(&cli),
         Command::Update { .. } => commands::run_update(&cli),
         Command::Status { .. } => commands::run_status(&cli),

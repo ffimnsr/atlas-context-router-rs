@@ -14,6 +14,7 @@ mod files;
 mod hash;
 mod owners;
 mod path;
+mod registry;
 mod root;
 
 pub use diff::{DiffTarget, changed_files};
@@ -27,5 +28,11 @@ pub use owners::{PackageOwners, WorkspaceRoot, discover_package_owners};
 pub use path::{
     CanonicalRepoPath, RepoPathError, canonical_absolute_path, canonical_filesystem_path,
     normalize_case, normalize_unicode, repo_relative, to_forward_slashes,
+};
+pub use registry::{
+    REPO_REGISTRY_FILE_NAME, REPO_REGISTRY_SCHEMA_VERSION, RepoDependency, RepoRegistration,
+    RepoRegistry, RepoRegistryWarning, RepoRelationship, RepoRelationshipKind, TrustState,
+    VcsMetadata, add_manual_repo, bootstrap_registry, discover_initialized_submodules,
+    phase1_multi_repo_supported, registry_path, stable_repo_id,
 };
 pub use root::find_repo_root;

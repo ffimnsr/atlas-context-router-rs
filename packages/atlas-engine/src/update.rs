@@ -75,6 +75,10 @@ pub struct UpdateOptions {
     pub target: UpdateTarget,
     /// Centralized operational budget for update work.
     pub budget: BuildRunBudget,
+    /// Stable multi-repo registry id for rows written by this update.
+    pub source_repo_id: Option<String>,
+    /// Prefix qualified names so equal paths/symbols from separate repos cannot collide.
+    pub namespace_qualified_names: bool,
 }
 
 impl Default for UpdateOptions {
@@ -85,6 +89,8 @@ impl Default for UpdateOptions {
             batch_size: crate::config::DEFAULT_PARSE_BATCH_SIZE,
             target: UpdateTarget::WorkingTree,
             budget: BuildRunBudget::default(),
+            source_repo_id: None,
+            namespace_qualified_names: false,
         }
     }
 }
@@ -176,6 +182,10 @@ pub fn update_graph(
 
     let mut store =
         Store::open(db_path).with_context(|| format!("cannot open database at {db_path}"))?;
+    let source_repo_id = opts
+        .source_repo_id
+        .clone()
+        .unwrap_or_else(|| "legacy".to_owned());
     store
         .upsert_repo(repo_root.as_str())
         .context("cannot register repo root for build state and history")?;
@@ -233,8 +243,14 @@ pub fn update_graph(
                     // Check whether content is unchanged: if so, preserve node ids.
                     let new_abs = repo_root.join(&cf.path);
                     let new_hash = hash_file(&new_abs).ok();
-                    let stored_hash = store.file_hash(old).ok().flatten();
-                    let old_owner_id = store.file_owner_id(old).ok().flatten();
+                    let stored_hash = store
+                        .file_hash_for_repo(&source_repo_id, old)
+                        .ok()
+                        .flatten();
+                    let old_owner_id = store
+                        .file_owner_id_for_repo(&source_repo_id, old)
+                        .ok()
+                        .flatten();
                     let new_owner_id = owners
                         .owner_for_path(&cf.path)
                         .map(|owner| owner.owner_id.clone());
@@ -289,7 +305,7 @@ pub fn update_graph(
         let _del_span = tracing::info_span!("update.delete_stale").entered();
         for path in &to_delete {
             store
-                .delete_file_graph(path)
+                .delete_file_graph_for_repo(&source_repo_id, path)
                 .with_context(|| format!("cannot delete graph for '{path}'"))?;
         }
     }
@@ -377,6 +393,11 @@ pub fn update_graph(
                 match registry.parse(rel_str, &hash, &source, old_tree.as_ref()) {
                     Some((mut pf, tree)) => {
                         annotate_parsed_file_owner(&mut pf, owners.owner_for_path(rel_str));
+                        annotate_parsed_file_repo(
+                            &mut pf,
+                            &source_repo_id,
+                            opts.namespace_qualified_names,
+                        );
                         (rel_str.clone(), Ok((pf, tree)))
                     }
                     None => (rel_str.clone(), Err("unsupported (skipped)".into())),
@@ -511,6 +532,11 @@ pub fn update_graph(
                 match registry.parse(rel_str, &hash, &source, old_tree.as_ref()) {
                     Some((mut pf, tree)) => {
                         annotate_parsed_file_owner(&mut pf, owners.owner_for_path(rel_str));
+                        annotate_parsed_file_repo(
+                            &mut pf,
+                            &source_repo_id,
+                            opts.namespace_qualified_names,
+                        );
                         (rel_str.clone(), Ok((pf, tree)))
                     }
                     None => (rel_str.clone(), Err("unsupported (skipped)".into())),
@@ -573,7 +599,7 @@ pub fn update_graph(
         // Sequential persistence through the store's single owned connection.
         let chunk_owned: Vec<ParsedFile> = chunk.iter().map(|pf| (*pf).clone()).collect();
         let (n, e) = store
-            .replace_files_transactional(&chunk_owned)
+            .replace_files_transactional_for_repo(&source_repo_id, &chunk_owned)
             .context("cannot store parsed files")?;
         for pf in &chunk_owned {
             store
@@ -583,31 +609,31 @@ pub fn update_graph(
         total_nodes += n;
         total_edges += e;
 
-        // Refresh chunk text; delete stale entries first, then re-insert.
-        for pf in &chunk_owned {
-            if let Err(err) = store.delete_chunks_for_file(&pf.path) {
-                tracing::warn!("chunk delete failed for {}: {err:#}", pf.path);
-            }
-            for node in &pf.nodes {
-                if let Err(err) = store.upsert_chunk(&node.qualified_name, 0, &node.chunk_text()) {
-                    chunk_upsert_failures += 1;
-                    tracing::warn!("chunk upsert failed for {}: {err:#}", node.qualified_name);
-                }
-            }
+        // Refresh chunk text in one transaction for this parsed batch.
+        if let Err(err) = store.replace_chunks_for_parsed_files(&chunk_owned) {
+            chunk_upsert_failures += 1;
+            tracing::warn!("chunk batch upsert failed: {err:#}");
         }
     }
     drop(_write_span);
 
     if !opts.dry_run {
-        refresh_owner_graphs(&mut store, repo_root, &owners)
-            .context("cannot refresh package/workspace nodes")?;
+        refresh_owner_graphs(
+            &mut store,
+            repo_root,
+            &owners,
+            &source_repo_id,
+            opts.namespace_qualified_names,
+        )
+        .context("cannot refresh package/workspace nodes")?;
     }
 
     let resolved_paths: Vec<String> = all_parsed.iter().map(|pf| pf.path.clone()).collect();
     let mut call_target_reconcile_failures = 0usize;
     if !resolved_paths.is_empty()
         && !opts.dry_run
-        && let Err(err) = reconcile_call_targets(&mut store, repo_root, &resolved_paths)
+        && let Err(err) =
+            reconcile_call_targets(&mut store, repo_root, &source_repo_id, &resolved_paths)
     {
         call_target_reconcile_failures += 1;
         tracing::warn!("late call-target resolution failed during update: {err:#}");
@@ -649,6 +675,48 @@ pub fn update_graph(
         budget: budget_report,
         elapsed_ms: started.elapsed().as_millis(),
     })
+}
+
+fn annotate_parsed_file_repo(parsed_file: &mut ParsedFile, repo_id: &str, namespace_qnames: bool) {
+    if namespace_qnames {
+        for node in &mut parsed_file.nodes {
+            let original = node.qualified_name.clone();
+            node.qualified_name = namespace_qname(repo_id, &original);
+            node.parent_name = node
+                .parent_name
+                .as_deref()
+                .map(|parent| namespace_qname(repo_id, parent));
+        }
+        for edge in &mut parsed_file.edges {
+            edge.source_qn = namespace_qname(repo_id, &edge.source_qn);
+            edge.target_qn = namespace_qname(repo_id, &edge.target_qn);
+        }
+    }
+
+    for node in &mut parsed_file.nodes {
+        let mut extra = node.extra_json.as_object().cloned().unwrap_or_default();
+        extra.insert(
+            "repo_id".to_owned(),
+            serde_json::Value::String(repo_id.to_owned()),
+        );
+        node.extra_json = serde_json::Value::Object(extra);
+    }
+    for edge in &mut parsed_file.edges {
+        let mut extra = edge.extra_json.as_object().cloned().unwrap_or_default();
+        extra.insert(
+            "repo_id".to_owned(),
+            serde_json::Value::String(repo_id.to_owned()),
+        );
+        edge.extra_json = serde_json::Value::Object(extra);
+    }
+}
+
+fn namespace_qname(repo_id: &str, qname: &str) -> String {
+    if qname.starts_with("repo::") {
+        qname.to_owned()
+    } else {
+        format!("repo::{repo_id}::{qname}")
+    }
 }
 
 fn annotate_parsed_file_owner(parsed_file: &mut ParsedFile, owner: Option<&PackageOwner>) {
@@ -724,6 +792,8 @@ mod tests {
                 dry_run: false,
                 batch_size: 16,
                 budget: BuildRunBudget::default(),
+                source_repo_id: None,
+                namespace_qualified_names: false,
             },
         )
         .unwrap();
@@ -748,6 +818,8 @@ mod tests {
                 batch_size: 16,
                 target: UpdateTarget::WorkingTree,
                 budget,
+                source_repo_id: None,
+                namespace_qualified_names: false,
             },
         )
         .unwrap();
@@ -779,6 +851,8 @@ mod tests {
                 dry_run: false,
                 batch_size: 16,
                 budget: BuildRunBudget::default(),
+                source_repo_id: None,
+                namespace_qualified_names: false,
             },
         )
         .unwrap();
@@ -798,6 +872,8 @@ mod tests {
                 batch_size: 16,
                 target: UpdateTarget::WorkingTree,
                 budget: BuildRunBudget::default(),
+                source_repo_id: None,
+                namespace_qualified_names: false,
             },
         )
         .unwrap();
@@ -864,6 +940,8 @@ mod tests {
                 batch_size: 1,
                 target: UpdateTarget::WorkingTree,
                 budget: BuildRunBudget::default(),
+                source_repo_id: None,
+                namespace_qualified_names: false,
             },
         )
         .unwrap();
@@ -932,6 +1010,8 @@ mod tests {
                     old_path: Some("base.rs".to_string()),
                 }]),
                 budget: BuildRunBudget::default(),
+                source_repo_id: None,
+                namespace_qualified_names: false,
             },
         )
         .unwrap();
@@ -996,6 +1076,8 @@ mod tests {
                 batch_size: 1,
                 target: UpdateTarget::Files(vec!["x.rs".to_string(), "y.rs".to_string()]),
                 budget: BuildRunBudget::default(),
+                source_repo_id: None,
+                namespace_qualified_names: false,
             },
         )
         .unwrap();

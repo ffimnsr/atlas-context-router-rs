@@ -1,4 +1,6 @@
 use anyhow::Result;
+use atlas_repo::RepoRegistry;
+use camino::Utf8Path;
 use serde::Serialize;
 use serde_json::{Value, json};
 
@@ -93,6 +95,31 @@ pub(crate) fn tool_tool_list(args: Option<&Value>, output_format: OutputFormat) 
     tool_inventory_response(&response, output_format)
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub(crate) struct RepoRegistryResponse {
+    pub registry_path: String,
+    pub schema_version: u32,
+    pub root_repo_id: String,
+    pub registration_count: usize,
+    pub warning_count: usize,
+    pub registrations: Vec<atlas_repo::RepoRegistration>,
+    pub warnings: Vec<atlas_repo::RepoRegistryWarning>,
+}
+
+pub(crate) fn tool_repo_registry(repo_root: &str, output_format: OutputFormat) -> Result<Value> {
+    let registry = RepoRegistry::load_or_bootstrap(Utf8Path::new(repo_root))?;
+    let response = RepoRegistryResponse {
+        registry_path: atlas_repo::registry_path(Utf8Path::new(repo_root)).to_string(),
+        schema_version: registry.schema_version,
+        root_repo_id: registry.root_repo_id,
+        registration_count: registry.registrations.len(),
+        warning_count: registry.warnings.len(),
+        registrations: registry.registrations,
+        warnings: registry.warnings,
+    };
+    tool_inventory_response(&response, output_format)
+}
+
 pub(crate) fn tool_tool_search(args: Option<&Value>, output_format: OutputFormat) -> Result<Value> {
     let query = args
         .and_then(|value| value.get("query"))
@@ -179,6 +206,69 @@ where
 }
 
 fn render_inventory_text(payload: &Value) -> String {
+    if let Some(registrations) = payload.get("registrations").and_then(Value::as_array) {
+        let mut lines = vec![format!(
+            "repo registry: {} repo(s), {} warning(s)",
+            payload
+                .get("registration_count")
+                .and_then(Value::as_u64)
+                .unwrap_or(registrations.len() as u64),
+            payload
+                .get("warning_count")
+                .and_then(Value::as_u64)
+                .unwrap_or(0)
+        )];
+        if let Some(path) = payload.get("registry_path").and_then(Value::as_str) {
+            lines.push(format!("path: {path}"));
+        }
+        if let Some(root_repo_id) = payload.get("root_repo_id").and_then(Value::as_str) {
+            lines.push(format!("root_repo_id: {root_repo_id}"));
+        }
+        lines.push(String::new());
+        for entry in registrations {
+            let repo_id = entry
+                .get("repo_id")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let alias = entry
+                .get("display_alias")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let relationship = entry
+                .pointer("/relationship/kind")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            let enabled = entry
+                .get("enabled")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let trust = entry
+                .get("trust_state")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            lines.push(format!(
+                "- {repo_id} [{alias}] relationship={relationship} trust={trust} enabled={enabled}"
+            ));
+        }
+        if let Some(warnings) = payload.get("warnings").and_then(Value::as_array)
+            && !warnings.is_empty()
+        {
+            lines.push(String::new());
+            lines.push("warnings:".to_owned());
+            for warning in warnings {
+                let code = warning
+                    .get("code")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                let message = warning
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                lines.push(format!("- {code}: {message}"));
+            }
+        }
+        return lines.join("\n");
+    }
     if let Some(tools) = payload.get("tools").and_then(Value::as_array) {
         let mut lines = vec![format!(
             "tools: {} visible exported MCP tools",

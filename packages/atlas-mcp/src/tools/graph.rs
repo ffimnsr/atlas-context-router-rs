@@ -15,12 +15,30 @@ use crate::tool_result::{
 
 use super::shared::{
     bool_arg, error_code_docs, error_message, error_suggestions, inject_budget_metadata,
-    load_budget_policy, load_embedding_config, open_store, resolve_kind_alias, str_arg,
-    string_array_arg, tool_result_value, u64_arg,
+    load_budget_policy, load_embedding_config, open_store, repo_aliases_by_id, resolve_kind_alias,
+    resolve_repo_scope_selection, str_arg, string_array_arg, tool_result_value, u64_arg,
 };
 
 fn ranking_evidence_legend_json() -> serde_json::Value {
     atlas_core::ranking_evidence_legend()
+}
+
+fn node_repo_id(node: &atlas_core::Node) -> Option<&str> {
+    node.extra_json
+        .as_object()
+        .and_then(|extra| extra.get("repo_id"))
+        .and_then(|value| value.as_str())
+}
+
+fn node_repo_json(
+    node: &atlas_core::Node,
+    repo_aliases: &std::collections::BTreeMap<String, String>,
+) -> serde_json::Value {
+    let repo_id = node_repo_id(node);
+    serde_json::json!({
+        "repo_id": repo_id,
+        "display_alias": repo_id.and_then(|id| repo_aliases.get(id)).cloned(),
+    })
 }
 
 fn normalized_optional_query_regex(raw: Option<&str>) -> Option<String> {
@@ -129,6 +147,7 @@ pub(super) fn tool_query_graph(
     let fuzzy = bool_arg(args, "fuzzy").unwrap_or(false);
     let hybrid = bool_arg(args, "hybrid").unwrap_or(false);
     let include_files = bool_arg(args, "include_files").unwrap_or(false);
+    let repo_scope = resolve_repo_scope_selection(args, repo_root)?;
 
     if let Err(payload) = validate_query_graph_inputs(
         "query_graph",
@@ -161,6 +180,10 @@ pub(super) fn tool_query_graph(
         regex_pattern: regex,
         fuzzy_match: fuzzy,
         hybrid,
+        repo_ids: repo_scope
+            .as_ref()
+            .map(|scope| scope.repo_ids.clone())
+            .unwrap_or_default(),
         ..Default::default()
     };
 
@@ -189,15 +212,18 @@ pub(super) fn tool_query_graph(
         score: f64,
         #[serde(skip_serializing_if = "Option::is_none")]
         ranking_evidence: Option<RankingEvidence>,
+        repo: serde_json::Value,
         #[serde(flatten)]
         node: crate::context::CompactNode<'a>,
     }
 
+    let repo_aliases = repo_aliases_by_id(repo_root);
     let compact: Vec<CompactResult<'_>> = results
         .iter()
         .map(|r| CompactResult {
             score: (r.score * 1000.0).round() / 1000.0,
             ranking_evidence: r.ranking_evidence.clone(),
+            repo: node_repo_json(&r.node, &repo_aliases),
             node: compact_node(&r.node),
         })
         .collect();
@@ -238,6 +264,7 @@ pub(super) fn tool_batch_query_graph(
 ) -> Result<serde_json::Value> {
     const MAX_QUERIES: usize = 20;
 
+    let repo_scope = resolve_repo_scope_selection(args, repo_root)?;
     let text_phrase = str_arg(args, "text")?.filter(|s| !s.trim().is_empty());
     let synthesized: Vec<serde_json::Value>;
     let queries_val: &[serde_json::Value] = if let Some(phrase) = text_phrase {
@@ -291,6 +318,7 @@ pub(super) fn tool_batch_query_graph(
         score: f64,
         #[serde(skip_serializing_if = "Option::is_none")]
         ranking_evidence: Option<RankingEvidence>,
+        repo: serde_json::Value,
         name: String,
         qualified_name: String,
         kind: String,
@@ -301,6 +329,7 @@ pub(super) fn tool_batch_query_graph(
 
     let mut batch_results: Vec<BatchItem> = Vec::with_capacity(queries_val.len());
     let mut batch_budget_reports = Vec::with_capacity(queries_val.len());
+    let repo_aliases = repo_aliases_by_id(repo_root);
 
     for (idx, q) in queries_val.iter().enumerate() {
         let q_args = Some(q);
@@ -350,6 +379,10 @@ pub(super) fn tool_batch_query_graph(
             regex_pattern: regex,
             fuzzy_match: fuzzy,
             hybrid,
+            repo_ids: repo_scope
+                .as_ref()
+                .map(|scope| scope.repo_ids.clone())
+                .unwrap_or_default(),
             ..Default::default()
         };
 
@@ -375,6 +408,7 @@ pub(super) fn tool_batch_query_graph(
             .map(|r| BatchResultNode {
                 score: (r.score * 1000.0).round() / 1000.0,
                 ranking_evidence: r.ranking_evidence.clone(),
+                repo: node_repo_json(&r.node, &repo_aliases),
                 name: r.node.name.clone(),
                 qualified_name: r.node.qualified_name.clone(),
                 kind: r.node.kind.as_str().to_owned(),
@@ -845,6 +879,7 @@ pub(super) fn tool_explain_query(
     db_path: &str,
     output_format: crate::output::OutputFormat,
 ) -> Result<serde_json::Value> {
+    let repo_scope = resolve_repo_scope_selection(args, repo_root)?;
     let policy = load_budget_policy(repo_root)?;
     let mut budgets = BudgetManager::new();
     let raw_text = str_arg(args, "text")?;
@@ -889,6 +924,10 @@ pub(super) fn tool_explain_query(
         regex_pattern: regex,
         fuzzy_match: fuzzy,
         hybrid,
+        repo_ids: repo_scope
+            .as_ref()
+            .map(|scope| scope.repo_ids.clone())
+            .unwrap_or_default(),
         ..Default::default()
     };
     let store = if db_exists {
@@ -964,6 +1003,8 @@ pub(super) fn tool_resolve_symbol(
     output_format: crate::output::OutputFormat,
 ) -> Result<serde_json::Value> {
     const DEFAULT_LIMIT: usize = 10;
+    let repo_scope = resolve_repo_scope_selection(args, repo_root)?;
+    let repo_aliases = repo_aliases_by_id(repo_root);
     let policy = load_budget_policy(repo_root)?;
     let mut budgets = BudgetManager::new();
 
@@ -992,6 +1033,27 @@ pub(super) fn tool_resolve_symbol(
         };
         match resolve_target(&store, &target).context("resolve_symbol qname lookup failed")? {
             ResolvedTarget::Node(node) => {
+                if let Some(scope) = repo_scope.as_ref()
+                    && node_repo_id(&node).is_some_and(|repo_id| {
+                        !scope.repo_ids.iter().any(|candidate| candidate == repo_id)
+                    })
+                {
+                    let payload = input_shape_error_payload(
+                        "resolve_symbol",
+                        format!("symbol '{name}' is outside selected repo scope"),
+                        "Qualified name resolved, but not inside requested repo_id/all_repos scope. Retry without repo selector or choose matching repo_id.".to_owned(),
+                        InputShapeErrorSpec {
+                            offending_fields: vec!["name".to_owned(), "repo_id".to_owned()],
+                            normalization_performed: Vec::new(),
+                            accepted_argument_families: vec!["name".to_owned(), "name + repo_id".to_owned()],
+                            retry_example: Some(json!({"name": name})),
+                            fail_closed_reason: Some("Atlas refused cross-repo exact resolution outside selected registry scope".to_owned()),
+                            retry_guidance: Some("Pick matching repo_id or remove repo selector, then retry.".to_owned()),
+                            extra_details: Some(json!({"selected_repo_ids": scope.repo_ids})),
+                        },
+                    );
+                    return tool_execution_error_value(output_format, &payload);
+                }
                 #[derive(Serialize)]
                 struct ResolvedMatch<'a> {
                     qualified_name: &'a str,
@@ -1000,6 +1062,7 @@ pub(super) fn tool_resolve_symbol(
                     file_path: &'a str,
                     language: &'a str,
                     line_start: u32,
+                    repo: serde_json::Value,
                 }
                 let m = ResolvedMatch {
                     qualified_name: &node.qualified_name,
@@ -1008,6 +1071,7 @@ pub(super) fn tool_resolve_symbol(
                     file_path: &node.file_path,
                     language: &node.language,
                     line_start: node.line_start,
+                    repo: node_repo_json(&node, &repo_aliases),
                 };
                 let normalised = normalize_qn_kind_tokens(&name);
                 let alias_note = if normalised != name {
@@ -1065,7 +1129,21 @@ pub(super) fn tool_resolve_symbol(
                     "ambiguity": {
                         "ambiguous": true,
                         "matches": serde_json::Value::Array(
-                            meta.candidates.iter().map(|qn| serde_json::json!({"qualified_name": qn})).collect()
+                            meta.candidates.iter().map(|qn| {
+                                let node = store.node_by_qname(qn).ok().flatten();
+                                let repo = node
+                                    .as_ref()
+                                    .map(|node| node_repo_json(node, &repo_aliases))
+                                    .unwrap_or_else(|| serde_json::json!({"repo_id": null, "display_alias": null}));
+                                let file_path = node.as_ref().map(|node| node.file_path.clone());
+                                let kind = node.as_ref().map(|node| node.kind.as_str().to_owned());
+                                serde_json::json!({
+                                    "qualified_name": qn,
+                                    "file_path": file_path,
+                                    "kind": kind,
+                                    "repo": repo,
+                                })
+                            }).collect()
                         ),
                     },
                     "suggestions": [{
@@ -1124,6 +1202,10 @@ pub(super) fn tool_resolve_symbol(
         kind: resolved_kind.clone(),
         language: language.clone(),
         limit: fetch_limit,
+        repo_ids: repo_scope
+            .as_ref()
+            .map(|scope| scope.repo_ids.clone())
+            .unwrap_or_default(),
         ..Default::default()
     };
     let results = atlas_search::execute_query(&store, &query, false)
@@ -1180,6 +1262,7 @@ pub(super) fn tool_resolve_symbol(
         file_path: &'a str,
         language: &'a str,
         line_start: u32,
+        repo: serde_json::Value,
     }
 
     let matches: Vec<ResolvedMatch<'_>> = ranked
@@ -1191,6 +1274,7 @@ pub(super) fn tool_resolve_symbol(
             file_path: &r.node.file_path,
             language: &r.node.language,
             line_start: r.node.line_start,
+            repo: node_repo_json(&r.node, &repo_aliases),
         })
         .collect();
 

@@ -374,6 +374,7 @@ dependencies = [
  "atlas-core",
  "camino",
  "proptest",
+ "serde",
  "serde_json",
  "sha2",
  "tempfile",

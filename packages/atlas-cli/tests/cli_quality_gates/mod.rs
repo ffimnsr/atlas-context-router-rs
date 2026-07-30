@@ -235,6 +235,10 @@ fn normalize_query_results(value: &mut Value) {
     if let Some(object) = value.as_object_mut() {
         object.remove("latency_ms");
     }
+    if let Some(query) = value["query"].as_object_mut() {
+        query.remove("repo_ids");
+        query.remove("all_repos");
+    }
     let Some(results) = value["results"].as_array_mut() else {
         panic!("query output results should be an array");
     };
@@ -243,6 +247,10 @@ fn normalize_query_results(value: &mut Value) {
         result["score"] = json!(0.0);
         result["node"]["id"] = json!(0);
         result["node"]["file_hash"] = json!("<hash>");
+        result["node"]["extra_json"] = json!(null);
+        if let Some(object) = result.as_object_mut() {
+            object.remove("repo");
+        }
         if let Some(evidence) = result["ranking_evidence"].as_object_mut() {
             evidence.insert("raw_score".to_string(), json!(0.0));
             evidence.insert("final_score".to_string(), json!(0.0));
@@ -365,15 +373,26 @@ fn read_json_data_output(command: &str, output: Output) -> Value {
 }
 
 fn normalize_context_result(value: &mut serde_json::Value) {
+    if let Some(request) = value["request"].as_object_mut() {
+        request.remove("allow_cross_repo_edges");
+    }
     if let Some(nodes) = value["nodes"].as_array_mut() {
         for n in nodes.iter_mut() {
             n["node"]["id"] = json!(0);
             n["node"]["file_hash"] = json!("<hash>");
+            n["node"]["extra_json"] = json!(null);
         }
     }
     if let Some(edges) = value["edges"].as_array_mut() {
         for e in edges.iter_mut() {
             e["edge"]["id"] = json!(0);
+            if let Some(extra) = e["edge"]["extra_json"].as_object_mut() {
+                extra.remove("repo_id");
+                extra.remove("source_repo");
+                extra.remove("target_repo");
+                extra.remove("relationship_reason");
+                extra.remove("confidence_tier_label");
+            }
         }
     }
 }

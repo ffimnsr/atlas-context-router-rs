@@ -102,15 +102,15 @@ pub(crate) fn resolve_repo_context_for_tool_call(
         .as_ref()
         .or(repo_resolution.startup.as_ref())
         .map(|repo| repo.repo_root.clone());
-    if let Some(repo_context) = explicit_repo_context_from_tool_args(tool_args).map_err(|error| {
+    if let Some(repo_context) = explicit_repo_context_from_tool_args(tool_args, repo_resolution).map_err(|error| {
         Box::new(RepoSelectionError {
             kind: RepoSelectionFailureKind::InvalidExplicitRepoSelector,
             message: error.to_string(),
             candidate_roots: Vec::new(),
-            selection_attempts: vec!["explicit_request_repo_root".to_owned()],
+            selection_attempts: vec!["explicit_request_repo_selector".to_owned()],
             selection_source: Some(RepoSelectionSource::ExplicitRequest),
             tool_name: tool_name.to_owned(),
-            recommended_fix: "Pass arguments.repo_root as canonical repo path, or start Atlas with --repo for fixed-mode MCP.".to_owned(),
+            recommended_fix: "Pass arguments.repo_root as canonical repo path, pass registered arguments.repo_id, or start Atlas with --repo for fixed-mode MCP.".to_owned(),
             session_mode: "fixed",
             active_repo_root: active_repo_root.clone(),
         })
@@ -124,9 +124,7 @@ pub(crate) fn resolve_repo_context_for_tool_call(
     if let Some(active) = repo_resolution.active.clone() {
         return Ok(RepoSelectionOutcome {
             repo_context: active,
-            selection_source: repo_resolution
-                .active_selection_source
-                .unwrap_or(RepoSelectionSource::CachedActiveRoot),
+            selection_source: RepoSelectionSource::CachedActiveRoot,
             candidate_roots: None,
         });
     }
@@ -139,12 +137,12 @@ pub(crate) fn resolve_repo_context_for_tool_call(
     }
     Err(Box::new(RepoSelectionError {
         kind: RepoSelectionFailureKind::NoRepoContextAvailable,
-        message: "atlas repo context missing; pass --repo or include arguments.repo_root".to_owned(),
+        message: "atlas repo context missing; pass --repo or include arguments.repo_root/repo_id".to_owned(),
         candidate_roots: Vec::new(),
-        selection_attempts: vec!["explicit_cli".to_owned(), "explicit_request_repo_root".to_owned()],
+        selection_attempts: vec!["explicit_cli".to_owned(), "explicit_request_repo_selector".to_owned()],
         selection_source: None,
         tool_name: tool_name.to_owned(),
-        recommended_fix: "Start Atlas with --repo, or pass arguments.repo_root using canonical repo path for repo-bound tools.".to_owned(),
+        recommended_fix: "Start Atlas with --repo, or pass arguments.repo_root / registered arguments.repo_id for repo-bound tools.".to_owned(),
         session_mode: "fixed",
         active_repo_root,
     }))

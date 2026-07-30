@@ -35,7 +35,7 @@ use super::graph::{
 use super::health::{
     tool_broker_status, tool_db_check, tool_debug_graph, tool_doctor, tool_status,
 };
-use super::inventory::{tool_tool_list, tool_tool_search};
+use super::inventory::{tool_repo_registry, tool_tool_list, tool_tool_search};
 use super::manual::{tool_help, tool_man};
 use super::postprocess::tool_postprocess_graph;
 use super::shared::{bool_arg, derive_graph_readiness, derive_graph_readiness_open_failed};
@@ -143,6 +143,7 @@ fn normalized_contract_tool(name: &str) -> bool {
             | "read_file_around_match"
             | "search_templates"
             | "search_text_assets"
+            | "repo_registry"
     )
 }
 
@@ -228,6 +229,7 @@ pub(crate) fn is_known_tool_name(name: &str) -> bool {
         #[cfg(test)]
         "__test_sleep" | "__test_panic" => true,
         "list_graph_stats"
+        | "repo_registry"
         | "tool_list"
         | "tool_search"
         | "tool_help"
@@ -373,13 +375,14 @@ fn call_inner(
                 "reason": reason,
                 "suggestions": suggestions,
             });
-            inject_provenance(&mut blocked, repo_root, db_path);
+            inject_provenance(&mut blocked, args, repo_root, db_path);
             return Ok(blocked);
         }
     }
 
     let dispatch_result = match name {
         "list_graph_stats" => tool_list_graph_stats(db_path, output_format),
+        "repo_registry" => tool_repo_registry(repo_root, output_format),
         "tool_list" => tool_tool_list(args, output_format),
         "tool_search" => tool_tool_search(args, output_format),
         "tool_help" => tool_help(args, output_format),
@@ -455,7 +458,7 @@ fn call_inner(
         Err(error) => return normalize_tool_execution_error(name, output_format, error),
     };
 
-    inject_provenance(&mut response, repo_root, db_path);
+    inject_provenance(&mut response, args, repo_root, db_path);
     inject_freshness_warning(&mut response, name, repo_root, db_path);
     mirror_metadata_into_structured_content(
         &mut response,
@@ -536,7 +539,12 @@ fn tool_graph_requirement(name: &str) -> Option<GraphToolRequirement> {
     }
 }
 
-fn inject_provenance(response: &mut serde_json::Value, repo_root: &str, db_path: &str) {
+fn inject_provenance(
+    response: &mut serde_json::Value,
+    args: Option<&serde_json::Value>,
+    repo_root: &str,
+    db_path: &str,
+) {
     let (indexed_file_count, last_indexed_at) = if let Ok(store) = Store::open(db_path) {
         if let Ok(meta) = store.provenance_meta() {
             (meta.indexed_file_count, meta.last_indexed_at)
@@ -547,11 +555,40 @@ fn inject_provenance(response: &mut serde_json::Value, repo_root: &str, db_path:
         (0, None)
     };
 
+    let registry =
+        atlas_repo::RepoRegistry::load_or_bootstrap(camino::Utf8Path::new(repo_root)).ok();
+    let selected_repo_ids = args
+        .and_then(|value| value.get("repo_id"))
+        .and_then(|value| value.as_str())
+        .map(|value| vec![value.to_owned()])
+        .or_else(|| {
+            args.and_then(|value| value.get("all_repos"))
+                .and_then(|value| value.as_bool())
+                .filter(|all| *all)
+                .and_then(|_| {
+                    registry.as_ref().map(|registry| {
+                        registry
+                            .registrations
+                            .iter()
+                            .filter(|entry| entry.enabled)
+                            .filter(|entry| {
+                                atlas_repo::phase1_multi_repo_supported(entry.relationship.kind)
+                            })
+                            .map(|entry| entry.repo_id.clone())
+                            .collect::<Vec<_>>()
+                    })
+                })
+        })
+        .unwrap_or_default();
+
     response["atlas_provenance"] = serde_json::json!({
         "repo_root": repo_root,
         "db_path": db_path,
         "indexed_file_count": indexed_file_count,
         "last_indexed_at": last_indexed_at,
+        "registry_root_repo_id": registry.as_ref().map(|registry| registry.root_repo_id.clone()),
+        "registry_repo_count": registry.as_ref().map(|registry| registry.registrations.len()),
+        "selected_repo_ids": selected_repo_ids,
     });
     mirror_metadata_into_structured_content(response, "atlas_provenance", normalized_contract_tool);
 }
@@ -559,6 +596,8 @@ fn inject_provenance(response: &mut serde_json::Value, repo_root: &str, db_path:
 #[cfg(test)]
 mod tests {
     use super::*;
+    use atlas_core::{Edge, EdgeKind, Node, NodeId, NodeKind};
+    use atlas_store_sqlite::Store;
     use jsonschema::{Draft, JSONSchema};
     use serde_json::json;
     use std::fs;
@@ -572,9 +611,26 @@ mod tests {
         fs::create_dir_all(&src_dir).expect("create src dir");
         fs::write(
             src_dir.join("lib.rs"),
-            "pub fn greet() -> &'static str { \"hi\" }\n",
+            "pub mod service;\npub fn greet() -> &'static str { \"hi\" }\n",
         )
         .expect("write fixture source");
+        fs::write(
+            src_dir.join("service.rs"),
+            "pub fn compute() -> i32 { 1 }\n",
+        )
+        .expect("write fixture service source");
+        fs::write(
+            src_dir.join("api.rs"),
+            "pub fn handle_request() -> i32 { crate::service::compute() }\n",
+        )
+        .expect("write fixture api source");
+        let tests_dir = dir.path().join("tests");
+        fs::create_dir_all(&tests_dir).expect("create tests dir");
+        fs::write(
+            tests_dir.join("service_test.rs"),
+            "#[test]\nfn compute_test() { assert_eq!(crate::service::compute(), 1); }\n",
+        )
+        .expect("write fixture test source");
         fs::write(
             dir.path().join("README.md"),
             "# Fixture Repo\n\n## Status\n\nFixture status content.\n",
@@ -617,6 +673,107 @@ mod tests {
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
+    }
+
+    fn make_node(kind: NodeKind, name: &str, qn: &str, file: &str) -> Node {
+        Node {
+            id: NodeId::UNSET,
+            kind,
+            name: name.to_owned(),
+            qualified_name: qn.to_owned(),
+            file_path: file.to_owned(),
+            line_start: 1,
+            line_end: 5,
+            language: "rust".to_owned(),
+            parent_name: None,
+            params: Some("()".to_owned()),
+            return_type: None,
+            modifiers: None,
+            is_test: kind == NodeKind::Test,
+            file_hash: format!("hash:{file}"),
+            extra_json: serde_json::json!({}),
+        }
+    }
+
+    fn make_edge(kind: EdgeKind, source_qn: &str, target_qn: &str, file: &str) -> Edge {
+        Edge {
+            id: 0,
+            kind,
+            source_qn: source_qn.to_owned(),
+            target_qn: target_qn.to_owned(),
+            file_path: file.to_owned(),
+            line: Some(1),
+            confidence: 1.0,
+            confidence_tier: None,
+            extra_json: serde_json::json!({}),
+        }
+    }
+
+    fn seed_schema_graph(db_path: &str) {
+        let mut store = Store::open(db_path).expect("open store");
+
+        let compute = make_node(
+            NodeKind::Function,
+            "compute",
+            "src/service.rs::fn::compute",
+            "src/service.rs",
+        );
+        store
+            .replace_file_graph(
+                "src/service.rs",
+                "hash:src/service.rs",
+                Some("rust"),
+                Some(5),
+                std::slice::from_ref(&compute),
+                &[],
+            )
+            .expect("seed service graph");
+
+        let handle = make_node(
+            NodeKind::Function,
+            "handle_request",
+            "src/api.rs::fn::handle_request",
+            "src/api.rs",
+        );
+        let handle_calls_compute = make_edge(
+            EdgeKind::Calls,
+            "src/api.rs::fn::handle_request",
+            "src/service.rs::fn::compute",
+            "src/api.rs",
+        );
+        store
+            .replace_file_graph(
+                "src/api.rs",
+                "hash:src/api.rs",
+                Some("rust"),
+                Some(5),
+                std::slice::from_ref(&handle),
+                &[handle_calls_compute],
+            )
+            .expect("seed api graph");
+
+        let compute_test = make_node(
+            NodeKind::Test,
+            "compute_test",
+            "tests/service_test.rs::fn::compute_test",
+            "tests/service_test.rs",
+        );
+        let test_targets_compute = make_edge(
+            EdgeKind::Tests,
+            "tests/service_test.rs::fn::compute_test",
+            "src/service.rs::fn::compute",
+            "tests/service_test.rs",
+        );
+        store
+            .replace_file_graph(
+                "tests/service_test.rs",
+                "hash:tests/service_test.rs",
+                Some("rust"),
+                Some(5),
+                std::slice::from_ref(&compute_test),
+                &[test_targets_compute],
+            )
+            .expect("seed test graph");
     }
 
     #[test]
@@ -690,7 +847,9 @@ mod tests {
             "get_context" => json!({"query": "greet", "output_format": "json"}),
             "analyze_architecture" => json!({"output_format": "json"}),
             "analyze_metrics" => json!({"output_format": "json"}),
-            "assess_risk" => json!({"symbol": "src/lib.rs::fn::greet", "output_format": "json"}),
+            "assess_risk" => {
+                json!({"symbol": "src/service.rs::fn::compute", "output_format": "json"})
+            }
             "analyze_patterns" => json!({"output_format": "json"}),
             "find_large_functions" => json!({"output_format": "json"}),
             "find_complex_functions" => json!({"output_format": "json"}),
@@ -729,6 +888,7 @@ mod tests {
             }
             "search_templates" => json!({"output_format": "json"}),
             "search_text_assets" => json!({"output_format": "json"}),
+            "repo_registry" => json!({"output_format": "json"}),
             "broker_status" => json!({"output_format": "json"}),
             "status" => json!({"output_format": "json"}),
             "doctor" => json!({"output_format": "json"}),
@@ -760,6 +920,7 @@ mod tests {
             &db_path,
         )
         .expect("build graph");
+        seed_schema_graph(&db_path);
 
         let saved = call(
             "save_context_artifact",
@@ -809,6 +970,7 @@ mod tests {
         )
         .expect("build graph");
         let _ = build;
+        seed_schema_graph(&db_path);
 
         let saved = call(
             "save_context_artifact",

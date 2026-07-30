@@ -76,6 +76,64 @@ fn fts_search_respects_kind_filter() {
 }
 
 #[test]
+fn fts_search_respects_repo_id_filter() {
+    let mut store = open_in_memory();
+    let left = make_node(
+        NodeKind::Function,
+        "shared_name",
+        "repo::repo_left::a.rs::fn::shared_name",
+        "a.rs",
+        "rust",
+    );
+    let right = make_node(
+        NodeKind::Function,
+        "shared_name",
+        "repo::repo_right::a.rs::fn::shared_name",
+        "a.rs",
+        "rust",
+    );
+    store
+        .replace_files_transactional_for_repo(
+            "repo_left",
+            &[ParsedFile {
+                path: "a.rs".to_string(),
+                language: Some("rust".to_string()),
+                hash: "h1".to_string(),
+                size: None,
+                nodes: vec![left],
+                edges: vec![],
+            }],
+        )
+        .unwrap();
+    store
+        .replace_files_transactional_for_repo(
+            "repo_right",
+            &[ParsedFile {
+                path: "a.rs".to_string(),
+                language: Some("rust".to_string()),
+                hash: "h2".to_string(),
+                size: None,
+                nodes: vec![right],
+                edges: vec![],
+            }],
+        )
+        .unwrap();
+
+    let q = SearchQuery {
+        text: "shared_name".to_string(),
+        limit: 10,
+        repo_ids: vec!["repo_right".to_string()],
+        ..Default::default()
+    };
+    let results = store.search(&q).unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(
+        results[0].node.qualified_name,
+        "repo::repo_right::a.rs::fn::shared_name"
+    );
+}
+
+#[test]
 fn fts_search_not_found_after_delete() {
     let mut store = open_in_memory();
     let node = make_node(

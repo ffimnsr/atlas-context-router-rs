@@ -1,6 +1,9 @@
+use std::collections::BTreeMap;
+
 use anyhow::{Context, Result};
 use atlas_contentstore::ContentStore;
 use atlas_core::{BudgetManager, GraphToolRequirement, RankingEvidence, SearchQuery};
+use atlas_repo::{RepoRegistry, phase1_multi_repo_supported};
 use atlas_search as search;
 use atlas_search::QueryExplanation;
 use atlas_store_sqlite::Store;
@@ -13,6 +16,8 @@ use super::{
     resolve_repo,
 };
 
+const MAX_MULTI_REPO_SELECTION: usize = 32;
+
 fn query_owner_identity(node: &atlas_core::Node) -> Option<String> {
     node.extra_json.as_object().and_then(|extra| {
         extra
@@ -21,6 +26,61 @@ fn query_owner_identity(node: &atlas_core::Node) -> Option<String> {
             .and_then(|value| value.as_str())
             .map(str::to_owned)
     })
+}
+
+fn node_repo_id(node: &atlas_core::Node) -> Option<String> {
+    node.extra_json
+        .as_object()
+        .and_then(|extra| extra.get("repo_id"))
+        .and_then(|value| value.as_str())
+        .map(str::to_owned)
+}
+
+fn repo_aliases(repo_root: &str) -> BTreeMap<String, String> {
+    RepoRegistry::load_or_bootstrap(camino::Utf8Path::new(repo_root))
+        .map(|registry| {
+            registry
+                .registrations
+                .into_iter()
+                .map(|entry| (entry.repo_id, entry.display_alias))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn selected_repo_ids(
+    repo_root: &str,
+    repo_id: &Option<String>,
+    all_repos: bool,
+) -> Result<Vec<String>> {
+    if !all_repos && repo_id.is_none() {
+        return Ok(Vec::new());
+    }
+    let registry = RepoRegistry::load(camino::Utf8Path::new(repo_root)).with_context(
+        || "repo registry missing; run `atlas init` or `atlas repo sync` before multi-repo query",
+    )?;
+    if all_repos {
+        let repo_ids = registry
+            .registrations
+            .into_iter()
+            .filter(|entry| entry.enabled)
+            .filter(|entry| phase1_multi_repo_supported(entry.relationship.kind))
+            .map(|entry| entry.repo_id)
+            .collect::<Vec<_>>();
+        anyhow::ensure!(
+            repo_ids.len() <= MAX_MULTI_REPO_SELECTION,
+            "all_repos scope exceeds max supported repo fan-out ({MAX_MULTI_REPO_SELECTION})"
+        );
+        return Ok(repo_ids);
+    }
+    let target = repo_id.as_deref().unwrap_or_default();
+    let entry = registry
+        .registrations
+        .into_iter()
+        .find(|entry| entry.repo_id == target)
+        .with_context(|| format!("repo id '{target}' is not registered"))?;
+    anyhow::ensure!(entry.enabled, "repo id '{target}' is disabled");
+    Ok(vec![entry.repo_id])
 }
 
 fn ranking_evidence_labels(evidence: &RankingEvidence) -> Vec<&'static str> {
@@ -100,6 +160,8 @@ pub fn run_query(cli: &Cli) -> Result<()> {
         regex,
         allow_stale,
         allow_partial,
+        repo_id,
+        all_repos,
     ) = match &cli.command {
         Command::Query {
             text,
@@ -116,6 +178,8 @@ pub fn run_query(cli: &Cli) -> Result<()> {
             regex,
             allow_stale,
             allow_partial,
+            repo_id,
+            all_repos,
         } => (
             text.clone(),
             kind.clone(),
@@ -131,6 +195,8 @@ pub fn run_query(cli: &Cli) -> Result<()> {
             *regex,
             *allow_stale,
             *allow_partial,
+            repo_id.clone(),
+            *all_repos,
         ),
         _ => unreachable!(),
     };
@@ -161,6 +227,8 @@ pub fn run_query(cli: &Cli) -> Result<()> {
     };
 
     let mut budgets = BudgetManager::new();
+    let selected_repo_ids = selected_repo_ids(&repo, &repo_id, all_repos)?;
+    let aliases = repo_aliases(&repo);
     let effective_limit = budgets.resolve_limit(
         policy.query_candidates_and_seeds.candidates,
         "query_candidates_and_seeds.max_candidates",
@@ -179,6 +247,7 @@ pub fn run_query(cli: &Cli) -> Result<()> {
         fuzzy_match: fuzzy,
         hybrid,
         regex_pattern,
+        repo_ids: selected_repo_ids.clone(),
         ..Default::default()
     };
 
@@ -216,8 +285,21 @@ pub fn run_query(cli: &Cli) -> Result<()> {
                     "fuzzy_match": query.fuzzy_match,
                     "semantic": semantic,
                     "regex_pattern": query.regex_pattern,
+                    "repo_ids": query.repo_ids,
+                    "all_repos": all_repos,
                 },
-                "results": results,
+                "results": results.iter().map(|result| {
+                    let repo_id = node_repo_id(&result.node);
+                    serde_json::json!({
+                        "score": result.score,
+                        "ranking_evidence": result.ranking_evidence,
+                        "node": result.node,
+                        "repo": repo_id.as_ref().map(|id| serde_json::json!({
+                            "repo_id": id,
+                            "display_alias": aliases.get(id).cloned().unwrap_or_else(|| id.clone())
+                        })).unwrap_or(serde_json::Value::Null)
+                    })
+                }).collect::<Vec<_>>(),
                 "ranking_evidence_legend": atlas_core::ranking_evidence_legend(),
                 "budget": budget,
             }),
@@ -233,8 +315,14 @@ pub fn run_query(cli: &Cli) -> Result<()> {
                 .as_ref()
                 .map(ranking_evidence_labels)
                 .unwrap_or_default();
+            let repo_suffix = node_repo_id(n)
+                .map(|id| {
+                    let label = aliases.get(&id).cloned().unwrap_or(id.clone());
+                    format!(" [repo {label}]")
+                })
+                .unwrap_or_default();
             println!(
-                "[{:.3}] {} {} ({}:{}){}",
+                "[{:.3}] {} {} ({}:{}){}{}",
                 r.score,
                 n.kind.as_str(),
                 n.qualified_name,
@@ -243,6 +331,7 @@ pub fn run_query(cli: &Cli) -> Result<()> {
                 query_owner_identity(n)
                     .map(|owner| format!(" [owner {owner}]"))
                     .unwrap_or_default(),
+                repo_suffix,
             );
             if cli.verbose && !labels.is_empty() {
                 println!("        evidence: {}", labels.join(", "));

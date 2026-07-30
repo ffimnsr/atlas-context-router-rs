@@ -8,7 +8,7 @@ mod tests;
 
 pub use subcommands::{
     AnalyzeCommand, CommunitiesCommand, ConfigCommand, FlowsCommand, HistoryCommand,
-    InsightsCommand, RefactorCommand, SessionCommand,
+    InsightsCommand, RefactorCommand, RepoCommand, SessionCommand,
 };
 
 use crate::install::InstructionsMode;
@@ -58,6 +58,12 @@ pub enum Command {
     /// Run repo-local database migrations without building graph state.
     Migrate,
 
+    /// Manage the multi-repo registry.
+    Repo {
+        #[command(subcommand)]
+        subcommand: RepoCommand,
+    },
+
     /// Scan all tracked files and build the code graph from scratch.
     Build {
         /// Stop immediately on the first parse error instead of continuing.
@@ -67,6 +73,14 @@ pub enum Command {
         /// Preview build work without writing graph state.
         #[arg(long)]
         dry_run: bool,
+
+        /// Build one registered repo by stable repo id.
+        #[arg(long, conflicts_with = "all_repos")]
+        repo_id: Option<String>,
+
+        /// Build all enabled registered repos.
+        #[arg(long)]
+        all_repos: bool,
     },
 
     /// Incrementally update the graph for files changed since a base ref.
@@ -94,6 +108,18 @@ pub enum Command {
         /// Preview update work without writing graph state.
         #[arg(long)]
         dry_run: bool,
+
+        /// Update one registered repo by stable repo id.
+        #[arg(long, conflicts_with_all = ["all_repos", "affected_repos"])]
+        repo_id: Option<String>,
+
+        /// Update all enabled registered repos.
+        #[arg(long, conflicts_with = "affected_repos")]
+        all_repos: bool,
+
+        /// Update only enabled repos with detected changes.
+        #[arg(long)]
+        affected_repos: bool,
     },
 
     /// Show database status and graph statistics.
@@ -116,6 +142,14 @@ pub enum Command {
         /// Diff staged changes only.
         #[arg(long)]
         staged: bool,
+
+        /// Detect changes for one registered repo by stable repo id.
+        #[arg(long, conflicts_with = "all_repos")]
+        repo_id: Option<String>,
+
+        /// Detect changes for all enabled registered repos.
+        #[arg(long)]
+        all_repos: bool,
     },
 
     /// Search the code graph by keyword.
@@ -177,6 +211,14 @@ pub enum Command {
         /// Allow symbol lookup on a partial (degraded) graph.
         #[arg(long)]
         allow_partial: bool,
+
+        /// Restrict query to one registered repo by stable repo id.
+        #[arg(long, conflicts_with = "all_repos")]
+        repo_id: Option<String>,
+
+        /// Query across all enabled registered repos.
+        #[arg(long)]
+        all_repos: bool,
     },
 
     /// Show runtime manual for one visible exported MCP tool.
@@ -232,6 +274,14 @@ pub enum Command {
         /// Allow impact traversal on a partial (degraded) graph.
         #[arg(long)]
         allow_partial: bool,
+
+        /// Restrict impact seeds to one registered repo by stable repo id.
+        #[arg(long, conflicts_with = "all_repos")]
+        repo_id: Option<String>,
+
+        /// Expand impact seeds across all enabled registered repos.
+        #[arg(long)]
+        all_repos: bool,
     },
 
     /// Assemble review context for changed files.
@@ -277,7 +327,8 @@ pub enum Command {
         /// Bypass repo-scoped broker/daemon indirection and serve MCP directly on stdio.
         ///
         /// Without `--repo` and `--db`, Atlas resolves repo from launch cwd the same way as other
-        /// repo-scoped commands. For explicit cross-repo tool calls, pass `arguments.repo_root`.
+        /// repo-scoped commands. For explicit cross-repo tool calls, pass `arguments.repo_root`
+        /// or registry-backed `arguments.repo_id`.
         #[arg(long)]
         direct_stdio: bool,
     },

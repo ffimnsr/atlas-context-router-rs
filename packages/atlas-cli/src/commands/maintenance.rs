@@ -4,7 +4,7 @@ use atlas_core::{
     GraphExecutionState, NodeKind, graph_health_error_message, graph_health_error_suggestions,
     is_schema_mismatch_error,
 };
-use atlas_repo::{collect_files, find_repo_root, hash_file};
+use atlas_repo::{collect_files, find_repo_root, hash_file, stable_repo_id};
 use atlas_session::DEFAULT_SESSION_DB;
 use atlas_store_sqlite::{GraphBuildState, Store};
 use camino::Utf8Path;
@@ -14,7 +14,8 @@ use toml::Value as TomlValue;
 use crate::cli::{Cli, Command, ConfigCommand};
 
 use super::{
-    db_path, derive_graph_readiness, derive_graph_readiness_open_failed, print_json, resolve_repo,
+    db_path, derive_graph_readiness, derive_graph_readiness_open_failed, print_json,
+    public_graph_stats, resolve_repo,
 };
 
 #[derive(Debug, Clone)]
@@ -773,7 +774,8 @@ pub fn run_doctor(cli: &Cli) -> Result<()> {
                         ));
                     }
                 }
-                match store.stats() {
+                let source_repo_id = stable_repo_id(Utf8Path::new(&repo));
+                match public_graph_stats(&store, &source_repo_id) {
                     Ok(stats) => {
                         checks.push(CheckResult::pass(
                             "graph_stats",

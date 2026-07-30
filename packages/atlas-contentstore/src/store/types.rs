@@ -41,8 +41,11 @@ pub struct SourceMeta {
     pub source_type: String,
     /// Human-readable label for display and retrieval.
     pub label: String,
-    /// Repo root at time of indexing (optional, for scoped queries).
+    /// Legacy single repo root at time of indexing (optional, for scoped queries).
     pub repo_root: Option<String>,
+    /// Canonical repo-root scope owning this artifact. Non-empty when the
+    /// artifact belongs to one or more registered repos.
+    pub repo_roots: Vec<String>,
     /// Identity kind used to derive `id`.
     pub identity_kind: String,
     /// Canonical identity payload used to derive `id`.
@@ -58,6 +61,7 @@ pub struct SearchFilters {
     pub agent_id: Option<String>,
     pub source_type: Option<String>,
     pub repo_root: Option<String>,
+    pub repo_roots: Vec<String>,
 }
 
 /// A single chunk result returned from search.
@@ -167,6 +171,7 @@ pub struct SourceRow {
     pub source_type: String,
     pub label: String,
     pub repo_root: Option<String>,
+    pub repo_roots: Vec<String>,
     pub identity_kind: String,
     pub identity_value: String,
     pub created_at: String,

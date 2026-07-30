@@ -13,7 +13,24 @@
       "additionalProperties": true,
       "required": ["files", "analysis"],
       "properties": {
-        "files": { "type": "array", "items": { "type": "string" } },
+        "files": {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              { "type": "string" },
+              {
+                "type": "object",
+                "additionalProperties": true,
+                "required": ["repo_id", "repo_alias", "path"],
+                "properties": {
+                  "repo_id": { "type": "string" },
+                  "repo_alias": { "type": "string" },
+                  "path": { "type": "string" }
+                }
+              }
+            ]
+          }
+        },
         "analysis": {
           "type": "object",
           "additionalProperties": true,

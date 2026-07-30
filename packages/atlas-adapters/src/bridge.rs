@@ -238,6 +238,7 @@ pub fn ingest_bridge_file(
             envelope.created_at,
         ),
         repo_root: None,
+        repo_roots: Vec::new(),
         identity_kind: bridge_identity.kind_str().to_owned(),
         identity_value: bridge_identity.value().to_owned(),
     };

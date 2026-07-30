@@ -168,7 +168,7 @@ pub(super) fn tool_analyze_patterns(
     let engine = InsightsEngine::new(&store, config.insights.clone())
         .context("cannot initialize insights engine")?;
     let mut report = engine
-        .analyze_patterns()
+        .analyze_patterns(repo_root)
         .context("pattern analysis failed")?;
     apply_finding_limit(&mut report.findings, &mut report.summary, limit);
 

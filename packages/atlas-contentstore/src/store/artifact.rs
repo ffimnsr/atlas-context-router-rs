@@ -1,5 +1,25 @@
 use std::collections::HashSet;
 
+fn encode_repo_roots_json(repo_roots: &[String]) -> String {
+    serde_json::to_string(repo_roots).unwrap_or_else(|_| "[]".to_owned())
+}
+
+fn decode_repo_roots_json(raw: Option<String>, repo_root: Option<String>) -> Vec<String> {
+    let mut repo_roots = raw
+        .as_deref()
+        .and_then(|value| serde_json::from_str::<Vec<String>>(value).ok())
+        .unwrap_or_default();
+    if repo_roots.is_empty() {
+        if let Some(repo_root) = repo_root.filter(|value| !value.is_empty()) {
+            repo_roots.push(repo_root);
+        }
+    } else {
+        repo_roots.sort();
+        repo_roots.dedup();
+    }
+    repo_roots
+}
+
 use rusqlite::{OptionalExtension, params};
 use tracing::{debug, warn};
 
@@ -212,10 +232,11 @@ impl ContentStore {
                 .transaction()
                 .map_err(|e| AtlasError::Db(e.to_string()))?;
 
+            let repo_roots_json = encode_repo_roots_json(&meta.repo_roots);
             tx.execute(
                 "INSERT OR REPLACE INTO sources (
-                     id, session_id, agent_id, source_type, label, repo_root, identity_kind, identity_value, created_at
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                     id, session_id, agent_id, source_type, label, repo_root, repo_roots_json, identity_kind, identity_value, created_at
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
                 params![
                     meta.id,
                     meta.session_id,
@@ -223,6 +244,7 @@ impl ContentStore {
                     meta.source_type,
                     meta.label,
                     meta.repo_root,
+                    repo_roots_json,
                     meta.identity_kind,
                     meta.identity_value,
                     now,
@@ -407,7 +429,7 @@ impl ContentStore {
         let mut stmt = self
             .conn
             .prepare(
-                "SELECT id, session_id, agent_id, source_type, label, repo_root, identity_kind, identity_value, created_at
+                "SELECT id, session_id, agent_id, source_type, label, repo_root, repo_roots_json, identity_kind, identity_value, created_at
                  FROM sources WHERE id = ?1",
             )
             .map_err(|e| AtlasError::Db(e.to_string()))?;
@@ -417,16 +439,21 @@ impl ContentStore {
             .map_err(|e| AtlasError::Db(e.to_string()))?;
 
         if let Some(row) = rows.next().map_err(|e| AtlasError::Db(e.to_string()))? {
+            let repo_root: Option<String> =
+                row.get(5).map_err(|e| AtlasError::Db(e.to_string()))?;
+            let repo_roots_json: Option<String> =
+                row.get(6).map_err(|e| AtlasError::Db(e.to_string()))?;
             Ok(Some(SourceRow {
                 id: row.get(0).map_err(|e| AtlasError::Db(e.to_string()))?,
                 session_id: row.get(1).map_err(|e| AtlasError::Db(e.to_string()))?,
                 agent_id: row.get(2).map_err(|e| AtlasError::Db(e.to_string()))?,
                 source_type: row.get(3).map_err(|e| AtlasError::Db(e.to_string()))?,
                 label: row.get(4).map_err(|e| AtlasError::Db(e.to_string()))?,
-                repo_root: row.get(5).map_err(|e| AtlasError::Db(e.to_string()))?,
-                identity_kind: row.get(6).map_err(|e| AtlasError::Db(e.to_string()))?,
-                identity_value: row.get(7).map_err(|e| AtlasError::Db(e.to_string()))?,
-                created_at: row.get(8).map_err(|e| AtlasError::Db(e.to_string()))?,
+                repo_root: repo_root.clone(),
+                repo_roots: decode_repo_roots_json(repo_roots_json, repo_root),
+                identity_kind: row.get(7).map_err(|e| AtlasError::Db(e.to_string()))?,
+                identity_value: row.get(8).map_err(|e| AtlasError::Db(e.to_string()))?,
+                created_at: row.get(9).map_err(|e| AtlasError::Db(e.to_string()))?,
             }))
         } else {
             Ok(None)
@@ -461,6 +488,14 @@ impl ContentStore {
         if let Some(ref repo_root) = filters.repo_root {
             extra_params.push(repo_root.clone());
             where_parts.push(format!("repo_root = ?{}", extra_params.len()));
+        }
+        if !filters.repo_roots.is_empty() {
+            let mut predicates = Vec::new();
+            for repo_root in &filters.repo_roots {
+                extra_params.push(repo_root.clone());
+                predicates.push(format!("EXISTS (SELECT 1 FROM json_each(COALESCE(repo_roots_json, '[]')) WHERE value = ?{})", extra_params.len()));
+            }
+            where_parts.push(format!("({})", predicates.join(" OR ")));
         }
 
         let limit = limit.clamp(1, 100);

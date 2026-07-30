@@ -8,10 +8,14 @@ use atlas_core::{
     is_schema_mismatch_error, select_graph_health_error_code,
 };
 use atlas_parser::ParserRegistry;
-use atlas_repo::{DiffTarget, changed_files, find_repo_root, hash_file};
+use atlas_repo::{
+    DiffTarget, RepoRegistration, RepoRegistry, changed_files, find_repo_root, hash_file,
+    phase1_multi_repo_supported,
+};
 use atlas_store_sqlite::Store;
 use camino::Utf8Path;
 use serde::Serialize;
+use std::collections::BTreeMap;
 
 use crate::output::OutputFormat;
 use crate::tool_result::tool_result_value as build_tool_result_value;
@@ -158,6 +162,78 @@ pub(super) fn inject_budget_metadata(response: &mut serde_json::Value, budget: &
     response["budget_observed"] = serde_json::json!(budget.budget_observed);
     response["partial"] = serde_json::json!(budget.partial);
     response["safe_to_answer"] = serde_json::json!(budget.safe_to_answer);
+}
+
+pub(crate) const MAX_MULTI_REPO_SELECTION: usize = 32;
+
+#[derive(Clone, Debug)]
+pub(crate) struct RepoScopeSelection {
+    pub repo_ids: Vec<String>,
+    pub registrations: Vec<RepoRegistration>,
+}
+
+pub(crate) fn repo_aliases_by_id(repo_root: &str) -> BTreeMap<String, String> {
+    RepoRegistry::load_or_bootstrap(Utf8Path::new(repo_root))
+        .map(|registry| {
+            registry
+                .registrations
+                .into_iter()
+                .map(|entry| (entry.repo_id, entry.display_alias))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+pub(crate) fn resolve_repo_scope_selection(
+    args: Option<&serde_json::Value>,
+    repo_root: &str,
+) -> Result<Option<RepoScopeSelection>> {
+    let repo_id = str_arg(args, "repo_id")?.map(str::to_owned);
+    let all_repos = bool_arg(args, "all_repos").unwrap_or(false);
+    if repo_id.is_none() && !all_repos {
+        return Ok(None);
+    }
+    anyhow::ensure!(
+        !(repo_id.is_some() && all_repos),
+        "repo_id and all_repos cannot be combined"
+    );
+
+    let registry = RepoRegistry::load(Utf8Path::new(repo_root)).with_context(|| {
+        "repo registry missing; run `atlas init` or `atlas repo sync` before multi-repo MCP queries"
+    })?;
+
+    if all_repos {
+        let registrations: Vec<RepoRegistration> = registry
+            .registrations
+            .into_iter()
+            .filter(|entry| entry.enabled)
+            .filter(|entry| phase1_multi_repo_supported(entry.relationship.kind))
+            .collect();
+        anyhow::ensure!(
+            registrations.len() <= MAX_MULTI_REPO_SELECTION,
+            "all_repos scope exceeds max supported repo fan-out ({MAX_MULTI_REPO_SELECTION})"
+        );
+        let repo_ids = registrations
+            .iter()
+            .map(|entry| entry.repo_id.clone())
+            .collect();
+        return Ok(Some(RepoScopeSelection {
+            repo_ids,
+            registrations,
+        }));
+    }
+
+    let target = repo_id.unwrap_or_default();
+    let registration = registry
+        .registrations
+        .into_iter()
+        .find(|entry| entry.repo_id == target)
+        .with_context(|| format!("repo id '{target}' is not registered"))?;
+    anyhow::ensure!(registration.enabled, "repo id '{target}' is disabled");
+    Ok(Some(RepoScopeSelection {
+        repo_ids: vec![registration.repo_id.clone()],
+        registrations: vec![registration],
+    }))
 }
 
 #[derive(Serialize)]
@@ -400,4 +476,93 @@ pub(super) fn derive_graph_readiness_open_failed(
         last_indexed_at: None,
         retrieval_unavailable: true,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use atlas_repo::{
+        RepoRegistration, RepoRegistry, RepoRelationship, RepoRelationshipKind, TrustState,
+        VcsMetadata, stable_repo_id,
+    };
+    use camino::{Utf8Path, Utf8PathBuf};
+    use serde_json::json;
+
+    fn registration(root: &Utf8Path, alias: &str, kind: RepoRelationshipKind) -> RepoRegistration {
+        RepoRegistration {
+            repo_id: stable_repo_id(root),
+            root: root.to_path_buf(),
+            display_alias: alias.to_owned(),
+            vcs: VcsMetadata {
+                head: None,
+                default_branch: None,
+                remote_url: None,
+            },
+            relationship: RepoRelationship {
+                kind,
+                parent_repo_id: None,
+                parent_path: None,
+            },
+            trust_state: TrustState::Trusted,
+            enabled: true,
+            include_globs: None,
+            exclude_globs: None,
+            dependencies: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn resolve_repo_scope_selection_all_repos_excludes_manual_registrations() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = Utf8Path::from_path(temp.path()).unwrap();
+        let sub = root.join("submodule");
+        let manual = root.join("../manual-sibling");
+        let mut registry = RepoRegistry::new(stable_repo_id(root));
+        registry.registrations = vec![
+            registration(root, ".", RepoRelationshipKind::Root),
+            registration(sub.as_path(), "submodule", RepoRelationshipKind::Submodule),
+            registration(manual.as_path(), "manual", RepoRelationshipKind::Manual),
+        ];
+        registry.save(root).unwrap();
+
+        let selection =
+            resolve_repo_scope_selection(Some(&json!({"all_repos": true})), root.as_str())
+                .unwrap()
+                .unwrap();
+
+        assert_eq!(selection.registrations.len(), 2);
+        assert!(
+            selection
+                .registrations
+                .iter()
+                .all(|entry| entry.relationship.kind != RepoRelationshipKind::Manual)
+        );
+    }
+
+    #[test]
+    fn resolve_repo_scope_selection_rejects_excessive_all_repo_fanout() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = Utf8Path::from_path(temp.path()).unwrap();
+        let mut registry = RepoRegistry::new(stable_repo_id(root));
+        registry.registrations = (0..(MAX_MULTI_REPO_SELECTION + 1))
+            .map(|index| {
+                let repo_root = Utf8PathBuf::from(format!("{}/repo-{index}", root.as_str()));
+                registration(
+                    repo_root.as_path(),
+                    &format!("repo-{index}"),
+                    RepoRelationshipKind::Submodule,
+                )
+            })
+            .collect();
+        registry.save(root).unwrap();
+
+        let error = resolve_repo_scope_selection(Some(&json!({"all_repos": true})), root.as_str())
+            .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("all_repos scope exceeds max supported repo fan-out")
+        );
+    }
 }

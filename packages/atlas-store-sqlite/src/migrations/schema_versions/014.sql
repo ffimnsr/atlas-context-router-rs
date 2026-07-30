@@ -1,9 +1,6 @@
 -- schema_version: 14
 PRAGMA user_version = 14;
 
--- table: atlas_provenance
-CREATE TABLE atlas_provenance ( singleton_key INTEGER PRIMARY KEY CHECK(singleton_key = 1), db_kind TEXT NOT NULL, created_by TEXT NOT NULL, created_at TEXT NOT NULL, last_opened_by TEXT NOT NULL, last_opened_at TEXT NOT NULL );
-
 -- table: commits
 CREATE TABLE commits ( commit_sha TEXT NOT NULL, repo_id INTEGER NOT NULL REFERENCES repos (repo_id), parent_sha TEXT, author_name TEXT, author_email TEXT, author_time INTEGER NOT NULL, committer_time INTEGER NOT NULL, subject TEXT NOT NULL, message TEXT, indexed_at TEXT NOT NULL, indexed_ref TEXT, PRIMARY KEY (commit_sha, repo_id) );
 
@@ -72,9 +69,6 @@ CREATE TABLE repos ( repo_id INTEGER PRIMARY KEY, root_path TEXT NOT NULL UNIQUE
 
 -- table: retrieval_chunks
 CREATE TABLE retrieval_chunks ( id INTEGER PRIMARY KEY, node_qn TEXT NOT NULL, chunk_idx INTEGER NOT NULL DEFAULT 0, text TEXT NOT NULL, embedding BLOB, -- little-endian f32 bytes; NULL until computed UNIQUE(node_qn, chunk_idx) );
-
--- table: schema_migrations
-CREATE TABLE schema_migrations ( id INTEGER PRIMARY KEY, version INTEGER NOT NULL, name TEXT NOT NULL, direction TEXT NOT NULL CHECK(direction IN ('up', 'down')), atlas_version TEXT NOT NULL, applied_at TEXT NOT NULL );
 
 -- table: snapshot_edges
 CREATE TABLE snapshot_edges ( snapshot_id INTEGER NOT NULL REFERENCES graph_snapshots (snapshot_id) ON DELETE CASCADE, file_hash TEXT NOT NULL, source_qn TEXT NOT NULL, target_qn TEXT NOT NULL, kind TEXT NOT NULL, PRIMARY KEY (snapshot_id, source_qn, target_qn, kind) );
@@ -219,9 +213,6 @@ CREATE INDEX idx_postprocess_state_updated_at_ms ON postprocess_state (updated_a
 
 -- index: idx_repos_root_path
 CREATE INDEX idx_repos_root_path ON repos (root_path);
-
--- index: idx_schema_migrations_version_id
-CREATE INDEX idx_schema_migrations_version_id ON schema_migrations(version, id);
 
 -- index: idx_snapshot_edges_file_hash
 CREATE INDEX idx_snapshot_edges_file_hash ON snapshot_edges (file_hash);

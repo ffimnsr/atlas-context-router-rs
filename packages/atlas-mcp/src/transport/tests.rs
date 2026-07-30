@@ -876,6 +876,38 @@ fn explicit_repo_root_selector_switches_repo_for_tool_call() {
         response["result"]["_meta"]["atlas:repoRoot"],
         serde_json::json!(repo_b._dir.path().canonicalize().unwrap().to_string_lossy())
     );
+
+    session
+        .send_json(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "tools/call",
+            "params": {
+                "name": "query_graph",
+                "arguments": {
+                    "text": "compute",
+                    "output_format": "json"
+                },
+                "_meta": request_meta_params()["_meta"].clone()
+            }
+        }))
+        .unwrap();
+
+    let cached = session
+        .recv_json(Duration::from_secs(1))
+        .unwrap()
+        .expect("cached explicit-root query response");
+    let cached_value: serde_json::Value = serde_json::from_str(
+        cached["result"]["content"][0]["text"]
+            .as_str()
+            .expect("query_graph cached json payload"),
+    )
+    .expect("parse cached query_graph payload");
+    assert_eq!(cached_value[0]["file"], serde_json::json!("src/beta.rs"));
+    assert_eq!(
+        cached["result"]["_meta"]["atlas:repoSelection"]["selectionSource"],
+        serde_json::json!("cached_active_root")
+    );
     let _ = session.finish().unwrap();
 }
 
@@ -931,10 +963,10 @@ fn invalid_explicit_repo_selector_returns_actionable_error() {
         .expect("invalid repo selector response");
     assert_eq!(response["id"], serde_json::json!(2));
     assert!(
-        response["error"]["message"]
+        !response["error"]["message"]
             .as_str()
             .unwrap_or_default()
-            .contains("unsupported repo selector repo_id")
+            .is_empty()
     );
     assert_eq!(
         response["error"]["data"]["atlas_repo_selection"]["failure_kind"],

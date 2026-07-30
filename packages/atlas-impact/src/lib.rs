@@ -14,6 +14,7 @@ const TEST_ADJACENCY_BOOST: f64 = 0.35;
 const UNCOVERED_CHANGE_BOOST: f64 = 0.45;
 const CROSS_MODULE_BOOST: f64 = 0.30;
 const CROSS_PACKAGE_BOOST: f64 = 0.60;
+const CROSS_REPO_BOOST: f64 = 0.75;
 
 // Base scores by node kind (seed nodes start with this score).
 fn base_score_for_kind(kind: NodeKind) -> f64 {
@@ -131,7 +132,7 @@ fn score_nodes(
         .iter()
         .map(|n| n.qualified_name.clone())
         .collect();
-    let (cross_module_qns, cross_package_qns) = boundary_signal_sets(violations);
+    let (cross_module_qns, cross_package_qns, cross_repo_qns) = boundary_signal_sets(violations);
 
     let all_nodes = base.changed_nodes.iter().chain(base.impacted_nodes.iter());
 
@@ -152,6 +153,9 @@ fn score_nodes(
             }
             if cross_package_qns.contains(&n.qualified_name) {
                 impact_score += CROSS_PACKAGE_BOOST;
+            }
+            if cross_repo_qns.contains(&n.qualified_name) {
+                impact_score += CROSS_REPO_BOOST;
             }
             let change_kind = if seed_qns.contains(n.qualified_name.as_str()) {
                 Some(classify_node(n))
@@ -306,10 +310,11 @@ fn test_adjacent_qns(base: &ImpactResult, test_impact: &TestImpactResult) -> Has
 // Boundary detection
 // ---------------------------------------------------------------------------
 
-/// Detect cross-module and cross-package impacts.
+/// Detect cross-module, cross-package, and cross-repo impacts.
 ///
 /// Module  = unique directory prefix of a node's `file_path`.
 /// Package = `owner_id` from node metadata when present, else top-level path component.
+/// Repo    = `repo_id` from node metadata when present, else top-level path component.
 fn detect_boundary_violations(base: &ImpactResult) -> Vec<BoundaryViolation> {
     let module_of = |path: &str| -> String {
         // Use the directory part of the path (everything before the last `/`).
@@ -334,6 +339,21 @@ fn detect_boundary_violations(base: &ImpactResult) -> Vec<BoundaryViolation> {
             })
     };
 
+    let repo_of = |node: &Node| -> String {
+        node.extra_json
+            .as_object()
+            .and_then(|extra| extra.get("repo_id"))
+            .and_then(|value| value.as_str())
+            .map(str::to_owned)
+            .unwrap_or_else(|| {
+                node.file_path
+                    .split('/')
+                    .next()
+                    .unwrap_or(&node.file_path)
+                    .to_string()
+            })
+    };
+
     let changed_modules: HashSet<String> = base
         .changed_nodes
         .iter()
@@ -341,10 +361,12 @@ fn detect_boundary_violations(base: &ImpactResult) -> Vec<BoundaryViolation> {
         .collect();
 
     let changed_packages: HashSet<String> = base.changed_nodes.iter().map(package_of).collect();
+    let changed_repos: HashSet<String> = base.changed_nodes.iter().map(repo_of).collect();
 
-    // Collect impacted nodes outside the changed modules/packages.
+    // Collect impacted nodes outside the changed modules/packages/repos.
     let mut cross_module_qns: Vec<String> = Vec::new();
     let mut cross_package_qns: Vec<String> = Vec::new();
+    let mut cross_repo_qns: Vec<String> = Vec::new();
 
     for n in &base.impacted_nodes {
         let m = module_of(&n.file_path);
@@ -354,6 +376,10 @@ fn detect_boundary_violations(base: &ImpactResult) -> Vec<BoundaryViolation> {
         let p = package_of(n);
         if !changed_packages.contains(&p) {
             cross_package_qns.push(n.qualified_name.clone());
+        }
+        let repo = repo_of(n);
+        if !changed_repos.contains(&repo) {
+            cross_repo_qns.push(n.qualified_name.clone());
         }
     }
 
@@ -381,12 +407,26 @@ fn detect_boundary_violations(base: &ImpactResult) -> Vec<BoundaryViolation> {
         });
     }
 
+    if !cross_repo_qns.is_empty() {
+        cross_repo_qns.sort();
+        cross_repo_qns.dedup();
+        let count = cross_repo_qns.len();
+        violations.push(BoundaryViolation {
+            kind: BoundaryKind::CrossRepo,
+            description: format!("{count} node(s) in other repos are impacted by this change"),
+            nodes: cross_repo_qns,
+        });
+    }
+
     violations
 }
 
-fn boundary_signal_sets(violations: &[BoundaryViolation]) -> (HashSet<String>, HashSet<String>) {
+fn boundary_signal_sets(
+    violations: &[BoundaryViolation],
+) -> (HashSet<String>, HashSet<String>, HashSet<String>) {
     let mut cross_module_qns = HashSet::new();
     let mut cross_package_qns = HashSet::new();
+    let mut cross_repo_qns = HashSet::new();
 
     for violation in violations {
         match violation.kind {
@@ -396,10 +436,13 @@ fn boundary_signal_sets(violations: &[BoundaryViolation]) -> (HashSet<String>, H
             BoundaryKind::CrossPackage => {
                 cross_package_qns.extend(violation.nodes.iter().cloned());
             }
+            BoundaryKind::CrossRepo => {
+                cross_repo_qns.extend(violation.nodes.iter().cloned());
+            }
         }
     }
 
-    (cross_module_qns, cross_package_qns)
+    (cross_module_qns, cross_package_qns, cross_repo_qns)
 }
 
 // ---------------------------------------------------------------------------
@@ -425,12 +468,16 @@ fn compute_risk_level(
     let has_cross_package = violations
         .iter()
         .any(|v| v.kind == BoundaryKind::CrossPackage);
+    let has_cross_repo = violations.iter().any(|v| v.kind == BoundaryKind::CrossRepo);
     let impacted_count = base.impacted_nodes.len();
     let uncovered = !test_impact.uncovered_changed_nodes.is_empty();
 
-    if has_api_change && (has_cross_package || has_cross_module) {
+    if has_api_change && (has_cross_repo || has_cross_package || has_cross_module) {
         RiskLevel::Critical
-    } else if has_api_change || (has_cross_package && (uncovered || impacted_count > 5)) {
+    } else if has_cross_repo
+        || has_api_change
+        || (has_cross_package && (uncovered || impacted_count > 5))
+    {
         RiskLevel::High
     } else if has_sig_change || has_cross_module || (impacted_count > 20) || uncovered {
         RiskLevel::Medium
@@ -485,6 +532,13 @@ mod tests {
 
     fn with_owner(mut node: Node, owner_id: &str) -> Node {
         node.extra_json = serde_json::json!({ "owner_id": owner_id });
+        node
+    }
+
+    fn with_repo(mut node: Node, repo_id: &str) -> Node {
+        let mut extra = node.extra_json.as_object().cloned().unwrap_or_default();
+        extra.insert("repo_id".to_owned(), serde_json::json!(repo_id));
+        node.extra_json = serde_json::Value::Object(extra);
         node
     }
 
@@ -893,7 +947,42 @@ mod tests {
 
         assert!(
             cross_score > local_score,
-            "cross-package node should score above same-distance local node"
+            "cross-package node should score above equally distant local node"
         );
+    }
+
+    #[test]
+    fn cross_repo_violation_detected() {
+        let seed = with_repo(
+            make_node(
+                NodeKind::Function,
+                "repo_a/src/lib.rs::fn::seed",
+                "src/lib.rs",
+                false,
+            ),
+            "repo-a",
+        );
+        let impacted = with_repo(
+            make_node(
+                NodeKind::Function,
+                "repo_b/src/lib.rs::fn::target",
+                "src/lib.rs",
+                false,
+            ),
+            "repo-b",
+        );
+
+        let result = analyze(base_result(vec![seed], vec![impacted], vec![]));
+
+        assert!(
+            result
+                .boundary_violations
+                .iter()
+                .any(|violation| violation.kind == BoundaryKind::CrossRepo)
+        );
+        assert!(matches!(
+            result.risk_level,
+            RiskLevel::High | RiskLevel::Critical
+        ));
     }
 }

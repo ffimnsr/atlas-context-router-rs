@@ -77,6 +77,9 @@ pub struct ContextRequest {
     pub include_callers: bool,
     /// Include direct callees in context (defaults to true).
     pub include_callees: bool,
+    /// Allow caller/callee graph expansion to cross repo boundaries.
+    /// Defaults to `false` so single-repo symbol context remains zero-config.
+    pub allow_cross_repo_edges: bool,
     // --- CM6: retrieval-backed restoration ---
     /// When `true`, the engine queries the content store for saved artifacts
     /// relevant to this request and populates `ContextResult::saved_context_sources`.
@@ -124,6 +127,7 @@ impl Default for ContextRequest {
             include_code_spans: false,
             include_callers: true,
             include_callees: true,
+            allow_cross_repo_edges: false,
             include_saved_context: false,
             session_id: None,
             agent_id: None,

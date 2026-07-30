@@ -71,6 +71,41 @@ fn parse_migrate_command() {
 }
 
 #[test]
+fn parse_repo_add_command() {
+    let cli = parse(&["atlas", "repo", "add", "../sibling"]);
+    match cli.command {
+        Command::Repo { subcommand } => match subcommand {
+            RepoCommand::Add { path } => assert_eq!(path, "../sibling"),
+            _ => panic!("expected repo add command"),
+        },
+        _ => panic!("expected repo command"),
+    }
+}
+
+#[test]
+fn parse_repo_remove_command() {
+    let cli = parse(&["atlas", "repo", "remove", "repo_abc"]);
+    match cli.command {
+        Command::Repo { subcommand } => match subcommand {
+            RepoCommand::Remove { repo_id } => assert_eq!(repo_id, "repo_abc"),
+            _ => panic!("expected repo remove command"),
+        },
+        _ => panic!("expected repo command"),
+    }
+}
+
+#[test]
+fn parse_repo_sync_command() {
+    let cli = parse(&["atlas", "repo", "sync"]);
+    assert!(matches!(
+        cli.command,
+        Command::Repo {
+            subcommand: RepoCommand::Sync
+        }
+    ));
+}
+
+#[test]
 fn parse_debug_config_command() {
     let cli = parse(&["atlas", "debug-config"]);
     assert!(matches!(cli.command, Command::DebugConfig));
@@ -100,7 +135,8 @@ fn parse_build_command_no_flags() {
         cli.command,
         Command::Build {
             fail_fast: false,
-            dry_run: false
+            dry_run: false,
+            ..
         }
     ));
 }
@@ -112,7 +148,8 @@ fn parse_build_fail_fast() {
         cli.command,
         Command::Build {
             fail_fast: true,
-            dry_run: false
+            dry_run: false,
+            ..
         }
     ));
 }
@@ -124,8 +161,35 @@ fn parse_build_dry_run() {
         cli.command,
         Command::Build {
             fail_fast: false,
-            dry_run: true
+            dry_run: true,
+            ..
         }
+    ));
+}
+
+#[test]
+fn parse_build_all_repos() {
+    let cli = parse(&["atlas", "build", "--all-repos"]);
+    assert!(matches!(
+        cli.command,
+        Command::Build {
+            all_repos: true,
+            repo_id: None,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn parse_build_repo_id() {
+    let cli = parse(&["atlas", "build", "--repo-id", "repo_abc"]);
+    assert!(matches!(
+        cli.command,
+        Command::Build {
+            repo_id: Some(ref repo_id),
+            all_repos: false,
+            ..
+        } if repo_id == "repo_abc"
     ));
 }
 
@@ -178,6 +242,7 @@ fn parse_update_with_base_ref() {
         files,
         fail_fast,
         dry_run,
+        ..
     } = cli.command
     {
         assert_eq!(base.as_deref(), Some("origin/main"));
@@ -221,7 +286,22 @@ fn parse_update_dry_run() {
     }
 }
 
+#[test]
+fn parse_update_affected_repos() {
+    let cli = parse(&["atlas", "update", "--affected-repos"]);
+    assert!(matches!(
+        cli.command,
+        Command::Update {
+            affected_repos: true,
+            all_repos: false,
+            repo_id: None,
+            ..
+        }
+    ));
+}
+
 // -------------------------------------------------------------------------
+// query / explain-query
 // query
 // -------------------------------------------------------------------------
 
@@ -377,6 +457,20 @@ fn parse_query_include_files_flag() {
     }
 }
 
+#[test]
+fn parse_query_all_repos_flag() {
+    let cli = parse(&["atlas", "query", "guide", "--all-repos"]);
+    if let Command::Query {
+        all_repos, repo_id, ..
+    } = cli.command
+    {
+        assert!(all_repos);
+        assert!(repo_id.is_none());
+    } else {
+        panic!("expected Query command");
+    }
+}
+
 // -------------------------------------------------------------------------
 // impact
 // -------------------------------------------------------------------------
@@ -418,6 +512,20 @@ fn parse_impact_with_depth_and_nodes() {
     {
         assert_eq!(max_depth, 3);
         assert_eq!(max_nodes, 50);
+    } else {
+        panic!("expected Impact command");
+    }
+}
+
+#[test]
+fn parse_impact_repo_id_flag() {
+    let cli = parse(&["atlas", "impact", "--repo-id", "repo_abc"]);
+    if let Command::Impact {
+        repo_id, all_repos, ..
+    } = cli.command
+    {
+        assert_eq!(repo_id.as_deref(), Some("repo_abc"));
+        assert!(!all_repos);
     } else {
         panic!("expected Impact command");
     }
@@ -495,7 +603,7 @@ fn parse_session_decisions_command() {
 #[test]
 fn parse_detect_changes_with_base() {
     let cli = parse(&["atlas", "detect-changes", "--base", "origin/main"]);
-    if let Command::DetectChanges { base, staged } = cli.command {
+    if let Command::DetectChanges { base, staged, .. } = cli.command {
         assert_eq!(base.as_deref(), Some("origin/main"));
         assert!(!staged);
     } else {
@@ -511,6 +619,19 @@ fn parse_detect_changes_staged() {
     } else {
         panic!("expected DetectChanges command");
     }
+}
+
+#[test]
+fn parse_detect_changes_all_repos() {
+    let cli = parse(&["atlas", "detect-changes", "--all-repos"]);
+    assert!(matches!(
+        cli.command,
+        Command::DetectChanges {
+            all_repos: true,
+            repo_id: None,
+            ..
+        }
+    ));
 }
 
 #[test]

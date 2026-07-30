@@ -4,6 +4,8 @@ use atlas_core::{AtlasError, Node, PackageOwner, PackageOwnerKind, ParsedFile, R
 use rusqlite::{Connection, params};
 use tracing::info;
 
+const LEGACY_SOURCE_REPO_ID: &str = "legacy";
+
 use super::{
     Store,
     helpers::{
@@ -11,8 +13,10 @@ use super::{
     },
 };
 
+#[allow(clippy::too_many_arguments)]
 fn do_replace_file_graph(
     conn: &Connection,
+    source_repo_id: &str,
     path: &str,
     hash: &str,
     language: Option<&str>,
@@ -29,11 +33,11 @@ fn do_replace_file_graph(
                 "SELECT id, kind, name, qualified_name, file_path, line_start, line_end,
                         language, parent_name, params, return_type, modifiers,
                         is_test, file_hash, extra_json
-                 FROM nodes WHERE file_path = ?1",
+                 FROM nodes WHERE source_repo_id = ?1 AND file_path = ?2",
             )
             .map_err(db_err)?;
         let rows: Vec<Node> = stmt
-            .query_map([path], row_to_node)
+            .query_map(params![source_repo_id, path], row_to_node)
             .map_err(db_err)?
             .filter_map(|r| r.ok())
             .collect();
@@ -62,31 +66,39 @@ fn do_replace_file_graph(
     }
 
     // Steps 3–4: clear edges and nodes for this file.
-    conn.execute("DELETE FROM edges WHERE file_path = ?1", [path])
-        .map_err(db_err)?;
+    conn.execute(
+        "DELETE FROM edges WHERE source_repo_id = ?1 AND file_path = ?2",
+        params![source_repo_id, path],
+    )
+    .map_err(db_err)?;
     // Remove dangling cross-file edges referencing old nodes from this file.
     conn.execute(
         "DELETE FROM edges
-         WHERE source_qualified IN (SELECT qualified_name FROM nodes WHERE file_path = ?1)
-            OR target_qualified IN (SELECT qualified_name FROM nodes WHERE file_path = ?1)",
-        [path],
+         WHERE source_repo_id = ?1
+           AND (source_qualified IN (SELECT qualified_name FROM nodes WHERE source_repo_id = ?1 AND file_path = ?2)
+             OR target_qualified IN (SELECT qualified_name FROM nodes WHERE source_repo_id = ?1 AND file_path = ?2))",
+        params![source_repo_id, path],
     )
     .map_err(db_err)?;
-    conn.execute("DELETE FROM nodes WHERE file_path = ?1", [path])
-        .map_err(db_err)?;
+    conn.execute(
+        "DELETE FROM nodes WHERE source_repo_id = ?1 AND file_path = ?2",
+        params![source_repo_id, path],
+    )
+    .map_err(db_err)?;
 
     // Step 5: upsert the file row.
     conn.execute(
         "INSERT OR REPLACE INTO files
              (path, language, hash, size, indexed_at, owner_id, owner_kind,
-              owner_root, owner_manifest_path, owner_name)
+              owner_root, owner_manifest_path, owner_name, source_repo_id)
          VALUES (?1, ?2, ?3, ?4, datetime('now'),
-                 (SELECT owner_id FROM files WHERE path = ?1),
-                 (SELECT owner_kind FROM files WHERE path = ?1),
-                 (SELECT owner_root FROM files WHERE path = ?1),
-                 (SELECT owner_manifest_path FROM files WHERE path = ?1),
-                 (SELECT owner_name FROM files WHERE path = ?1))",
-        params![path, language, hash, size],
+                 (SELECT owner_id FROM files WHERE source_repo_id = ?5 AND path = ?1),
+                 (SELECT owner_kind FROM files WHERE source_repo_id = ?5 AND path = ?1),
+                 (SELECT owner_root FROM files WHERE source_repo_id = ?5 AND path = ?1),
+                 (SELECT owner_manifest_path FROM files WHERE source_repo_id = ?5 AND path = ?1),
+                 (SELECT owner_name FROM files WHERE source_repo_id = ?5 AND path = ?1),
+                 ?5)",
+        params![path, language, hash, size, source_repo_id],
     )
     .map_err(db_err)?;
 
@@ -97,8 +109,8 @@ fn do_replace_file_graph(
             "INSERT OR REPLACE INTO nodes
                  (kind, name, qualified_name, file_path, line_start, line_end,
                   language, parent_name, params, return_type, modifiers,
-                  is_test, file_hash, extra_json)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
+                  is_test, file_hash, extra_json, source_repo_id)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
             params![
                 n.kind.as_str(),
                 n.name,
@@ -114,6 +126,7 @@ fn do_replace_file_graph(
                 n.is_test as i32,
                 n.file_hash,
                 extra,
+                source_repo_id,
             ],
         )
         .map_err(db_err)?;
@@ -145,8 +158,8 @@ fn do_replace_file_graph(
         conn.execute(
             "INSERT INTO edges
                  (kind, source_qualified, target_qualified, file_path,
-                  line, confidence, confidence_tier, extra_json)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+                  line, confidence, confidence_tier, extra_json, source_repo_id)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
             params![
                 e.kind.as_str(),
                 e.source_qn,
@@ -156,6 +169,7 @@ fn do_replace_file_graph(
                 e.confidence,
                 e.confidence_tier,
                 extra,
+                source_repo_id,
             ],
         )
         .map_err(db_err)?;
@@ -179,6 +193,7 @@ impl Store {
         self.conn.execute_batch("BEGIN IMMEDIATE").map_err(db_err)?;
         match do_replace_file_graph(
             &self.conn,
+            LEGACY_SOURCE_REPO_ID,
             &normalized.path,
             hash,
             language,
@@ -211,6 +226,14 @@ impl Store {
     ///
     /// Returns `(total_nodes, total_edges)` inserted.
     pub fn replace_files_transactional(&mut self, files: &[ParsedFile]) -> Result<(usize, usize)> {
+        self.replace_files_transactional_for_repo(LEGACY_SOURCE_REPO_ID, files)
+    }
+
+    pub fn replace_files_transactional_for_repo(
+        &mut self,
+        source_repo_id: &str,
+        files: &[ParsedFile],
+    ) -> Result<(usize, usize)> {
         if files.is_empty() {
             return Ok((0, 0));
         }
@@ -226,6 +249,7 @@ impl Store {
         for f in &normalized_files {
             match do_replace_file_graph(
                 &self.conn,
+                source_repo_id,
                 &f.path,
                 &f.hash,
                 f.language.as_deref(),
@@ -311,6 +335,10 @@ impl Store {
 
     /// Atomically remove every node, edge and FTS row for `path`.
     pub fn delete_file_graph(&mut self, path: &str) -> Result<()> {
+        self.delete_file_graph_for_repo(LEGACY_SOURCE_REPO_ID, path)
+    }
+
+    pub fn delete_file_graph_for_repo(&mut self, source_repo_id: &str, path: &str) -> Result<()> {
         let path = canonicalize_repo_path(path)?;
         let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
 
@@ -324,11 +352,11 @@ impl Store {
                     "SELECT id, kind, name, qualified_name, file_path, line_start, line_end,
                             language, parent_name, params, return_type, modifiers,
                             is_test, file_hash, extra_json
-                     FROM nodes WHERE file_path = ?1",
+                     FROM nodes WHERE source_repo_id = ?1 AND file_path = ?2",
                 )
                 .map_err(db_err)?;
             let rows: Vec<Node> = stmt
-                .query_map([path.as_str()], row_to_node)
+                .query_map(params![source_repo_id, path.as_str()], row_to_node)
                 .map_err(db_err)?
                 .filter_map(|r| r.ok())
                 .collect();
@@ -358,7 +386,10 @@ impl Store {
         }
 
         self.conn
-            .execute("DELETE FROM edges WHERE file_path = ?1", [path.as_str()])
+            .execute(
+                "DELETE FROM edges WHERE source_repo_id = ?1 AND file_path = ?2",
+                params![source_repo_id, path.as_str()],
+            )
             .map_err(db_err)?;
         // Also remove dangling cross-file edges whose source or target
         // qualified name belongs to a node in the deleted file.  These edges
@@ -367,16 +398,23 @@ impl Store {
         self.conn
             .execute(
                 "DELETE FROM edges
-                 WHERE source_qualified IN (SELECT qualified_name FROM nodes WHERE file_path = ?1)
-                    OR target_qualified IN (SELECT qualified_name FROM nodes WHERE file_path = ?1)",
-                [path.as_str()],
+                 WHERE source_repo_id = ?1
+                   AND (source_qualified IN (SELECT qualified_name FROM nodes WHERE source_repo_id = ?1 AND file_path = ?2)
+                     OR target_qualified IN (SELECT qualified_name FROM nodes WHERE source_repo_id = ?1 AND file_path = ?2))",
+                params![source_repo_id, path.as_str()],
             )
             .map_err(db_err)?;
         self.conn
-            .execute("DELETE FROM nodes WHERE file_path = ?1", [path.as_str()])
+            .execute(
+                "DELETE FROM nodes WHERE source_repo_id = ?1 AND file_path = ?2",
+                params![source_repo_id, path.as_str()],
+            )
             .map_err(db_err)?;
         self.conn
-            .execute("DELETE FROM files WHERE path = ?1", [path.as_str()])
+            .execute(
+                "DELETE FROM files WHERE source_repo_id = ?1 AND path = ?2",
+                params![source_repo_id, path.as_str()],
+            )
             .map_err(db_err)?;
 
         self.conn.execute_batch("COMMIT").map_err(db_err)?;
@@ -403,8 +441,58 @@ impl Store {
         Ok(result)
     }
 
+    pub fn file_hash_for_repo(&self, source_repo_id: &str, path: &str) -> Result<Option<String>> {
+        let path = canonicalize_repo_path(path)?;
+        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
+        use rusqlite::OptionalExtension;
+        self.conn
+            .query_row(
+                "SELECT hash FROM files WHERE source_repo_id = ?1 AND path = ?2",
+                params![source_repo_id, path.as_str()],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(db_err)
+    }
+
     /// Returns the stored owner metadata for `path`, if present.
     pub fn file_owner(&self, path: &str) -> Result<Option<PackageOwner>> {
+        if let Some(owner) = self.file_owner_for_repo(LEGACY_SOURCE_REPO_ID, path)? {
+            return Ok(Some(owner));
+        }
+
+        let path = canonicalize_repo_path(path)?;
+        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
+        use rusqlite::OptionalExtension;
+        let source_repo_id: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT source_repo_id
+                 FROM files
+                 WHERE path = ?1 AND owner_id IS NOT NULL
+                 ORDER BY CASE
+                     WHEN source_repo_id = 'legacy' THEN 0
+                     WHEN source_repo_id = 'registry' THEN 2
+                     ELSE 1
+                 END
+                 LIMIT 1",
+                params![path.as_str()],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(db_err)?;
+
+        match source_repo_id {
+            Some(source_repo_id) => self.file_owner_for_repo(&source_repo_id, path.as_str()),
+            None => Ok(None),
+        }
+    }
+
+    pub fn file_owner_for_repo(
+        &self,
+        source_repo_id: &str,
+        path: &str,
+    ) -> Result<Option<PackageOwner>> {
         let path = canonicalize_repo_path(path)?;
         let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
         use rusqlite::OptionalExtension;
@@ -412,8 +500,8 @@ impl Store {
             .conn
             .query_row(
                 "SELECT owner_id, owner_kind, owner_root, owner_manifest_path, owner_name
-                 FROM files WHERE path = ?1",
-                [path.as_str()],
+                 FROM files WHERE source_repo_id = ?1 AND path = ?2",
+                params![source_repo_id, path.as_str()],
                 |row| {
                     let owner_id: Option<String> = row.get(0)?;
                     let owner_kind: Option<String> = row.get(1)?;
@@ -452,15 +540,35 @@ impl Store {
         Ok(self.file_owner(path)?.map(|owner| owner.owner_id))
     }
 
+    pub fn file_owner_id_for_repo(
+        &self,
+        source_repo_id: &str,
+        path: &str,
+    ) -> Result<Option<String>> {
+        Ok(self
+            .file_owner_for_repo(source_repo_id, path)?
+            .map(|owner| owner.owner_id))
+    }
+
     pub fn file_paths_with_prefix(&self, prefix: &str) -> Result<Vec<String>> {
+        self.file_paths_with_prefix_for_repo(LEGACY_SOURCE_REPO_ID, prefix)
+    }
+
+    pub fn file_paths_with_prefix_for_repo(
+        &self,
+        source_repo_id: &str,
+        prefix: &str,
+    ) -> Result<Vec<String>> {
         let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
         let like = format!("{prefix}%");
         let mut stmt = self
             .conn
-            .prepare("SELECT path FROM files WHERE path LIKE ?1 ORDER BY path")
+            .prepare(
+                "SELECT path FROM files WHERE source_repo_id = ?1 AND path LIKE ?2 ORDER BY path",
+            )
             .map_err(db_err)?;
         let paths = stmt
-            .query_map([like], |row| row.get::<_, String>(0))
+            .query_map(params![source_repo_id, like], |row| row.get::<_, String>(0))
             .map_err(db_err)?
             .filter_map(|row| row.ok())
             .collect();

@@ -20,11 +20,13 @@ use atlas_adapters::{
 };
 use atlas_contentstore::{ContentStore, OutputRouting, SearchFilters, SourceMeta};
 use atlas_core::{BudgetManager, BudgetPolicy, BudgetReport};
+use atlas_repo::RepoRegistry;
 use atlas_session::{
     AgentMemorySummary, CurationResult, DecisionSearchHit, GlobalAccessEntry,
     GlobalWorkflowPattern, NewSessionEvent, ResumeSnapshot, SessionEventType, SessionId,
     SessionMeta, SessionStore,
 };
+use camino::Utf8Path;
 use serde::Serialize;
 use serde_json::Value;
 use tracing::warn;
@@ -39,9 +41,77 @@ fn mcp_session_id(repo_root: &str) -> SessionId {
     SessionId::derive(repo_root, "", "mcp")
 }
 
+const MAX_MULTI_REPO_SCOPE: usize = 32;
+
 fn open_session_store_best_effort(db_path: &str) -> Option<SessionStore> {
     let session_db = derive_session_db_path(db_path);
     SessionStore::open(&session_db).ok()
+}
+
+fn normalize_repo_roots(mut repo_roots: Vec<String>) -> Vec<String> {
+    repo_roots.sort();
+    repo_roots.dedup();
+    repo_roots.retain(|root| !root.trim().is_empty());
+    repo_roots
+}
+
+fn resolve_requested_repo_roots(args: Option<&Value>, repo_root: &str) -> Result<Vec<String>> {
+    let repo_id = args
+        .and_then(|a| a.get("repo_id"))
+        .and_then(|v| v.as_str())
+        .map(str::to_owned);
+    let all_repos = args
+        .and_then(|a| a.get("all_repos"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    if repo_id.is_none() && !all_repos {
+        return Ok(vec![repo_root.to_owned()]);
+    }
+    anyhow::ensure!(
+        !(repo_id.is_some() && all_repos),
+        "repo_id and all_repos cannot be combined"
+    );
+
+    let registry = RepoRegistry::load(Utf8Path::new(repo_root)).map_err(|error| {
+        anyhow::anyhow!(
+            "repo registry missing; run `atlas init` or `atlas repo sync` before multi-repo saved-context operations: {error}"
+        )
+    })?;
+
+    let repo_roots = if all_repos {
+        let enabled = registry
+            .registrations
+            .into_iter()
+            .filter(|entry| entry.enabled)
+            .map(|entry| entry.root.to_string())
+            .collect::<Vec<_>>();
+        anyhow::ensure!(
+            enabled.len() <= MAX_MULTI_REPO_SCOPE,
+            "all_repos scope exceeds max supported repo fan-out ({MAX_MULTI_REPO_SCOPE})"
+        );
+        enabled
+    } else {
+        let target = repo_id.unwrap_or_default();
+        let entry = registry
+            .registrations
+            .into_iter()
+            .find(|entry| entry.repo_id == target)
+            .ok_or_else(|| anyhow::anyhow!(format!("repo id '{target}' is not registered")))?;
+        anyhow::ensure!(entry.enabled, "repo id '{target}' is disabled");
+        vec![entry.root.to_string()]
+    };
+
+    Ok(normalize_repo_roots(repo_roots))
+}
+
+fn artifact_repo_roots(meta: &SourceMeta) -> Vec<String> {
+    normalize_repo_roots(meta.repo_roots.clone())
+}
+
+fn repo_scopes_overlap(left: &[String], right: &[String]) -> bool {
+    left.iter()
+        .any(|candidate| right.iter().any(|other| other == candidate))
 }
 
 pub(crate) fn search_decisions_best_effort(
@@ -562,10 +632,10 @@ pub fn tool_search_saved_context(
         .and_then(|a| a.get("merge_agent_partitions"))
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
-    let repo_root_filter = if cross_session {
-        Some(repo_root.to_string())
+    let repo_scope_roots = if cross_session {
+        resolve_requested_repo_roots(args, repo_root)?
     } else {
-        None
+        Vec::new()
     };
     let source_type_filter = args
         .and_then(|a| a.get("source_type"))
@@ -593,7 +663,8 @@ pub fn tool_search_saved_context(
             agent_id_filter.clone()
         },
         source_type: source_type_filter,
-        repo_root: repo_root_filter,
+        repo_root: None,
+        repo_roots: repo_scope_roots.clone(),
     };
 
     let chunks = cs.search_with_fallback(query, &filters)?;
@@ -603,6 +674,7 @@ pub fn tool_search_saved_context(
         source_id: String,
         chunk_id: String,
         chunk_index: usize,
+        repo_roots: Vec<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         title: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -643,6 +715,10 @@ pub fn tool_search_saved_context(
                 source_type: source.as_ref().map(|row| row.source_type.clone()),
                 identity_kind: source.as_ref().map(|row| row.identity_kind.clone()),
                 identity_value: source.as_ref().map(|row| row.identity_value.clone()),
+                repo_roots: source
+                    .as_ref()
+                    .map(|row| row.repo_roots.clone())
+                    .unwrap_or_default(),
                 preview: c.content.chars().take(256).collect(),
                 content_type: c.content_type,
             }
@@ -665,6 +741,10 @@ pub fn tool_search_saved_context(
             "query": query,
             "agent_id": agent_id_filter,
             "merged_agent_view": merge_agent_partitions || cross_session,
+            "repo_scope": {
+                "repo_roots": repo_scope_roots,
+                "repo_count": repo_scope_roots.len(),
+            },
             "results": results,
             "total": total,
             "linked_decisions": linked_decisions,
@@ -794,6 +874,8 @@ pub fn tool_save_context_artifact(
 
     let redaction_rules = load_redaction_rules(repo_root)?;
     let sanitized_content = redact_text_with_rules(content, &redaction_rules);
+    let repo_roots = resolve_requested_repo_roots(args, repo_root)?;
+    let primary_repo_root = (repo_roots.len() == 1).then(|| repo_roots[0].clone());
 
     let identity = ArtifactIdentity::artifact_label(label);
     let source_id = generate_source_id(&identity, &sanitized_content);
@@ -808,10 +890,12 @@ pub fn tool_save_context_artifact(
         agent_id: agent_id.clone(),
         source_type: source_type.to_string(),
         label: label.to_string(),
-        repo_root: Some(repo_root.to_string()),
+        repo_root: primary_repo_root,
+        repo_roots: repo_roots.clone(),
         identity_kind: identity.kind_str().to_owned(),
         identity_value: identity.value().to_owned(),
     };
+    let artifact_repo_scope = artifact_repo_roots(&meta);
 
     let routing = cs.route_output(meta, &sanitized_content, content_type)?;
     let content_size_bytes = sanitized_content.len();
@@ -874,6 +958,10 @@ pub fn tool_save_context_artifact(
         "chunk_count": chunk_count,
         "resource_link": resource_link,
         "retrieval_hint": retrieval_hint,
+        "repo_scope": {
+            "repo_roots": repo_roots,
+            "repo_count": artifact_repo_scope.len(),
+        },
         "summary": {
             "session_id": session_id_str,
             "stored": storage_mode != "raw_inline",
@@ -1040,6 +1128,7 @@ pub fn tool_read_saved_context(
     let content_db = derive_content_db_path(db_path);
     let mut cs = ContentStore::open(&content_db)?;
     let _ = cs.migrate();
+    let requested_repo_roots = resolve_requested_repo_roots(args, repo_root)?;
 
     let summary_budget = |observed| {
         budgets.summary(
@@ -1111,13 +1200,12 @@ pub fn tool_read_saved_context(
         return Ok(response);
     }
 
-    if let Some(ref artifact_repo) = source.repo_root
-        && artifact_repo != repo_root
-    {
+    let artifact_repo_roots = normalize_repo_roots(source.repo_roots.clone());
+    if !repo_scopes_overlap(&requested_repo_roots, &artifact_repo_roots) {
         let mut response = tool_result_value(
             &build_error_result(
-                "repo_mismatch",
-                "artifact not accessible from this repository",
+                "repo_scope_mismatch",
+                "artifact repo scope does not overlap current request scope",
             ),
             output_format,
         )?;
@@ -1183,6 +1271,11 @@ pub fn tool_read_saved_context(
         "created_at": source.created_at,
         "session_id": source.session_id,
         "agent_id": source.agent_id,
+        "repo_scope": {
+            "repo_roots": artifact_repo_roots,
+            "repo_count": artifact_repo_roots.len(),
+            "requested_repo_roots": requested_repo_roots,
+        },
         "merged_agent_view": merge_agent_partitions,
         "label": source.label,
         "content": content,
@@ -1392,8 +1485,9 @@ pub fn tool_cross_session_search(
     let content_db = derive_content_db_path(db_path);
     let mut cs = ContentStore::open(&content_db)?;
     let _ = cs.migrate();
+    let repo_scope_roots = resolve_requested_repo_roots(args, repo_root)?;
 
-    // Explicitly filter by repo_root, no session_id restriction.
+    // Explicitly filter by repo scope, no session_id restriction.
     let filters = SearchFilters {
         session_id: None,
         agent_id: if merge_agent_partitions {
@@ -1402,7 +1496,8 @@ pub fn tool_cross_session_search(
             agent_id_filter.clone()
         },
         source_type: source_type_filter,
-        repo_root: Some(repo_root.to_string()),
+        repo_root: None,
+        repo_roots: repo_scope_roots.clone(),
     };
 
     let chunks = cs.search_with_fallback(query, &filters)?;
@@ -1412,6 +1507,7 @@ pub fn tool_cross_session_search(
         source_id: String,
         chunk_id: String,
         chunk_index: usize,
+        repo_roots: Vec<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         session_id: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -1436,6 +1532,10 @@ pub fn tool_cross_session_search(
                 source_id: c.source_id,
                 chunk_id: c.chunk_id,
                 chunk_index: c.chunk_index,
+                repo_roots: source
+                    .as_ref()
+                    .map(|s| s.repo_roots.clone())
+                    .unwrap_or_default(),
                 session_id: source.as_ref().and_then(|s| s.session_id.clone()),
                 agent_id: source.as_ref().and_then(|s| s.agent_id.clone()),
                 title: c.title,
@@ -1464,6 +1564,10 @@ pub fn tool_cross_session_search(
             "cross_session": true,
             "agent_id": agent_id_filter,
             "merged_agent_view": merge_agent_partitions,
+            "repo_scope": {
+                "repo_roots": repo_scope_roots,
+                "repo_count": repo_scope_roots.len(),
+            },
             "results": results,
             "total": total,
         }),
@@ -2640,6 +2744,8 @@ mod tests {
         assert!(body["found"].as_bool().unwrap());
         assert_eq!(body["source_id"].as_str().unwrap(), source_id);
         assert_eq!(body["label"].as_str().unwrap(), "my label");
+        assert_eq!(body["repo_scope"]["repo_count"].as_u64().unwrap(), 1);
+        assert_eq!(body["repo_scope"]["requested_repo_roots"][0], repo_root);
         assert_eq!(body["identity_kind"].as_str().unwrap(), "artifact_label");
         assert_eq!(body["identity_value"].as_str().unwrap(), "my label");
         assert!(body["created_at"].is_string());
@@ -2802,13 +2908,169 @@ mod tests {
                 .unwrap();
         let body = tool_body(&result);
         assert!(!body["found"].as_bool().unwrap());
-        assert_eq!(body["access_status"], "repo_mismatch");
+        assert_eq!(body["access_status"], "repo_scope_mismatch");
         assert!(
             body["warnings"][0]
                 .as_str()
                 .unwrap()
-                .contains("not accessible from this repository")
+                .contains("does not overlap current request scope")
         );
+    }
+
+    #[test]
+    fn read_saved_context_allows_overlap_with_multi_repo_artifact_scope() {
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join(".atlas")).unwrap();
+        let db_path = setup_db_path(&dir);
+        let repo_root = dir.path().to_str().unwrap();
+        let content_db = derive_content_db_path(&db_path);
+        let mut store = ContentStore::open(&content_db).unwrap();
+        store.migrate().unwrap();
+
+        let identity = ArtifactIdentity::artifact_label("multi-scope-artifact");
+        let source_id = generate_source_id(&identity, &medium_content("multi-scope"));
+        store
+            .index_artifact(
+                SourceMeta {
+                    id: source_id.clone(),
+                    session_id: Some("sess-overlap".to_owned()),
+                    agent_id: None,
+                    source_type: "review_context".to_owned(),
+                    label: "multi-scope".to_owned(),
+                    repo_root: None,
+                    repo_roots: vec![repo_root.to_owned(), "/other/repo".to_owned()],
+                    identity_kind: identity.kind_str().to_owned(),
+                    identity_value: identity.value().to_owned(),
+                },
+                &medium_content("multi-scope"),
+                "text/plain",
+            )
+            .unwrap();
+
+        let args = serde_json::json!({"source_id": source_id});
+        let result =
+            tool_read_saved_context(Some(&args), repo_root, &db_path, OutputFormat::Json).unwrap();
+        let body = tool_body(&result);
+        assert_eq!(body["access_status"], "ok");
+        assert_eq!(body["repo_scope"]["repo_count"].as_u64().unwrap(), 2);
+    }
+
+    #[test]
+    fn search_saved_context_cross_session_honors_repo_scope_isolation() {
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join(".atlas")).unwrap();
+        let db_path = setup_db_path(&dir);
+        let repo_root = dir.path().to_str().unwrap();
+
+        let registry = RepoRegistry {
+            schema_version: atlas_repo::REPO_REGISTRY_SCHEMA_VERSION,
+            root_repo_id: atlas_repo::stable_repo_id(Utf8Path::new(repo_root)),
+            registrations: vec![
+                atlas_repo::RepoRegistration {
+                    repo_id: atlas_repo::stable_repo_id(Utf8Path::new(repo_root)),
+                    root: Utf8Path::new(repo_root).to_path_buf(),
+                    display_alias: ".".to_owned(),
+                    vcs: atlas_repo::VcsMetadata {
+                        head: None,
+                        default_branch: None,
+                        remote_url: None,
+                    },
+                    relationship: atlas_repo::RepoRelationship {
+                        kind: atlas_repo::RepoRelationshipKind::Root,
+                        parent_repo_id: None,
+                        parent_path: None,
+                    },
+                    trust_state: atlas_repo::TrustState::Trusted,
+                    enabled: true,
+                    include_globs: None,
+                    exclude_globs: None,
+                    dependencies: Vec::new(),
+                },
+                atlas_repo::RepoRegistration {
+                    repo_id: "repo_other".to_owned(),
+                    root: Utf8Path::new("/other/repo").to_path_buf(),
+                    display_alias: "other".to_owned(),
+                    vcs: atlas_repo::VcsMetadata {
+                        head: None,
+                        default_branch: None,
+                        remote_url: None,
+                    },
+                    relationship: atlas_repo::RepoRelationship {
+                        kind: atlas_repo::RepoRelationshipKind::Manual,
+                        parent_repo_id: None,
+                        parent_path: None,
+                    },
+                    trust_state: atlas_repo::TrustState::Trusted,
+                    enabled: true,
+                    include_globs: None,
+                    exclude_globs: None,
+                    dependencies: Vec::new(),
+                },
+            ],
+            warnings: Vec::new(),
+        };
+        registry.save(Utf8Path::new(repo_root)).unwrap();
+
+        let content_db = derive_content_db_path(&db_path);
+        let mut store = ContentStore::open(&content_db).unwrap();
+        store.migrate().unwrap();
+        let local_identity = ArtifactIdentity::artifact_label("local-artifact");
+        let local_source_id = generate_source_id(&local_identity, &medium_content("local-scope"));
+        store
+            .index_artifact(
+                SourceMeta {
+                    id: local_source_id,
+                    session_id: Some("sess-a".to_owned()),
+                    agent_id: None,
+                    source_type: "review_context".to_owned(),
+                    label: "local-artifact".to_owned(),
+                    repo_root: Some(repo_root.to_owned()),
+                    repo_roots: vec![repo_root.to_owned()],
+                    identity_kind: local_identity.kind_str().to_owned(),
+                    identity_value: local_identity.value().to_owned(),
+                },
+                &medium_content("local-scope"),
+                "text/plain",
+            )
+            .unwrap();
+        let other_identity = ArtifactIdentity::artifact_label("other-artifact");
+        let other_source_id = generate_source_id(&other_identity, &medium_content("other-scope"));
+        store
+            .index_artifact(
+                SourceMeta {
+                    id: other_source_id,
+                    session_id: Some("sess-b".to_owned()),
+                    agent_id: None,
+                    source_type: "review_context".to_owned(),
+                    label: "other-artifact".to_owned(),
+                    repo_root: Some("/other/repo".to_owned()),
+                    repo_roots: vec!["/other/repo".to_owned()],
+                    identity_kind: other_identity.kind_str().to_owned(),
+                    identity_value: other_identity.value().to_owned(),
+                },
+                &medium_content("other-scope"),
+                "text/plain",
+            )
+            .unwrap();
+
+        let result = tool_search_saved_context(
+            Some(&serde_json::json!({
+                "query": "scope",
+                "cross_session": true,
+                "repo_id": atlas_repo::stable_repo_id(Utf8Path::new(repo_root)),
+            })),
+            repo_root,
+            &db_path,
+            OutputFormat::Json,
+        )
+        .unwrap();
+        let body = tool_body(&result);
+        let results = body["results"].as_array().unwrap();
+
+        assert_eq!(body["repo_scope"]["repo_count"], serde_json::json!(1));
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0]["label"], serde_json::json!("local-artifact"));
+        assert_eq!(results[0]["repo_roots"], serde_json::json!([repo_root]));
     }
 
     #[test]

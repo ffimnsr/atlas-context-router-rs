@@ -159,6 +159,7 @@ fn bench_context_retrieval_latency(c: &mut Criterion) {
             include_code_spans: true,
             include_callers: true,
             include_callees: true,
+            allow_cross_repo_edges: false,
             include_saved_context: false,
             session_id: None,
             agent_id: None,

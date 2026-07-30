@@ -141,7 +141,7 @@ impl<'s> InsightsEngine<'s> {
         let store = self.store().ok_or_else(|| {
             AtlasError::Other("metrics analysis requires a store-backed insights engine".to_owned())
         })?;
-        let snapshot = self.load_graph_snapshot(store)?;
+        let snapshot = self.load_graph_snapshot(store, repo_root.as_ref())?;
         let rust_complexity = load_rust_complexity(repo_root.as_ref(), &snapshot.nodes)?;
         let mut node_metrics = build_node_metrics(self, &snapshot, &rust_complexity);
         let mut file_metrics = build_file_metrics(&snapshot, &node_metrics);
@@ -194,8 +194,16 @@ impl<'s> InsightsEngine<'s> {
     pub(super) fn load_graph_snapshot(
         &self,
         store: &'s atlas_store_sqlite::Store,
+        repo_root: impl AsRef<Path>,
     ) -> Result<GraphSnapshot> {
-        let mut file_paths = store.file_hashes()?.into_keys().collect::<Vec<_>>();
+        let source_repo_id = store
+            .get_build_status(repo_root.as_ref().to_string_lossy().as_ref())?
+            .map(|status| status.source_repo_id)
+            .unwrap_or_else(|| "legacy".to_owned());
+        let mut file_paths = store
+            .file_hashes_for_repo(&source_repo_id)?
+            .into_keys()
+            .collect::<Vec<_>>();
         file_paths.sort();
 
         let mut nodes = Vec::new();

@@ -40,7 +40,10 @@ fn update_dry_run_output_matches_golden() {
     assert_cli_json_snapshot(
         repo.path(),
         "update",
-        run_atlas(repo.path(), &["--json", "update", "--base", "HEAD", "--dry-run"]),
+        run_atlas(
+            repo.path(),
+            &["--json", "update", "--base", "HEAD", "--dry-run"],
+        ),
         "update_dry_run.json",
         normalize_build_like_snapshot,
     );
@@ -89,6 +92,9 @@ fn mcp_query_graph_output_matches_golden() {
                 item["score"] = json!(0.0);
                 item["ranking_evidence"]["raw_score"] = json!(0.0);
                 item["ranking_evidence"]["final_score"] = json!(0.0);
+                if let Some(object) = item.as_object_mut() {
+                    object.remove("repo");
+                }
             }
         },
     );
@@ -109,7 +115,7 @@ fn mcp_get_context_output_matches_golden() {
             "{}{}",
             initialized_session_prelude(1),
             "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"get_context\",\"arguments\":{\"files\":[\"src/lib.rs\"],\"intent\":\"review\",\"max_nodes\":1,\"max_edges\":0,\"max_files\":1,\"output_format\":\"json\"}}}\n"
-        )
+        ),
     );
     assert!(output.status.success(), "serve get_context failed");
 
@@ -118,7 +124,17 @@ fn mcp_get_context_output_matches_golden() {
         &output,
         2,
         "mcp_get_context_greet_twice.json",
-        |_| {},
+        |value| {
+            if let Some(ambiguity) = value["ambiguity"].as_object_mut() {
+                ambiguity.remove("candidates_detailed");
+            }
+            if let Some(object) = value.as_object_mut() {
+                object.remove("cross_repo_context_hops");
+            }
+            if let Some(detail_controls) = value["detail_controls"].as_object_mut() {
+                detail_controls.remove("allow_cross_repo_edges");
+            }
+        },
     );
 
     cleanup_mcp_daemons(repo.path());

@@ -44,6 +44,7 @@ impl ToolResultContract {
 pub(crate) fn tool_result_contract(name: &str) -> ToolResultContract {
     match name {
         "list_graph_stats"
+        | "repo_registry"
         | "tool_list"
         | "tool_search"
         | "tool_help"
@@ -144,6 +145,17 @@ fn base_tool_list_json() -> Value {
                 }
             },
             {
+                "name": "repo_registry",
+                "description": "Inspect persisted multi-repo registry metadata under .atlas/, including registered repo identities, relationship kinds, trust states, and bootstrap warnings.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
+                    },
+                    "required": []
+                }
+            },
+            {
                 "name": "tool_list",
                 "description": "List visible exported MCP tools in compact runtime inventory form. Use this instead of hardcoding tool tables in agent instructions; pair with tool_search and tool_help for discovery.",
                 "inputSchema": {
@@ -211,6 +223,8 @@ fn base_tool_list_json() -> Value {
                         "fuzzy":    { "type": "boolean", "description": "Enable fuzzy (edit-distance) typo recovery for near-miss symbol names (default false). Uses relaxed candidate expansion plus stronger code-symbol ranking so close symbol typos outrank weaker docs/config matches." },
                         "hybrid":   { "type": "boolean", "description": "Enable hybrid FTS + vector retrieval with Reciprocal Rank Fusion (default false). Requires search.embedding.url in .atlas/config.toml; falls back to FTS-only when no embedding backend is configured." },
                         "include_files": { "type": "boolean", "description": "Include file nodes in the result set (default false). Leave disabled for symbol-centric search; enable when a file-level hit is useful." },
+                        "repo_id": { "type": "string", "description": "Optional registry-backed repo selector. Restricts results to one registered repo id." },
+                        "all_repos": { "type": "boolean", "description": "Search all enabled registered repos instead of default current repo scope." },
                         "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
                     },
                     "required": []
@@ -249,6 +263,8 @@ fn base_tool_list_json() -> Value {
                                 "required": []
                             }
                         },
+                        "repo_id": { "type": "string", "description": "Optional registry-backed repo selector applied to all batch queries." },
+                        "all_repos": { "type": "boolean", "description": "Search all enabled registered repos for every batch query." },
                         "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
                     },
                     "required": []
@@ -267,6 +283,8 @@ fn base_tool_list_json() -> Value {
                         "working_tree": { "type": "boolean", "description": "Diff working-tree changes only. Mutually exclusive with files/base/staged." },
                         "max_depth": { "type": "integer", "description": "Traversal depth limit (default 5)" },
                         "max_nodes": { "type": "integer", "description": "Maximum impacted nodes to return (default 200)" },
+                        "repo_id": { "type": "string", "description": "Optional registry-backed repo selector. Computes impact from that repo's own git root and indexed symbols." },
+                        "all_repos": { "type": "boolean", "description": "Expand impact seeds across all enabled registered repos." },
                         "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
                     },
                     "required": []
@@ -301,6 +319,8 @@ fn base_tool_list_json() -> Value {
                         "base":   { "type": "string",  "description": "Base ref (e.g. 'origin/main'). Omit to diff working tree." },
                         "staged": { "type": "boolean", "description": "Diff staged changes only (default false)" },
                         "working_tree": { "type": "boolean", "description": "Diff working-tree changes only. Mutually exclusive with base/staged." },
+                        "repo_id": { "type": "string", "description": "Optional registry-backed repo selector. Diffs that repo's own git root." },
+                        "all_repos": { "type": "boolean", "description": "Detect changes across all enabled registered repos." },
                         "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
                     },
                     "required": []
@@ -916,6 +936,8 @@ fn base_tool_list_json() -> Value {
                         "fuzzy":         { "type": "boolean", "description": "Whether fuzzy name-matching boost would be active (default false)." },
                         "hybrid":        { "type": "boolean", "description": "Whether hybrid FTS + vector retrieval would be used (default false). Requires search.embedding.url in .atlas/config.toml." },
                         "include_files": { "type": "boolean", "description": "Whether file nodes would be included in the result set (default false)." },
+                        "repo_id": { "type": "string", "description": "Optional registry-backed repo selector. Restricts explain_query planning to one registered repo." },
+                        "all_repos": { "type": "boolean", "description": "Explain query planning across all enabled registered repos." },
                         "output_format": { "type": "string",  "description": DEFAULT_OUTPUT_DESCRIPTION }
                     },
                     "required": []
@@ -991,6 +1013,8 @@ fn base_tool_list_json() -> Value {
                         "file":          { "type": "string",  "description": "Optional file path filter. Only returns matches whose file_path contains this string (e.g. 'internal/requestctx/context.go' or 'src/')." },
                         "language":      { "type": "string",  "description": "Optional language filter (e.g. 'rust', 'go', 'typescript')." },
                         "limit":         { "type": "integer", "description": "Maximum matches to return (default 10)." },
+                        "repo_id": { "type": "string", "description": "Optional registry-backed repo selector. Restricts candidates to one registered repo." },
+                        "all_repos": { "type": "boolean", "description": "Resolve across all enabled registered repos." },
                         "output_format": { "type": "string",  "description": DEFAULT_OUTPUT_DESCRIPTION }
                     },
                     "required": ["name"]
@@ -1076,6 +1100,7 @@ fn build_tool_descriptor(seed: ToolDescriptorSeed) -> ToolDescriptor {
 fn tool_output_schema_for(name: &str) -> Option<Value> {
     match name {
         "list_graph_stats" => Some(list_graph_stats_output_schema()),
+        "repo_registry" => Some(repo_registry_output_schema()),
         "tool_list" => Some(tool_list_output_schema()),
         "tool_search" => Some(tool_search_output_schema()),
         "tool_help" => Some(man_output_schema()),
@@ -1126,6 +1151,30 @@ fn tool_output_schema_for(name: &str) -> Option<Value> {
         "man" => Some(man_output_schema()),
         _ => None,
     }
+}
+
+fn repo_registry_output_schema() -> Value {
+    normalized_tool_output_schema(
+        serde_json::json!({
+            "registry_path": { "type": "string" },
+            "schema_version": { "type": "integer" },
+            "root_repo_id": { "type": "string" },
+            "registration_count": { "type": "integer" },
+            "warning_count": { "type": "integer" },
+            "registrations": { "type": "array", "items": { "type": "object" } },
+            "warnings": { "type": "array", "items": { "type": "object" } }
+        }),
+        &[
+            "registry_path",
+            "schema_version",
+            "root_repo_id",
+            "registration_count",
+            "warning_count",
+            "registrations",
+            "warnings",
+        ],
+        None,
+    )
 }
 
 fn list_graph_stats_output_schema() -> Value {
@@ -1763,9 +1812,31 @@ fn ambiguity_schema() -> Value {
         "additionalProperties": false,
         "properties": {
             "query": { "type": ["string", "null"] },
-            "candidates": { "type": "array", "items": { "type": "string" } }
+            "candidates": { "type": "array", "items": { "type": "string" } },
+            "candidates_detailed": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "qualified_name": { "type": "string" },
+                        "file_path": { "type": ["string", "null"] },
+                        "kind": { "type": ["string", "null"] },
+                        "repo": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "properties": {
+                                "repo_id": { "type": ["string", "null"] },
+                                "display_alias": { "type": ["string", "null"] }
+                            },
+                            "required": ["repo_id", "display_alias"]
+                        }
+                    },
+                    "required": ["qualified_name", "file_path", "kind", "repo"]
+                }
+            }
         },
-        "required": ["query", "candidates"]
+        "required": ["query", "candidates", "candidates_detailed"]
     })
 }
 
@@ -1998,7 +2069,8 @@ fn review_risk_summary_schema() -> Value {
             "nodes_dropped": { "type": "integer" },
             "edges_dropped": { "type": "integer" },
             "files_dropped": { "type": "integer" },
-            "ambiguity_present": { "type": "boolean" }
+            "ambiguity_present": { "type": "boolean" },
+            "cross_repo_boundary": { "type": "boolean" }
         },
         "required": [
             "intent",
@@ -2009,7 +2081,33 @@ fn review_risk_summary_schema() -> Value {
             "nodes_dropped",
             "edges_dropped",
             "files_dropped",
-            "ambiguity_present"
+            "ambiguity_present",
+            "cross_repo_boundary"
+        ]
+    })
+}
+
+fn boundary_summary_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "cross_module": { "type": "boolean" },
+            "cross_module_count": { "type": "integer" },
+            "cross_package": { "type": "boolean" },
+            "cross_package_count": { "type": "integer" },
+            "cross_repo": { "type": "boolean" },
+            "cross_repo_count": { "type": "integer" },
+            "violations": { "type": "array", "items": { "type": "string" } }
+        },
+        "required": [
+            "cross_module",
+            "cross_module_count",
+            "cross_package",
+            "cross_package_count",
+            "cross_repo",
+            "cross_repo_count",
+            "violations"
         ]
     })
 }
@@ -2676,7 +2774,8 @@ fn get_impact_radius_output_schema() -> Value {
                     "impacted_file_count": { "type": "integer" },
                     "relevant_edge_count": { "type": "integer" },
                     "seed_budget_count": { "type": "integer" },
-                    "traversal_budget_applied": { "type": "boolean" }
+                    "traversal_budget_applied": { "type": "boolean" },
+                    "cross_repo_boundary": { "type": "boolean" }
                 },
                 "required": [
                     "changed_file_count",
@@ -2685,9 +2784,11 @@ fn get_impact_radius_output_schema() -> Value {
                     "impacted_file_count",
                     "relevant_edge_count",
                     "seed_budget_count",
-                    "traversal_budget_applied"
+                    "traversal_budget_applied",
+                    "cross_repo_boundary"
                 ]
             },
+            "boundary_summary": { "$ref": "#/$defs/boundary_summary" },
             "truncated": { "type": "boolean" },
             "relevant_edges": { "type": "array", "items": { "$ref": "#/$defs/compact_edge" } },
             "seed_budgets": { "type": "array", "items": { "$ref": "#/$defs/seed_budget" } },
@@ -2717,6 +2818,7 @@ fn get_impact_radius_output_schema() -> Value {
             "compact_edge": compact_edge_schema(),
             "seed_budget": seed_budget_schema(),
             "traversal_budget": traversal_budget_schema(),
+            "boundary_summary": boundary_summary_schema(),
         })),
     )
 }
@@ -2725,11 +2827,25 @@ fn get_review_context_output_schema() -> Value {
     normalized_tool_output_schema(
         serde_json::json!({
             "change_source": { "$ref": "#/$defs/change_source" },
+            "changed_repos": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "repo_id": { "type": "string" },
+                        "display_alias": { "type": ["string", "null"] },
+                        "changed_symbol_count": { "type": "integer" }
+                    },
+                    "required": ["repo_id", "display_alias", "changed_symbol_count"]
+                }
+            },
             "changed_files": { "type": "array", "items": { "type": "string" } },
             "changed_symbols": { "type": "array", "items": { "$ref": "#/$defs/packaged_selected_node" } },
             "neighbors": { "type": "array", "items": { "$ref": "#/$defs/packaged_selected_node" } },
             "critical_edges": { "type": "array", "items": { "$ref": "#/$defs/packaged_selected_edge" } },
             "risk_summary": { "$ref": "#/$defs/review_risk_summary" },
+            "boundary_summary": { "$ref": "#/$defs/boundary_summary" },
             "artifacts": { "type": "array", "items": { "$ref": "#/$defs/artifact_saved_context" } },
             "intent": { "type": "string" },
             "node_count": { "type": "integer" },
@@ -2790,6 +2906,7 @@ fn get_review_context_output_schema() -> Value {
             "context_source_mix": context_source_mix_schema(),
             "payload_truncation": payload_truncation_schema(),
             "review_risk_summary": review_risk_summary_schema(),
+            "boundary_summary": boundary_summary_schema(),
         })),
     )
 }
@@ -2995,6 +3112,15 @@ fn get_context_output_schema() -> Value {
             "agent_scope": { "type": "object" },
             "ranking_evidence_legend": { "type": "object" },
             "lookup": { "type": "object" },
+            "cross_repo_context_hops": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "enabled": { "type": "boolean" },
+                    "edge_count": { "type": "integer" }
+                },
+                "required": ["enabled", "edge_count"]
+            },
             "intent": { "type": "string" },
             "node_count": { "type": "integer" },
             "nodes": { "type": "array", "items": { "$ref": "#/$defs/packaged_selected_node" } },
@@ -3367,6 +3493,16 @@ fn read_saved_context_output_schema() -> Value {
             "created_at": { "type": "string" },
             "session_id": { "type": ["string", "null"] },
             "agent_id": { "type": ["string", "null"] },
+            "repo_scope": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "repo_roots": { "type": "array", "items": { "type": "string" } },
+                    "repo_count": { "type": "integer" },
+                    "requested_repo_roots": { "type": "array", "items": { "type": "string" } }
+                },
+                "required": ["repo_roots", "repo_count", "requested_repo_roots"]
+            },
             "merged_agent_view": { "type": "boolean" },
             "label": { "type": "string" },
             "byte_count": { "type": "integer" },
@@ -3408,6 +3544,15 @@ fn save_context_artifact_output_schema() -> Value {
             "chunk_count": { "type": "integer" },
             "resource_link": { "type": ["object", "null"] },
             "retrieval_hint": { "type": ["string", "null"] },
+            "repo_scope": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "repo_roots": { "type": "array", "items": { "type": "string" } },
+                    "repo_count": { "type": "integer" }
+                },
+                "required": ["repo_roots", "repo_count"]
+            },
             "summary": {
                 "type": "object",
                 "additionalProperties": false,
@@ -4053,7 +4198,7 @@ fn tool_category(name: &str) -> &'static str {
         | "get_session_status"
         | "cross_session_search"
         | "get_global_memory" => "memory",
-        "tool_list" | "tool_search" | "tool_help" | "man" => "introspection",
+        "tool_list" | "tool_search" | "tool_help" | "man" | "repo_registry" => "introspection",
         "status" | "doctor" | "db_check" | "debug_graph" | "broker_status" => "health",
         name if name.starts_with("analyze_")
             || name.starts_with("assess_")

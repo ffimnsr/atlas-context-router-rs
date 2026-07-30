@@ -135,13 +135,22 @@ impl Store {
     /// `files.path` identities stored in the graph DB, so file-hash reuse and
     /// later historical snapshot keys operate on the same path spelling.
     pub fn file_hashes(&self) -> Result<std::collections::HashMap<String, String>> {
+        self.file_hashes_for_repo("legacy")
+    }
+
+    pub fn file_hashes_for_repo(
+        &self,
+        source_repo_id: &str,
+    ) -> Result<std::collections::HashMap<String, String>> {
         let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
         let mut stmt = self
             .conn
-            .prepare("SELECT path, hash FROM files")
+            .prepare("SELECT path, hash FROM files WHERE source_repo_id = ?1")
             .map_err(db_err)?;
         let map = stmt
-            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+            .query_map([source_repo_id], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+            })
             .map_err(db_err)?
             .filter_map(|r| r.ok())
             .collect();

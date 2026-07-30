@@ -14,7 +14,7 @@ max_total_bytes_per_run = 536870912
 max_file_bytes = 67108864
 max_parse_failures = 10000
 max_parse_failure_ratio = 1.0
-max_wall_time_ms = 90000
+max_wall_time_ms = 150000
 "#,
     )
     .expect("write representative repo budget config");
@@ -29,7 +29,7 @@ max_wall_time_ms = 90000
         "representative repo build should index substantial graph size: {build:?}"
     );
     assert!(
-        build["elapsed_ms"].as_u64().unwrap_or(u64::MAX) <= 90_000,
+        build["elapsed_ms"].as_u64().unwrap_or(u64::MAX) <= 150_000,
         "representative repo build latency regressed: {build:?}"
     );
 

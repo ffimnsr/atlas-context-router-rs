@@ -12,6 +12,7 @@ mod platform;
 mod postprocess;
 mod query;
 mod reasoning;
+mod repo;
 mod session;
 
 pub use changes::{run_detect_changes, run_explain_change, run_impact, run_review_context};
@@ -30,6 +31,7 @@ pub use platform::{run_completions, run_install, run_serve, run_serve_daemon, ru
 pub use postprocess::run_postprocess;
 pub use query::{run_embed, run_explain_query, run_query};
 pub use reasoning::{run_analyze, run_refactor};
+pub use repo::run_repo;
 pub use session::run_session;
 
 pub(crate) const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -69,11 +71,11 @@ use anyhow::{Context, Result};
 use atlas_contentstore::{ContentStore, IndexState};
 use atlas_core::model::{ChangeType, ChangedFile};
 use atlas_core::{
-    BudgetPolicy, GraphReadiness, GraphReadinessInput, GraphToolRequirement, ReadinessOverride,
-    ReadinessVerdict,
+    BudgetPolicy, GraphReadiness, GraphReadinessInput, GraphStats, GraphToolRequirement,
+    ReadinessOverride, ReadinessVerdict,
 };
 use atlas_parser::ParserRegistry;
-use atlas_repo::{DiffTarget, changed_files, find_repo_root, hash_file};
+use atlas_repo::{DiffTarget, changed_files, find_repo_root, hash_file, stable_repo_id};
 use atlas_store_sqlite::{GraphBuildState, Store};
 use camino::Utf8Path;
 
@@ -95,6 +97,46 @@ pub(crate) fn print_json(command: &str, data: serde_json::Value) -> Result<()> {
         serde_json::to_string_pretty(&json_envelope(command, data))?
     );
     Ok(())
+}
+
+const SYNTHETIC_GRAPH_PREFIX: &str = ".atlas/synthetic/";
+
+fn is_synthetic_graph_path(path: &str) -> bool {
+    path.starts_with(SYNTHETIC_GRAPH_PREFIX)
+}
+
+pub(crate) fn public_graph_stats(store: &Store, source_repo_id: &str) -> Result<GraphStats> {
+    let raw = store.stats()?;
+    let mut file_count = 0i64;
+    let mut node_count = 0i64;
+    let mut edge_count = 0i64;
+    let mut nodes_by_kind = std::collections::BTreeMap::<String, i64>::new();
+    let mut languages = std::collections::BTreeSet::<String>::new();
+
+    for file_path in store.file_hashes_for_repo(source_repo_id)?.into_keys() {
+        if is_synthetic_graph_path(&file_path) {
+            continue;
+        }
+        file_count += 1;
+        for node in store.nodes_by_file(&file_path)? {
+            node_count += 1;
+            *nodes_by_kind
+                .entry(node.kind.as_str().to_owned())
+                .or_default() += 1;
+            languages.insert(node.language);
+        }
+        edge_count +=
+            i64::try_from(store.edges_by_file(&file_path)?.len()).expect("edge count fits in i64");
+    }
+
+    Ok(GraphStats {
+        file_count,
+        node_count,
+        edge_count,
+        nodes_by_kind: nodes_by_kind.into_iter().collect(),
+        languages: languages.into_iter().collect(),
+        last_indexed_at: raw.last_indexed_at,
+    })
 }
 
 pub(crate) fn load_budget_policy(repo_root: &str) -> Result<BudgetPolicy> {
@@ -326,7 +368,8 @@ pub(crate) fn derive_graph_readiness(
         _ => (None, None),
     };
 
-    let (stats, graph_error) = match store.stats() {
+    let source_repo_id = stable_repo_id(Utf8Path::new(repo_root));
+    let (stats, graph_error) = match public_graph_stats(store, &source_repo_id) {
         Ok(s) => (s, None),
         Err(e) => {
             let dummy = atlas_core::GraphStats {

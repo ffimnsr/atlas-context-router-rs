@@ -413,123 +413,124 @@ Registry-first design, not raw path merge. Current recursive submodule scan, own
 
 ##### 30.1.2 Multi-repo registry
 
-- [ ] define `RepoRegistry` model
-- [ ] define `RepoRegistration` entry with:
-  - [ ] stable `repo_id`
-  - [ ] canonical absolute root
-  - [ ] repo-relative display alias
-  - [ ] VCS metadata: `HEAD`, default branch, remote URL when available
-  - [ ] relationship kind: `root`, `submodule`, `workspace_member`, `manual`
-  - [ ] trust state and enabled/disabled flag
-  - [ ] optional include/exclude globs
-  - [ ] optional dependency metadata to other registered repos
-- [ ] persist registry metadata under `.atlas/` instead of inferring everything from transient process state
-- [ ] keep registry format human-editable
-- [ ] version registry schema for future migrations
+- [x] define `RepoRegistry` model
+- [x] define `RepoRegistration` entry with:
+  - [x] stable `repo_id`
+  - [x] canonical absolute root
+  - [x] repo-relative display alias
+  - [x] VCS metadata: `HEAD`, default branch, remote URL when available
+  - [x] relationship kind: `root`, `submodule`, `workspace_member`, `manual`
+  - [x] trust state and enabled/disabled flag
+  - [x] optional include/exclude globs
+  - [x] optional dependency metadata to other registered repos
+- [x] persist registry metadata under `.atlas/` instead of inferring everything from transient process state
+- [x] keep registry format human-editable
+- [x] version registry schema for future migrations
 
 ##### 30.1.3 Discovery and bootstrap
 
-- [ ] auto-register root repo on `atlas init`
-- [ ] auto-discover initialized git submodules as first-class repo entries
-- [ ] record parent-to-submodule linkage instead of flattening submodule identity into root only
-- [ ] support manual `atlas repo add <path>` for sibling repos outside root tree
-- [ ] support `atlas repo remove <repo-id>` without deleting graph data for unrelated repos
-- [ ] support `atlas repo sync` to refresh refs, remotes, enabled state, and missing paths
-- [ ] surface uninitialized or missing submodules as registry warnings, not hard failures
+- [x] auto-register root repo on `atlas init`
+- [x] auto-discover initialized git submodules as first-class repo entries
+- [x] record parent-to-submodule linkage instead of flattening submodule identity into root only
+- [x] support manual `atlas repo add <path>` for sibling repos outside root tree
+- [x] support `atlas repo remove <repo-id>` without deleting graph data for unrelated repos
+- [x] support `atlas repo sync` to refresh refs, remotes, enabled state, and missing paths
+- [x] surface uninitialized or missing submodules as registry warnings, not hard failures
 
 ##### 30.1.4 Identity and storage model
 
-- [ ] extend path identity invariant from repo-relative path to `(repo_id, canonical_repo_relative_path)`
-- [ ] prevent qualified-name collisions for same file names across different repos
-- [ ] keep per-repo synthetic owner/workspace nodes and add synthetic repo nodes
-- [ ] add repo-membership edges:
-  - [ ] `repo contains package`
-  - [ ] `repo contains workspace`
-  - [ ] `registry contains repo`
-  - [ ] `repo depends_on repo`
-  - [ ] `repo submodule_of repo`
+- [x] extend path identity invariant from repo-relative path to `(repo_id, canonical_repo_relative_path)`
+- [x] prevent qualified-name collisions for same file names across different repos
+- [x] keep per-repo synthetic owner/workspace nodes and add synthetic repo nodes
+- [x] add repo-membership edges:
+  - [x] `repo contains package`
+  - [x] `repo contains workspace`
+  - [x] `registry contains repo`
+  - [x] `repo depends_on repo`
+  - [x] `repo submodule_of repo`
 - [ ] store repo provenance on nodes, edges, files, saved context, and diagnostics output
-- [ ] preserve existing single-db deployment when practical, but partition rows by `repo_id`
-- [ ] avoid shared-graph writes that cannot be traced back to one source repo
+- [x] preserve existing single-db deployment when practical, but partition rows by `repo_id`
+- [x] avoid shared-graph writes that cannot be traced back to one source repo
 
 ##### 30.1.5 Build and update flows
 
-- [ ] build each registered repo as independent parse/update unit
-- [ ] reuse existing submodule-safe git invocation rules for child repos
-- [ ] detect changes per repo using each repo's own git root and diff state
-- [ ] let root-repo `detect-changes` expand into registered sub-repo changes when requested
-- [ ] support targeted update:
-  - [ ] one repo
-  - [ ] all enabled repos
-  - [ ] affected repos only
-- [ ] cache per-repo build status, indexed revision, and stale markers
-- [ ] report partial success when some repos update and others fail
+- [x] build each registered repo as independent parse/update unit
+- [x] reuse existing submodule-safe git invocation rules for child repos
+- [x] detect changes per repo using each repo's own git root and diff state
+- [x] let root-repo `detect-changes` expand into registered sub-repo changes when requested
+- [x] support targeted update:
+  - [x] one repo
+  - [x] all enabled repos
+  - [x] affected repos only
+- [x] cache per-repo build status, indexed revision, and stale markers
+- [x] report partial success when some repos update and others fail
 
 ##### 30.1.6 Cross-repo resolution and graph semantics
 
-- [ ] resolve imports/calls across repos only when registry relationship or dependency evidence exists
-- [ ] treat submodule boundaries as repo boundaries first, directory prefixes second
-- [ ] let package-owner and workspace-owner metadata bridge repo boundaries when manifests point across repos
+- [x] resolve imports/calls across repos only when registry relationship or dependency evidence exists
+- [x] treat submodule boundaries as repo boundaries first, directory prefixes second
+- [x] let package-owner and workspace-owner metadata bridge repo boundaries when manifests point across repos
 - [ ] add cross-repo edge metadata:
-  - [ ] source repo
-  - [ ] target repo
-  - [ ] relationship reason: import, dependency, submodule, workspace link
-  - [ ] confidence tier
-- [ ] keep unresolved cross-repo references explicit so review/impact can explain missing evidence
-- [ ] support cross-repo impact radius and removal analysis without hiding repo hops
+  - [x] source repo
+  - [x] target repo
+  - [x] relationship reason: import, dependency, submodule, workspace link
+  - [x] confidence tier
+- [x] keep unresolved cross-repo references explicit so review/impact can explain missing evidence
+- [x] support cross-repo impact radius and removal analysis without hiding repo hops
 
 ##### 30.1.7 CLI and MCP surface
 
 - [ ] CLI:
-  - [ ] `atlas repo list`
-  - [ ] `atlas repo add <path>`
-  - [ ] `atlas repo remove <repo-id>`
-  - [ ] `atlas repo sync`
-  - [ ] `atlas build --all-repos`
-  - [ ] `atlas update --all-repos`
-  - [ ] `atlas query --repo <repo-id>|--all-repos`
-  - [ ] `atlas impact --all-repos`
+  - [x] `atlas repo list`
+  - [x] `atlas repo add <path>`
+  - [x] `atlas repo remove <repo-id>`
+  - [x] `atlas repo sync`
+  - [x] `atlas build --all-repos`
+  - [x] `atlas update --all-repos`
+  - [x] `atlas query --repo <repo-id>|--all-repos`
+  - [x] `atlas impact --all-repos`
 - [ ] MCP:
-  - [ ] expose registry inspection tool
-  - [ ] add optional repo scoping to graph/context tools
-  - [ ] add per-root broker sessions discovered from client `roots/list`
-  - [ ] return repo identity in ambiguity candidates and provenance payloads
-- [ ] human-readable output must show repo labels anywhere same symbol exists in multiple repos
-- [ ] JSON output must include repo metadata in stable fields, not ad hoc strings
+  - [x] expose registry inspection tool
+  - [x] add explicit `repo_root` scoping to graph/context tools
+  - [x] add registry-backed `repo_id` / `--all-repos` scoping to graph/context tools
+  - [x] add per-root broker sessions from explicit repo selectors (not client `roots/list`)
+  - [x] return repo identity in ambiguity candidates and provenance payloads
+- [x] human-readable output must show repo labels anywhere same symbol exists in multiple repos
+- [x] JSON output must include repo metadata in stable fields, not ad hoc strings
 
 ##### 30.1.8 Review, context, and saved artifacts
 
-- [ ] let review context summarize changed repos before changed files
-- [ ] include cross-repo boundary violations in impact and review summaries
-- [ ] allow `get_context` to follow caller/callee edges across repos when enabled
-- [ ] store session artifacts with repo-set ownership, not single repo only
-- [ ] block saved-context reads when session repo scope does not overlap requested repo scope
+- [x] let review context summarize changed repos before changed files
+- [x] include cross-repo boundary violations in impact and review summaries
+- [x] allow `get_context` to follow caller/callee edges across repos when enabled
+- [x] store session artifacts with repo-set ownership, not single repo only
+- [x] block saved-context reads when session repo scope does not overlap requested repo scope
 
 ##### 30.1.9 Safety, performance, and rollout
 
-- [ ] keep single-repo default path zero-config and zero-regression
-- [ ] gate multi-repo federation behind explicit registry presence or `--all-repos`
-- [ ] bound fan-out so one command cannot accidentally parse every nearby checkout
-- [ ] add per-repo and aggregate budget reporting
-- [ ] degrade cleanly when one repo is unavailable, corrupted, or on unsupported filesystem
-- [ ] start with submodules as phase-1 supported multi-repo source, then add manual sibling repos
+- [x] keep single-repo default path zero-config and zero-regression
+- [x] gate multi-repo federation behind explicit registry presence or `--all-repos`
+- [x] bound fan-out so one command cannot accidentally parse every nearby checkout
+- [x] add per-repo and aggregate budget reporting
+- [x] degrade cleanly when one repo is unavailable, corrupted, or on unsupported filesystem
+- [x] start with submodules as phase-1 supported multi-repo source, then add manual sibling repos
 
 ##### 30.1.10 Tests and completion criteria
 
-- [ ] tests:
-  - [ ] submodule auto-registration
-  - [ ] manual sibling repo registration
-  - [ ] repo-id stability across rebuilds
-  - [ ] qualified-name collision handling across repos
-  - [ ] cross-repo query ranking and ambiguity output
-  - [ ] cross-repo impact/review context
-  - [ ] partial update failure reporting
-  - [ ] saved-context repo-scope isolation
-- [ ] completion criteria:
-  - [ ] Atlas can index at least root repo plus one submodule as separate repo identities
-  - [ ] cross-repo query output is deterministic and provenance-rich
-  - [ ] impact/review tools can explain repo hops
-  - [ ] default single-repo behavior remains unchanged
+- [x] tests:
+  - [x] submodule auto-registration
+  - [x] manual sibling repo registration
+  - [x] repo-id stability across rebuilds
+  - [x] qualified-name collision handling across repos
+  - [x] cross-repo query ranking and ambiguity output
+  - [x] cross-repo impact/review context
+  - [x] partial update failure reporting
+  - [x] saved-context repo-scope isolation
+- [x] completion criteria:
+  - [x] Atlas can index at least root repo plus one submodule as separate repo identities
+  - [x] cross-repo query output is deterministic and provenance-rich
+  - [x] impact/review tools can explain repo hops
+  - [x] default single-repo behavior remains unchanged
 
 #### 30.2 Remaining code intelligence
 

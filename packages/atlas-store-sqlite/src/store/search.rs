@@ -45,6 +45,15 @@ impl Store {
             let mut filters: Vec<String> = Vec::new();
             let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
 
+            if !query.repo_ids.is_empty() {
+                filters.push(format!(
+                    "n.source_repo_id IN ({})",
+                    repeat_placeholders(query.repo_ids.len())
+                ));
+                for repo_id in &query.repo_ids {
+                    params.push(Box::new(repo_id.clone()));
+                }
+            }
             if let Some(kind) = &query.kind {
                 filters.push("n.kind = ?".to_string());
                 params.push(Box::new(kind.clone()));
@@ -116,6 +125,15 @@ impl Store {
             let mut filters: Vec<String> = vec!["nodes_fts MATCH ?".to_string()];
             let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = vec![Box::new(fts_query)];
 
+            if !query.repo_ids.is_empty() {
+                filters.push(format!(
+                    "n.source_repo_id IN ({})",
+                    repeat_placeholders(query.repo_ids.len())
+                ));
+                for repo_id in &query.repo_ids {
+                    params.push(Box::new(repo_id.clone()));
+                }
+            }
             if let Some(kind) = &query.kind {
                 filters.push("n.kind = ?".to_string());
                 params.push(Box::new(kind.clone()));

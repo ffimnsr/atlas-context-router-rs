@@ -19,6 +19,7 @@ struct WorkspaceDefinition {
     kind: PackageOwnerKind,
     manifest_path: String,
     member_manifest_paths: Vec<String>,
+    member_roots: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -144,6 +145,7 @@ fn parse_cargo_workspace(
     Ok(Some(WorkspaceDefinition {
         kind: PackageOwnerKind::Cargo,
         manifest_path: manifest_path.to_string(),
+        member_roots: resolve_member_roots(&member_patterns, &exclude_patterns, cargo_manifests),
         member_manifest_paths,
     }))
 }
@@ -167,6 +169,7 @@ fn parse_npm_workspace(
     Ok(Some(WorkspaceDefinition {
         kind: PackageOwnerKind::Npm,
         manifest_path: manifest_path.to_string(),
+        member_roots: resolve_member_roots(&member_patterns, &[], npm_manifests),
         member_manifest_paths,
     }))
 }
@@ -188,6 +191,7 @@ fn parse_go_workspace(
     Ok(Some(WorkspaceDefinition {
         kind: PackageOwnerKind::Go,
         manifest_path: manifest_path.to_string(),
+        member_roots: resolve_member_roots(&member_patterns, &[], go_manifests),
         member_manifest_paths,
     }))
 }
@@ -279,6 +283,45 @@ fn resolve_member_manifest_paths(
         .collect()
 }
 
+fn resolve_member_roots(
+    include_patterns: &[String],
+    exclude_patterns: &[String],
+    manifests: &[Utf8PathBuf],
+) -> Vec<String> {
+    let mut roots: Vec<String> = manifests
+        .iter()
+        .filter(|manifest_path| {
+            let root = manifest_root(manifest_path);
+            include_patterns
+                .iter()
+                .any(|pattern| workspace_pattern_matches(pattern, root))
+                && !exclude_patterns
+                    .iter()
+                    .any(|pattern| workspace_pattern_matches(pattern, root))
+        })
+        .map(|manifest_path| manifest_root(manifest_path).to_string())
+        .collect();
+    for pattern in include_patterns {
+        if is_glob_pattern(pattern)
+            || exclude_patterns
+                .iter()
+                .any(|exclude| workspace_pattern_matches(exclude, pattern))
+        {
+            continue;
+        }
+        if !roots.iter().any(|existing| existing == pattern) {
+            roots.push(pattern.clone());
+        }
+    }
+    roots.sort();
+    roots.dedup();
+    roots
+}
+
+fn is_glob_pattern(pattern: &str) -> bool {
+    pattern.contains('*') || pattern.contains('?') || pattern.contains('[')
+}
+
 fn normalize_workspace_pattern(pattern: &str) -> String {
     let trimmed = pattern.trim().trim_matches('"');
     let trimmed = trimmed.strip_prefix("./").unwrap_or(trimmed);
@@ -298,7 +341,7 @@ fn manifest_root(manifest_path: &Utf8Path) -> &str {
 }
 
 fn make_workspace(workspace: WorkspaceDefinition, owners: &[PackageOwner]) -> WorkspaceRoot {
-    let mut member_roots = Vec::new();
+    let mut member_roots = workspace.member_roots.clone();
     let mut member_owner_ids = Vec::new();
 
     for manifest_path in workspace.member_manifest_paths {
@@ -310,6 +353,9 @@ fn make_workspace(workspace: WorkspaceDefinition, owners: &[PackageOwner]) -> Wo
             member_owner_ids.push(owner.owner_id.clone());
         }
     }
+
+    member_roots.sort();
+    member_roots.dedup();
 
     WorkspaceRoot {
         workspace_id: format!(

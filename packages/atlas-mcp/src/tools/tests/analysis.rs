@@ -479,7 +479,7 @@ fn analyze_patterns_matches_direct_report_json() {
     let store = Store::open(&fixture.db_path).expect("open store");
     let engine = InsightsEngine::new(&store, atlas_engine::config::InsightsConfig::default())
         .expect("insights engine");
-    let direct = engine.analyze_patterns().expect("direct analysis");
+    let direct = engine.analyze_patterns("/repo").expect("direct analysis");
     let mut direct_value = serde_json::to_value(&direct).expect("serialize report");
     direct_value["summary"]["generated_at"] = tool_value["summary"]["generated_at"].clone();
 
@@ -632,7 +632,7 @@ fn r4_insight_tools_keep_full_report_in_toon_structured_content() {
         risk,
     );
 
-    let patterns = serde_json::to_value(engine.analyze_patterns().expect("patterns direct"))
+    let patterns = serde_json::to_value(engine.analyze_patterns("/repo").expect("patterns direct"))
         .expect("serialize pattern report");
     assert_toon_structured_content_matches_direct_report(
         "analyze_patterns",

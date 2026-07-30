@@ -256,6 +256,142 @@ fn query_graph_include_files_opt_in_controls_file_results() {
 }
 
 #[test]
+fn query_graph_all_repos_returns_repo_provenance_for_ambiguous_results() {
+    use atlas_repo::{
+        RepoRegistration, RepoRegistry, RepoRelationship, RepoRelationshipKind, TrustState,
+        VcsMetadata, stable_repo_id,
+    };
+    use camino::{Utf8Path, Utf8PathBuf};
+
+    let fixture = setup_git_mcp_fixture();
+    let root = Utf8Path::new(&fixture.repo_root);
+    let root_repo_id = stable_repo_id(root);
+    let dep_repo_id = stable_repo_id(Utf8Path::new("/virtual/submodule"));
+    let mut store = Store::open(&fixture.db_path).expect("open store");
+
+    let root_compute = Node {
+        extra_json: json!({"repo_id": root_repo_id.clone()}),
+        ..make_node(
+            NodeKind::Function,
+            "compute",
+            "src/service.rs::fn::compute",
+            "src/service.rs",
+        )
+    };
+    store
+        .replace_file_graph(
+            "src/service.rs",
+            "hash:src/service.rs",
+            Some("rust"),
+            Some(5),
+            std::slice::from_ref(&root_compute),
+            &[],
+        )
+        .expect("replace root compute");
+
+    let dep_compute = Node {
+        extra_json: json!({"repo_id": dep_repo_id.clone()}),
+        ..make_node(
+            NodeKind::Function,
+            "compute",
+            "repo::repo_dep::vendor/dep/src/service.rs::fn::compute",
+            "vendor/dep/src/service.rs",
+        )
+    };
+    store
+        .replace_file_graph(
+            "vendor/dep/src/service.rs",
+            "hash:vendor/dep/src/service.rs",
+            Some("rust"),
+            Some(5),
+            std::slice::from_ref(&dep_compute),
+            &[],
+        )
+        .expect("replace dep compute");
+
+    let mut registry = RepoRegistry::new(root_repo_id.clone());
+    registry.registrations = vec![
+        RepoRegistration {
+            repo_id: root_repo_id.clone(),
+            root: root.to_path_buf(),
+            display_alias: ".".to_owned(),
+            vcs: VcsMetadata {
+                head: None,
+                default_branch: None,
+                remote_url: None,
+            },
+            relationship: RepoRelationship {
+                kind: RepoRelationshipKind::Root,
+                parent_repo_id: None,
+                parent_path: None,
+            },
+            trust_state: TrustState::Trusted,
+            enabled: true,
+            include_globs: None,
+            exclude_globs: None,
+            dependencies: Vec::new(),
+        },
+        RepoRegistration {
+            repo_id: dep_repo_id.clone(),
+            root: Utf8PathBuf::from("/virtual/submodule"),
+            display_alias: "vendor/dep".to_owned(),
+            vcs: VcsMetadata {
+                head: None,
+                default_branch: None,
+                remote_url: None,
+            },
+            relationship: RepoRelationship {
+                kind: RepoRelationshipKind::Submodule,
+                parent_repo_id: Some(root_repo_id.clone()),
+                parent_path: Some("vendor/dep".to_owned()),
+            },
+            trust_state: TrustState::Trusted,
+            enabled: true,
+            include_globs: None,
+            exclude_globs: None,
+            dependencies: Vec::new(),
+        },
+    ];
+    registry.save(root).expect("save registry");
+
+    let args = serde_json::json!({ "text": "compute", "all_repos": true, "output_format": "json" });
+    let first = call(
+        "query_graph",
+        Some(&args),
+        &fixture.repo_root,
+        &fixture.db_path,
+    )
+    .expect("query_graph call");
+    let second = call(
+        "query_graph",
+        Some(&args),
+        &fixture.repo_root,
+        &fixture.db_path,
+    )
+    .expect("query_graph call repeat");
+    let first_text = unwrap_tool_text(first);
+    let second_text = unwrap_tool_text(second);
+    assert_eq!(
+        first_text, second_text,
+        "cross-repo query output must be deterministic"
+    );
+
+    let payload: serde_json::Value = serde_json::from_str(&first_text).expect("parse json");
+    let results = payload.as_array().expect("result array");
+    assert!(results.len() >= 2);
+    assert!(
+        results
+            .iter()
+            .any(|item| item["repo"]["display_alias"] == json!("."))
+    );
+    assert!(
+        results
+            .iter()
+            .any(|item| item["repo"]["display_alias"] == json!("vendor/dep"))
+    );
+}
+
+#[test]
 fn query_graph_response_carries_relationship_guidance() {
     let fixture = setup_mcp_fixture();
     let args = serde_json::json!({ "text": "compute", "output_format": "json" });

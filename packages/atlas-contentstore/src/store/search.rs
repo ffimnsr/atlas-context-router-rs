@@ -30,6 +30,17 @@ impl ContentStore {
             extra_params.push(repo_root.clone());
             where_parts.push(format!("s.repo_root = ?{}", extra_params.len() + 1));
         }
+        if !filters.repo_roots.is_empty() {
+            let mut predicates = Vec::new();
+            for repo_root in &filters.repo_roots {
+                extra_params.push(repo_root.clone());
+                predicates.push(format!(
+                    "EXISTS (SELECT 1 FROM json_each(COALESCE(s.repo_roots_json, '[]')) WHERE value = ?{})",
+                    extra_params.len() + 1
+                ));
+            }
+            where_parts.push(format!("({})", predicates.join(" OR ")));
+        }
 
         let sql = format!(
             "SELECT c.source_id, c.chunk_id, c.chunk_index, c.title, c.content, c.content_type
@@ -96,6 +107,17 @@ impl ContentStore {
         if let Some(ref repo_root) = filters.repo_root {
             extra_params.push(repo_root.clone());
             where_parts.push(format!("s.repo_root = ?{}", extra_params.len() + 1));
+        }
+        if !filters.repo_roots.is_empty() {
+            let mut predicates = Vec::new();
+            for repo_root in &filters.repo_roots {
+                extra_params.push(repo_root.clone());
+                predicates.push(format!(
+                    "EXISTS (SELECT 1 FROM json_each(COALESCE(s.repo_roots_json, '[]')) WHERE value = ?{})",
+                    extra_params.len() + 1
+                ));
+            }
+            where_parts.push(format!("({})", predicates.join(" OR ")));
         }
 
         let sql = format!(

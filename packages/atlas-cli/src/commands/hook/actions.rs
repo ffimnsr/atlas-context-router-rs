@@ -222,6 +222,7 @@ fn persist_handoff_artifact(
         source_type: "hook_handoff".to_owned(),
         label: format!("hook:{frontend}:{trigger}:handoff"),
         repo_root: Some(repo.to_owned()),
+        repo_roots: vec![repo.to_owned()],
         identity_kind: identity.kind_str().to_owned(),
         identity_value: identity.value().to_owned(),
     };
@@ -354,6 +355,8 @@ fn execute_graph_refresh_action(
             batch_size: config.parse_batch_size(),
             target,
             budget: build_budget,
+            source_repo_id: None,
+            namespace_qualified_names: false,
         },
     );
 
@@ -623,6 +626,7 @@ fn persist_named_hook_artifact(
                 source_type: kind.to_owned(),
                 label: format!("hook:{trigger}:{kind}"),
                 repo_root: Some(repo.to_owned()),
+                repo_roots: vec![repo.to_owned()],
                 identity_kind: identity.kind_str().to_owned(),
                 identity_value: identity.value().to_owned(),
             },

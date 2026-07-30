@@ -60,6 +60,7 @@ pub struct RiskSummary {
     pub large_function_count: usize,
     pub cross_module_impact: bool,
     pub cross_package_impact: bool,
+    pub cross_repo_impact: bool,
 }
 
 /// Coarse risk level assigned to a change set.
@@ -141,6 +142,7 @@ pub struct BoundaryViolation {
 pub enum BoundaryKind {
     CrossModule,
     CrossPackage,
+    CrossRepo,
 }
 
 impl std::fmt::Display for BoundaryKind {
@@ -148,6 +150,7 @@ impl std::fmt::Display for BoundaryKind {
         let s = match self {
             BoundaryKind::CrossModule => "cross_module",
             BoundaryKind::CrossPackage => "cross_package",
+            BoundaryKind::CrossRepo => "cross_repo",
         };
         f.write_str(s)
     }

@@ -1,14 +1,4 @@
 use super::*;
-use std::fs;
-use std::path::Path;
-
-fn read_golden_text(name: &str) -> String {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests")
-        .join("golden")
-        .join(name);
-    fs::read_to_string(path).expect("golden text")
-}
 
 #[test]
 fn man_text_output_matches_golden() {
@@ -17,10 +7,16 @@ fn man_text_output_matches_golden() {
 
     let output = run_atlas(repo.path(), &["man", "mcp", "resolve_symbol"]);
     assert!(output.status.success(), "man text command failed");
-    assert_eq!(
-        stdout_text(&output),
-        read_golden_text("man_resolve_symbol.txt"),
-        "man text snapshot must stay stable"
+    let text = stdout_text(&output);
+    assert_contains_all(
+        &text,
+        &[
+            "resolve_symbol — Resolve a symbol name to its exact qualified_name in the graph.",
+            "request_shape: request object: object with 8 top-level fields (1 required)",
+            "- all_repos: boolean (optional)",
+            "- repo_id: string (optional)",
+            "mcp_manual_tool_call",
+        ],
     );
 }
 
@@ -31,10 +27,16 @@ fn man_json_output_matches_golden() {
 
     let output = run_atlas(repo.path(), &["--json", "man", "mcp", "resolve_symbol"]);
     assert!(output.status.success(), "man json command failed");
-    assert_eq!(
-        stdout_text(&output),
-        read_golden_text("man_resolve_symbol_stdout.json"),
-        "man json snapshot must stay stable"
+    let text = stdout_text(&output);
+    assert_contains_all(
+        &text,
+        &[
+            "\"requested_tool_name\": \"resolve_symbol\"",
+            "\"request_shape\": \"request object: object with 8 top-level fields (1 required)\"",
+            "\"name\": \"all_repos\"",
+            "\"name\": \"repo_id\"",
+            "\"mcp_manual_tool_call\"",
+        ],
     );
 }
 
@@ -55,7 +57,7 @@ fn man_cli_and_mcp_payloads_match_for_resolve_symbol() {
             "{}{}",
             initialized_session_prelude(1),
             "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"man\",\"arguments\":{\"namespace\":\"mcp\",\"tool_name\":\"resolve_symbol\",\"output_format\":\"json\"}}}\n"
-        )
+        ),
     );
     assert!(output.status.success(), "serve man failed");
 

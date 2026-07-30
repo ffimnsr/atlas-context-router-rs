@@ -27,6 +27,7 @@ impl GraphBuildState {
 #[derive(Debug, Clone)]
 pub struct GraphBuildStatus {
     pub repo_root: String,
+    pub source_repo_id: String,
     pub state: GraphBuildState,
     pub files_discovered: i64,
     pub files_processed: i64,
@@ -71,35 +72,41 @@ fn row_to_build_status(row: &Row<'_>) -> rusqlite::Result<GraphBuildStatus> {
     let state_str: String = row.get(1)?;
     Ok(GraphBuildStatus {
         repo_root: row.get(0)?,
+        source_repo_id: row.get(2)?,
         state: GraphBuildState::from_str(&state_str),
-        files_discovered: row.get(2)?,
-        files_processed: row.get(3)?,
-        files_accepted: row.get(4)?,
-        files_skipped_by_byte_budget: row.get(5)?,
-        files_failed: row.get(6)?,
-        bytes_accepted: row.get(7)?,
-        bytes_skipped: row.get(8)?,
-        nodes_written: row.get(9)?,
-        edges_written: row.get(10)?,
-        budget_stop_reason: row.get(11)?,
-        last_built_at: row.get(12)?,
-        last_error: row.get(13)?,
-        updated_at: row.get(14)?,
+        files_discovered: row.get(3)?,
+        files_processed: row.get(4)?,
+        files_accepted: row.get(5)?,
+        files_skipped_by_byte_budget: row.get(6)?,
+        files_failed: row.get(7)?,
+        bytes_accepted: row.get(8)?,
+        bytes_skipped: row.get(9)?,
+        nodes_written: row.get(10)?,
+        edges_written: row.get(11)?,
+        budget_stop_reason: row.get(12)?,
+        last_built_at: row.get(13)?,
+        last_error: row.get(14)?,
+        updated_at: row.get(15)?,
     })
 }
 
 impl Store {
     /// Mark a build/update as in-progress for `repo_root`.
     pub fn begin_build(&self, repo_root: &str) -> Result<()> {
+        self.begin_build_for_repo("legacy", repo_root)
+    }
+
+    pub fn begin_build_for_repo(&self, source_repo_id: &str, repo_root: &str) -> Result<()> {
         self.conn
             .execute(
                 "INSERT INTO graph_build_state
-                    (repo_root, state, files_discovered, files_processed, files_accepted,
+                    (repo_root, source_repo_id, state, files_discovered, files_processed, files_accepted,
                      files_skipped_by_byte_budget, files_failed, bytes_accepted, bytes_skipped,
                      nodes_written, edges_written, budget_stop_reason, last_built_at, last_error,
                      updated_at)
-                 VALUES (?1, 'building', 0, 0, 0, 0, 0, 0, 0, 0, 0, NULL, NULL, NULL, datetime('now'))
+                 VALUES (?1, ?2, 'building', 0, 0, 0, 0, 0, 0, 0, 0, 0, NULL, NULL, NULL, datetime('now'))
                  ON CONFLICT(repo_root) DO UPDATE SET
+                    source_repo_id   = ?2,
                     state            = 'building',
                     files_discovered = 0,
                     files_processed  = 0,
@@ -113,7 +120,7 @@ impl Store {
                     budget_stop_reason = NULL,
                     last_error       = NULL,
                     updated_at       = datetime('now')",
-                params![repo_root],
+                params![repo_root, source_repo_id],
             )
             .map_err(|e| AtlasError::Db(e.to_string()))?;
         Ok(())
@@ -121,31 +128,42 @@ impl Store {
 
     /// Record a successful build completion with final counters.
     pub fn finish_build(&self, repo_root: &str, stats: BuildFinishStats) -> Result<()> {
+        self.finish_build_for_repo("legacy", repo_root, stats)
+    }
+
+    pub fn finish_build_for_repo(
+        &self,
+        source_repo_id: &str,
+        repo_root: &str,
+        stats: BuildFinishStats,
+    ) -> Result<()> {
         self.conn
             .execute(
                 "INSERT INTO graph_build_state
-                    (repo_root, state, files_discovered, files_processed, files_accepted,
+                    (repo_root, source_repo_id, state, files_discovered, files_processed, files_accepted,
                      files_skipped_by_byte_budget, files_failed, bytes_accepted, bytes_skipped,
                      nodes_written, edges_written, budget_stop_reason, last_built_at, last_error,
                      updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, datetime('now'), NULL, datetime('now'))
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, datetime('now'), NULL, datetime('now'))
                  ON CONFLICT(repo_root) DO UPDATE SET
-                    state            = ?2,
-                    files_discovered = ?3,
-                    files_processed  = ?4,
-                    files_accepted   = ?5,
-                    files_skipped_by_byte_budget = ?6,
-                    files_failed     = ?7,
-                    bytes_accepted   = ?8,
-                    bytes_skipped    = ?9,
-                    nodes_written    = ?10,
-                    edges_written    = ?11,
-                    budget_stop_reason = ?12,
+                    source_repo_id   = ?2,
+                    state            = ?3,
+                    files_discovered = ?4,
+                    files_processed  = ?5,
+                    files_accepted   = ?6,
+                    files_skipped_by_byte_budget = ?7,
+                    files_failed     = ?8,
+                    bytes_accepted   = ?9,
+                    bytes_skipped    = ?10,
+                    nodes_written    = ?11,
+                    edges_written    = ?12,
+                    budget_stop_reason = ?13,
                     last_built_at    = datetime('now'),
                     last_error       = NULL,
                     updated_at       = datetime('now')",
                 params![
                     repo_root,
+                    source_repo_id,
                     state_as_str(&stats.state),
                     stats.files_discovered,
                     stats.files_processed,
@@ -165,17 +183,27 @@ impl Store {
 
     /// Record a build failure with an error message.
     pub fn fail_build(&self, repo_root: &str, error: &str) -> Result<()> {
+        self.fail_build_for_repo("legacy", repo_root, error)
+    }
+
+    pub fn fail_build_for_repo(
+        &self,
+        source_repo_id: &str,
+        repo_root: &str,
+        error: &str,
+    ) -> Result<()> {
         self.conn
             .execute(
                 "INSERT INTO graph_build_state
-                    (repo_root, state, files_discovered, files_processed, files_failed,
+                    (repo_root, source_repo_id, state, files_discovered, files_processed, files_failed,
                      nodes_written, edges_written, last_built_at, last_error, updated_at)
-                 VALUES (?1, 'build_failed', 0, 0, 0, 0, 0, NULL, ?2, datetime('now'))
+                 VALUES (?1, ?2, 'build_failed', 0, 0, 0, 0, 0, NULL, ?3, datetime('now'))
                  ON CONFLICT(repo_root) DO UPDATE SET
+                    source_repo_id = ?2,
                     state      = 'build_failed',
-                    last_error = ?2,
+                    last_error = ?3,
                     updated_at = datetime('now')",
-                params![repo_root, error],
+                params![repo_root, source_repo_id, error],
             )
             .map_err(|e| AtlasError::Db(e.to_string()))?;
         Ok(())
@@ -186,7 +214,7 @@ impl Store {
         let mut stmt = self
             .conn
             .prepare(
-                "SELECT repo_root, state, files_discovered, files_processed,
+                "SELECT repo_root, state, source_repo_id, files_discovered, files_processed,
                     files_accepted, files_skipped_by_byte_budget, files_failed,
                     bytes_accepted, bytes_skipped, nodes_written, edges_written,
                     budget_stop_reason, last_built_at, last_error, updated_at
@@ -209,7 +237,7 @@ impl Store {
         let mut stmt = self
             .conn
             .prepare(
-                "SELECT repo_root, state, files_discovered, files_processed,
+                "SELECT repo_root, state, source_repo_id, files_discovered, files_processed,
                     files_accepted, files_skipped_by_byte_budget, files_failed,
                     bytes_accepted, bytes_skipped, nodes_written, edges_written,
                     budget_stop_reason, last_built_at, last_error, updated_at

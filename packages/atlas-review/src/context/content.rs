@@ -116,6 +116,7 @@ pub(super) fn retrieve_content_assets(
 
     let filters = SearchFilters {
         repo_root: None,
+        repo_roots: Vec::new(),
         session_id: None,
         agent_id: None,
         source_type: None,

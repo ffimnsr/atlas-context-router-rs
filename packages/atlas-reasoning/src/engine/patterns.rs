@@ -14,11 +14,14 @@ use super::metrics::{
 };
 
 impl<'s> InsightsEngine<'s> {
-    pub fn analyze_patterns(&self) -> Result<PatternReport> {
+    pub fn analyze_patterns(
+        &self,
+        repo_root: impl AsRef<std::path::Path>,
+    ) -> Result<PatternReport> {
         let store = self.store().ok_or_else(|| {
             AtlasError::Other("pattern analysis requires a store-backed insights engine".to_owned())
         })?;
-        let snapshot = self.load_graph_snapshot(store)?;
+        let snapshot = self.load_graph_snapshot(store, repo_root.as_ref())?;
         let rust_complexity: HashMap<String, RustComplexityMetrics> = HashMap::new();
         let node_metrics = build_node_metrics(self, &snapshot, &rust_complexity);
 

@@ -5,7 +5,7 @@ use atlas_core::{
     ChangeType, GraphStats, PostprocessExecutionMode, PostprocessRunState, PostprocessRunSummary,
     PostprocessStageStatus, PostprocessStageSummary,
 };
-use atlas_repo::{DiffTarget, changed_files, find_repo_root};
+use atlas_repo::{DiffTarget, changed_files, find_repo_root, stable_repo_id};
 use atlas_store_sqlite::Store;
 use camino::Utf8Path;
 
@@ -60,8 +60,20 @@ fn qn_file_path(qualified_name: &str) -> &str {
         .unwrap_or(qualified_name)
 }
 
-fn graph_built(stats: &GraphStats) -> bool {
-    stats.file_count > 0 || stats.node_count > 0 || stats.edge_count > 0
+fn graph_built(store: &Store, repo_root: &Utf8Path, stats: &GraphStats) -> anyhow::Result<bool> {
+    if stats.file_count <= 0 && stats.node_count <= 0 && stats.edge_count <= 0 {
+        return Ok(false);
+    }
+    let source_repo_id = store
+        .get_build_status(repo_root.as_str())?
+        .map(|status| status.source_repo_id)
+        .unwrap_or_else(|| stable_repo_id(repo_root));
+    let file_hashes = store
+        .file_hashes_for_repo(&source_repo_id)
+        .or_else(|_| store.file_hashes_for_repo("legacy"))?;
+    Ok(file_hashes
+        .into_keys()
+        .any(|path| !path.starts_with(".atlas/synthetic/")))
 }
 
 fn unknown_stage_summary(
@@ -379,7 +391,7 @@ pub fn postprocess_graph(
     let store =
         Store::open(db_path).with_context(|| format!("cannot open database at {db_path}"))?;
     let stats = store.stats().context("cannot read graph stats")?;
-    if !graph_built(&stats) {
+    if !graph_built(&store, repo_root, &stats)? {
         return Ok(no_graph_summary(repo_root.as_str(), options, started_at_ms));
     }
 

@@ -8,7 +8,10 @@ use atlas_core::model::{
     ReviewContext, ReviewImpactOverview, RiskSummary, SelectionReason,
 };
 use atlas_impact::analyze as advanced_impact;
-use atlas_repo::{CanonicalRepoPath, DiffTarget, changed_files, find_repo_root};
+use atlas_repo::{
+    CanonicalRepoPath, DiffTarget, RepoRegistry, changed_files, find_repo_root,
+    phase1_multi_repo_supported, stable_repo_id,
+};
 use atlas_review::{ContextEngine, build_explain_change_summary, empty_explain_change_summary};
 use atlas_store_sqlite::Store;
 use camino::Utf8Path;
@@ -24,6 +27,8 @@ use super::{
 // Helpers
 // ---------------------------------------------------------------------------
 
+const MAX_MULTI_REPO_SELECTION: usize = 32;
+
 fn normalize_explicit_files(
     repo_root: &Utf8Path,
     explicit_files: &[String],
@@ -36,6 +41,75 @@ fn normalize_explicit_files(
                 .map(|path| path.as_str().to_owned())
         })
         .collect()
+}
+
+fn node_repo_id(node: &atlas_core::Node) -> Option<&str> {
+    node.extra_json
+        .as_object()
+        .and_then(|extra| extra.get("repo_id"))
+        .and_then(|value| value.as_str())
+}
+
+fn selected_impact_repos(
+    registry_root: &Utf8Path,
+    repo_id: &Option<String>,
+    all_repos: bool,
+) -> Result<(Vec<atlas_repo::RepoRegistration>, usize)> {
+    if !all_repos && repo_id.is_none() {
+        return Ok((Vec::new(), 0));
+    }
+    let registry = RepoRegistry::load(registry_root).with_context(
+        || "repo registry missing; run `atlas init` or `atlas repo sync` before multi-repo impact",
+    )?;
+    let excluded_manual = if all_repos {
+        registry
+            .registrations
+            .iter()
+            .filter(|entry| entry.enabled)
+            .filter(|entry| entry.relationship.kind == atlas_repo::RepoRelationshipKind::Manual)
+            .count()
+    } else {
+        0
+    };
+    if all_repos {
+        let registrations = registry
+            .registrations
+            .into_iter()
+            .filter(|entry| entry.enabled)
+            .filter(|entry| phase1_multi_repo_supported(entry.relationship.kind))
+            .collect::<Vec<_>>();
+        anyhow::ensure!(
+            registrations.len() <= MAX_MULTI_REPO_SELECTION,
+            "all_repos scope exceeds max supported repo fan-out ({MAX_MULTI_REPO_SELECTION})"
+        );
+        return Ok((registrations, excluded_manual));
+    }
+    let target = repo_id.as_deref().unwrap_or_default();
+    let entry = registry
+        .registrations
+        .into_iter()
+        .find(|entry| entry.repo_id == target)
+        .with_context(|| format!("repo id '{target}' is not registered"))?;
+    anyhow::ensure!(entry.enabled, "repo id '{target}' is disabled");
+    Ok((vec![entry], excluded_manual))
+}
+
+fn impact_seed_qnames_for_repo(
+    store: &Store,
+    repo_id: &str,
+    files: &[String],
+) -> Result<Vec<String>> {
+    let mut qnames = Vec::new();
+    for file in files {
+        for node in store.nodes_by_file(file)? {
+            if node_repo_id(&node) == Some(repo_id) {
+                qnames.push(node.qualified_name);
+            }
+        }
+    }
+    qnames.sort();
+    qnames.dedup();
+    Ok(qnames)
 }
 
 fn print_review_context_text(ctx: &ContextResult, changed_files: &[String]) {
@@ -389,11 +463,122 @@ pub fn run_detect_changes(cli: &Cli) -> Result<()> {
     let repo_root = repo_root_path.as_path();
     let db_path = db_path(cli, &repo);
 
-    let (base, staged) = match &cli.command {
-        Command::DetectChanges { base, staged } => (base.clone(), *staged),
+    let (base, staged, selected_repo_id, all_repos) = match &cli.command {
+        Command::DetectChanges {
+            base,
+            staged,
+            repo_id,
+            all_repos,
+        } => (base.clone(), *staged, repo_id.clone(), *all_repos),
         _ => unreachable!(),
     };
     let diff_target = detect_changes_target(&base, staged);
+
+    if all_repos || selected_repo_id.is_some() {
+        let (registrations, excluded_manual_repo_count) =
+            selected_impact_repos(Utf8Path::new(&repo), &selected_repo_id, all_repos)?;
+        let mut repo_changes = Vec::new();
+        let mut warnings = Vec::new();
+        let mut processed_repo_count = 0usize;
+        let mut failed_repo_count = 0usize;
+        let mut skipped_repo_count = 0usize;
+        let mut changed_file_count = 0usize;
+        for registration in registrations {
+            if !registration.root.exists() {
+                failed_repo_count += 1;
+                skipped_repo_count += 1;
+                warnings.push(format!(
+                    "skipped repo {}: repo root missing",
+                    registration.display_alias
+                ));
+                repo_changes.push(serde_json::json!({
+                    "repo_id": registration.repo_id,
+                    "display_alias": registration.display_alias,
+                    "root": registration.root,
+                    "status": "skipped",
+                    "error": "repo root missing",
+                    "changes": [],
+                }));
+                continue;
+            }
+            match changed_files(registration.root.as_path(), &diff_target) {
+                Ok(changes) => {
+                    processed_repo_count += 1;
+                    changed_file_count += changes.len();
+                    repo_changes.push(serde_json::json!({
+                        "repo_id": registration.repo_id,
+                        "display_alias": registration.display_alias,
+                        "root": registration.root,
+                        "status": "ok",
+                        "changed_file_count": changes.len(),
+                        "changes": augment_changes_with_node_counts(&changes, None),
+                    }));
+                }
+                Err(error) => {
+                    failed_repo_count += 1;
+                    skipped_repo_count += 1;
+                    warnings.push(format!(
+                        "skipped repo {}: {}",
+                        registration.display_alias, error
+                    ));
+                    repo_changes.push(serde_json::json!({
+                        "repo_id": registration.repo_id,
+                        "display_alias": registration.display_alias,
+                        "root": registration.root,
+                        "status": "skipped",
+                        "error": error.to_string(),
+                        "changes": [],
+                    }));
+                }
+            }
+        }
+        if cli.json {
+            return print_json(
+                "detect_changes",
+                serde_json::json!({
+                    "diff_target": {
+                        "base": base,
+                        "staged": staged,
+                        "kind": if staged { "staged" } else if base.is_some() { "base_ref" } else { "working_tree" },
+                    },
+                    "repo_scope": {
+                        "selected_repo_count": repo_changes.len(),
+                        "processed_repo_count": processed_repo_count,
+                        "failed_repo_count": failed_repo_count,
+                        "skipped_repo_count": skipped_repo_count,
+                        "excluded_manual_repo_count": excluded_manual_repo_count,
+                    },
+                    "summary": {
+                        "changed_file_count": changed_file_count,
+                        "warning_count": warnings.len(),
+                    },
+                    "warnings": warnings,
+                    "repos": repo_changes,
+                }),
+            );
+        }
+        println!(
+            "Detected changes across {} repo(s); processed={} failures={} skipped={} changed_files={}",
+            repo_changes.len(),
+            processed_repo_count,
+            failed_repo_count,
+            skipped_repo_count,
+            changed_file_count,
+        );
+        if excluded_manual_repo_count > 0 {
+            println!(
+                "Phase-1 rollout: excluded {} manual repo(s) from --all-repos. Use --repo-id to target them explicitly.",
+                excluded_manual_repo_count
+            );
+        }
+        for warning in &warnings {
+            println!("warning\t{warning}");
+        }
+        for repo_change in &repo_changes {
+            println!("{}", repo_change);
+        }
+        return Ok(());
+    }
 
     let changes = changed_files(repo_root, &diff_target).context("cannot detect changed files")?;
 
@@ -683,25 +868,37 @@ pub fn run_impact(cli: &Cli) -> Result<()> {
         };
         let policy = load_budget_policy(&repo)?;
 
-        let (base, explicit_files, max_depth, max_nodes, allow_stale, allow_partial) =
-            match &cli.command {
-                Command::Impact {
-                    base,
-                    files,
-                    max_depth,
-                    max_nodes,
-                    allow_stale,
-                    allow_partial,
-                } => (
-                    base.clone(),
-                    files.clone(),
-                    *max_depth,
-                    *max_nodes as usize,
-                    *allow_stale,
-                    *allow_partial,
-                ),
-                _ => unreachable!(),
-            };
+        let (
+            base,
+            explicit_files,
+            max_depth,
+            max_nodes,
+            allow_stale,
+            allow_partial,
+            repo_id,
+            all_repos,
+        ) = match &cli.command {
+            Command::Impact {
+                base,
+                files,
+                max_depth,
+                max_nodes,
+                allow_stale,
+                allow_partial,
+                repo_id,
+                all_repos,
+            } => (
+                base.clone(),
+                files.clone(),
+                *max_depth,
+                *max_nodes as usize,
+                *allow_stale,
+                *allow_partial,
+                repo_id.clone(),
+                *all_repos,
+            ),
+            _ => unreachable!(),
+        };
 
         let readiness = derive_graph_readiness(&store, &repo, &db_path);
         if let Some(warning) = check_graph_readiness(
@@ -714,20 +911,93 @@ pub fn run_impact(cli: &Cli) -> Result<()> {
             eprintln!("Warning: {warning}");
         }
 
-        let target_files: Vec<String> = if !explicit_files.is_empty() {
-            normalize_explicit_files(repo_root, &explicit_files)?
+        let (selected_repos, excluded_manual_repo_count) =
+            selected_impact_repos(repo_root, &repo_id, all_repos)?;
+        let mut repo_warnings = Vec::new();
+        let mut processed_repo_count = 0usize;
+        let mut failed_repo_count = 0usize;
+        let mut skipped_repo_count = 0usize;
+        let target_files: Vec<(String, String)> = if selected_repos.is_empty() {
+            let files = if !explicit_files.is_empty() {
+                normalize_explicit_files(repo_root, &explicit_files)?
+            } else {
+                let diff_target = if let Some(base_ref) = &base {
+                    DiffTarget::BaseRef(base_ref.clone())
+                } else {
+                    DiffTarget::WorkingTree
+                };
+                changed_files(repo_root, &diff_target)
+                    .context("cannot detect changed files")?
+                    .into_iter()
+                    .filter(|cf| cf.change_type != ChangeType::Deleted)
+                    .map(|cf| cf.path)
+                    .collect()
+            };
+            let root_repo_id = stable_repo_id(repo_root);
+            files
+                .into_iter()
+                .map(|path| (root_repo_id.clone(), path))
+                .collect()
         } else {
             let diff_target = if let Some(base_ref) = &base {
                 DiffTarget::BaseRef(base_ref.clone())
             } else {
                 DiffTarget::WorkingTree
             };
-            changed_files(repo_root, &diff_target)
-                .context("cannot detect changed files")?
-                .into_iter()
-                .filter(|cf| cf.change_type != ChangeType::Deleted)
-                .map(|cf| cf.path)
-                .collect()
+            let mut combined = Vec::new();
+            for registration in &selected_repos {
+                if !registration.root.exists() {
+                    failed_repo_count += 1;
+                    skipped_repo_count += 1;
+                    repo_warnings.push(format!(
+                        "skipped repo {}: repo root missing",
+                        registration.display_alias
+                    ));
+                    continue;
+                }
+                let repo_files = if !explicit_files.is_empty() {
+                    match normalize_explicit_files(registration.root.as_path(), &explicit_files) {
+                        Ok(files) => files,
+                        Err(error) => {
+                            failed_repo_count += 1;
+                            skipped_repo_count += 1;
+                            repo_warnings.push(format!(
+                                "skipped repo {}: {}",
+                                registration.display_alias, error
+                            ));
+                            continue;
+                        }
+                    }
+                } else {
+                    match changed_files(registration.root.as_path(), &diff_target) {
+                        Ok(changes) => changes
+                            .into_iter()
+                            .filter(|cf| cf.change_type != ChangeType::Deleted)
+                            .map(|cf| cf.path)
+                            .collect(),
+                        Err(error) => {
+                            failed_repo_count += 1;
+                            skipped_repo_count += 1;
+                            repo_warnings.push(format!(
+                                "skipped repo {}: {}",
+                                registration.display_alias, error
+                            ));
+                            continue;
+                        }
+                    }
+                };
+                if repo_files.is_empty() {
+                    skipped_repo_count += 1;
+                    continue;
+                }
+                processed_repo_count += 1;
+                combined.extend(
+                    repo_files
+                        .into_iter()
+                        .map(|path| (registration.repo_id.clone(), path)),
+                );
+            }
+            combined
         };
 
         if target_files.is_empty() {
@@ -736,6 +1006,14 @@ pub fn run_impact(cli: &Cli) -> Result<()> {
                     "impact",
                     serde_json::json!({
                         "files": target_files,
+                        "repo_scope": {
+                            "selected_repo_count": selected_repos.len(),
+                            "processed_repo_count": processed_repo_count,
+                            "failed_repo_count": failed_repo_count,
+                            "skipped_repo_count": skipped_repo_count,
+                            "excluded_manual_repo_count": excluded_manual_repo_count,
+                        },
+                        "warnings": repo_warnings,
                         "analysis": ImpactResult {
                             changed_nodes: vec![],
                             impacted_nodes: vec![],
@@ -749,15 +1027,34 @@ pub fn run_impact(cli: &Cli) -> Result<()> {
                 )?;
             } else {
                 println!("No changed files detected.");
+                if excluded_manual_repo_count > 0 {
+                    println!(
+                        "Phase-1 rollout: excluded {} manual repo(s) from --all-repos. Use --repo-id to target them explicitly.",
+                        excluded_manual_repo_count
+                    );
+                }
+                for warning in &repo_warnings {
+                    println!("warning\t{warning}");
+                }
             }
             return Ok(());
         }
 
-        let path_refs: Vec<&str> = target_files.iter().map(String::as_str).collect();
+        let mut seed_qnames = Vec::new();
+        for (seed_repo_id, file_path) in &target_files {
+            seed_qnames.extend(impact_seed_qnames_for_repo(
+                &store,
+                seed_repo_id,
+                std::slice::from_ref(file_path),
+            )?);
+        }
+        seed_qnames.sort();
+        seed_qnames.dedup();
+
         let t0 = std::time::Instant::now();
         let result = store
-            .impact_radius(
-                &path_refs,
+            .traverse_from_qnames(
+                &seed_qnames.iter().map(String::as_str).collect::<Vec<_>>(),
                 max_depth,
                 max_nodes,
                 policy.graph_traversal.edges.default_limit,
@@ -766,16 +1063,41 @@ pub fn run_impact(cli: &Cli) -> Result<()> {
         let latency_ms = t0.elapsed().as_millis();
 
         let advanced = advanced_impact(result);
+        let repo_aliases: std::collections::BTreeMap<String, String> = selected_repos
+            .iter()
+            .map(|entry| (entry.repo_id.clone(), entry.display_alias.clone()))
+            .collect();
 
         if cli.json {
             print_json(
                 "impact",
                 serde_json::json!({
-                    "files": target_files,
+                    "files": target_files.iter().map(|(repo_id, path)| serde_json::json!({
+                        "repo_id": repo_id,
+                        "repo_alias": repo_aliases.get(repo_id).cloned().unwrap_or_else(|| repo_id.clone()),
+                        "path": path,
+                    })).collect::<Vec<_>>(),
+                    "repo_scope": {
+                        "selected_repo_count": selected_repos.len(),
+                        "processed_repo_count": processed_repo_count,
+                        "failed_repo_count": failed_repo_count,
+                        "skipped_repo_count": skipped_repo_count,
+                        "excluded_manual_repo_count": excluded_manual_repo_count,
+                    },
+                    "warnings": repo_warnings,
                     "analysis": advanced,
                 }),
             )?;
         } else {
+            if !selected_repos.is_empty() {
+                println!(
+                    "Repo scope    : selected={} processed={} failures={} skipped={}",
+                    selected_repos.len(),
+                    processed_repo_count,
+                    failed_repo_count,
+                    skipped_repo_count,
+                );
+            }
             println!("Changed files : {}", target_files.len());
             println!("Changed nodes : {}", advanced.base.changed_nodes.len());
             println!("Impacted nodes: {}", advanced.base.impacted_nodes.len());
@@ -796,12 +1118,22 @@ pub fn run_impact(cli: &Cli) -> Result<()> {
                         .change_kind
                         .map(|c| format!(" [{c}]"))
                         .unwrap_or_default();
+                    let repo_suffix = node_repo_id(&sn.node)
+                        .map(|repo_id| {
+                            let label = repo_aliases
+                                .get(repo_id)
+                                .cloned()
+                                .unwrap_or_else(|| repo_id.to_owned());
+                            format!(" [repo {label}]")
+                        })
+                        .unwrap_or_default();
                     println!(
-                        "  {:>6.2}  {} {}{}",
+                        "  {:>6.2}  {} {}{}{}",
                         sn.impact_score,
                         sn.node.kind.as_str(),
                         sn.node.qualified_name,
-                        ck
+                        ck,
+                        repo_suffix
                     );
                 }
             }
@@ -822,6 +1154,15 @@ pub fn run_impact(cli: &Cli) -> Result<()> {
                 for v in &advanced.boundary_violations {
                     println!("  [{}] {}", v.kind, v.description);
                 }
+            }
+            if excluded_manual_repo_count > 0 {
+                println!(
+                    "\nPhase-1 rollout: excluded {} manual repo(s) from --all-repos. Use --repo-id to target them explicitly.",
+                    excluded_manual_repo_count
+                );
+            }
+            for warning in &repo_warnings {
+                println!("warning\t{warning}");
             }
         }
 
@@ -941,6 +1282,7 @@ pub fn run_review_context(cli: &Cli) -> Result<()> {
                         large_function_count: 0,
                         cross_module_impact: false,
                         cross_package_impact: false,
+                        cross_repo_impact: false,
                     },
                 };
                 print_json(
@@ -1001,4 +1343,87 @@ pub fn run_review_context(cli: &Cli) -> Result<()> {
         a.after_command("review-context", result.is_ok());
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use atlas_repo::{
+        RepoRegistration, RepoRelationship, RepoRelationshipKind, TrustState, VcsMetadata,
+        stable_repo_id,
+    };
+    use camino::{Utf8Path, Utf8PathBuf};
+
+    fn registration(root: &Utf8Path, alias: &str, kind: RepoRelationshipKind) -> RepoRegistration {
+        RepoRegistration {
+            repo_id: stable_repo_id(root),
+            root: root.to_path_buf(),
+            display_alias: alias.to_owned(),
+            vcs: VcsMetadata {
+                head: None,
+                default_branch: None,
+                remote_url: None,
+            },
+            relationship: RepoRelationship {
+                kind,
+                parent_repo_id: None,
+                parent_path: None,
+            },
+            trust_state: TrustState::Trusted,
+            enabled: true,
+            include_globs: None,
+            exclude_globs: None,
+            dependencies: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn selected_impact_repos_all_repos_excludes_manual_registrations() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = Utf8Path::from_path(temp.path()).unwrap();
+        let sub = root.join("submodule");
+        let manual = root.join("../manual-sibling");
+        let mut registry = RepoRegistry::new(stable_repo_id(root));
+        registry.registrations = vec![
+            registration(root, ".", RepoRelationshipKind::Root),
+            registration(sub.as_path(), "submodule", RepoRelationshipKind::Submodule),
+            registration(manual.as_path(), "manual", RepoRelationshipKind::Manual),
+        ];
+        registry.save(root).unwrap();
+
+        let (selected, excluded_manual) = selected_impact_repos(root, &None, true).unwrap();
+
+        assert_eq!(selected.len(), 2);
+        assert_eq!(excluded_manual, 1);
+        assert!(
+            selected
+                .iter()
+                .all(|entry| entry.relationship.kind != RepoRelationshipKind::Manual)
+        );
+    }
+
+    #[test]
+    fn selected_impact_repos_rejects_excessive_all_repo_fanout() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = Utf8Path::from_path(temp.path()).unwrap();
+        let mut registry = RepoRegistry::new(stable_repo_id(root));
+        registry.registrations = (0..(MAX_MULTI_REPO_SELECTION + 1))
+            .map(|index| {
+                let repo_root = Utf8PathBuf::from(format!("{}/repo-{index}", root.as_str()));
+                registration(
+                    repo_root.as_path(),
+                    &format!("repo-{index}"),
+                    RepoRelationshipKind::Submodule,
+                )
+            })
+            .collect();
+        registry.save(root).unwrap();
+
+        let error = selected_impact_repos(root, &None, true).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("all_repos scope exceeds max supported repo fan-out")
+        );
+    }
 }

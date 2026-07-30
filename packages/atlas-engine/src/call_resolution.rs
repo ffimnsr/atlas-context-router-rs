@@ -3,12 +3,14 @@ use std::fs;
 
 use anyhow::Result;
 use atlas_core::{Edge, Node, NodeKind};
+use atlas_repo::RepoRegistry;
 use atlas_store_sqlite::Store;
 use camino::{Utf8Path, Utf8PathBuf};
 
 pub fn reconcile_call_targets(
     store: &mut Store,
     repo_root: &Utf8Path,
+    source_repo_id: &str,
     file_paths: &[String],
 ) -> Result<usize> {
     let mut touched_files = 0usize;
@@ -16,13 +18,18 @@ pub fn reconcile_call_targets(
     let mut candidate_cache: HashMap<(String, String), Vec<Node>> = HashMap::new();
     let mut owner_cache: HashMap<String, Option<String>> = HashMap::new();
     let config = load_resolver_config(repo_root);
+    let allowed_repo_ids = allowed_repo_ids(repo_root, source_repo_id);
 
     for path in file_paths {
         if !seen.insert(path.clone()) {
             continue;
         }
 
-        let nodes = store.nodes_by_file(path)?;
+        let nodes: Vec<Node> = store
+            .nodes_by_file(path)?
+            .into_iter()
+            .filter(|node| node_repo_id(node) == Some(source_repo_id))
+            .collect();
         if nodes.is_empty() {
             continue;
         }
@@ -37,7 +44,11 @@ pub fn reconcile_call_targets(
         }
 
         let import_bindings = collect_import_bindings(&nodes);
-        let mut edges = store.edges_by_file(path)?;
+        let mut edges: Vec<Edge> = store
+            .edges_by_file(path)?
+            .into_iter()
+            .filter(|edge| edge_repo_id(edge) == Some(source_repo_id))
+            .collect();
         let mut changed = false;
         let resolution_ctx = ResolutionContext {
             store,
@@ -45,6 +56,8 @@ pub fn reconcile_call_targets(
             path,
             language: &language,
             config: &config,
+            source_repo_id,
+            allowed_repo_ids: &allowed_repo_ids,
         };
 
         for edge in &mut edges {
@@ -67,9 +80,7 @@ pub fn reconcile_call_targets(
                 )
                 .or_else(|| {
                     resolve_same_package_target(
-                        store,
-                        path,
-                        &language,
+                        &resolution_ctx,
                         &meta,
                         &mut candidate_cache,
                         &mut owner_cache,
@@ -84,9 +95,7 @@ pub fn reconcile_call_targets(
                 )
                 .or_else(|| {
                     resolve_same_package_target(
-                        store,
-                        path,
-                        &language,
+                        &resolution_ctx,
                         &meta,
                         &mut candidate_cache,
                         &mut owner_cache,
@@ -94,16 +103,20 @@ pub fn reconcile_call_targets(
                 })
             };
 
-            let Some((target_qn, tier, confidence)) = resolved else {
+            let Some((target_node, tier, confidence)) = resolved else {
+                mark_unresolved_cross_repo_edge(edge, &resolution_ctx, &import_bindings, &meta);
                 continue;
             };
-            if edge.target_qn == target_qn && edge.confidence_tier.as_deref() == Some(tier) {
+            if edge.target_qn == target_node.qualified_name
+                && edge.confidence_tier.as_deref() == Some(tier)
+            {
                 continue;
             }
 
-            edge.target_qn = target_qn;
+            edge.target_qn = target_node.qualified_name.clone();
             edge.confidence_tier = Some(tier.to_owned());
             edge.confidence = confidence;
+            annotate_cross_repo_edge(edge, source_repo_id, &target_node, tier);
             changed = true;
         }
 
@@ -138,6 +151,8 @@ struct ResolutionContext<'a> {
     path: &'a str,
     language: &'a str,
     config: &'a ResolverConfig,
+    source_repo_id: &'a str,
+    allowed_repo_ids: &'a HashSet<String>,
 }
 
 #[derive(Default)]
@@ -348,6 +363,124 @@ fn load_go_module(repo_root: &Utf8Path) -> Option<String> {
     })
 }
 
+fn node_repo_id(node: &Node) -> Option<&str> {
+    node.extra_json
+        .as_object()
+        .and_then(|extra| extra.get("repo_id"))
+        .and_then(|value| value.as_str())
+}
+
+fn edge_repo_id(edge: &Edge) -> Option<&str> {
+    edge.extra_json
+        .as_object()
+        .and_then(|extra| extra.get("repo_id"))
+        .and_then(|value| value.as_str())
+}
+
+fn allowed_repo_ids(repo_root: &Utf8Path, source_repo_id: &str) -> HashSet<String> {
+    let mut allowed = HashSet::from([source_repo_id.to_owned()]);
+    let Some(registry) = load_nearest_registry(repo_root) else {
+        return allowed;
+    };
+    for entry in &registry.registrations {
+        if entry.repo_id == source_repo_id {
+            for dependency in &entry.dependencies {
+                allowed.insert(dependency.repo_id.clone());
+            }
+            if let Some(parent_repo_id) = &entry.relationship.parent_repo_id {
+                allowed.insert(parent_repo_id.clone());
+            }
+        }
+        if entry
+            .dependencies
+            .iter()
+            .any(|dependency| dependency.repo_id == source_repo_id)
+            || entry.relationship.parent_repo_id.as_deref() == Some(source_repo_id)
+        {
+            allowed.insert(entry.repo_id.clone());
+        }
+    }
+    allowed
+}
+
+fn load_nearest_registry(repo_root: &Utf8Path) -> Option<RepoRegistry> {
+    for ancestor in repo_root.ancestors() {
+        let path = atlas_repo::registry_path(ancestor);
+        if path.exists() {
+            return RepoRegistry::load(ancestor).ok();
+        }
+    }
+    None
+}
+
+fn annotate_cross_repo_edge(edge: &mut Edge, source_repo_id: &str, target_node: &Node, tier: &str) {
+    let target_repo_id = node_repo_id(target_node)
+        .unwrap_or(source_repo_id)
+        .to_owned();
+    let mut extra = edge.extra_json.as_object().cloned().unwrap_or_default();
+    extra.insert(
+        "source_repo".to_owned(),
+        serde_json::Value::String(source_repo_id.to_owned()),
+    );
+    extra.insert(
+        "target_repo".to_owned(),
+        serde_json::Value::String(target_repo_id.clone()),
+    );
+    let relationship_reason = if target_repo_id == source_repo_id {
+        "import"
+    } else {
+        "dependency"
+    };
+    extra.insert(
+        "relationship_reason".to_owned(),
+        serde_json::Value::String(relationship_reason.to_owned()),
+    );
+    extra.insert(
+        "confidence_tier_label".to_owned(),
+        serde_json::Value::String(tier.to_owned()),
+    );
+    edge.extra_json = serde_json::Value::Object(extra);
+}
+
+fn mark_unresolved_cross_repo_edge(
+    edge: &mut Edge,
+    ctx: &ResolutionContext<'_>,
+    bindings: &[ImportBinding],
+    meta: &CallMeta,
+) {
+    let has_external_binding = bindings.iter().any(|binding| {
+        !binding.source.starts_with('.')
+            && (binding.local == meta.callee_name
+                || meta.receiver_text.as_deref() == Some(binding.local.as_str())
+                || binding.kind == "wildcard")
+    });
+    if !has_external_binding || ctx.allowed_repo_ids.len() <= 1 {
+        return;
+    }
+    let mut extra = edge.extra_json.as_object().cloned().unwrap_or_default();
+    extra.insert(
+        "source_repo".to_owned(),
+        serde_json::Value::String(ctx.source_repo_id.to_owned()),
+    );
+    extra.insert(
+        "relationship_reason".to_owned(),
+        serde_json::Value::String("import".to_owned()),
+    );
+    extra.insert(
+        "confidence_tier_label".to_owned(),
+        serde_json::Value::String("unresolved_cross_repo".to_owned()),
+    );
+    extra.insert(
+        "unresolved_cross_repo".to_owned(),
+        serde_json::Value::Bool(true),
+    );
+    extra.insert(
+        "allowed_target_repos".to_owned(),
+        serde_json::json!(ctx.allowed_repo_ids),
+    );
+    edge.extra_json = serde_json::Value::Object(extra);
+}
+
 fn call_meta(edge: &Edge) -> Option<CallMeta> {
     let extra = edge.extra_json.as_object()?;
     let callee_name = extra.get("callee_name")?.as_str()?.to_owned();
@@ -416,15 +549,19 @@ fn collect_import_bindings(nodes: &[Node]) -> Vec<ImportBinding> {
 }
 
 fn resolve_same_package_target(
-    store: &Store,
-    path: &str,
-    language: &str,
+    ctx: &ResolutionContext<'_>,
     meta: &CallMeta,
     candidate_cache: &mut HashMap<(String, String), Vec<Node>>,
     owner_cache: &mut HashMap<String, Option<String>>,
-) -> Option<(String, &'static str, f32)> {
-    let mut candidates =
-        callable_candidates(store, language, &meta.callee_name, candidate_cache).ok()?;
+) -> Option<(Node, &'static str, f32)> {
+    let mut candidates = callable_candidates(
+        ctx.store,
+        ctx.language,
+        &meta.callee_name,
+        candidate_cache,
+        ctx.allowed_repo_ids,
+    )
+    .ok()?;
     if let Some(receiver_hint) = meta
         .receiver_type
         .as_deref()
@@ -439,53 +576,57 @@ fn resolve_same_package_target(
             candidates = receiver_matches;
         }
     }
-    let current_owner = cached_owner_id(store, path, owner_cache);
+    let current_owner = cached_owner_id(ctx.store, ctx.source_repo_id, ctx.path, owner_cache);
 
     if let Some(current_owner) = current_owner {
         let same_owner_matches: Vec<Node> = candidates
             .iter()
-            .filter(|node| node.file_path != path)
+            .filter(|node| node.file_path != ctx.path)
             .filter(|node| {
-                cached_owner_id(store, &node.file_path, owner_cache).as_deref()
+                cached_owner_id(ctx.store, ctx.source_repo_id, &node.file_path, owner_cache)
+                    .as_deref()
                     == Some(current_owner.as_str())
             })
             .cloned()
             .collect();
         if let Some(node) = unique_node(same_owner_matches.clone()) {
-            return Some((node.qualified_name, "same_package", 0.65));
+            return Some((node, "same_package", 0.65));
         }
 
-        let current_dir = Utf8Path::new(path)
+        let current_dir = Utf8Path::new(ctx.path)
             .parent()
             .unwrap_or_else(|| Utf8Path::new(""));
         let same_dir_matches: Vec<Node> = same_owner_matches
             .into_iter()
             .filter(|node| same_dir(current_dir, &node.file_path))
             .collect();
-        return unique_node(same_dir_matches)
-            .map(|node| (node.qualified_name, "same_package", 0.65));
+        return unique_node(same_dir_matches).map(|node| (node, "same_package", 0.65));
     }
 
-    let current_dir = Utf8Path::new(path)
+    let current_dir = Utf8Path::new(ctx.path)
         .parent()
         .unwrap_or_else(|| Utf8Path::new(""));
     let matches: Vec<Node> = candidates
         .into_iter()
-        .filter(|node| node.file_path != path)
+        .filter(|node| node.file_path != ctx.path)
         .filter(|node| same_dir(current_dir, &node.file_path))
         .collect();
-    unique_node(matches).map(|node| (node.qualified_name, "same_package", 0.65))
+    unique_node(matches).map(|node| (node, "same_package", 0.65))
 }
 
 fn cached_owner_id(
     store: &Store,
+    source_repo_id: &str,
     path: &str,
     owner_cache: &mut HashMap<String, Option<String>>,
 ) -> Option<String> {
     if let Some(owner_id) = owner_cache.get(path) {
         return owner_id.clone();
     }
-    let owner_id = store.file_owner_id(path).ok().flatten();
+    let owner_id = store
+        .file_owner_id_for_repo(source_repo_id, path)
+        .ok()
+        .flatten();
     owner_cache.insert(path.to_owned(), owner_id.clone());
     owner_id
 }
@@ -495,7 +636,7 @@ fn resolve_import_target(
     meta: &CallMeta,
     bindings: &[ImportBinding],
     candidate_cache: &mut HashMap<(String, String), Vec<Node>>,
-) -> Option<(String, &'static str, f32)> {
+) -> Option<(Node, &'static str, f32)> {
     let matching_bindings: Vec<&ImportBinding> = if let Some(receiver) = &meta.receiver_text {
         bindings
             .iter()
@@ -517,6 +658,7 @@ fn resolve_import_target(
                 ctx.language,
                 candidate_name.as_str(),
                 candidate_cache,
+                ctx.allowed_repo_ids,
             )
             .ok()?;
             let matches: Vec<Node> = candidates
@@ -524,7 +666,7 @@ fn resolve_import_target(
                 .filter(|node| candidate_files.contains(node.file_path.as_str()))
                 .collect();
             if let Some(node) = unique_node(matches) {
-                return Some((node.qualified_name, "imports", 0.75));
+                return Some((node, "imports", 0.75));
             }
         }
     }
@@ -903,6 +1045,7 @@ fn callable_candidates(
     language: &str,
     callee_name: &str,
     candidate_cache: &mut HashMap<(String, String), Vec<Node>>,
+    allowed_repo_ids: &HashSet<String>,
 ) -> Result<Vec<Node>> {
     let key = (language.to_owned(), callee_name.to_owned());
     if let Some(nodes) = candidate_cache.get(&key) {
@@ -910,7 +1053,14 @@ fn callable_candidates(
     }
     let nodes = store.callable_nodes_by_name(language, callee_name)?;
     candidate_cache.insert(key, nodes.clone());
-    Ok(nodes)
+    Ok(nodes
+        .into_iter()
+        .filter(|node| {
+            node_repo_id(node)
+                .map(|repo_id| allowed_repo_ids.contains(repo_id))
+                .unwrap_or(true)
+        })
+        .collect())
 }
 
 fn receiver_type_hint(receiver: &str) -> Option<&str> {

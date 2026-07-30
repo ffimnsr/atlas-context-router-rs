@@ -113,7 +113,7 @@ impl<'s> InsightsEngine<'s> {
             )
         })?;
         let resolved = resolve_risk_target(store, target)?;
-        let snapshot = self.load_graph_snapshot(store)?;
+        let snapshot = self.load_graph_snapshot(store, repo_root.as_ref())?;
         let rust_complexity = load_rust_complexity(repo_root.as_ref(), &snapshot.nodes)?;
         let node_metrics = build_node_metrics(self, &snapshot, &rust_complexity);
         let metric = node_metrics

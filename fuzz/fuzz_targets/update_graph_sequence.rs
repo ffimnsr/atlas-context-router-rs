@@ -122,6 +122,8 @@ fn run_working_tree_case(case: &UpdateGraphCase) {
             batch_size: normalized_batch_size(case.batch_size),
             target: UpdateTarget::WorkingTree,
             budget: BuildRunBudget::default(),
+            source_repo_id: None,
+            namespace_qualified_names: false,
         },
     )
     .expect("working-tree update must stay bounded for benign malformed input");
@@ -191,6 +193,8 @@ fn run_explicit_file_case(case: &UpdateGraphCase) {
             // file twice and forces TreeCache old-tree handoff in phase 1.
             target: UpdateTarget::Files(explicit_paths.clone()),
             budget: BuildRunBudget::default(),
+            source_repo_id: None,
+            namespace_qualified_names: false,
         },
     )
     .expect("explicit-file update must stay bounded for benign malformed input");
@@ -254,6 +258,8 @@ fn prepare_fixture(case: &UpdateGraphCase) -> Fixture {
             dry_run: false,
             batch_size: normalized_batch_size(case.batch_size),
             budget: BuildRunBudget::default(),
+            source_repo_id: None,
+            namespace_qualified_names: false,
         },
     )
     .expect("initial build must succeed");

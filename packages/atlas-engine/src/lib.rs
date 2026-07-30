@@ -9,6 +9,7 @@ pub mod paths;
 
 mod build;
 mod postprocess;
+mod repo_graph;
 mod update;
 pub mod watch;
 
@@ -20,5 +21,6 @@ pub use postprocess::{
     POSTPROCESS_STAGE_LARGE_FUNCTION_SUMMARIES, POSTPROCESS_STAGE_QUERY_HINTS, PostprocessOptions,
     postprocess_graph, supported_postprocess_stages,
 };
+pub use repo_graph::refresh_repo_registry_graph;
 pub use update::{UpdateOptions, UpdateSummary, UpdateTarget, update_graph};
 pub use watch::{FileWatcher, WatchBatchResult, WatchEvent, WatchRunner, WatchState};

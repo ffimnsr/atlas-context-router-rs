@@ -1,5 +1,6 @@
 use atlas_core::{
-    AtlasError, Node, RankingEvidence, Result, RetrievalMode, ScoredNode, SearchMatchedField,
+    AtlasError, Node, ParsedFile, RankingEvidence, Result, RetrievalMode, ScoredNode,
+    SearchMatchedField,
 };
 use rusqlite::params;
 
@@ -58,6 +59,60 @@ impl Store {
             )
             .map_err(db_err)?;
         Ok(())
+    }
+
+    pub fn replace_chunks_for_parsed_files(&self, files: &[ParsedFile]) -> Result<usize> {
+        if files.is_empty() {
+            return Ok(0);
+        }
+
+        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
+        self.conn.execute_batch("BEGIN IMMEDIATE").map_err(db_err)?;
+
+        let result = (|| {
+            let mut delete_stmt = self
+                .conn
+                .prepare(
+                    "DELETE FROM retrieval_chunks
+                     WHERE node_qn IN (
+                         SELECT qualified_name FROM nodes WHERE file_path = ?1
+                     )",
+                )
+                .map_err(db_err)?;
+            let mut upsert_stmt = self
+                .conn
+                .prepare(
+                    "INSERT INTO retrieval_chunks (node_qn, chunk_idx, text)
+                     VALUES (?1, ?2, ?3)
+                     ON CONFLICT(node_qn, chunk_idx) DO UPDATE SET text = excluded.text",
+                )
+                .map_err(db_err)?;
+
+            let mut written = 0usize;
+            for parsed_file in files {
+                delete_stmt
+                    .execute(params![parsed_file.path])
+                    .map_err(db_err)?;
+                for node in &parsed_file.nodes {
+                    upsert_stmt
+                        .execute(params![node.qualified_name, 0, node.chunk_text()])
+                        .map_err(db_err)?;
+                    written += 1;
+                }
+            }
+            Ok(written)
+        })();
+
+        match result {
+            Ok(written) => {
+                self.conn.execute_batch("COMMIT").map_err(db_err)?;
+                Ok(written)
+            }
+            Err(error) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(error)
+            }
+        }
     }
 
     /// Return up to `limit` chunks that have no embedding yet.

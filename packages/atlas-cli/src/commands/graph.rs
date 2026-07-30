@@ -12,7 +12,10 @@ use atlas_core::{
 };
 use atlas_engine::{BuildOptions, UpdateOptions, UpdateTarget, build_graph, update_graph};
 use atlas_parser::ParserRegistry;
-use atlas_repo::{changed_files, find_repo_root, hash_file};
+use atlas_repo::{
+    RepoRegistration, RepoRegistry, RepoRelationshipKind, changed_files, find_repo_root, hash_file,
+    phase1_multi_repo_supported, stable_repo_id,
+};
 use atlas_session::SessionStore;
 use atlas_store_sqlite::{BuildFinishStats, Store};
 use camino::Utf8Path;
@@ -22,7 +25,7 @@ use crate::cli::{Cli, Command};
 
 use super::{
     augment_changes_with_node_counts, change_tag, db_path, detect_changes_target, print_json,
-    resolve_repo,
+    public_graph_stats, resolve_repo,
 };
 
 struct StatusPayloadContext<'a> {
@@ -46,6 +49,31 @@ struct StatusDiagnostics {
     pending_graph_changes: Vec<String>,
     retrieval_index: serde_json::Value,
     execution_state: atlas_core::GraphExecutionState,
+}
+
+const MAX_MULTI_REPO_SELECTION: usize = 32;
+
+#[derive(Default)]
+struct MultiRepoBudgetAggregate {
+    selected_repo_count: usize,
+    processed_repo_count: usize,
+    failed_repo_count: usize,
+    skipped_repo_count: usize,
+    excluded_manual_repo_count: usize,
+    budget_hit_repo_count: usize,
+    files_accepted: usize,
+    files_skipped_by_byte_budget: usize,
+    bytes_accepted: u64,
+    bytes_skipped: u64,
+}
+
+fn excluded_manual_repo_count(registry: &RepoRegistry) -> usize {
+    registry
+        .registrations
+        .iter()
+        .filter(|entry| entry.enabled)
+        .filter(|entry| entry.relationship.kind == RepoRelationshipKind::Manual)
+        .count()
 }
 
 fn print_summary_value(label: &str, value: impl Display) {
@@ -376,6 +404,15 @@ pub fn run_init(cli: &Cli) -> Result<()> {
         .with_context(|| format!("cannot write config to {}", config_path.display()))?;
     debug!(config_path = %config_path.display(), config_created, profile = profile.as_str(), "init: prepared config template");
 
+    let repo_registry = super::repo::bootstrap_and_save_registry(Utf8Path::new(&repo))
+        .context("cannot bootstrap repo registry")?;
+    let repo_registry_path = atlas_repo::registry_path(Utf8Path::new(&repo));
+    if let Ok(mut store) = Store::open(&db_path) {
+        atlas_engine::refresh_repo_registry_graph(&mut store, &repo_registry)
+            .context("cannot refresh synthetic repo registry graph")?;
+    }
+    debug!(registry_path = %repo_registry_path, registrations = repo_registry.registrations.len(), "init: prepared repo registry");
+
     if cli.json {
         print_json(
             "init",
@@ -387,6 +424,9 @@ pub fn run_init(cli: &Cli) -> Result<()> {
                 "config_path": config_path.display().to_string(),
                 "config_created": config_created,
                 "config_profile": profile.as_str(),
+                "repo_registry_path": repo_registry_path.to_string(),
+                "repo_registrations": repo_registry.registrations.len(),
+                "repo_registry_warnings": repo_registry.warnings,
             }),
         )?;
     } else if super::init_wizard::should_run(cli.json) {
@@ -397,6 +437,7 @@ pub fn run_init(cli: &Cli) -> Result<()> {
         println!("Database: {db_path}");
         println!("Content : {content_db_path}");
         println!("Session : {session_db_path}");
+        println!("Registry: {repo_registry_path}");
         if config_created {
             println!("Config  : {} ({})", config_path.display(), profile.as_str());
         }
@@ -419,7 +460,8 @@ pub fn run_status(cli: &Cli) -> Result<()> {
     let store =
         Store::open(&db_path).with_context(|| format!("cannot open database at {db_path}"))?;
     let config = atlas_engine::Config::load(&atlas_engine::paths::atlas_dir(&repo))?;
-    let stats = store.stats().context("cannot read stats")?;
+    let source_repo_id = stable_repo_id(repo_root);
+    let stats = public_graph_stats(&store, &source_repo_id).context("cannot read stats")?;
     let changes = changed_files(repo_root, &detect_changes_target(&base, staged))
         .context("cannot detect changed files")?;
 
@@ -498,8 +540,13 @@ pub fn run_status(cli: &Cli) -> Result<()> {
 }
 
 pub fn run_build(cli: &Cli) -> Result<()> {
-    let (fail_fast, dry_run) = match &cli.command {
-        Command::Build { fail_fast, dry_run } => (*fail_fast, *dry_run),
+    let (fail_fast, dry_run, selected_repo_id, all_repos) = match &cli.command {
+        Command::Build {
+            fail_fast,
+            dry_run,
+            repo_id,
+            all_repos,
+        } => (*fail_fast, *dry_run, repo_id.clone(), *all_repos),
         _ => unreachable!(),
     };
     let repo = resolve_repo(cli)?;
@@ -516,9 +563,24 @@ pub fn run_build(cli: &Cli) -> Result<()> {
         let config = atlas_engine::Config::load(&atlas_engine::paths::atlas_dir(&repo))?;
         let build_budget = config.build_run_budget()?;
 
+        if all_repos || selected_repo_id.is_some() {
+            return run_registered_builds(
+                cli,
+                Utf8Path::new(&repo),
+                &db_path,
+                &config,
+                fail_fast,
+                dry_run,
+                selected_repo_id.as_deref(),
+                all_repos,
+            );
+        }
+
+        let source_repo_id = stable_repo_id(repo_root_path.as_path());
+
         // Record lifecycle: building.
         if !dry_run && let Ok(store) = Store::open(&db_path) {
-            let _ = store.begin_build(repo_root_path.as_str());
+            let _ = store.begin_build_for_repo(&source_repo_id, repo_root_path.as_str());
         }
 
         let build_result = build_graph(
@@ -529,6 +591,8 @@ pub fn run_build(cli: &Cli) -> Result<()> {
                 dry_run,
                 batch_size: config.parse_batch_size(),
                 budget: build_budget,
+                source_repo_id: Some(source_repo_id.clone()),
+                namespace_qualified_names: false,
             },
         );
 
@@ -544,7 +608,8 @@ pub fn run_build(cli: &Cli) -> Result<()> {
                         } else {
                             atlas_store_sqlite::GraphBuildState::Built
                         };
-                    let _ = store.finish_build(
+                    let _ = store.finish_build_for_repo(
+                        &source_repo_id,
                         repo_root_path.as_str(),
                         BuildFinishStats {
                             state,
@@ -565,7 +630,11 @@ pub fn run_build(cli: &Cli) -> Result<()> {
                     );
                 }
                 Err(e) => {
-                    let _ = store.fail_build(repo_root_path.as_str(), &e.to_string());
+                    let _ = store.fail_build_for_repo(
+                        &source_repo_id,
+                        repo_root_path.as_str(),
+                        &e.to_string(),
+                    );
                 }
             }
         }
@@ -655,11 +724,492 @@ pub fn run_build(cli: &Cli) -> Result<()> {
     result
 }
 
+fn enabled_registration_targets(
+    registry_root: &Utf8Path,
+    selected_repo_id: Option<&str>,
+    all_repos: bool,
+) -> Result<(Vec<RepoRegistration>, usize)> {
+    let registry = RepoRegistry::load(registry_root)
+        .with_context(|| "repo registry missing; run `atlas init` or `atlas repo sync` first")?;
+    let excluded_manual = if all_repos {
+        excluded_manual_repo_count(&registry)
+    } else {
+        0
+    };
+    let mut registrations: Vec<RepoRegistration> = registry
+        .registrations
+        .into_iter()
+        .filter(|entry| entry.enabled)
+        .collect();
+    if let Some(repo_id) = selected_repo_id {
+        registrations.retain(|entry| entry.repo_id == repo_id);
+        anyhow::ensure!(
+            !registrations.is_empty(),
+            "enabled repo id '{repo_id}' is not registered"
+        );
+    } else if all_repos {
+        registrations.retain(|entry| phase1_multi_repo_supported(entry.relationship.kind));
+        anyhow::ensure!(
+            registrations.len() <= MAX_MULTI_REPO_SELECTION,
+            "all_repos scope exceeds max supported repo fan-out ({MAX_MULTI_REPO_SELECTION})"
+        );
+    } else {
+        registrations.retain(|entry| entry.relationship.kind == RepoRelationshipKind::Root);
+    }
+    Ok((registrations, excluded_manual))
+}
+
+fn build_state_for_summary(
+    summary: &atlas_engine::BuildSummary,
+) -> atlas_store_sqlite::GraphBuildState {
+    if matches!(
+        summary.budget.budget_status,
+        atlas_core::BudgetStatus::Blocked
+    ) {
+        atlas_store_sqlite::GraphBuildState::BuildFailed
+    } else if summary.is_degraded() {
+        atlas_store_sqlite::GraphBuildState::Degraded
+    } else {
+        atlas_store_sqlite::GraphBuildState::Built
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_registered_builds(
+    cli: &Cli,
+    registry_root: &Utf8Path,
+    db_path: &str,
+    config: &atlas_engine::Config,
+    fail_fast: bool,
+    dry_run: bool,
+    selected_repo_id: Option<&str>,
+    all_repos: bool,
+) -> Result<()> {
+    let (registrations, excluded_manual) =
+        enabled_registration_targets(registry_root, selected_repo_id, all_repos)?;
+    let build_budget = config.build_run_budget()?;
+    let mut results = Vec::new();
+    let mut aggregate = MultiRepoBudgetAggregate {
+        selected_repo_count: registrations.len(),
+        excluded_manual_repo_count: excluded_manual,
+        ..MultiRepoBudgetAggregate::default()
+    };
+
+    for registration in registrations {
+        if !registration.root.exists() {
+            aggregate.failed_repo_count += 1;
+            aggregate.skipped_repo_count += 1;
+            results.push(serde_json::json!({
+                "repo_id": registration.repo_id,
+                "display_alias": registration.display_alias,
+                "status": "skipped",
+                "ok": false,
+                "error": "repo root missing",
+            }));
+            continue;
+        }
+        if !dry_run && let Ok(store) = Store::open(db_path) {
+            let _ = store.begin_build_for_repo(&registration.repo_id, registration.root.as_str());
+        }
+        let result = build_graph(
+            registration.root.as_path(),
+            db_path,
+            &BuildOptions {
+                fail_fast,
+                dry_run,
+                batch_size: config.parse_batch_size(),
+                budget: build_budget,
+                source_repo_id: Some(registration.repo_id.clone()),
+                namespace_qualified_names: registration.relationship.kind
+                    != RepoRelationshipKind::Root,
+            },
+        );
+        match result {
+            Ok(summary) => {
+                if !dry_run && let Ok(store) = Store::open(db_path) {
+                    let _ = store.finish_build_for_repo(
+                        &registration.repo_id,
+                        registration.root.as_str(),
+                        BuildFinishStats {
+                            state: build_state_for_summary(&summary),
+                            files_discovered: summary.scanned as i64,
+                            files_processed: summary.parsed as i64,
+                            files_accepted: summary.budget_counters.files_accepted as i64,
+                            files_skipped_by_byte_budget: summary
+                                .budget_counters
+                                .files_skipped_by_byte_budget
+                                as i64,
+                            files_failed: summary.parse_errors as i64,
+                            bytes_accepted: summary.budget_counters.bytes_accepted as i64,
+                            bytes_skipped: summary.budget_counters.bytes_skipped as i64,
+                            nodes_written: summary.nodes_inserted as i64,
+                            edges_written: summary.edges_inserted as i64,
+                            budget_stop_reason: summary.budget_counters.budget_stop_reason.clone(),
+                        },
+                    );
+                }
+                aggregate.processed_repo_count += 1;
+                if summary.budget.budget_hit {
+                    aggregate.budget_hit_repo_count += 1;
+                }
+                aggregate.files_accepted += summary.budget_counters.files_accepted;
+                aggregate.files_skipped_by_byte_budget +=
+                    summary.budget_counters.files_skipped_by_byte_budget;
+                aggregate.bytes_accepted += summary.budget_counters.bytes_accepted;
+                aggregate.bytes_skipped += summary.budget_counters.bytes_skipped;
+                results.push(serde_json::json!({
+                    "repo_id": registration.repo_id,
+                    "display_alias": registration.display_alias,
+                    "status": if summary.is_degraded() { "degraded" } else { "ok" },
+                    "ok": true,
+                    "parsed": summary.parsed,
+                    "nodes_inserted": summary.nodes_inserted,
+                    "edges_inserted": summary.edges_inserted,
+                    "budget_status": summary.budget.budget_status,
+                    "budget_hit": summary.budget.budget_hit,
+                    "files_accepted": summary.budget_counters.files_accepted,
+                    "files_skipped_by_byte_budget": summary.budget_counters.files_skipped_by_byte_budget,
+                    "bytes_accepted": summary.budget_counters.bytes_accepted,
+                    "bytes_skipped": summary.budget_counters.bytes_skipped,
+                    "budget_stop_reason": summary.budget_counters.budget_stop_reason,
+                    "warnings": summary.warnings,
+                }));
+            }
+            Err(error) => {
+                aggregate.failed_repo_count += 1;
+                if !dry_run && let Ok(store) = Store::open(db_path) {
+                    let _ = store.fail_build_for_repo(
+                        &registration.repo_id,
+                        registration.root.as_str(),
+                        &error.to_string(),
+                    );
+                }
+                results.push(serde_json::json!({
+                    "repo_id": registration.repo_id,
+                    "display_alias": registration.display_alias,
+                    "status": "error",
+                    "ok": false,
+                    "error": error.to_string(),
+                }));
+            }
+        }
+    }
+
+    if cli.json {
+        print_json(
+            "build",
+            serde_json::json!({
+                "dry_run": dry_run,
+                "partial_success": aggregate.failed_repo_count > 0,
+                "repo_scope": {
+                    "selected_repo_count": aggregate.selected_repo_count,
+                    "processed_repo_count": aggregate.processed_repo_count,
+                    "failed_repo_count": aggregate.failed_repo_count,
+                    "skipped_repo_count": aggregate.skipped_repo_count,
+                    "excluded_manual_repo_count": aggregate.excluded_manual_repo_count,
+                },
+                "budget_summary": {
+                    "budget_hit_repo_count": aggregate.budget_hit_repo_count,
+                    "files_accepted": aggregate.files_accepted,
+                    "files_skipped_by_byte_budget": aggregate.files_skipped_by_byte_budget,
+                    "bytes_accepted": aggregate.bytes_accepted,
+                    "bytes_skipped": aggregate.bytes_skipped,
+                },
+                "repos": results,
+            }),
+        )
+    } else {
+        println!(
+            "Build complete for {} repo(s); processed={} failures={} skipped={}",
+            aggregate.selected_repo_count,
+            aggregate.processed_repo_count,
+            aggregate.failed_repo_count,
+            aggregate.skipped_repo_count,
+        );
+        if aggregate.excluded_manual_repo_count > 0 {
+            println!(
+                "Phase-1 rollout: excluded {} manual repo(s) from --all-repos. Use --repo-id to target them explicitly.",
+                aggregate.excluded_manual_repo_count
+            );
+        }
+        println!(
+            "Budget summary: accepted_files={} skipped_files={} accepted_bytes={} skipped_bytes={} budget_hit_repos={}",
+            aggregate.files_accepted,
+            aggregate.files_skipped_by_byte_budget,
+            aggregate.bytes_accepted,
+            aggregate.bytes_skipped,
+            aggregate.budget_hit_repo_count,
+        );
+        for result in results {
+            println!("  {}", result);
+        }
+        Ok(())
+    }
+}
+
+fn update_state_for_summary(
+    summary: &atlas_engine::UpdateSummary,
+) -> atlas_store_sqlite::GraphBuildState {
+    if matches!(
+        summary.budget.budget_status,
+        atlas_core::BudgetStatus::Blocked
+    ) {
+        atlas_store_sqlite::GraphBuildState::BuildFailed
+    } else if summary.is_degraded() {
+        atlas_store_sqlite::GraphBuildState::Degraded
+    } else {
+        atlas_store_sqlite::GraphBuildState::Built
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_registered_updates(
+    cli: &Cli,
+    registry_root: &Utf8Path,
+    db_path: &str,
+    config: &atlas_engine::Config,
+    fail_fast: bool,
+    dry_run: bool,
+    selected_repo_id: Option<&str>,
+    all_repos: bool,
+    affected_repos: bool,
+) -> Result<()> {
+    let (registrations, excluded_manual) =
+        enabled_registration_targets(registry_root, selected_repo_id, all_repos || affected_repos)?;
+    let build_budget = config.build_run_budget()?;
+    let mut results = Vec::new();
+    let mut aggregate = MultiRepoBudgetAggregate {
+        selected_repo_count: registrations.len(),
+        excluded_manual_repo_count: excluded_manual,
+        ..MultiRepoBudgetAggregate::default()
+    };
+
+    for registration in registrations {
+        if !registration.root.exists() {
+            aggregate.failed_repo_count += 1;
+            aggregate.skipped_repo_count += 1;
+            results.push(serde_json::json!({
+                "repo_id": registration.repo_id,
+                "display_alias": registration.display_alias,
+                "status": "skipped",
+                "ok": false,
+                "error": "repo root missing",
+            }));
+            continue;
+        }
+        let target = match &cli.command {
+            Command::Update {
+                base,
+                staged,
+                files,
+                ..
+            } => {
+                if !files.is_empty() && selected_repo_id.is_some() {
+                    UpdateTarget::Files(files.clone())
+                } else if *staged {
+                    UpdateTarget::Staged
+                } else if let Some(base_ref) = base {
+                    UpdateTarget::BaseRef(base_ref.clone())
+                } else {
+                    UpdateTarget::WorkingTree
+                }
+            }
+            _ => UpdateTarget::WorkingTree,
+        };
+
+        if affected_repos {
+            let diff_target = match &target {
+                UpdateTarget::Staged => atlas_repo::DiffTarget::Staged,
+                UpdateTarget::BaseRef(base) => atlas_repo::DiffTarget::BaseRef(base.clone()),
+                _ => atlas_repo::DiffTarget::WorkingTree,
+            };
+            let changes = match changed_files(registration.root.as_path(), &diff_target) {
+                Ok(changes) => changes,
+                Err(error) => {
+                    aggregate.failed_repo_count += 1;
+                    aggregate.skipped_repo_count += 1;
+                    results.push(serde_json::json!({
+                        "repo_id": registration.repo_id,
+                        "display_alias": registration.display_alias,
+                        "status": "skipped",
+                        "ok": false,
+                        "error": error.to_string(),
+                    }));
+                    continue;
+                }
+            };
+            if changes.is_empty() {
+                aggregate.skipped_repo_count += 1;
+                results.push(serde_json::json!({
+                    "repo_id": registration.repo_id,
+                    "display_alias": registration.display_alias,
+                    "status": "skipped",
+                    "ok": true,
+                    "skipped": "no_changes",
+                }));
+                continue;
+            }
+        }
+
+        if !dry_run && let Ok(store) = Store::open(db_path) {
+            let _ = store.begin_build_for_repo(&registration.repo_id, registration.root.as_str());
+        }
+        let result = update_graph(
+            registration.root.as_path(),
+            db_path,
+            &UpdateOptions {
+                fail_fast,
+                dry_run,
+                batch_size: config.parse_batch_size(),
+                target,
+                budget: build_budget,
+                source_repo_id: Some(registration.repo_id.clone()),
+                namespace_qualified_names: registration.relationship.kind
+                    != RepoRelationshipKind::Root,
+            },
+        );
+        match result {
+            Ok(summary) => {
+                if !dry_run && let Ok(store) = Store::open(db_path) {
+                    let _ = store.finish_build_for_repo(
+                        &registration.repo_id,
+                        registration.root.as_str(),
+                        BuildFinishStats {
+                            state: update_state_for_summary(&summary),
+                            files_discovered: (summary.parsed + summary.deleted + summary.renamed)
+                                as i64,
+                            files_processed: summary.parsed as i64,
+                            files_accepted: summary.budget_counters.files_accepted as i64,
+                            files_skipped_by_byte_budget: summary
+                                .budget_counters
+                                .files_skipped_by_byte_budget
+                                as i64,
+                            files_failed: summary.parse_errors as i64,
+                            bytes_accepted: summary.budget_counters.bytes_accepted as i64,
+                            bytes_skipped: summary.budget_counters.bytes_skipped as i64,
+                            nodes_written: summary.nodes_updated as i64,
+                            edges_written: summary.edges_updated as i64,
+                            budget_stop_reason: summary.budget_counters.budget_stop_reason.clone(),
+                        },
+                    );
+                }
+                aggregate.processed_repo_count += 1;
+                if summary.budget.budget_hit {
+                    aggregate.budget_hit_repo_count += 1;
+                }
+                aggregate.files_accepted += summary.budget_counters.files_accepted;
+                aggregate.files_skipped_by_byte_budget +=
+                    summary.budget_counters.files_skipped_by_byte_budget;
+                aggregate.bytes_accepted += summary.budget_counters.bytes_accepted;
+                aggregate.bytes_skipped += summary.budget_counters.bytes_skipped;
+                results.push(serde_json::json!({
+                    "repo_id": registration.repo_id,
+                    "display_alias": registration.display_alias,
+                    "status": if summary.is_degraded() { "degraded" } else { "ok" },
+                    "ok": true,
+                    "parsed": summary.parsed,
+                    "deleted": summary.deleted,
+                    "renamed": summary.renamed,
+                    "nodes_updated": summary.nodes_updated,
+                    "edges_updated": summary.edges_updated,
+                    "budget_status": summary.budget.budget_status,
+                    "budget_hit": summary.budget.budget_hit,
+                    "files_accepted": summary.budget_counters.files_accepted,
+                    "files_skipped_by_byte_budget": summary.budget_counters.files_skipped_by_byte_budget,
+                    "bytes_accepted": summary.budget_counters.bytes_accepted,
+                    "bytes_skipped": summary.budget_counters.bytes_skipped,
+                    "budget_stop_reason": summary.budget_counters.budget_stop_reason,
+                    "warnings": summary.warnings,
+                }));
+            }
+            Err(error) => {
+                aggregate.failed_repo_count += 1;
+                if !dry_run && let Ok(store) = Store::open(db_path) {
+                    let _ = store.fail_build_for_repo(
+                        &registration.repo_id,
+                        registration.root.as_str(),
+                        &error.to_string(),
+                    );
+                }
+                results.push(serde_json::json!({
+                    "repo_id": registration.repo_id,
+                    "display_alias": registration.display_alias,
+                    "status": "error",
+                    "ok": false,
+                    "error": error.to_string(),
+                }));
+            }
+        }
+    }
+
+    if cli.json {
+        print_json(
+            "update",
+            serde_json::json!({
+                "dry_run": dry_run,
+                "partial_success": aggregate.failed_repo_count > 0,
+                "repo_scope": {
+                    "selected_repo_count": aggregate.selected_repo_count,
+                    "processed_repo_count": aggregate.processed_repo_count,
+                    "failed_repo_count": aggregate.failed_repo_count,
+                    "skipped_repo_count": aggregate.skipped_repo_count,
+                    "excluded_manual_repo_count": aggregate.excluded_manual_repo_count,
+                },
+                "budget_summary": {
+                    "budget_hit_repo_count": aggregate.budget_hit_repo_count,
+                    "files_accepted": aggregate.files_accepted,
+                    "files_skipped_by_byte_budget": aggregate.files_skipped_by_byte_budget,
+                    "bytes_accepted": aggregate.bytes_accepted,
+                    "bytes_skipped": aggregate.bytes_skipped,
+                },
+                "repos": results,
+            }),
+        )
+    } else {
+        println!(
+            "Update complete for {} repo(s); processed={} failures={} skipped={}",
+            aggregate.selected_repo_count,
+            aggregate.processed_repo_count,
+            aggregate.failed_repo_count,
+            aggregate.skipped_repo_count,
+        );
+        if aggregate.excluded_manual_repo_count > 0 {
+            println!(
+                "Phase-1 rollout: excluded {} manual repo(s) from broad multi-repo update. Use --repo-id to target them explicitly.",
+                aggregate.excluded_manual_repo_count
+            );
+        }
+        println!(
+            "Budget summary: accepted_files={} skipped_files={} accepted_bytes={} skipped_bytes={} budget_hit_repos={}",
+            aggregate.files_accepted,
+            aggregate.files_skipped_by_byte_budget,
+            aggregate.bytes_accepted,
+            aggregate.bytes_skipped,
+            aggregate.budget_hit_repo_count,
+        );
+        for result in results {
+            println!("  {}", result);
+        }
+        Ok(())
+    }
+}
+
 pub fn run_update(cli: &Cli) -> Result<()> {
-    let (fail_fast, dry_run) = match &cli.command {
+    let (fail_fast, dry_run, selected_repo_id, all_repos, affected_repos) = match &cli.command {
         Command::Update {
-            fail_fast, dry_run, ..
-        } => (*fail_fast, *dry_run),
+            fail_fast,
+            dry_run,
+            repo_id,
+            all_repos,
+            affected_repos,
+            ..
+        } => (
+            *fail_fast,
+            *dry_run,
+            repo_id.clone(),
+            *all_repos,
+            *affected_repos,
+        ),
         _ => unreachable!(),
     };
     let repo = resolve_repo(cli)?;
@@ -675,6 +1225,20 @@ pub fn run_update(cli: &Cli) -> Result<()> {
 
         let config = atlas_engine::Config::load(&atlas_engine::paths::atlas_dir(&repo))?;
         let build_budget = config.build_run_budget()?;
+
+        if all_repos || affected_repos || selected_repo_id.is_some() {
+            return run_registered_updates(
+                cli,
+                Utf8Path::new(&repo),
+                &db_path,
+                &config,
+                fail_fast,
+                dry_run,
+                selected_repo_id.as_deref(),
+                all_repos,
+                affected_repos,
+            );
+        }
 
         let explicit_files: Vec<String> = match &cli.command {
             Command::Update { files, .. } => files.clone(),
@@ -698,9 +1262,11 @@ pub fn run_update(cli: &Cli) -> Result<()> {
             }
         };
 
+        let source_repo_id = stable_repo_id(repo_root_path.as_path());
+
         // Record lifecycle: building.
         if !dry_run && let Ok(store) = Store::open(&db_path) {
-            let _ = store.begin_build(repo_root_path.as_str());
+            let _ = store.begin_build_for_repo(&source_repo_id, repo_root_path.as_str());
         }
 
         let update_result = update_graph(
@@ -712,6 +1278,8 @@ pub fn run_update(cli: &Cli) -> Result<()> {
                 batch_size: config.parse_batch_size(),
                 target,
                 budget: build_budget,
+                source_repo_id: Some(source_repo_id.clone()),
+                namespace_qualified_names: false,
             },
         );
 
@@ -727,7 +1295,8 @@ pub fn run_update(cli: &Cli) -> Result<()> {
                         } else {
                             atlas_store_sqlite::GraphBuildState::Built
                         };
-                    let _ = store.finish_build(
+                    let _ = store.finish_build_for_repo(
+                        &source_repo_id,
                         repo_root_path.as_str(),
                         BuildFinishStats {
                             state,
@@ -748,7 +1317,11 @@ pub fn run_update(cli: &Cli) -> Result<()> {
                     );
                 }
                 Err(e) => {
-                    let _ = store.fail_build(repo_root_path.as_str(), &e.to_string());
+                    let _ = store.fail_build_for_repo(
+                        &source_repo_id,
+                        repo_root_path.as_str(),
+                        &e.to_string(),
+                    );
                 }
             }
         }
@@ -929,4 +1502,84 @@ pub fn run_watch(cli: &Cli) -> Result<()> {
             );
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use atlas_repo::{RepoRelationship, TrustState, VcsMetadata};
+    use camino::{Utf8Path, Utf8PathBuf};
+
+    fn registration(root: &Utf8Path, alias: &str, kind: RepoRelationshipKind) -> RepoRegistration {
+        RepoRegistration {
+            repo_id: stable_repo_id(root),
+            root: root.to_path_buf(),
+            display_alias: alias.to_owned(),
+            vcs: VcsMetadata {
+                head: None,
+                default_branch: None,
+                remote_url: None,
+            },
+            relationship: RepoRelationship {
+                kind,
+                parent_repo_id: None,
+                parent_path: None,
+            },
+            trust_state: TrustState::Trusted,
+            enabled: true,
+            include_globs: None,
+            exclude_globs: None,
+            dependencies: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn enabled_registration_targets_all_repos_excludes_manual_registrations() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = Utf8Path::from_path(temp.path()).unwrap();
+        let sub = root.join("submodule");
+        let manual = root.join("../manual-sibling");
+        let mut registry = RepoRegistry::new(stable_repo_id(root));
+        registry.registrations = vec![
+            registration(root, ".", RepoRelationshipKind::Root),
+            registration(sub.as_path(), "submodule", RepoRelationshipKind::Submodule),
+            registration(manual.as_path(), "manual", RepoRelationshipKind::Manual),
+        ];
+        registry.save(root).unwrap();
+
+        let (selected, excluded_manual) = enabled_registration_targets(root, None, true).unwrap();
+
+        assert_eq!(selected.len(), 2);
+        assert_eq!(excluded_manual, 1);
+        assert!(
+            selected
+                .iter()
+                .all(|entry| entry.relationship.kind != RepoRelationshipKind::Manual)
+        );
+    }
+
+    #[test]
+    fn enabled_registration_targets_rejects_excessive_all_repo_fanout() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = Utf8Path::from_path(temp.path()).unwrap();
+        let mut registry = RepoRegistry::new(stable_repo_id(root));
+        registry.registrations = (0..(MAX_MULTI_REPO_SELECTION + 1))
+            .map(|index| {
+                let repo_root = Utf8PathBuf::from(format!("{}/repo-{index}", root.as_str()));
+                registration(
+                    repo_root.as_path(),
+                    &format!("repo-{index}"),
+                    RepoRelationshipKind::Submodule,
+                )
+            })
+            .collect();
+        registry.save(root).unwrap();
+
+        let error = enabled_registration_targets(root, None, true).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("all_repos scope exceeds max supported repo fan-out")
+        );
+    }
 }

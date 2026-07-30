@@ -7,6 +7,7 @@
 //! | Tool                      | Description                                              |
 //! |---------------------------|----------------------------------------------------------|
 //! | `list_graph_stats`        | Node/edge counts and language breakdown                  |
+//! | `repo_registry`           | Registered repo inventory and federation scope summary   |
 //! | `tool_list`               | Compact runtime inventory of visible exported MCP tools  |
 //! | `tool_search`             | Search visible exported MCP tools by name/description    |
 //! | `tool_help`               | Runtime manual for one visible exported MCP tool         |

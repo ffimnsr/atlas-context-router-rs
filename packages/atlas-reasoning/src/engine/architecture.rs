@@ -71,7 +71,7 @@ impl<'s> InsightsEngine<'s> {
                 "architecture analysis requires a store-backed insights engine".to_owned(),
             )
         })?;
-        let snapshot = self.load_graph_snapshot(store)?;
+        let snapshot = self.load_graph_snapshot(store, repo_root)?;
 
         let module_contents = build_module_contents(&metrics.metrics.node_metrics);
         let layer_by_module = assign_layers(self, &module_contents)?;

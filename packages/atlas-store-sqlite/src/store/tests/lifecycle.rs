@@ -1,4 +1,5 @@
 use super::*;
+use crate::migrations::LATEST_VERSION;
 
 // --- existing foundation tests -------------------------------------------
 
@@ -42,8 +43,8 @@ fn migration_schema_matches_checked_in_schema_sql() {
 #[test]
 fn migration_schema_matches_versioned_schema_fixtures() {
     assert_eq!(
-        MIGRATIONS.len(),
-        13,
+        MIGRATIONS.len() as i32,
+        LATEST_VERSION,
         "add fixture when migration count changes"
     );
 
@@ -151,7 +152,7 @@ fn rollback_and_reupgrade_restore_latest_schema() {
             |row| row.get(0),
         )
         .unwrap();
-    assert_eq!(rollback_events, 10);
+    assert_eq!(rollback_events, i64::from(LATEST_VERSION - 3));
 
     store.migrate().unwrap();
     assert_eq!(

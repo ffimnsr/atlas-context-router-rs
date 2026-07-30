@@ -588,6 +588,7 @@ The MCP server (`atlas serve`) exposes these tools to agents:
 | `get_minimal_context` | Auto-detect changes and return compact impact bundle |
 | `explain_change` | Advanced impact: risk, change kinds, boundary/test gaps |
 | `get_session_status` | Current session identity, event count, and resume state |
+| `repo_registry` | Persisted multi-repo registry inventory, relationships, trust, and warnings |
 | `compact_session` | Compact session event ledger: merge, decay, dedup, promote |
 | `resume_session` | Retrieve and consume current session snapshot |
 | `search_saved_context` | Search saved artifacts from prior tool outputs |

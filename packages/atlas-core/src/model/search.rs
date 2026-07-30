@@ -296,6 +296,8 @@ pub struct SearchQuery {
     /// Patterns must be valid `regex` crate syntax. An invalid pattern is
     /// returned as an error rather than silently skipped.
     pub regex_pattern: Option<String>,
+    /// Restrict search to these indexed repo ids. Empty means all repos.
+    pub repo_ids: Vec<String>,
 }
 
 impl Default for SearchQuery {
@@ -321,6 +323,7 @@ impl Default for SearchQuery {
             top_k_vector: 60,
             rrf_k: 60,
             regex_pattern: None,
+            repo_ids: vec![],
         }
     }
 }

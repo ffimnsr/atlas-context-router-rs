@@ -35,6 +35,11 @@ fn make_node(qname: &str, name: &str, file: &str, kind: NodeKind, parent: Option
     }
 }
 
+fn with_repo(mut node: Node, repo_id: &str) -> Node {
+    node.extra_json = serde_json::json!({"repo_id": repo_id});
+    node
+}
+
 fn make_edge(src: &str, tgt: &str, kind: EdgeKind, file: &str) -> Edge {
     Edge {
         id: 0,
@@ -144,6 +149,7 @@ fn saved_source_meta(id: &str) -> SourceMeta {
         source_type: "review_context".into(),
         label: format!("artifact-{id}"),
         repo_root: Some("/repo".into()),
+        repo_roots: vec!["/repo".into()],
         identity_kind: "artifact_label".into(),
         identity_value: format!("artifact-{id}"),
     }
@@ -585,6 +591,82 @@ fn build_context_convenience_wrapper() {
             .nodes
             .iter()
             .any(|n| n.node.qualified_name == "src/b.rs::fn_b")
+    );
+}
+
+#[test]
+fn symbol_context_blocks_cross_repo_callers_unless_enabled() {
+    let mut store = open_store();
+    let local = with_repo(
+        make_node(
+            "src/local.rs::fn::target",
+            "target",
+            "src/local.rs",
+            NodeKind::Function,
+            None,
+        ),
+        "repo-local",
+    );
+    let remote = with_repo(
+        make_node(
+            "vendor/remote.rs::fn::caller",
+            "caller",
+            "vendor/remote.rs",
+            NodeKind::Function,
+            None,
+        ),
+        "repo-remote",
+    );
+    let files = vec![
+        ParsedFile {
+            path: "src/local.rs".to_string(),
+            language: Some("rust".to_string()),
+            hash: "local".to_string(),
+            size: None,
+            nodes: vec![local.clone()],
+            edges: vec![],
+        },
+        ParsedFile {
+            path: "vendor/remote.rs".to_string(),
+            language: Some("rust".to_string()),
+            hash: "remote".to_string(),
+            size: None,
+            nodes: vec![remote.clone()],
+            edges: vec![make_edge(
+                "vendor/remote.rs::fn::caller",
+                "src/local.rs::fn::target",
+                EdgeKind::Calls,
+                "vendor/remote.rs",
+            )],
+        },
+    ];
+    store.replace_batch(&files).unwrap();
+
+    let seed = store
+        .node_by_qname("src/local.rs::fn::target")
+        .unwrap()
+        .unwrap();
+    let blocked = build_symbol_context(
+        &store,
+        seed.clone(),
+        &symbol_request("src/local.rs::fn::target"),
+    )
+    .unwrap();
+    assert!(
+        !blocked
+            .nodes
+            .iter()
+            .any(|node| node.node.qualified_name == "vendor/remote.rs::fn::caller")
+    );
+
+    let mut req = symbol_request("src/local.rs::fn::target");
+    req.allow_cross_repo_edges = true;
+    let allowed = build_symbol_context(&store, seed, &req).unwrap();
+    assert!(
+        allowed
+            .nodes
+            .iter()
+            .any(|node| node.node.qualified_name == "vendor/remote.rs::fn::caller")
     );
 }
 

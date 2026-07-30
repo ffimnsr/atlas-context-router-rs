@@ -3,7 +3,9 @@ use atlas_adapters::derive_content_db_path;
 use atlas_core::SearchQuery;
 use atlas_core::model::{ChangeType, ChangedFile, ContextIntent, ContextRequest, ContextTarget};
 use atlas_engine::{BuildOptions, UpdateOptions, UpdateTarget, build_graph, update_graph};
-use atlas_repo::{CanonicalRepoPath, DiffTarget, changed_files, find_repo_root};
+use atlas_repo::{
+    CanonicalRepoPath, DiffTarget, RepoRegistration, changed_files, find_repo_root, stable_repo_id,
+};
 use atlas_review::{ContextEngine, query_parser};
 use atlas_search::semantic as sem;
 use atlas_store_sqlite::{BuildFinishStats, GraphBuildState, Store};
@@ -14,7 +16,8 @@ use std::collections::BTreeSet;
 
 use super::shared::{
     bool_arg, error_code_docs, error_message, error_suggestions, inject_budget_metadata,
-    load_budget_policy, open_store, parse_mcp_intent, str_arg, string_array_arg, u64_arg,
+    load_budget_policy, open_store, parse_mcp_intent, repo_aliases_by_id,
+    resolve_repo_scope_selection, str_arg, string_array_arg, u64_arg,
 };
 use crate::context::{enforce_mcp_response_budget, package_context_result, package_impact};
 use crate::session_tools::{
@@ -522,6 +525,120 @@ fn change_source_json(resolved: &ResolvedChangeSource) -> Value {
     })
 }
 
+fn node_repo_id(node: &atlas_core::Node) -> Option<&str> {
+    node.extra_json
+        .as_object()
+        .and_then(|extra| extra.get("repo_id"))
+        .and_then(|value| value.as_str())
+}
+
+fn changed_repo_summary_json(
+    changed_nodes: &[atlas_core::Node],
+    repo_aliases: &std::collections::BTreeMap<String, String>,
+) -> Value {
+    let mut counts = std::collections::BTreeMap::<String, usize>::new();
+    for node in changed_nodes {
+        if let Some(repo_id) = node_repo_id(node) {
+            *counts.entry(repo_id.to_owned()).or_default() += 1;
+        }
+    }
+    Value::Array(
+        counts
+            .into_iter()
+            .map(|(repo_id, changed_symbol_count)| {
+                json!({
+                    "repo_id": repo_id,
+                    "display_alias": repo_aliases.get(&repo_id).cloned(),
+                    "changed_symbol_count": changed_symbol_count,
+                })
+            })
+            .collect(),
+    )
+}
+
+fn boundary_summary_json(advanced: &atlas_core::AdvancedImpactResult) -> Value {
+    let cross_module_count = advanced
+        .boundary_violations
+        .iter()
+        .find(|violation| violation.kind == atlas_core::BoundaryKind::CrossModule)
+        .map(|violation| violation.nodes.len())
+        .unwrap_or(0);
+    let cross_package_count = advanced
+        .boundary_violations
+        .iter()
+        .find(|violation| violation.kind == atlas_core::BoundaryKind::CrossPackage)
+        .map(|violation| violation.nodes.len())
+        .unwrap_or(0);
+    let cross_repo_count = advanced
+        .boundary_violations
+        .iter()
+        .find(|violation| violation.kind == atlas_core::BoundaryKind::CrossRepo)
+        .map(|violation| violation.nodes.len())
+        .unwrap_or(0);
+    json!({
+        "cross_module": cross_module_count > 0,
+        "cross_module_count": cross_module_count,
+        "cross_package": cross_package_count > 0,
+        "cross_package_count": cross_package_count,
+        "cross_repo": cross_repo_count > 0,
+        "cross_repo_count": cross_repo_count,
+        "violations": advanced.boundary_violations,
+    })
+}
+
+fn cross_repo_context_hops_json(edges: &[Value], store: &Store) -> Value {
+    let hop_count = edges
+        .iter()
+        .filter(|edge| {
+            let from = edge.get("from").and_then(Value::as_str);
+            let to = edge.get("to").and_then(Value::as_str);
+            let from_node = from.and_then(|qname| store.node_by_qname(qname).ok().flatten());
+            let to_node = to.and_then(|qname| store.node_by_qname(qname).ok().flatten());
+            let from_repo = from_node.as_ref().and_then(node_repo_id);
+            let to_repo = to_node.as_ref().and_then(node_repo_id);
+            from_repo.is_some() && to_repo.is_some() && from_repo != to_repo
+        })
+        .count();
+    json!({
+        "enabled": hop_count > 0,
+        "edge_count": hop_count,
+    })
+}
+
+fn impact_seed_qnames_for_repo(
+    store: &Store,
+    repo_id: &str,
+    files: &[String],
+) -> Result<Vec<String>> {
+    let mut qnames = Vec::new();
+    for file in files {
+        for node in store.nodes_by_file(file)? {
+            if node_repo_id(&node) == Some(repo_id) {
+                qnames.push(node.qualified_name);
+            }
+        }
+    }
+    qnames.sort();
+    qnames.dedup();
+    Ok(qnames)
+}
+
+fn detect_changes_for_registration(
+    registration: &RepoRegistration,
+    request: &ChangeSourceRequest,
+) -> Result<ResolvedChangeSource> {
+    resolve_change_source(
+        ChangeSourceRequest {
+            mode: request.mode,
+            files: request.files.clone(),
+            base: request.base.clone(),
+            staged: request.staged,
+            working_tree: request.working_tree,
+        },
+        registration.root.as_str(),
+    )
+}
+
 fn insert_change_source_payload(payload: &mut Map<String, Value>, resolved: &ResolvedChangeSource) {
     payload.insert("change_source".to_owned(), change_source_json(resolved));
 }
@@ -572,22 +689,145 @@ pub(super) fn tool_get_impact_radius(
         Ok(request) => request,
         Err(payload) => return tool_execution_error_value(output_format, &payload),
     };
-    let resolved = resolve_change_source(request, repo_root)?;
+    let repo_scope = resolve_repo_scope_selection(args, repo_root)?;
+    let resolved = resolve_change_source(
+        ChangeSourceRequest {
+            mode: request.mode,
+            files: request.files.clone(),
+            base: request.base.clone(),
+            staged: request.staged,
+            working_tree: request.working_tree,
+        },
+        repo_root,
+    )?;
     let max_depth = u64_arg(args, "max_depth").unwrap_or(5) as u32;
     let max_nodes = u64_arg(args, "max_nodes").unwrap_or(200) as usize;
 
     let store = open_store(db_path)?;
     let policy = load_budget_policy(repo_root)?;
-    let file_refs: Vec<&str> = resolved.files.iter().map(String::as_str).collect();
-    let result = store
-        .impact_radius(
-            &file_refs,
-            max_depth,
-            max_nodes,
-            policy.graph_traversal.edges.default_limit,
-        )
-        .context("impact_radius query failed")?;
+    let mut tool_warnings = Vec::new();
+    let result = if let Some(scope) = repo_scope.as_ref() {
+        let mut seed_files = Vec::new();
+        let mut seed_qnames = Vec::new();
+        let mut repo_results = Vec::new();
+        for registration in &scope.registrations {
+            match detect_changes_for_registration(registration, &request) {
+                Ok(per_repo) => {
+                    seed_files.extend(per_repo.files.clone().into_iter().map(|path| {
+                        json!({
+                            "path": path,
+                            "repo": {
+                                "repo_id": registration.repo_id,
+                                "display_alias": registration.display_alias,
+                            }
+                        })
+                    }));
+                    seed_qnames.extend(impact_seed_qnames_for_repo(
+                        &store,
+                        &registration.repo_id,
+                        &per_repo.files,
+                    )?);
+                    repo_results.push(json!({
+                        "repo_id": registration.repo_id,
+                        "display_alias": registration.display_alias,
+                        "status": "ok",
+                        "changed_file_count": per_repo.files.len(),
+                    }));
+                }
+                Err(error) => {
+                    tool_warnings.push(format!(
+                        "skipped repo {}: {}",
+                        registration.display_alias, error
+                    ));
+                    repo_results.push(json!({
+                        "repo_id": registration.repo_id,
+                        "display_alias": registration.display_alias,
+                        "status": "skipped",
+                        "error": error.to_string(),
+                    }));
+                }
+            }
+        }
+        let seed_refs: Vec<&str> = seed_qnames.iter().map(String::as_str).collect();
+        let impact = store
+            .traverse_from_qnames(
+                &seed_refs,
+                max_depth,
+                max_nodes,
+                policy.graph_traversal.edges.default_limit,
+            )
+            .context("impact_radius query failed")?;
+        let advanced = atlas_impact::analyze(impact.clone());
+        let packaged = package_impact(&impact, &resolved.files);
+        let mut payload = as_object_map(serde_json::to_value(&packaged)?);
+        payload.insert("seed_files".to_owned(), Value::Array(seed_files));
+        payload.insert(
+            "changed_symbols".to_owned(),
+            serde_json::to_value(&packaged.changed_nodes)?,
+        );
+        payload.insert(
+            "impacted_symbols".to_owned(),
+            serde_json::to_value(&packaged.impacted_nodes)?,
+        );
+        payload.insert(
+            "boundary_summary".to_owned(),
+            boundary_summary_json(&advanced),
+        );
+        payload.insert(
+            "repo_scope".to_owned(),
+            json!({
+                "selected_repo_count": scope.registrations.len(),
+                "processed_repo_count": repo_results.iter().filter(|entry| entry.get("status") == Some(&Value::String("ok".to_owned()))).count(),
+                "repos": repo_results,
+            }),
+        );
+        payload.insert(
+            "summary".to_owned(),
+            json!({
+                "changed_file_count": packaged.changed_file_count,
+                "changed_symbol_count": packaged.changed_node_count,
+                "impacted_symbol_count": packaged.impacted_node_count,
+                "impacted_file_count": packaged.impacted_file_count,
+                "relevant_edge_count": packaged.relevant_edge_count,
+                "seed_budget_count": packaged.seed_budgets.len(),
+                "traversal_budget_applied": packaged.traversal_budget.is_some(),
+                "cross_repo_boundary": advanced.boundary_violations.iter().any(|violation| violation.kind == atlas_core::BoundaryKind::CrossRepo),
+            }),
+        );
+        payload.remove("changed_file_count");
+        payload.remove("changed_node_count");
+        payload.remove("changed_nodes");
+        payload.remove("impacted_node_count");
+        payload.remove("impacted_nodes");
+        payload.remove("impacted_file_count");
+        payload.remove("relevant_edge_count");
+        payload.remove("budget_status");
+        insert_change_source_payload(&mut payload, &resolved);
+        let mut response = build_normalized_success_response(
+            "get_impact_radius",
+            Value::Object(payload),
+            output_format,
+            tool_warnings.clone(),
+            packaged.truncated,
+            packaged
+                .truncated
+                .then_some("node or edge caps limited impact result"),
+        )?;
+        inject_budget_metadata(&mut response, &impact.budget);
+        return Ok(response);
+    } else {
+        let file_refs: Vec<&str> = resolved.files.iter().map(String::as_str).collect();
+        store
+            .impact_radius(
+                &file_refs,
+                max_depth,
+                max_nodes,
+                policy.graph_traversal.edges.default_limit,
+            )
+            .context("impact_radius query failed")?
+    };
 
+    let advanced = atlas_impact::analyze(result.clone());
     let packaged = package_impact(&result, &resolved.files);
     let mut payload = as_object_map(serde_json::to_value(&packaged)?);
     payload.insert("seed_files".to_owned(), json!(resolved.files));
@@ -600,6 +840,10 @@ pub(super) fn tool_get_impact_radius(
         serde_json::to_value(&packaged.impacted_nodes)?,
     );
     payload.insert(
+        "boundary_summary".to_owned(),
+        boundary_summary_json(&advanced),
+    );
+    payload.insert(
         "summary".to_owned(),
         json!({
             "changed_file_count": packaged.changed_file_count,
@@ -609,6 +853,7 @@ pub(super) fn tool_get_impact_radius(
             "relevant_edge_count": packaged.relevant_edge_count,
             "seed_budget_count": packaged.seed_budgets.len(),
             "traversal_budget_applied": packaged.traversal_budget.is_some(),
+            "cross_repo_boundary": advanced.boundary_violations.iter().any(|violation| violation.kind == atlas_core::BoundaryKind::CrossRepo),
         }),
     );
     payload.remove("changed_file_count");
@@ -625,7 +870,7 @@ pub(super) fn tool_get_impact_radius(
         "get_impact_radius",
         Value::Object(payload),
         output_format,
-        Vec::new(),
+        tool_warnings,
         packaged.truncated,
         packaged
             .truncated
@@ -664,6 +909,16 @@ pub(super) fn tool_get_review_context(
         ..ContextRequest::default()
     };
     let result = engine.build(&request).context("context engine failed")?;
+    let file_refs: Vec<&str> = resolved.files.iter().map(String::as_str).collect();
+    let review_impact = store
+        .impact_radius(
+            &file_refs,
+            max_depth,
+            max_nodes,
+            policy.graph_traversal.edges.default_limit,
+        )
+        .context("review impact query failed")?;
+    let advanced = atlas_impact::analyze(review_impact);
     let include_context_ranking_evidence = output_format == crate::output::OutputFormat::Json;
     let packaged = package_context_result(&result, include_context_ranking_evidence);
     let mut packaged_value = serde_json::to_value(&packaged)?;
@@ -711,13 +966,30 @@ pub(super) fn tool_get_review_context(
             Value::Object(object)
         })
         .collect::<Vec<_>>();
+    let repo_aliases = repo_aliases_by_id(repo_root);
     let mut normalized_payload = as_object_map(packaged_value.clone());
     normalized_payload.remove("saved_context_sources");
+    normalized_payload.insert(
+        "changed_repos".to_owned(),
+        changed_repo_summary_json(
+            &result
+                .nodes
+                .iter()
+                .filter(|node| node.selection_reason.as_str() == "direct_target")
+                .map(|node| node.node.clone())
+                .collect::<Vec<_>>(),
+            &repo_aliases,
+        ),
+    );
     normalized_payload.insert("changed_files".to_owned(), json!(resolved.files.clone()));
     normalized_payload.insert("changed_symbols".to_owned(), Value::Array(changed_symbols));
     normalized_payload.insert("neighbors".to_owned(), Value::Array(neighbors));
     normalized_payload.insert("critical_edges".to_owned(), critical_edges);
     normalized_payload.insert("artifacts".to_owned(), Value::Array(artifacts));
+    normalized_payload.insert(
+        "boundary_summary".to_owned(),
+        boundary_summary_json(&advanced),
+    );
     normalized_payload.insert(
         "risk_summary".to_owned(),
         json!({
@@ -733,6 +1005,7 @@ pub(super) fn tool_get_review_context(
                 .get("ambiguity_candidates")
                 .and_then(Value::as_array)
                 .is_some_and(|items| !items.is_empty()),
+            "cross_repo_boundary": advanced.boundary_violations.iter().any(|violation| violation.kind == atlas_core::BoundaryKind::CrossRepo),
         }),
     );
     normalized_payload.insert("change_source".to_owned(), change_source_json(&resolved));
@@ -767,20 +1040,31 @@ pub(super) fn tool_detect_changes(
         Ok(request) => request,
         Err(payload) => return tool_execution_error_value(output_format, &payload),
     };
-    let resolved = resolve_change_source(request, repo_root)?;
+    let repo_scope = resolve_repo_scope_selection(args, repo_root)?;
+    let resolved = resolve_change_source(
+        ChangeSourceRequest {
+            mode: request.mode,
+            files: request.files.clone(),
+            base: request.base.clone(),
+            staged: request.staged,
+            working_tree: request.working_tree,
+        },
+        repo_root,
+    )?;
     let changes = &resolved.changes;
     let store_opt = Store::open(db_path).ok();
 
     #[derive(Serialize)]
-    struct ChangedEntry<'a> {
-        path: &'a str,
-        change_type: &'a str,
+    struct ChangedEntry {
+        path: String,
+        change_type: String,
         #[serde(skip_serializing_if = "Option::is_none")]
-        old_path: Option<&'a str>,
+        old_path: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         node_count: Option<usize>,
         #[serde(skip_serializing_if = "Option::is_none")]
         language: Option<String>,
+        repo: serde_json::Value,
         is_added: bool,
         is_modified: bool,
         is_deleted: bool,
@@ -788,55 +1072,152 @@ pub(super) fn tool_detect_changes(
         is_copied: bool,
     }
 
-    let entries: Vec<ChangedEntry<'_>> = changes
-        .iter()
-        .map(|cf| {
-            let file_nodes = store_opt
-                .as_ref()
-                .and_then(|s| s.nodes_by_file(&cf.path).ok());
-            let node_count = file_nodes.as_ref().map(Vec::len);
-            let language = file_nodes
-                .as_ref()
-                .and_then(|nodes| nodes.first())
-                .map(|node| node.language.clone());
-            let change_type = match cf.change_type {
-                ChangeType::Added => "added",
-                ChangeType::Modified => "modified",
-                ChangeType::Deleted => "deleted",
-                ChangeType::Renamed => "renamed",
-                ChangeType::Copied => "copied",
-            };
-            ChangedEntry {
-                path: &cf.path,
-                change_type,
-                old_path: cf.old_path.as_deref(),
-                node_count,
-                language,
-                is_added: matches!(cf.change_type, ChangeType::Added),
-                is_modified: matches!(cf.change_type, ChangeType::Modified),
-                is_deleted: matches!(cf.change_type, ChangeType::Deleted),
-                is_renamed: matches!(cf.change_type, ChangeType::Renamed),
-                is_copied: matches!(cf.change_type, ChangeType::Copied),
+    let repo_aliases = repo_aliases_by_id(repo_root);
+    let mut tool_warnings = Vec::new();
+    let mut repo_results = Vec::new();
+    let mut repo_processed_count = 0usize;
+    let mut repo_skipped_count = 0usize;
+    let entries: Vec<ChangedEntry> = if let Some(scope) = repo_scope.as_ref() {
+        let mut entries = Vec::new();
+        for registration in &scope.registrations {
+            match detect_changes_for_registration(registration, &request) {
+                Ok(per_repo) => {
+                    repo_processed_count += 1;
+                    repo_results.push(json!({
+                        "repo_id": registration.repo_id,
+                        "display_alias": registration.display_alias,
+                        "status": "ok",
+                        "changed_file_count": per_repo.changes.len(),
+                    }));
+                    for cf in &per_repo.changes {
+                        let file_nodes = store_opt
+                            .as_ref()
+                            .and_then(|s| s.nodes_by_file(&cf.path).ok())
+                            .map(|nodes| {
+                                nodes
+                                    .into_iter()
+                                    .filter(|node| {
+                                        node_repo_id(node) == Some(registration.repo_id.as_str())
+                                    })
+                                    .collect::<Vec<_>>()
+                            });
+                        let node_count = file_nodes.as_ref().map(Vec::len);
+                        let language = file_nodes
+                            .as_ref()
+                            .and_then(|nodes| nodes.first())
+                            .map(|node| node.language.clone());
+                        let change_type = match cf.change_type {
+                            ChangeType::Added => "added",
+                            ChangeType::Modified => "modified",
+                            ChangeType::Deleted => "deleted",
+                            ChangeType::Renamed => "renamed",
+                            ChangeType::Copied => "copied",
+                        };
+                        entries.push(ChangedEntry {
+                            path: cf.path.clone(),
+                            change_type: change_type.to_owned(),
+                            old_path: cf.old_path.clone(),
+                            node_count,
+                            language,
+                            repo: json!({
+                                "repo_id": registration.repo_id,
+                                "display_alias": repo_aliases.get(&registration.repo_id).cloned().unwrap_or_else(|| registration.display_alias.clone()),
+                            }),
+                            is_added: matches!(cf.change_type, ChangeType::Added),
+                            is_modified: matches!(cf.change_type, ChangeType::Modified),
+                            is_deleted: matches!(cf.change_type, ChangeType::Deleted),
+                            is_renamed: matches!(cf.change_type, ChangeType::Renamed),
+                            is_copied: matches!(cf.change_type, ChangeType::Copied),
+                        });
+                    }
+                }
+                Err(error) => {
+                    repo_skipped_count += 1;
+                    tool_warnings.push(format!(
+                        "skipped repo {}: {}",
+                        registration.display_alias, error
+                    ));
+                    repo_results.push(json!({
+                        "repo_id": registration.repo_id,
+                        "display_alias": registration.display_alias,
+                        "status": "skipped",
+                        "error": error.to_string(),
+                    }));
+                }
             }
-        })
-        .collect();
+        }
+        entries
+    } else {
+        changes
+            .iter()
+            .map(|cf| {
+                let file_nodes = store_opt
+                    .as_ref()
+                    .and_then(|s| s.nodes_by_file(&cf.path).ok());
+                let node_count = file_nodes.as_ref().map(Vec::len);
+                let language = file_nodes
+                    .as_ref()
+                    .and_then(|nodes| nodes.first())
+                    .map(|node| node.language.clone());
+                let change_type = match cf.change_type {
+                    ChangeType::Added => "added",
+                    ChangeType::Modified => "modified",
+                    ChangeType::Deleted => "deleted",
+                    ChangeType::Renamed => "renamed",
+                    ChangeType::Copied => "copied",
+                };
+                ChangedEntry {
+                    path: cf.path.clone(),
+                    change_type: change_type.to_owned(),
+                    old_path: cf.old_path.clone(),
+                    node_count,
+                    language,
+                    repo: json!({"repo_id": null, "display_alias": null}),
+                    is_added: matches!(cf.change_type, ChangeType::Added),
+                    is_modified: matches!(cf.change_type, ChangeType::Modified),
+                    is_deleted: matches!(cf.change_type, ChangeType::Deleted),
+                    is_renamed: matches!(cf.change_type, ChangeType::Renamed),
+                    is_copied: matches!(cf.change_type, ChangeType::Copied),
+                }
+            })
+            .collect()
+    };
 
+    let effective_changes: Vec<ChangedFile> = if repo_scope.is_some() {
+        entries
+            .iter()
+            .map(|entry| ChangedFile {
+                path: entry.path.clone(),
+                change_type: match entry.change_type.as_str() {
+                    "added" => ChangeType::Added,
+                    "modified" => ChangeType::Modified,
+                    "deleted" => ChangeType::Deleted,
+                    "renamed" => ChangeType::Renamed,
+                    "copied" => ChangeType::Copied,
+                    _ => ChangeType::Modified,
+                },
+                old_path: entry.old_path.clone(),
+            })
+            .collect()
+    } else {
+        changes.clone()
+    };
     let (added_count, modified_count, deleted_count, renamed_count, copied_count) =
-        count_change_kinds(changes);
-    let payload = json!({
+        count_change_kinds(&effective_changes);
+    let mut payload = json!({
         "mode": resolved.mode.as_str(),
         "base_ref": resolved.base,
         "change_source": change_source_json(&resolved),
         "files": entries,
         "summary": {
-            "changed_file_count": changes.len(),
-            "resolved_file_count": resolved.files.len(),
+            "changed_file_count": effective_changes.len(),
+            "resolved_file_count": if repo_scope.is_some() { entries.len() } else { resolved.files.len() },
             "deleted_file_count": deleted_count,
             "added_file_count": added_count,
             "modified_file_count": modified_count,
             "renamed_file_count": renamed_count,
             "copied_file_count": copied_count,
-            "files_with_graph_nodes": changes
+            "files_with_graph_nodes": effective_changes
                 .iter()
                 .filter(|cf| {
                     store_opt
@@ -847,12 +1228,25 @@ pub(super) fn tool_detect_changes(
                 .count(),
         },
     });
+    if let Some(scope) = repo_scope.as_ref()
+        && let Some(object) = payload.as_object_mut()
+    {
+        object.insert(
+            "repo_scope".to_owned(),
+            json!({
+                "selected_repo_count": scope.registrations.len(),
+                "processed_repo_count": repo_processed_count,
+                "skipped_repo_count": repo_skipped_count,
+                "repos": repo_results,
+            }),
+        );
+    }
 
     build_normalized_success_response(
         "detect_changes",
         payload,
         output_format,
-        Vec::new(),
+        tool_warnings,
         false,
         None,
     )
@@ -958,6 +1352,8 @@ pub(super) fn tool_build_or_update_graph(
                 batch_size: config.parse_batch_size(),
                 target,
                 budget: build_budget,
+                source_repo_id: Some(stable_repo_id(repo_root_path.as_path())),
+                namespace_qualified_names: false,
             },
         );
 
@@ -1099,6 +1495,8 @@ pub(super) fn tool_build_or_update_graph(
                 dry_run: false,
                 batch_size: config.parse_batch_size(),
                 budget: build_budget,
+                source_repo_id: Some(stable_repo_id(repo_root_path.as_path())),
+                namespace_qualified_names: false,
             },
         );
 
@@ -1467,6 +1865,7 @@ pub(super) fn tool_get_context(
     let neighbors = bool_arg(args, "neighbors");
     let semantic = bool_arg(args, "semantic").unwrap_or(false);
     let include_saved_context = bool_arg(args, "include_saved_context").unwrap_or(false);
+    let allow_cross_repo_edges = bool_arg(args, "allow_cross_repo_edges").unwrap_or(false);
     let session_id = str_arg(args, "session_id")?.map(str::to_owned);
     let agent_id = str_arg(args, "agent_id")?.map(str::to_owned);
     let merge_agent_partitions = bool_arg(args, "merge_agent_partitions").unwrap_or(false);
@@ -1529,6 +1928,7 @@ pub(super) fn tool_get_context(
         request.include_neighbors = v;
     }
     request.include_saved_context = include_saved_context;
+    request.allow_cross_repo_edges = allow_cross_repo_edges;
     request.session_id = session_id;
     request.agent_id = agent_id.clone();
     request.merge_agent_partitions = merge_agent_partitions;
@@ -1689,12 +2089,33 @@ pub(super) fn tool_get_context(
             })
         })
         .collect::<Vec<_>>();
+    let ambiguity_candidates = packaged_value
+        .get("ambiguity_candidates")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let repo_aliases = repo_aliases_by_id(repo_root);
+    let ambiguity_candidates_detailed = ambiguity_candidates
+        .iter()
+        .filter_map(Value::as_str)
+        .map(|qname| {
+            let node = store.node_by_qname(qname).ok().flatten();
+            let repo_id = node.as_ref().and_then(node_repo_id);
+            json!({
+                "qualified_name": qname,
+                "file_path": node.as_ref().map(|node| node.file_path.clone()),
+                "kind": node.as_ref().map(|node| node.kind.as_str().to_owned()),
+                "repo": {
+                    "repo_id": repo_id,
+                    "display_alias": repo_id.and_then(|id| repo_aliases.get(id)).cloned(),
+                }
+            })
+        })
+        .collect::<Vec<_>>();
     let ambiguity = json!({
         "query": packaged_value.get("ambiguity_query").cloned().unwrap_or(Value::Null),
-        "candidates": packaged_value
-            .get("ambiguity_candidates")
-            .cloned()
-            .unwrap_or_else(|| json!([])),
+        "candidates": serde_json::Value::Array(ambiguity_candidates),
+        "candidates_detailed": ambiguity_candidates_detailed,
     });
     let mut normalized_payload = as_object_map(packaged_value.clone());
     normalized_payload.remove("saved_context_sources");
@@ -1735,6 +2156,17 @@ pub(super) fn tool_get_context(
     }
     normalized_payload.insert("context_files".to_owned(), json!(context_files));
     normalized_payload.insert(
+        "cross_repo_context_hops".to_owned(),
+        cross_repo_context_hops_json(
+            packaged_value
+                .get("edges")
+                .and_then(Value::as_array)
+                .map(Vec::as_slice)
+                .unwrap_or(&[]),
+            &store,
+        ),
+    );
+    normalized_payload.insert(
         "detail_controls".to_owned(),
         serde_json::json!({
             "max_files": result.request.max_files,
@@ -1745,6 +2177,7 @@ pub(super) fn tool_get_context(
             "imports": result.request.include_imports,
             "neighbors": result.request.include_neighbors,
             "semantic": semantic,
+            "allow_cross_repo_edges": result.request.allow_cross_repo_edges,
             "agent_id": result.request.agent_id,
             "merge_agent_partitions": result.request.merge_agent_partitions,
             "omitted_sections": omitted,

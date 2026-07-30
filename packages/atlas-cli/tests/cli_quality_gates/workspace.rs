@@ -1,4 +1,172 @@
 use super::*;
+use atlas_repo::RepoRegistry;
+
+#[test]
+fn submodule_auto_registration_indexes_separate_repo_identities() {
+    let repo = setup_repo_with_submodule(
+        &[("src/lib.rs", "pub fn root_helper() {}\n")],
+        "vendor/dep",
+        &[("src/lib.rs", "pub fn dep_helper() {}\n")],
+    );
+
+    run_atlas(repo.path(), &["init"]);
+    let registry = read_json_data_output(
+        "repo.list",
+        run_atlas(repo.path(), &["--json", "repo", "list"]),
+    );
+    let registrations = registry["registrations"]
+        .as_array()
+        .expect("registrations array");
+    assert_eq!(
+        registrations.len(),
+        2,
+        "root + submodule must auto-register: {registry:?}"
+    );
+    assert!(
+        registrations
+            .iter()
+            .any(|entry| entry["relationship"]["kind"] == json!("root"))
+    );
+    assert!(registrations.iter().any(|entry| {
+        entry["relationship"]["kind"] == json!("submodule")
+            && entry["display_alias"] == json!("vendor/dep")
+    }));
+
+    run_atlas(repo.path(), &["build", "--all-repos"]);
+    let query = read_json_data_output(
+        "query",
+        run_atlas(repo.path(), &["--json", "query", "helper", "--all-repos"]),
+    );
+    let results = query["results"].as_array().expect("results array");
+    assert!(results.iter().any(|item| {
+        item["repo"]["display_alias"] == json!(".")
+            && item["node"]["qualified_name"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("root_helper")
+    }));
+    assert!(results.iter().any(|item| {
+        item["repo"]["display_alias"] == json!("vendor/dep")
+            && item["node"]["qualified_name"]
+                .as_str()
+                .unwrap_or_default()
+                .starts_with("repo::")
+    }));
+}
+
+#[test]
+fn manual_sibling_repo_registration_lists_manual_entry() {
+    let repo = setup_repo(&[("src/lib.rs", "pub fn root_only() {}\n")]);
+    let sibling = setup_repo(&[("src/lib.rs", "pub fn sibling_only() {}\n")]);
+
+    run_atlas(repo.path(), &["init"]);
+    let sibling_path = sibling.path().to_str().expect("sibling path");
+    let added = read_json_data_output(
+        "repo.add",
+        run_atlas(repo.path(), &["--json", "repo", "add", sibling_path]),
+    );
+    assert!(added["repo_id"].as_str().is_some());
+
+    let listed = read_json_data_output(
+        "repo.list",
+        run_atlas(repo.path(), &["--json", "repo", "list"]),
+    );
+    assert!(
+        listed["registrations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| {
+                entry["relationship"]["kind"] == json!("manual")
+                    && entry["root"] == json!(sibling_path)
+            })
+    );
+}
+
+#[test]
+fn default_single_repo_build_remains_unchanged_with_submodule_present() {
+    let repo = setup_repo_with_submodule(
+        &[("src/lib.rs", "pub fn root_only() {}\n")],
+        "vendor/dep",
+        &[("src/lib.rs", "pub fn submodule_only() {}\n")],
+    );
+
+    run_atlas(repo.path(), &["init"]);
+    run_atlas(repo.path(), &["build"]);
+
+    let query_default = read_json_data_output(
+        "query",
+        run_atlas(repo.path(), &["--json", "query", "root_only"]),
+    );
+    assert!(
+        query_default["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| {
+                entry["node"]["qualified_name"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .contains("root_only")
+            })
+    );
+
+    run_atlas(repo.path(), &["build", "--all-repos"]);
+    let query_all = read_json_data_output(
+        "query",
+        run_atlas(
+            repo.path(),
+            &["--json", "query", "submodule_only", "--all-repos"],
+        ),
+    );
+    assert!(
+        query_all["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| { entry["repo"]["display_alias"] == json!("vendor/dep") })
+    );
+}
+
+#[test]
+fn multi_repo_update_reports_partial_failure_for_missing_registered_repo() {
+    let repo = setup_repo_with_submodule(
+        &[("src/lib.rs", "pub fn root_only() {}\n")],
+        "vendor/dep",
+        &[("src/lib.rs", "pub fn dep_only() {}\n")],
+    );
+
+    run_atlas(repo.path(), &["init"]);
+    let mut registry =
+        RepoRegistry::load(camino::Utf8Path::from_path(repo.path()).unwrap()).unwrap();
+    let submodule = registry
+        .registrations
+        .iter_mut()
+        .find(|entry| entry.relationship.kind == atlas_repo::RepoRelationshipKind::Submodule)
+        .expect("submodule registration");
+    submodule.root = camino::Utf8PathBuf::from("/missing/dep");
+    submodule.enabled = true;
+    registry
+        .save(camino::Utf8Path::from_path(repo.path()).unwrap())
+        .unwrap();
+
+    let update = read_json_data_output(
+        "update",
+        run_atlas(repo.path(), &["--json", "update", "--all-repos"]),
+    );
+    assert_eq!(update["partial_success"], json!(true));
+    assert!(
+        update["repo_scope"]["failed_repo_count"]
+            .as_u64()
+            .unwrap_or_default()
+            >= 1
+    );
+    assert!(
+        update["repos"].as_array().unwrap().iter().any(|entry| {
+            entry["status"] == json!("skipped") || entry["status"] == json!("error")
+        })
+    );
+}
 
 #[test]
 fn query_includes_owner_identity_for_ambiguous_workspace_results() {
@@ -195,8 +363,7 @@ fn ranking_inventory_doc_covers_patch_d1_surfaces() {
     let root = current_repo_root();
     let doc = fs::read_to_string(root.join("wiki/ranking-and-trimming-primitives.md"))
         .expect("read ranking inventory doc");
-    let sidebar =
-        fs::read_to_string(root.join("wiki/_Sidebar.md")).expect("read wiki sidebar");
+    let sidebar = fs::read_to_string(root.join("wiki/_Sidebar.md")).expect("read wiki sidebar");
 
     assert_contains_all(
         &doc,
@@ -270,8 +437,8 @@ fn public_tool_layers_do_not_add_ad_hoc_sorting_or_truncation() {
     ];
 
     for relative_path in public_layers {
-        let content =
-            fs::read_to_string(root.join(relative_path)).unwrap_or_else(|err| panic!("read {relative_path}: {err}"));
+        let content = fs::read_to_string(root.join(relative_path))
+            .unwrap_or_else(|err| panic!("read {relative_path}: {err}"));
         for needle in forbidden {
             assert!(
                 !content.contains(needle),

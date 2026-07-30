@@ -42,6 +42,7 @@ const TOOL_REGISTRY_SNAPSHOT: &[&str] = &[
     "read_file_around_match",
     "read_file_excerpt",
     "read_saved_context",
+    "repo_registry",
     "resolve_symbol",
     "resume_session",
     "save_context_artifact",
@@ -121,6 +122,7 @@ fn parity_args(tool_name: &str, source_id: &str) -> Value {
         "search_saved_context" => json!({ "query": "parity-seed", "output_format": "json" }),
         "search_decisions" => json!({ "query": "parity-seed", "output_format": "json" }),
         "read_saved_context" => json!({ "source_id": source_id, "output_format": "json" }),
+        "repo_registry" => json!({ "output_format": "json" }),
         "save_context_artifact" => json!({
             "content": "parity preview payload".repeat(40),
             "label": "parity-save",
@@ -189,6 +191,11 @@ fn exported_registry_includes_tool_inventory_helpers() {
             .any(|t| t.get("name") == Some(&"tool_help".into()))
     );
     assert!(tools.iter().any(|t| t.get("name") == Some(&"man".into())));
+    assert!(
+        tools
+            .iter()
+            .any(|t| t.get("name") == Some(&"repo_registry".into()))
+    );
 }
 
 #[test]

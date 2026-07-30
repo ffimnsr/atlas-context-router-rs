@@ -37,6 +37,7 @@ fn meta(id: &str) -> SourceMeta {
         source_type: "review_context".into(),
         label: "test artifact".into(),
         repo_root: Some("/repo".into()),
+        repo_roots: vec!["/repo".into()],
         identity_kind: "artifact_label".into(),
         identity_value: "test artifact".into(),
     }
@@ -63,7 +64,7 @@ fn open_stamps_migration_history_and_provenance() {
         .conn
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 7);
+    assert_eq!(version, 8);
 
     let history_count: i64 = store
         .conn
@@ -71,7 +72,7 @@ fn open_stamps_migration_history_and_provenance() {
             row.get(0)
         })
         .unwrap();
-    assert_eq!(history_count, 7);
+    assert_eq!(history_count, 8);
 
     let (db_kind, created_by): (String, String) = store
         .conn
@@ -102,10 +103,11 @@ fn rollback_and_reupgrade_restore_content_schema() {
         .conn
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(restored_version, 7);
+    assert_eq!(restored_version, 8);
     assert!(table_columns(&store.conn, "chunks").contains(&"chunk_id".to_string()));
     assert!(table_columns(&store.conn, "sources").contains(&"identity_kind".to_string()));
     assert!(table_columns(&store.conn, "sources").contains(&"agent_id".to_string()));
+    assert!(table_columns(&store.conn, "sources").contains(&"repo_roots_json".to_string()));
 }
 
 #[test]

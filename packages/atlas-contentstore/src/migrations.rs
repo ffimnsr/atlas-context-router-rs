@@ -38,9 +38,14 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "007_embedding_provider_registry",
         up_sql: include_str!("migrations/007_embedding_provider_registry.sql"),
     },
+    Migration {
+        version: 8,
+        name: "008_artifact_repo_scope",
+        up_sql: include_str!("migrations/008_artifact_repo_scope.sql"),
+    },
 ];
 
-pub const LATEST_VERSION: i32 = 7;
+pub const LATEST_VERSION: i32 = 8;
 
 pub const MIGRATION_SET: MigrationSet = MigrationSet {
     db_kind: "context",

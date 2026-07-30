@@ -2040,7 +2040,7 @@ fn pattern_detection_groups_repeated_call_chains() {
     ];
     seed_graph(&mut store, nodes, edges);
 
-    let report = insights_engine(&store).analyze_patterns().unwrap();
+    let report = insights_engine(&store).analyze_patterns("/repo").unwrap();
     let findings = pattern_findings(&report, "pattern_repeated_chain");
 
     assert_eq!(findings.len(), 1);
@@ -2074,7 +2074,7 @@ fn pattern_detection_reports_unused_module_with_blockers() {
     );
     seed_graph(&mut store, vec![public_api, helper], vec![]);
 
-    let report = insights_engine(&store).analyze_patterns().unwrap();
+    let report = insights_engine(&store).analyze_patterns("/repo").unwrap();
     let findings = pattern_findings(&report, "pattern_unused_module");
 
     assert_eq!(findings.len(), 1);
@@ -2137,7 +2137,7 @@ fn pattern_detection_reports_isolated_components() {
     ];
     seed_graph(&mut store, nodes, edges);
 
-    let report = insights_engine(&store).analyze_patterns().unwrap();
+    let report = insights_engine(&store).analyze_patterns("/repo").unwrap();
     let findings = pattern_findings(&report, "pattern_isolated_component");
 
     assert_eq!(findings.len(), 2);
@@ -2223,7 +2223,7 @@ fn pattern_detection_reports_hubs_and_bottlenecks() {
         ..Default::default()
     };
     let report = insights_engine_with_config(&store, config)
-        .analyze_patterns()
+        .analyze_patterns("/repo")
         .unwrap();
     let findings = pattern_findings(&report, "pattern_centrality");
 
@@ -2288,7 +2288,7 @@ fn pattern_detection_reports_deep_chains_with_cycle_guard() {
         ..Default::default()
     };
     let report = insights_engine_with_config(&store, config)
-        .analyze_patterns()
+        .analyze_patterns("/repo")
         .unwrap();
     let findings = pattern_findings(&report, "pattern_deep_chain");
 

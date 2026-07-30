@@ -246,6 +246,7 @@ fn sample_context_request_symbol() -> ContextRequest {
         include_code_spans: false,
         include_callers: true,
         include_callees: true,
+        allow_cross_repo_edges: true,
         include_saved_context: false,
         session_id: None,
         agent_id: None,
@@ -329,6 +330,7 @@ fn context_request_round_trip() {
     assert_eq!(back.include_tests, req.include_tests);
     assert_eq!(back.include_imports, req.include_imports);
     assert_eq!(back.include_neighbors, req.include_neighbors);
+    assert_eq!(back.allow_cross_repo_edges, req.allow_cross_repo_edges);
 }
 
 #[test]
@@ -342,6 +344,7 @@ fn context_request_default_round_trip() {
     assert!(!back.include_tests);
     assert!(back.include_imports);
     assert!(!back.include_neighbors);
+    assert!(!back.allow_cross_repo_edges);
 }
 
 #[test]

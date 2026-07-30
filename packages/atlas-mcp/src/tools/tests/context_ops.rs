@@ -283,6 +283,219 @@ fn get_context_supports_toon_output_format() {
 }
 
 #[test]
+fn detect_changes_all_repos_skips_unavailable_repo_with_warning() {
+    use atlas_repo::{
+        RepoRegistration, RepoRegistry, RepoRelationship, RepoRelationshipKind, TrustState,
+        VcsMetadata, stable_repo_id,
+    };
+    use camino::{Utf8Path, Utf8PathBuf};
+
+    let fixture = setup_git_mcp_fixture();
+    let root = Utf8Path::new(&fixture.repo_root);
+    let mut registry = RepoRegistry::new(stable_repo_id(root));
+    registry.registrations = vec![
+        RepoRegistration {
+            repo_id: stable_repo_id(root),
+            root: root.to_path_buf(),
+            display_alias: ".".to_owned(),
+            vcs: VcsMetadata {
+                head: None,
+                default_branch: None,
+                remote_url: None,
+            },
+            relationship: RepoRelationship {
+                kind: RepoRelationshipKind::Root,
+                parent_repo_id: None,
+                parent_path: None,
+            },
+            trust_state: TrustState::Trusted,
+            enabled: true,
+            include_globs: None,
+            exclude_globs: None,
+            dependencies: Vec::new(),
+        },
+        RepoRegistration {
+            repo_id: stable_repo_id(Utf8Path::new("/missing/submodule")),
+            root: Utf8PathBuf::from("/missing/submodule"),
+            display_alias: "missing-submodule".to_owned(),
+            vcs: VcsMetadata {
+                head: None,
+                default_branch: None,
+                remote_url: None,
+            },
+            relationship: RepoRelationship {
+                kind: RepoRelationshipKind::Submodule,
+                parent_repo_id: Some(stable_repo_id(root)),
+                parent_path: Some("vendor/missing-submodule".to_owned()),
+            },
+            trust_state: TrustState::Missing,
+            enabled: true,
+            include_globs: None,
+            exclude_globs: None,
+            dependencies: Vec::new(),
+        },
+    ];
+    registry.save(root).expect("save registry");
+
+    write_repo_file(
+        fixture._dir.path(),
+        "src/service.rs",
+        "pub fn compute() -> i32 { 2 }\n",
+    );
+
+    let args =
+        serde_json::json!({ "all_repos": true, "working_tree": true, "output_format": "json" });
+    let resp = call(
+        "detect_changes",
+        Some(&args),
+        &fixture.repo_root,
+        &fixture.db_path,
+    )
+    .expect("call");
+    let payload: serde_json::Value =
+        serde_json::from_str(&unwrap_tool_text(resp.clone())).expect("parse json");
+
+    assert_eq!(
+        payload["repo_scope"]["selected_repo_count"],
+        serde_json::json!(2)
+    );
+    assert_eq!(
+        payload["repo_scope"]["processed_repo_count"],
+        serde_json::json!(1)
+    );
+    assert_eq!(
+        payload["repo_scope"]["skipped_repo_count"],
+        serde_json::json!(1)
+    );
+    assert!(
+        resp["structuredContent"]["warnings"]
+            .as_array()
+            .is_some_and(|warnings| !warnings.is_empty())
+    );
+}
+
+#[test]
+fn review_and_impact_context_report_cross_repo_hops() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let db_path = dir.path().join("atlas.db").to_string_lossy().to_string();
+    let mut store = Store::open(&db_path).expect("open store");
+
+    let root_node = Node {
+        id: NodeId::UNSET,
+        kind: NodeKind::Function,
+        name: "call_dep".to_owned(),
+        qualified_name: "src/app.rs::fn::call_dep".to_owned(),
+        file_path: "src/app.rs".to_owned(),
+        line_start: 1,
+        line_end: 5,
+        language: "rust".to_owned(),
+        parent_name: None,
+        params: Some("()".to_owned()),
+        return_type: None,
+        modifiers: Some("pub".to_owned()),
+        is_test: false,
+        file_hash: "h-app".to_owned(),
+        extra_json: serde_json::json!({"repo_id": "repo_root"}),
+    };
+    let dep_node = Node {
+        id: NodeId::UNSET,
+        kind: NodeKind::Function,
+        name: "dep_helper".to_owned(),
+        qualified_name: "repo::repo_dep::src/lib.rs::fn::dep_helper".to_owned(),
+        file_path: "src/lib.rs".to_owned(),
+        line_start: 1,
+        line_end: 5,
+        language: "rust".to_owned(),
+        parent_name: None,
+        params: Some("()".to_owned()),
+        return_type: None,
+        modifiers: Some("pub".to_owned()),
+        is_test: false,
+        file_hash: "h-dep".to_owned(),
+        extra_json: serde_json::json!({"repo_id": "repo_dep"}),
+    };
+    let cross_edge = Edge {
+        id: 0,
+        kind: EdgeKind::Calls,
+        source_qn: "src/app.rs::fn::call_dep".to_owned(),
+        target_qn: "repo::repo_dep::src/lib.rs::fn::dep_helper".to_owned(),
+        file_path: "src/app.rs".to_owned(),
+        line: Some(1),
+        confidence: 1.0,
+        confidence_tier: Some("high".to_owned()),
+        extra_json: serde_json::json!({"repo_id": "repo_root"}),
+    };
+    store
+        .replace_file_graph(
+            "src/app.rs",
+            "h-app",
+            Some("rust"),
+            Some(5),
+            &[root_node],
+            &[cross_edge],
+        )
+        .expect("replace app graph");
+    store
+        .replace_file_graph(
+            "src/lib.rs",
+            "h-dep",
+            Some("rust"),
+            Some(5),
+            &[dep_node],
+            &[],
+        )
+        .expect("replace dep graph");
+
+    let review = call(
+        "get_review_context",
+        Some(&serde_json::json!({ "files": ["src/app.rs"], "output_format": "json" })),
+        "/ignored",
+        &db_path,
+    )
+    .expect("review context call");
+    let review_payload: serde_json::Value =
+        serde_json::from_str(&unwrap_tool_text(review)).expect("parse review json");
+    assert_eq!(
+        review_payload["risk_summary"]["cross_repo_boundary"],
+        serde_json::json!(true)
+    );
+    assert_eq!(
+        review_payload["boundary_summary"]["cross_repo"],
+        serde_json::json!(true)
+    );
+    assert!(
+        review_payload["boundary_summary"]["cross_repo_count"]
+            .as_u64()
+            .unwrap_or_default()
+            >= 1
+    );
+
+    let impact = call(
+        "get_impact_radius",
+        Some(&serde_json::json!({ "files": ["src/app.rs"], "output_format": "json" })),
+        "/ignored",
+        &db_path,
+    )
+    .expect("impact call");
+    let impact_payload: serde_json::Value =
+        serde_json::from_str(&unwrap_tool_text(impact)).expect("parse impact json");
+    assert_eq!(
+        impact_payload["summary"]["cross_repo_boundary"],
+        serde_json::json!(true)
+    );
+    assert_eq!(
+        impact_payload["boundary_summary"]["cross_repo"],
+        serde_json::json!(true)
+    );
+    assert!(
+        impact_payload["boundary_summary"]["cross_repo_count"]
+            .as_u64()
+            .unwrap_or_default()
+            >= 1
+    );
+}
+
+#[test]
 fn explain_change_reports_change_kind_counts() {
     let dir = tempfile::tempdir().expect("tempdir");
     let db_path = dir.path().join("atlas.db");

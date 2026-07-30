@@ -158,6 +158,7 @@ fn route_hook_payload(
         source_type: "hook_event".to_owned(),
         label,
         repo_root: Some(repo.to_owned()),
+        repo_roots: vec![repo.to_owned()],
         identity_kind: identity.kind_str().to_owned(),
         identity_value: identity.value().to_owned(),
     };

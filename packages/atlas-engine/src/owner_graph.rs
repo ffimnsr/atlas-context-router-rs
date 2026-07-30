@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use atlas_core::{Edge, EdgeKind, Node, NodeId, NodeKind, PackageOwner, ParsedFile};
-use atlas_repo::{PackageOwners, WorkspaceRoot, hash_file};
+use atlas_repo::{PackageOwners, RepoRegistry, WorkspaceRoot, hash_file};
 use atlas_store_sqlite::Store;
 use camino::Utf8Path;
 
@@ -10,25 +10,34 @@ pub(crate) fn refresh_owner_graphs(
     store: &mut Store,
     repo_root: &Utf8Path,
     owners: &PackageOwners,
+    source_repo_id: &str,
+    namespace_qualified_names: bool,
 ) -> Result<()> {
     let existing_paths = store
-        .file_paths_with_prefix(SYNTHETIC_GRAPH_PREFIX)
+        .file_paths_with_prefix_for_repo(source_repo_id, SYNTHETIC_GRAPH_PREFIX)
         .context("cannot list synthetic owner graph files")?;
     for path in existing_paths {
         store
-            .delete_file_graph(&path)
+            .delete_file_graph_for_repo(source_repo_id, &path)
             .with_context(|| format!("cannot delete synthetic graph for {path}"))?;
     }
 
     let package_files: Vec<(ParsedFile, PackageOwner)> = owners
         .all()
         .iter()
-        .map(|owner| make_package_file(repo_root, owner))
+        .map(|owner| make_package_file(repo_root, owner, source_repo_id, namespace_qualified_names))
         .collect::<Result<Vec<_>>>()?;
     let workspace_files: Vec<ParsedFile> = owners
         .workspaces()
         .iter()
-        .map(|workspace| make_workspace_file(repo_root, workspace))
+        .map(|workspace| {
+            make_workspace_file(
+                repo_root,
+                workspace,
+                source_repo_id,
+                namespace_qualified_names,
+            )
+        })
         .collect::<Result<Vec<_>>>()?;
 
     let mut parsed_files: Vec<ParsedFile> = package_files
@@ -39,7 +48,7 @@ pub(crate) fn refresh_owner_graphs(
 
     if !parsed_files.is_empty() {
         store
-            .replace_files_transactional(&parsed_files)
+            .replace_files_transactional_for_repo(source_repo_id, &parsed_files)
             .context("cannot refresh synthetic owner/workspace nodes")?;
         for (parsed_file, owner) in &package_files {
             store
@@ -59,10 +68,17 @@ pub(crate) fn refresh_owner_graphs(
 fn make_package_file(
     repo_root: &Utf8Path,
     owner: &PackageOwner,
+    source_repo_id: &str,
+    namespace_qualified_names: bool,
 ) -> Result<(ParsedFile, PackageOwner)> {
     let path = synthetic_package_path(owner);
     let hash = manifest_hash(repo_root, &owner.manifest_path, &owner.owner_id)?;
     let language = manifest_language(owner.kind).to_owned();
+    let qualified_name = maybe_namespace_qn(
+        &format!("package::{}", owner.owner_id),
+        source_repo_id,
+        namespace_qualified_names,
+    );
     let node = Node {
         id: NodeId::UNSET,
         kind: NodeKind::Package,
@@ -71,7 +87,7 @@ fn make_package_file(
             &owner.root,
             &owner.manifest_path,
         ),
-        qualified_name: format!("package::{}", owner.owner_id),
+        qualified_name,
         file_path: path.clone(),
         line_start: 1,
         line_end: 1,
@@ -89,6 +105,7 @@ fn make_package_file(
             "owner_root": owner.root,
             "owner_manifest_path": owner.manifest_path,
             "owner_name": owner.package_name,
+            "repo_id": source_repo_id,
         }),
     };
 
@@ -105,14 +122,23 @@ fn make_package_file(
     ))
 }
 
-fn make_workspace_file(repo_root: &Utf8Path, workspace: &WorkspaceRoot) -> Result<ParsedFile> {
+fn make_workspace_file(
+    repo_root: &Utf8Path,
+    workspace: &WorkspaceRoot,
+    source_repo_id: &str,
+    namespace_qualified_names: bool,
+) -> Result<ParsedFile> {
     let path = synthetic_workspace_path(workspace);
     let hash = manifest_hash(repo_root, &workspace.manifest_path, &workspace.workspace_id)?;
     let language = manifest_language(workspace.kind).to_owned();
-    let qualified_name = format!(
-        "workspace::{}::{}",
-        workspace.kind.as_str(),
-        workspace.manifest_path
+    let qualified_name = maybe_namespace_qn(
+        &format!(
+            "workspace::{}::{}",
+            workspace.kind.as_str(),
+            workspace.manifest_path
+        ),
+        source_repo_id,
+        namespace_qualified_names,
     );
     let node = Node {
         id: NodeId::UNSET,
@@ -137,16 +163,21 @@ fn make_workspace_file(repo_root: &Utf8Path, workspace: &WorkspaceRoot) -> Resul
             "workspace_manifest_path": workspace.manifest_path,
             "member_roots": workspace.member_roots,
             "member_owner_ids": workspace.member_owner_ids,
+            "repo_id": source_repo_id,
         }),
     };
-    let edges = workspace
+    let mut edges: Vec<Edge> = workspace
         .member_owner_ids
         .iter()
         .map(|owner_id| Edge {
             id: 0,
             kind: EdgeKind::Contains,
             source_qn: qualified_name.clone(),
-            target_qn: format!("package::{owner_id}"),
+            target_qn: maybe_namespace_qn(
+                &format!("package::{owner_id}"),
+                source_repo_id,
+                namespace_qualified_names,
+            ),
             file_path: path.clone(),
             line: None,
             confidence: 1.0,
@@ -154,9 +185,39 @@ fn make_workspace_file(repo_root: &Utf8Path, workspace: &WorkspaceRoot) -> Resul
             extra_json: serde_json::json!({
                 "synthetic_kind": "workspace_membership",
                 "workspace_id": workspace.workspace_id,
+                "repo_id": source_repo_id,
             }),
         })
         .collect();
+
+    if let Ok(registry) = RepoRegistry::load_or_bootstrap(repo_root) {
+        for member_root in &workspace.member_roots {
+            if let Some(registration) = registry.registrations.iter().find(|registration| {
+                registration.repo_id != source_repo_id
+                    && (registration.display_alias == member_root.as_str()
+                        || registration.root.ends_with(member_root.as_str()))
+            }) {
+                edges.push(Edge {
+                    id: 0,
+                    kind: EdgeKind::References,
+                    source_qn: qualified_name.clone(),
+                    target_qn: format!("repo::{}", registration.repo_id),
+                    file_path: path.clone(),
+                    line: None,
+                    confidence: 1.0,
+                    confidence_tier: Some("workspace_link".to_owned()),
+                    extra_json: serde_json::json!({
+                        "synthetic_kind": "workspace_repo_bridge",
+                        "workspace_id": workspace.workspace_id,
+                        "source_repo": source_repo_id,
+                        "target_repo": registration.repo_id,
+                        "relationship_reason": "workspace_link",
+                        "member_root": member_root,
+                    }),
+                });
+            }
+        }
+    }
 
     Ok(ParsedFile {
         path,
@@ -166,6 +227,14 @@ fn make_workspace_file(repo_root: &Utf8Path, workspace: &WorkspaceRoot) -> Resul
         nodes: vec![node],
         edges,
     })
+}
+
+fn maybe_namespace_qn(qname: &str, source_repo_id: &str, namespace: bool) -> String {
+    if namespace {
+        format!("repo::{source_repo_id}::{qname}")
+    } else {
+        qname.to_owned()
+    }
 }
 
 fn manifest_hash(repo_root: &Utf8Path, manifest_path: &str, fallback: &str) -> Result<String> {

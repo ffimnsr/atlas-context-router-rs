@@ -553,6 +553,8 @@ impl WatchRunner {
             batch_size: self.batch_size,
             target: plan.target,
             budget: crate::config::BuildRunBudget::default(),
+            source_repo_id: None,
+            namespace_qualified_names: false,
         };
 
         let (nodes_updated, errors) =

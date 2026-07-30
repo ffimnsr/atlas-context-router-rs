@@ -22,6 +22,7 @@ fn migration_adds_postprocess_state_table() {
             "last_error_code",
             "last_error",
             "updated_at_ms",
+            "source_repo_id",
         ])
     );
 

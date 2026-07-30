@@ -203,6 +203,7 @@ pub fn build_explain_change_summary(
             kind: match violation.kind {
                 atlas_core::BoundaryKind::CrossModule => "cross_module",
                 atlas_core::BoundaryKind::CrossPackage => "cross_package",
+                atlas_core::BoundaryKind::CrossRepo => "cross_repo",
             }
             .to_string(),
             description: violation.description.clone(),
