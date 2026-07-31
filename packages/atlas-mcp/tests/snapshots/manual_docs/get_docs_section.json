@@ -1,0 +1,36 @@
+{
+  "resolved_tool_name": "get_docs_section",
+  "input_contract": {
+    "canonical_form": "prefer canonical discriminated objects or preferred field families for new calls",
+    "families": [
+      {
+        "family_name": "selector",
+        "family_kind": "discriminated_object",
+        "discriminant_field": "selector.kind",
+        "accepted_values": ["heading", "line"],
+        "mutually_exclusive_legacy_fields": [],
+        "variants": [
+          {
+            "value": "heading",
+            "required_companion_fields": ["selector.heading"],
+            "minimal_example": {
+              "file": "README.md",
+              "selector": { "kind": "heading", "heading": "document.install" },
+              "output_format": "json"
+            }
+          },
+          {
+            "value": "line",
+            "required_companion_fields": ["selector.line"],
+            "minimal_example": {
+              "file": "README.md",
+              "selector": { "kind": "line", "line": 42 },
+              "output_format": "json"
+            }
+          }
+        ]
+      }
+    ],
+    "notes": []
+  }
+}

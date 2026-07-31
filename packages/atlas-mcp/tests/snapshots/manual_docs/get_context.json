@@ -1,0 +1,42 @@
+{
+  "resolved_tool_name": "get_context",
+  "input_contract": {
+    "canonical_form": "prefer canonical discriminated objects or preferred field families for new calls",
+    "families": [
+      {
+        "family_name": "target",
+        "family_kind": "discriminated_object",
+        "discriminant_field": "target.kind",
+        "accepted_values": ["query", "file", "files"],
+        "mutually_exclusive_legacy_fields": [],
+        "variants": [
+          {
+            "value": "query",
+            "required_companion_fields": ["target.query"],
+            "minimal_example": {
+              "target": { "kind": "query", "query": "compute" },
+              "output_format": "json"
+            }
+          },
+          {
+            "value": "file",
+            "required_companion_fields": ["target.file"],
+            "minimal_example": {
+              "target": { "kind": "file", "file": "src/lib.rs" },
+              "output_format": "json"
+            }
+          },
+          {
+            "value": "files",
+            "required_companion_fields": ["target.files"],
+            "minimal_example": {
+              "target": { "kind": "files", "files": ["src/lib.rs"] },
+              "output_format": "json"
+            }
+          }
+        ]
+      }
+    ],
+    "notes": []
+  }
+}

@@ -8,6 +8,7 @@ use crate::spec;
 use serde::Deserialize;
 use serde_json::Value;
 
+#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ToolResultContract {
     StableObject,
@@ -92,12 +93,12 @@ pub(crate) fn tool_result_contract(name: &str) -> ToolResultContract {
         | "get_docs_section"
         | "read_file_around_match"
         | "search_templates"
-        | "search_text_assets" => ToolResultContract::StableObject,
-        "query_graph"
+        | "search_text_assets"
+        | "query_graph"
         | "batch_query_graph"
         | "search_saved_context"
         | "search_decisions"
-        | "cross_session_search" => ToolResultContract::TextOnly,
+        | "cross_session_search" => ToolResultContract::StableObject,
         _ => panic!("tool_result_contract missing classification for {name}"),
     }
 }
@@ -207,11 +208,11 @@ fn base_tool_list_json() -> Value {
             },
             {
                 "name": "query_graph",
-                "description": "Full-text search the code graph by symbol name or identifier. Returns a compact, ranked list of matching symbols by default; set include_files=true when file-level hits are also useful. It does not return caller/callee usage edges. Empty `regex` is treated like omitted; truly empty `text`+`regex` requests return a self-correcting retry example instead of a bare validation failure. IMPORTANT: text is matched against indexed symbol names and qualified names (identifiers like 'BalancesTab', 'useFilteredBalances'), NOT against natural language — use short exact symbol names, not descriptive phrases. Follow up with symbol_neighbors, traverse_graph, or get_context when you need relationships.",
+                "description": "Full-text search the code graph by symbol name, qualified name, or supported intent phrase. Supported `text` grammar: plain identifier (`compute`), exact qualified name (`src/service.rs::fn::compute`), `who calls <symbol>`, `what breaks <symbol>`, and `tests for <symbol>`. Returns stable object `structuredContent` with `query`, `matches`, `summary`, `truncated`, and `warnings`; set include_files=true when file-level hits are also useful. It does not return caller/callee usage edges. Empty `regex` is treated like omitted; truly empty `text`+`regex` requests return a self-correcting retry example instead of a bare validation failure. Natural-language-only descriptions without a concrete identifier are rejected with retry guidance. Follow up with symbol_neighbors, traverse_graph, or get_context when you need relationships.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "text":     { "type": "string",  "description": "Symbol name or identifier to search (e.g. 'BalancesTab', 'useFilteredBalances'). FTS matches against indexed symbol names and qualified names — use short exact identifiers, NOT natural language phrases. Multi-word phrases rarely produce hits." },
+                        "text":     { "type": "string",  "description": "Query text. Supported grammar: plain identifier ('compute'), exact qualified name ('src/service.rs::fn::compute'), 'who calls <symbol>', 'what breaks <symbol>', or 'tests for <symbol>'. Natural-language-only descriptions without a concrete identifier are rejected." },
                         "kind":     { "type": "string",  "description": "Filter by node kind (e.g. 'function', 'struct')" },
                         "language": { "type": "string",  "description": "Filter by language (e.g. 'rust', 'python')" },
                         "limit":    { "type": "integer", "description": "Maximum results to return (default 20)" },
@@ -223,8 +224,16 @@ fn base_tool_list_json() -> Value {
                         "fuzzy":    { "type": "boolean", "description": "Enable fuzzy (edit-distance) typo recovery for near-miss symbol names (default false). Uses relaxed candidate expansion plus stronger code-symbol ranking so close symbol typos outrank weaker docs/config matches." },
                         "hybrid":   { "type": "boolean", "description": "Enable hybrid FTS + vector retrieval with Reciprocal Rank Fusion (default false). Requires search.embedding.url in .atlas/config.toml; falls back to FTS-only when no embedding backend is configured." },
                         "include_files": { "type": "boolean", "description": "Include file nodes in the result set (default false). Leave disabled for symbol-centric search; enable when a file-level hit is useful." },
-                        "repo_id": { "type": "string", "description": "Optional registry-backed repo selector. Restricts results to one registered repo id." },
-                        "all_repos": { "type": "boolean", "description": "Search all enabled registered repos instead of default current repo scope." },
+                        "repo_scope": {
+                            "type": "object",
+                            "description": "Repo scope object. Use { kind: 'current' }, { kind: 'repo_id', repo_id: '<id>' }, or { kind: 'all' }.",
+                            "properties": {
+                                "kind": { "type": "string", "description": "Repo scope kind: current, repo_id, or all." },
+                                "repo_id": { "type": "string", "description": "Required when kind='repo_id'. Must be registered and enabled." }
+                            },
+                            "required": ["kind"]
+                        },
+
                         "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
                     },
                     "required": []
@@ -232,17 +241,13 @@ fn base_tool_list_json() -> Value {
             },
             {
                 "name": "batch_query_graph",
-                "description": "Run multiple query_graph searches in a single round-trip. Provide EITHER 'text' (a space- or comma-separated list of symbol names that is auto-split into one query per token, e.g. 'BalancesTab, compute, handleRequest') OR 'queries' (an explicit array of query objects). Returns an array of per-query results. Each token/query uses the same symbol-name FTS as query_graph — pass short exact identifiers, not natural-language phrases. File nodes remain opt-in per query via include_files=true. Max 20 tokens/queries per call.",
+                "description": "Run multiple query_graph searches in a single round-trip. Canonical input is top-level `items`: an explicit array of query_graph-shaped objects. Returns stable object `structuredContent` with normalized `items`, per-item `results`, `summary`, and `warnings`. Each item uses same symbol-name FTS as query_graph — pass short exact identifiers, not natural-language phrases. File nodes remain opt-in per item via include_files=true. Max 20 items per call.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "text": {
-                            "type": "string",
-                            "description": "Space- or comma-separated symbol names to look up. Each delimiter-separated token becomes an independent FTS query (e.g. 'BalancesTab, compute, handleRequest' or 'BalancesTab compute handleRequest'). Mutually exclusive with 'queries'; if both are given, 'text' wins."
-                        },
-                        "queries": {
+                        "items": {
                             "type": "array",
-                            "description": "Array of query objects (max 20). Each object accepts the same fields as query_graph: text, kind, language, limit, semantic, expand, expand_hops, regex, subpath, fuzzy, hybrid. Use when per-query options differ.",
+                            "description": "Array of query objects (1-20). Each object accepts same fields as query_graph: text, kind, language, limit, semantic, expand, expand_hops, regex, subpath, fuzzy, hybrid, include_files.",
                             "maxItems": 20,
                             "items": {
                                 "type": "object",
@@ -263,8 +268,17 @@ fn base_tool_list_json() -> Value {
                                 "required": []
                             }
                         },
-                        "repo_id": { "type": "string", "description": "Optional registry-backed repo selector applied to all batch queries." },
-                        "all_repos": { "type": "boolean", "description": "Search all enabled registered repos for every batch query." },
+
+                        "repo_scope": {
+                            "type": "object",
+                            "description": "Repo scope object. Use { kind: 'current' }, { kind: 'repo_id', repo_id: '<id>' }, or { kind: 'all' }.",
+                            "properties": {
+                                "kind": { "type": "string", "description": "Repo scope kind: current, repo_id, or all." },
+                                "repo_id": { "type": "string", "description": "Required when kind='repo_id'. Must be registered and enabled." }
+                            },
+                            "required": ["kind"]
+                        },
+
                         "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
                     },
                     "required": []
@@ -276,15 +290,27 @@ fn base_tool_list_json() -> Value {
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "mode":      { "type": "string",  "description": "Optional change-source mode: files, base, staged, or working_tree. When set, provide only that mode's required fields and omit other mode families." },
-                        "files":     { "type": "array",   "items": { "type": "string" }, "description": "Repo-relative changed file paths. Alternative to base/staged/working_tree." },
-                        "base":      { "type": "string",  "description": "Base git ref (e.g. 'origin/main'). Infers changed files from git diff when files not provided." },
-                        "staged":    { "type": "boolean", "description": "Diff staged changes only (default false). Mutually exclusive with files/base/working_tree." },
-                        "working_tree": { "type": "boolean", "description": "Diff working-tree changes only. Mutually exclusive with files/base/staged." },
+                        "change_source": {
+                            "type": "object",
+                            "description": "Change-source object. Use { kind: 'files', files: ['src/lib.rs'] }, { kind: 'base', base: 'origin/main' }, { kind: 'staged' }, or { kind: 'working_tree' }.",
+                            "properties": {
+                                "kind": { "type": "string", "description": "Change-source kind: files, base, staged, or working_tree." },
+                                "files": { "type": "array", "items": { "type": "string" }, "description": "Required when kind='files'. Non-empty repo-relative file path list." },
+                                "base": { "type": "string", "description": "Required when kind='base'. Base git ref such as 'origin/main'." }
+                            },
+                            "required": ["kind"]
+                        },
                         "max_depth": { "type": "integer", "description": "Traversal depth limit (default 5)" },
                         "max_nodes": { "type": "integer", "description": "Maximum impacted nodes to return (default 200)" },
-                        "repo_id": { "type": "string", "description": "Optional registry-backed repo selector. Computes impact from that repo's own git root and indexed symbols." },
-                        "all_repos": { "type": "boolean", "description": "Expand impact seeds across all enabled registered repos." },
+                        "repo_scope": {
+                            "type": "object",
+                            "description": "Repo scope object. Use { kind: 'current' }, { kind: 'repo_id', repo_id: '<id>' }, or { kind: 'all' }.",
+                            "properties": {
+                                "kind": { "type": "string", "description": "Repo scope kind: current, repo_id, or all." },
+                                "repo_id": { "type": "string", "description": "Required when kind='repo_id'. Must be registered and enabled." }
+                            },
+                            "required": ["kind"]
+                        },
                         "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
                     },
                     "required": []
@@ -296,11 +322,16 @@ fn base_tool_list_json() -> Value {
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "mode": { "type": "string", "description": "Optional change-source mode: files, base, staged, or working_tree. When set, provide only that mode's required fields and omit other mode families." },
-                        "files": { "type": "array", "items": { "type": "string" }, "description": "Repo-relative changed file paths. Alternative to base/staged/working_tree." },
-                        "base": { "type": "string", "description": "Base git ref (e.g. 'origin/main'). Infers changed files from git diff when files not provided." },
-                        "staged": { "type": "boolean", "description": "Diff staged changes only (default false). Mutually exclusive with files/base/working_tree." },
-                        "working_tree": { "type": "boolean", "description": "Diff working-tree changes only. Mutually exclusive with files/base/staged." },
+                        "change_source": {
+                            "type": "object",
+                            "description": "Change-source object. Use { kind: 'files', files: ['src/lib.rs'] }, { kind: 'base', base: 'origin/main' }, { kind: 'staged' }, or { kind: 'working_tree' }.",
+                            "properties": {
+                                "kind": { "type": "string", "description": "Change-source kind: files, base, staged, or working_tree." },
+                                "files": { "type": "array", "items": { "type": "string" }, "description": "Required when kind='files'. Non-empty repo-relative file path list." },
+                                "base": { "type": "string", "description": "Required when kind='base'. Base git ref such as 'origin/main'." }
+                            },
+                            "required": ["kind"]
+                        },
                         "max_depth": { "type": "integer", "description": "Traversal depth limit (default 3)" },
                         "max_nodes": { "type": "integer", "description": "Maximum impacted nodes to consider (default 200)" },
                         "token_budget": { "type": "integer", "description": "Maximum tokens to include in the result. Overrides the default policy limit for this call only. Cannot exceed the policy ceiling." },
@@ -311,16 +342,28 @@ fn base_tool_list_json() -> Value {
             },
             {
                 "name": "detect_changes",
-                "description": "List files changed since a base git ref, with per-file node counts from the graph. Change-source conflicts return structured retry guidance instead of a bare ambiguity error.",
+                "description": "List files changed since a base git ref, with per-file node counts from the graph. Use `change_source={ kind: ... }` with `base`, `staged`, or `working_tree`.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "mode":   { "type": "string",  "description": "Optional change-source mode: base, staged, or working_tree. When set, provide only that mode's required fields and omit other mode families." },
-                        "base":   { "type": "string",  "description": "Base ref (e.g. 'origin/main'). Omit to diff working tree." },
-                        "staged": { "type": "boolean", "description": "Diff staged changes only (default false)" },
-                        "working_tree": { "type": "boolean", "description": "Diff working-tree changes only. Mutually exclusive with base/staged." },
-                        "repo_id": { "type": "string", "description": "Optional registry-backed repo selector. Diffs that repo's own git root." },
-                        "all_repos": { "type": "boolean", "description": "Detect changes across all enabled registered repos." },
+                        "change_source": {
+                            "type": "object",
+                            "description": "Change-source object. Use { kind: 'base', base: 'origin/main' }, { kind: 'staged' }, or { kind: 'working_tree' }.",
+                            "properties": {
+                                "kind": { "type": "string", "description": "Change-source kind: base, staged, or working_tree." },
+                                "base": { "type": "string", "description": "Required when kind='base'. Base git ref such as 'origin/main'." }
+                            },
+                            "required": ["kind"]
+                        },
+                        "repo_scope": {
+                            "type": "object",
+                            "description": "Repo scope object. Use { kind: 'current' }, { kind: 'repo_id', repo_id: '<id>' }, or { kind: 'all' }.",
+                            "properties": {
+                                "kind": { "type": "string", "description": "Repo scope kind: current, repo_id, or all." },
+                                "repo_id": { "type": "string", "description": "Required when kind='repo_id'. Must be registered and enabled." }
+                            },
+                            "required": ["kind"]
+                        },
                         "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
                     },
                     "required": []
@@ -328,14 +371,29 @@ fn base_tool_list_json() -> Value {
             },
             {
                 "name": "build_or_update_graph",
-                "description": "Scan, parse, and persist (or incrementally update) the code graph. Use mode='build' for a full scan or mode='update' for a git-diff-based incremental update. In update mode, omitting 'base' or passing an empty string falls back to working-tree changes unless 'staged' or explicit 'files' are provided.",
+                "description": "Scan, parse, and persist the code graph. Canonical input is `operation={ kind: 'build' }` for full scan or `operation={ kind: 'update', change_source: ... }` for incremental update.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "mode":   { "type": "string",  "description": "'build' (full scan, default) or 'update' (incremental)" },
-                        "base":   { "type": "string",  "description": "For update: base git ref (e.g. 'origin/main'). Omit or pass an empty string to diff the working tree instead." },
-                        "staged": { "type": "boolean", "description": "For update: diff staged changes only" },
-                        "files":  { "type": "array", "items": { "type": "string" }, "description": "For update: explicit list of repo-relative file paths to re-index" },
+                        "operation": {
+                            "type": "object",
+                            "description": "Operation object. Use { kind: 'build' } or { kind: 'update', change_source: { kind: 'working_tree'|'staged'|'base'|'files', ... } }.",
+                            "properties": {
+                                "kind": { "type": "string", "description": "Operation kind: build or update." },
+                                "change_source": {
+                                    "type": "object",
+                                    "description": "Required when kind='update'. Use { kind: 'working_tree' }, { kind: 'staged' }, { kind: 'base', base: 'origin/main' }, or { kind: 'files', files: ['src/lib.rs'] }.",
+                                    "properties": {
+                                        "kind": { "type": "string", "description": "Change-source kind: working_tree, staged, base, or files." },
+                                        "base": { "type": "string", "description": "Required when kind='base'. Base git ref such as 'origin/main'." },
+                                        "files": { "type": "array", "items": { "type": "string" }, "description": "Required when kind='files'. Non-empty repo-relative file path list." }
+                                    },
+                                    "required": ["kind"]
+                                }
+                            },
+                            "required": ["kind"]
+                        },
+
                         "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
                     },
                     "required": []
@@ -371,14 +429,19 @@ fn base_tool_list_json() -> Value {
             },
             {
                 "name": "get_minimal_context",
-                "description": "Auto-detect changed files from git, then return a compact review bundle: changed symbols, immediate impact, risk flags. Lower token overhead than get_review_context. Change-source conflicts return structured retry guidance instead of a bare ambiguity error.",
+                "description": "Auto-detect changed files from git, then return a compact review bundle: changed symbols, immediate impact, risk flags. Lower token overhead than get_review_context.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "mode":      { "type": "string",  "description": "Optional change-source mode: base, staged, or working_tree. When set, provide only that mode's required fields and omit other mode families." },
-                        "base":      { "type": "string",  "description": "Base git ref (e.g. 'origin/main'). Omit to diff working tree." },
-                        "staged":    { "type": "boolean", "description": "Diff staged changes only (default false)" },
-                        "working_tree": { "type": "boolean", "description": "Diff working-tree changes only. Mutually exclusive with base/staged." },
+                        "change_source": {
+                            "type": "object",
+                            "description": "Change-source object. Use { kind: 'base', base: 'origin/main' }, { kind: 'staged' }, or { kind: 'working_tree' }.",
+                            "properties": {
+                                "kind": { "type": "string", "description": "Change-source kind: base, staged, or working_tree." },
+                                "base": { "type": "string", "description": "Required when kind='base'. Base git ref such as 'origin/main'." }
+                            },
+                            "required": ["kind"]
+                        },
                         "max_depth": { "type": "integer", "description": "Traversal depth limit (default 2)" },
                         "max_nodes": { "type": "integer", "description": "Maximum impacted nodes (default 50)" },
                         "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
@@ -388,15 +451,20 @@ fn base_tool_list_json() -> Value {
             },
             {
                 "name": "explain_change",
-                "description": "Advanced impact analysis for a set of changed files: risk level, changed-symbol breakdown by change kind (api/signature/internal), boundary violations, test coverage gaps, and a compact summary. Deterministic, LLM-free. Change-source conflicts return structured retry guidance instead of a bare ambiguity error.",
+                "description": "Advanced impact analysis for a set of changed files: risk level, changed-symbol breakdown by change kind (api/signature/internal), boundary violations, test coverage gaps, and a compact summary. Deterministic, LLM-free.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "mode":      { "type": "string",  "description": "Optional change-source mode: files, base, staged, or working_tree. When set, provide only that mode's required fields and omit other mode families." },
-                        "files":     { "type": "array", "items": { "type": "string" }, "description": "Repo-relative changed file paths. Required unless using base/staged/working_tree." },
-                        "base":      { "type": "string",  "description": "Base git ref (e.g. 'origin/main'). Infers changed files from git diff when files not provided." },
-                        "staged":    { "type": "boolean", "description": "Diff staged changes only (default false). Used when inferring files from git." },
-                        "working_tree": { "type": "boolean", "description": "Diff working-tree changes only. Mutually exclusive with files/base/staged." },
+                        "change_source": {
+                            "type": "object",
+                            "description": "Change-source object. Use { kind: 'files', files: ['src/lib.rs'] }, { kind: 'base', base: 'origin/main' }, { kind: 'staged' }, or { kind: 'working_tree' }.",
+                            "properties": {
+                                "kind": { "type": "string", "description": "Change-source kind: files, base, staged, or working_tree." },
+                                "files": { "type": "array", "items": { "type": "string" }, "description": "Required when kind='files'. Non-empty repo-relative file path list." },
+                                "base": { "type": "string", "description": "Required when kind='base'. Base git ref such as 'origin/main'." }
+                            },
+                            "required": ["kind"]
+                        },
                         "max_depth": { "type": "integer", "description": "Traversal depth limit for impact (default 5)" },
                         "max_nodes": { "type": "integer", "description": "Maximum impacted nodes (default 200)" },
                         "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
@@ -406,13 +474,22 @@ fn base_tool_list_json() -> Value {
             },
             {
                 "name": "get_context",
-                "description": "Build bounded context around a symbol, file, or change-set. Provide EITHER 'query' (a symbol name, qualified name, or structured intent phrase like 'who calls MyFunc') OR 'file' (a repo-relative path) OR 'files' (a list of changed paths). Returns ranked nodes, edges, files, and truncation/ambiguity metadata. IMPORTANT: 'query' is matched against indexed symbol names — it does NOT accept natural-language descriptions. Use short exact identifiers or intent phrases. When changed files include docs, config, templates, SQL, or prompts, pass those paths in 'files' to merge graph and content assets under one bounded selection, ranking, and truncation policy.",
+                "description": "Build bounded context around a symbol, file, or change-set. Canonical input is `target={ kind: 'query'|'file'|'files', ... }`. Supported query grammar: plain identifier (`compute`), exact qualified name (`src/service.rs::fn::compute`), `who calls <symbol>`, `what breaks <symbol>`, and `tests for <symbol>`. Natural-language-only descriptions without a concrete identifier are rejected with retry guidance. When changed files include docs, config, templates, SQL, or prompts, pass those paths in files target to merge graph and content assets under one bounded selection, ranking, and truncation policy.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "query":     { "type": "string",  "description": "Symbol name, qualified name, or intent phrase. Examples: 'AuthService' (symbol), 'src/lib.rs::fn::foo' (qualified name), 'who calls handle_request' (usage lookup), 'what breaks MyFunc' (impact). Do NOT pass natural-language descriptions — they will not match any graph nodes. Alternative to file/files." },
-                        "file":      { "type": "string",  "description": "Repo-relative file path target (file intent). Alternative to query/files." },
-                        "files":     { "type": "array", "items": { "type": "string" }, "description": "Changed file paths for review/impact context. Alternative to query/file." },
+                        "target": {
+                            "type": "object",
+                            "description": "Target object. Use { kind: 'query', query: 'handle_request' }, { kind: 'file', file: 'src/lib.rs' }, or { kind: 'files', files: ['src/lib.rs'] }. Query grammar supports plain identifiers, exact qualified names, 'who calls <symbol>', 'what breaks <symbol>', and 'tests for <symbol>'.",
+                            "properties": {
+                                "kind": { "type": "string", "description": "Target kind: query, file, or files." },
+                                "query": { "type": "string", "description": "Required when kind='query'. Supported grammar: plain identifier, exact qualified name, 'who calls <symbol>', 'what breaks <symbol>', or 'tests for <symbol>'. Natural-language-only descriptions without a concrete identifier are rejected." },
+                                "file": { "type": "string", "description": "Required when kind='file'. Repo-relative file path." },
+                                "files": { "type": "array", "items": { "type": "string" }, "description": "Required when kind='files'. Non-empty repo-relative file path list." }
+                            },
+                            "required": ["kind"]
+                        },
+
                         "intent":    { "type": "string",  "description": "Override intent: symbol, file, review, impact, usage_lookup, refactor_safety, dead_code_check, rename_preview, dependency_removal. Inferred when omitted." },
                         "max_nodes": { "type": "integer", "description": "Maximum nodes to include (default 100)." },
                         "max_edges": { "type": "integer", "description": "Maximum edges to include (default 100)." },
@@ -566,11 +643,20 @@ fn base_tool_list_json() -> Value {
             },
             {
                 "name": "search_saved_context",
-                "description": "Search previously saved artifacts in the content store using BM25 + trigram fallback. Returns previews (first 256 chars) and source_ids for follow-up retrieval.",
+                "description": "Search previously saved artifacts in the content store using BM25 + trigram fallback. Returns stable object `structuredContent` with `query`, preview `matches`, `summary`, `truncated`, and `warnings` for follow-up retrieval.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
                         "query":        { "type": "string",  "description": "Search query text." },
+                        "repo_scope": {
+                            "type": "object",
+                            "description": "Repo scope object for cross-session search. Use { kind: 'current' }, { kind: 'repo_id', repo_id: '<id>' }, or { kind: 'all' }.",
+                            "properties": {
+                                "kind": { "type": "string", "description": "Repo scope kind: current, repo_id, or all." },
+                                "repo_id": { "type": "string", "description": "Required when kind='repo_id'. Must be registered and enabled." }
+                            },
+                            "required": ["kind"]
+                        },
                         "session_id":   { "type": "string",  "description": "Restrict search to artifacts from this session." },
                         "agent_id":     { "type": "string",  "description": "Restrict search to artifacts from one agent memory partition." },
                         "merge_agent_partitions": { "type": "boolean", "description": "Intentionally merge saved-context search across all agent partitions." },
@@ -583,7 +669,7 @@ fn base_tool_list_json() -> Value {
             },
             {
                 "name": "search_decisions",
-                "description": "Search persisted decision memory for prior conclusions, linked evidence, and artifact references.",
+                "description": "Search persisted decision memory for prior conclusions, linked evidence, and artifact references. Returns stable object `structuredContent` with `query`, `matches`, `summary`, `truncated`, and `warnings`.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -607,6 +693,15 @@ fn base_tool_list_json() -> Value {
                         "merge_agent_partitions": { "type": "boolean", "description": "When true, allow reads across agent partitions intentionally after repo/session checks pass." },
                         "chunk_offset":  { "type": "integer", "description": "0-based chunk index to start reading from (default 0). Use next_chunk_offset from a prior truncated response for paging." },
                         "max_bytes":     { "type": "integer", "description": "Byte cap on returned content (default 65536). When content exceeds this the response sets truncated=true and includes next_chunk_offset." },
+                        "repo_scope": {
+                            "type": "object",
+                            "description": "Repo scope object. Use { kind: 'current' }, { kind: 'repo_id', repo_id: '<id>' }, or { kind: 'all' }.",
+                            "properties": {
+                                "kind": { "type": "string", "description": "Repo scope kind: current, repo_id, or all." },
+                                "repo_id": { "type": "string", "description": "Required when kind='repo_id'. Must be registered and enabled." }
+                            },
+                            "required": ["kind"]
+                        },
                         "output_format": { "type": "string",  "description": DEFAULT_OUTPUT_DESCRIPTION }
                     },
                     "required": ["source_id"]
@@ -623,6 +718,15 @@ fn base_tool_list_json() -> Value {
                         "source_type":  { "type": "string",  "description": "Category tag (e.g. 'review_context', 'mcp_artifact'). Default: 'mcp_artifact'." },
                         "session_id":   { "type": "string",  "description": "Associate artifact with this session. Omit to use derived session." },
                         "agent_id":     { "type": "string",  "description": "Associate artifact with this agent memory partition." },
+                        "repo_scope": {
+                            "type": "object",
+                            "description": "Repo scope object. Use { kind: 'current' }, { kind: 'repo_id', repo_id: '<id>' }, or { kind: 'all' }.",
+                            "properties": {
+                                "kind": { "type": "string", "description": "Repo scope kind: current, repo_id, or all." },
+                                "repo_id": { "type": "string", "description": "Required when kind='repo_id'. Must be registered and enabled." }
+                            },
+                            "required": ["kind"]
+                        },
                         "content_type": { "type": "string",  "description": "MIME type: 'text/plain' (default), 'text/markdown', or 'application/json'." },
                         "output_format":{ "type": "string",  "description": DEFAULT_OUTPUT_DESCRIPTION }
                     },
@@ -658,7 +762,7 @@ fn base_tool_list_json() -> Value {
             },
             {
                 "name": "cross_session_search",
-                "description": "CM11: Search saved context artifacts across all sessions for this repo. Use this for cross-session recall when the relevant content may have been saved in a prior session.",
+                "description": "CM11: Search saved context artifacts across all sessions for this repo. Returns stable object `structuredContent` with `query`, distinct `sessions`, preview `matches`, `summary`, `truncated`, and `warnings`. Use this for cross-session recall when the relevant content may have been saved in a prior session.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -667,6 +771,15 @@ fn base_tool_list_json() -> Value {
                         "agent_id":      { "type": "string",  "description": "Restrict cross-session search to one agent memory partition." },
                         "merge_agent_partitions": { "type": "boolean", "description": "Intentionally merge cross-session search across all agent partitions." },
                         "limit":         { "type": "integer", "description": "Maximum results to return (default 10)." },
+                        "repo_scope": {
+                            "type": "object",
+                            "description": "Repo scope object. Use { kind: 'current' }, { kind: 'repo_id', repo_id: '<id>' }, or { kind: 'all' }.",
+                            "properties": {
+                                "kind": { "type": "string", "description": "Repo scope kind: current, repo_id, or all." },
+                                "repo_id": { "type": "string", "description": "Required when kind='repo_id'. Must be registered and enabled." }
+                            },
+                            "required": ["kind"]
+                        },
                         "output_format": { "type": "string",  "description": DEFAULT_OUTPUT_DESCRIPTION }
                     },
                     "required": ["query"]
@@ -764,27 +877,35 @@ fn base_tool_list_json() -> Value {
             },
             {
                 "name": "read_file_excerpt",
-                "description": "Read bounded file content from a repo-relative path using either explicit line range(s) or a single line with surrounding context. Wrapper-emitted absent-equivalent selector fields like `0`, `[]`, and `null` are ignored when exactly one selector family is materially set. Use this when you already know the file path and need precise excerpts instead of content search.",
+                "description": "Read bounded file content from a repo-relative path using `selector={ kind: 'range'|'ranges'|'context', ... }`. Use this when you already know the file path and need precise excerpts instead of content search.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
                         "file": { "type": "string", "description": "Repo-relative file path to read." },
-                        "start_line": { "type": "integer", "description": "1-based inclusive start line for single-range mode. Requires end_line." },
-                        "end_line": { "type": "integer", "description": "1-based inclusive end line for single-range mode. Requires start_line." },
-                        "line": { "type": "integer", "description": "1-based line number for line-with-context mode." },
-                        "before": { "type": "integer", "description": "Context lines before `line` (default 0). Only valid with line." },
-                        "after": { "type": "integer", "description": "Context lines after `line` (default 0). Only valid with line." },
-                        "line_ranges": {
-                            "type": "array",
-                            "description": "Explicit list of line ranges. Mutually exclusive with start_line/end_line and line.",
-                            "items": {
-                                "type": "object",
-                                "properties": {
-                                    "start_line": { "type": "integer", "description": "1-based inclusive start line." },
-                                    "end_line": { "type": "integer", "description": "1-based inclusive end line." }
-                                },
-                                "required": ["start_line", "end_line"]
-                            }
+                        "selector": {
+                            "type": "object",
+                            "description": "Selector object. Use { kind: 'range', start_line: 10, end_line: 20 }, { kind: 'ranges', line_ranges: [{ start_line: 10, end_line: 20 }] }, or { kind: 'context', line: 42, before: 2, after: 2 }.",
+                            "properties": {
+                                "kind": { "type": "string", "description": "Selector kind: range, ranges, or context." },
+                                "start_line": { "type": "integer", "description": "Required when kind='range'. 1-based inclusive start line." },
+                                "end_line": { "type": "integer", "description": "Required when kind='range'. 1-based inclusive end line." },
+                                "line": { "type": "integer", "description": "Required when kind='context'. 1-based line number." },
+                                "before": { "type": "integer", "description": "Optional when kind='context'. Context lines before line." },
+                                "after": { "type": "integer", "description": "Optional when kind='context'. Context lines after line." },
+                                "line_ranges": {
+                                    "type": "array",
+                                    "description": "Required when kind='ranges'. Non-empty list of line ranges.",
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "start_line": { "type": "integer", "description": "1-based inclusive start line." },
+                                            "end_line": { "type": "integer", "description": "1-based inclusive end line." }
+                                        },
+                                        "required": ["start_line", "end_line"]
+                                    }
+                                }
+                            },
+                            "required": ["kind"]
                         },
                         "max_lines": { "type": "integer", "description": "Maximum excerpt lines to return across all ranges (default 200, clamped by policy)." },
                         "repo_root": { "type": "string", "description": "Optional repo-root assertion. When provided, Atlas fails if it does not match current repo identity." },
@@ -795,13 +916,21 @@ fn base_tool_list_json() -> Value {
             },
             {
                 "name": "get_docs_section",
-                "description": "Resolve a Markdown section from a repo-relative documentation file using either a heading path/slug or a line number. Returns the section excerpt with heading metadata and file hash.",
+                "description": "Resolve a Markdown section from a repo-relative documentation file using `selector={ kind: 'heading'|'line', ... }`. Returns the section excerpt with heading metadata and file hash.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
                         "file": { "type": "string", "description": "Repo-relative Markdown file path to read." },
-                        "heading": { "type": "string", "description": "Heading path, slug, or title to resolve. Mutually exclusive with line." },
-                        "line": { "type": "integer", "description": "1-based line number to resolve to the containing Markdown section. Mutually exclusive with heading." },
+                        "selector": {
+                            "type": "object",
+                            "description": "Selector object. Use { kind: 'heading', heading: 'document.install' } or { kind: 'line', line: 42 }.",
+                            "properties": {
+                                "kind": { "type": "string", "description": "Selector kind: heading or line." },
+                                "heading": { "type": "string", "description": "Required when kind='heading'. Heading path, slug, or title to resolve." },
+                                "line": { "type": "integer", "description": "Required when kind='line'. 1-based line number." }
+                            },
+                            "required": ["kind"]
+                        },
                         "max_bytes": { "type": "integer", "description": "Maximum bytes of section content to emit before truncating (default 16384)." },
                         "repo_root": { "type": "string", "description": "Optional repo-root assertion. When provided, Atlas fails if it does not match current repo identity." },
                         "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
@@ -936,8 +1065,15 @@ fn base_tool_list_json() -> Value {
                         "fuzzy":         { "type": "boolean", "description": "Whether fuzzy name-matching boost would be active (default false)." },
                         "hybrid":        { "type": "boolean", "description": "Whether hybrid FTS + vector retrieval would be used (default false). Requires search.embedding.url in .atlas/config.toml." },
                         "include_files": { "type": "boolean", "description": "Whether file nodes would be included in the result set (default false)." },
-                        "repo_id": { "type": "string", "description": "Optional registry-backed repo selector. Restricts explain_query planning to one registered repo." },
-                        "all_repos": { "type": "boolean", "description": "Explain query planning across all enabled registered repos." },
+                        "repo_scope": {
+                            "type": "object",
+                            "description": "Repo scope object. Use { kind: 'current' }, { kind: 'repo_id', repo_id: '<id>' }, or { kind: 'all' }.",
+                            "properties": {
+                                "kind": { "type": "string", "description": "Repo scope kind: current, repo_id, or all." },
+                                "repo_id": { "type": "string", "description": "Required when kind='repo_id'. Must be registered and enabled." }
+                            },
+                            "required": ["kind"]
+                        },
                         "output_format": { "type": "string",  "description": DEFAULT_OUTPUT_DESCRIPTION }
                     },
                     "required": []
@@ -1004,17 +1140,24 @@ fn base_tool_list_json() -> Value {
             },
             {
                 "name": "resolve_symbol",
-                "description": "Resolve a symbol name to its exact qualified_name in the graph. Eliminates the manual workflow of query_graph → copy qualified_name → call symbol_neighbors. Returns the best match, an ambiguity list when multiple symbols match, and follow-up suggestions. Accepts public kind aliases (e.g. 'function'/'fn', 'struct'/'record') that are mapped to the compact tokens used in qualified names.",
+                "description": "Resolve a symbol name or exact qualified_name to its canonical graph symbol. Useful before relationship tools when you want one exact target from either a plain identifier (`compute`) or a fully qualified name (`src/service.rs::fn::compute`). Eliminates the manual workflow of query_graph → copy qualified_name → call symbol_neighbors. Returns the best match, an ambiguity list when multiple symbols match, and follow-up suggestions. Accepts public kind aliases (e.g. 'function'/'fn', 'struct'/'record') that are mapped to the compact tokens used in qualified names.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "name":          { "type": "string",  "description": "Symbol name to resolve (e.g. 'LoadIdentityMessages', 'compute'). Matched against indexed symbol names using FTS." },
+                        "name":          { "type": "string",  "description": "Symbol identifier or exact qualified name to resolve (e.g. 'LoadIdentityMessages', 'compute', 'src/service.rs::fn::compute')." },
                         "kind":          { "type": "string",  "description": "Optional kind filter. Accepts public aliases: 'function'/'fn'/'func', 'method', 'class', 'struct'/'record', 'interface'/'iface', 'trait', 'enum', 'module'/'mod', 'variable'/'var', 'constant'/'const', 'test', 'import', 'package'/'pkg', 'file'." },
                         "file":          { "type": "string",  "description": "Optional file path filter. Only returns matches whose file_path contains this string (e.g. 'internal/requestctx/context.go' or 'src/')." },
                         "language":      { "type": "string",  "description": "Optional language filter (e.g. 'rust', 'go', 'typescript')." },
                         "limit":         { "type": "integer", "description": "Maximum matches to return (default 10)." },
-                        "repo_id": { "type": "string", "description": "Optional registry-backed repo selector. Restricts candidates to one registered repo." },
-                        "all_repos": { "type": "boolean", "description": "Resolve across all enabled registered repos." },
+                        "repo_scope": {
+                            "type": "object",
+                            "description": "Repo scope object. Use { kind: 'current' }, { kind: 'repo_id', repo_id: '<id>' }, or { kind: 'all' }.",
+                            "properties": {
+                                "kind": { "type": "string", "description": "Repo scope kind: current, repo_id, or all." },
+                                "repo_id": { "type": "string", "description": "Required when kind='repo_id'. Must be registered and enabled." }
+                            },
+                            "required": ["kind"]
+                        },
                         "output_format": { "type": "string",  "description": DEFAULT_OUTPUT_DESCRIPTION }
                     },
                     "required": ["name"]
@@ -1111,6 +1254,8 @@ fn tool_output_schema_for(name: &str) -> Option<Value> {
         "doctor" => Some(doctor_output_schema()),
         "db_check" => Some(db_check_output_schema()),
         "debug_graph" => Some(debug_graph_output_schema()),
+        "query_graph" => Some(query_graph_output_schema()),
+        "batch_query_graph" => Some(batch_query_graph_output_schema()),
         "explain_query" => Some(explain_query_output_schema()),
         "analyze_architecture" => Some(insight_report_output_schema()),
         "analyze_metrics" => Some(insight_report_output_schema()),
@@ -1128,10 +1273,13 @@ fn tool_output_schema_for(name: &str) -> Option<Value> {
         "get_session_status" => Some(get_session_status_output_schema()),
         "compact_session" => Some(compact_session_output_schema()),
         "resume_session" => Some(resume_session_output_schema()),
+        "search_saved_context" => Some(search_saved_context_output_schema()),
+        "search_decisions" => Some(search_decisions_output_schema()),
         "read_saved_context" => Some(read_saved_context_output_schema()),
         "save_context_artifact" => Some(save_context_artifact_output_schema()),
         "get_context_stats" => Some(get_context_stats_output_schema()),
         "purge_saved_context" => Some(purge_saved_context_output_schema()),
+        "cross_session_search" => Some(cross_session_search_output_schema()),
         "get_global_memory" => Some(get_global_memory_output_schema()),
         "symbol_neighbors" => Some(symbol_neighbors_output_schema()),
         "cross_file_links" => Some(cross_file_links_output_schema()),
@@ -1648,14 +1796,12 @@ fn change_source_schema() -> Value {
         "type": "object",
         "additionalProperties": false,
         "properties": {
-            "mode": { "type": "string" },
+            "kind": { "type": "string" },
             "resolved_files": { "type": "array", "items": { "type": "string" } },
             "deleted_files": { "type": "array", "items": { "type": "string" } },
-            "base": { "type": ["string", "null"] },
-            "staged": { "type": "boolean" },
-            "working_tree": { "type": "boolean" }
+            "base": { "type": ["string", "null"] }
         },
-        "required": ["mode", "resolved_files", "deleted_files", "base", "staged", "working_tree"]
+        "required": ["kind", "resolved_files", "deleted_files", "base"]
     })
 }
 
@@ -2601,6 +2747,273 @@ fn debug_graph_output_schema() -> Value {
     )
 }
 
+fn query_graph_output_schema() -> Value {
+    normalized_tool_output_schema(
+        serde_json::json!({
+            "query": { "$ref": "#/$defs/query_graph_query" },
+            "matches": { "type": "array", "items": { "$ref": "#/$defs/query_graph_match" } },
+            "summary": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "match_count": { "type": "integer" },
+                    "returned_count": { "type": "integer" },
+                    "usage_edges_included": { "type": "boolean" },
+                    "relationship_tools": { "type": "array", "items": { "type": "string" } },
+                    "ranking_evidence_legend": { "type": "object" }
+                },
+                "required": [
+                    "match_count",
+                    "returned_count",
+                    "usage_edges_included",
+                    "relationship_tools",
+                    "ranking_evidence_legend"
+                ]
+            },
+            "truncated": { "type": "boolean" },
+            "warnings": { "type": "array", "items": { "type": "string" } },
+            "atlas_provenance": { "type": "object" },
+            "atlas_freshness": { "type": "object" }
+        }),
+        &[
+            "tool",
+            "query",
+            "matches",
+            "summary",
+            "truncated",
+            "warnings",
+            "atlas_provenance",
+        ],
+        Some(serde_json::json!({
+            "query_intent": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "kind": { "type": "string" },
+                    "source_text": { "type": "string" },
+                    "normalized_text": { "type": "string" },
+                    "intent": { "type": "string" },
+                    "accepted": { "type": "boolean" }
+                },
+                "required": ["kind", "source_text", "normalized_text", "intent", "accepted"]
+            },
+            "repo_scope_selection": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "kind": { "type": "string" },
+                    "repo_ids": { "type": "array", "items": { "type": "string" } },
+                    "repo_count": { "type": "integer" }
+                },
+                "required": ["kind", "repo_ids", "repo_count"]
+            },
+            "query_graph_repo_scope": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "selection": { "anyOf": [{ "$ref": "#/$defs/repo_scope_selection" }, { "type": "null" }] },
+                    "deprecated_input_fields": { "type": "array", "items": { "type": "string" } }
+                },
+                "required": ["selection", "deprecated_input_fields"]
+            },
+            "query_graph_query": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "text": { "type": "string" },
+                    "normalized_text": { "type": "string" },
+                    "regex": { "type": ["string", "null"] },
+                    "kind": { "type": ["string", "null"] },
+                    "language": { "type": ["string", "null"] },
+                    "requested_limit": { "type": "integer" },
+                    "applied_limit": { "type": "integer" },
+                    "semantic": { "type": "boolean" },
+                    "expand": { "type": "boolean" },
+                    "expand_hops": { "type": "integer" },
+                    "subpath": { "type": ["string", "null"] },
+                    "fuzzy": { "type": "boolean" },
+                    "hybrid": { "type": "boolean" },
+                    "include_files": { "type": "boolean" },
+                    "repo_scope": { "$ref": "#/$defs/query_graph_repo_scope" },
+                    "query_intent": { "$ref": "#/$defs/query_intent" },
+                    "active_query_mode": { "type": "string" }
+                },
+                "required": [
+                    "text",
+                    "normalized_text",
+                    "regex",
+                    "kind",
+                    "language",
+                    "requested_limit",
+                    "applied_limit",
+                    "semantic",
+                    "expand",
+                    "expand_hops",
+                    "subpath",
+                    "fuzzy",
+                    "hybrid",
+                    "include_files",
+                    "repo_scope",
+                    "query_intent",
+                    "active_query_mode"
+                ]
+            },
+            "query_graph_repo": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "repo_id": { "type": ["string", "null"] },
+                    "display_alias": { "type": ["string", "null"] }
+                },
+                "required": ["repo_id", "display_alias"]
+            },
+            "query_graph_match": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "score": { "type": "number" },
+                    "ranking_evidence": { "type": ["object", "null"] },
+                    "repo": { "$ref": "#/$defs/query_graph_repo" },
+                    "qn": { "type": "string" },
+                    "kind": { "type": "string" },
+                    "file": { "type": "string" },
+                    "line": { "type": "integer" },
+                    "parent": { "type": "string" },
+                    "sig": { "type": "string" },
+                    "lang": { "type": "string" }
+                },
+                "required": ["score", "repo", "qn", "kind", "file", "line", "lang"]
+            }
+        })),
+    )
+}
+
+fn batch_query_graph_output_schema() -> Value {
+    normalized_tool_output_schema(
+        serde_json::json!({
+            "items": { "type": "array", "items": { "$ref": "#/$defs/batch_query_item" } },
+            "results": { "type": "array", "items": { "$ref": "#/$defs/batch_query_result" } },
+            "summary": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "query_count": { "type": "integer" },
+                    "ranking_evidence_legend": { "type": "object" }
+                },
+                "required": ["query_count", "ranking_evidence_legend"]
+            },
+            "warnings": { "type": "array", "items": { "type": "string" } },
+            "atlas_provenance": { "type": "object" }
+        }),
+        &[
+            "tool",
+            "items",
+            "results",
+            "summary",
+            "warnings",
+            "atlas_provenance",
+        ],
+        Some(serde_json::json!({
+            "query_intent": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "kind": { "type": "string" },
+                    "source_text": { "type": "string" },
+                    "normalized_text": { "type": "string" },
+                    "intent": { "type": "string" },
+                    "accepted": { "type": "boolean" }
+                },
+                "required": ["kind", "source_text", "normalized_text", "intent", "accepted"]
+            },
+            "batch_query_item": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "query_index": { "type": "integer" },
+                    "text": { "type": "string" },
+                    "normalized_text": { "type": "string" },
+                    "regex": { "type": ["string", "null"] },
+                    "kind": { "type": ["string", "null"] },
+                    "language": { "type": ["string", "null"] },
+                    "requested_limit": { "type": "integer" },
+                    "applied_limit": { "type": "integer" },
+                    "semantic": { "type": "boolean" },
+                    "expand": { "type": "boolean" },
+                    "expand_hops": { "type": "integer" },
+                    "subpath": { "type": ["string", "null"] },
+                    "fuzzy": { "type": "boolean" },
+                    "hybrid": { "type": "boolean" },
+                    "include_files": { "type": "boolean" },
+                    "query_intent": { "$ref": "#/$defs/query_intent" }
+                },
+                "required": [
+                    "query_index",
+                    "text",
+                    "normalized_text",
+                    "regex",
+                    "kind",
+                    "language",
+                    "requested_limit",
+                    "applied_limit",
+                    "semantic",
+                    "expand",
+                    "expand_hops",
+                    "subpath",
+                    "fuzzy",
+                    "hybrid",
+                    "include_files",
+                    "query_intent"
+                ]
+            },
+            "batch_query_match": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "score": { "type": "number" },
+                    "ranking_evidence": { "type": ["object", "null"] },
+                    "repo": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                            "repo_id": { "type": ["string", "null"] },
+                            "display_alias": { "type": ["string", "null"] }
+                        },
+                        "required": ["repo_id", "display_alias"]
+                    },
+                    "name": { "type": "string" },
+                    "qualified_name": { "type": "string" },
+                    "kind": { "type": "string" },
+                    "file_path": { "type": "string" },
+                    "line_start": { "type": "integer" },
+                    "language": { "type": "string" }
+                },
+                "required": ["score", "repo", "name", "qualified_name", "kind", "file_path", "line_start", "language"]
+            },
+            "batch_query_result": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "query_index": { "type": "integer" },
+                    "matches": { "type": "array", "items": { "$ref": "#/$defs/batch_query_match" } },
+                    "summary": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                            "match_count": { "type": "integer" },
+                            "returned_count": { "type": "integer" }
+                        },
+                        "required": ["match_count", "returned_count"]
+                    },
+                    "truncated": { "type": "boolean" },
+                    "warnings": { "type": "array", "items": { "type": "string" } }
+                },
+                "required": ["query_index", "matches", "summary", "truncated", "warnings"]
+            }
+        })),
+    )
+}
+
 fn explain_query_output_schema() -> Value {
     normalized_tool_output_schema(
         serde_json::json!({
@@ -2683,8 +3096,6 @@ fn explain_query_output_schema() -> Value {
 fn detect_changes_output_schema() -> Value {
     normalized_tool_output_schema(
         serde_json::json!({
-            "mode": { "type": "string" },
-            "base_ref": { "type": ["string", "null"] },
             "change_source": { "$ref": "#/$defs/change_source" },
             "files": {
                 "type": "array",
@@ -2743,8 +3154,6 @@ fn detect_changes_output_schema() -> Value {
         }),
         &[
             "tool",
-            "mode",
-            "base_ref",
             "change_source",
             "files",
             "summary",
@@ -3099,6 +3508,17 @@ fn get_context_output_schema() -> Value {
     normalized_tool_output_schema(
         serde_json::json!({
             "mode": { "type": "string" },
+            "target": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "kind": { "type": "string" },
+                    "query": { "type": ["string", "null"] },
+                    "file": { "type": ["string", "null"] },
+                    "files": { "type": "array", "items": { "type": "string" } }
+                },
+                "required": ["kind", "query", "file", "files"]
+            },
             "query": { "type": ["string", "null"] },
             "file": { "type": ["string", "null"] },
             "files": { "type": "array", "items": { "type": "string" } },
@@ -3155,6 +3575,7 @@ fn get_context_output_schema() -> Value {
         &[
             "tool",
             "mode",
+            "target",
             "query",
             "file",
             "files",
@@ -3228,6 +3649,7 @@ fn man_output_schema() -> Value {
                 "type": "array",
                 "items": { "$ref": "#/$defs/manual_field" }
             },
+            "input_contract": { "$ref": "#/$defs/manual_input_contract" },
             "output_response": {
                 "type": "object",
                 "additionalProperties": false,
@@ -3298,6 +3720,7 @@ fn man_output_schema() -> Value {
             "description",
             "tool_structure",
             "input_args",
+            "input_contract",
             "output_response",
             "usage",
             "error_cases",
@@ -3326,6 +3749,64 @@ fn man_output_schema() -> Value {
                     "enum_values",
                     "description"
                 ]
+            },
+            "manual_input_variant": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "value": { "type": "string" },
+                    "required_companion_fields": {
+                        "type": "array",
+                        "items": { "type": "string" }
+                    },
+                    "minimal_example": { "type": "object" }
+                },
+                "required": ["value", "required_companion_fields", "minimal_example"]
+            },
+            "manual_input_family": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "family_name": { "type": "string" },
+                    "family_kind": { "type": "string" },
+                    "discriminant_field": { "type": ["string", "null"] },
+                    "accepted_values": {
+                        "type": "array",
+                        "items": { "type": "string" }
+                    },
+                    "mutually_exclusive_legacy_fields": {
+                        "type": "array",
+                        "items": { "type": "string" }
+                    },
+                    "variants": {
+                        "type": "array",
+                        "items": { "$ref": "#/$defs/manual_input_variant" }
+                    }
+                },
+                "required": [
+                    "family_name",
+                    "family_kind",
+                    "discriminant_field",
+                    "accepted_values",
+                    "mutually_exclusive_legacy_fields",
+                    "variants"
+                ]
+            },
+            "manual_input_contract": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "canonical_form": { "type": "string" },
+                    "families": {
+                        "type": "array",
+                        "items": { "$ref": "#/$defs/manual_input_family" }
+                    },
+                    "notes": {
+                        "type": "array",
+                        "items": { "type": "string" }
+                    }
+                },
+                "required": ["canonical_form", "families", "notes"]
             }
         })),
     )
@@ -3459,6 +3940,249 @@ fn resume_session_output_schema() -> Value {
             "summary",
             "warnings",
             "atlas_provenance",
+        ],
+        None,
+    )
+}
+
+fn search_saved_context_output_schema() -> Value {
+    normalized_tool_output_schema(
+        serde_json::json!({
+            "query": { "$ref": "#/$defs/saved_context_query" },
+            "matches": { "type": "array", "items": { "$ref": "#/$defs/saved_context_match" } },
+            "linked_decisions": { "type": "array", "items": { "type": "object" } },
+            "summary": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "match_count": { "type": "integer" },
+                    "total_matches": { "type": "integer" },
+                    "linked_decision_count": { "type": "integer" }
+                },
+                "required": ["match_count", "total_matches", "linked_decision_count"]
+            },
+            "truncated": { "type": "boolean" },
+            "warnings": { "type": "array", "items": { "type": "string" } },
+            "atlas_provenance": { "type": "object" }
+        }),
+        &[
+            "tool",
+            "query",
+            "matches",
+            "linked_decisions",
+            "summary",
+            "truncated",
+            "warnings",
+        ],
+        Some(serde_json::json!({
+            "saved_context_query": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "text": { "type": "string" },
+                    "session_id": { "type": ["string", "null"] },
+                    "agent_id": { "type": ["string", "null"] },
+                    "cross_session": { "type": "boolean" },
+                    "merge_agent_partitions": { "type": "boolean" },
+                    "source_type": { "type": ["string", "null"] },
+                    "requested_limit": { "type": "integer" },
+                    "applied_limit": { "type": "integer" },
+                    "repo_scope": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                            "repo_roots": { "type": "array", "items": { "type": "string" } },
+                            "repo_count": { "type": "integer" }
+                        },
+                        "required": ["repo_roots", "repo_count"]
+                    }
+                },
+                "required": [
+                    "text",
+                    "session_id",
+                    "agent_id",
+                    "cross_session",
+                    "merge_agent_partitions",
+                    "source_type",
+                    "requested_limit",
+                    "applied_limit",
+                    "repo_scope"
+                ]
+            },
+            "saved_context_match": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "source_id": { "type": "string" },
+                    "chunk_id": { "type": "string" },
+                    "chunk_index": { "type": "integer" },
+                    "repo_roots": { "type": "array", "items": { "type": "string" } },
+                    "title": { "type": ["string", "null"] },
+                    "label": { "type": ["string", "null"] },
+                    "agent_id": { "type": ["string", "null"] },
+                    "source_type": { "type": ["string", "null"] },
+                    "identity_kind": { "type": ["string", "null"] },
+                    "identity_value": { "type": ["string", "null"] },
+                    "preview": { "type": "string" },
+                    "content_type": { "type": "string" }
+                },
+                "required": [
+                    "source_id",
+                    "chunk_id",
+                    "chunk_index",
+                    "repo_roots",
+                    "label",
+                    "source_type",
+                    "identity_kind",
+                    "identity_value",
+                    "preview",
+                    "content_type"
+                ]
+            }
+        })),
+    )
+}
+
+fn search_decisions_output_schema() -> Value {
+    normalized_tool_output_schema(
+        serde_json::json!({
+            "query": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "text": { "type": "string" },
+                    "session_id": { "type": ["string", "null"] },
+                    "agent_id": { "type": ["string", "null"] },
+                    "requested_limit": { "type": "integer" }
+                },
+                "required": ["text", "session_id", "agent_id", "requested_limit"]
+            },
+            "matches": { "type": "array", "items": { "type": "object" } },
+            "summary": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "match_count": { "type": "integer" },
+                    "total_matches": { "type": "integer" }
+                },
+                "required": ["match_count", "total_matches"]
+            },
+            "truncated": { "type": "boolean" },
+            "warnings": { "type": "array", "items": { "type": "string" } },
+            "atlas_provenance": { "type": "object" }
+        }),
+        &[
+            "tool",
+            "query",
+            "matches",
+            "summary",
+            "truncated",
+            "warnings",
+        ],
+        None,
+    )
+}
+
+fn cross_session_search_output_schema() -> Value {
+    normalized_tool_output_schema(
+        serde_json::json!({
+            "query": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "text": { "type": "string" },
+                    "repo_root": { "type": "string" },
+                    "cross_session": { "type": "boolean" },
+                    "agent_id": { "type": ["string", "null"] },
+                    "merge_agent_partitions": { "type": "boolean" },
+                    "source_type": { "type": ["string", "null"] },
+                    "requested_limit": { "type": "integer" },
+                    "applied_limit": { "type": "integer" },
+                    "repo_scope": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                            "repo_roots": { "type": "array", "items": { "type": "string" } },
+                            "repo_count": { "type": "integer" }
+                        },
+                        "required": ["repo_roots", "repo_count"]
+                    }
+                },
+                "required": [
+                    "text",
+                    "repo_root",
+                    "cross_session",
+                    "agent_id",
+                    "merge_agent_partitions",
+                    "source_type",
+                    "requested_limit",
+                    "applied_limit",
+                    "repo_scope"
+                ]
+            },
+            "sessions": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "session_id": { "type": "string" },
+                        "agent_id": { "type": ["string", "null"] }
+                    },
+                    "required": ["session_id", "agent_id"]
+                }
+            },
+            "matches": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "source_id": { "type": "string" },
+                        "chunk_id": { "type": "string" },
+                        "chunk_index": { "type": "integer" },
+                        "repo_roots": { "type": "array", "items": { "type": "string" } },
+                        "session_id": { "type": ["string", "null"] },
+                        "agent_id": { "type": ["string", "null"] },
+                        "title": { "type": ["string", "null"] },
+                        "label": { "type": ["string", "null"] },
+                        "source_type": { "type": ["string", "null"] },
+                        "preview": { "type": "string" }
+                    },
+                    "required": [
+                        "source_id",
+                        "chunk_id",
+                        "chunk_index",
+                        "repo_roots",
+                        "session_id",
+                        "label",
+                        "source_type",
+                        "preview"
+                    ]
+                }
+            },
+            "summary": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "match_count": { "type": "integer" },
+                    "total_matches": { "type": "integer" },
+                    "session_count": { "type": "integer" }
+                },
+                "required": ["match_count", "total_matches", "session_count"]
+            },
+            "truncated": { "type": "boolean" },
+            "warnings": { "type": "array", "items": { "type": "string" } },
+            "atlas_provenance": { "type": "object" }
+        }),
+        &[
+            "tool",
+            "query",
+            "sessions",
+            "matches",
+            "summary",
+            "truncated",
+            "warnings",
         ],
         None,
     )
@@ -4216,6 +4940,9 @@ fn tool_icons(_category: &str) -> Vec<IconDescriptor> {
 }
 
 #[cfg(test)]
+const ALLOWED_TEXT_ONLY_TOOLS: &[&str] = &[];
+
+#[cfg(test)]
 const ALLOWED_TOOL_DESCRIPTOR_FIELDS: &[&str] = &[
     "name",
     "title",
@@ -4230,8 +4957,8 @@ const ALLOWED_TOOL_DESCRIPTOR_FIELDS: &[&str] = &[
 #[cfg(test)]
 mod tests {
     use super::{
-        ToolResultContract, tool_descriptors, tool_input_schema_by_name, tool_list,
-        tool_list_markdown, tool_result_contract,
+        ALLOWED_TEXT_ONLY_TOOLS, ToolResultContract, tool_descriptors, tool_input_schema_by_name,
+        tool_list, tool_list_markdown, tool_result_contract,
     };
     use crate::descriptors::JSON_SCHEMA_2020_12_URI;
     use jsonschema::{Draft, JSONSchema};
@@ -4326,8 +5053,7 @@ mod tests {
         assert!(tools.iter().all(|tool| tool.get("title").is_some()));
         assert!(tools.iter().all(|tool| tool.get("annotations").is_some()));
         assert!(tools.iter().all(|tool| tool.get("icons").is_none()));
-        assert!(tools.iter().any(|tool| tool.get("outputSchema").is_some()));
-        assert!(tools.iter().any(|tool| tool.get("outputSchema").is_none()));
+        assert!(tools.iter().all(|tool| tool.get("outputSchema").is_some()));
         assert!(
             tools
                 .iter()
@@ -4341,6 +5067,8 @@ mod tests {
         assert!(markdown.contains("| Tool | Result contract | Output schema | Description |"));
         assert!(markdown.contains("`stable-object`"));
         assert!(markdown.contains("`text-only`"));
+        assert!(!markdown.contains("| `query_graph` | `text-only` |"));
+        assert!(!markdown.contains("| `batch_query_graph` | `text-only` |"));
         assert!(!markdown.contains("mixed-needs-redesign"));
         assert!(
             markdown.contains("`broker_status` | `stable-object` | exact structuredContent schema")
@@ -4359,6 +5087,21 @@ mod tests {
                 tool.name
             );
         }
+    }
+
+    #[test]
+    fn text_only_contracts_require_explicit_allowlist_entry() {
+        let text_only = tool_descriptors()
+            .into_iter()
+            .filter(|tool| {
+                matches!(
+                    tool_result_contract(&tool.name),
+                    ToolResultContract::TextOnly
+                )
+            })
+            .map(|tool| tool.name)
+            .collect::<Vec<_>>();
+        assert_eq!(text_only, ALLOWED_TEXT_ONLY_TOOLS);
     }
 }
 

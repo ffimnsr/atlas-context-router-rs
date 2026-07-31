@@ -38,7 +38,10 @@ use super::health::{
 use super::inventory::{tool_repo_registry, tool_tool_list, tool_tool_search};
 use super::manual::{tool_help, tool_man};
 use super::postprocess::tool_postprocess_graph;
-use super::shared::{bool_arg, derive_graph_readiness, derive_graph_readiness_open_failed};
+use super::shared::{
+    bool_arg, derive_graph_readiness, derive_graph_readiness_open_failed,
+    resolve_repo_scope_selection,
+};
 
 fn response_file_list(response: &serde_json::Value, pointer: &str) -> Vec<String> {
     response
@@ -84,6 +87,19 @@ fn response_insight_finding_files(response: &serde_json::Value) -> Vec<String> {
 
 fn response_query_graph_files(response: &serde_json::Value) -> Vec<String> {
     let mut files = std::collections::BTreeSet::new();
+
+    if let Some(items) = response
+        .pointer("/structuredContent/matches")
+        .and_then(|value| value.as_array())
+    {
+        for item in items {
+            if let Some(file) = item.get("file").and_then(|value| value.as_str()) {
+                files.insert(file.to_owned());
+            }
+        }
+        return files.into_iter().collect();
+    }
+
     let Some(text) = response
         .pointer("/content/0/text")
         .and_then(|value| value.as_str())
@@ -107,7 +123,9 @@ fn response_query_graph_files(response: &serde_json::Value) -> Vec<String> {
 fn normalized_contract_tool(name: &str) -> bool {
     matches!(
         name,
-        "detect_changes"
+        "query_graph"
+            | "batch_query_graph"
+            | "detect_changes"
             | "get_impact_radius"
             | "get_review_context"
             | "get_minimal_context"
@@ -124,9 +142,12 @@ fn normalized_contract_tool(name: &str) -> bool {
             | "get_session_status"
             | "compact_session"
             | "resume_session"
+            | "search_saved_context"
+            | "search_decisions"
             | "read_saved_context"
             | "save_context_artifact"
             | "purge_saved_context"
+            | "cross_session_search"
             | "get_global_memory"
             | "symbol_neighbors"
             | "cross_file_links"
@@ -557,27 +578,15 @@ fn inject_provenance(
 
     let registry =
         atlas_repo::RepoRegistry::load_or_bootstrap(camino::Utf8Path::new(repo_root)).ok();
-    let selected_repo_ids = args
-        .and_then(|value| value.get("repo_id"))
-        .and_then(|value| value.as_str())
-        .map(|value| vec![value.to_owned()])
-        .or_else(|| {
-            args.and_then(|value| value.get("all_repos"))
-                .and_then(|value| value.as_bool())
-                .filter(|all| *all)
-                .and_then(|_| {
-                    registry.as_ref().map(|registry| {
-                        registry
-                            .registrations
-                            .iter()
-                            .filter(|entry| entry.enabled)
-                            .filter(|entry| {
-                                atlas_repo::phase1_multi_repo_supported(entry.relationship.kind)
-                            })
-                            .map(|entry| entry.repo_id.clone())
-                            .collect::<Vec<_>>()
-                    })
-                })
+    let selected_repo_ids = resolve_repo_scope_selection("dispatch_provenance", args, repo_root)
+        .ok()
+        .and_then(|resolved| resolved.selection)
+        .map(|selection| {
+            selection
+                .registrations
+                .iter()
+                .map(|entry| entry.repo_id.clone())
+                .collect::<Vec<_>>()
         })
         .unwrap_or_default();
 
@@ -833,18 +842,34 @@ mod tests {
                 json!({"namespace": "mcp", "tool_name": "query_graph", "output_format": "json"})
             }
             "query_graph" => json!({"text": "greet", "output_format": "json"}),
-            "batch_query_graph" => json!({"text": "greet", "output_format": "json"}),
-            "get_impact_radius" => json!({"files": ["src/lib.rs"], "output_format": "json"}),
-            "get_review_context" => json!({"files": ["src/lib.rs"], "output_format": "json"}),
-            "detect_changes" => json!({"working_tree": true, "output_format": "json"}),
-            "build_or_update_graph" => json!({"mode": "build", "output_format": "json"}),
+            "batch_query_graph" => {
+                json!({"items": [{"text": "greet"}], "output_format": "json"})
+            }
+            "get_impact_radius" => {
+                json!({"change_source": {"kind": "files", "files": ["src/lib.rs"]}, "output_format": "json"})
+            }
+            "get_review_context" => {
+                json!({"change_source": {"kind": "files", "files": ["src/lib.rs"]}, "output_format": "json"})
+            }
+            "detect_changes" => {
+                json!({"change_source": {"kind": "working_tree"}, "output_format": "json"})
+            }
+            "build_or_update_graph" => {
+                json!({"operation": {"kind": "build"}, "output_format": "json"})
+            }
             "postprocess_graph" => json!({"dry_run": true, "output_format": "json"}),
             "traverse_graph" => {
                 json!({"from_qn": "src/lib.rs::fn::greet", "output_format": "json"})
             }
-            "get_minimal_context" => json!({"output_format": "json"}),
-            "explain_change" => json!({"files": ["src/lib.rs"], "output_format": "json"}),
-            "get_context" => json!({"query": "greet", "output_format": "json"}),
+            "get_minimal_context" => {
+                json!({"change_source": {"kind": "working_tree"}, "output_format": "json"})
+            }
+            "explain_change" => {
+                json!({"change_source": {"kind": "files", "files": ["src/lib.rs"]}, "output_format": "json"})
+            }
+            "get_context" => {
+                json!({"target": {"kind": "query", "query": "greet"}, "output_format": "json"})
+            }
             "analyze_architecture" => json!({"output_format": "json"}),
             "analyze_metrics" => json!({"output_format": "json"}),
             "assess_risk" => {
@@ -878,10 +903,10 @@ mod tests {
             "search_files" => json!({"pattern": "*.rs", "output_format": "json"}),
             "search_content" => json!({"query": "greet", "output_format": "json"}),
             "read_file_excerpt" => {
-                json!({"file": "src/lib.rs", "start_line": 1, "end_line": 1, "output_format": "json"})
+                json!({"file": "src/lib.rs", "selector": {"kind": "range", "start_line": 1, "end_line": 1}, "output_format": "json"})
             }
             "get_docs_section" => {
-                json!({"file": "README.md", "heading": "Status", "output_format": "json"})
+                json!({"file": "README.md", "selector": {"kind": "heading", "heading": "Status"}, "output_format": "json"})
             }
             "read_file_around_match" => {
                 json!({"file": "src/lib.rs", "query": "greet", "output_format": "json"})
@@ -915,7 +940,7 @@ mod tests {
 
         let _build = call(
             "build_or_update_graph",
-            Some(&json!({"mode": "build", "output_format": "json"})),
+            Some(&json!({"operation": {"kind": "build"}, "output_format": "json"})),
             &repo_root,
             &db_path,
         )
@@ -964,7 +989,7 @@ mod tests {
 
         let build = call(
             "build_or_update_graph",
-            Some(&json!({"mode": "build", "output_format": "json"})),
+            Some(&json!({"operation": {"kind": "build"}, "output_format": "json"})),
             &repo_root,
             &db_path,
         )

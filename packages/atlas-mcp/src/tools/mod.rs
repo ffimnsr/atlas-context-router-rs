@@ -7,7 +7,7 @@ mod inventory;
 mod manual;
 mod postprocess;
 mod registry;
-mod shared;
+pub(crate) mod shared;
 
 pub use dispatch::call;
 pub(crate) use dispatch::is_known_tool_name;

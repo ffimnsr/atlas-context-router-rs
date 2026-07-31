@@ -581,7 +581,7 @@ mod tests {
                 .into_owned();
             crate::tools::call(
                 "build_or_update_graph",
-                Some(&json!({"mode": "build", "output_format": "json"})),
+                Some(&json!({"operation": {"kind": "build"}, "output_format": "json"})),
                 &repo_root,
                 &db_path,
             )

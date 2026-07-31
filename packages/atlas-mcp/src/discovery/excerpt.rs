@@ -225,14 +225,14 @@ fn read_file_excerpt_input_shape_error(
             offending_fields: offending_fields.into_iter().map(str::to_owned).collect(),
             normalization_performed,
             accepted_argument_families: vec![
-                "line_ranges".to_owned(),
-                "start_line/end_line".to_owned(),
-                "line with optional before/after".to_owned(),
+                "selector.kind=range".to_owned(),
+                "selector.kind=ranges".to_owned(),
+                "selector.kind=context".to_owned(),
             ],
             retry_example: Some(retry_example),
             fail_closed_reason: fail_closed_reason.map(str::to_owned),
             retry_guidance: Some(
-                "Provide exactly one selector family and keep wrapper-default fields absent or empty, then retry."
+                "Provide selector={ kind: 'range' | 'ranges' | 'context', ... } and retry."
                     .to_owned(),
             ),
             extra_details,
@@ -240,94 +240,29 @@ fn read_file_excerpt_input_shape_error(
     ))
 }
 
+struct ParsedExcerptSelection {
+    ranges: Vec<RequestedLineRange>,
+    selection_mode: &'static str,
+}
+
 fn parse_excerpt_selection(
     args: Option<&serde_json::Value>,
-) -> std::result::Result<(Vec<RequestedLineRange>, &'static str), Box<ToolErrorPayload>> {
-    let start_line_raw = u64_arg(args, "start_line");
-    let end_line_raw = u64_arg(args, "end_line");
-    let line_raw = u64_arg(args, "line");
-    let before = u64_arg(args, "before").unwrap_or(0) as usize;
-    let after = u64_arg(args, "after").unwrap_or(0) as usize;
-    let line_ranges_value = args.and_then(|value| value.get("line_ranges"));
-    let line_ranges = line_ranges_value
-        .and_then(|value| value.as_array())
-        .map(|ranges| {
-            ranges
-                .iter()
-                .map(parse_requested_range)
-                .collect::<Result<Vec<_>>>()
-        })
-        .transpose()
-        .map_err(|error| {
-            read_file_excerpt_input_shape_error(
-                "invalid line_ranges selector",
-                error.to_string(),
-                vec!["line_ranges"],
-                Vec::new(),
-                serde_json::json!({
-                    "file": "src/lib.rs",
-                    "line_ranges": [{ "start_line": 10, "end_line": 20 }]
-                }),
-                None,
-                None,
-            )
-        })?
-        .unwrap_or_default();
+) -> std::result::Result<ParsedExcerptSelection, Box<ToolErrorPayload>> {
+    let selector_value = args.and_then(|value| value.get("selector"));
+    let selector_object = selector_value.and_then(|value| value.as_object());
+    let legacy_fields_present = args.is_some_and(|value| {
+        value.get("line_ranges").is_some()
+            || value.get("start_line").is_some()
+            || value.get("end_line").is_some()
+            || value.get("line").is_some()
+            || value.get("before").is_some()
+            || value.get("after").is_some()
+    });
 
-    let start_line = start_line_raw
-        .filter(|value| *value > 0)
-        .map(|value| value as usize);
-    let end_line = end_line_raw
-        .filter(|value| *value > 0)
-        .map(|value| value as usize);
-    let line = line_raw
-        .filter(|value| *value > 0)
-        .map(|value| value as usize);
-
-    let line_ranges_used = !line_ranges.is_empty();
-    let single_range_used = start_line_raw.is_some_and(|value| value > 0)
-        || end_line_raw.is_some_and(|value| value > 0);
-    let line_context_used = line_raw.is_some_and(|value| value > 0) || before > 0 || after > 0;
-
-    let selectors_used = usize::from(line_ranges_used)
-        + usize::from(single_range_used)
-        + usize::from(line_context_used);
-    if selectors_used != 1 {
-        let seen_families = [
-            line_ranges_used.then_some("line_ranges"),
-            single_range_used.then_some("start_line/end_line"),
-            line_context_used.then_some("line with optional before/after"),
-        ]
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>()
-        .join(", ");
-        let seen_families = if seen_families.is_empty() {
-            "none".to_owned()
-        } else {
-            seen_families
-        };
-        let mut normalization_performed = Vec::new();
-        if start_line_raw == Some(0) {
-            normalization_performed.push("ignored start_line=0 wrapper field".to_owned());
-        }
-        if end_line_raw == Some(0) {
-            normalization_performed.push("ignored end_line=0 wrapper field".to_owned());
-        }
-        if line_raw == Some(0) {
-            normalization_performed.push("ignored line=0 wrapper field".to_owned());
-        }
-        if line_ranges_value
-            .and_then(|value| value.as_array())
-            .is_some_and(|ranges| ranges.is_empty())
-        {
-            normalization_performed.push("ignored empty line_ranges wrapper field".to_owned());
-        }
+    if legacy_fields_present {
         return Err(read_file_excerpt_input_shape_error(
-            "provide exactly one selector: line_ranges, start_line/end_line, or line with optional before/after",
-            format!(
-                "selector families seen: {seen_families}. Atlas refused to guess between conflicting selector families."
-            ),
+            "legacy excerpt selector fields are no longer supported",
+            "Use selector={ kind: 'range' | 'ranges' | 'context', ... } and remove top-level line_ranges/start_line/end_line/line/before/after fields.",
             vec![
                 "line_ranges",
                 "start_line",
@@ -336,93 +271,239 @@ fn parse_excerpt_selection(
                 "before",
                 "after",
             ],
-            normalization_performed,
-            serde_json::json!({ "file": "src/lib.rs", "start_line": 10, "end_line": 20 }),
-            Some("Atlas refused to guess between conflicting selector families"),
-            Some(serde_json::json!({ "selector_families_seen": seen_families })),
+            Vec::new(),
+            serde_json::json!({
+                "file": "src/lib.rs",
+                "selector": { "kind": "range", "start_line": 10, "end_line": 20 }
+            }),
+            None,
+            None,
         ));
     }
 
-    if line_ranges_used {
-        return Ok((normalize_requested_ranges(line_ranges), "line_ranges"));
-    }
-
-    if line_context_used {
-        let line = line.ok_or_else(|| {
-            read_file_excerpt_input_shape_error(
-                "line must be >= 1 when using line-context selector",
-                "line-context selector requires line >= 1",
-                vec!["line", "before", "after"],
-                Vec::new(),
-                serde_json::json!({ "file": "src/lib.rs", "line": 42, "before": 2, "after": 2 }),
-                None,
-                None,
-            )
-        })?;
-        let start_line = line.saturating_sub(before).max(1);
-        let end_line = line.saturating_add(after);
-        let range = validate_requested_range(start_line, end_line).map_err(|error| {
-            read_file_excerpt_input_shape_error(
-                "invalid line-context selector",
-                error.to_string(),
-                vec!["line", "before", "after"],
-                Vec::new(),
-                serde_json::json!({ "file": "src/lib.rs", "line": 42, "before": 2, "after": 2 }),
-                None,
-                None,
-            )
-        })?;
-        return Ok((vec![range], "line_context"));
-    }
-
-    if start_line_raw.is_some_and(|value| value == 0)
-        || end_line_raw.is_some_and(|value| value == 0)
-    {
+    if selector_value.is_some() && selector_object.is_none() {
         return Err(read_file_excerpt_input_shape_error(
-            "start_line/end_line must be >= 1 when using single-range selector",
-            "single-range selector requires start_line >= 1 and end_line >= 1",
-            vec!["start_line", "end_line"],
+            "invalid selector object",
+            "selector must be an object with kind=range, kind=ranges, or kind=context",
+            vec!["selector"],
             Vec::new(),
-            serde_json::json!({ "file": "src/lib.rs", "start_line": 10, "end_line": 20 }),
+            serde_json::json!({
+                "file": "src/lib.rs",
+                "selector": { "kind": "range", "start_line": 10, "end_line": 20 }
+            }),
             None,
             None,
         ));
     }
 
-    let start_line = start_line.ok_or_else(|| {
-        read_file_excerpt_input_shape_error(
-            "missing required argument: start_line",
-            "single-range selector requires both start_line and end_line",
-            vec!["start_line", "end_line"],
+    if let Some(selector) = selector_object {
+        let kind = selector
+            .get("kind")
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                read_file_excerpt_input_shape_error(
+                    "selector.kind is required",
+                    "selector object requires kind=range, kind=ranges, or kind=context",
+                    vec!["selector.kind"],
+                    Vec::new(),
+                    serde_json::json!({
+                        "file": "src/lib.rs",
+                        "selector": { "kind": "range", "start_line": 10, "end_line": 20 }
+                    }),
+                    None,
+                    None,
+                )
+            })?;
+        match kind {
+            "range" => {
+                let start_line = selector
+                    .get("start_line")
+                    .and_then(|value| value.as_u64())
+                    .ok_or_else(|| {
+                        read_file_excerpt_input_shape_error(
+                            "selector.kind='range' requires start_line and end_line",
+                            "range selector requires start_line >= 1 and end_line >= 1",
+                            vec!["selector.kind", "selector.start_line", "selector.end_line"],
+                            Vec::new(),
+                            serde_json::json!({
+                                "file": "src/lib.rs",
+                                "selector": { "kind": "range", "start_line": 10, "end_line": 20 }
+                            }),
+                            None,
+                            None,
+                        )
+                    })? as usize;
+                let end_line = selector
+                    .get("end_line")
+                    .and_then(|value| value.as_u64())
+                    .ok_or_else(|| {
+                        read_file_excerpt_input_shape_error(
+                            "selector.kind='range' requires start_line and end_line",
+                            "range selector requires start_line >= 1 and end_line >= 1",
+                            vec!["selector.kind", "selector.start_line", "selector.end_line"],
+                            Vec::new(),
+                            serde_json::json!({
+                                "file": "src/lib.rs",
+                                "selector": { "kind": "range", "start_line": 10, "end_line": 20 }
+                            }),
+                            None,
+                            None,
+                        )
+                    })? as usize;
+                let range = validate_requested_range(start_line, end_line).map_err(|error| {
+                    read_file_excerpt_input_shape_error(
+                        "invalid range selector",
+                        error.to_string(),
+                        vec!["selector.start_line", "selector.end_line"],
+                        Vec::new(),
+                        serde_json::json!({
+                            "file": "src/lib.rs",
+                            "selector": { "kind": "range", "start_line": 10, "end_line": 20 }
+                        }),
+                        None,
+                        None,
+                    )
+                })?;
+                Ok(ParsedExcerptSelection {
+                    ranges: vec![range],
+                    selection_mode: "range",
+                })
+            }
+            "ranges" => {
+                let line_ranges = selector
+                    .get("line_ranges")
+                    .and_then(|value| value.as_array())
+                    .ok_or_else(|| {
+                        read_file_excerpt_input_shape_error(
+                            "selector.kind='ranges' requires selector.line_ranges",
+                            "ranges selector requires non-empty selector.line_ranges array",
+                            vec!["selector.kind", "selector.line_ranges"],
+                            Vec::new(),
+                            serde_json::json!({
+                                "file": "src/lib.rs",
+                                "selector": { "kind": "ranges", "line_ranges": [{ "start_line": 10, "end_line": 20 }] }
+                            }),
+                            None,
+                            None,
+                        )
+                    })?;
+                let ranges = line_ranges
+                    .iter()
+                    .map(parse_requested_range)
+                    .collect::<Result<Vec<_>>>()
+                    .map(normalize_requested_ranges)
+                    .map_err(|error| {
+                        read_file_excerpt_input_shape_error(
+                            "invalid ranges selector",
+                            error.to_string(),
+                            vec!["selector.line_ranges"],
+                            Vec::new(),
+                            serde_json::json!({
+                                "file": "src/lib.rs",
+                                "selector": { "kind": "ranges", "line_ranges": [{ "start_line": 10, "end_line": 20 }] }
+                            }),
+                            None,
+                            None,
+                        )
+                    })?;
+                if ranges.is_empty() {
+                    return Err(read_file_excerpt_input_shape_error(
+                        "selector.kind='ranges' requires selector.line_ranges",
+                        "ranges selector requires non-empty selector.line_ranges array",
+                        vec!["selector.kind", "selector.line_ranges"],
+                        Vec::new(),
+                        serde_json::json!({
+                            "file": "src/lib.rs",
+                            "selector": { "kind": "ranges", "line_ranges": [{ "start_line": 10, "end_line": 20 }] }
+                        }),
+                        None,
+                        None,
+                    ));
+                }
+                Ok(ParsedExcerptSelection {
+                    ranges,
+                    selection_mode: "ranges",
+                })
+            }
+            "context" => {
+                let line = selector
+                    .get("line")
+                    .and_then(|value| value.as_u64())
+                    .filter(|line| *line >= 1)
+                    .ok_or_else(|| {
+                        read_file_excerpt_input_shape_error(
+                            "selector.kind='context' requires selector.line",
+                            "context selector requires line >= 1",
+                            vec!["selector.kind", "selector.line"],
+                            Vec::new(),
+                            serde_json::json!({
+                                "file": "src/lib.rs",
+                                "selector": { "kind": "context", "line": 42, "before": 2, "after": 2 }
+                            }),
+                            None,
+                            None,
+                        )
+                    })? as usize;
+                let before = selector
+                    .get("before")
+                    .and_then(|value| value.as_u64())
+                    .unwrap_or(0) as usize;
+                let after = selector
+                    .get("after")
+                    .and_then(|value| value.as_u64())
+                    .unwrap_or(0) as usize;
+                let range = validate_requested_range(
+                    line.saturating_sub(before).max(1),
+                    line.saturating_add(after),
+                )
+                .map_err(|error| {
+                    read_file_excerpt_input_shape_error(
+                        "invalid context selector",
+                        error.to_string(),
+                        vec!["selector.line", "selector.before", "selector.after"],
+                        Vec::new(),
+                        serde_json::json!({
+                            "file": "src/lib.rs",
+                            "selector": { "kind": "context", "line": 42, "before": 2, "after": 2 }
+                        }),
+                        None,
+                        None,
+                    )
+                })?;
+                Ok(ParsedExcerptSelection {
+                    ranges: vec![range],
+                    selection_mode: "context",
+                })
+            }
+            other => Err(read_file_excerpt_input_shape_error(
+                format!("invalid selector.kind '{other}'"),
+                "selector.kind must be one of: range, ranges, context",
+                vec!["selector.kind"],
+                Vec::new(),
+                serde_json::json!({
+                    "file": "src/lib.rs",
+                    "selector": { "kind": "range", "start_line": 10, "end_line": 20 }
+                }),
+                None,
+                None,
+            )),
+        }
+    } else {
+        Err(read_file_excerpt_input_shape_error(
+            "selector is required",
+            "Provide selector={ kind: 'range' | 'ranges' | 'context', ... }.",
+            vec!["selector"],
             Vec::new(),
-            serde_json::json!({ "file": "src/lib.rs", "start_line": 10, "end_line": 20 }),
+            serde_json::json!({
+                "file": "src/lib.rs",
+                "selector": { "kind": "range", "start_line": 10, "end_line": 20 }
+            }),
             None,
             None,
-        )
-    })?;
-    let end_line = end_line.ok_or_else(|| {
-        read_file_excerpt_input_shape_error(
-            "missing required argument: end_line",
-            "single-range selector requires both start_line and end_line",
-            vec!["start_line", "end_line"],
-            Vec::new(),
-            serde_json::json!({ "file": "src/lib.rs", "start_line": 10, "end_line": 20 }),
-            None,
-            None,
-        )
-    })?;
-    let range = validate_requested_range(start_line, end_line).map_err(|error| {
-        read_file_excerpt_input_shape_error(
-            "invalid single-range selector",
-            error.to_string(),
-            vec!["start_line", "end_line"],
-            Vec::new(),
-            serde_json::json!({ "file": "src/lib.rs", "start_line": 10, "end_line": 20 }),
-            None,
-            None,
-        )
-    })?;
-    Ok((vec![range], "single_range"))
+        ))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -459,7 +540,7 @@ pub(crate) fn tool_read_file_excerpt(
             Err(payload) => return repo_path_tool_error_result(output_format, *payload),
         };
 
-        let (requested_ranges, mode) = match parse_excerpt_selection(args) {
+        let selection = match parse_excerpt_selection(args) {
             Ok(selection) => selection,
             Err(payload) => return repo_path_tool_error_result(output_format, *payload),
         };
@@ -468,9 +549,9 @@ pub(crate) fn tool_read_file_excerpt(
         let lines: Vec<&str> = contents.lines().collect();
         let total_lines = lines.len();
 
-        let requested_range_count = requested_ranges.len();
+        let requested_range_count = selection.ranges.len();
         let mut resolved_ranges = Vec::with_capacity(requested_range_count);
-        for range in requested_ranges {
+        for range in selection.ranges {
             if total_lines == 0 {
                 break;
             }
@@ -588,7 +669,7 @@ pub(crate) fn tool_read_file_excerpt(
         let result = ReadFileExcerptResult {
             tool: "read_file_excerpt",
             file,
-            selection_mode: mode,
+            selection_mode: selection.selection_mode,
             ranges: normalized_ranges,
             summary: ReadFileExcerptSummary {
                 total_lines,
@@ -611,6 +692,7 @@ pub(crate) fn tool_read_file_excerpt(
                 requested_max_lines.max(total_selected_lines),
             ),
         );
+
         Ok(response)
     })()
     .or_else(|error| discovery_tool_error_result("read_file_excerpt", output_format, error))
@@ -619,6 +701,141 @@ pub(crate) fn tool_read_file_excerpt(
 // ---------------------------------------------------------------------------
 // tool_get_docs_section
 // ---------------------------------------------------------------------------
+
+struct ParsedDocsSectionSelector {
+    selector: DocsSectionSelector,
+    selector_mode: &'static str,
+}
+
+fn get_docs_section_selector_error(
+    message: impl Into<String>,
+    detail: impl Into<String>,
+    offending_fields: Vec<&str>,
+    retry_example: serde_json::Value,
+) -> Box<ToolErrorPayload> {
+    Box::new(input_shape_error_payload(
+        "get_docs_section",
+        message,
+        detail,
+        InputShapeErrorSpec {
+            offending_fields: offending_fields.into_iter().map(str::to_owned).collect(),
+            normalization_performed: Vec::new(),
+            accepted_argument_families: vec![
+                "selector.kind=heading".to_owned(),
+                "selector.kind=line".to_owned(),
+            ],
+            retry_example: Some(retry_example),
+            fail_closed_reason: Some(
+                "Atlas refused to guess between conflicting docs section selectors".to_owned(),
+            ),
+            retry_guidance: Some("Provide exactly one docs section selector and retry.".to_owned()),
+            extra_details: Some(serde_json::json!({
+                "accepted_selector_shapes": [
+                    { "selector": { "kind": "heading", "heading": "document.install" } },
+                    { "selector": { "kind": "line", "line": 42 } }
+                ]
+            })),
+        },
+    ))
+}
+
+fn parse_docs_section_selector(
+    args: Option<&serde_json::Value>,
+) -> std::result::Result<ParsedDocsSectionSelector, Box<ToolErrorPayload>> {
+    if args.is_some_and(|value| value.get("heading").is_some() || value.get("line").is_some()) {
+        return Err(get_docs_section_selector_error(
+            "legacy docs section selector fields are no longer supported",
+            "Use selector={ kind: 'heading' | 'line', ... } and remove top-level heading/line fields.",
+            vec!["heading", "line"],
+            serde_json::json!({ "selector": { "kind": "heading", "heading": "document.install" } }),
+        ));
+    }
+    let selector_value = args.and_then(|value| value.get("selector"));
+    let selector_object = selector_value.and_then(|value| value.as_object());
+
+    if selector_value.is_some() && selector_object.is_none() {
+        return Err(get_docs_section_selector_error(
+            "invalid selector object",
+            "selector must be an object with kind=heading or kind=line",
+            vec!["selector"],
+            serde_json::json!({ "selector": { "kind": "heading", "heading": "document.install" } }),
+        ));
+    }
+    if let Some(selector) = selector_object {
+        let kind = selector
+            .get("kind")
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                get_docs_section_selector_error(
+                    "selector.kind is required",
+                    "selector object requires kind=heading or kind=line",
+                    vec!["selector.kind"],
+                    serde_json::json!({ "selector": { "kind": "heading", "heading": "document.install" } }),
+                )
+            })?;
+        return match kind {
+            "heading" => {
+                let heading = selector
+                    .get("heading")
+                    .and_then(|value| value.as_str())
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .ok_or_else(|| {
+                        get_docs_section_selector_error(
+                            "selector.kind='heading' requires selector.heading",
+                            "heading selector requires non-empty selector.heading",
+                            vec!["selector.kind", "selector.heading"],
+                            serde_json::json!({ "selector": { "kind": "heading", "heading": "document.install" } }),
+                        )
+                    })?
+                    .to_owned();
+                Ok(ParsedDocsSectionSelector {
+                    selector: DocsSectionSelector::Heading(heading),
+                    selector_mode: "heading",
+                })
+            }
+            "line" => {
+                let line = selector
+                    .get("line")
+                    .and_then(|value| value.as_u64())
+                    .ok_or_else(|| {
+                        get_docs_section_selector_error(
+                            "selector.kind='line' requires selector.line",
+                            "line selector requires line >= 1",
+                            vec!["selector.kind", "selector.line"],
+                            serde_json::json!({ "selector": { "kind": "line", "line": 42 } }),
+                        )
+                    })?;
+                if line == 0 {
+                    return Err(get_docs_section_selector_error(
+                        "selector.kind='line' requires selector.line",
+                        "line selector requires line >= 1",
+                        vec!["selector.kind", "selector.line"],
+                        serde_json::json!({ "selector": { "kind": "line", "line": 42 } }),
+                    ));
+                }
+                Ok(ParsedDocsSectionSelector {
+                    selector: DocsSectionSelector::Line(line as u32),
+                    selector_mode: "line",
+                })
+            }
+            other => Err(get_docs_section_selector_error(
+                format!("invalid selector.kind '{other}'"),
+                "selector.kind must be one of: heading, line",
+                vec!["selector.kind"],
+                serde_json::json!({ "selector": { "kind": "heading", "heading": "document.install" } }),
+            )),
+        };
+    }
+    Err(get_docs_section_selector_error(
+        "selector is required",
+        "Provide selector={ kind: 'heading' | 'line', ... }.",
+        vec!["selector"],
+        serde_json::json!({ "selector": { "kind": "heading", "heading": "document.install" } }),
+    ))
+}
 
 /// MCP tool: `get_docs_section` — resolve a Markdown section by heading path/slug or line.
 pub(crate) fn tool_get_docs_section(
@@ -635,11 +852,10 @@ pub(crate) fn tool_get_docs_section(
         }
         let file = str_arg(args, "file")?
             .ok_or_else(|| anyhow::anyhow!("missing required argument: file"))?;
-        let heading = str_arg(args, "heading")?.map(str::to_owned);
-        let line = u64_arg(args, "line").map(|value| value as u32);
-        if usize::from(heading.is_some()) + usize::from(line.is_some()) != 1 {
-            anyhow::bail!("provide exactly one selector: heading or line");
-        }
+        let selector = match parse_docs_section_selector(args) {
+            Ok(selector) => selector,
+            Err(payload) => return repo_path_tool_error_result(output_format, *payload),
+        };
 
         let max_bytes = u64_arg(args, "max_bytes").unwrap_or(16_384) as usize;
         let (file, _) =
@@ -649,16 +865,11 @@ pub(crate) fn tool_get_docs_section(
             };
         let store = Store::open(db_path)
             .with_context(|| format!("cannot open atlas store at '{db_path}'"))?;
-        let selector = if let Some(selector) = heading {
-            DocsSectionSelector::Heading(selector)
-        } else {
-            DocsSectionSelector::Line(line.expect("validated line selector"))
-        };
         let result = lookup_docs_section(
             &store,
             camino::Utf8Path::new(repo_root),
             &file,
-            selector,
+            selector.selector,
             max_bytes,
         )?;
 
@@ -719,7 +930,7 @@ pub(crate) fn tool_get_docs_section(
         let normalized = GetDocsSectionResult {
             tool: "get_docs_section",
             file: result.file.clone(),
-            selector_mode: result.selector_kind.clone(),
+            selector_mode: selector.selector_mode.to_owned(),
             heading,
             slug: result.heading_slug.clone(),
             line_start: result.start_line.map(u64::from),
@@ -741,6 +952,7 @@ pub(crate) fn tool_get_docs_section(
 
         let mut response = render_tool_result(&normalized, output_format)?;
         response["file"] = serde_json::Value::String(normalized.file.clone());
+
         Ok(response)
     })()
     .or_else(|error| discovery_tool_error_result("get_docs_section", output_format, error))

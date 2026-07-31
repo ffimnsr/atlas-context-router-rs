@@ -194,7 +194,7 @@ fn serve_requests() -> String {
         initialized_notification_line().to_owned(),
         format!("{{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\",\"params\":{{{meta}}}}}\n"),
         format!("{{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{{\"name\":\"query_graph\",\"arguments\":{{\"text\":\"greet_twice\"}},{meta}}}}}\n"),
-        format!("{{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{{\"name\":\"get_context\",\"arguments\":{{\"query\":\"greet_twice\"}},{meta}}}}}\n"),
+        format!("{{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{{\"name\":\"get_context\",\"arguments\":{{\"target\":{{\"kind\":\"query\",\"query\":\"greet_twice\"}}}},{meta}}}}}\n"),
     ]
     .concat()
 }

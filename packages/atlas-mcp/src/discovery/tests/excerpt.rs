@@ -68,15 +68,14 @@ fn read_file_excerpt_reads_single_range() {
     )]);
     let args = serde_json::json!({
         "file": "src/lib.rs",
-        "start_line": 2,
-        "end_line": 3,
+        "selector": { "kind": "range", "start_line": 2, "end_line": 3 },
     });
     let resp = tool_read_file_excerpt(Some(&args), &root, OutputFormat::Json).unwrap();
     let v: serde_json::Value =
         serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
 
     assert_eq!(v["tool"], "read_file_excerpt");
-    assert_eq!(v["selection_mode"], "single_range");
+    assert_eq!(v["selection_mode"], "range");
     assert_eq!(v["ranges"][0]["start_line"], 2);
     assert_eq!(v["snippets"][0]["start_line"], 2);
     assert_eq!(v["snippets"][0]["end_line"], 3);
@@ -96,18 +95,13 @@ fn read_file_excerpt_ignores_absent_equivalent_wrapper_fields_for_single_range()
     )]);
     let args = serde_json::json!({
         "file": "src/lib.rs",
-        "start_line": 2,
-        "end_line": 3,
-        "line": 0,
-        "before": 0,
-        "after": 0,
-        "line_ranges": [],
+        "selector": { "kind": "range", "start_line": 2, "end_line": 3 },
     });
     let resp = tool_read_file_excerpt(Some(&args), &root, OutputFormat::Json).unwrap();
     let v: serde_json::Value =
         serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
 
-    assert_eq!(v["selection_mode"], "single_range");
+    assert_eq!(v["selection_mode"], "range");
     assert_eq!(v["summary"]["returned_snippet_count"], 1);
     assert_eq!(v["snippets"][0]["start_line"], 2);
     assert_eq!(v["snippets"][0]["end_line"], 3);
@@ -121,20 +115,15 @@ fn read_file_excerpt_ignores_zero_line_when_line_ranges_is_real_selector() {
     )]);
     let args = serde_json::json!({
         "file": "src/lib.rs",
-        "start_line": 0,
-        "end_line": 0,
-        "line": 0,
-        "before": 0,
-        "after": 0,
-        "line_ranges": [
+        "selector": { "kind": "ranges", "line_ranges": [
             { "start_line": 2, "end_line": 4 }
-        ],
+        ] },
     });
     let resp = tool_read_file_excerpt(Some(&args), &root, OutputFormat::Json).unwrap();
     let v: serde_json::Value =
         serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
 
-    assert_eq!(v["selection_mode"], "line_ranges");
+    assert_eq!(v["selection_mode"], "ranges");
     assert_eq!(v["summary"]["returned_snippet_count"], 1);
     assert_eq!(v["snippets"][0]["start_line"], 2);
     assert_eq!(v["snippets"][0]["end_line"], 4);
@@ -148,15 +137,13 @@ fn read_file_excerpt_supports_line_with_context() {
     )]);
     let args = serde_json::json!({
         "file": "src/lib.rs",
-        "line": 3,
-        "before": 1,
-        "after": 1,
+        "selector": { "kind": "context", "line": 3, "before": 1, "after": 1 },
     });
     let resp = tool_read_file_excerpt(Some(&args), &root, OutputFormat::Json).unwrap();
     let v: serde_json::Value =
         serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
 
-    assert_eq!(v["selection_mode"], "line_context");
+    assert_eq!(v["selection_mode"], "context");
     assert_eq!(v["snippets"][0]["start_line"], 2);
     assert_eq!(v["snippets"][0]["end_line"], 4);
     let lines = v["snippets"][0]["lines"].as_array().expect("excerpt lines");
@@ -173,16 +160,16 @@ fn read_file_excerpt_merges_overlapping_ranges() {
     )]);
     let args = serde_json::json!({
         "file": "src/lib.rs",
-        "line_ranges": [
+        "selector": { "kind": "ranges", "line_ranges": [
             { "start_line": 1, "end_line": 2 },
             { "start_line": 2, "end_line": 4 }
-        ],
+        ] },
     });
     let resp = tool_read_file_excerpt(Some(&args), &root, OutputFormat::Json).unwrap();
     let v: serde_json::Value =
         serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
 
-    assert_eq!(v["selection_mode"], "line_ranges");
+    assert_eq!(v["selection_mode"], "ranges");
     assert_eq!(v["summary"]["returned_snippet_count"], 1);
     assert_eq!(v["snippets"][0]["start_line"], 1);
     assert_eq!(v["snippets"][0]["end_line"], 4);
@@ -196,8 +183,7 @@ fn read_file_excerpt_truncates_to_budgeted_max_lines() {
     )]);
     let args = serde_json::json!({
         "file": "src/lib.rs",
-        "start_line": 1,
-        "end_line": 4,
+        "selector": { "kind": "range", "start_line": 1, "end_line": 4 },
         "max_lines": 2,
     });
     let resp = tool_read_file_excerpt(Some(&args), &root, OutputFormat::Json).unwrap();
@@ -213,62 +199,35 @@ fn read_file_excerpt_truncates_to_budgeted_max_lines() {
 }
 
 #[test]
-fn read_file_excerpt_conflicting_real_selectors_return_actionable_error() {
+fn read_file_excerpt_rejects_mixed_selector_object_and_removed_top_level_fields() {
     let (_dir, root) = make_repo(&[("src/lib.rs", "fn x() {}\nfn y() {}\n")]);
     let args = serde_json::json!({
         "file": "src/lib.rs",
-        "start_line": 1,
-        "end_line": 1,
+        "selector": { "kind": "range", "start_line": 1, "end_line": 1 },
         "line": 2,
         "before": 0,
         "after": 0,
     });
     let result = tool_read_file_excerpt(Some(&args), &root, OutputFormat::Json)
-        .expect("conflicting selectors should return tool error result");
-    let message = result["structuredContent"]["message"]
-        .as_str()
-        .expect("message");
-    let details = &result["structuredContent"]["details"];
+        .expect("mixed selector should return tool error result");
 
     assert_eq!(result["isError"], serde_json::json!(true));
     assert_eq!(
         result["structuredContent"]["code"],
         serde_json::json!("invalid_input")
     );
-    assert!(
-        message.contains("provide exactly one selector"),
-        "got: {message}"
-    );
     assert_eq!(
-        details["selector_families_seen"],
-        serde_json::json!("start_line/end_line, line with optional before/after")
-    );
-    assert_eq!(
-        details["accepted_argument_families"],
-        serde_json::json!([
-            "line_ranges",
-            "start_line/end_line",
-            "line with optional before/after"
-        ])
-    );
-    assert_eq!(
-        details["retry_example"],
-        serde_json::json!({ "file": "src/lib.rs", "start_line": 10, "end_line": 20 })
-    );
-    assert_eq!(
-        details["fail_closed_reason"],
-        serde_json::json!("Atlas refused to guess between conflicting selector families")
+        result["structuredContent"]["message"],
+        serde_json::json!("legacy excerpt selector fields are no longer supported")
     );
 }
 
 #[test]
-fn read_file_excerpt_zero_line_with_context_returns_actionable_error() {
+fn read_file_excerpt_zero_line_in_context_selector_returns_actionable_error() {
     let (_dir, root) = make_repo(&[("src/lib.rs", "fn x() {}\nfn y() {}\n")]);
     let args = serde_json::json!({
         "file": "src/lib.rs",
-        "line": 0,
-        "before": 2,
-        "after": 2,
+        "selector": { "kind": "context", "line": 0, "before": 2, "after": 2 },
     });
     let result = tool_read_file_excerpt(Some(&args), &root, OutputFormat::Json)
         .expect("invalid line context should return tool error result");
@@ -281,15 +240,18 @@ fn read_file_excerpt_zero_line_with_context_returns_actionable_error() {
     );
     assert_eq!(
         details["detail"],
-        serde_json::json!("line-context selector requires line >= 1")
+        serde_json::json!("context selector requires line >= 1")
     );
     assert_eq!(
         details["retry_example"],
-        serde_json::json!({ "file": "src/lib.rs", "line": 42, "before": 2, "after": 2 })
+        serde_json::json!({
+            "file": "src/lib.rs",
+            "selector": { "kind": "context", "line": 42, "before": 2, "after": 2 }
+        })
     );
     assert_eq!(
         details["offending_fields"],
-        serde_json::json!(["line", "before", "after"])
+        serde_json::json!(["selector.kind", "selector.line"])
     );
 }
 
@@ -299,8 +261,7 @@ fn read_file_excerpt_path_traversal_is_rejected() {
     for bad in &["../", "../../etc/passwd", "/etc/passwd"] {
         let args = serde_json::json!({
             "file": bad,
-            "start_line": 1,
-            "end_line": 1,
+            "selector": { "kind": "range", "start_line": 1, "end_line": 1 },
         });
         let result = tool_read_file_excerpt(Some(&args), &root, OutputFormat::Json)
             .expect("path traversal should return tool error result");
@@ -322,8 +283,7 @@ fn read_file_excerpt_duplicate_root_prefix_returns_repo_relative_hint() {
         .expect("repo name");
     let args = serde_json::json!({
         "file": format!("{repo_name}/src/lib.rs"),
-        "start_line": 1,
-        "end_line": 1,
+        "selector": { "kind": "range", "start_line": 1, "end_line": 1 },
     });
     let result = tool_read_file_excerpt(Some(&args), &root, OutputFormat::Json)
         .expect("duplicate root prefix should return tool error result");
@@ -355,8 +315,7 @@ fn read_file_excerpt_nested_root_prefix_returns_repo_relative_hint() {
     let (_dir, root) = make_repo(&[("src/lib.rs", "fn x() {}\n")]);
     let args = serde_json::json!({
         "file": "clients/mach-one/src/lib.rs",
-        "start_line": 1,
-        "end_line": 1,
+        "selector": { "kind": "range", "start_line": 1, "end_line": 1 },
     });
     let result = tool_read_file_excerpt(Some(&args), &root, OutputFormat::Json)
         .expect("nested root prefix should return tool error result");
@@ -383,8 +342,7 @@ fn read_file_excerpt_valid_repo_relative_path_under_current_root_succeeds() {
     let (_dir, root) = make_repo(&[("src/lib.rs", "fn x() {}\nfn y() {}\n")]);
     let args = serde_json::json!({
         "file": "src/lib.rs",
-        "start_line": 1,
-        "end_line": 1,
+        "selector": { "kind": "range", "start_line": 1, "end_line": 1 },
     });
     let result = tool_read_file_excerpt(Some(&args), &root, OutputFormat::Json)
         .expect("valid repo-relative path should succeed");
@@ -400,8 +358,7 @@ fn read_file_excerpt_missing_file_uses_unique_basename_suggestion() {
     let (_dir, root) = make_repo(&[("crate/service.rs", "fn x() {}\n")]);
     let args = serde_json::json!({
         "file": "src/service.rs",
-        "start_line": 1,
-        "end_line": 1,
+        "selector": { "kind": "range", "start_line": 1, "end_line": 1 },
     });
     let result = tool_read_file_excerpt(Some(&args), &root, OutputFormat::Json)
         .expect("missing file should return tool error result");
@@ -427,8 +384,7 @@ fn read_file_excerpt_ambiguous_root_recovery_still_fails_closed() {
     let (_dir, root) = make_repo(&[("src/lib.rs", "fn x() {}\n"), ("lib.rs", "fn y() {}\n")]);
     let args = serde_json::json!({
         "file": "workspace/src/lib.rs",
-        "start_line": 1,
-        "end_line": 1,
+        "selector": { "kind": "range", "start_line": 1, "end_line": 1 },
     });
     let result = tool_read_file_excerpt(Some(&args), &root, OutputFormat::Json)
         .expect("ambiguous recovery should return tool error result");
@@ -472,7 +428,7 @@ fn get_docs_section_by_heading_path_returns_section() {
     );
     let args = serde_json::json!({
         "file": "README.md",
-        "heading": "document.overview.install",
+        "selector": { "kind": "heading", "heading": "document.overview.install" },
     });
     let resp = tool_get_docs_section(Some(&args), &root, &db_path, OutputFormat::Json).unwrap();
     let v: serde_json::Value =
@@ -505,7 +461,7 @@ fn get_docs_section_by_line_returns_containing_section() {
     );
     let args = serde_json::json!({
         "file": "README.md",
-        "line": 4,
+        "selector": { "kind": "line", "line": 4 },
     });
     let resp = tool_get_docs_section(Some(&args), &root, &db_path, OutputFormat::Json).unwrap();
     let v: serde_json::Value =
@@ -514,6 +470,156 @@ fn get_docs_section_by_line_returns_containing_section() {
     assert_eq!(v["heading"]["path"], "document.overview.install");
     assert_eq!(v["line_start"], 3);
     assert_eq!(v["line_end"], 4);
+}
+
+#[test]
+fn read_file_excerpt_accepts_selector_object_variants() {
+    let (_dir, root) = make_repo(&[(
+        "src/lib.rs",
+        "fn one() {}\nfn two() {}\nfn three() {}\nfn four() {}\n",
+    )]);
+
+    let range = serde_json::json!({
+        "file": "src/lib.rs",
+        "selector": { "kind": "range", "start_line": 2, "end_line": 3 },
+    });
+    let range_resp = tool_read_file_excerpt(Some(&range), &root, OutputFormat::Json).unwrap();
+    let range_body: serde_json::Value =
+        serde_json::from_str(range_resp["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(range_body["selection_mode"], "range");
+    assert!(range_resp["_meta"].get("deprecated_input_fields").is_none());
+
+    let ranges = serde_json::json!({
+        "file": "src/lib.rs",
+        "selector": { "kind": "ranges", "line_ranges": [{ "start_line": 1, "end_line": 2 }] },
+    });
+    let ranges_resp = tool_read_file_excerpt(Some(&ranges), &root, OutputFormat::Json).unwrap();
+    let ranges_body: serde_json::Value =
+        serde_json::from_str(ranges_resp["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(ranges_body["selection_mode"], "ranges");
+
+    let context = serde_json::json!({
+        "file": "src/lib.rs",
+        "selector": { "kind": "context", "line": 3, "before": 1, "after": 1 },
+    });
+    let context_resp = tool_read_file_excerpt(Some(&context), &root, OutputFormat::Json).unwrap();
+    let context_body: serde_json::Value =
+        serde_json::from_str(context_resp["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(context_body["selection_mode"], "context");
+}
+
+#[test]
+fn read_file_excerpt_rejects_mixed_selector_object_and_legacy_fields() {
+    let (_dir, root) = make_repo(&[("src/lib.rs", "fn x() {}\nfn y() {}\n")]);
+    let args = serde_json::json!({
+        "file": "src/lib.rs",
+        "selector": { "kind": "range", "start_line": 1, "end_line": 1 },
+        "start_line": 1,
+        "end_line": 1,
+    });
+    let result = tool_read_file_excerpt(Some(&args), &root, OutputFormat::Json)
+        .expect("mixed selector should return tool error result");
+
+    assert_eq!(result["isError"], serde_json::json!(true));
+    assert_eq!(
+        result["structuredContent"]["code"],
+        serde_json::json!("invalid_input")
+    );
+    assert_eq!(
+        result["structuredContent"]["message"],
+        serde_json::json!("legacy excerpt selector fields are no longer supported")
+    );
+}
+
+#[test]
+fn read_file_excerpt_legacy_selectors_are_rejected() {
+    let (_dir, root) = make_repo(&[(
+        "src/lib.rs",
+        "fn one() {}\nfn two() {}\nfn three() {}\nfn four() {}\n",
+    )]);
+    let args = serde_json::json!({
+        "file": "src/lib.rs",
+        "line_ranges": [{ "start_line": 2, "end_line": 3 }],
+    });
+    let result = tool_read_file_excerpt(Some(&args), &root, OutputFormat::Json)
+        .expect("legacy selector should return tool error result");
+    assert_eq!(result["isError"], serde_json::json!(true));
+    assert_eq!(
+        result["structuredContent"]["message"],
+        serde_json::json!("legacy excerpt selector fields are no longer supported")
+    );
+}
+
+#[test]
+fn get_docs_section_accepts_selector_object_and_rejects_mixed_legacy_fields() {
+    let (_dir, root) = make_repo(&[(
+        "README.md",
+        "# Overview\nintro\n## Install\nstep one\n## Usage\nrun it\n",
+    )]);
+    let db_path = seed_docs_index(
+        &root,
+        &[
+            markdown_heading("Overview", "document.overview", 1, 1),
+            markdown_heading("Install", "document.overview.install", 2, 3),
+            markdown_heading("Usage", "document.overview.usage", 2, 5),
+        ],
+    );
+
+    let selector_args = serde_json::json!({
+        "file": "README.md",
+        "selector": { "kind": "heading", "heading": "document.overview.install" },
+    });
+    let selector_resp =
+        tool_get_docs_section(Some(&selector_args), &root, &db_path, OutputFormat::Json).unwrap();
+    let selector_body: serde_json::Value =
+        serde_json::from_str(selector_resp["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(selector_body["selector_mode"], "heading");
+    assert!(
+        selector_resp["_meta"]
+            .get("deprecated_input_fields")
+            .is_none()
+    );
+
+    let mixed_args = serde_json::json!({
+        "file": "README.md",
+        "selector": { "kind": "heading", "heading": "document.overview.install" },
+        "heading": "document.overview.install",
+    });
+    let mixed_result =
+        tool_get_docs_section(Some(&mixed_args), &root, &db_path, OutputFormat::Json)
+            .expect("mixed selector should return tool error result");
+    assert_eq!(mixed_result["isError"], serde_json::json!(true));
+    assert_eq!(
+        mixed_result["structuredContent"]["message"],
+        serde_json::json!("legacy docs section selector fields are no longer supported")
+    );
+}
+
+#[test]
+fn get_docs_section_legacy_heading_is_rejected() {
+    let (_dir, root) = make_repo(&[(
+        "README.md",
+        "# Overview\nintro\n## Install\nstep one\n## Usage\nrun it\n",
+    )]);
+    let db_path = seed_docs_index(
+        &root,
+        &[
+            markdown_heading("Overview", "document.overview", 1, 1),
+            markdown_heading("Install", "document.overview.install", 2, 3),
+            markdown_heading("Usage", "document.overview.usage", 2, 5),
+        ],
+    );
+    let args = serde_json::json!({
+        "file": "README.md",
+        "heading": "document.overview.install",
+    });
+    let result = tool_get_docs_section(Some(&args), &root, &db_path, OutputFormat::Json)
+        .expect("legacy heading should return tool error result");
+    assert_eq!(result["isError"], serde_json::json!(true));
+    assert_eq!(
+        result["structuredContent"]["message"],
+        serde_json::json!("legacy docs section selector fields are no longer supported")
+    );
 }
 
 #[test]
@@ -530,7 +636,7 @@ fn get_docs_section_returns_candidates_for_ambiguous_slug() {
     );
     let args = serde_json::json!({
         "file": "README.md",
-        "heading": "install",
+        "selector": { "kind": "heading", "heading": "install" },
     });
     let resp = tool_get_docs_section(Some(&args), &root, &db_path, OutputFormat::Json).unwrap();
     let v: serde_json::Value =
@@ -627,7 +733,7 @@ fn get_docs_section_invalid_selector_returns_tool_error_result() {
     );
     let args = serde_json::json!({
         "file": "README.md",
-        "heading": "document.overview.install",
+        "selector": { "kind": "heading", "heading": "document.overview.install" },
         "line": 3,
     });
     let result = tool_get_docs_section(Some(&args), &root, &db_path, OutputFormat::Json)

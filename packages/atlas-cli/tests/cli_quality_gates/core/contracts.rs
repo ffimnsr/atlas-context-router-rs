@@ -225,7 +225,7 @@ fn stdio_transport_representative_stable_tools_keep_object_structured_content() 
         format!(
             "{}{}{}{}{}{}{}{}",
             initialized_session_prelude(1),
-            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"get_context\",\"arguments\":{\"query\":\"greet_twice\",\"output_format\":\"json\"}}}\n",
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"get_context\",\"arguments\":{\"target\":{\"kind\":\"query\",\"query\":\"greet_twice\"},\"output_format\":\"json\"}}}\n",
             "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"status\",\"arguments\":{\"output_format\":\"json\"}}}\n",
             "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"doctor\",\"arguments\":{\"output_format\":\"json\"}}}\n",
             "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"tools/call\",\"params\":{\"name\":\"analyze_metrics\",\"arguments\":{\"output_format\":\"json\"}}}\n",

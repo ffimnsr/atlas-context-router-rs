@@ -6,7 +6,7 @@ use atlas_engine::{BuildOptions, UpdateOptions, UpdateTarget, build_graph, updat
 use atlas_repo::{
     CanonicalRepoPath, DiffTarget, RepoRegistration, changed_files, find_repo_root, stable_repo_id,
 };
-use atlas_review::{ContextEngine, query_parser};
+use atlas_review::ContextEngine;
 use atlas_search::semantic as sem;
 use atlas_store_sqlite::{BuildFinishStats, GraphBuildState, Store};
 use camino::Utf8Path;
@@ -15,9 +15,11 @@ use serde_json::{Map, Value, json};
 use std::collections::BTreeSet;
 
 use super::shared::{
-    bool_arg, error_code_docs, error_message, error_suggestions, inject_budget_metadata,
-    load_budget_policy, open_store, parse_mcp_intent, repo_aliases_by_id,
-    resolve_repo_scope_selection, str_arg, string_array_arg, u64_arg,
+    ResolvedChangeSourceKind, bool_arg, error_code_docs, error_message, error_suggestions,
+    inject_budget_metadata, inject_deprecated_input_fields, load_budget_policy,
+    mcp_query_looks_like_unstructured_description, mcp_supported_query_grammar_examples,
+    open_store, parse_mcp_intent, parse_mcp_query_grammar, repo_aliases_by_id,
+    resolve_change_source_selection, resolve_repo_scope_selection, str_arg, u64_arg,
 };
 use crate::context::{enforce_mcp_response_budget, package_context_result, package_impact};
 use crate::session_tools::{
@@ -49,152 +51,57 @@ fn context_decision_lookup_query(request: &ContextRequest) -> Option<String> {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ChangeSourceMode {
-    ExplicitFiles,
-    BaseRef,
-    Staged,
-    WorkingTree,
-}
-
-impl ChangeSourceMode {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::ExplicitFiles => "explicit_files",
-            Self::BaseRef => "base_ref",
-            Self::Staged => "staged",
-            Self::WorkingTree => "working_tree",
-        }
-    }
-}
-
+#[derive(Clone, Debug)]
 struct ChangeSourceRequest {
-    mode: ChangeSourceMode,
+    kind: ResolvedChangeSourceKind,
     files: Vec<String>,
     base: Option<String>,
-    staged: bool,
-    working_tree: bool,
+    deprecated_input_fields: Vec<String>,
 }
 
 struct ResolvedChangeSource {
-    mode: ChangeSourceMode,
+    kind: ResolvedChangeSourceKind,
     files: Vec<String>,
     changes: Vec<ChangedFile>,
     deleted_files: Vec<String>,
     base: Option<String>,
-    staged: bool,
-    working_tree: bool,
 }
 
-fn normalize_explicit_files(files: Vec<String>) -> Result<Vec<String>> {
-    files
-        .into_iter()
-        .map(|path| {
-            CanonicalRepoPath::from_repo_relative(&path)
-                .with_context(|| format!("invalid explicit file path '{path}'"))
-                .map(|path| path.as_str().to_owned())
-        })
-        .collect()
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BuildOperationKind {
+    Build,
+    Update,
 }
 
-fn resolve_diff_target(
-    base: Option<String>,
-    staged: bool,
-    working_tree: bool,
-) -> (ChangeSourceMode, DiffTarget) {
-    if staged {
-        (ChangeSourceMode::Staged, DiffTarget::Staged)
-    } else if let Some(base_ref) = base {
-        (ChangeSourceMode::BaseRef, DiffTarget::BaseRef(base_ref))
-    } else {
-        let _ = working_tree;
-        (ChangeSourceMode::WorkingTree, DiffTarget::WorkingTree)
+impl BuildOperationKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Build => "build",
+            Self::Update => "update",
+        }
     }
 }
 
-fn change_source_examples(allow_explicit_files: bool) -> Vec<serde_json::Value> {
-    let mut examples = Vec::new();
-    if allow_explicit_files {
-        examples.push(serde_json::json!({
-            "mode": "files",
-            "files": ["src/service.rs"]
-        }));
-    }
-    examples.push(serde_json::json!({
-        "mode": "base",
-        "base": "origin/main"
-    }));
-    examples.push(serde_json::json!({
-        "mode": "staged",
-        "staged": true
-    }));
-    examples.push(serde_json::json!({
-        "mode": "working_tree",
-        "working_tree": true
-    }));
-    examples
+#[derive(Clone, Debug)]
+struct BuildOperationRequest {
+    kind: BuildOperationKind,
+    change_source: Option<ChangeSourceRequest>,
+    deprecated_input_fields: Vec<String>,
 }
 
-fn accepted_change_source_modes(allow_explicit_files: bool) -> Vec<&'static str> {
-    let mut modes = Vec::new();
-    if allow_explicit_files {
-        modes.push("files");
-    }
-    modes.extend(["base", "staged", "working_tree"]);
-    modes
+struct LegacyBuildUpdateFields {
+    present_fields: Vec<String>,
 }
 
-fn change_source_error_payload(
-    tool_name: &str,
-    message: impl Into<String>,
-    detail: impl Into<String>,
-    allow_explicit_files: bool,
-    offending_fields: Vec<&'static str>,
-    present_mode_families: Vec<&'static str>,
-    requested_mode: Option<&str>,
-) -> ToolErrorPayload {
-    let accepted_modes = accepted_change_source_modes(allow_explicit_files);
-    let accepted_argument_families = accepted_modes
-        .iter()
-        .map(|mode| (*mode).to_owned())
-        .collect::<Vec<_>>();
-    let examples = change_source_examples(allow_explicit_files);
-    let retry_example = examples.first().cloned();
-    let mode_contract = if allow_explicit_files {
-        "Provide exactly one change-source mode: files, base, staged, or working_tree. Atlas refuses to guess when multiple mode families are present."
-    } else {
-        "Provide exactly one change-source mode: base, staged, or working_tree. Atlas refuses to guess when multiple mode families are present."
-    };
-    let mut extra_details = serde_json::json!({
-        "present_mode_families": present_mode_families,
-        "accepted_modes": accepted_modes,
-        "accepted_mode_examples": examples,
-        "mode_contract": mode_contract,
-    });
-    if let Some(mode) = requested_mode {
-        extra_details["requested_mode"] = serde_json::Value::String(mode.to_owned());
+fn resolve_diff_target(request: &ChangeSourceRequest) -> DiffTarget {
+    match request.kind {
+        ResolvedChangeSourceKind::Staged => DiffTarget::Staged,
+        ResolvedChangeSourceKind::Base => {
+            DiffTarget::BaseRef(request.base.clone().expect("base kind requires base ref"))
+        }
+        ResolvedChangeSourceKind::WorkingTree => DiffTarget::WorkingTree,
+        ResolvedChangeSourceKind::Files => unreachable!("files kind does not use git diff target"),
     }
-
-    input_shape_error_payload(
-        tool_name,
-        message,
-        detail,
-        InputShapeErrorSpec {
-            offending_fields: offending_fields.into_iter().map(str::to_owned).collect(),
-            normalization_performed: Vec::new(),
-            accepted_argument_families,
-            retry_example,
-            fail_closed_reason: Some(
-                "Atlas refused to guess because multiple change-source mode families were present"
-                    .to_owned(),
-            ),
-            retry_guidance: Some(
-                "Pick exactly one change-source mode and provide only its required fields, then retry."
-                    .to_owned(),
-            ),
-            extra_details: Some(extra_details),
-        },
-    )
 }
 
 fn validate_change_source_request(
@@ -202,261 +109,171 @@ fn validate_change_source_request(
     args: Option<&serde_json::Value>,
     allow_explicit_files: bool,
 ) -> std::result::Result<ChangeSourceRequest, Box<ToolErrorPayload>> {
-    let mode = str_arg(args, "mode")
-        .map_err(|error| {
-            Box::new(change_source_error_payload(
-                tool_name,
-                "invalid change source arguments",
-                error.to_string(),
-                allow_explicit_files,
-                vec!["mode"],
-                Vec::new(),
-                None,
-            ))
-        })?
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    let base = str_arg(args, "base")
-        .map_err(|error| {
-            Box::new(change_source_error_payload(
-                tool_name,
-                "invalid change source arguments",
-                error.to_string(),
-                allow_explicit_files,
-                vec!["base"],
-                Vec::new(),
-                mode,
-            ))
-        })?
-        .map(str::to_owned);
-    let staged = bool_arg(args, "staged").unwrap_or(false);
-    let working_tree = bool_arg(args, "working_tree").unwrap_or(false);
-    let files = if allow_explicit_files {
-        string_array_arg(args, "files").map_err(|error| {
-            Box::new(change_source_error_payload(
-                tool_name,
-                "invalid change source arguments",
-                error.to_string(),
-                allow_explicit_files,
-                vec!["files"],
-                Vec::new(),
-                mode,
-            ))
-        })?
-    } else {
-        Vec::new()
-    };
-
-    let mut present_mode_families = Vec::new();
-    let mut offending_fields = Vec::new();
-    if !files.is_empty() {
-        present_mode_families.push("files");
-        offending_fields.push("files");
-    }
-    if base.is_some() {
-        present_mode_families.push("base");
-        offending_fields.push("base");
-    }
-    if staged {
-        present_mode_families.push("staged");
-        offending_fields.push("staged");
-    }
-    if working_tree {
-        present_mode_families.push("working_tree");
-        offending_fields.push("working_tree");
-    }
-
-    if let Some(mode_name) = mode {
-        let allowed = accepted_change_source_modes(allow_explicit_files);
-        if !allowed.contains(&mode_name) {
-            return Err(Box::new(change_source_error_payload(
-                tool_name,
-                format!("invalid change source mode '{mode_name}'"),
-                format!(
-                    "invalid change source mode '{mode_name}'. Accepted modes: {}",
-                    allowed.join(", ")
-                ),
-                allow_explicit_files,
-                vec!["mode"],
-                present_mode_families,
-                Some(mode_name),
-            )));
-        }
-
-        match mode_name {
-            "files" => {
-                if !allow_explicit_files {
-                    return Err(Box::new(change_source_error_payload(
-                        tool_name,
-                        "invalid change source mode 'files'",
-                        "this tool does not accept explicit files mode",
-                        allow_explicit_files,
-                        vec!["mode"],
-                        present_mode_families,
-                        Some(mode_name),
-                    )));
-                }
-                if files.is_empty() {
-                    return Err(Box::new(change_source_error_payload(
-                        tool_name,
-                        "mode 'files' requires non-empty 'files'",
-                        "files mode requires a non-empty files array",
-                        allow_explicit_files,
-                        vec!["mode", "files"],
-                        present_mode_families,
-                        Some(mode_name),
-                    )));
-                }
-                if base.is_some() || staged || working_tree {
-                    return Err(Box::new(change_source_error_payload(
-                        tool_name,
-                        "ambiguous change source: mode 'files' cannot be combined with base/staged/working_tree",
-                        "mode 'files' conflicts with one or more legacy mode fields",
-                        allow_explicit_files,
-                        offending_fields,
-                        present_mode_families,
-                        Some(mode_name),
-                    )));
-                }
-                return Ok(ChangeSourceRequest {
-                    mode: ChangeSourceMode::ExplicitFiles,
-                    files,
-                    base: None,
-                    staged: false,
-                    working_tree: false,
-                });
-            }
-            "base" => {
-                if base.is_none() {
-                    return Err(Box::new(change_source_error_payload(
-                        tool_name,
-                        "mode 'base' requires non-empty 'base'",
-                        "base mode requires base ref string",
-                        allow_explicit_files,
-                        vec!["mode", "base"],
-                        present_mode_families,
-                        Some(mode_name),
-                    )));
-                }
-                if !files.is_empty() || staged || working_tree {
-                    return Err(Box::new(change_source_error_payload(
-                        tool_name,
-                        "ambiguous change source: mode 'base' cannot be combined with files/staged/working_tree",
-                        "mode 'base' conflicts with one or more legacy mode fields",
-                        allow_explicit_files,
-                        offending_fields,
-                        present_mode_families,
-                        Some(mode_name),
-                    )));
-                }
-            }
-            "staged" => {
-                if !staged {
-                    return Err(Box::new(change_source_error_payload(
-                        tool_name,
-                        "mode 'staged' requires staged=true",
-                        "staged mode requires staged=true",
-                        allow_explicit_files,
-                        vec!["mode", "staged"],
-                        present_mode_families,
-                        Some(mode_name),
-                    )));
-                }
-                if !files.is_empty() || base.is_some() || working_tree {
-                    return Err(Box::new(change_source_error_payload(
-                        tool_name,
-                        "ambiguous change source: mode 'staged' cannot be combined with files/base/working_tree",
-                        "mode 'staged' conflicts with one or more legacy mode fields",
-                        allow_explicit_files,
-                        offending_fields,
-                        present_mode_families,
-                        Some(mode_name),
-                    )));
-                }
-            }
-            "working_tree" => {
-                if !working_tree {
-                    return Err(Box::new(change_source_error_payload(
-                        tool_name,
-                        "mode 'working_tree' requires working_tree=true",
-                        "working_tree mode requires working_tree=true",
-                        allow_explicit_files,
-                        vec!["mode", "working_tree"],
-                        present_mode_families,
-                        Some(mode_name),
-                    )));
-                }
-                if !files.is_empty() || base.is_some() || staged {
-                    return Err(Box::new(change_source_error_payload(
-                        tool_name,
-                        "ambiguous change source: mode 'working_tree' cannot be combined with files/base/staged",
-                        "mode 'working_tree' conflicts with one or more legacy mode fields",
-                        allow_explicit_files,
-                        offending_fields,
-                        present_mode_families,
-                        Some(mode_name),
-                    )));
-                }
-            }
-            _ => unreachable!("validated mode"),
-        }
-    }
-
-    if present_mode_families.len() > 1 {
-        return Err(Box::new(change_source_error_payload(
-            tool_name,
-            "ambiguous change source: provide exactly one mode family",
-            "multiple change-source mode families were provided in one call",
-            allow_explicit_files,
-            offending_fields,
-            present_mode_families,
-            None,
-        )));
-    }
-
-    if !files.is_empty() {
-        return Ok(ChangeSourceRequest {
-            mode: ChangeSourceMode::ExplicitFiles,
-            files,
-            base: None,
-            staged: false,
-            working_tree: false,
-        });
-    }
-    if let Some(base_ref) = base {
-        return Ok(ChangeSourceRequest {
-            mode: ChangeSourceMode::BaseRef,
-            files: Vec::new(),
-            base: Some(base_ref),
-            staged: false,
-            working_tree: false,
-        });
-    }
-    if staged {
-        return Ok(ChangeSourceRequest {
-            mode: ChangeSourceMode::Staged,
-            files: Vec::new(),
-            base: None,
-            staged: true,
-            working_tree: false,
-        });
-    }
-    if working_tree {
-        return Ok(ChangeSourceRequest {
-            mode: ChangeSourceMode::WorkingTree,
-            files: Vec::new(),
-            base: None,
-            staged: false,
-            working_tree: true,
-        });
-    }
-
+    let resolved = resolve_change_source_selection(tool_name, args, allow_explicit_files)?;
     Ok(ChangeSourceRequest {
-        mode: ChangeSourceMode::WorkingTree,
-        files: Vec::new(),
-        base: None,
-        staged: false,
-        working_tree: true,
+        kind: resolved.kind,
+        files: resolved.files,
+        base: resolved.base,
+        deprecated_input_fields: resolved.deprecated_input_fields,
+    })
+}
+
+fn build_operation_error(
+    message: impl Into<String>,
+    detail: impl Into<String>,
+    offending_fields: Vec<&str>,
+    retry_example: Value,
+) -> Box<ToolErrorPayload> {
+    Box::new(input_shape_error_payload(
+        "build_or_update_graph",
+        message,
+        detail,
+        InputShapeErrorSpec {
+            offending_fields: offending_fields.into_iter().map(str::to_owned).collect(),
+            normalization_performed: Vec::new(),
+            accepted_argument_families: vec![
+                "operation.kind=build".to_owned(),
+                "operation.kind=update".to_owned(),
+            ],
+            retry_example: Some(retry_example),
+            fail_closed_reason: Some(
+                "Atlas refused to guess between conflicting build/update operation selectors"
+                    .to_owned(),
+            ),
+            retry_guidance: Some(
+                "Provide exactly one build_or_update_graph operation shape and retry.".to_owned(),
+            ),
+            extra_details: Some(json!({
+                "accepted_operation_shapes": [
+                    { "operation": { "kind": "build" } },
+                    { "operation": { "kind": "update", "change_source": { "kind": "working_tree" } } },
+                    { "operation": { "kind": "update", "change_source": { "kind": "staged" } } },
+                    { "operation": { "kind": "update", "change_source": { "kind": "base", "base": "origin/main" } } },
+                    { "operation": { "kind": "update", "change_source": { "kind": "files", "files": ["src/lib.rs"] } } }
+                ]
+            })),
+        },
+    ))
+}
+
+fn material_legacy_build_update_fields(
+    args: Option<&Value>,
+) -> std::result::Result<LegacyBuildUpdateFields, Box<ToolErrorPayload>> {
+    let present_fields = ["mode", "base", "staged", "files"]
+        .into_iter()
+        .filter(|field| args.is_some_and(|value| value.get(field).is_some()))
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    Ok(LegacyBuildUpdateFields { present_fields })
+}
+
+fn validate_build_operation_request(
+    args: Option<&Value>,
+) -> std::result::Result<BuildOperationRequest, Box<ToolErrorPayload>> {
+    let LegacyBuildUpdateFields {
+        present_fields: legacy_present_fields,
+    } = material_legacy_build_update_fields(args)?;
+    let operation_value = args.and_then(|value| value.get("operation"));
+    let operation_object = operation_value.and_then(|value| value.as_object());
+
+    if operation_value.is_some() && operation_object.is_none() {
+        return Err(build_operation_error(
+            "invalid operation selector",
+            "operation must be an object with kind=build or kind=update",
+            vec!["operation"],
+            json!({ "operation": { "kind": "build" } }),
+        ));
+    }
+
+    if operation_object.is_some() && !legacy_present_fields.is_empty() {
+        let mut offending_fields = vec!["operation"];
+        offending_fields.extend(legacy_present_fields.iter().map(String::as_str));
+        return Err(build_operation_error(
+            "conflicting build operation selectors",
+            "operation cannot be combined with legacy mode, base, staged, or files fields",
+            offending_fields,
+            json!({ "operation": { "kind": "build" } }),
+        ));
+    }
+
+    if let Some(operation) = operation_object {
+        let kind = operation
+            .get("kind")
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                build_operation_error(
+                    "operation.kind is required",
+                    "operation object requires kind=build or kind=update",
+                    vec!["operation.kind"],
+                    json!({ "operation": { "kind": "build" } }),
+                )
+            })?;
+        return match kind {
+            "build" => {
+                if operation.get("change_source").is_some() {
+                    Err(build_operation_error(
+                        "operation.kind='build' cannot include change_source",
+                        "build operation does not accept change_source because it performs a full build",
+                        vec!["operation.kind", "operation.change_source"],
+                        json!({ "operation": { "kind": "build" } }),
+                    ))
+                } else {
+                    Ok(BuildOperationRequest {
+                        kind: BuildOperationKind::Build,
+                        change_source: None,
+                        deprecated_input_fields: Vec::new(),
+                    })
+                }
+            }
+            "update" => {
+                let nested_change_source = operation.get("change_source").ok_or_else(|| {
+                    build_operation_error(
+                        "operation.kind='update' requires operation.change_source",
+                        "update operation requires explicit operation.change_source; use working_tree, staged, base, or files",
+                        vec!["operation.kind", "operation.change_source"],
+                        json!({ "operation": { "kind": "update", "change_source": { "kind": "working_tree" } } }),
+                    )
+                })?;
+                let nested_args = json!({ "change_source": nested_change_source.clone() });
+                let change_source = validate_change_source_request(
+                    "build_or_update_graph",
+                    Some(&nested_args),
+                    true,
+                )?;
+                Ok(BuildOperationRequest {
+                    kind: BuildOperationKind::Update,
+                    change_source: Some(change_source),
+                    deprecated_input_fields: Vec::new(),
+                })
+            }
+            other => Err(build_operation_error(
+                format!("invalid operation.kind '{other}'"),
+                "operation.kind must be one of: build, update",
+                vec!["operation.kind"],
+                json!({ "operation": { "kind": "build" } }),
+            )),
+        };
+    }
+
+    if !legacy_present_fields.is_empty() {
+        let offending_fields = legacy_present_fields
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        return Err(build_operation_error(
+            "legacy build_or_update_graph fields are no longer supported",
+            "Use operation={ kind: 'build' } or operation={ kind: 'update', change_source: ... } and remove top-level mode/base/staged/files fields.",
+            offending_fields,
+            json!({ "operation": { "kind": "build" } }),
+        ));
+    }
+
+    Ok(BuildOperationRequest {
+        kind: BuildOperationKind::Build,
+        change_source: None,
+        deprecated_input_fields: Vec::new(),
     })
 }
 
@@ -465,23 +282,19 @@ fn resolve_change_source(
     repo_root: &str,
 ) -> Result<ResolvedChangeSource> {
     let ChangeSourceRequest {
-        mode,
+        kind,
         files,
         base,
-        staged,
-        working_tree,
+        deprecated_input_fields: _,
     } = request;
 
-    if mode == ChangeSourceMode::ExplicitFiles {
-        let files = normalize_explicit_files(files)?;
+    if kind == ResolvedChangeSourceKind::Files {
         return Ok(ResolvedChangeSource {
-            mode,
+            kind,
             files,
             changes: Vec::new(),
             deleted_files: Vec::new(),
             base,
-            staged,
-            working_tree,
         });
     }
 
@@ -489,7 +302,12 @@ fn resolve_change_source(
         find_repo_root(Utf8Path::new(repo_root)).context("cannot find git repo root")?;
     let repo_root_path = repo_root_path.as_path();
 
-    let (_, diff_target) = resolve_diff_target(base.clone(), staged, working_tree);
+    let diff_target = resolve_diff_target(&ChangeSourceRequest {
+        kind,
+        files: Vec::new(),
+        base: base.clone(),
+        deprecated_input_fields: Vec::new(),
+    });
     let changes =
         changed_files(repo_root_path, &diff_target).context("cannot detect changed files")?;
     let files: Vec<String> = changes
@@ -504,24 +322,20 @@ fn resolve_change_source(
         .collect();
 
     Ok(ResolvedChangeSource {
-        mode,
+        kind,
         files,
         changes,
         deleted_files,
         base,
-        staged,
-        working_tree,
     })
 }
 
 fn change_source_json(resolved: &ResolvedChangeSource) -> Value {
     json!({
-        "mode": resolved.mode.as_str(),
+        "kind": resolved.kind.as_str(),
         "resolved_files": &resolved.files,
         "deleted_files": &resolved.deleted_files,
         "base": &resolved.base,
-        "staged": resolved.staged,
-        "working_tree": resolved.working_tree,
     })
 }
 
@@ -629,11 +443,10 @@ fn detect_changes_for_registration(
 ) -> Result<ResolvedChangeSource> {
     resolve_change_source(
         ChangeSourceRequest {
-            mode: request.mode,
+            kind: request.kind,
             files: request.files.clone(),
             base: request.base.clone(),
-            staged: request.staged,
-            working_tree: request.working_tree,
+            deprecated_input_fields: request.deprecated_input_fields.clone(),
         },
         registration.root.as_str(),
     )
@@ -657,8 +470,255 @@ fn build_normalized_success_response(
 ) -> Result<Value> {
     let envelope = ToolSuccessEnvelope::new(tool_name, payload)
         .with_warnings(warnings)
-        .with_truncation(truncated, truncation_reason);
+        .with_truncation(truncated, truncation_reason.map(str::to_owned));
     normalized_tool_result_value(&envelope, output_format)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GetContextTargetKind {
+    Query,
+    File,
+    Files,
+}
+
+impl GetContextTargetKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Query => "query",
+            Self::File => "file",
+            Self::Files => "files",
+        }
+    }
+}
+
+struct ParsedGetContextTarget {
+    kind: GetContextTargetKind,
+    target: ContextTarget,
+    parsed_request: Option<atlas_core::model::ContextRequest>,
+    query: Option<String>,
+    file: Option<String>,
+    files: Vec<String>,
+    deprecated_input_fields: Vec<String>,
+}
+
+fn get_context_target_error(
+    message: impl Into<String>,
+    detail: impl Into<String>,
+    offending_fields: Vec<&str>,
+    retry_example: Value,
+) -> Box<ToolErrorPayload> {
+    Box::new(input_shape_error_payload(
+        "get_context",
+        message,
+        detail,
+        InputShapeErrorSpec {
+            offending_fields: offending_fields.into_iter().map(str::to_owned).collect(),
+            normalization_performed: Vec::new(),
+            accepted_argument_families: vec![
+                "target.kind=query".to_owned(),
+                "target.kind=file".to_owned(),
+                "target.kind=files".to_owned(),
+            ],
+            retry_example: Some(retry_example),
+            fail_closed_reason: Some(
+                "Atlas refused to guess between conflicting get_context target selectors"
+                    .to_owned(),
+            ),
+            retry_guidance: Some(
+                "Provide exactly one get_context target selector and retry.".to_owned(),
+            ),
+            extra_details: Some(json!({
+                "accepted_target_shapes": [
+                    { "target": { "kind": "query", "query": "handle_request" } },
+                    { "target": { "kind": "file", "file": "src/lib.rs" } },
+                    { "target": { "kind": "files", "files": ["src/lib.rs"] } }
+                ]
+            })),
+        },
+    ))
+}
+
+fn context_query_looks_like_unstructured_description(query: &str) -> bool {
+    mcp_query_looks_like_unstructured_description(query)
+}
+
+fn parse_get_context_target(
+    args: Option<&Value>,
+) -> std::result::Result<ParsedGetContextTarget, Box<ToolErrorPayload>> {
+    if args.is_some_and(|value| {
+        value.get("query").is_some() || value.get("file").is_some() || value.get("files").is_some()
+    }) {
+        return Err(get_context_target_error(
+            "legacy get_context target fields are no longer supported",
+            "Use target={ kind: 'query' | 'file' | 'files', ... } and remove top-level query/file/files fields.",
+            vec!["query", "file", "files"],
+            json!({ "target": { "kind": "query", "query": "handle_request" } }),
+        ));
+    }
+
+    let target_value = args.and_then(|value| value.get("target"));
+    let target_object = target_value.and_then(|value| value.as_object());
+
+    if target_value.is_some() && target_object.is_none() {
+        return Err(get_context_target_error(
+            "invalid target selector",
+            "target must be an object with kind=query, kind=file, or kind=files",
+            vec!["target"],
+            json!({ "target": { "kind": "query", "query": "handle_request" } }),
+        ));
+    }
+
+    if let Some(target) = target_object {
+        let kind = target
+            .get("kind")
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                get_context_target_error(
+                    "target.kind is required",
+                    "target object requires kind=query, kind=file, or kind=files",
+                    vec!["target.kind"],
+                    json!({ "target": { "kind": "query", "query": "handle_request" } }),
+                )
+            })?;
+        match kind {
+            "query" => {
+                let query = target
+                    .get("query")
+                    .and_then(|value| value.as_str())
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .ok_or_else(|| {
+                        get_context_target_error(
+                            "target.kind='query' requires non-empty target.query",
+                            "query target requires target.query",
+                            vec!["target.kind", "target.query"],
+                            json!({ "target": { "kind": "query", "query": "handle_request" } }),
+                        )
+                    })?
+                    .to_owned();
+                if context_query_looks_like_unstructured_description(&query) {
+                    return Err(get_context_target_error(
+                        "target.query must be exact identifier, qualified name, or supported intent phrase",
+                        format!(
+                            "query target does not accept natural-language-only descriptions. Supported grammar: {}.",
+                            mcp_supported_query_grammar_examples().join(", ")
+                        ),
+                        vec!["target.query"],
+                        json!({ "target": { "kind": "query", "query": "who calls handle_request" } }),
+                    ));
+                }
+                let parsed = parse_mcp_query_grammar(&query);
+                Ok(ParsedGetContextTarget {
+                    kind: GetContextTargetKind::Query,
+                    target: parsed.parsed_request.target.clone(),
+                    parsed_request: Some(parsed.parsed_request),
+                    query: Some(query),
+                    file: None,
+                    files: Vec::new(),
+                    deprecated_input_fields: Vec::new(),
+                })
+            }
+            "file" => {
+                let file = target
+                    .get("file")
+                    .and_then(|value| value.as_str())
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .ok_or_else(|| {
+                        get_context_target_error(
+                            "target.kind='file' requires non-empty target.file",
+                            "file target requires target.file",
+                            vec!["target.kind", "target.file"],
+                            json!({ "target": { "kind": "file", "file": "src/lib.rs" } }),
+                        )
+                    })?;
+                let file = CanonicalRepoPath::from_repo_relative(file)
+                    .map_err(|error| {
+                        get_context_target_error(
+                            "invalid target.file path",
+                            error.to_string(),
+                            vec!["target.file"],
+                            json!({ "target": { "kind": "file", "file": "src/lib.rs" } }),
+                        )
+                    })?
+                    .as_str()
+                    .to_owned();
+                Ok(ParsedGetContextTarget {
+                    kind: GetContextTargetKind::File,
+                    target: ContextTarget::FilePath { path: file.clone() },
+                    parsed_request: None,
+                    query: None,
+                    file: Some(file),
+                    files: Vec::new(),
+                    deprecated_input_fields: Vec::new(),
+                })
+            }
+            "files" => {
+                let files = target
+                    .get("files")
+                    .and_then(|value| value.as_array())
+                    .ok_or_else(|| {
+                        get_context_target_error(
+                            "target.kind='files' requires non-empty target.files",
+                            "files target requires target.files array",
+                            vec!["target.kind", "target.files"],
+                            json!({ "target": { "kind": "files", "files": ["src/lib.rs"] } }),
+                        )
+                    })?
+                    .iter()
+                    .filter_map(|value| value.as_str())
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(|path| {
+                        CanonicalRepoPath::from_repo_relative(path)
+                            .map(|path| path.as_str().to_owned())
+                            .map_err(|error| {
+                                get_context_target_error(
+                                    "invalid target.files path",
+                                    error.to_string(),
+                                    vec!["target.files"],
+                                    json!({ "target": { "kind": "files", "files": ["src/lib.rs"] } }),
+                                )
+                            })
+                    })
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                if files.is_empty() {
+                    return Err(get_context_target_error(
+                        "target.kind='files' requires non-empty target.files",
+                        "files target requires target.files array",
+                        vec!["target.kind", "target.files"],
+                        json!({ "target": { "kind": "files", "files": ["src/lib.rs"] } }),
+                    ));
+                }
+                Ok(ParsedGetContextTarget {
+                    kind: GetContextTargetKind::Files,
+                    target: ContextTarget::ChangedFiles {
+                        paths: files.clone(),
+                    },
+                    parsed_request: None,
+                    query: None,
+                    file: None,
+                    files,
+                    deprecated_input_fields: Vec::new(),
+                })
+            }
+            other => Err(get_context_target_error(
+                format!("invalid target.kind '{other}'"),
+                "target.kind must be one of: query, file, files",
+                vec!["target.kind"],
+                json!({ "target": { "kind": "query", "query": "handle_request" } }),
+            )),
+        }
+    } else {
+        Err(get_context_target_error(
+            "get_context requires target",
+            "Provide target={ kind: 'query' | 'file' | 'files', ... }.",
+            vec!["target"],
+            json!({ "target": { "kind": "query", "query": "handle_request" } }),
+        ))
+    }
 }
 
 fn count_change_kinds(changes: &[ChangedFile]) -> (usize, usize, usize, usize, usize) {
@@ -689,24 +749,19 @@ pub(super) fn tool_get_impact_radius(
         Ok(request) => request,
         Err(payload) => return tool_execution_error_value(output_format, &payload),
     };
-    let repo_scope = resolve_repo_scope_selection(args, repo_root)?;
-    let resolved = resolve_change_source(
-        ChangeSourceRequest {
-            mode: request.mode,
-            files: request.files.clone(),
-            base: request.base.clone(),
-            staged: request.staged,
-            working_tree: request.working_tree,
-        },
-        repo_root,
-    )?;
+    let repo_scope = match resolve_repo_scope_selection("get_impact_radius", args, repo_root) {
+        Ok(scope) => scope,
+        Err(payload) => return tool_execution_error_value(output_format, &payload),
+    };
+    let deprecated_change_source_fields = request.deprecated_input_fields.clone();
+    let resolved = resolve_change_source(request.clone(), repo_root)?;
     let max_depth = u64_arg(args, "max_depth").unwrap_or(5) as u32;
     let max_nodes = u64_arg(args, "max_nodes").unwrap_or(200) as usize;
 
     let store = open_store(db_path)?;
     let policy = load_budget_policy(repo_root)?;
     let mut tool_warnings = Vec::new();
-    let result = if let Some(scope) = repo_scope.as_ref() {
+    let result = if let Some(scope) = repo_scope.selection.as_ref() {
         let mut seed_files = Vec::new();
         let mut seed_qnames = Vec::new();
         let mut repo_results = Vec::new();
@@ -813,7 +868,11 @@ pub(super) fn tool_get_impact_radius(
                 .truncated
                 .then_some("node or edge caps limited impact result"),
         )?;
-        inject_budget_metadata(&mut response, &impact.budget);
+        inject_budget_metadata(&mut response, &packaged.budget);
+        let mut deprecated_fields = deprecated_change_source_fields.clone();
+        deprecated_fields.extend(repo_scope.deprecated_input_fields.iter().cloned());
+        deprecated_fields.dedup();
+        inject_deprecated_input_fields(&mut response, &deprecated_fields);
         return Ok(response);
     } else {
         let file_refs: Vec<&str> = resolved.files.iter().map(String::as_str).collect();
@@ -877,6 +936,10 @@ pub(super) fn tool_get_impact_radius(
             .then_some("node or edge caps limited impact result"),
     )?;
     inject_budget_metadata(&mut response, &result.budget);
+    let mut deprecated_fields = deprecated_change_source_fields;
+    deprecated_fields.extend(repo_scope.deprecated_input_fields.iter().cloned());
+    deprecated_fields.dedup();
+    inject_deprecated_input_fields(&mut response, &deprecated_fields);
     Ok(response)
 }
 
@@ -890,6 +953,7 @@ pub(super) fn tool_get_review_context(
         Ok(request) => request,
         Err(payload) => return tool_execution_error_value(output_format, &payload),
     };
+    let deprecated_change_source_fields = request.deprecated_input_fields.clone();
     let resolved = resolve_change_source(request, repo_root)?;
     let max_depth = u64_arg(args, "max_depth").unwrap_or(3) as u32;
     let max_nodes = u64_arg(args, "max_nodes").unwrap_or(200) as usize;
@@ -1027,6 +1091,7 @@ pub(super) fn tool_get_review_context(
             .then_some("review context capped by node, edge, file, or payload budget"),
     )?;
     inject_budget_metadata(&mut response, &stage_budget);
+    inject_deprecated_input_fields(&mut response, &deprecated_change_source_fields);
     Ok(response)
 }
 
@@ -1040,17 +1105,12 @@ pub(super) fn tool_detect_changes(
         Ok(request) => request,
         Err(payload) => return tool_execution_error_value(output_format, &payload),
     };
-    let repo_scope = resolve_repo_scope_selection(args, repo_root)?;
-    let resolved = resolve_change_source(
-        ChangeSourceRequest {
-            mode: request.mode,
-            files: request.files.clone(),
-            base: request.base.clone(),
-            staged: request.staged,
-            working_tree: request.working_tree,
-        },
-        repo_root,
-    )?;
+    let repo_scope = match resolve_repo_scope_selection("detect_changes", args, repo_root) {
+        Ok(scope) => scope,
+        Err(payload) => return tool_execution_error_value(output_format, &payload),
+    };
+    let deprecated_change_source_fields = request.deprecated_input_fields.clone();
+    let resolved = resolve_change_source(request.clone(), repo_root)?;
     let changes = &resolved.changes;
     let store_opt = Store::open(db_path).ok();
 
@@ -1077,7 +1137,7 @@ pub(super) fn tool_detect_changes(
     let mut repo_results = Vec::new();
     let mut repo_processed_count = 0usize;
     let mut repo_skipped_count = 0usize;
-    let entries: Vec<ChangedEntry> = if let Some(scope) = repo_scope.as_ref() {
+    let entries: Vec<ChangedEntry> = if let Some(scope) = repo_scope.selection.as_ref() {
         let mut entries = Vec::new();
         for registration in &scope.registrations {
             match detect_changes_for_registration(registration, &request) {
@@ -1183,7 +1243,7 @@ pub(super) fn tool_detect_changes(
             .collect()
     };
 
-    let effective_changes: Vec<ChangedFile> = if repo_scope.is_some() {
+    let effective_changes: Vec<ChangedFile> = if repo_scope.selection.is_some() {
         entries
             .iter()
             .map(|entry| ChangedFile {
@@ -1205,13 +1265,11 @@ pub(super) fn tool_detect_changes(
     let (added_count, modified_count, deleted_count, renamed_count, copied_count) =
         count_change_kinds(&effective_changes);
     let mut payload = json!({
-        "mode": resolved.mode.as_str(),
-        "base_ref": resolved.base,
         "change_source": change_source_json(&resolved),
         "files": entries,
         "summary": {
             "changed_file_count": effective_changes.len(),
-            "resolved_file_count": if repo_scope.is_some() { entries.len() } else { resolved.files.len() },
+            "resolved_file_count": if repo_scope.selection.is_some() { entries.len() } else { resolved.files.len() },
             "deleted_file_count": deleted_count,
             "added_file_count": added_count,
             "modified_file_count": modified_count,
@@ -1228,7 +1286,7 @@ pub(super) fn tool_detect_changes(
                 .count(),
         },
     });
-    if let Some(scope) = repo_scope.as_ref()
+    if let Some(scope) = repo_scope.selection.as_ref()
         && let Some(object) = payload.as_object_mut()
     {
         object.insert(
@@ -1242,14 +1300,19 @@ pub(super) fn tool_detect_changes(
         );
     }
 
-    build_normalized_success_response(
+    let mut response = build_normalized_success_response(
         "detect_changes",
         payload,
         output_format,
         tool_warnings,
         false,
         None,
-    )
+    )?;
+    let mut deprecated_fields = deprecated_change_source_fields;
+    deprecated_fields.extend(repo_scope.deprecated_input_fields.iter().cloned());
+    deprecated_fields.dedup();
+    inject_deprecated_input_fields(&mut response, &deprecated_fields);
+    Ok(response)
 }
 
 pub(super) fn tool_build_or_update_graph(
@@ -1258,7 +1321,11 @@ pub(super) fn tool_build_or_update_graph(
     db_path: &str,
     output_format: crate::output::OutputFormat,
 ) -> Result<serde_json::Value> {
-    let mode = str_arg(args, "mode")?.unwrap_or("build");
+    let operation = match validate_build_operation_request(args) {
+        Ok(operation) => operation,
+        Err(payload) => return tool_execution_error_value(output_format, &payload),
+    };
+    let deprecated_operation_fields = operation.deprecated_input_fields.clone();
     let repo_root_path =
         find_repo_root(Utf8Path::new(repo_root)).context("cannot find git repo root")?;
     let repo_root_str = repo_root_path.as_str();
@@ -1302,31 +1369,22 @@ pub(super) fn tool_build_or_update_graph(
         }
     }
 
-    if mode == "update" {
-        let base = str_arg(args, "base")?
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_owned);
-        let staged = bool_arg(args, "staged").unwrap_or(false);
-        let files = string_array_arg(args, "files")?;
-
-        let target_kind = if !files.is_empty() {
-            "explicit_files"
-        } else if staged {
-            "staged"
-        } else if base.is_some() {
-            "base_ref"
-        } else {
-            "working_tree"
-        };
-        let target = if !files.is_empty() {
-            UpdateTarget::Files(files)
-        } else if staged {
-            UpdateTarget::Staged
-        } else if let Some(b) = base.clone() {
-            UpdateTarget::BaseRef(b)
-        } else {
-            UpdateTarget::WorkingTree
+    if operation.kind == BuildOperationKind::Update {
+        let change_source = operation
+            .change_source
+            .clone()
+            .expect("validated update operation requires change_source");
+        let base = change_source.base.clone();
+        let (target_kind, target) = match change_source.kind {
+            ResolvedChangeSourceKind::Files => {
+                ("files", UpdateTarget::Files(change_source.files.clone()))
+            }
+            ResolvedChangeSourceKind::Staged => ("staged", UpdateTarget::Staged),
+            ResolvedChangeSourceKind::Base => (
+                "base",
+                UpdateTarget::BaseRef(base.clone().expect("base kind requires base ref")),
+            ),
+            ResolvedChangeSourceKind::WorkingTree => ("working_tree", UpdateTarget::WorkingTree),
         };
 
         let config = atlas_engine::Config::load(&atlas_engine::paths::atlas_dir(repo_root))
@@ -1410,12 +1468,12 @@ pub(super) fn tool_build_or_update_graph(
         };
         let warnings = summary.warnings.clone();
         let payload = json!({
-            "mode": "update",
+            "mode": operation.kind.as_str(),
             "status": status,
             "source": {
                 "target_kind": target_kind,
                 "base_ref": base,
-                "staged": staged,
+                "staged": matches!(change_source.kind, ResolvedChangeSourceKind::Staged),
             },
             "files_scanned": summary.parsed + summary.deleted + summary.renamed,
             "files_changed": summary.parsed + summary.deleted + summary.renamed,
@@ -1471,6 +1529,7 @@ pub(super) fn tool_build_or_update_graph(
         let envelope = ToolSuccessEnvelope::new("build_or_update_graph", payload);
         let mut response = normalized_tool_result_value(&envelope, output_format)?;
         inject_budget_metadata(&mut response, &summary.budget);
+        inject_deprecated_input_fields(&mut response, &deprecated_operation_fields);
         Ok(response)
     } else {
         let config = atlas_engine::Config::load(&atlas_engine::paths::atlas_dir(repo_root))
@@ -1553,7 +1612,7 @@ pub(super) fn tool_build_or_update_graph(
         };
         let warnings = summary.warnings.clone();
         let payload = json!({
-            "mode": "build",
+            "mode": operation.kind.as_str(),
             "status": status,
             "source": {
                 "target_kind": "full_build",
@@ -1615,6 +1674,7 @@ pub(super) fn tool_build_or_update_graph(
         let envelope = ToolSuccessEnvelope::new("build_or_update_graph", payload);
         let mut response = normalized_tool_result_value(&envelope, output_format)?;
         inject_budget_metadata(&mut response, &summary.budget);
+        inject_deprecated_input_fields(&mut response, &deprecated_operation_fields);
         Ok(response)
     }
 }
@@ -1632,6 +1692,7 @@ pub(super) fn tool_get_minimal_context(
     let max_depth = u64_arg(args, "max_depth").unwrap_or(2) as u32;
     let max_nodes = u64_arg(args, "max_nodes").unwrap_or(50) as usize;
 
+    let deprecated_change_source_fields = request.deprecated_input_fields.clone();
     let resolved = resolve_change_source(request, repo_root)?;
     let changes = &resolved.changes;
 
@@ -1715,6 +1776,7 @@ pub(super) fn tool_get_minimal_context(
             .then_some("minimal context capped by node or edge budgets"),
     )?;
     inject_budget_metadata(&mut response, &impact.budget);
+    inject_deprecated_input_fields(&mut response, &deprecated_change_source_fields);
     Ok(response)
 }
 
@@ -1732,6 +1794,7 @@ pub(super) fn tool_explain_change(
         Ok(request) => request,
         Err(payload) => return tool_execution_error_value(output_format, &payload),
     };
+    let deprecated_change_source_fields = request.deprecated_input_fields.clone();
     let resolved = resolve_change_source(request, repo_root)?;
     let files = resolved.files.clone();
 
@@ -1767,7 +1830,7 @@ pub(super) fn tool_explain_change(
         payload.remove("impacted_node_count");
         payload.remove("summary_text");
         insert_change_source_payload(&mut payload, &resolved);
-        let response = build_normalized_success_response(
+        let mut response = build_normalized_success_response(
             "explain_change",
             Value::Object(payload),
             output_format,
@@ -1775,6 +1838,7 @@ pub(super) fn tool_explain_change(
             false,
             None,
         )?;
+        inject_deprecated_input_fields(&mut response, &deprecated_change_source_fields);
         return Ok(response);
     }
 
@@ -1833,14 +1897,16 @@ pub(super) fn tool_explain_change(
     payload.remove("summary_text");
 
     insert_change_source_payload(&mut payload, &resolved);
-    build_normalized_success_response(
+    let mut response = build_normalized_success_response(
         "explain_change",
         Value::Object(payload),
         output_format,
         Vec::new(),
         false,
         None,
-    )
+    )?;
+    inject_deprecated_input_fields(&mut response, &deprecated_change_source_fields);
+    Ok(response)
 }
 
 pub(super) fn tool_get_context(
@@ -1851,9 +1917,10 @@ pub(super) fn tool_get_context(
 ) -> Result<serde_json::Value> {
     use atlas_contentstore::ContentStore;
 
-    let query = str_arg(args, "query")?.map(str::to_owned);
-    let file = str_arg(args, "file")?.map(str::to_owned);
-    let files = string_array_arg(args, "files")?;
+    let target = match parse_get_context_target(args) {
+        Ok(target) => target,
+        Err(payload) => return tool_execution_error_value(output_format, &payload),
+    };
     let intent_override = str_arg(args, "intent")?.map(str::to_owned);
     let max_nodes = u64_arg(args, "max_nodes").map(|n| n as usize);
     let max_edges = u64_arg(args, "max_edges").map(|n| n as usize);
@@ -1871,36 +1938,39 @@ pub(super) fn tool_get_context(
     let merge_agent_partitions = bool_arg(args, "merge_agent_partitions").unwrap_or(false);
     let token_budget = u64_arg(args, "token_budget").map(|n| n as usize);
 
-    let mut request = if !files.is_empty() {
-        let intent = intent_override
-            .as_deref()
-            .map(parse_mcp_intent)
-            .unwrap_or(ContextIntent::Review);
-        ContextRequest {
-            intent,
-            target: ContextTarget::ChangedFiles { paths: files },
-            ..ContextRequest::default()
+    let mut request = match target.kind {
+        GetContextTargetKind::Files => {
+            let intent = intent_override
+                .as_deref()
+                .map(parse_mcp_intent)
+                .unwrap_or(ContextIntent::Review);
+            ContextRequest {
+                intent,
+                target: target.target.clone(),
+                ..ContextRequest::default()
+            }
         }
-    } else if let Some(path) = file {
-        let intent = intent_override
-            .as_deref()
-            .map(parse_mcp_intent)
-            .unwrap_or(ContextIntent::File);
-        ContextRequest {
-            intent,
-            target: ContextTarget::FilePath { path },
-            ..ContextRequest::default()
+        GetContextTargetKind::File => {
+            let intent = intent_override
+                .as_deref()
+                .map(parse_mcp_intent)
+                .unwrap_or(ContextIntent::File);
+            ContextRequest {
+                intent,
+                target: target.target.clone(),
+                ..ContextRequest::default()
+            }
         }
-    } else if let Some(q) = query {
-        let mut parsed = query_parser::parse_query(&q);
-        if let Some(ref ov) = intent_override {
-            parsed.intent = parse_mcp_intent(ov);
+        GetContextTargetKind::Query => {
+            let mut parsed = target
+                .parsed_request
+                .clone()
+                .expect("query target parsed request");
+            if let Some(ref ov) = intent_override {
+                parsed.intent = parse_mcp_intent(ov);
+            }
+            parsed
         }
-        parsed
-    } else {
-        return Err(anyhow::anyhow!(
-            "get_context requires one of: 'query', 'file', or 'files'"
-        ));
     };
 
     if max_nodes.is_some() {
@@ -2121,6 +2191,15 @@ pub(super) fn tool_get_context(
     normalized_payload.remove("saved_context_sources");
     normalized_payload.insert("mode".to_owned(), json!(mode));
     normalized_payload.insert(
+        "target".to_owned(),
+        json!({
+            "kind": target.kind.as_str(),
+            "query": target.query,
+            "file": target.file,
+            "files": target.files,
+        }),
+    );
+    normalized_payload.insert(
         "query".to_owned(),
         match &request.target {
             ContextTarget::QualifiedName { qname } => json!(qname),
@@ -2233,6 +2312,7 @@ pub(super) fn tool_get_context(
             .then_some("context capped by node, edge, file, or payload budget"),
     )?;
     inject_budget_metadata(&mut response, &stage_budget);
+    inject_deprecated_input_fields(&mut response, &target.deprecated_input_fields);
     if let Some((query, hits)) = linked_decisions {
         let source_ids = hits
             .iter()
@@ -2257,4 +2337,29 @@ pub(super) fn tool_get_context(
         );
     }
     Ok(response)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::context_query_looks_like_unstructured_description;
+
+    #[test]
+    fn natural_language_query_detection_rejects_plain_descriptions() {
+        assert!(context_query_looks_like_unstructured_description(
+            "please show me authentication flow"
+        ));
+    }
+
+    #[test]
+    fn natural_language_query_detection_allows_code_like_queries() {
+        assert!(!context_query_looks_like_unstructured_description(
+            "who calls handle_request"
+        ));
+        assert!(!context_query_looks_like_unstructured_description(
+            "src/lib.rs::fn::handle_request"
+        ));
+        assert!(!context_query_looks_like_unstructured_description(
+            "handle_request"
+        ));
+    }
 }

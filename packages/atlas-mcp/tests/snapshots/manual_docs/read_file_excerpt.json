@@ -1,0 +1,48 @@
+{
+  "resolved_tool_name": "read_file_excerpt",
+  "input_contract": {
+    "canonical_form": "prefer canonical discriminated objects or preferred field families for new calls",
+    "families": [
+      {
+        "family_name": "selector",
+        "family_kind": "discriminated_object",
+        "discriminant_field": "selector.kind",
+        "accepted_values": ["range", "ranges", "context"],
+        "mutually_exclusive_legacy_fields": [],
+        "variants": [
+          {
+            "value": "range",
+            "required_companion_fields": ["selector.start_line", "selector.end_line"],
+            "minimal_example": {
+              "file": "src/lib.rs",
+              "selector": { "kind": "range", "start_line": 10, "end_line": 20 },
+              "output_format": "json"
+            }
+          },
+          {
+            "value": "ranges",
+            "required_companion_fields": ["selector.line_ranges"],
+            "minimal_example": {
+              "file": "src/lib.rs",
+              "selector": {
+                "kind": "ranges",
+                "line_ranges": [{ "start_line": 10, "end_line": 20 }]
+              },
+              "output_format": "json"
+            }
+          },
+          {
+            "value": "context",
+            "required_companion_fields": ["selector.line"],
+            "minimal_example": {
+              "file": "src/lib.rs",
+              "selector": { "kind": "context", "line": 42, "before": 2, "after": 2 },
+              "output_format": "json"
+            }
+          }
+        ]
+      }
+    ],
+    "notes": []
+  }
+}

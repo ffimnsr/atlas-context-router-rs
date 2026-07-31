@@ -20,6 +20,7 @@ pub struct ToolManualDocument {
     pub description: String,
     pub tool_structure: ToolManualStructure,
     pub input_args: Vec<ToolManualField>,
+    pub input_contract: ToolManualInputContract,
     pub output_response: ToolManualOutputResponse,
     pub usage: ToolManualUsage,
     pub error_cases: Vec<ToolManualErrorCase>,
@@ -51,6 +52,30 @@ pub struct ToolManualField {
     pub default_value: Option<String>,
     pub enum_values: Vec<String>,
     pub description: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ToolManualInputContract {
+    pub canonical_form: String,
+    pub families: Vec<ToolManualInputFamily>,
+    pub notes: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ToolManualInputFamily {
+    pub family_name: String,
+    pub family_kind: String,
+    pub discriminant_field: Option<String>,
+    pub accepted_values: Vec<String>,
+    pub mutually_exclusive_legacy_fields: Vec<String>,
+    pub variants: Vec<ToolManualInputVariant>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ToolManualInputVariant {
+    pub value: String,
+    pub required_companion_fields: Vec<String>,
+    pub minimal_example: Value,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -155,6 +180,52 @@ pub fn render_tool_manual_text(document: &ToolManualDocument) -> String {
             }
             lines.push(line);
             lines.push(format!("    {}", field.description));
+        }
+    }
+
+    lines.push(String::new());
+    lines.push("input_contract:".to_owned());
+    lines.push(format!(
+        "  canonical_form: {}",
+        document.input_contract.canonical_form
+    ));
+    lines.push("  families:".to_owned());
+    if document.input_contract.families.is_empty() {
+        lines.push("    - none".to_owned());
+    } else {
+        for family in &document.input_contract.families {
+            lines.push(format!("    - family_name: {}", family.family_name));
+            lines.push(format!("      family_kind: {}", family.family_kind));
+            lines.push(format!(
+                "      discriminant_field: {}",
+                family.discriminant_field.as_deref().unwrap_or("none")
+            ));
+            lines.push(format!(
+                "      accepted_values: [{}]",
+                family.accepted_values.join(", ")
+            ));
+            lines.push(format!(
+                "      mutually_exclusive_legacy_fields: [{}]",
+                family.mutually_exclusive_legacy_fields.join(", ")
+            ));
+            lines.push("      variants:".to_owned());
+            for variant in &family.variants {
+                lines.push(format!("        - value: {}", variant.value));
+                lines.push(format!(
+                    "          required_companion_fields: [{}]",
+                    variant.required_companion_fields.join(", ")
+                ));
+                lines.push(format!(
+                    "          minimal_example: {}",
+                    variant.minimal_example
+                ));
+            }
+        }
+    }
+    if !document.input_contract.notes.is_empty() {
+        lines.push("  notes:".to_owned());
+        for note in &document.input_contract.notes {
+            lines.push(format!("    - {note}"));
         }
     }
 
@@ -362,6 +433,7 @@ fn lookup_tool_manual(
             },
         },
         input_args,
+        input_contract: tool_input_contract(&tool.name, &tool.input_schema),
         output_response: ToolManualOutputResponse {
             response_shape: if tool.output_schema.is_some() {
                 "structuredContent follows advertised outputSchema when present".to_owned()
@@ -717,6 +789,394 @@ fn error_cases() -> Vec<ToolManualErrorCase> {
     ]
 }
 
+fn tool_input_contract(tool_name: &str, input_schema: &Value) -> ToolManualInputContract {
+    let mut families = match tool_name {
+        "get_context" => vec![target_input_family()],
+        "read_file_excerpt" => vec![excerpt_selector_input_family()],
+        "get_docs_section" => vec![docs_selector_input_family()],
+        "detect_changes" => vec![change_source_input_family(false)],
+        "get_impact_radius" | "get_review_context" | "get_minimal_context" | "explain_change" => {
+            vec![change_source_input_family(true)]
+        }
+        "build_or_update_graph" => vec![
+            operation_input_family(),
+            operation_change_source_input_family(),
+        ],
+        "batch_query_graph" => vec![batch_query_items_input_family()],
+        _ => Vec::new(),
+    };
+
+    if schema_has_property(input_schema, "repo_scope") {
+        families.push(repo_scope_input_family());
+    }
+
+    let canonical_form = if families.is_empty() {
+        "single object input; populate documented fields directly and avoid undocumented extras"
+            .to_owned()
+    } else {
+        "prefer canonical discriminated objects or preferred field families for new calls"
+            .to_owned()
+    };
+
+    let mut notes = Vec::new();
+    if tool_name == "batch_query_graph" {
+        notes.push(
+            "Collection field is items; send 1-20 query_graph-shaped objects per call.".to_owned(),
+        );
+    }
+
+    ToolManualInputContract {
+        canonical_form,
+        families,
+        notes,
+    }
+}
+
+fn schema_has_property(schema: &Value, field_name: &str) -> bool {
+    schema
+        .get("properties")
+        .and_then(Value::as_object)
+        .is_some_and(|properties| properties.contains_key(field_name))
+}
+
+fn input_variant(
+    value: &str,
+    required_companion_fields: &[&str],
+    minimal_example: Value,
+) -> ToolManualInputVariant {
+    ToolManualInputVariant {
+        value: value.to_owned(),
+        required_companion_fields: required_companion_fields
+            .iter()
+            .map(|field| (*field).to_owned())
+            .collect(),
+        minimal_example,
+    }
+}
+
+fn target_input_family() -> ToolManualInputFamily {
+    let variants = vec![
+        input_variant(
+            "query",
+            &["target.query"],
+            json!({
+                "target": { "kind": "query", "query": "compute" },
+                "output_format": "json"
+            }),
+        ),
+        input_variant(
+            "file",
+            &["target.file"],
+            json!({
+                "target": { "kind": "file", "file": "src/lib.rs" },
+                "output_format": "json"
+            }),
+        ),
+        input_variant(
+            "files",
+            &["target.files"],
+            json!({
+                "target": { "kind": "files", "files": ["src/lib.rs"] },
+                "output_format": "json"
+            }),
+        ),
+    ];
+    ToolManualInputFamily {
+        family_name: "target".to_owned(),
+        family_kind: "discriminated_object".to_owned(),
+        discriminant_field: Some("target.kind".to_owned()),
+        accepted_values: variants
+            .iter()
+            .map(|variant| variant.value.clone())
+            .collect(),
+        mutually_exclusive_legacy_fields: Vec::new(),
+        variants,
+    }
+}
+
+fn excerpt_selector_input_family() -> ToolManualInputFamily {
+    let variants = vec![
+        input_variant(
+            "range",
+            &["selector.start_line", "selector.end_line"],
+            json!({
+                "file": "src/lib.rs",
+                "selector": { "kind": "range", "start_line": 10, "end_line": 20 },
+                "output_format": "json"
+            }),
+        ),
+        input_variant(
+            "ranges",
+            &["selector.line_ranges"],
+            json!({
+                "file": "src/lib.rs",
+                "selector": {
+                    "kind": "ranges",
+                    "line_ranges": [{ "start_line": 10, "end_line": 20 }]
+                },
+                "output_format": "json"
+            }),
+        ),
+        input_variant(
+            "context",
+            &["selector.line"],
+            json!({
+                "file": "src/lib.rs",
+                "selector": { "kind": "context", "line": 42, "before": 2, "after": 2 },
+                "output_format": "json"
+            }),
+        ),
+    ];
+    ToolManualInputFamily {
+        family_name: "selector".to_owned(),
+        family_kind: "discriminated_object".to_owned(),
+        discriminant_field: Some("selector.kind".to_owned()),
+        accepted_values: variants
+            .iter()
+            .map(|variant| variant.value.clone())
+            .collect(),
+        mutually_exclusive_legacy_fields: Vec::new(),
+        variants,
+    }
+}
+
+fn docs_selector_input_family() -> ToolManualInputFamily {
+    let variants = vec![
+        input_variant(
+            "heading",
+            &["selector.heading"],
+            json!({
+                "file": "README.md",
+                "selector": { "kind": "heading", "heading": "document.install" },
+                "output_format": "json"
+            }),
+        ),
+        input_variant(
+            "line",
+            &["selector.line"],
+            json!({
+                "file": "README.md",
+                "selector": { "kind": "line", "line": 42 },
+                "output_format": "json"
+            }),
+        ),
+    ];
+    ToolManualInputFamily {
+        family_name: "selector".to_owned(),
+        family_kind: "discriminated_object".to_owned(),
+        discriminant_field: Some("selector.kind".to_owned()),
+        accepted_values: variants
+            .iter()
+            .map(|variant| variant.value.clone())
+            .collect(),
+        mutually_exclusive_legacy_fields: Vec::new(),
+        variants,
+    }
+}
+
+fn change_source_input_family(include_files: bool) -> ToolManualInputFamily {
+    let mut variants = Vec::new();
+    if include_files {
+        variants.push(input_variant(
+            "files",
+            &["change_source.files"],
+            json!({
+                "change_source": { "kind": "files", "files": ["src/lib.rs"] },
+                "output_format": "json"
+            }),
+        ));
+    }
+    variants.push(input_variant(
+        "base",
+        &["change_source.base"],
+        json!({
+            "change_source": { "kind": "base", "base": "origin/main" },
+            "output_format": "json"
+        }),
+    ));
+    variants.push(input_variant(
+        "staged",
+        &[],
+        json!({
+            "change_source": { "kind": "staged" },
+            "output_format": "json"
+        }),
+    ));
+    variants.push(input_variant(
+        "working_tree",
+        &[],
+        json!({
+            "change_source": { "kind": "working_tree" },
+            "output_format": "json"
+        }),
+    ));
+    ToolManualInputFamily {
+        family_name: "change_source".to_owned(),
+        family_kind: "discriminated_object".to_owned(),
+        discriminant_field: Some("change_source.kind".to_owned()),
+        accepted_values: variants
+            .iter()
+            .map(|variant| variant.value.clone())
+            .collect(),
+        mutually_exclusive_legacy_fields: Vec::new(),
+        variants,
+    }
+}
+
+fn operation_input_family() -> ToolManualInputFamily {
+    let variants = vec![
+        input_variant(
+            "build",
+            &[],
+            json!({
+                "operation": { "kind": "build" },
+                "output_format": "json"
+            }),
+        ),
+        input_variant(
+            "update",
+            &["operation.change_source"],
+            json!({
+                "operation": {
+                    "kind": "update",
+                    "change_source": { "kind": "working_tree" }
+                },
+                "output_format": "json"
+            }),
+        ),
+    ];
+    ToolManualInputFamily {
+        family_name: "operation".to_owned(),
+        family_kind: "discriminated_object".to_owned(),
+        discriminant_field: Some("operation.kind".to_owned()),
+        accepted_values: variants
+            .iter()
+            .map(|variant| variant.value.clone())
+            .collect(),
+        mutually_exclusive_legacy_fields: Vec::new(),
+        variants,
+    }
+}
+
+fn operation_change_source_input_family() -> ToolManualInputFamily {
+    let variants = vec![
+        input_variant(
+            "working_tree",
+            &[],
+            json!({
+                "operation": {
+                    "kind": "update",
+                    "change_source": { "kind": "working_tree" }
+                },
+                "output_format": "json"
+            }),
+        ),
+        input_variant(
+            "staged",
+            &[],
+            json!({
+                "operation": {
+                    "kind": "update",
+                    "change_source": { "kind": "staged" }
+                },
+                "output_format": "json"
+            }),
+        ),
+        input_variant(
+            "base",
+            &["operation.change_source.base"],
+            json!({
+                "operation": {
+                    "kind": "update",
+                    "change_source": { "kind": "base", "base": "origin/main" }
+                },
+                "output_format": "json"
+            }),
+        ),
+        input_variant(
+            "files",
+            &["operation.change_source.files"],
+            json!({
+                "operation": {
+                    "kind": "update",
+                    "change_source": { "kind": "files", "files": ["src/lib.rs"] }
+                },
+                "output_format": "json"
+            }),
+        ),
+    ];
+    ToolManualInputFamily {
+        family_name: "operation.change_source".to_owned(),
+        family_kind: "discriminated_object".to_owned(),
+        discriminant_field: Some("operation.change_source.kind".to_owned()),
+        accepted_values: variants
+            .iter()
+            .map(|variant| variant.value.clone())
+            .collect(),
+        mutually_exclusive_legacy_fields: Vec::new(),
+        variants,
+    }
+}
+
+fn batch_query_items_input_family() -> ToolManualInputFamily {
+    let variants = vec![input_variant(
+        "items",
+        &["items"],
+        json!({
+            "items": [{ "text": "compute" }],
+            "output_format": "json"
+        }),
+    )];
+    ToolManualInputFamily {
+        family_name: "query_collection".to_owned(),
+        family_kind: "preferred_field".to_owned(),
+        discriminant_field: Some("items".to_owned()),
+        accepted_values: vec!["items".to_owned()],
+        mutually_exclusive_legacy_fields: Vec::new(),
+        variants,
+    }
+}
+
+fn repo_scope_input_family() -> ToolManualInputFamily {
+    let variants = vec![
+        input_variant(
+            "current",
+            &[],
+            json!({
+                "repo_scope": { "kind": "current" },
+                "output_format": "json"
+            }),
+        ),
+        input_variant(
+            "repo_id",
+            &["repo_scope.repo_id"],
+            json!({
+                "repo_scope": { "kind": "repo_id", "repo_id": "primary" },
+                "output_format": "json"
+            }),
+        ),
+        input_variant(
+            "all",
+            &[],
+            json!({
+                "repo_scope": { "kind": "all" },
+                "output_format": "json"
+            }),
+        ),
+    ];
+    ToolManualInputFamily {
+        family_name: "repo_scope".to_owned(),
+        family_kind: "discriminated_object".to_owned(),
+        discriminant_field: Some("repo_scope.kind".to_owned()),
+        accepted_values: variants
+            .iter()
+            .map(|variant| variant.value.clone())
+            .collect(),
+        mutually_exclusive_legacy_fields: Vec::new(),
+        variants,
+    }
+}
+
 fn schema_fields(schema: &Value) -> Vec<ToolManualField> {
     let props = schema
         .get("properties")
@@ -853,6 +1313,34 @@ fn top_level_shape(label: &str, schema: &Value) -> String {
 }
 
 fn target_tool_examples(tool_name: &str, input_schema: &Value) -> Vec<String> {
+    let special = match tool_name {
+        "query_graph" => Some(vec![
+            json!({ "name": "query_graph", "arguments": { "text": "compute", "output_format": "json" } }),
+            json!({ "name": "query_graph", "arguments": { "text": "src/service.rs::fn::compute", "output_format": "json" } }),
+            json!({ "name": "query_graph", "arguments": { "text": "who calls compute", "output_format": "json" } }),
+            json!({ "name": "query_graph", "arguments": { "text": "what breaks if I change compute", "output_format": "json" } }),
+            json!({ "name": "query_graph", "arguments": { "text": "tests for compute", "output_format": "json" } }),
+        ]),
+        "get_context" => Some(vec![
+            json!({ "name": "get_context", "arguments": { "target": { "kind": "query", "query": "compute" }, "output_format": "json" } }),
+            json!({ "name": "get_context", "arguments": { "target": { "kind": "query", "query": "src/service.rs::fn::compute" }, "output_format": "json" } }),
+            json!({ "name": "get_context", "arguments": { "target": { "kind": "query", "query": "who calls compute" }, "output_format": "json" } }),
+            json!({ "name": "get_context", "arguments": { "target": { "kind": "query", "query": "what breaks if I change compute" }, "output_format": "json" } }),
+            json!({ "name": "get_context", "arguments": { "target": { "kind": "query", "query": "tests for compute" }, "output_format": "json" } }),
+        ]),
+        "resolve_symbol" => Some(vec![
+            json!({ "name": "resolve_symbol", "arguments": { "name": "compute", "output_format": "json" } }),
+            json!({ "name": "resolve_symbol", "arguments": { "name": "src/service.rs::fn::compute", "output_format": "json" } }),
+        ]),
+        _ => None,
+    };
+    if let Some(examples) = special {
+        return examples
+            .into_iter()
+            .map(|example| truncate_text(&example.to_string(), MAX_EXAMPLE_CHARS))
+            .collect();
+    }
+
     let props = input_schema
         .get("properties")
         .and_then(Value::as_object)
@@ -861,28 +1349,20 @@ fn target_tool_examples(tool_name: &str, input_schema: &Value) -> Vec<String> {
     let required = input_schema
         .get("required")
         .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(Value::as_str)
-                .map(str::to_owned)
-                .collect::<Vec<_>>()
-        })
+        .map(|items| items.iter().filter_map(Value::as_str).collect::<Vec<_>>())
         .unwrap_or_default();
 
     let mut args = Map::new();
     for field_name in required {
-        if let Some(field) = props.get(&field_name) {
-            args.insert(field_name.clone(), example_value(&field_name, field));
+        if let Some(field) = props.get(field_name) {
+            args.insert(field_name.to_owned(), example_value(field_name, field));
         }
     }
-    if args.is_empty() {
-        if let Some(primary) = first_example_field(&props)
-            && let Some(field) = props.get(primary)
-        {
-            args.insert(primary.to_owned(), example_value(primary, field));
-        }
-        args.insert("output_format".to_owned(), Value::String("json".to_owned()));
+    if args.is_empty()
+        && let Some(primary) = first_example_field(&props)
+        && let Some(field) = props.get(primary)
+    {
+        args.insert(primary.to_owned(), example_value(primary, field));
     }
 
     let examples = vec![truncate_text(
@@ -1075,6 +1555,7 @@ mod tests {
         for section in [
             "structure:",
             "input_args:",
+            "input_contract:",
             "output_response:",
             "usage:",
             "error_cases:",
@@ -1082,5 +1563,37 @@ mod tests {
             assert!(text.contains(section), "missing section {section}");
         }
         assert!(text.contains("man mcp query_graph"));
+    }
+
+    #[test]
+    fn manual_lookup_exposes_target_contract_for_get_context() {
+        let doc = tool_manual("mcp", "get_context").expect("manual doc");
+        let family = doc
+            .input_contract
+            .families
+            .iter()
+            .find(|family| family.family_name == "target")
+            .expect("target family");
+        assert_eq!(family.discriminant_field.as_deref(), Some("target.kind"));
+        assert_eq!(family.accepted_values, vec!["query", "file", "files"]);
+        assert!(family.mutually_exclusive_legacy_fields.is_empty());
+    }
+
+    #[test]
+    fn manual_lookup_exposes_nested_operation_contract_for_build_or_update_graph() {
+        let doc = tool_manual("mcp", "build_or_update_graph").expect("manual doc");
+        assert!(
+            doc.input_contract
+                .families
+                .iter()
+                .any(|family| family.discriminant_field.as_deref() == Some("operation.kind"))
+        );
+        assert!(
+            doc.input_contract
+                .families
+                .iter()
+                .any(|family| family.discriminant_field.as_deref()
+                    == Some("operation.change_source.kind"))
+        );
     }
 }

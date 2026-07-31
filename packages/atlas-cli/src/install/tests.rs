@@ -74,6 +74,26 @@ fn instructions_section_mentions_tool_discovery_helpers() {
     assert!(INSTRUCTIONS_SECTION.contains("`tool_list`"));
     assert!(INSTRUCTIONS_SECTION.contains("`tool_search`"));
     assert!(INSTRUCTIONS_SECTION.contains("`tool_help`"));
+    assert!(INSTRUCTIONS_SECTION.contains("Runtime docs are canonical"));
+    assert!(INSTRUCTIONS_SECTION.contains("input_contract"));
+}
+
+#[test]
+fn instructions_section_references_runtime_docs_without_duplicating_full_tool_inventory() {
+    let exported = exported_mcp_tool_names();
+    let mentioned = exported
+        .iter()
+        .filter(|tool_name| INSTRUCTIONS_SECTION.contains(&format!("`{tool_name}`")))
+        .count();
+
+    assert!(
+        mentioned < exported.len(),
+        "instructions block should not duplicate full exported tool inventory"
+    );
+    assert!(
+        INSTRUCTIONS_SECTION
+            .contains("Do not treat this instruction block as exhaustive inventory.")
+    );
 }
 
 #[test]

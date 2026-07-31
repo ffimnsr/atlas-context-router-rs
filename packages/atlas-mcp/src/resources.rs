@@ -175,7 +175,7 @@ pub(crate) fn resources_read(
             "get_docs_section",
             Some(&json!({
                 "file": file,
-                "heading": heading,
+                "selector": { "kind": "heading", "heading": heading },
                 "output_format": "json"
             })),
             repo_root,
@@ -608,6 +608,58 @@ fn render_tool_manual_markdown(document: &crate::tools::ToolManualDocument) -> S
 
     lines.extend([
         "".to_owned(),
+        "## Input Contract".to_owned(),
+        "".to_owned(),
+        format!(
+            "- canonical_form: {}",
+            document.input_contract.canonical_form
+        ),
+        "".to_owned(),
+        "### Families".to_owned(),
+        "".to_owned(),
+    ]);
+    if document.input_contract.families.is_empty() {
+        lines.push("- none; single object input".to_owned());
+    } else {
+        for family in &document.input_contract.families {
+            lines.push(format!(
+                "- `{}` ({})",
+                family.family_name, family.family_kind
+            ));
+            lines.push(format!(
+                "  - discriminant_field: `{}`",
+                family.discriminant_field.as_deref().unwrap_or("none")
+            ));
+            lines.push(format!(
+                "  - accepted_values: `{}`",
+                family.accepted_values.join(", ")
+            ));
+            lines.push(format!(
+                "  - mutually_exclusive_legacy_fields: `{}`",
+                family.mutually_exclusive_legacy_fields.join(", ")
+            ));
+            for variant in &family.variants {
+                lines.push(format!("  - value `{}`", variant.value));
+                lines.push(format!(
+                    "    - required_companion_fields: `{}`",
+                    variant.required_companion_fields.join(", ")
+                ));
+                lines.push(format!(
+                    "    - minimal_example: `{}`",
+                    variant.minimal_example
+                ));
+            }
+        }
+    }
+    if !document.input_contract.notes.is_empty() {
+        lines.extend(["".to_owned(), "### Notes".to_owned(), "".to_owned()]);
+        for note in &document.input_contract.notes {
+            lines.push(format!("- {note}"));
+        }
+    }
+
+    lines.extend([
+        "".to_owned(),
         "## Usage".to_owned(),
         "".to_owned(),
         format!("- CLI: `{}`", document.usage.cli),
@@ -907,6 +959,7 @@ mod tests {
             .as_str()
             .expect("markdown text");
         assert!(text.contains("# Tool Docs: `query_graph`"));
+        assert!(text.contains("## Input Contract"));
         assert!(text.contains("## Usage"));
         assert!(text.contains("### Target Tool Call Examples"));
     }

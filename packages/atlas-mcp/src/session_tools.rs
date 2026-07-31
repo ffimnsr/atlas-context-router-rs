@@ -20,19 +20,21 @@ use atlas_adapters::{
 };
 use atlas_contentstore::{ContentStore, OutputRouting, SearchFilters, SourceMeta};
 use atlas_core::{BudgetManager, BudgetPolicy, BudgetReport};
-use atlas_repo::RepoRegistry;
 use atlas_session::{
     AgentMemorySummary, CurationResult, DecisionSearchHit, GlobalAccessEntry,
     GlobalWorkflowPattern, NewSessionEvent, ResumeSnapshot, SessionEventType, SessionId,
     SessionMeta, SessionStore,
 };
-use camino::Utf8Path;
 use serde::Serialize;
 use serde_json::Value;
 use tracing::warn;
 
 use crate::output::OutputFormat;
-use crate::tool_result::tool_result_value as build_tool_result_value;
+use crate::tool_result::{
+    normalized_tool_result_value as build_normalized_tool_result_value, tool_execution_error_value,
+    tool_result_value as build_tool_result_value,
+};
+use crate::tools::shared::{inject_deprecated_input_fields, resolve_repo_scope_selection};
 
 /// Derive the MCP session id for a given repo root.
 ///
@@ -40,8 +42,6 @@ use crate::tool_result::tool_result_value as build_tool_result_value;
 fn mcp_session_id(repo_root: &str) -> SessionId {
     SessionId::derive(repo_root, "", "mcp")
 }
-
-const MAX_MULTI_REPO_SCOPE: usize = 32;
 
 fn open_session_store_best_effort(db_path: &str) -> Option<SessionStore> {
     let session_db = derive_session_db_path(db_path);
@@ -55,54 +55,27 @@ fn normalize_repo_roots(mut repo_roots: Vec<String>) -> Vec<String> {
     repo_roots
 }
 
-fn resolve_requested_repo_roots(args: Option<&Value>, repo_root: &str) -> Result<Vec<String>> {
-    let repo_id = args
-        .and_then(|a| a.get("repo_id"))
-        .and_then(|v| v.as_str())
-        .map(str::to_owned);
-    let all_repos = args
-        .and_then(|a| a.get("all_repos"))
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-
-    if repo_id.is_none() && !all_repos {
-        return Ok(vec![repo_root.to_owned()]);
-    }
-    anyhow::ensure!(
-        !(repo_id.is_some() && all_repos),
-        "repo_id and all_repos cannot be combined"
-    );
-
-    let registry = RepoRegistry::load(Utf8Path::new(repo_root)).map_err(|error| {
-        anyhow::anyhow!(
-            "repo registry missing; run `atlas init` or `atlas repo sync` before multi-repo saved-context operations: {error}"
-        )
-    })?;
-
-    let repo_roots = if all_repos {
-        let enabled = registry
-            .registrations
-            .into_iter()
-            .filter(|entry| entry.enabled)
-            .map(|entry| entry.root.to_string())
-            .collect::<Vec<_>>();
-        anyhow::ensure!(
-            enabled.len() <= MAX_MULTI_REPO_SCOPE,
-            "all_repos scope exceeds max supported repo fan-out ({MAX_MULTI_REPO_SCOPE})"
-        );
-        enabled
-    } else {
-        let target = repo_id.unwrap_or_default();
-        let entry = registry
-            .registrations
-            .into_iter()
-            .find(|entry| entry.repo_id == target)
-            .ok_or_else(|| anyhow::anyhow!(format!("repo id '{target}' is not registered")))?;
-        anyhow::ensure!(entry.enabled, "repo id '{target}' is disabled");
-        vec![entry.root.to_string()]
-    };
-
-    Ok(normalize_repo_roots(repo_roots))
+fn resolve_requested_repo_roots(
+    tool_name: &str,
+    args: Option<&Value>,
+    repo_root: &str,
+) -> std::result::Result<(Vec<String>, Vec<String>), Box<crate::tool_result::ToolErrorPayload>> {
+    let scope = resolve_repo_scope_selection(tool_name, args, repo_root)?;
+    let repo_roots = scope
+        .selection
+        .as_ref()
+        .map(|selection| {
+            selection
+                .registrations
+                .iter()
+                .map(|entry| entry.root.to_string())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_else(|| vec![repo_root.to_owned()]);
+    Ok((
+        normalize_repo_roots(repo_roots),
+        scope.deprecated_input_fields,
+    ))
 }
 
 fn artifact_repo_roots(meta: &SourceMeta) -> Vec<String> {
@@ -239,7 +212,12 @@ fn continuity_event_spec(
         }
         "get_impact_radius" => {
             let files = args
-                .and_then(|a| a.get("files"))
+                .and_then(|a| a.get("change_source"))
+                .and_then(|value| value.as_object())
+                .filter(|change_source| {
+                    change_source.get("kind").and_then(|value| value.as_str()) == Some("files")
+                })
+                .and_then(|change_source| change_source.get("files"))
                 .cloned()
                 .unwrap_or(Value::Array(vec![]));
             Some((
@@ -249,7 +227,12 @@ fn continuity_event_spec(
         }
         "get_review_context" => {
             let files = args
-                .and_then(|a| a.get("files"))
+                .and_then(|a| a.get("change_source"))
+                .and_then(|value| value.as_object())
+                .filter(|change_source| {
+                    change_source.get("kind").and_then(|value| value.as_str()) == Some("files")
+                })
+                .and_then(|change_source| change_source.get("files"))
                 .cloned()
                 .unwrap_or(Value::Array(vec![]));
             Some((
@@ -258,14 +241,22 @@ fn continuity_event_spec(
             ))
         }
         "detect_changes" => {
-            let base = args
-                .and_then(|a| a.get("base"))
+            let change_source = args
+                .and_then(|a| a.get("change_source"))
+                .and_then(|value| value.as_object());
+            let base = change_source
+                .filter(|change_source| {
+                    change_source.get("kind").and_then(|value| value.as_str()) == Some("base")
+                })
+                .and_then(|change_source| change_source.get("base"))
                 .cloned()
                 .unwrap_or(Value::Null);
-            let staged = args
-                .and_then(|a| a.get("staged"))
-                .cloned()
-                .unwrap_or(Value::Bool(false));
+            let staged = Value::Bool(
+                change_source
+                    .and_then(|change_source| change_source.get("kind"))
+                    .and_then(|value| value.as_str())
+                    == Some("staged"),
+            );
             Some((
                 SessionEventType::CommandRun,
                 serde_json::json!({"tool": "detect_changes", "base": base, "staged": staged}),
@@ -632,10 +623,13 @@ pub fn tool_search_saved_context(
         .and_then(|a| a.get("merge_agent_partitions"))
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
-    let repo_scope_roots = if cross_session {
-        resolve_requested_repo_roots(args, repo_root)?
+    let (repo_scope_roots, deprecated_input_fields) = if cross_session {
+        match resolve_requested_repo_roots("search_saved_context", args, repo_root) {
+            Ok(resolved) => resolved,
+            Err(payload) => return tool_execution_error_value(output_format, &payload),
+        }
     } else {
-        Vec::new()
+        (Vec::new(), Vec::new())
     };
     let source_type_filter = args
         .and_then(|a| a.get("source_type"))
@@ -736,18 +730,33 @@ pub fn tool_search_saved_context(
     }
 
     let total = results.len();
-    let mut response = tool_result_value(
+    let truncated = total_matches > limit;
+    let mut response = build_normalized_tool_result_value(
         &serde_json::json!({
-            "query": query,
-            "agent_id": agent_id_filter,
-            "merged_agent_view": merge_agent_partitions || cross_session,
-            "repo_scope": {
-                "repo_roots": repo_scope_roots,
-                "repo_count": repo_scope_roots.len(),
+            "tool": "search_saved_context",
+            "query": {
+                "text": query,
+                "session_id": session_id_filter,
+                "agent_id": agent_id_filter,
+                "cross_session": cross_session,
+                "merge_agent_partitions": merge_agent_partitions || cross_session,
+                "source_type": filters.source_type,
+                "requested_limit": requested_limit,
+                "applied_limit": limit,
+                "repo_scope": {
+                    "repo_roots": repo_scope_roots,
+                    "repo_count": repo_scope_roots.len(),
+                }
             },
-            "results": results,
-            "total": total,
+            "matches": results,
             "linked_decisions": linked_decisions,
+            "summary": {
+                "match_count": total,
+                "total_matches": total_matches,
+                "linked_decision_count": linked_decisions.len(),
+            },
+            "truncated": truncated,
+            "warnings": [],
         }),
         output_format,
     )?;
@@ -759,6 +768,7 @@ pub fn tool_search_saved_context(
             requested_limit.max(total_matches),
         ),
     );
+    inject_deprecated_input_fields(&mut response, &deprecated_input_fields);
     if !linked_decisions.is_empty() {
         let source_ids = linked_decisions
             .iter()
@@ -815,13 +825,22 @@ pub fn tool_search_decisions(
         query,
         limit,
     );
-    tool_result_value(
+    build_normalized_tool_result_value(
         &serde_json::json!({
-            "query": query,
-            "session_id": session_id,
-            "agent_id": agent_id,
-            "results": hits,
-            "total": hits.len(),
+            "tool": "search_decisions",
+            "query": {
+                "text": query,
+                "session_id": session_id,
+                "agent_id": agent_id,
+                "requested_limit": limit,
+            },
+            "matches": hits,
+            "summary": {
+                "match_count": hits.len(),
+                "total_matches": hits.len(),
+            },
+            "truncated": false,
+            "warnings": [],
         }),
         output_format,
     )
@@ -874,7 +893,11 @@ pub fn tool_save_context_artifact(
 
     let redaction_rules = load_redaction_rules(repo_root)?;
     let sanitized_content = redact_text_with_rules(content, &redaction_rules);
-    let repo_roots = resolve_requested_repo_roots(args, repo_root)?;
+    let (repo_roots, deprecated_input_fields) =
+        match resolve_requested_repo_roots("save_context_artifact", args, repo_root) {
+            Ok(resolved) => resolved,
+            Err(payload) => return tool_execution_error_value(output_format, &payload),
+        };
     let primary_repo_root = (repo_roots.len() == 1).then(|| repo_roots[0].clone());
 
     let identity = ArtifactIdentity::artifact_label(label);
@@ -970,7 +993,9 @@ pub fn tool_save_context_artifact(
         }
     });
 
-    tool_result_value(&result, output_format)
+    let mut response = tool_result_value(&result, output_format)?;
+    inject_deprecated_input_fields(&mut response, &deprecated_input_fields);
+    Ok(response)
 }
 
 // ---------------------------------------------------------------------------
@@ -1128,7 +1153,11 @@ pub fn tool_read_saved_context(
     let content_db = derive_content_db_path(db_path);
     let mut cs = ContentStore::open(&content_db)?;
     let _ = cs.migrate();
-    let requested_repo_roots = resolve_requested_repo_roots(args, repo_root)?;
+    let (requested_repo_roots, deprecated_input_fields) =
+        match resolve_requested_repo_roots("read_saved_context", args, repo_root) {
+            Ok(resolved) => resolved,
+            Err(payload) => return tool_execution_error_value(output_format, &payload),
+        };
 
     let summary_budget = |observed| {
         budgets.summary(
@@ -1167,6 +1196,7 @@ pub fn tool_read_saved_context(
                 output_format,
             )?;
             inject_budget_metadata(&mut response, &summary_budget(max_bytes));
+            inject_deprecated_input_fields(&mut response, &deprecated_input_fields);
             return Ok(response);
         }
     };
@@ -1182,6 +1212,7 @@ pub fn tool_read_saved_context(
             output_format,
         )?;
         inject_budget_metadata(&mut response, &summary_budget(max_bytes));
+        inject_deprecated_input_fields(&mut response, &deprecated_input_fields);
         return Ok(response);
     }
 
@@ -1197,6 +1228,7 @@ pub fn tool_read_saved_context(
             output_format,
         )?;
         inject_budget_metadata(&mut response, &summary_budget(max_bytes));
+        inject_deprecated_input_fields(&mut response, &deprecated_input_fields);
         return Ok(response);
     }
 
@@ -1210,6 +1242,7 @@ pub fn tool_read_saved_context(
             output_format,
         )?;
         inject_budget_metadata(&mut response, &summary_budget(max_bytes));
+        inject_deprecated_input_fields(&mut response, &deprecated_input_fields);
         return Ok(response);
     }
 
@@ -1310,6 +1343,7 @@ pub fn tool_read_saved_context(
             requested_max_bytes.max(total_byte_count),
         ),
     );
+    inject_deprecated_input_fields(&mut response, &deprecated_input_fields);
     Ok(response)
 }
 
@@ -1485,7 +1519,11 @@ pub fn tool_cross_session_search(
     let content_db = derive_content_db_path(db_path);
     let mut cs = ContentStore::open(&content_db)?;
     let _ = cs.migrate();
-    let repo_scope_roots = resolve_requested_repo_roots(args, repo_root)?;
+    let (repo_scope_roots, deprecated_input_fields) =
+        match resolve_requested_repo_roots("cross_session_search", args, repo_root) {
+            Ok(resolved) => resolved,
+            Err(payload) => return tool_execution_error_value(output_format, &payload),
+        };
 
     // Explicitly filter by repo scope, no session_id restriction.
     let filters = SearchFilters {
@@ -1557,19 +1595,49 @@ pub fn tool_cross_session_search(
     }
 
     let total = results.len();
-    let mut response = tool_result_value(
+    let truncated = total_matches > limit;
+    let sessions = results
+        .iter()
+        .filter_map(|item| {
+            item.session_id
+                .as_ref()
+                .map(|session_id| (session_id.clone(), item.agent_id.clone()))
+        })
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .map(|(session_id, agent_id)| {
+            serde_json::json!({
+                "session_id": session_id,
+                "agent_id": agent_id,
+            })
+        })
+        .collect::<Vec<_>>();
+    let mut response = build_normalized_tool_result_value(
         &serde_json::json!({
-            "query": query,
-            "repo_root": repo_root,
-            "cross_session": true,
-            "agent_id": agent_id_filter,
-            "merged_agent_view": merge_agent_partitions,
-            "repo_scope": {
-                "repo_roots": repo_scope_roots,
-                "repo_count": repo_scope_roots.len(),
+            "tool": "cross_session_search",
+            "query": {
+                "text": query,
+                "repo_root": repo_root,
+                "cross_session": true,
+                "agent_id": agent_id_filter,
+                "merge_agent_partitions": merge_agent_partitions,
+                "source_type": filters.source_type,
+                "requested_limit": requested_limit,
+                "applied_limit": limit,
+                "repo_scope": {
+                    "repo_roots": repo_scope_roots,
+                    "repo_count": repo_scope_roots.len(),
+                }
             },
-            "results": results,
-            "total": total,
+            "sessions": sessions,
+            "matches": results,
+            "summary": {
+                "match_count": total,
+                "total_matches": total_matches,
+                "session_count": sessions.len(),
+            },
+            "truncated": truncated,
+            "warnings": [],
         }),
         output_format,
     )?;
@@ -1581,6 +1649,7 @@ pub fn tool_cross_session_search(
             requested_limit.max(total_matches),
         ),
     );
+    inject_deprecated_input_fields(&mut response, &deprecated_input_fields);
     Ok(response)
 }
 
@@ -1803,6 +1872,8 @@ pub(crate) fn tool_result_value<T: Serialize>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use atlas_repo::RepoRegistry;
+    use camino::Utf8Path;
     use tempfile::TempDir;
 
     fn setup_db_path(dir: &TempDir) -> String {
@@ -1811,6 +1882,64 @@ mod tests {
             .join("worldtree.db")
             .to_string_lossy()
             .into_owned()
+    }
+
+    fn setup_multi_repo_registry(repo_root: &str) -> String {
+        use atlas_repo::{
+            RepoRegistration, RepoRegistry, RepoRelationship, RepoRelationshipKind, TrustState,
+            VcsMetadata, stable_repo_id,
+        };
+        use camino::Utf8Path;
+
+        let root = Utf8Path::new(repo_root);
+        let dep = root.join("dep-repo");
+        std::fs::create_dir_all(dep.as_std_path()).unwrap();
+        let dep_id = stable_repo_id(dep.as_path());
+        let mut registry = RepoRegistry::new(stable_repo_id(root));
+        registry.registrations = vec![
+            RepoRegistration {
+                repo_id: stable_repo_id(root),
+                root: root.to_path_buf(),
+                display_alias: ".".to_owned(),
+                vcs: VcsMetadata {
+                    head: None,
+                    default_branch: None,
+                    remote_url: None,
+                },
+                relationship: RepoRelationship {
+                    kind: RepoRelationshipKind::Root,
+                    parent_repo_id: None,
+                    parent_path: None,
+                },
+                trust_state: TrustState::Trusted,
+                enabled: true,
+                include_globs: None,
+                exclude_globs: None,
+                dependencies: Vec::new(),
+            },
+            RepoRegistration {
+                repo_id: dep_id.clone(),
+                root: dep,
+                display_alias: "dep-repo".to_owned(),
+                vcs: VcsMetadata {
+                    head: None,
+                    default_branch: None,
+                    remote_url: None,
+                },
+                relationship: RepoRelationship {
+                    kind: RepoRelationshipKind::Submodule,
+                    parent_repo_id: Some(stable_repo_id(root)),
+                    parent_path: Some("dep-repo".to_owned()),
+                },
+                trust_state: TrustState::Trusted,
+                enabled: true,
+                include_globs: None,
+                exclude_globs: None,
+                dependencies: Vec::new(),
+            },
+        ];
+        registry.save(root).unwrap();
+        dep_id
     }
 
     fn tool_body(result: &Value) -> Value {
@@ -2227,12 +2356,61 @@ mod tests {
         let result =
             tool_search_saved_context(Some(&args), repo_root, &db_path, OutputFormat::Json)
                 .unwrap();
-        let body: Value =
-            serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
-        let hit = &body["results"].as_array().unwrap()[0];
+        let body = tool_body(&result);
+        let hit = &body["matches"].as_array().unwrap()[0];
         assert!(hit["chunk_id"].as_str().is_some());
         assert_eq!(hit["identity_kind"].as_str().unwrap(), "artifact_label");
         assert_eq!(hit["identity_value"].as_str().unwrap(), "my label");
+    }
+
+    #[test]
+    fn saved_context_tools_accept_canonical_repo_scope_and_reject_legacy_fields() {
+        let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join(".atlas")).unwrap();
+        let db_path = setup_db_path(&dir);
+        let repo_root = dir.path().to_str().unwrap();
+        let dep_repo_id = setup_multi_repo_registry(repo_root);
+
+        let save_args = serde_json::json!({
+            "content": medium_content("repo-scope"),
+            "label": "repo-scope artifact",
+            "repo_scope": { "kind": "repo_id", "repo_id": dep_repo_id.clone() },
+        });
+        let save_result =
+            tool_save_context_artifact(Some(&save_args), repo_root, &db_path, OutputFormat::Json)
+                .unwrap();
+        assert!(
+            save_result["_meta"]
+                .get("deprecated_input_fields")
+                .is_none()
+        );
+
+        let search_args = serde_json::json!({
+            "query": "repo-scope",
+            "cross_session": true,
+            "all_repos": true,
+        });
+        let search_result =
+            tool_search_saved_context(Some(&search_args), repo_root, &db_path, OutputFormat::Json)
+                .unwrap();
+        assert_eq!(search_result["isError"], serde_json::json!(true));
+        assert_eq!(
+            search_result["structuredContent"]["message"],
+            serde_json::json!("legacy repo scope fields are no longer supported")
+        );
+
+        let cross_args = serde_json::json!({
+            "query": "repo-scope",
+            "repo_id": setup_multi_repo_registry(repo_root),
+        });
+        let cross_result =
+            tool_cross_session_search(Some(&cross_args), repo_root, &db_path, OutputFormat::Json)
+                .unwrap();
+        assert_eq!(cross_result["isError"], serde_json::json!(true));
+        assert_eq!(
+            cross_result["structuredContent"]["message"],
+            serde_json::json!("legacy repo scope fields are no longer supported")
+        );
     }
 
     #[test]
@@ -2275,12 +2453,11 @@ mod tests {
             OutputFormat::Json,
         )
         .unwrap();
-        let body: Value =
-            serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
-        assert_eq!(body["query"], "src/lib.rs");
-        assert_eq!(body["session_id"], session_id.as_str());
-        assert_eq!(body["total"], 1);
-        let hit = &body["results"][0];
+        let body = tool_body(&result);
+        assert_eq!(body["query"]["text"], "src/lib.rs");
+        assert_eq!(body["query"]["session_id"], session_id.as_str());
+        assert_eq!(body["summary"]["match_count"], 1);
+        let hit = &body["matches"][0];
         assert_eq!(hit["decision"]["summary"], "reuse prior review context");
         assert_eq!(hit["decision"]["source_ids"][0], "src-123");
         assert_eq!(hit["decision"]["evidence"][0]["kind"], "saved_context");
@@ -2355,8 +2532,7 @@ mod tests {
         let result =
             tool_search_saved_context(Some(&args), repo_root, &db_path, OutputFormat::Json)
                 .unwrap();
-        let body: Value =
-            serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+        let body = tool_body(&result);
 
         assert_eq!(result["budget_status"], "partial_result");
         assert_eq!(result["budget_hit"], true);
@@ -2366,8 +2542,8 @@ mod tests {
         );
         assert_eq!(result["budget_limit"], 25);
         assert_eq!(result["budget_observed"], 30);
-        assert_eq!(body["total"], 25);
-        assert_eq!(body["results"].as_array().unwrap().len(), 25);
+        assert_eq!(body["summary"]["match_count"], 25);
+        assert_eq!(body["matches"].as_array().unwrap().len(), 25);
     }
 
     #[test]
@@ -3057,7 +3233,10 @@ mod tests {
             Some(&serde_json::json!({
                 "query": "scope",
                 "cross_session": true,
-                "repo_id": atlas_repo::stable_repo_id(Utf8Path::new(repo_root)),
+                "repo_scope": {
+                    "kind": "repo_id",
+                    "repo_id": atlas_repo::stable_repo_id(Utf8Path::new(repo_root))
+                },
             })),
             repo_root,
             &db_path,
@@ -3065,9 +3244,12 @@ mod tests {
         )
         .unwrap();
         let body = tool_body(&result);
-        let results = body["results"].as_array().unwrap();
+        let results = body["matches"].as_array().unwrap();
 
-        assert_eq!(body["repo_scope"]["repo_count"], serde_json::json!(1));
+        assert_eq!(
+            body["query"]["repo_scope"]["repo_count"],
+            serde_json::json!(1)
+        );
         assert_eq!(results.len(), 1);
         assert_eq!(results[0]["label"], serde_json::json!("local-artifact"));
         assert_eq!(results[0]["repo_roots"], serde_json::json!([repo_root]));

@@ -1,0 +1,61 @@
+{
+  "resolved_tool_name": "batch_query_graph",
+  "input_contract": {
+    "canonical_form": "prefer canonical discriminated objects or preferred field families for new calls",
+    "families": [
+      {
+        "family_name": "query_collection",
+        "family_kind": "preferred_field",
+        "discriminant_field": "items",
+        "accepted_values": ["items"],
+        "mutually_exclusive_legacy_fields": [],
+        "variants": [
+          {
+            "value": "items",
+            "required_companion_fields": ["items"],
+            "minimal_example": {
+              "items": [{ "text": "compute" }],
+              "output_format": "json"
+            }
+          }
+        ]
+      },
+      {
+        "family_name": "repo_scope",
+        "family_kind": "discriminated_object",
+        "discriminant_field": "repo_scope.kind",
+        "accepted_values": ["current", "repo_id", "all"],
+        "mutually_exclusive_legacy_fields": [],
+        "variants": [
+          {
+            "value": "current",
+            "required_companion_fields": [],
+            "minimal_example": {
+              "repo_scope": { "kind": "current" },
+              "output_format": "json"
+            }
+          },
+          {
+            "value": "repo_id",
+            "required_companion_fields": ["repo_scope.repo_id"],
+            "minimal_example": {
+              "repo_scope": { "kind": "repo_id", "repo_id": "primary" },
+              "output_format": "json"
+            }
+          },
+          {
+            "value": "all",
+            "required_companion_fields": [],
+            "minimal_example": {
+              "repo_scope": { "kind": "all" },
+              "output_format": "json"
+            }
+          }
+        ]
+      }
+    ],
+    "notes": [
+      "Collection field is items; send 1-20 query_graph-shaped objects per call."
+    ]
+  }
+}

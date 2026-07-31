@@ -6,9 +6,11 @@ use std::process::Command;
 use std::thread;
 use std::time::Duration;
 
+use atlas_adapters::derive_session_db_path;
 use atlas_mcp::spec;
 use atlas_mcp::testing::{InteractiveStdioTestSession, run_stdio_jsonrpc_session_for_tests};
 use atlas_mcp::{MCP_PROTOCOL_VERSION, ServerOptions};
+use atlas_session::{NewSessionEvent, SessionEventType, SessionId, SessionStore};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
@@ -182,6 +184,53 @@ fn build_fixture_graph(repo_root: &str, db_path: &str) {
         response.get("result").is_some(),
         "build response missing result: {response:#}"
     );
+}
+
+fn seed_saved_context_and_decision(repo_root: &str, db_path: &str) {
+    let save = stdio_initialized_call(
+        repo_root,
+        db_path,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 4,
+            "method": "tools/call",
+            "params": {
+                "name": "save_context_artifact",
+                "arguments": {
+                    "content": "transport parity artifact payload ".repeat(80),
+                    "label": "transport-parity-artifact",
+                    "source_type": "review_context",
+                    "output_format": "json"
+                }
+            }
+        }),
+    );
+    assert!(
+        save.get("result").is_some(),
+        "save response missing result: {save:#}"
+    );
+
+    let session_db = derive_session_db_path(db_path);
+    let store = SessionStore::open(&session_db).expect("open session store");
+    let session_id = SessionId::derive(repo_root, "", "mcp");
+    store
+        .upsert_session_meta(session_id.clone(), repo_root, "mcp", None)
+        .expect("upsert session meta");
+    store
+        .append_event(NewSessionEvent {
+            session_id,
+            event_type: SessionEventType::Decision,
+            priority: 4,
+            payload: json!({
+                "summary": "transport parity decision",
+                "conclusion": "reused decision for parity test",
+                "query": "transport parity",
+                "source_id": "transport-parity-source",
+                "evidence": [{"kind": "saved_context", "source_id": "transport-parity-source"}],
+            }),
+            created_at: None,
+        })
+        .expect("append decision event");
 }
 
 fn http_session(harness: &HttpTestHarness) -> String {
@@ -1320,6 +1369,132 @@ fn spec_broker_status_direct_and_deferred_contracts_match_across_stdio_and_http(
     assert_eq!(direct_stdio, deferred_stdio);
     assert_eq!(direct_stdio, direct_http);
     assert_eq!(direct_stdio, deferred_http);
+}
+
+#[test]
+fn spec_converted_stable_object_tools_match_across_direct_and_deferred_stdio_and_http() {
+    let (_dir, repo_root, db_path) = setup_repo();
+    build_fixture_graph(&repo_root, &db_path);
+    seed_saved_context_and_decision(&repo_root, &db_path);
+
+    let cases = vec![
+        (
+            "query_graph",
+            json!({ "text": "greet", "output_format": "json" }),
+        ),
+        (
+            "batch_query_graph",
+            json!({
+                "items": [{ "text": "greet" }, { "text": "greet_twice" }],
+                "output_format": "json"
+            }),
+        ),
+        (
+            "search_saved_context",
+            json!({ "query": "transport parity", "output_format": "json" }),
+        ),
+        (
+            "search_decisions",
+            json!({ "query": "transport parity", "output_format": "json" }),
+        ),
+        (
+            "cross_session_search",
+            json!({ "query": "transport parity", "output_format": "json" }),
+        ),
+    ];
+
+    let harness = HttpTestHarness::new(&repo_root, &db_path);
+    let session_id = http_session(&harness);
+
+    for (tool_name, arguments) in cases {
+        let stdio_direct = stdio_initialized_call(
+            &repo_root,
+            &db_path,
+            json!({
+                "jsonrpc": "2.0",
+                "id": 30,
+                "method": "tools/call",
+                "params": { "name": tool_name, "arguments": arguments.clone() }
+            }),
+        );
+        let stdio_deferred_create = stdio_initialized_call(
+            &repo_root,
+            &db_path,
+            json!({
+                "jsonrpc": "2.0",
+                "id": 31,
+                "method": "tools/call",
+                "params": {
+                    "name": tool_name,
+                    "task": { "ttl": 1000 },
+                    "arguments": arguments.clone()
+                }
+            }),
+        );
+        let stdio_task_id = stdio_deferred_create["result"]["task"]["taskId"]
+            .as_str()
+            .expect("stdio task id");
+        let stdio_deferred = stdio_wait_for_task_result(&repo_root, &db_path, stdio_task_id);
+
+        let http_direct = harness
+            .post_jsonrpc(
+                &http_headers(&session_id),
+                &json!({
+                    "jsonrpc": "2.0",
+                    "id": 32,
+                    "method": "tools/call",
+                    "params": { "name": tool_name, "arguments": arguments.clone() }
+                }),
+            )
+            .unwrap_or_else(|_| panic!("http direct {tool_name}"))
+            .json_body
+            .expect("http direct json body");
+        let http_deferred_create = harness
+            .post_jsonrpc(
+                &http_headers(&session_id),
+                &json!({
+                    "jsonrpc": "2.0",
+                    "id": 33,
+                    "method": "tools/call",
+                    "params": {
+                        "name": tool_name,
+                        "task": { "ttl": 1000 },
+                        "arguments": arguments.clone()
+                    }
+                }),
+            )
+            .unwrap_or_else(|_| panic!("http deferred create {tool_name}"))
+            .json_body
+            .expect("http deferred create body");
+        let http_task_id = http_deferred_create["result"]["task"]["taskId"]
+            .as_str()
+            .expect("http task id");
+        let http_deferred = http_wait_for_task_result(&harness, &session_id, http_task_id);
+
+        let direct_stdio = normalized_tool_result_contract(&stdio_direct["result"]);
+        let deferred_stdio = normalized_tool_result_contract(&stdio_deferred);
+        let direct_http = normalized_tool_result_contract(&http_direct["result"]);
+        let deferred_http = normalized_tool_result_contract(&http_deferred);
+
+        assert_eq!(
+            direct_stdio, deferred_stdio,
+            "stdio deferred mismatch for {tool_name}"
+        );
+        assert_eq!(
+            direct_stdio, direct_http,
+            "http direct mismatch for {tool_name}"
+        );
+        assert_eq!(
+            direct_stdio, deferred_http,
+            "http deferred mismatch for {tool_name}"
+        );
+        assert!(
+            direct_stdio["structuredContent"]["tool"]
+                .as_str()
+                .is_some_and(|name| name == tool_name),
+            "structuredContent.tool must match {tool_name}"
+        );
+    }
 }
 
 #[test]

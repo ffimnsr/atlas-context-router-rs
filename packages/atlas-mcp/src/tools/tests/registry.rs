@@ -1,6 +1,10 @@
 use super::*;
+use crate::tools::registry::{ToolResultContract, tool_result_contract};
+use crate::tools::tool_descriptors;
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
+use std::fs;
+use std::path::PathBuf;
 
 const TOOL_REGISTRY_SNAPSHOT: &[&str] = &[
     "analyze_architecture",
@@ -60,6 +64,38 @@ const TOOL_REGISTRY_SNAPSHOT: &[&str] = &[
     "traverse_graph",
 ];
 
+fn manual_snapshot_path(name: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("snapshots")
+        .join("manual_docs")
+        .join(format!("{name}.json"))
+}
+
+fn manual_contract_snapshot(tool_name: &str, repo_root: &str, db_path: &str) -> Value {
+    let response = call(
+        "tool_help",
+        Some(&json!({ "name": tool_name, "output_format": "json" })),
+        repo_root,
+        db_path,
+    )
+    .expect("tool_help response");
+    let payload: Value = serde_json::from_str(&unwrap_tool_text(response)).expect("json payload");
+    json!({
+        "resolved_tool_name": payload["resolved_tool_name"],
+        "input_contract": payload["input_contract"],
+    })
+}
+
+fn assert_manual_contract_snapshot(tool_name: &str, repo_root: &str, db_path: &str) {
+    let actual = manual_contract_snapshot(tool_name, repo_root, db_path);
+    let expected: Value = serde_json::from_str(
+        &fs::read_to_string(manual_snapshot_path(tool_name)).expect("read manual snapshot"),
+    )
+    .expect("parse manual snapshot");
+    assert_eq!(actual, expected, "manual snapshot mismatch for {tool_name}");
+}
+
 fn parity_seed_source_id(repo_root: &str, db_path: &str) -> String {
     let content = std::iter::repeat_n("parity seed artifact content with safe spacing", 20)
         .collect::<Vec<_>>()
@@ -88,12 +124,21 @@ fn parity_args(tool_name: &str, source_id: &str) -> Value {
         "tool_help" => json!({ "name": "query_graph", "output_format": "json" }),
         "man" => json!({ "namespace": "mcp", "tool_name": "query_graph", "output_format": "json" }),
         "query_graph" => json!({ "text": "compute", "output_format": "json" }),
-        "batch_query_graph" => json!({ "text": "compute handle_request", "output_format": "json" }),
-        "get_impact_radius" => json!({ "files": ["src/service.rs"], "output_format": "json" }),
-        "get_review_context" => json!({ "files": ["src/service.rs"], "output_format": "json" }),
-        "detect_changes" => json!({ "working_tree": true, "output_format": "json" }),
+        "batch_query_graph" => json!({
+            "items": [{ "text": "compute" }, { "text": "handle_request" }],
+            "output_format": "json"
+        }),
+        "get_impact_radius" => {
+            json!({ "change_source": { "kind": "files", "files": ["src/service.rs"] }, "output_format": "json" })
+        }
+        "get_review_context" => {
+            json!({ "change_source": { "kind": "files", "files": ["src/service.rs"] }, "output_format": "json" })
+        }
+        "detect_changes" => {
+            json!({ "change_source": { "kind": "working_tree" }, "output_format": "json" })
+        }
         "build_or_update_graph" => {
-            json!({ "mode": "update", "files": ["src/service.rs"], "output_format": "json" })
+            json!({ "operation": { "kind": "update", "change_source": { "kind": "files", "files": ["src/service.rs"] } }, "output_format": "json" })
         }
         "postprocess_graph" => {
             json!({ "changed_only": true, "stage": "flows", "dry_run": true, "output_format": "json" })
@@ -101,9 +146,15 @@ fn parity_args(tool_name: &str, source_id: &str) -> Value {
         "traverse_graph" => {
             json!({ "from_qn": "src/service.rs::fn::compute", "output_format": "json" })
         }
-        "get_minimal_context" => json!({ "working_tree": true, "output_format": "json" }),
-        "explain_change" => json!({ "files": ["src/service.rs"], "output_format": "json" }),
-        "get_context" => json!({ "query": "compute", "output_format": "json" }),
+        "get_minimal_context" => {
+            json!({ "change_source": { "kind": "working_tree" }, "output_format": "json" })
+        }
+        "explain_change" => {
+            json!({ "change_source": { "kind": "files", "files": ["src/service.rs"] }, "output_format": "json" })
+        }
+        "get_context" => {
+            json!({ "target": { "kind": "query", "query": "compute" }, "output_format": "json" })
+        }
         "analyze_architecture" => json!({ "output_format": "json" }),
         "analyze_metrics" => json!({ "output_format": "json" }),
         "assess_risk" => {
@@ -140,10 +191,10 @@ fn parity_args(tool_name: &str, source_id: &str) -> Value {
         "search_files" => json!({ "pattern": "*.rs", "output_format": "json" }),
         "search_content" => json!({ "query": "compute", "output_format": "json" }),
         "read_file_excerpt" => {
-            json!({ "file": "src/service.rs", "start_line": 1, "end_line": 3, "output_format": "json" })
+            json!({ "file": "src/service.rs", "selector": { "kind": "range", "start_line": 1, "end_line": 3 }, "output_format": "json" })
         }
         "get_docs_section" => {
-            json!({ "file": "README.md", "heading": "document.overview", "output_format": "json" })
+            json!({ "file": "README.md", "selector": { "kind": "heading", "heading": "document.overview" }, "output_format": "json" })
         }
         "read_file_around_match" => {
             json!({ "file": "src/service.rs", "query": "compute", "output_format": "json" })
@@ -264,7 +315,35 @@ fn tool_help_returns_same_manual_payload_shape() {
         serde_json::from_str(&unwrap_tool_text(response.clone())).expect("json payload");
     assert_eq!(payload["resolved_tool_name"], json!("query_graph"));
     assert_eq!(payload["requested_namespace"], json!("mcp"));
+    assert!(payload["input_contract"]["canonical_form"].is_string());
+    assert!(
+        payload["usage"]["target_tool_call_examples"]
+            .as_array()
+            .is_some_and(|items| items.iter().any(|item| item
+                .as_str()
+                .is_some_and(|text| text.contains("who calls compute"))))
+    );
     assert_provenance(&response, &fixture.repo_root, &fixture.db_path);
+}
+
+#[test]
+fn tool_help_query_grammar_examples_cover_query_graph_get_context_and_resolve_symbol() {
+    let fixture = setup_git_mcp_fixture();
+    for tool_name in ["query_graph", "get_context", "resolve_symbol"] {
+        let response = call(
+            "tool_help",
+            Some(&json!({ "name": tool_name, "output_format": "json" })),
+            &fixture.repo_root,
+            &fixture.db_path,
+        )
+        .expect("tool_help response");
+        let payload: Value =
+            serde_json::from_str(&unwrap_tool_text(response)).expect("json payload");
+        let examples = payload["usage"]["target_tool_call_examples"]
+            .as_array()
+            .expect("examples array");
+        assert!(!examples.is_empty(), "examples required for {tool_name}");
+    }
 }
 
 #[test]
@@ -287,6 +366,7 @@ fn man_tool_returns_structured_manual_payload() {
         serde_json::from_str(&unwrap_tool_text(response.clone())).expect("json payload");
     assert_eq!(payload["resolved_tool_name"], json!("query_graph"));
     assert_eq!(payload["usage"]["cli"], json!("man mcp query_graph"));
+    assert!(payload["input_contract"]["canonical_form"].is_string());
     assert!(
         payload["input_args"]
             .as_array()
@@ -337,6 +417,21 @@ fn man_hidden_internal_tool_is_not_documented() {
         response["structuredContent"]["details"]["reason"],
         json!("hidden_or_internal_tool")
     );
+}
+
+#[test]
+fn tool_help_manual_contract_snapshots_match_for_high_frequency_tools() {
+    let fixture = setup_git_mcp_fixture();
+    for tool_name in [
+        "get_context",
+        "read_file_excerpt",
+        "get_docs_section",
+        "detect_changes",
+        "build_or_update_graph",
+        "batch_query_graph",
+    ] {
+        assert_manual_contract_snapshot(tool_name, &fixture.repo_root, &fixture.db_path);
+    }
 }
 
 #[test]
@@ -497,7 +592,7 @@ fn invalid_output_format_returns_error() {
     let db_path = db_path.to_string_lossy().to_string();
     let _ = Store::open(&db_path).expect("open store");
 
-    let args = serde_json::json!({ "query": "compute", "output_format": "xml" });
+    let args = serde_json::json!({ "target": { "kind": "query", "query": "compute" }, "output_format": "xml" });
     let result = call("get_context", Some(&args), "/ignored", &db_path)
         .expect("invalid output_format should return tool error result");
 
@@ -662,7 +757,7 @@ fn get_docs_section_reports_freshness_when_doc_changes_after_index() {
         "get_docs_section",
         Some(&json!({
             "file": "README.md",
-            "heading": "document.overview",
+            "selector": { "kind": "heading", "heading": "document.overview" },
             "output_format": "json"
         })),
         &fixture.repo_root,
@@ -682,4 +777,131 @@ fn get_docs_section_reports_freshness_when_doc_changes_after_index() {
             .and_then(|v| v.as_str()),
         Some("README.md")
     );
+}
+
+#[test]
+fn exported_input_schemas_reject_known_legacy_ambiguous_field_groups() {
+    let list = tool_list();
+    let tools = list["tools"].as_array().expect("tools array");
+
+    let forbidden_top_level_fields = [
+        ("get_context", vec!["query", "file", "files"]),
+        (
+            "read_file_excerpt",
+            vec![
+                "line_ranges",
+                "start_line",
+                "end_line",
+                "line",
+                "before",
+                "after",
+            ],
+        ),
+        ("get_docs_section", vec!["heading", "line"]),
+        (
+            "detect_changes",
+            vec!["mode", "base", "staged", "working_tree"],
+        ),
+        (
+            "get_impact_radius",
+            vec!["mode", "files", "base", "staged", "working_tree"],
+        ),
+        (
+            "get_review_context",
+            vec!["mode", "files", "base", "staged", "working_tree"],
+        ),
+        (
+            "get_minimal_context",
+            vec!["mode", "files", "base", "staged", "working_tree"],
+        ),
+        (
+            "explain_change",
+            vec!["mode", "files", "base", "staged", "working_tree"],
+        ),
+        ("batch_query_graph", vec!["queries", "text"]),
+    ];
+
+    for (tool_name, forbidden_fields) in forbidden_top_level_fields {
+        let tool = tools
+            .iter()
+            .find(|tool| tool["name"] == json!(tool_name))
+            .unwrap_or_else(|| panic!("tool {tool_name} missing from registry"));
+        let properties = tool["inputSchema"]["properties"]
+            .as_object()
+            .unwrap_or_else(|| panic!("tool {tool_name} missing input properties"));
+        for field in forbidden_fields {
+            assert!(
+                !properties.contains_key(field),
+                "tool {tool_name} must not expose legacy top-level field {field}"
+            );
+        }
+    }
+
+    for tool_name in [
+        "query_graph",
+        "batch_query_graph",
+        "get_impact_radius",
+        "detect_changes",
+        "read_saved_context",
+        "save_context_artifact",
+        "cross_session_search",
+        "resolve_symbol",
+    ] {
+        let tool = tools
+            .iter()
+            .find(|tool| tool["name"] == json!(tool_name))
+            .unwrap_or_else(|| panic!("tool {tool_name} missing from registry"));
+        let properties = tool["inputSchema"]["properties"]
+            .as_object()
+            .unwrap_or_else(|| panic!("tool {tool_name} missing input properties"));
+        assert!(properties.contains_key("repo_scope"));
+        assert!(
+            !properties.contains_key("repo_id"),
+            "tool {tool_name} must not expose legacy top-level repo_id"
+        );
+        assert!(
+            !properties.contains_key("all_repos"),
+            "tool {tool_name} must not expose legacy top-level all_repos"
+        );
+    }
+}
+
+#[test]
+fn tool_descriptions_do_not_hide_precedence_rules() {
+    let list = tool_list();
+    let tools = list["tools"].as_array().expect("tools array");
+    let banned_phrases = [" wins", "takes precedence", "ignored when both"];
+
+    for tool in tools {
+        let name = tool["name"].as_str().expect("tool name");
+        let description = tool["description"]
+            .as_str()
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        for phrase in banned_phrases {
+            assert!(
+                !description.contains(phrase),
+                "tool {name} description must not contain hidden precedence phrase {phrase:?}: {description}"
+            );
+        }
+    }
+}
+
+#[test]
+fn stable_object_tools_export_object_structured_content_schema() {
+    for descriptor in tool_descriptors() {
+        let name = descriptor.name.as_str();
+        if tool_result_contract(name) != ToolResultContract::StableObject {
+            continue;
+        }
+        let output_schema = descriptor
+            .output_schema
+            .as_ref()
+            .unwrap_or_else(|| panic!("tool {name} missing outputSchema"));
+        assert_eq!(
+            output_schema.get("type").and_then(|value| value.as_str()),
+            Some("object"),
+            "tool {name} stable-object contract must expose object outputSchema"
+        );
+    }
 }

@@ -28,22 +28,22 @@ fn json_tool_outputs_are_byte_identical_for_same_repo_and_commit() {
     assert_json_tool_text_deterministic(
         &fixture,
         "get_context",
-        serde_json::json!({ "query": "compute", "output_format": "json" }),
+        serde_json::json!({ "target": { "kind": "query", "query": "compute" }, "output_format": "json" }),
     );
     assert_json_tool_text_deterministic(
         &fixture,
         "get_impact_radius",
-        serde_json::json!({ "files": ["src/service.rs"], "output_format": "json" }),
+        serde_json::json!({ "change_source": { "kind": "files", "files": ["src/service.rs"] }, "output_format": "json" }),
     );
     assert_json_tool_text_deterministic(
         &fixture,
         "get_review_context",
-        serde_json::json!({ "files": ["src/service.rs"], "output_format": "json" }),
+        serde_json::json!({ "change_source": { "kind": "files", "files": ["src/service.rs"] }, "output_format": "json" }),
     );
     assert_json_tool_text_deterministic(
         &fixture,
         "explain_change",
-        serde_json::json!({ "files": ["src/service.rs"], "output_format": "json" }),
+        serde_json::json!({ "change_source": { "kind": "files", "files": ["src/service.rs"] }, "output_format": "json" }),
     );
 }
 
@@ -116,7 +116,7 @@ fn get_context_query_returns_packaged_result() {
         .replace_file_graph("src/math.rs", "h1", Some("rust"), Some(5), &[node], &[])
         .expect("replace_file_graph");
 
-    let args = serde_json::json!({ "query": "compute", "output_format": "json" });
+    let args = serde_json::json!({ "target": { "kind": "query", "query": "compute" }, "output_format": "json" });
     let resp = call("get_context", Some(&args), "/ignored", &db_path).expect("call");
     let text = unwrap_tool_text(resp.clone());
     let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
@@ -143,6 +143,184 @@ fn get_context_query_returns_packaged_result() {
         resp["structuredContent"]
             .get("ranking_evidence_legend")
             .is_some()
+    );
+    assert_eq!(v["target"]["kind"], serde_json::json!("query"));
+    assert_eq!(v["target"]["query"], serde_json::json!("compute"));
+    assert!(resp["_meta"].get("deprecated_input_fields").is_none());
+}
+
+#[test]
+fn get_context_accepts_target_object_and_reports_normalized_target() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let db_path = dir.path().join("atlas.db");
+    let db_path = db_path.to_string_lossy().to_string();
+
+    let mut store = Store::open(&db_path).expect("open store");
+    let node = Node {
+        id: NodeId::UNSET,
+        kind: NodeKind::Function,
+        name: "compute".to_owned(),
+        qualified_name: "src/math.rs::fn::compute".to_owned(),
+        file_path: "src/math.rs".to_owned(),
+        line_start: 1,
+        line_end: 5,
+        language: "rust".to_owned(),
+        parent_name: None,
+        params: Some("(x: i32) -> i32".to_owned()),
+        return_type: Some("i32".to_owned()),
+        modifiers: Some("pub".to_owned()),
+        is_test: false,
+        file_hash: "h1".to_owned(),
+        extra_json: serde_json::json!({}),
+    };
+    store
+        .replace_file_graph("src/math.rs", "h1", Some("rust"), Some(5), &[node], &[])
+        .expect("replace_file_graph");
+
+    let args = serde_json::json!({
+        "target": { "kind": "query", "query": "compute" },
+        "output_format": "json"
+    });
+    let resp = call("get_context", Some(&args), "/ignored", &db_path).expect("call");
+    let v: serde_json::Value =
+        serde_json::from_str(&unwrap_tool_text(resp.clone())).expect("parse json");
+
+    assert_eq!(v["target"]["kind"], serde_json::json!("query"));
+    assert_eq!(v["target"]["query"], serde_json::json!("compute"));
+    assert!(resp["_meta"].get("deprecated_input_fields").is_none());
+}
+
+#[test]
+fn get_context_accepts_supported_query_intent_phrases() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let db_path = dir.path().join("atlas.db");
+    let db_path = db_path.to_string_lossy().to_string();
+
+    let mut store = Store::open(&db_path).expect("open store");
+    let node = Node {
+        id: NodeId::UNSET,
+        kind: NodeKind::Function,
+        name: "compute".to_owned(),
+        qualified_name: "src/math.rs::fn::compute".to_owned(),
+        file_path: "src/math.rs".to_owned(),
+        line_start: 1,
+        line_end: 5,
+        language: "rust".to_owned(),
+        parent_name: None,
+        params: Some("(x: i32) -> i32".to_owned()),
+        return_type: Some("i32".to_owned()),
+        modifiers: Some("pub".to_owned()),
+        is_test: false,
+        file_hash: "h1".to_owned(),
+        extra_json: serde_json::json!({}),
+    };
+    store
+        .replace_file_graph("src/math.rs", "h1", Some("rust"), Some(5), &[node], &[])
+        .expect("replace_file_graph");
+
+    let resp = call(
+        "get_context",
+        Some(&serde_json::json!({
+            "target": { "kind": "query", "query": "who calls compute" },
+            "output_format": "json"
+        })),
+        "/ignored",
+        &db_path,
+    )
+    .expect("get_context who calls");
+    let v: serde_json::Value = serde_json::from_str(&unwrap_tool_text(resp)).expect("parse json");
+    assert_eq!(v["target"]["kind"], serde_json::json!("query"));
+    assert_eq!(v["target"]["query"], serde_json::json!("who calls compute"));
+}
+
+#[test]
+fn get_context_rejects_natural_language_only_query_descriptions() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let db_path = dir.path().join("atlas.db");
+    let db_path = db_path.to_string_lossy().to_string();
+    let store = Store::open(&db_path).expect("open store");
+    store
+        .finish_build(
+            "/ignored",
+            atlas_store_sqlite::BuildFinishStats {
+                state: atlas_store_sqlite::GraphBuildState::Built,
+                files_discovered: 0,
+                files_processed: 0,
+                files_accepted: 0,
+                files_skipped_by_byte_budget: 0,
+                files_failed: 0,
+                bytes_accepted: 0,
+                bytes_skipped: 0,
+                nodes_written: 0,
+                edges_written: 0,
+                budget_stop_reason: None,
+            },
+        )
+        .expect("finish_build");
+
+    let result = call(
+        "get_context",
+        Some(&serde_json::json!({
+            "target": { "kind": "query", "query": "please show me authentication flow" },
+            "output_format": "json"
+        })),
+        "/ignored",
+        &db_path,
+    )
+    .expect("invalid get_context query must return tool result");
+    assert_eq!(result["isError"], serde_json::json!(true));
+    assert_eq!(
+        result["structuredContent"]["message"],
+        serde_json::json!(
+            "target.query must be exact identifier, qualified name, or supported intent phrase"
+        )
+    );
+}
+
+#[test]
+fn get_context_rejects_legacy_target_fields() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let db_path = dir.path().join("atlas.db");
+    let db_path = db_path.to_string_lossy().to_string();
+    let store = Store::open(&db_path).expect("open store");
+    store
+        .finish_build(
+            "/ignored",
+            atlas_store_sqlite::BuildFinishStats {
+                state: atlas_store_sqlite::GraphBuildState::Built,
+                files_discovered: 0,
+                files_processed: 0,
+                files_accepted: 0,
+                files_skipped_by_byte_budget: 0,
+                files_failed: 0,
+                bytes_accepted: 0,
+                bytes_skipped: 0,
+                nodes_written: 0,
+                edges_written: 0,
+                budget_stop_reason: None,
+            },
+        )
+        .expect("finish_build");
+
+    let result = call(
+        "get_context",
+        Some(&serde_json::json!({
+            "query": "compute",
+            "output_format": "json"
+        })),
+        "/ignored",
+        &db_path,
+    )
+    .expect("tool result");
+
+    assert_eq!(result["isError"], serde_json::json!(true));
+    assert_eq!(
+        result["structuredContent"]["code"],
+        serde_json::json!("invalid_input")
+    );
+    assert_eq!(
+        result["structuredContent"]["message"],
+        serde_json::json!("legacy get_context target fields are no longer supported")
     );
 }
 
@@ -173,7 +351,7 @@ fn get_context_files_returns_review_intent() {
         )
         .expect("finish_build");
 
-    let args = serde_json::json!({ "files": ["src/main.rs"], "output_format": "json" });
+    let args = serde_json::json!({ "target": { "kind": "files", "files": ["src/main.rs"] }, "output_format": "json" });
     let resp = call("get_context", Some(&args), "/ignored", &db_path).expect("call");
     let text = unwrap_tool_text(resp.clone());
     let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
@@ -212,8 +390,7 @@ fn get_context_not_found_returns_empty_nodes() {
         )
         .expect("finish_build");
 
-    let args =
-        serde_json::json!({ "query": "nonexistent_xyz_unknown_symbol", "output_format": "json" });
+    let args = serde_json::json!({ "target": { "kind": "query", "query": "nonexistent_xyz_unknown_symbol" }, "output_format": "json" });
     let resp = call("get_context", Some(&args), "/ignored", &db_path).expect("call");
     let text = unwrap_tool_text(resp);
     let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
@@ -250,7 +427,7 @@ fn get_context_defaults_to_toon_output_format() {
         .replace_file_graph("src/math.rs", "h1", Some("rust"), Some(5), &[node], &[])
         .expect("replace_file_graph");
 
-    let args = serde_json::json!({ "query": "compute" });
+    let args = serde_json::json!({ "target": { "kind": "query", "query": "compute" } });
     let resp = call("get_context", Some(&args), "/ignored", &db_path).expect("call");
     let text = unwrap_tool_text(resp.clone());
 
@@ -261,7 +438,7 @@ fn get_context_defaults_to_toon_output_format() {
 #[test]
 fn explicit_json_override_beats_toon_default() {
     let fixture = setup_mcp_fixture();
-    let args = serde_json::json!({ "query": "compute", "output_format": "json" });
+    let args = serde_json::json!({ "target": { "kind": "query", "query": "compute" }, "output_format": "json" });
     let resp = call("get_context", Some(&args), "/ignored", &fixture.db_path).expect("call");
     let text = unwrap_tool_text(resp.clone());
 
@@ -272,7 +449,7 @@ fn explicit_json_override_beats_toon_default() {
 #[test]
 fn get_context_supports_toon_output_format() {
     let fixture = setup_mcp_fixture();
-    let args = serde_json::json!({ "query": "compute", "output_format": "toon" });
+    let args = serde_json::json!({ "target": { "kind": "query", "query": "compute" }, "output_format": "toon" });
     let resp = call("get_context", Some(&args), "/ignored", &fixture.db_path).expect("call");
     let text = unwrap_tool_text(resp.clone());
 
@@ -280,6 +457,181 @@ fn get_context_supports_toon_output_format() {
     assert!(text.contains("intent: symbol"));
     assert!(text.contains("src/service.rs::fn::compute"));
     assert!(!text.contains("\"intent\""));
+}
+
+#[test]
+fn query_graph_legacy_repo_scope_is_rejected() {
+    let fixture = setup_mcp_fixture();
+    let resp = call(
+        "query_graph",
+        Some(&serde_json::json!({
+            "text": "compute",
+            "all_repos": true,
+            "output_format": "json"
+        })),
+        "/ignored",
+        &fixture.db_path,
+    )
+    .expect("call");
+
+    assert_eq!(resp["isError"], serde_json::json!(true));
+    assert_eq!(
+        resp["structuredContent"]["message"],
+        serde_json::json!("legacy repo scope fields are no longer supported")
+    );
+}
+
+#[test]
+fn detect_changes_accepts_change_source_object_and_reports_normalized_kind() {
+    let fixture = setup_git_mcp_fixture();
+    write_repo_file(
+        fixture._dir.path(),
+        "src/service.rs",
+        "pub fn compute() -> i32 { 2 }\n",
+    );
+
+    let args = serde_json::json!({
+        "change_source": { "kind": "working_tree" },
+        "output_format": "json"
+    });
+    let resp = call(
+        "detect_changes",
+        Some(&args),
+        &fixture.repo_root,
+        &fixture.db_path,
+    )
+    .expect("call");
+    let payload: serde_json::Value =
+        serde_json::from_str(&unwrap_tool_text(resp.clone())).expect("parse json");
+
+    assert_eq!(
+        payload["change_source"]["kind"],
+        serde_json::json!("working_tree")
+    );
+    assert!(resp["_meta"].get("deprecated_input_fields").is_none());
+}
+
+#[test]
+fn detect_changes_legacy_mode_is_rejected() {
+    let fixture = setup_git_mcp_fixture();
+    write_repo_file(
+        fixture._dir.path(),
+        "src/service.rs",
+        "pub fn compute() -> i32 { 2 }\n",
+    );
+
+    let args = serde_json::json!({ "mode": "working_tree", "output_format": "json" });
+    let resp = call(
+        "detect_changes",
+        Some(&args),
+        &fixture.repo_root,
+        &fixture.db_path,
+    )
+    .expect("call");
+    assert_eq!(resp["isError"], serde_json::json!(true));
+    assert_eq!(
+        resp["structuredContent"]["message"],
+        serde_json::json!("legacy change_source fields are no longer supported")
+    );
+}
+
+#[test]
+fn detect_changes_rejects_mixed_change_source_and_legacy_fields() {
+    let fixture = setup_git_mcp_fixture();
+    let resp = call(
+        "detect_changes",
+        Some(&serde_json::json!({
+            "change_source": { "kind": "working_tree" },
+            "working_tree": true,
+            "output_format": "json"
+        })),
+        &fixture.repo_root,
+        &fixture.db_path,
+    )
+    .expect("call");
+
+    assert_eq!(resp["isError"], serde_json::json!(true));
+    assert_eq!(
+        resp["structuredContent"]["message"],
+        serde_json::json!("legacy change_source fields are no longer supported")
+    );
+}
+
+#[test]
+fn detect_changes_legacy_repo_scope_is_rejected() {
+    use atlas_repo::{
+        RepoRegistration, RepoRegistry, RepoRelationship, RepoRelationshipKind, TrustState,
+        VcsMetadata, stable_repo_id,
+    };
+    use camino::{Utf8Path, Utf8PathBuf};
+
+    let fixture = setup_git_mcp_fixture();
+    let root = Utf8Path::new(&fixture.repo_root);
+    let dep = Utf8PathBuf::from(format!("{}/dep-repo", root.as_str()));
+    std::fs::create_dir_all(dep.as_std_path()).expect("create dep repo dir");
+    let dep_repo_id = stable_repo_id(dep.as_path());
+    let mut registry = RepoRegistry::new(stable_repo_id(root));
+    registry.registrations = vec![
+        RepoRegistration {
+            repo_id: stable_repo_id(root),
+            root: root.to_path_buf(),
+            display_alias: ".".to_owned(),
+            vcs: VcsMetadata {
+                head: None,
+                default_branch: None,
+                remote_url: None,
+            },
+            relationship: RepoRelationship {
+                kind: RepoRelationshipKind::Root,
+                parent_repo_id: None,
+                parent_path: None,
+            },
+            trust_state: TrustState::Trusted,
+            enabled: true,
+            include_globs: None,
+            exclude_globs: None,
+            dependencies: Vec::new(),
+        },
+        RepoRegistration {
+            repo_id: dep_repo_id.clone(),
+            root: dep,
+            display_alias: "dep-repo".to_owned(),
+            vcs: VcsMetadata {
+                head: None,
+                default_branch: None,
+                remote_url: None,
+            },
+            relationship: RepoRelationship {
+                kind: RepoRelationshipKind::Submodule,
+                parent_repo_id: Some(stable_repo_id(root)),
+                parent_path: Some("dep-repo".to_owned()),
+            },
+            trust_state: TrustState::Trusted,
+            enabled: true,
+            include_globs: None,
+            exclude_globs: None,
+            dependencies: Vec::new(),
+        },
+    ];
+    registry.save(root).expect("save registry");
+
+    let args = serde_json::json!({
+        "repo_id": dep_repo_id,
+        "change_source": { "kind": "working_tree" },
+        "output_format": "json"
+    });
+    let resp = call(
+        "detect_changes",
+        Some(&args),
+        &fixture.repo_root,
+        &fixture.db_path,
+    )
+    .expect("call");
+    assert_eq!(resp["isError"], serde_json::json!(true));
+    assert_eq!(
+        resp["structuredContent"]["message"],
+        serde_json::json!("legacy repo scope fields are no longer supported")
+    );
 }
 
 #[test]
@@ -343,8 +695,7 @@ fn detect_changes_all_repos_skips_unavailable_repo_with_warning() {
         "pub fn compute() -> i32 { 2 }\n",
     );
 
-    let args =
-        serde_json::json!({ "all_repos": true, "working_tree": true, "output_format": "json" });
+    let args = serde_json::json!({ "repo_scope": { "kind": "all" }, "change_source": { "kind": "working_tree" }, "output_format": "json" });
     let resp = call(
         "detect_changes",
         Some(&args),
@@ -371,6 +722,107 @@ fn detect_changes_all_repos_skips_unavailable_repo_with_warning() {
         resp["structuredContent"]["warnings"]
             .as_array()
             .is_some_and(|warnings| !warnings.is_empty())
+    );
+}
+
+#[test]
+fn change_source_tools_resolve_files_for_canonical_inputs() {
+    let fixture = setup_git_mcp_fixture();
+    write_repo_file(
+        fixture._dir.path(),
+        "src/service.rs",
+        "pub fn compute() -> i32 { 2 }\n",
+    );
+
+    let detect = call(
+        "detect_changes",
+        Some(&serde_json::json!({
+            "change_source": { "kind": "working_tree" },
+            "output_format": "json"
+        })),
+        &fixture.repo_root,
+        &fixture.db_path,
+    )
+    .expect("detect");
+    let detect_payload: serde_json::Value =
+        serde_json::from_str(&unwrap_tool_text(detect)).expect("detect json");
+    assert!(
+        detect_payload["files"]
+            .as_array()
+            .is_some_and(|files| !files.is_empty())
+    );
+
+    let minimal = call(
+        "get_minimal_context",
+        Some(&serde_json::json!({
+            "change_source": { "kind": "working_tree" },
+            "output_format": "json"
+        })),
+        &fixture.repo_root,
+        &fixture.db_path,
+    )
+    .expect("minimal");
+    let minimal_payload: serde_json::Value =
+        serde_json::from_str(&unwrap_tool_text(minimal)).expect("minimal json");
+    assert_eq!(
+        minimal_payload["summary"]["changed_file_count"],
+        serde_json::json!(1)
+    );
+}
+
+#[test]
+fn review_impact_and_explain_change_accept_canonical_change_source() {
+    let fixture = setup_git_mcp_fixture();
+
+    let review = call(
+        "get_review_context",
+        Some(&serde_json::json!({
+            "change_source": { "kind": "files", "files": ["src/service.rs"] },
+            "output_format": "json"
+        })),
+        &fixture.repo_root,
+        &fixture.db_path,
+    )
+    .expect("review");
+    let review_payload: serde_json::Value =
+        serde_json::from_str(&unwrap_tool_text(review)).expect("review json");
+    assert_eq!(
+        review_payload["change_source"]["kind"],
+        serde_json::json!("files")
+    );
+
+    let impact = call(
+        "get_impact_radius",
+        Some(&serde_json::json!({
+            "change_source": { "kind": "files", "files": ["src/service.rs"] },
+            "output_format": "json"
+        })),
+        &fixture.repo_root,
+        &fixture.db_path,
+    )
+    .expect("impact");
+    let impact_payload: serde_json::Value =
+        serde_json::from_str(&unwrap_tool_text(impact)).expect("impact json");
+    assert_eq!(
+        impact_payload["seed_files"],
+        serde_json::json!(["src/service.rs"])
+    );
+
+    let explain = call(
+        "explain_change",
+        Some(&serde_json::json!({
+            "change_source": { "kind": "files", "files": ["src/service.rs"] },
+            "output_format": "json"
+        })),
+        &fixture.repo_root,
+        &fixture.db_path,
+    )
+    .expect("explain");
+    let explain_payload: serde_json::Value =
+        serde_json::from_str(&unwrap_tool_text(explain)).expect("explain json");
+    assert_eq!(
+        explain_payload["change_source"]["kind"],
+        serde_json::json!("files")
     );
 }
 
@@ -448,7 +900,7 @@ fn review_and_impact_context_report_cross_repo_hops() {
 
     let review = call(
         "get_review_context",
-        Some(&serde_json::json!({ "files": ["src/app.rs"], "output_format": "json" })),
+        Some(&serde_json::json!({ "change_source": { "kind": "files", "files": ["src/app.rs"] }, "output_format": "json" })),
         "/ignored",
         &db_path,
     )
@@ -472,7 +924,7 @@ fn review_and_impact_context_report_cross_repo_hops() {
 
     let impact = call(
         "get_impact_radius",
-        Some(&serde_json::json!({ "files": ["src/app.rs"], "output_format": "json" })),
+        Some(&serde_json::json!({ "change_source": { "kind": "files", "files": ["src/app.rs"] }, "output_format": "json" })),
         "/ignored",
         &db_path,
     )
@@ -524,7 +976,7 @@ fn explain_change_reports_change_kind_counts() {
         .expect("replace_file_graph");
 
     let args = serde_json::json!({
-        "files": ["src/a.rs"],
+        "change_source": { "kind": "files", "files": ["src/a.rs"] },
         "max_depth": 5,
         "max_nodes": 200,
         "output_format": "json",
@@ -591,7 +1043,8 @@ fn mcp_agent_facing_flows_pass_usability_acceptance_gate() {
             .any(|tool| tool.as_str() == Some("symbol_neighbors"))
     );
 
-    let impact_args = serde_json::json!({ "files": ["src/service.rs"] });
+    let impact_args =
+        serde_json::json!({ "change_source": { "kind": "files", "files": ["src/service.rs"] } });
     let impact_resp = call(
         "get_impact_radius",
         Some(&impact_args),
@@ -606,7 +1059,8 @@ fn mcp_agent_facing_flows_pass_usability_acceptance_gate() {
     assert!(impact_text.contains("src/api.rs::fn::handle_request"));
     assert!(impact_text.contains("tests/service_test.rs::fn::compute_test"));
 
-    let review_args = serde_json::json!({ "files": ["src/service.rs"] });
+    let review_args =
+        serde_json::json!({ "change_source": { "kind": "files", "files": ["src/service.rs"] } });
     let review_resp = call(
         "get_review_context",
         Some(&review_args),
@@ -622,7 +1076,7 @@ fn mcp_agent_facing_flows_pass_usability_acceptance_gate() {
     assert!(review_text.contains("src/service.rs"));
     assert!(review_text.contains("src/api.rs"));
 
-    let context_args = serde_json::json!({ "query": "compute" });
+    let context_args = serde_json::json!({ "target": { "kind": "query", "query": "compute" } });
     let context_resp = call(
         "get_context",
         Some(&context_args),
@@ -721,7 +1175,7 @@ fn postprocess_graph_supports_single_stage_changed_only() {
 #[test]
 fn get_impact_radius_includes_provenance() {
     let fixture = setup_mcp_fixture();
-    let args = serde_json::json!({ "files": ["src/service.rs"] });
+    let args = serde_json::json!({ "change_source": { "kind": "files", "files": ["src/service.rs"] }, "output_format": "json" });
     let resp = call("get_impact_radius", Some(&args), "/repo", &fixture.db_path)
         .expect("get_impact_radius");
     assert_provenance(&resp, "/repo", &fixture.db_path);
@@ -730,7 +1184,7 @@ fn get_impact_radius_includes_provenance() {
 #[test]
 fn get_review_context_includes_provenance() {
     let fixture = setup_mcp_fixture();
-    let args = serde_json::json!({ "files": ["src/service.rs"], "output_format": "json" });
+    let args = serde_json::json!({ "change_source": { "kind": "files", "files": ["src/service.rs"] }, "output_format": "json" });
     let resp = call("get_review_context", Some(&args), "/repo", &fixture.db_path)
         .expect("get_review_context");
     assert_provenance(&resp, "/repo", &fixture.db_path);
@@ -744,7 +1198,7 @@ fn get_review_context_includes_provenance() {
 #[test]
 fn get_review_context_json_includes_changed_symbol_evidence() {
     let fixture = setup_mcp_fixture();
-    let args = serde_json::json!({ "files": ["src/service.rs"], "output_format": "json" });
+    let args = serde_json::json!({ "change_source": { "kind": "files", "files": ["src/service.rs"] }, "output_format": "json" });
     let resp = call("get_review_context", Some(&args), "/repo", &fixture.db_path)
         .expect("get_review_context");
     let text = unwrap_tool_text(resp.clone());
@@ -769,7 +1223,7 @@ fn get_review_context_json_includes_changed_symbol_evidence() {
 #[test]
 fn get_context_includes_provenance() {
     let fixture = setup_mcp_fixture();
-    let args = serde_json::json!({ "query": "compute", "output_format": "json" });
+    let args = serde_json::json!({ "target": { "kind": "query", "query": "compute" }, "output_format": "json" });
     let resp = call("get_context", Some(&args), "/repo", &fixture.db_path).expect("get_context");
     assert_provenance(&resp, "/repo", &fixture.db_path);
 }
@@ -782,7 +1236,7 @@ fn get_context_changed_code_file_emits_freshness_warning() {
         "src/service.rs",
         "pub fn compute() -> i32 { 42 }\n",
     );
-    let args = serde_json::json!({ "query": "compute", "output_format": "json" });
+    let args = serde_json::json!({ "target": { "kind": "query", "query": "compute" }, "output_format": "json" });
 
     let resp = call(
         "get_context",
@@ -812,7 +1266,8 @@ fn get_review_context_changed_code_file_emits_freshness_warning() {
         "src/service.rs",
         "pub fn compute() -> i32 { 77 }\n",
     );
-    let args = serde_json::json!({ "working_tree": true, "output_format": "json" });
+    let args =
+        serde_json::json!({ "change_source": { "kind": "working_tree" }, "output_format": "json" });
 
     let resp = call(
         "get_review_context",
@@ -842,7 +1297,8 @@ fn get_impact_radius_changed_code_file_emits_freshness_warning() {
         "src/service.rs",
         "pub fn compute() -> i32 { 88 }\n",
     );
-    let args = serde_json::json!({ "working_tree": true, "output_format": "json" });
+    let args =
+        serde_json::json!({ "change_source": { "kind": "working_tree" }, "output_format": "json" });
 
     let resp = call(
         "get_impact_radius",
@@ -868,7 +1324,7 @@ fn get_impact_radius_changed_code_file_emits_freshness_warning() {
 fn get_impact_radius_accepts_explicit_files_and_reports_change_source_metadata() {
     let fixture = setup_mcp_fixture();
     let args = serde_json::json!({
-        "files": ["src/service.rs"],
+        "change_source": { "kind": "files", "files": ["src/service.rs"] },
         "output_format": "json"
     });
 
@@ -884,9 +1340,9 @@ fn get_impact_radius_accepts_explicit_files_and_reports_change_source_metadata()
         Some(1)
     );
     assert_eq!(
-        resp.pointer("/structuredContent/change_source/mode")
+        resp.pointer("/structuredContent/change_source/kind")
             .and_then(|value| value.as_str()),
-        Some("explicit_files")
+        Some("files")
     );
     assert_eq!(
         resp.pointer("/structuredContent/change_source/resolved_files/0")
@@ -899,7 +1355,7 @@ fn get_impact_radius_accepts_explicit_files_and_reports_change_source_metadata()
 fn get_review_context_accepts_explicit_files_and_reports_change_source_metadata() {
     let fixture = setup_mcp_fixture();
     let args = serde_json::json!({
-        "files": ["src/service.rs"],
+        "change_source": { "kind": "files", "files": ["src/service.rs"] },
         "output_format": "json"
     });
 
@@ -913,9 +1369,9 @@ fn get_review_context_accepts_explicit_files_and_reports_change_source_metadata(
         Some("review")
     );
     assert_eq!(
-        resp.pointer("/structuredContent/change_source/mode")
+        resp.pointer("/structuredContent/change_source/kind")
             .and_then(|value| value.as_str()),
-        Some("explicit_files")
+        Some("files")
     );
     assert_eq!(
         resp.pointer("/structuredContent/change_source/resolved_files/0")
@@ -932,7 +1388,7 @@ fn get_impact_radius_resolves_base_diff_files() {
         "src/service.rs",
         "pub fn compute() -> i32 { 2 }\n",
     );
-    let args = serde_json::json!({ "base": "HEAD", "output_format": "json" });
+    let args = serde_json::json!({ "change_source": { "kind": "base", "base": "HEAD" }, "output_format": "json" });
 
     let resp = call(
         "get_impact_radius",
@@ -951,9 +1407,9 @@ fn get_impact_radius_resolves_base_diff_files() {
         Some(1)
     );
     assert_eq!(
-        resp.pointer("/structuredContent/change_source/mode")
+        resp.pointer("/structuredContent/change_source/kind")
             .and_then(|value| value.as_str()),
-        Some("base_ref")
+        Some("base")
     );
     assert_eq!(
         resp.pointer("/structuredContent/change_source/resolved_files/0")
@@ -972,7 +1428,8 @@ fn get_review_context_resolves_staged_diff_files() {
         "pub fn compute() -> i32 { 3 }\n",
     );
     git_run(repo_root, &["add", "src/service.rs"]);
-    let args = serde_json::json!({ "staged": true, "output_format": "json" });
+    let args =
+        serde_json::json!({ "change_source": { "kind": "staged" }, "output_format": "json" });
 
     let resp = call(
         "get_review_context",
@@ -989,7 +1446,7 @@ fn get_review_context_resolves_staged_diff_files() {
         Some("review")
     );
     assert_eq!(
-        resp.pointer("/structuredContent/change_source/mode")
+        resp.pointer("/structuredContent/change_source/kind")
             .and_then(|value| value.as_str()),
         Some("staged")
     );
@@ -1008,7 +1465,8 @@ fn get_review_context_resolves_working_tree_diff_files() {
         "src/service.rs",
         "pub fn compute() -> i32 { 4 }\n",
     );
-    let args = serde_json::json!({ "working_tree": true, "output_format": "json" });
+    let args =
+        serde_json::json!({ "change_source": { "kind": "working_tree" }, "output_format": "json" });
 
     let resp = call(
         "get_review_context",
@@ -1019,7 +1477,7 @@ fn get_review_context_resolves_working_tree_diff_files() {
     .expect("get_review_context");
 
     assert_eq!(
-        resp.pointer("/structuredContent/change_source/mode")
+        resp.pointer("/structuredContent/change_source/kind")
             .and_then(|value| value.as_str()),
         Some("working_tree")
     );
@@ -1033,7 +1491,8 @@ fn get_review_context_resolves_working_tree_diff_files() {
 #[test]
 fn get_impact_radius_empty_diff_returns_empty_result() {
     let fixture = setup_git_mcp_fixture();
-    let args = serde_json::json!({ "working_tree": true, "output_format": "json" });
+    let args =
+        serde_json::json!({ "change_source": { "kind": "working_tree" }, "output_format": "json" });
 
     let resp = call(
         "get_impact_radius",
@@ -1058,7 +1517,7 @@ fn get_impact_radius_empty_diff_returns_empty_result() {
         Some(0)
     );
     assert_eq!(
-        resp.pointer("/structuredContent/change_source/mode")
+        resp.pointer("/structuredContent/change_source/kind")
             .and_then(|value| value.as_str()),
         Some("working_tree")
     );
@@ -1091,10 +1550,9 @@ fn change_source_invalid_combinations_return_structured_errors() {
         impact_err["structuredContent"]["code"],
         serde_json::json!("invalid_input")
     );
-    assert!(
-        impact_err["structuredContent"]["message"]
-            .as_str()
-            .is_some_and(|message| message.contains("provide exactly one mode family"))
+    assert_eq!(
+        impact_err["structuredContent"]["message"],
+        serde_json::json!("legacy change_source fields are no longer supported")
     );
     assert_eq!(
         impact_details["offending_fields"],
@@ -1102,29 +1560,24 @@ fn change_source_invalid_combinations_return_structured_errors() {
     );
     assert_eq!(
         impact_details["present_mode_families"],
-        serde_json::json!(["files", "staged"])
-    );
-    assert_eq!(
-        impact_details["accepted_modes"],
-        serde_json::json!(["files", "base", "staged", "working_tree"])
+        serde_json::json!([])
     );
     assert_eq!(
         impact_details["accepted_argument_families"],
-        serde_json::json!(["files", "base", "staged", "working_tree"])
-    );
-    assert_eq!(
-        impact_details["accepted_mode_examples"][0],
-        serde_json::json!({"mode": "files", "files": ["src/service.rs"]})
+        serde_json::json!([
+            "change_source.kind=files",
+            "change_source.kind=base",
+            "change_source.kind=staged",
+            "change_source.kind=working_tree"
+        ])
     );
     assert_eq!(
         impact_details["retry_example"],
-        serde_json::json!({"mode": "files", "files": ["src/service.rs"]})
+        serde_json::json!({"change_source": {"kind": "files", "files": ["src/service.rs"]}})
     );
     assert_eq!(
         impact_details["fail_closed_reason"],
-        serde_json::json!(
-            "Atlas refused to guess because multiple change-source mode families were present"
-        )
+        serde_json::json!("Atlas refused to guess between conflicting change-source selectors")
     );
 
     let review_err = call(
@@ -1150,28 +1603,21 @@ fn change_source_invalid_combinations_return_structured_errors() {
     );
     assert_eq!(
         review_details["present_mode_families"],
-        serde_json::json!(["base", "working_tree"])
+        serde_json::json!([])
     );
+
     assert_eq!(
         review_details["retry_example"],
-        serde_json::json!({"mode": "files", "files": ["src/service.rs"]})
+        serde_json::json!({"change_source": {"kind": "files", "files": ["src/service.rs"]}})
     );
 }
 
 #[test]
-fn build_or_update_graph_treats_empty_base_as_working_tree() {
+fn build_or_update_graph_accepts_operation_build() {
     let fixture = setup_git_mcp_fixture();
-    write_repo_file(
-        std::path::Path::new(&fixture.repo_root),
-        "src/service.rs",
-        "pub fn compute() -> i32 { 9 }\n",
-    );
     let args = serde_json::json!({
-        "mode": "update",
-        "base": "",
-        "staged": false,
-        "files": [],
-        "output_format": "toon"
+        "operation": { "kind": "build" },
+        "output_format": "json"
     });
 
     let resp = call(
@@ -1180,22 +1626,19 @@ fn build_or_update_graph_treats_empty_base_as_working_tree() {
         &fixture.repo_root,
         &fixture.db_path,
     )
-    .expect("build_or_update_graph with empty base");
+    .expect("build_or_update_graph build op");
 
     assert_ne!(resp.get("isError"), Some(&serde_json::json!(true)));
     assert_eq!(
-        resp.pointer("/structuredContent/source/target_kind")
+        resp.pointer("/structuredContent/mode")
             .and_then(|value| value.as_str()),
-        Some("working_tree")
+        Some("build")
     );
-    assert_eq!(
-        resp.pointer("/structuredContent/source/base_ref"),
-        Some(&serde_json::Value::Null)
-    );
+    assert!(resp["_meta"].get("deprecated_input_fields").is_none());
 }
 
 #[test]
-fn detect_changes_accepts_explicit_mode_field() {
+fn build_or_update_graph_accepts_operation_update_working_tree() {
     let fixture = setup_git_mcp_fixture();
     write_repo_file(
         std::path::Path::new(&fixture.repo_root),
@@ -1203,8 +1646,228 @@ fn detect_changes_accepts_explicit_mode_field() {
         "pub fn compute() -> i32 { 9 }\n",
     );
     let args = serde_json::json!({
-        "mode": "working_tree",
-        "working_tree": true,
+        "operation": {
+            "kind": "update",
+            "change_source": { "kind": "working_tree" }
+        },
+        "output_format": "json"
+    });
+
+    let resp = call(
+        "build_or_update_graph",
+        Some(&args),
+        &fixture.repo_root,
+        &fixture.db_path,
+    )
+    .expect("build_or_update_graph working tree op");
+
+    assert_eq!(
+        resp.pointer("/structuredContent/source/target_kind")
+            .and_then(|value| value.as_str()),
+        Some("working_tree")
+    );
+}
+
+#[test]
+fn build_or_update_graph_accepts_operation_update_staged() {
+    let fixture = setup_git_mcp_fixture();
+    let repo_root = std::path::Path::new(&fixture.repo_root);
+    write_repo_file(
+        repo_root,
+        "src/service.rs",
+        "pub fn compute() -> i32 { 10 }\n",
+    );
+    git_run(repo_root, &["add", "src/service.rs"]);
+    let args = serde_json::json!({
+        "operation": {
+            "kind": "update",
+            "change_source": { "kind": "staged" }
+        },
+        "output_format": "json"
+    });
+
+    let resp = call(
+        "build_or_update_graph",
+        Some(&args),
+        &fixture.repo_root,
+        &fixture.db_path,
+    )
+    .expect("build_or_update_graph staged op");
+
+    assert_eq!(
+        resp.pointer("/structuredContent/source/target_kind")
+            .and_then(|value| value.as_str()),
+        Some("staged")
+    );
+}
+
+#[test]
+fn build_or_update_graph_accepts_operation_update_base() {
+    let fixture = setup_git_mcp_fixture();
+    write_repo_file(
+        std::path::Path::new(&fixture.repo_root),
+        "src/service.rs",
+        "pub fn compute() -> i32 { 11 }\n",
+    );
+    let args = serde_json::json!({
+        "operation": {
+            "kind": "update",
+            "change_source": { "kind": "base", "base": "HEAD" }
+        },
+        "output_format": "json"
+    });
+
+    let resp = call(
+        "build_or_update_graph",
+        Some(&args),
+        &fixture.repo_root,
+        &fixture.db_path,
+    )
+    .expect("build_or_update_graph base op");
+
+    assert_eq!(
+        resp.pointer("/structuredContent/source/target_kind")
+            .and_then(|value| value.as_str()),
+        Some("base")
+    );
+    assert_eq!(
+        resp.pointer("/structuredContent/source/base_ref")
+            .and_then(|value| value.as_str()),
+        Some("HEAD")
+    );
+}
+
+#[test]
+fn build_or_update_graph_accepts_operation_update_files() {
+    let fixture = setup_git_mcp_fixture();
+    let args = serde_json::json!({
+        "operation": {
+            "kind": "update",
+            "change_source": { "kind": "files", "files": ["src/service.rs"] }
+        },
+        "output_format": "json"
+    });
+
+    let resp = call(
+        "build_or_update_graph",
+        Some(&args),
+        &fixture.repo_root,
+        &fixture.db_path,
+    )
+    .expect("build_or_update_graph files op");
+
+    assert_eq!(
+        resp.pointer("/structuredContent/source/target_kind")
+            .and_then(|value| value.as_str()),
+        Some("files")
+    );
+}
+
+#[test]
+fn build_or_update_graph_rejects_legacy_mode_update() {
+    let fixture = setup_git_mcp_fixture();
+    write_repo_file(
+        std::path::Path::new(&fixture.repo_root),
+        "src/service.rs",
+        "pub fn compute() -> i32 { 12 }\n",
+    );
+    let args = serde_json::json!({
+        "mode": "update",
+        "output_format": "json"
+    });
+
+    let resp = call(
+        "build_or_update_graph",
+        Some(&args),
+        &fixture.repo_root,
+        &fixture.db_path,
+    )
+    .expect("build_or_update_graph legacy update");
+
+    assert_eq!(resp["isError"], serde_json::json!(true));
+    assert_eq!(
+        resp["structuredContent"]["message"],
+        serde_json::json!("legacy build_or_update_graph fields are no longer supported")
+    );
+}
+
+#[test]
+fn build_or_update_graph_rejects_build_operation_with_change_source() {
+    let fixture = setup_git_mcp_fixture();
+    let resp = call(
+        "build_or_update_graph",
+        Some(&serde_json::json!({
+            "operation": {
+                "kind": "build",
+                "change_source": { "kind": "working_tree" }
+            },
+            "output_format": "json"
+        })),
+        &fixture.repo_root,
+        &fixture.db_path,
+    )
+    .expect("build conflict result");
+
+    assert_eq!(resp["isError"], serde_json::json!(true));
+    assert_eq!(
+        resp["structuredContent"]["message"],
+        serde_json::json!("operation.kind='build' cannot include change_source")
+    );
+}
+
+#[test]
+fn build_or_update_graph_rejects_update_operation_without_change_source() {
+    let fixture = setup_git_mcp_fixture();
+    let resp = call(
+        "build_or_update_graph",
+        Some(&serde_json::json!({
+            "operation": { "kind": "update" },
+            "output_format": "json"
+        })),
+        &fixture.repo_root,
+        &fixture.db_path,
+    )
+    .expect("missing change_source result");
+
+    assert_eq!(resp["isError"], serde_json::json!(true));
+    assert_eq!(
+        resp["structuredContent"]["message"],
+        serde_json::json!("operation.kind='update' requires operation.change_source")
+    );
+}
+
+#[test]
+fn build_or_update_graph_rejects_mixed_operation_and_legacy_fields() {
+    let fixture = setup_git_mcp_fixture();
+    let resp = call(
+        "build_or_update_graph",
+        Some(&serde_json::json!({
+            "operation": { "kind": "build" },
+            "mode": "build",
+            "output_format": "json"
+        })),
+        &fixture.repo_root,
+        &fixture.db_path,
+    )
+    .expect("mixed operation result");
+
+    assert_eq!(resp["isError"], serde_json::json!(true));
+    assert_eq!(
+        resp["structuredContent"]["message"],
+        serde_json::json!("conflicting build operation selectors")
+    );
+}
+
+#[test]
+fn detect_changes_accepts_canonical_change_source_field() {
+    let fixture = setup_git_mcp_fixture();
+    write_repo_file(
+        std::path::Path::new(&fixture.repo_root),
+        "src/service.rs",
+        "pub fn compute() -> i32 { 9 }\n",
+    );
+    let args = serde_json::json!({
+        "change_source": { "kind": "working_tree" },
         "output_format": "json"
     });
 
@@ -1214,17 +1877,17 @@ fn detect_changes_accepts_explicit_mode_field() {
         &fixture.repo_root,
         &fixture.db_path,
     )
-    .expect("detect_changes with explicit mode");
+    .expect("detect_changes with canonical change_source");
 
     assert_eq!(
-        resp.pointer("/structuredContent/change_source/mode")
+        resp.pointer("/structuredContent/change_source/kind")
             .and_then(|value| value.as_str()),
         Some("working_tree")
     );
 }
 
 #[test]
-fn detect_changes_rejects_conflicting_mode_and_fields_with_examples() {
+fn detect_changes_rejects_legacy_mode_and_fields_with_examples() {
     let fixture = setup_git_mcp_fixture();
     let args = serde_json::json!({
         "mode": "base",
@@ -1247,23 +1910,13 @@ fn detect_changes_rejects_conflicting_mode_and_fields_with_examples() {
         resp["structuredContent"]["code"],
         serde_json::json!("invalid_input")
     );
-    assert_eq!(details["requested_mode"], serde_json::json!("base"));
     assert_eq!(
-        details["accepted_modes"],
-        serde_json::json!(["base", "staged", "working_tree"])
-    );
-    assert_eq!(
-        details["accepted_mode_examples"][0],
-        serde_json::json!({"mode": "base", "base": "origin/main"})
+        resp["structuredContent"]["message"],
+        serde_json::json!("legacy change_source fields are no longer supported")
     );
     assert_eq!(
         details["retry_example"],
-        serde_json::json!({"mode": "base", "base": "origin/main"})
-    );
-    assert!(
-        details["mode_contract"]
-            .as_str()
-            .is_some_and(|value| value.contains("Provide exactly one change-source mode"))
+        serde_json::json!({"change_source": {"kind": "base", "base": "origin/main"}})
     );
 }
 
@@ -1288,8 +1941,12 @@ fn get_minimal_context_rejects_conflicting_change_source_modes() {
         serde_json::json!("invalid_input")
     );
     assert_eq!(
-        resp["structuredContent"]["details"]["accepted_modes"],
-        serde_json::json!(["base", "staged", "working_tree"])
+        resp["structuredContent"]["details"]["accepted_argument_families"],
+        serde_json::json!([
+            "change_source.kind=base",
+            "change_source.kind=staged",
+            "change_source.kind=working_tree"
+        ])
     );
 }
 
@@ -1300,7 +1957,7 @@ fn get_minimal_context_rejects_conflicting_change_source_modes() {
 #[test]
 fn get_context_response_includes_detail_controls_metadata() {
     let fixture = setup_mcp_fixture();
-    let args = serde_json::json!({ "query": "compute", "output_format": "json" });
+    let args = serde_json::json!({ "target": { "kind": "query", "query": "compute" }, "output_format": "json" });
     let resp = call("get_context", Some(&args), "/ignored", &fixture.db_path).expect("call");
     let controls = resp
         .get("structuredContent")
@@ -1323,7 +1980,7 @@ fn get_context_response_includes_detail_controls_metadata() {
 #[test]
 fn get_context_default_omits_tests_code_spans_neighbors() {
     let fixture = setup_mcp_fixture();
-    let args = serde_json::json!({ "query": "compute", "output_format": "json" });
+    let args = serde_json::json!({ "target": { "kind": "query", "query": "compute" }, "output_format": "json" });
     let resp = call("get_context", Some(&args), "/ignored", &fixture.db_path).expect("call");
     let controls = &resp["structuredContent"]["detail_controls"];
     let omitted = controls["omitted_sections"].as_array().expect("array");
@@ -1343,7 +2000,7 @@ fn get_context_default_omits_tests_code_spans_neighbors() {
 fn get_context_tests_toggle_enables_test_nodes() {
     let fixture = setup_mcp_fixture();
     let args = serde_json::json!({
-        "query": "compute",
+        "target": { "kind": "query", "query": "compute" },
         "tests": true,
         "output_format": "json"
     });
@@ -1374,7 +2031,7 @@ fn get_context_tests_toggle_enables_test_nodes() {
 fn get_context_tests_false_excludes_test_nodes() {
     let fixture = setup_mcp_fixture();
     let args = serde_json::json!({
-        "query": "compute",
+        "target": { "kind": "query", "query": "compute" },
         "tests": false,
         "output_format": "json"
     });
@@ -1418,16 +2075,22 @@ fn get_context_code_spans_toggle_controls_line_ranges() {
         .replace_file_graph("src/ui.rs", "h1", Some("rust"), Some(20), &[node], &[])
         .expect("replace_file_graph");
 
-    let with_spans =
-        serde_json::json!({ "file": "src/ui.rs", "code_spans": true, "output_format": "json" });
+    let with_spans = serde_json::json!({
+        "target": { "kind": "file", "file": "src/ui.rs" },
+        "code_spans": true,
+        "output_format": "json"
+    });
     let resp_with = call("get_context", Some(&with_spans), "/ignored", &db_path).expect("call");
     assert_eq!(
         resp_with["structuredContent"]["detail_controls"]["code_spans"].as_bool(),
         Some(true)
     );
 
-    let without_spans =
-        serde_json::json!({ "file": "src/ui.rs", "code_spans": false, "output_format": "json" });
+    let without_spans = serde_json::json!({
+        "target": { "kind": "file", "file": "src/ui.rs" },
+        "code_spans": false,
+        "output_format": "json"
+    });
     let resp_without =
         call("get_context", Some(&without_spans), "/ignored", &db_path).expect("call");
     assert_eq!(
@@ -1447,7 +2110,7 @@ fn get_context_code_spans_toggle_controls_line_ranges() {
 #[test]
 fn get_context_imports_false_reflected_in_controls() {
     let fixture = setup_mcp_fixture();
-    let args = serde_json::json!({ "query": "compute", "imports": false, "output_format": "json" });
+    let args = serde_json::json!({ "target": { "kind": "query", "query": "compute" }, "imports": false, "output_format": "json" });
     let resp = call("get_context", Some(&args), "/ignored", &fixture.db_path).expect("call");
     assert_eq!(
         resp["structuredContent"]["detail_controls"]["imports"].as_bool(),
@@ -1458,8 +2121,7 @@ fn get_context_imports_false_reflected_in_controls() {
 #[test]
 fn get_context_neighbors_toggle_reflected_in_controls() {
     let fixture = setup_mcp_fixture();
-    let args =
-        serde_json::json!({ "query": "compute", "neighbors": true, "output_format": "json" });
+    let args = serde_json::json!({ "target": { "kind": "query", "query": "compute" }, "neighbors": true, "output_format": "json" });
     let resp = call("get_context", Some(&args), "/ignored", &fixture.db_path).expect("call");
     assert_eq!(
         resp["structuredContent"]["detail_controls"]["neighbors"].as_bool(),
@@ -1478,7 +2140,7 @@ fn get_context_neighbors_toggle_reflected_in_controls() {
 #[test]
 fn get_context_max_files_reflected_in_controls() {
     let fixture = setup_mcp_fixture();
-    let args = serde_json::json!({ "query": "compute", "max_files": 3, "output_format": "json" });
+    let args = serde_json::json!({ "target": { "kind": "query", "query": "compute" }, "max_files": 3, "output_format": "json" });
     let resp = call("get_context", Some(&args), "/ignored", &fixture.db_path).expect("call");
     assert_eq!(
         resp["structuredContent"]["detail_controls"]["max_files"].as_u64(),
@@ -1491,7 +2153,7 @@ fn get_context_max_files_reflected_in_controls() {
 fn get_context_combined_toggles_applied_correctly() {
     let fixture = setup_mcp_fixture();
     let args = serde_json::json!({
-        "query": "compute",
+        "target": { "kind": "query", "query": "compute" },
         "tests": true,
         "code_spans": true,
         "neighbors": true,
@@ -1517,7 +2179,7 @@ fn get_context_combined_toggles_applied_correctly() {
 #[test]
 fn get_context_semantic_flag_reflected_in_controls() {
     let fixture = setup_mcp_fixture();
-    let args = serde_json::json!({ "query": "compute", "semantic": true, "output_format": "json" });
+    let args = serde_json::json!({ "target": { "kind": "query", "query": "compute" }, "semantic": true, "output_format": "json" });
     let resp = call("get_context", Some(&args), "/ignored", &fixture.db_path).expect("call");
     assert_eq!(
         resp["structuredContent"]["detail_controls"]["semantic"].as_bool(),
@@ -1530,7 +2192,7 @@ fn get_context_semantic_flag_reflected_in_controls() {
 fn get_context_files_with_max_files_cap_respected() {
     let fixture = setup_mcp_fixture();
     let args = serde_json::json!({
-        "files": ["src/service.rs", "src/api.rs"],
+        "target": { "kind": "files", "files": ["src/service.rs", "src/api.rs"] },
         "max_files": 1,
         "output_format": "json"
     });
@@ -1546,8 +2208,11 @@ fn get_context_files_with_max_files_cap_respected() {
 fn get_context_json_and_toon_output_both_include_controls() {
     let fixture = setup_mcp_fixture();
 
-    let json_args =
-        serde_json::json!({ "query": "compute", "tests": true, "output_format": "json" });
+    let json_args = serde_json::json!({
+        "target": { "kind": "query", "query": "compute" },
+        "tests": true,
+        "output_format": "json"
+    });
     let json_resp = call(
         "get_context",
         Some(&json_args),
@@ -1563,7 +2228,10 @@ fn get_context_json_and_toon_output_both_include_controls() {
         "json: controls present"
     );
 
-    let toon_args = serde_json::json!({ "query": "compute", "tests": true });
+    let toon_args = serde_json::json!({
+        "target": { "kind": "query", "query": "compute" },
+        "tests": true
+    });
     let toon_resp = call(
         "get_context",
         Some(&toon_args),
@@ -1593,7 +2261,7 @@ fn get_context_applies_mcp_response_byte_cap() {
 
     let repo_root = fixture._dir.path().to_string_lossy().to_string();
     let args = serde_json::json!({
-        "query": "compute",
+        "target": { "kind": "query", "query": "compute" },
         "tests": true,
         "neighbors": true,
         "output_format": "json"
@@ -1636,7 +2304,7 @@ fn get_context_fails_closed_when_mcp_response_budget_is_impossible() {
 
     let repo_root = fixture._dir.path().to_string_lossy().to_string();
     let args = serde_json::json!({
-        "query": "compute",
+        "target": { "kind": "query", "query": "compute" },
         "output_format": "json"
     });
     let err = call("get_context", Some(&args), &repo_root, &fixture.db_path)

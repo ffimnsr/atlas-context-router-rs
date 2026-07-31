@@ -1,0 +1,90 @@
+{
+  "resolved_tool_name": "build_or_update_graph",
+  "input_contract": {
+    "canonical_form": "prefer canonical discriminated objects or preferred field families for new calls",
+    "families": [
+      {
+        "family_name": "operation",
+        "family_kind": "discriminated_object",
+        "discriminant_field": "operation.kind",
+        "accepted_values": ["build", "update"],
+        "mutually_exclusive_legacy_fields": [],
+        "variants": [
+          {
+            "value": "build",
+            "required_companion_fields": [],
+            "minimal_example": {
+              "operation": { "kind": "build" },
+              "output_format": "json"
+            }
+          },
+          {
+            "value": "update",
+            "required_companion_fields": ["operation.change_source"],
+            "minimal_example": {
+              "operation": {
+                "kind": "update",
+                "change_source": { "kind": "working_tree" }
+              },
+              "output_format": "json"
+            }
+          }
+        ]
+      },
+      {
+        "family_name": "operation.change_source",
+        "family_kind": "discriminated_object",
+        "discriminant_field": "operation.change_source.kind",
+        "accepted_values": ["working_tree", "staged", "base", "files"],
+        "mutually_exclusive_legacy_fields": [],
+        "variants": [
+          {
+            "value": "working_tree",
+            "required_companion_fields": [],
+            "minimal_example": {
+              "operation": {
+                "kind": "update",
+                "change_source": { "kind": "working_tree" }
+              },
+              "output_format": "json"
+            }
+          },
+          {
+            "value": "staged",
+            "required_companion_fields": [],
+            "minimal_example": {
+              "operation": {
+                "kind": "update",
+                "change_source": { "kind": "staged" }
+              },
+              "output_format": "json"
+            }
+          },
+          {
+            "value": "base",
+            "required_companion_fields": ["operation.change_source.base"],
+            "minimal_example": {
+              "operation": {
+                "kind": "update",
+                "change_source": { "kind": "base", "base": "origin/main" }
+              },
+              "output_format": "json"
+            }
+          },
+          {
+            "value": "files",
+            "required_companion_fields": ["operation.change_source.files"],
+            "minimal_example": {
+              "operation": {
+                "kind": "update",
+                "change_source": { "kind": "files", "files": ["src/lib.rs"] }
+              },
+              "output_format": "json"
+            }
+          }
+        ]
+      }
+    ],
+    "notes": []
+  }
+}

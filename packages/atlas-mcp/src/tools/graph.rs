@@ -9,18 +9,35 @@ use std::time::Instant;
 
 use crate::context::{compact_node, package_impact};
 use crate::tool_result::{
-    InputShapeErrorSpec, ToolSuccessEnvelope, input_shape_error_payload,
+    InputShapeErrorSpec, ToolErrorPayload, ToolSuccessEnvelope, input_shape_error_payload,
     normalized_tool_result_value, tool_execution_error_value,
 };
 
 use super::shared::{
     bool_arg, error_code_docs, error_message, error_suggestions, inject_budget_metadata,
-    load_budget_policy, load_embedding_config, open_store, repo_aliases_by_id, resolve_kind_alias,
+    inject_deprecated_input_fields, load_budget_policy, load_embedding_config,
+    mcp_query_looks_like_unstructured_description, mcp_supported_query_grammar_examples,
+    open_store, parse_mcp_query_grammar, repo_aliases_by_id, resolve_kind_alias,
     resolve_repo_scope_selection, str_arg, string_array_arg, tool_result_value, u64_arg,
 };
 
 fn ranking_evidence_legend_json() -> serde_json::Value {
     atlas_core::ranking_evidence_legend()
+}
+
+fn context_intent_str(intent: atlas_core::model::ContextIntent) -> &'static str {
+    match intent {
+        atlas_core::model::ContextIntent::Symbol => "symbol",
+        atlas_core::model::ContextIntent::File => "file",
+        atlas_core::model::ContextIntent::Review => "review",
+        atlas_core::model::ContextIntent::Impact => "impact",
+        atlas_core::model::ContextIntent::ImpactAnalysis => "impact_analysis",
+        atlas_core::model::ContextIntent::UsageLookup => "usage_lookup",
+        atlas_core::model::ContextIntent::RefactorSafety => "refactor_safety",
+        atlas_core::model::ContextIntent::DeadCodeCheck => "dead_code_check",
+        atlas_core::model::ContextIntent::RenamePreview => "rename_preview",
+        atlas_core::model::ContextIntent::DependencyRemoval => "dependency_removal",
+    }
 }
 
 fn node_repo_id(node: &atlas_core::Node) -> Option<&str> {
@@ -52,13 +69,38 @@ fn normalized_optional_query_regex(raw: Option<&str>) -> Option<String> {
     })
 }
 
+fn query_graph_empty_semantic_hint(semantic: bool, items_empty: bool) -> Option<String> {
+    if !semantic || !items_empty {
+        return None;
+    }
+    Some(
+        "FTS found no symbol names matching the query text. \
+         FTS searches indexed identifiers, not natural language phrases. \
+         Try: (1) a short exact symbol name like 'BalancesTab'; \
+         (2) the regex param for pattern matching (e.g. regex='Balance'); \
+         (3) get_context with a file path; \
+         (4) list_graph_stats to confirm the graph has been built."
+            .to_owned(),
+    )
+}
+
+fn parsed_query_intent_json(parsed_query: &crate::tools::shared::McpQueryGrammar) -> Value {
+    serde_json::json!({
+        "kind": parsed_query.kind,
+        "source_text": parsed_query.source_text,
+        "normalized_text": parsed_query.normalized_text,
+        "intent": context_intent_str(parsed_query.parsed_request.intent),
+        "accepted": parsed_query.accepted,
+    })
+}
+
 fn validate_query_graph_inputs(
     tool_name: &str,
     text: &str,
     regex: &Option<String>,
     had_text_input: bool,
     had_regex_input: bool,
-) -> std::result::Result<(), Box<crate::tool_result::ToolErrorPayload>> {
+) -> std::result::Result<(), Box<ToolErrorPayload>> {
     if text.trim().is_empty() && regex.is_none() {
         let mut normalization_performed = Vec::new();
         if had_text_input && text.trim().is_empty() {
@@ -92,6 +134,36 @@ fn validate_query_graph_inputs(
         )));
     }
 
+    if mcp_query_looks_like_unstructured_description(text) {
+        return Err(Box::new(input_shape_error_payload(
+            tool_name,
+            format!(
+                "{tool_name} text must be exact identifier, qualified name, or supported intent phrase"
+            ),
+            "Natural-language-only descriptions are not accepted here. Use a plain symbol identifier, exact qualified name, or one of the supported intent phrases with a concrete identifier.",
+            InputShapeErrorSpec {
+                offending_fields: vec!["text".to_owned()],
+                normalization_performed: Vec::new(),
+                accepted_argument_families: mcp_supported_query_grammar_examples()
+                    .iter()
+                    .map(|example| example.to_string())
+                    .collect(),
+                retry_example: Some(serde_json::json!({ "text": "who calls handle_request" })),
+                fail_closed_reason: Some(
+                    "Atlas refused to guess a concrete symbol from a natural-language-only description"
+                        .to_owned(),
+                ),
+                retry_guidance: Some(
+                    "Retry with exact identifier, exact qualified name, or supported intent phrase containing a concrete identifier."
+                        .to_owned(),
+                ),
+                extra_details: Some(serde_json::json!({
+                    "supported_query_grammar": mcp_supported_query_grammar_examples(),
+                })),
+            },
+        )));
+    }
+
     if let Some(pat) = regex {
         regex::Regex::new(pat)
             .map_err(|e| Box::new(input_shape_error_payload(
@@ -116,6 +188,88 @@ fn validate_query_graph_inputs(
     Ok(())
 }
 
+#[derive(Debug)]
+struct ParsedBatchQueryItems {
+    items: Vec<Value>,
+    deprecated_input_fields: Vec<String>,
+}
+
+fn batch_query_graph_input_error(
+    message: impl Into<String>,
+    detail: impl Into<String>,
+    offending_fields: Vec<&str>,
+    retry_example: Value,
+) -> Box<ToolErrorPayload> {
+    Box::new(input_shape_error_payload(
+        "batch_query_graph",
+        message,
+        detail,
+        InputShapeErrorSpec {
+            offending_fields: offending_fields.into_iter().map(str::to_owned).collect(),
+            normalization_performed: Vec::new(),
+            accepted_argument_families: vec!["items".to_owned()],
+            retry_example: Some(retry_example),
+            fail_closed_reason: Some(
+                "Atlas refused to guess between conflicting batch_query_graph input families"
+                    .to_owned(),
+            ),
+            retry_guidance: Some(
+                "Send items=[...] with 1-20 query_graph-shaped objects, then retry.".to_owned(),
+            ),
+            extra_details: None,
+        },
+    ))
+}
+
+fn parse_batch_query_items(
+    args: Option<&Value>,
+) -> std::result::Result<ParsedBatchQueryItems, Box<ToolErrorPayload>> {
+    const MAX_QUERIES: usize = 20;
+
+    if args.is_some_and(|value| value.get("queries").is_some() || value.get("text").is_some()) {
+        return Err(batch_query_graph_input_error(
+            "legacy batch_query_graph fields are no longer supported",
+            "Use top-level items=[...] and remove legacy queries/text fields.",
+            vec!["queries", "text"],
+            serde_json::json!({ "items": [{ "text": "compute" }] }),
+        ));
+    }
+
+    let items = args
+        .and_then(|a| a.get("items"))
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            batch_query_graph_input_error(
+                "items is required",
+                "Provide items=[...] with 1-20 query_graph-shaped objects.",
+                vec!["items"],
+                serde_json::json!({ "items": [{ "text": "compute" }] }),
+            )
+        })?;
+    if items.is_empty() {
+        return Err(batch_query_graph_input_error(
+            "batch_query_graph items must be non-empty",
+            "Provide at least one query object in items.",
+            vec!["items"],
+            serde_json::json!({ "items": [{ "text": "compute" }] }),
+        ));
+    }
+    if items.len() > MAX_QUERIES {
+        return Err(batch_query_graph_input_error(
+            format!("batch_query_graph exceeds maximum of {MAX_QUERIES} items"),
+            format!(
+                "Provide at most {MAX_QUERIES} query objects in items, or split the request into smaller batches."
+            ),
+            vec!["items"],
+            serde_json::json!({ "items": [{ "text": "compute" }] }),
+        ));
+    }
+    Ok(ParsedBatchQueryItems {
+        items: items.to_vec(),
+        deprecated_input_fields: Vec::new(),
+    })
+}
+
 pub(super) fn tool_list_graph_stats(
     db_path: &str,
     output_format: crate::output::OutputFormat,
@@ -133,7 +287,7 @@ pub(super) fn tool_query_graph(
 ) -> Result<serde_json::Value> {
     let raw_text = str_arg(args, "text")?;
     let had_text_input = raw_text.is_some();
-    let text = raw_text.map(str::to_owned).unwrap_or_default();
+    let source_text = raw_text.map(str::to_owned).unwrap_or_default();
     let kind = str_arg(args, "kind")?.map(str::to_owned);
     let language = str_arg(args, "language")?.map(str::to_owned);
     let requested_limit = u64_arg(args, "limit").unwrap_or(20) as usize;
@@ -147,17 +301,23 @@ pub(super) fn tool_query_graph(
     let fuzzy = bool_arg(args, "fuzzy").unwrap_or(false);
     let hybrid = bool_arg(args, "hybrid").unwrap_or(false);
     let include_files = bool_arg(args, "include_files").unwrap_or(false);
-    let repo_scope = resolve_repo_scope_selection(args, repo_root)?;
+    let repo_scope = match resolve_repo_scope_selection("query_graph", args, repo_root) {
+        Ok(scope) => scope,
+        Err(payload) => return tool_execution_error_value(output_format, &payload),
+    };
 
     if let Err(payload) = validate_query_graph_inputs(
         "query_graph",
-        &text,
+        &source_text,
         &regex,
         had_text_input,
         had_regex_input,
     ) {
         return tool_execution_error_value(output_format, &payload);
     }
+
+    let parsed_query = parse_mcp_query_grammar(&source_text);
+    let text = parsed_query.normalized_text.clone();
 
     let store = open_store(db_path)?;
     let embed_cfg = load_embedding_config(repo_root)?;
@@ -181,6 +341,7 @@ pub(super) fn tool_query_graph(
         fuzzy_match: fuzzy,
         hybrid,
         repo_ids: repo_scope
+            .selection
             .as_ref()
             .map(|scope| scope.repo_ids.clone())
             .unwrap_or_default(),
@@ -228,31 +389,69 @@ pub(super) fn tool_query_graph(
         })
         .collect();
 
-    let mut response = tool_result_value(&compact, output_format)?;
+    let warnings = query_graph_empty_semantic_hint(semantic, compact.is_empty())
+        .into_iter()
+        .collect::<Vec<_>>();
+    let truncated = compact.len() == limit;
+    let query_intent = parsed_query_intent_json(&parsed_query);
+
+    let mut response = normalized_tool_result_value(
+        &serde_json::json!({
+            "tool": "query_graph",
+            "query": {
+                "text": source_text,
+                "normalized_text": query.text,
+                "regex": query.regex_pattern,
+                "kind": query.kind,
+                "language": query.language,
+                "requested_limit": requested_limit,
+                "applied_limit": limit,
+                "semantic": semantic,
+                "expand": query.graph_expand,
+                "expand_hops": query.graph_max_hops,
+                "subpath": query.subpath,
+                "fuzzy": query.fuzzy_match,
+                "hybrid": query.hybrid,
+                "include_files": query.include_files,
+                "repo_scope": {
+                    "selection": repo_scope.selection.as_ref().map(|selection| serde_json::json!({
+                        "kind": if selection.repo_ids.len() > 1 { "all" } else { "repo_id" },
+                        "repo_ids": selection.repo_ids,
+                        "repo_count": selection.repo_ids.len(),
+                    })),
+                    "deprecated_input_fields": repo_scope.deprecated_input_fields.clone(),
+                },
+                "query_intent": query_intent,
+                "active_query_mode": explanation.active_query_mode,
+            },
+            "matches": compact,
+            "summary": {
+                "match_count": results.len(),
+                "returned_count": results.len(),
+                "usage_edges_included": false,
+                "relationship_tools": ["symbol_neighbors", "traverse_graph", "get_context"],
+                "ranking_evidence_legend": ranking_evidence_legend_json(),
+            },
+            "truncated": truncated,
+            "warnings": warnings,
+        }),
+        output_format,
+    )?;
     response["atlas_usage_edges_included"] = serde_json::Value::Bool(false);
     response["atlas_relationship_tools"] =
         serde_json::json!(["symbol_neighbors", "traverse_graph", "get_context"]);
-    response["atlas_truncated"] = serde_json::json!(compact.len() == limit);
+    response["atlas_truncated"] = serde_json::json!(truncated);
     response["atlas_query_mode"] = serde_json::Value::String(explanation.active_query_mode);
     response["atlas_ranking_evidence_legend"] = ranking_evidence_legend_json();
-    if compact.is_empty() && semantic {
-        response["hint"] = serde_json::Value::String(
-            "FTS found no symbol names matching the query text. \
-             FTS searches indexed identifiers, not natural language phrases. \
-             Try: (1) a short exact symbol name like 'BalancesTab'; \
-             (2) the regex param for pattern matching (e.g. regex='Balance'); \
-             (3) get_context with a file path; \
-             (4) list_graph_stats to confirm the graph has been built."
-                .to_owned(),
-        );
-    }
     response["atlas_query_elapsed_ms"] = serde_json::json!(elapsed_ms);
+    response["atlas_query_intent"] = query_intent;
     let budget = budgets.summary(
         "query_candidates_and_seeds.max_candidates",
         limit,
-        compact.len(),
+        results.len(),
     );
     inject_budget_metadata(&mut response, &budget);
+    inject_deprecated_input_fields(&mut response, &repo_scope.deprecated_input_fields);
     Ok(response)
 }
 
@@ -262,56 +461,18 @@ pub(super) fn tool_batch_query_graph(
     db_path: &str,
     output_format: crate::output::OutputFormat,
 ) -> Result<serde_json::Value> {
-    const MAX_QUERIES: usize = 20;
-
-    let repo_scope = resolve_repo_scope_selection(args, repo_root)?;
-    let text_phrase = str_arg(args, "text")?.filter(|s| !s.trim().is_empty());
-    let synthesized: Vec<serde_json::Value>;
-    let queries_val: &[serde_json::Value] = if let Some(phrase) = text_phrase {
-        synthesized = phrase
-            .split(|c: char| c.is_whitespace() || c == ',')
-            .filter(|tok| !tok.is_empty())
-            .map(|tok| serde_json::json!({ "text": tok }))
-            .collect();
-        &synthesized
-    } else {
-        let arr = args
-            .and_then(|a| a.get("queries"))
-            .and_then(|v| v.as_array())
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "batch_query_graph requires either a 'text' string \
-                     (space-separated tokens) or a non-empty 'queries' array"
-                )
-            })?;
-        arr.as_slice()
+    let repo_scope = match resolve_repo_scope_selection("batch_query_graph", args, repo_root) {
+        Ok(scope) => scope,
+        Err(payload) => return tool_execution_error_value(output_format, &payload),
     };
-
-    if queries_val.is_empty() {
-        anyhow::bail!(
-            "batch_query_graph requires either a 'text' string \
-             (space-separated tokens) or a non-empty 'queries' array"
-        );
-    }
-    if queries_val.len() > MAX_QUERIES {
-        anyhow::bail!(
-            "batch_query_graph exceeds the maximum of {MAX_QUERIES} queries per call; \
-             split into smaller batches"
-        );
-    }
+    let parsed_items = match parse_batch_query_items(args) {
+        Ok(parsed) => parsed,
+        Err(payload) => return tool_execution_error_value(output_format, &payload),
+    };
 
     let store = open_store(db_path)?;
     let embed_cfg = load_embedding_config(repo_root)?;
     let policy = load_budget_policy(repo_root)?;
-
-    #[derive(Serialize)]
-    struct BatchItem {
-        query_index: usize,
-        text: String,
-        items: Vec<BatchResultNode>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        hint: Option<String>,
-    }
 
     #[derive(Serialize)]
     struct BatchResultNode {
@@ -327,15 +488,16 @@ pub(super) fn tool_batch_query_graph(
         language: String,
     }
 
-    let mut batch_results: Vec<BatchItem> = Vec::with_capacity(queries_val.len());
-    let mut batch_budget_reports = Vec::with_capacity(queries_val.len());
+    let mut normalized_items: Vec<Value> = Vec::with_capacity(parsed_items.items.len());
+    let mut batch_results: Vec<Value> = Vec::with_capacity(parsed_items.items.len());
+    let mut batch_budget_reports = Vec::with_capacity(parsed_items.items.len());
     let repo_aliases = repo_aliases_by_id(repo_root);
 
-    for (idx, q) in queries_val.iter().enumerate() {
+    for (idx, q) in parsed_items.items.iter().enumerate() {
         let q_args = Some(q);
         let raw_text = str_arg(q_args, "text")?;
         let had_text_input = raw_text.is_some();
-        let text = raw_text.map(str::to_owned).unwrap_or_default();
+        let source_text = raw_text.map(str::to_owned).unwrap_or_default();
         let kind = str_arg(q_args, "kind")?.map(str::to_owned);
         let language = str_arg(q_args, "language")?.map(str::to_owned);
         let requested_limit = u64_arg(q_args, "limit").unwrap_or(20) as usize;
@@ -360,12 +522,14 @@ pub(super) fn tool_batch_query_graph(
 
         validate_query_graph_inputs(
             &format!("query at index {idx}"),
-            &text,
+            &source_text,
             &regex,
             had_text_input,
             had_regex_input,
         )
         .map_err(|payload| anyhow::anyhow!(payload.message.clone()))?;
+        let parsed_query = parse_mcp_query_grammar(&source_text);
+        let text = parsed_query.normalized_text.clone();
 
         let query = SearchQuery {
             text: text.clone(),
@@ -380,6 +544,7 @@ pub(super) fn tool_batch_query_graph(
             fuzzy_match: fuzzy,
             hybrid,
             repo_ids: repo_scope
+                .selection
                 .as_ref()
                 .map(|scope| scope.repo_ids.clone())
                 .unwrap_or_default(),
@@ -418,42 +583,57 @@ pub(super) fn tool_batch_query_graph(
             })
             .collect();
 
-        let hint = if items.is_empty() && semantic {
-            Some(
-                "FTS found no symbol names matching the query text. \
-                 FTS searches indexed identifiers, not natural language phrases. \
-                 Try: (1) a short exact symbol name like 'BalancesTab'; \
-                 (2) the regex param for pattern matching (e.g. regex='Balance'); \
-                 (3) get_context with a file path; \
-                 (4) list_graph_stats to confirm the graph has been built."
-                    .to_owned(),
-            )
-        } else {
-            None
-        };
+        let warnings = query_graph_empty_semantic_hint(semantic, items.is_empty())
+            .into_iter()
+            .collect::<Vec<_>>();
+        let query_intent = parsed_query_intent_json(&parsed_query);
+        let truncated = items.len() == limit;
 
-        batch_results.push(BatchItem {
-            query_index: idx,
-            text,
-            items,
-            hint,
-        });
-        batch_budget_reports.push(
-            budgets.summary(
-                budget_name,
-                limit,
-                batch_results
-                    .last()
-                    .map(|item| item.items.len())
-                    .unwrap_or(0),
-            ),
-        );
+        normalized_items.push(serde_json::json!({
+            "query_index": idx,
+            "text": source_text,
+            "normalized_text": text,
+            "regex": query.regex_pattern,
+            "kind": query.kind,
+            "language": query.language,
+            "requested_limit": requested_limit,
+            "applied_limit": limit,
+            "semantic": semantic,
+            "expand": query.graph_expand,
+            "expand_hops": query.graph_max_hops,
+            "subpath": query.subpath,
+            "fuzzy": query.fuzzy_match,
+            "hybrid": query.hybrid,
+            "include_files": query.include_files,
+            "query_intent": query_intent,
+        }));
+        batch_results.push(serde_json::json!({
+            "query_index": idx,
+            "matches": items,
+            "summary": {
+                "match_count": results.len(),
+                "returned_count": results.len(),
+            },
+            "truncated": truncated,
+            "warnings": warnings,
+        }));
+        batch_budget_reports.push(budgets.summary(budget_name, limit, results.len()));
     }
 
-    let mut response = tool_result_value(&batch_results, output_format)?;
-    response["atlas_query_count"] =
-        serde_json::Value::Number(serde_json::Number::from(batch_results.len()));
-    response["atlas_ranking_evidence_legend"] = ranking_evidence_legend_json();
+    let ranking_evidence_legend = ranking_evidence_legend_json();
+    let mut response = normalized_tool_result_value(
+        &serde_json::json!({
+            "tool": "batch_query_graph",
+            "items": normalized_items,
+            "results": batch_results,
+            "summary": {
+                "query_count": parsed_items.items.len(),
+                "ranking_evidence_legend": ranking_evidence_legend,
+            },
+            "warnings": [],
+        }),
+        output_format,
+    )?;
     let worst_budget = batch_budget_reports
         .into_iter()
         .max_by(|left, right| {
@@ -478,7 +658,13 @@ pub(super) fn tool_batch_query_graph(
                 0,
             )
         });
+    response["atlas_query_count"] =
+        serde_json::Value::Number(serde_json::Number::from(parsed_items.items.len()));
+    response["atlas_ranking_evidence_legend"] = ranking_evidence_legend_json();
     inject_budget_metadata(&mut response, &worst_budget);
+    let mut deprecated_input_fields = parsed_items.deprecated_input_fields;
+    deprecated_input_fields.extend(repo_scope.deprecated_input_fields);
+    inject_deprecated_input_fields(&mut response, &deprecated_input_fields);
     Ok(response)
 }
 
@@ -879,12 +1065,15 @@ pub(super) fn tool_explain_query(
     db_path: &str,
     output_format: crate::output::OutputFormat,
 ) -> Result<serde_json::Value> {
-    let repo_scope = resolve_repo_scope_selection(args, repo_root)?;
+    let repo_scope = match resolve_repo_scope_selection("explain_query", args, repo_root) {
+        Ok(scope) => scope,
+        Err(payload) => return tool_execution_error_value(output_format, &payload),
+    };
     let policy = load_budget_policy(repo_root)?;
     let mut budgets = BudgetManager::new();
     let raw_text = str_arg(args, "text")?;
     let had_text_input = raw_text.is_some();
-    let text = raw_text.map(str::to_owned).unwrap_or_default();
+    let source_text = raw_text.map(str::to_owned).unwrap_or_default();
     let kind = str_arg(args, "kind")?.map(str::to_owned);
     let language = str_arg(args, "language")?.map(str::to_owned);
     let requested_limit = u64_arg(args, "limit").unwrap_or(20) as usize;
@@ -904,13 +1093,16 @@ pub(super) fn tool_explain_query(
 
     if let Err(payload) = validate_query_graph_inputs(
         "explain_query",
-        &text,
+        &source_text,
         &regex,
         had_text_input,
         had_regex_input,
     ) {
         return tool_execution_error_value(output_format, &payload);
     }
+
+    let parsed_query = parse_mcp_query_grammar(&source_text);
+    let text = parsed_query.normalized_text.clone();
 
     let db_exists = std::path::Path::new(db_path).exists();
     let embed_cfg = load_embedding_config(repo_root)?;
@@ -925,6 +1117,7 @@ pub(super) fn tool_explain_query(
         fuzzy_match: fuzzy,
         hybrid,
         repo_ids: repo_scope
+            .selection
             .as_ref()
             .map(|scope| scope.repo_ids.clone())
             .unwrap_or_default(),
@@ -993,6 +1186,7 @@ pub(super) fn tool_explain_query(
             requested_limit.max(limit),
         ),
     );
+    inject_deprecated_input_fields(&mut response, &repo_scope.deprecated_input_fields);
     Ok(response)
 }
 
@@ -1003,7 +1197,10 @@ pub(super) fn tool_resolve_symbol(
     output_format: crate::output::OutputFormat,
 ) -> Result<serde_json::Value> {
     const DEFAULT_LIMIT: usize = 10;
-    let repo_scope = resolve_repo_scope_selection(args, repo_root)?;
+    let repo_scope = match resolve_repo_scope_selection("resolve_symbol", args, repo_root) {
+        Ok(scope) => scope,
+        Err(payload) => return tool_execution_error_value(output_format, &payload),
+    };
     let repo_aliases = repo_aliases_by_id(repo_root);
     let policy = load_budget_policy(repo_root)?;
     let mut budgets = BudgetManager::new();
@@ -1033,7 +1230,7 @@ pub(super) fn tool_resolve_symbol(
         };
         match resolve_target(&store, &target).context("resolve_symbol qname lookup failed")? {
             ResolvedTarget::Node(node) => {
-                if let Some(scope) = repo_scope.as_ref()
+                if let Some(scope) = repo_scope.selection.as_ref()
                     && node_repo_id(&node).is_some_and(|repo_id| {
                         !scope.repo_ids.iter().any(|candidate| candidate == repo_id)
                     })
@@ -1114,6 +1311,7 @@ pub(super) fn tool_resolve_symbol(
                         requested_limit.max(1),
                     ),
                 );
+                inject_deprecated_input_fields(&mut response, &repo_scope.deprecated_input_fields);
                 return Ok(response);
             }
             ResolvedTarget::Ambiguous(meta) => {
@@ -1166,6 +1364,7 @@ pub(super) fn tool_resolve_symbol(
                         requested_limit.max(meta.candidates.len()),
                     ),
                 );
+                inject_deprecated_input_fields(&mut response, &repo_scope.deprecated_input_fields);
                 return Ok(response);
             }
             ResolvedTarget::NotFound { suggestions } => {
@@ -1203,6 +1402,7 @@ pub(super) fn tool_resolve_symbol(
         language: language.clone(),
         limit: fetch_limit,
         repo_ids: repo_scope
+            .selection
             .as_ref()
             .map(|scope| scope.repo_ids.clone())
             .unwrap_or_default(),
@@ -1325,8 +1525,9 @@ pub(super) fn tool_resolve_symbol(
         &budgets.summary(
             "query_candidates_and_seeds.max_candidates",
             limit,
-            requested_limit.max(total_before_limit),
+            requested_limit.max(matches.len()),
         ),
     );
+    inject_deprecated_input_fields(&mut response, &repo_scope.deprecated_input_fields);
     Ok(response)
 }

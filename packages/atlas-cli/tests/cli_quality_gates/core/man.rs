@@ -11,10 +11,10 @@ fn man_text_output_matches_golden() {
     assert_contains_all(
         &text,
         &[
-            "resolve_symbol — Resolve a symbol name to its exact qualified_name in the graph.",
-            "request_shape: request object: object with 8 top-level fields (1 required)",
-            "- all_repos: boolean (optional)",
-            "- repo_id: string (optional)",
+            "resolve_symbol — Resolve a symbol name or exact qualified_name to its canonical graph symbol.",
+            "request_shape: request object: object with 7 top-level fields (1 required)",
+            "input_contract:",
+            "repo_scope.kind",
             "mcp_manual_tool_call",
         ],
     );
@@ -32,9 +32,9 @@ fn man_json_output_matches_golden() {
         &text,
         &[
             "\"requested_tool_name\": \"resolve_symbol\"",
-            "\"request_shape\": \"request object: object with 8 top-level fields (1 required)\"",
-            "\"name\": \"all_repos\"",
-            "\"name\": \"repo_id\"",
+            "\"request_shape\": \"request object: object with 7 top-level fields (1 required)\"",
+            "\"input_contract\"",
+            "\"discriminant_field\": \"repo_scope.kind\"",
             "\"mcp_manual_tool_call\"",
         ],
     );

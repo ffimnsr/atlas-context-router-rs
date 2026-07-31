@@ -197,8 +197,13 @@ fn serve_command_handles_stdio_jsonrpc_flow_end_to_end() {
     if query_format == "json" {
         let query_value: Value =
             serde_json::from_str(query_text).expect("query_graph payload json");
+        let first_match = query_value
+            .get("matches")
+            .and_then(Value::as_array)
+            .and_then(|matches| matches.first())
+            .unwrap_or(&query_value[0]);
         assert_eq!(
-            query_value[0]["qn"],
+            first_match["qn"],
             json!("src/lib.rs::method::Greeter::greet_twice")
         );
     } else {
@@ -287,8 +292,13 @@ fn serve_direct_stdio_uses_launch_cwd_repo_without_roots_flow() {
         .as_str()
         .expect("query_graph text content");
     let query_value: Value = serde_json::from_str(query_text).expect("query_graph payload json");
+    let first_match = query_value
+        .get("matches")
+        .and_then(Value::as_array)
+        .and_then(|matches| matches.first())
+        .unwrap_or(&query_value[0]);
     assert_eq!(
-        query_value[0]["qn"],
+        first_match["qn"],
         json!("src/lib.rs::method::Greeter::greet_twice")
     );
 

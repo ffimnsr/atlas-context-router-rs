@@ -1,0 +1,75 @@
+{
+  "resolved_tool_name": "detect_changes",
+  "input_contract": {
+    "canonical_form": "prefer canonical discriminated objects or preferred field families for new calls",
+    "families": [
+      {
+        "family_name": "change_source",
+        "family_kind": "discriminated_object",
+        "discriminant_field": "change_source.kind",
+        "accepted_values": ["base", "staged", "working_tree"],
+        "mutually_exclusive_legacy_fields": [],
+        "variants": [
+          {
+            "value": "base",
+            "required_companion_fields": ["change_source.base"],
+            "minimal_example": {
+              "change_source": { "kind": "base", "base": "origin/main" },
+              "output_format": "json"
+            }
+          },
+          {
+            "value": "staged",
+            "required_companion_fields": [],
+            "minimal_example": {
+              "change_source": { "kind": "staged" },
+              "output_format": "json"
+            }
+          },
+          {
+            "value": "working_tree",
+            "required_companion_fields": [],
+            "minimal_example": {
+              "change_source": { "kind": "working_tree" },
+              "output_format": "json"
+            }
+          }
+        ]
+      },
+      {
+        "family_name": "repo_scope",
+        "family_kind": "discriminated_object",
+        "discriminant_field": "repo_scope.kind",
+        "accepted_values": ["current", "repo_id", "all"],
+        "mutually_exclusive_legacy_fields": [],
+        "variants": [
+          {
+            "value": "current",
+            "required_companion_fields": [],
+            "minimal_example": {
+              "repo_scope": { "kind": "current" },
+              "output_format": "json"
+            }
+          },
+          {
+            "value": "repo_id",
+            "required_companion_fields": ["repo_scope.repo_id"],
+            "minimal_example": {
+              "repo_scope": { "kind": "repo_id", "repo_id": "primary" },
+              "output_format": "json"
+            }
+          },
+          {
+            "value": "all",
+            "required_companion_fields": [],
+            "minimal_example": {
+              "repo_scope": { "kind": "all" },
+              "output_format": "json"
+            }
+          }
+        ]
+      }
+    ],
+    "notes": []
+  }
+}

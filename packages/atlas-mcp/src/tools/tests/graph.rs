@@ -7,17 +7,16 @@ fn query_graph_regex_param_filters_results() {
     let args = serde_json::json!({ "regex": "compute", "output_format": "json" });
     let response = call("query_graph", Some(&args), "/ignored", &fixture.db_path)
         .expect("query_graph regex call");
-    let text = unwrap_tool_text(response);
-    let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
-    if let Some(arr) = v.as_array() {
-        for item in arr {
-            let qn = item["qn"].as_str().unwrap_or("");
-            let name = item["name"].as_str().unwrap_or("");
-            assert!(
-                qn.contains("compute") || name.contains("compute"),
-                "regex filter should only return matching symbols, got qn={qn} name={name}"
-            );
-        }
+    let arr = response["structuredContent"]["matches"]
+        .as_array()
+        .expect("matches array");
+    for item in arr {
+        let qn = item["qn"].as_str().unwrap_or("");
+        let name = item["name"].as_str().unwrap_or("");
+        assert!(
+            qn.contains("compute") || name.contains("compute"),
+            "regex filter should only return matching symbols, got qn={qn} name={name}"
+        );
     }
 }
 
@@ -47,9 +46,9 @@ fn query_graph_empty_regex_is_treated_as_missing_when_text_present() {
 
     let response = call("query_graph", Some(&args), "/ignored", &fixture.db_path)
         .expect("empty regex with text should still search by text");
-    let text = unwrap_tool_text(response);
-    let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
-    let items = v.as_array().expect("result array");
+    let items = response["structuredContent"]["matches"]
+        .as_array()
+        .expect("matches array");
     assert!(!items.is_empty(), "expected text search results");
 }
 
@@ -179,9 +178,9 @@ fn query_graph_fuzzy_typo_prefers_symbol_over_markdown_file() {
     });
     let response =
         call("query_graph", Some(&args), "/ignored", &db_path).expect("query_graph call");
-    let text = unwrap_tool_text(response);
-    let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
-    let items = v.as_array().expect("result array");
+    let items = response["structuredContent"]["matches"]
+        .as_array()
+        .expect("matches array");
 
     assert!(!items.is_empty(), "expected fuzzy results");
     assert_eq!(items[0]["kind"].as_str(), Some("function"));
@@ -234,10 +233,8 @@ fn query_graph_include_files_opt_in_controls_file_results() {
     let no_files = serde_json::json!({ "text": "Architecture Notes", "output_format": "json" });
     let resp =
         call("query_graph", Some(&no_files), "/ignored", &db_path).expect("query_graph no files");
-    let text = unwrap_tool_text(resp);
-    let no_files_value: serde_json::Value = serde_json::from_str(&text).expect("parse json");
     assert!(
-        no_files_value
+        resp["structuredContent"]["matches"]
             .as_array()
             .is_some_and(|items| items.is_empty())
     );
@@ -249,10 +246,128 @@ fn query_graph_include_files_opt_in_controls_file_results() {
     });
     let resp = call("query_graph", Some(&with_files), "/ignored", &db_path)
         .expect("query_graph with files");
-    let text = unwrap_tool_text(resp);
-    let with_files_value: serde_json::Value = serde_json::from_str(&text).expect("parse json");
-    let items = with_files_value.as_array().expect("result array");
+    let items = resp["structuredContent"]["matches"]
+        .as_array()
+        .expect("matches array");
     assert_eq!(items[0]["kind"].as_str(), Some("file"));
+}
+
+#[test]
+fn query_graph_supported_grammar_normalizes_identifier_and_intent_phrases() {
+    let fixture = setup_mcp_fixture();
+
+    let plain = call(
+        "query_graph",
+        Some(&json!({ "text": "compute", "output_format": "json" })),
+        "/ignored",
+        &fixture.db_path,
+    )
+    .expect("plain identifier query_graph");
+    assert_eq!(
+        plain["structuredContent"]["query"]["query_intent"]["kind"],
+        json!("plain_identifier")
+    );
+    assert_eq!(
+        plain["structuredContent"]["query"]["query_intent"]["normalized_text"],
+        json!("compute")
+    );
+
+    let qname = call(
+        "query_graph",
+        Some(&json!({ "text": "src/service.rs::fn::compute", "output_format": "json" })),
+        "/ignored",
+        &fixture.db_path,
+    )
+    .expect("qualified name query_graph");
+    assert_eq!(
+        qname["structuredContent"]["query"]["query_intent"]["kind"],
+        json!("exact_qualified_name")
+    );
+    assert_eq!(
+        qname["structuredContent"]["query"]["query_intent"]["normalized_text"],
+        json!("src/service.rs::fn::compute")
+    );
+
+    let who_calls = call(
+        "query_graph",
+        Some(&json!({ "text": "who calls compute", "output_format": "json" })),
+        "/ignored",
+        &fixture.db_path,
+    )
+    .expect("who calls query_graph");
+    assert_eq!(
+        who_calls["structuredContent"]["query"]["query_intent"]["kind"],
+        json!("who_calls")
+    );
+    assert_eq!(
+        who_calls["structuredContent"]["query"]["query_intent"]["normalized_text"],
+        json!("compute")
+    );
+
+    let what_breaks = call(
+        "query_graph",
+        Some(&json!({ "text": "what breaks if I change compute", "output_format": "json" })),
+        "/ignored",
+        &fixture.db_path,
+    )
+    .expect("what breaks query_graph");
+    assert_eq!(
+        what_breaks["structuredContent"]["query"]["query_intent"]["kind"],
+        json!("what_breaks")
+    );
+    assert_eq!(
+        what_breaks["structuredContent"]["query"]["query_intent"]["normalized_text"],
+        json!("compute")
+    );
+
+    let tests_for = call(
+        "query_graph",
+        Some(&json!({ "text": "tests for compute", "output_format": "json" })),
+        "/ignored",
+        &fixture.db_path,
+    )
+    .expect("tests for query_graph");
+    assert_eq!(
+        tests_for["structuredContent"]["query"]["query_intent"]["kind"],
+        json!("tests_for")
+    );
+    assert_eq!(
+        tests_for["structuredContent"]["query"]["query_intent"]["normalized_text"],
+        json!("compute")
+    );
+}
+
+#[test]
+fn query_graph_rejects_natural_language_only_description_with_retry_guidance() {
+    let fixture = setup_mcp_fixture();
+    let result = call(
+        "query_graph",
+        Some(&json!({
+            "text": "please show me authentication flow",
+            "output_format": "json"
+        })),
+        "/ignored",
+        &fixture.db_path,
+    )
+    .expect("expected invalid_input tool result");
+
+    assert_eq!(result["isError"], json!(true));
+    assert_eq!(
+        result["structuredContent"]["message"],
+        json!(
+            "query_graph text must be exact identifier, qualified name, or supported intent phrase"
+        )
+    );
+    assert_eq!(
+        result["structuredContent"]["details"]["supported_query_grammar"],
+        json!([
+            "compute",
+            "src/service.rs::fn::compute",
+            "who calls compute",
+            "what breaks if I change compute",
+            "tests for compute"
+        ])
+    );
 }
 
 #[test]
@@ -354,7 +469,7 @@ fn query_graph_all_repos_returns_repo_provenance_for_ambiguous_results() {
     ];
     registry.save(root).expect("save registry");
 
-    let args = serde_json::json!({ "text": "compute", "all_repos": true, "output_format": "json" });
+    let args = serde_json::json!({ "text": "compute", "repo_scope": { "kind": "all" }, "output_format": "json" });
     let first = call(
         "query_graph",
         Some(&args),
@@ -369,15 +484,14 @@ fn query_graph_all_repos_returns_repo_provenance_for_ambiguous_results() {
         &fixture.db_path,
     )
     .expect("query_graph call repeat");
-    let first_text = unwrap_tool_text(first);
-    let second_text = unwrap_tool_text(second);
     assert_eq!(
-        first_text, second_text,
+        first["structuredContent"], second["structuredContent"],
         "cross-repo query output must be deterministic"
     );
 
-    let payload: serde_json::Value = serde_json::from_str(&first_text).expect("parse json");
-    let results = payload.as_array().expect("result array");
+    let results = first["structuredContent"]["matches"]
+        .as_array()
+        .expect("matches array");
     assert!(results.len() >= 2);
     assert!(
         results
@@ -399,9 +513,12 @@ fn query_graph_response_carries_relationship_guidance() {
     let response =
         call("query_graph", Some(&args), "/ignored", &fixture.db_path).expect("query_graph call");
 
-    assert_eq!(response["atlas_usage_edges_included"], false);
     assert_eq!(
-        response["atlas_relationship_tools"],
+        response["structuredContent"]["summary"]["usage_edges_included"],
+        false
+    );
+    assert_eq!(
+        response["structuredContent"]["summary"]["relationship_tools"],
         serde_json::json!(["symbol_neighbors", "traverse_graph", "get_context"])
     );
     assert_eq!(response["content"].as_array().map(Vec::len), Some(1));
@@ -410,20 +527,18 @@ fn query_graph_response_carries_relationship_guidance() {
 #[test]
 fn semantic_empty_result_includes_hint() {
     let fixture = setup_mcp_fixture();
-    let args = serde_json::json!({ "text": "balances tab portfolio asset balance usd notional", "semantic": true, "output_format": "json" });
+    let args = serde_json::json!({ "text": "who calls missing_symbol", "semantic": true, "output_format": "json" });
 
     let response = call("query_graph", Some(&args), "/ignored", &fixture.db_path)
         .expect("query_graph semantic call");
 
-    let content = response["content"].as_array().expect("content array");
-    assert_eq!(content.len(), 1);
-    let text = content[0]["text"].as_str().unwrap_or("");
-    assert!(text.contains("[]"), "expected empty results, got: {text}");
-    assert!(
-        response["hint"].as_str().is_some(),
-        "expected hint when semantic returns empty, got none"
-    );
-    let hint = response["hint"].as_str().unwrap();
+    let matches = response["structuredContent"]["matches"]
+        .as_array()
+        .expect("matches array");
+    assert!(matches.is_empty(), "expected empty results");
+    let hint = response["structuredContent"]["warnings"][0]
+        .as_str()
+        .expect("warning hint");
     assert!(
         hint.contains("FTS found no symbol names"),
         "hint should explain FTS limitation: {hint}"
@@ -431,10 +546,10 @@ fn semantic_empty_result_includes_hint() {
 }
 
 #[test]
-fn batch_query_graph_returns_per_query_results() {
+fn batch_query_graph_items_returns_per_query_results() {
     let fixture = setup_mcp_fixture();
     let args = serde_json::json!({
-        "queries": [
+        "items": [
             { "text": "compute", "output_format": "json" },
             { "text": "handle_request", "output_format": "json" }
         ],
@@ -449,24 +564,25 @@ fn batch_query_graph_returns_per_query_results() {
     )
     .expect("batch_query_graph call");
 
-    assert_eq!(response["atlas_query_count"], 2);
+    let body = &response["structuredContent"];
+    assert_eq!(body["summary"]["query_count"], 2);
 
-    let text = response["content"][0]["text"].as_str().unwrap();
-    let items: serde_json::Value = serde_json::from_str(text).expect("parse batch result");
-    let arr = items.as_array().expect("array");
-    assert_eq!(arr.len(), 2);
-    assert_eq!(arr[0]["query_index"], 0);
-    assert_eq!(arr[0]["text"], "compute");
-    let first_items = arr[0]["items"].as_array().expect("items array");
+    let items = body["items"].as_array().expect("items array");
+    let results = body["results"].as_array().expect("results array");
+    assert_eq!(items.len(), 2);
+    assert_eq!(results.len(), 2);
+    assert_eq!(items[0]["query_index"], 0);
+    assert_eq!(items[0]["normalized_text"], "compute");
+    let first_items = results[0]["matches"].as_array().expect("matches array");
     assert!(!first_items.is_empty(), "expected results for 'compute'");
     assert!(
         first_items
             .iter()
             .any(|n| n["qualified_name"] == "src/service.rs::fn::compute")
     );
-    assert_eq!(arr[1]["query_index"], 1);
-    assert_eq!(arr[1]["text"], "handle_request");
-    let second_items = arr[1]["items"].as_array().expect("items array");
+    assert_eq!(items[1]["query_index"], 1);
+    assert_eq!(items[1]["normalized_text"], "handle_request");
+    let second_items = results[1]["matches"].as_array().expect("matches array");
     assert!(
         !second_items.is_empty(),
         "expected results for 'handle_request'"
@@ -514,27 +630,51 @@ fn symbol_neighbors_limit_is_clamped_by_central_budget_policy() {
 }
 
 #[test]
-fn batch_query_graph_empty_queries_returns_error() {
+fn batch_query_graph_accepts_canonical_items_only() {
     let fixture = setup_mcp_fixture();
-    let args = serde_json::json!({ "queries": [] });
+    let args = serde_json::json!({
+        "items": [
+            { "text": "compute" },
+            { "text": "handle_request" }
+        ],
+        "output_format": "json"
+    });
+    let response = call(
+        "batch_query_graph",
+        Some(&args),
+        "/ignored",
+        &fixture.db_path,
+    )
+    .expect("expected batch_query_graph success for canonical items");
+
+    assert!(response["_meta"].get("deprecated_input_fields").is_none());
+}
+
+#[test]
+fn batch_query_graph_empty_items_returns_error() {
+    let fixture = setup_mcp_fixture();
+    let args = serde_json::json!({ "items": [] });
     let result = call(
         "batch_query_graph",
         Some(&args),
         "/ignored",
         &fixture.db_path,
     )
-    .expect("expected tool error for empty queries array");
+    .expect("expected tool error for empty items array");
     assert_eq!(result["isError"], serde_json::json!(true));
     let msg = result["structuredContent"]["message"]
         .as_str()
         .unwrap_or("");
-    assert!(msg.contains("non-empty") || msg.contains("requires"));
+    assert!(msg.contains("non-empty"));
 }
 
 #[test]
-fn batch_query_graph_text_phrase_splits_and_queries_each_token() {
+fn batch_query_graph_rejects_legacy_queries_field() {
     let fixture = setup_mcp_fixture();
-    let args = serde_json::json!({ "text": "compute handle_request", "output_format": "json" });
+    let args = serde_json::json!({
+        "queries": [{ "text": "compute" }, { "text": "handle_request" }],
+        "output_format": "json"
+    });
 
     let response = call(
         "batch_query_graph",
@@ -542,29 +682,86 @@ fn batch_query_graph_text_phrase_splits_and_queries_each_token() {
         "/ignored",
         &fixture.db_path,
     )
-    .expect("batch_query_graph with text phrase");
+    .expect("batch_query_graph legacy queries must return tool error result");
 
-    assert_eq!(response["atlas_query_count"], 2);
+    assert_eq!(response["isError"], serde_json::json!(true));
+    assert_eq!(
+        response["structuredContent"]["message"],
+        serde_json::json!("legacy batch_query_graph fields are no longer supported")
+    );
+}
 
-    let text = response["content"][0]["text"].as_str().unwrap();
-    let arr: serde_json::Value = serde_json::from_str(text).expect("parse batch result");
-    let arr = arr.as_array().expect("array");
-    assert_eq!(arr.len(), 2, "one result per token");
-    assert_eq!(arr[0]["text"], "compute");
-    assert_eq!(arr[1]["text"], "handle_request");
-    assert!(
-        !arr[0]["items"].as_array().unwrap().is_empty(),
-        "compute should have results"
+#[test]
+fn batch_query_graph_rejects_legacy_text_field() {
+    let fixture = setup_mcp_fixture();
+    let args = serde_json::json!({
+        "text": "compute,handle_request",
+        "output_format": "json"
+    });
+
+    let response = call(
+        "batch_query_graph",
+        Some(&args),
+        "/ignored",
+        &fixture.db_path,
+    )
+    .expect("batch_query_graph legacy text must return tool error result");
+    assert_eq!(response["isError"], serde_json::json!(true));
+    assert_eq!(
+        response["structuredContent"]["message"],
+        serde_json::json!("legacy batch_query_graph fields are no longer supported")
+    );
+}
+
+#[test]
+fn batch_query_graph_rejects_legacy_text_plus_queries() {
+    let fixture = setup_mcp_fixture();
+    let args = serde_json::json!({
+        "text": "compute",
+        "queries": [{ "text": "handle_request" }]
+    });
+    let result = call(
+        "batch_query_graph",
+        Some(&args),
+        "/ignored",
+        &fixture.db_path,
+    )
+    .expect("expected tool error for text+queries conflict");
+    assert_eq!(result["isError"], serde_json::json!(true));
+    assert_eq!(
+        result["structuredContent"]["message"],
+        serde_json::json!("legacy batch_query_graph fields are no longer supported")
+    );
+}
+
+#[test]
+fn batch_query_graph_rejects_text_plus_items() {
+    let fixture = setup_mcp_fixture();
+    let args = serde_json::json!({
+        "text": "compute",
+        "items": [{ "text": "handle_request" }]
+    });
+    let result = call(
+        "batch_query_graph",
+        Some(&args),
+        "/ignored",
+        &fixture.db_path,
+    )
+    .expect("expected tool error for text+items conflict");
+    assert_eq!(result["isError"], serde_json::json!(true));
+    assert_eq!(
+        result["structuredContent"]["message"],
+        serde_json::json!("legacy batch_query_graph fields are no longer supported")
     );
 }
 
 #[test]
 fn batch_query_graph_over_limit_returns_error() {
     let fixture = setup_mcp_fixture();
-    let queries: Vec<serde_json::Value> = (0..21)
+    let items: Vec<serde_json::Value> = (0..21)
         .map(|i| serde_json::json!({ "text": format!("sym{i}") }))
         .collect();
-    let args = serde_json::json!({ "queries": queries });
+    let args = serde_json::json!({ "items": items });
     let result = call(
         "batch_query_graph",
         Some(&args),
@@ -586,9 +783,9 @@ fn batch_query_graph_over_limit_returns_error() {
 fn batch_query_graph_partial_empty_result_carries_hint() {
     let fixture = setup_mcp_fixture();
     let args = serde_json::json!({
-        "queries": [
+        "items": [
             { "text": "compute" },
-            { "text": "balances tab portfolio asset usd notional", "semantic": true }
+            { "text": "who calls missing_symbol", "semantic": true }
         ],
         "output_format": "json"
     });
@@ -601,21 +798,25 @@ fn batch_query_graph_partial_empty_result_carries_hint() {
     )
     .expect("batch_query_graph call");
 
-    let text = response["content"][0]["text"].as_str().unwrap();
-    let items: serde_json::Value = serde_json::from_str(text).expect("parse batch result");
-    let arr = items.as_array().expect("array");
-    assert_eq!(arr.len(), 2);
+    let results = response["structuredContent"]["results"]
+        .as_array()
+        .expect("results array");
+    assert_eq!(results.len(), 2);
 
-    let first_items = arr[0]["items"].as_array().expect("items");
+    let first_items = results[0]["matches"].as_array().expect("matches");
     assert!(!first_items.is_empty());
-    assert!(arr[0].get("hint").is_none(), "no hint for successful query");
+    assert_eq!(
+        results[0]["warnings"].as_array().map(Vec::len),
+        Some(0),
+        "no warning for successful query"
+    );
 
-    let second_items = arr[1]["items"].as_array().expect("items");
+    let second_items = results[1]["matches"].as_array().expect("matches");
     assert!(
         second_items.is_empty(),
         "expected empty results for NL phrase"
     );
-    let hint = arr[1]["hint"].as_str().expect("hint present");
+    let hint = results[1]["warnings"][0].as_str().expect("warning present");
     assert!(
         hint.contains("FTS found no symbol names"),
         "hint should explain FTS limit: {hint}"
@@ -1227,9 +1428,10 @@ fn query_graph_truncation_metadata_present() {
     let args = serde_json::json!({ "text": "compute" });
     let resp =
         call("query_graph", Some(&args), "/repo", &fixture.db_path).expect("query_graph call");
-    let text = unwrap_tool_text(resp.clone());
-    let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
-    let result_count = v.as_array().map(Vec::len).expect("result array");
+    let result_count = resp["structuredContent"]["matches"]
+        .as_array()
+        .map(Vec::len)
+        .expect("matches array");
     assert!(resp.get("atlas_truncated").is_some());
     assert!(
         result_count > 0,
@@ -1244,9 +1446,7 @@ fn query_graph_subpath_filters_results() {
         serde_json::json!({ "text": "compute", "subpath": "tests", "output_format": "json" });
     let resp = call("query_graph", Some(&args), "/repo", &fixture.db_path)
         .expect("query_graph subpath call");
-    let text = unwrap_tool_text(resp.clone());
-    let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
-    if let Some(arr) = v.as_array() {
+    if let Some(arr) = resp["structuredContent"]["matches"].as_array() {
         for item in arr {
             let fp = item["file"].as_str().unwrap_or("");
             assert!(
@@ -1263,9 +1463,9 @@ fn query_graph_fuzzy_returns_near_miss() {
     let args = serde_json::json!({ "text": "comput", "fuzzy": true, "output_format": "json" });
     let resp = call("query_graph", Some(&args), "/repo", &fixture.db_path)
         .expect("query_graph fuzzy call");
-    let text = unwrap_tool_text(resp);
-    let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
-    let arr = v.as_array().expect("expected array result");
+    let arr = resp["structuredContent"]["matches"]
+        .as_array()
+        .expect("expected matches array");
     assert!(
         arr.iter()
             .any(|item| item["qn"].as_str().unwrap_or("").contains("compute"))
@@ -1278,9 +1478,9 @@ fn query_graph_hybrid_falls_back_to_fts() {
     let args = serde_json::json!({ "text": "compute", "hybrid": true, "output_format": "json" });
     let resp = call("query_graph", Some(&args), "/repo", &fixture.db_path)
         .expect("query_graph hybrid call");
-    let text = unwrap_tool_text(resp.clone());
-    let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
-    let arr = v.as_array().expect("expected array result");
+    let arr = resp["structuredContent"]["matches"]
+        .as_array()
+        .expect("expected matches array");
     assert!(
         arr.iter()
             .any(|item| item["qn"].as_str().unwrap_or("").contains("compute"))
@@ -1304,9 +1504,7 @@ fn query_graph_json_includes_ranking_evidence_and_legend() {
     let args = serde_json::json!({ "text": "compute", "output_format": "json" });
     let resp =
         call("query_graph", Some(&args), "/repo", &fixture.db_path).expect("query_graph call");
-    let text = unwrap_tool_text(resp.clone());
-    let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
-    let first = v
+    let first = resp["structuredContent"]["matches"]
         .as_array()
         .and_then(|items| items.first())
         .expect("first result");
@@ -1323,14 +1521,14 @@ fn query_graph_json_includes_ranking_evidence_and_legend() {
 fn batch_query_graph_json_includes_ranking_evidence() {
     let fixture = setup_mcp_fixture();
     let args = serde_json::json!({
-        "queries": [{ "text": "compute" }],
+        "items": [{ "text": "compute" }],
         "output_format": "json"
     });
     let resp = call("batch_query_graph", Some(&args), "/repo", &fixture.db_path)
         .expect("batch_query_graph call");
-    let text = unwrap_tool_text(resp.clone());
-    let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
-    let first = &v.as_array().expect("batch results")[0]["items"][0];
+    let first = &resp["structuredContent"]["results"]
+        .as_array()
+        .expect("batch results")[0]["matches"][0];
     assert!(first.get("ranking_evidence").is_some());
     assert!(resp.get("atlas_ranking_evidence_legend").is_some());
 }

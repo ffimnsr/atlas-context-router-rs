@@ -50,18 +50,20 @@ Do not treat `query_graph` as caller/callee search. Fall back to file tools **on
 
 ### Tool discovery
 
+Runtime docs are canonical for exact current arguments, discriminated input objects, legacy-compatibility windows, and output contracts. Do not treat this instruction block as exhaustive inventory.
+
 - `tool_list`: list current visible exported MCP tools at runtime instead of hardcoding long tool tables in agent instructions
 - `tool_search`: search tools by name/title/description with explicit score factors and typo-tolerant fuzzy name matching when exact tool name is unclear
-- `tool_help`: read runtime docs for one exact exported MCP tool name
+- `tool_help`: read runtime docs for one exact exported MCP tool name, including `input_contract` with discriminants, accepted values, companion fields, legacy conflicts, and minimal examples
 - `man`: legacy namespace-aware manual alias; use when caller already speaks `namespace/tool_name`
 
-### Core workflow surfaces
+### Workflow surfaces
 
-- `query_graph`, then `symbol_neighbors`, `traverse_graph`, or `get_context` for symbol lookup and relationships
-- `detect_changes`, `get_review_context`, `get_minimal_context`, `get_impact_radius`, and `explain_change` for change review and blast radius
-- `status`, `doctor`, `db_check`, `debug_graph`, and `list_graph_stats` for repo and graph health
-- `search_files`, `search_content`, `read_file_excerpt`, `get_docs_section`, `read_file_around_match`, `search_templates`, and `search_text_assets` for non-code or known-file companion lookup
-- `get_session_status`, `resume_session`, `search_saved_context`, `search_decisions`, and `save_context_artifact` for continuity
+- symbol lookup/relationships: `query_graph`, `symbol_neighbors`, `traverse_graph`, `get_context`
+- change review/blast radius: `detect_changes`, `get_review_context`, `get_minimal_context`, `get_impact_radius`, `explain_change`
+- repo/graph health: `status`, `doctor`, `db_check`, `debug_graph`, `list_graph_stats`
+- companion file/docs lookup: `search_files`, `search_content`, `read_file_excerpt`, `get_docs_section`, `read_file_around_match`, `search_templates`, `search_text_assets`
+- continuity: `get_session_status`, `resume_session`, `search_saved_context`, `search_decisions`, `save_context_artifact`
 
 ### Workflow
 

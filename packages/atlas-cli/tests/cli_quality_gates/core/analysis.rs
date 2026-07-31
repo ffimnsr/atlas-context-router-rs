@@ -270,9 +270,12 @@ fn query_cli_and_mcp_share_ranked_results() {
     );
 
     let mcp_query = read_json_tool_result(&output, 2);
-    let mcp_qnames: Vec<String> = mcp_query
-        .as_array()
-        .expect("mcp query results array")
+    let mcp_matches = mcp_query
+        .get("matches")
+        .and_then(Value::as_array)
+        .or_else(|| mcp_query.as_array())
+        .expect("mcp query matches array");
+    let mcp_qnames: Vec<String> = mcp_matches
         .iter()
         .filter_map(|result| result["qn"].as_str().map(str::to_owned))
         .collect();
@@ -287,9 +290,8 @@ fn query_cli_and_mcp_share_ranked_results() {
             .is_some()
     );
     assert!(
-        mcp_query
-            .as_array()
-            .and_then(|results| results.first())
+        mcp_matches
+            .first()
             .and_then(|result| result.get("ranking_evidence"))
             .is_some()
     );
@@ -328,7 +330,9 @@ fn mcp_query_and_explain_query_share_match_order() {
     let explain = read_json_tool_result(&output, 3);
 
     let query_qnames: Vec<String> = query
-        .as_array()
+        .get("matches")
+        .and_then(Value::as_array)
+        .or_else(|| query.as_array())
         .expect("query_graph results array")
         .iter()
         .filter_map(|result| result["qn"].as_str().map(str::to_owned))
@@ -371,7 +375,7 @@ fn explain_change_cli_and_mcp_share_summary_builder() {
         format!(
             "{}{}",
             initialized_session_prelude(1),
-            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"explain_change\",\"arguments\":{\"base\":\"HEAD\",\"output_format\":\"json\"}}}\n"
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"explain_change\",\"arguments\":{\"change_source\":{\"kind\":\"base\",\"base\":\"HEAD\"},\"output_format\":\"json\"}}}\n"
         ),
     );
     assert!(
@@ -419,7 +423,7 @@ fn review_context_cli_and_get_context_share_review_seed_results() {
         format!(
             "{}{}",
             initialized_session_prelude(1),
-            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"get_context\",\"arguments\":{\"files\":[\"src/lib.rs\"],\"intent\":\"review\",\"output_format\":\"json\"}}}\n"
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"get_context\",\"arguments\":{\"target\":{\"kind\":\"files\",\"files\":[\"src/lib.rs\"]},\"output_format\":\"json\"}}}\n"
         ),
     );
     assert!(
@@ -542,7 +546,7 @@ fn review_context_and_get_context_share_node_trimming_semantics() {
         format!(
             "{}{}",
             initialized_session_prelude(1),
-            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"get_context\",\"arguments\":{\"files\":[\"src/lib.rs\"],\"intent\":\"review\",\"max_nodes\":1,\"output_format\":\"json\"}}}\n"
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"get_context\",\"arguments\":{\"target\":{\"kind\":\"files\",\"files\":[\"src/lib.rs\"]},\"max_nodes\":1,\"output_format\":\"json\"}}}\n"
         ),
     );
     assert!(

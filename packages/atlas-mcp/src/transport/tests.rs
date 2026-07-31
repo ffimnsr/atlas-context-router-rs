@@ -867,7 +867,10 @@ fn explicit_repo_root_selector_switches_repo_for_tool_call() {
             .expect("query_graph json payload"),
     )
     .expect("parse query_graph payload");
-    assert_eq!(query_value[0]["file"], serde_json::json!("src/beta.rs"));
+    assert_eq!(
+        query_value["matches"][0]["file"],
+        serde_json::json!("src/beta.rs")
+    );
     assert_eq!(
         response["result"]["_meta"]["atlas:repoSelection"]["selectionSource"],
         serde_json::json!("explicit_request")
@@ -903,7 +906,10 @@ fn explicit_repo_root_selector_switches_repo_for_tool_call() {
             .expect("query_graph cached json payload"),
     )
     .expect("parse cached query_graph payload");
-    assert_eq!(cached_value[0]["file"], serde_json::json!("src/beta.rs"));
+    assert_eq!(
+        cached_value["matches"][0]["file"],
+        serde_json::json!("src/beta.rs")
+    );
     assert_eq!(
         cached["result"]["_meta"]["atlas:repoSelection"]["selectionSource"],
         serde_json::json!("cached_active_root")
@@ -991,7 +997,7 @@ fn stdio_transport_handles_initialize_list_and_tool_calls() {
         "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"prompts/list\",\"params\":{}}\n".to_owned(),
         "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"prompts/get\",\"params\":{\"name\":\"inspect_symbol\",\"arguments\":{\"symbol\":\"compute\"}}}\n".to_owned(),
         "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"tools/call\",\"params\":{\"name\":\"query_graph\",\"arguments\":{\"text\":\"compute\"}}}\n".to_owned(),
-        "{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"tools/call\",\"params\":{\"name\":\"get_context\",\"arguments\":{\"query\":\"compute\"}}}\n".to_owned(),
+        "{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"tools/call\",\"params\":{\"name\":\"get_context\",\"arguments\":{\"target\":{\"kind\":\"query\",\"query\":\"compute\"}}}}\n".to_owned(),
     ]
     .concat();
     let reader = BufReader::new(Cursor::new(input.as_bytes()));
@@ -1082,7 +1088,10 @@ fn stdio_transport_handles_initialize_list_and_tool_calls() {
         .expect("query_graph text content");
     let query_value: serde_json::Value =
         serde_json::from_str(query_text).expect("query_graph payload json");
-    assert_eq!(query_value[0]["qn"], "src/service.rs::fn::compute");
+    assert_eq!(
+        query_value["matches"][0]["qn"],
+        "src/service.rs::fn::compute"
+    );
 
     assert_eq!(
         by_id[&serde_json::json!(6)]["result"]["_meta"]["atlas:outputFormat"],

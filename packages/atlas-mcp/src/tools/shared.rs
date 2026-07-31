@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use atlas_contentstore::{ContentStore, IndexState};
 use atlas_core::model::ContextIntent;
-use atlas_core::model::{ChangeType, ChangedFile};
+use atlas_core::model::{ChangeType, ChangedFile, ContextRequest, ContextTarget};
 use atlas_core::{
     BudgetPolicy, BudgetReport, GraphHealthInput, GraphReadiness, GraphReadinessInput,
     error_code_docs_ref, graph_health_error_message, graph_health_error_suggestions,
@@ -9,16 +9,20 @@ use atlas_core::{
 };
 use atlas_parser::ParserRegistry;
 use atlas_repo::{
-    DiffTarget, RepoRegistration, RepoRegistry, changed_files, find_repo_root, hash_file,
-    phase1_multi_repo_supported,
+    CanonicalRepoPath, DiffTarget, RepoRegistration, RepoRegistry, changed_files, find_repo_root,
+    hash_file, phase1_multi_repo_supported,
 };
+use atlas_review::query_parser;
 use atlas_store_sqlite::Store;
 use camino::Utf8Path;
 use serde::Serialize;
 use std::collections::BTreeMap;
 
 use crate::output::OutputFormat;
-use crate::tool_result::tool_result_value as build_tool_result_value;
+use crate::tool_result::{
+    InputShapeErrorSpec, ToolErrorPayload, input_shape_error_payload,
+    tool_result_value as build_tool_result_value,
+};
 
 pub(super) const DEFAULT_OUTPUT_DESCRIPTION: &str =
     "Response body format: 'toon' (default) or 'json'";
@@ -34,6 +38,162 @@ pub(crate) fn parse_mcp_intent(s: &str) -> ContextIntent {
         "rename_preview" | "rename" => ContextIntent::RenamePreview,
         "dependency_removal" | "deps" => ContextIntent::DependencyRemoval,
         _ => ContextIntent::Symbol,
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct McpQueryGrammar {
+    pub(crate) kind: &'static str,
+    pub(crate) accepted: bool,
+    pub(crate) source_text: String,
+    pub(crate) normalized_text: String,
+    pub(crate) parsed_request: ContextRequest,
+}
+
+pub(crate) fn mcp_supported_query_grammar_examples() -> &'static [&'static str] {
+    &[
+        "compute",
+        "src/service.rs::fn::compute",
+        "who calls compute",
+        "what breaks if I change compute",
+        "tests for compute",
+    ]
+}
+
+fn strip_case_insensitive_prefix<'a>(text: &'a str, prefix: &str) -> Option<&'a str> {
+    if text.len() < prefix.len() {
+        return None;
+    }
+    let head = text.get(..prefix.len())?;
+    if head.eq_ignore_ascii_case(prefix) {
+        Some(text[prefix.len()..].trim())
+    } else {
+        None
+    }
+}
+
+fn target_to_lookup_text(target: &ContextTarget) -> Option<String> {
+    match target {
+        ContextTarget::QualifiedName { qname } => Some(qname.clone()),
+        ContextTarget::SymbolName { name } => Some(name.clone()),
+        ContextTarget::FilePath { path } => Some(path.clone()),
+        ContextTarget::ChangedFiles { paths } => paths.first().cloned(),
+        ContextTarget::ChangedSymbols { qnames } => qnames.first().cloned(),
+        ContextTarget::EdgeQuerySeed { source_qname, .. } => Some(source_qname.clone()),
+    }
+}
+
+fn looks_code_like_query(trimmed: &str) -> bool {
+    trimmed.contains("::")
+        || trimmed.contains('/')
+        || trimmed.contains('_')
+        || trimmed.contains('(')
+        || trimmed.contains('.')
+        || trimmed.chars().any(|ch| ch.is_ascii_uppercase())
+}
+
+fn looks_plain_identifier(trimmed: &str) -> bool {
+    !trimmed.is_empty()
+        && !trimmed.contains(char::is_whitespace)
+        && trimmed
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | ':' | '/' | '.'))
+}
+
+pub(crate) fn mcp_query_looks_like_unstructured_description(query: &str) -> bool {
+    let trimmed = query.trim();
+    if trimmed.is_empty() || !trimmed.contains(char::is_whitespace) {
+        return false;
+    }
+    if strip_case_insensitive_prefix(trimmed, "tests for ").is_some() {
+        return false;
+    }
+    if looks_code_like_query(trimmed) {
+        return false;
+    }
+
+    let parsed = query_parser::parse_query(trimmed);
+    if parsed.intent != ContextIntent::Symbol {
+        return false;
+    }
+
+    let words = trimmed
+        .split_whitespace()
+        .map(|word| word.trim_matches(|ch: char| !ch.is_alphanumeric()))
+        .filter(|word| !word.is_empty())
+        .collect::<Vec<_>>();
+    let natural_language_cues = [
+        "please", "show", "find", "explain", "review", "check", "tell", "help", "look", "what",
+        "why", "how",
+    ];
+    if words.len() >= 4
+        || words.iter().any(|word| {
+            natural_language_cues
+                .iter()
+                .any(|cue| word.eq_ignore_ascii_case(cue))
+        })
+    {
+        return true;
+    }
+
+    matches!(parsed.target, ContextTarget::SymbolName { ref name } if name == trimmed)
+}
+
+pub(crate) fn parse_mcp_query_grammar(query: &str) -> McpQueryGrammar {
+    let trimmed = query.trim();
+
+    if let Some(rest) = strip_case_insensitive_prefix(trimmed, "tests for ") {
+        let parsed_target = query_parser::parse_query(rest);
+        let normalized_text =
+            target_to_lookup_text(&parsed_target.target).unwrap_or_else(|| rest.trim().to_owned());
+        let mut parsed_request = parsed_target;
+        parsed_request.intent = ContextIntent::UsageLookup;
+        parsed_request.include_callers = true;
+        parsed_request.include_callees = false;
+        parsed_request.include_tests = true;
+        return McpQueryGrammar {
+            kind: "tests_for",
+            accepted: !normalized_text.is_empty()
+                && !mcp_query_looks_like_unstructured_description(rest),
+            source_text: trimmed.to_owned(),
+            normalized_text,
+            parsed_request,
+        };
+    }
+
+    let parsed_request = query_parser::parse_query(trimmed);
+    let lower = trimmed.to_ascii_lowercase();
+    let kind = if lower.starts_with("who calls ") {
+        "who_calls"
+    } else if lower.starts_with("what breaks") {
+        "what_breaks"
+    } else if matches!(&parsed_request.target, ContextTarget::QualifiedName { qname } if qname == trimmed)
+    {
+        "exact_qualified_name"
+    } else if matches!(&parsed_request.target, ContextTarget::SymbolName { name } if name == trimmed)
+        && looks_plain_identifier(trimmed)
+    {
+        "plain_identifier"
+    } else if mcp_query_looks_like_unstructured_description(trimmed) {
+        "unsupported_description"
+    } else {
+        "structured_query"
+    };
+    let normalized_text = match kind {
+        "who_calls" | "what_breaks" => {
+            target_to_lookup_text(&parsed_request.target).unwrap_or_else(|| trimmed.to_owned())
+        }
+        "exact_qualified_name" | "plain_identifier" => trimmed.to_owned(),
+        "unsupported_description" | "structured_query" => trimmed.to_owned(),
+        _ => target_to_lookup_text(&parsed_request.target).unwrap_or_else(|| trimmed.to_owned()),
+    };
+
+    McpQueryGrammar {
+        kind,
+        accepted: kind != "unsupported_description",
+        source_text: trimmed.to_owned(),
+        normalized_text,
+        parsed_request,
     }
 }
 
@@ -164,12 +324,37 @@ pub(super) fn inject_budget_metadata(response: &mut serde_json::Value, budget: &
     response["safe_to_answer"] = serde_json::json!(budget.safe_to_answer);
 }
 
+pub(crate) fn inject_deprecated_input_fields(
+    response: &mut serde_json::Value,
+    deprecated_input_fields: &[String],
+) {
+    if deprecated_input_fields.is_empty() {
+        return;
+    }
+    response["_meta"]["deprecated_input_fields"] = serde_json::json!(deprecated_input_fields);
+}
+
 pub(crate) const MAX_MULTI_REPO_SELECTION: usize = 32;
 
 #[derive(Clone, Debug)]
 pub(crate) struct RepoScopeSelection {
     pub repo_ids: Vec<String>,
     pub registrations: Vec<RepoRegistration>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ResolvedRepoScopeKind {
+    Current,
+    RepoId,
+    All,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ResolvedRepoScopeSelection {
+    #[allow(dead_code)]
+    pub kind: ResolvedRepoScopeKind,
+    pub selection: Option<RepoScopeSelection>,
+    pub deprecated_input_fields: Vec<String>,
 }
 
 pub(crate) fn repo_aliases_by_id(repo_root: &str) -> BTreeMap<String, String> {
@@ -184,56 +369,525 @@ pub(crate) fn repo_aliases_by_id(repo_root: &str) -> BTreeMap<String, String> {
         .unwrap_or_default()
 }
 
+fn repo_scope_error_payload(
+    tool_name: &str,
+    message: impl Into<String>,
+    detail: impl Into<String>,
+    offending_fields: Vec<String>,
+    retry_example: serde_json::Value,
+) -> Box<ToolErrorPayload> {
+    Box::new(input_shape_error_payload(
+        tool_name,
+        message,
+        detail,
+        InputShapeErrorSpec {
+            offending_fields,
+            normalization_performed: Vec::new(),
+            accepted_argument_families: vec![
+                "repo_scope.kind=current".to_owned(),
+                "repo_scope.kind=repo_id".to_owned(),
+                "repo_scope.kind=all".to_owned(),
+            ],
+            retry_example: Some(retry_example),
+            fail_closed_reason: Some(
+                "Atlas refused to guess between conflicting repository scope selectors".to_owned(),
+            ),
+            retry_guidance: Some("Provide exactly one repo scope selector, then retry.".to_owned()),
+            extra_details: Some(serde_json::json!({
+                "accepted_repo_scope_shapes": [
+                    { "repo_scope": { "kind": "current" } },
+                    { "repo_scope": { "kind": "repo_id", "repo_id": "atlas-core" } },
+                    { "repo_scope": { "kind": "all" } }
+                ]
+            })),
+        },
+    ))
+}
+
 pub(crate) fn resolve_repo_scope_selection(
+    tool_name: &str,
     args: Option<&serde_json::Value>,
     repo_root: &str,
-) -> Result<Option<RepoScopeSelection>> {
-    let repo_id = str_arg(args, "repo_id")?.map(str::to_owned);
-    let all_repos = bool_arg(args, "all_repos").unwrap_or(false);
-    if repo_id.is_none() && !all_repos {
-        return Ok(None);
+) -> std::result::Result<ResolvedRepoScopeSelection, Box<ToolErrorPayload>> {
+    let repo_scope_value = args.and_then(|value| value.get("repo_scope"));
+    let repo_scope_object = repo_scope_value.and_then(|value| value.as_object());
+
+    if args.is_some_and(|value| value.get("repo_id").is_some() || value.get("all_repos").is_some())
+    {
+        return Err(repo_scope_error_payload(
+            tool_name,
+            "legacy repo scope fields are no longer supported",
+            "Use repo_scope={ kind: 'current' | 'repo_id' | 'all' } and remove top-level repo_id/all_repos fields.",
+            vec!["repo_id".to_owned(), "all_repos".to_owned()],
+            serde_json::json!({ "repo_scope": { "kind": "current" } }),
+        ));
     }
-    anyhow::ensure!(
-        !(repo_id.is_some() && all_repos),
-        "repo_id and all_repos cannot be combined"
-    );
+
+    if repo_scope_value.is_some() && repo_scope_object.is_none() {
+        return Err(repo_scope_error_payload(
+            tool_name,
+            "invalid repo_scope selector",
+            "repo_scope must be an object with required kind field",
+            vec!["repo_scope".to_owned()],
+            serde_json::json!({ "repo_scope": { "kind": "current" } }),
+        ));
+    }
+
+    let (kind, target_repo_id, deprecated_input_fields) = if let Some(scope) = repo_scope_object {
+        let kind = scope
+            .get("kind")
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                repo_scope_error_payload(
+                    tool_name,
+                    "repo_scope.kind is required",
+                    "repo_scope object requires kind=current, kind=repo_id, or kind=all",
+                    vec!["repo_scope.kind".to_owned()],
+                    serde_json::json!({ "repo_scope": { "kind": "current" } }),
+                )
+            })?;
+        match kind {
+            "current" => (ResolvedRepoScopeKind::Current, None, Vec::new()),
+            "repo_id" => {
+                let repo_id = scope
+                    .get("repo_id")
+                    .and_then(|value| value.as_str())
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .ok_or_else(|| {
+                        repo_scope_error_payload(
+                            tool_name,
+                            "repo_scope.kind='repo_id' requires non-empty repo_id",
+                            "repo_scope repo_id selector requires repo_scope.repo_id",
+                            vec!["repo_scope.kind".to_owned(), "repo_scope.repo_id".to_owned()],
+                            serde_json::json!({ "repo_scope": { "kind": "repo_id", "repo_id": "atlas-core" } }),
+                        )
+                    })?;
+                (
+                    ResolvedRepoScopeKind::RepoId,
+                    Some(repo_id.to_owned()),
+                    Vec::new(),
+                )
+            }
+            "all" => (ResolvedRepoScopeKind::All, None, Vec::new()),
+            other => {
+                return Err(repo_scope_error_payload(
+                    tool_name,
+                    format!("invalid repo_scope.kind '{other}'"),
+                    "repo_scope.kind must be one of: current, repo_id, all",
+                    vec!["repo_scope.kind".to_owned()],
+                    serde_json::json!({ "repo_scope": { "kind": "current" } }),
+                ));
+            }
+        }
+    } else {
+        (ResolvedRepoScopeKind::Current, None, Vec::new())
+    };
+
+    if kind == ResolvedRepoScopeKind::Current {
+        return Ok(ResolvedRepoScopeSelection {
+            kind,
+            selection: None,
+            deprecated_input_fields,
+        });
+    }
 
     let registry = RepoRegistry::load(Utf8Path::new(repo_root)).with_context(|| {
         "repo registry missing; run `atlas init` or `atlas repo sync` before multi-repo MCP queries"
+    }).map_err(|error| {
+        repo_scope_error_payload(
+            tool_name,
+            "repo registry missing for requested repo scope",
+            error.to_string(),
+            vec!["repo_scope".to_owned()],
+            serde_json::json!({ "repo_scope": { "kind": "current" } }),
+        )
     })?;
 
-    if all_repos {
+    let selection = if kind == ResolvedRepoScopeKind::All {
         let registrations: Vec<RepoRegistration> = registry
             .registrations
             .into_iter()
             .filter(|entry| entry.enabled)
             .filter(|entry| phase1_multi_repo_supported(entry.relationship.kind))
             .collect();
-        anyhow::ensure!(
-            registrations.len() <= MAX_MULTI_REPO_SELECTION,
-            "all_repos scope exceeds max supported repo fan-out ({MAX_MULTI_REPO_SELECTION})"
-        );
+        if registrations.len() > MAX_MULTI_REPO_SELECTION {
+            return Err(repo_scope_error_payload(
+                tool_name,
+                "all repo scope exceeds max supported fan-out",
+                format!(
+                    "all repo scope exceeds max supported repo fan-out ({MAX_MULTI_REPO_SELECTION})"
+                ),
+                vec!["repo_scope".to_owned()],
+                serde_json::json!({ "repo_scope": { "kind": "current" } }),
+            ));
+        }
         let repo_ids = registrations
             .iter()
             .map(|entry| entry.repo_id.clone())
             .collect();
-        return Ok(Some(RepoScopeSelection {
+        RepoScopeSelection {
             repo_ids,
             registrations,
+        }
+    } else {
+        let target = target_repo_id.expect("repo_id target required");
+        let registration = registry
+            .registrations
+            .into_iter()
+            .find(|entry| entry.repo_id == target)
+            .ok_or_else(|| {
+                repo_scope_error_payload(
+                    tool_name,
+                    format!("repo id '{target}' is not registered"),
+                    format!("repo id '{target}' is not registered"),
+                    vec!["repo_scope.repo_id".to_owned()],
+                    serde_json::json!({ "repo_scope": { "kind": "current" } }),
+                )
+            })?;
+        if !registration.enabled {
+            return Err(repo_scope_error_payload(
+                tool_name,
+                format!("repo id '{target}' is disabled"),
+                format!("repo id '{target}' is disabled"),
+                vec!["repo_scope.repo_id".to_owned()],
+                serde_json::json!({ "repo_scope": { "kind": "current" } }),
+            ));
+        }
+        RepoScopeSelection {
+            repo_ids: vec![registration.repo_id.clone()],
+            registrations: vec![registration],
+        }
+    };
+
+    Ok(ResolvedRepoScopeSelection {
+        kind,
+        selection: Some(selection),
+        deprecated_input_fields,
+    })
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ResolvedChangeSourceKind {
+    WorkingTree,
+    Staged,
+    Base,
+    Files,
+}
+
+impl ResolvedChangeSourceKind {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::WorkingTree => "working_tree",
+            Self::Staged => "staged",
+            Self::Base => "base",
+            Self::Files => "files",
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ResolvedChangeSourceSelection {
+    pub kind: ResolvedChangeSourceKind,
+    pub files: Vec<String>,
+    pub base: Option<String>,
+    pub deprecated_input_fields: Vec<String>,
+}
+
+fn change_source_examples(allow_explicit_files: bool) -> Vec<serde_json::Value> {
+    let mut examples = Vec::new();
+    if allow_explicit_files {
+        examples.push(serde_json::json!({
+            "change_source": {
+                "kind": "files",
+                "files": ["src/service.rs"]
+            }
         }));
     }
+    examples.push(serde_json::json!({
+        "change_source": {
+            "kind": "base",
+            "base": "origin/main"
+        }
+    }));
+    examples.push(serde_json::json!({
+        "change_source": {
+            "kind": "staged"
+        }
+    }));
+    examples.push(serde_json::json!({
+        "change_source": {
+            "kind": "working_tree"
+        }
+    }));
+    examples
+}
 
-    let target = repo_id.unwrap_or_default();
-    let registration = registry
-        .registrations
-        .into_iter()
-        .find(|entry| entry.repo_id == target)
-        .with_context(|| format!("repo id '{target}' is not registered"))?;
-    anyhow::ensure!(registration.enabled, "repo id '{target}' is disabled");
-    Ok(Some(RepoScopeSelection {
-        repo_ids: vec![registration.repo_id.clone()],
-        registrations: vec![registration],
-    }))
+fn accepted_change_source_families(allow_explicit_files: bool) -> Vec<String> {
+    let mut families = Vec::new();
+    if allow_explicit_files {
+        families.push("change_source.kind=files".to_owned());
+    }
+    families.extend([
+        "change_source.kind=base".to_owned(),
+        "change_source.kind=staged".to_owned(),
+        "change_source.kind=working_tree".to_owned(),
+    ]);
+    families
+}
+
+fn change_source_error_payload(
+    tool_name: &str,
+    message: impl Into<String>,
+    detail: impl Into<String>,
+    allow_explicit_files: bool,
+    offending_fields: Vec<String>,
+    present_mode_families: Vec<String>,
+) -> Box<ToolErrorPayload> {
+    let examples = change_source_examples(allow_explicit_files);
+    let retry_example = examples.first().cloned();
+    let accepted_shapes = if allow_explicit_files {
+        serde_json::json!([
+            { "change_source": { "kind": "files", "files": ["src/service.rs"] } },
+            { "change_source": { "kind": "base", "base": "origin/main" } },
+            { "change_source": { "kind": "staged" } },
+            { "change_source": { "kind": "working_tree" } }
+        ])
+    } else {
+        serde_json::json!([
+            { "change_source": { "kind": "base", "base": "origin/main" } },
+            { "change_source": { "kind": "staged" } },
+            { "change_source": { "kind": "working_tree" } }
+        ])
+    };
+    Box::new(input_shape_error_payload(
+        tool_name,
+        message,
+        detail,
+        InputShapeErrorSpec {
+            offending_fields,
+            normalization_performed: Vec::new(),
+            accepted_argument_families: accepted_change_source_families(allow_explicit_files),
+            retry_example,
+            fail_closed_reason: Some(
+                "Atlas refused to guess between conflicting change-source selectors".to_owned(),
+            ),
+            retry_guidance: Some(
+                "Provide exactly one change_source selector and retry.".to_owned(),
+            ),
+            extra_details: Some(serde_json::json!({
+                "present_mode_families": present_mode_families,
+                "accepted_change_source_shapes": accepted_shapes,
+            })),
+        },
+    ))
+}
+
+fn canonicalize_change_source_files(
+    files: &[String],
+    tool_name: &str,
+    field_name: &str,
+    allow_explicit_files: bool,
+) -> std::result::Result<Vec<String>, Box<ToolErrorPayload>> {
+    files
+        .iter()
+        .map(|path| {
+            CanonicalRepoPath::from_repo_relative(path)
+                .with_context(|| format!("invalid explicit file path '{path}'"))
+                .map(|path| path.as_str().to_owned())
+                .map_err(|error| {
+                    change_source_error_payload(
+                        tool_name,
+                        format!("invalid {field_name} path"),
+                        error.to_string(),
+                        allow_explicit_files,
+                        vec![field_name.to_owned()],
+                        vec!["files".to_owned()],
+                    )
+                })
+        })
+        .collect()
+}
+
+pub(crate) fn resolve_change_source_selection(
+    tool_name: &str,
+    args: Option<&serde_json::Value>,
+    allow_explicit_files: bool,
+) -> std::result::Result<ResolvedChangeSourceSelection, Box<ToolErrorPayload>> {
+    let change_source_value = args.and_then(|value| value.get("change_source"));
+    let change_source_object = change_source_value.and_then(|value| value.as_object());
+    let mut offending_legacy_fields = Vec::new();
+    if args.is_some_and(|value| value.get("mode").is_some()) {
+        offending_legacy_fields.push("mode".to_owned());
+    }
+    if args.is_some_and(|value| value.get("files").is_some()) {
+        offending_legacy_fields.push("files".to_owned());
+    }
+    if args.is_some_and(|value| value.get("base").is_some()) {
+        offending_legacy_fields.push("base".to_owned());
+    }
+    if args.is_some_and(|value| value.get("staged").is_some()) {
+        offending_legacy_fields.push("staged".to_owned());
+    }
+    if args.is_some_and(|value| value.get("working_tree").is_some()) {
+        offending_legacy_fields.push("working_tree".to_owned());
+    }
+    if !offending_legacy_fields.is_empty() {
+        return Err(change_source_error_payload(
+            tool_name,
+            "legacy change_source fields are no longer supported",
+            "Use change_source={ kind: 'files' | 'base' | 'staged' | 'working_tree', ... } and remove top-level mode/files/base/staged/working_tree fields.",
+            allow_explicit_files,
+            offending_legacy_fields,
+            Vec::new(),
+        ));
+    }
+
+    if change_source_value.is_some() && change_source_object.is_none() {
+        return Err(change_source_error_payload(
+            tool_name,
+            "invalid change_source selector",
+            "change_source must be an object with kind=working_tree, kind=staged, kind=base, or kind=files",
+            allow_explicit_files,
+            vec!["change_source".to_owned()],
+            Vec::new(),
+        ));
+    }
+
+    if let Some(change_source) = change_source_object {
+        let kind = change_source
+            .get("kind")
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                change_source_error_payload(
+                    tool_name,
+                    "change_source.kind is required",
+                    "change_source object requires kind=working_tree, kind=staged, kind=base, or kind=files",
+                    allow_explicit_files,
+                    vec!["change_source.kind".to_owned()],
+                    Vec::new(),
+                )
+            })?;
+
+        return match kind {
+            "working_tree" => Ok(ResolvedChangeSourceSelection {
+                kind: ResolvedChangeSourceKind::WorkingTree,
+                files: Vec::new(),
+                base: None,
+                deprecated_input_fields: Vec::new(),
+            }),
+            "staged" => Ok(ResolvedChangeSourceSelection {
+                kind: ResolvedChangeSourceKind::Staged,
+                files: Vec::new(),
+                base: None,
+                deprecated_input_fields: Vec::new(),
+            }),
+            "base" => {
+                let base = change_source
+                    .get("base")
+                    .and_then(|value| value.as_str())
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .ok_or_else(|| {
+                        change_source_error_payload(
+                            tool_name,
+                            "change_source.kind='base' requires non-empty change_source.base",
+                            "base change_source selector requires change_source.base",
+                            allow_explicit_files,
+                            vec![
+                                "change_source.kind".to_owned(),
+                                "change_source.base".to_owned(),
+                            ],
+                            vec!["base".to_owned()],
+                        )
+                    })?
+                    .to_owned();
+                Ok(ResolvedChangeSourceSelection {
+                    kind: ResolvedChangeSourceKind::Base,
+                    files: Vec::new(),
+                    base: Some(base),
+                    deprecated_input_fields: Vec::new(),
+                })
+            }
+            "files" => {
+                if !allow_explicit_files {
+                    return Err(change_source_error_payload(
+                        tool_name,
+                        "invalid change_source.kind 'files'",
+                        "this tool does not accept change_source.kind='files'",
+                        allow_explicit_files,
+                        vec!["change_source.kind".to_owned()],
+                        vec!["files".to_owned()],
+                    ));
+                }
+                let raw_files = change_source
+                    .get("files")
+                    .and_then(|value| value.as_array())
+                    .ok_or_else(|| {
+                        change_source_error_payload(
+                            tool_name,
+                            "change_source.kind='files' requires non-empty change_source.files",
+                            "files change_source selector requires change_source.files array",
+                            allow_explicit_files,
+                            vec![
+                                "change_source.kind".to_owned(),
+                                "change_source.files".to_owned(),
+                            ],
+                            vec!["files".to_owned()],
+                        )
+                    })?
+                    .iter()
+                    .filter_map(|value| value.as_str().map(str::to_owned))
+                    .collect::<Vec<_>>();
+                if raw_files.is_empty() {
+                    return Err(change_source_error_payload(
+                        tool_name,
+                        "change_source.kind='files' requires non-empty change_source.files",
+                        "files change_source selector requires non-empty change_source.files array",
+                        allow_explicit_files,
+                        vec![
+                            "change_source.kind".to_owned(),
+                            "change_source.files".to_owned(),
+                        ],
+                        vec!["files".to_owned()],
+                    ));
+                }
+                let files = canonicalize_change_source_files(
+                    &raw_files,
+                    tool_name,
+                    "change_source.files",
+                    allow_explicit_files,
+                )?;
+                Ok(ResolvedChangeSourceSelection {
+                    kind: ResolvedChangeSourceKind::Files,
+                    files,
+                    base: None,
+                    deprecated_input_fields: Vec::new(),
+                })
+            }
+            other => Err(change_source_error_payload(
+                tool_name,
+                format!("invalid change_source.kind '{other}'"),
+                "change_source.kind must be one of: working_tree, staged, base, files",
+                allow_explicit_files,
+                vec!["change_source.kind".to_owned()],
+                Vec::new(),
+            )),
+        };
+    }
+
+    Err(change_source_error_payload(
+        tool_name,
+        "change_source is required",
+        "Provide change_source={ kind: 'files' | 'base' | 'staged' | 'working_tree', ... }.",
+        allow_explicit_files,
+        vec!["change_source".to_owned()],
+        Vec::new(),
+    ))
 }
 
 #[derive(Serialize)]
@@ -512,7 +1166,7 @@ mod tests {
     }
 
     #[test]
-    fn resolve_repo_scope_selection_all_repos_excludes_manual_registrations() {
+    fn resolve_repo_scope_selection_all_kind_excludes_manual_registrations() {
         let temp = tempfile::tempdir().unwrap();
         let root = Utf8Path::from_path(temp.path()).unwrap();
         let sub = root.join("submodule");
@@ -525,17 +1179,93 @@ mod tests {
         ];
         registry.save(root).unwrap();
 
-        let selection =
-            resolve_repo_scope_selection(Some(&json!({"all_repos": true})), root.as_str())
-                .unwrap()
-                .unwrap();
+        let resolved = resolve_repo_scope_selection(
+            "test_tool",
+            Some(&json!({"repo_scope": {"kind": "all"}})),
+            root.as_str(),
+        )
+        .unwrap();
+        let selection = resolved.selection.expect("selection");
 
+        assert_eq!(resolved.kind, ResolvedRepoScopeKind::All);
+        assert!(resolved.deprecated_input_fields.is_empty());
         assert_eq!(selection.registrations.len(), 2);
         assert!(
             selection
                 .registrations
                 .iter()
                 .all(|entry| entry.relationship.kind != RepoRelationshipKind::Manual)
+        );
+    }
+
+    #[test]
+    fn resolve_repo_scope_selection_supports_repo_scope_object_current() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = Utf8Path::from_path(temp.path()).unwrap();
+        let resolved = resolve_repo_scope_selection(
+            "test_tool",
+            Some(&json!({"repo_scope": {"kind": "current"}})),
+            root.as_str(),
+        )
+        .unwrap();
+
+        assert_eq!(resolved.kind, ResolvedRepoScopeKind::Current);
+        assert!(resolved.selection.is_none());
+        assert!(resolved.deprecated_input_fields.is_empty());
+    }
+
+    #[test]
+    fn resolve_repo_scope_selection_supports_repo_scope_object_repo_id() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = Utf8Path::from_path(temp.path()).unwrap();
+        let sub = root.join("submodule");
+        let mut registry = RepoRegistry::new(stable_repo_id(root));
+        registry.registrations = vec![
+            registration(root, ".", RepoRelationshipKind::Root),
+            registration(sub.as_path(), "submodule", RepoRelationshipKind::Submodule),
+        ];
+        registry.save(root).unwrap();
+        let sub_repo_id = stable_repo_id(sub.as_path());
+
+        let resolved = resolve_repo_scope_selection(
+            "test_tool",
+            Some(&json!({"repo_scope": {"kind": "repo_id", "repo_id": sub_repo_id}})),
+            root.as_str(),
+        )
+        .unwrap();
+        let selection = resolved.selection.expect("selection");
+
+        assert_eq!(resolved.kind, ResolvedRepoScopeKind::RepoId);
+        assert!(resolved.deprecated_input_fields.is_empty());
+        assert_eq!(selection.repo_ids.len(), 1);
+        assert_eq!(selection.repo_ids[0], stable_repo_id(sub.as_path()));
+    }
+
+    #[test]
+    fn resolve_repo_scope_selection_rejects_mixed_repo_scope_and_legacy_fields() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = Utf8Path::from_path(temp.path()).unwrap();
+        let error = resolve_repo_scope_selection(
+            "test_tool",
+            Some(&json!({
+                "repo_scope": {"kind": "current"},
+                "all_repos": true
+            })),
+            root.as_str(),
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            error.message,
+            "legacy repo scope fields are no longer supported"
+        );
+        assert_eq!(
+            error
+                .details
+                .as_ref()
+                .and_then(|details| details.get("offending_fields"))
+                .cloned(),
+            Some(json!(["repo_id", "all_repos"]))
         );
     }
 
@@ -556,13 +1286,103 @@ mod tests {
             .collect();
         registry.save(root).unwrap();
 
-        let error = resolve_repo_scope_selection(Some(&json!({"all_repos": true})), root.as_str())
-            .unwrap_err();
+        let error = resolve_repo_scope_selection(
+            "test_tool",
+            Some(&json!({"repo_scope": {"kind": "all"}})),
+            root.as_str(),
+        )
+        .unwrap_err();
 
+        assert_eq!(
+            error.message,
+            "all repo scope exceeds max supported fan-out"
+        );
         assert!(
             error
-                .to_string()
-                .contains("all_repos scope exceeds max supported repo fan-out")
+                .details
+                .as_ref()
+                .and_then(|details| details.get("detail"))
+                .and_then(|detail| detail.as_str())
+                .is_some_and(|detail| detail.contains("max supported repo fan-out"))
+        );
+    }
+
+    #[test]
+    fn resolve_change_source_selection_supports_change_source_object_files() {
+        let resolved = resolve_change_source_selection(
+            "test_tool",
+            Some(&json!({
+                "change_source": {
+                    "kind": "files",
+                    "files": ["src/./lib.rs"]
+                }
+            })),
+            true,
+        )
+        .unwrap();
+
+        assert_eq!(resolved.kind, ResolvedChangeSourceKind::Files);
+        assert_eq!(resolved.files, vec!["src/lib.rs"]);
+        assert!(resolved.deprecated_input_fields.is_empty());
+    }
+
+    #[test]
+    fn resolve_change_source_selection_rejects_legacy_mode() {
+        let error = resolve_change_source_selection(
+            "test_tool",
+            Some(&json!({"mode": "working_tree"})),
+            false,
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            error.message,
+            "legacy change_source fields are no longer supported"
+        );
+    }
+
+    #[test]
+    fn resolve_change_source_selection_rejects_missing_base_for_base_kind() {
+        let error = resolve_change_source_selection(
+            "test_tool",
+            Some(&json!({
+                "change_source": {
+                    "kind": "base"
+                }
+            })),
+            false,
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            error.message,
+            "change_source.kind='base' requires non-empty change_source.base"
+        );
+    }
+
+    #[test]
+    fn resolve_change_source_selection_rejects_mixed_change_source_and_legacy_fields() {
+        let error = resolve_change_source_selection(
+            "test_tool",
+            Some(&json!({
+                "change_source": {"kind": "staged"},
+                "staged": true
+            })),
+            false,
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            error.message,
+            "legacy change_source fields are no longer supported"
+        );
+        assert_eq!(
+            error
+                .details
+                .as_ref()
+                .and_then(|details| details.get("offending_fields"))
+                .cloned(),
+            Some(json!(["staged"]))
         );
     }
 }
