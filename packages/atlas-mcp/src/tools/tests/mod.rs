@@ -5,7 +5,9 @@ use atlas_core::EdgeKind;
 use atlas_core::error_code_docs_ref;
 use atlas_core::kinds::NodeKind;
 use atlas_core::model::{Edge, Node, NodeId};
+use atlas_repo::canonical_filesystem_path;
 use atlas_store_sqlite::{BuildFinishStats, GraphBuildState, Store};
+use camino::Utf8Path;
 use std::path::PathBuf;
 use std::process::Command;
 use tempfile::TempDir;
@@ -220,6 +222,9 @@ pub(super) fn setup_git_mcp_fixture() -> GitMcpFixture {
     git_run(root, &["add", "-A"]);
     git_run(root, &["commit", "--quiet", "-m", "initial"]);
 
+    let canonical_root =
+        canonical_filesystem_path(Utf8Path::from_path(root).unwrap()).expect("canonical repo root");
+    let canonical_root_str = canonical_root.as_str().to_owned();
     let db_path = root.join("atlas.db").to_string_lossy().to_string();
     let mut store = Store::open(&db_path).expect("open store");
 
@@ -335,11 +340,11 @@ pub(super) fn setup_git_mcp_fixture() -> GitMcpFixture {
     let mut content_store = ContentStore::open(&content_db_path).expect("open content store");
     content_store.migrate().expect("migrate content store");
     content_store
-        .begin_indexing(&root.to_string_lossy(), 4)
+        .begin_indexing(&canonical_root_str, 4)
         .expect("begin indexing");
     content_store
         .finish_indexing(
-            &root.to_string_lossy(),
+            &canonical_root_str,
             &IndexingStats {
                 files_indexed: 4,
                 chunks_written: 4,
@@ -350,7 +355,7 @@ pub(super) fn setup_git_mcp_fixture() -> GitMcpFixture {
 
     store
         .finish_build(
-            &root.to_string_lossy(),
+            &canonical_root_str,
             BuildFinishStats {
                 state: GraphBuildState::Built,
                 files_discovered: 4,
@@ -368,7 +373,7 @@ pub(super) fn setup_git_mcp_fixture() -> GitMcpFixture {
         .expect("finish build");
 
     GitMcpFixture {
-        repo_root: root.to_string_lossy().to_string(),
+        repo_root: canonical_root_str,
         db_path,
         _dir: dir,
     }
