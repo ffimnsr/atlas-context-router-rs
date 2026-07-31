@@ -720,8 +720,12 @@ mod tests {
 
         let db_dir = tempfile::tempdir().unwrap();
         let db_path = db_dir.path().join("worldtree.db");
-        let repo_a_id = atlas_repo::stable_repo_id(Utf8Path::from_path(repo_a).unwrap());
-        let repo_b_id = atlas_repo::stable_repo_id(Utf8Path::from_path(repo_b).unwrap());
+        let repo_a_root =
+            atlas_repo::canonical_filesystem_path(Utf8Path::from_path(repo_a).unwrap()).unwrap();
+        let repo_b_root =
+            atlas_repo::canonical_filesystem_path(Utf8Path::from_path(repo_b).unwrap()).unwrap();
+        let repo_a_id = atlas_repo::stable_repo_id(repo_a_root.as_path());
+        let repo_b_id = atlas_repo::stable_repo_id(repo_b_root.as_path());
 
         build_graph(
             Utf8Path::from_path(repo_a).unwrap(),

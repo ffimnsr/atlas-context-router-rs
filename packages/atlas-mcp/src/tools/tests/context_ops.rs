@@ -1105,7 +1105,10 @@ fn postprocess_graph_returns_noop_when_graph_missing() {
 
     let db_path = root.join("atlas.db").to_string_lossy().to_string();
     let _ = Store::open(&db_path).expect("open store");
-    let repo_root = root.to_string_lossy().to_string();
+    let repo_root =
+        atlas_repo::canonical_filesystem_path(camino::Utf8Path::from_path(root).unwrap())
+            .expect("canonical repo root")
+            .to_string();
     let args = serde_json::json!({ "output_format": "json" });
     let response = call("postprocess_graph", Some(&args), &repo_root, &db_path)
         .expect("postprocess_graph call");

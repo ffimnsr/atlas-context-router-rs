@@ -701,9 +701,11 @@ mod tests {
             registration.display_alias,
             sibling.file_name().unwrap().to_string_lossy()
         );
+        let canonical_sibling =
+            canonical_filesystem_path(Utf8Path::from_path(sibling).unwrap()).unwrap();
         assert_eq!(
             registration.repo_id,
-            stable_repo_id(Utf8Path::from_path(sibling).unwrap())
+            stable_repo_id(canonical_sibling.as_path())
         );
     }
 
