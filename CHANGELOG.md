@@ -4,6 +4,32 @@ All notable changes to this project should be recorded in this file.
 
 Versioning policy may evolve while Atlas is still moving quickly, but release notes should still group changes by user-visible impact.
 
+## 1.6.0 - 2026-07-31
+
+### Features
+
+- add install update agents (`35e1ac9`)
+- add multi repo update (`ec5dded`)
+- simplify mcp tools params (`299bd50`)
+- update macos ci (`ddb2ae5`)
+- harden parts on test that interacts with tempdir (`f69db41`)
+
+
+### Documentation
+
+- update docs for new stable tools issue (`0d9d0d6`)
+
+
+### Tests
+
+- update a lint error on a test (`5f28934`)
+
+
+### CI
+
+- another update on github ci (`0bde7b5`)
+
+
 ## 1.5.2 - 2026-07-30
 
 ### Features
