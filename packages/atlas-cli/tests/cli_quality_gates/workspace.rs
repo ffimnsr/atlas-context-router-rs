@@ -1,5 +1,6 @@
 use super::*;
-use atlas_repo::RepoRegistry;
+use atlas_repo::{RepoRegistry, canonical_filesystem_path};
+use camino::Utf8Path;
 
 #[test]
 fn submodule_auto_registration_indexes_separate_repo_identities() {
@@ -61,6 +62,8 @@ fn manual_sibling_repo_registration_lists_manual_entry() {
 
     run_atlas(repo.path(), &["init"]);
     let sibling_path = sibling.path().to_str().expect("sibling path");
+    let sibling_root = canonical_filesystem_path(Utf8Path::from_path(sibling.path()).unwrap())
+        .expect("canonical sibling path");
     let added = read_json_data_output(
         "repo.add",
         run_atlas(repo.path(), &["--json", "repo", "add", sibling_path]),
@@ -78,7 +81,7 @@ fn manual_sibling_repo_registration_lists_manual_entry() {
             .iter()
             .any(|entry| {
                 entry["relationship"]["kind"] == json!("manual")
-                    && entry["root"] == json!(sibling_path)
+                    && entry["root"] == json!(sibling_root.as_str())
             })
     );
 }
