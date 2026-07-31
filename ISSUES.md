@@ -3918,3 +3918,267 @@ Completion criteria:
 - [x] direct tool call, deferred task completion, stdio transport, and HTTP transport all expose same result contract per tool
 - [x] `packages/atlas-mcp/src/tools/registry.rs` no longer classifies any current tool as `MixedNeedsRedesign`
 - [x] generated `MCP_TOOLS.md` shows only `stable-object` or `text-only` result contracts
+
+---
+
+## Part IX — MCP Tool Agent-Ergonomics Simplification Roadmap
+
+Use this part to make Atlas MCP tools easier for LLM agents to call correctly. Focus on eliminating ambiguous input shapes, hidden precedence, selector-family conflicts, and text-only result contracts while preserving strict MCP 2026-07-28 compliance and existing CLI behavior unless a shared service contract must change.
+
+Implementation order below is required. Do not start later phases until earlier phases land with tests.
+
+Rules:
+
+- prefer one unambiguous input object over multiple top-level selector fields
+- reject conflicting inputs instead of choosing hidden precedence
+- use discriminated objects for mutually exclusive tool modes
+- keep legacy top-level fields only behind an explicit compatibility window and emit deprecation metadata when accepted
+- keep tool execution errors on shared `ToolErrorPayload` path with offending fields, accepted shapes, and one retry example
+- keep successful MCP JSON output as stable object `structuredContent` with exact `outputSchema`
+- update generated `MCP_TOOLS.md`, runtime `tool_help` / `man`, registry snapshots, and MCP handler tests in same patch as each surface change
+- preserve path identity invariant by using `atlas_repo::CanonicalRepoPath` or helper APIs built on it for all path-bearing fields
+
+### Phase MCP-ERG1 — Tool input-shape inventory and compatibility policy
+
+Start with an exact inventory so simplification patches do not miss hidden validators or docs-only contracts.
+
+- [ ] add `McpInputShapeInventory` test/helper that enumerates every exported MCP tool descriptor from `atlas_mcp::tool_list()`
+- [ ] classify every exported tool input shape as one of:
+  - [ ] `single_shape`
+  - [ ] `selector_family`
+  - [ ] `mode_family`
+  - [ ] `scope_family`
+  - [ ] `legacy_precedence`
+  - [ ] `text_only_result`
+- [ ] record inventory output in a deterministic snapshot fixture under `packages/atlas-mcp/tests/snapshots/`
+- [ ] identify tools that currently accept conflicting top-level fields or hidden precedence:
+  - [ ] `get_context` target fields `query`, `file`, and `files`
+  - [ ] `batch_query_graph` fields `text` and `queries`
+  - [ ] change-source tools using `files`, `base`, `staged`, `working_tree`, and `mode`
+  - [ ] `read_file_excerpt` selector fields `line_ranges`, `start_line`, `end_line`, `line`, `before`, and `after`
+  - [ ] `get_docs_section` selector fields `heading` and `line`
+  - [ ] multi-repo scope fields `repo_id` and `all_repos`
+- [ ] define compatibility policy for legacy fields:
+  - [ ] first release accepts both legacy and new discriminated objects when exactly one family is materially present
+  - [ ] conflicting legacy and new objects fail closed with structured retry guidance
+  - [ ] accepted legacy fields emit `warnings[]` or `_meta.deprecated_input_fields`
+  - [ ] no compatibility path may silently ignore populated fields
+- [ ] add one test that fails if any future tool descriptor introduces description text containing `if both are given` or `wins`
+- [ ] update `wiki/mcp-tool-contracts.md` with inventory classes, compatibility policy, and examples of accepted versus rejected shapes
+
+Why:
+- tool ergonomics bugs are mostly input-shape bugs, not business-logic bugs
+- inventory prevents one-off cleanup that drifts as new tools are added
+
+### Phase MCP-ERG2 — Discriminated target, selector, and scope objects
+
+Replace ambiguous top-level selector families with one explicit discriminated object per semantic axis.
+
+#### MCP-ERG2.1 `get_context` target object
+
+- [ ] add new `target` object input for `get_context` with shape:
+  - [ ] `{ "kind": "query", "query": "handle_request" }`
+  - [ ] `{ "kind": "file", "file": "src/lib.rs" }`
+  - [ ] `{ "kind": "files", "files": ["src/lib.rs"] }`
+- [ ] validate `target.kind` as required enum `query`, `file`, or `files`
+- [ ] require `target.query` when `kind = "query"` and reject empty or natural-language-only descriptions with existing query guidance
+- [ ] require `target.file` when `kind = "file"` and canonicalize with existing path APIs
+- [ ] require non-empty `target.files` when `kind = "files"` and canonicalize every path with existing path APIs
+- [ ] reject calls that combine populated `target` with legacy `query`, `file`, or `files`
+- [ ] reject legacy calls that populate more than one of `query`, `file`, or `files`; remove current precedence behavior `files > file > query`
+- [ ] map valid legacy single-family calls into `target` internally and emit deprecation metadata
+- [ ] update `GetContextResult` to report selected `target.kind` and normalized target fields
+- [ ] add tests for new target variants, valid legacy single-family variants, conflicting legacy variants, and mixed target+legacy rejection
+
+#### MCP-ERG2.2 file excerpt selector object
+
+- [ ] add new `selector` object input for `read_file_excerpt` with shape:
+  - [ ] `{ "kind": "range", "start_line": 10, "end_line": 20 }`
+  - [ ] `{ "kind": "ranges", "line_ranges": [{ "start_line": 10, "end_line": 20 }] }`
+  - [ ] `{ "kind": "context", "line": 42, "before": 2, "after": 2 }`
+- [ ] validate `selector.kind` as required enum `range`, `ranges`, or `context`
+- [ ] require positive line numbers for every selector object path
+- [ ] reject `selector.kind = "context"` when `line` is missing, even if `before` or `after` is present
+- [ ] reject calls that combine populated `selector` with legacy selector fields
+- [ ] keep current wrapper-default normalization only for legacy fields and emit deprecation metadata when used
+- [ ] update `ReadFileExcerptResult.selection_mode` to derive from `selector.kind`
+- [ ] add tests for all selector variants, invalid line numbers, mixed selector+legacy rejection, and old wrapper-default compatibility
+
+#### MCP-ERG2.3 docs selector object
+
+- [ ] add new `selector` object input for `get_docs_section` with shape:
+  - [ ] `{ "kind": "heading", "heading": "Usage/Install" }`
+  - [ ] `{ "kind": "line", "line": 42 }`
+- [ ] require exactly one selector object and reject missing selector when legacy fields are absent
+- [ ] reject calls that combine populated `selector` with legacy `heading` or `line`
+- [ ] keep valid single-family legacy `heading` or `line` calls during compatibility window with deprecation metadata
+- [ ] add tests for heading selector, line selector, mixed selector+legacy rejection, and conflicting legacy rejection
+
+#### MCP-ERG2.4 repo scope object
+
+- [ ] add shared `repo_scope` object parser for tools that currently accept `repo_id` or `all_repos`
+- [ ] support shapes:
+  - [ ] `{ "kind": "current" }`
+  - [ ] `{ "kind": "repo_id", "repo_id": "<id>" }`
+  - [ ] `{ "kind": "all" }`
+- [ ] reject `repo_scope.kind = "repo_id"` when `repo_id` is empty or unregistered
+- [ ] reject populated `repo_scope` combined with legacy `repo_id` or `all_repos`
+- [ ] map valid legacy `repo_id` or `all_repos` to `repo_scope` internally and emit deprecation metadata
+- [ ] apply shared parser to all MCP tools that expose multi-repo scope fields
+- [ ] add tests proving `repo_scope` conflict behavior is identical across context, query, saved-context, and change tools where applicable
+
+Why:
+- discriminated objects make impossible states harder for LLM agents to produce
+- explicit `kind` fields remove hidden priority rules and reduce retry loops
+
+### Phase MCP-ERG3 — Change-source and operation-source simplification
+
+Replace flat change-source booleans with one shared object used by all change/review/build tools.
+
+#### MCP-ERG3.1 shared `change_source` object
+
+- [ ] add shared `ChangeSourceInput` parser for MCP request arguments
+- [ ] support shapes:
+  - [ ] `{ "kind": "working_tree" }`
+  - [ ] `{ "kind": "staged" }`
+  - [ ] `{ "kind": "base", "base": "origin/main" }`
+  - [ ] `{ "kind": "files", "files": ["src/lib.rs"] }`
+- [ ] validate `kind = "base"` requires non-empty `base`
+- [ ] validate `kind = "files"` requires non-empty `files` and canonicalizes every file path
+- [ ] reject any call that combines populated `change_source` with legacy `mode`, `files`, `base`, `staged`, or `working_tree`
+- [ ] keep legacy fields accepted only when exactly one mode family is materially present and emit deprecation metadata
+- [ ] remove boolean requirement traps such as `mode = "staged"` plus `staged = true`; new shape must not require duplicate confirmation
+- [ ] keep default behavior explicit by materializing omitted source as `change_source = { "kind": "working_tree" }` in result metadata
+- [ ] add shared tests for valid modes, missing companion fields, mixed new+legacy rejection, and legacy compatibility
+
+#### MCP-ERG3.2 apply `change_source` to change/review tools
+
+- [ ] update `detect_changes` input schema to advertise `change_source` and mark legacy fields deprecated in descriptions/manual output
+- [ ] update `get_minimal_context` input schema to advertise `change_source`
+- [ ] update `get_review_context` input schema to advertise `change_source`
+- [ ] update `get_impact_radius` input schema to advertise `change_source`
+- [ ] update `explain_change` input schema to advertise `change_source`
+- [ ] keep successful result objects reporting normalized `change_source.kind`, not raw legacy fields
+- [ ] add per-tool tests proving `change_source` produces same file set as equivalent legacy input
+- [ ] add conflict tests for every migrated tool using shared validator snapshots
+
+#### MCP-ERG3.3 split graph build operation from update source
+
+- [ ] add new `operation` object input for `build_or_update_graph` with shapes:
+  - [ ] `{ "kind": "build" }`
+  - [ ] `{ "kind": "update", "change_source": { "kind": "working_tree" } }`
+  - [ ] `{ "kind": "update", "change_source": { "kind": "staged" } }`
+  - [ ] `{ "kind": "update", "change_source": { "kind": "base", "base": "origin/main" } }`
+  - [ ] `{ "kind": "update", "change_source": { "kind": "files", "files": ["src/lib.rs"] } }`
+- [ ] reject `operation.kind = "build"` when update-only source fields are present
+- [ ] reject `operation.kind = "update"` when `change_source` is missing; if default working-tree update is desired, require explicit `{ "kind": "working_tree" }`
+- [ ] map legacy `mode = "build"` and `mode = "update"` calls into `operation` during compatibility window with deprecation metadata
+- [ ] add tests for build, every update source, legacy compatibility, and invalid mixed operation fields
+
+Why:
+- change-source fields are reused across core review workflows, so one parser reduces drift
+- update operations currently mix operation kind with diff source, which forces agents to satisfy duplicate or conflicting fields
+
+### Phase MCP-ERG4 — Batch query and query-intent cleanup
+
+Remove hidden precedence and make symbol-query intent boundaries explicit.
+
+#### MCP-ERG4.1 normalize `batch_query_graph`
+
+- [ ] add `items` array input for `batch_query_graph` where every item uses the same query object shape as `query_graph`
+- [ ] require `items` max length 20 and reject empty arrays
+- [ ] reject calls that combine populated `items` with legacy `text` or `queries`
+- [ ] keep legacy `queries` accepted as alias for `items` during compatibility window with deprecation metadata
+- [ ] keep legacy `text` accepted only when `queries` and `items` are absent; split only on comma, not whitespace, to avoid accidental symbol fragmentation
+- [ ] reject legacy calls containing both `text` and `queries`; remove current `text wins` behavior
+- [ ] update docs to say `items` is preferred and `text` is compatibility-only
+- [ ] add tests for `items`, legacy `queries`, legacy `text`, `text+queries` rejection, `text+items` rejection, and max-item enforcement
+
+#### MCP-ERG4.2 explicit query-intent grammar
+
+- [ ] define supported `query_graph` / `get_context target.kind=query` intent grammar in docs and manual output:
+  - [ ] plain symbol identifier
+  - [ ] exact qualified name
+  - [ ] `who calls <symbol>`
+  - [ ] `what breaks <symbol>`
+  - [ ] `tests for <symbol>`
+- [ ] add validator or parser metadata that distinguishes supported intent phrases from arbitrary natural-language descriptions
+- [ ] return retry guidance when query text looks like a natural-language description without a concrete identifier
+- [ ] add examples to `tool_help query_graph`, `tool_help resolve_symbol`, and `tool_help get_context`
+- [ ] add tests for supported phrases, unsupported descriptive sentence, exact qualified name, and plain identifier
+
+Why:
+- `text wins` and whitespace auto-splitting are hidden behavior
+- agents need exact query grammar more than broad prose warnings like "not natural language"
+
+### Phase MCP-ERG5 — Stable-object result contract for all agent-facing tools
+
+Remove remaining text-only contracts from agent-facing tools so clients can chain outputs without parsing prose.
+
+- [ ] convert `query_graph` from `text-only` to stable object `QueryGraphResult` with fields `query`, `matches`, `summary`, `truncated`, `warnings`, and `atlas_provenance`
+- [ ] convert `batch_query_graph` from `text-only` to stable object `BatchQueryGraphResult` with fields `items`, `results`, `summary`, `warnings`, and `atlas_provenance`
+- [ ] convert `search_saved_context` from `text-only` to stable object `SearchSavedContextResult` with fields `query`, `matches`, `summary`, `truncated`, and `warnings`
+- [ ] convert `search_decisions` from `text-only` to stable object `SearchDecisionsResult` with fields `query`, `matches`, `summary`, `truncated`, and `warnings`
+- [ ] convert `cross_session_search` from `text-only` to stable object `CrossSessionSearchResult` with fields `query`, `sessions`, `matches`, `summary`, `truncated`, and `warnings`
+- [ ] keep compact human text in MCP `content[0].text`, derived from structured object
+- [ ] add exact `outputSchema` for every converted tool
+- [ ] update `MCP_TOOLS.md` generation so no exported agent-facing tool remains `text-only` unless an explicit allowlist test names it
+- [ ] add direct-call, stdio, HTTP, and deferred-task parity tests for converted tools where deferred task path applies
+- [ ] add schema validation tests proving `structuredContent` validates against advertised `outputSchema`
+
+Why:
+- agents chain structured fields more reliably than text snippets
+- text-only contracts block exact schema validation and increase parsing mistakes
+
+### Phase MCP-ERG6 — Runtime manual, generated docs, and installed instruction sync
+
+Make the simplified shapes discoverable from live tool docs and keep static instructions from drifting.
+
+- [ ] update `tool_help` / `man` output to include an `input_contract` section for every tool with:
+  - [ ] discriminant field name such as `target.kind`, `selector.kind`, `change_source.kind`, or `repo_scope.kind`
+  - [ ] accepted enum values
+  - [ ] required companion fields per enum value
+  - [ ] mutually exclusive legacy fields during compatibility window
+  - [ ] one minimal valid example per enum value
+- [ ] add manual-output snapshot tests for `get_context`, `read_file_excerpt`, `get_docs_section`, `detect_changes`, `build_or_update_graph`, and `batch_query_graph`
+- [ ] update generated `MCP_TOOLS.md` descriptions to prefer discriminated objects and avoid `EITHER ... OR ...` prose where schema already encodes `kind`
+- [ ] update installed AGENTS instructions to say runtime `tool_list` / `tool_help` is canonical for exact current arguments
+- [ ] remove stale static tool tables from installed instruction templates where generated docs already provide current inventory
+- [ ] add documentation drift test proving AGENTS installed block references runtime docs instead of duplicating full tool list
+- [ ] add docs section `wiki/mcp-agent-ergonomics.md` with before/after examples for the highest-frequency tools
+
+Why:
+- agents follow tool descriptions and manuals more than implementation intent
+- one live manual surface reduces stale prompt and markdown drift
+
+### Phase MCP-ERG7 — Deprecation removal and enforcement gates
+
+After compatibility window, remove legacy ambiguous inputs and make CI block regressions.
+
+- [ ] remove legacy `get_context` top-level target fields `query`, `file`, and `files` after new `target` object has shipped for one compatibility window
+- [ ] remove legacy `read_file_excerpt` top-level selector fields after new `selector` object has shipped for one compatibility window
+- [ ] remove legacy `get_docs_section` top-level `heading` and `line` selector fields after new `selector` object has shipped for one compatibility window
+- [ ] remove legacy change-source fields `mode`, `files`, `base`, `staged`, and `working_tree` from MCP descriptors after new `change_source` has shipped for one compatibility window
+- [ ] remove legacy `batch_query_graph.text` and `batch_query_graph.queries` after `items` has shipped for one compatibility window
+- [ ] remove legacy `repo_id` and `all_repos` descriptor fields after `repo_scope` has shipped for one compatibility window
+- [ ] add registry test that fails when any exported input schema contains known legacy ambiguous field groups without explicit allowlist entry
+- [ ] add registry test that fails when any tool description contains hidden precedence wording such as `wins`, `takes precedence`, or `ignored when both`
+- [ ] add registry test that fails when any exported agent-facing tool lacks object `structuredContent` output schema
+- [ ] update `MCP_TOOLS.md` and wiki docs to remove compatibility examples after removal lands
+
+Why:
+- compatibility shims should not become permanent complexity
+- CI needs to prevent new ambiguous tool shapes from reappearing
+
+#### Part IX completion criteria
+
+- [ ] every selector-family MCP tool uses a discriminated object for new calls
+- [ ] every change-source MCP tool uses shared `change_source` object for new calls
+- [ ] every multi-repo MCP tool uses shared `repo_scope` object for new calls
+- [ ] `get_context` no longer silently chooses between `files`, `file`, and `query`
+- [ ] `batch_query_graph` no longer silently lets `text` override `queries`
+- [ ] all agent-facing tools return stable object `structuredContent` with exact `outputSchema`
+- [ ] runtime `tool_help` / `man`, generated `MCP_TOOLS.md`, installed AGENTS bootstrap, and wiki docs describe the same input contracts
+- [ ] conflict errors name offending fields, accepted discriminants, and one valid retry example
+- [ ] registry and snapshot tests prevent hidden precedence, ambiguous selector families, text-only agent-facing contracts, and stale manual docs from returning
+- [ ] `cargo fmt --all`, `cargo clippy --workspace --all-targets --all-features -- -D warnings`, `cargo test --quiet -p atlas-mcp`, and `./scripts/test-workspace-summary.sh` pass after Part IX implementation
