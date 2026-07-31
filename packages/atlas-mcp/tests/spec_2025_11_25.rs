@@ -211,7 +211,7 @@ fn seed_saved_context_and_decision(repo_root: &str, db_path: &str) {
     );
 
     let session_db = derive_session_db_path(db_path);
-    let store = SessionStore::open(&session_db).expect("open session store");
+    let mut store = SessionStore::open(&session_db).expect("open session store");
     let session_id = SessionId::derive(repo_root, "", "mcp");
     store
         .upsert_session_meta(session_id.clone(), repo_root, "mcp", None)
