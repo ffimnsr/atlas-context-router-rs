@@ -14,20 +14,20 @@ use atlas_review::{ContextEngine, build_explain_change_summary};
 use atlas_session::{SessionId, SessionStore};
 use atlas_store_sqlite::{BuildFinishStats, Store};
 
-use super::metadata::{
+use crate::metadata::{
     build_freshness_metadata, collect_context_hints, compute_prompt_routing, snapshot_to_value,
 };
-use super::payload::{
+use crate::payload::{
     extract_changed_files, extract_hook_command, extract_hook_status, extract_tool_name,
     tool_may_change_files,
 };
-use super::policy::{
+use crate::policy::{
     HookLifecycleAction, HookPersistence, HookPolicy, MAX_HOOK_REVIEW_REFRESH_DEPTH,
     MAX_HOOK_REVIEW_REFRESH_FILES, MAX_HOOK_REVIEW_REFRESH_NODES, ReviewRefreshArtifact,
     ReviewRefreshResult,
 };
 
-pub(crate) fn execute_hook_actions(
+pub fn execute_hook_actions(
     repo: &str,
     graph_db_path: &str,
     frontend: &str,

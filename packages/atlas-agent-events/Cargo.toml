@@ -1,0 +1,25 @@
+[package]
+name = "atlas-agent-events"
+version = "1.6.0"
+edition = "2024"
+description = "Shared agent event service for native hook capture and MCP fallback capture"
+
+[dependencies]
+atlas-adapters = { path = "../atlas-adapters" , version = "1.6.0"}
+atlas-contentstore = { path = "../atlas-contentstore" , version = "1.6.0"}
+atlas-core.workspace = true
+atlas-engine.workspace = true
+atlas-impact = { path = "../atlas-impact" , version = "1.6.0"}
+atlas-review = { path = "../atlas-review" , version = "1.6.0"}
+atlas-session = { path = "../atlas-session" , version = "1.6.0"}
+atlas-store-sqlite = { path = "../atlas-store-sqlite" , version = "1.6.0"}
+anyhow.workspace = true
+camino.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+tempfile = "3"

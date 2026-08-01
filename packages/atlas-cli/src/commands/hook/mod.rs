@@ -1,22 +1,20 @@
 use anyhow::Result;
-use serde_json::json;
+use serde_json::{Value, json};
+
+use atlas_agent_events::{
+    AgentEventRequest, AgentEventResult, AgentEventSource, record_agent_event,
+};
 
 use crate::cli::{Cli, Command};
 
 use super::{db_path, print_json};
 
-mod actions;
-mod metadata;
-mod payload;
-mod policy;
 mod runtime;
 
 #[cfg(test)]
 mod tests;
 
-use actions::execute_hook_actions;
-use policy::resolve_hook_policy;
-use runtime::{hook_frontend, persist_hook_event, read_hook_payload, resolve_hook_repo};
+use runtime::{hook_frontend, read_hook_payload, resolve_hook_repo};
 
 pub fn run_hook(cli: &Cli) -> Result<()> {
     let event = match &cli.command {
@@ -28,35 +26,40 @@ pub fn run_hook(cli: &Cli) -> Result<()> {
     let graph_db_path = db_path(cli, &repo);
     let payload = read_hook_payload()?;
     let frontend = hook_frontend();
-    let policy = resolve_hook_policy(event)?;
-    let persisted = persist_hook_event(&repo, &graph_db_path, &frontend, event, payload.clone())?;
-    let actions = execute_hook_actions(
-        &repo,
-        &graph_db_path,
-        &frontend,
-        policy,
-        &persisted,
-        &payload,
-    );
+    let result = record_agent_event(AgentEventRequest {
+        repo_root: repo.clone(),
+        graph_db_path,
+        frontend,
+        event: event.to_owned(),
+        session_id: None,
+        agent_id: None,
+        payload,
+        source: AgentEventSource::Hook,
+    })?;
 
     if cli.json {
-        print_json(
-            "hook",
-            json!({
-                "event": event,
-                "frontend": frontend,
-                "repo_root": repo,
-                "session_id": persisted.session_id.as_str(),
-                "pending_resume": persisted.pending_resume,
-                "stored": persisted.stored_event_id.is_some(),
-                "event_id": persisted.stored_event_id,
-                "source_id": persisted.source_id,
-                "storage_kind": persisted.storage_kind,
-                "snapshot": persisted.snapshot,
-                "actions": actions,
-            }),
-        )?;
+        print_json("hook", hook_result_json(&repo, result))?;
     }
 
     Ok(())
+}
+
+/// Build the stable `atlas hook --json` output shape.
+///
+/// Field names and presence are part of the hook output contract; keep this
+/// helper in sync with pre-refactor output so hook consumers never break.
+pub(crate) fn hook_result_json(repo: &str, result: AgentEventResult) -> Value {
+    json!({
+        "event": result.event,
+        "frontend": result.frontend,
+        "repo_root": repo,
+        "session_id": result.session_id,
+        "pending_resume": result.pending_resume,
+        "stored": result.stored,
+        "event_id": result.event_id,
+        "source_id": result.source_id,
+        "storage_kind": result.storage_kind,
+        "snapshot": result.snapshot,
+        "actions": result.actions,
+    })
 }

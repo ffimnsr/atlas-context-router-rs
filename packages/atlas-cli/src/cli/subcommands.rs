@@ -1,5 +1,30 @@
 use clap::Subcommand;
 
+/// Which install surfaces `atlas install` should set up.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, clap::ValueEnum)]
+pub enum InstallMode {
+    /// MCP server config only (no hooks, no instruction files).
+    Mcp,
+    /// Native hook assets only (git hooks + platform agent hooks).
+    Hook,
+    /// Instruction fallback text only (AGENTS.md / CLAUDE.md).
+    Cli,
+    /// All three surfaces (default).
+    #[default]
+    All,
+}
+
+impl InstallMode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Mcp => "mcp",
+            Self::Hook => "hook",
+            Self::Cli => "cli",
+            Self::All => "all",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, clap::ValueEnum)]
 pub enum InsightsLargeFunctionMode {
     Large,

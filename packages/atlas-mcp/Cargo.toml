@@ -13,6 +13,7 @@ http-transport = ["dep:tokio", "dep:axum", "dep:tower-http", "dep:tokio-stream",
 [dependencies]
 atlas-core.workspace = true
 atlas-adapters = { path = "../atlas-adapters" , version = "1.6.0"}
+atlas-agent-events = { path = "../atlas-agent-events" , version = "1.6.0"}
 atlas-contentstore = { path = "../atlas-contentstore" , version = "1.6.0"}
 atlas-engine.workspace = true
 atlas-impact = { path = "../atlas-impact" , version = "1.6.0"}

@@ -18,6 +18,7 @@ members = [
   "packages/atlas-contextsave",
   "packages/atlas-adapters",
   "packages/atlas-db-utils",
+  "packages/atlas-agent-events",
 ]
 exclude = ["fuzz"]
 resolver = "2"
@@ -113,6 +114,7 @@ atlas-core      = { path = "packages/atlas-core" }
 atlas-engine    = { path = "packages/atlas-engine" }
 atlas-mcp       = { path = "packages/atlas-mcp" }
 atlas-reasoning = { path = "packages/atlas-reasoning" }
+atlas-agent-events = { path = "packages/atlas-agent-events" }
 
 [profile.dev]
 debug = 1

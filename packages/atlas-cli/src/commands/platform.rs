@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use atlas_mcp::ServerOptions;
 use serde::{Deserialize, Serialize};
 
-use crate::cli::{Cli, Command};
+use crate::cli::{Cli, Command, InstallMode};
 
 use super::{db_path, print_json, resolve_repo};
 
@@ -753,6 +753,17 @@ struct DaemonHandshakeResponse {
     error: Option<String>,
 }
 
+/// Map an install mode to the surfaces it skips: `(platform config, hooks,
+/// instructions)`. `all` skips nothing; the mode composes with explicit
+/// `--no-*` flags in the caller.
+fn resolve_mode_skips(mode: InstallMode) -> (bool, bool, bool) {
+    (
+        matches!(mode, InstallMode::Hook | InstallMode::Cli),
+        matches!(mode, InstallMode::Mcp | InstallMode::Cli),
+        matches!(mode, InstallMode::Mcp | InstallMode::Hook),
+    )
+}
+
 pub fn run_install(cli: &Cli) -> Result<()> {
     let (
         platform,
@@ -765,6 +776,7 @@ pub fn run_install(cli: &Cli) -> Result<()> {
         no_hooks,
         no_instructions,
         instructions_mode,
+        mode,
     ) = match &cli.command {
         Command::Install {
             platform,
@@ -777,6 +789,7 @@ pub fn run_install(cli: &Cli) -> Result<()> {
             no_hooks,
             no_instructions,
             instructions_mode,
+            mode,
         } => (
             platform.clone(),
             scope.clone(),
@@ -788,6 +801,7 @@ pub fn run_install(cli: &Cli) -> Result<()> {
             *no_hooks,
             *no_instructions,
             *instructions_mode,
+            *mode,
         ),
         _ => unreachable!(),
     };
@@ -801,8 +815,14 @@ pub fn run_install(cli: &Cli) -> Result<()> {
         println!("Dry run — no files will be written.\n");
     }
 
-    let no_platform_config = no_platform_config || instructions_only;
-    let no_hooks = no_hooks || instructions_only;
+    // Install modes map to the same surfaces as the explicit --no-* flags:
+    // mcp = platform MCP config, hook = git + agent hooks, cli = instruction
+    // fallback text, all = every surface.
+    let (mode_skips_platform_config, mode_skips_hooks, mode_skips_instructions) =
+        resolve_mode_skips(mode);
+    let no_platform_config = no_platform_config || instructions_only || mode_skips_platform_config;
+    let no_hooks = no_hooks || instructions_only || mode_skips_hooks;
+    let no_instructions = no_instructions || mode_skips_instructions;
 
     let summary = crate::install::run_install(
         repo_root,
@@ -829,6 +849,7 @@ pub fn run_install(cli: &Cli) -> Result<()> {
                 "instructions_only": instructions_only,
                 "no_platform_config": no_platform_config,
                 "no_hooks": no_hooks,
+                "mode": mode.as_str(),
                 "instructions_mode": instructions_mode.as_str(),
                 "configured": summary.configured,
                 "already_configured": summary.already_configured,
@@ -852,7 +873,11 @@ pub fn run_install(cli: &Cli) -> Result<()> {
             println!("  Hook config: {f}");
         }
         for f in &summary.instruction_files {
-            println!("  Instructions updated: {f}");
+            if dry_run {
+                println!("  Instructions (dry-run): {f} (would update fallback file)");
+            } else {
+                println!("  Instructions updated  : {f}");
+            }
         }
         for check in &summary.validation_checks {
             let status = if check.ok { "ok" } else { "fail" };
@@ -924,10 +949,19 @@ pub fn run_serve_http(_cli: &Cli) -> Result<()> {
 mod tests {
     use clap::Parser;
 
-    use crate::cli::{Cli, Command};
+    use crate::cli::{Cli, Command, InstallMode};
 
     fn parse(args: &[&str]) -> Cli {
         Cli::try_parse_from(args).expect("parse should succeed")
+    }
+
+    #[test]
+    fn install_mode_maps_to_surfaces() {
+        use super::resolve_mode_skips;
+        assert_eq!(resolve_mode_skips(InstallMode::All), (false, false, false));
+        assert_eq!(resolve_mode_skips(InstallMode::Mcp), (false, true, true));
+        assert_eq!(resolve_mode_skips(InstallMode::Hook), (true, false, true));
+        assert_eq!(resolve_mode_skips(InstallMode::Cli), (true, true, false));
     }
 
     #[test]

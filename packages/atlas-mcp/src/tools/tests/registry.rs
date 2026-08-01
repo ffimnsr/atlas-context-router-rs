@@ -1,4 +1,5 @@
 use super::*;
+use crate::session_events::{SUPPORTED_EVENTS, is_supported_event_name};
 use crate::tools::registry::{ToolResultContract, tool_result_contract};
 use crate::tools::tool_descriptors;
 use serde_json::{Value, json};
@@ -46,6 +47,7 @@ const TOOL_REGISTRY_SNAPSHOT: &[&str] = &[
     "read_file_around_match",
     "read_file_excerpt",
     "read_saved_context",
+    "record_session_event",
     "repo_registry",
     "resolve_symbol",
     "resume_session",
@@ -62,6 +64,7 @@ const TOOL_REGISTRY_SNAPSHOT: &[&str] = &[
     "tool_list",
     "tool_search",
     "traverse_graph",
+    "wake_up",
 ];
 
 fn manual_snapshot_path(name: &str) -> PathBuf {
@@ -170,6 +173,10 @@ fn parity_args(tool_name: &str, source_id: &str) -> Value {
         "get_session_status" => json!({ "output_format": "json" }),
         "compact_session" => json!({ "output_format": "json" }),
         "resume_session" => json!({ "mark_consumed": false, "output_format": "json" }),
+        "record_session_event" => {
+            json!({ "event": "user-prompt", "payload": { "prompt": "parity" }, "output_format": "json" })
+        }
+        "wake_up" => json!({ "output_format": "json" }),
         "search_saved_context" => json!({ "query": "parity-seed", "output_format": "json" }),
         "search_decisions" => json!({ "query": "parity-seed", "output_format": "json" }),
         "read_saved_context" => json!({ "source_id": source_id, "output_format": "json" }),
@@ -537,6 +544,53 @@ fn tool_list_all_tools_default_to_toon() {
             .expect("output_format description");
         assert_eq!(description, DEFAULT_OUTPUT_DESCRIPTION);
     }
+}
+
+#[test]
+fn record_session_event_description_lists_only_supported_events() {
+    let list = tool_list();
+    let tools = list.get("tools").and_then(|t| t.as_array()).unwrap();
+    let tool = tools
+        .iter()
+        .find(|t| t.get("name") == Some(&json!("record_session_event")))
+        .expect("record_session_event must be in registry");
+    let description = tool["description"].as_str().expect("description");
+
+    // The key lifecycle events must be listed explicitly and be supported.
+    for event in [
+        "session-start",
+        "user-prompt",
+        "pre-tool-use",
+        "post-tool-use",
+        "pre-compact",
+        "post-compact",
+        "stop",
+        "session-end",
+        "file-changed",
+        "tool-failure",
+        "error",
+    ] {
+        assert!(
+            description.contains(event),
+            "registry description must list event {event}"
+        );
+        assert!(is_supported_event_name(event));
+    }
+
+    // Every hyphenated token in the description must be a supported event
+    // name, so the registry can never describe a conflicting event.
+    for token in description.split(|c: char| !c.is_ascii_alphanumeric() && c != '-') {
+        if token.contains('-') {
+            assert!(
+                is_supported_event_name(token),
+                "registry description lists unsupported event name: {token}"
+            );
+        }
+    }
+
+    // The exported supported list is the single source of truth and stays
+    // non-empty.
+    assert!(SUPPORTED_EVENTS.len() >= 20);
 }
 
 #[test]

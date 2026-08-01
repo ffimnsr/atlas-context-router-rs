@@ -79,6 +79,71 @@ fn instructions_section_mentions_tool_discovery_helpers() {
 }
 
 #[test]
+fn instructions_section_documents_session_memory_fallback() {
+    assert!(INSTRUCTIONS_SECTION.contains("Session memory fallback for hosts without hooks"));
+    assert!(INSTRUCTIONS_SECTION.contains("`record_session_event`"));
+    assert!(INSTRUCTIONS_SECTION.contains("`wake_up` when available"));
+    assert!(INSTRUCTIONS_SECTION.contains("`resume_session`"));
+    assert!(INSTRUCTIONS_SECTION.contains("`save_context_artifact`"));
+    assert!(INSTRUCTIONS_SECTION.contains("`compact_session`"));
+    assert!(INSTRUCTIONS_SECTION.contains("`search_decisions`"));
+    assert!(INSTRUCTIONS_SECTION.contains("`get_global_memory`"));
+    for event in [
+        "user-prompt",
+        "post-tool-use",
+        "file-changed",
+        "tool-failure",
+        "pre-compact",
+        "stop",
+        "session-end",
+    ] {
+        assert!(
+            INSTRUCTIONS_SECTION.contains(&format!("\"{event}\"")),
+            "fallback protocol must document event {event}"
+        );
+    }
+    assert!(INSTRUCTIONS_SECTION.contains("Do NOT store"));
+    assert!(INSTRUCTIONS_SECTION.contains("Never write any Atlas database directly"));
+}
+
+#[test]
+fn inject_instructions_agents_md_contains_fallback_protocol() {
+    let tmp = TempDir::new().unwrap();
+    inject_instructions(tmp.path(), &["AGENTS.md"], false, InstructionsMode::Refresh).unwrap();
+    let content = fs::read_to_string(tmp.path().join("AGENTS.md")).unwrap();
+    assert!(content.contains("Session memory fallback for hosts without hooks"));
+    assert!(content.contains("record_session_event"));
+    assert!(content.contains("pre-compact"));
+}
+
+#[test]
+fn inject_instructions_claude_md_contains_fallback_protocol() {
+    let tmp = TempDir::new().unwrap();
+    inject_instructions(tmp.path(), &["CLAUDE.md"], false, InstructionsMode::Refresh).unwrap();
+    let content = fs::read_to_string(tmp.path().join("CLAUDE.md")).unwrap();
+    assert!(content.contains("Session memory fallback for hosts without hooks"));
+    assert!(content.contains("save_context_artifact"));
+    assert!(content.contains("source_id"));
+}
+
+#[test]
+fn inject_instructions_fallback_protocol_preserves_user_content() {
+    let tmp = TempDir::new().unwrap();
+    let seeded = format!(
+        "# Existing content\n\n{INSTRUCTIONS_MARKER}\nold stale block\n{INSTRUCTIONS_END_MARKER}\n\n## User Notes\nkeep me\n"
+    );
+    fs::write(tmp.path().join("AGENTS.md"), seeded).unwrap();
+
+    inject_instructions(tmp.path(), &["AGENTS.md"], false, InstructionsMode::Refresh).unwrap();
+    let content = fs::read_to_string(tmp.path().join("AGENTS.md")).unwrap();
+
+    assert!(content.starts_with("# Existing content"));
+    assert!(content.contains("## User Notes\nkeep me"));
+    assert!(content.contains("Session memory fallback for hosts without hooks"));
+    assert!(content.contains("record_session_event"));
+}
+
+#[test]
 fn instructions_section_references_runtime_docs_without_duplicating_full_tool_inventory() {
     let exported = exported_mcp_tool_names();
     let mentioned = exported
@@ -216,6 +281,78 @@ fn generated_mcp_tools_markdown_matches_exported_registry() {
     assert_eq!(actual, atlas_mcp::tool_list_markdown());
 }
 
+#[test]
+fn installed_instructions_reference_only_supported_fallback_events() {
+    let events = extract_event_literals(INSTRUCTIONS_SECTION);
+    assert!(
+        events.len() >= 7,
+        "fallback protocol must reference its capture events: {events:?}"
+    );
+    for event in &events {
+        assert!(
+            atlas_mcp::is_supported_event_name(event),
+            "installed instructions reference unsupported event name: {event}"
+        );
+    }
+}
+
+#[test]
+fn wiki_hook_docs_and_fallback_page_agree_on_event_names() {
+    for (path, pascal_cells) in [
+        ("wiki/hooks-claude.md", true),
+        ("wiki/hooks-codex.md", true),
+        ("wiki/session-memory-fallback.md", false),
+    ] {
+        let full = repo_root().join(path);
+        let text =
+            fs::read_to_string(&full).unwrap_or_else(|err| panic!("read {path} failed: {err}"));
+        let names: Vec<String> = if pascal_cells {
+            extract_pascal_table_event_names(&text)
+        } else {
+            extract_event_literals(&text)
+        };
+        assert!(!names.is_empty(), "{path} must document event names");
+        for name in &names {
+            assert!(
+                atlas_mcp::is_supported_event_name(name),
+                "{path} describes unsupported event name: {name}"
+            );
+        }
+    }
+}
+
+#[test]
+fn dry_run_reports_instruction_fallback_files_without_writing() {
+    let tmp = TempDir::new().unwrap();
+
+    let summary = run_install(
+        tmp.path(),
+        "codex",
+        "repo",
+        InstallOptions {
+            dry_run: true,
+            no_platform_config: true,
+            no_hooks: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    assert!(
+        summary.instruction_files.contains(&"AGENTS.md".to_owned()),
+        "dry-run must report the fallback file it would update: {:?}",
+        summary.instruction_files
+    );
+    assert!(
+        !tmp.path().join("AGENTS.md").exists(),
+        "dry-run must not write instruction fallback files"
+    );
+    assert!(
+        summary.configured.is_empty() && summary.hook_paths.is_empty(),
+        "dry-run with cli-only surfaces must not report config or hooks"
+    );
+}
+
 fn exported_mcp_tool_names() -> BTreeSet<String> {
     atlas_mcp::tool_list()["tools"]
         .as_array()
@@ -276,6 +413,46 @@ fn repo_root() -> PathBuf {
         .parent()
         .unwrap()
         .to_path_buf()
+}
+
+/// Extract `event: "name"` literals from a text block (instructions, wiki
+/// fallback page).
+fn extract_event_literals(text: &str) -> Vec<String> {
+    let mut events = Vec::new();
+    let mut rest = text;
+    while let Some(idx) = rest.find("event: \"") {
+        let after = &rest[idx + "event: \"".len()..];
+        let end = after.find('"').unwrap_or(after.len());
+        let name = after[..end].to_owned();
+        if !name.is_empty() && !events.contains(&name) {
+            events.push(name);
+        }
+        rest = after;
+    }
+    events
+}
+
+/// Extract PascalCase event names from markdown table cells (`| `Name` |`),
+/// used by the hooks wiki pages.
+fn extract_pascal_table_event_names(text: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    for line in text.lines() {
+        let Some(rest) = line.trim_start().strip_prefix("| `") else {
+            continue;
+        };
+        let Some(name) = rest.split('`').next() else {
+            continue;
+        };
+        if name.is_empty() {
+            continue;
+        }
+        let looks_like_event = name.chars().next().is_some_and(|c| c.is_ascii_uppercase())
+            && name.chars().all(|c| c.is_ascii_alphanumeric());
+        if looks_like_event && !names.contains(&name.to_owned()) {
+            names.push(name.to_owned());
+        }
+    }
+    names
 }
 
 fn expected_stdio_args(repo_root: &Path) -> Value {
@@ -730,6 +907,38 @@ fn install_atlas_hook_runner_creates_executable_script() {
         use std::os::unix::fs::PermissionsExt;
         let mode = fs::metadata(&runner).unwrap().permissions().mode();
         assert_ne!(mode & 0o111, 0, "runner should be executable");
+    }
+}
+
+#[test]
+fn install_atlas_hook_runner_calls_cli_and_never_writes_sqlite_directly() {
+    let tmp = TempDir::new().unwrap();
+    install_atlas_hook_runner(tmp.path(), false).unwrap();
+
+    let content =
+        fs::read_to_string(tmp.path().join(".atlas").join("hooks").join("atlas-hook")).unwrap();
+
+    // Thin launcher only: all real work stays in the Rust `atlas hook` CLI.
+    assert!(
+        content.contains("atlas hook"),
+        "runner must call `atlas hook`, got: {content}"
+    );
+    assert!(content.contains("|| true"), "runner must be non-blocking");
+
+    // Regression guard: generated runner must never perform direct graph/db
+    // work from shell; everything goes through the shared CLI service.
+    for banned in [
+        "atlas update",
+        "atlas detect-changes",
+        "worldtree",
+        "session.db",
+        "context.db",
+        "sqlite",
+    ] {
+        assert!(
+            !content.contains(banned),
+            "runner must not contain {banned:?}; got: {content}"
+        );
     }
 }
 

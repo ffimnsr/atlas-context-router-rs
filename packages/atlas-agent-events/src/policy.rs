@@ -3,14 +3,14 @@ use serde_json::Value;
 
 use atlas_session::{SessionEventType, SessionId, SessionStore};
 
-pub(crate) const MAX_HOOK_STDIN_BYTES: u64 = 64 * 1024;
-pub(crate) const MAX_HOOK_EVENT_SCAN: usize = 20;
-pub(crate) const MAX_HOOK_SOURCE_HINTS: usize = 3;
-pub(crate) const MAX_HOOK_PROMPT_HITS: usize = 3;
-pub(crate) const MAX_HOOK_REVIEW_REFRESH_FILES: usize = 8;
-pub(crate) const MAX_HOOK_REVIEW_REFRESH_DEPTH: u32 = 3;
-pub(crate) const MAX_HOOK_REVIEW_REFRESH_NODES: usize = 64;
-pub(crate) const FILE_CHANGED_INLINE_CONTENT_KEYS: &[&str] = &[
+pub const MAX_HOOK_STDIN_BYTES: u64 = 64 * 1024;
+pub const MAX_HOOK_EVENT_SCAN: usize = 20;
+pub const MAX_HOOK_SOURCE_HINTS: usize = 3;
+pub const MAX_HOOK_PROMPT_HITS: usize = 3;
+pub const MAX_HOOK_REVIEW_REFRESH_FILES: usize = 8;
+pub const MAX_HOOK_REVIEW_REFRESH_DEPTH: u32 = 3;
+pub const MAX_HOOK_REVIEW_REFRESH_NODES: usize = 64;
+pub const FILE_CHANGED_INLINE_CONTENT_KEYS: &[&str] = &[
     "after",
     "before",
     "content",
@@ -25,39 +25,39 @@ pub(crate) const FILE_CHANGED_INLINE_CONTENT_KEYS: &[&str] = &[
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum HookStorage {
+pub enum HookStorage {
     SessionOnly,
     SessionAndContent,
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct HookPayloadRouting {
-    pub(crate) event_payload: Value,
-    pub(crate) source_id: Option<String>,
-    pub(crate) storage_kind: Option<&'static str>,
+pub struct HookPayloadRouting {
+    pub event_payload: Value,
+    pub source_id: Option<String>,
+    pub storage_kind: Option<&'static str>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum HookLifecycleAction {
+pub enum HookLifecycleAction {
     None,
     LoadRestore,
     PersistHandoff,
     VerifyRestore,
 }
 
-pub(crate) struct HookPolicy {
-    pub(crate) canonical_event: &'static str,
-    pub(crate) aliases: &'static [&'static str],
-    pub(crate) event_type: SessionEventType,
-    pub(crate) priority: i32,
-    pub(crate) storage: HookStorage,
-    pub(crate) lifecycle: HookLifecycleAction,
-    pub(crate) prompt_routing: bool,
-    pub(crate) freshness: bool,
-    pub(crate) graph_refresh: bool,
-    pub(crate) review_refresh: bool,
-    pub(crate) build_resume_snapshot: bool,
-    pub(crate) session_start: bool,
+pub struct HookPolicy {
+    pub canonical_event: &'static str,
+    pub aliases: &'static [&'static str],
+    pub event_type: SessionEventType,
+    pub priority: i32,
+    pub storage: HookStorage,
+    pub lifecycle: HookLifecycleAction,
+    pub prompt_routing: bool,
+    pub freshness: bool,
+    pub graph_refresh: bool,
+    pub review_refresh: bool,
+    pub build_resume_snapshot: bool,
+    pub session_start: bool,
 }
 
 const SESSION_START_ALIASES: &[&str] = &["session-start", "SessionStart", "sessionStart"];
@@ -470,56 +470,60 @@ const HOOK_POLICIES: &[HookPolicy] = &[
 ];
 
 #[derive(Debug)]
-pub(crate) struct HookPersistence {
-    pub(crate) session_id: SessionId,
-    pub(crate) pending_resume: bool,
-    pub(crate) stored_event_id: Option<i64>,
-    pub(crate) snapshot: Option<Value>,
-    pub(crate) source_id: Option<String>,
-    pub(crate) storage_kind: Option<&'static str>,
+pub struct HookPersistence {
+    pub session_id: SessionId,
+    pub pending_resume: bool,
+    pub stored_event_id: Option<i64>,
+    pub snapshot: Option<Value>,
+    pub source_id: Option<String>,
+    pub storage_kind: Option<&'static str>,
 }
 
-pub(crate) struct PromptRoutingMetadata {
-    pub(crate) prompt_excerpt: String,
-    pub(crate) query: String,
-    pub(crate) intent: Value,
-    pub(crate) target: Value,
-    pub(crate) hits: Vec<Value>,
+pub struct PromptRoutingMetadata {
+    pub prompt_excerpt: String,
+    pub query: String,
+    pub intent: Value,
+    pub target: Value,
+    pub hits: Vec<Value>,
 }
 
-pub(crate) struct HookMetadataContext<'a> {
-    pub(crate) repo: &'a str,
-    pub(crate) graph_db_path: &'a str,
-    pub(crate) store: &'a SessionStore,
-    pub(crate) session_id: &'a SessionId,
-    pub(crate) policy: &'a HookPolicy,
-    pub(crate) payload: &'a Value,
-    pub(crate) routed: &'a HookPayloadRouting,
-    pub(crate) pending_resume: bool,
+pub struct HookMetadataContext<'a> {
+    pub repo: &'a str,
+    pub graph_db_path: &'a str,
+    pub store: &'a SessionStore,
+    pub session_id: &'a SessionId,
+    pub policy: &'a HookPolicy,
+    pub payload: &'a Value,
+    pub routed: &'a HookPayloadRouting,
+    pub pending_resume: bool,
+    pub event_source: &'a str,
+    pub agent_id: Option<&'a str>,
 }
 
-pub(crate) struct HookEventParts<'a> {
-    pub(crate) frontend: &'a str,
-    pub(crate) event: &'a str,
-    pub(crate) payload: Value,
-    pub(crate) hook_metadata: Value,
-    pub(crate) source_id: Option<&'a str>,
-    pub(crate) storage_kind: Option<&'a str>,
-    pub(crate) pending_resume: bool,
+pub struct HookEventParts<'a> {
+    pub frontend: &'a str,
+    pub event: &'a str,
+    pub payload: Value,
+    pub hook_metadata: Value,
+    pub source_id: Option<&'a str>,
+    pub storage_kind: Option<&'a str>,
+    pub pending_resume: bool,
+    pub event_source: &'a str,
+    pub agent_id: Option<&'a str>,
 }
 
-pub(crate) struct ReviewRefreshArtifact {
-    pub(crate) kind: &'static str,
-    pub(crate) source_id: String,
+pub struct ReviewRefreshArtifact {
+    pub kind: &'static str,
+    pub source_id: String,
 }
 
-pub(crate) struct ReviewRefreshResult {
-    pub(crate) trigger: &'static str,
-    pub(crate) changed_files: Vec<String>,
-    pub(crate) artifacts: Vec<ReviewRefreshArtifact>,
+pub struct ReviewRefreshResult {
+    pub trigger: &'static str,
+    pub changed_files: Vec<String>,
+    pub artifacts: Vec<ReviewRefreshArtifact>,
 }
 
-pub(crate) fn resolve_hook_policy(event: &str) -> Result<&'static HookPolicy> {
+pub fn resolve_hook_policy(event: &str) -> Result<&'static HookPolicy> {
     let Some(policy) = HOOK_POLICIES
         .iter()
         .find(|policy| policy.aliases.contains(&event))

@@ -1,6 +1,7 @@
 use super::*;
 use clap::Parser;
 
+use crate::cli::InstallMode;
 use crate::install::InstructionsMode;
 
 fn parse(args: &[&str]) -> Cli {
@@ -948,6 +949,7 @@ fn parse_install_defaults() {
         no_hooks,
         no_instructions,
         instructions_mode,
+        mode,
     } = cli.command
     {
         assert_eq!(platform, "all");
@@ -960,6 +962,7 @@ fn parse_install_defaults() {
         assert!(!no_hooks);
         assert!(!no_instructions);
         assert_eq!(instructions_mode, InstructionsMode::Refresh);
+        assert_eq!(mode, InstallMode::All);
     } else {
         panic!("expected Install command");
     }
@@ -1055,6 +1058,51 @@ fn parse_install_no_platform_config() {
     } else {
         panic!("expected Install command");
     }
+}
+
+#[test]
+fn parse_install_mode_all_is_default() {
+    let cli = parse(&["atlas", "install"]);
+    if let Command::Install { mode, .. } = cli.command {
+        assert_eq!(mode, InstallMode::All);
+    } else {
+        panic!("expected Install command");
+    }
+}
+
+#[test]
+fn parse_install_mode_mcp() {
+    let cli = parse(&["atlas", "install", "--mode", "mcp"]);
+    if let Command::Install { mode, .. } = cli.command {
+        assert_eq!(mode, InstallMode::Mcp);
+    } else {
+        panic!("expected Install command");
+    }
+}
+
+#[test]
+fn parse_install_mode_hook() {
+    let cli = parse(&["atlas", "install", "--mode", "hook"]);
+    if let Command::Install { mode, .. } = cli.command {
+        assert_eq!(mode, InstallMode::Hook);
+    } else {
+        panic!("expected Install command");
+    }
+}
+
+#[test]
+fn parse_install_mode_cli() {
+    let cli = parse(&["atlas", "install", "--mode", "cli"]);
+    if let Command::Install { mode, .. } = cli.command {
+        assert_eq!(mode, InstallMode::Cli);
+    } else {
+        panic!("expected Install command");
+    }
+}
+
+#[test]
+fn parse_install_rejects_unknown_mode() {
+    assert!(Cli::try_parse_from(["atlas", "install", "--mode", "hooks"]).is_err());
 }
 
 #[test]

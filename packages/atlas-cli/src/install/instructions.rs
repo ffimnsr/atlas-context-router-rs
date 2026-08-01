@@ -90,6 +90,32 @@ Runtime docs are canonical for exact current arguments, discriminated input obje
 - Apply same rule to future sidecar/cache/index keys, including in-memory parser caches and retrieval sidecars keyed by repo files.
 - Use `atlas_repo::CanonicalRepoPath` or helper APIs built on it. Do not add local path-normalization helpers for path-derived identity.
 - If `doctor` or `db_check` reports `noncanonical_path_rows`, prefer rebuild from clean canonical inputs instead of in-place row rewrites.
+
+### Session memory fallback for hosts without hooks
+
+Native Atlas hooks capture session events automatically on Claude Code, Codex, and Copilot. When this client does not support Atlas hooks (or hook availability is unknown), use Atlas MCP tools as the fallback lifecycle protocol. Never write any Atlas database directly; only call Atlas MCP tools or CLI commands.
+
+#### Recall before work
+
+- At session start, call `wake_up` when available; otherwise call `resume_session` before substantive work.
+- Call `search_decisions` for prior conclusions and `search_saved_context` for prior artifacts relevant to the task.
+- Call `get_global_memory` when you need repo-level cross-session context.
+
+#### Mandatory capture triggers
+
+Call `record_session_event` when any of these happens:
+
+1. User gives a substantial task → `record_session_event` with `event: "user-prompt"` and `payload.prompt`.
+2. A tool call creates, edits, deletes, renames, or generates files → `record_session_event` with `event: "post-tool-use"` and payload containing `tool_name` and `changed_files` (repo-relative paths).
+3. You know exact changed files but not the originating tool payload → `record_session_event` with `event: "file-changed"`.
+4. Error resolved → `record_session_event` with `event: "tool-failure"` (or `error`) AND save the fix via `save_context_artifact` with `source_type: "error_resolved"`.
+5. Architecture/design decision made → save via `save_context_artifact` with `source_type: "decision"`, linking symbols/files/source ids when possible.
+6. User preference discovered → save via `save_context_artifact` with `source_type: "preference"`.
+7. Major investigation, review, or handoff summary produced → save via `save_context_artifact` with `source_type: "review"` / `"investigation"` / `"handoff"`.
+8. Context compression is imminent or detected → call `compact_session` and `record_session_event` with `event: "pre-compact"` first.
+9. Major work completed before your final response → `record_session_event` with `event: "stop"` (or `event: "session-end"`) and save a concise handoff artifact.
+
+Do NOT store: trivial logs, raw secrets or credentials, duplicate facts, raw unbounded transcripts, or facts already present in repository instruction files. Prefer compact summaries and `source_id` references.
 <!-- /atlas MCP tools -->
 "#;
 
@@ -140,17 +166,23 @@ pub fn inject_instructions(
 
         if dry_run {
             if existing.is_empty() {
-                println!("  [dry-run] would create {filename}");
+                println!("  [dry-run] would create instruction fallback file {filename}");
             } else {
                 match mode {
                     InstructionsMode::Refresh if existing.contains(INSTRUCTIONS_MARKER) => {
-                        println!("  [dry-run] would refresh atlas instructions in {filename}");
+                        println!(
+                            "  [dry-run] would refresh instruction fallback block in {filename}"
+                        );
                     }
                     InstructionsMode::Refresh => {
-                        println!("  [dry-run] would append atlas instructions to {filename}");
+                        println!(
+                            "  [dry-run] would append instruction fallback block to {filename}"
+                        );
                     }
                     InstructionsMode::ReplaceFile => {
-                        println!("  [dry-run] would replace all contents in {filename}");
+                        println!(
+                            "  [dry-run] would replace all contents of {filename} with instruction fallback block"
+                        );
                     }
                 }
             }

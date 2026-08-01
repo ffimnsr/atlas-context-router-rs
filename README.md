@@ -264,6 +264,38 @@ atlas install --platform codex --instructions-only
 
 `--instructions-only` is alias for `--no-platform-config --no-hooks`. It updates only `AGENTS.md` / `CLAUDE.md`.
 
+### Install modes
+
+`--mode` selects which surfaces `atlas install` sets up for the target platform. It composes with the explicit `--no-*` flags (which add further skips):
+
+| Mode | Installs | Skips |
+| ---- | -------- | ----- |
+| `mcp` | platform MCP config only | hooks + instruction fallback files |
+| `hook` | git hooks + platform agent hooks | MCP config + instruction fallback files |
+| `cli` | instruction fallback text (`AGENTS.md` / `CLAUDE.md`) | MCP config + hooks |
+| `all` (default) | all three surfaces | — |
+
+Examples:
+
+```bash
+atlas install --platform claude --mode mcp    # MCP config only
+atlas install --platform codex --mode cli     # instruction fallback only
+atlas install --mode hook                     # hooks only, auto-detected platform
+```
+
+`atlas install --dry-run` prints every file it would write or refresh, including which instruction fallback files would be created, appended, or refreshed, without touching anything.
+
+### Native hooks vs MCP fallback
+
+| surface | works_with | automatic | token_cost | best_for |
+| ------- | ---------- | --------- | ---------- | -------- |
+| native `atlas hook` (installed via `atlas install`) | Claude Code, Codex, GitHub Copilot | yes — zero agent effort | low (one background call per event) | hosts with LLM hook support; hands-off continuity |
+| MCP fallback (`wake_up` + `record_session_event` + instruction block) | any MCP-capable host: Zed, Cursor, Cline, VS Code Copilot Chat, JetBrains AI, others | no — agent follows the installed instruction block | low–medium (one tool call per trigger) | hookless hosts; universal compatibility |
+| instruction block alone (`AGENTS.md` / `CLAUDE.md`) | any host that reads repository instructions | no | none | hosts without MCP or hooks |
+| CLI (`atlas hook`, `atlas session resume`, `atlas session compact`) | shell scripts and manual workflows | no | none | debugging, CI, and scripted flows |
+
+Both capture paths record the same events into the same `session.db` / `context.db` storage through one shared event service, so event semantics, redaction, lifecycle actions, graph refresh, and review refresh never drift. See [Session Memory Fallback for Hookless Hosts](wiki/session-memory-fallback.md) for the hookless protocol.
+
 `atlas install` will:
 
 - write MCP server config for GitHub Copilot, Claude Code, or Codex
@@ -588,6 +620,8 @@ The MCP server (`atlas serve`) exposes these tools to agents:
 | `get_minimal_context` | Auto-detect changes and return compact impact bundle |
 | `explain_change` | Advanced impact: risk, change kinds, boundary/test gaps |
 | `get_session_status` | Current session identity, event count, and resume state |
+| `record_session_event` | Hook-equivalent MCP fallback capture for session/prompt/tool/stop events |
+| `wake_up` | Bounded session-start recall: focus, decisions, memories, readiness |
 | `repo_registry` | Persisted multi-repo registry inventory, relationships, trust, and warnings |
 | `compact_session` | Compact session event ledger: merge, decay, dedup, promote |
 | `resume_session` | Retrieve and consume current session snapshot |

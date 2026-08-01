@@ -75,6 +75,8 @@ pub(crate) fn tool_result_contract(name: &str) -> ToolResultContract {
         | "get_session_status"
         | "compact_session"
         | "resume_session"
+        | "record_session_event"
+        | "wake_up"
         | "read_saved_context"
         | "save_context_artifact"
         | "purge_saved_context"
@@ -609,6 +611,56 @@ fn base_tool_list_json() -> Value {
                         "session_id":    { "type": "string",  "description": "Explicit session id. Omit to use the derived id for the current repo." },
                         "agent_id":      { "type": "string",  "description": "Restrict status to one agent memory partition." },
                         "merge_agent_partitions": { "type": "boolean", "description": "Intentionally merge status across all agent partitions." },
+                        "output_format": { "type": "string",  "description": DEFAULT_OUTPUT_DESCRIPTION }
+                    },
+                    "required": []
+                }
+            },
+            {
+                "name": "record_session_event",
+                "description": "Session capture for hosts without native LLM hooks, mirroring `atlas hook <event>` exactly. Records the same agent events through the shared event service: session-start, user-prompt, pre-tool-use, post-tool-use, pre-compact, post-compact, stop, session-end, file-changed, tool-failure, error, and the other supported hook events. Returns stored event identity, storage routing, resume snapshot state, and executed actions (lifecycle, prompt routing, graph refresh, freshness, review refresh).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "event": { "type": "string",  "description": "Hook-compatible event name or alias (kebab-case or PascalCase). Examples: session-start, user-prompt, post-tool-use, file-changed, stop, session-end, tool-failure, SessionStart, PostToolUse." },
+                        "payload": { "type": "object", "description": "Event payload. Include prompt text, tool name, command, changed_files, status, or summary when available." },
+                        "frontend": { "type": "string",  "description": "Agent/frontend name recorded with the event. Defaults to mcp." },
+                        "session_id": { "type": "string",  "description": "Explicit session id. Omit to use the derived mcp session for the current repo." },
+                        "agent_id": { "type": "string",  "description": "Optional agent memory partition label echoed back in the response." },
+                        "repo_scope": {
+                            "type": "object",
+                            "description": "Repo scope object. Use { kind: 'current' } or { kind: 'repo_id', repo_id: '<id>' }. Multi-repo scopes are rejected; event capture is per-repo.",
+                            "properties": {
+                                "kind": { "type": "string", "description": "Repo scope kind: current or repo_id." },
+                                "repo_id": { "type": "string", "description": "Required when kind='repo_id'. Must be registered and enabled." }
+                            },
+                            "required": ["kind"]
+                        },
+                        "output_format": { "type": "string",  "description": DEFAULT_OUTPUT_DESCRIPTION }
+                    },
+                    "required": ["event"]
+                }
+            },
+            {
+                "name": "wake_up",
+                "description": "Bounded session-start recall for hookless agents. Assembles a compact context pack from the resume snapshot, decision memory, saved-context hints, global memory, changed files, and graph readiness, then records the session-start event through the shared event service shared with native hooks. Large saved artifacts are referenced by source_id only, never inlined.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "topic": { "type": "string",  "description": "Optional topic hint used to focus decision-memory search and to fill current_focus when no prior session exists." },
+                        "session_id": { "type": "string",  "description": "Explicit session id. Omit to use the derived mcp session for the current repo." },
+                        "frontend": { "type": "string",  "description": "Agent/frontend name recorded with the wake-up event. Defaults to mcp." },
+                        "agent_id": { "type": "string",  "description": "Restrict resume-snapshot recall to one agent memory partition." },
+                        "max_items": { "type": "integer",  "description": "Cap for every list in the pack (default 10, hard-clamped to 25)." },
+                        "repo_scope": {
+                            "type": "object",
+                            "description": "Repo scope object. Use { kind: 'current' } or { kind: 'repo_id', repo_id: '<id>' }. Multi-repo scopes are rejected; wake-up is per-repo.",
+                            "properties": {
+                                "kind": { "type": "string", "description": "Repo scope kind: current or repo_id." },
+                                "repo_id": { "type": "string", "description": "Required when kind='repo_id'. Must be registered and enabled." }
+                            },
+                            "required": ["kind"]
+                        },
                         "output_format": { "type": "string",  "description": DEFAULT_OUTPUT_DESCRIPTION }
                     },
                     "required": []
@@ -1273,6 +1325,8 @@ fn tool_output_schema_for(name: &str) -> Option<Value> {
         "get_session_status" => Some(get_session_status_output_schema()),
         "compact_session" => Some(compact_session_output_schema()),
         "resume_session" => Some(resume_session_output_schema()),
+        "record_session_event" => Some(record_session_event_output_schema()),
+        "wake_up" => Some(wake_up_output_schema()),
         "search_saved_context" => Some(search_saved_context_output_schema()),
         "search_decisions" => Some(search_decisions_output_schema()),
         "read_saved_context" => Some(read_saved_context_output_schema()),
@@ -3865,6 +3919,157 @@ fn get_session_status_output_schema() -> Value {
     )
 }
 
+fn record_session_event_output_schema() -> Value {
+    normalized_tool_output_schema(
+        serde_json::json!({
+            "tool": { "type": "string" },
+            "event": { "type": "string" },
+            "canonical_event": { "type": "string" },
+            "frontend": { "type": "string" },
+            "session_id": { "type": "string" },
+            "agent_id": { "type": ["string", "null"] },
+            "pending_resume": { "type": "boolean" },
+            "stored": { "type": "boolean" },
+            "event_id": { "type": ["integer", "null"] },
+            "source_id": { "type": ["string", "null"] },
+            "storage_kind": { "type": ["string", "null"] },
+            "snapshot": { "type": ["object", "null"] },
+            "actions": { "type": ["object", "null"] },
+            "warnings": { "type": "array", "items": { "type": "string" } },
+            "atlas_provenance": { "type": "object" },
+            "atlas_freshness": { "type": "object" }
+        }),
+        &[
+            "tool",
+            "event",
+            "canonical_event",
+            "frontend",
+            "session_id",
+            "pending_resume",
+            "stored",
+            "event_id",
+            "source_id",
+            "storage_kind",
+            "snapshot",
+            "actions",
+            "warnings",
+            "atlas_provenance",
+        ],
+        None,
+    )
+}
+
+fn wake_up_output_schema() -> Value {
+    normalized_tool_output_schema(
+        serde_json::json!({
+            "tool": { "type": "string" },
+            "repo_root": { "type": "string" },
+            "session_id": { "type": "string" },
+            "frontend": { "type": "string" },
+            "agent_id": { "type": ["string", "null"] },
+            "current_focus": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "intent": { "type": ["string", "null"] },
+                    "reasoning": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "properties": {
+                                "summary": { "type": ["string", "null"] },
+                                "source_id": { "type": ["string", "null"] },
+                                "at": { "type": ["string", "null"] }
+                            },
+                            "required": ["summary", "source_id", "at"]
+                        }
+                    }
+                },
+                "required": ["intent", "reasoning"]
+            },
+            "recent_decisions": { "type": "array", "items": { "type": "object" } },
+            "critical_memories": { "type": "array", "items": { "type": "object" } },
+            "recent_feedback": { "type": "array", "items": { "type": "object" } },
+            "active_memoir_concepts": { "type": "array", "items": { "type": "string" } },
+            "changed_files": { "type": "array", "items": { "type": "string" } },
+            "graph_readiness": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "graph_built": { "type": "boolean" },
+                    "graph_queryable": { "type": "boolean" },
+                    "graph_current": { "type": "boolean" },
+                    "stale_index": { "type": "boolean" },
+                    "execution_state": { "type": "string" },
+                    "pending_graph_change_count": { "type": "integer" },
+                    "pending_graph_changes": { "type": "array", "items": { "type": "string" } },
+                    "indexed_file_count": { "type": "integer" },
+                    "last_indexed_at": { "type": ["string", "null"] },
+                    "message": { "type": "string" }
+                },
+                "required": ["graph_built", "graph_queryable", "graph_current", "stale_index", "execution_state", "pending_graph_change_count", "pending_graph_changes", "indexed_file_count", "last_indexed_at", "message"]
+            },
+            "retrieval_hints": { "type": "array", "items": { "type": "object" } },
+            "generated_at": { "type": "string" },
+            "event_recorded": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "stored": { "type": "boolean" },
+                    "event": { "type": ["string", "null"] },
+                    "event_id": { "type": ["integer", "null"] },
+                    "pending_resume": { "type": ["boolean", "null"] },
+                    "lifecycle_status": { "type": ["string", "null"] },
+                    "resume_loaded": { "type": ["boolean", "null"] },
+                    "error": { "type": ["string", "null"] }
+                },
+                "required": ["stored"]
+            },
+            "summary": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "status": { "type": "string" },
+                    "pending_resume": { "type": "boolean" },
+                    "event_count": { "type": "integer" },
+                    "decision_count": { "type": "integer" },
+                    "critical_memory_count": { "type": "integer" },
+                    "feedback_count": { "type": "integer" },
+                    "concept_count": { "type": "integer" },
+                    "changed_file_count": { "type": "integer" },
+                    "retrieval_hint_count": { "type": "integer" },
+                    "recorded": { "type": "string" }
+                },
+                "required": ["status", "pending_resume", "event_count", "decision_count", "critical_memory_count", "feedback_count", "concept_count", "changed_file_count", "retrieval_hint_count", "recorded"]
+            },
+            "warnings": { "type": "array", "items": { "type": "string" } },
+            "atlas_provenance": { "type": "object" },
+            "atlas_freshness": { "type": "object" }
+        }),
+        &[
+            "tool",
+            "repo_root",
+            "session_id",
+            "frontend",
+            "current_focus",
+            "recent_decisions",
+            "critical_memories",
+            "recent_feedback",
+            "active_memoir_concepts",
+            "changed_files",
+            "graph_readiness",
+            "retrieval_hints",
+            "generated_at",
+            "event_recorded",
+            "summary",
+            "warnings",
+            "atlas_provenance",
+        ],
+        None,
+    )
+}
+
 fn compact_session_output_schema() -> Value {
     normalized_tool_output_schema(
         serde_json::json!({
@@ -4899,7 +5104,12 @@ fn tool_annotations(name: &str) -> ToolAnnotations {
     let destructive = matches!(name, "purge_saved_context");
     let state_changing = matches!(
         name,
-        "build_or_update_graph" | "postprocess_graph" | "compact_session" | "purge_saved_context"
+        "build_or_update_graph"
+            | "postprocess_graph"
+            | "compact_session"
+            | "record_session_event"
+            | "wake_up"
+            | "purge_saved_context"
     );
     ToolAnnotations {
         read_only_hint: !state_changing,
@@ -4920,6 +5130,8 @@ fn tool_category(name: &str) -> &'static str {
         | "search_decisions"
         | "get_context_stats"
         | "get_session_status"
+        | "record_session_event"
+        | "wake_up"
         | "cross_session_search"
         | "get_global_memory" => "memory",
         "tool_list" | "tool_search" | "tool_help" | "man" | "repo_registry" => "introspection",

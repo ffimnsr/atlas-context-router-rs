@@ -224,7 +224,7 @@ pub(super) fn string_array_arg(args: Option<&serde_json::Value>, key: &str) -> R
         .unwrap_or_default())
 }
 
-pub(super) fn open_store(db_path: &str) -> Result<Store> {
+pub(crate) fn open_store(db_path: &str) -> Result<Store> {
     Store::open(db_path).with_context(|| format!("cannot open database at {db_path}"))
 }
 
@@ -1048,7 +1048,7 @@ pub(super) fn compute_freshness_warning(
 /// This is the shared readiness derivation path for all MCP tool handlers.
 /// Call this after `Store::open` succeeds; use the result to gate
 /// graph-backed operations via [`GraphReadiness::check_tool`].
-pub(super) fn derive_graph_readiness(
+pub(crate) fn derive_graph_readiness(
     store: &Store,
     repo_root: &str,
     db_path: &str,
@@ -1110,7 +1110,7 @@ pub(super) fn derive_graph_readiness(
 ///
 /// Use this when `Store::open` fails; the open error is passed into the
 /// readiness record so blocked messages are consistent.
-pub(super) fn derive_graph_readiness_open_failed(
+pub(crate) fn derive_graph_readiness_open_failed(
     repo_root: &str,
     db_path: &str,
     open_error: &str,

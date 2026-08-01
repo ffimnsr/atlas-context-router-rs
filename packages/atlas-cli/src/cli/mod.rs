@@ -8,7 +8,7 @@ mod tests;
 
 pub use subcommands::{
     AnalyzeCommand, CommunitiesCommand, ConfigCommand, FlowsCommand, HistoryCommand,
-    InsightsCommand, RefactorCommand, RepoCommand, SessionCommand,
+    InsightsCommand, InstallMode, RefactorCommand, RepoCommand, SessionCommand,
 };
 
 use crate::install::InstructionsMode;
@@ -472,6 +472,10 @@ pub enum Command {
         /// Instruction write mode: refresh managed atlas block or replace whole file.
         #[arg(long, default_value = "refresh", value_enum)]
         instructions_mode: InstructionsMode,
+
+        /// Install mode: mcp (MCP config), hook (git + agent hooks), cli (instruction fallback text), or all (default).
+        #[arg(long, default_value = "all", value_enum)]
+        mode: InstallMode,
     },
 
     /// Explain supported update path for the installed atlas binary.

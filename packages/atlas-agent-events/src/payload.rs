@@ -3,32 +3,32 @@ use std::path::Path;
 
 use serde_json::{Map, Value};
 
-use super::policy::{FILE_CHANGED_INLINE_CONTENT_KEYS, HookPolicy};
+use crate::policy::{FILE_CHANGED_INLINE_CONTENT_KEYS, HookPolicy};
 
-pub(crate) fn extract_hook_status(payload: &Value) -> Option<String> {
+pub fn extract_hook_status(payload: &Value) -> Option<String> {
     find_first_string_by_key(payload, &["status", "result"])
         .map(|status| status.to_ascii_lowercase())
 }
 
-pub(crate) fn extract_hook_command(payload: &Value) -> Option<String> {
+pub fn extract_hook_command(payload: &Value) -> Option<String> {
     find_first_string_by_key(
         payload,
         &["command", "cmd", "shell_command", "shellCommand"],
     )
 }
 
-pub(crate) fn extract_prompt_text(payload: &Value) -> Option<String> {
+pub fn extract_prompt_text(payload: &Value) -> Option<String> {
     find_first_string_by_key(
         payload,
         &["prompt", "query", "message", "text", "content", "raw"],
     )
 }
 
-pub(crate) fn extract_tool_name(payload: &Value) -> Option<String> {
+pub fn extract_tool_name(payload: &Value) -> Option<String> {
     find_first_string_by_key(payload, &["tool_name", "toolName", "tool"])
 }
 
-pub(crate) fn tool_may_change_files(tool_name: &str) -> bool {
+pub fn tool_may_change_files(tool_name: &str) -> bool {
     matches!(
         tool_name.to_ascii_lowercase().as_str(),
         // Claude Code tool names
@@ -48,7 +48,7 @@ pub(crate) fn tool_may_change_files(tool_name: &str) -> bool {
     )
 }
 
-pub(crate) fn extract_changed_files(repo: &str, payload: &Value) -> Vec<String> {
+pub fn extract_changed_files(repo: &str, payload: &Value) -> Vec<String> {
     let mut candidates = Vec::new();
     collect_strings_for_keys(
         payload,
@@ -76,7 +76,7 @@ pub(crate) fn extract_changed_files(repo: &str, payload: &Value) -> Vec<String> 
     normalized.into_iter().collect()
 }
 
-pub(crate) fn collect_source_ids(payload: &Value, source_ids: &mut BTreeSet<String>) {
+pub fn collect_source_ids(payload: &Value, source_ids: &mut BTreeSet<String>) {
     let mut candidates = Vec::new();
     collect_strings_for_keys(payload, &["source_id"], &mut candidates);
     for source_id in candidates {
@@ -211,7 +211,7 @@ pub(crate) fn strip_inline_file_content(value: Value) -> Value {
     }
 }
 
-pub(crate) fn sanitize_payload_for_storage(policy: &HookPolicy, payload: Value) -> Value {
+pub fn sanitize_payload_for_storage(policy: &HookPolicy, payload: Value) -> Value {
     if policy.canonical_event == "file-changed" {
         strip_inline_file_content(payload)
     } else {

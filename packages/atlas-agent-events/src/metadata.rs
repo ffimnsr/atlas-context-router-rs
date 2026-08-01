@@ -8,8 +8,8 @@ use atlas_core::model::ContextTarget;
 use atlas_review::query_parser;
 use atlas_session::{ResumeSnapshot, SessionId, SessionStore};
 
-use super::payload::{collect_source_ids, extract_changed_files, extract_prompt_text};
-use super::policy::{
+use crate::payload::{collect_source_ids, extract_changed_files, extract_prompt_text};
+use crate::policy::{
     HookMetadataContext, HookPolicy, HookStorage, MAX_HOOK_EVENT_SCAN, MAX_HOOK_PROMPT_HITS,
     MAX_HOOK_SOURCE_HINTS, PromptRoutingMetadata,
 };
@@ -141,6 +141,8 @@ pub(crate) fn build_hook_event_metadata(context: HookMetadataContext<'_>) -> Val
 
     json!({
         "storage_mode": storage_mode,
+        "event_source": context.event_source,
+        "agent_id": context.agent_id,
         "restore_metadata": build_restore_metadata(
             context.store,
             context.session_id,

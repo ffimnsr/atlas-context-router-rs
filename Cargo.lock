@@ -117,11 +117,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "atlas-agent-events"
+version = "1.6.0"
+dependencies = [
+ "anyhow",
+ "atlas-adapters",
+ "atlas-contentstore",
+ "atlas-core",
+ "atlas-engine",
+ "atlas-impact",
+ "atlas-review",
+ "atlas-session",
+ "atlas-store-sqlite",
+ "camino",
+ "serde_json",
+ "tempfile",
+ "tracing",
+]
+
+[[package]]
 name = "atlas-cli"
 version = "1.6.0"
 dependencies = [
  "anyhow",
  "atlas-adapters",
+ "atlas-agent-events",
  "atlas-contentstore",
  "atlas-core",
  "atlas-engine",
@@ -265,6 +285,7 @@ version = "1.6.0"
 dependencies = [
  "anyhow",
  "atlas-adapters",
+ "atlas-agent-events",
  "atlas-contentstore",
  "atlas-core",
  "atlas-engine",

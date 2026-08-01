@@ -24,6 +24,8 @@
 //! | `get_minimal_context`     | Compact auto-detected review context                     |
 //! | `explain_change`          | Advanced impact: risk, change kinds, boundary/test gaps  |
 //! | `get_session_status`      | CM7: current session identity and event count            |
+//! | `record_session_event`    | Hook-equivalent MCP fallback event capture              |
+//! | `wake_up`                 | Bounded session-start recall for hookless agents        |
 //! | `analyze_architecture`    | Deterministic architecture report: cycles, layers, coupling |
 //! | `analyze_metrics`         | Deterministic metrics report: outliers and hotspots      |
 //! | `assess_risk`             | Deterministic risk assessment for one symbol             |
@@ -83,12 +85,16 @@ pub mod progress;
 mod prompts;
 mod resources;
 mod runtime_context;
+mod session_events;
 mod session_tools;
 pub mod spec;
 mod tasks;
 mod tool_result;
 mod tools;
 mod transport;
+mod wake_up;
+
+pub use session_events::{is_supported_event_name, supported_event_names};
 
 #[cfg(feature = "http-transport")]
 pub mod transport_http;

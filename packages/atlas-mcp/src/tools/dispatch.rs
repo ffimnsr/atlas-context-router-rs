@@ -8,6 +8,7 @@ use crate::discovery::{
     tool_search_content, tool_search_files, tool_search_templates, tool_search_text_assets,
 };
 use crate::output::{OutputFormat, resolve_output_format};
+use crate::session_events::tool_record_session_event;
 use crate::session_tools::{
     tool_compact_session, tool_cross_session_search, tool_get_context_stats,
     tool_get_global_memory, tool_get_session_status, tool_purge_saved_context,
@@ -17,6 +18,7 @@ use crate::session_tools::{
 use crate::tool_result::{
     ToolErrorCode, ToolErrorPayload, normalize_tool_execution_error, tool_execution_error_value,
 };
+use crate::wake_up::tool_wake_up;
 
 use super::analysis::{
     tool_analyze_architecture, tool_analyze_dead_code, tool_analyze_dependency,
@@ -142,6 +144,8 @@ fn normalized_contract_tool(name: &str) -> bool {
             | "get_session_status"
             | "compact_session"
             | "resume_session"
+            | "record_session_event"
+            | "wake_up"
             | "search_saved_context"
             | "search_decisions"
             | "read_saved_context"
@@ -275,6 +279,8 @@ pub(crate) fn is_known_tool_name(name: &str) -> bool {
         | "get_session_status"
         | "compact_session"
         | "resume_session"
+        | "record_session_event"
+        | "wake_up"
         | "search_saved_context"
         | "search_decisions"
         | "read_saved_context"
@@ -436,6 +442,10 @@ fn call_inner(
         "get_session_status" => tool_get_session_status(args, repo_root, db_path, output_format),
         "compact_session" => tool_compact_session(args, repo_root, db_path, output_format),
         "resume_session" => tool_resume_session(args, repo_root, db_path, output_format),
+        "record_session_event" => {
+            tool_record_session_event(args, repo_root, db_path, output_format)
+        }
+        "wake_up" => tool_wake_up(args, repo_root, db_path, output_format),
         "search_saved_context" => {
             tool_search_saved_context(args, repo_root, db_path, output_format)
         }
@@ -881,6 +891,10 @@ mod tests {
             "get_session_status" => json!({"output_format": "json"}),
             "compact_session" => json!({"output_format": "json"}),
             "resume_session" => json!({"output_format": "json"}),
+            "record_session_event" => {
+                json!({"event": "user-prompt", "payload": {"prompt": "schema-test"}, "output_format": "json"})
+            }
+            "wake_up" => json!({"output_format": "json"}),
             "search_saved_context" => json!({"query": "schema-test", "output_format": "json"}),
             "search_decisions" => json!({"query": "schema-test", "output_format": "json"}),
             "read_saved_context" => json!({"source_id": saved_source_id, "output_format": "json"}),

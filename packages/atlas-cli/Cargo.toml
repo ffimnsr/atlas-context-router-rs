@@ -15,6 +15,7 @@ path = "src/main.rs"
 [dependencies]
 atlas-core.workspace = true
 atlas-adapters = { path = "../atlas-adapters" , version = "1.6.0"}
+atlas-agent-events = { path = "../atlas-agent-events" , version = "1.6.0"}
 atlas-contentstore = { path = "../atlas-contentstore" , version = "1.6.0"}
 atlas-engine.workspace = true
 atlas-history = { path = "../atlas-history", version = "1.6.0" }
