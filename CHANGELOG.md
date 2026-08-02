@@ -4,6 +4,14 @@ All notable changes to this project should be recorded in this file.
 
 Versioning policy may evolve while Atlas is still moving quickly, but release notes should still group changes by user-visible impact.
 
+## 1.6.1 - 2026-08-02
+
+### Features
+
+- add hook alternative for universal solution (`4d051ba`)
+- add hook stabilization (`1f416d3`)
+
+
 ## 1.6.0 - 2026-07-31
 
 ### Features
