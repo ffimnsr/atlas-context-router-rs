@@ -1,5 +1,7 @@
-use atlas_core::{AtlasError, Edge, EdgeKind, Node, NodeId, NodeKind, ParsedFile, Result};
-use atlas_repo::CanonicalRepoPath;
+use atlas_core::{
+    AtlasError, Edge, EdgeKind, Node, NodeId, NodeKind, ParsedFile, RepoProvenance, Result,
+};
+use atlas_repo::{CanonicalRepoPath, stable_repo_fingerprint};
 use rusqlite::Row;
 
 #[derive(Debug, Clone)]
@@ -100,6 +102,52 @@ fn canonicalize_edge(edge: &Edge, raw_path: &str, canonical_path: &str) -> Resul
     Ok(normalized)
 }
 
+pub(super) fn parse_repo_provenance(extra_json: &serde_json::Value) -> Option<RepoProvenance> {
+    let extra = extra_json.as_object()?;
+
+    let provenance = extra
+        .get("repo_provenance")
+        .and_then(|value| serde_json::from_value::<RepoProvenance>(value.clone()).ok())
+        .map(RepoProvenance::normalize);
+    if provenance.is_some() {
+        return provenance;
+    }
+
+    extra
+        .get("repo_id")
+        .and_then(|value| value.as_str())
+        .map(|repo_id| {
+            let repo_root = extra
+                .get("repo_root")
+                .and_then(|value| value.as_str())
+                .map(str::to_owned);
+            let remote_url = extra
+                .get("remote_url")
+                .and_then(|value| value.as_str())
+                .map(str::to_owned);
+            let repo_fingerprint = extra
+                .get("repo_fingerprint")
+                .and_then(|value| value.as_str())
+                .map(str::to_owned)
+                .or_else(|| {
+                    repo_root.as_deref().map(|repo_root| {
+                        stable_repo_fingerprint(
+                            camino::Utf8Path::new(repo_root),
+                            remote_url.as_deref(),
+                        )
+                    })
+                })
+                .or_else(|| Some(repo_id.to_owned()));
+            RepoProvenance {
+                repo_fingerprint,
+                repo_id: repo_id.to_owned(),
+                repo_root,
+                remote_url,
+            }
+            .normalize()
+        })
+}
+
 fn rewrite_known_path_prefixes(value: &str, mappings: &[(&str, &str)]) -> String {
     for (_, canonical_path) in mappings {
         if value == *canonical_path {
@@ -139,6 +187,8 @@ pub(super) fn row_to_node(row: &Row<'_>) -> rusqlite::Result<Node> {
         .and_then(|s| serde_json::from_str(s).ok())
         .unwrap_or(serde_json::Value::Null);
 
+    let repo_provenance = parse_repo_provenance(&extra_json);
+
     Ok(Node {
         id: NodeId(row.get(0)?),
         kind,
@@ -155,6 +205,7 @@ pub(super) fn row_to_node(row: &Row<'_>) -> rusqlite::Result<Node> {
         is_test: row.get::<_, i32>(12)? != 0,
         file_hash: row.get::<_, Option<String>>(13)?.unwrap_or_default(),
         extra_json,
+        repo_provenance,
     })
 }
 
@@ -168,6 +219,8 @@ pub(super) fn row_to_edge(row: &Row<'_>) -> rusqlite::Result<Edge> {
         .and_then(|s| serde_json::from_str(s).ok())
         .unwrap_or(serde_json::Value::Null);
 
+    let repo_provenance = parse_repo_provenance(&extra_json);
+
     Ok(Edge {
         id: row.get(0)?,
         kind,
@@ -178,6 +231,7 @@ pub(super) fn row_to_edge(row: &Row<'_>) -> rusqlite::Result<Edge> {
         confidence: row.get(6)?,
         confidence_tier: row.get(7)?,
         extra_json,
+        repo_provenance,
     })
 }
 

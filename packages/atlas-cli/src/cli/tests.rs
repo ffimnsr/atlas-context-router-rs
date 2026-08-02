@@ -1304,6 +1304,127 @@ fn parse_insights_complex_functions_with_thresholds() {
 }
 
 #[test]
+fn parse_insights_similar_functions_with_thresholds() {
+    let cli = parse(&[
+        "atlas",
+        "insights",
+        "similar-functions",
+        "src/lib.rs::fn::helper",
+        "--min-score",
+        "0.61",
+        "--limit",
+        "6",
+        "--include-same-file",
+    ]);
+    if let Command::Insights { subcommand, .. } = cli.command {
+        match subcommand {
+            InsightsCommand::SimilarFunctions {
+                symbol,
+                min_score,
+                limit,
+                include_same_file,
+            } => {
+                assert_eq!(symbol, "src/lib.rs::fn::helper");
+                assert_eq!(min_score, Some(0.61));
+                assert_eq!(limit, Some(6));
+                assert!(include_same_file);
+            }
+            _ => panic!("expected insights similar-functions"),
+        }
+    } else {
+        panic!("expected Insights command");
+    }
+}
+
+#[test]
+fn parse_insights_duplicates_with_thresholds() {
+    let cli = parse(&[
+        "atlas",
+        "insights",
+        "duplicates",
+        "--files",
+        "src/lib.rs",
+        "src/api.rs",
+        "--min-score",
+        "0.77",
+        "--limit",
+        "5",
+        "--include-tests",
+        "--suppress",
+        "src/generated",
+    ]);
+    if let Command::Insights { subcommand, .. } = cli.command {
+        match subcommand {
+            InsightsCommand::Duplicates {
+                files,
+                min_score,
+                limit,
+                include_tests,
+                suppressions,
+            } => {
+                assert_eq!(files, vec!["src/lib.rs", "src/api.rs"]);
+                assert_eq!(min_score, Some(0.77));
+                assert_eq!(limit, Some(5));
+                assert!(include_tests);
+                assert_eq!(suppressions, vec!["src/generated"]);
+            }
+            _ => panic!("expected insights duplicates"),
+        }
+    } else {
+        panic!("expected Insights command");
+    }
+}
+
+#[test]
+fn parse_insights_infer_modules_with_limit() {
+    let cli = parse(&["atlas", "insights", "infer-modules", "--limit", "11"]);
+    if let Command::Insights { subcommand, .. } = cli.command {
+        match subcommand {
+            InsightsCommand::InferModules { limit } => assert_eq!(limit, Some(11)),
+            _ => panic!("expected insights infer-modules"),
+        }
+    } else {
+        panic!("expected Insights command");
+    }
+}
+
+#[test]
+fn parse_insights_label_components_with_filters() {
+    let cli = parse(&[
+        "atlas",
+        "insights",
+        "label-components",
+        "--files",
+        "src/lib.rs",
+        "docs/README.md",
+        "--symbol",
+        "src/lib.rs::fn::helper",
+        "src/api.rs::fn::handle",
+        "--limit",
+        "8",
+    ]);
+    if let Command::Insights { subcommand, .. } = cli.command {
+        match subcommand {
+            InsightsCommand::LabelComponents {
+                files,
+                symbols,
+                limit,
+            } => {
+                assert_eq!(files, vec!["src/lib.rs", "docs/README.md"]);
+                assert_eq!(
+                    symbols,
+                    vec!["src/lib.rs::fn::helper", "src/api.rs::fn::handle"]
+                );
+                assert_eq!(limit, Some(8));
+            }
+            _ => panic!("expected insights label-components"),
+        }
+    } else {
+        panic!("expected Insights command");
+    }
+}
+
+#[test]
 fn parse_refactor_rename_with_named_flags() {
     let cli = parse(&[
         "atlas",

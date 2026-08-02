@@ -248,6 +248,7 @@ fn normalize_query_results(value: &mut Value) {
         result["node"]["id"] = json!(0);
         result["node"]["file_hash"] = json!("<hash>");
         result["node"]["extra_json"] = json!(null);
+        normalize_repo_provenance_value(&mut result["node"]["repo_provenance"]);
         if let Some(object) = result.as_object_mut() {
             object.remove("repo");
         }
@@ -381,19 +382,52 @@ fn normalize_context_result(value: &mut serde_json::Value) {
             n["node"]["id"] = json!(0);
             n["node"]["file_hash"] = json!("<hash>");
             n["node"]["extra_json"] = json!(null);
+            normalize_repo_provenance_value(&mut n["node"]["repo_provenance"]);
         }
     }
     if let Some(edges) = value["edges"].as_array_mut() {
         for e in edges.iter_mut() {
             e["edge"]["id"] = json!(0);
+            normalize_repo_provenance_value(&mut e["edge"]["repo_provenance"]);
             if let Some(extra) = e["edge"]["extra_json"].as_object_mut() {
                 extra.remove("repo_id");
                 extra.remove("source_repo");
                 extra.remove("target_repo");
                 extra.remove("relationship_reason");
                 extra.remove("confidence_tier_label");
+                extra.remove("repo_root");
+                extra.remove("repo_provenance");
             }
         }
+    }
+    if let Some(files) = value["files"].as_array_mut() {
+        for file in files.iter_mut() {
+            normalize_repo_provenance_value(&mut file["repo_provenance"]);
+        }
+    }
+    if let Some(saved_context_sources) = value["saved_context_sources"].as_array_mut() {
+        for source in saved_context_sources.iter_mut() {
+            normalize_repo_provenance_value(&mut source["repo_provenance"]);
+        }
+    }
+}
+
+fn normalize_repo_provenance_value(value: &mut Value) {
+    if value.is_null() {
+        return;
+    }
+
+    let Some(object) = value.as_object_mut() else {
+        return;
+    };
+    if object.contains_key("repo_id") {
+        object.insert("repo_id".to_string(), json!("<repo_id>"));
+    }
+    if object.contains_key("repo_fingerprint") {
+        object.insert("repo_fingerprint".to_string(), json!("<repo_fingerprint>"));
+    }
+    if object.contains_key("repo_root") {
+        object.insert("repo_root".to_string(), json!("<repo_root>"));
     }
 }
 

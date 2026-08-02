@@ -32,6 +32,50 @@ impl std::fmt::Display for NodeId {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RepoProvenance {
+    pub repo_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo_fingerprint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repo_root: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remote_url: Option<String>,
+}
+
+impl RepoProvenance {
+    pub fn new(repo_id: impl Into<String>) -> Self {
+        Self {
+            repo_id: repo_id.into(),
+            repo_fingerprint: None,
+            repo_root: None,
+            remote_url: None,
+        }
+    }
+
+    pub fn with_repo_fingerprint(mut self, repo_fingerprint: impl Into<String>) -> Self {
+        self.repo_fingerprint = Some(repo_fingerprint.into());
+        self
+    }
+
+    pub fn with_repo_root(mut self, repo_root: impl Into<String>) -> Self {
+        self.repo_root = Some(repo_root.into());
+        self
+    }
+
+    pub fn with_remote_url(mut self, remote_url: impl Into<String>) -> Self {
+        self.remote_url = Some(remote_url.into());
+        self
+    }
+
+    pub fn normalize(mut self) -> Self {
+        if self.repo_fingerprint.is_none() {
+            self.repo_fingerprint = Some(self.repo_id.clone());
+        }
+        self
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Node {
     pub id: NodeId,
@@ -49,6 +93,8 @@ pub struct Node {
     pub is_test: bool,
     pub file_hash: String,
     pub extra_json: serde_json::Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo_provenance: Option<RepoProvenance>,
 }
 
 impl Node {
@@ -89,6 +135,8 @@ pub struct Edge {
     pub confidence: f32,
     pub confidence_tier: Option<String>,
     pub extra_json: serde_json::Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo_provenance: Option<RepoProvenance>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -103,6 +151,8 @@ pub struct FileRecord {
     pub owner_root: Option<String>,
     pub owner_manifest_path: Option<String>,
     pub owner_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo_provenance: Option<RepoProvenance>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

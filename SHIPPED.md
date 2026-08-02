@@ -222,5 +222,5 @@ For active backlog, see ISSUES.md.
 
 ## Still Open
 
-- Phase 29 external layer-rules file surface, Phase 30 remaining code intelligence, Phase 31 lowest-priority features, and the ICM-inspired memory follow-on roadmap (ICM-A through ICM-H) remain in ISSUES.md.
+- Phase 30 remaining code intelligence, Phase 31 lowest-priority features, and the ICM-inspired memory follow-on roadmap (ICM-A through ICM-H) remain in ISSUES.md.
 - Retrieval post-retrieval compaction experiment, runtime event enrichment and graph linking, Rust reachability guard, shared parser query migration, context escalation contract, dynamic agent policy and hook enforcement, graph store corruption recovery, and measured SQLite read pooling remain in ISSUES.md.

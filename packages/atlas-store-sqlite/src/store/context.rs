@@ -1,7 +1,10 @@
 use atlas_core::{AtlasError, Node, Result};
 use rusqlite::params;
 
-use super::{Store, helpers::row_to_node};
+use super::{
+    Store,
+    helpers::{parse_repo_provenance, row_to_node},
+};
 
 fn row_to_node_and_edge(row: &rusqlite::Row<'_>) -> rusqlite::Result<(Node, atlas_core::Edge)> {
     // -- node --
@@ -14,6 +17,7 @@ fn row_to_node_and_edge(row: &rusqlite::Row<'_>) -> rusqlite::Result<(Node, atla
         .as_deref()
         .and_then(|s| serde_json::from_str(s).ok())
         .unwrap_or(serde_json::Value::Null);
+    let node_repo_provenance = parse_repo_provenance(&node_extra);
     let node = Node {
         id: atlas_core::NodeId(row.get(0)?),
         kind: node_kind,
@@ -30,6 +34,7 @@ fn row_to_node_and_edge(row: &rusqlite::Row<'_>) -> rusqlite::Result<(Node, atla
         is_test: row.get::<_, i32>(12)? != 0,
         file_hash: row.get::<_, Option<String>>(13)?.unwrap_or_default(),
         extra_json: node_extra,
+        repo_provenance: node_repo_provenance,
     };
 
     // -- edge --
@@ -42,6 +47,7 @@ fn row_to_node_and_edge(row: &rusqlite::Row<'_>) -> rusqlite::Result<(Node, atla
         .as_deref()
         .and_then(|s| serde_json::from_str(s).ok())
         .unwrap_or(serde_json::Value::Null);
+    let edge_repo_provenance = parse_repo_provenance(&edge_extra);
     let edge = atlas_core::Edge {
         id: row.get(15)?,
         kind: edge_kind,
@@ -52,6 +58,7 @@ fn row_to_node_and_edge(row: &rusqlite::Row<'_>) -> rusqlite::Result<(Node, atla
         confidence: row.get(21)?,
         confidence_tier: row.get(22)?,
         extra_json: edge_extra,
+        repo_provenance: edge_repo_provenance,
     };
 
     Ok((node, edge))

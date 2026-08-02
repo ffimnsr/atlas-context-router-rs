@@ -188,6 +188,7 @@ fn make_node(kind: NodeKind, name: &str, qn: &str, file_path: &str, language: &s
         is_test: false,
         file_hash: "abc123".to_string(),
         extra_json: serde_json::Value::Null,
+        repo_provenance: None,
     }
 }
 
@@ -202,5 +203,6 @@ fn make_edge(kind: EdgeKind, src: &str, tgt: &str, file_path: &str) -> Edge {
         confidence: 1.0,
         confidence_tier: None,
         extra_json: serde_json::Value::Null,
+        repo_provenance: None,
     }
 }

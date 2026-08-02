@@ -494,6 +494,7 @@ impl<'s, 'o> RustDefinitionEmitter<'s, 'o> {
             is_test: is_test || self.current_in_test_mod(),
             file_hash: self.file_hash.to_owned(),
             extra_json: serde_json::Value::Null,
+            repo_provenance: None,
         });
         self.edges.push(contains_edge(
             &parent_qn,
@@ -539,6 +540,7 @@ impl<'s, 'o> RustDefinitionEmitter<'s, 'o> {
             is_test: self.current_in_test_mod(),
             file_hash: self.file_hash.to_owned(),
             extra_json: serde_json::Value::Null,
+            repo_provenance: None,
         });
         self.edges.push(contains_edge(
             &parent_qn,
@@ -574,6 +576,7 @@ impl<'s, 'o> RustDefinitionEmitter<'s, 'o> {
             is_test: is_test_mod,
             file_hash: self.file_hash.to_owned(),
             extra_json: serde_json::Value::Null,
+            repo_provenance: None,
         });
         self.edges.push(contains_edge(
             &parent_qn,
@@ -616,6 +619,7 @@ impl<'s, 'o> RustDefinitionEmitter<'s, 'o> {
             is_test: self.current_in_test_mod(),
             file_hash: self.file_hash.to_owned(),
             extra_json: serde_json::Value::Null,
+            repo_provenance: None,
         });
         self.edges.push(contains_edge(
             &parent_qn,
@@ -669,6 +673,7 @@ impl<'s, 'o> RustDefinitionEmitter<'s, 'o> {
                 "type_name": type_name,
                 "trait_name": trait_name,
             }),
+            repo_provenance: None,
         });
         self.edges.push(contains_edge(
             &parent_qn,
@@ -693,6 +698,7 @@ impl<'s, 'o> RustDefinitionEmitter<'s, 'o> {
                 confidence: 0.9,
                 confidence_tier: Some("same_file".to_owned()),
                 extra_json: serde_json::Value::Null,
+                repo_provenance: None,
             });
         }
 
@@ -728,6 +734,7 @@ fn file_node(rel_path: &str, file_hash: &str, line_end: u32) -> Node {
         is_test: false,
         file_hash: file_hash.to_owned(),
         extra_json: serde_json::Value::Null,
+        repo_provenance: None,
     }
 }
 
@@ -742,6 +749,7 @@ fn contains_edge(parent_qn: &str, child_qn: &str, file_path: &str, line: u32) ->
         confidence: 1.0,
         confidence_tier: Some("definite".to_owned()),
         extra_json: serde_json::Value::Null,
+        repo_provenance: None,
     }
 }
 
@@ -1123,6 +1131,7 @@ fn call_edge(
             "callee_name": caller_simple_name(callee_qn),
             "receiver_text": receiver,
         }),
+        repo_provenance: None,
     }
 }
 
@@ -1408,6 +1417,7 @@ fn reference_edge(
         confidence: 0.75,
         confidence_tier,
         extra_json: serde_json::Value::Null,
+        repo_provenance: None,
     }
 }
 

@@ -978,6 +978,7 @@ mod tests {
             is_test: false,
             file_hash: "hash".to_owned(),
             extra_json: serde_json::Value::Null,
+            repo_provenance: None,
         }
     }
 
@@ -992,6 +993,7 @@ mod tests {
             confidence: 1.0,
             confidence_tier: None,
             extra_json: serde_json::Value::Null,
+            repo_provenance: None,
         }
     }
 

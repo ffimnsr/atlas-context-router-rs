@@ -132,6 +132,7 @@ fn file_node(rel_path: &str, file_hash: &str, line_end: u32) -> Node {
         is_test: false,
         file_hash: file_hash.to_owned(),
         extra_json: serde_json::Value::Null,
+        repo_provenance: None,
     }
 }
 
@@ -152,6 +153,7 @@ fn package_node(rel_path: &str, file_hash: &str, package_name: &str, qn: &str, l
         is_test: false,
         file_hash: file_hash.to_owned(),
         extra_json: serde_json::Value::Null,
+        repo_provenance: None,
     }
 }
 
@@ -166,6 +168,7 @@ fn contains_edge(parent_qn: &str, child_qn: &str, file_path: &str, line: u32) ->
         confidence: 1.0,
         confidence_tier: Some("definite".to_owned()),
         extra_json: serde_json::Value::Null,
+        repo_provenance: None,
     }
 }
 
@@ -227,6 +230,7 @@ fn visit_function(
         is_test,
         file_hash: ctx.file_hash.to_owned(),
         extra_json: serde_json::Value::Null,
+        repo_provenance: None,
     });
     edges.push(contains_edge(
         package_qn,
@@ -270,6 +274,7 @@ fn visit_method(
             "receiver_name": receiver_name,
             "receiver_type": receiver_type,
         }),
+        repo_provenance: None,
     });
     edges.push(contains_edge(
         package_qn,
@@ -393,6 +398,7 @@ fn visit_type_spec(
         is_test: false,
         file_hash: ctx.file_hash.to_owned(),
         extra_json: serde_json::Value::Null,
+        repo_provenance: None,
     });
     edges.push(contains_edge(
         package_qn,
@@ -454,6 +460,7 @@ fn visit_imports(
                                 }
                             ],
                         }),
+                        repo_provenance: None,
                     });
                     edges.push(Edge {
                         id: 0,
@@ -465,6 +472,7 @@ fn visit_imports(
                         confidence: 1.0,
                         confidence_tier: Some("definite".to_owned()),
                         extra_json: serde_json::Value::Null,
+                        repo_provenance: None,
                     });
                 }
             }
@@ -506,6 +514,7 @@ fn visit_value_decl(
                 is_test: false,
                 file_hash: ctx.file_hash.to_owned(),
                 extra_json: serde_json::Value::Null,
+                repo_provenance: None,
             });
             edges.push(contains_edge(
                 package_qn,
@@ -1394,6 +1403,7 @@ fn go_call_edge(
         confidence: if same_file { 0.8 } else { 0.3 },
         confidence_tier: Some(if same_file { "same_file" } else { "text" }.to_owned()),
         extra_json: serde_json::Value::Object(extra_json),
+        repo_provenance: None,
     }
 }
 

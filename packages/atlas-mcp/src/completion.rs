@@ -600,6 +600,8 @@ mod tests {
                         label: "completion seed".to_owned(),
                         repo_root: Some(repo_root.clone()),
                         repo_roots: vec![repo_root.clone()],
+                        repo_id: None,
+                        repo_ids: vec![],
                         identity_kind: "artifact_label".to_owned(),
                         identity_value: "completion-seed".to_owned(),
                     },

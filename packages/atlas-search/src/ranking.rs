@@ -96,6 +96,7 @@ mod tests {
                 is_test: false,
                 file_hash: String::new(),
                 extra_json: serde_json::Value::Null,
+                repo_provenance: None,
             },
             1.0,
         )

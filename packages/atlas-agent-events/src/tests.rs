@@ -518,6 +518,8 @@ fn user_prompt_hook_routes_intent_and_finds_saved_context() {
                 label: "review context".to_owned(),
                 repo_root: Some(repo.clone()),
                 repo_roots: vec![repo.clone()],
+                repo_id: None,
+                repo_ids: vec![],
                 identity_kind: identity.kind_str().to_owned(),
                 identity_value: identity.value().to_owned(),
             },

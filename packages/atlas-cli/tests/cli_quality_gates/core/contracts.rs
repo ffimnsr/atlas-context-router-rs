@@ -211,6 +211,35 @@ fn atlas_cli_v1_schemas_validate_live_outputs() {
             ],
         ),
     );
+    assert_valid_against_schema(
+        "insights-similar-functions.schema.json",
+        "insights_similar_functions",
+        run_atlas(
+            repo.path(),
+            &[
+                "--json",
+                "insights",
+                "similar-functions",
+                "src/lib.rs::fn::helper",
+                "--include-same-file",
+            ],
+        ),
+    );
+    assert_valid_against_schema(
+        "insights-duplicates.schema.json",
+        "insights_duplicates",
+        run_atlas(repo.path(), &["--json", "insights", "duplicates"]),
+    );
+    assert_valid_against_schema(
+        "insights-infer-modules.schema.json",
+        "insights_infer_modules",
+        run_atlas(repo.path(), &["--json", "insights", "infer-modules"]),
+    );
+    assert_valid_against_schema(
+        "insights-label-components.schema.json",
+        "insights_label_components",
+        run_atlas(repo.path(), &["--json", "insights", "label-components"]),
+    );
 }
 
 #[test]

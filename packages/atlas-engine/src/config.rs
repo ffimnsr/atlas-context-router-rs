@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use atlas_core::{BudgetLimitRule, BudgetPolicy};
@@ -298,6 +298,18 @@ fn validate_f64_range(name: &str, value: f64, min: f64, max: f64) -> Result<f64>
     Ok(value)
 }
 
+fn validate_ordered_score_thresholds(name: &str, low: f64, medium: f64, high: f64) -> Result<()> {
+    validate_f64_range(&format!("{name}.low"), low, 0.0, 1.0)?;
+    validate_f64_range(&format!("{name}.medium"), medium, 0.0, 1.0)?;
+    validate_f64_range(&format!("{name}.high"), high, 0.0, 1.0)?;
+    if !(low < medium && medium < high) {
+        anyhow::bail!(
+            "invalid config: {name} must satisfy low ({low}) < medium ({medium}) < high ({high})"
+        );
+    }
+    Ok(())
+}
+
 fn validate_nonempty_string(name: &str, value: &str) -> Result<String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -374,6 +386,7 @@ impl Config {
         let config: Self =
             toml::from_str(&raw).with_context(|| format!("cannot parse {}", path.display()))?;
         config.insights.validate()?;
+        config.insights.validate_layer_rules_file(atlas_dir)?;
         config.sanitization.validate(atlas_dir)?;
         Ok(config)
     }
@@ -661,6 +674,34 @@ impl Config {
                     active.insights.risk_high_threshold.to_string(),
                 ),
                 (
+                    "similarity_high_threshold",
+                    active.insights.similarity_high_threshold.to_string(),
+                ),
+                (
+                    "similarity_medium_threshold",
+                    active.insights.similarity_medium_threshold.to_string(),
+                ),
+                (
+                    "similarity_low_threshold",
+                    active.insights.similarity_low_threshold.to_string(),
+                ),
+                (
+                    "duplicate_high_threshold",
+                    active.insights.duplicate_high_threshold.to_string(),
+                ),
+                (
+                    "duplicate_medium_threshold",
+                    active.insights.duplicate_medium_threshold.to_string(),
+                ),
+                (
+                    "duplicate_low_threshold",
+                    active.insights.duplicate_low_threshold.to_string(),
+                ),
+                (
+                    "duplicate_suppressions",
+                    render_string_array(&active.insights.duplicate_suppressions),
+                ),
+                (
                     "ignore_files",
                     render_string_array(&active.insights.ignore_files),
                 ),
@@ -675,6 +716,8 @@ impl Config {
             ],
             profile == ConfigTemplateProfile::Full,
         ));
+
+        lines.push("# layer_rules_file = \"layer-rules.toml\"".to_owned());
 
         lines.extend(render_insights_layer_rules(
             &active.insights.layer_rules,
@@ -1168,6 +1211,14 @@ pub struct InsightsLayerRule {
     pub module_prefixes: Vec<String>,
 }
 
+/// External layer-rules file shape: `[[layer_rules]]` entries mirror the
+/// inline `[[insights.layer_rules]]` config surface.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct LayerRulesFile {
+    layer_rules: Vec<InsightsLayerRule>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct SanitizationConfig {
@@ -1248,10 +1299,21 @@ pub struct InsightsConfig {
     pub risk_cycle_participation_weight: f64,
     pub risk_medium_threshold: f64,
     pub risk_high_threshold: f64,
+    pub similarity_high_threshold: f64,
+    pub similarity_medium_threshold: f64,
+    pub similarity_low_threshold: f64,
+    pub duplicate_high_threshold: f64,
+    pub duplicate_medium_threshold: f64,
+    pub duplicate_low_threshold: f64,
+    pub duplicate_suppressions: Vec<String>,
     pub ignore_files: Vec<String>,
     pub ignore_modules: Vec<String>,
     pub ignore_node_kinds: Vec<String>,
     pub layer_rules: Vec<InsightsLayerRule>,
+    /// Optional path to a TOML file containing `[[layer_rules]]` entries.
+    /// When set, replaces inline `layer_rules`. Relative paths resolve from
+    /// the `.atlas/` directory, matching `sanitization.redaction_rules_file`.
+    pub layer_rules_file: Option<String>,
 }
 
 impl Default for InsightsConfig {
@@ -1284,10 +1346,18 @@ impl Default for InsightsConfig {
             risk_cycle_participation_weight: 1.0,
             risk_medium_threshold: 35.0,
             risk_high_threshold: 70.0,
+            similarity_high_threshold: 0.72,
+            similarity_medium_threshold: 0.55,
+            similarity_low_threshold: 0.40,
+            duplicate_high_threshold: 0.86,
+            duplicate_medium_threshold: 0.74,
+            duplicate_low_threshold: 0.64,
+            duplicate_suppressions: Vec::new(),
             ignore_files: Vec::new(),
             ignore_modules: Vec::new(),
             ignore_node_kinds: Vec::new(),
             layer_rules: Vec::new(),
+            layer_rules_file: None,
         }
     }
 }
@@ -1402,7 +1472,22 @@ impl InsightsConfig {
                 self.risk_high_threshold,
             );
         }
+        validate_ordered_score_thresholds(
+            "insights similarity thresholds",
+            self.similarity_low_threshold,
+            self.similarity_medium_threshold,
+            self.similarity_high_threshold,
+        )?;
+        validate_ordered_score_thresholds(
+            "insights duplicate thresholds",
+            self.duplicate_low_threshold,
+            self.duplicate_medium_threshold,
+            self.duplicate_high_threshold,
+        )?;
 
+        for (index, value) in self.duplicate_suppressions.iter().enumerate() {
+            validate_nonempty_string(&format!("insights.duplicate_suppressions[{index}]"), value)?;
+        }
         for (index, value) in self.ignore_files.iter().enumerate() {
             validate_nonempty_string(&format!("insights.ignore_files[{index}]"), value)?;
         }
@@ -1411,6 +1496,10 @@ impl InsightsConfig {
         }
         for (index, value) in self.ignore_node_kinds.iter().enumerate() {
             validate_nonempty_string(&format!("insights.ignore_node_kinds[{index}]"), value)?;
+        }
+
+        if self.layer_rules_file.is_some() {
+            return Ok(());
         }
 
         let mut seen_names = std::collections::BTreeSet::new();
@@ -1443,6 +1532,98 @@ impl InsightsConfig {
             }
         }
 
+        Ok(())
+    }
+
+    /// Resolve `layer_rules_file` to a concrete path. Returns `None` when the
+    /// option is unset; rejects blank values.
+    pub fn resolve_layer_rules_file(&self, atlas_dir: &Path) -> Result<Option<PathBuf>> {
+        let Some(raw_path) = self.layer_rules_file.as_deref() else {
+            return Ok(None);
+        };
+        let trimmed = validate_nonempty_string("insights.layer_rules_file", raw_path)?;
+        let candidate = Path::new(&trimmed);
+        let resolved = if candidate.is_absolute() {
+            candidate.to_path_buf()
+        } else {
+            atlas_dir.join(candidate)
+        };
+        Ok(Some(resolved))
+    }
+
+    /// Parse a layer-rules file into rules. Shared by validation and the
+    /// runtime loader so both surfaces agree on the file shape.
+    fn load_layer_rules_file(path: &Path) -> Result<Vec<InsightsLayerRule>> {
+        let raw = fs::read_to_string(path)
+            .with_context(|| format!("cannot read layer-rules file {}", path.display()))?;
+        let parsed: LayerRulesFile = toml::from_str(&raw)
+            .with_context(|| format!("cannot parse layer-rules file {}", path.display()))?;
+        Ok(parsed.layer_rules)
+    }
+
+    /// Runtime layer rules: external file contents when `layer_rules_file` is
+    /// set, otherwise the inline rules. Rules are validated before return.
+    pub fn effective_layer_rules(&self, atlas_dir: &Path) -> Result<Vec<InsightsLayerRule>> {
+        let rules = match self.resolve_layer_rules_file(atlas_dir)? {
+            Some(path) => Self::load_layer_rules_file(&path)?,
+            None => self.layer_rules.clone(),
+        };
+        let resolved = Self {
+            layer_rules: rules,
+            layer_rules_file: None,
+            ..self.clone()
+        };
+        resolved.validate()?;
+        Ok(resolved.layer_rules)
+    }
+
+    /// Clone with runtime layer rules loaded in place, ready for engine
+    /// construction at CLI/MCP entry points.
+    pub fn with_loaded_layer_rules(&self, atlas_dir: &Path) -> Result<Self> {
+        Ok(Self {
+            layer_rules: self.effective_layer_rules(atlas_dir)?,
+            ..self.clone()
+        })
+    }
+
+    /// Validate the external file reference: blank values, missing paths,
+    /// non-file paths, and malformed contents all fail with the config key
+    /// and resolved path named in the error.
+    pub fn validate_layer_rules_file(&self, atlas_dir: &Path) -> Result<()> {
+        let Some(path) = self.resolve_layer_rules_file(atlas_dir)? else {
+            return Ok(());
+        };
+        if !path.exists() {
+            anyhow::bail!(
+                "invalid config: insights.layer_rules_file points to missing file {}",
+                path.display()
+            );
+        }
+        if !path.is_file() {
+            anyhow::bail!(
+                "invalid config: insights.layer_rules_file must point to a readable file, got {}",
+                path.display()
+            );
+        }
+        let rules = Self::load_layer_rules_file(&path).with_context(|| {
+            format!(
+                "invalid config: insights.layer_rules_file={} failed validation",
+                path.display()
+            )
+        })?;
+        // Reuse the inline rule validation (duplicate names, empty matchers,
+        // missing both matcher lists) on the external file contents.
+        let candidate = Self {
+            layer_rules: rules,
+            layer_rules_file: None,
+            ..self.clone()
+        };
+        candidate.validate().with_context(|| {
+            format!(
+                "invalid config: insights.layer_rules_file={} failed validation",
+                path.display()
+            )
+        })?;
         Ok(())
     }
 }
@@ -1954,6 +2135,7 @@ mod tests {
         assert!(template.contains("# repeated_call_chain_min_length = 3"));
         assert!(template.contains("# outlier_percentile_cutoff = 95"));
         assert!(template.contains("# [[insights.layer_rules]]\n# name = \"layer_1\""));
+        assert!(template.contains("# layer_rules_file = \"layer-rules.toml\""));
         assert!(
             template.contains("[sanitization]\n# redaction_rules_file = \"redaction-rules.toml\"")
         );
@@ -1987,6 +2169,7 @@ mod tests {
         assert!(template.contains("outlier_percentile_cutoff = 90"));
         assert!(template.contains("ignore_node_kinds = [\"import\"]"));
         assert!(template.contains("[[insights.layer_rules]]\nname = \"api\""));
+        assert!(template.contains("# layer_rules_file = \"layer-rules.toml\""));
         assert!(template.contains("[sanitization]\nredaction_rules_file = \"\""));
         assert!(template.contains("[mcp.http_auth]\nenabled = true"));
         assert!(template.contains("required_scopes = { mcp = [\"atlas:mcp\", \"atlas:read\"] }"));
@@ -2151,6 +2334,251 @@ mod tests {
             message.contains("cannot parse redaction rules file")
                 || message.contains("failed validation")
         );
+    }
+
+    #[test]
+    fn load_accepts_valid_external_layer_rules_file() {
+        let dir = tempdir().expect("tempdir");
+        fs::write(
+            dir.path().join("layer-rules.toml"),
+            "[[layer_rules]]\nname = \"api\"\npath_prefixes = [\"src/api\"]\nmodule_prefixes = []\n\n[[layer_rules]]\nname = \"domain\"\npath_prefixes = [\"src/domain\"]\nmodule_prefixes = []\n",
+        )
+        .expect("write rules");
+        fs::write(
+            dir.path().join(crate::paths::ATLAS_CONFIG),
+            "[insights]\nmax_findings = 10\nlayer_rules_file = \"layer-rules.toml\"\n",
+        )
+        .expect("write config");
+
+        let config = Config::load(dir.path()).expect("config should load");
+        let resolved = config
+            .insights
+            .resolve_layer_rules_file(dir.path())
+            .expect("resolve path")
+            .expect("configured path");
+        assert!(resolved.ends_with("layer-rules.toml"));
+        let rules = config
+            .insights
+            .effective_layer_rules(dir.path())
+            .expect("effective rules");
+        assert_eq!(rules.len(), 2);
+        assert_eq!(rules[0].name, "api");
+        assert_eq!(rules[1].name, "domain");
+    }
+
+    #[test]
+    fn with_loaded_layer_rules_prefers_external_file_over_inline() {
+        let dir = tempdir().expect("tempdir");
+        fs::write(
+            dir.path().join("layer-rules.toml"),
+            "[[layer_rules]]\nname = \"external\"\npath_prefixes = [\"src/ext\"]\nmodule_prefixes = []\n",
+        )
+        .expect("write rules");
+
+        let mut config = Config::default();
+        config.insights.layer_rules = vec![InsightsLayerRule {
+            name: "inline".to_owned(),
+            path_prefixes: vec!["src/inline".to_owned()],
+            module_prefixes: vec![],
+        }];
+        config.insights.layer_rules_file = Some("layer-rules.toml".to_owned());
+
+        let loaded = config
+            .insights
+            .with_loaded_layer_rules(dir.path())
+            .expect("loaded rules");
+        assert_eq!(loaded.layer_rules.len(), 1);
+        assert_eq!(loaded.layer_rules[0].name, "external");
+    }
+
+    #[test]
+    fn load_external_layer_rules_file_ignores_invalid_inline_rules() {
+        let dir = tempdir().expect("tempdir");
+        fs::write(
+            dir.path().join("layer-rules.toml"),
+            "[[layer_rules]]\nname = \"external\"\npath_prefixes = [\"src/ext\"]\nmodule_prefixes = []\n",
+        )
+        .expect("write rules");
+        fs::write(
+            dir.path().join(crate::paths::ATLAS_CONFIG),
+            "[insights]\nlayer_rules_file = \"layer-rules.toml\"\n\n[[insights.layer_rules]]\nname = \"\"\npath_prefixes = []\nmodule_prefixes = []\n",
+        )
+        .expect("write config");
+
+        let config = Config::load(dir.path()).expect("external rules should replace inline rules");
+        let rules = config
+            .insights
+            .effective_layer_rules(dir.path())
+            .expect("effective rules");
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].name, "external");
+    }
+
+    #[test]
+    fn with_loaded_layer_rules_keeps_inline_rules_when_file_unset() {
+        let dir = tempdir().expect("tempdir");
+        let mut config = Config::default();
+        config.insights.layer_rules = vec![InsightsLayerRule {
+            name: "inline".to_owned(),
+            path_prefixes: vec!["src/inline".to_owned()],
+            module_prefixes: vec![],
+        }];
+
+        let loaded = config
+            .insights
+            .with_loaded_layer_rules(dir.path())
+            .expect("loaded rules");
+        assert_eq!(loaded.layer_rules.len(), 1);
+        assert_eq!(loaded.layer_rules[0].name, "inline");
+    }
+
+    #[test]
+    fn load_rejects_missing_external_layer_rules_file() {
+        let dir = tempdir().expect("tempdir");
+        fs::write(
+            dir.path().join(crate::paths::ATLAS_CONFIG),
+            "[insights]\nlayer_rules_file = \"missing-rules.toml\"\n",
+        )
+        .expect("write config");
+
+        let err = Config::load(dir.path()).expect_err("missing rules must fail");
+        assert!(
+            err.to_string()
+                .contains("insights.layer_rules_file points to missing file")
+        );
+    }
+
+    #[test]
+    fn load_rejects_directory_external_layer_rules_file() {
+        let dir = tempdir().expect("tempdir");
+        fs::create_dir_all(dir.path().join("rules-dir")).expect("create rules dir");
+        fs::write(
+            dir.path().join(crate::paths::ATLAS_CONFIG),
+            "[insights]\nlayer_rules_file = \"rules-dir\"\n",
+        )
+        .expect("write config");
+
+        let err = Config::load(dir.path()).expect_err("directory path must fail");
+        assert!(
+            err.to_string()
+                .contains("insights.layer_rules_file must point to a readable file")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn load_rejects_unreadable_external_layer_rules_file() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempdir().expect("tempdir");
+        let rules_path = dir.path().join("layer-rules.toml");
+        fs::write(
+            &rules_path,
+            "[[layer_rules]]\nname = \"api\"\npath_prefixes = [\"src/api\"]\nmodule_prefixes = []\n",
+        )
+        .expect("write rules");
+        let mut permissions = fs::metadata(&rules_path)
+            .expect("rules metadata")
+            .permissions();
+        permissions.set_mode(0o000);
+        fs::set_permissions(&rules_path, permissions).expect("remove read permission");
+        fs::write(
+            dir.path().join(crate::paths::ATLAS_CONFIG),
+            "[insights]\nlayer_rules_file = \"layer-rules.toml\"\n",
+        )
+        .expect("write config");
+
+        let err = Config::load(dir.path()).expect_err("unreadable rules must fail");
+        assert!(err.to_string().contains("insights.layer_rules_file"));
+        assert!(
+            err.chain()
+                .any(|cause| { cause.to_string().contains("cannot read layer-rules file") })
+        );
+    }
+
+    #[test]
+    fn load_rejects_malformed_external_layer_rules_file() {
+        let dir = tempdir().expect("tempdir");
+        fs::write(
+            dir.path().join("layer-rules.toml"),
+            "[[layer_rules]]\nname = [",
+        )
+        .expect("write malformed rules");
+        fs::write(
+            dir.path().join(crate::paths::ATLAS_CONFIG),
+            "[insights]\nlayer_rules_file = \"layer-rules.toml\"\n",
+        )
+        .expect("write config");
+
+        let err = Config::load(dir.path()).expect_err("malformed rules must fail");
+        let message = err.to_string();
+        assert!(message.contains("insights.layer_rules_file"));
+        assert!(
+            message.contains("cannot parse layer-rules file")
+                || message.contains("failed validation")
+        );
+    }
+
+    #[test]
+    fn load_rejects_blank_external_layer_rules_file() {
+        let dir = tempdir().expect("tempdir");
+        fs::write(
+            dir.path().join(crate::paths::ATLAS_CONFIG),
+            "[insights]\nlayer_rules_file = \"\"\n",
+        )
+        .expect("write config");
+
+        let err = Config::load(dir.path()).expect_err("blank path must fail");
+        assert!(
+            err.to_string()
+                .contains("insights.layer_rules_file must not be empty")
+        );
+    }
+
+    #[test]
+    fn load_rejects_external_layer_rules_file_with_duplicate_names() {
+        let dir = tempdir().expect("tempdir");
+        fs::write(
+            dir.path().join("layer-rules.toml"),
+            "[[layer_rules]]\nname = \"api\"\npath_prefixes = [\"src/api\"]\nmodule_prefixes = []\n\n[[layer_rules]]\nname = \"api\"\npath_prefixes = [\"src/other\"]\nmodule_prefixes = []\n",
+        )
+        .expect("write rules");
+        fs::write(
+            dir.path().join(crate::paths::ATLAS_CONFIG),
+            "[insights]\nlayer_rules_file = \"layer-rules.toml\"\n",
+        )
+        .expect("write config");
+
+        let err = Config::load(dir.path()).expect_err("duplicate names must fail");
+        assert!(err.to_string().contains("insights.layer_rules_file"));
+        assert!(err.chain().any(|cause| {
+            cause
+                .to_string()
+                .contains("insights.layer_rules[1].name duplicates layer `api`")
+        }));
+    }
+
+    #[test]
+    fn load_rejects_external_layer_rules_file_with_empty_matchers() {
+        let dir = tempdir().expect("tempdir");
+        fs::write(
+            dir.path().join("layer-rules.toml"),
+            "[[layer_rules]]\nname = \"app\"\npath_prefixes = []\nmodule_prefixes = []\n",
+        )
+        .expect("write rules");
+        fs::write(
+            dir.path().join(crate::paths::ATLAS_CONFIG),
+            "[insights]\nlayer_rules_file = \"layer-rules.toml\"\n",
+        )
+        .expect("write config");
+
+        let err = Config::load(dir.path()).expect_err("empty matchers must fail");
+        assert!(err.to_string().contains("insights.layer_rules_file"));
+        assert!(err.chain().any(|cause| {
+            cause
+                .to_string()
+                .contains("insights.layer_rules[0] must define path_prefixes or module_prefixes")
+        }));
     }
 
     #[test]

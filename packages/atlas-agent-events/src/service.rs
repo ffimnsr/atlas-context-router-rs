@@ -295,6 +295,8 @@ fn route_hook_payload(
         label,
         repo_root: Some(repo.to_owned()),
         repo_roots: vec![repo.to_owned()],
+        repo_id: None,
+        repo_ids: vec![],
         identity_kind: identity.kind_str().to_owned(),
         identity_value: identity.value().to_owned(),
     };

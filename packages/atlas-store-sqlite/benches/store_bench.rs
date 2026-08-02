@@ -35,6 +35,7 @@ fn make_nodes(file: &str, count: usize) -> Vec<Node> {
             is_test: i % 7 == 0,
             file_hash: "abc123".to_owned(),
             extra_json: serde_json::Value::Null,
+            repo_provenance: None,
         })
         .collect()
 }
@@ -52,6 +53,7 @@ fn make_edges(file: &str, nodes: &[Node]) -> Vec<Edge> {
             confidence: 1.0,
             confidence_tier: None,
             extra_json: serde_json::Value::Null,
+            repo_provenance: None,
         })
         .collect()
 }
@@ -252,6 +254,7 @@ fn make_regex_store(file_count: usize, nodes_per_file: usize) -> Store {
                     is_test: false,
                     file_hash: "abc".to_owned(),
                     extra_json: serde_json::Value::Null,
+                    repo_provenance: None,
                 }
             })
             .collect();

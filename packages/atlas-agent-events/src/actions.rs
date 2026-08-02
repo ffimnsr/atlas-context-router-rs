@@ -223,6 +223,8 @@ fn persist_handoff_artifact(
         label: format!("hook:{frontend}:{trigger}:handoff"),
         repo_root: Some(repo.to_owned()),
         repo_roots: vec![repo.to_owned()],
+        repo_id: None,
+        repo_ids: vec![],
         identity_kind: identity.kind_str().to_owned(),
         identity_value: identity.value().to_owned(),
     };
@@ -627,6 +629,8 @@ fn persist_named_hook_artifact(
                 label: format!("hook:{trigger}:{kind}"),
                 repo_root: Some(repo.to_owned()),
                 repo_roots: vec![repo.to_owned()],
+                repo_id: None,
+                repo_ids: vec![],
                 identity_kind: identity.kind_str().to_owned(),
                 identity_value: identity.value().to_owned(),
             },

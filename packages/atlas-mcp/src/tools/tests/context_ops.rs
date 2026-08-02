@@ -111,6 +111,7 @@ fn get_context_query_returns_packaged_result() {
         is_test: false,
         file_hash: "h1".to_owned(),
         extra_json: serde_json::json!({}),
+        repo_provenance: None,
     };
     store
         .replace_file_graph("src/math.rs", "h1", Some("rust"), Some(5), &[node], &[])
@@ -172,6 +173,7 @@ fn get_context_accepts_target_object_and_reports_normalized_target() {
         is_test: false,
         file_hash: "h1".to_owned(),
         extra_json: serde_json::json!({}),
+        repo_provenance: None,
     };
     store
         .replace_file_graph("src/math.rs", "h1", Some("rust"), Some(5), &[node], &[])
@@ -213,6 +215,7 @@ fn get_context_accepts_supported_query_intent_phrases() {
         is_test: false,
         file_hash: "h1".to_owned(),
         extra_json: serde_json::json!({}),
+        repo_provenance: None,
     };
     store
         .replace_file_graph("src/math.rs", "h1", Some("rust"), Some(5), &[node], &[])
@@ -422,6 +425,7 @@ fn get_context_defaults_to_toon_output_format() {
         is_test: false,
         file_hash: "h1".to_owned(),
         extra_json: serde_json::json!({}),
+        repo_provenance: None,
     };
     store
         .replace_file_graph("src/math.rs", "h1", Some("rust"), Some(5), &[node], &[])
@@ -848,6 +852,7 @@ fn review_and_impact_context_report_cross_repo_hops() {
         is_test: false,
         file_hash: "h-app".to_owned(),
         extra_json: serde_json::json!({"repo_id": "repo_root"}),
+        repo_provenance: None,
     };
     let dep_node = Node {
         id: NodeId::UNSET,
@@ -865,6 +870,7 @@ fn review_and_impact_context_report_cross_repo_hops() {
         is_test: false,
         file_hash: "h-dep".to_owned(),
         extra_json: serde_json::json!({"repo_id": "repo_dep"}),
+        repo_provenance: None,
     };
     let cross_edge = Edge {
         id: 0,
@@ -876,6 +882,7 @@ fn review_and_impact_context_report_cross_repo_hops() {
         confidence: 1.0,
         confidence_tier: Some("high".to_owned()),
         extra_json: serde_json::json!({"repo_id": "repo_root"}),
+        repo_provenance: None,
     };
     store
         .replace_file_graph(
@@ -970,6 +977,7 @@ fn explain_change_reports_change_kind_counts() {
         is_test: false,
         file_hash: "h1".to_owned(),
         extra_json: serde_json::json!({}),
+        repo_provenance: None,
     };
     store
         .replace_file_graph("src/a.rs", "h1", Some("rust"), Some(10), &[node], &[])
@@ -2073,6 +2081,7 @@ fn get_context_code_spans_toggle_controls_line_ranges() {
         is_test: false,
         file_hash: "h1".to_owned(),
         extra_json: serde_json::json!({}),
+        repo_provenance: None,
     };
     store
         .replace_file_graph("src/ui.rs", "h1", Some("rust"), Some(20), &[node], &[])

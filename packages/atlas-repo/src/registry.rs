@@ -384,10 +384,23 @@ pub fn registration_for_repo(
 
 pub fn stable_repo_id(repo_root: &Utf8Path) -> String {
     let normalized = to_forward_slashes(repo_root.as_str());
+    stable_prefixed_hash("repo_", &normalized)
+}
+
+pub fn stable_repo_fingerprint(repo_root: &Utf8Path, remote_url: Option<&str>) -> String {
+    let seed = remote_url
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|remote_url| format!("remote:{remote_url}"))
+        .unwrap_or_else(|| format!("root:{}", to_forward_slashes(repo_root.as_str())));
+    stable_prefixed_hash("repo_fp_", &seed)
+}
+
+fn stable_prefixed_hash(prefix: &str, seed: &str) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(normalized.as_bytes());
+    hasher.update(seed.as_bytes());
     let digest = hasher.finalize();
-    format!("repo_{:x}", digest)[..21].to_owned()
+    format!("{prefix}{:x}", digest)[..(prefix.len() + 16)].to_owned()
 }
 
 fn read_vcs_metadata(repo_root: &Utf8Path) -> VcsMetadata {
@@ -520,6 +533,25 @@ mod tests {
 
         assert_eq!(first, second);
         assert!(first.starts_with("repo_"));
+    }
+
+    #[test]
+    fn stable_repo_fingerprint_is_domain_separated_from_repo_id() {
+        let repo_root = Utf8Path::new("/tmp/example");
+        let repo_id = stable_repo_id(repo_root);
+        let repo_fingerprint = stable_repo_fingerprint(repo_root, None);
+
+        assert_ne!(repo_id, repo_fingerprint);
+        assert!(repo_fingerprint.starts_with("repo_fp_"));
+    }
+
+    #[test]
+    fn stable_repo_fingerprint_prefers_remote_url_when_available() {
+        let repo_root = Utf8Path::new("/tmp/example");
+        let from_remote = stable_repo_fingerprint(repo_root, Some("git@github.com:org/repo.git"));
+        let from_root_only = stable_repo_fingerprint(repo_root, None);
+
+        assert_ne!(from_remote, from_root_only);
     }
 
     #[test]

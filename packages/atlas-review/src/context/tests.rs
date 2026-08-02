@@ -32,6 +32,7 @@ fn make_node(qname: &str, name: &str, file: &str, kind: NodeKind, parent: Option
         is_test: false,
         file_hash: "abc".to_string(),
         extra_json: serde_json::Value::Null,
+        repo_provenance: None,
     }
 }
 
@@ -51,6 +52,7 @@ fn make_edge(src: &str, tgt: &str, kind: EdgeKind, file: &str) -> Edge {
         confidence: 1.0,
         confidence_tier: None,
         extra_json: serde_json::Value::Null,
+        repo_provenance: None,
     }
 }
 
@@ -150,6 +152,8 @@ fn saved_source_meta(id: &str) -> SourceMeta {
         label: format!("artifact-{id}"),
         repo_root: Some("/repo".into()),
         repo_roots: vec!["/repo".into()],
+        repo_id: None,
+        repo_ids: vec![],
         identity_kind: "artifact_label".into(),
         identity_value: format!("artifact-{id}"),
     }
@@ -1040,6 +1044,7 @@ fn saved_context_cap_drops_low_ranked_sources() {
             preview: "A".repeat(200),
             retrieval_hint: "source_id=src-1".to_owned(),
             relevance_score: 10.0,
+            repo_provenance: None,
             context_ranking_evidence: None,
         },
         SavedContextSource {
@@ -1051,6 +1056,7 @@ fn saved_context_cap_drops_low_ranked_sources() {
             preview: "B".repeat(200),
             retrieval_hint: "source_id=src-2".to_owned(),
             relevance_score: 1.0,
+            repo_provenance: None,
             context_ranking_evidence: None,
         },
     ];
@@ -1214,6 +1220,7 @@ fn source_mix_lists_saved_artifacts_when_present() {
         preview: "preview".to_owned(),
         retrieval_hint: "source_id=s1".to_owned(),
         relevance_score: 5.0,
+        repo_provenance: None,
         context_ranking_evidence: None,
     }];
     super::payload::apply_payload_budgets(&mut result, &BudgetPolicy::default());
@@ -1657,6 +1664,7 @@ fn saved_context_evidence_carries_saved_context_kind_and_session_recency() {
         preview: "previous review output".to_string(),
         retrieval_hint: "source_id=src-42".to_string(),
         relevance_score: 20.0,
+        repo_provenance: None,
         context_ranking_evidence: Some(evidence),
     };
 

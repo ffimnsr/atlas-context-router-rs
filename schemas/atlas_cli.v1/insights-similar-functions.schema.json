@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://atlas-context-router-rs/schemas/atlas_cli.v1/insights-similar-functions.schema.json",
+  "title": "atlas_cli.v1 insights_similar_functions",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "command", "data"],
+  "properties": {
+    "schema_version": { "const": "atlas_cli.v1" },
+    "command": { "const": "insights_similar_functions" },
+    "data": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "thresholds", "summary", "findings", "matches", "atlas_provenance"],
+      "properties": {
+        "source": { "type": "object", "additionalProperties": true },
+        "thresholds": { "type": "object", "additionalProperties": false, "required": ["high", "medium", "low"], "properties": { "high": { "type": "number" }, "medium": { "type": "number" }, "low": { "type": "number" } } },
+        "summary": { "type": "object", "additionalProperties": false, "required": ["total_findings", "generated_at"], "properties": { "total_findings": { "type": "integer", "minimum": 0 }, "highest_severity": { "type": ["string", "null"], "enum": ["info", "low", "medium", "high", null] }, "generated_at": { "type": "string" } } },
+        "findings": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+        "matches": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+        "atlas_provenance": { "type": "object", "additionalProperties": false, "required": ["indexed_file_count"], "properties": { "indexed_file_count": { "type": "integer", "minimum": 0 }, "last_indexed_at": { "type": ["string", "null"] } } },
+        "atlas_freshness": { "type": ["object", "null"], "additionalProperties": true }
+      }
+    }
+  }
+}

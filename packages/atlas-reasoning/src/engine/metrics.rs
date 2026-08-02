@@ -118,6 +118,7 @@ pub(super) struct GraphSnapshot {
     pub(super) nodes: Vec<Node>,
     pub(super) edges: Vec<Edge>,
     pub(super) owner_by_file: BTreeMap<String, Option<String>>,
+    pub(super) file_hash_by_file: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -200,10 +201,11 @@ impl<'s> InsightsEngine<'s> {
             .get_build_status(repo_root.as_ref().to_string_lossy().as_ref())?
             .map(|status| status.source_repo_id)
             .unwrap_or_else(|| "legacy".to_owned());
-        let mut file_paths = store
+        let file_hash_by_file = store
             .file_hashes_for_repo(&source_repo_id)?
-            .into_keys()
-            .collect::<Vec<_>>();
+            .into_iter()
+            .collect::<BTreeMap<_, _>>();
+        let mut file_paths = file_hash_by_file.keys().cloned().collect::<Vec<_>>();
         file_paths.sort();
 
         let mut nodes = Vec::new();
@@ -249,10 +251,16 @@ impl<'s> InsightsEngine<'s> {
             .filter(|(file_path, _)| allowed_files.contains(file_path))
             .collect();
 
+        let filtered_file_hash_by_file = file_hash_by_file
+            .into_iter()
+            .filter(|(file_path, _)| allowed_files.contains(file_path))
+            .collect();
+
         Ok(GraphSnapshot {
             nodes: allowed_nodes,
             edges: filtered_edges,
             owner_by_file: filtered_owner_by_file,
+            file_hash_by_file: filtered_file_hash_by_file,
         })
     }
 }

@@ -187,6 +187,7 @@ fn emit_package(
         is_test: false,
         file_hash: ctx.file_hash.to_owned(),
         extra_json: serde_json::Value::Null,
+        repo_provenance: None,
     });
     edges.push(contains_edge(ctx.rel_path, &qn, ctx.rel_path, line));
     Some(qn)
@@ -228,6 +229,7 @@ fn emit_type(
         is_test: false,
         file_hash: ctx.file_hash.to_owned(),
         extra_json: serde_json::Value::Null,
+        repo_provenance: None,
     });
     edges.push(contains_edge(parent_qn, &qn, ctx.rel_path, line));
     emit_annotations(node, ctx, &qn, annotation_index, nodes, edges);
@@ -286,6 +288,7 @@ fn emit_method(
         is_test: false,
         file_hash: ctx.file_hash.to_owned(),
         extra_json: serde_json::Value::Null,
+        repo_provenance: None,
     });
     edges.push(contains_edge(parent_qn, &qn, ctx.rel_path, line));
     emit_annotations(node, ctx, &qn, annotation_index, nodes, edges);
@@ -325,6 +328,7 @@ fn emit_import(
         is_test: false,
         file_hash: ctx.file_hash.to_owned(),
         extra_json: serde_json::json!({ "imported": name }),
+        repo_provenance: None,
     });
     edges.push(contains_edge(parent_qn, &qn, ctx.rel_path, line));
     edges.push(imports_edge(
@@ -380,6 +384,7 @@ fn emit_annotations(
             is_test: false,
             file_hash: ctx.file_hash.to_owned(),
             extra_json: serde_json::json!({ "kind": "annotation" }),
+            repo_provenance: None,
         });
         edges.push(contains_edge(owner_qn, &qn, ctx.rel_path, line));
     }
@@ -455,6 +460,7 @@ fn file_node(rel_path: &str, file_hash: &str, line_end: u32) -> Node {
         is_test: false,
         file_hash: file_hash.to_owned(),
         extra_json: serde_json::Value::Null,
+        repo_provenance: None,
     }
 }
 
@@ -469,6 +475,7 @@ fn contains_edge(parent_qn: &str, child_qn: &str, file_path: &str, line: u32) ->
         confidence: 1.0,
         confidence_tier: Some("definite".to_owned()),
         extra_json: serde_json::Value::Null,
+        repo_provenance: None,
     }
 }
 
@@ -483,6 +490,7 @@ fn imports_edge(source_qn: &str, target_qn: &str, file_path: &str, line: u32, ti
         confidence: 1.0,
         confidence_tier: Some(tier.to_owned()),
         extra_json: serde_json::Value::Null,
+        repo_provenance: None,
     }
 }
 
@@ -497,6 +505,7 @@ fn call_edge(source_qn: &str, target_qn: &str, file_path: &str, line: u32, tier:
         confidence: 1.0,
         confidence_tier: Some(tier.to_owned()),
         extra_json: serde_json::Value::Null,
+        repo_provenance: None,
     }
 }
 

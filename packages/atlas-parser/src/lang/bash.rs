@@ -117,6 +117,7 @@ fn emit_function(
         is_test: false,
         file_hash: ctx.file_hash.to_owned(),
         extra_json: serde_json::Value::Null,
+        repo_provenance: None,
     });
     edges.push(contains_edge(parent_qn, &qn, ctx.rel_path, line));
     Some(qn)
@@ -152,6 +153,7 @@ fn emit_source_command(
         is_test: false,
         file_hash: ctx.file_hash.to_owned(),
         extra_json: serde_json::json!({ "command": command_name, "imported": target }),
+        repo_provenance: None,
     });
     edges.push(contains_edge(parent_qn, &qn, ctx.rel_path, line));
     edges.push(imports_edge(
@@ -208,6 +210,7 @@ fn walk_commands(
                 confidence: 1.0,
                 confidence_tier: Some("same_file".to_owned()),
                 extra_json: serde_json::Value::Null,
+                repo_provenance: None,
             });
         }
         if parse_source_command(node, ctx.source).is_some() {
@@ -352,6 +355,7 @@ fn file_node(rel_path: &str, file_hash: &str, line_end: u32, language: &str) -> 
         is_test: false,
         file_hash: file_hash.to_owned(),
         extra_json: serde_json::Value::Null,
+        repo_provenance: None,
     }
 }
 
@@ -366,6 +370,7 @@ fn contains_edge(parent_qn: &str, child_qn: &str, file_path: &str, line: u32) ->
         confidence: 1.0,
         confidence_tier: Some("definite".to_owned()),
         extra_json: serde_json::Value::Null,
+        repo_provenance: None,
     }
 }
 
@@ -380,6 +385,7 @@ fn imports_edge(source_qn: &str, target_qn: &str, file_path: &str, line: u32, ti
         confidence: 1.0,
         confidence_tier: Some(tier.to_owned()),
         extra_json: serde_json::Value::Null,
+        repo_provenance: None,
     }
 }
 

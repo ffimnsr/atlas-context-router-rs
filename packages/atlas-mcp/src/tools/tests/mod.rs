@@ -88,6 +88,7 @@ pub(super) fn make_node(kind: NodeKind, name: &str, qualified_name: &str, file_p
         is_test: kind == NodeKind::Test,
         file_hash: format!("hash:{file_path}"),
         extra_json: serde_json::json!({}),
+        repo_provenance: None,
     }
 }
 
@@ -102,6 +103,7 @@ pub(super) fn make_edge(kind: EdgeKind, source_qn: &str, target_qn: &str, file_p
         confidence: 1.0,
         confidence_tier: Some("high".to_owned()),
         extra_json: serde_json::json!({}),
+        repo_provenance: None,
     }
 }
 
@@ -307,6 +309,7 @@ pub(super) fn setup_git_mcp_fixture() -> GitMcpFixture {
         is_test: false,
         file_hash: "hash:README.md".to_owned(),
         extra_json: serde_json::json!({ "level": 1, "path": "document.overview" }),
+        repo_provenance: None,
     };
     let install_heading = Node {
         id: NodeId::UNSET,
@@ -324,6 +327,7 @@ pub(super) fn setup_git_mcp_fixture() -> GitMcpFixture {
         is_test: false,
         file_hash: "hash:README.md".to_owned(),
         extra_json: serde_json::json!({ "level": 2, "path": "document.overview.install" }),
+        repo_provenance: None,
     };
     store
         .replace_file_graph(

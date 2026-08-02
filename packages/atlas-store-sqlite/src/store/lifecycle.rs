@@ -253,6 +253,42 @@ impl Store {
         }
 
         issues.extend(self.noncanonical_path_rows(Self::NONCANONICAL_PATH_LIMIT)?);
+        issues.extend(self.missing_repo_provenance_rows(Self::NONCANONICAL_PATH_LIMIT)?);
+
+        Ok(issues)
+    }
+
+    pub fn missing_repo_provenance_rows(&self, limit: usize) -> Result<Vec<String>> {
+        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
+        let mut issues = Vec::new();
+
+        for (table, predicate) in [
+            ("files", "source_repo_id = ''"),
+            (
+                "nodes",
+                "source_repo_id = '' OR json_extract(COALESCE(extra_json, 'null'), '$.repo_provenance.repo_id') IS NULL",
+            ),
+            (
+                "edges",
+                "source_repo_id = '' OR json_extract(COALESCE(extra_json, 'null'), '$.repo_provenance.repo_id') IS NULL",
+            ),
+        ] {
+            if issues.len() >= limit {
+                break;
+            }
+            let remaining = (limit - issues.len()) as i64;
+            let sql =
+                format!("SELECT rowid, source_repo_id FROM {table} WHERE {predicate} LIMIT ?1");
+            let mut stmt = self.conn.prepare(&sql).map_err(db_err)?;
+            let mut rows = stmt.query(params![remaining]).map_err(db_err)?;
+            while let Some(row) = rows.next().map_err(db_err)? {
+                let rowid: i64 = row.get(0).map_err(db_err)?;
+                let source_repo_id: String = row.get(1).map_err(db_err)?;
+                issues.push(format!(
+                    "missing_repo_provenance: table={table} rowid={rowid} source_repo_id={source_repo_id}"
+                ));
+            }
+        }
 
         Ok(issues)
     }

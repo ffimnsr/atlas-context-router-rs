@@ -72,6 +72,10 @@ pub(crate) fn tool_result_contract(name: &str) -> ToolResultContract {
         | "analyze_patterns"
         | "find_large_functions"
         | "find_complex_functions"
+        | "find_similar_functions"
+        | "find_duplicates"
+        | "infer_modules"
+        | "label_components"
         | "get_session_status"
         | "compact_session"
         | "resume_session"
@@ -596,6 +600,67 @@ fn base_tool_list_json() -> Value {
                         "nesting_threshold": { "type": "integer", "description": "Override max nesting depth threshold." },
                         "limit": { "type": "integer", "description": "Cap result count after ranking." },
                         "include_tests": { "type": "boolean", "description": "Include test functions and methods." },
+                        "verbose": { "type": "boolean", "description": "Return full report body in toon output too." },
+                        "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
+                    },
+                    "required": []
+                }
+            },
+            {
+                "name": "find_similar_functions",
+                "description": "Find semantically similar functions for one callable symbol using name, signature, body-shingle, and neighbor overlap. JSON output matches the CLI similar-functions report; default toon output stays compact unless verbose=true.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "symbol": { "type": "string", "description": "Qualified name or resolvable callable identifier." },
+                        "min_score": { "type": "number", "description": "Minimum similarity score to keep (0.0-1.0)." },
+                        "limit": { "type": "integer", "description": "Cap returned matches after ranking." },
+                        "include_same_file": { "type": "boolean", "description": "Keep same-file matches too." },
+                        "verbose": { "type": "boolean", "description": "Return full report body in toon output too." },
+                        "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
+                    },
+                    "required": ["symbol"]
+                }
+            },
+            {
+                "name": "find_duplicates",
+                "description": "Find exact-normalized and near-duplicate callable bodies using normalized token shingles. JSON output matches the CLI duplicates report; default toon output stays compact unless verbose=true.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "files": { "type": "array", "items": { "type": "string" }, "description": "Optional repo-relative files to scope the search." },
+                        "min_score": { "type": "number", "description": "Minimum duplicate confidence to keep (0.0-1.0)." },
+                        "limit": { "type": "integer", "description": "Cap returned duplicate groups after ranking." },
+                        "include_tests": { "type": "boolean", "description": "Include test functions and methods." },
+                        "suppressions": { "type": "array", "items": { "type": "string" }, "description": "Optional suppressions matched against duplicate group id, normalized summary, file path, or symbol name." },
+                        "verbose": { "type": "boolean", "description": "Return full report body in toon output too." },
+                        "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
+                    },
+                    "required": []
+                }
+            },
+            {
+                "name": "infer_modules",
+                "description": "Infer module buckets from package ownership, path layout, and dependency structure. JSON output matches the CLI infer-modules report; default toon output stays compact unless verbose=true.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "limit": { "type": "integer", "description": "Cap returned findings after ranking." },
+                        "verbose": { "type": "boolean", "description": "Return full report body in toon output too." },
+                        "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
+                    },
+                    "required": []
+                }
+            },
+            {
+                "name": "label_components",
+                "description": "Label files and symbols with Atlas component taxonomy such as cli, mcp, parse, review_context, and session_continuity. JSON output matches the CLI label-components report; default toon output stays compact unless verbose=true.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "files": { "type": "array", "items": { "type": "string" }, "description": "Optional repo-relative files to scope file labeling." },
+                        "symbols": { "type": "array", "items": { "type": "string" }, "description": "Optional qualified names to scope symbol labeling." },
+                        "limit": { "type": "integer", "description": "Cap returned assignments after ranking." },
                         "verbose": { "type": "boolean", "description": "Return full report body in toon output too." },
                         "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
                     },
@@ -1315,6 +1380,10 @@ fn tool_output_schema_for(name: &str) -> Option<Value> {
         "analyze_patterns" => Some(insight_report_output_schema()),
         "find_large_functions" => Some(large_function_report_output_schema()),
         "find_complex_functions" => Some(large_function_report_output_schema()),
+        "find_similar_functions" => Some(similar_function_report_output_schema()),
+        "find_duplicates" => Some(duplicate_report_output_schema()),
+        "infer_modules" => Some(inferred_module_report_output_schema()),
+        "label_components" => Some(component_label_report_output_schema()),
         "detect_changes" => Some(detect_changes_output_schema()),
         "get_impact_radius" => Some(get_impact_radius_output_schema()),
         "get_review_context" => Some(get_review_context_output_schema()),
@@ -2461,6 +2530,142 @@ fn large_function_report_output_schema() -> Value {
             "atlas_freshness": { "$ref": "#/$defs/graph_freshness_warning" }
         }),
         &["mode", "summary", "findings", "atlas_provenance"],
+        Some(serde_json::json!({
+            "insight_severity": insight_severity_schema(),
+            "confidence_tier": confidence_tier_schema(),
+            "insight_line_range": insight_line_range_schema(),
+            "insight_evidence": insight_evidence_schema(),
+            "insight_finding": insight_finding_schema(),
+            "insight_summary": insight_summary_schema(),
+            "graph_freshness_warning": graph_freshness_warning_schema()
+        })),
+    )
+}
+
+fn similar_function_report_output_schema() -> Value {
+    normalized_tool_output_schema(
+        serde_json::json!({
+            "source": { "type": "object" },
+            "thresholds": { "type": "object" },
+            "summary": { "$ref": "#/$defs/insight_summary" },
+            "findings": { "type": "array", "items": { "$ref": "#/$defs/insight_finding" } },
+            "matches": { "type": "array", "items": { "type": "object" } },
+            "atlas_provenance": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "indexed_file_count": { "type": "integer" },
+                    "last_indexed_at": { "type": ["string", "null"] }
+                },
+                "required": ["indexed_file_count"]
+            },
+            "atlas_freshness": { "$ref": "#/$defs/graph_freshness_warning" }
+        }),
+        &[
+            "source",
+            "thresholds",
+            "summary",
+            "findings",
+            "matches",
+            "atlas_provenance",
+        ],
+        Some(serde_json::json!({
+            "insight_severity": insight_severity_schema(),
+            "confidence_tier": confidence_tier_schema(),
+            "insight_line_range": insight_line_range_schema(),
+            "insight_evidence": insight_evidence_schema(),
+            "insight_finding": insight_finding_schema(),
+            "insight_summary": insight_summary_schema(),
+            "graph_freshness_warning": graph_freshness_warning_schema()
+        })),
+    )
+}
+
+fn duplicate_report_output_schema() -> Value {
+    normalized_tool_output_schema(
+        serde_json::json!({
+            "thresholds": { "type": "object" },
+            "summary": { "$ref": "#/$defs/insight_summary" },
+            "findings": { "type": "array", "items": { "$ref": "#/$defs/insight_finding" } },
+            "groups": { "type": "array", "items": { "type": "object" } },
+            "atlas_provenance": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "indexed_file_count": { "type": "integer" },
+                    "last_indexed_at": { "type": ["string", "null"] }
+                },
+                "required": ["indexed_file_count"]
+            },
+            "atlas_freshness": { "$ref": "#/$defs/graph_freshness_warning" }
+        }),
+        &[
+            "thresholds",
+            "summary",
+            "findings",
+            "groups",
+            "atlas_provenance",
+        ],
+        Some(serde_json::json!({
+            "insight_severity": insight_severity_schema(),
+            "confidence_tier": confidence_tier_schema(),
+            "insight_line_range": insight_line_range_schema(),
+            "insight_evidence": insight_evidence_schema(),
+            "insight_finding": insight_finding_schema(),
+            "insight_summary": insight_summary_schema(),
+            "graph_freshness_warning": graph_freshness_warning_schema()
+        })),
+    )
+}
+
+fn inferred_module_report_output_schema() -> Value {
+    normalized_tool_output_schema(
+        serde_json::json!({
+            "summary": { "$ref": "#/$defs/insight_summary" },
+            "findings": { "type": "array", "items": { "$ref": "#/$defs/insight_finding" } },
+            "modules": { "type": "array", "items": { "type": "object" } },
+            "atlas_provenance": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "indexed_file_count": { "type": "integer" },
+                    "last_indexed_at": { "type": ["string", "null"] }
+                },
+                "required": ["indexed_file_count"]
+            },
+            "atlas_freshness": { "$ref": "#/$defs/graph_freshness_warning" }
+        }),
+        &["summary", "findings", "modules", "atlas_provenance"],
+        Some(serde_json::json!({
+            "insight_severity": insight_severity_schema(),
+            "confidence_tier": confidence_tier_schema(),
+            "insight_line_range": insight_line_range_schema(),
+            "insight_evidence": insight_evidence_schema(),
+            "insight_finding": insight_finding_schema(),
+            "insight_summary": insight_summary_schema(),
+            "graph_freshness_warning": graph_freshness_warning_schema()
+        })),
+    )
+}
+
+fn component_label_report_output_schema() -> Value {
+    normalized_tool_output_schema(
+        serde_json::json!({
+            "summary": { "$ref": "#/$defs/insight_summary" },
+            "findings": { "type": "array", "items": { "$ref": "#/$defs/insight_finding" } },
+            "assignments": { "type": "array", "items": { "type": "object" } },
+            "atlas_provenance": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "indexed_file_count": { "type": "integer" },
+                    "last_indexed_at": { "type": ["string", "null"] }
+                },
+                "required": ["indexed_file_count"]
+            },
+            "atlas_freshness": { "$ref": "#/$defs/graph_freshness_warning" }
+        }),
+        &["summary", "findings", "assignments", "atlas_provenance"],
         Some(serde_json::json!({
             "insight_severity": insight_severity_schema(),
             "confidence_tier": confidence_tier_schema(),
@@ -5138,7 +5343,9 @@ fn tool_category(name: &str) -> &'static str {
         "status" | "doctor" | "db_check" | "debug_graph" | "broker_status" => "health",
         name if name.starts_with("analyze_")
             || name.starts_with("assess_")
-            || name.starts_with("find_") =>
+            || name.starts_with("find_")
+            || name == "infer_modules"
+            || name == "label_components" =>
         {
             "analysis"
         }

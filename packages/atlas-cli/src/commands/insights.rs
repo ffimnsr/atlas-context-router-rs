@@ -3,7 +3,8 @@ use atlas_adapters::{AdapterHooks, CliAdapter};
 use atlas_core::GraphToolRequirement;
 use atlas_core::{InsightFinding, InsightSummary};
 use atlas_reasoning::{
-    InsightsEngine, LargeFunctionMode, LargeFunctionRequest, RiskAssessmentTarget,
+    ComponentLabelRequest, DuplicateDetectionRequest, InsightsEngine, LargeFunctionMode,
+    LargeFunctionRequest, RiskAssessmentTarget, SimilarFunctionRequest,
 };
 use atlas_store_sqlite::Store;
 
@@ -22,6 +23,10 @@ fn insights_command_label(subcommand: &InsightsCommand) -> &'static str {
         InsightsCommand::Patterns { .. } => "insights:patterns",
         InsightsCommand::LargeFunctions { .. } => "insights:large-functions",
         InsightsCommand::ComplexFunctions { .. } => "insights:complex-functions",
+        InsightsCommand::SimilarFunctions { .. } => "insights:similar-functions",
+        InsightsCommand::Duplicates { .. } => "insights:duplicates",
+        InsightsCommand::InferModules { .. } => "insights:infer-modules",
+        InsightsCommand::LabelComponents { .. } => "insights:label-components",
     }
 }
 
@@ -99,10 +104,15 @@ pub fn run_insights(cli: &Cli) -> Result<()> {
             eprintln!("Warning: {warning}");
         }
 
+        let atlas_dir = atlas_engine::paths::atlas_dir(&repo);
         let config =
-            atlas_engine::Config::load(&atlas_engine::paths::atlas_dir(&repo)).unwrap_or_default();
-        let engine = InsightsEngine::new(&store, config.insights.clone())
-            .context("cannot initialize insights engine")?;
+            atlas_engine::Config::load(&atlas_dir).context("cannot load .atlas/config.toml")?;
+        let insights = config
+            .insights
+            .with_loaded_layer_rules(&atlas_dir)
+            .context("cannot load insights layer rules")?;
+        let engine =
+            InsightsEngine::new(&store, insights).context("cannot initialize insights engine")?;
 
         let subcommand = match &cli.command {
             Command::Insights { subcommand, .. } => subcommand,
@@ -284,6 +294,155 @@ pub fn run_insights(cli: &Cli) -> Result<()> {
                             candidate.max_nesting_depth,
                         );
                         println!("    {}", candidate.ranking_reason);
+                    }
+                }
+            }
+            InsightsCommand::SimilarFunctions {
+                symbol,
+                min_score,
+                limit,
+                include_same_file,
+            } => {
+                let analysis = engine
+                    .find_similar_functions(
+                        &repo,
+                        SimilarFunctionRequest {
+                            symbol: symbol.clone(),
+                            limit: *limit,
+                            min_score: *min_score,
+                            include_same_file: *include_same_file,
+                        },
+                    )
+                    .with_context(|| format!("similar-function analysis failed for `{symbol}`"))?;
+
+                if cli.json {
+                    print_json(
+                        "insights_similar_functions",
+                        serde_json::to_value(analysis.report_result())?,
+                    )?;
+                } else if analysis.matches.is_empty() {
+                    println!("No similar functions matched current thresholds.");
+                } else {
+                    println!("Similar functions for {}:", analysis.source.qualified_name);
+                    for item in &analysis.matches {
+                        println!(
+                            "  - [{:.2}] {} {}:{}-{}",
+                            item.score,
+                            item.candidate.qualified_name,
+                            item.candidate.file_path,
+                            item.candidate.line_start,
+                            item.candidate.line_end,
+                        );
+                        println!("    matched: {}", item.matched_features.join(", "));
+                    }
+                }
+            }
+            InsightsCommand::Duplicates {
+                files,
+                min_score,
+                limit,
+                include_tests,
+                suppressions,
+            } => {
+                let analysis = engine
+                    .find_duplicates(
+                        &repo,
+                        DuplicateDetectionRequest {
+                            files: (!files.is_empty()).then(|| files.clone()),
+                            limit: *limit,
+                            min_score: *min_score,
+                            include_tests: *include_tests,
+                            suppressions: suppressions.clone(),
+                        },
+                    )
+                    .context("duplicate detection failed")?;
+
+                if cli.json {
+                    print_json(
+                        "insights_duplicates",
+                        serde_json::to_value(analysis.report_result())?,
+                    )?;
+                } else if analysis.groups.is_empty() {
+                    println!("No duplicate groups matched current thresholds.");
+                } else {
+                    println!("Duplicate groups ({}):", analysis.groups.len());
+                    for group in &analysis.groups {
+                        println!(
+                            "  - [{:.2}] {} members={} tokens={} files={}",
+                            group.confidence,
+                            group.duplicate_kind,
+                            group.member_count,
+                            group.duplicated_token_count,
+                            group.files.join(", "),
+                        );
+                    }
+                }
+            }
+            InsightsCommand::InferModules { limit } => {
+                let mut analysis = engine
+                    .infer_modules(&repo)
+                    .context("module inference failed")?;
+                apply_finding_limit(
+                    &mut analysis.report.findings,
+                    &mut analysis.report.summary,
+                    *limit,
+                );
+                if cli.json {
+                    print_json(
+                        "insights_infer_modules",
+                        serde_json::to_value(analysis.report_result())?,
+                    )?;
+                } else if analysis.modules.is_empty() {
+                    println!("No modules inferred.");
+                } else {
+                    println!("Inferred modules ({}):", analysis.modules.len());
+                    for module in &analysis.modules {
+                        println!(
+                            "  - [{:.2}] {} files={} nodes={} explicit={}",
+                            module.confidence,
+                            module.display_name,
+                            module.file_count,
+                            module.node_count,
+                            module.explicit,
+                        );
+                    }
+                }
+            }
+            InsightsCommand::LabelComponents {
+                files,
+                symbols,
+                limit,
+            } => {
+                let analysis = engine
+                    .label_components(
+                        &repo,
+                        ComponentLabelRequest {
+                            files: (!files.is_empty()).then(|| files.clone()),
+                            symbols: (!symbols.is_empty()).then(|| symbols.clone()),
+                            limit: *limit,
+                        },
+                    )
+                    .context("component labeling failed")?;
+                if cli.json {
+                    print_json(
+                        "insights_label_components",
+                        serde_json::to_value(analysis.report_result())?,
+                    )?;
+                } else if analysis.assignments.is_empty() {
+                    println!("No component labels matched current selection.");
+                } else {
+                    println!("Component labels ({}):", analysis.assignments.len());
+                    for assignment in &analysis.assignments {
+                        let labels = assignment
+                            .labels
+                            .iter()
+                            .map(|item| format!("{}:{:.2}", item.label, item.confidence))
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        match &assignment.qualified_name {
+                            Some(qualified_name) => println!("  - {} | {}", qualified_name, labels),
+                            None => println!("  - {} | {}", assignment.file_path, labels),
+                        }
                     }
                 }
             }

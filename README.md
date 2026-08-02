@@ -546,6 +546,10 @@ atlas insights risk src/service.rs::fn::compute
 atlas insights patterns --limit 20
 atlas insights large-functions --threshold 80 --mode large-or-complex
 atlas insights complex-functions --complexity-threshold 15
+atlas insights similar-functions src/service.rs::fn::compute --limit 10
+atlas insights duplicates --min-score 0.7
+atlas insights infer-modules
+atlas insights label-components --files packages/atlas-cli/src/commands/changes.rs
 atlas --json insights metrics
 ```
 
@@ -572,6 +576,33 @@ name = "domain"
 path_prefixes = ["src/domain"]
 module_prefixes = []
 ```
+
+Layer rules can also live in a separate `.atlas/layer-rules.toml` file so they
+change without editing the main config. Point `insights.layer_rules_file` at
+it (relative paths resolve from `.atlas/`); when set, it replaces inline
+`[[insights.layer_rules]]` entries:
+
+```toml
+[insights]
+layer_rules_file = "layer-rules.toml"
+```
+
+`.atlas/layer-rules.toml`:
+
+```toml
+[[layer_rules]]
+name = "api"
+path_prefixes = ["src/api"]
+module_prefixes = []
+
+[[layer_rules]]
+name = "domain"
+path_prefixes = ["src/domain"]
+module_prefixes = []
+```
+
+Missing, unreadable, or malformed layer-rules files fail config load with
+actionable errors naming `insights.layer_rules_file` and the resolved path.
 
 ## MCP Tools
 
@@ -610,6 +641,10 @@ The MCP server (`atlas serve`) exposes these tools to agents:
 | `analyze_dependency` | Dependency-removal validation for a symbol |
 | `find_large_functions` | Deterministic large/complex function discovery with thresholds and ranked evidence |
 | `find_complex_functions` | Deterministic complex-function discovery with complexity thresholds |
+| `find_similar_functions` | Similar callable discovery with score breakdown |
+| `find_duplicates` | Near-duplicate callable detection |
+| `infer_modules` | Explainable module inference from paths and graph |
+| `label_components` | Rule-based Atlas component labeling |
 | `get_impact_radius` | Graph traversal from changed files |
 | `get_review_context` | Review bundle: symbols, neighbors, risk summary |
 | `get_context` | General context engine: symbol, file, review, impact |

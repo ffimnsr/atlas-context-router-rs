@@ -903,6 +903,7 @@ fn cycle_context(
                 is_test: false,
                 file_hash: String::new(),
                 extra_json: Value::Null,
+                repo_provenance: None,
             });
         evidence_by_edge
             .entry((source_module.clone(), target_module.clone()))

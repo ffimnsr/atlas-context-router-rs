@@ -1,7 +1,14 @@
 use std::collections::HashSet;
 
+use atlas_repo::stable_repo_id;
+use camino::Utf8Path;
+
 fn encode_repo_roots_json(repo_roots: &[String]) -> String {
     serde_json::to_string(repo_roots).unwrap_or_else(|_| "[]".to_owned())
+}
+
+fn encode_repo_ids_json(repo_ids: &[String]) -> String {
+    serde_json::to_string(repo_ids).unwrap_or_else(|_| "[]".to_owned())
 }
 
 fn decode_repo_roots_json(raw: Option<String>, repo_root: Option<String>) -> Vec<String> {
@@ -18,6 +25,39 @@ fn decode_repo_roots_json(raw: Option<String>, repo_root: Option<String>) -> Vec
         repo_roots.dedup();
     }
     repo_roots
+}
+
+fn derive_repo_ids(
+    repo_roots: &[String],
+    repo_id: Option<String>,
+    repo_ids: &[String],
+) -> Vec<String> {
+    let mut derived = if repo_ids.is_empty() {
+        repo_roots
+            .iter()
+            .map(|repo_root| stable_repo_id(Utf8Path::new(repo_root)))
+            .collect::<Vec<_>>()
+    } else {
+        repo_ids.to_vec()
+    };
+    if let Some(repo_id) = repo_id.filter(|value| !value.is_empty()) {
+        derived.push(repo_id);
+    }
+    derived.sort();
+    derived.dedup();
+    derived
+}
+
+fn decode_repo_ids_json(
+    raw: Option<String>,
+    repo_roots: &[String],
+    repo_id: Option<String>,
+) -> Vec<String> {
+    let parsed = raw
+        .as_deref()
+        .and_then(|value| serde_json::from_str::<Vec<String>>(value).ok())
+        .unwrap_or_default();
+    derive_repo_ids(repo_roots, repo_id, &parsed)
 }
 
 use rusqlite::{OptionalExtension, params};
@@ -233,10 +273,16 @@ impl ContentStore {
                 .map_err(|e| AtlasError::Db(e.to_string()))?;
 
             let repo_roots_json = encode_repo_roots_json(&meta.repo_roots);
+            let repo_ids = derive_repo_ids(&meta.repo_roots, meta.repo_id.clone(), &meta.repo_ids);
+            let repo_ids_json = encode_repo_ids_json(&repo_ids);
+            let primary_repo_id = meta
+                .repo_id
+                .clone()
+                .or_else(|| (repo_ids.len() == 1).then(|| repo_ids[0].clone()));
             tx.execute(
                 "INSERT OR REPLACE INTO sources (
-                     id, session_id, agent_id, source_type, label, repo_root, repo_roots_json, identity_kind, identity_value, created_at
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                     id, session_id, agent_id, source_type, label, repo_root, repo_roots_json, repo_id, repo_ids_json, identity_kind, identity_value, created_at
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
                 params![
                     meta.id,
                     meta.session_id,
@@ -245,6 +291,8 @@ impl ContentStore {
                     meta.label,
                     meta.repo_root,
                     repo_roots_json,
+                    primary_repo_id,
+                    repo_ids_json,
                     meta.identity_kind,
                     meta.identity_value,
                     now,
@@ -429,7 +477,7 @@ impl ContentStore {
         let mut stmt = self
             .conn
             .prepare(
-                "SELECT id, session_id, agent_id, source_type, label, repo_root, repo_roots_json, identity_kind, identity_value, created_at
+                "SELECT id, session_id, agent_id, source_type, label, repo_root, repo_roots_json, repo_id, repo_ids_json, identity_kind, identity_value, created_at
                  FROM sources WHERE id = ?1",
             )
             .map_err(|e| AtlasError::Db(e.to_string()))?;
@@ -443,17 +491,23 @@ impl ContentStore {
                 row.get(5).map_err(|e| AtlasError::Db(e.to_string()))?;
             let repo_roots_json: Option<String> =
                 row.get(6).map_err(|e| AtlasError::Db(e.to_string()))?;
+            let repo_id: Option<String> = row.get(7).map_err(|e| AtlasError::Db(e.to_string()))?;
+            let repo_roots = decode_repo_roots_json(repo_roots_json, repo_root.clone());
+            let repo_ids_json: Option<String> =
+                row.get(8).map_err(|e| AtlasError::Db(e.to_string()))?;
             Ok(Some(SourceRow {
                 id: row.get(0).map_err(|e| AtlasError::Db(e.to_string()))?,
                 session_id: row.get(1).map_err(|e| AtlasError::Db(e.to_string()))?,
                 agent_id: row.get(2).map_err(|e| AtlasError::Db(e.to_string()))?,
                 source_type: row.get(3).map_err(|e| AtlasError::Db(e.to_string()))?,
                 label: row.get(4).map_err(|e| AtlasError::Db(e.to_string()))?,
-                repo_root: repo_root.clone(),
-                repo_roots: decode_repo_roots_json(repo_roots_json, repo_root),
-                identity_kind: row.get(7).map_err(|e| AtlasError::Db(e.to_string()))?,
-                identity_value: row.get(8).map_err(|e| AtlasError::Db(e.to_string()))?,
-                created_at: row.get(9).map_err(|e| AtlasError::Db(e.to_string()))?,
+                repo_root,
+                repo_roots: repo_roots.clone(),
+                repo_id: repo_id.clone(),
+                repo_ids: decode_repo_ids_json(repo_ids_json, &repo_roots, repo_id),
+                identity_kind: row.get(9).map_err(|e| AtlasError::Db(e.to_string()))?,
+                identity_value: row.get(10).map_err(|e| AtlasError::Db(e.to_string()))?,
+                created_at: row.get(11).map_err(|e| AtlasError::Db(e.to_string()))?,
             }))
         } else {
             Ok(None)

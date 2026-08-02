@@ -33,6 +33,6 @@ pub use registry::{
     REPO_REGISTRY_FILE_NAME, REPO_REGISTRY_SCHEMA_VERSION, RepoDependency, RepoRegistration,
     RepoRegistry, RepoRegistryWarning, RepoRelationship, RepoRelationshipKind, TrustState,
     VcsMetadata, add_manual_repo, bootstrap_registry, discover_initialized_submodules,
-    phase1_multi_repo_supported, registry_path, stable_repo_id,
+    phase1_multi_repo_supported, registry_path, stable_repo_fingerprint, stable_repo_id,
 };
 pub use root::find_repo_root;

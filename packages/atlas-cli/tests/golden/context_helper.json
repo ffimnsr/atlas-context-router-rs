@@ -73,7 +73,12 @@
         "kind": "calls",
         "line": 10,
         "source_qn": "src/lib.rs::fn::helper",
-        "target_qn": "src/lib.rs::method::Greeter::greet_twice"
+        "target_qn": "src/lib.rs::method::Greeter::greet_twice",
+        "repo_provenance": {
+          "repo_id": "<repo_id>",
+          "repo_fingerprint": "<repo_fingerprint>",
+          "repo_root": "<repo_root>"
+        }
       },
       "relevance_score": 88.0,
       "selection_reason": "callee"
@@ -99,7 +104,12 @@
         "kind": "calls",
         "line": 4,
         "source_qn": "src/main.rs::fn::main",
-        "target_qn": "src/lib.rs::fn::helper"
+        "target_qn": "src/lib.rs::fn::helper",
+        "repo_provenance": {
+          "repo_id": "<repo_id>",
+          "repo_fingerprint": "<repo_fingerprint>",
+          "repo_root": "<repo_root>"
+        }
       },
       "relevance_score": 86.5,
       "selection_reason": "caller"
@@ -111,14 +121,24 @@
       "line_ranges": [],
       "node_count_included": 2,
       "path": "src/lib.rs",
-      "selection_reason": "direct_target"
+      "selection_reason": "direct_target",
+      "repo_provenance": {
+        "repo_id": "<repo_id>",
+        "repo_fingerprint": "<repo_fingerprint>",
+        "repo_root": "<repo_root>"
+      }
     },
     {
       "language": "rust",
       "line_ranges": [],
       "node_count_included": 1,
       "path": "src/main.rs",
-      "selection_reason": "caller"
+      "selection_reason": "caller",
+      "repo_provenance": {
+        "repo_id": "<repo_id>",
+        "repo_fingerprint": "<repo_fingerprint>",
+        "repo_root": "<repo_root>"
+      }
     }
   ],
   "nodes": [
@@ -145,7 +165,12 @@
         "params": "(name: &str)",
         "parent_name": "src/lib.rs",
         "qualified_name": "src/lib.rs::fn::helper",
-        "return_type": "String"
+        "return_type": "String",
+        "repo_provenance": {
+          "repo_id": "<repo_id>",
+          "repo_fingerprint": "<repo_fingerprint>",
+          "repo_root": "<repo_root>"
+        }
       },
       "relevance_score": 121.0,
       "selection_reason": "direct_target"
@@ -174,7 +199,12 @@
         "params": "(name: &str)",
         "parent_name": "src/lib.rs::impl::Greeter",
         "qualified_name": "src/lib.rs::method::Greeter::greet_twice",
-        "return_type": "String"
+        "return_type": "String",
+        "repo_provenance": {
+          "repo_id": "<repo_id>",
+          "repo_fingerprint": "<repo_fingerprint>",
+          "repo_root": "<repo_root>"
+        }
       },
       "relevance_score": 96.0,
       "selection_reason": "callee"
@@ -203,7 +233,12 @@
         "params": "()",
         "parent_name": "src/main.rs",
         "qualified_name": "src/main.rs::fn::main",
-        "return_type": null
+        "return_type": null,
+        "repo_provenance": {
+          "repo_id": "<repo_id>",
+          "repo_fingerprint": "<repo_fingerprint>",
+          "repo_root": "<repo_root>"
+        }
       },
       "relevance_score": 88.0,
       "selection_reason": "caller"

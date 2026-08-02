@@ -5,6 +5,11 @@
   "suggestions": [
     "inspect the checks array for details"
   ],
+  "repo_provenance": {
+    "repo_id": "<repo_id>",
+    "repo_fingerprint": "<repo_fingerprint>",
+    "repo_root": "<repo_root>"
+  },
   "execution_state": "fresh",
   "checks": [
     {

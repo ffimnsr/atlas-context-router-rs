@@ -69,6 +69,7 @@ fn parsed_file_with_fn(
             is_test: false,
             file_hash: "abc".to_string(),
             extra_json: serde_json::Value::Null,
+            repo_provenance: None,
         }],
         edges: vec![],
     }
@@ -158,6 +159,7 @@ fn rename_multi_file_symbol() {
             is_test: false,
             file_hash: "xyz".to_string(),
             extra_json: serde_json::Value::Null,
+            repo_provenance: None,
         }],
         edges: vec![atlas_core::Edge {
             id: 0,
@@ -169,6 +171,7 @@ fn rename_multi_file_symbol() {
             confidence: 1.0,
             confidence_tier: Some("high".to_string()),
             extra_json: serde_json::Value::Null,
+            repo_provenance: None,
         }],
     };
     insert_pf(&mut store, pf_ref);
@@ -222,6 +225,7 @@ fn rename_collision_rejected() {
                 is_test: false,
                 file_hash: "abc".to_string(),
                 extra_json: serde_json::Value::Null,
+                repo_provenance: None,
             },
             atlas_core::Node {
                 id: atlas_core::NodeId::UNSET,
@@ -239,6 +243,7 @@ fn rename_collision_rejected() {
                 is_test: false,
                 file_hash: "abc".to_string(),
                 extra_json: serde_json::Value::Null,
+                repo_provenance: None,
             },
         ],
         edges: vec![],
@@ -288,6 +293,7 @@ fn dead_code_removal_private_helper() {
                 is_test: false,
                 file_hash: "h1".to_string(),
                 extra_json: serde_json::Value::Null,
+                repo_provenance: None,
             },
             atlas_core::Node {
                 id: atlas_core::NodeId::UNSET,
@@ -305,6 +311,7 @@ fn dead_code_removal_private_helper() {
                 is_test: false,
                 file_hash: "h1".to_string(),
                 extra_json: serde_json::Value::Null,
+                repo_provenance: None,
             },
         ],
         edges: vec![],

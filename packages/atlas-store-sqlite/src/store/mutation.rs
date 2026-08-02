@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 
-use atlas_core::{AtlasError, Node, PackageOwner, PackageOwnerKind, ParsedFile, Result};
+use atlas_core::{
+    AtlasError, Node, PackageOwner, PackageOwnerKind, ParsedFile, RepoProvenance, Result,
+};
 use rusqlite::{Connection, params};
 use tracing::info;
 
@@ -12,6 +14,21 @@ use super::{
         canonicalize_graph_slice, canonicalize_parsed_file, canonicalize_repo_path, row_to_node,
     },
 };
+
+#[allow(clippy::too_many_arguments)]
+fn upsert_repo_provenance_json(
+    extra_json: &serde_json::Value,
+    provenance: &RepoProvenance,
+) -> serde_json::Value {
+    let mut extra = extra_json.as_object().cloned().unwrap_or_default();
+    extra
+        .entry("repo_id".to_owned())
+        .or_insert_with(|| serde_json::Value::String(provenance.repo_id.clone()));
+    extra
+        .entry("repo_provenance".to_owned())
+        .or_insert_with(|| serde_json::to_value(provenance).unwrap_or(serde_json::Value::Null));
+    serde_json::Value::Object(extra)
+}
 
 #[allow(clippy::too_many_arguments)]
 fn do_replace_file_graph(
@@ -102,9 +119,18 @@ fn do_replace_file_graph(
     )
     .map_err(db_err)?;
 
+    let default_repo_provenance = RepoProvenance::new(source_repo_id.to_owned())
+        .with_repo_fingerprint(format!("repo_fp_legacy_{source_repo_id}"));
+
     // Steps 6a + 6b: insert each node then its FTS row.
     for n in nodes {
-        let extra = serde_json::to_string(&n.extra_json).map_err(AtlasError::Serde)?;
+        let node_extra_json = upsert_repo_provenance_json(
+            &n.extra_json,
+            n.repo_provenance
+                .as_ref()
+                .unwrap_or(&default_repo_provenance),
+        );
+        let extra = serde_json::to_string(&node_extra_json).map_err(AtlasError::Serde)?;
         conn.execute(
             "INSERT OR REPLACE INTO nodes
                  (kind, name, qualified_name, file_path, line_start, line_end,
@@ -154,7 +180,13 @@ fn do_replace_file_graph(
 
     // Step 7: insert edges.
     for e in edges {
-        let extra = serde_json::to_string(&e.extra_json).map_err(AtlasError::Serde)?;
+        let edge_extra_json = upsert_repo_provenance_json(
+            &e.extra_json,
+            e.repo_provenance
+                .as_ref()
+                .unwrap_or(&default_repo_provenance),
+        );
+        let extra = serde_json::to_string(&edge_extra_json).map_err(AtlasError::Serde)?;
         conn.execute(
             "INSERT INTO edges
                  (kind, source_qualified, target_qualified, file_path,

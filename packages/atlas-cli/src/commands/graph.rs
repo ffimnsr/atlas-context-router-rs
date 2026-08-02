@@ -14,7 +14,7 @@ use atlas_engine::{BuildOptions, UpdateOptions, UpdateTarget, build_graph, updat
 use atlas_parser::ParserRegistry;
 use atlas_repo::{
     RepoRegistration, RepoRegistry, RepoRelationshipKind, changed_files, find_repo_root, hash_file,
-    phase1_multi_repo_supported, stable_repo_id,
+    phase1_multi_repo_supported, stable_repo_fingerprint, stable_repo_id,
 };
 use atlas_session::SessionStore;
 use atlas_store_sqlite::{BuildFinishStats, Store};
@@ -327,12 +327,19 @@ fn status_payload(ctx: StatusPayloadContext<'_>) -> serde_json::Value {
             "last_error": bs.last_error,
         })
     });
+    let repo_id = stable_repo_id(Utf8Path::new(ctx.repo));
+    let repo_fingerprint = stable_repo_fingerprint(Utf8Path::new(ctx.repo), None);
     serde_json::json!({
         "ok": diagnostics.ok,
         "error_code": diagnostics.error_code,
         "message": graph_health_error_message(diagnostics.error_code),
         "suggestions": graph_health_error_suggestions(diagnostics.error_code),
         "repo_root": ctx.repo,
+        "repo_provenance": {
+            "repo_id": repo_id,
+            "repo_fingerprint": repo_fingerprint,
+            "repo_root": ctx.repo,
+        },
         "db_path": ctx.db_path,
         "mcp": {
             "worker_threads": ctx.config.mcp_worker_threads(),

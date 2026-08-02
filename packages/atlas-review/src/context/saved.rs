@@ -136,6 +136,7 @@ pub(super) fn retrieve_saved_context(
             "source_id={} label={:?} type={}",
             source_id, meta.label, meta.source_type
         );
+        let repo_provenance = meta.primary_repo_provenance();
 
         scored.push(SavedContextSource {
             source_id: source_id.clone(),
@@ -146,6 +147,7 @@ pub(super) fn retrieve_saved_context(
             preview,
             retrieval_hint,
             relevance_score: score,
+            repo_provenance,
             context_ranking_evidence: Some(evidence),
         });
     }

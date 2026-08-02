@@ -3,8 +3,9 @@ use atlas_core::{
     BudgetManager, BudgetPolicy, BudgetStatus, InsightFinding, InsightSummary, NodeKind,
 };
 use atlas_reasoning::{
-    AnalysisRankingPrimitives, AnalysisTrimmingPrimitives, InsightsEngine, LargeFunctionMode,
-    LargeFunctionRequest, ReasoningEngine, RiskAssessmentTarget, sort_dead_code_candidates,
+    AnalysisRankingPrimitives, AnalysisTrimmingPrimitives, ComponentLabelRequest,
+    DuplicateDetectionRequest, InsightsEngine, LargeFunctionMode, LargeFunctionRequest,
+    ReasoningEngine, RiskAssessmentTarget, SimilarFunctionRequest, sort_dead_code_candidates,
     sort_dependency_result, sort_refactor_safety_result, sort_removal_result,
 };
 
@@ -65,10 +66,15 @@ pub(super) fn tool_analyze_architecture(
     let limit = u64_arg(args, "limit").map(|value| value as usize);
     let verbose = bool_arg(args, "verbose").unwrap_or(false);
     let store = open_store(db_path)?;
+    let atlas_dir = atlas_engine::paths::atlas_dir(repo_root);
     let config =
-        atlas_engine::Config::load(&atlas_engine::paths::atlas_dir(repo_root)).unwrap_or_default();
-    let engine = InsightsEngine::new(&store, config.insights.clone())
-        .context("cannot initialize insights engine")?;
+        atlas_engine::Config::load(&atlas_dir).context("cannot load .atlas/config.toml")?;
+    let insights = config
+        .insights
+        .with_loaded_layer_rules(&atlas_dir)
+        .context("cannot load insights layer rules")?;
+    let engine =
+        InsightsEngine::new(&store, insights).context("cannot initialize insights engine")?;
     let mut analysis = engine
         .analyze_architecture(repo_root)
         .context("architecture analysis failed")?;
@@ -270,6 +276,156 @@ pub(super) fn tool_find_complex_functions(
         Some(LargeFunctionMode::Complex),
         "complex_function_report",
     )
+}
+
+pub(super) fn tool_find_similar_functions(
+    args: Option<&serde_json::Value>,
+    repo_root: &str,
+    db_path: &str,
+    output_format: crate::output::OutputFormat,
+) -> Result<serde_json::Value> {
+    let symbol = str_arg(args, "symbol")?
+        .ok_or_else(|| anyhow::anyhow!("find_similar_functions requires 'symbol'"))?
+        .to_owned();
+    let min_score = args
+        .and_then(|value| value.get("min_score"))
+        .and_then(|value| value.as_f64());
+    let limit = u64_arg(args, "limit").map(|value| value as usize);
+    let include_same_file = bool_arg(args, "include_same_file").unwrap_or(false);
+    let verbose = bool_arg(args, "verbose").unwrap_or(false);
+    let store = open_store(db_path)?;
+    let config =
+        atlas_engine::Config::load(&atlas_engine::paths::atlas_dir(repo_root)).unwrap_or_default();
+    let engine = InsightsEngine::new(&store, config.insights.clone())
+        .context("cannot initialize insights engine")?;
+    let analysis = engine
+        .find_similar_functions(
+            repo_root,
+            SimilarFunctionRequest {
+                symbol,
+                limit,
+                min_score,
+                include_same_file,
+            },
+        )
+        .context("similar-function analysis failed")?;
+    let compact = serde_json::json!({
+        "source": analysis.source,
+        "thresholds": analysis.thresholds,
+        "summary": analysis.report.summary.clone(),
+        "top_findings": analysis.report.findings.clone(),
+        "matches": analysis.matches,
+    });
+    insight_report_response(&analysis.report_result(), compact, output_format, verbose)
+}
+
+pub(super) fn tool_find_duplicates(
+    args: Option<&serde_json::Value>,
+    repo_root: &str,
+    db_path: &str,
+    output_format: crate::output::OutputFormat,
+) -> Result<serde_json::Value> {
+    let files = string_array_arg(args, "files")?;
+    let min_score = args
+        .and_then(|value| value.get("min_score"))
+        .and_then(|value| value.as_f64());
+    let limit = u64_arg(args, "limit").map(|value| value as usize);
+    let include_tests = bool_arg(args, "include_tests").unwrap_or(false);
+    let suppressions = string_array_arg(args, "suppressions")?;
+    let verbose = bool_arg(args, "verbose").unwrap_or(false);
+    let store = open_store(db_path)?;
+    let config =
+        atlas_engine::Config::load(&atlas_engine::paths::atlas_dir(repo_root)).unwrap_or_default();
+    let engine = InsightsEngine::new(&store, config.insights.clone())
+        .context("cannot initialize insights engine")?;
+    let analysis = engine
+        .find_duplicates(
+            repo_root,
+            DuplicateDetectionRequest {
+                files: (!files.is_empty()).then_some(files),
+                limit,
+                min_score,
+                include_tests,
+                suppressions,
+            },
+        )
+        .context("duplicate detection failed")?;
+    let compact = serde_json::json!({
+        "thresholds": analysis.thresholds,
+        "summary": analysis.report.summary.clone(),
+        "top_findings": analysis.report.findings.clone(),
+        "groups": analysis.groups,
+    });
+    insight_report_response(&analysis.report_result(), compact, output_format, verbose)
+}
+
+pub(super) fn tool_infer_modules(
+    args: Option<&serde_json::Value>,
+    repo_root: &str,
+    db_path: &str,
+    output_format: crate::output::OutputFormat,
+) -> Result<serde_json::Value> {
+    let limit = u64_arg(args, "limit").map(|value| value as usize);
+    let verbose = bool_arg(args, "verbose").unwrap_or(false);
+    let store = open_store(db_path)?;
+    let atlas_dir = atlas_engine::paths::atlas_dir(repo_root);
+    let config =
+        atlas_engine::Config::load(&atlas_dir).context("cannot load .atlas/config.toml")?;
+    let insights = config
+        .insights
+        .with_loaded_layer_rules(&atlas_dir)
+        .context("cannot load insights layer rules")?;
+    let engine =
+        InsightsEngine::new(&store, insights).context("cannot initialize insights engine")?;
+    let mut analysis = engine
+        .infer_modules(repo_root)
+        .context("module inference failed")?;
+    apply_finding_limit(
+        &mut analysis.report.findings,
+        &mut analysis.report.summary,
+        limit,
+    );
+    let compact = serde_json::json!({
+        "summary": analysis.report.summary.clone(),
+        "top_findings": analysis.report.findings.clone(),
+        "module_count": analysis.modules.len(),
+        "modules": analysis.modules,
+    });
+    insight_report_response(&analysis.report_result(), compact, output_format, verbose)
+}
+
+pub(super) fn tool_label_components(
+    args: Option<&serde_json::Value>,
+    repo_root: &str,
+    db_path: &str,
+    output_format: crate::output::OutputFormat,
+) -> Result<serde_json::Value> {
+    let files = string_array_arg(args, "files")?;
+    let symbols = string_array_arg(args, "symbols")?;
+    let limit = u64_arg(args, "limit").map(|value| value as usize);
+    let verbose = bool_arg(args, "verbose").unwrap_or(false);
+    let store = open_store(db_path)?;
+    let config =
+        atlas_engine::Config::load(&atlas_engine::paths::atlas_dir(repo_root)).unwrap_or_default();
+    let engine = InsightsEngine::new(&store, config.insights.clone())
+        .context("cannot initialize insights engine")?;
+    let analysis = engine
+        .label_components(
+            repo_root,
+            ComponentLabelRequest {
+                files: (!files.is_empty()).then_some(files),
+                symbols: (!symbols.is_empty()).then_some(symbols),
+                limit,
+            },
+        )
+        .context("component labeling failed")?;
+    let compact = serde_json::json!({
+        "summary": analysis.report.summary.clone(),
+        "top_findings": analysis.report.findings.clone(),
+        "assignment_count": analysis.assignments.len(),
+        "assignments": analysis.assignments,
+    });
+    insight_report_response(&analysis.report_result(), compact, output_format, verbose)
 }
 
 pub(super) fn tool_analyze_safety(

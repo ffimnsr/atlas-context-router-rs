@@ -17,7 +17,7 @@ pub use self::context::{
 };
 pub use self::graph::{
     ChangeType, ChangedFile, Edge, FileRecord, GraphStats, Node, NodeId, PackageOwner,
-    PackageOwnerKind, ParsedFile, ProvenanceMeta,
+    PackageOwnerKind, ParsedFile, ProvenanceMeta, RepoProvenance,
 };
 pub use self::grouping::{
     Community, CommunityNode, Flow, FlowMembership, PostprocessExecutionMode, PostprocessRunState,

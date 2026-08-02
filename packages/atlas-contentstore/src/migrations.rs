@@ -43,9 +43,14 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "008_artifact_repo_scope",
         up_sql: include_str!("migrations/008_artifact_repo_scope.sql"),
     },
+    Migration {
+        version: 9,
+        name: "009_saved_context_repo_ids",
+        up_sql: include_str!("migrations/009_saved_context_repo_ids.sql"),
+    },
 ];
 
-pub const LATEST_VERSION: i32 = 8;
+pub const LATEST_VERSION: i32 = 9;
 
 pub const MIGRATION_SET: MigrationSet = MigrationSet {
     db_kind: "context",

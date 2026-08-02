@@ -16,10 +16,16 @@ mod ranking;
 pub use engine::ReasoningEngine;
 pub use engine::{
     ArchitectureAnalysis, ArchitectureEdgeEvidence, ArchitectureModuleEdge, ArchitectureModuleNode,
-    CodeHealthMetrics, FileMetric, InsightsEngine, InsightsGraphSummary, LargeFunctionAnalysis,
-    LargeFunctionCandidate, LargeFunctionMode, LargeFunctionReportResult, LargeFunctionRequest,
-    MetricDistribution, MetricOutlier, MetricValue, MetricsAnalysis, ModuleMetric, NodeMetric,
-    RiskAssessmentAnalysis, RiskAssessmentTarget, RiskClassification, RiskFactorContribution,
+    CodeHealthMetrics, ComponentLabelAnalysis, ComponentLabelAssignment, ComponentLabelMatch,
+    ComponentLabelReportResult, ComponentLabelRequest, DuplicateDetectionAnalysis,
+    DuplicateDetectionReportResult, DuplicateDetectionRequest, DuplicateGroup, DuplicateMember,
+    FileMetric, InferredModule, InferredModuleReportResult, InsightSymbolSummary, InsightsEngine,
+    LargeFunctionAnalysis, LargeFunctionCandidate, LargeFunctionMode, LargeFunctionReportResult,
+    LargeFunctionRequest, MetricDistribution, MetricOutlier, MetricValue, MetricsAnalysis,
+    ModuleInferenceAnalysis, ModuleMetric, NodeMetric, RiskAssessmentAnalysis,
+    RiskAssessmentTarget, RiskClassification, RiskFactorContribution, SimilarFunctionAnalysis,
+    SimilarFunctionMatch, SimilarFunctionReportResult, SimilarFunctionRequest,
+    SimilarityThresholds,
 };
 pub use ranking::{
     AnalysisRankingPrimitives, AnalysisTrimmingPrimitives, sort_dead_code_candidates,

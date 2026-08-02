@@ -37,6 +37,7 @@ fn make_node(file_path: &str, qualified_name: String, name: String, line_start: 
         is_test: false,
         file_hash: "bench-hash".to_owned(),
         extra_json: serde_json::Value::Null,
+        repo_provenance: None,
     }
 }
 
@@ -51,6 +52,7 @@ fn make_edge(file_path: &str, source_qn: String, target_qn: String, line: u32) -
         confidence: 1.0,
         confidence_tier: Some("high".to_owned()),
         extra_json: serde_json::Value::Null,
+        repo_provenance: None,
     }
 }
 

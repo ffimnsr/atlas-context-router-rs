@@ -304,6 +304,7 @@ pub(super) fn collect_files(nodes: &[SelectedNode]) -> Vec<SelectedFile> {
                 line_ranges: vec![],
                 language: Some(sn.node.language.clone()),
                 node_count_included: 0,
+                repo_provenance: sn.node.repo_provenance.clone(),
             });
         }
     }

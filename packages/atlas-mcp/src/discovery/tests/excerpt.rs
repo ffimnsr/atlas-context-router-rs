@@ -37,6 +37,7 @@ fn markdown_heading(title: &str, path: &str, level: u32, start_line: u32) -> Nod
         is_test: false,
         file_hash: "hash:README.md".to_owned(),
         extra_json: json!({ "level": level, "path": path }),
+        repo_provenance: None,
     }
 }
 

@@ -17,6 +17,7 @@
         "error_code": { "type": "string" },
         "message": { "type": "string" },
         "suggestions": { "type": "array", "items": { "type": "string" } },
+        "repo_provenance": { "$ref": "#/$defs/repo_provenance" },
         "execution_state": { "type": "string" },
         "checks": {
           "type": "array",
@@ -32,6 +33,19 @@
             }
           }
         }
+      }
+    }
+  },
+  "$defs": {
+    "repo_provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repo_id", "repo_fingerprint", "repo_root"],
+      "properties": {
+        "repo_id": { "type": "string" },
+        "repo_fingerprint": { "type": "string" },
+        "repo_root": { "type": "string" },
+        "remote_url": { "type": ["string", "null"] }
       }
     }
   }

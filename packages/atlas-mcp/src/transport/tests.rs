@@ -58,6 +58,7 @@ fn make_node(kind: NodeKind, name: &str, qualified_name: &str, file_path: &str) 
         is_test: kind == NodeKind::Test,
         file_hash: format!("hash:{file_path}"),
         extra_json: serde_json::json!({}),
+        repo_provenance: None,
     }
 }
 
@@ -72,6 +73,7 @@ fn make_edge(kind: EdgeKind, source_qn: &str, target_qn: &str, file_path: &str) 
         confidence: 1.0,
         confidence_tier: Some("high".to_owned()),
         extra_json: serde_json::json!({}),
+        repo_provenance: None,
     }
 }
 

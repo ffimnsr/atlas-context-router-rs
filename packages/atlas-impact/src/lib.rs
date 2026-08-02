@@ -513,6 +513,7 @@ mod tests {
             is_test,
             file_hash: "abc".to_string(),
             extra_json: serde_json::Value::Null,
+            repo_provenance: None,
         }
     }
 
@@ -527,6 +528,7 @@ mod tests {
             confidence: 1.0,
             confidence_tier: None,
             extra_json: serde_json::Value::Null,
+            repo_provenance: None,
         }
     }
 

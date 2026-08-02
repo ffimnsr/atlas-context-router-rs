@@ -123,6 +123,7 @@ fn file_node(rel_path: &str, file_hash: &str, line_end: u32, lang: &str) -> Node
         is_test: false,
         file_hash: file_hash.to_owned(),
         extra_json: serde_json::Value::Null,
+        repo_provenance: None,
     }
 }
 
@@ -137,6 +138,7 @@ fn contains_edge(parent_qn: &str, child_qn: &str, file_path: &str, line: u32) ->
         confidence: 1.0,
         confidence_tier: Some("definite".to_owned()),
         extra_json: serde_json::Value::Null,
+        repo_provenance: None,
     }
 }
 
@@ -221,6 +223,7 @@ fn visit_function(
         is_test: false,
         file_hash: ctx.file_hash.to_owned(),
         extra_json: serde_json::Value::Null,
+        repo_provenance: None,
     });
     edges.push(contains_edge(
         parent_qn,
@@ -263,6 +266,7 @@ fn visit_class(
         is_test: false,
         file_hash: ctx.file_hash.to_owned(),
         extra_json: serde_json::Value::Null,
+        repo_provenance: None,
     });
     edges.push(contains_edge(
         ctx.rel_path,
@@ -323,6 +327,7 @@ fn visit_method(
         is_test: false,
         file_hash: ctx.file_hash.to_owned(),
         extra_json: serde_json::Value::Null,
+        repo_provenance: None,
     });
     edges.push(contains_edge(class_qn, &qn, ctx.rel_path, start_line(node)));
 }
@@ -408,6 +413,7 @@ fn visit_import(
             "source": source,
             "bindings": bindings,
         }),
+        repo_provenance: None,
     });
     edges.push(Edge {
         id: 0,
@@ -419,6 +425,7 @@ fn visit_import(
         confidence: 1.0,
         confidence_tier: Some("definite".to_owned()),
         extra_json: serde_json::Value::Null,
+        repo_provenance: None,
     });
 }
 
@@ -454,6 +461,7 @@ fn visit_ts_interface(
         is_test: false,
         file_hash: ctx.file_hash.to_owned(),
         extra_json: serde_json::Value::Null,
+        repo_provenance: None,
     });
     edges.push(contains_edge(
         ctx.rel_path,
@@ -495,6 +503,7 @@ fn visit_ts_type_alias(
         is_test: false,
         file_hash: ctx.file_hash.to_owned(),
         extra_json: serde_json::Value::Null,
+        repo_provenance: None,
     });
     edges.push(contains_edge(
         ctx.rel_path,
@@ -536,6 +545,7 @@ fn visit_ts_enum(
         is_test: false,
         file_hash: ctx.file_hash.to_owned(),
         extra_json: serde_json::Value::Null,
+        repo_provenance: None,
     });
     edges.push(contains_edge(
         ctx.rel_path,
@@ -605,6 +615,7 @@ fn visit_variable_declarator(
         is_test: false,
         file_hash: ctx.file_hash.to_owned(),
         extra_json: serde_json::Value::Null,
+        repo_provenance: None,
     });
     edges.push(contains_edge(
         ctx.rel_path,
@@ -960,6 +971,7 @@ fn js_call_edge(
             "callee_name": caller_simple_name(callee),
             "receiver_text": receiver,
         }),
+        repo_provenance: None,
     }
 }
 

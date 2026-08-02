@@ -58,6 +58,7 @@ impl LangParser for MarkdownParser {
                 is_test: false,
                 file_hash: ctx.file_hash.to_owned(),
                 extra_json: serde_json::json!({ "kind": "document" }),
+                repo_provenance: None,
             });
             edges.push(contains_edge(ctx.rel_path, &document_qn, ctx.rel_path, 1));
 
@@ -166,6 +167,7 @@ fn walk_markdown_blocks(
                     is_test: false,
                     file_hash: ctx.file_hash.to_owned(),
                     extra_json: serde_json::json!({ "level": level, "path": heading_path }),
+                    repo_provenance: None,
                 });
                 edges.push(contains_edge(
                     &parent_qn,
@@ -268,6 +270,7 @@ fn emit_code_block(
         is_test: false,
         file_hash: ctx.file_hash.to_owned(),
         extra_json: serde_json::json!({ "info_string": info, "kind": "fenced_code_block" }),
+        repo_provenance: None,
     });
     edges.push(contains_edge(parent_qn, &qn, ctx.rel_path, line));
 }
@@ -310,6 +313,7 @@ fn scan_links(
             is_test: false,
             file_hash: ctx.file_hash.to_owned(),
             extra_json: serde_json::json!({ "destination": destination }),
+            repo_provenance: None,
         });
         edges.push(contains_edge(parent_qn, &qn, ctx.rel_path, line));
         edges.push(Edge {
@@ -322,6 +326,7 @@ fn scan_links(
             confidence: 0.8,
             confidence_tier: Some("markdown_link".to_owned()),
             extra_json: serde_json::Value::Null,
+            repo_provenance: None,
         });
     }
 }
@@ -425,6 +430,7 @@ fn file_node(rel_path: &str, file_hash: &str, line_end: u32, language: &str) -> 
         is_test: false,
         file_hash: file_hash.to_owned(),
         extra_json: serde_json::Value::Null,
+        repo_provenance: None,
     }
 }
 
@@ -439,6 +445,7 @@ fn contains_edge(parent_qn: &str, child_qn: &str, file_path: &str, line: u32) ->
         confidence: 1.0,
         confidence_tier: Some("definite".to_owned()),
         extra_json: serde_json::Value::Null,
+        repo_provenance: None,
     }
 }
 

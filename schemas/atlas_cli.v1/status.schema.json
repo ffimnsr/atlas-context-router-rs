@@ -44,6 +44,7 @@
         "message": { "type": "string" },
         "suggestions": { "type": "array", "items": { "type": "string" } },
         "repo_root": { "type": "string" },
+        "repo_provenance": { "$ref": "#/$defs/repo_provenance" },
         "db_path": { "type": "string" },
         "mcp": {
           "type": "object",
@@ -133,6 +134,19 @@
           "type": ["object", "null"],
           "additionalProperties": true
         }
+      }
+    }
+  },
+  "$defs": {
+    "repo_provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repo_id", "repo_fingerprint", "repo_root"],
+      "properties": {
+        "repo_id": { "type": "string" },
+        "repo_fingerprint": { "type": "string" },
+        "repo_root": { "type": "string" },
+        "remote_url": { "type": ["string", "null"] }
       }
     }
   }

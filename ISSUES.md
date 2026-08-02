@@ -66,11 +66,46 @@ Shipped: insights engine foundation, code health metrics engine, large/complex f
 
 Remaining:
 
-- [ ] add configurable layer-rules file surface for architecture validation:
-  - [ ] add config field for external layer-rules file path under `.atlas/config.toml`
-  - [ ] load layer rules from referenced file at runtime so architecture rules can change without recompiling
-  - [ ] validate missing, unreadable, or malformed layer-rules file with actionable config errors
-- [ ] completion criteria: config supports runtime-loaded external layer-rules files with validation
+- [x] add configurable layer-rules file surface for architecture validation:
+  - [x] config shape:
+    - [x] add `insights.layer_rules_file: Option<String>` to `packages/atlas-engine/src/config.rs`
+    - [x] keep existing inline `[[insights.layer_rules]]` support for now; define precedence as `layer_rules_file` replaces inline rules when set
+    - [x] resolve relative `layer_rules_file` paths from `.atlas/`, matching `sanitization.redaction_rules_file`
+  - [x] external file schema:
+    - [x] support TOML files containing `[[layer_rules]]` entries with same fields as inline rules: `name`, `path_prefixes`, `module_prefixes`
+    - [x] deserialize through existing `InsightsLayerRule` so validation stays shared
+    - [x] document example file as `.atlas/layer-rules.toml`
+  - [x] loader/validation:
+    - [x] add `InsightsConfig::resolve_layer_rules_file(atlas_dir)` helper
+    - [x] add `InsightsConfig::effective_layer_rules(atlas_dir) -> Result<Vec<InsightsLayerRule>>` or equivalent runtime loader
+    - [x] reject blank `insights.layer_rules_file`
+    - [x] reject missing paths with error naming `insights.layer_rules_file` and resolved path
+    - [x] reject directories/unreadable files with actionable error naming `insights.layer_rules_file`
+    - [x] reject malformed TOML with parse context naming `insights.layer_rules_file`
+    - [x] reuse existing layer-rule validation for duplicate names, empty matchers, and rules missing both matcher lists
+  - [x] runtime integration:
+    - [x] update architecture analysis config construction so `atlas-reasoning/src/engine/architecture.rs` receives effective runtime rules
+    - [x] verify CLI `insights architecture` and MCP `analyze_architecture` both load external rules via normal `Config::load` paths
+    - [x] preserve no-rules behavior when neither inline rules nor file path is configured
+  - [x] templates/docs:
+    - [x] update config template rendering to include commented `layer_rules_file = "layer-rules.toml"` near `[insights]`
+    - [x] decide whether full profile should prefer inline sample rules or external sample path; do not emit a non-existent active file path
+    - [x] update relevant docs or config examples if present
+  - [x] tests:
+    - [x] unit: `Config::load` accepts valid external layer-rules file
+    - [x] unit: `Config::load` rejects missing external layer-rules file
+    - [x] unit: `Config::load` rejects directory/unreadable external layer-rules file
+    - [x] unit: `Config::load` rejects malformed external layer-rules TOML
+    - [x] unit: external file reuses duplicate-name and empty-matcher validation
+    - [x] CLI quality gate: `insights architecture` reports `layer_violation` from `.atlas/layer-rules.toml`
+    - [x] regression: inline `[[insights.layer_rules]]` still works when `layer_rules_file` unset
+  - [x] validation commands:
+    - [x] `cargo fmt --all`
+    - [x] `cargo clippy --workspace --all-targets --quiet`
+    - [x] `cargo test --quiet -p atlas-engine config::tests::load_accepts_valid_external_layer_rules_file`
+    - [x] `cargo test --quiet -p atlas-cli --test cli_quality_gates insights_architecture_reports_layer_violations_from_external_config_file`
+    - [x] `./scripts/test-workspace-summary.sh`
+- [x] completion criteria: config supports runtime-loaded external layer-rules files with validation, CLI/MCP architecture analysis both use effective external rules, and tests cover valid/missing/unreadable/malformed files
 
 ### Phase 30 — Optional Advanced Features
 
@@ -80,14 +115,73 @@ Shipped: repo registry, discovery and bootstrap, identity and storage model, per
 
 Remaining:
 
-- [ ] store repo provenance on nodes, edges, files, saved context, and diagnostics output
+- [x] store repo provenance on nodes, edges, files, saved context, and diagnostics output:
+  - [x] data model:
+    - [x] define shared repo provenance shape with canonical repo identity fields: `repo_id`, `repo_root`, `repo_fingerprint`/registry fingerprint, and optional `remote_url` when already available
+    - [x] persist provenance on graph nodes and edges without deriving identity from non-canonical paths
+    - [x] persist provenance on file/content records and source references used by retrieval/review context
+    - [x] persist provenance on saved context artifacts and session continuity records
+    - [x] include provenance in diagnostics records/output payloads so stale or cross-repo diagnostics can be traced
+  - [x] write path:
+    - [x] populate provenance from repo registry/discovery bootstrap during full graph build
+    - [x] preserve/update provenance during incremental graph updates, deletes, and cross-repo edge creation
+    - [x] reject or fail closed when required repo provenance is missing for persisted multi-repo data
+  - [x] read/API surfaces:
+    - [x] expose provenance in CLI JSON outputs for graph/context/review/diagnostics commands that emit nodes, edges, files, saved context, or diagnostics
+    - [x] expose provenance in MCP TOON/JSON responses for affected tools, keeping existing fields stable where possible
+    - [x] ensure diagnostics output includes enough repo metadata to distinguish same relative path across repos
+  - [x] migration/backfill:
+    - [x] add schema migration for new provenance columns/tables/indexes
+    - [x] backfill single-repo databases from current repo registry/default repo identity
+    - [x] make `doctor`/`db_check` report missing or inconsistent repo provenance separately from `noncanonical_path_rows`
+  - [x] tests:
+    - [x] unit: provenance shape serializes/deserializes for CLI JSON and MCP responses
+    - [x] integration: full graph build stores provenance on nodes, edges, and files
+    - [x] integration: incremental update preserves provenance and removes stale rows for deleted files
+    - [x] integration: saved context artifact round-trips repo provenance
+    - [x] integration: diagnostics output distinguishes two repos with same relative file path
+    - [x] regression: canonical path identity invariant still holds for path-derived IDs/cache keys
+  - [x] validation commands:
+    - [x] `cargo fmt --all`
+    - [x] `cargo clippy --workspace --all-targets --quiet`
+    - [x] targeted provenance tests with `cargo test --quiet ...`
+    - [x] `./scripts/test-workspace-summary.sh`
+  - [x] completion criteria: every persisted/output entity that can cross repo boundaries carries canonical repo provenance, health checks detect missing provenance, and tests prove same-relative-path multi-repo cases remain unambiguous
 
 #### 30.2 Remaining code intelligence
 
-- [ ] similar-function detection beyond graph-shape heuristics
-- [ ] duplicate detection beyond exact structural patterns
-- [ ] infer modules
-- [ ] label components
+Make higher-level code intelligence explicit, deterministic, and implementable on top of canonical graph/content inputs.
+
+- [x] similar-function detection beyond graph-shape heuristics:
+  - [x] compute deterministic callable fingerprints from canonical file paths, symbol kind/name tokens, normalized signature tokens, call/import/reference neighborhood, module bucket, source-body shingles, and normalized duplicate shingles
+  - [x] score candidates with weighted name/signature/body/neighborhood/module/size buckets and return feature score breakdowns, matched features, differing features, and similarity band
+  - [x] bound candidates by language, callable kind, arity shape, same-file option, and deterministic result limits
+  - [x] expose CLI/MCP entry points with stable JSON schemas and freshness/provenance metadata from existing command/tool wrappers
+  - [x] tests: known similar but non-identical callable fixture
+- [x] duplicate detection beyond exact structural patterns:
+  - [x] normalize callable source tokens by preserving keywords/control-flow structure while replacing identifiers/literals
+  - [x] detect `exact_normalized` and `near_duplicate` callable groups with normalized token shingles
+  - [x] rank duplicate groups by confidence, duplicated token/line count, member count, and stable deterministic group ID
+  - [x] expose groups through CLI/MCP with members, files, normalized pattern summary, and suggested extraction target
+  - [x] tests: multi-file near-duplicate callable fixture
+- [x] infer modules:
+  - [x] define inferred module model with stable ID, display name, root paths, owned symbols, inbound/outbound dependencies, confidence, evidence, and explicit-owner flag
+  - [x] prefer explicit package ownership when stored; otherwise infer from `packages/<name>`, `src/<segment>`, `tests`, docs/wiki/markdown paths, or parent-directory fallback
+  - [x] compute module dependency edges from graph edges with deterministic ordering
+  - [x] expose inferred modules through CLI/MCP with stable JSON schemas
+  - [x] tests: explicit owner plus path-bucket fixture
+- [x] label components:
+  - [x] define Atlas taxonomy: repo scan, parse, persist graph, incremental update, search/traverse, review context, context memory, session continuity, CLI, MCP, config, diagnostics, tests, docs
+  - [x] implement deterministic multi-label file/symbol assignment from path and symbol-name rules with confidence/evidence
+  - [x] expose scoped CLI/MCP label queries for files and symbols with stable JSON schemas
+  - [x] tests: multi-label CLI/review fixture
+- [x] Follow-up hardening:
+  - [x] configurable similarity and duplicate band thresholds via `insights.*_threshold` config
+  - [x] graph-community module clustering used before path fallback when explicit package owner is absent
+  - [x] duplicate suppressions from config and CLI/MCP request filters
+  - [x] source-span records inside duplicate members
+  - [x] component-label propagation into review/context workflow impacted components
+  - [x] persisted fingerprint cache with incremental invalidation
 
 ### Phase 31 — Lowest Priority
 

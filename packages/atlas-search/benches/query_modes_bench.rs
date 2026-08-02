@@ -30,6 +30,7 @@ fn make_node(file_path: &str, qn: &str, name: &str, is_public: bool) -> Node {
         is_test: false,
         file_hash: "bench-hash".to_owned(),
         extra_json: serde_json::Value::Null,
+        repo_provenance: None,
     }
 }
 
@@ -44,6 +45,7 @@ fn make_call_edge(file_path: &str, src: &str, tgt: &str) -> Edge {
         confidence: 1.0,
         confidence_tier: Some("high".to_owned()),
         extra_json: serde_json::Value::Null,
+        repo_provenance: None,
     }
 }
 

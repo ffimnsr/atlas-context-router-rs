@@ -384,6 +384,8 @@ pub struct SelectedFile {
     pub language: Option<String>,
     /// Number of nodes included from this file after trimming.
     pub node_count_included: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo_provenance: Option<crate::model::RepoProvenance>,
 }
 
 /// Metadata about truncation applied to a [`ContextResult`].
@@ -694,6 +696,8 @@ pub struct SavedContextSource {
     pub retrieval_hint: String,
     /// Relevance score for ranking within this result (higher = more relevant).
     pub relevance_score: f32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo_provenance: Option<crate::model::RepoProvenance>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context_ranking_evidence: Option<ContextRankingEvidence>,
 }

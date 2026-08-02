@@ -11,6 +11,17 @@
     "data": { "$ref": "#/$defs/context_result" }
   },
   "$defs": {
+    "repo_provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repo_id", "repo_fingerprint", "repo_root"],
+      "properties": {
+        "repo_id": { "type": "string" },
+        "repo_fingerprint": { "type": "string" },
+        "repo_root": { "type": "string" },
+        "remote_url": { "type": ["string", "null"] }
+      }
+    },
     "context_result": {
       "type": "object",
       "additionalProperties": true,
@@ -39,7 +50,13 @@
             "additionalProperties": true,
             "required": ["node", "selection_reason", "distance", "relevance_score"],
             "properties": {
-              "node": { "type": "object", "additionalProperties": true },
+              "node": {
+                "type": "object",
+                "additionalProperties": true,
+                "properties": {
+                  "repo_provenance": { "$ref": "#/$defs/repo_provenance" }
+                }
+              },
               "selection_reason": { "type": "string" },
               "distance": { "type": "integer" },
               "relevance_score": { "type": "number" },
@@ -54,7 +71,13 @@
             "additionalProperties": true,
             "required": ["edge", "selection_reason", "depth", "relevance_score"],
             "properties": {
-              "edge": { "type": "object", "additionalProperties": true },
+              "edge": {
+                "type": "object",
+                "additionalProperties": true,
+                "properties": {
+                  "repo_provenance": { "$ref": "#/$defs/repo_provenance" }
+                }
+              },
               "selection_reason": { "type": "string" },
               "depth": { "type": ["integer", "null"] },
               "relevance_score": { "type": "number" },
@@ -67,7 +90,10 @@
           "items": {
             "type": "object",
             "additionalProperties": true,
-            "required": ["path", "selection_reason", "line_ranges", "language", "node_count_included"]
+            "required": ["path", "selection_reason", "line_ranges", "language", "node_count_included"],
+            "properties": {
+              "repo_provenance": { "$ref": "#/$defs/repo_provenance" }
+            }
           }
         },
         "truncation": { "type": "object", "additionalProperties": true },
@@ -75,7 +101,16 @@
         "traversal_budget": { "type": ["object", "null"], "additionalProperties": true },
         "ambiguity": { "type": ["object", "null"] },
         "workflow": { "type": ["object", "null"], "additionalProperties": true },
-        "saved_context_sources": { "type": "array", "items": { "type": "object", "additionalProperties": true } },
+        "saved_context_sources": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+              "repo_provenance": { "$ref": "#/$defs/repo_provenance" }
+            }
+          }
+        },
         "budget_status": { "type": "string" },
         "budget_hit": { "type": "boolean" },
         "budget_name": { "type": ["string", "null"] },

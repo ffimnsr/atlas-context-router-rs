@@ -49,6 +49,11 @@ fn sample_node() -> Node {
         is_test: false,
         file_hash: "abc123".to_string(),
         extra_json: serde_json::Value::Null,
+        repo_provenance: Some(
+            RepoProvenance::new("repo-main".to_string())
+                .with_repo_fingerprint("repo_fp_main".to_string())
+                .with_repo_root("/repo".to_string()),
+        ),
     }
 }
 
@@ -190,6 +195,11 @@ fn sample_edge() -> Edge {
         confidence: 1.0,
         confidence_tier: Some("high".to_string()),
         extra_json: serde_json::Value::Null,
+        repo_provenance: Some(
+            RepoProvenance::new("repo-main".to_string())
+                .with_repo_fingerprint("repo_fp_main".to_string())
+                .with_repo_root("/repo".to_string()),
+        ),
     }
 }
 
@@ -450,6 +460,11 @@ fn selected_file_round_trip() {
         line_ranges: vec![(10, 20), (35, 50)],
         language: Some("rust".to_string()),
         node_count_included: 2,
+        repo_provenance: Some(
+            RepoProvenance::new("repo-main".to_string())
+                .with_repo_fingerprint("repo_fp_main".to_string())
+                .with_repo_root("/repo".to_string()),
+        ),
     };
     let json = serde_json::to_string(&sf).unwrap();
     let back: SelectedFile = serde_json::from_str(&json).unwrap();
@@ -466,6 +481,7 @@ fn selected_file_empty_ranges_round_trip() {
         line_ranges: vec![],
         language: None,
         node_count_included: 0,
+        repo_provenance: None,
     };
     let json = serde_json::to_string(&sf).unwrap();
     let back: SelectedFile = serde_json::from_str(&json).unwrap();
@@ -564,6 +580,11 @@ fn context_result_round_trip() {
             line_ranges: vec![(10, 20)],
             language: Some("rust".to_string()),
             node_count_included: 1,
+            repo_provenance: Some(
+                RepoProvenance::new("repo-main".to_string())
+                    .with_repo_fingerprint("repo_fp_main".to_string())
+                    .with_repo_root("/repo".to_string()),
+            ),
         }],
         content_assets: vec![],
         truncation: TruncationMeta::none(),
@@ -615,6 +636,11 @@ fn context_result_round_trip() {
             preview: "preview".to_string(),
             retrieval_hint: "source_id=saved-1".to_string(),
             relevance_score: 14.0,
+            repo_provenance: Some(
+                RepoProvenance::new("repo-main".to_string())
+                    .with_repo_fingerprint("repo_fp_main".to_string())
+                    .with_repo_root("/repo".to_string()),
+            ),
             context_ranking_evidence: Some(ContextRankingEvidence {
                 saved_context_rank_score: Some(4.0),
                 same_session_boost: Some(10.0),

@@ -38,6 +38,8 @@ fn meta(id: &str) -> SourceMeta {
         label: "test artifact".into(),
         repo_root: Some("/repo".into()),
         repo_roots: vec!["/repo".into()],
+        repo_id: None,
+        repo_ids: vec![],
         identity_kind: "artifact_label".into(),
         identity_value: "test artifact".into(),
     }
@@ -53,6 +55,8 @@ fn index_and_retrieve_by_source_id() {
     assert_eq!(src.identity_kind, "artifact_label");
     assert_eq!(src.identity_value, "test artifact");
     assert_eq!(src.agent_id.as_deref(), Some("agent-alpha"));
+    assert!(src.repo_id.is_some());
+    assert_eq!(src.repo_ids.len(), 1);
     let chunks = store.get_chunks("src-1").unwrap();
     assert!(!chunks.is_empty());
 }
@@ -64,7 +68,7 @@ fn open_stamps_migration_history_and_provenance() {
         .conn
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 8);
+    assert_eq!(version, 9);
 
     let history_count: i64 = store
         .conn
@@ -72,7 +76,7 @@ fn open_stamps_migration_history_and_provenance() {
             row.get(0)
         })
         .unwrap();
-    assert_eq!(history_count, 8);
+    assert_eq!(history_count, 9);
 
     let (db_kind, created_by): (String, String) = store
         .conn
@@ -103,11 +107,13 @@ fn rollback_and_reupgrade_restore_content_schema() {
         .conn
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(restored_version, 8);
+    assert_eq!(restored_version, 9);
     assert!(table_columns(&store.conn, "chunks").contains(&"chunk_id".to_string()));
     assert!(table_columns(&store.conn, "sources").contains(&"identity_kind".to_string()));
     assert!(table_columns(&store.conn, "sources").contains(&"agent_id".to_string()));
     assert!(table_columns(&store.conn, "sources").contains(&"repo_roots_json".to_string()));
+    assert!(table_columns(&store.conn, "sources").contains(&"repo_id".to_string()));
+    assert!(table_columns(&store.conn, "sources").contains(&"repo_ids_json".to_string()));
 }
 
 #[test]

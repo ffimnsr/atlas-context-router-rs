@@ -1317,6 +1317,7 @@ mod tests {
             is_test: false,
             file_hash: "abc".to_string(),
             extra_json: serde_json::Value::Null,
+            repo_provenance: None,
         };
 
         let input = vec![ScoredNode::new(node, 5.0)];
@@ -1357,6 +1358,7 @@ mod tests {
                 is_test: false,
                 file_hash: "h".to_string(),
                 extra_json: serde_json::Value::Null,
+                repo_provenance: None,
             },
             1.0,
         )
@@ -1637,6 +1639,7 @@ mod tests {
             is_test: false,
             file_hash: "h1".to_string(),
             extra_json: serde_json::json!({}),
+            repo_provenance: None,
         };
         store
             .replace_file_graph(
@@ -1665,6 +1668,7 @@ mod tests {
             is_test: false,
             file_hash: "h2".to_string(),
             extra_json: serde_json::json!({}),
+            repo_provenance: None,
         };
         store
             .replace_file_graph(
@@ -1722,6 +1726,7 @@ mod tests {
             is_test: false,
             file_hash: "h".to_string(),
             extra_json: serde_json::json!({}),
+            repo_provenance: None,
         };
         store
             .replace_file_graph(
@@ -1933,6 +1938,7 @@ mod tests {
             is_test: false,
             file_hash: "h".to_string(),
             extra_json: serde_json::Value::Null,
+            repo_provenance: None,
         };
         store
             .replace_file_graph("src/lib.rs", "h", Some("rust"), Some(5), &[node], &[])
@@ -2032,6 +2038,7 @@ mod tests {
             is_test: false,
             file_hash: "ha".to_string(),
             extra_json: serde_json::Value::Null,
+            repo_provenance: None,
         };
         let node_b = Node {
             id: NodeId::UNSET,
@@ -2049,6 +2056,7 @@ mod tests {
             is_test: false,
             file_hash: "hb".to_string(),
             extra_json: serde_json::Value::Null,
+            repo_provenance: None,
         };
         let edge_ab = Edge {
             id: 0,
@@ -2060,6 +2068,7 @@ mod tests {
             confidence: 1.0,
             confidence_tier: Some("high".to_string()),
             extra_json: serde_json::Value::Null,
+            repo_provenance: None,
         };
         store
             .replace_file_graph(

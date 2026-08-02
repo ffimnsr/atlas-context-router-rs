@@ -130,6 +130,7 @@ fn query_graph_fuzzy_typo_prefers_symbol_over_markdown_file() {
         is_test: false,
         file_hash: "h1".to_owned(),
         extra_json: serde_json::json!({}),
+        repo_provenance: None,
     };
     store
         .replace_file_graph(
@@ -158,6 +159,7 @@ fn query_graph_fuzzy_typo_prefers_symbol_over_markdown_file() {
         is_test: false,
         file_hash: "h2".to_owned(),
         extra_json: serde_json::json!({}),
+        repo_provenance: None,
     };
     store
         .replace_file_graph(
@@ -218,6 +220,7 @@ fn query_graph_include_files_opt_in_controls_file_results() {
         is_test: false,
         file_hash: "h".to_owned(),
         extra_json: serde_json::json!({}),
+        repo_provenance: None,
     };
     store
         .replace_file_graph(

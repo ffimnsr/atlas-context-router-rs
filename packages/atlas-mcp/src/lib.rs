@@ -32,6 +32,10 @@
 //! | `analyze_patterns`        | Deterministic pattern detection for graph structures     |
 //! | `find_large_functions`    | Ranked large/complex function discovery                  |
 //! | `find_complex_functions`  | Ranked complex-function discovery                        |
+//! | `find_similar_functions`  | Similar callable discovery with score breakdown          |
+//! | `find_duplicates`         | Near-duplicate callable detection                        |
+//! | `infer_modules`           | Explainable module inference from paths and graph        |
+//! | `label_components`        | Rule-based Atlas component labeling                      |
 //! | `compact_session`         | CM10: compact event ledger; merge, decay, dedup, promote |
 //! | `resume_session`          | CM7: retrieve and consume the resume snapshot            |
 //! | `search_saved_context`    | CM7: FTS + trigram search over saved artifacts           |

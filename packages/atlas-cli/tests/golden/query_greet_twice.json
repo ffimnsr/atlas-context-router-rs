@@ -38,7 +38,12 @@
         "modifiers": "pub",
         "is_test": false,
         "file_hash": "<hash>",
-        "extra_json": null
+        "extra_json": null,
+        "repo_provenance": {
+          "repo_id": "<repo_id>",
+          "repo_fingerprint": "<repo_fingerprint>",
+          "repo_root": "<repo_root>"
+        }
       },
       "ranking_evidence": {
         "base_mode": "fts5",

@@ -10,6 +10,7 @@ atlas-core.workspace = true
 atlas-db-utils.workspace = true
 atlas-repo = { path = "../atlas-repo", version = "1.6.0" }
 anyhow.workspace = true
+camino.workspace = true
 rusqlite.workspace = true
 regex.workspace = true
 serde.workspace = true

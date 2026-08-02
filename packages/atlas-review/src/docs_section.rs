@@ -362,6 +362,7 @@ mod tests {
             is_test: false,
             file_hash: "h1".to_owned(),
             extra_json: json!({ "level": level, "path": path }),
+            repo_provenance: None,
         }
     }
 

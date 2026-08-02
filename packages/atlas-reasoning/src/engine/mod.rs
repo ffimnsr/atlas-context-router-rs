@@ -4,6 +4,7 @@
 //! Results are deterministic given the same graph state.
 
 mod architecture;
+mod code_intelligence;
 mod dead_code;
 mod helpers;
 mod insights;
@@ -22,7 +23,15 @@ use atlas_store_sqlite::Store;
 pub use architecture::{
     ArchitectureAnalysis, ArchitectureEdgeEvidence, ArchitectureModuleEdge, ArchitectureModuleNode,
 };
-pub use insights::{InsightsEngine, InsightsGraphSummary};
+pub use code_intelligence::{
+    ComponentLabelAnalysis, ComponentLabelAssignment, ComponentLabelMatch,
+    ComponentLabelReportResult, ComponentLabelRequest, DuplicateDetectionAnalysis,
+    DuplicateDetectionReportResult, DuplicateDetectionRequest, DuplicateGroup, DuplicateMember,
+    InferredModule, InferredModuleReportResult, InsightSymbolSummary, ModuleInferenceAnalysis,
+    SimilarFunctionAnalysis, SimilarFunctionMatch, SimilarFunctionReportResult,
+    SimilarFunctionRequest, SimilarityThresholds,
+};
+pub use insights::InsightsEngine;
 pub use large_functions::{
     LargeFunctionAnalysis, LargeFunctionCandidate, LargeFunctionMode, LargeFunctionReportResult,
     LargeFunctionRequest,

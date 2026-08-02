@@ -9,6 +9,7 @@ use atlas_core::{BudgetReport, BuildUpdateBudgetCounters, PackageOwner, model::P
 use atlas_parser::ParserRegistry;
 use atlas_repo::{
     collect_supported_files_with_stats, discover_package_owners, find_repo_root, hash_file,
+    stable_repo_fingerprint,
 };
 use atlas_store_sqlite::Store;
 use camino::Utf8Path;
@@ -224,6 +225,7 @@ pub fn build_graph(
                         annotate_parsed_file_repo(
                             &mut pf,
                             &source_repo_id,
+                            repo_root.as_str(),
                             opts.namespace_qualified_names,
                         );
                         (rel_str.clone(), Ok(pf))
@@ -364,7 +366,12 @@ pub fn resolve_repo_root(start_dir: &str) -> Result<camino::Utf8PathBuf> {
     find_repo_root(Utf8Path::new(start_dir)).context("cannot find git repo root")
 }
 
-fn annotate_parsed_file_repo(parsed_file: &mut ParsedFile, repo_id: &str, namespace_qnames: bool) {
+fn annotate_parsed_file_repo(
+    parsed_file: &mut ParsedFile,
+    repo_id: &str,
+    repo_root: &str,
+    namespace_qnames: bool,
+) {
     if namespace_qnames {
         for node in &mut parsed_file.nodes {
             let original = node.qualified_name.clone();
@@ -380,13 +387,26 @@ fn annotate_parsed_file_repo(parsed_file: &mut ParsedFile, repo_id: &str, namesp
         }
     }
 
+    let repo_provenance = atlas_core::RepoProvenance::new(repo_id.to_owned())
+        .with_repo_fingerprint(stable_repo_fingerprint(Utf8Path::new(repo_root), None))
+        .with_repo_root(repo_root.to_owned());
+
     for node in &mut parsed_file.nodes {
         let mut extra = node.extra_json.as_object().cloned().unwrap_or_default();
         extra.insert(
             "repo_id".to_owned(),
             serde_json::Value::String(repo_id.to_owned()),
         );
+        extra.insert(
+            "repo_root".to_owned(),
+            serde_json::Value::String(repo_root.to_owned()),
+        );
+        extra.insert(
+            "repo_provenance".to_owned(),
+            serde_json::to_value(&repo_provenance).unwrap_or(serde_json::Value::Null),
+        );
         node.extra_json = serde_json::Value::Object(extra);
+        node.repo_provenance = Some(repo_provenance.clone());
     }
     for edge in &mut parsed_file.edges {
         let mut extra = edge.extra_json.as_object().cloned().unwrap_or_default();
@@ -394,7 +414,16 @@ fn annotate_parsed_file_repo(parsed_file: &mut ParsedFile, repo_id: &str, namesp
             "repo_id".to_owned(),
             serde_json::Value::String(repo_id.to_owned()),
         );
+        extra.insert(
+            "repo_root".to_owned(),
+            serde_json::Value::String(repo_root.to_owned()),
+        );
+        extra.insert(
+            "repo_provenance".to_owned(),
+            serde_json::to_value(&repo_provenance).unwrap_or(serde_json::Value::Null),
+        );
         edge.extra_json = serde_json::Value::Object(extra);
+        edge.repo_provenance = Some(repo_provenance.clone());
     }
 }
 
@@ -500,6 +529,7 @@ mod tests {
                     is_test: false,
                     file_hash: file_hash.clone(),
                     extra_json: serde_json::Value::Null,
+                    repo_provenance: None,
                 }],
                 &[],
             )

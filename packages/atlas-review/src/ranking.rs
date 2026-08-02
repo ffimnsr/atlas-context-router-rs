@@ -223,6 +223,7 @@ mod tests {
                 is_test: false,
                 file_hash: String::new(),
                 extra_json: serde_json::Value::Null,
+                repo_provenance: None,
             },
             selection_reason: reason,
             distance: 0,
@@ -286,6 +287,7 @@ mod tests {
                 preview: String::new(),
                 retrieval_hint: String::new(),
                 relevance_score: primitives.rank_score(0),
+                repo_provenance: None,
                 context_ranking_evidence: None,
             },
             SavedContextSource {
@@ -297,6 +299,7 @@ mod tests {
                 preview: String::new(),
                 retrieval_hint: String::new(),
                 relevance_score: primitives.rank_score(0) + primitives.same_session_bonus,
+                repo_provenance: None,
                 context_ranking_evidence: None,
             },
         ];
@@ -318,6 +321,7 @@ mod tests {
                 preview: String::new(),
                 retrieval_hint: String::new(),
                 relevance_score: 10.0,
+                repo_provenance: None,
                 context_ranking_evidence: None,
             },
             SavedContextSource {
@@ -329,6 +333,7 @@ mod tests {
                 preview: String::new(),
                 retrieval_hint: String::new(),
                 relevance_score: 10.0,
+                repo_provenance: None,
                 context_ranking_evidence: None,
             },
         ];

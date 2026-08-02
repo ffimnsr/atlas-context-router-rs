@@ -91,6 +91,7 @@ fn emit_css_import(
         is_test: false,
         file_hash: ctx.file_hash.to_owned(),
         extra_json: serde_json::json!({ "source": imported, "statement": raw }),
+        repo_provenance: None,
     });
     edges.push(contains_edge(ctx.rel_path, &qn, ctx.rel_path, line));
     edges.push(imports_edge(
@@ -130,6 +131,7 @@ fn emit_rule_set(
         is_test: false,
         file_hash: ctx.file_hash.to_owned(),
         extra_json: serde_json::json!({ "selector": selectors }),
+        repo_provenance: None,
     });
     edges.push(contains_edge(ctx.rel_path, &rule_qn, ctx.rel_path, line));
 
@@ -166,6 +168,7 @@ fn emit_rule_set(
                 is_test: false,
                 file_hash: ctx.file_hash.to_owned(),
                 extra_json: serde_json::json!({ "selector_kind": child.kind() }),
+                repo_provenance: None,
             });
             edges.push(contains_edge(
                 &rule_qn,
@@ -208,6 +211,7 @@ fn emit_rule_set(
                 is_test: false,
                 file_hash: ctx.file_hash.to_owned(),
                 extra_json: serde_json::json!({ "kind": "declaration" }),
+                repo_provenance: None,
             });
             edges.push(contains_edge(
                 &rule_qn,
@@ -266,6 +270,7 @@ fn file_node(rel_path: &str, file_hash: &str, line_end: u32, language: &str) -> 
         is_test: false,
         file_hash: file_hash.to_owned(),
         extra_json: serde_json::Value::Null,
+        repo_provenance: None,
     }
 }
 
@@ -280,6 +285,7 @@ fn contains_edge(parent_qn: &str, child_qn: &str, file_path: &str, line: u32) ->
         confidence: 1.0,
         confidence_tier: Some("definite".to_owned()),
         extra_json: serde_json::Value::Null,
+        repo_provenance: None,
     }
 }
 
@@ -294,6 +300,7 @@ fn imports_edge(source_qn: &str, target_qn: &str, file_path: &str, line: u32, ti
         confidence: 1.0,
         confidence_tier: Some(tier.to_owned()),
         extra_json: serde_json::Value::Null,
+        repo_provenance: None,
     }
 }
 

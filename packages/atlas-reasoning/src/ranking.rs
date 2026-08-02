@@ -253,6 +253,7 @@ mod tests {
             is_test: false,
             file_hash: String::new(),
             extra_json: serde_json::Value::Null,
+            repo_provenance: None,
         }
     }
 
@@ -383,6 +384,7 @@ mod tests {
                     confidence: 1.0,
                     confidence_tier: Some("high".to_owned()),
                     extra_json: serde_json::Value::Null,
+                    repo_provenance: None,
                 },
                 Edge {
                     id: 1,
@@ -394,6 +396,7 @@ mod tests {
                     confidence: 1.0,
                     confidence_tier: Some("high".to_owned()),
                     extra_json: serde_json::Value::Null,
+                    repo_provenance: None,
                 },
             ],
             confidence: ConfidenceTier::Low,

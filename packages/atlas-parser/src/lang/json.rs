@@ -89,6 +89,7 @@ fn file_node(rel_path: &str, file_hash: &str, line_end: u32) -> Node {
         is_test: false,
         file_hash: file_hash.to_owned(),
         extra_json: serde_json::Value::Null,
+        repo_provenance: None,
     }
 }
 
@@ -103,6 +104,7 @@ fn contains_edge(parent_qn: &str, child_qn: &str, file_path: &str, line: u32) ->
         confidence: 1.0,
         confidence_tier: Some("definite".to_owned()),
         extra_json: serde_json::Value::Null,
+        repo_provenance: None,
     }
 }
 
@@ -199,6 +201,7 @@ fn walk_object(
                 "path": path,
                 "value_kind": vkind,
             }),
+            repo_provenance: None,
         });
         edges.push(contains_edge(parent_qn, &qn, rel_path, line_start));
 
@@ -261,6 +264,7 @@ fn walk_array(
                 "path": child_path,
                 "value_kind": vkind,
             }),
+            repo_provenance: None,
         });
         edges.push(contains_edge(parent_qn, &child_qn, rel_path, line_start));
 

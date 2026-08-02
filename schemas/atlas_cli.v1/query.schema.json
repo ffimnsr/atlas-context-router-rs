@@ -34,7 +34,10 @@
                   "line_end",
                   "language",
                   "is_test"
-                ]
+                ],
+                "properties": {
+                  "repo_provenance": { "$ref": "#/$defs/repo_provenance" }
+                }
               },
               "score": { "type": "number" },
               "ranking_evidence": { "type": ["object", "null"] }
@@ -43,6 +46,19 @@
         },
         "ranking_evidence_legend": { "type": "object", "additionalProperties": true },
         "budget": { "type": "object", "additionalProperties": true }
+      }
+    }
+  },
+  "$defs": {
+    "repo_provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repo_id", "repo_fingerprint", "repo_root"],
+      "properties": {
+        "repo_id": { "type": "string" },
+        "repo_fingerprint": { "type": "string" },
+        "repo_root": { "type": "string" },
+        "remote_url": { "type": ["string", "null"] }
       }
     }
   }

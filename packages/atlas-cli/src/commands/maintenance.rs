@@ -4,7 +4,9 @@ use atlas_core::{
     GraphExecutionState, NodeKind, graph_health_error_message, graph_health_error_suggestions,
     is_schema_mismatch_error,
 };
-use atlas_repo::{collect_files, find_repo_root, hash_file, stable_repo_id};
+use atlas_repo::{
+    collect_files, find_repo_root, hash_file, stable_repo_fingerprint, stable_repo_id,
+};
 use atlas_session::DEFAULT_SESSION_DB;
 use atlas_store_sqlite::{GraphBuildState, Store};
 use camino::Utf8Path;
@@ -344,6 +346,11 @@ fn integrity_issue_code(issues: &[String], structural_problem: bool) -> &'static
         "corrupt_or_inconsistent_graph_rows"
     } else if issues
         .iter()
+        .any(|issue| issue.starts_with("missing_repo_provenance:"))
+    {
+        "missing_repo_provenance_rows"
+    } else if issues
+        .iter()
         .any(|issue| issue.starts_with("noncanonical_path:"))
     {
         "noncanonical_path_rows"
@@ -391,8 +398,19 @@ fn display_check_name(name: &str) -> &str {
     }
 }
 
+fn repo_provenance_json(repo_root: &str) -> serde_json::Value {
+    let repo_id = stable_repo_id(Utf8Path::new(repo_root));
+    let repo_fingerprint = stable_repo_fingerprint(Utf8Path::new(repo_root), None);
+    serde_json::json!({
+        "repo_id": repo_id,
+        "repo_fingerprint": repo_fingerprint,
+        "repo_root": repo_root,
+    })
+}
+
 fn print_doctor_report(
     cli: &Cli,
+    repo_root: &str,
     checks: &[CheckResult],
     all_ok: bool,
     execution_state: Option<GraphExecutionState>,
@@ -417,6 +435,7 @@ fn print_doctor_report(
                 "error_code": error_code,
                 "message": graph_health_error_message(error_code),
                 "suggestions": graph_health_error_suggestions(error_code),
+                "repo_provenance": repo_provenance_json(repo_root),
                 "execution_state": execution_state.map(|s| s.as_str()),
                 "checks": items,
             }),
@@ -678,7 +697,7 @@ pub fn run_doctor(cli: &Cli) -> Result<()> {
         }
         Err(e) => {
             checks.push(CheckResult::fail("repo_root", e.to_string(), None));
-            return print_doctor_report(cli, &checks, false, None);
+            return print_doctor_report(cli, ".", &checks, false, None);
         }
     };
 
@@ -1071,7 +1090,7 @@ pub fn run_doctor(cli: &Cli) -> Result<()> {
             derive_graph_readiness_open_failed(&repo, &db_path_str, "db not found").execution_state,
         )
     };
-    print_doctor_report(cli, &checks, all_ok, execution_state)?;
+    print_doctor_report(cli, &repo, &checks, all_ok, execution_state)?;
     if !all_ok {
         std::process::exit(1);
     }
@@ -1101,6 +1120,7 @@ pub fn run_db_check(cli: &Cli) -> Result<()> {
     if cli.json {
         let result = serde_json::json!({
             "db_path": db_path,
+            "repo_provenance": repo_provenance_json(&repo),
             "ok": ok,
             "error_code": error_code,
             "message": graph_health_error_message(error_code),
@@ -1390,6 +1410,7 @@ mod tests {
             is_test: false,
             file_hash: "hash".to_owned(),
             extra_json: serde_json::Value::Null,
+            repo_provenance: None,
         }
     }
 
@@ -1404,6 +1425,7 @@ mod tests {
             confidence: 1.0,
             confidence_tier: None,
             extra_json: serde_json::Value::Null,
+            repo_provenance: None,
         }
     }
 

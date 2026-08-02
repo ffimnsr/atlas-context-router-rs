@@ -71,17 +71,25 @@ fn build_impacted_components(nodes: &[SelectedNode]) -> Vec<WorkflowComponent> {
         HashMap::new();
 
     for node in nodes {
-        let (kind, label) = component_identity(&node.node);
-        let entry = component_map
-            .entry((kind, label))
-            .or_insert_with(|| (0, 0, HashSet::new()));
+        let mut identities = vec![component_identity(&node.node)];
+        identities.extend(
+            component_labels_for_node(&node.node)
+                .into_iter()
+                .map(|label| ("component_label".to_string(), label)),
+        );
 
-        if node.selection_reason == SelectionReason::DirectTarget {
-            entry.0 += 1;
-        } else {
-            entry.1 += 1;
+        for (kind, label) in identities {
+            let entry = component_map
+                .entry((kind, label))
+                .or_insert_with(|| (0, 0, HashSet::new()));
+
+            if node.selection_reason == SelectionReason::DirectTarget {
+                entry.0 += 1;
+            } else {
+                entry.1 += 1;
+            }
+            entry.2.insert(node.node.file_path.clone());
         }
-        entry.2.insert(node.node.file_path.clone());
     }
 
     let mut components: Vec<WorkflowComponent> = component_map
@@ -107,6 +115,7 @@ fn build_impacted_components(nodes: &[SelectedNode]) -> Vec<WorkflowComponent> {
         (b.changed_node_count + b.impacted_node_count)
             .cmp(&(a.changed_node_count + a.impacted_node_count))
             .then_with(|| a.label.cmp(&b.label))
+            .then_with(|| a.kind.cmp(&b.kind))
     });
     components.truncate(6);
     components
@@ -138,6 +147,114 @@ fn parent_dir(path: &str) -> &str {
     match path.rfind('/') {
         Some(index) => &path[..index],
         None => "",
+    }
+}
+
+fn component_labels_for_node(node: &atlas_core::Node) -> Vec<String> {
+    let path = node.file_path.as_str();
+    let name = node.name.as_str();
+    let mut labels = Vec::new();
+    add_component_label(&mut labels, path.starts_with("packages/atlas-cli/"), "cli");
+    add_component_label(
+        &mut labels,
+        path.starts_with("packages/atlas-mcp/") || path == "MCP_TOOLS.md",
+        "mcp",
+    );
+    add_component_label(
+        &mut labels,
+        path.starts_with("packages/atlas-repo/"),
+        "repo_scan",
+    );
+    add_component_label(
+        &mut labels,
+        path.starts_with("packages/atlas-parser/"),
+        "parse",
+    );
+    add_component_label(
+        &mut labels,
+        path.starts_with("packages/atlas-store-sqlite/")
+            || path.starts_with("packages/atlas-db-utils/"),
+        "persist_graph",
+    );
+    add_component_label(
+        &mut labels,
+        path.starts_with("packages/atlas-engine/")
+            || path.contains("/update.rs")
+            || path.contains("/watch.rs")
+            || path.contains("postprocess"),
+        "incremental_update",
+    );
+    add_component_label(
+        &mut labels,
+        path.starts_with("packages/atlas-search/")
+            || path.contains("query")
+            || path.contains("traverse"),
+        "search_traverse",
+    );
+    add_component_label(
+        &mut labels,
+        path.starts_with("packages/atlas-review/")
+            || path.contains("review")
+            || path.ends_with("changes.rs")
+            || path.ends_with("context_cmd.rs"),
+        "review_context",
+    );
+    add_component_label(
+        &mut labels,
+        path.starts_with("packages/atlas-contextsave/")
+            || path.starts_with("packages/atlas-contentstore/"),
+        "context_memory",
+    );
+    add_component_label(
+        &mut labels,
+        path.starts_with("packages/atlas-session/")
+            || path.starts_with("packages/atlas-agent-events/")
+            || path.contains("session")
+            || path.contains("wake_up"),
+        "session_continuity",
+    );
+    add_component_label(
+        &mut labels,
+        path.starts_with("schemas/")
+            || path.starts_with(".atlas/")
+            || path.ends_with(".toml")
+            || path.ends_with(".yaml")
+            || path.ends_with(".yml")
+            || path.ends_with(".json"),
+        "config",
+    );
+    add_component_label(
+        &mut labels,
+        path.contains("health")
+            || path.contains("doctor")
+            || path.contains("db_check")
+            || path.contains("debug_graph")
+            || path.contains("status")
+            || name.contains("doctor")
+            || name.contains("status"),
+        "diagnostics",
+    );
+    add_component_label(
+        &mut labels,
+        path.starts_with("tests/")
+            || path.contains("/tests/")
+            || path.ends_with("_test.rs")
+            || path.ends_with("tests.rs"),
+        "tests",
+    );
+    add_component_label(
+        &mut labels,
+        path.starts_with("docs/") || path.starts_with("wiki/") || path.ends_with(".md"),
+        "docs",
+    );
+    labels.sort();
+    labels.dedup();
+    labels
+}
+
+fn add_component_label(labels: &mut Vec<String>, predicate: bool, label: &str) {
+    if predicate {
+        labels.push(label.to_string());
     }
 }
 

@@ -51,6 +51,7 @@ impl LangParser for HtmlParser {
                 is_test: false,
                 file_hash: ctx.file_hash.to_owned(),
                 extra_json: serde_json::json!({ "kind": "document" }),
+                repo_provenance: None,
             });
             edges.push(contains_edge(ctx.rel_path, &document_qn, ctx.rel_path, 1));
 
@@ -133,6 +134,7 @@ fn walk_html_children(
                 "tag": tag_name,
                 "path": child_path,
             }),
+            repo_provenance: None,
         });
         edges.push(contains_edge(parent_qn, &child_qn, ctx.rel_path, line));
 
@@ -215,6 +217,7 @@ fn emit_html_imports(
                 "imported": value,
                 "tag": tag,
             }),
+            repo_provenance: None,
         });
         edges.push(contains_edge(container_qn, &qn, ctx.rel_path, line));
         edges.push(Edge {
@@ -227,6 +230,7 @@ fn emit_html_imports(
             confidence: 0.9,
             confidence_tier: Some("attribute".to_owned()),
             extra_json: serde_json::Value::Null,
+            repo_provenance: None,
         });
     }
 }
@@ -331,6 +335,7 @@ fn file_node(rel_path: &str, file_hash: &str, line_end: u32, language: &str) -> 
         is_test: false,
         file_hash: file_hash.to_owned(),
         extra_json: serde_json::Value::Null,
+        repo_provenance: None,
     }
 }
 
@@ -345,6 +350,7 @@ fn contains_edge(parent_qn: &str, child_qn: &str, file_path: &str, line: u32) ->
         confidence: 1.0,
         confidence_tier: Some("definite".to_owned()),
         extra_json: serde_json::Value::Null,
+        repo_provenance: None,
     }
 }
 

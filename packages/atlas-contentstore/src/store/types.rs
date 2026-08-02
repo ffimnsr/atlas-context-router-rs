@@ -1,3 +1,6 @@
+use atlas_core::RepoProvenance;
+use atlas_repo::stable_repo_fingerprint;
+use camino::Utf8Path;
 use serde::{Deserialize, Serialize};
 
 /// Below this → raw pass-through, no indexing.
@@ -46,6 +49,11 @@ pub struct SourceMeta {
     /// Canonical repo-root scope owning this artifact. Non-empty when the
     /// artifact belongs to one or more registered repos.
     pub repo_roots: Vec<String>,
+    /// Stable primary repo id for this artifact when one repo owns it.
+    pub repo_id: Option<String>,
+    /// Stable repo ids for the artifact scope. Empty means derive from
+    /// `repo_roots` when persisting/reading.
+    pub repo_ids: Vec<String>,
     /// Identity kind used to derive `id`.
     pub identity_kind: String,
     /// Canonical identity payload used to derive `id`.
@@ -172,9 +180,25 @@ pub struct SourceRow {
     pub label: String,
     pub repo_root: Option<String>,
     pub repo_roots: Vec<String>,
+    pub repo_id: Option<String>,
+    pub repo_ids: Vec<String>,
     pub identity_kind: String,
     pub identity_value: String,
     pub created_at: String,
+}
+
+impl SourceRow {
+    pub fn primary_repo_provenance(&self) -> Option<RepoProvenance> {
+        self.repo_id.as_ref().map(|repo_id| {
+            let mut provenance = RepoProvenance::new(repo_id.clone());
+            if let Some(repo_root) = self.repo_root.as_ref() {
+                provenance = provenance
+                    .with_repo_fingerprint(stable_repo_fingerprint(Utf8Path::new(repo_root), None))
+                    .with_repo_root(repo_root.clone());
+            }
+            provenance
+        })
+    }
 }
 
 /// Lifecycle phase of the retrieval/content index for a given repo.

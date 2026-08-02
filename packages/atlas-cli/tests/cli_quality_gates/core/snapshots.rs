@@ -6,6 +6,7 @@ fn normalize_build_like_snapshot(value: &mut Value) {
 }
 
 fn normalize_doctor_snapshot(value: &mut Value) {
+    normalize_repo_provenance_value(&mut value["repo_provenance"]);
     let checks = value["checks"].as_array_mut().expect("doctor checks array");
     for item in checks {
         if let Some(detail) = item["detail"].as_str()
@@ -95,6 +96,17 @@ fn mcp_query_graph_output_matches_golden() {
                     item["score"] = json!(0.0);
                     item["ranking_evidence"]["raw_score"] = json!(0.0);
                     item["ranking_evidence"]["final_score"] = json!(0.0);
+                    if let Some(node) = item.get_mut("node").and_then(Value::as_object_mut) {
+                        match node.get_mut("repo_provenance") {
+                            Some(repo_provenance) if !repo_provenance.is_null() => {
+                                normalize_repo_provenance_value(repo_provenance);
+                            }
+                            Some(_) => {
+                                node.remove("repo_provenance");
+                            }
+                            None => {}
+                        }
+                    }
                     if let Some(object) = item.as_object_mut() {
                         object.remove("repo");
                     }
@@ -109,6 +121,17 @@ fn mcp_query_graph_output_matches_golden() {
                 item["score"] = json!(0.0);
                 item["ranking_evidence"]["raw_score"] = json!(0.0);
                 item["ranking_evidence"]["final_score"] = json!(0.0);
+                if let Some(node) = item.get_mut("node").and_then(Value::as_object_mut) {
+                    match node.get_mut("repo_provenance") {
+                        Some(repo_provenance) if !repo_provenance.is_null() => {
+                            normalize_repo_provenance_value(repo_provenance);
+                        }
+                        Some(_) => {
+                            node.remove("repo_provenance");
+                        }
+                        None => {}
+                    }
+                }
                 if let Some(object) = item.as_object_mut() {
                     object.remove("repo");
                 }
@@ -151,6 +174,28 @@ fn mcp_get_context_output_matches_golden() {
             }
             if let Some(detail_controls) = value["detail_controls"].as_object_mut() {
                 detail_controls.remove("allow_cross_repo_edges");
+            }
+            if let Some(nodes) = value["nodes"].as_array_mut() {
+                for node in nodes.iter_mut() {
+                    if node["repo_provenance"].is_null() {
+                        if let Some(object) = node.as_object_mut() {
+                            object.remove("repo_provenance");
+                        }
+                    } else {
+                        normalize_repo_provenance_value(&mut node["repo_provenance"]);
+                    }
+                }
+            }
+            if let Some(files) = value["ranked_files"].as_array_mut() {
+                for file in files.iter_mut() {
+                    if file["repo_provenance"].is_null() {
+                        if let Some(object) = file.as_object_mut() {
+                            object.remove("repo_provenance");
+                        }
+                    } else {
+                        normalize_repo_provenance_value(&mut file["repo_provenance"]);
+                    }
+                }
             }
         },
     );

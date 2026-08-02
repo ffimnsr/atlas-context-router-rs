@@ -265,7 +265,7 @@ fn make_edge(file_hash: &str, src: &str, tgt: &str) -> HistoricalEdge {
         file_path: "src/lib.rs".to_owned(),
         line: Some(5),
         confidence: 1.0,
-        confidence_tier: None,
+        confidence_tier: Some("definite".to_owned()),
         extra_json: None,
     }
 }

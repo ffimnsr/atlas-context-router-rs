@@ -68,6 +68,7 @@ fn file_node(rel_path: &str, file_hash: &str, line_end: u32) -> Node {
         is_test: false,
         file_hash: file_hash.to_owned(),
         extra_json: serde_json::Value::Null,
+        repo_provenance: None,
     }
 }
 
@@ -82,6 +83,7 @@ fn contains_edge(parent_qn: &str, child_qn: &str, file_path: &str, line: u32) ->
         confidence: 1.0,
         confidence_tier: Some("definite".to_owned()),
         extra_json: serde_json::Value::Null,
+        repo_provenance: None,
     }
 }
 
@@ -196,6 +198,7 @@ impl<'a> TomlWalker<'a> {
                 "value_kind": value_kind,
                 "parent_path": parent_path,
             }),
+            repo_provenance: None,
         });
         self.edges
             .push(contains_edge(parent_qn, &qn, self.ctx.rel_path, line));
@@ -238,6 +241,7 @@ impl<'a> TomlWalker<'a> {
                             "value_kind": "array_item",
                             "parent_path": path,
                         }),
+                        repo_provenance: None,
                     });
                     self.edges
                         .push(contains_edge(&qn, &item_qn, self.ctx.rel_path, line));

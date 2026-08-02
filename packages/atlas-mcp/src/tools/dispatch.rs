@@ -23,7 +23,8 @@ use crate::wake_up::tool_wake_up;
 use super::analysis::{
     tool_analyze_architecture, tool_analyze_dead_code, tool_analyze_dependency,
     tool_analyze_metrics, tool_analyze_patterns, tool_analyze_remove, tool_analyze_safety,
-    tool_assess_risk, tool_find_complex_functions, tool_find_large_functions,
+    tool_assess_risk, tool_find_complex_functions, tool_find_duplicates, tool_find_large_functions,
+    tool_find_similar_functions, tool_infer_modules, tool_label_components,
 };
 use super::context_ops::{
     tool_build_or_update_graph, tool_detect_changes, tool_explain_change, tool_get_context,
@@ -217,7 +218,11 @@ fn inject_freshness_warning(
         | "assess_risk"
         | "analyze_patterns"
         | "find_large_functions"
-        | "find_complex_functions" => response_insight_finding_files(response),
+        | "find_complex_functions"
+        | "find_similar_functions"
+        | "find_duplicates"
+        | "infer_modules"
+        | "label_components" => response_insight_finding_files(response),
         "get_docs_section" => response_single_file(response, "/file"),
         _ => Vec::new(),
     };
@@ -276,6 +281,10 @@ pub(crate) fn is_known_tool_name(name: &str) -> bool {
         | "analyze_patterns"
         | "find_large_functions"
         | "find_complex_functions"
+        | "find_similar_functions"
+        | "find_duplicates"
+        | "infer_modules"
+        | "label_components"
         | "get_session_status"
         | "compact_session"
         | "resume_session"
@@ -439,6 +448,12 @@ fn call_inner(
         "find_complex_functions" => {
             tool_find_complex_functions(args, repo_root, db_path, output_format)
         }
+        "find_similar_functions" => {
+            tool_find_similar_functions(args, repo_root, db_path, output_format)
+        }
+        "find_duplicates" => tool_find_duplicates(args, repo_root, db_path, output_format),
+        "infer_modules" => tool_infer_modules(args, repo_root, db_path, output_format),
+        "label_components" => tool_label_components(args, repo_root, db_path, output_format),
         "get_session_status" => tool_get_session_status(args, repo_root, db_path, output_format),
         "compact_session" => tool_compact_session(args, repo_root, db_path, output_format),
         "resume_session" => tool_resume_session(args, repo_root, db_path, output_format),
@@ -560,6 +575,10 @@ fn tool_graph_requirement(name: &str) -> Option<GraphToolRequirement> {
         | "analyze_patterns"
         | "find_large_functions"
         | "find_complex_functions"
+        | "find_similar_functions"
+        | "find_duplicates"
+        | "infer_modules"
+        | "label_components"
         | "analyze_safety"
         | "analyze_remove"
         | "analyze_dead_code"
@@ -711,6 +730,7 @@ mod tests {
             is_test: kind == NodeKind::Test,
             file_hash: format!("hash:{file}"),
             extra_json: serde_json::json!({}),
+            repo_provenance: None,
         }
     }
 
@@ -725,6 +745,7 @@ mod tests {
             confidence: 1.0,
             confidence_tier: None,
             extra_json: serde_json::json!({}),
+            repo_provenance: None,
         }
     }
 
@@ -888,6 +909,12 @@ mod tests {
             "analyze_patterns" => json!({"output_format": "json"}),
             "find_large_functions" => json!({"output_format": "json"}),
             "find_complex_functions" => json!({"output_format": "json"}),
+            "find_similar_functions" => {
+                json!({"symbol": "greet", "output_format": "json"})
+            }
+            "find_duplicates" => json!({"output_format": "json"}),
+            "infer_modules" => json!({"output_format": "json"}),
+            "label_components" => json!({"output_format": "json"}),
             "get_session_status" => json!({"output_format": "json"}),
             "compact_session" => json!({"output_format": "json"}),
             "resume_session" => json!({"output_format": "json"}),

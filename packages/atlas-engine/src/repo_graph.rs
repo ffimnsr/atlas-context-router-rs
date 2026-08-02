@@ -46,6 +46,7 @@ fn make_registry_file(registry: &RepoRegistry) -> ParsedFile {
             "root_repo_id": registry.root_repo_id,
             "repo_id": SYNTHETIC_REPO_SOURCE_ID,
         }),
+        repo_provenance: None,
     }];
 
     let mut edges = Vec::new();
@@ -78,6 +79,7 @@ fn make_registry_file(registry: &RepoRegistry) -> ParsedFile {
                 "default_branch": registration.vcs.default_branch,
                 "remote_url": registration.vcs.remote_url,
             }),
+            repo_provenance: None,
         });
         edges.push(Edge {
             id: 0,
@@ -92,6 +94,7 @@ fn make_registry_file(registry: &RepoRegistry) -> ParsedFile {
                 "synthetic_kind": "registry_contains_repo",
                 "repo_id": registration.repo_id,
             }),
+            repo_provenance: None,
         });
         if let Some(parent_repo_id) = &registration.relationship.parent_repo_id
             && registration.relationship.kind == RepoRelationshipKind::Submodule
@@ -111,6 +114,7 @@ fn make_registry_file(registry: &RepoRegistry) -> ParsedFile {
                     "child_repo_id": registration.repo_id,
                     "parent_path": registration.relationship.parent_path,
                 }),
+                repo_provenance: None,
             });
         }
         for dependency in &registration.dependencies {
@@ -129,6 +133,7 @@ fn make_registry_file(registry: &RepoRegistry) -> ParsedFile {
                     "dependency_repo_id": dependency.repo_id,
                     "dependency_kind": dependency.kind,
                 }),
+                repo_provenance: None,
             });
         }
     }

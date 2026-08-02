@@ -7,6 +7,120 @@ fn write_atlas_config(repo: &Path, contents: &str) {
 }
 
 #[test]
+fn insights_similar_functions_returns_structured_report() {
+    let repo = setup_repo(&[(
+        "src/lib.rs",
+        "pub fn alpha(value: i32) -> i32 {\n    let next = value + 1;\n    next * 2\n}\n\npub fn beta(input: i32) -> i32 {\n    let next = input + 1;\n    next * 2\n}\n",
+    )]);
+
+    run_atlas(repo.path(), &["build"]);
+
+    let output = run_atlas(
+        repo.path(),
+        &[
+            "--json",
+            "insights",
+            "similar-functions",
+            "src/lib.rs::fn::alpha",
+            "--min-score",
+            "0.3",
+            "--include-same-file",
+        ],
+    );
+    let value = read_json_output(output);
+    let data = &value["data"];
+
+    assert_eq!(value["command"], json!("insights_similar_functions"));
+    assert_eq!(
+        data["source"]["qualified_name"],
+        json!("src/lib.rs::fn::alpha")
+    );
+    assert_eq!(
+        data["matches"][0]["candidate"]["qualified_name"],
+        json!("src/lib.rs::fn::beta")
+    );
+}
+
+#[test]
+fn insights_duplicates_returns_structured_report() {
+    let repo = setup_repo(&[
+        (
+            "src/a.rs",
+            "pub fn first(input: i32) -> i32 {\n    let local = input + 1;\n    local * 2\n}\n",
+        ),
+        (
+            "src/b.rs",
+            "pub fn second(value: i32) -> i32 {\n    let result = value + 1;\n    result * 2\n}\n",
+        ),
+    ]);
+
+    run_atlas(repo.path(), &["build"]);
+
+    let output = run_atlas(
+        repo.path(),
+        &["--json", "insights", "duplicates", "--min-score", "0.6"],
+    );
+    let value = read_json_output(output);
+    let data = &value["data"];
+
+    assert_eq!(value["command"], json!("insights_duplicates"));
+    assert_eq!(data["groups"][0]["member_count"], json!(2));
+}
+
+#[test]
+fn insights_infer_modules_returns_structured_report() {
+    let repo = setup_repo(&[
+        ("packages/atlas-cli/src/lib.rs", "pub fn cli() {}\n"),
+        ("src/core.rs", "pub fn core() {}\n"),
+    ]);
+
+    run_atlas(repo.path(), &["build"]);
+
+    let output = run_atlas(repo.path(), &["--json", "insights", "infer-modules"]);
+    let value = read_json_output(output);
+    let data = &value["data"];
+
+    assert_eq!(value["command"], json!("insights_infer_modules"));
+    assert!(
+        data["modules"]
+            .as_array()
+            .is_some_and(|items| !items.is_empty())
+    );
+}
+
+#[test]
+fn insights_label_components_returns_structured_report() {
+    let repo = setup_repo(&[(
+        "packages/atlas-cli/src/commands/changes.rs",
+        "pub fn render_review() {}\n",
+    )]);
+
+    run_atlas(repo.path(), &["build"]);
+
+    let output = run_atlas(
+        repo.path(),
+        &[
+            "--json",
+            "insights",
+            "label-components",
+            "--files",
+            "packages/atlas-cli/src/commands/changes.rs",
+        ],
+    );
+    let value = read_json_output(output);
+    let data = &value["data"];
+
+    assert_eq!(value["command"], json!("insights_label_components"));
+    assert!(
+        data["assignments"][0]["labels"]
+            .as_array()
+            .expect("labels array")
+            .iter()
+            .any(|label| label["label"] == json!("cli"))
+    );
+}
+
+#[test]
 fn insights_large_functions_returns_structured_report() {
     let repo = setup_repo(&[
         (
@@ -106,6 +220,65 @@ fn insights_architecture_reports_layer_violations_from_config() {
             .expect("findings array")
             .iter()
             .any(|finding| finding["category"] == json!("layer_violation"))
+    );
+}
+
+#[test]
+fn insights_architecture_reports_layer_violations_from_external_config_file() {
+    let repo = setup_repo(&[
+        ("src/api/index.js", "export function dto() { return 1; }\n"),
+        (
+            "src/domain/index.js",
+            "import { dto } from \"../api/index.js\";\nexport function service() { return dto(); }\n",
+        ),
+    ]);
+    let atlas_dir = repo.path().join(".atlas");
+    std::fs::create_dir_all(&atlas_dir).expect("create .atlas dir");
+    std::fs::write(
+        atlas_dir.join("layer-rules.toml"),
+        "[[layer_rules]]\nname = \"api\"\npath_prefixes = [\"src/api\"]\nmodule_prefixes = []\n\n[[layer_rules]]\nname = \"domain\"\npath_prefixes = [\"src/domain\"]\nmodule_prefixes = []\n",
+    )
+    .expect("write layer rules");
+    write_atlas_config(
+        repo.path(),
+        "[insights]\nmax_findings = 10\nlayer_rules_file = \"layer-rules.toml\"\n",
+    );
+
+    run_atlas(repo.path(), &["build"]);
+
+    let output = run_atlas(repo.path(), &["--json", "insights", "architecture"]);
+    let value = read_json_output(output);
+    let data = &value["data"];
+
+    assert_eq!(value["command"], json!("insights_architecture"));
+    assert!(
+        data["findings"]
+            .as_array()
+            .expect("findings array")
+            .iter()
+            .any(|finding| finding["category"] == json!("layer_violation"))
+    );
+}
+
+#[test]
+fn insights_architecture_missing_layer_rules_file_fails_with_actionable_error() {
+    let repo = setup_repo(&[("src/lib.rs", "pub fn run() {}\n")]);
+    write_atlas_config(
+        repo.path(),
+        "[insights]\nlayer_rules_file = \"missing-rules.toml\"\n",
+    );
+
+    // Config validation fails closed at load time: any atlas command that
+    // loads the config reports the broken layer-rules reference.
+    let output = run_atlas_capture(repo.path(), &["build"]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "missing layer-rules file must fail insights architecture"
+    );
+    assert!(
+        stderr.contains("insights.layer_rules_file points to missing file"),
+        "expected actionable config error, got: {stderr}"
     );
 }
 
@@ -261,7 +434,7 @@ fn insights_risk_cli_and_mcp_share_report() {
             "{}{}",
             initialized_session_prelude(1),
             "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"assess_risk\",\"arguments\":{\"symbol\":\"src/lib.rs::fn::helper\",\"output_format\":\"json\"}}}\n"
-        )
+        ),
     );
     assert!(output.status.success(), "atlas serve assess_risk failed");
 

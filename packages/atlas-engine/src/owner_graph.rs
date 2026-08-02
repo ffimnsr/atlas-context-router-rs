@@ -107,6 +107,7 @@ fn make_package_file(
             "owner_name": owner.package_name,
             "repo_id": source_repo_id,
         }),
+        repo_provenance: None,
     };
 
     Ok((
@@ -165,6 +166,7 @@ fn make_workspace_file(
             "member_owner_ids": workspace.member_owner_ids,
             "repo_id": source_repo_id,
         }),
+        repo_provenance: None,
     };
     let mut edges: Vec<Edge> = workspace
         .member_owner_ids
@@ -187,6 +189,7 @@ fn make_workspace_file(
                 "workspace_id": workspace.workspace_id,
                 "repo_id": source_repo_id,
             }),
+            repo_provenance: None,
         })
         .collect();
 
@@ -214,6 +217,7 @@ fn make_workspace_file(
                         "relationship_reason": "workspace_link",
                         "member_root": member_root,
                     }),
+                    repo_provenance: None,
                 });
             }
         }

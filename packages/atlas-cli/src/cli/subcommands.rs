@@ -136,6 +136,72 @@ pub enum InsightsCommand {
         #[arg(long)]
         include_tests: bool,
     },
+
+    /// Find semantically similar functions for one symbol.
+    #[command(name = "similar-functions")]
+    SimilarFunctions {
+        /// Fully-qualified symbol name or resolvable callable identifier.
+        symbol: String,
+
+        /// Minimum similarity score to keep (0.0-1.0).
+        #[arg(long)]
+        min_score: Option<f64>,
+
+        /// Cap returned matches after ranking.
+        #[arg(long)]
+        limit: Option<usize>,
+
+        /// Keep same-file matches too.
+        #[arg(long)]
+        include_same_file: bool,
+    },
+
+    /// Find exact-normalized and near-duplicate callable bodies.
+    Duplicates {
+        /// Restrict search to one or more repo-relative files.
+        #[arg(long, num_args = 1..)]
+        files: Vec<String>,
+
+        /// Minimum duplicate confidence to keep (0.0-1.0).
+        #[arg(long)]
+        min_score: Option<f64>,
+
+        /// Cap returned duplicate groups after ranking.
+        #[arg(long)]
+        limit: Option<usize>,
+
+        /// Include test functions and test methods in the result set.
+        #[arg(long)]
+        include_tests: bool,
+
+        /// Suppress duplicate groups matching group id, normalized summary, file path, or symbol name.
+        #[arg(long = "suppress", num_args = 1..)]
+        suppressions: Vec<String>,
+    },
+
+    /// Infer module buckets from package ownership, paths, and dependency structure.
+    #[command(name = "infer-modules")]
+    InferModules {
+        /// Cap returned findings after ranking.
+        #[arg(long)]
+        limit: Option<usize>,
+    },
+
+    /// Label files and symbols with Atlas component taxonomy.
+    #[command(name = "label-components")]
+    LabelComponents {
+        /// Restrict file labeling to one or more repo-relative files.
+        #[arg(long, num_args = 1..)]
+        files: Vec<String>,
+
+        /// Restrict symbol labeling to one or more qualified names.
+        #[arg(long = "symbol", num_args = 1..)]
+        symbols: Vec<String>,
+
+        /// Cap returned assignments after ranking.
+        #[arg(long)]
+        limit: Option<usize>,
+    },
 }
 
 #[derive(Debug, Subcommand)]

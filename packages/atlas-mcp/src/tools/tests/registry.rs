@@ -30,7 +30,9 @@ const TOOL_REGISTRY_SNAPSHOT: &[&str] = &[
     "explain_change",
     "explain_query",
     "find_complex_functions",
+    "find_duplicates",
     "find_large_functions",
+    "find_similar_functions",
     "get_context",
     "get_context_stats",
     "get_docs_section",
@@ -39,6 +41,8 @@ const TOOL_REGISTRY_SNAPSHOT: &[&str] = &[
     "get_minimal_context",
     "get_review_context",
     "get_session_status",
+    "infer_modules",
+    "label_components",
     "list_graph_stats",
     "man",
     "postprocess_graph",
@@ -170,6 +174,12 @@ fn parity_args(tool_name: &str, source_id: &str) -> Value {
         "find_complex_functions" => {
             json!({ "complexity_threshold": 1, "output_format": "json" })
         }
+        "find_similar_functions" => {
+            json!({ "symbol": "compute", "output_format": "json" })
+        }
+        "find_duplicates" => json!({ "output_format": "json" }),
+        "infer_modules" => json!({ "output_format": "json" }),
+        "label_components" => json!({ "output_format": "json" }),
         "get_session_status" => json!({ "output_format": "json" }),
         "compact_session" => json!({ "output_format": "json" }),
         "resume_session" => json!({ "mark_consumed": false, "output_format": "json" }),

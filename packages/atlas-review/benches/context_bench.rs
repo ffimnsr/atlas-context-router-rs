@@ -36,6 +36,7 @@ fn make_node(
         is_test: kind == NodeKind::Test,
         file_hash: "bench-hash".to_owned(),
         extra_json: serde_json::Value::Null,
+        repo_provenance: None,
     }
 }
 
@@ -50,6 +51,7 @@ fn make_edge(file_path: &str, source_qn: String, target_qn: String, kind: EdgeKi
         confidence: 1.0,
         confidence_tier: Some("high".to_owned()),
         extra_json: serde_json::Value::Null,
+        repo_provenance: None,
     }
 }
 
