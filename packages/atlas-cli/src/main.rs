@@ -49,6 +49,7 @@ fn run_cli() -> anyhow::Result<()> {
         Command::Query { .. } => commands::run_query(&cli),
         Command::Man { .. } => commands::run_man(&cli),
         Command::DocsSection { .. } => commands::run_docs_section(&cli),
+        Command::Docs { .. } => commands::run_docs(&cli),
         Command::Embed { .. } => commands::run_embed(&cli),
         Command::Impact { .. } => commands::run_impact(&cli),
         Command::ReviewContext { .. } => commands::run_review_context(&cli),

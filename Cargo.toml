@@ -19,6 +19,7 @@ members = [
   "packages/atlas-adapters",
   "packages/atlas-db-utils",
   "packages/atlas-agent-events",
+  "packages/atlas-docs",
 ]
 exclude = ["fuzz"]
 resolver = "2"
@@ -115,6 +116,7 @@ atlas-engine    = { path = "packages/atlas-engine" }
 atlas-mcp       = { path = "packages/atlas-mcp" }
 atlas-reasoning = { path = "packages/atlas-reasoning" }
 atlas-agent-events = { path = "packages/atlas-agent-events" }
+atlas-docs      = { path = "packages/atlas-docs" }
 
 [profile.dev]
 debug = 1

@@ -17,6 +17,7 @@ atlas-core.workspace = true
 atlas-adapters = { path = "../atlas-adapters" , version = "1.6.1"}
 atlas-agent-events = { path = "../atlas-agent-events" , version = "1.6.1"}
 atlas-contentstore = { path = "../atlas-contentstore" , version = "1.6.1"}
+atlas-docs = { path = "../atlas-docs", version = "1.6.1" }
 atlas-engine.workspace = true
 atlas-history = { path = "../atlas-history", version = "1.6.1" }
 atlas-impact = { path = "../atlas-impact" , version = "1.6.1"}

@@ -1,4 +1,6 @@
-use atlas_core::{AtlasError, BudgetManager, BudgetPolicy, ImpactResult, Node, Result};
+use atlas_core::{
+    AtlasError, BudgetManager, BudgetPolicy, Edge, FileRecord, ImpactResult, Node, Result,
+};
 use rusqlite::params;
 
 use super::{
@@ -44,6 +46,87 @@ impl Store {
             .map_err(db_err)?;
         let rows = stmt
             .query_map([path], row_to_node)
+            .map_err(db_err)?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(rows)
+    }
+
+    /// All file records in the graph, ordered by canonical repo-relative path.
+    ///
+    /// Used by docs generation and other whole-graph consumers that need the
+    /// complete file inventory in one deterministic pass.
+    pub fn list_files(&self) -> Result<Vec<FileRecord>> {
+        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT path, language, hash, size, indexed_at,
+                        owner_id, owner_kind, owner_root, owner_manifest_path, owner_name
+                 FROM files ORDER BY path",
+            )
+            .map_err(db_err)?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(FileRecord {
+                    path: row.get(0)?,
+                    language: row.get(1)?,
+                    hash: row.get(2)?,
+                    size: row.get(3)?,
+                    indexed_at: row.get(4)?,
+                    owner_id: row.get(5)?,
+                    owner_kind: row.get(6)?,
+                    owner_root: row.get(7)?,
+                    owner_manifest_path: row.get(8)?,
+                    owner_name: row.get(9)?,
+                    repo_provenance: None,
+                })
+            })
+            .map_err(db_err)?;
+        let mut files: Vec<FileRecord> = rows.filter_map(|r| r.ok()).collect();
+        files.sort_by(|left, right| left.path.cmp(&right.path));
+        Ok(files)
+    }
+
+    /// All nodes in the graph, ordered by file path, line start, then qualified
+    /// name, so whole-graph consumers render deterministically.
+    pub fn list_all_nodes(&self) -> Result<Vec<Node>> {
+        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, kind, name, qualified_name, file_path, line_start, line_end,
+                        language, parent_name, params, return_type, modifiers,
+                        is_test, file_hash, extra_json
+                 FROM nodes
+                 ORDER BY file_path, line_start, qualified_name",
+            )
+            .map_err(db_err)?;
+        let rows = stmt
+            .query_map([], row_to_node)
+            .map_err(db_err)?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(rows)
+    }
+
+    /// All edges in the graph, ordered by source, target, kind, then file path.
+    ///
+    /// Used by whole-graph consumers (docs generation, diagram export) that
+    /// derive callers/callees and dependency summaries in one pass.
+    pub fn list_all_edges(&self) -> Result<Vec<Edge>> {
+        let db_err = |e: rusqlite::Error| AtlasError::Db(e.to_string());
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, kind, source_qualified, target_qualified, file_path,
+                        line, confidence, confidence_tier, extra_json
+                 FROM edges
+                 ORDER BY source_qualified, target_qualified, kind, file_path",
+            )
+            .map_err(db_err)?;
+        let rows = stmt
+            .query_map([], row_to_edge)
             .map_err(db_err)?
             .filter_map(|r| r.ok())
             .collect();

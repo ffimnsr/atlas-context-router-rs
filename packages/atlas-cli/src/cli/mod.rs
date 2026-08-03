@@ -7,7 +7,7 @@ mod subcommands;
 mod tests;
 
 pub use subcommands::{
-    AnalyzeCommand, CommunitiesCommand, ConfigCommand, FlowsCommand, HistoryCommand,
+    AnalyzeCommand, CommunitiesCommand, ConfigCommand, DocsCommand, FlowsCommand, HistoryCommand,
     InsightsCommand, InstallMode, RefactorCommand, RepoCommand, SessionCommand,
 };
 
@@ -247,6 +247,20 @@ pub enum Command {
         /// Maximum UTF-8 bytes to return from the section body.
         #[arg(long, default_value_t = 16_384)]
         max_bytes: usize,
+    },
+
+    /// Generate Markdown documentation or export dependency diagrams from the graph.
+    Docs {
+        #[command(subcommand)]
+        subcommand: DocsCommand,
+
+        /// Allow docs generation on a stale graph; prints a freshness warning.
+        #[arg(long)]
+        allow_stale: bool,
+
+        /// Allow docs generation on a partial (degraded) graph.
+        #[arg(long)]
+        allow_partial: bool,
     },
 
     /// Compute the impact radius of changed files.

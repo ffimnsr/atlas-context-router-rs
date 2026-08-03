@@ -187,8 +187,23 @@ Make higher-level code intelligence explicit, deterministic, and implementable o
 
 #### 31.1 Docs generation (CLI command)
 
-- [ ] generate Markdown docs
-- [ ] visualization/export
+- [x] add `atlas docs generate` CLI command for Markdown documentation:
+  - [x] support `--repo <path>` and reuse existing graph DB/config discovery
+  - [x] support `--output <dir>` and create deterministic `index.md`, `files.md`, `symbols.md`, `modules.md`, and `components.md`
+  - [x] include repo summary, graph stats, generated timestamp, indexed file count, symbol counts by kind, inferred modules, component labels, and top-level dependency summaries
+  - [x] include per-file sections with canonical path, language, package/module/component labels, owned symbols, inbound/outbound dependency counts, and notable duplicates when available
+  - [x] include per-symbol sections with qualified name, kind, file/span, documentation snippet when available, callers/callees, tests, and owning module/component labels
+  - [x] make output stable for tests by sorting paths/symbols/modules/components deterministically and allowing timestamp override in test fixtures
+  - [x] fail with actionable errors when graph DB missing, stale, or unreadable; never silently generate partial docs unless `--allow-partial` is passed
+  - [x] tests: fixture repo generates deterministic Markdown snapshots and validates missing/stale graph error paths
+- [x] add visualization/export support for generated docs:
+  - [x] support `atlas docs export --format mermaid` to emit dependency diagrams for modules, components, and selected symbol neighborhoods
+  - [x] support `atlas docs export --format dot` for Graphviz-compatible module/component dependency graphs
+  - [x] support `--scope repo|module|component|file|symbol` plus `--name <value>` for focused exports
+  - [x] include stable node IDs, human-readable labels, edge kinds, and edge counts; collapse high-volume edges with summarized counts
+  - [x] integrate export links or fenced Mermaid diagrams into generated Markdown when `atlas docs generate --include-diagrams` is passed
+  - [x] cap diagram size by default with `--max-nodes`/`--max-edges` and report omitted nodes/edges deterministically
+  - [x] tests: deterministic Mermaid/DOT snapshot fixtures for repo, module, component, and symbol-neighborhood scopes
 
 #### 31.2 MCP tool manual and schema introspection
 

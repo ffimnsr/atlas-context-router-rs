@@ -144,6 +144,7 @@ dependencies = [
  "atlas-agent-events",
  "atlas-contentstore",
  "atlas-core",
+ "atlas-docs",
  "atlas-engine",
  "atlas-history",
  "atlas-impact",
@@ -227,6 +228,20 @@ version = "1.6.1"
 dependencies = [
  "atlas-core",
  "rusqlite",
+]
+
+[[package]]
+name = "atlas-docs"
+version = "1.6.1"
+dependencies = [
+ "anyhow",
+ "atlas-core",
+ "atlas-engine",
+ "atlas-reasoning",
+ "atlas-store-sqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]

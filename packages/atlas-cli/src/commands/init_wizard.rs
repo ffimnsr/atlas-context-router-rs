@@ -46,9 +46,18 @@ pub fn run(repo_root: &Path) -> Result<()> {
         .defaults(&[false, false, true])
         .interact()?;
 
-    // ── Step 2: Git hooks ─────────────────────────────────────────────────────
+    // ── Step 2: LLM hooks ─────────────────────────────────────────────────────
     writeln!(term.clone())?;
-    section(&term, "2", "Git Hooks")?;
+    section(&term, "2", "LLM Hooks")?;
+
+    let install_llm_hooks = Confirm::with_theme(&theme)
+        .with_prompt("Install LLM hooks for selected coding tools?")
+        .default(false)
+        .interact()?;
+
+    // ── Step 3: Git hooks ─────────────────────────────────────────────────────
+    writeln!(term.clone())?;
+    section(&term, "3", "Git Hooks")?;
 
     let install_hooks = Confirm::with_theme(&theme)
         .with_prompt("Install git hooks for automatic graph updates?")
@@ -74,7 +83,7 @@ pub fn run(repo_root: &Path) -> Result<()> {
     for &idx in &platform_selections {
         let key = PLATFORM_KEYS[idx];
         let display = PLATFORM_NAMES[idx];
-        match install_platform_setup(repo_root, key) {
+        match install_platform_setup(repo_root, key, install_llm_hooks) {
             Ok(summary) => {
                 for name in &summary.configured {
                     print_tick(&term, name)?;
@@ -231,7 +240,11 @@ fn print_cross(term: &Term, msg: &str) -> Result<()> {
     Ok(())
 }
 
-fn install_platform_setup(repo_root: &Path, platform: &str) -> Result<InstallSummary> {
+fn install_platform_setup(
+    repo_root: &Path,
+    platform: &str,
+    install_llm_hooks: bool,
+) -> Result<InstallSummary> {
     let mut summary = crate::install::run_install(
         repo_root,
         platform,
@@ -241,8 +254,10 @@ fn install_platform_setup(repo_root: &Path, platform: &str) -> Result<InstallSum
             ..Default::default()
         },
     )?;
-    summary.platform_hook_files =
-        crate::install::install_platform_agent_hooks(repo_root, platform, false)?;
+    if install_llm_hooks {
+        summary.platform_hook_files =
+            crate::install::install_platform_agent_hooks(repo_root, platform, false)?;
+    }
     Ok(summary)
 }
 
@@ -256,7 +271,7 @@ mod tests {
     fn install_platform_setup_adds_agent_hooks_for_claude() {
         let tmp = TempDir::new().unwrap();
 
-        let summary = install_platform_setup(tmp.path(), "claude").unwrap();
+        let summary = install_platform_setup(tmp.path(), "claude", true).unwrap();
 
         assert!(tmp.path().join(".mcp.json").exists());
         assert!(tmp.path().join("CLAUDE.md").exists());
@@ -284,7 +299,7 @@ mod tests {
     fn install_platform_setup_keeps_git_hooks_separate() {
         let tmp = TempDir::new().unwrap();
 
-        let summary = install_platform_setup(tmp.path(), "codex").unwrap();
+        let summary = install_platform_setup(tmp.path(), "codex", true).unwrap();
 
         assert!(summary.hook_paths.is_empty());
         assert!(
@@ -295,5 +310,24 @@ mod tests {
                 .exists()
         );
         assert!(tmp.path().join(".codex").join("hooks.json").exists());
+    }
+
+    #[test]
+    fn install_platform_setup_skips_agent_hooks_when_not_requested() {
+        let tmp = TempDir::new().unwrap();
+
+        let summary = install_platform_setup(tmp.path(), "claude", false).unwrap();
+
+        assert!(tmp.path().join(".mcp.json").exists());
+        assert!(tmp.path().join("CLAUDE.md").exists());
+        assert!(summary.platform_hook_files.is_empty());
+        assert!(
+            !tmp.path()
+                .join(".atlas")
+                .join("hooks")
+                .join("atlas-hook")
+                .exists()
+        );
+        assert!(!tmp.path().join(".claude").join("settings.json").exists());
     }
 }
