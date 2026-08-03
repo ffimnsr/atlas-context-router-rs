@@ -5,25 +5,21 @@
     "result": {
       "protocolVersion": "2026-07-28",
       "capabilities": {
-        "tools": {},
-        "prompts": { "listChanged": false },
-        "resources": { "subscribe": false, "listChanged": false },
+        "tools": { "listChanged": true },
+        "prompts": { "listChanged": true },
+        "resources": { "subscribe": true, "listChanged": true },
         "completions": {},
+        "logging": {},
         "extensions": {
-          "tasks": {
-            "get": {},
-            "update": {},
-            "toolCallHandles": true
-          }
-        },
-        "experimental": { "progressNotifications": true }
+          "io.modelcontextprotocol/tasks": {}
+        }
       },
       "serverInfo": {
         "name": "atlas",
-        "version": "1.5.1",
+        "version": "1.6.1",
         "description": "MCP server exposing Atlas graph, impact, and review tools over stdio"
       },
-      "_meta": { "clientTag": "spec-suite" }
+      "instructions": "Use server/discover for capability negotiation. For 2026 requests after discovery, include params._meta with protocol version and client capabilities."
     }
   }
 }

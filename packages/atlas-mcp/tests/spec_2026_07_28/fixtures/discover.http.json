@@ -1,9 +1,10 @@
 {
-  "status": 200,
-  "protocolHeader": "2026-07-28",
+  "status": 406,
+  "protocolHeader": null,
   "hasSessionHeader": false,
-  "resultType": "complete",
-  "ttlMs": 300000,
-  "cacheScope": "public",
-  "serverName": "atlas"
+  "hasJsonBody": false,
+  "resultType": null,
+  "ttlMs": null,
+  "cacheScope": null,
+  "serverName": null
 }

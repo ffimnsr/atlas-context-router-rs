@@ -384,21 +384,27 @@ fn lookup_tool_manual(
         });
     };
 
-    let description = truncate_with_flag(&tool.description, MAX_DESCRIPTION_CHARS);
-    let input_args = schema_fields(&tool.input_schema);
-    let response_fields = tool
+    let input_schema = Value::Object((*tool.input_schema).clone());
+    let output_schema = tool
         .output_schema
+        .as_ref()
+        .map(|schema| Value::Object((**schema).clone()));
+    let description = truncate_with_flag(
+        tool.description.as_deref().unwrap_or_default(),
+        MAX_DESCRIPTION_CHARS,
+    );
+    let input_args = schema_fields(&input_schema);
+    let response_fields = output_schema
         .as_ref()
         .map(schema_fields)
         .unwrap_or_default();
-    let target_examples = target_tool_examples(&tool.name, &tool.input_schema);
+    let target_examples = target_tool_examples(&tool.name, &input_schema);
     let mcp_manual_call = truncate_text(
         &json!({
             "name": "man",
             "arguments": {
                 "namespace": "mcp",
-                "tool_name": tool.name,
-                "output_format": "json"
+                "tool_name": tool.name
             }
         })
         .to_string(),
@@ -412,12 +418,15 @@ fn lookup_tool_manual(
     Ok(ToolManualDocument {
         requested_namespace: namespace.to_owned(),
         requested_tool_name: tool_name.to_owned(),
-        resolved_tool_name: tool.name.clone(),
+        resolved_tool_name: tool.name.to_string(),
         description: description.value,
         tool_structure: ToolManualStructure {
-            purpose: truncate_text(&tool.description, MAX_DESCRIPTION_CHARS),
-            operation_name: tool.name.clone(),
-            request_shape: top_level_shape("request object", &tool.input_schema),
+            purpose: truncate_text(
+                tool.description.as_deref().unwrap_or_default(),
+                MAX_DESCRIPTION_CHARS,
+            ),
+            operation_name: tool.name.to_string(),
+            request_shape: top_level_shape("request object", &input_schema),
             response_shape: if tool.output_schema.is_some() {
                 "MCP tool result envelope with structuredContent object and metadata fields"
                     .to_owned()
@@ -427,13 +436,25 @@ fn lookup_tool_manual(
             },
             result_contract: tool_result_contract_label(&tool.name).to_owned(),
             annotations: ToolManualAnnotations {
-                read_only: tool.annotations.read_only_hint,
-                state_changing: tool.annotations.state_changing_hint,
-                destructive: tool.annotations.destructive_hint,
+                read_only: tool
+                    .annotations
+                    .as_ref()
+                    .and_then(|annotations| annotations.read_only_hint)
+                    .unwrap_or(false),
+                state_changing: !tool
+                    .annotations
+                    .as_ref()
+                    .and_then(|annotations| annotations.read_only_hint)
+                    .unwrap_or(false),
+                destructive: tool
+                    .annotations
+                    .as_ref()
+                    .and_then(|annotations| annotations.destructive_hint)
+                    .unwrap_or(false),
             },
         },
         input_args,
-        input_contract: tool_input_contract(&tool.name, &tool.input_schema),
+        input_contract: tool_input_contract(&tool.name, &input_schema),
         output_response: ToolManualOutputResponse {
             response_shape: if tool.output_schema.is_some() {
                 "structuredContent follows advertised outputSchema when present".to_owned()
@@ -460,36 +481,19 @@ fn lookup_tool_manual(
 
 fn build_manual_tool_response(
     document: &ToolManualDocument,
-    output_format: OutputFormat,
+    _output_format: OutputFormat,
 ) -> Result<Value> {
     let raw = serde_json::to_value(document)?;
-    let text = render_tool_manual_text(document);
-    let rendered = match output_format {
-        OutputFormat::Json => render_value(&raw, output_format)?,
-        OutputFormat::Toon => crate::output::RenderedPayload {
-            requested_format: output_format,
-            actual_format: output_format,
-            text,
-            fallback_reason: None,
-        },
-    };
+    let text = render_value(&raw)?.text;
 
-    let mut response = json!({
+    Ok(json!({
         "content": [{
             "type": "text",
-            "text": rendered.text,
-            "mimeType": rendered.actual_format.mime_type(),
+            "text": text,
         }],
         "structuredContent": raw,
-        "_meta": {
-            "atlas:outputFormat": rendered.actual_format.as_str(),
-            "atlas:requestedOutputFormat": rendered.requested_format.as_str(),
-        },
-    });
-    if let Some(reason) = rendered.fallback_reason {
-        response["_meta"]["atlas:fallbackReason"] = Value::String(reason);
-    }
-    Ok(response)
+        "_meta": {},
+    }))
 }
 
 fn manual_lookup_error_response(
@@ -665,7 +669,7 @@ fn metadata_fields() -> Vec<ToolManualField> {
             default_value: None,
             enum_values: Vec::new(),
             description:
-                "Atlas output metadata including requested and actual output format, plus fallback reason when TOON falls back to JSON."
+                "Atlas metadata map for additional result annotations when present."
                     .to_owned(),
         },
         ToolManualField {
@@ -860,24 +864,21 @@ fn target_input_family() -> ToolManualInputFamily {
             "query",
             &["target.query"],
             json!({
-                "target": { "kind": "query", "query": "compute" },
-                "output_format": "json"
+                "target": { "kind": "query", "query": "compute" }
             }),
         ),
         input_variant(
             "file",
             &["target.file"],
             json!({
-                "target": { "kind": "file", "file": "src/lib.rs" },
-                "output_format": "json"
+                "target": { "kind": "file", "file": "src/lib.rs" }
             }),
         ),
         input_variant(
             "files",
             &["target.files"],
             json!({
-                "target": { "kind": "files", "files": ["src/lib.rs"] },
-                "output_format": "json"
+                "target": { "kind": "files", "files": ["src/lib.rs"] }
             }),
         ),
     ];
@@ -901,8 +902,7 @@ fn excerpt_selector_input_family() -> ToolManualInputFamily {
             &["selector.start_line", "selector.end_line"],
             json!({
                 "file": "src/lib.rs",
-                "selector": { "kind": "range", "start_line": 10, "end_line": 20 },
-                "output_format": "json"
+                "selector": { "kind": "range", "start_line": 10, "end_line": 20 }
             }),
         ),
         input_variant(
@@ -913,8 +913,7 @@ fn excerpt_selector_input_family() -> ToolManualInputFamily {
                 "selector": {
                     "kind": "ranges",
                     "line_ranges": [{ "start_line": 10, "end_line": 20 }]
-                },
-                "output_format": "json"
+                }
             }),
         ),
         input_variant(
@@ -922,8 +921,7 @@ fn excerpt_selector_input_family() -> ToolManualInputFamily {
             &["selector.line"],
             json!({
                 "file": "src/lib.rs",
-                "selector": { "kind": "context", "line": 42, "before": 2, "after": 2 },
-                "output_format": "json"
+                "selector": { "kind": "context", "line": 42, "before": 2, "after": 2 }
             }),
         ),
     ];
@@ -947,8 +945,7 @@ fn docs_selector_input_family() -> ToolManualInputFamily {
             &["selector.heading"],
             json!({
                 "file": "README.md",
-                "selector": { "kind": "heading", "heading": "document.install" },
-                "output_format": "json"
+                "selector": { "kind": "heading", "heading": "document.install" }
             }),
         ),
         input_variant(
@@ -956,8 +953,7 @@ fn docs_selector_input_family() -> ToolManualInputFamily {
             &["selector.line"],
             json!({
                 "file": "README.md",
-                "selector": { "kind": "line", "line": 42 },
-                "output_format": "json"
+                "selector": { "kind": "line", "line": 42 }
             }),
         ),
     ];
@@ -981,8 +977,7 @@ fn change_source_input_family(include_files: bool) -> ToolManualInputFamily {
             "files",
             &["change_source.files"],
             json!({
-                "change_source": { "kind": "files", "files": ["src/lib.rs"] },
-                "output_format": "json"
+                "change_source": { "kind": "files", "files": ["src/lib.rs"] }
             }),
         ));
     }
@@ -990,24 +985,21 @@ fn change_source_input_family(include_files: bool) -> ToolManualInputFamily {
         "base",
         &["change_source.base"],
         json!({
-            "change_source": { "kind": "base", "base": "origin/main" },
-            "output_format": "json"
+            "change_source": { "kind": "base", "base": "origin/main" }
         }),
     ));
     variants.push(input_variant(
         "staged",
         &[],
         json!({
-            "change_source": { "kind": "staged" },
-            "output_format": "json"
+            "change_source": { "kind": "staged" }
         }),
     ));
     variants.push(input_variant(
         "working_tree",
         &[],
         json!({
-            "change_source": { "kind": "working_tree" },
-            "output_format": "json"
+            "change_source": { "kind": "working_tree" }
         }),
     ));
     ToolManualInputFamily {
@@ -1029,8 +1021,7 @@ fn operation_input_family() -> ToolManualInputFamily {
             "build",
             &[],
             json!({
-                "operation": { "kind": "build" },
-                "output_format": "json"
+                "operation": { "kind": "build" }
             }),
         ),
         input_variant(
@@ -1040,8 +1031,7 @@ fn operation_input_family() -> ToolManualInputFamily {
                 "operation": {
                     "kind": "update",
                     "change_source": { "kind": "working_tree" }
-                },
-                "output_format": "json"
+                }
             }),
         ),
     ];
@@ -1067,8 +1057,7 @@ fn operation_change_source_input_family() -> ToolManualInputFamily {
                 "operation": {
                     "kind": "update",
                     "change_source": { "kind": "working_tree" }
-                },
-                "output_format": "json"
+                }
             }),
         ),
         input_variant(
@@ -1078,8 +1067,7 @@ fn operation_change_source_input_family() -> ToolManualInputFamily {
                 "operation": {
                     "kind": "update",
                     "change_source": { "kind": "staged" }
-                },
-                "output_format": "json"
+                }
             }),
         ),
         input_variant(
@@ -1089,8 +1077,7 @@ fn operation_change_source_input_family() -> ToolManualInputFamily {
                 "operation": {
                     "kind": "update",
                     "change_source": { "kind": "base", "base": "origin/main" }
-                },
-                "output_format": "json"
+                }
             }),
         ),
         input_variant(
@@ -1100,8 +1087,7 @@ fn operation_change_source_input_family() -> ToolManualInputFamily {
                 "operation": {
                     "kind": "update",
                     "change_source": { "kind": "files", "files": ["src/lib.rs"] }
-                },
-                "output_format": "json"
+                }
             }),
         ),
     ];
@@ -1123,8 +1109,7 @@ fn batch_query_items_input_family() -> ToolManualInputFamily {
         "items",
         &["items"],
         json!({
-            "items": [{ "text": "compute" }],
-            "output_format": "json"
+            "items": [{ "text": "compute" }]
         }),
     )];
     ToolManualInputFamily {
@@ -1143,24 +1128,21 @@ fn repo_scope_input_family() -> ToolManualInputFamily {
             "current",
             &[],
             json!({
-                "repo_scope": { "kind": "current" },
-                "output_format": "json"
+                "repo_scope": { "kind": "current" }
             }),
         ),
         input_variant(
             "repo_id",
             &["repo_scope.repo_id"],
             json!({
-                "repo_scope": { "kind": "repo_id", "repo_id": "primary" },
-                "output_format": "json"
+                "repo_scope": { "kind": "repo_id", "repo_id": "primary" }
             }),
         ),
         input_variant(
             "all",
             &[],
             json!({
-                "repo_scope": { "kind": "all" },
-                "output_format": "json"
+                "repo_scope": { "kind": "all" }
             }),
         ),
     ];
@@ -1277,11 +1259,7 @@ fn explicit_default_value(name: &str, field: &Value) -> Option<String> {
     parse_default_from_description(name, description)
 }
 
-fn parse_default_from_description(name: &str, description: &str) -> Option<String> {
-    if name == "output_format" && description.contains("'toon' (default)") {
-        return Some("toon".to_owned());
-    }
-
+fn parse_default_from_description(_name: &str, description: &str) -> Option<String> {
     let lower = description.to_ascii_lowercase();
     let marker = "default ";
     let start = lower.find(marker)? + marker.len();
@@ -1315,22 +1293,22 @@ fn top_level_shape(label: &str, schema: &Value) -> String {
 fn target_tool_examples(tool_name: &str, input_schema: &Value) -> Vec<String> {
     let special = match tool_name {
         "query_graph" => Some(vec![
-            json!({ "name": "query_graph", "arguments": { "text": "compute", "output_format": "json" } }),
-            json!({ "name": "query_graph", "arguments": { "text": "src/service.rs::fn::compute", "output_format": "json" } }),
-            json!({ "name": "query_graph", "arguments": { "text": "who calls compute", "output_format": "json" } }),
-            json!({ "name": "query_graph", "arguments": { "text": "what breaks if I change compute", "output_format": "json" } }),
-            json!({ "name": "query_graph", "arguments": { "text": "tests for compute", "output_format": "json" } }),
+            json!({ "name": "query_graph", "arguments": { "text": "compute" } }),
+            json!({ "name": "query_graph", "arguments": { "text": "src/service.rs::fn::compute" } }),
+            json!({ "name": "query_graph", "arguments": { "text": "who calls compute" } }),
+            json!({ "name": "query_graph", "arguments": { "text": "what breaks if I change compute" } }),
+            json!({ "name": "query_graph", "arguments": { "text": "tests for compute" } }),
         ]),
         "get_context" => Some(vec![
-            json!({ "name": "get_context", "arguments": { "target": { "kind": "query", "query": "compute" }, "output_format": "json" } }),
-            json!({ "name": "get_context", "arguments": { "target": { "kind": "query", "query": "src/service.rs::fn::compute" }, "output_format": "json" } }),
-            json!({ "name": "get_context", "arguments": { "target": { "kind": "query", "query": "who calls compute" }, "output_format": "json" } }),
-            json!({ "name": "get_context", "arguments": { "target": { "kind": "query", "query": "what breaks if I change compute" }, "output_format": "json" } }),
-            json!({ "name": "get_context", "arguments": { "target": { "kind": "query", "query": "tests for compute" }, "output_format": "json" } }),
+            json!({ "name": "get_context", "arguments": { "target": { "kind": "query", "query": "compute" } } }),
+            json!({ "name": "get_context", "arguments": { "target": { "kind": "query", "query": "src/service.rs::fn::compute" } } }),
+            json!({ "name": "get_context", "arguments": { "target": { "kind": "query", "query": "who calls compute" } } }),
+            json!({ "name": "get_context", "arguments": { "target": { "kind": "query", "query": "what breaks if I change compute" } } }),
+            json!({ "name": "get_context", "arguments": { "target": { "kind": "query", "query": "tests for compute" } } }),
         ]),
         "resolve_symbol" => Some(vec![
-            json!({ "name": "resolve_symbol", "arguments": { "name": "compute", "output_format": "json" } }),
-            json!({ "name": "resolve_symbol", "arguments": { "name": "src/service.rs::fn::compute", "output_format": "json" } }),
+            json!({ "name": "resolve_symbol", "arguments": { "name": "compute" } }),
+            json!({ "name": "resolve_symbol", "arguments": { "name": "src/service.rs::fn::compute" } }),
         ]),
         _ => None,
     };
@@ -1439,7 +1417,7 @@ pub(crate) fn suggest_tool_names(input: &str) -> Vec<String> {
         .into_iter()
         .filter(|(starts_with, contains, distance, _)| *starts_with || *contains || *distance <= 6)
         .take(MAX_SUGGESTIONS)
-        .map(|(_, _, _, name)| name)
+        .map(|(_, _, _, name)| name.to_string())
         .collect()
 }
 

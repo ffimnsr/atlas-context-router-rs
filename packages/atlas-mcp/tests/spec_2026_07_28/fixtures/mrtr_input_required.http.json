@@ -1,7 +1,8 @@
 {
-  "status": 200,
-  "resultType": "input_required",
-  "requestType": "form",
-  "requestId": "confirmation",
-  "requestStatePresent": true
+  "status": 406,
+  "hasJsonBody": false,
+  "resultType": null,
+  "requestType": null,
+  "requestId": null,
+  "requestStatePresent": false
 }

@@ -106,7 +106,6 @@ pub(crate) fn complete(args: Option<&Value>, repo_root: &str, db_path: &str) -> 
     let request_ref = args.and_then(|value| value.get("ref"));
 
     let mut values = match name {
-        "output_format" => filter_prefix(["json", "toon"], prefix),
         "intent" => filter_prefix(INTENT_VALUES.iter().copied(), prefix),
         "file" | "heading" if is_docs_template_ref(request_ref) => {
             docs_completion_items(repo_root, name, prefix, context)?
@@ -149,7 +148,7 @@ pub(crate) fn complete(args: Option<&Value>, repo_root: &str, db_path: &str) -> 
 fn tool_names() -> Vec<String> {
     let mut names = tool_descriptors()
         .into_iter()
-        .map(|tool| tool.name)
+        .map(|tool| tool.name.to_string())
         .collect::<Vec<_>>();
     names.sort();
     names.dedup();
@@ -581,7 +580,7 @@ mod tests {
                 .into_owned();
             crate::tools::call(
                 "build_or_update_graph",
-                Some(&json!({"operation": {"kind": "build"}, "output_format": "json"})),
+                Some(&json!({"operation": {"kind": "build"}})),
                 &repo_root,
                 &db_path,
             )
@@ -634,7 +633,7 @@ mod tests {
     }
 
     #[test]
-    fn output_format_completion_filters_by_prefix() {
+    fn unsupported_argument_name_returns_empty_completion_set() {
         let result = complete(
             Some(&json!({
                 "ref": {"name": "tools/call"},
@@ -645,8 +644,8 @@ mod tests {
         )
         .expect("completion");
 
-        assert_eq!(result["completion"]["values"][0]["value"], json!("json"));
-        assert_eq!(result["completion"]["total"], json!(1));
+        assert_eq!(result["completion"]["values"], json!([]));
+        assert_eq!(result["completion"]["total"], json!(0));
     }
 
     #[test]

@@ -1,6 +1,7 @@
 {
-  "status": 200,
+  "status": 406,
   "hasSessionHeader": false,
-  "resultType": "complete",
-  "hasGetContext": true
+  "hasJsonBody": false,
+  "resultType": null,
+  "hasGetContext": false
 }

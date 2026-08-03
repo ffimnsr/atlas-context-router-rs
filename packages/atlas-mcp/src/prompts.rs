@@ -4,10 +4,8 @@ use anyhow::Result;
 use serde::Serialize;
 
 use crate::descriptors::{
-    IconDescriptor, PromptArgumentDescriptor, PromptDescriptor, PromptRegistry, descriptor_meta,
-    human_title, validate_descriptor_name,
+    PromptArgumentDescriptor, PromptDescriptor, human_title, validate_descriptor_name,
 };
-use crate::spec;
 
 #[derive(Clone, Copy)]
 struct PromptDef {
@@ -120,46 +118,34 @@ pub fn prompt_descriptors() -> Vec<PromptDescriptor> {
         .iter()
         .map(|prompt| {
             validate_descriptor_name(prompt.name).expect("prompt name must satisfy MCP guidance");
-            PromptDescriptor {
-                name: prompt.name.to_owned(),
-                title: human_title(prompt.name),
-                description: prompt.description.to_owned(),
-                arguments: prompt
-                    .arguments
-                    .iter()
-                    .map(|arg| PromptArgumentDescriptor {
-                        name: arg.name.to_owned(),
-                        description: arg.description.to_owned(),
-                        required: arg.required,
-                    })
-                    .collect(),
-                icons: prompt_icons(prompt.name),
-                meta: descriptor_meta("prompt", "workflow"),
+            let arguments = prompt
+                .arguments
+                .iter()
+                .map(|arg| {
+                    PromptArgumentDescriptor::new(arg.name)
+                        .with_title(human_title(arg.name))
+                        .with_description(arg.description)
+                        .with_required(arg.required)
+                })
+                .collect::<Vec<_>>();
+            let mut descriptor = PromptDescriptor::new(
+                prompt.name,
+                Some(prompt.description),
+                (!arguments.is_empty()).then_some(arguments),
+            )
+            .with_title(human_title(prompt.name));
+            if let Some(meta) = crate::rmcp_types::meta_object_from_value(
+                crate::descriptors::descriptor_meta("prompt", "workflow"),
+            )
+            .expect("prompt descriptor meta must be object")
+            {
+                descriptor = descriptor.with_meta(meta);
             }
+            descriptor
         })
         .collect::<Vec<_>>();
     prompts.sort_by(|left, right| left.name.cmp(&right.name));
     prompts
-}
-
-const PROMPTS_LIST_CACHE_TTL_MS: u64 = 300_000;
-const PROMPTS_LIST_CACHE_SCOPE: &str = spec::CACHE_SCOPE_PUBLIC;
-
-pub fn prompt_list() -> serde_json::Value {
-    let mut result = serde_json::to_value(PromptRegistry {
-        prompts: prompt_descriptors(),
-    })
-    .expect("prompt registry serialization");
-    spec::annotate_cacheable_result(
-        &mut result,
-        PROMPTS_LIST_CACHE_TTL_MS,
-        PROMPTS_LIST_CACHE_SCOPE,
-    );
-    result
-}
-
-fn prompt_icons(_name: &str) -> Vec<IconDescriptor> {
-    Vec::new()
 }
 
 pub fn prompt_get(name: &str, args: Option<&serde_json::Value>) -> Result<serde_json::Value> {
@@ -258,15 +244,13 @@ fn required_string_arg(args: Option<&serde_json::Value>, key: &str) -> Result<St
 
 #[cfg(test)]
 mod tests {
-    use super::{prompt_descriptors, prompt_get, prompt_list};
+    use super::{prompt_descriptors, prompt_get};
 
     #[test]
     fn prompt_list_exposes_expected_templates() {
-        let listed = prompt_list();
-        let prompts = listed["prompts"].as_array().expect("prompts array");
-        let names = prompts
-            .iter()
-            .filter_map(|prompt| prompt["name"].as_str())
+        let names = prompt_descriptors()
+            .into_iter()
+            .map(|prompt| prompt.name)
             .collect::<Vec<_>>();
 
         assert_eq!(
@@ -278,21 +262,23 @@ mod tests {
                 "review_change"
             ]
         );
-        assert_eq!(listed["resultType"], serde_json::json!("complete"));
-        assert_eq!(listed["ttlMs"], serde_json::json!(300000));
-        assert_eq!(listed["cacheScope"], serde_json::json!("public"));
     }
 
     #[test]
     fn prompt_descriptors_have_titles_and_spec_safe_icons_contract() {
         for prompt in prompt_descriptors() {
             assert!(
-                !prompt.title.trim().is_empty(),
+                !prompt
+                    .title
+                    .as_deref()
+                    .unwrap_or_default()
+                    .trim()
+                    .is_empty(),
                 "missing title for {}",
                 prompt.name
             );
             assert!(
-                prompt.icons.is_empty(),
+                prompt.icons.is_none(),
                 "prompt icons should be omitted until MCP-compatible icon sources exist for {}",
                 prompt.name
             );
@@ -307,6 +293,42 @@ mod tests {
                 .to_string()
                 .contains("missing required argument: symbol")
         );
+    }
+
+    #[test]
+    fn prompt_text_stays_json_only_and_graph_first() {
+        for name in [
+            "review_change",
+            "inspect_symbol",
+            "plan_refactor",
+            "resume_prior_session",
+        ] {
+            let args = match name {
+                "inspect_symbol" => Some(serde_json::json!({"symbol": "demo::item"})),
+                "plan_refactor" => Some(serde_json::json!({"target": "demo::item"})),
+                _ => None,
+            };
+            let rendered = prompt_get(name, args.as_ref()).expect("prompt render");
+            let text = rendered["messages"][0]["content"]["text"]
+                .as_str()
+                .expect("prompt text");
+            assert!(
+                !text.contains("output_format"),
+                "{name} prompt must not mention output_format"
+            );
+            assert!(
+                !text.to_ascii_lowercase().contains("toon"),
+                "{name} prompt must not mention TOON"
+            );
+        }
+
+        let review = prompt_get("review_change", None).expect("review_change prompt");
+        let review_text = review["messages"][0]["content"]["text"]
+            .as_str()
+            .expect("review text");
+        assert!(review_text.contains("Prefer graph tools before file search."));
+        assert!(review_text.contains("atlas_provenance"));
+        assert!(review_text.contains("atlas_freshness"));
     }
 
     #[test]

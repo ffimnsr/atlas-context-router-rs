@@ -84,7 +84,7 @@ fn manual_snapshot_path(name: &str) -> PathBuf {
 fn manual_contract_snapshot(tool_name: &str, repo_root: &str, db_path: &str) -> Value {
     let response = call(
         "tool_help",
-        Some(&json!({ "name": tool_name, "output_format": "json" })),
+        Some(&json!({ "name": tool_name })),
         repo_root,
         db_path,
     )
@@ -111,8 +111,7 @@ fn parity_seed_source_id(repo_root: &str, db_path: &str) -> String {
         .join(" ");
     let args = json!({
         "content": content,
-        "label": "parity-seed",
-        "output_format": "json"
+        "label": "parity-seed"
     });
 
     let response = call("save_context_artifact", Some(&args), repo_root, db_path)
@@ -127,12 +126,12 @@ fn parity_seed_source_id(repo_root: &str, db_path: &str) -> String {
 
 fn parity_args(tool_name: &str, source_id: &str) -> Value {
     match tool_name {
-        "list_graph_stats" => json!({ "output_format": "json" }),
-        "tool_list" => json!({ "output_format": "json" }),
-        "tool_search" => json!({ "query": "query", "output_format": "json" }),
-        "tool_help" => json!({ "name": "query_graph", "output_format": "json" }),
-        "man" => json!({ "namespace": "mcp", "tool_name": "query_graph", "output_format": "json" }),
-        "query_graph" => json!({ "text": "compute", "output_format": "json" }),
+        "list_graph_stats" => json!({}),
+        "tool_list" => json!({}),
+        "tool_search" => json!({ "query": "query" }),
+        "tool_help" => json!({ "name": "query_graph" }),
+        "man" => json!({ "namespace": "mcp", "tool_name": "query_graph" }),
+        "query_graph" => json!({ "text": "compute" }),
         "batch_query_graph" => json!({
             "items": [{ "text": "compute" }, { "text": "handle_request" }],
             "output_format": "json"
@@ -524,7 +523,7 @@ fn tool_list_schema_has_required_fields() {
 }
 
 #[test]
-fn tool_list_documents_output_format() {
+fn tool_list_omits_output_format_from_input_schema() {
     let list = tool_list();
     let tools = list
         .get("tools")
@@ -537,14 +536,14 @@ fn tool_list_documents_output_format() {
             .and_then(|value| value.as_object())
             .expect("inputSchema properties");
         assert!(
-            props.contains_key("output_format"),
-            "tool must document output_format"
+            !props.contains_key("output_format"),
+            "tool must not document removed output_format"
         );
     }
 }
 
 #[test]
-fn tool_list_all_tools_default_to_toon() {
+fn tool_list_uses_json_only_output_description_without_output_format_field() {
     let list = tool_list();
     let tools = list
         .get("tools")
@@ -552,11 +551,12 @@ fn tool_list_all_tools_default_to_toon() {
         .expect("tools array");
 
     for tool in tools {
-        let description = tool
-            .pointer("/inputSchema/properties/output_format/description")
-            .and_then(|value| value.as_str())
-            .expect("output_format description");
-        assert_eq!(description, DEFAULT_OUTPUT_DESCRIPTION);
+        let serialized = serde_json::to_string(tool).expect("serialize tool descriptor");
+        assert!(
+            !serialized.contains("output_format"),
+            "tool descriptor must not mention removed output_format"
+        );
+        assert!(DEFAULT_OUTPUT_DESCRIPTION.contains("JSON-only"));
     }
 }
 
@@ -645,31 +645,29 @@ fn tool_list_names_are_unique() {
 }
 
 #[test]
-fn tool_result_value_falls_back_to_json_when_toon_is_empty() {
+fn tool_result_value_uses_json_only_without_fallback_metadata() {
     let rendered =
-        tool_result_value(&serde_json::json!({}), OutputFormat::Toon).expect("tool result");
+        tool_result_value(&serde_json::json!({}), OutputFormat::Json).expect("tool result");
 
     assert_eq!(unwrap_tool_format(&rendered), "json");
-    assert!(fallback_reason(&rendered).is_some());
+    assert!(fallback_reason(&rendered).is_none());
+    assert_eq!(rendered["_meta"], serde_json::json!({}));
 }
 
 #[test]
-fn invalid_output_format_returns_error() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let db_path = dir.path().join("atlas.db");
-    let db_path = db_path.to_string_lossy().to_string();
-    let _ = Store::open(&db_path).expect("open store");
+fn stale_output_format_argument_is_ignored() {
+    let fixture = setup_mcp_fixture();
+    let args = serde_json::json!({
+        "target": { "kind": "query", "query": "compute" },
+        "output_format": "xml"
+    });
+    let result = call("get_context", Some(&args), "/ignored", &fixture.db_path)
+        .expect("stale output_format should be ignored");
 
-    let args = serde_json::json!({ "target": { "kind": "query", "query": "compute" }, "output_format": "xml" });
-    let result = call("get_context", Some(&args), "/ignored", &db_path)
-        .expect("invalid output_format should return tool error result");
-
-    assert_eq!(result["isError"], serde_json::json!(true));
-    assert!(
-        result["structuredContent"]["message"]
-            .as_str()
-            .is_some_and(|message| message.contains("unsupported output_format"))
-    );
+    assert_ne!(result["isError"], serde_json::json!(true));
+    let payload: Value =
+        serde_json::from_str(&unwrap_tool_text(result.clone())).expect("parse get_context json");
+    assert_eq!(payload["target"]["query"], serde_json::json!("compute"));
 }
 
 #[test]
@@ -958,7 +956,7 @@ fn tool_descriptions_do_not_hide_precedence_rules() {
 #[test]
 fn stable_object_tools_export_object_structured_content_schema() {
     for descriptor in tool_descriptors() {
-        let name = descriptor.name.as_str();
+        let name = descriptor.name.as_ref();
         if tool_result_contract(name) != ToolResultContract::StableObject {
             continue;
         }

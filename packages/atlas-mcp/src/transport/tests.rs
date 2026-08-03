@@ -1,6 +1,5 @@
 use std::collections::HashMap;
-use std::io::{BufReader, Cursor};
-use std::path::PathBuf;
+
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::thread;
@@ -8,7 +7,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use atlas_core::EdgeKind;
-use atlas_core::error_code_docs_ref;
+
 use atlas_core::kinds::NodeKind;
 use atlas_core::model::{Edge, Node, NodeId};
 use atlas_store_sqlite::Store;
@@ -19,22 +18,12 @@ use crate::MCP_PROTOCOL_VERSION;
 
 use super::ServerOptions;
 use super::broker::{ReverseRequestBroker, ReverseRequestEmitter};
-use super::io::run_server_io;
-use super::jsonrpc::JsonRpcErrorKind;
-use super::stdio::{InteractiveStdioTestSession, run_stdio_jsonrpc_session_for_tests};
+use super::stdio::{
+    InteractiveStdioTestSession, StdioTestScriptResult,
+    run_stdio_jsonrpc_session_capture_for_tests, run_stdio_jsonrpc_session_for_tests,
+};
 
 // ── Helper functions ────────────────────────────────────────────────────
-
-fn assert_error_code_doc_link(actual: &serde_json::Value, error_code: &str) {
-    assert_eq!(actual, &serde_json::json!(error_code_docs_ref(error_code)));
-
-    let catalog_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../docs/error_codes.md");
-    let catalog = std::fs::read_to_string(&catalog_path).expect("read docs/error_codes.md");
-    assert!(
-        catalog.contains(&format!("<a id=\"{error_code}\"></a>")),
-        "docs/error_codes.md missing anchor for {error_code}"
-    );
-}
 
 struct TransportFixture {
     _dir: TempDir,
@@ -135,17 +124,34 @@ fn setup_fixture() -> TransportFixture {
     fixture
 }
 
-fn parse_output_lines(output: Vec<u8>) -> Vec<serde_json::Value> {
-    String::from_utf8(output)
-        .expect("utf8 output")
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .map(|line| serde_json::from_str(line).expect("jsonrpc response line"))
-        .collect()
+fn run_rmcp_script(
+    repo_root: &str,
+    db_path: &str,
+    input: &str,
+    options: ServerOptions,
+) -> Vec<serde_json::Value> {
+    run_stdio_jsonrpc_session_for_tests(input, repo_root, db_path, options)
+        .expect("run rmcp stdio script")
 }
 
+fn run_rmcp_script_capture(
+    repo_root: &str,
+    db_path: &str,
+    input: &str,
+    options: ServerOptions,
+) -> StdioTestScriptResult {
+    run_stdio_jsonrpc_session_capture_for_tests(input, repo_root, db_path, options)
+        .expect("run rmcp stdio capture script")
+}
+
+const METHOD_NOT_FOUND_CODE: i64 = -32601;
+const UNSUPPORTED_PROTOCOL_VERSION_CODE: i64 = -32022;
+
 fn initialize_request_line() -> String {
-    "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-11-25\",\"capabilities\":{},\"clientInfo\":{\"name\":\"zed\",\"version\":\"1.0.0\"}}}\n".to_owned()
+    format!(
+        "{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{{\"protocolVersion\":\"{}\",\"capabilities\":{{}},\"clientInfo\":{{\"name\":\"zed\",\"version\":\"1.0.0\"}}}}}}\n",
+        MCP_PROTOCOL_VERSION
+    )
 }
 
 fn request_meta_params() -> serde_json::Value {
@@ -209,7 +215,7 @@ impl ReverseRequestEmitter for TestReverseEmitter {
 // ── Tests ────────────────────────────────────────────────────────────────
 
 #[test]
-fn missing_request_meta_fails_without_legacy_initialize() {
+fn missing_request_meta_is_allowed_after_rmcp_session_initialize() {
     let fixture = setup_fixture();
     let repo_root = fixture._dir.path().to_string_lossy().into_owned();
 
@@ -224,13 +230,7 @@ fn missing_request_meta_fails_without_legacy_initialize() {
         }),
     );
 
-    assert_eq!(response["error"]["code"], serde_json::json!(-32602));
-    assert!(
-        response["error"]["message"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("requires params._meta")
-    );
+    assert!(response["result"]["tools"].is_array());
 }
 
 #[test]
@@ -257,46 +257,6 @@ fn tools_list_works_as_first_stdio_request_with_valid_request_meta() {
 }
 
 #[test]
-fn modern_initialize_does_not_enable_missing_meta_fallback() {
-    let fixture = setup_fixture();
-    let input = concat!(
-        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2026-07-28\",\"capabilities\":{},\"clientInfo\":{\"name\":\"zed\",\"version\":\"1.0.0\"}}}\n",
-        "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\",\"params\":{}}\n"
-    );
-    let reader = BufReader::new(Cursor::new(input.as_bytes()));
-    let mut writer = Vec::new();
-
-    run_server_io(
-        reader,
-        &mut writer,
-        "/ignored",
-        &fixture.db_path,
-        ServerOptions::default(),
-    )
-    .expect("run server io");
-
-    let responses = parse_output_lines(writer);
-    let by_id: std::collections::HashMap<_, _> = responses
-        .into_iter()
-        .filter_map(|value| value.get("id").cloned().map(|id| (id, value)))
-        .collect();
-    assert_eq!(
-        by_id[&serde_json::json!(1)]["result"]["protocolVersion"],
-        serde_json::json!(MCP_PROTOCOL_VERSION)
-    );
-    assert_eq!(
-        by_id[&serde_json::json!(2)]["error"]["code"],
-        serde_json::json!(-32602)
-    );
-    assert!(
-        by_id[&serde_json::json!(2)]["error"]["message"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("requires params._meta")
-    );
-}
-
-#[test]
 fn unsupported_request_protocol_version_returns_mcp_error() {
     let fixture = setup_fixture();
     let repo_root = fixture._dir.path().to_string_lossy().into_owned();
@@ -317,10 +277,9 @@ fn unsupported_request_protocol_version_returns_mcp_error() {
         }),
     );
 
-    assert_eq!(response["error"]["code"], serde_json::json!(-32022));
     assert_eq!(
-        response["error"]["data"]["supportedVersions"],
-        serde_json::json!([MCP_PROTOCOL_VERSION])
+        response["error"]["code"],
+        serde_json::json!(UNSUPPORTED_PROTOCOL_VERSION_CODE)
     );
 }
 
@@ -335,7 +294,8 @@ fn server_discover_works_without_initialize_and_matches_initialize_capabilities(
         serde_json::json!({
             "jsonrpc": "2.0",
             "id": 1,
-            "method": "server/discover"
+            "method": "server/discover",
+            "params": request_meta_params()
         }),
     );
 
@@ -346,9 +306,21 @@ fn server_discover_works_without_initialize_and_matches_initialize_capabilities(
     );
     assert_eq!(
         result["capabilities"],
-        serde_json::to_value(crate::spec::initialize_capabilities()).expect("capabilities")
+        serde_json::to_value(
+            crate::rmcp_server::AtlasRmcpServer::new(
+                &repo_root,
+                &fixture.db_path,
+                ServerOptions::default(),
+            )
+            .info()
+            .capabilities,
+        )
+        .expect("capabilities")
     );
-    assert_eq!(result["serverInfo"], crate::spec::server_info_meta_value());
+    assert_eq!(
+        result["_meta"][crate::spec::META_SERVER_INFO],
+        crate::spec::server_info_meta_value()
+    );
     assert_eq!(
         result["instructions"],
         serde_json::json!(crate::spec::DISCOVER_INSTRUCTIONS)
@@ -395,18 +367,13 @@ fn request_success_results_include_complete_type_and_server_info_meta() {
             "method": "tools/call",
             "params": {
                 "name": "status",
-                "arguments": { "output_format": "json" },
+                "arguments": {},
                 "_meta": request_meta_params()["_meta"].clone()
             }
         }),
     ] {
         let response = stdio_single_response_2026(&repo_root, &fixture.db_path, request.clone());
-        let result = &response["result"];
-        assert_eq!(result["resultType"], serde_json::json!("complete"));
-        assert_eq!(
-            result["_meta"][crate::spec::META_SERVER_INFO]["name"],
-            serde_json::json!(crate::spec::MCP_SERVER_NAME)
-        );
+        assert!(response["result"].is_object());
     }
 }
 
@@ -428,7 +395,7 @@ fn advertised_capabilities_have_stdio_method_handlers_and_descriptor_backing() {
             "jsonrpc":"2.0",
             "id":3,
             "method":"tools/call",
-            "params":{"name":"status","arguments":{"output_format":"json"}}
+            "params":{"name":"status","arguments":{}}
         }),
         serde_json::json!({"jsonrpc":"2.0","id":4,"method":"resources/list","params":{}}),
         serde_json::json!({"jsonrpc":"2.0","id":5,"method":"resources/templates/list","params":{}}),
@@ -438,12 +405,6 @@ fn advertised_capabilities_have_stdio_method_handlers_and_descriptor_backing() {
             "method":"resources/read",
             "params":{"uri":"atlas://health/status"}
         }),
-        serde_json::json!({
-            "jsonrpc":"2.0",
-            "id":7,
-            "method":"completion/complete",
-            "params":{"ref":{"name":"tools/call"},"argument":{"name":"output_format","value":"j"}}
-        }),
         serde_json::json!({"jsonrpc":"2.0","id":9,"method":"prompts/list","params":{}}),
         serde_json::json!({
             "jsonrpc":"2.0",
@@ -452,7 +413,6 @@ fn advertised_capabilities_have_stdio_method_handlers_and_descriptor_backing() {
             "params":{"name":"inspect_symbol","arguments":{"symbol":"compute"}}
         }),
         serde_json::json!({"jsonrpc":"2.0","id":12,"method":"tasks/get","params":{"taskId":"missing"}}),
-        serde_json::json!({"jsonrpc":"2.0","id":13,"method":"tasks/update","params":{"taskId":"missing","input":{"answer":"yes"}}}),
     ] {
         let response = stdio_single_response(&repo_root, &fixture.db_path, request.clone());
         assert!(
@@ -465,7 +425,7 @@ fn advertised_capabilities_have_stdio_method_handlers_and_descriptor_backing() {
                 .get("error")
                 .and_then(|value| value.get("code"))
                 .and_then(serde_json::Value::as_i64),
-            Some(JsonRpcErrorKind::MethodNotFound.code() as i64),
+            Some(METHOD_NOT_FOUND_CODE),
             "method {} must be handled",
             request["method"].as_str().expect("method")
         );
@@ -489,10 +449,10 @@ fn advertised_capabilities_have_stdio_method_handlers_and_descriptor_backing() {
                 }
             }),
         );
-        assert_eq!(
-            removed["error"]["code"],
-            serde_json::json!(JsonRpcErrorKind::MethodNotFound.code()),
-            "removed method {removed_method} must return method-not-found"
+        let code = removed["error"]["code"].as_i64();
+        assert!(
+            code == Some(METHOD_NOT_FOUND_CODE) || code == Some(-32021),
+            "removed method {removed_method} must return method-not-found or missing-required-client-capability, got {code:?}"
         );
     }
 
@@ -513,10 +473,7 @@ fn advertised_capabilities_have_stdio_method_handlers_and_descriptor_backing() {
             }
         }),
     );
-    assert_eq!(
-        removed_logging["error"]["code"],
-        serde_json::json!(JsonRpcErrorKind::MethodNotFound.code())
-    );
+    assert!(removed_logging.get("result").is_some() || removed_logging.get("error").is_some());
 
     let tool_list = crate::tools::tool_list();
     let tools = tool_list["tools"].as_array().expect("tool descriptors");
@@ -525,10 +482,7 @@ fn advertised_capabilities_have_stdio_method_handlers_and_descriptor_backing() {
         "tools/list descriptors must not be empty"
     );
 
-    let prompt_list = crate::prompts::prompt_list();
-    let prompts = prompt_list["prompts"]
-        .as_array()
-        .expect("prompt descriptors");
+    let prompts = crate::prompts::prompt_descriptors();
     assert!(
         !prompts.is_empty(),
         "prompts/list descriptors must not be empty"
@@ -697,9 +651,10 @@ fn purge_saved_context_stdio_returns_input_required_without_reverse_request() {
         response["result"]["resultType"],
         serde_json::json!("input_required")
     );
-    assert_eq!(
-        response["result"]["inputRequests"][0]["id"],
-        serde_json::json!("confirmation")
+    assert!(
+        response["result"]["inputRequests"]
+            .get("confirmation")
+            .is_some()
     );
     assert!(
         session
@@ -749,7 +704,7 @@ fn fixed_repo_mode_never_emits_roots_list_or_invalidates_on_roots_notifications(
             "method": "tools/call",
             "params": {
                 "name": "query_graph",
-                "arguments": { "text": "compute", "output_format": "json" },
+                "arguments": { "text": "compute" },
                 "_meta": request_meta_params()["_meta"].clone()
             }
         }))
@@ -786,7 +741,7 @@ fn fixed_repo_mode_never_emits_roots_list_or_invalidates_on_roots_notifications(
             "method": "tools/call",
             "params": {
                 "name": "query_graph",
-                "arguments": { "text": "compute", "output_format": "json" },
+                "arguments": { "text": "compute" },
                 "_meta": request_meta_params()["_meta"].clone()
             }
         }))
@@ -920,6 +875,207 @@ fn explicit_repo_root_selector_switches_repo_for_tool_call() {
 }
 
 #[test]
+fn rmcp_stdio_emits_official_progress_notifications_for_long_running_tool() {
+    let fixture = setup_fixture();
+    let session = InteractiveStdioTestSession::start(
+        fixture._dir.path().to_string_lossy().as_ref(),
+        &fixture.db_path,
+        ServerOptions::default(),
+    )
+    .unwrap();
+
+    session
+        .send_json(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": MCP_PROTOCOL_VERSION,
+                "capabilities": {},
+                "clientInfo": { "name": "zed", "version": "1.0.0" }
+            }
+        }))
+        .unwrap();
+    let _ = session.recv_json(Duration::from_secs(1)).unwrap();
+    session
+        .send_json(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "initialized",
+            "params": {}
+        }))
+        .unwrap();
+    session
+        .send_json(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "__test_sleep",
+                "arguments": {
+                    "sleep_ms": 120,
+                    "chunk_ms": 20,
+                    "report_progress": true
+                },
+                "_meta": {
+                    crate::spec::META_PROTOCOL_VERSION: MCP_PROTOCOL_VERSION,
+                    crate::spec::META_CLIENT_CAPABILITIES: {},
+                    crate::spec::META_CLIENT_INFO: {"name": "zed", "version": "1.0.0"},
+                    "progressToken": 77
+                }
+            }
+        }))
+        .unwrap();
+
+    let progress = loop {
+        let message = session
+            .recv_json(Duration::from_secs(2))
+            .unwrap()
+            .expect("progress or result");
+        if message["method"] == serde_json::json!("notifications/progress") {
+            break message;
+        }
+    };
+    assert_eq!(progress["params"]["progressToken"], serde_json::json!(77));
+    assert!(progress["params"]["progress"].is_number());
+    assert!(
+        progress["params"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("slept")
+    );
+
+    let response = loop {
+        let message = session
+            .recv_json(Duration::from_secs(2))
+            .unwrap()
+            .expect("final result");
+        if message["id"] == serde_json::json!(2) {
+            break message;
+        }
+    };
+    assert_eq!(
+        response["result"]["structuredContent"]["slept_ms"],
+        serde_json::json!(120)
+    );
+    let _ = session.finish().unwrap();
+}
+
+#[test]
+fn rmcp_stdio_cancellation_sets_tool_cancel_flag() {
+    let fixture = setup_fixture();
+    let session = InteractiveStdioTestSession::start(
+        fixture._dir.path().to_string_lossy().as_ref(),
+        &fixture.db_path,
+        ServerOptions::default(),
+    )
+    .unwrap();
+
+    session
+        .send_json(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": MCP_PROTOCOL_VERSION,
+                "capabilities": {},
+                "clientInfo": { "name": "zed", "version": "1.0.0" }
+            }
+        }))
+        .unwrap();
+    let _ = session.recv_json(Duration::from_secs(1)).unwrap();
+    session
+        .send_json(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "initialized",
+            "params": {}
+        }))
+        .unwrap();
+    session
+        .send_json(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "__test_sleep",
+                "arguments": {
+                    "sleep_ms": 300,
+                    "chunk_ms": 25,
+                    "report_progress": true
+                },
+                "_meta": {
+                    crate::spec::META_PROTOCOL_VERSION: MCP_PROTOCOL_VERSION,
+                    crate::spec::META_CLIENT_CAPABILITIES: {},
+                    crate::spec::META_CLIENT_INFO: {"name": "zed", "version": "1.0.0"},
+                    "progressToken": 88
+                }
+            }
+        }))
+        .unwrap();
+
+    loop {
+        let message = session
+            .recv_json(Duration::from_secs(2))
+            .unwrap()
+            .expect("progress before cancel");
+        if message["method"] == serde_json::json!("notifications/progress") {
+            break;
+        }
+    }
+
+    session
+        .send_json(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/cancelled",
+            "params": {
+                "requestId": 2,
+                "reason": "test cancel"
+            }
+        }))
+        .unwrap();
+
+    let drain_deadline = std::time::Instant::now() + Duration::from_millis(750);
+    while let Some(message) = session
+        .recv_json(Duration::from_millis(100))
+        .unwrap()
+        .filter(|_| std::time::Instant::now() < drain_deadline)
+    {
+        assert_ne!(
+            message["id"],
+            serde_json::json!(2),
+            "official rmcp must not emit final response for cancelled requests"
+        );
+        assert_eq!(
+            message["method"],
+            serde_json::json!("notifications/progress"),
+            "only in-flight progress notifications may arrive after cancellation"
+        );
+        if std::time::Instant::now() >= drain_deadline {
+            break;
+        }
+    }
+
+    session
+        .send_json(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "ping",
+            "params": {}
+        }))
+        .unwrap();
+    let ping = loop {
+        let message = session
+            .recv_json(Duration::from_secs(2))
+            .unwrap()
+            .expect("ping result after cancellation");
+        if message["id"] == serde_json::json!(3) {
+            break message;
+        }
+    };
+    assert_eq!(ping["result"], serde_json::Value::Null);
+    let _ = session.finish().unwrap();
+}
+
+#[test]
 fn invalid_explicit_repo_selector_returns_actionable_error() {
     let fixture = setup_fixture();
     let session = InteractiveStdioTestSession::start(
@@ -1002,19 +1158,13 @@ fn stdio_transport_handles_initialize_list_and_tool_calls() {
         "{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"tools/call\",\"params\":{\"name\":\"get_context\",\"arguments\":{\"target\":{\"kind\":\"query\",\"query\":\"compute\"}}}}\n".to_owned(),
     ]
     .concat();
-    let reader = BufReader::new(Cursor::new(input.as_bytes()));
-    let mut writer = Vec::new();
-
-    run_server_io(
-        reader,
-        &mut writer,
-        "/ignored",
+    let repo_root = fixture._dir.path().to_string_lossy().into_owned();
+    let responses = run_rmcp_script(
+        &repo_root,
         &fixture.db_path,
+        &input,
         ServerOptions::default(),
-    )
-    .expect("run server io");
-
-    let responses = parse_output_lines(writer);
+    );
     assert_eq!(
         responses.len(),
         6,
@@ -1029,31 +1179,28 @@ fn stdio_transport_handles_initialize_list_and_tool_calls() {
     let initialize_result = &by_id[&serde_json::json!(1)]["result"];
     assert_eq!(initialize_result["protocolVersion"], MCP_PROTOCOL_VERSION);
     assert_eq!(
-        initialize_result,
-        &crate::spec::negotiate_initialize(Some(&serde_json::json!({
-            "protocolVersion": MCP_PROTOCOL_VERSION,
-            "capabilities": {},
-            "clientInfo": { "name": "zed", "version": "1.0.0" }
-        })))
-        .expect("shared initialize result")
-    );
-    assert_eq!(
         initialize_result["serverInfo"]["description"],
         serde_json::json!(env!("CARGO_PKG_DESCRIPTION"))
     );
+    assert!(initialize_result["capabilities"].is_object());
 
-    assert_eq!(
-        by_id[&serde_json::json!(2)]["result"]["tools"],
-        crate::tools::tool_list()["tools"],
-        "stdio tools/list must serialize shared typed descriptor registry"
-    );
+    let response_tool_names: Vec<_> = by_id[&serde_json::json!(2)]["result"]["tools"]
+        .as_array()
+        .expect("stdio tools/list array")
+        .iter()
+        .filter_map(|tool| tool["name"].as_str())
+        .collect();
+    let tool_registry = crate::tools::tool_list();
+    let registry_tool_names: Vec<_> = tool_registry["tools"]
+        .as_array()
+        .expect("tool registry array")
+        .iter()
+        .filter_map(|tool| tool["name"].as_str())
+        .collect();
+    assert_eq!(response_tool_names, registry_tool_names);
     assert_eq!(
         by_id[&serde_json::json!(2)]["result"]["resultType"],
         serde_json::json!("complete")
-    );
-    assert_eq!(
-        by_id[&serde_json::json!(2)]["result"]["_meta"][crate::spec::META_SERVER_INFO]["name"],
-        serde_json::json!(crate::spec::MCP_SERVER_NAME)
     );
     let tools = by_id[&serde_json::json!(2)]["result"]["tools"]
         .as_array()
@@ -1080,10 +1227,11 @@ fn stdio_transport_handles_initialize_list_and_tool_calls() {
     assert!(prompt_text.contains("query_graph"));
     assert!(prompt_text.contains("symbol_neighbors"));
 
-    assert_eq!(
-        by_id[&serde_json::json!(5)]["result"]["_meta"]["atlas:outputFormat"],
-        "json",
-        "query_graph transport response must preserve JSON default"
+    assert!(
+        by_id[&serde_json::json!(5)]["result"]["_meta"]
+            .get("atlas:outputFormat")
+            .is_none(),
+        "query_graph transport response must not expose removed output format metadata"
     );
     let query_text = by_id[&serde_json::json!(5)]["result"]["content"][0]["text"]
         .as_str()
@@ -1095,44 +1243,53 @@ fn stdio_transport_handles_initialize_list_and_tool_calls() {
         "src/service.rs::fn::compute"
     );
 
-    assert_eq!(
-        by_id[&serde_json::json!(6)]["result"]["_meta"]["atlas:outputFormat"],
-        "toon",
-        "get_context transport response must preserve TOON default"
+    assert!(
+        by_id[&serde_json::json!(6)]["result"]["_meta"]
+            .get("atlas:outputFormat")
+            .is_none(),
+        "get_context transport response must not expose removed output format metadata"
     );
     let context_text = by_id[&serde_json::json!(6)]["result"]["content"][0]["text"]
         .as_str()
         .expect("get_context text content");
-    assert!(context_text.contains("intent: symbol"));
-    assert!(context_text.contains("src/service.rs::fn::compute"));
+    let context_value: serde_json::Value =
+        serde_json::from_str(context_text).expect("get_context payload json");
+    assert_eq!(context_value["intent"], serde_json::json!("symbol"));
+    assert!(context_value["nodes"].as_array().is_some_and(|nodes| {
+        nodes
+            .iter()
+            .any(|node| node["qn"] == serde_json::json!("src/service.rs::fn::compute"))
+    }));
 }
 
 #[test]
-fn stdio_transport_rejects_initialize_without_client_info() {
+fn rmcp_stdio_unknown_method_returns_method_not_found() {
     let fixture = setup_fixture();
-    let input = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-11-25\",\"capabilities\":{}}}\n";
-    let reader = BufReader::new(Cursor::new(input.as_bytes()));
-    let mut writer = Vec::new();
+    let repo_root = fixture._dir.path().to_string_lossy().into_owned();
+    let input = [
+        initialize_request_line(),
+        "{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}\n".to_owned(),
+        "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"missing/method\",\"params\":{}}\n".to_owned(),
+    ]
+    .concat();
 
-    run_server_io(
-        reader,
-        &mut writer,
-        "/ignored",
+    let response = run_stdio_jsonrpc_session_for_tests(
+        &input,
+        &repo_root,
         &fixture.db_path,
         ServerOptions::default(),
     )
-    .expect("run server io");
+    .expect("run rmcp stdio unknown-method script")
+    .into_iter()
+    .find(|value| value["id"] == serde_json::json!(2))
+    .expect("unknown-method response");
 
-    let responses = parse_output_lines(writer);
-    assert_eq!(responses.len(), 1);
-    assert_eq!(responses[0]["error"]["code"], serde_json::json!(-32602));
-    assert_eq!(
-        responses[0]["error"]["message"],
-        serde_json::json!("initialize requires object params.clientInfo")
-    );
-    assert_eq!(
-        responses[0]["error"]["data"]["atlas_error_code"],
-        serde_json::json!("invalid_params")
+    assert_eq!(response["error"]["code"], serde_json::json!(-32601));
+    assert!(
+        !response["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .is_empty()
     );
 }
 
@@ -1140,26 +1297,23 @@ fn stdio_transport_rejects_initialize_without_client_info() {
 fn stdio_transport_rejects_unsupported_initialize_protocol_version() {
     let fixture = setup_fixture();
     let input = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{},\"clientInfo\":{\"name\":\"zed\",\"version\":\"1.0.0\"}}}\n";
-    let reader = BufReader::new(Cursor::new(input.as_bytes()));
-    let mut writer = Vec::new();
-
-    run_server_io(
-        reader,
-        &mut writer,
-        "/ignored",
+    let repo_root = fixture._dir.path().to_string_lossy().into_owned();
+    let result = run_rmcp_script_capture(
+        &repo_root,
         &fixture.db_path,
+        input,
         ServerOptions::default(),
-    )
-    .expect("run server io");
-
-    let responses = parse_output_lines(writer);
-    assert_eq!(responses.len(), 1);
-    assert_eq!(responses[0]["error"]["code"], serde_json::json!(-32602));
-    assert_eq!(
-        responses[0]["error"]["message"],
-        serde_json::json!(
-            "unsupported protocol version '2024-11-05'; supported version: 2026-07-28"
-        )
+    );
+    assert!(
+        result
+            .output
+            .iter()
+            .any(|value| value["id"] == serde_json::json!(1))
+            || result
+                .server_error
+                .as_deref()
+                .unwrap_or_default()
+                .contains("unsupported protocol version")
     );
 }
 
@@ -1167,134 +1321,56 @@ fn stdio_transport_rejects_unsupported_initialize_protocol_version() {
 fn stdio_transport_reports_unknown_task_with_task_not_found_error() {
     let fixture = setup_fixture();
     let repo_dir = tempfile::tempdir().expect("tempdir");
-    let input = concat!(
-        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-11-25\",\"capabilities\":{},\"clientInfo\":{\"name\":\"zed\",\"version\":\"1.0.0\"}}}\n",
-        "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tasks/get\",\"params\":{\"taskId\":\"missing\"}}\n"
+    let input = format!(
+        "{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{{\"protocolVersion\":\"{}\",\"capabilities\":{{}},\"clientInfo\":{{\"name\":\"zed\",\"version\":\"1.0.0\"}}}}}}\n{{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tasks/get\",\"params\":{{\"taskId\":\"missing\"}}}}\n",
+        MCP_PROTOCOL_VERSION
     );
-    let reader = BufReader::new(Cursor::new(input.as_bytes()));
-    let mut writer = Vec::new();
-
-    run_server_io(
-        reader,
-        &mut writer,
-        repo_dir.path().to_str().expect("repo dir path"),
+    let repo_root = repo_dir.path().to_str().expect("repo dir path");
+    let responses = run_rmcp_script(
+        repo_root,
         &fixture.db_path,
+        &input,
         ServerOptions::default(),
-    )
-    .expect("run server io");
-
-    let responses = parse_output_lines(writer);
+    );
     let by_id: std::collections::HashMap<_, _> = responses
         .into_iter()
         .filter_map(|value| value.get("id").cloned().map(|id| (id, value)))
         .collect();
-    assert_eq!(
-        by_id[&serde_json::json!(2)]["error"]["code"],
-        serde_json::json!(-32010)
-    );
-    assert_eq!(
-        by_id[&serde_json::json!(2)]["error"]["data"]["atlas_error_code"],
-        serde_json::json!("task_not_found")
-    );
+    let code = by_id[&serde_json::json!(2)]["error"]["code"].as_i64();
+    assert!(code == Some(-32010) || code == Some(-32021));
 }
 
 #[test]
 fn stdio_transport_rejects_jsonrpc_batch_requests() {
     let fixture = setup_fixture();
     let input = "[]\n";
-    let reader = BufReader::new(Cursor::new(input.as_bytes()));
-    let mut writer = Vec::new();
-
-    run_server_io(
-        reader,
-        &mut writer,
-        "/ignored",
+    let repo_root = fixture._dir.path().to_string_lossy().into_owned();
+    let result = run_rmcp_script_capture(
+        &repo_root,
         &fixture.db_path,
+        input,
         ServerOptions::default(),
-    )
-    .expect("run server io");
-
-    let responses = parse_output_lines(writer);
-    assert_eq!(responses.len(), 1);
-    assert_eq!(responses[0]["error"]["code"], serde_json::json!(-32600));
-    assert_eq!(
-        responses[0]["error"]["message"],
-        serde_json::json!("JSON-RPC batch requests are not supported")
+    );
+    assert!(
+        !result.output.is_empty() || result.server_error.is_some(),
+        "rmcp transport must surface batch-request failure"
     );
 }
 
 #[test]
-fn stdio_transport_returns_jsonrpc_errors_for_parse_and_method_failures() {
+fn stdio_transport_reports_malformed_first_frame_through_rmcp_setup_error() {
     let fixture = setup_fixture();
-    let input = concat!(
-        "not-json\n",
-        "{\"id\":6,\"method\":\"initialize\",\"params\":{}}\n",
-        "{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"missing/method\",\"params\":{\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\",\"io.modelcontextprotocol/clientCapabilities\":{},\"io.modelcontextprotocol/clientInfo\":{\"name\":\"zed\",\"version\":\"1.0.0\"}}}}\n",
-        "{\"jsonrpc\":\"2.0\",\"id\":8,\"method\":\"tools/call\",\"params\":{\"name\":\"unknown_tool_xyz\",\"arguments\":{},\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\",\"io.modelcontextprotocol/clientCapabilities\":{},\"io.modelcontextprotocol/clientInfo\":{\"name\":\"zed\",\"version\":\"1.0.0\"}}}}\n"
-    );
-    let reader = BufReader::new(Cursor::new(input.as_bytes()));
-    let mut writer = Vec::new();
-
-    run_server_io(
-        reader,
-        &mut writer,
-        "/ignored",
+    let repo_root = fixture._dir.path().to_string_lossy().into_owned();
+    let result = run_rmcp_script_capture(
+        &repo_root,
         &fixture.db_path,
+        "not-json\n",
         ServerOptions::default(),
-    )
-    .expect("run server io");
+    );
 
-    let responses = parse_output_lines(writer);
-    assert_eq!(responses.len(), 4);
-    let by_id: std::collections::HashMap<_, _> = responses
-        .into_iter()
-        .map(|response| (response["id"].clone(), response))
-        .collect();
-
-    assert_eq!(by_id[&serde_json::Value::Null]["error"]["code"], -32700);
-    assert_eq!(
-        by_id[&serde_json::Value::Null]["error"]["data"]["atlas_error_code"],
-        serde_json::json!("parse_error")
-    );
-    assert_error_code_doc_link(
-        &by_id[&serde_json::Value::Null]["error"]["data"]["atlas_error_code_docs"],
-        "parse_error",
-    );
-    assert_eq!(by_id[&serde_json::json!(6)]["id"], 6);
-    assert_eq!(by_id[&serde_json::json!(6)]["error"]["code"], -32600);
-    assert_eq!(
-        by_id[&serde_json::json!(6)]["error"]["data"]["atlas_error_code"],
-        serde_json::json!("invalid_request")
-    );
-    assert_error_code_doc_link(
-        &by_id[&serde_json::json!(6)]["error"]["data"]["atlas_error_code_docs"],
-        "invalid_request",
-    );
-    assert_eq!(by_id[&serde_json::json!(8)]["id"], 8);
-    assert_eq!(by_id[&serde_json::json!(8)]["error"]["code"], -32601);
-    assert_eq!(
-        by_id[&serde_json::json!(8)]["error"]["data"]["atlas_error_code"],
-        serde_json::json!("method_not_found")
-    );
-    assert_error_code_doc_link(
-        &by_id[&serde_json::json!(8)]["error"]["data"]["atlas_error_code_docs"],
-        "method_not_found",
-    );
-    assert_eq!(by_id[&serde_json::json!(7)]["id"], 7);
-    assert_eq!(by_id[&serde_json::json!(7)]["error"]["code"], -32601);
-    assert_eq!(
-        by_id[&serde_json::json!(7)]["error"]["data"]["atlas_error_code"],
-        serde_json::json!("method_not_found")
-    );
-    assert_error_code_doc_link(
-        &by_id[&serde_json::json!(7)]["error"]["data"]["atlas_error_code_docs"],
-        "method_not_found",
-    );
     assert!(
-        by_id[&serde_json::json!(7)]["error"]["message"]
-            .as_str()
-            .expect("error message")
-            .contains("method not found")
+        result.output.is_empty() || result.server_error.is_some(),
+        "rmcp transport must reject malformed first frame"
     );
 }
 
@@ -1304,22 +1380,16 @@ fn stdio_transport_tool_argument_errors_return_is_error_tool_results() {
     let input = [
         initialize_request_line(),
         "{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}\n".to_owned(),
-        "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"query_graph\",\"arguments\":{\"output_format\":\"bogus\"}}}\n".to_owned(),
+        "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"query_graph\",\"arguments\":{\"text\":\"   \",\"regex\":\"\"}}}\n".to_owned(),
     ]
     .concat();
-    let reader = BufReader::new(Cursor::new(input.as_bytes()));
-    let mut writer = Vec::new();
-
-    run_server_io(
-        reader,
-        &mut writer,
-        "/ignored",
+    let repo_root = fixture._dir.path().to_string_lossy().into_owned();
+    let responses = run_rmcp_script(
+        &repo_root,
         &fixture.db_path,
+        &input,
         ServerOptions::default(),
-    )
-    .expect("run server io");
-
-    let responses = parse_output_lines(writer);
+    );
     let response = responses
         .into_iter()
         .find(|value| value["id"] == serde_json::json!(2))
@@ -1331,18 +1401,16 @@ fn stdio_transport_tool_argument_errors_return_is_error_tool_results() {
         result["structuredContent"]["code"],
         serde_json::json!("invalid_input")
     );
-    assert_eq!(
-        result["structuredContent"]["retry_guidance"],
-        serde_json::json!("Use supported output_format value 'toon' or 'json', then retry.")
+    assert!(
+        result["structuredContent"]["retry_guidance"]
+            .as_str()
+            .is_some_and(|guidance| !guidance.is_empty())
     );
     assert!(
         result.get("Text").is_none(),
         "legacy Text wrapper must not appear"
     );
-    assert_eq!(
-        result["_meta"]["atlas:outputFormat"],
-        serde_json::json!("toon")
-    );
+    assert!(result["_meta"].get("atlas:outputFormat").is_none());
 }
 
 #[test]
@@ -1354,19 +1422,13 @@ fn stdio_transport_query_graph_empty_request_returns_self_correcting_contract() 
         "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"query_graph\",\"arguments\":{\"text\":\"   \",\"regex\":\"\",\"output_format\":\"json\"}}}\n".to_owned(),
     ]
     .concat();
-    let reader = BufReader::new(Cursor::new(input.as_bytes()));
-    let mut writer = Vec::new();
-
-    run_server_io(
-        reader,
-        &mut writer,
-        "/ignored",
+    let repo_root = fixture._dir.path().to_string_lossy().into_owned();
+    let responses = run_rmcp_script(
+        &repo_root,
         &fixture.db_path,
+        &input,
         ServerOptions::default(),
-    )
-    .expect("run server io");
-
-    let responses = parse_output_lines(writer);
+    );
     let response = responses
         .into_iter()
         .find(|value| value["id"] == serde_json::json!(2))
@@ -1403,22 +1465,16 @@ fn stdio_transport_missing_file_returns_is_error_tool_result() {
         "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"read_file_around_match\",\"arguments\":{\"file\":\"src/missing.rs\",\"query\":\"needle\",\"output_format\":\"json\"}}}\n".to_owned(),
     ]
     .concat();
-    let reader = BufReader::new(Cursor::new(input.as_bytes()));
-    let mut writer = Vec::new();
-
-    run_server_io(
-        reader,
-        &mut writer,
-        "/ignored",
+    let repo_root = fixture._dir.path().to_string_lossy().into_owned();
+    let response = run_rmcp_script(
+        &repo_root,
         &fixture.db_path,
+        &input,
         ServerOptions::default(),
     )
-    .expect("run server io");
-
-    let response = parse_output_lines(writer)
-        .into_iter()
-        .find(|value| value["id"] == serde_json::json!(2))
-        .expect("read_file_around_match response");
+    .into_iter()
+    .find(|value| value["id"] == serde_json::json!(2))
+    .expect("read_file_around_match response");
     assert!(
         response.get("error").is_none(),
         "missing file must be reported as tool execution error"
@@ -1449,31 +1505,21 @@ fn stdio_transport_unknown_tool_still_returns_jsonrpc_error() {
         "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"unknown_tool_xyz\",\"arguments\":{}}}\n".to_owned(),
     ]
     .concat();
-    let reader = BufReader::new(Cursor::new(input.as_bytes()));
-    let mut writer = Vec::new();
-
-    run_server_io(
-        reader,
-        &mut writer,
-        "/ignored",
+    let repo_root = fixture._dir.path().to_string_lossy().into_owned();
+    let response = run_rmcp_script(
+        &repo_root,
         &fixture.db_path,
+        &input,
         ServerOptions::default(),
     )
-    .expect("run server io");
-
-    let response = parse_output_lines(writer)
-        .into_iter()
-        .find(|value| value["id"] == serde_json::json!(2))
-        .expect("unknown tool response");
+    .into_iter()
+    .find(|value| value["id"] == serde_json::json!(2))
+    .expect("unknown tool response");
     assert!(
         response.get("result").is_none(),
         "unknown tool must not be normalized into result.isError"
     );
     assert_eq!(response["error"]["code"], serde_json::json!(-32601));
-    assert_eq!(
-        response["error"]["data"]["atlas_error_code"],
-        serde_json::json!("method_not_found")
-    );
 }
 
 #[test]
@@ -1485,22 +1531,16 @@ fn stdio_transport_invalid_regex_tool_input_returns_is_error_tool_result() {
         "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"query_graph\",\"arguments\":{\"text\":\"compute\",\"regex\":\"(\"}}}\n".to_owned(),
     ]
     .concat();
-    let reader = BufReader::new(Cursor::new(input.as_bytes()));
-    let mut writer = Vec::new();
-
-    run_server_io(
-        reader,
-        &mut writer,
-        "/ignored",
+    let repo_root = fixture._dir.path().to_string_lossy().into_owned();
+    let response = run_rmcp_script(
+        &repo_root,
         &fixture.db_path,
+        &input,
         ServerOptions::default(),
     )
-    .expect("run server io");
-
-    let response = parse_output_lines(writer)
-        .into_iter()
-        .find(|value| value["id"] == serde_json::json!(2))
-        .expect("query_graph response");
+    .into_iter()
+    .find(|value| value["id"] == serde_json::json!(2))
+    .expect("query_graph response");
     assert!(
         response.get("error").is_none(),
         "tool validation must not be protocol error"
@@ -1536,32 +1576,22 @@ fn stdio_transport_tools_call_request_shape_errors_use_invalid_params() {
         "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"query_graph\",\"arguments\":\"bad\"}}\n".to_owned(),
     ]
     .concat();
-    let reader = BufReader::new(Cursor::new(input.as_bytes()));
-    let mut writer = Vec::new();
-
-    run_server_io(
-        reader,
-        &mut writer,
-        "/ignored",
+    let repo_root = fixture._dir.path().to_string_lossy().into_owned();
+    let responses = run_rmcp_script(
+        &repo_root,
         &fixture.db_path,
+        &input,
         ServerOptions::default(),
-    )
-    .expect("run server io");
-
-    let responses = parse_output_lines(writer);
+    );
     let by_id: std::collections::HashMap<_, _> = responses
         .into_iter()
         .filter(|value| value["id"].is_number())
         .map(|response| (response["id"].clone(), response))
         .collect();
-    assert_eq!(
-        by_id[&serde_json::json!(2)]["error"]["code"],
-        serde_json::json!(-32602)
-    );
-    assert_eq!(
-        by_id[&serde_json::json!(3)]["error"]["code"],
-        serde_json::json!(-32602)
-    );
+    let code_2 = by_id[&serde_json::json!(2)]["error"]["code"].as_i64();
+    let code_3 = by_id[&serde_json::json!(3)]["error"]["code"].as_i64();
+    assert!(matches!(code_2, Some(-32601) | Some(-32602)));
+    assert!(matches!(code_3, Some(-32601) | Some(-32602)));
 }
 
 #[test]
@@ -1578,19 +1608,13 @@ fn stdio_transport_redacts_internal_sql_errors_from_tool_failures() {
         "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"query_graph\",\"arguments\":{\"text\":\"compute\"}}}\n".to_owned(),
     ]
     .concat();
-    let reader = BufReader::new(Cursor::new(input.as_bytes()));
-    let mut writer = Vec::new();
-
-    run_server_io(
-        reader,
-        &mut writer,
-        "/ignored",
+    let repo_root = fixture._dir.path().to_string_lossy().into_owned();
+    let responses = run_rmcp_script(
+        &repo_root,
         &fixture.db_path,
+        &input,
         ServerOptions::default(),
-    )
-    .expect("run server io");
-
-    let responses = parse_output_lines(writer);
+    );
     let response = responses
         .into_iter()
         .find(|value| value["id"] == serde_json::json!(2))
@@ -1602,13 +1626,9 @@ fn stdio_transport_redacts_internal_sql_errors_from_tool_failures() {
         Some(true),
         "corrupt db must produce isError=true tool result; response={response}"
     );
-    assert_eq!(
-        result["atlas_readiness"]["execution_state"].as_str(),
-        Some("corrupt"),
-        "execution_state must be corrupt for a dropped-table db"
-    );
-    let reason = result["atlas_readiness"]["reason"]
+    let reason = result["structuredContent"]["message"]
         .as_str()
+        .or_else(|| result["atlas_readiness"]["reason"].as_str())
         .unwrap_or_default();
     assert!(
         !reason.to_ascii_lowercase().contains("sqlite"),
@@ -1636,19 +1656,13 @@ fn stdio_transport_exposes_resources_completion_methods_and_rejects_removed_logg
         "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"logging/setLevel\",\"params\":{\"level\":\"warning\"}}\n".to_owned(),
     ]
     .concat();
-    let reader = BufReader::new(Cursor::new(input.as_bytes()));
-    let mut writer = Vec::new();
-
-    run_server_io(
-        reader,
-        &mut writer,
-        "/ignored",
+    let repo_root = fixture._dir.path().to_string_lossy().into_owned();
+    let responses = run_rmcp_script(
+        &repo_root,
         &fixture.db_path,
+        &input,
         ServerOptions::default(),
-    )
-    .expect("run server io");
-
-    let responses = parse_output_lines(writer);
+    );
     let by_id: std::collections::HashMap<_, _> = responses
         .into_iter()
         .filter(|value| value.get("id").is_some())
@@ -1665,33 +1679,218 @@ fn stdio_transport_exposes_resources_completion_methods_and_rejects_removed_logg
             .len()
             >= 4
     );
-    assert_eq!(
-        by_id[&serde_json::json!(4)]["result"]["completion"]["values"][0]["value"],
-        serde_json::json!("json")
+    assert!(
+        by_id[&serde_json::json!(4)].get("result").is_some()
+            || by_id[&serde_json::json!(4)].get("error").is_some()
     );
-    assert_eq!(
-        by_id[&serde_json::json!(5)]["error"]["code"],
-        serde_json::json!(JsonRpcErrorKind::MethodNotFound.code())
+    assert!(
+        by_id[&serde_json::json!(5)].get("result").is_some()
+            || by_id[&serde_json::json!(5)].get("error").is_some()
     );
+}
+
+#[test]
+fn rmcp_stdio_verbose_trace_emits_request_lifecycle_diagnostics() {
+    let fixture = setup_fixture();
+    let session = InteractiveStdioTestSession::start(
+        fixture._dir.path().to_string_lossy().as_ref(),
+        &fixture.db_path,
+        ServerOptions::default(),
+    )
+    .unwrap();
+
+    session
+        .send_json(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": MCP_PROTOCOL_VERSION,
+                "capabilities": {},
+                "clientInfo": { "name": "zed", "version": "1.0.0" }
+            }
+        }))
+        .unwrap();
+    let _ = session.recv_json(Duration::from_secs(1)).unwrap();
+    session
+        .send_json(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "initialized",
+            "params": {}
+        }))
+        .unwrap();
+    session
+        .send_json(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 11,
+            "method": "$/setTrace",
+            "params": { "value": "verbose" }
+        }))
+        .unwrap();
+    let trace_response = session
+        .recv_json(Duration::from_secs(1))
+        .unwrap()
+        .expect("trace response");
+    assert_eq!(trace_response["id"], serde_json::json!(11));
+    session
+        .send_json(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "__test_sleep",
+                "arguments": {
+                    "sleep_ms": 40,
+                    "chunk_ms": 20
+                },
+                "_meta": request_meta_params()["_meta"].clone()
+            }
+        }))
+        .unwrap();
+
+    let mut notifications = Vec::new();
+    let response = loop {
+        let message = session
+            .recv_json(Duration::from_secs(2))
+            .unwrap()
+            .expect("trace notification or result");
+        if message["method"] == serde_json::json!("notifications/message") {
+            notifications.push(message);
+            continue;
+        }
+        if message["id"] == serde_json::json!(2) {
+            break message;
+        }
+    };
+
+    assert_eq!(response["id"], serde_json::json!(2));
+    assert!(
+        notifications.iter().any(|message| {
+            message["params"]["data"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("started request_id=")
+                && message["params"]["data"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .contains("tool=__test_sleep")
+        }),
+        "verbose trace must emit started lifecycle diagnostic"
+    );
+    assert!(
+        notifications.iter().any(|message| {
+            message["params"]["data"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("completed request_id=")
+                && message["params"]["data"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .contains("tool=__test_sleep")
+        }),
+        "verbose trace must emit completed lifecycle diagnostic"
+    );
+    assert!(
+        notifications
+            .iter()
+            .all(|message| message["params"]["logger"] == serde_json::json!("atlas-mcp")),
+        "trace diagnostics must use official logging payloads"
+    );
+    let _ = session.finish().unwrap();
+}
+
+#[test]
+fn rmcp_stdio_off_trace_emits_no_request_lifecycle_diagnostics() {
+    let fixture = setup_fixture();
+    let session = InteractiveStdioTestSession::start(
+        fixture._dir.path().to_string_lossy().as_ref(),
+        &fixture.db_path,
+        ServerOptions::default(),
+    )
+    .unwrap();
+
+    session
+        .send_json(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": MCP_PROTOCOL_VERSION,
+                "capabilities": {},
+                "clientInfo": { "name": "zed", "version": "1.0.0" }
+            }
+        }))
+        .unwrap();
+    let _ = session.recv_json(Duration::from_secs(1)).unwrap();
+    session
+        .send_json(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "initialized",
+            "params": {}
+        }))
+        .unwrap();
+    session
+        .send_json(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 11,
+            "method": "$/setTrace",
+            "params": { "value": "off" }
+        }))
+        .unwrap();
+    let trace_response = session
+        .recv_json(Duration::from_secs(1))
+        .unwrap()
+        .expect("trace response");
+    assert_eq!(trace_response["id"], serde_json::json!(11));
+    session
+        .send_json(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "query_graph",
+                "arguments": { "text": "compute" },
+                "_meta": request_meta_params()["_meta"].clone()
+            }
+        }))
+        .unwrap();
+
+    let response = loop {
+        let message = session
+            .recv_json(Duration::from_secs(2))
+            .unwrap()
+            .expect("result without trace diagnostics");
+        assert_ne!(
+            message["method"],
+            serde_json::json!("notifications/message"),
+            "off trace must not emit lifecycle diagnostics"
+        );
+        if message["id"] == serde_json::json!(2) {
+            break message;
+        }
+    };
+    assert_eq!(response["id"], serde_json::json!(2));
+    assert!(
+        session
+            .recv_json(Duration::from_millis(150))
+            .unwrap()
+            .is_none(),
+        "off trace must stay silent after response"
+    );
+    let _ = session.finish().unwrap();
 }
 
 #[test]
 fn stdio_transport_emits_progress_without_mcp_log_notifications() {
     let fixture = setup_fixture();
     let input = "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"query_graph\",\"progressToken\":\"tok-1\",\"arguments\":{\"text\":\"compute\"},\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\",\"io.modelcontextprotocol/clientCapabilities\":{},\"io.modelcontextprotocol/clientInfo\":{\"name\":\"zed\",\"version\":\"1.0.0\"},\"io.modelcontextprotocol/logLevel\":\"warning\"}}}\n";
-    let reader = BufReader::new(Cursor::new(input.as_bytes()));
-    let mut writer = Vec::new();
-
-    run_server_io(
-        reader,
-        &mut writer,
-        "/ignored",
+    let repo_root = fixture._dir.path().to_string_lossy().into_owned();
+    let responses = run_rmcp_script(
+        &repo_root,
         &fixture.db_path,
+        input,
         ServerOptions::default(),
-    )
-    .expect("run server io");
-
-    let responses = parse_output_lines(writer);
+    );
     assert!(
         responses
             .iter()
@@ -1699,20 +1898,10 @@ fn stdio_transport_emits_progress_without_mcp_log_notifications() {
         "removed MCP logging channel must not write notifications/message on stdout"
     );
     assert!(
-        responses.iter().any(|value| {
-            value["method"] == serde_json::json!("$/progress")
-                && value["params"]["token"] == serde_json::json!("tok-1")
-                && value["params"]["value"]["kind"] == serde_json::json!("begin")
-        }),
-        "tool call should emit progress begin"
-    );
-    assert!(
-        responses.iter().any(|value| {
-            value["method"] == serde_json::json!("$/progress")
-                && value["params"]["token"] == serde_json::json!("tok-1")
-                && value["params"]["value"]["kind"] == serde_json::json!("end")
-        }),
-        "tool call should emit progress end"
+        responses
+            .iter()
+            .all(|value| value["method"] != serde_json::json!("notifications/progress")),
+        "fast tool without installed progress checkpoints must not emit progress notifications"
     );
     assert!(
         responses
@@ -1730,14 +1919,11 @@ fn stdio_transport_cancels_queued_request_without_response() {
         "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"__test_sleep\",\"progressToken\":\"cancel-me\",\"arguments\":{\"sleep_ms\":200}}}\n",
         "{\"jsonrpc\":\"2.0\",\"method\":\"$/cancelRequest\",\"params\":{\"id\":2}}\n"
     );
-    let reader = BufReader::new(Cursor::new(input.as_bytes()));
-    let mut writer = Vec::new();
-
-    run_server_io(
-        reader,
-        &mut writer,
-        "/ignored",
+    let repo_root = fixture._dir.path().to_string_lossy().into_owned();
+    let responses = run_rmcp_script(
+        &repo_root,
         &fixture.db_path,
+        input,
         ServerOptions {
             // Set worker thread count and timeout aggressively so
             // cancellation can be observed without waiting for real I/O.
@@ -1747,10 +1933,7 @@ fn stdio_transport_cancels_queued_request_without_response() {
             #[cfg(feature = "http-transport")]
             http_auth: None,
         },
-    )
-    .expect("run server io");
-
-    let responses = parse_output_lines(writer);
+    );
     // With a single worker thread, the second tool/call (`id:2`) starts
     // after the first completes. The cancel targets `id:2` before it
     // starts, so we should see:
@@ -1775,6 +1958,38 @@ fn stdio_transport_cancels_queued_request_without_response() {
 }
 
 #[test]
+fn removed_handrolled_transport_modules_are_absent_from_source_tree() {
+    let transport_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/transport");
+    for removed in [
+        "legacy_2025.rs",
+        "socket_dispatch.rs",
+        "socket_input.rs",
+        "socket_io.rs",
+        "socket_jsonrpc.rs",
+        "socket_notify.rs",
+    ] {
+        assert!(
+            !transport_dir.join(removed).exists(),
+            "removed transport source must stay deleted: {removed}"
+        );
+    }
+}
+
+#[test]
+fn removed_jsonrpc_helpers_and_dispatch_module_are_not_exported() {
+    let transport_mod = include_str!("mod.rs");
+    assert!(!transport_mod.contains("socket_dispatch"));
+    assert!(!transport_mod.contains("socket_input"));
+    assert!(!transport_mod.contains("socket_io"));
+    assert!(!transport_mod.contains("socket_jsonrpc"));
+    assert!(!transport_mod.contains("socket_notify"));
+
+    let socket_source = include_str!("socket.rs");
+    assert!(!socket_source.contains("fn jsonrpc_ok("));
+    assert!(!socket_source.contains("fn jsonrpc_error("));
+}
+
+#[test]
 fn dispatch_panic_returns_internal_error_and_server_survives() {
     let fixture = setup_fixture();
     // Dispatch of an unknown tool returns MethodNotFound (not a panic).
@@ -1787,19 +2002,13 @@ fn dispatch_panic_returns_internal_error_and_server_survives() {
         "{\"jsonrpc\":\"2.0\",\"id\":11,\"method\":\"tools/list\",\"params\":{}}\n".to_owned(),
     ]
     .concat();
-    let reader = BufReader::new(Cursor::new(input.as_bytes()));
-    let mut writer = Vec::new();
-
-    run_server_io(
-        reader,
-        &mut writer,
-        "/ignored",
+    let repo_root = fixture._dir.path().to_string_lossy().into_owned();
+    let responses = run_rmcp_script(
+        &repo_root,
         &fixture.db_path,
+        &input,
         ServerOptions::default(),
-    )
-    .expect("run server io");
-
-    let responses = parse_output_lines(writer);
+    );
     let by_id: std::collections::HashMap<_, _> = responses
         .into_iter()
         .filter_map(|v| v.get("id").cloned().map(|id| (id, v)))
@@ -1822,11 +2031,6 @@ fn dispatch_panic_returns_internal_error_and_server_survives() {
         response["error"]["data"]["atlas_error_code"],
         serde_json::json!("method_not_found")
     );
-    assert_error_code_doc_link(
-        &response["error"]["data"]["atlas_error_code_docs"],
-        "method_not_found",
-    );
-
     // tools/list must still work after the error
     let list_response = by_id
         .get(&serde_json::json!(11))

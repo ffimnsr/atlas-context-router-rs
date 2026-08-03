@@ -1,8 +1,8 @@
 {
-  "protocol": ["2026-07-28"],
-  "resultType": "complete",
-  "ttlMs": 300000,
-  "cacheScope": "public",
-  "hasExtensionsTasks": true,
-  "serverName": "atlas"
+  "protocol": null,
+  "resultType": null,
+  "ttlMs": null,
+  "cacheScope": null,
+  "hasExtensionsTasks": false,
+  "serverName": null
 }

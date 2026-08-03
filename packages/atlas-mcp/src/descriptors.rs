@@ -1,115 +1,20 @@
 use anyhow::{Result, bail};
 use regex::Regex;
-use serde::{Deserialize, Serialize};
+use rmcp::model::{
+    Icon, Prompt, PromptArgument, Resource, ResourceTemplate, Tool, ToolAnnotations,
+};
 use serde_json::{Map, Value, json};
 use std::sync::OnceLock;
 
 pub(crate) const JSON_SCHEMA_2020_12_URI: &str = "https://json-schema.org/draft/2020-12/schema";
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct ToolRegistry {
-    pub(crate) tools: Vec<ToolDescriptor>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct ToolDescriptor {
-    pub(crate) name: String,
-    pub(crate) title: String,
-    pub(crate) description: String,
-    #[serde(rename = "inputSchema")]
-    pub(crate) input_schema: Value,
-    #[serde(rename = "outputSchema", skip_serializing_if = "Option::is_none")]
-    pub(crate) output_schema: Option<Value>,
-    pub(crate) annotations: ToolAnnotations,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub(crate) icons: Vec<IconDescriptor>,
-    #[serde(rename = "_meta")]
-    pub(crate) meta: Value,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct PromptRegistry {
-    pub(crate) prompts: Vec<PromptDescriptor>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct PromptDescriptor {
-    pub(crate) name: String,
-    pub(crate) title: String,
-    pub(crate) description: String,
-    pub(crate) arguments: Vec<PromptArgumentDescriptor>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub(crate) icons: Vec<IconDescriptor>,
-    #[serde(rename = "_meta")]
-    pub(crate) meta: Value,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct PromptArgumentDescriptor {
-    pub(crate) name: String,
-    pub(crate) description: String,
-    pub(crate) required: bool,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct ResourceDescriptor {
-    pub(crate) uri: String,
-    pub(crate) name: String,
-    pub(crate) title: String,
-    pub(crate) description: String,
-    pub(crate) mime_type: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub(crate) icons: Vec<IconDescriptor>,
-    #[serde(rename = "_meta")]
-    pub(crate) meta: Value,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct ResourceTemplateDescriptor {
-    pub(crate) uri_template: String,
-    pub(crate) name: String,
-    pub(crate) title: String,
-    pub(crate) description: String,
-    pub(crate) mime_type: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub(crate) icons: Vec<IconDescriptor>,
-    #[serde(rename = "_meta")]
-    pub(crate) meta: Value,
-}
-
-#[allow(dead_code)]
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct CompletionDescriptor {
-    pub(crate) name: String,
-    pub(crate) title: String,
-    pub(crate) description: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub(crate) icons: Vec<IconDescriptor>,
-    #[serde(rename = "_meta")]
-    pub(crate) meta: Value,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct ToolAnnotations {
-    #[serde(rename = "readOnlyHint")]
-    pub(crate) read_only_hint: bool,
-    #[serde(rename = "stateChangingHint")]
-    pub(crate) state_changing_hint: bool,
-    #[serde(rename = "destructiveHint")]
-    pub(crate) destructive_hint: bool,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct IconDescriptor {
-    pub(crate) src: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) mime_type: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) sizes: Option<Vec<String>>,
-}
+pub(crate) type ToolDescriptor = Tool;
+pub(crate) type PromptDescriptor = Prompt;
+pub(crate) type PromptArgumentDescriptor = PromptArgument;
+pub(crate) type ResourceDescriptor = Resource;
+pub(crate) type ResourceTemplateDescriptor = ResourceTemplate;
+pub(crate) type IconDescriptor = Icon;
+pub(crate) type ToolDescriptorAnnotations = ToolAnnotations;
 
 pub(crate) fn validate_descriptor_name(name: &str) -> Result<()> {
     static DESCRIPTOR_NAME_RE: OnceLock<Regex> = OnceLock::new();

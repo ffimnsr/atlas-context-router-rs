@@ -13,7 +13,7 @@ use super::shared::{
     bool_arg, inject_budget_metadata, open_store, str_arg, string_array_arg, tool_result_value,
     u64_arg,
 };
-use crate::output::{OutputFormat, render_value};
+use crate::output::OutputFormat;
 use serde_json::json;
 
 fn apply_finding_limit(
@@ -30,31 +30,12 @@ fn apply_finding_limit(
 
 fn insight_report_response<T: serde::Serialize>(
     full_payload: &T,
-    compact_payload: serde_json::Value,
+    _compact_payload: serde_json::Value,
     output_format: OutputFormat,
-    verbose: bool,
+    _verbose: bool,
 ) -> Result<serde_json::Value> {
     let full_payload = serde_json::to_value(full_payload)?;
-    let mut response = tool_result_value(&full_payload, output_format)?;
-
-    if output_format != OutputFormat::Json && !verbose {
-        let rendered = render_value(&compact_payload, output_format)?;
-        response["content"][0]["text"] = json!(rendered.text);
-        response["content"][0]["mimeType"] = json!(rendered.actual_format.mime_type());
-        response["_meta"]["atlas:outputFormat"] = json!(rendered.actual_format.as_str());
-        response["_meta"]["atlas:requestedOutputFormat"] =
-            json!(rendered.requested_format.as_str());
-        if let Some(reason) = rendered.fallback_reason {
-            response["_meta"]["atlas:fallbackReason"] = json!(reason);
-        } else if let Some(meta) = response
-            .get_mut("_meta")
-            .and_then(|value| value.as_object_mut())
-        {
-            meta.remove("atlas:fallbackReason");
-        }
-    }
-
-    Ok(response)
+    tool_result_value(&full_payload, output_format)
 }
 
 pub(super) fn tool_analyze_architecture(

@@ -391,7 +391,7 @@ fn insights_large_functions_cli_and_mcp_share_report() {
         format!(
             "{}{}",
             initialized_session_prelude(1),
-            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"find_large_functions\",\"arguments\":{\"threshold\":5,\"mode\":\"large\",\"output_format\":\"json\"}}}\n"
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"find_large_functions\",\"arguments\":{\"threshold\":5,\"mode\":\"large\"}}}\n"
         ),
     );
     assert!(
@@ -433,7 +433,7 @@ fn insights_risk_cli_and_mcp_share_report() {
         format!(
             "{}{}",
             initialized_session_prelude(1),
-            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"assess_risk\",\"arguments\":{\"symbol\":\"src/lib.rs::fn::helper\",\"output_format\":\"json\"}}}\n"
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"assess_risk\",\"arguments\":{\"symbol\":\"src/lib.rs::fn::helper\"}}}\n"
         ),
     );
     assert!(output.status.success(), "atlas serve assess_risk failed");

@@ -15,8 +15,7 @@
             "required_companion_fields": ["selector.start_line", "selector.end_line"],
             "minimal_example": {
               "file": "src/lib.rs",
-              "selector": { "kind": "range", "start_line": 10, "end_line": 20 },
-              "output_format": "json"
+              "selector": { "kind": "range", "start_line": 10, "end_line": 20 }
             }
           },
           {
@@ -27,8 +26,7 @@
               "selector": {
                 "kind": "ranges",
                 "line_ranges": [{ "start_line": 10, "end_line": 20 }]
-              },
-              "output_format": "json"
+              }
             }
           },
           {
@@ -36,8 +34,7 @@
             "required_companion_fields": ["selector.line"],
             "minimal_example": {
               "file": "src/lib.rs",
-              "selector": { "kind": "context", "line": 42, "before": 2, "after": 2 },
-              "output_format": "json"
+              "selector": { "kind": "context", "line": 42, "before": 2, "after": 2 }
             }
           }
         ]

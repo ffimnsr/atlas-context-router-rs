@@ -1,4 +1,3 @@
-use anyhow::{Result, anyhow};
 use serde::Serialize;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
@@ -12,19 +11,6 @@ pub(crate) enum LogLevel {
 }
 
 impl LogLevel {
-    pub(crate) fn parse(raw: &str) -> Result<Self> {
-        match raw.trim().to_ascii_lowercase().as_str() {
-            "debug" => Ok(Self::Debug),
-            "info" => Ok(Self::Info),
-            "notice" => Ok(Self::Notice),
-            "warning" | "warn" => Ok(Self::Warning),
-            "error" => Ok(Self::Error),
-            other => Err(anyhow!(
-                "invalid logging level '{other}'; expected debug, info, notice, warning, or error"
-            )),
-        }
-    }
-
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Debug => "debug",

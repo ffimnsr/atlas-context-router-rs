@@ -14,24 +14,21 @@
             "value": "query",
             "required_companion_fields": ["target.query"],
             "minimal_example": {
-              "target": { "kind": "query", "query": "compute" },
-              "output_format": "json"
+              "target": { "kind": "query", "query": "compute" }
             }
           },
           {
             "value": "file",
             "required_companion_fields": ["target.file"],
             "minimal_example": {
-              "target": { "kind": "file", "file": "src/lib.rs" },
-              "output_format": "json"
+              "target": { "kind": "file", "file": "src/lib.rs" }
             }
           },
           {
             "value": "files",
             "required_companion_fields": ["target.files"],
             "minimal_example": {
-              "target": { "kind": "files", "files": ["src/lib.rs"] },
-              "output_format": "json"
+              "target": { "kind": "files", "files": ["src/lib.rs"] }
             }
           }
         ]

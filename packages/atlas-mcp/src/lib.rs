@@ -90,6 +90,9 @@ mod output;
 pub mod progress;
 mod prompts;
 mod resources;
+pub(crate) mod rmcp_error;
+pub(crate) mod rmcp_server;
+pub(crate) mod rmcp_types;
 mod runtime_context;
 mod session_events;
 mod session_tools;
@@ -160,12 +163,9 @@ mod tests {
             .map(str::to_owned)
             .collect::<BTreeSet<_>>();
 
-        let exported = crate::prompts::prompt_list()["prompts"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter_map(|prompt| prompt["name"].as_str())
-            .map(str::to_owned)
+        let exported = crate::prompts::prompt_descriptors()
+            .into_iter()
+            .map(|prompt| prompt.name)
             .collect::<BTreeSet<_>>();
 
         assert_eq!(documented, exported);

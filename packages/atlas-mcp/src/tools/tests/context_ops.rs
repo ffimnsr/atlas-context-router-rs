@@ -403,7 +403,7 @@ fn get_context_not_found_returns_empty_nodes() {
 }
 
 #[test]
-fn get_context_defaults_to_toon_output_format() {
+fn get_context_defaults_to_json_output() {
     let dir = tempfile::tempdir().expect("tempdir");
     let db_path = dir.path().join("atlas.db");
     let db_path = db_path.to_string_lossy().to_string();
@@ -435,12 +435,13 @@ fn get_context_defaults_to_toon_output_format() {
     let resp = call("get_context", Some(&args), "/ignored", &db_path).expect("call");
     let text = unwrap_tool_text(resp.clone());
 
-    assert_eq!(unwrap_tool_format(&resp), "toon");
-    assert!(text.contains("intent: symbol"));
+    assert_eq!(unwrap_tool_format(&resp), "json");
+    let value: serde_json::Value = serde_json::from_str(&text).expect("parse json");
+    assert_eq!(value["intent"], serde_json::json!("symbol"));
 }
 
 #[test]
-fn explicit_json_override_beats_toon_default() {
+fn explicit_json_argument_is_ignored_and_stays_json() {
     let fixture = setup_mcp_fixture();
     let args = serde_json::json!({ "target": { "kind": "query", "query": "compute" }, "output_format": "json" });
     let resp = call("get_context", Some(&args), "/ignored", &fixture.db_path).expect("call");
@@ -451,16 +452,20 @@ fn explicit_json_override_beats_toon_default() {
 }
 
 #[test]
-fn get_context_supports_toon_output_format() {
+fn get_context_ignores_stale_toon_output_argument() {
     let fixture = setup_mcp_fixture();
     let args = serde_json::json!({ "target": { "kind": "query", "query": "compute" }, "output_format": "toon" });
     let resp = call("get_context", Some(&args), "/ignored", &fixture.db_path).expect("call");
     let text = unwrap_tool_text(resp.clone());
+    let value: serde_json::Value = serde_json::from_str(&text).expect("parse json");
 
-    assert_eq!(unwrap_tool_format(&resp), "toon");
-    assert!(text.contains("intent: symbol"));
-    assert!(text.contains("src/service.rs::fn::compute"));
-    assert!(!text.contains("\"intent\""));
+    assert_eq!(unwrap_tool_format(&resp), "json");
+    assert_eq!(value["intent"], serde_json::json!("symbol"));
+    assert!(value["nodes"].as_array().is_some_and(|nodes| {
+        nodes
+            .iter()
+            .any(|node| node["qn"] == serde_json::json!("src/service.rs::fn::compute"))
+    }));
 }
 
 #[test]
@@ -1032,16 +1037,19 @@ fn mcp_agent_facing_flows_pass_usability_acceptance_gate() {
     )
     .expect("query_graph call");
     let query_text = unwrap_tool_text(query_resp.clone());
-    let query_format = unwrap_tool_format(&query_resp);
+    let query_value: serde_json::Value = serde_json::from_str(&query_text).expect("query json");
+    assert_eq!(unwrap_tool_format(&query_resp), "json");
     assert!(
-        query_format == "toon" || query_format == "json",
-        "expected toon or json, got {query_format}"
-    );
-    assert!(
-        !query_text.is_empty(),
+        query_value["matches"]
+            .as_array()
+            .is_some_and(|matches| !matches.is_empty()),
         "query_graph must return ranked results"
     );
-    assert!(query_text.contains("src/service.rs::fn::compute"));
+    assert!(query_value["matches"].as_array().is_some_and(|matches| {
+        matches
+            .iter()
+            .any(|item| item["qn"] == serde_json::json!("src/service.rs::fn::compute"))
+    }));
     assert_eq!(query_resp["atlas_usage_edges_included"], false);
     assert!(
         query_resp["atlas_relationship_tools"]
@@ -1061,11 +1069,31 @@ fn mcp_agent_facing_flows_pass_usability_acceptance_gate() {
     )
     .expect("get_impact_radius call");
     let impact_text = unwrap_tool_text(impact_resp.clone());
-    assert_eq!(unwrap_tool_format(&impact_resp), "toon");
+    let impact_value: serde_json::Value = serde_json::from_str(&impact_text).expect("impact json");
+    assert_eq!(unwrap_tool_format(&impact_resp), "json");
     assert!(fallback_reason(&impact_resp).is_none());
-    assert!(impact_text.contains("changed_file_count: 1"));
-    assert!(impact_text.contains("src/api.rs::fn::handle_request"));
-    assert!(impact_text.contains("tests/service_test.rs::fn::compute_test"));
+    assert_eq!(
+        impact_value["summary"]["changed_file_count"],
+        serde_json::json!(1)
+    );
+    assert!(
+        impact_value["impacted_symbols"]
+            .as_array()
+            .is_some_and(|symbols| symbols
+                .iter()
+                .any(|item| item["qn"] == serde_json::json!("src/api.rs::fn::handle_request")))
+    );
+    assert!(
+        impact_value["relevant_edges"]
+            .as_array()
+            .is_some_and(|edges| {
+                edges.iter().any(|item| {
+                    item["from"] == serde_json::json!("tests/service_test.rs::fn::compute_test")
+                        || item["to"]
+                            == serde_json::json!("tests/service_test.rs::fn::compute_test")
+                })
+            })
+    );
 
     let review_args =
         serde_json::json!({ "change_source": { "kind": "files", "files": ["src/service.rs"] } });
@@ -1077,12 +1105,21 @@ fn mcp_agent_facing_flows_pass_usability_acceptance_gate() {
     )
     .expect("get_review_context call");
     let review_text = unwrap_tool_text(review_resp.clone());
-    assert_eq!(unwrap_tool_format(&review_resp), "toon");
+    let review_value: serde_json::Value = serde_json::from_str(&review_text).expect("review json");
+    assert_eq!(unwrap_tool_format(&review_resp), "json");
     assert!(fallback_reason(&review_resp).is_none());
-    assert!(review_text.contains("intent: review"));
-    assert!(review_text.contains("file_count:"));
-    assert!(review_text.contains("src/service.rs"));
-    assert!(review_text.contains("src/api.rs"));
+    assert_eq!(review_value["intent"], serde_json::json!("review"));
+    assert!(review_value["file_count"].as_u64().is_some());
+    assert!(review_value["files"].as_array().is_some_and(|files| {
+        files
+            .iter()
+            .any(|item| item["path"] == serde_json::json!("src/service.rs"))
+    }));
+    assert!(review_value["files"].as_array().is_some_and(|files| {
+        files
+            .iter()
+            .any(|item| item["path"] == serde_json::json!("src/api.rs"))
+    }));
 
     let context_args = serde_json::json!({ "target": { "kind": "query", "query": "compute" } });
     let context_resp = call(
@@ -1093,11 +1130,21 @@ fn mcp_agent_facing_flows_pass_usability_acceptance_gate() {
     )
     .expect("get_context call");
     let context_text = unwrap_tool_text(context_resp.clone());
-    assert_eq!(unwrap_tool_format(&context_resp), "toon");
+    let context_value: serde_json::Value =
+        serde_json::from_str(&context_text).expect("context json");
+    assert_eq!(unwrap_tool_format(&context_resp), "json");
     assert!(fallback_reason(&context_resp).is_none());
-    assert!(context_text.contains("intent: symbol"));
-    assert!(context_text.contains("src/service.rs::fn::compute"));
-    assert!(context_text.contains("src/api.rs::fn::handle_request"));
+    assert_eq!(context_value["intent"], serde_json::json!("symbol"));
+    assert!(context_value["nodes"].as_array().is_some_and(|nodes| {
+        nodes
+            .iter()
+            .any(|item| item["qn"] == serde_json::json!("src/service.rs::fn::compute"))
+    }));
+    assert!(context_value["nodes"].as_array().is_some_and(|nodes| {
+        nodes
+            .iter()
+            .any(|item| item["qn"] == serde_json::json!("src/api.rs::fn::handle_request"))
+    }));
 }
 
 #[test]
@@ -2217,13 +2264,12 @@ fn get_context_files_with_max_files_cap_respected() {
 }
 
 #[test]
-fn get_context_json_and_toon_output_both_include_controls() {
+fn get_context_json_requests_and_default_output_both_include_controls() {
     let fixture = setup_mcp_fixture();
 
     let json_args = serde_json::json!({
         "target": { "kind": "query", "query": "compute" },
-        "tests": true,
-        "output_format": "json"
+        "tests": true
     });
     let json_resp = call(
         "get_context",
@@ -2240,23 +2286,23 @@ fn get_context_json_and_toon_output_both_include_controls() {
         "json: controls present"
     );
 
-    let toon_args = serde_json::json!({
+    let default_args = serde_json::json!({
         "target": { "kind": "query", "query": "compute" },
         "tests": true
     });
     let toon_resp = call(
         "get_context",
-        Some(&toon_args),
+        Some(&default_args),
         "/ignored",
         &fixture.db_path,
     )
-    .expect("call toon");
+    .expect("call default");
     assert!(
         toon_resp
             .get("structuredContent")
             .and_then(|v| v.get("detail_controls"))
             .is_some(),
-        "toon: controls present"
+        "default: controls present"
     );
 }
 
@@ -2267,7 +2313,7 @@ fn get_context_applies_mcp_response_byte_cap() {
     std::fs::create_dir_all(&atlas_dir).expect("create atlas dir");
     std::fs::write(
         atlas_dir.join("config.toml"),
-        "[mcp]\nworker_threads = 2\ntool_timeout_ms = 300000\nmax_mcp_response_bytes = 2500\n",
+        "[mcp]\nworker_threads = 2\ntool_timeout_ms = 300000\nmax_mcp_response_bytes = 1200\n",
     )
     .expect("write config");
 
@@ -2280,14 +2326,15 @@ fn get_context_applies_mcp_response_byte_cap() {
     });
     let resp = call("get_context", Some(&args), &repo_root, &fixture.db_path).expect("call");
 
-    let text = unwrap_tool_text(resp.clone());
-    let value: serde_json::Value = serde_json::from_str(&text).expect("parse tool body");
+    let value = resp["structuredContent"].clone();
     assert_eq!(value["truncated"].as_bool(), Some(true));
     assert!(
-        value["nodes"]
-            .as_array()
-            .is_some_and(|nodes| !nodes.is_empty()),
-        "response cap must still retain some context nodes"
+        value["node_count"].as_u64().is_some(),
+        "response must keep summary fields"
+    );
+    assert!(
+        value["nodes"].as_array().is_some(),
+        "response must keep nodes array shape"
     );
     assert!(
         value["payload_truncation"]["omitted_byte_count"]

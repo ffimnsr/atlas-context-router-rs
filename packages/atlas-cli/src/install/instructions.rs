@@ -33,7 +33,7 @@ atlas MCP tools BEFORE using file-search or grep to explore the codebase.**
 The graph is faster, cheaper (fewer tokens), and gives you structural context
 (callers, dependents, test coverage) that file scanning cannot.
 
-ALWAYS use TOON output everytime, and JSON when you expect there's floating numbers.
+Use default JSON output. Trust structuredContent as source of truth.
 
 ### When to use atlas tools first
 

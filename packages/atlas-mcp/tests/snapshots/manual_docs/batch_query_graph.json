@@ -14,8 +14,7 @@
             "value": "items",
             "required_companion_fields": ["items"],
             "minimal_example": {
-              "items": [{ "text": "compute" }],
-              "output_format": "json"
+              "items": [{ "text": "compute" }]
             }
           }
         ]
@@ -31,24 +30,21 @@
             "value": "current",
             "required_companion_fields": [],
             "minimal_example": {
-              "repo_scope": { "kind": "current" },
-              "output_format": "json"
+              "repo_scope": { "kind": "current" }
             }
           },
           {
             "value": "repo_id",
             "required_companion_fields": ["repo_scope.repo_id"],
             "minimal_example": {
-              "repo_scope": { "kind": "repo_id", "repo_id": "primary" },
-              "output_format": "json"
+              "repo_scope": { "kind": "repo_id", "repo_id": "primary" }
             }
           },
           {
             "value": "all",
             "required_companion_fields": [],
             "minimal_example": {
-              "repo_scope": { "kind": "all" },
-              "output_format": "json"
+              "repo_scope": { "kind": "all" }
             }
           }
         ]

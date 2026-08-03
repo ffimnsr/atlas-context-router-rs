@@ -513,7 +513,6 @@ JSON output uses `atlas_cli.v1` and returns request metadata, selected nodes and
 Contract references:
 
 - [Output stability policy](docs/contracts/output-stability.md)
-- [TOON contract](docs/contracts/atlas_toon.v1.md)
 - `schemas/atlas_cli.v1/*.schema.json`
 
 ## Output Modes
@@ -717,9 +716,9 @@ These prompts are guidance only. Atlas still keeps graph, context, impact, and c
 
 Output defaults:
 
-- `get_context`, `get_review_context`, `get_impact_radius`, and `explain_change` default to `toon`
-- all other tools default to `json`
-- explicit `output_format=json` overrides TOON-first behavior
+- all MCP tools return JSON text content
+- `structuredContent` is authoritative for object payloads
+- do not pass legacy format-selector arguments; JSON is implicit
 
 `get_context` accepts free-text query, file, or changed-file list plus intent and limit controls. Response is compact `PackagedContextResult` with counts, selected nodes and edges, files, truncation fields, and optional ambiguity candidates.
 

@@ -254,13 +254,13 @@ fn stdio_transport_representative_stable_tools_keep_object_structured_content() 
         format!(
             "{}{}{}{}{}{}{}{}",
             initialized_session_prelude(1),
-            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"get_context\",\"arguments\":{\"target\":{\"kind\":\"query\",\"query\":\"greet_twice\"},\"output_format\":\"json\"}}}\n",
-            "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"status\",\"arguments\":{\"output_format\":\"json\"}}}\n",
-            "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"doctor\",\"arguments\":{\"output_format\":\"json\"}}}\n",
-            "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"tools/call\",\"params\":{\"name\":\"analyze_metrics\",\"arguments\":{\"output_format\":\"json\"}}}\n",
-            "{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"tools/call\",\"params\":{\"name\":\"get_session_status\",\"arguments\":{\"output_format\":\"json\"}}}\n",
-            "{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"tools/call\",\"params\":{\"name\":\"resolve_symbol\",\"arguments\":{\"name\":\"greet_twice\",\"file\":\"src/lib.rs\",\"output_format\":\"json\"}}}\n",
-            "{\"jsonrpc\":\"2.0\",\"id\":8,\"method\":\"tools/call\",\"params\":{\"name\":\"search_files\",\"arguments\":{\"pattern\":\"*.rs\",\"output_format\":\"json\"}}}\n"
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"get_context\",\"arguments\":{\"target\":{\"kind\":\"query\",\"query\":\"greet_twice\"}}}}\n",
+            "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"status\",\"arguments\":{}}}\n",
+            "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"doctor\",\"arguments\":{}}}\n",
+            "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"tools/call\",\"params\":{\"name\":\"analyze_metrics\",\"arguments\":{}}}\n",
+            "{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"tools/call\",\"params\":{\"name\":\"get_session_status\",\"arguments\":{}}}\n",
+            "{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"tools/call\",\"params\":{\"name\":\"resolve_symbol\",\"arguments\":{\"name\":\"greet_twice\",\"file\":\"src/lib.rs\"}}}\n",
+            "{\"jsonrpc\":\"2.0\",\"id\":8,\"method\":\"tools/call\",\"params\":{\"name\":\"search_files\",\"arguments\":{\"pattern\":\"*.rs\"}}}\n"
         ),
     );
     assert!(

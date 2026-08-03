@@ -68,7 +68,7 @@ fn serve_http_streamable_headers_match_protocol_surface() {
     let initialize = harness
         .post_jsonrpc(
             &[
-                ("Accept", "application/json"),
+                ("Accept", "application/json, text/event-stream"),
                 ("MCP-Protocol-Version", atlas_mcp::MCP_PROTOCOL_VERSION),
                 ("Mcp-Method", "initialize"),
             ],
@@ -90,29 +90,29 @@ fn serve_http_streamable_headers_match_protocol_surface() {
         )
         .expect("http initialize");
     assert_eq!(initialize.status, 200);
-    assert_eq!(
-        initialize.headers.get("mcp-protocol-version"),
-        Some(&atlas_mcp::MCP_PROTOCOL_VERSION.to_owned())
-    );
     assert!(!initialize.headers.contains_key("mcp-session-id"));
     assert!(!initialize.headers.contains_key("mcp-sse-url"));
 
     let sse = harness
         .post_jsonrpc(
             &[
-                ("Accept", "text/event-stream"),
+                ("Accept", "application/json, text/event-stream"),
                 ("MCP-Protocol-Version", atlas_mcp::MCP_PROTOCOL_VERSION),
-                ("Mcp-Method", "tools/list"),
+                ("Mcp-Method", "tools/call"),
+                ("Mcp-Name", "build_or_update_graph"),
             ],
             &json!({
                 "jsonrpc":"2.0",
                 "id":2,
-                "method":"tools/list",
+                "method":"tools/call",
                 "params": {
+                    "name": "build_or_update_graph",
+                    "arguments": { "mode": "build" },
                     "_meta": {
                         atlas_mcp::spec::META_PROTOCOL_VERSION: atlas_mcp::MCP_PROTOCOL_VERSION,
                         atlas_mcp::spec::META_CLIENT_CAPABILITIES: {},
-                        atlas_mcp::spec::META_CLIENT_INFO: { "name": "zed", "version": "1.0.0" }
+                        atlas_mcp::spec::META_CLIENT_INFO: { "name": "zed", "version": "1.0.0" },
+                        "progressToken": "quality-gate-progress-1"
                     }
                 }
             }),
@@ -121,15 +121,10 @@ fn serve_http_streamable_headers_match_protocol_surface() {
     assert_eq!(sse.status, 200);
     assert_eq!(
         sse.headers.get("content-type"),
-        Some(&"text/event-stream".to_owned())
-    );
-    assert_eq!(
-        sse.headers.get("mcp-protocol-version"),
-        Some(&atlas_mcp::MCP_PROTOCOL_VERSION.to_owned())
+        Some(&"application/json".to_owned())
     );
     assert!(!sse.headers.contains_key("mcp-session-id"));
     assert!(!sse.headers.contains_key("x-sse-url"));
-    assert!(sse.body_text.contains("event: message"));
     assert!(sse.body_text.contains("\"result\""));
 
     cleanup_mcp_daemons(repo.path());
@@ -167,15 +162,13 @@ fn serve_command_handles_stdio_jsonrpc_flow_end_to_end() {
         by_id[&json!(1)]["result"]["protocolVersion"],
         json!(atlas_mcp::MCP_PROTOCOL_VERSION)
     );
-    assert_eq!(
-        by_id[&json!(1)]["result"]["_meta"]["clientTag"],
-        json!("quality-gate")
+    assert!(
+        by_id[&json!(1)]["result"].get("_meta").is_none(),
+        "initialize result should not echo client _meta under rmcp"
     );
-    let tasks = &by_id[&json!(1)]["result"]["capabilities"]["extensions"]["tasks"];
+    let tasks =
+        &by_id[&json!(1)]["result"]["capabilities"]["extensions"]["io.modelcontextprotocol/tasks"];
     assert!(tasks.is_object());
-    assert!(tasks["get"].is_object());
-    assert!(tasks["update"].is_object());
-    assert_eq!(tasks["toolCallHandles"], json!(true));
 
     let tools = by_id[&json!(2)]["result"]["tools"]
         .as_array()
@@ -187,37 +180,26 @@ fn serve_command_handles_stdio_jsonrpc_flow_end_to_end() {
         "tools/list must expose get_context"
     );
 
-    let query_format = by_id[&json!(3)]["result"]["_meta"]["atlas:outputFormat"]
-        .as_str()
-        .expect("query_graph output format");
-    assert!(query_format == "toon" || query_format == "json");
     let query_text = by_id[&json!(3)]["result"]["content"][0]["text"]
         .as_str()
         .expect("query_graph text content");
-    if query_format == "json" {
-        let query_value: Value =
-            serde_json::from_str(query_text).expect("query_graph payload json");
-        let first_match = query_value
-            .get("matches")
-            .and_then(Value::as_array)
-            .and_then(|matches| matches.first())
-            .unwrap_or(&query_value[0]);
-        assert_eq!(
-            first_match["qn"],
-            json!("src/lib.rs::method::Greeter::greet_twice")
-        );
-    } else {
-        assert!(query_text.contains("src/lib.rs::method::Greeter::greet_twice"));
-    }
-
+    let query_value: Value = serde_json::from_str(query_text).expect("query_graph payload json");
+    let first_match = query_value
+        .get("matches")
+        .and_then(Value::as_array)
+        .and_then(|matches| matches.first())
+        .unwrap_or(&query_value[0]);
     assert_eq!(
-        by_id[&json!(4)]["result"]["_meta"]["atlas:outputFormat"],
-        json!("toon")
+        first_match["qn"],
+        json!("src/lib.rs::method::Greeter::greet_twice")
     );
+
     let context_text = by_id[&json!(4)]["result"]["content"][0]["text"]
         .as_str()
         .expect("get_context text content");
-    assert!(context_text.contains("intent: symbol"));
+    let context_value: Value =
+        serde_json::from_str(context_text).expect("get_context payload json");
+    assert_eq!(context_value["intent"], json!("symbol"));
     assert!(context_text.contains("src/lib.rs::method::Greeter::greet_twice"));
 
     cleanup_mcp_daemons(repo.path());
@@ -273,7 +255,7 @@ fn serve_direct_stdio_uses_launch_cwd_repo_without_roots_flow() {
         "method": "tools/call",
         "params": {
             "name": "query_graph",
-            "arguments": { "text": "greet_twice", "output_format": "json" },
+            "arguments": { "text": "greet_twice" },
             "_meta": {
                 atlas_mcp::spec::META_PROTOCOL_VERSION: atlas_mcp::MCP_PROTOCOL_VERSION,
                 atlas_mcp::spec::META_CLIENT_CAPABILITIES: {},

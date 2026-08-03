@@ -14,8 +14,7 @@
             "value": "build",
             "required_companion_fields": [],
             "minimal_example": {
-              "operation": { "kind": "build" },
-              "output_format": "json"
+              "operation": { "kind": "build" }
             }
           },
           {
@@ -25,8 +24,7 @@
               "operation": {
                 "kind": "update",
                 "change_source": { "kind": "working_tree" }
-              },
-              "output_format": "json"
+              }
             }
           }
         ]
@@ -45,8 +43,7 @@
               "operation": {
                 "kind": "update",
                 "change_source": { "kind": "working_tree" }
-              },
-              "output_format": "json"
+              }
             }
           },
           {
@@ -56,8 +53,7 @@
               "operation": {
                 "kind": "update",
                 "change_source": { "kind": "staged" }
-              },
-              "output_format": "json"
+              }
             }
           },
           {
@@ -67,8 +63,7 @@
               "operation": {
                 "kind": "update",
                 "change_source": { "kind": "base", "base": "origin/main" }
-              },
-              "output_format": "json"
+              }
             }
           },
           {
@@ -78,8 +73,7 @@
               "operation": {
                 "kind": "update",
                 "change_source": { "kind": "files", "files": ["src/lib.rs"] }
-              },
-              "output_format": "json"
+              }
             }
           }
         ]

@@ -55,7 +55,7 @@ fn mcp_memory_store_and_recall_match_cli_record_shape() {
         repo.path(),
         2,
         "memory_store",
-        r#"{"text":"parity body text","topic":"parity","title":"Parity note","importance":"critical","source_id":"artifact-parity","output_format":"json"}"#,
+        r#"{"text":"parity body text","topic":"parity","title":"Parity note","importance":"critical","source_id":"artifact-parity"}"#,
     );
 
     for field in [
@@ -83,7 +83,7 @@ fn mcp_memory_store_and_recall_match_cli_record_shape() {
         repo.path(),
         3,
         "memory_store",
-        r#"{"text":"defaults body","output_format":"json"}"#,
+        r#"{"text":"defaults body"}"#,
     );
     assert_eq!(cli_defaults["memory"]["importance"], json!("normal"));
     assert_eq!(cli_defaults["memory"]["scope"], json!("project"));
@@ -96,7 +96,7 @@ fn mcp_memory_store_and_recall_match_cli_record_shape() {
         repo.path(),
         4,
         "memory_recall",
-        r#"{"query":"parity","output_format":"json"}"#,
+        r#"{"query":"parity"}"#,
     );
     assert!(recall["summary"]["match_count"].as_u64().unwrap() >= 1);
     assert!(
@@ -139,8 +139,7 @@ fn mcp_memory_store_errors_match_cli_validation() {
             "name": "memory_store",
             "arguments": {
                 "text": "x",
-                "importance": "urgent",
-                "output_format": "json"
+                "importance": "urgent"
             },
         },
     }))

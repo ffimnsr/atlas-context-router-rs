@@ -282,6 +282,8 @@ pub struct DurableTaskRecord {
     pub progress: Option<Value>,
     pub result: Option<Value>,
     pub error: Option<Value>,
+    pub input_requests: Option<Value>,
+    pub request_state: Option<String>,
     pub ttl_ms: Option<u64>,
     pub cancel_requested: bool,
 }
@@ -306,6 +308,8 @@ pub struct DurableTaskUpdate {
     pub progress: Option<Value>,
     pub result: Option<Value>,
     pub error: Option<Value>,
+    pub input_requests: Option<Value>,
+    pub request_state: Option<String>,
     pub cancel_requested: Option<bool>,
 }
 

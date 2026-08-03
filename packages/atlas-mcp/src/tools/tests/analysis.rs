@@ -524,7 +524,7 @@ fn find_complex_functions_matches_direct_report_json() {
     assert_provenance(&resp, "/repo", &fixture.db_path);
 }
 
-fn assert_toon_structured_content_matches_direct_report(
+fn assert_json_structured_content_matches_direct_report(
     tool_name: &str,
     args: serde_json::Value,
     expected_report: serde_json::Value,
@@ -532,11 +532,6 @@ fn assert_toon_structured_content_matches_direct_report(
     let fixture = setup_mcp_fixture();
     let resp = call(tool_name, Some(&args), "/repo", &fixture.db_path)
         .unwrap_or_else(|error| panic!("{tool_name} call failed: {error}"));
-    assert_eq!(
-        resp.pointer("/_meta/atlas:requestedOutputFormat")
-            .and_then(|value| value.as_str()),
-        Some("toon")
-    );
 
     let mut expected = expected_report;
     expected["summary"]["generated_at"] =
@@ -582,7 +577,7 @@ fn find_large_functions_changed_code_file_emits_freshness_warning() {
 }
 
 #[test]
-fn r4_insight_tools_keep_full_report_in_toon_structured_content() {
+fn r4_insight_tools_keep_full_report_in_json_structured_content() {
     let fixture = setup_mcp_fixture();
     let store = Store::open(&fixture.db_path).expect("open store");
     let engine = InsightsEngine::new(&store, atlas_engine::config::InsightsConfig::default())
@@ -595,9 +590,9 @@ fn r4_insight_tools_keep_full_report_in_toon_structured_content() {
             .report,
     )
     .expect("serialize architecture report");
-    assert_toon_structured_content_matches_direct_report(
+    assert_json_structured_content_matches_direct_report(
         "analyze_architecture",
-        serde_json::json!({ "output_format": "toon" }),
+        serde_json::json!({}),
         architecture,
     );
 
@@ -608,9 +603,9 @@ fn r4_insight_tools_keep_full_report_in_toon_structured_content() {
             .report,
     )
     .expect("serialize metrics report");
-    assert_toon_structured_content_matches_direct_report(
+    assert_json_structured_content_matches_direct_report(
         "analyze_metrics",
-        serde_json::json!({ "output_format": "toon" }),
+        serde_json::json!({}),
         metrics,
     );
 
@@ -626,17 +621,17 @@ fn r4_insight_tools_keep_full_report_in_toon_structured_content() {
             .report,
     )
     .expect("serialize risk report");
-    assert_toon_structured_content_matches_direct_report(
+    assert_json_structured_content_matches_direct_report(
         "assess_risk",
-        serde_json::json!({ "symbol": "src/service.rs::fn::compute", "output_format": "toon" }),
+        serde_json::json!({ "symbol": "src/service.rs::fn::compute" }),
         risk,
     );
 
     let patterns = serde_json::to_value(engine.analyze_patterns("/repo").expect("patterns direct"))
         .expect("serialize pattern report");
-    assert_toon_structured_content_matches_direct_report(
+    assert_json_structured_content_matches_direct_report(
         "analyze_patterns",
-        serde_json::json!({ "output_format": "toon" }),
+        serde_json::json!({}),
         patterns,
     );
 
@@ -654,9 +649,9 @@ fn r4_insight_tools_keep_full_report_in_toon_structured_content() {
             .report_result(),
     )
     .expect("serialize large report");
-    assert_toon_structured_content_matches_direct_report(
+    assert_json_structured_content_matches_direct_report(
         "find_large_functions",
-        serde_json::json!({ "threshold": 2, "mode": "large", "output_format": "toon" }),
+        serde_json::json!({ "threshold": 2, "mode": "large" }),
         large,
     );
 
@@ -674,9 +669,9 @@ fn r4_insight_tools_keep_full_report_in_toon_structured_content() {
             .report_result(),
     )
     .expect("serialize complex report");
-    assert_toon_structured_content_matches_direct_report(
+    assert_json_structured_content_matches_direct_report(
         "find_complex_functions",
-        serde_json::json!({ "complexity_threshold": 1, "output_format": "toon" }),
+        serde_json::json!({ "complexity_threshold": 1 }),
         complex,
     );
 }

@@ -1,17 +1,17 @@
 use super::shared::DEFAULT_OUTPUT_DESCRIPTION;
 use crate::descriptors::{
-    IconDescriptor, ToolAnnotations, ToolDescriptor, ToolRegistry, descriptor_meta,
-    ensure_schema_2020_12, human_title, normalized_tool_output_schema, validate_descriptor_name,
-    validate_mcp_schema,
+    ToolDescriptor, ToolDescriptorAnnotations, descriptor_meta, ensure_schema_2020_12, human_title,
+    normalized_tool_output_schema, validate_descriptor_name, validate_mcp_schema,
 };
 use crate::spec;
+use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::Value;
 
-#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ToolResultContract {
     StableObject,
+    #[allow(dead_code)]
     TextOnly,
 }
 
@@ -113,16 +113,21 @@ pub(crate) fn tool_result_contract(name: &str) -> ToolResultContract {
 
 pub fn tool_list_markdown() -> String {
     let mut markdown = String::from(
-        "# MCP Tools\n\nThis file is generated from `atlas_mcp::tool_list()`. Do not edit by hand.\n\nMCP 2026 quick guidance:\n- protocol version: `2026-07-28`\n- call `server/discover` for capability negotiation\n- on stdio and HTTP requests after discovery, include `params._meta` with protocol version and client capabilities\n- use explicit `arguments.repo_root` or server launch cwd for repo selection; do not rely on MCP Roots\n- HTTP transport is stateless at protocol level: no `Mcp-Session-Id`, `GET /mcp`, `DELETE /mcp`, or `Last-Event-ID` flow\n\nResult contract legend:\n- `stable-object`: JSON mode returns object `structuredContent`; `outputSchema` validates that object.\n- `text-only`: consume MCP `content`; no `outputSchema` advertised.\n\n| Tool | Result contract | Output schema | Description |\n|------|-----------------|---------------|-------------|\n",
+        "# MCP Tools\n\nThis file is generated from rmcp-backed `atlas_mcp::tool_list()` descriptors serialized from `rmcp::model::Tool`. Do not edit by hand.\n\nMCP 2026 quick guidance:\n- protocol version: `2026-07-28`\n- call `server/discover` for capability negotiation\n- on stdio and HTTP requests after discovery, include `params._meta` with protocol version and client capabilities\n- use explicit `arguments.repo_root` or server launch cwd for repo selection; do not rely on MCP Roots\n- HTTP transport is stateless at protocol level: no `Mcp-Session-Id`, `GET /mcp`, `DELETE /mcp`, or `Last-Event-ID` flow\n\nResult contract legend:\n- `stable-object`: JSON `structuredContent` is source of truth; `outputSchema` validates that object.\n- `text-only`: consume MCP `content`; no `outputSchema` advertised.\n\n| Tool | Title | Input schema | Result contract | Output schema | Description |\n|------|-------|--------------|-----------------|---------------|-------------|\n",
     );
 
-    for tool in tool_list()["tools"].as_array().expect("tools array") {
-        let name = tool["name"].as_str().expect("tool name");
-        let description = tool["description"].as_str().expect("tool description");
-        let contract = tool_result_contract(name);
+    for tool in tool_descriptors() {
+        let contract = tool_result_contract(&tool.name);
+        let input_schema = Value::Object((*tool.input_schema).clone());
+        let title = tool.title.as_deref().expect("tool title");
+        let description = tool.description.as_deref().expect("tool description");
         markdown.push_str("| `");
-        markdown.push_str(name);
-        markdown.push_str("` | `");
+        markdown.push_str(&tool.name);
+        markdown.push_str("` | ");
+        markdown.push_str(&escape_markdown_table_cell(title));
+        markdown.push_str(" | ");
+        markdown.push_str(&input_schema_note(&input_schema));
+        markdown.push_str(" | `");
         markdown.push_str(contract.label());
         markdown.push_str("` | ");
         markdown.push_str(contract.output_schema_note());
@@ -134,13 +139,41 @@ pub fn tool_list_markdown() -> String {
     markdown
 }
 
+fn input_schema_note(schema: &Value) -> String {
+    let required = schema
+        .get("required")
+        .and_then(Value::as_array)
+        .map(|items| items.len())
+        .unwrap_or_default();
+    format!("object; required fields: {required}")
+}
+
 fn escape_markdown_table_cell(text: &str) -> String {
     text.replace('\n', " ").replace('|', "\\|")
 }
 
 /// Return the MCP `tools/list` response body.
+fn strip_output_format_properties(value: &mut Value) {
+    match value {
+        Value::Object(object) => {
+            if let Some(properties) = object.get_mut("properties").and_then(Value::as_object_mut) {
+                properties.remove("output_format");
+            }
+            for child in object.values_mut() {
+                strip_output_format_properties(child);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                strip_output_format_properties(item);
+            }
+        }
+        _ => {}
+    }
+}
+
 fn base_tool_list_json() -> Value {
-    serde_json::json!({
+    let mut value = serde_json::json!({
         "tools": [
             {
                 "name": "list_graph_stats",
@@ -520,12 +553,12 @@ fn base_tool_list_json() -> Value {
             },
             {
                 "name": "analyze_architecture",
-                "description": "Analyze module-level cycles, layer violations, and coupling hotspots. JSON output matches the CLI insights architecture report; default toon output stays compact unless verbose=true.",
+                "description": "Analyze module-level cycles, layer violations, and coupling hotspots. JSON output matches the CLI insights architecture report; JSON output stays compact unless verbose=true.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
                         "limit": { "type": "integer", "description": "Cap returned findings after ranking." },
-                        "verbose": { "type": "boolean", "description": "Return full report body in toon output too." },
+                        "verbose": { "type": "boolean", "description": "Return full report body in JSON output too." },
                         "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
                     },
                     "required": []
@@ -533,12 +566,12 @@ fn base_tool_list_json() -> Value {
             },
             {
                 "name": "analyze_metrics",
-                "description": "Analyze graph health metrics, outliers, complexity hotspots, and coupling findings. JSON output matches the CLI insights metrics report; default toon output stays compact unless verbose=true.",
+                "description": "Analyze graph health metrics, outliers, complexity hotspots, and coupling findings. JSON output matches the CLI insights metrics report; JSON output stays compact unless verbose=true.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
                         "limit": { "type": "integer", "description": "Cap returned findings after ranking." },
-                        "verbose": { "type": "boolean", "description": "Return full report body in toon output too." },
+                        "verbose": { "type": "boolean", "description": "Return full report body in JSON output too." },
                         "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
                     },
                     "required": []
@@ -546,12 +579,12 @@ fn base_tool_list_json() -> Value {
             },
             {
                 "name": "assess_risk",
-                "description": "Score deterministic risk for one symbol with factor evidence and ranked findings. JSON output matches the CLI insights risk report; default toon output stays compact unless verbose=true.",
+                "description": "Score deterministic risk for one symbol with factor evidence and ranked findings. JSON output matches the CLI insights risk report; JSON output stays compact unless verbose=true.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
                         "symbol": { "type": "string", "description": "Qualified name or resolvable symbol identifier." },
-                        "verbose": { "type": "boolean", "description": "Return full report body in toon output too." },
+                        "verbose": { "type": "boolean", "description": "Return full report body in JSON output too." },
                         "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
                     },
                     "required": ["symbol"]
@@ -559,12 +592,12 @@ fn base_tool_list_json() -> Value {
             },
             {
                 "name": "analyze_patterns",
-                "description": "Detect repeated call chains, isolated structures, hubs, bottlenecks, and deep dependency paths. JSON output matches the CLI insights patterns report; default toon output stays compact unless verbose=true.",
+                "description": "Detect repeated call chains, isolated structures, hubs, bottlenecks, and deep dependency paths. JSON output matches the CLI insights patterns report; JSON output stays compact unless verbose=true.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
                         "limit": { "type": "integer", "description": "Cap returned findings after ranking." },
-                        "verbose": { "type": "boolean", "description": "Return full report body in toon output too." },
+                        "verbose": { "type": "boolean", "description": "Return full report body in JSON output too." },
                         "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
                     },
                     "required": []
@@ -572,7 +605,7 @@ fn base_tool_list_json() -> Value {
             },
             {
                 "name": "find_large_functions",
-                "description": "Find large or complex functions repo-wide or within selected files using deterministic LOC and complexity thresholds. JSON output matches the CLI insights report; default toon output stays compact for agent review.",
+                "description": "Find large or complex functions repo-wide or within selected files using deterministic LOC and complexity thresholds. JSON output matches the CLI insights report; JSON output stays compact for agent review.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -584,7 +617,7 @@ fn base_tool_list_json() -> Value {
                         "mode": { "type": "string", "description": "One of 'large', 'complex', or 'large-or-complex'." },
                         "limit": { "type": "integer", "description": "Cap result count after ranking." },
                         "include_tests": { "type": "boolean", "description": "Include test functions and methods." },
-                        "verbose": { "type": "boolean", "description": "Return full report body in toon output too." },
+                        "verbose": { "type": "boolean", "description": "Return full report body in JSON output too." },
                         "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
                     },
                     "required": []
@@ -592,7 +625,7 @@ fn base_tool_list_json() -> Value {
             },
             {
                 "name": "find_complex_functions",
-                "description": "Find complex functions repo-wide or within selected files using deterministic complexity thresholds. JSON output matches the CLI insights complex-functions report; default toon output stays compact unless verbose=true.",
+                "description": "Find complex functions repo-wide or within selected files using deterministic complexity thresholds. JSON output matches the CLI insights complex-functions report; JSON output stays compact unless verbose=true.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -602,7 +635,7 @@ fn base_tool_list_json() -> Value {
                         "nesting_threshold": { "type": "integer", "description": "Override max nesting depth threshold." },
                         "limit": { "type": "integer", "description": "Cap result count after ranking." },
                         "include_tests": { "type": "boolean", "description": "Include test functions and methods." },
-                        "verbose": { "type": "boolean", "description": "Return full report body in toon output too." },
+                        "verbose": { "type": "boolean", "description": "Return full report body in JSON output too." },
                         "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
                     },
                     "required": []
@@ -610,7 +643,7 @@ fn base_tool_list_json() -> Value {
             },
             {
                 "name": "find_similar_functions",
-                "description": "Find semantically similar functions for one callable symbol using name, signature, body-shingle, and neighbor overlap. JSON output matches the CLI similar-functions report; default toon output stays compact unless verbose=true.",
+                "description": "Find semantically similar functions for one callable symbol using name, signature, body-shingle, and neighbor overlap. JSON output matches the CLI similar-functions report; JSON output stays compact unless verbose=true.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -618,7 +651,7 @@ fn base_tool_list_json() -> Value {
                         "min_score": { "type": "number", "description": "Minimum similarity score to keep (0.0-1.0)." },
                         "limit": { "type": "integer", "description": "Cap returned matches after ranking." },
                         "include_same_file": { "type": "boolean", "description": "Keep same-file matches too." },
-                        "verbose": { "type": "boolean", "description": "Return full report body in toon output too." },
+                        "verbose": { "type": "boolean", "description": "Return full report body in JSON output too." },
                         "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
                     },
                     "required": ["symbol"]
@@ -626,7 +659,7 @@ fn base_tool_list_json() -> Value {
             },
             {
                 "name": "find_duplicates",
-                "description": "Find exact-normalized and near-duplicate callable bodies using normalized token shingles. JSON output matches the CLI duplicates report; default toon output stays compact unless verbose=true.",
+                "description": "Find exact-normalized and near-duplicate callable bodies using normalized token shingles. JSON output matches the CLI duplicates report; JSON output stays compact unless verbose=true.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -635,7 +668,7 @@ fn base_tool_list_json() -> Value {
                         "limit": { "type": "integer", "description": "Cap returned duplicate groups after ranking." },
                         "include_tests": { "type": "boolean", "description": "Include test functions and methods." },
                         "suppressions": { "type": "array", "items": { "type": "string" }, "description": "Optional suppressions matched against duplicate group id, normalized summary, file path, or symbol name." },
-                        "verbose": { "type": "boolean", "description": "Return full report body in toon output too." },
+                        "verbose": { "type": "boolean", "description": "Return full report body in JSON output too." },
                         "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
                     },
                     "required": []
@@ -643,12 +676,12 @@ fn base_tool_list_json() -> Value {
             },
             {
                 "name": "infer_modules",
-                "description": "Infer module buckets from package ownership, path layout, and dependency structure. JSON output matches the CLI infer-modules report; default toon output stays compact unless verbose=true.",
+                "description": "Infer module buckets from package ownership, path layout, and dependency structure. JSON output matches the CLI infer-modules report; JSON output stays compact unless verbose=true.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
                         "limit": { "type": "integer", "description": "Cap returned findings after ranking." },
-                        "verbose": { "type": "boolean", "description": "Return full report body in toon output too." },
+                        "verbose": { "type": "boolean", "description": "Return full report body in JSON output too." },
                         "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
                     },
                     "required": []
@@ -656,14 +689,14 @@ fn base_tool_list_json() -> Value {
             },
             {
                 "name": "label_components",
-                "description": "Label files and symbols with Atlas component taxonomy such as cli, mcp, parse, review_context, and session_continuity. JSON output matches the CLI label-components report; default toon output stays compact unless verbose=true.",
+                "description": "Label files and symbols with Atlas component taxonomy such as cli, mcp, parse, review_context, and session_continuity. JSON output matches the CLI label-components report; JSON output stays compact unless verbose=true.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
                         "files": { "type": "array", "items": { "type": "string" }, "description": "Optional repo-relative files to scope file labeling." },
                         "symbols": { "type": "array", "items": { "type": "string" }, "description": "Optional qualified names to scope symbol labeling." },
                         "limit": { "type": "integer", "description": "Cap returned assignments after ranking." },
-                        "verbose": { "type": "boolean", "description": "Return full report body in toon output too." },
+                        "verbose": { "type": "boolean", "description": "Return full report body in JSON output too." },
                         "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
                     },
                     "required": []
@@ -1318,7 +1351,866 @@ fn base_tool_list_json() -> Value {
                 }
             }
         ]
-    })
+    });
+    strip_output_format_properties(&mut value);
+    value
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct HealthOutputFormatArgs {
+    output_format: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct DbCheckArgsSchema {
+    limit: Option<u64>,
+    output_format: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct DebugGraphArgsSchema {
+    limit: Option<u64>,
+    output_format: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct SearchFilesArgsSchema {
+    pattern: String,
+    globs: Option<Vec<String>>,
+    exclude_globs: Option<Vec<String>>,
+    subpath: Option<String>,
+    case_sensitive: Option<bool>,
+    output_format: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct SearchContentArgsSchema {
+    query: String,
+    globs: Option<Vec<String>>,
+    exclude_globs: Option<Vec<String>>,
+    exclude_generated: Option<bool>,
+    is_regex: Option<bool>,
+    context_lines: Option<u64>,
+    rich_snippets: Option<bool>,
+    snippet_context_lines: Option<u64>,
+    max_results: Option<u64>,
+    subpath: Option<String>,
+    output_format: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum ExcerptSelectorKindSchema {
+    Range,
+    Ranges,
+    Context,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct ExcerptLineRangeSchema {
+    start_line: u64,
+    end_line: u64,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct ReadFileExcerptSelectorSchema {
+    kind: ExcerptSelectorKindSchema,
+    start_line: Option<u64>,
+    end_line: Option<u64>,
+    line: Option<u64>,
+    before: Option<u64>,
+    after: Option<u64>,
+    line_ranges: Option<Vec<ExcerptLineRangeSchema>>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct ReadFileExcerptArgsSchema {
+    file: String,
+    selector: ReadFileExcerptSelectorSchema,
+    max_lines: Option<u64>,
+    repo_root: Option<String>,
+    output_format: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum DocsSelectorKindSchema {
+    Heading,
+    Line,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct GetDocsSectionSelectorSchema {
+    kind: DocsSelectorKindSchema,
+    heading: Option<String>,
+    line: Option<u64>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct GetDocsSectionArgsSchema {
+    file: String,
+    selector: GetDocsSectionSelectorSchema,
+    max_bytes: Option<u64>,
+    repo_root: Option<String>,
+    output_format: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct ReadFileAroundMatchArgsSchema {
+    file: String,
+    query: String,
+    is_regex: Option<bool>,
+    case_sensitive: Option<bool>,
+    before: Option<u64>,
+    after: Option<u64>,
+    max_matches: Option<u64>,
+    max_lines: Option<u64>,
+    repo_root: Option<String>,
+    output_format: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum TemplateKindSchema {
+    Html,
+    Jinja,
+    Handlebars,
+    Tera,
+    Mako,
+    Mustache,
+    Twig,
+    Liquid,
+    Erb,
+    Haml,
+    Pug,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct SearchTemplatesArgsSchema {
+    kind: Option<TemplateKindSchema>,
+    globs: Option<Vec<String>>,
+    exclude_globs: Option<Vec<String>>,
+    subpath: Option<String>,
+    case_sensitive: Option<bool>,
+    max_results: Option<u64>,
+    output_format: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum TextAssetKindSchema {
+    Sql,
+    Config,
+    Env,
+    Prompt,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct SearchTextAssetsArgsSchema {
+    kind: Option<TextAssetKindSchema>,
+    globs: Option<Vec<String>>,
+    exclude_globs: Option<Vec<String>>,
+    subpath: Option<String>,
+    case_sensitive: Option<bool>,
+    max_results: Option<u64>,
+    output_format: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum RepoScopeKindSchema {
+    Current,
+    RepoId,
+    All,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct RepoScopeArgsSchema {
+    kind: RepoScopeKindSchema,
+    repo_id: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct QueryGraphArgsSchema {
+    text: Option<String>,
+    kind: Option<String>,
+    language: Option<String>,
+    limit: Option<u64>,
+    semantic: Option<bool>,
+    expand: Option<bool>,
+    expand_hops: Option<u64>,
+    regex: Option<String>,
+    subpath: Option<String>,
+    fuzzy: Option<bool>,
+    hybrid: Option<bool>,
+    include_files: Option<bool>,
+    repo_scope: Option<RepoScopeArgsSchema>,
+    output_format: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct BatchQueryGraphItemArgsSchema {
+    text: Option<String>,
+    kind: Option<String>,
+    language: Option<String>,
+    limit: Option<u64>,
+    semantic: Option<bool>,
+    expand: Option<bool>,
+    expand_hops: Option<u64>,
+    regex: Option<String>,
+    subpath: Option<String>,
+    fuzzy: Option<bool>,
+    hybrid: Option<bool>,
+    include_files: Option<bool>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct BatchQueryGraphArgsSchema {
+    #[schemars(length(min = 1, max = 20))]
+    items: Vec<BatchQueryGraphItemArgsSchema>,
+    repo_scope: Option<RepoScopeArgsSchema>,
+    output_format: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct ExplainQueryArgsSchema {
+    text: Option<String>,
+    kind: Option<String>,
+    language: Option<String>,
+    limit: Option<u64>,
+    semantic: Option<bool>,
+    regex: Option<String>,
+    subpath: Option<String>,
+    fuzzy: Option<bool>,
+    hybrid: Option<bool>,
+    include_files: Option<bool>,
+    repo_scope: Option<RepoScopeArgsSchema>,
+    output_format: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct TraverseGraphArgsSchema {
+    from_qn: String,
+    max_depth: Option<u64>,
+    max_nodes: Option<u64>,
+    output_format: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct SymbolNeighborsArgsSchema {
+    qname: String,
+    limit: Option<u64>,
+    output_format: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct CrossFileLinksArgsSchema {
+    file: String,
+    limit: Option<u64>,
+    output_format: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct ConceptClustersArgsSchema {
+    files: Vec<String>,
+    limit: Option<u64>,
+    output_format: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct ResolveSymbolArgsSchema {
+    name: String,
+    kind: Option<String>,
+    file: Option<String>,
+    language: Option<String>,
+    limit: Option<u64>,
+    repo_scope: Option<RepoScopeArgsSchema>,
+    output_format: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum ChangeSourceWithFilesKindSchema {
+    Files,
+    Base,
+    Staged,
+    WorkingTree,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum ChangeSourceWithoutFilesKindSchema {
+    Base,
+    Staged,
+    WorkingTree,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct ChangeSourceWithFilesArgsSchema {
+    kind: ChangeSourceWithFilesKindSchema,
+    files: Option<Vec<String>>,
+    base: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct ChangeSourceWithoutFilesArgsSchema {
+    kind: ChangeSourceWithoutFilesKindSchema,
+    base: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum BuildOperationKindSchema {
+    Build,
+    Update,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct BuildOperationArgsSchema {
+    kind: BuildOperationKindSchema,
+    change_source: Option<ChangeSourceWithFilesArgsSchema>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct BuildOrUpdateGraphArgsSchema {
+    operation: Option<BuildOperationArgsSchema>,
+    output_format: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum PostprocessStageSchema {
+    Flows,
+    Communities,
+    ArchitectureMetrics,
+    QueryHints,
+    LargeFunctionSummaries,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct PostprocessGraphArgsSchema {
+    changed_only: Option<bool>,
+    stage: Option<PostprocessStageSchema>,
+    dry_run: Option<bool>,
+    output_format: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct DetectChangesArgsSchema {
+    change_source: ChangeSourceWithoutFilesArgsSchema,
+    repo_scope: Option<RepoScopeArgsSchema>,
+    output_format: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct GetImpactRadiusArgsSchema {
+    change_source: ChangeSourceWithFilesArgsSchema,
+    max_depth: Option<u64>,
+    max_nodes: Option<u64>,
+    repo_scope: Option<RepoScopeArgsSchema>,
+    output_format: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct GetReviewContextArgsSchema {
+    change_source: ChangeSourceWithFilesArgsSchema,
+    max_depth: Option<u64>,
+    max_nodes: Option<u64>,
+    token_budget: Option<u64>,
+    output_format: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct GetMinimalContextArgsSchema {
+    change_source: ChangeSourceWithoutFilesArgsSchema,
+    max_depth: Option<u64>,
+    max_nodes: Option<u64>,
+    output_format: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct ExplainChangeArgsSchema {
+    change_source: ChangeSourceWithFilesArgsSchema,
+    max_depth: Option<u64>,
+    max_nodes: Option<u64>,
+    output_format: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum GetContextTargetKindSchema {
+    Query,
+    File,
+    Files,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct GetContextTargetArgsSchema {
+    kind: GetContextTargetKindSchema,
+    query: Option<String>,
+    file: Option<String>,
+    files: Option<Vec<String>>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum GetContextIntentSchema {
+    Symbol,
+    File,
+    Review,
+    Impact,
+    UsageLookup,
+    RefactorSafety,
+    DeadCodeCheck,
+    RenamePreview,
+    DependencyRemoval,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct GetContextArgsSchema {
+    target: GetContextTargetArgsSchema,
+    intent: Option<GetContextIntentSchema>,
+    max_nodes: Option<u64>,
+    max_edges: Option<u64>,
+    max_files: Option<u64>,
+    max_depth: Option<u64>,
+    code_spans: Option<bool>,
+    tests: Option<bool>,
+    imports: Option<bool>,
+    neighbors: Option<bool>,
+    semantic: Option<bool>,
+    include_saved_context: Option<bool>,
+    session_id: Option<String>,
+    agent_id: Option<String>,
+    merge_agent_partitions: Option<bool>,
+    token_budget: Option<u64>,
+    output_format: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+enum LargeFunctionModeSchema {
+    Large,
+    Complex,
+    LargeOrComplex,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct FindLargeFunctionsArgsSchema {
+    files: Option<Vec<String>>,
+    threshold: Option<u64>,
+    complexity_threshold: Option<u64>,
+    cognitive_threshold: Option<u64>,
+    nesting_threshold: Option<u64>,
+    mode: Option<LargeFunctionModeSchema>,
+    limit: Option<u64>,
+    include_tests: Option<bool>,
+    verbose: Option<bool>,
+    output_format: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct FindComplexFunctionsArgsSchema {
+    files: Option<Vec<String>>,
+    complexity_threshold: Option<u64>,
+    cognitive_threshold: Option<u64>,
+    nesting_threshold: Option<u64>,
+    limit: Option<u64>,
+    include_tests: Option<bool>,
+    verbose: Option<bool>,
+    output_format: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct FindSimilarFunctionsArgsSchema {
+    symbol: String,
+    min_score: Option<f64>,
+    limit: Option<u64>,
+    include_same_file: Option<bool>,
+    verbose: Option<bool>,
+    output_format: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct FindDuplicatesArgsSchema {
+    files: Option<Vec<String>>,
+    min_score: Option<f64>,
+    limit: Option<u64>,
+    include_tests: Option<bool>,
+    suppressions: Option<Vec<String>>,
+    verbose: Option<bool>,
+    output_format: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct InferModulesArgsSchema {
+    limit: Option<u64>,
+    verbose: Option<bool>,
+    output_format: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct LabelComponentsArgsSchema {
+    files: Option<Vec<String>>,
+    symbols: Option<Vec<String>>,
+    limit: Option<u64>,
+    verbose: Option<bool>,
+    output_format: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct AnalyzeSafetyArgsSchema {
+    symbol: String,
+    output_format: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct AnalyzeRemoveArgsSchema {
+    symbols: Vec<String>,
+    max_depth: Option<u64>,
+    max_nodes: Option<u64>,
+    max_files: Option<u64>,
+    max_edges: Option<u64>,
+    output_format: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum DeadCodeExcludeKindSchema {
+    Function,
+    Method,
+    Struct,
+    Enum,
+    Trait,
+    Interface,
+    Class,
+    Constant,
+    Variable,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct AnalyzeDeadCodeArgsSchema {
+    allowlist: Option<Vec<String>>,
+    subpath: Option<String>,
+    limit: Option<u64>,
+    summary: Option<bool>,
+    exclude_kind: Option<Vec<DeadCodeExcludeKindSchema>>,
+    code_only: Option<bool>,
+    max_files: Option<u64>,
+    max_edges: Option<u64>,
+    output_format: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct AnalyzeDependencyArgsSchema {
+    symbol: String,
+    output_format: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum SingleRepoScopeKindSchema {
+    Current,
+    RepoId,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct SingleRepoScopeArgsSchema {
+    kind: SingleRepoScopeKindSchema,
+    repo_id: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct GetSessionStatusArgsSchema {
+    session_id: Option<String>,
+    agent_id: Option<String>,
+    merge_agent_partitions: Option<bool>,
+    output_format: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct RecordSessionEventArgsSchema {
+    event: String,
+    payload: Option<serde_json::Map<String, Value>>,
+    frontend: Option<String>,
+    session_id: Option<String>,
+    agent_id: Option<String>,
+    repo_scope: Option<SingleRepoScopeArgsSchema>,
+    output_format: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct WakeUpArgsSchema {
+    topic: Option<String>,
+    session_id: Option<String>,
+    frontend: Option<String>,
+    agent_id: Option<String>,
+    max_items: Option<u64>,
+    repo_scope: Option<SingleRepoScopeArgsSchema>,
+    output_format: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct CompactSessionArgsSchema {
+    session_id: Option<String>,
+    output_format: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct ResumeSessionArgsSchema {
+    session_id: Option<String>,
+    agent_id: Option<String>,
+    merge_agent_partitions: Option<bool>,
+    mark_consumed: Option<bool>,
+    output_format: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct SearchSavedContextArgsSchema {
+    query: String,
+    repo_scope: Option<RepoScopeArgsSchema>,
+    session_id: Option<String>,
+    agent_id: Option<String>,
+    merge_agent_partitions: Option<bool>,
+    source_type: Option<String>,
+    limit: Option<u64>,
+    output_format: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct SearchDecisionsArgsSchema {
+    query: String,
+    session_id: Option<String>,
+    limit: Option<u64>,
+    output_format: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct ReadSavedContextArgsSchema {
+    source_id: String,
+    session_id: Option<String>,
+    agent_id: Option<String>,
+    merge_agent_partitions: Option<bool>,
+    chunk_offset: Option<u64>,
+    max_bytes: Option<u64>,
+    repo_scope: Option<RepoScopeArgsSchema>,
+    output_format: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct SaveContextArtifactArgsSchema {
+    content: String,
+    label: String,
+    source_type: Option<String>,
+    session_id: Option<String>,
+    agent_id: Option<String>,
+    repo_scope: Option<RepoScopeArgsSchema>,
+    content_type: Option<String>,
+    output_format: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct PurgeSavedContextArgsSchema {
+    session_id: Option<String>,
+    agent_id: Option<String>,
+    keep_days: Option<u64>,
+    output_format: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct CrossSessionSearchArgsSchema {
+    query: String,
+    source_type: Option<String>,
+    agent_id: Option<String>,
+    merge_agent_partitions: Option<bool>,
+    limit: Option<u64>,
+    repo_scope: Option<RepoScopeArgsSchema>,
+    output_format: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct GetGlobalMemoryArgsSchema {
+    limit: Option<u64>,
+    focus_symbols: Option<Vec<String>>,
+    focus_files: Option<Vec<String>>,
+    output_format: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+enum MemoryImportanceSchema {
+    Critical,
+    High,
+    Normal,
+    Low,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+enum MemoryScopeSchema {
+    Project,
+    Session,
+    Frontend,
+    Global,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct MemoryStoreArgsSchema {
+    text: String,
+    topic: Option<String>,
+    title: Option<String>,
+    importance: Option<MemoryImportanceSchema>,
+    scope: Option<MemoryScopeSchema>,
+    frontend: Option<String>,
+    source_id: Option<String>,
+    output_format: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct MemoryRecallArgsSchema {
+    query: String,
+    topic: Option<String>,
+    importance: Option<MemoryImportanceSchema>,
+    scope: Option<MemoryScopeSchema>,
+    shared: Option<bool>,
+    limit: Option<u64>,
+    output_format: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -1352,17 +2244,29 @@ pub fn tool_input_schema_by_name(name: &str) -> Option<Value> {
     tool_descriptors()
         .into_iter()
         .find(|tool| tool.name == name)
-        .map(|tool| tool.input_schema)
+        .map(|tool| Value::Object((*tool.input_schema).clone()))
+}
+
+#[cfg(test)]
+pub(crate) fn raw_tool_input_schema_by_name(name: &str) -> Option<Value> {
+    let tools_value = base_tool_list_json()["tools"].clone();
+    let seeds: Vec<ToolDescriptorSeed> =
+        serde_json::from_value(tools_value).expect("base tool registry json must be valid");
+    seeds
+        .into_iter()
+        .find(|tool| tool.name == name)
+        .map(|seed| {
+            ensure_schema_2020_12(typed_input_schema_for(&seed.name).unwrap_or(seed.input_schema))
+        })
 }
 
 const TOOLS_LIST_CACHE_TTL_MS: u64 = 300_000;
 const TOOLS_LIST_CACHE_SCOPE: &str = spec::CACHE_SCOPE_PUBLIC;
 
 pub fn tool_list() -> Value {
-    let mut result = serde_json::to_value(ToolRegistry {
-        tools: tool_descriptors(),
-    })
-    .expect("tool registry serialization");
+    let mut result = serde_json::json!({
+        "tools": tool_descriptors(),
+    });
     spec::annotate_cacheable_result(&mut result, TOOLS_LIST_CACHE_TTL_MS, TOOLS_LIST_CACHE_SCOPE);
     result
 }
@@ -1374,7 +2278,9 @@ fn build_tool_descriptor(seed: ToolDescriptorSeed) -> ToolDescriptor {
     let mut meta = descriptor_meta("tool", category);
     meta["atlas:resultContract"] = serde_json::json!(contract.label());
     meta["atlas:resultContractGuidance"] = serde_json::json!(contract.guidance());
-    let input_schema = ensure_schema_2020_12(seed.input_schema);
+    let mut input_schema =
+        ensure_schema_2020_12(typed_input_schema_for(&seed.name).unwrap_or(seed.input_schema));
+    strip_output_format_properties(&mut input_schema);
     validate_mcp_schema(&input_schema)
         .unwrap_or_else(|error| panic!("{} input schema invalid for MCP: {error}", seed.name));
     let output_schema = tool_output_schema_for(&seed.name);
@@ -1382,15 +2288,1460 @@ fn build_tool_descriptor(seed: ToolDescriptorSeed) -> ToolDescriptor {
         validate_mcp_schema(schema)
             .unwrap_or_else(|error| panic!("{} output schema invalid for MCP: {error}", seed.name));
     }
-    ToolDescriptor {
-        title: human_title(&seed.name),
-        output_schema,
-        annotations: tool_annotations(&seed.name),
-        icons: tool_icons(category),
-        meta,
-        name: seed.name,
-        description: seed.description,
-        input_schema,
+    let tool_name = seed.name;
+    let tool_description = seed.description;
+    let mut descriptor = ToolDescriptor::new_with_raw(
+        tool_name.clone(),
+        Some(std::borrow::Cow::Owned(tool_description)),
+        crate::rmcp_types::schema_object_from_value(input_schema)
+            .expect("tool input schema must be object"),
+    )
+    .with_title(human_title(&tool_name));
+    descriptor.annotations = Some(tool_annotations(tool_name.as_str()));
+    if let Some(schema) = output_schema {
+        descriptor = descriptor.with_raw_output_schema(
+            crate::rmcp_types::schema_object_from_value(schema)
+                .expect("tool output schema must be object"),
+        );
+    }
+    if let Some(meta) = crate::rmcp_types::meta_object_from_value(meta)
+        .expect("tool descriptor meta must be object")
+    {
+        descriptor = descriptor.with_meta(meta);
+    }
+    descriptor
+}
+
+fn typed_input_schema_for(name: &str) -> Option<Value> {
+    match name {
+        "broker_status" | "status" | "doctor" => {
+            Some(typed_schema_with_descriptions::<HealthOutputFormatArgs>(&[
+                ("properties/output_format", DEFAULT_OUTPUT_DESCRIPTION),
+            ]))
+        }
+        "db_check" => Some(typed_schema_with_descriptions::<DbCheckArgsSchema>(&[
+            (
+                "properties/limit",
+                "Maximum orphan/dangling samples to return (default 100).",
+            ),
+            ("properties/output_format", DEFAULT_OUTPUT_DESCRIPTION),
+        ])),
+        "debug_graph" => Some(typed_schema_with_descriptions::<DebugGraphArgsSchema>(&[
+            (
+                "properties/limit",
+                "Maximum orphan/dangling samples to return (default 20).",
+            ),
+            ("properties/output_format", DEFAULT_OUTPUT_DESCRIPTION),
+        ])),
+        "get_impact_radius" => Some(typed_schema_with_descriptions::<GetImpactRadiusArgsSchema>(
+            &[
+                (
+                    "properties/change_source",
+                    "Change-source object. Use { kind: 'files', files: ['src/lib.rs'] }, { kind: 'base', base: 'origin/main' }, { kind: 'staged' }, or { kind: 'working_tree' }.",
+                ),
+                (
+                    "properties/change_source/properties/kind",
+                    "Change-source kind: files, base, staged, or working_tree.",
+                ),
+                (
+                    "properties/change_source/properties/files",
+                    "Required when kind='files'. Non-empty repo-relative file path list.",
+                ),
+                (
+                    "properties/change_source/properties/base",
+                    "Required when kind='base'. Base git ref such as 'origin/main'.",
+                ),
+                ("properties/max_depth", "Traversal depth limit (default 5)"),
+                (
+                    "properties/max_nodes",
+                    "Maximum impacted nodes to return (default 200)",
+                ),
+                (
+                    "properties/repo_scope",
+                    "Repo scope object. Use { kind: 'current' }, { kind: 'repo_id', repo_id: '<id>' }, or { kind: 'all' }.",
+                ),
+                (
+                    "properties/repo_scope/properties/kind",
+                    "Repo scope kind: current, repo_id, or all.",
+                ),
+                (
+                    "properties/repo_scope/properties/repo_id",
+                    "Required when kind='repo_id'. Must be registered and enabled.",
+                ),
+                ("properties/output_format", DEFAULT_OUTPUT_DESCRIPTION),
+            ],
+        )),
+        "get_review_context" => Some(
+            typed_schema_with_descriptions::<GetReviewContextArgsSchema>(&[
+                (
+                    "properties/change_source",
+                    "Change-source object. Use { kind: 'files', files: ['src/lib.rs'] }, { kind: 'base', base: 'origin/main' }, { kind: 'staged' }, or { kind: 'working_tree' }.",
+                ),
+                (
+                    "properties/change_source/properties/kind",
+                    "Change-source kind: files, base, staged, or working_tree.",
+                ),
+                (
+                    "properties/change_source/properties/files",
+                    "Required when kind='files'. Non-empty repo-relative file path list.",
+                ),
+                (
+                    "properties/change_source/properties/base",
+                    "Required when kind='base'. Base git ref such as 'origin/main'.",
+                ),
+                ("properties/max_depth", "Traversal depth limit (default 3)"),
+                (
+                    "properties/max_nodes",
+                    "Maximum impacted nodes to consider (default 200)",
+                ),
+                (
+                    "properties/token_budget",
+                    "Maximum tokens to include in the result. Overrides the default policy limit for this call only. Cannot exceed the policy ceiling.",
+                ),
+                ("properties/output_format", DEFAULT_OUTPUT_DESCRIPTION),
+            ]),
+        ),
+        "detect_changes" => Some(typed_schema_with_descriptions::<DetectChangesArgsSchema>(
+            &[
+                (
+                    "properties/change_source",
+                    "Change-source object. Use { kind: 'base', base: 'origin/main' }, { kind: 'staged' }, or { kind: 'working_tree' }.",
+                ),
+                (
+                    "properties/change_source/properties/kind",
+                    "Change-source kind: base, staged, or working_tree.",
+                ),
+                (
+                    "properties/change_source/properties/base",
+                    "Required when kind='base'. Base git ref such as 'origin/main'.",
+                ),
+                (
+                    "properties/repo_scope",
+                    "Repo scope object. Use { kind: 'current' }, { kind: 'repo_id', repo_id: '<id>' }, or { kind: 'all' }.",
+                ),
+                (
+                    "properties/repo_scope/properties/kind",
+                    "Repo scope kind: current, repo_id, or all.",
+                ),
+                (
+                    "properties/repo_scope/properties/repo_id",
+                    "Required when kind='repo_id'. Must be registered and enabled.",
+                ),
+                ("properties/output_format", DEFAULT_OUTPUT_DESCRIPTION),
+            ],
+        )),
+        "build_or_update_graph" => Some(typed_schema_with_descriptions::<
+            BuildOrUpdateGraphArgsSchema,
+        >(&[
+            (
+                "properties/operation",
+                "Operation object. Use { kind: 'build' } or { kind: 'update', change_source: { kind: 'working_tree'|'staged'|'base'|'files', ... } }.",
+            ),
+            (
+                "properties/operation/properties/kind",
+                "Operation kind: build or update.",
+            ),
+            (
+                "properties/operation/properties/change_source",
+                "Required when kind='update'. Use { kind: 'working_tree' }, { kind: 'staged' }, { kind: 'base', base: 'origin/main' }, or { kind: 'files', files: ['src/lib.rs'] }.",
+            ),
+            (
+                "properties/operation/properties/change_source/properties/kind",
+                "Change-source kind: working_tree, staged, base, or files.",
+            ),
+            (
+                "properties/operation/properties/change_source/properties/base",
+                "Required when kind='base'. Base git ref such as 'origin/main'.",
+            ),
+            (
+                "properties/operation/properties/change_source/properties/files",
+                "Required when kind='files'. Non-empty repo-relative file path list.",
+            ),
+            ("properties/output_format", DEFAULT_OUTPUT_DESCRIPTION),
+        ])),
+        "postprocess_graph" => Some(
+            typed_schema_with_descriptions::<PostprocessGraphArgsSchema>(&[
+                (
+                    "properties/changed_only",
+                    "Restrict postprocess to files currently changed in the working tree when stage dependencies allow.",
+                ),
+                (
+                    "properties/stage",
+                    "Optional stage name: flows, communities, architecture_metrics, query_hints, or large_function_summaries.",
+                ),
+                (
+                    "properties/dry_run",
+                    "Compute the stage summary without recording lifecycle state.",
+                ),
+                ("properties/output_format", DEFAULT_OUTPUT_DESCRIPTION),
+            ]),
+        ),
+        "get_minimal_context" => Some(
+            typed_schema_with_descriptions::<GetMinimalContextArgsSchema>(&[
+                (
+                    "properties/change_source",
+                    "Change-source object. Use { kind: 'base', base: 'origin/main' }, { kind: 'staged' }, or { kind: 'working_tree' }.",
+                ),
+                (
+                    "properties/change_source/properties/kind",
+                    "Change-source kind: base, staged, or working_tree.",
+                ),
+                (
+                    "properties/change_source/properties/base",
+                    "Required when kind='base'. Base git ref such as 'origin/main'.",
+                ),
+                ("properties/max_depth", "Traversal depth limit (default 2)"),
+                (
+                    "properties/max_nodes",
+                    "Maximum impacted nodes (default 50)",
+                ),
+                ("properties/output_format", DEFAULT_OUTPUT_DESCRIPTION),
+            ]),
+        ),
+        "explain_change" => Some(typed_schema_with_descriptions::<ExplainChangeArgsSchema>(
+            &[
+                (
+                    "properties/change_source",
+                    "Change-source object. Use { kind: 'files', files: ['src/lib.rs'] }, { kind: 'base', base: 'origin/main' }, { kind: 'staged' }, or { kind: 'working_tree' }.",
+                ),
+                (
+                    "properties/change_source/properties/kind",
+                    "Change-source kind: files, base, staged, or working_tree.",
+                ),
+                (
+                    "properties/change_source/properties/files",
+                    "Required when kind='files'. Non-empty repo-relative file path list.",
+                ),
+                (
+                    "properties/change_source/properties/base",
+                    "Required when kind='base'. Base git ref such as 'origin/main'.",
+                ),
+                (
+                    "properties/max_depth",
+                    "Traversal depth limit for impact (default 5)",
+                ),
+                (
+                    "properties/max_nodes",
+                    "Maximum impacted nodes (default 200)",
+                ),
+                ("properties/output_format", DEFAULT_OUTPUT_DESCRIPTION),
+            ],
+        )),
+        "get_context" => Some(typed_schema_with_descriptions::<GetContextArgsSchema>(&[
+            (
+                "properties/target",
+                "Target object. Use { kind: 'query', query: 'handle_request' }, { kind: 'file', file: 'src/lib.rs' }, or { kind: 'files', files: ['src/lib.rs'] }. Query grammar supports plain identifiers, exact qualified names, 'who calls <symbol>', 'what breaks <symbol>', and 'tests for <symbol>'.",
+            ),
+            (
+                "properties/target/properties/kind",
+                "Target kind: query, file, or files.",
+            ),
+            (
+                "properties/target/properties/query",
+                "Required when kind='query'. Supported grammar: plain identifier, exact qualified name, 'who calls <symbol>', 'what breaks <symbol>', or 'tests for <symbol>'. Natural-language-only descriptions without a concrete identifier are rejected.",
+            ),
+            (
+                "properties/target/properties/file",
+                "Required when kind='file'. Repo-relative file path.",
+            ),
+            (
+                "properties/target/properties/files",
+                "Required when kind='files'. Non-empty repo-relative file path list.",
+            ),
+            (
+                "properties/intent",
+                "Override intent: symbol, file, review, impact, usage_lookup, refactor_safety, dead_code_check, rename_preview, dependency_removal. Inferred when omitted.",
+            ),
+            (
+                "properties/max_nodes",
+                "Maximum nodes to include (default 100).",
+            ),
+            (
+                "properties/max_edges",
+                "Maximum edges to include (default 100).",
+            ),
+            (
+                "properties/max_files",
+                "Maximum files to include in result. Omit for no cap. Reduces token use when the change-set is large.",
+            ),
+            (
+                "properties/max_depth",
+                "Traversal depth in graph hops (default 2).",
+            ),
+            (
+                "properties/code_spans",
+                "Include line-range spans for each selected file node (default false). Adds token cost; useful when you need precise edit coordinates.",
+            ),
+            (
+                "properties/tests",
+                "Include test nodes in context (default false). Enable when reviewing test coverage or debugging test failures.",
+            ),
+            (
+                "properties/imports",
+                "Include import edges and nodes (default true). Set false to reduce noise when only callers/callees matter.",
+            ),
+            (
+                "properties/neighbors",
+                "Include containment-sibling nodes — functions/types in the same parent scope (default false).",
+            ),
+            (
+                "properties/semantic",
+                "Run graph-aware semantic search to resolve the best-matching qualified name before building context (default false). Useful when the symbol name is ambiguous or approximate.",
+            ),
+            (
+                "properties/include_saved_context",
+                "When true, also query the content store for saved artifacts relevant to this request and include them in the result (default false).",
+            ),
+            (
+                "properties/session_id",
+                "Restrict saved-context retrieval to artifacts from this session and apply a same-session relevance boost.",
+            ),
+            (
+                "properties/agent_id",
+                "Restrict saved-context retrieval to one agent memory partition.",
+            ),
+            (
+                "properties/merge_agent_partitions",
+                "Intentionally merge context across all agent partitions instead of filtering to one partition.",
+            ),
+            (
+                "properties/token_budget",
+                "Maximum tokens to include in the result. Overrides the default policy limit for this call only. Cannot exceed the policy ceiling. Use to enforce tighter context budgets from the caller side.",
+            ),
+            ("properties/output_format", DEFAULT_OUTPUT_DESCRIPTION),
+        ])),
+        "get_session_status" => Some(
+            typed_schema_with_descriptions::<GetSessionStatusArgsSchema>(&[
+                (
+                    "properties/session_id",
+                    "Explicit session id. Omit to use the derived id for the current repo.",
+                ),
+                (
+                    "properties/agent_id",
+                    "Restrict status to one agent memory partition.",
+                ),
+                (
+                    "properties/merge_agent_partitions",
+                    "Intentionally merge status across all agent partitions.",
+                ),
+                ("properties/output_format", DEFAULT_OUTPUT_DESCRIPTION),
+            ]),
+        ),
+        "record_session_event" => Some(typed_schema_with_descriptions::<
+            RecordSessionEventArgsSchema,
+        >(&[
+            (
+                "properties/event",
+                "Hook-compatible event name or alias (kebab-case or PascalCase). Examples: session-start, user-prompt, post-tool-use, file-changed, stop, session-end, tool-failure, SessionStart, PostToolUse.",
+            ),
+            (
+                "properties/payload",
+                "Event payload. Include prompt text, tool name, command, changed_files, status, or summary when available.",
+            ),
+            (
+                "properties/frontend",
+                "Agent/frontend name recorded with the event. Defaults to mcp.",
+            ),
+            (
+                "properties/session_id",
+                "Explicit session id. Omit to use the derived mcp session for the current repo.",
+            ),
+            (
+                "properties/agent_id",
+                "Optional agent memory partition label echoed back in the response.",
+            ),
+            (
+                "properties/repo_scope",
+                "Repo scope object. Use { kind: 'current' } or { kind: 'repo_id', repo_id: '<id>' }. Multi-repo scopes are rejected; event capture is per-repo.",
+            ),
+            (
+                "properties/repo_scope/properties/kind",
+                "Repo scope kind: current or repo_id.",
+            ),
+            (
+                "properties/repo_scope/properties/repo_id",
+                "Required when kind='repo_id'. Must be registered and enabled.",
+            ),
+            ("properties/output_format", DEFAULT_OUTPUT_DESCRIPTION),
+        ])),
+        "wake_up" => Some(typed_schema_with_descriptions::<WakeUpArgsSchema>(&[
+            (
+                "properties/topic",
+                "Optional topic hint used to focus decision-memory search and to fill current_focus when no prior session exists.",
+            ),
+            (
+                "properties/session_id",
+                "Explicit session id. Omit to use the derived mcp session for the current repo.",
+            ),
+            (
+                "properties/frontend",
+                "Agent/frontend name recorded with the wake-up event. Defaults to mcp.",
+            ),
+            (
+                "properties/agent_id",
+                "Restrict resume-snapshot recall to one agent memory partition.",
+            ),
+            (
+                "properties/max_items",
+                "Cap for every list in the pack (default 10, hard-clamped to 25).",
+            ),
+            (
+                "properties/repo_scope",
+                "Repo scope object. Use { kind: 'current' } or { kind: 'repo_id', repo_id: '<id>' }. Multi-repo scopes are rejected; wake-up is per-repo.",
+            ),
+            (
+                "properties/repo_scope/properties/kind",
+                "Repo scope kind: current or repo_id.",
+            ),
+            (
+                "properties/repo_scope/properties/repo_id",
+                "Required when kind='repo_id'. Must be registered and enabled.",
+            ),
+            ("properties/output_format", DEFAULT_OUTPUT_DESCRIPTION),
+        ])),
+        "compact_session" => Some(typed_schema_with_descriptions::<CompactSessionArgsSchema>(
+            &[
+                (
+                    "properties/session_id",
+                    "Explicit session id. Omit to use the derived id for the current repo.",
+                ),
+                ("properties/output_format", DEFAULT_OUTPUT_DESCRIPTION),
+            ],
+        )),
+        "resume_session" => Some(typed_schema_with_descriptions::<ResumeSessionArgsSchema>(
+            &[
+                (
+                    "properties/session_id",
+                    "Explicit session id. Omit to use the derived id for the current repo.",
+                ),
+                (
+                    "properties/agent_id",
+                    "Restrict resume output to one agent memory partition.",
+                ),
+                (
+                    "properties/merge_agent_partitions",
+                    "Intentionally merge resume output across all agent partitions.",
+                ),
+                (
+                    "properties/mark_consumed",
+                    "Mark the snapshot consumed after reading (default true).",
+                ),
+                ("properties/output_format", DEFAULT_OUTPUT_DESCRIPTION),
+            ],
+        )),
+        "search_saved_context" => Some(typed_schema_with_descriptions::<
+            SearchSavedContextArgsSchema,
+        >(&[
+            ("properties/query", "Search query text."),
+            (
+                "properties/repo_scope",
+                "Repo scope object for cross-session search. Use { kind: 'current' }, { kind: 'repo_id', repo_id: '<id>' }, or { kind: 'all' }.",
+            ),
+            (
+                "properties/repo_scope/properties/kind",
+                "Repo scope kind: current, repo_id, or all.",
+            ),
+            (
+                "properties/repo_scope/properties/repo_id",
+                "Required when kind='repo_id'. Must be registered and enabled.",
+            ),
+            (
+                "properties/session_id",
+                "Restrict search to artifacts from this session.",
+            ),
+            (
+                "properties/agent_id",
+                "Restrict search to artifacts from one agent memory partition.",
+            ),
+            (
+                "properties/merge_agent_partitions",
+                "Intentionally merge saved-context search across all agent partitions.",
+            ),
+            (
+                "properties/source_type",
+                "Filter by source type (e.g. 'review_context', 'mcp_artifact').",
+            ),
+            (
+                "properties/limit",
+                "Maximum results to return (default 10).",
+            ),
+            ("properties/output_format", DEFAULT_OUTPUT_DESCRIPTION),
+        ])),
+        "search_decisions" => Some(typed_schema_with_descriptions::<SearchDecisionsArgsSchema>(
+            &[
+                ("properties/query", "Search query text."),
+                (
+                    "properties/session_id",
+                    "Restrict search to one session. Omit for repo-wide decision recall.",
+                ),
+                (
+                    "properties/limit",
+                    "Maximum decisions to return (default 10).",
+                ),
+                ("properties/output_format", DEFAULT_OUTPUT_DESCRIPTION),
+            ],
+        )),
+        "read_saved_context" => Some(
+            typed_schema_with_descriptions::<ReadSavedContextArgsSchema>(&[
+                (
+                    "properties/source_id",
+                    "The source_id returned by save_context_artifact or search_saved_context.",
+                ),
+                (
+                    "properties/session_id",
+                    "Optional: restrict access to artifacts owned by this session. Omit to skip session scoping.",
+                ),
+                (
+                    "properties/agent_id",
+                    "Optional: restrict access to artifacts owned by this agent partition.",
+                ),
+                (
+                    "properties/merge_agent_partitions",
+                    "When true, allow reads across agent partitions intentionally after repo/session checks pass.",
+                ),
+                (
+                    "properties/chunk_offset",
+                    "0-based chunk index to start reading from (default 0). Use next_chunk_offset from a prior truncated response for paging.",
+                ),
+                (
+                    "properties/max_bytes",
+                    "Byte cap on returned content (default 65536). When content exceeds this the response sets truncated=true and includes next_chunk_offset.",
+                ),
+                (
+                    "properties/repo_scope",
+                    "Repo scope object. Use { kind: 'current' }, { kind: 'repo_id', repo_id: '<id>' }, or { kind: 'all' }.",
+                ),
+                (
+                    "properties/repo_scope/properties/kind",
+                    "Repo scope kind: current, repo_id, or all.",
+                ),
+                (
+                    "properties/repo_scope/properties/repo_id",
+                    "Required when kind='repo_id'. Must be registered and enabled.",
+                ),
+                ("properties/output_format", DEFAULT_OUTPUT_DESCRIPTION),
+            ]),
+        ),
+        "save_context_artifact" => Some(typed_schema_with_descriptions::<
+            SaveContextArtifactArgsSchema,
+        >(&[
+            ("properties/content", "The content to store."),
+            (
+                "properties/label",
+                "Human-readable label for display and retrieval.",
+            ),
+            (
+                "properties/source_type",
+                "Category tag (e.g. 'review_context', 'mcp_artifact'). Default: 'mcp_artifact'.",
+            ),
+            (
+                "properties/session_id",
+                "Associate artifact with this session. Omit to use derived session.",
+            ),
+            (
+                "properties/agent_id",
+                "Associate artifact with this agent memory partition.",
+            ),
+            (
+                "properties/repo_scope",
+                "Repo scope object. Use { kind: 'current' }, { kind: 'repo_id', repo_id: '<id>' }, or { kind: 'all' }.",
+            ),
+            (
+                "properties/repo_scope/properties/kind",
+                "Repo scope kind: current, repo_id, or all.",
+            ),
+            (
+                "properties/repo_scope/properties/repo_id",
+                "Required when kind='repo_id'. Must be registered and enabled.",
+            ),
+            (
+                "properties/content_type",
+                "MIME type: 'text/plain' (default), 'text/markdown', or 'application/json'.",
+            ),
+            ("properties/output_format", DEFAULT_OUTPUT_DESCRIPTION),
+        ])),
+        "purge_saved_context" => Some(
+            typed_schema_with_descriptions::<PurgeSavedContextArgsSchema>(&[
+                (
+                    "properties/session_id",
+                    "Delete all saved artifacts for this session.",
+                ),
+                (
+                    "properties/agent_id",
+                    "Restrict session deletion to one agent memory partition.",
+                ),
+                (
+                    "properties/keep_days",
+                    "For age-based cleanup: keep sources newer than this many days (default 30).",
+                ),
+                ("properties/output_format", DEFAULT_OUTPUT_DESCRIPTION),
+            ]),
+        ),
+        "cross_session_search" => Some(typed_schema_with_descriptions::<
+            CrossSessionSearchArgsSchema,
+        >(&[
+            ("properties/query", "Full-text or semantic search query."),
+            (
+                "properties/source_type",
+                "Optional filter: restrict to a specific source_type (e.g. 'mcp_artifact').",
+            ),
+            (
+                "properties/agent_id",
+                "Restrict cross-session search to one agent memory partition.",
+            ),
+            (
+                "properties/merge_agent_partitions",
+                "Intentionally merge cross-session search across all agent partitions.",
+            ),
+            (
+                "properties/limit",
+                "Maximum results to return (default 10).",
+            ),
+            (
+                "properties/repo_scope",
+                "Repo scope object. Use { kind: 'current' }, { kind: 'repo_id', repo_id: '<id>' }, or { kind: 'all' }.",
+            ),
+            (
+                "properties/repo_scope/properties/kind",
+                "Repo scope kind: current, repo_id, or all.",
+            ),
+            (
+                "properties/repo_scope/properties/repo_id",
+                "Required when kind='repo_id'. Must be registered and enabled.",
+            ),
+            ("properties/output_format", DEFAULT_OUTPUT_DESCRIPTION),
+        ])),
+        "get_global_memory" => Some(typed_schema_with_descriptions::<GetGlobalMemoryArgsSchema>(
+            &[
+                (
+                    "properties/limit",
+                    "Maximum entries to return per category (default 10).",
+                ),
+                (
+                    "properties/focus_symbols",
+                    "Symbol qualified names from the current context used to find related past sessions.",
+                ),
+                (
+                    "properties/focus_files",
+                    "File paths from the current context used to find related past sessions.",
+                ),
+                ("properties/output_format", DEFAULT_OUTPUT_DESCRIPTION),
+            ],
+        )),
+        "memory_store" => Some(typed_schema_with_descriptions::<MemoryStoreArgsSchema>(&[
+            (
+                "properties/text",
+                "Memory body text; stored exactly as provided.",
+            ),
+            ("properties/topic", "Topic label for the memory."),
+            ("properties/title", "Optional title line."),
+            (
+                "properties/importance",
+                "Importance: critical, high, normal, or low (default normal).",
+            ),
+            (
+                "properties/scope",
+                "Visibility scope: project, session, frontend, or global (default project).",
+            ),
+            (
+                "properties/frontend",
+                "Frontend identifier; required when scope is frontend. Normalized to claude, codex, copilot, cli, or mcp unless config allows custom frontends.",
+            ),
+            (
+                "properties/source_id",
+                "Source id linking this memory to a saved-context artifact.",
+            ),
+            ("properties/output_format", DEFAULT_OUTPUT_DESCRIPTION),
+        ])),
+        "memory_recall" => Some(typed_schema_with_descriptions::<MemoryRecallArgsSchema>(&[
+            (
+                "properties/query",
+                "Search text matched against topic, title, and body.",
+            ),
+            (
+                "properties/topic",
+                "Restrict recall to one topic (case-insensitive exact match).",
+            ),
+            (
+                "properties/importance",
+                "Restrict recall to one importance level.",
+            ),
+            ("properties/scope", "Restrict recall to one scope."),
+            (
+                "properties/shared",
+                "Only return memories visible to every frontend (project + global).",
+            ),
+            (
+                "properties/limit",
+                "Maximum memories to return (default 20).",
+            ),
+            ("properties/output_format", DEFAULT_OUTPUT_DESCRIPTION),
+        ])),
+        "analyze_safety" => Some(typed_schema_with_descriptions::<AnalyzeSafetyArgsSchema>(
+            &[
+                (
+                    "properties/symbol",
+                    "Fully-qualified symbol name (e.g. 'src/auth.rs::fn::verify_token').",
+                ),
+                ("properties/output_format", DEFAULT_OUTPUT_DESCRIPTION),
+            ],
+        )),
+        "analyze_remove" => Some(typed_schema_with_descriptions::<AnalyzeRemoveArgsSchema>(
+            &[
+                (
+                    "properties/symbols",
+                    "Fully-qualified symbol names to remove.",
+                ),
+                ("properties/max_depth", "Traversal depth limit (default 3)."),
+                (
+                    "properties/max_nodes",
+                    "Maximum impacted nodes to return (default 200).",
+                ),
+                (
+                    "properties/max_files",
+                    "Maximum impacted files to include in the response (default 20). Raises omitted_file_count when truncated.",
+                ),
+                (
+                    "properties/max_edges",
+                    "Maximum relevant edges to include in the response (default 50). Raises omitted_edge_count when truncated.",
+                ),
+                ("properties/output_format", DEFAULT_OUTPUT_DESCRIPTION),
+            ],
+        )),
+        "analyze_dead_code" => Some(typed_schema_with_descriptions::<AnalyzeDeadCodeArgsSchema>(
+            &[
+                (
+                    "properties/allowlist",
+                    "Qualified names to exclude from dead-code candidates even when they have no inbound edges.",
+                ),
+                (
+                    "properties/subpath",
+                    "Restrict scan to nodes whose file_path starts with this prefix (e.g. 'src/internal').",
+                ),
+                (
+                    "properties/limit",
+                    "Maximum candidates to return (default 50).",
+                ),
+                (
+                    "properties/summary",
+                    "Return only the candidate count, not the full list. Useful for quick health checks.",
+                ),
+                (
+                    "properties/exclude_kind",
+                    "Node kinds to exclude from results (e.g. ['constant', 'variable']). Accepted values: function, method, struct, enum, trait, interface, class, constant, variable.",
+                ),
+                (
+                    "properties/code_only",
+                    "Restrict to code symbols only (default true). Non-code nodes (files, packages, docs) are always excluded in the current implementation.",
+                ),
+                (
+                    "properties/max_files",
+                    "Reserved for future per-candidate file-list truncation. No effect in current implementation.",
+                ),
+                (
+                    "properties/max_edges",
+                    "Reserved for future per-candidate edge-list truncation. No effect in current implementation.",
+                ),
+                ("properties/output_format", DEFAULT_OUTPUT_DESCRIPTION),
+            ],
+        )),
+        "analyze_dependency" => Some(
+            typed_schema_with_descriptions::<AnalyzeDependencyArgsSchema>(&[
+                (
+                    "properties/symbol",
+                    "Fully-qualified symbol name to check (e.g. 'src/lib.rs::fn::legacy_parse').",
+                ),
+                ("properties/output_format", DEFAULT_OUTPUT_DESCRIPTION),
+            ]),
+        ),
+        "find_large_functions" => Some(typed_schema_with_descriptions::<
+            FindLargeFunctionsArgsSchema,
+        >(&[
+            (
+                "properties/files",
+                "Optional repo-relative files to scope the search.",
+            ),
+            ("properties/threshold", "Override LOC threshold."),
+            (
+                "properties/complexity_threshold",
+                "Override cyclomatic complexity threshold.",
+            ),
+            (
+                "properties/cognitive_threshold",
+                "Override cognitive complexity threshold.",
+            ),
+            (
+                "properties/nesting_threshold",
+                "Override max nesting depth threshold.",
+            ),
+            (
+                "properties/mode",
+                "One of 'large', 'complex', or 'large-or-complex'.",
+            ),
+            ("properties/limit", "Cap result count after ranking."),
+            (
+                "properties/include_tests",
+                "Include test functions and methods.",
+            ),
+            (
+                "properties/verbose",
+                "Return full report body in JSON output too.",
+            ),
+            ("properties/output_format", DEFAULT_OUTPUT_DESCRIPTION),
+        ])),
+        "find_complex_functions" => Some(typed_schema_with_descriptions::<
+            FindComplexFunctionsArgsSchema,
+        >(&[
+            (
+                "properties/files",
+                "Optional repo-relative files to scope the search.",
+            ),
+            (
+                "properties/complexity_threshold",
+                "Override cyclomatic complexity threshold.",
+            ),
+            (
+                "properties/cognitive_threshold",
+                "Override cognitive complexity threshold.",
+            ),
+            (
+                "properties/nesting_threshold",
+                "Override max nesting depth threshold.",
+            ),
+            ("properties/limit", "Cap result count after ranking."),
+            (
+                "properties/include_tests",
+                "Include test functions and methods.",
+            ),
+            (
+                "properties/verbose",
+                "Return full report body in JSON output too.",
+            ),
+            ("properties/output_format", DEFAULT_OUTPUT_DESCRIPTION),
+        ])),
+        "find_similar_functions" => Some(typed_schema_with_descriptions::<
+            FindSimilarFunctionsArgsSchema,
+        >(&[
+            (
+                "properties/symbol",
+                "Qualified name or resolvable callable identifier.",
+            ),
+            (
+                "properties/min_score",
+                "Minimum similarity score to keep (0.0-1.0).",
+            ),
+            ("properties/limit", "Cap returned matches after ranking."),
+            (
+                "properties/include_same_file",
+                "Keep same-file matches too.",
+            ),
+            (
+                "properties/verbose",
+                "Return full report body in JSON output too.",
+            ),
+            ("properties/output_format", DEFAULT_OUTPUT_DESCRIPTION),
+        ])),
+        "find_duplicates" => Some(typed_schema_with_descriptions::<FindDuplicatesArgsSchema>(
+            &[
+                (
+                    "properties/files",
+                    "Optional repo-relative files to scope the search.",
+                ),
+                (
+                    "properties/min_score",
+                    "Minimum duplicate confidence to keep (0.0-1.0).",
+                ),
+                (
+                    "properties/limit",
+                    "Cap returned duplicate groups after ranking.",
+                ),
+                (
+                    "properties/include_tests",
+                    "Include test functions and methods.",
+                ),
+                (
+                    "properties/suppressions",
+                    "Optional suppressions matched against duplicate group id, normalized summary, file path, or symbol name.",
+                ),
+                (
+                    "properties/verbose",
+                    "Return full report body in JSON output too.",
+                ),
+                ("properties/output_format", DEFAULT_OUTPUT_DESCRIPTION),
+            ],
+        )),
+        "infer_modules" => Some(typed_schema_with_descriptions::<InferModulesArgsSchema>(&[
+            ("properties/limit", "Cap returned findings after ranking."),
+            (
+                "properties/verbose",
+                "Return full report body in JSON output too.",
+            ),
+            ("properties/output_format", DEFAULT_OUTPUT_DESCRIPTION),
+        ])),
+        "label_components" => Some(typed_schema_with_descriptions::<LabelComponentsArgsSchema>(
+            &[
+                (
+                    "properties/files",
+                    "Optional repo-relative files to scope file labeling.",
+                ),
+                (
+                    "properties/symbols",
+                    "Optional qualified names to scope symbol labeling.",
+                ),
+                (
+                    "properties/limit",
+                    "Cap returned assignments after ranking.",
+                ),
+                (
+                    "properties/verbose",
+                    "Return full report body in JSON output too.",
+                ),
+                ("properties/output_format", DEFAULT_OUTPUT_DESCRIPTION),
+            ],
+        )),
+        "query_graph" => Some(typed_schema_with_descriptions::<QueryGraphArgsSchema>(&[
+            (
+                "properties/text",
+                "Query text. Supported grammar: plain identifier ('compute'), exact qualified name ('src/service.rs::fn::compute'), 'who calls <symbol>', 'what breaks <symbol>', or 'tests for <symbol>'. Natural-language-only descriptions without a concrete identifier are rejected.",
+            ),
+            (
+                "properties/kind",
+                "Filter by node kind (e.g. 'function', 'struct')",
+            ),
+            (
+                "properties/language",
+                "Filter by language (e.g. 'rust', 'python')",
+            ),
+            ("properties/limit", "Maximum results to return (default 20)"),
+            (
+                "properties/semantic",
+                "Graph-neighbour expansion on top of FTS: re-ranks initial FTS hits using graph edges (default false). NOT vector/embedding search — still requires FTS to find at least one initial symbol-name hit. If FTS returns nothing (e.g. text was a phrase not a symbol name), semantic expansion also returns nothing. Use regex instead for pattern-based fallback.",
+            ),
+            (
+                "properties/expand",
+                "Expand results through graph edges after ranking (default false). Subsumed by semantic=true; setting both is redundant.",
+            ),
+            (
+                "properties/expand_hops",
+                "Max edge hops when expand=true (default 1)",
+            ),
+            (
+                "properties/regex",
+                "Regex pattern matched against name and qualified_name via SQL UDF. Empty string is treated like omitted. Three modes: (1) regex-only structural scan when text is empty — filters every node in the DB; (2) text+regex: FTS5 runs first then the UDF post-filters its candidates inside SQLite; (3) invalid pattern returns an error with details. Supports regex crate alternation syntax (e.g. 'handle|HANDLE|Handle_'). Must be valid regex crate syntax.",
+            ),
+            (
+                "properties/subpath",
+                "Restrict results to nodes whose file_path starts with this prefix (e.g. 'src/auth', 'packages/atlas-core'). Filtering happens in SQL before ranking.",
+            ),
+            (
+                "properties/fuzzy",
+                "Enable fuzzy (edit-distance) typo recovery for near-miss symbol names (default false). Uses relaxed candidate expansion plus stronger code-symbol ranking so close symbol typos outrank weaker docs/config matches.",
+            ),
+            (
+                "properties/hybrid",
+                "Enable hybrid FTS + vector retrieval with Reciprocal Rank Fusion (default false). Requires search.embedding.url in .atlas/config.toml; falls back to FTS-only when no embedding backend is configured.",
+            ),
+            (
+                "properties/include_files",
+                "Include file nodes in the result set (default false). Leave disabled for symbol-centric search; enable when a file-level hit is useful.",
+            ),
+            (
+                "properties/repo_scope",
+                "Repo scope object. Use { kind: 'current' }, { kind: 'repo_id', repo_id: '<id>' }, or { kind: 'all' }.",
+            ),
+            (
+                "properties/repo_scope/properties/kind",
+                "Repo scope kind: current, repo_id, or all.",
+            ),
+            (
+                "properties/repo_scope/properties/repo_id",
+                "Required when kind='repo_id'. Must be registered and enabled.",
+            ),
+            ("properties/output_format", DEFAULT_OUTPUT_DESCRIPTION),
+        ])),
+        "batch_query_graph" => Some(typed_schema_with_descriptions::<BatchQueryGraphArgsSchema>(
+            &[
+                (
+                    "properties/items",
+                    "Array of query objects (1-20). Each object accepts same fields as query_graph: text, kind, language, limit, semantic, expand, expand_hops, regex, subpath, fuzzy, hybrid, include_files.",
+                ),
+                (
+                    "properties/items/items/properties/text",
+                    "Symbol name or identifier to search (e.g. 'BalancesTab'). Required unless 'regex' is set.",
+                ),
+                (
+                    "properties/items/items/properties/kind",
+                    "Filter by node kind (e.g. 'function', 'struct')",
+                ),
+                (
+                    "properties/items/items/properties/language",
+                    "Filter by language (e.g. 'rust', 'typescript')",
+                ),
+                (
+                    "properties/items/items/properties/limit",
+                    "Maximum results for this query (default 20)",
+                ),
+                (
+                    "properties/items/items/properties/semantic",
+                    "Graph-neighbour expansion on top of FTS (default false). Requires FTS to find at least one hit first.",
+                ),
+                (
+                    "properties/items/items/properties/expand",
+                    "Expand results through graph edges after ranking (default false)",
+                ),
+                (
+                    "properties/items/items/properties/expand_hops",
+                    "Max edge hops when expand=true (default 1)",
+                ),
+                (
+                    "properties/items/items/properties/regex",
+                    "Regex pattern matched against name and qualified_name via SQL UDF. Must be valid regex crate syntax.",
+                ),
+                (
+                    "properties/items/items/properties/subpath",
+                    "Restrict results to nodes whose file_path starts with this prefix.",
+                ),
+                (
+                    "properties/items/items/properties/fuzzy",
+                    "Enable fuzzy typo recovery (default false).",
+                ),
+                (
+                    "properties/items/items/properties/hybrid",
+                    "Enable hybrid FTS + vector retrieval (default false). Requires search.embedding.url in .atlas/config.toml.",
+                ),
+                (
+                    "properties/items/items/properties/include_files",
+                    "Include file nodes in the result set (default false).",
+                ),
+                (
+                    "properties/repo_scope",
+                    "Repo scope object. Use { kind: 'current' }, { kind: 'repo_id', repo_id: '<id>' }, or { kind: 'all' }.",
+                ),
+                (
+                    "properties/repo_scope/properties/kind",
+                    "Repo scope kind: current, repo_id, or all.",
+                ),
+                (
+                    "properties/repo_scope/properties/repo_id",
+                    "Required when kind='repo_id'. Must be registered and enabled.",
+                ),
+                ("properties/output_format", DEFAULT_OUTPUT_DESCRIPTION),
+            ],
+        )),
+        "traverse_graph" => Some(typed_schema_with_descriptions::<TraverseGraphArgsSchema>(
+            &[
+                (
+                    "properties/from_qn",
+                    "Qualified name of the starting node (e.g. 'src/lib.rs::fn::my_func')",
+                ),
+                ("properties/max_depth", "Traversal depth limit (default 3)"),
+                (
+                    "properties/max_nodes",
+                    "Maximum nodes to return (default 100)",
+                ),
+                ("properties/output_format", DEFAULT_OUTPUT_DESCRIPTION),
+            ],
+        )),
+        "symbol_neighbors" => Some(typed_schema_with_descriptions::<SymbolNeighborsArgsSchema>(
+            &[
+                (
+                    "properties/qname",
+                    "Fully-qualified name of the symbol (e.g. 'src/lib.rs::fn::my_func').",
+                ),
+                (
+                    "properties/limit",
+                    "Maximum nodes to return per relationship kind (default 10).",
+                ),
+                ("properties/output_format", DEFAULT_OUTPUT_DESCRIPTION),
+            ],
+        )),
+        "cross_file_links" => Some(typed_schema_with_descriptions::<CrossFileLinksArgsSchema>(
+            &[
+                (
+                    "properties/file",
+                    "Repo-relative file path to analyse (e.g. 'src/auth.rs').",
+                ),
+                ("properties/limit", "Maximum links to return (default 20)."),
+                ("properties/output_format", DEFAULT_OUTPUT_DESCRIPTION),
+            ],
+        )),
+        "concept_clusters" => Some(typed_schema_with_descriptions::<ConceptClustersArgsSchema>(
+            &[
+                (
+                    "properties/files",
+                    "Seed file paths (repo-relative) to cluster around.",
+                ),
+                (
+                    "properties/limit",
+                    "Maximum clusters to return (default 10).",
+                ),
+                ("properties/output_format", DEFAULT_OUTPUT_DESCRIPTION),
+            ],
+        )),
+        "explain_query" => Some(typed_schema_with_descriptions::<ExplainQueryArgsSchema>(&[
+            (
+                "properties/text",
+                "Symbol name or identifier — same as query_graph 'text'.",
+            ),
+            (
+                "properties/kind",
+                "Node kind filter (e.g. 'function', 'struct') — same as query_graph 'kind'.",
+            ),
+            (
+                "properties/language",
+                "Language filter (e.g. 'rust') — same as query_graph 'language'.",
+            ),
+            ("properties/limit", "Result limit (default 20)."),
+            (
+                "properties/semantic",
+                "Whether semantic expansion would be applied (default false).",
+            ),
+            (
+                "properties/regex",
+                "Regex pattern — validated and explained. Regex-only (text empty): structural scan. text+regex: FTS5 first then UDF post-filter. Invalid pattern: error with details.",
+            ),
+            (
+                "properties/subpath",
+                "File-path prefix filter — same as query_graph 'subpath'.",
+            ),
+            (
+                "properties/fuzzy",
+                "Whether fuzzy name-matching boost would be active (default false).",
+            ),
+            (
+                "properties/hybrid",
+                "Whether hybrid FTS + vector retrieval would be used (default false). Requires search.embedding.url in .atlas/config.toml.",
+            ),
+            (
+                "properties/include_files",
+                "Whether file nodes would be included in the result set (default false).",
+            ),
+            (
+                "properties/repo_scope",
+                "Repo scope object. Use { kind: 'current' }, { kind: 'repo_id', repo_id: '<id>' }, or { kind: 'all' }.",
+            ),
+            (
+                "properties/repo_scope/properties/kind",
+                "Repo scope kind: current, repo_id, or all.",
+            ),
+            (
+                "properties/repo_scope/properties/repo_id",
+                "Required when kind='repo_id'. Must be registered and enabled.",
+            ),
+            ("properties/output_format", DEFAULT_OUTPUT_DESCRIPTION),
+        ])),
+        "resolve_symbol" => Some(typed_schema_with_descriptions::<ResolveSymbolArgsSchema>(
+            &[
+                (
+                    "properties/name",
+                    "Symbol identifier or exact qualified name to resolve (e.g. 'LoadIdentityMessages', 'compute', 'src/service.rs::fn::compute').",
+                ),
+                (
+                    "properties/kind",
+                    "Optional kind filter. Accepts public aliases: 'function'/'fn'/'func', 'method', 'class', 'struct'/'record', 'interface'/'iface', 'trait', 'enum', 'module'/'mod', 'variable'/'var', 'constant'/'const', 'test', 'import', 'package'/'pkg', 'file'.",
+                ),
+                (
+                    "properties/file",
+                    "Optional file path filter. Only returns matches whose file_path contains this string (e.g. 'internal/requestctx/context.go' or 'src/').",
+                ),
+                (
+                    "properties/language",
+                    "Optional language filter (e.g. 'rust', 'go', 'typescript').",
+                ),
+                (
+                    "properties/limit",
+                    "Maximum matches to return (default 10).",
+                ),
+                (
+                    "properties/repo_scope",
+                    "Repo scope object. Use { kind: 'current' }, { kind: 'repo_id', repo_id: '<id>' }, or { kind: 'all' }.",
+                ),
+                (
+                    "properties/repo_scope/properties/kind",
+                    "Repo scope kind: current, repo_id, or all.",
+                ),
+                (
+                    "properties/repo_scope/properties/repo_id",
+                    "Required when kind='repo_id'. Must be registered and enabled.",
+                ),
+                ("properties/output_format", DEFAULT_OUTPUT_DESCRIPTION),
+            ],
+        )),
+        "search_files" => Some(typed_schema_with_descriptions::<SearchFilesArgsSchema>(&[
+            (
+                "properties/pattern",
+                "Glob pattern matched against file names and repo-relative paths (e.g. '*.sql', '**/*.toml', 'config/*').",
+            ),
+            (
+                "properties/globs",
+                "Optional include-path filters: only files whose repo-relative path matches at least one of these globs are considered.",
+            ),
+            (
+                "properties/exclude_globs",
+                "Optional exclusion filters: files matching any of these globs are skipped (e.g. ['**/generated/**', '**/*.min.js']).",
+            ),
+            (
+                "properties/subpath",
+                "Scope the walk to a repo sub-directory (e.g. 'packages/api'). Empty or omitted value means repo root.",
+            ),
+            (
+                "properties/case_sensitive",
+                "Match pattern case-sensitively (default false).",
+            ),
+            ("properties/output_format", DEFAULT_OUTPUT_DESCRIPTION),
+        ])),
+        "search_content" => Some(typed_schema_with_descriptions::<SearchContentArgsSchema>(
+            &[
+                (
+                    "properties/query",
+                    "Text to search for. Literal string by default; set is_regex=true for regex patterns. Invalid regex stays strict and returns an error; for literal metacharacters prefer is_regex=false or escape them, e.g. 'Command::Context|Context \\{' .",
+                ),
+                (
+                    "properties/globs",
+                    "Optional include-path filters: only files matching at least one glob are searched.",
+                ),
+                (
+                    "properties/exclude_globs",
+                    "Optional exclusion filters: files matching any of these globs are skipped.",
+                ),
+                (
+                    "properties/exclude_generated",
+                    "Skip generated/vendor files (node_modules, dist, *.min.js, etc.). Default true.",
+                ),
+                (
+                    "properties/is_regex",
+                    "Treat query as a regex pattern (default false). Literal queries are case-insensitive by default. Invalid regex does not fall back to literal search.",
+                ),
+                (
+                    "properties/context_lines",
+                    "Lines of context to include before and after each match (default 0).",
+                ),
+                (
+                    "properties/rich_snippets",
+                    "When true, also return grouped per-match snippets with before/match/after context lines. Default false to keep payloads compact.",
+                ),
+                (
+                    "properties/snippet_context_lines",
+                    "Context lines per grouped rich snippet (default: max(context_lines, 2) when rich_snippets=true).",
+                ),
+                (
+                    "properties/max_results",
+                    "Maximum match lines to return (default 50).",
+                ),
+                (
+                    "properties/subpath",
+                    "Scope the walk to a repo sub-directory (e.g. 'services/auth'). Empty or omitted value means repo root.",
+                ),
+                ("properties/output_format", DEFAULT_OUTPUT_DESCRIPTION),
+            ],
+        )),
+        "read_file_excerpt" => Some(typed_schema_with_descriptions::<ReadFileExcerptArgsSchema>(
+            &[
+                ("properties/file", "Repo-relative file path to read."),
+                (
+                    "properties/selector",
+                    "Selector object. Use { kind: 'range', start_line: 10, end_line: 20 }, { kind: 'ranges', line_ranges: [{ start_line: 10, end_line: 20 }] }, or { kind: 'context', line: 42, before: 2, after: 2 }.",
+                ),
+                (
+                    "properties/selector/properties/kind",
+                    "Selector kind: range, ranges, or context.",
+                ),
+                (
+                    "properties/selector/properties/start_line",
+                    "Required when kind='range'. 1-based inclusive start line.",
+                ),
+                (
+                    "properties/selector/properties/end_line",
+                    "Required when kind='range'. 1-based inclusive end line.",
+                ),
+                (
+                    "properties/selector/properties/line",
+                    "Required when kind='context'. 1-based line number.",
+                ),
+                (
+                    "properties/selector/properties/before",
+                    "Optional when kind='context'. Context lines before line.",
+                ),
+                (
+                    "properties/selector/properties/after",
+                    "Optional when kind='context'. Context lines after line.",
+                ),
+                (
+                    "properties/selector/properties/line_ranges",
+                    "Required when kind='ranges'. Non-empty list of line ranges.",
+                ),
+                (
+                    "properties/selector/properties/line_ranges/items/properties/start_line",
+                    "1-based inclusive start line.",
+                ),
+                (
+                    "properties/selector/properties/line_ranges/items/properties/end_line",
+                    "1-based inclusive end line.",
+                ),
+                (
+                    "properties/max_lines",
+                    "Maximum excerpt lines to return across all ranges (default 200, clamped by policy).",
+                ),
+                (
+                    "properties/repo_root",
+                    "Optional repo-root assertion. When provided, Atlas fails if it does not match current repo identity.",
+                ),
+                ("properties/output_format", DEFAULT_OUTPUT_DESCRIPTION),
+            ],
+        )),
+        "get_docs_section" => Some(typed_schema_with_descriptions::<GetDocsSectionArgsSchema>(
+            &[
+                (
+                    "properties/file",
+                    "Repo-relative Markdown file path to read.",
+                ),
+                (
+                    "properties/selector",
+                    "Selector object. Use { kind: 'heading', heading: 'document.install' } or { kind: 'line', line: 42 }.",
+                ),
+                (
+                    "properties/selector/properties/kind",
+                    "Selector kind: heading or line.",
+                ),
+                (
+                    "properties/selector/properties/heading",
+                    "Required when kind='heading'. Heading path, slug, or title to resolve.",
+                ),
+                (
+                    "properties/selector/properties/line",
+                    "Required when kind='line'. 1-based line number.",
+                ),
+                (
+                    "properties/max_bytes",
+                    "Maximum bytes of section content to emit before truncating (default 16384).",
+                ),
+                (
+                    "properties/repo_root",
+                    "Optional repo-root assertion. When provided, Atlas fails if it does not match current repo identity.",
+                ),
+                ("properties/output_format", DEFAULT_OUTPUT_DESCRIPTION),
+            ],
+        )),
+        "read_file_around_match" => Some(typed_schema_with_descriptions::<
+            ReadFileAroundMatchArgsSchema,
+        >(&[
+            ("properties/file", "Repo-relative file path to search."),
+            (
+                "properties/query",
+                "Literal string or regex pattern to match within the file.",
+            ),
+            (
+                "properties/is_regex",
+                "Treat query as regex (default false).",
+            ),
+            (
+                "properties/case_sensitive",
+                "When false, literal matching is case-insensitive by default; regex matching is case-sensitive by default.",
+            ),
+            (
+                "properties/before",
+                "Context lines before each match window (default 2).",
+            ),
+            (
+                "properties/after",
+                "Context lines after each match window (default 2).",
+            ),
+            (
+                "properties/max_matches",
+                "Maximum matched lines to consider before truncating (default 20, clamped by policy).",
+            ),
+            (
+                "properties/max_lines",
+                "Maximum lines to emit across returned snippets (default 200, clamped by policy).",
+            ),
+            (
+                "properties/repo_root",
+                "Optional repo-root assertion. When provided, Atlas fails if it does not match current repo identity.",
+            ),
+            ("properties/output_format", DEFAULT_OUTPUT_DESCRIPTION),
+        ])),
+        "search_templates" => Some(typed_schema_with_descriptions::<SearchTemplatesArgsSchema>(
+            &[
+                (
+                    "properties/kind",
+                    "Template engine: html, jinja, handlebars, tera, mako, mustache, twig, liquid, erb, haml, pug. Omit to search all template types.",
+                ),
+                ("properties/globs", "Optional include-path filters."),
+                ("properties/exclude_globs", "Optional exclusion filters."),
+                (
+                    "properties/subpath",
+                    "Scope the walk to a repo sub-directory. Empty or omitted value means repo root.",
+                ),
+                (
+                    "properties/case_sensitive",
+                    "Match case-sensitively (default false).",
+                ),
+                (
+                    "properties/max_results",
+                    "Maximum files to return (default 100).",
+                ),
+                ("properties/output_format", DEFAULT_OUTPUT_DESCRIPTION),
+            ],
+        )),
+        "search_text_assets" => Some(
+            typed_schema_with_descriptions::<SearchTextAssetsArgsSchema>(&[
+                (
+                    "properties/kind",
+                    "Asset type: sql, config, env, prompt. Omit to search all text asset types.",
+                ),
+                ("properties/globs", "Optional include-path filters."),
+                ("properties/exclude_globs", "Optional exclusion filters."),
+                (
+                    "properties/subpath",
+                    "Scope the walk to a repo sub-directory. Empty or omitted value means repo root.",
+                ),
+                (
+                    "properties/case_sensitive",
+                    "Match case-sensitively (default false).",
+                ),
+                (
+                    "properties/max_results",
+                    "Maximum files to return (default 100).",
+                ),
+                ("properties/output_format", DEFAULT_OUTPUT_DESCRIPTION),
+            ]),
+        ),
+        _ => None,
+    }
+}
+
+fn typed_schema_with_descriptions<T: JsonSchema>(descriptions: &[(&str, &str)]) -> Value {
+    let mut schema = serde_json::to_value(schemars::schema_for!(T)).expect("typed schema value");
+    for &(path, description) in descriptions {
+        annotate_schema_description(&mut schema, path, description);
+    }
+    schema
+}
+
+fn annotate_schema_description(schema: &mut Value, path: &str, description: &str) {
+    let mut current = schema;
+    for segment in path.split('/') {
+        match current {
+            Value::Object(object) => {
+                let Some(next) = object.get_mut(segment) else {
+                    return;
+                };
+                current = next;
+            }
+            Value::Array(items) if segment == "items" => {
+                if items.is_empty() {
+                    return;
+                }
+                current = &mut items[0];
+            }
+            _ => return,
+        }
+    }
+    if let Value::Object(object) = current {
+        object.insert(
+            "description".to_owned(),
+            Value::String(description.to_owned()),
+        );
     }
 }
 
@@ -5498,7 +7849,7 @@ fn get_context_stats_output_schema() -> Value {
     )
 }
 
-fn tool_annotations(name: &str) -> ToolAnnotations {
+fn tool_annotations(name: &str) -> ToolDescriptorAnnotations {
     let destructive = matches!(name, "purge_saved_context");
     let state_changing = matches!(
         name,
@@ -5509,11 +7860,9 @@ fn tool_annotations(name: &str) -> ToolAnnotations {
             | "wake_up"
             | "purge_saved_context"
     );
-    ToolAnnotations {
-        read_only_hint: !state_changing,
-        state_changing_hint: state_changing,
-        destructive_hint: destructive,
-    }
+    ToolDescriptorAnnotations::new()
+        .read_only(!state_changing)
+        .destructive(destructive)
 }
 
 fn tool_category(name: &str) -> &'static str {
@@ -5549,12 +7898,84 @@ fn tool_category(name: &str) -> &'static str {
     }
 }
 
-fn tool_icons(_category: &str) -> Vec<IconDescriptor> {
-    Vec::new()
-}
-
 #[cfg(test)]
 const ALLOWED_TEXT_ONLY_TOOLS: &[&str] = &[];
+
+#[cfg(test)]
+const TYPED_HEALTH_SCHEMA_TOOLS: &[&str] = &[
+    "broker_status",
+    "status",
+    "doctor",
+    "db_check",
+    "debug_graph",
+];
+
+#[cfg(test)]
+const TYPED_DISCOVERY_SCHEMA_TOOLS: &[&str] = &[
+    "search_files",
+    "search_content",
+    "read_file_excerpt",
+    "get_docs_section",
+    "read_file_around_match",
+    "search_templates",
+    "search_text_assets",
+];
+
+#[cfg(test)]
+const TYPED_GRAPH_SCHEMA_TOOLS: &[&str] = &[
+    "query_graph",
+    "batch_query_graph",
+    "resolve_symbol",
+    "symbol_neighbors",
+    "traverse_graph",
+    "cross_file_links",
+    "concept_clusters",
+    "explain_query",
+];
+
+#[cfg(test)]
+const TYPED_CONTEXT_REVIEW_SCHEMA_TOOLS: &[&str] = &[
+    "detect_changes",
+    "get_context",
+    "get_review_context",
+    "get_minimal_context",
+    "get_impact_radius",
+    "explain_change",
+    "build_or_update_graph",
+    "postprocess_graph",
+];
+
+#[cfg(test)]
+const TYPED_ANALYSIS_SCHEMA_TOOLS: &[&str] = &[
+    "analyze_safety",
+    "analyze_remove",
+    "analyze_dead_code",
+    "analyze_dependency",
+    "find_large_functions",
+    "find_complex_functions",
+    "find_similar_functions",
+    "find_duplicates",
+    "infer_modules",
+    "label_components",
+];
+
+#[cfg(test)]
+const TYPED_SESSION_MEMORY_SCHEMA_TOOLS: &[&str] = &[
+    "get_session_status",
+    "compact_session",
+    "resume_session",
+    "search_saved_context",
+    "search_decisions",
+    "read_saved_context",
+    "save_context_artifact",
+    "purge_saved_context",
+    "cross_session_search",
+    "get_global_memory",
+    "memory_store",
+    "memory_recall",
+    "record_session_event",
+    "wake_up",
+];
 
 #[cfg(test)]
 const ALLOWED_TOOL_DESCRIPTOR_FIELDS: &[&str] = &[
@@ -5571,12 +7992,16 @@ const ALLOWED_TOOL_DESCRIPTOR_FIELDS: &[&str] = &[
 #[cfg(test)]
 mod tests {
     use super::{
-        ALLOWED_TEXT_ONLY_TOOLS, ToolResultContract, tool_descriptors, tool_input_schema_by_name,
-        tool_list, tool_list_markdown, tool_result_contract,
+        ALLOWED_TEXT_ONLY_TOOLS, TYPED_ANALYSIS_SCHEMA_TOOLS, TYPED_CONTEXT_REVIEW_SCHEMA_TOOLS,
+        TYPED_DISCOVERY_SCHEMA_TOOLS, TYPED_GRAPH_SCHEMA_TOOLS, TYPED_HEALTH_SCHEMA_TOOLS,
+        TYPED_SESSION_MEMORY_SCHEMA_TOOLS, ToolResultContract, raw_tool_input_schema_by_name,
+        tool_descriptors, tool_input_schema_by_name, tool_list, tool_list_markdown,
+        tool_result_contract,
     };
     use crate::descriptors::JSON_SCHEMA_2020_12_URI;
     use jsonschema::{Draft, JSONSchema};
     use serde_json::json;
+    use std::collections::BTreeSet;
 
     fn compile_schema(schema: &serde_json::Value) {
         JSONSchema::options()
@@ -5585,24 +8010,139 @@ mod tests {
             .expect("valid 2020-12 schema");
     }
 
+    fn required_field_names(schema: &serde_json::Value) -> BTreeSet<String> {
+        schema
+            .get("required")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(serde_json::Value::as_str)
+            .map(ToOwned::to_owned)
+            .collect()
+    }
+
+    fn resolve_local_schema<'a>(
+        root: &'a serde_json::Value,
+        schema: &'a serde_json::Value,
+    ) -> &'a serde_json::Value {
+        let mut current = schema;
+        loop {
+            if let Some(reference) = current.get("$ref").and_then(serde_json::Value::as_str) {
+                let pointer = reference
+                    .strip_prefix('#')
+                    .expect("local schema ref must start with #");
+                current = root
+                    .pointer(pointer)
+                    .unwrap_or_else(|| panic!("missing local schema ref target: {reference}"));
+                continue;
+            }
+
+            let mut advanced = false;
+            for keyword in ["anyOf", "oneOf", "allOf"] {
+                let Some(options) = current.get(keyword).and_then(serde_json::Value::as_array)
+                else {
+                    continue;
+                };
+                if let Some(candidate) = options
+                    .iter()
+                    .find(|candidate| candidate.get("type") != Some(&json!("null")))
+                {
+                    current = candidate;
+                    advanced = true;
+                    break;
+                }
+            }
+            if !advanced {
+                break;
+            }
+        }
+        current
+    }
+
+    fn schema_node_at<'a>(root: &'a serde_json::Value, pointer: &str) -> &'a serde_json::Value {
+        let mut current = root;
+        for segment in pointer.trim_start_matches('/').split('/') {
+            current = resolve_local_schema(root, current);
+            current = current
+                .get(segment)
+                .unwrap_or_else(|| panic!("missing schema path /{segment} in {pointer}"));
+        }
+        resolve_local_schema(root, current)
+    }
+
+    fn schema_enum_values(
+        root: &serde_json::Value,
+        schema: &serde_json::Value,
+    ) -> Option<Vec<String>> {
+        let schema = resolve_local_schema(root, schema);
+        if let Some(values) = schema.get("enum").and_then(serde_json::Value::as_array) {
+            return Some(
+                values
+                    .iter()
+                    .map(|value| {
+                        value
+                            .as_str()
+                            .unwrap_or_else(|| panic!("enum value must be string: {value}"))
+                            .to_owned()
+                    })
+                    .collect(),
+            );
+        }
+
+        for keyword in ["anyOf", "oneOf", "allOf"] {
+            if let Some(values) = schema.get(keyword).and_then(serde_json::Value::as_array) {
+                for candidate in values {
+                    if candidate.get("type") == Some(&json!("null")) {
+                        continue;
+                    }
+                    if let Some(enum_values) = schema_enum_values(root, candidate) {
+                        return Some(enum_values);
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
+    fn assert_schema_enum_values(root: &serde_json::Value, pointer: &str, expected: &[&str]) {
+        let actual = schema_enum_values(root, schema_node_at(root, pointer))
+            .unwrap_or_else(|| panic!("missing enum at schema path {pointer}"));
+        let expected = expected
+            .iter()
+            .map(|value| (*value).to_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected, "enum mismatch at schema path {pointer}");
+    }
+
     #[test]
     fn every_tool_name_title_and_annotations_are_present() {
         for tool in tool_descriptors() {
             assert!(
-                !tool.title.trim().is_empty(),
+                !tool.title.as_deref().unwrap_or_default().trim().is_empty(),
                 "missing title for {}",
                 tool.name
             );
-            if tool.annotations.state_changing_hint {
+            let read_only = tool
+                .annotations
+                .as_ref()
+                .and_then(|annotations| annotations.read_only_hint)
+                .unwrap_or(false);
+            let destructive = tool
+                .annotations
+                .as_ref()
+                .and_then(|annotations| annotations.destructive_hint)
+                .unwrap_or(false);
+            if !read_only {
                 assert!(
-                    !tool.annotations.read_only_hint,
+                    !read_only,
                     "state-changing tool marked read-only: {}",
                     tool.name
                 );
             }
-            if tool.annotations.destructive_hint {
+            if destructive {
                 assert!(
-                    tool.annotations.state_changing_hint,
+                    !read_only,
                     "destructive tool must be state-changing: {}",
                     tool.name
                 );
@@ -5613,11 +8153,13 @@ mod tests {
     #[test]
     fn tool_registry_schemas_validate_as_2020_12() {
         for tool in tool_descriptors() {
-            assert_eq!(tool.input_schema["$schema"], json!(JSON_SCHEMA_2020_12_URI));
-            compile_schema(&tool.input_schema);
+            let input_schema = serde_json::Value::Object((*tool.input_schema).clone());
+            assert_eq!(input_schema["$schema"], json!(JSON_SCHEMA_2020_12_URI));
+            compile_schema(&input_schema);
             if let Some(output_schema) = tool.output_schema.as_ref() {
+                let output_schema = serde_json::Value::Object((**output_schema).clone());
                 assert_eq!(output_schema["$schema"], json!(JSON_SCHEMA_2020_12_URI));
-                compile_schema(output_schema);
+                compile_schema(&output_schema);
             }
         }
     }
@@ -5642,7 +8184,11 @@ mod tests {
                 }
             }
             assert_eq!(
-                tool.meta["atlas:resultContract"],
+                tool.meta
+                    .as_ref()
+                    .and_then(|meta| meta.get("atlas:resultContract"))
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null),
                 json!(tool_result_contract(&tool.name).label())
             );
         }
@@ -5653,7 +8199,8 @@ mod tests {
         for tool in tool_descriptors() {
             let built = tool_input_schema_by_name(&tool.name).expect("schema by name");
             assert_eq!(
-                built, tool.input_schema,
+                built,
+                serde_json::Value::Object((*tool.input_schema).clone()),
                 "input schema mismatch for {}",
                 tool.name
             );
@@ -5678,14 +8225,22 @@ mod tests {
     #[test]
     fn tool_list_markdown_documents_result_contract_inventory() {
         let markdown = tool_list_markdown();
-        assert!(markdown.contains("| Tool | Result contract | Output schema | Description |"));
+        assert!(markdown.contains("generated from rmcp-backed `atlas_mcp::tool_list()` descriptors serialized from `rmcp::model::Tool`"));
+        assert!(markdown.contains(
+            "| Tool | Title | Input schema | Result contract | Output schema | Description |"
+        ));
         assert!(markdown.contains("`stable-object`"));
         assert!(markdown.contains("`text-only`"));
-        assert!(!markdown.contains("| `query_graph` | `text-only` |"));
-        assert!(!markdown.contains("| `batch_query_graph` | `text-only` |"));
+        assert!(markdown.contains("structuredContent` is source of truth"));
+        assert!(!markdown.contains(
+            "| `query_graph` | Query Graph | object; required fields: 0 | `text-only` |"
+        ));
+        assert!(!markdown.contains(
+            "| `batch_query_graph` | Batch Query Graph | object; required fields: 1 | `text-only` |"
+        ));
         assert!(!markdown.contains("mixed-needs-redesign"));
         assert!(
-            markdown.contains("`broker_status` | `stable-object` | exact structuredContent schema")
+            markdown.contains("`broker_status` | Broker Status | object; required fields: 0 | `stable-object` | exact structuredContent schema")
         );
     }
 
@@ -5716,6 +8271,491 @@ mod tests {
             .map(|tool| tool.name)
             .collect::<Vec<_>>();
         assert_eq!(text_only, ALLOWED_TEXT_ONLY_TOOLS);
+    }
+
+    #[test]
+    fn typed_health_schemas_preserve_required_fields_and_property_descriptions() {
+        for name in TYPED_HEALTH_SCHEMA_TOOLS {
+            let schema = raw_tool_input_schema_by_name(name).expect("typed health tool schema");
+            let required = schema
+                .get("required")
+                .and_then(serde_json::Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            assert!(
+                required.is_empty(),
+                "{name} should not require input fields"
+            );
+
+            let properties = schema["properties"].as_object().expect("properties object");
+            assert!(
+                properties
+                    .get("output_format")
+                    .and_then(|property| property.get("description"))
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|description| !description.trim().is_empty()),
+                "{name} output_format description must stay non-empty"
+            );
+
+            if matches!(*name, "db_check" | "debug_graph") {
+                assert!(
+                    properties
+                        .get("limit")
+                        .and_then(|property| property.get("description"))
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|description| !description.trim().is_empty()),
+                    "{name} limit description must stay non-empty"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn typed_health_schemas_keep_enum_values_stable() {
+        for name in TYPED_HEALTH_SCHEMA_TOOLS {
+            let schema = raw_tool_input_schema_by_name(name).expect("typed health tool schema");
+            let properties = schema["properties"].as_object().expect("properties object");
+            for property_name in ["output_format", "limit"] {
+                let Some(property) = properties.get(property_name) else {
+                    continue;
+                };
+                assert!(
+                    property.get("enum").is_none(),
+                    "{name}.{property_name} unexpectedly gained enum values"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn typed_discovery_schemas_preserve_required_fields_and_descriptions() {
+        for name in TYPED_DISCOVERY_SCHEMA_TOOLS {
+            let schema = raw_tool_input_schema_by_name(name).expect("typed discovery tool schema");
+            let required = required_field_names(&schema);
+            let expected = match *name {
+                "search_files" => ["pattern"].into_iter().map(ToOwned::to_owned).collect(),
+                "search_content" => ["query"].into_iter().map(ToOwned::to_owned).collect(),
+                "read_file_excerpt" | "get_docs_section" => ["file", "selector"]
+                    .into_iter()
+                    .map(ToOwned::to_owned)
+                    .collect(),
+                "read_file_around_match" => ["file", "query"]
+                    .into_iter()
+                    .map(ToOwned::to_owned)
+                    .collect(),
+                "search_templates" | "search_text_assets" => BTreeSet::new(),
+                _ => unreachable!("unexpected discovery schema tool"),
+            };
+            assert_eq!(
+                required, expected,
+                "{name} required fields changed unexpectedly"
+            );
+
+            let properties = schema["properties"].as_object().expect("properties object");
+            assert!(
+                properties.values().all(|property| property
+                    .get("description")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|description| !description.trim().is_empty())),
+                "{name} top-level property descriptions must stay non-empty"
+            );
+        }
+    }
+
+    #[test]
+    fn typed_discovery_schemas_keep_enum_values_stable() {
+        let excerpt = raw_tool_input_schema_by_name("read_file_excerpt").expect("excerpt schema");
+        assert_schema_enum_values(
+            &excerpt,
+            "/properties/selector/properties/kind",
+            &["range", "ranges", "context"],
+        );
+
+        let docs = raw_tool_input_schema_by_name("get_docs_section").expect("docs schema");
+        assert_schema_enum_values(
+            &docs,
+            "/properties/selector/properties/kind",
+            &["heading", "line"],
+        );
+
+        let templates =
+            raw_tool_input_schema_by_name("search_templates").expect("templates schema");
+        assert_schema_enum_values(
+            &templates,
+            "/properties/kind",
+            &[
+                "html",
+                "jinja",
+                "handlebars",
+                "tera",
+                "mako",
+                "mustache",
+                "twig",
+                "liquid",
+                "erb",
+                "haml",
+                "pug",
+            ],
+        );
+
+        let text_assets =
+            raw_tool_input_schema_by_name("search_text_assets").expect("text assets schema");
+        assert_schema_enum_values(
+            &text_assets,
+            "/properties/kind",
+            &["sql", "config", "env", "prompt"],
+        );
+    }
+
+    #[test]
+    fn typed_graph_schemas_preserve_required_fields_and_descriptions() {
+        for name in TYPED_GRAPH_SCHEMA_TOOLS {
+            let schema = raw_tool_input_schema_by_name(name).expect("typed graph tool schema");
+            let required = required_field_names(&schema);
+            let expected = match *name {
+                "query_graph" | "explain_query" => BTreeSet::new(),
+                "batch_query_graph" => ["items"].into_iter().map(ToOwned::to_owned).collect(),
+                "resolve_symbol" => ["name"].into_iter().map(ToOwned::to_owned).collect(),
+                "symbol_neighbors" => ["qname"].into_iter().map(ToOwned::to_owned).collect(),
+                "traverse_graph" => ["from_qn"].into_iter().map(ToOwned::to_owned).collect(),
+                "cross_file_links" => ["file"].into_iter().map(ToOwned::to_owned).collect(),
+                "concept_clusters" => ["files"].into_iter().map(ToOwned::to_owned).collect(),
+                _ => unreachable!("unexpected graph schema tool"),
+            };
+            assert_eq!(
+                required, expected,
+                "{name} required fields changed unexpectedly"
+            );
+
+            let properties = schema["properties"].as_object().expect("properties object");
+            assert!(
+                properties.values().all(|property| property
+                    .get("description")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|description| !description.trim().is_empty())),
+                "{name} top-level property descriptions must stay non-empty"
+            );
+        }
+    }
+
+    #[test]
+    fn typed_graph_schemas_keep_repo_scope_and_batch_limits_stable() {
+        for name in [
+            "query_graph",
+            "batch_query_graph",
+            "resolve_symbol",
+            "explain_query",
+        ] {
+            let schema = raw_tool_input_schema_by_name(name).expect("typed graph tool schema");
+            assert_schema_enum_values(
+                &schema,
+                "/properties/repo_scope/properties/kind",
+                &["current", "repo_id", "all"],
+            );
+        }
+
+        let batch = raw_tool_input_schema_by_name("batch_query_graph").expect("batch schema");
+        assert_eq!(
+            schema_node_at(&batch, "/properties/items").get("maxItems"),
+            Some(&json!(20)),
+            "batch_query_graph.items maxItems changed unexpectedly"
+        );
+    }
+
+    #[test]
+    fn typed_context_review_schemas_preserve_required_fields_and_descriptions() {
+        for name in TYPED_CONTEXT_REVIEW_SCHEMA_TOOLS {
+            let schema =
+                raw_tool_input_schema_by_name(name).expect("typed context/review tool schema");
+            let required = required_field_names(&schema);
+            let expected = match *name {
+                "detect_changes"
+                | "get_review_context"
+                | "get_minimal_context"
+                | "get_impact_radius"
+                | "explain_change" => ["change_source"]
+                    .into_iter()
+                    .map(ToOwned::to_owned)
+                    .collect(),
+                "get_context" => ["target"].into_iter().map(ToOwned::to_owned).collect(),
+                "build_or_update_graph" | "postprocess_graph" => BTreeSet::new(),
+                _ => unreachable!("unexpected context/review schema tool"),
+            };
+            assert_eq!(
+                required, expected,
+                "{name} required fields changed unexpectedly"
+            );
+
+            let properties = schema["properties"].as_object().expect("properties object");
+            assert!(
+                properties.values().all(|property| property
+                    .get("description")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|description| !description.trim().is_empty())),
+                "{name} top-level property descriptions must stay non-empty"
+            );
+        }
+    }
+
+    #[test]
+    fn typed_context_review_schemas_keep_enum_values_stable() {
+        for name in ["get_impact_radius", "get_review_context", "explain_change"] {
+            let schema = raw_tool_input_schema_by_name(name).expect("context/review schema");
+            assert_schema_enum_values(
+                &schema,
+                "/properties/change_source/properties/kind",
+                &["files", "base", "staged", "working_tree"],
+            );
+        }
+
+        for name in ["detect_changes", "get_minimal_context"] {
+            let schema = raw_tool_input_schema_by_name(name).expect("context/review schema");
+            assert_schema_enum_values(
+                &schema,
+                "/properties/change_source/properties/kind",
+                &["base", "staged", "working_tree"],
+            );
+        }
+
+        let build = raw_tool_input_schema_by_name("build_or_update_graph").expect("build schema");
+        assert_schema_enum_values(
+            &build,
+            "/properties/operation/properties/kind",
+            &["build", "update"],
+        );
+        assert_schema_enum_values(
+            &build,
+            "/properties/operation/properties/change_source/properties/kind",
+            &["files", "base", "staged", "working_tree"],
+        );
+
+        let postprocess =
+            raw_tool_input_schema_by_name("postprocess_graph").expect("postprocess schema");
+        assert_schema_enum_values(
+            &postprocess,
+            "/properties/stage",
+            &[
+                "flows",
+                "communities",
+                "architecture_metrics",
+                "query_hints",
+                "large_function_summaries",
+            ],
+        );
+
+        let context = raw_tool_input_schema_by_name("get_context").expect("get_context schema");
+        assert_schema_enum_values(
+            &context,
+            "/properties/target/properties/kind",
+            &["query", "file", "files"],
+        );
+        assert_schema_enum_values(
+            &context,
+            "/properties/intent",
+            &[
+                "symbol",
+                "file",
+                "review",
+                "impact",
+                "usage_lookup",
+                "refactor_safety",
+                "dead_code_check",
+                "rename_preview",
+                "dependency_removal",
+            ],
+        );
+    }
+
+    #[test]
+    fn typed_analysis_schemas_preserve_required_fields_and_descriptions() {
+        for name in TYPED_ANALYSIS_SCHEMA_TOOLS {
+            let schema = raw_tool_input_schema_by_name(name).expect("typed analysis tool schema");
+            let required = required_field_names(&schema);
+            let expected = match *name {
+                "analyze_safety" | "analyze_dependency" | "find_similar_functions" => {
+                    ["symbol"].into_iter().map(ToOwned::to_owned).collect()
+                }
+                "analyze_remove" => ["symbols"].into_iter().map(ToOwned::to_owned).collect(),
+                "analyze_dead_code"
+                | "find_large_functions"
+                | "find_complex_functions"
+                | "find_duplicates"
+                | "infer_modules"
+                | "label_components" => BTreeSet::new(),
+                _ => unreachable!("unexpected analysis schema tool"),
+            };
+            assert_eq!(
+                required, expected,
+                "{name} required fields changed unexpectedly"
+            );
+
+            let properties = schema["properties"].as_object().expect("properties object");
+            assert!(
+                properties.values().all(|property| property
+                    .get("description")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|description| !description.trim().is_empty())),
+                "{name} top-level property descriptions must stay non-empty"
+            );
+        }
+    }
+
+    #[test]
+    fn typed_analysis_schemas_keep_enum_values_stable() {
+        let large =
+            raw_tool_input_schema_by_name("find_large_functions").expect("large functions schema");
+        assert_schema_enum_values(
+            &large,
+            "/properties/mode",
+            &["large", "complex", "large-or-complex"],
+        );
+
+        let dead_code =
+            raw_tool_input_schema_by_name("analyze_dead_code").expect("dead code schema");
+        assert_schema_enum_values(
+            &dead_code,
+            "/properties/exclude_kind/items",
+            &[
+                "function",
+                "method",
+                "struct",
+                "enum",
+                "trait",
+                "interface",
+                "class",
+                "constant",
+                "variable",
+            ],
+        );
+    }
+
+    #[test]
+    fn typed_session_memory_schemas_preserve_required_fields_and_descriptions() {
+        for name in TYPED_SESSION_MEMORY_SCHEMA_TOOLS {
+            let schema =
+                raw_tool_input_schema_by_name(name).expect("typed session/memory tool schema");
+            let required = required_field_names(&schema);
+            let expected = match *name {
+                "search_saved_context"
+                | "search_decisions"
+                | "cross_session_search"
+                | "memory_recall" => ["query"].into_iter().map(ToOwned::to_owned).collect(),
+                "read_saved_context" => ["source_id"].into_iter().map(ToOwned::to_owned).collect(),
+                "save_context_artifact" => ["content", "label"]
+                    .into_iter()
+                    .map(ToOwned::to_owned)
+                    .collect(),
+                "memory_store" => ["text"].into_iter().map(ToOwned::to_owned).collect(),
+                "record_session_event" => ["event"].into_iter().map(ToOwned::to_owned).collect(),
+                "get_session_status"
+                | "compact_session"
+                | "resume_session"
+                | "purge_saved_context"
+                | "get_global_memory"
+                | "wake_up" => BTreeSet::new(),
+                _ => unreachable!("unexpected session/memory schema tool"),
+            };
+            assert_eq!(
+                required, expected,
+                "{name} required fields changed unexpectedly"
+            );
+
+            let properties = schema["properties"].as_object().expect("properties object");
+            assert!(
+                properties.values().all(|property| property
+                    .get("description")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|description| !description.trim().is_empty())),
+                "{name} top-level property descriptions must stay non-empty"
+            );
+        }
+    }
+
+    #[test]
+    fn typed_session_memory_schemas_keep_enum_values_stable() {
+        for name in [
+            "search_saved_context",
+            "read_saved_context",
+            "save_context_artifact",
+            "cross_session_search",
+        ] {
+            let schema = raw_tool_input_schema_by_name(name).expect("session/memory schema");
+            assert_schema_enum_values(
+                &schema,
+                "/properties/repo_scope/properties/kind",
+                &["current", "repo_id", "all"],
+            );
+        }
+
+        for name in ["record_session_event", "wake_up"] {
+            let schema = raw_tool_input_schema_by_name(name).expect("session/memory schema");
+            assert_schema_enum_values(
+                &schema,
+                "/properties/repo_scope/properties/kind",
+                &["current", "repo_id"],
+            );
+        }
+
+        let memory_store =
+            raw_tool_input_schema_by_name("memory_store").expect("memory_store schema");
+        assert_schema_enum_values(
+            &memory_store,
+            "/properties/importance",
+            &["critical", "high", "normal", "low"],
+        );
+        assert_schema_enum_values(
+            &memory_store,
+            "/properties/scope",
+            &["project", "session", "frontend", "global"],
+        );
+
+        let memory_recall =
+            raw_tool_input_schema_by_name("memory_recall").expect("memory_recall schema");
+        assert_schema_enum_values(
+            &memory_recall,
+            "/properties/importance",
+            &["critical", "high", "normal", "low"],
+        );
+        assert_schema_enum_values(
+            &memory_recall,
+            "/properties/scope",
+            &["project", "session", "frontend", "global"],
+        );
+    }
+
+    #[test]
+    fn all_tool_descriptions_and_output_schema_contracts_remain_present() {
+        for tool in tool_descriptors() {
+            assert!(
+                tool.title
+                    .as_deref()
+                    .is_some_and(|title| !title.trim().is_empty()),
+                "{} missing title",
+                tool.name
+            );
+            assert!(
+                tool.description
+                    .as_deref()
+                    .is_some_and(|description| !description.trim().is_empty()),
+                "{} missing description",
+                tool.name
+            );
+            assert!(
+                !tool.input_schema.is_empty(),
+                "{} must keep input schema",
+                tool.name
+            );
+            if matches!(
+                tool_result_contract(&tool.name),
+                ToolResultContract::StableObject
+            ) {
+                assert!(
+                    tool.output_schema.is_some(),
+                    "{} must keep output schema",
+                    tool.name
+                );
+            }
+        }
     }
 }
 

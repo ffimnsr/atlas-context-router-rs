@@ -59,14 +59,7 @@
         "enum_values": [],
         "description": "Symbol name to resolve (e.g. 'LoadIdentityMessages', 'compute'). Matched against indexed symbol names using FTS."
       },
-      {
-        "name": "output_format",
-        "field_type": "string",
-        "required": false,
-        "default_value": "toon",
-        "enum_values": [],
-        "description": "Response body format: 'toon' (default) or 'json'"
-      }
+
     ],
     "output_response": {
       "response_shape": "structuredContent follows advertised outputSchema when present",
@@ -248,7 +241,7 @@
           "required": true,
           "default_value": null,
           "enum_values": [],
-          "description": "Atlas output metadata including requested and actual output format, plus fallback reason when TOON falls back to JSON."
+          "description": "Atlas output metadata for transport and server details."
         },
         {
           "name": "atlas_provenance",
@@ -328,7 +321,7 @@
     },
     "usage": {
       "cli": "man mcp resolve_symbol",
-      "mcp_manual_tool_call": "{\"name\":\"man\",\"arguments\":{\"namespace\":\"mcp\",\"tool_name\":\"resolve_symbol\",\"output_format\":\"json\"}}",
+      "mcp_manual_tool_call": "{\"name\":\"man\",\"arguments\":{\"namespace\":\"mcp\",\"tool_name\":\"resolve_symbol\"}}",
       "target_tool_call_examples": [
         "{\"name\":\"resolve_symbol\",\"arguments\":{\"name\":\"<name>\"}}"
       ]

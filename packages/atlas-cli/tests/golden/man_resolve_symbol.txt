@@ -19,8 +19,7 @@ input_args:
     Maximum matches to return (default 10).
   - name: string (required)
     Symbol name to resolve (e.g. 'LoadIdentityMessages', 'compute'). Matched against indexed symbol names using FTS.
-  - output_format: string (optional), default=toon
-    Response body format: 'toon' (default) or 'json'
+
 
 output_response:
   response_shape: structuredContent follows advertised outputSchema when present
@@ -48,7 +47,7 @@ output_response:
   metadata_fields:
     - content: array<object> (required) — Human-readable rendered payload. Present on success and error results.
     - structuredContent: object (optional) — Machine-readable payload when the tool returns object-shaped structured output.
-    - _meta: object (required) — Atlas output metadata including requested and actual output format, plus fallback reason when TOON falls back to JSON.
+    - _meta: object (required) — Atlas output metadata for transport and server details.
     - atlas_provenance: object (required) — Atlas repo/db provenance metadata injected by dispatch for authoritative runtime context.
     - atlas_freshness: object (optional) — Freshness warning metadata when working-tree changes can make graph-backed answers stale.
     - atlas_readiness: object (optional) — Readiness gating metadata for graph-backed tools when Atlas evaluates safe-to-answer state.
@@ -61,7 +60,7 @@ output_response:
 
 usage:
   cli: man mcp resolve_symbol
-  mcp_manual_tool_call: {"name":"man","arguments":{"namespace":"mcp","tool_name":"resolve_symbol","output_format":"json"}}
+  mcp_manual_tool_call: {"name":"man","arguments":{"namespace":"mcp","tool_name":"resolve_symbol"}}
   target_tool_call_examples:
     - {"name":"resolve_symbol","arguments":{"name":"<name>"}}
 

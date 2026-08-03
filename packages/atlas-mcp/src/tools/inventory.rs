@@ -181,241 +181,62 @@ pub(crate) fn tool_tool_search(args: Option<&Value>, output_format: OutputFormat
     tool_inventory_response(&response, output_format)
 }
 
-fn tool_inventory_response<T>(payload: &T, output_format: OutputFormat) -> Result<Value>
+fn tool_inventory_response<T>(payload: &T, _output_format: OutputFormat) -> Result<Value>
 where
     T: Serialize,
 {
     let raw = serde_json::to_value(payload)?;
-    let text = match output_format {
-        OutputFormat::Json => render_value(&raw, output_format)?.text,
-        OutputFormat::Toon => render_inventory_text(&raw),
-    };
+    let text = render_value(&raw)?.text;
 
     Ok(json!({
         "content": [{
             "type": "text",
             "text": text,
-            "mimeType": output_format.mime_type(),
         }],
         "structuredContent": raw,
-        "_meta": {
-            "atlas:outputFormat": output_format.as_str(),
-            "atlas:requestedOutputFormat": output_format.as_str(),
-        },
+        "_meta": {},
     }))
-}
-
-fn render_inventory_text(payload: &Value) -> String {
-    if let Some(registrations) = payload.get("registrations").and_then(Value::as_array) {
-        let mut lines = vec![format!(
-            "repo registry: {} repo(s), {} warning(s)",
-            payload
-                .get("registration_count")
-                .and_then(Value::as_u64)
-                .unwrap_or(registrations.len() as u64),
-            payload
-                .get("warning_count")
-                .and_then(Value::as_u64)
-                .unwrap_or(0)
-        )];
-        if let Some(path) = payload.get("registry_path").and_then(Value::as_str) {
-            lines.push(format!("path: {path}"));
-        }
-        if let Some(root_repo_id) = payload.get("root_repo_id").and_then(Value::as_str) {
-            lines.push(format!("root_repo_id: {root_repo_id}"));
-        }
-        lines.push(String::new());
-        for entry in registrations {
-            let repo_id = entry
-                .get("repo_id")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            let alias = entry
-                .get("display_alias")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            let relationship = entry
-                .pointer("/relationship/kind")
-                .and_then(Value::as_str)
-                .unwrap_or("unknown");
-            let enabled = entry
-                .get("enabled")
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
-            let trust = entry
-                .get("trust_state")
-                .and_then(Value::as_str)
-                .unwrap_or("unknown");
-            lines.push(format!(
-                "- {repo_id} [{alias}] relationship={relationship} trust={trust} enabled={enabled}"
-            ));
-        }
-        if let Some(warnings) = payload.get("warnings").and_then(Value::as_array)
-            && !warnings.is_empty()
-        {
-            lines.push(String::new());
-            lines.push("warnings:".to_owned());
-            for warning in warnings {
-                let code = warning
-                    .get("code")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default();
-                let message = warning
-                    .get("message")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default();
-                lines.push(format!("- {code}: {message}"));
-            }
-        }
-        return lines.join("\n");
-    }
-    if let Some(tools) = payload.get("tools").and_then(Value::as_array) {
-        let mut lines = vec![format!(
-            "tools: {} visible exported MCP tools",
-            payload
-                .get("returned_tools")
-                .and_then(Value::as_u64)
-                .unwrap_or(tools.len() as u64)
-        )];
-        if let Some(category) = payload.get("applied_category").and_then(Value::as_str) {
-            lines.push(format!("category: {category}"));
-        }
-        lines.push(String::new());
-        for tool in tools {
-            let name = tool.get("name").and_then(Value::as_str).unwrap_or_default();
-            let description = tool
-                .get("description")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            let category = tool
-                .get("category")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            lines.push(format!("- {name} [{category}] — {description}"));
-        }
-        lines.push(String::new());
-        lines.push(
-            "next: use tool_search for fuzzy discovery, tool_help for exact runtime docs"
-                .to_owned(),
-        );
-        return lines.join("\n");
-    }
-
-    let matches = payload
-        .get("matches")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    let query = payload
-        .get("query")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    let mut lines = vec![format!(
-        "tool search: '{}' → {} match(es)",
-        query,
-        payload
-            .get("returned_matches")
-            .and_then(Value::as_u64)
-            .unwrap_or(matches.len() as u64)
-    )];
-    lines.push(String::new());
-    if matches.is_empty() {
-        lines.push("- no direct matches".to_owned());
-        if let Some(suggestions) = payload.get("suggestions").and_then(Value::as_array) {
-            let values = suggestions
-                .iter()
-                .filter_map(Value::as_str)
-                .collect::<Vec<_>>();
-            if !values.is_empty() {
-                lines.push(format!("  suggestions: {}", values.join(", ")));
-            }
-        }
-    } else {
-        for item in matches {
-            let name = item.get("name").and_then(Value::as_str).unwrap_or_default();
-            let description = item
-                .get("description")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            let reasons = item
-                .get("match_reasons")
-                .and_then(Value::as_array)
-                .map(|values| {
-                    values
-                        .iter()
-                        .filter_map(Value::as_str)
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                })
-                .unwrap_or_default();
-            let score = item
-                .get("score")
-                .and_then(Value::as_u64)
-                .unwrap_or_default();
-            let factors = item
-                .get("score_factors")
-                .and_then(Value::as_array)
-                .map(|values| {
-                    values
-                        .iter()
-                        .map(|value| {
-                            let factor = value
-                                .get("factor")
-                                .and_then(Value::as_str)
-                                .unwrap_or_default();
-                            let contribution = value
-                                .get("contribution")
-                                .and_then(Value::as_u64)
-                                .unwrap_or_default();
-                            let detail = value.get("detail").and_then(Value::as_str);
-                            match detail {
-                                Some(detail) if !detail.is_empty() => {
-                                    format!("{factor}(+{contribution}; {detail})")
-                                }
-                                _ => format!("{factor}(+{contribution})"),
-                            }
-                        })
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                })
-                .unwrap_or_default();
-            lines.push(format!("- {name} — {description}"));
-            lines.push(format!("  score: {score}"));
-            if !reasons.is_empty() {
-                lines.push(format!("  reasons: {reasons}"));
-            }
-            if !factors.is_empty() {
-                lines.push(format!("  factors: {factors}"));
-            }
-        }
-    }
-    lines.push(String::new());
-    lines.push("next: use tool_help with exact name for full runtime docs".to_owned());
-    lines.join("\n")
 }
 
 fn inventory_entries() -> Vec<ToolInventoryEntry> {
     let mut tools = tool_descriptors()
         .into_iter()
-        .map(|tool| ToolInventoryEntry {
-            category: tool
-                .meta
-                .get("atlas:category")
-                .and_then(Value::as_str)
-                .unwrap_or("unknown")
-                .to_owned(),
-            result_contract: tool
-                .meta
-                .get("atlas:resultContract")
-                .and_then(Value::as_str)
-                .unwrap_or("text-only")
-                .to_owned(),
-            read_only: tool.annotations.read_only_hint,
-            state_changing: tool.annotations.state_changing_hint,
-            destructive: tool.annotations.destructive_hint,
-            name: tool.name,
-            title: tool.title,
-            description: tool.description,
+        .map(|tool| {
+            let read_only = tool
+                .annotations
+                .as_ref()
+                .and_then(|annotations| annotations.read_only_hint)
+                .unwrap_or(false);
+            let destructive = tool
+                .annotations
+                .as_ref()
+                .and_then(|annotations| annotations.destructive_hint)
+                .unwrap_or(false);
+            ToolInventoryEntry {
+                category: tool
+                    .meta
+                    .as_ref()
+                    .and_then(|meta| meta.get("atlas:category"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown")
+                    .to_owned(),
+                result_contract: tool
+                    .meta
+                    .as_ref()
+                    .and_then(|meta| meta.get("atlas:resultContract"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("text-only")
+                    .to_owned(),
+                read_only,
+                state_changing: !read_only,
+                destructive,
+                name: tool.name.to_string(),
+                title: tool.title.unwrap_or_default(),
+                description: tool
+                    .description
+                    .map(|value| value.into_owned())
+                    .unwrap_or_default(),
+            }
         })
         .collect::<Vec<_>>();
     tools.sort_by(|left, right| left.name.cmp(&right.name));

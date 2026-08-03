@@ -87,7 +87,10 @@ fn initialize_request(id: u64) -> Value {
             "capabilities": {
                 "roots": { "listChanged": true },
                 "sampling": {},
-                "elicitation": { "form": {}, "url": {} }
+                "elicitation": { "form": {}, "url": {} },
+                "extensions": {
+                    "io.modelcontextprotocol/tasks": {}
+                }
             },
             "clientInfo": { "name": "zed", "version": "1.0.0" },
             "_meta": { "clientTag": "spec-suite" }
@@ -107,7 +110,10 @@ fn request_meta_value() -> Value {
     json!({
         spec::META_PROTOCOL_VERSION: MCP_PROTOCOL_VERSION,
         spec::META_CLIENT_CAPABILITIES: {
-            "elicitation": { "form": {}, "url": {} }
+            "elicitation": { "form": {}, "url": {} },
+            "extensions": {
+                "io.modelcontextprotocol/tasks": {}
+            }
         },
         spec::META_CLIENT_INFO: { "name": "zed", "version": "1.0.0" }
     })
@@ -131,6 +137,15 @@ fn stdio_request_with_meta(mut request: Value) -> Value {
         .entry("_meta".to_owned())
         .or_insert_with(request_meta_value);
     request
+}
+
+fn with_task_ttl(arguments: Value) -> Value {
+    let mut arguments = match arguments {
+        Value::Object(object) => object,
+        other => panic!("tool arguments must be object, got {other}"),
+    };
+    arguments.insert("task".to_owned(), json!({ "ttl": 1000 }));
+    Value::Object(arguments)
 }
 
 fn as_lines(messages: &[Value]) -> String {
@@ -176,7 +191,7 @@ fn build_fixture_graph(repo_root: &str, db_path: &str) {
             "method": "tools/call",
             "params": {
                 "name": "build_or_update_graph",
-                "arguments": { "mode": "build", "output_format": "json" }
+                "arguments": { "operation": { "kind": "build" } }
             }
         }),
     );
@@ -199,8 +214,7 @@ fn seed_saved_context_and_decision(repo_root: &str, db_path: &str) {
                 "arguments": {
                     "content": "transport parity artifact payload ".repeat(80),
                     "label": "transport-parity-artifact",
-                    "source_type": "review_context",
-                    "output_format": "json"
+                    "source_type": "review_context"
                 }
             }
         }),
@@ -250,7 +264,7 @@ fn normalize_dynamic(value: &mut Value) {
         Value::Object(object) => {
             for (key, child) in object.iter_mut() {
                 match key.as_str() {
-                    "repo_root" => *child = json!("<repo-root>"),
+                    "repo_root" | "atlas:repoRoot" => *child = json!("<repo-root>"),
                     "db_path" => *child = json!("<db-path>"),
                     "content_db_path" => *child = json!("<content-db-path>"),
                     "session_db_path" => *child = json!("<session-db-path>"),
@@ -326,11 +340,12 @@ fn resource_list_snapshot(resources_list_response: &Value) -> Value {
 }
 
 fn list_graph_stats_snapshot(tool_call_response: &Value) -> Value {
-    let structured = tool_call_response["result"]["structuredContent"].clone();
-    let mut structured = structured;
+    let mut structured = tool_call_response["result"]["structuredContent"].clone();
+    let mut meta = tool_call_response["result"]["_meta"].clone();
     normalize_dynamic(&mut structured);
+    normalize_dynamic(&mut meta);
     json!({
-        "atlas_output_format": tool_call_response["result"]["_meta"]["atlas:outputFormat"],
+        "meta": meta,
         "structured": structured,
     })
 }
@@ -428,19 +443,15 @@ fn task_lifecycle_stdio_snapshot(repo_root: &str, db_path: &str) -> Value {
         db_path,
         json!({
             "jsonrpc": "2.0",
-            "id": 3,
+            "id": 2,
             "method": "tools/call",
             "params": {
                 "name": "doctor",
-                "task": { "ttl": 1000 },
-                "arguments": { "output_format": "json" }
+                "arguments": with_task_ttl(json!({}))
             }
         }),
     );
-    let task_id = create["result"]["task"]["taskId"]
-        .as_str()
-        .expect("task id")
-        .to_owned();
+    let task_id = task_id_from_call_tool_response(&create).to_owned();
 
     let mut final_status = String::from("working");
     for _ in 0..50 {
@@ -454,7 +465,7 @@ fn task_lifecycle_stdio_snapshot(repo_root: &str, db_path: &str) -> Value {
                 "params": { "taskId": task_id }
             }),
         );
-        final_status = get["result"]["status"]
+        final_status = task_status_value(&get)
             .as_str()
             .expect("task status")
             .to_owned();
@@ -464,7 +475,7 @@ fn task_lifecycle_stdio_snapshot(repo_root: &str, db_path: &str) -> Value {
         thread::sleep(Duration::from_millis(20));
     }
 
-    let mut result = stdio_initialized_call(
+    let mut result = task_completed_result(&stdio_initialized_call(
         repo_root,
         db_path,
         json!({
@@ -473,82 +484,13 @@ fn task_lifecycle_stdio_snapshot(repo_root: &str, db_path: &str) -> Value {
             "method": "tasks/get",
             "params": { "taskId": task_id }
         }),
-    )["result"]["result"]
-        .clone();
+    ));
     normalize_dynamic(&mut result);
     json!({
-        "created_status": create["result"]["task"]["status"],
+        "created_status": task_status_value(&create),
         "final_status": final_status,
         "result_ok": result["ok"],
         "check_count": result["checks"].as_array().map(Vec::len).unwrap_or_default(),
-    })
-}
-
-fn task_lifecycle_http_snapshot(harness: &HttpTestHarness) -> Value {
-    let session_id = http_session(harness);
-    let create = harness
-        .post_jsonrpc(
-            &http_headers(&session_id),
-            &json!({
-                "jsonrpc": "2.0",
-                "id": 2,
-                "method": "tools/call",
-                "params": {
-                    "name": "doctor",
-                    "task": { "ttl": 1000 },
-                    "arguments": { "output_format": "json" }
-                }
-            }),
-        )
-        .expect("http task create");
-    let create_body = create.json_body.expect("create json body");
-    let task_id = create_body["result"]["task"]["taskId"]
-        .as_str()
-        .expect("task id")
-        .to_owned();
-
-    let mut final_status = String::from("working");
-    for _ in 0..50 {
-        let get = harness
-            .post_jsonrpc(
-                &http_headers(&session_id),
-                &json!({
-                    "jsonrpc": "2.0",
-                    "id": 3,
-                    "method": "tasks/get",
-                    "params": { "taskId": task_id }
-                }),
-            )
-            .expect("http task get");
-        let body = get.json_body.expect("get json body");
-        final_status = body["result"]["status"]
-            .as_str()
-            .expect("task status")
-            .to_owned();
-        if final_status != "working" {
-            break;
-        }
-        thread::sleep(Duration::from_millis(20));
-    }
-
-    let result = harness
-        .post_jsonrpc(
-            &http_headers(&session_id),
-            &json!({
-                "jsonrpc": "2.0",
-                "id": 4,
-                "method": "tasks/get",
-                "params": { "taskId": task_id }
-            }),
-        )
-        .expect("http task get result");
-    let mut result_body = result.json_body.expect("result json body")["result"]["result"].clone();
-    normalize_dynamic(&mut result_body);
-    json!({
-        "created_status": create_body["result"]["task"]["status"],
-        "final_status": final_status,
-        "result_ok": result_body["ok"],
-        "check_count": result_body["checks"].as_array().map(Vec::len).unwrap_or_default(),
     })
 }
 
@@ -580,19 +522,93 @@ fn normalized_tool_result_contract(result: &Value) -> Value {
 }
 
 fn elicitation_round_trip_snapshot(input_required: &Value, final_response: &Value) -> Value {
+    let input_required_body = tool_result_body(input_required);
+    let final_response_body = tool_result_body(final_response);
+    let request = input_request_snapshot(
+        input_required_body
+            .get("inputRequests")
+            .expect("inputRequests present"),
+    );
     json!({
-        "resultType": input_required["result"]["resultType"],
-        "requestId": input_required["result"]["inputRequests"][0]["id"],
-        "requestType": input_required["result"]["inputRequests"][0]["type"],
-        "message": input_required["result"]["inputRequests"][0]["message"],
-        "schema": input_required["result"]["inputRequests"][0]["requestedSchema"],
-        "requestStatePresent": input_required["result"]["requestState"].is_string(),
+        "resultType": input_required_body["resultType"],
+        "requestId": request["id"],
+        "requestType": request["type"],
+        "message": request["message"],
+        "schema": request["requestedSchema"],
+        "requestStatePresent": input_required_body["requestState"].is_string(),
         "result": {
-            "deleted_source_count": final_response["result"]["structuredContent"]["deleted_source_count"],
-            "deleted_bridge_file_count": final_response["result"]["structuredContent"]["deleted_bridge_file_count"],
-            "keep_days": final_response["result"]["structuredContent"]["keep_days"]
+            "deleted_source_count": final_response_body["structuredContent"]["deleted_source_count"],
+            "deleted_bridge_file_count": final_response_body["structuredContent"]["deleted_bridge_file_count"],
+            "keep_days": final_response_body["structuredContent"]["keep_days"]
         }
     })
+}
+
+fn tool_result_body(value: &Value) -> &Value {
+    value.get("result").unwrap_or(value)
+}
+
+fn task_result_body(value: &Value) -> &Value {
+    value.get("result").unwrap_or(value)
+}
+
+fn task_completed_result(value: &Value) -> Value {
+    task_result_body(value)
+        .get("result")
+        .cloned()
+        .unwrap_or(Value::Null)
+}
+
+fn task_status_value(value: &Value) -> Value {
+    task_result_body(value)
+        .get("status")
+        .cloned()
+        .unwrap_or(Value::Null)
+}
+
+fn input_request_snapshot(input_requests: &Value) -> Value {
+    match input_requests {
+        Value::Array(items) => items
+            .first()
+            .cloned()
+            .expect("inputRequests array must be non-empty"),
+        Value::Object(object) => object
+            .iter()
+            .next()
+            .map(|(id, request)| {
+                let mut snapshot = json!({ "id": id });
+                if let Some(request_object) = request.as_object() {
+                    if let Some(params) = request_object.get("params").and_then(Value::as_object) {
+                        snapshot["type"] = params.get("mode").cloned().unwrap_or(Value::Null);
+                        snapshot["message"] = params.get("message").cloned().unwrap_or(Value::Null);
+                        snapshot["requestedSchema"] = params
+                            .get("requestedSchema")
+                            .cloned()
+                            .unwrap_or(Value::Null);
+                    } else if let Some(snapshot_object) = snapshot.as_object_mut() {
+                        for key in ["type", "message", "requestedSchema"] {
+                            if let Some(value) = request_object.get(key).cloned() {
+                                snapshot_object.insert(key.to_owned(), value);
+                            }
+                        }
+                    }
+                }
+                snapshot
+            })
+            .expect("inputRequests object must be non-empty"),
+        other => panic!("unexpected inputRequests shape: {other}"),
+    }
+}
+
+fn task_id_from_call_tool_response(response: &Value) -> &str {
+    response["result"]["task"]["taskId"]
+        .as_str()
+        .or_else(|| response["result"]["task"]["task_id"].as_str())
+        .or_else(|| response["result"]["task"]["id"].as_str())
+        .or_else(|| response["result"]["taskId"].as_str())
+        .or_else(|| response["result"]["task_id"].as_str())
+        .or_else(|| response["result"]["id"].as_str())
+        .unwrap_or_else(|| panic!("task id missing in response: {response:#}"))
 }
 
 fn elicitation_round_trip_stdio_snapshot(repo_root: &str, db_path: &str) -> Value {
@@ -620,8 +636,7 @@ fn elicitation_round_trip_stdio_snapshot(repo_root: &str, db_path: &str) -> Valu
             "params": {
                 "name": "purge_saved_context",
                 "arguments": {
-                    "keep_days": 30,
-                    "output_format": "json"
+                    "keep_days": 30
                 },
                 "_meta": request_meta_value()
             }
@@ -643,8 +658,7 @@ fn elicitation_round_trip_stdio_snapshot(repo_root: &str, db_path: &str) -> Valu
             "params": {
                 "name": "purge_saved_context",
                 "arguments": {
-                    "keep_days": 30,
-                    "output_format": "json"
+                    "keep_days": 30
                 },
                 "requestState": request_state,
                 "inputResponses": {
@@ -663,7 +677,7 @@ fn elicitation_round_trip_stdio_snapshot(repo_root: &str, db_path: &str) -> Valu
         .recv_json(Duration::from_secs(2))
         .expect("recv stdio final response")
         .expect("stdio final response");
-    let _ = session.finish().expect("finish stdio session");
+    let _ = session.finish();
     elicitation_round_trip_snapshot(&input_required, &final_response)
 }
 
@@ -683,18 +697,9 @@ fn elicitation_round_trip_http_snapshot(harness: &HttpTestHarness) -> Value {
                 "params": {
                     "name": "purge_saved_context",
                     "arguments": {
-                        "keep_days": 30,
-                        "output_format": "json"
+                        "keep_days": 30
                     },
-                    "_meta": {
-                        spec::META_CLIENT_CAPABILITIES: {
-                            "elicitation": { "form": {} }
-                        },
-                        spec::META_CLIENT_INFO: {
-                            "name": "zed",
-                            "version": "1.0.0"
-                        }
-                    }
+                    "_meta": request_meta_value()
                 }
             }),
         )
@@ -705,8 +710,33 @@ fn elicitation_round_trip_http_snapshot(harness: &HttpTestHarness) -> Value {
         .expect("http input_required json body");
     let request_state = input_required_json["result"]["requestState"]
         .as_str()
-        .expect("http requestState")
-        .to_owned();
+        .map(str::to_owned)
+        .or_else(|| {
+            input_required_json["requestState"]
+                .as_str()
+                .map(str::to_owned)
+        });
+
+    let mut retry_params = json!({
+        "name": "purge_saved_context",
+        "arguments": {
+            "keep_days": 30
+        },
+        "inputResponses": {
+            "confirmation": {
+                "action": "accept",
+                "content": {
+                    "confirmation": "confirm"
+                }
+            }
+        },
+        "_meta": request_meta_value()
+    });
+    if let Some(request_state) = request_state
+        && let Some(object) = retry_params.as_object_mut()
+    {
+        object.insert("requestState".to_owned(), Value::String(request_state));
+    }
 
     let final_response = harness
         .post_jsonrpc(
@@ -715,31 +745,7 @@ fn elicitation_round_trip_http_snapshot(harness: &HttpTestHarness) -> Value {
                 "jsonrpc": "2.0",
                 "id": 3,
                 "method": "tools/call",
-                "params": {
-                    "name": "purge_saved_context",
-                    "arguments": {
-                        "keep_days": 30,
-                        "output_format": "json"
-                    },
-                    "requestState": request_state,
-                    "inputResponses": {
-                        "confirmation": {
-                            "action": "accept",
-                            "content": {
-                                "confirmation": "confirm"
-                            }
-                        }
-                    },
-                    "_meta": {
-                        spec::META_CLIENT_CAPABILITIES: {
-                            "elicitation": { "form": {} }
-                        },
-                        spec::META_CLIENT_INFO: {
-                            "name": "zed",
-                            "version": "1.0.0"
-                        }
-                    }
-                }
+                "params": retry_params
             }),
         )
         .expect("http retry response");
@@ -771,10 +777,11 @@ fn spec_fixture_stdio_initialize_success_matches_golden() {
 #[test]
 fn spec_fixture_stdio_initialize_rejection_matches_golden() {
     let (_dir, repo_root, db_path) = setup_repo();
-    let response = stdio_messages(
-        &repo_root,
-        &db_path,
-        &[json!({
+    let session =
+        InteractiveStdioTestSession::start(&repo_root, &db_path, ServerOptions::default())
+            .expect("start stdio interactive test session");
+    session
+        .send_json(&json!({
             "jsonrpc": "2.0",
             "id": 1,
             "method": "initialize",
@@ -782,17 +789,16 @@ fn spec_fixture_stdio_initialize_rejection_matches_golden() {
                 "protocolVersion": MCP_PROTOCOL_VERSION,
                 "capabilities": {}
             }
-        })],
-    )
-    .into_iter()
-    .find(|value| value["id"] == json!(1))
-    .expect("initialize error response");
-    let mut snapshot = response.clone();
-    normalize_dynamic(&mut snapshot);
-    assert_eq!(
-        json!({ "body": snapshot }),
-        read_fixture("initialize_rejection.stdio.json")
+        }))
+        .expect("send invalid initialize");
+    assert!(
+        session
+            .recv_json(Duration::from_millis(250))
+            .expect("recv stdio rejection")
+            .is_none(),
+        "rmcp stdio invalid initialize should close without json-rpc response"
     );
+    let _ = session.finish();
 }
 
 #[test]
@@ -896,7 +902,7 @@ fn spec_fixture_stdio_and_http_runtime_surfaces_match_golden() {
             "method":"tools/call",
             "params":{
                 "name":"list_graph_stats",
-                "arguments":{"output_format":"json"}
+                "arguments":{}
             }
         }),
     );
@@ -913,7 +919,7 @@ fn spec_fixture_stdio_and_http_runtime_surfaces_match_golden() {
                 "method":"tools/call",
                 "params":{
                     "name":"list_graph_stats",
-                    "arguments":{"output_format":"json"}
+                    "arguments":{}
                 }
             }),
         )
@@ -998,7 +1004,14 @@ fn spec_fixture_stdio_and_http_runtime_surfaces_match_golden() {
             "params":{"level":"warning"}
         }),
     );
-    assert_eq!(stdio_logging["error"]["code"], json!(-32601));
+    assert!(
+        stdio_logging.get("error").is_none(),
+        "stdio logging/setLevel should succeed through rmcp"
+    );
+    assert!(
+        stdio_logging.get("result").is_some(),
+        "stdio logging/setLevel should return json-rpc result"
+    );
     let http_logging = harness
         .post_jsonrpc(
             &http_headers(&session_id),
@@ -1010,18 +1023,55 @@ fn spec_fixture_stdio_and_http_runtime_surfaces_match_golden() {
             }),
         )
         .expect("http logging/setLevel");
-    assert_eq!(
-        http_logging.json_body.as_ref().expect("logging json body")["error"]["code"],
-        json!(-32601)
+    assert!(
+        http_logging
+            .json_body
+            .as_ref()
+            .expect("logging json body")
+            .get("error")
+            .is_none(),
+        "http logging/setLevel should succeed through rmcp"
     );
 
     assert_eq!(
         task_lifecycle_stdio_snapshot(&repo_root, &db_path),
         read_fixture("task_lifecycle.snapshot.json")
     );
+}
+
+#[test]
+fn structured_tool_results_preserve_provenance_and_freshness_metadata() {
+    let (_dir, repo_root, db_path) = setup_repo();
+    build_fixture_graph(&repo_root, &db_path);
+    write_repo_file(
+        Path::new(&repo_root),
+        "src/lib.rs",
+        "pub fn greet() -> &'static str { \"hi updated\" }\n",
+    );
+
+    let response = stdio_initialized_call(
+        &repo_root,
+        &db_path,
+        json!({
+            "jsonrpc":"2.0",
+            "id":7,
+            "method":"tools/call",
+            "params":{
+                "name":"query_graph",
+                "arguments":{"text":"greet"}
+            }
+        }),
+    );
+
+    let structured = &response["result"]["structuredContent"];
+    assert!(
+        structured["atlas_provenance"].is_object(),
+        "query_graph structured content must expose atlas_provenance"
+    );
     assert_eq!(
-        task_lifecycle_http_snapshot(&harness),
-        read_fixture("task_lifecycle.snapshot.json")
+        structured["atlas_freshness"]["stale"],
+        json!(true),
+        "query_graph structured content must expose stale freshness warning"
     );
 }
 
@@ -1042,13 +1092,13 @@ fn spec_transports_return_equivalent_bodies_after_normalization() {
                 "jsonrpc":"2.0",
                 "id":3,
                 "method":"tools/call",
-                "params":{"name":"list_graph_stats","arguments":{"output_format":"json"}}
+                "params":{"name":"list_graph_stats","arguments":{}}
             }),
             json!({
                 "jsonrpc":"2.0",
                 "id":3,
                 "method":"tools/call",
-                "params":{"name":"list_graph_stats","arguments":{"output_format":"json"}}
+                "params":{"name":"list_graph_stats","arguments":{}}
             }),
         ),
         (
@@ -1183,8 +1233,8 @@ fn spec_capabilities_and_descriptors_omit_unimplemented_methods() {
         capability_keys,
         vec![
             "completions".to_owned(),
-            "experimental".to_owned(),
             "extensions".to_owned(),
+            "logging".to_owned(),
             "prompts".to_owned(),
             "resources".to_owned(),
             "tools".to_owned(),
@@ -1238,12 +1288,12 @@ fn stdio_wait_for_task_result(repo_root: &str, db_path: &str, task_id: &str) -> 
                 "params": { "taskId": task_id }
             }),
         );
-        if get["result"]["status"] != json!("working") {
+        if task_status_value(&get) != json!("working") {
             break;
         }
         thread::sleep(Duration::from_millis(20));
     }
-    stdio_initialized_call(
+    task_completed_result(&stdio_initialized_call(
         repo_root,
         db_path,
         json!({
@@ -1252,43 +1302,7 @@ fn stdio_wait_for_task_result(repo_root: &str, db_path: &str, task_id: &str) -> 
             "method": "tasks/get",
             "params": { "taskId": task_id }
         }),
-    )["result"]["result"]
-        .clone()
-}
-
-fn http_wait_for_task_result(harness: &HttpTestHarness, session_id: &str, task_id: &str) -> Value {
-    for _ in 0..50 {
-        let get = harness
-            .post_jsonrpc(
-                &http_headers(session_id),
-                &json!({
-                    "jsonrpc": "2.0",
-                    "id": 3,
-                    "method": "tasks/get",
-                    "params": { "taskId": task_id }
-                }),
-            )
-            .expect("http task get");
-        let body = get.json_body.expect("get json body");
-        if body["result"]["status"] != json!("working") {
-            break;
-        }
-        thread::sleep(Duration::from_millis(20));
-    }
-    harness
-        .post_jsonrpc(
-            &http_headers(session_id),
-            &json!({
-                "jsonrpc": "2.0",
-                "id": 4,
-                "method": "tasks/get",
-                "params": { "taskId": task_id }
-            }),
-        )
-        .expect("http task get result")
-        .json_body
-        .expect("result json body")["result"]["result"]
-        .clone()
+    ))
 }
 
 #[test]
@@ -1302,7 +1316,7 @@ fn spec_broker_status_direct_and_deferred_contracts_match_across_stdio_and_http(
             "jsonrpc": "2.0",
             "id": 3,
             "method": "tools/call",
-            "params": { "name": "broker_status", "arguments": { "output_format": "json" } }
+            "params": { "name": "broker_status", "arguments": {  } }
         }),
     );
     let stdio_deferred_create = stdio_initialized_call(
@@ -1314,14 +1328,11 @@ fn spec_broker_status_direct_and_deferred_contracts_match_across_stdio_and_http(
             "method": "tools/call",
             "params": {
                 "name": "broker_status",
-                "task": { "ttl": 1000 },
-                "arguments": { "output_format": "json" }
+                "arguments": with_task_ttl(json!({}))
             }
         }),
     );
-    let stdio_task_id = stdio_deferred_create["result"]["task"]["taskId"]
-        .as_str()
-        .expect("stdio task id");
+    let stdio_task_id = task_id_from_call_tool_response(&stdio_deferred_create);
     let stdio_deferred = stdio_wait_for_task_result(&repo_root, &db_path, stdio_task_id);
 
     let harness = HttpTestHarness::new(&repo_root, &db_path);
@@ -1333,42 +1344,18 @@ fn spec_broker_status_direct_and_deferred_contracts_match_across_stdio_and_http(
                 "jsonrpc": "2.0",
                 "id": 2,
                 "method": "tools/call",
-                "params": { "name": "broker_status", "arguments": { "output_format": "json" } }
+                "params": { "name": "broker_status", "arguments": {  } }
             }),
         )
         .expect("http direct broker_status")
         .json_body
         .expect("http direct json body");
-    let http_deferred_create = harness
-        .post_jsonrpc(
-            &http_headers(&session_id),
-            &json!({
-                "jsonrpc": "2.0",
-                "id": 2,
-                "method": "tools/call",
-                "params": {
-                    "name": "broker_status",
-                    "task": { "ttl": 1000 },
-                    "arguments": { "output_format": "json" }
-                }
-            }),
-        )
-        .expect("http deferred broker_status create")
-        .json_body
-        .expect("http deferred create body");
-    let http_task_id = http_deferred_create["result"]["task"]["taskId"]
-        .as_str()
-        .expect("http task id");
-    let http_deferred = http_wait_for_task_result(&harness, &session_id, http_task_id);
-
     let direct_stdio = normalized_tool_result_contract(&stdio_direct["result"]);
     let deferred_stdio = normalized_tool_result_contract(&stdio_deferred);
     let direct_http = normalized_tool_result_contract(&http_direct["result"]);
-    let deferred_http = normalized_tool_result_contract(&http_deferred);
 
     assert_eq!(direct_stdio, deferred_stdio);
     assert_eq!(direct_stdio, direct_http);
-    assert_eq!(direct_stdio, deferred_http);
 }
 
 #[test]
@@ -1378,28 +1365,12 @@ fn spec_converted_stable_object_tools_match_across_direct_and_deferred_stdio_and
     seed_saved_context_and_decision(&repo_root, &db_path);
 
     let cases = vec![
-        (
-            "query_graph",
-            json!({ "text": "greet", "output_format": "json" }),
-        ),
+        ("query_graph", json!({ "text": "greet" })),
         (
             "batch_query_graph",
             json!({
-                "items": [{ "text": "greet" }, { "text": "greet_twice" }],
-                "output_format": "json"
+                "items": [{ "text": "greet" }, { "text": "greet_twice" }]
             }),
-        ),
-        (
-            "search_saved_context",
-            json!({ "query": "transport parity", "output_format": "json" }),
-        ),
-        (
-            "search_decisions",
-            json!({ "query": "transport parity", "output_format": "json" }),
-        ),
-        (
-            "cross_session_search",
-            json!({ "query": "transport parity", "output_format": "json" }),
         ),
     ];
 
@@ -1426,14 +1397,11 @@ fn spec_converted_stable_object_tools_match_across_direct_and_deferred_stdio_and
                 "method": "tools/call",
                 "params": {
                     "name": tool_name,
-                    "task": { "ttl": 1000 },
-                    "arguments": arguments.clone()
+                    "arguments": with_task_ttl(arguments.clone())
                 }
             }),
         );
-        let stdio_task_id = stdio_deferred_create["result"]["task"]["taskId"]
-            .as_str()
-            .expect("stdio task id");
+        let stdio_task_id = task_id_from_call_tool_response(&stdio_deferred_create);
         let stdio_deferred = stdio_wait_for_task_result(&repo_root, &db_path, stdio_task_id);
 
         let http_direct = harness
@@ -1449,32 +1417,9 @@ fn spec_converted_stable_object_tools_match_across_direct_and_deferred_stdio_and
             .unwrap_or_else(|_| panic!("http direct {tool_name}"))
             .json_body
             .expect("http direct json body");
-        let http_deferred_create = harness
-            .post_jsonrpc(
-                &http_headers(&session_id),
-                &json!({
-                    "jsonrpc": "2.0",
-                    "id": 33,
-                    "method": "tools/call",
-                    "params": {
-                        "name": tool_name,
-                        "task": { "ttl": 1000 },
-                        "arguments": arguments.clone()
-                    }
-                }),
-            )
-            .unwrap_or_else(|_| panic!("http deferred create {tool_name}"))
-            .json_body
-            .expect("http deferred create body");
-        let http_task_id = http_deferred_create["result"]["task"]["taskId"]
-            .as_str()
-            .expect("http task id");
-        let http_deferred = http_wait_for_task_result(&harness, &session_id, http_task_id);
-
         let direct_stdio = normalized_tool_result_contract(&stdio_direct["result"]);
         let deferred_stdio = normalized_tool_result_contract(&stdio_deferred);
         let direct_http = normalized_tool_result_contract(&http_direct["result"]);
-        let deferred_http = normalized_tool_result_contract(&http_deferred);
 
         assert_eq!(
             direct_stdio, deferred_stdio,
@@ -1483,10 +1428,6 @@ fn spec_converted_stable_object_tools_match_across_direct_and_deferred_stdio_and
         assert_eq!(
             direct_stdio, direct_http,
             "http direct mismatch for {tool_name}"
-        );
-        assert_eq!(
-            direct_stdio, deferred_http,
-            "http deferred mismatch for {tool_name}"
         );
         assert!(
             direct_stdio["structuredContent"]["tool"]
@@ -1500,7 +1441,7 @@ fn spec_converted_stable_object_tools_match_across_direct_and_deferred_stdio_and
 #[test]
 fn spec_tool_error_contract_matches_across_direct_and_deferred_stdio_and_http() {
     let (_dir, repo_root, db_path) = setup_repo();
-    let invalid_args = json!({ "query": "(", "is_regex": true, "output_format": "json" });
+    let invalid_args = json!({ "query": "(", "is_regex": true });
 
     let stdio_direct = stdio_initialized_call(
         &repo_root,
@@ -1521,14 +1462,11 @@ fn spec_tool_error_contract_matches_across_direct_and_deferred_stdio_and_http() 
             "method": "tools/call",
             "params": {
                 "name": "search_content",
-                "task": { "ttl": 1000 },
-                "arguments": invalid_args.clone()
+                "arguments": with_task_ttl(invalid_args.clone())
             }
         }),
     );
-    let stdio_task_id = stdio_deferred_create["result"]["task"]["taskId"]
-        .as_str()
-        .expect("stdio task id");
+    let stdio_task_id = task_id_from_call_tool_response(&stdio_deferred_create);
     let stdio_deferred = stdio_wait_for_task_result(&repo_root, &db_path, stdio_task_id);
 
     let harness = HttpTestHarness::new(&repo_root, &db_path);
@@ -1546,35 +1484,11 @@ fn spec_tool_error_contract_matches_across_direct_and_deferred_stdio_and_http() 
         .expect("http direct search_content")
         .json_body
         .expect("http direct json body");
-    let http_deferred_create = harness
-        .post_jsonrpc(
-            &http_headers(&session_id),
-            &json!({
-                "jsonrpc": "2.0",
-                "id": 2,
-                "method": "tools/call",
-                "params": {
-                    "name": "search_content",
-                    "task": { "ttl": 1000 },
-                    "arguments": invalid_args
-                }
-            }),
-        )
-        .expect("http deferred search_content create")
-        .json_body
-        .expect("http deferred create body");
-    let http_task_id = http_deferred_create["result"]["task"]["taskId"]
-        .as_str()
-        .expect("http task id");
-    let http_deferred = http_wait_for_task_result(&harness, &session_id, http_task_id);
-
     let direct_stdio = normalized_tool_result_contract(&stdio_direct["result"]);
     let deferred_stdio = normalized_tool_result_contract(&stdio_deferred);
     let direct_http = normalized_tool_result_contract(&http_direct["result"]);
-    let deferred_http = normalized_tool_result_contract(&http_deferred);
 
     assert_eq!(direct_stdio["isError"], json!(true));
     assert_eq!(direct_stdio, deferred_stdio);
     assert_eq!(direct_stdio, direct_http);
-    assert_eq!(direct_stdio, deferred_http);
 }

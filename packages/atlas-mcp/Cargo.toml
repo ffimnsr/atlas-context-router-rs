@@ -8,7 +8,7 @@ publish = false
 [features]
 default = []
 # Enable optional HTTP + SSE transport (requires tokio + axum).
-http-transport = ["dep:tokio", "dep:axum", "dep:tower-http", "dep:tokio-stream", "dep:reqwest", "dep:jsonwebtoken"]
+http-transport = ["dep:axum", "dep:tower", "dep:tower-http", "dep:tokio-stream", "dep:reqwest", "dep:jsonwebtoken"]
 
 [dependencies]
 atlas-core.workspace = true
@@ -30,7 +30,9 @@ regex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
-toon-format = { version = "0.4.5", default-features = false }
+schemars = "1"
+rmcp = { version = "3.1.0", features = ["server", "macros", "schemars", "transport-io", "transport-async-rw", "transport-streamable-http-server", "elicitation", "request-state"] }
+
 url = "2"
 tracing.workspace = true
 libc = "0.2"
@@ -40,8 +42,9 @@ globset = "0.4.18"
 grep-searcher = "0.1.16"
 grep-regex = "0.1.14"
 # Optional HTTP+SSE transport dependencies
-tokio         = { version = "1", features = ["rt-multi-thread", "macros", "sync", "net", "time"], optional = true }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "net", "time", "io-std", "io-util"] }
 axum          = { version = "0.8", optional = true }
+tower         = { version = "0.5", optional = true }
 tower-http    = { version = "0.6", features = ["cors"], optional = true }
 tokio-stream  = { version = "0.1", features = ["sync"], optional = true }
 reqwest       = { workspace = true, optional = true }
@@ -59,8 +62,8 @@ windows-sys = { version = "0.52", features = [
 jsonschema = { version = "0.18", features = ["draft202012"] }
 rusqlite.workspace = true
 tempfile = "3"
-tiktoken-rs = "0.6"
-tower = "0.5"
+
+
 
 [lints]
 workspace = true

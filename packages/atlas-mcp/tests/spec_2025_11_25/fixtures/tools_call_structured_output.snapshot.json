@@ -1,5 +1,11 @@
 {
-  "atlas_output_format": "json",
+  "meta": {
+    "atlas:repoRoot": "<repo-root>",
+    "atlas:repoSelection": {
+      "dynamicMode": false,
+      "selectionSource": "cached_active_root"
+    }
+  },
   "structured": {
     "file_count": 1,
     "node_count": 2,

@@ -7,13 +7,17 @@ use std::thread;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+use rmcp::serve_server;
+use serde::{Deserialize, Serialize};
+use tokio::io::{AsyncRead, AsyncWrite};
 
-use super::io::{ConnectionStartup, perform_socket_handshake, serve_connection};
+use crate::rmcp_server::AtlasRmcpServer;
+
 use super::types::ServerOptions;
-use super::worker::{ActiveStreamGuard, WorkerPool, install_socket_shutdown_handler};
+use super::worker::{ActiveStreamGuard, install_socket_shutdown_handler};
 
 #[cfg(unix)]
-use std::io::BufReader;
+use std::io::{BufReader, Write};
 #[cfg(unix)]
 use std::os::fd::AsRawFd;
 #[cfg(unix)]
@@ -47,6 +51,113 @@ use windows_sys::Win32::System::Threading::{
 };
 
 // ---------------------------------------------------------------------------
+// Handshake
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) struct DaemonHandshakeRequest {
+    pub(crate) protocol_version: String,
+    pub(crate) repo_root: String,
+    pub(crate) db_path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) struct DaemonHandshakeResponse {
+    pub(crate) ok: bool,
+    pub(crate) protocol_version: String,
+    pub(crate) repo_root: String,
+    pub(crate) db_path: String,
+    pub(crate) error: Option<String>,
+}
+
+impl DaemonHandshakeResponse {
+    pub(crate) fn ok(protocol_version: &str, repo_root: &str, db_path: &str) -> Self {
+        Self {
+            ok: true,
+            protocol_version: protocol_version.to_owned(),
+            repo_root: repo_root.to_owned(),
+            db_path: db_path.to_owned(),
+            error: None,
+        }
+    }
+
+    pub(crate) fn err(
+        protocol_version: &str,
+        repo_root: &str,
+        db_path: &str,
+        error: String,
+    ) -> Self {
+        Self {
+            ok: false,
+            protocol_version: protocol_version.to_owned(),
+            repo_root: repo_root.to_owned(),
+            db_path: db_path.to_owned(),
+            error: Some(error),
+        }
+    }
+}
+
+fn perform_socket_handshake<R: std::io::BufRead, W: std::io::Write>(
+    reader: &mut R,
+    writer: &mut W,
+    repo_root: &str,
+    db_path: &str,
+) -> Result<()> {
+    let mut line = String::new();
+    let bytes = reader.read_line(&mut line)?;
+    if bytes == 0 {
+        return Err(anyhow::anyhow!("daemon handshake missing"));
+    }
+
+    let request: DaemonHandshakeRequest =
+        serde_json::from_str(line.trim()).context("invalid daemon handshake")?;
+    let response = if request.protocol_version != crate::spec::MCP_PROTOCOL_VERSION {
+        DaemonHandshakeResponse::err(
+            crate::spec::MCP_PROTOCOL_VERSION,
+            repo_root,
+            db_path,
+            format!(
+                "protocol mismatch: client={} server={}",
+                request.protocol_version,
+                crate::spec::MCP_PROTOCOL_VERSION
+            ),
+        )
+    } else if request.repo_root != repo_root {
+        DaemonHandshakeResponse::err(
+            crate::MCP_PROTOCOL_VERSION,
+            repo_root,
+            db_path,
+            format!(
+                "repo mismatch: client={} server={repo_root}",
+                request.repo_root
+            ),
+        )
+    } else if request.db_path != db_path {
+        DaemonHandshakeResponse::err(
+            crate::MCP_PROTOCOL_VERSION,
+            repo_root,
+            db_path,
+            format!("db mismatch: client={} server={db_path}", request.db_path),
+        )
+    } else {
+        DaemonHandshakeResponse::ok(crate::MCP_PROTOCOL_VERSION, repo_root, db_path)
+    };
+
+    writeln!(writer, "{}", serde_json::to_string(&response)?)?;
+    writer.flush()?;
+
+    if response.ok {
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!(
+            response
+                .error
+                .unwrap_or_else(|| "daemon handshake failed".to_owned())
+        ))
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Unix socket server
 // ---------------------------------------------------------------------------
 
@@ -75,10 +186,6 @@ pub fn run_socket_server_with_options(
         .set_nonblocking(true)
         .with_context(|| format!("cannot set nonblocking {}", socket_path.display()))?;
     crate::tools::health::mark_server_started();
-    let worker_pool = Arc::new(WorkerPool::from_env(
-        "atlas-mcp:tool-worker",
-        options.clone(),
-    )?);
     let next_connection = AtomicUsize::new(0);
     let shutdown = Arc::new(AtomicBool::new(false));
     let active_streams = Arc::new(Mutex::new(Vec::<UnixStream>::new()));
@@ -111,7 +218,6 @@ pub fn run_socket_server_with_options(
         }
         let repo_root = repo_root.to_owned();
         let db_path = db_path.to_owned();
-        let worker_pool = Arc::clone(&worker_pool);
         let server_options = options.clone();
         let active_streams = Arc::clone(&active_streams);
         let connection_id = next_connection.fetch_add(1, Ordering::Relaxed) + 1;
@@ -124,7 +230,6 @@ pub fn run_socket_server_with_options(
                     stream,
                     &repo_root,
                     &db_path,
-                    worker_pool,
                     server_options,
                     active_streams,
                 ) {
@@ -142,7 +247,6 @@ fn serve_socket_connection(
     stream: UnixStream,
     repo_root: &str,
     db_path: &str,
-    worker_pool: Arc<WorkerPool>,
     server_options: ServerOptions,
     active_streams: Arc<Mutex<Vec<UnixStream>>>,
 ) -> Result<()> {
@@ -158,20 +262,23 @@ fn serve_socket_connection(
     let _stream_guard = ActiveStreamGuard::new(registered_fd, active_streams);
     let reader_stream = stream.try_clone().context("cannot clone daemon stream")?;
     let mut reader = BufReader::new(reader_stream);
-    let mut writer = std::io::BufWriter::new(stream);
+    let mut writer = std::io::BufWriter::new(
+        stream
+            .try_clone()
+            .context("cannot clone daemon stream writer")?,
+    );
 
     perform_socket_handshake(&mut reader, &mut writer, repo_root, db_path)?;
-    serve_connection(
-        reader,
-        &mut writer,
-        ConnectionStartup {
-            repo_root: Some(repo_root),
-            db_path: Some(db_path),
-            dynamic_roots: false,
-        },
-        worker_pool,
-        server_options,
-    )
+    writer
+        .flush()
+        .context("cannot flush daemon handshake response")?;
+    drop(reader);
+    drop(writer);
+
+    stream
+        .set_nonblocking(true)
+        .context("cannot set daemon stream nonblocking for rmcp")?;
+    run_rmcp_unix_socket_session(repo_root, db_path, server_options, stream)
 }
 
 #[cfg(unix)]
@@ -226,6 +333,7 @@ fn peer_uid(stream: &UnixStream) -> Result<libc::uid_t> {
     target_os = "openbsd",
     target_os = "netbsd"
 ))]
+#[cfg(unix)]
 fn peer_uid(stream: &UnixStream) -> Result<libc::uid_t> {
     let fd = stream.as_raw_fd();
     let mut uid = 0;
@@ -236,6 +344,50 @@ fn peer_uid(stream: &UnixStream) -> Result<libc::uid_t> {
     } else {
         Err(std::io::Error::last_os_error()).context("cannot read peer credentials")
     }
+}
+
+#[cfg(unix)]
+fn run_rmcp_unix_socket_session(
+    repo_root: &str,
+    db_path: &str,
+    options: ServerOptions,
+    stream: UnixStream,
+) -> Result<()> {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(options.worker_threads.max(1))
+        .enable_all()
+        .build()
+        .context("cannot build tokio runtime for rmcp socket server")?;
+    let repo_root = repo_root.to_owned();
+    let db_path = db_path.to_owned();
+    runtime.block_on(async move {
+        let stream = tokio::net::UnixStream::from_std(stream)
+            .context("cannot convert daemon stream into tokio UnixStream")?;
+        let (read, write) = tokio::io::split(stream);
+        run_rmcp_socket_session(&repo_root, &db_path, options, read, write).await
+    })
+}
+
+async fn run_rmcp_socket_session<R, W>(
+    repo_root: &str,
+    db_path: &str,
+    options: ServerOptions,
+    read: R,
+    write: W,
+) -> Result<()>
+where
+    R: AsyncRead + Send + Unpin + 'static,
+    W: AsyncWrite + Send + Unpin + 'static,
+{
+    let server = AtlasRmcpServer::new(repo_root, db_path, options);
+    let running = serve_server(server, (read, write))
+        .await
+        .map_err(|error| anyhow::anyhow!("rmcp socket initialize failed: {error}"))?;
+    running
+        .waiting()
+        .await
+        .map_err(|error| anyhow::anyhow!("rmcp socket task join failed: {error}"))?;
+    Ok(())
 }
 
 #[cfg(all(
@@ -270,16 +422,14 @@ pub fn run_socket_server_with_options(
 ) -> Result<()> {
     use std::os::windows::ffi::OsStrExt;
 
+    crate::tools::health::mark_server_started();
+
     let pipe_name: Vec<u16> = pipe_path
         .as_os_str()
         .encode_wide()
         .chain(std::iter::once(0))
         .collect();
 
-    let worker_pool = Arc::new(WorkerPool::from_env(
-        "atlas-mcp:tool-worker",
-        options.clone(),
-    )?);
     let next_connection = AtomicUsize::new(0);
 
     eprintln!(
@@ -306,7 +456,6 @@ pub fn run_socket_server_with_options(
 
         let repo_root = repo_root.to_owned();
         let db_path = db_path.to_owned();
-        let worker_pool = Arc::clone(&worker_pool);
         let server_options = options.clone();
         let connection_id = next_connection.fetch_add(1, Ordering::Relaxed) + 1;
         let thread_name = format!("atlas-mcp:daemon-client-{connection_id}");
@@ -315,13 +464,9 @@ pub fn run_socket_server_with_options(
         thread::Builder::new()
             .name(thread_name.clone())
             .spawn(move || {
-                if let Err(error) = win_serve_pipe_connection(
-                    pipe_handle,
-                    &repo_root,
-                    &db_path,
-                    worker_pool,
-                    server_options,
-                ) {
+                if let Err(error) =
+                    win_serve_pipe_connection(pipe_handle, &repo_root, &db_path, server_options)
+                {
                     tracing::warn!(
                         error = %error,
                         client = %log_thread_name,
@@ -466,7 +611,6 @@ fn win_serve_pipe_connection(
     pipe_handle: HANDLE,
     repo_root: &str,
     db_path: &str,
-    worker_pool: Arc<WorkerPool>,
     server_options: ServerOptions,
 ) -> Result<()> {
     win_ensure_pipe_client_is_same_user(pipe_handle)?;
@@ -479,15 +623,204 @@ fn win_serve_pipe_connection(
     let mut writer = std::io::BufWriter::new(writer_file);
 
     perform_socket_handshake(&mut reader, &mut writer, repo_root, db_path)?;
-    serve_connection(
-        reader,
-        &mut writer,
-        ConnectionStartup {
-            repo_root: Some(repo_root),
-            db_path: Some(db_path),
-            dynamic_roots: false,
-        },
-        worker_pool,
-        server_options,
-    )
+    writer
+        .flush()
+        .context("cannot flush named-pipe handshake response")?;
+
+    let reader_file = reader.into_inner();
+    let writer_file = writer
+        .into_inner()
+        .context("cannot recover named-pipe writer after handshake")?;
+    let reader_file = tokio::fs::File::from_std(reader_file);
+    let writer_file = tokio::fs::File::from_std(writer_file);
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(server_options.worker_threads.max(1))
+        .enable_all()
+        .build()
+        .context("cannot build tokio runtime for rmcp named-pipe server")?;
+    let repo_root = repo_root.to_owned();
+    let db_path = db_path.to_owned();
+    runtime.block_on(async move {
+        run_rmcp_socket_session(
+            &repo_root,
+            &db_path,
+            server_options,
+            reader_file,
+            writer_file,
+        )
+        .await
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(unix)]
+    use std::io::{BufRead, BufReader, Write};
+    #[cfg(unix)]
+    use std::os::unix::net::UnixStream;
+    #[cfg(unix)]
+    use std::sync::{Arc, Mutex};
+    #[cfg(unix)]
+    use std::time::Duration;
+
+    #[cfg(unix)]
+    use serde_json::json;
+
+    #[cfg(unix)]
+    use super::{DaemonHandshakeRequest, DaemonHandshakeResponse};
+
+    #[cfg(unix)]
+    #[test]
+    fn socket_tools_call_reaches_rmcp_handler_after_handshake() {
+        let repo = tempfile::tempdir().expect("repo tempdir");
+        std::fs::create_dir_all(repo.path().join(".git")).expect("create git dir");
+        let repo_root = repo
+            .path()
+            .canonicalize()
+            .expect("canonical repo")
+            .to_string_lossy()
+            .into_owned();
+        let db_path = repo.path().join(".atlas").join("worldtree.db");
+        std::fs::create_dir_all(db_path.parent().expect("atlas dir")).expect("create atlas dir");
+        let db_path = db_path.to_string_lossy().into_owned();
+
+        let (server_stream, mut client_stream) = UnixStream::pair().expect("unix stream pair");
+        client_stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .expect("set read timeout");
+        let join_handle = std::thread::spawn({
+            let repo_root = repo_root.clone();
+            let db_path = db_path.clone();
+            move || {
+                serve_socket_connection(
+                    server_stream,
+                    &repo_root,
+                    &db_path,
+                    ServerOptions::default(),
+                    Arc::new(Mutex::new(Vec::new())),
+                )
+            }
+        });
+
+        let handshake = DaemonHandshakeRequest {
+            protocol_version: crate::MCP_PROTOCOL_VERSION.to_owned(),
+            repo_root: repo_root.clone(),
+            db_path: db_path.clone(),
+        };
+        writeln!(
+            client_stream,
+            "{}",
+            serde_json::to_string(&handshake).expect("serialize handshake")
+        )
+        .expect("write handshake");
+        client_stream.flush().expect("flush handshake");
+
+        let mut reader = BufReader::new(client_stream.try_clone().expect("clone client stream"));
+        let mut line = String::new();
+        reader
+            .read_line(&mut line)
+            .expect("read handshake response");
+        let handshake_response: DaemonHandshakeResponse =
+            serde_json::from_str(line.trim()).expect("parse handshake response");
+        assert_eq!(
+            handshake_response,
+            DaemonHandshakeResponse::ok(crate::MCP_PROTOCOL_VERSION, &repo_root, &db_path)
+        );
+
+        writeln!(
+            client_stream,
+            "{}",
+            json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2026-07-28",
+                    "capabilities": {},
+                    "clientInfo": {"name": "socket-test", "version": "1.0.0"}
+                }
+            })
+        )
+        .expect("write initialize");
+        client_stream.flush().expect("flush initialize");
+        line.clear();
+        reader
+            .read_line(&mut line)
+            .expect("read initialize response");
+        let initialize: serde_json::Value =
+            serde_json::from_str(line.trim()).expect("parse initialize response");
+        assert_eq!(initialize["id"], json!(1));
+        assert_eq!(initialize["result"]["protocolVersion"], json!("2026-07-28"));
+
+        writeln!(
+            client_stream,
+            "{}",
+            json!({
+                "jsonrpc": "2.0",
+                "method": "initialized",
+                "params": {}
+            })
+        )
+        .expect("write initialized");
+        client_stream.flush().expect("flush initialized");
+
+        writeln!(
+            client_stream,
+            "{}",
+            json!({
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {
+                    "name": "broker_status",
+                    "arguments": {}
+                }
+            })
+        )
+        .expect("write tools call");
+        client_stream.flush().expect("flush tools call");
+        line.clear();
+        reader
+            .read_line(&mut line)
+            .expect("read tools call response");
+        let response: serde_json::Value =
+            serde_json::from_str(line.trim()).expect("parse tools call response");
+        assert_eq!(response["id"], json!(2));
+        assert_eq!(
+            response["result"]["structuredContent"]["repo_root"],
+            json!(repo_root)
+        );
+        assert_eq!(
+            response["result"]["structuredContent"]["db_path"],
+            json!(db_path)
+        );
+        assert!(response["result"]["structuredContent"]["pid"].is_number());
+        assert_eq!(
+            response["result"]["structuredContent"]["version"],
+            json!(env!("CARGO_PKG_VERSION"))
+        );
+
+        drop(reader);
+        drop(client_stream);
+        join_handle
+            .join()
+            .expect("socket server thread panicked")
+            .expect("socket server result");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn named_pipe_rmcp_wiring_compiles() {
+        fn assert_wiring<R, W>()
+        where
+            R: AsyncRead + Send + Unpin + 'static,
+            W: AsyncWrite + Send + Unpin + 'static,
+        {
+            let _ = run_rmcp_socket_session::<R, W>;
+        }
+
+        assert_wiring::<tokio::fs::File, tokio::fs::File>();
+    }
 }

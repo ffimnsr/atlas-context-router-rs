@@ -25,7 +25,7 @@ use crate::tool_result::{
 };
 
 pub(super) const DEFAULT_OUTPUT_DESCRIPTION: &str =
-    "Response body format: 'toon' (default) or 'json'";
+    "Response body format. Atlas MCP responses are JSON-only.";
 
 pub(crate) fn parse_mcp_intent(s: &str) -> ContextIntent {
     match s {

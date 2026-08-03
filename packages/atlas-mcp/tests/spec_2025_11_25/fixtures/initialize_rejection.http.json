@@ -5,11 +5,7 @@
     "id": 1,
     "error": {
       "code": -32602,
-      "message": "initialize requires object params.clientInfo",
-      "data": {
-        "atlas_error_code": "invalid_params",
-        "atlas_error_code_docs": "docs/error_codes.md#invalid_params"
-      }
+      "message": "Invalid params: request _meta is missing or has malformed required fields: io.modelcontextprotocol/protocolVersion, io.modelcontextprotocol/clientCapabilities"
     }
   }
 }

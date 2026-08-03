@@ -410,8 +410,9 @@ impl SessionStore {
             .execute(
                 "INSERT INTO durable_tasks (
                     task_id, originating_method, request_id, tool_name, transport_kind, session_id,
-                    created_at, updated_at, status, status_message, ttl_ms, cancel_requested
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 0)",
+                    created_at, updated_at, status, status_message, ttl_ms, cancel_requested,
+                    input_requests_json, request_state
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 0, NULL, NULL)",
                 params![
                     task.task_id,
                     task.originating_method,
@@ -437,6 +438,7 @@ impl SessionStore {
         let progress_json = update.progress.as_ref().map(canonical_json);
         let result_json = update.result.as_ref().map(canonical_json);
         let error_json = update.error.as_ref().map(canonical_json);
+        let input_requests_json = update.input_requests.as_ref().map(canonical_json);
         self.conn
             .execute(
                 "UPDATE durable_tasks
@@ -446,7 +448,9 @@ impl SessionStore {
                      result_json = COALESCE(?5, result_json),
                      error_json = COALESCE(?6, error_json),
                      cancel_requested = COALESCE(?7, cancel_requested),
-                     updated_at = ?8
+                     updated_at = ?8,
+                     input_requests_json = COALESCE(?9, input_requests_json),
+                     request_state = COALESCE(?10, request_state)
                  WHERE task_id = ?1",
                 params![
                     task_id,
@@ -457,6 +461,8 @@ impl SessionStore {
                     error_json,
                     update.cancel_requested.map(i32::from),
                     now,
+                    input_requests_json,
+                    update.request_state,
                 ],
             )
             .map_err(|e| AtlasError::Db(e.to_string()))?;
@@ -479,7 +485,7 @@ impl SessionStore {
             .query_row(
                 "SELECT task_id, originating_method, request_id, tool_name, transport_kind, session_id,
                         created_at, updated_at, status, status_message, progress_json, result_json,
-                        error_json, ttl_ms, cancel_requested
+                        error_json, input_requests_json, request_state, ttl_ms, cancel_requested
                  FROM durable_tasks
                  WHERE task_id = ?1",
                 params![task_id],
@@ -503,7 +509,7 @@ impl SessionStore {
                 .prepare(
                     "SELECT task_id, originating_method, request_id, tool_name, transport_kind, session_id,
                             created_at, updated_at, status, status_message, progress_json, result_json,
-                            error_json, ttl_ms, cancel_requested
+                            error_json, input_requests_json, request_state, ttl_ms, cancel_requested
                      FROM durable_tasks
                      WHERE updated_at < ?1
                         OR (updated_at = ?1 AND created_at < ?2)
@@ -517,7 +523,7 @@ impl SessionStore {
                 .prepare(
                     "SELECT task_id, originating_method, request_id, tool_name, transport_kind, session_id,
                             created_at, updated_at, status, status_message, progress_json, result_json,
-                            error_json, ttl_ms, cancel_requested
+                            error_json, input_requests_json, request_state, ttl_ms, cancel_requested
                      FROM durable_tasks
                      ORDER BY updated_at DESC, created_at DESC, task_id DESC
                      LIMIT ?1",
@@ -865,6 +871,7 @@ fn row_to_durable_task(row: &rusqlite::Row<'_>) -> rusqlite::Result<DurableTaskR
     let progress_json: Option<String> = row.get(10)?;
     let result_json: Option<String> = row.get(11)?;
     let error_json: Option<String> = row.get(12)?;
+    let input_requests_json: Option<String> = row.get(13)?;
     Ok(DurableTaskRecord {
         task_id: row.get(0)?,
         originating_method: row.get(1)?,
@@ -918,7 +925,19 @@ fn row_to_durable_task(row: &rusqlite::Row<'_>) -> rusqlite::Result<DurableTaskR
                     Box::new(error),
                 )
             })?,
-        ttl_ms: row.get::<_, Option<i64>>(13)?.map(|value| value as u64),
-        cancel_requested: row.get::<_, i32>(14)? != 0,
+        input_requests: input_requests_json
+            .as_deref()
+            .map(serde_json::from_str)
+            .transpose()
+            .map_err(|error| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    13,
+                    rusqlite::types::Type::Text,
+                    Box::new(error),
+                )
+            })?,
+        request_state: row.get(14)?,
+        ttl_ms: row.get::<_, Option<i64>>(15)?.map(|value| value as u64),
+        cancel_requested: row.get::<_, i32>(16)? != 0,
     })
 }

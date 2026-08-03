@@ -14,24 +14,21 @@
             "value": "base",
             "required_companion_fields": ["change_source.base"],
             "minimal_example": {
-              "change_source": { "kind": "base", "base": "origin/main" },
-              "output_format": "json"
+              "change_source": { "kind": "base", "base": "origin/main" }
             }
           },
           {
             "value": "staged",
             "required_companion_fields": [],
             "minimal_example": {
-              "change_source": { "kind": "staged" },
-              "output_format": "json"
+              "change_source": { "kind": "staged" }
             }
           },
           {
             "value": "working_tree",
             "required_companion_fields": [],
             "minimal_example": {
-              "change_source": { "kind": "working_tree" },
-              "output_format": "json"
+              "change_source": { "kind": "working_tree" }
             }
           }
         ]
@@ -47,24 +44,21 @@
             "value": "current",
             "required_companion_fields": [],
             "minimal_example": {
-              "repo_scope": { "kind": "current" },
-              "output_format": "json"
+              "repo_scope": { "kind": "current" }
             }
           },
           {
             "value": "repo_id",
             "required_companion_fields": ["repo_scope.repo_id"],
             "minimal_example": {
-              "repo_scope": { "kind": "repo_id", "repo_id": "primary" },
-              "output_format": "json"
+              "repo_scope": { "kind": "repo_id", "repo_id": "primary" }
             }
           },
           {
             "value": "all",
             "required_companion_fields": [],
             "minimal_example": {
-              "repo_scope": { "kind": "all" },
-              "output_format": "json"
+              "repo_scope": { "kind": "all" }
             }
           }
         ]

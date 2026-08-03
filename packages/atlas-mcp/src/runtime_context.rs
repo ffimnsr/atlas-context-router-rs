@@ -6,10 +6,10 @@ use serde_json::Value;
 
 pub(crate) type TaskStatusNotifyFn = dyn Fn(Value) -> Result<()> + Send + Sync;
 
-#[allow(dead_code)]
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ClientInteractionCapabilities {
     pub supports_elicitation_form: bool,
+    #[allow(dead_code)]
     pub supports_elicitation_url: bool,
 }
 

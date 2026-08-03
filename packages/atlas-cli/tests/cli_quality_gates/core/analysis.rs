@@ -205,7 +205,7 @@ fn explain_query_cli_and_mcp_share_execution_explanation() {
         format!(
             "{}{}",
             initialized_session_prelude(1),
-            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"explain_query\",\"arguments\":{\"text\":\"greet_twice\",\"output_format\":\"json\"}}}\n"
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"explain_query\",\"arguments\":{\"text\":\"greet_twice\"}}}\n"
         ),
     );
     assert!(
@@ -259,7 +259,7 @@ fn query_cli_and_mcp_share_ranked_results() {
         format!(
             "{}{}",
             initialized_session_prelude(1),
-            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"query_graph\",\"arguments\":{\"text\":\"helper\",\"output_format\":\"json\"}}}\n"
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"query_graph\",\"arguments\":{\"text\":\"helper\"}}}\n"
         ),
     );
     assert!(
@@ -315,8 +315,8 @@ fn mcp_query_and_explain_query_share_match_order() {
         format!(
             "{}{}{}",
             initialized_session_prelude(1),
-            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"query_graph\",\"arguments\":{\"text\":\"helper\",\"output_format\":\"json\"}}}\n",
-            "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"explain_query\",\"arguments\":{\"text\":\"helper\",\"output_format\":\"json\"}}}\n"
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"query_graph\",\"arguments\":{\"text\":\"helper\"}}}\n",
+            "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"explain_query\",\"arguments\":{\"text\":\"helper\"}}}\n"
         ),
     );
     assert!(
@@ -375,7 +375,7 @@ fn explain_change_cli_and_mcp_share_summary_builder() {
         format!(
             "{}{}",
             initialized_session_prelude(1),
-            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"explain_change\",\"arguments\":{\"change_source\":{\"kind\":\"base\",\"base\":\"HEAD\"},\"output_format\":\"json\"}}}\n"
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"explain_change\",\"arguments\":{\"change_source\":{\"kind\":\"base\",\"base\":\"HEAD\"}}}}\n"
         ),
     );
     assert!(
@@ -423,7 +423,7 @@ fn review_context_cli_and_get_context_share_review_seed_results() {
         format!(
             "{}{}",
             initialized_session_prelude(1),
-            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"get_context\",\"arguments\":{\"target\":{\"kind\":\"files\",\"files\":[\"src/lib.rs\"]},\"output_format\":\"json\"}}}\n"
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"get_context\",\"arguments\":{\"target\":{\"kind\":\"files\",\"files\":[\"src/lib.rs\"]}}}}\n"
         ),
     );
     assert!(
@@ -546,7 +546,7 @@ fn review_context_and_get_context_share_node_trimming_semantics() {
         format!(
             "{}{}",
             initialized_session_prelude(1),
-            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"get_context\",\"arguments\":{\"target\":{\"kind\":\"files\",\"files\":[\"src/lib.rs\"]},\"max_nodes\":1,\"output_format\":\"json\"}}}\n"
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"get_context\",\"arguments\":{\"target\":{\"kind\":\"files\",\"files\":[\"src/lib.rs\"]},\"max_nodes\":1}}}\n"
         ),
     );
     assert!(
@@ -728,7 +728,7 @@ fn analyze_remove_cli_and_mcp_share_ordering_primitives() {
         format!(
             "{}{}",
             initialized_session_prelude(1),
-            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"analyze_remove\",\"arguments\":{\"symbols\":[\"src/a.rs::fn::target\"],\"output_format\":\"json\"}}}\n"
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"analyze_remove\",\"arguments\":{\"symbols\":[\"src/a.rs::fn::target\"]}}}\n"
         ),
     );
     assert!(
@@ -785,7 +785,7 @@ fn analyze_dead_code_cli_and_mcp_share_ordering_primitives() {
         format!(
             "{}{}",
             initialized_session_prelude(1),
-            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"analyze_dead_code\",\"arguments\":{\"output_format\":\"json\"}}}\n"
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"analyze_dead_code\",\"arguments\":{}}}\n"
         ),
     );
     assert!(
@@ -850,7 +850,7 @@ fn analyze_dependency_cli_and_mcp_share_ordering_primitives() {
         format!(
             "{}{}",
             initialized_session_prelude(1),
-            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"analyze_dependency\",\"arguments\":{\"symbol\":\"src/a.rs::fn::target\",\"output_format\":\"json\"}}}\n"
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"analyze_dependency\",\"arguments\":{\"symbol\":\"src/a.rs::fn::target\"}}}\n"
         ),
     );
     assert!(

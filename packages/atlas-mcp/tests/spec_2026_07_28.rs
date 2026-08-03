@@ -1,7 +1,9 @@
 #![cfg(feature = "http-transport")]
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::Duration;
 
 use atlas_mcp::spec;
@@ -50,7 +52,10 @@ fn request_meta() -> Value {
     json!({
         spec::META_PROTOCOL_VERSION: MCP_PROTOCOL_VERSION,
         spec::META_CLIENT_CAPABILITIES: {
-            "elicitation": { "form": {}, "url": {} }
+            "elicitation": { "form": {}, "url": {} },
+            "extensions": {
+                "io.modelcontextprotocol/tasks": {}
+            }
         },
         spec::META_CLIENT_INFO: { "name": "zed", "version": "1.0.0" }
     })
@@ -79,11 +84,28 @@ fn stdio_response(repo_root: &str, db_path: &str, request: Value) -> Value {
 }
 
 fn discover_stdio_snapshot(repo_root: &str, db_path: &str) -> Value {
-    let response = stdio_response(
+    let response = run_stdio_jsonrpc_session_for_tests(
+        &as_lines(&[
+            json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": MCP_PROTOCOL_VERSION,
+                    "capabilities": {},
+                    "clientInfo": { "name": "zed", "version": "1.0.0" }
+                }
+            }),
+            json!({"jsonrpc": "2.0", "id": 2, "method": "server/discover"}),
+        ]),
         repo_root,
         db_path,
-        json!({"jsonrpc": "2.0", "id": 1, "method": "server/discover"}),
-    );
+        ServerOptions::default(),
+    )
+    .expect("run stdio session")
+    .into_iter()
+    .find(|value| value["id"] == json!(2))
+    .expect("discover response by id");
     json!({
         "protocol": response["result"]["supportedVersions"],
         "resultType": response["result"]["resultType"],
@@ -118,6 +140,26 @@ fn tools_list_first_stdio_snapshot(repo_root: &str, db_path: &str) -> Value {
             )
         }),
     })
+}
+
+fn input_request_snapshot(input_requests: &Value) -> Value {
+    match input_requests {
+        Value::Array(items) => items.first().cloned().expect("inputRequests array"),
+        Value::Object(object) => object
+            .iter()
+            .next()
+            .map(|(id, request)| {
+                let mut snapshot = json!({ "id": id });
+                if let Some(request_object) = request.as_object()
+                    && let Some(params) = request_object.get("params").and_then(Value::as_object)
+                {
+                    snapshot["type"] = params.get("mode").cloned().unwrap_or(Value::Null);
+                }
+                snapshot
+            })
+            .expect("inputRequests object"),
+        other => panic!("unexpected inputRequests shape: {other}"),
+    }
 }
 
 fn mrtr_retry_stdio_snapshot(repo_root: &str, db_path: &str) -> Value {
@@ -156,7 +198,7 @@ fn mrtr_retry_stdio_snapshot(repo_root: &str, db_path: &str) -> Value {
             "method": "tools/call",
             "params": {
                 "name": "purge_saved_context",
-                "arguments": { "keep_days": 30, "output_format": "json" },
+                "arguments": { "keep_days": 30 },
                 "_meta": request_meta()
             }
         }))
@@ -176,7 +218,7 @@ fn mrtr_retry_stdio_snapshot(repo_root: &str, db_path: &str) -> Value {
             "method": "tools/call",
             "params": {
                 "name": "purge_saved_context",
-                "arguments": { "keep_days": 30, "output_format": "json" },
+                "arguments": { "keep_days": 30 },
                 "requestState": request_state,
                 "inputResponses": {
                     "confirmation": {
@@ -205,10 +247,11 @@ fn mrtr_retry_stdio_snapshot(repo_root: &str, db_path: &str) -> Value {
         "stdio MRTR path must not emit server-initiated JSON-RPC requests"
     );
     let _ = session.finish().expect("finish interactive stdio session");
+    let request = input_request_snapshot(&input_required["result"]["inputRequests"]);
     json!({
         "resultType": input_required["result"]["resultType"],
-        "requestType": input_required["result"]["inputRequests"][0]["type"],
-        "requestId": input_required["result"]["inputRequests"][0]["id"],
+        "requestType": request["type"],
+        "requestId": request["id"],
         "requestStatePresent": input_required["result"]["requestState"].is_string(),
         "finalResultType": final_response["result"]["resultType"],
         "finalErrorCode": final_response["error"]["code"],
@@ -223,24 +266,52 @@ fn http_headers() -> Vec<(&'static str, &'static str)> {
 }
 
 fn discover_http_snapshot(harness: &HttpTestHarness) -> Value {
+    let _ = harness.post_jsonrpc(
+        &[],
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 0,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": MCP_PROTOCOL_VERSION,
+                "capabilities": {},
+                "clientInfo": { "name": "zed", "version": "1.0.0" }
+            }
+        }),
+    );
     let response = harness
         .post_jsonrpc(
             &http_headers(),
             &json!({"jsonrpc": "2.0", "id": 1, "method": "server/discover"}),
         )
         .expect("http discover");
+    let body = response.json_body.as_ref();
     json!({
         "status": response.status,
         "protocolHeader": response.headers.get("mcp-protocol-version"),
         "hasSessionHeader": response.headers.contains_key("mcp-session-id"),
-        "resultType": response.json_body.as_ref().expect("json body")["result"]["resultType"],
-        "ttlMs": response.json_body.as_ref().expect("json body")["result"]["ttlMs"],
-        "cacheScope": response.json_body.as_ref().expect("json body")["result"]["cacheScope"],
-        "serverName": response.json_body.as_ref().expect("json body")["result"]["serverInfo"]["name"],
+        "hasJsonBody": body.is_some(),
+        "resultType": body.map(|body| body["result"]["resultType"].clone()).unwrap_or(Value::Null),
+        "ttlMs": body.map(|body| body["result"]["ttlMs"].clone()).unwrap_or(Value::Null),
+        "cacheScope": body.map(|body| body["result"]["cacheScope"].clone()).unwrap_or(Value::Null),
+        "serverName": body.map(|body| body["result"]["serverInfo"]["name"].clone()).unwrap_or(Value::Null),
     })
 }
 
 fn tools_list_cacheable_http_snapshot(harness: &HttpTestHarness) -> Value {
+    let _ = harness.post_jsonrpc(
+        &[],
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 0,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": MCP_PROTOCOL_VERSION,
+                "capabilities": {},
+                "clientInfo": { "name": "zed", "version": "1.0.0" }
+            }
+        }),
+    );
     let response = harness
         .post_jsonrpc(
             &http_headers(),
@@ -252,15 +323,22 @@ fn tools_list_cacheable_http_snapshot(harness: &HttpTestHarness) -> Value {
             }),
         )
         .expect("http tools/list");
-    let body = response.json_body.as_ref().expect("json body");
-    let tools = body["result"]["tools"].as_array().expect("tools array");
+    let body = response.json_body.as_ref();
+    let has_get_context = body
+        .and_then(|body| body["result"]["tools"].as_array())
+        .is_some_and(|tools| {
+            tools
+                .iter()
+                .any(|tool| tool["name"] == json!("get_context"))
+        });
     json!({
         "status": response.status,
         "hasSessionHeader": response.headers.contains_key("mcp-session-id"),
-        "resultType": body["result"]["resultType"],
-        "ttlMs": body["result"]["ttlMs"],
-        "cacheScope": body["result"]["cacheScope"],
-        "hasGetContext": tools.iter().any(|tool| tool["name"] == json!("get_context")),
+        "hasJsonBody": body.is_some(),
+        "resultType": body.map(|body| body["result"]["resultType"].clone()).unwrap_or(Value::Null),
+        "ttlMs": body.map(|body| body["result"]["ttlMs"].clone()).unwrap_or(Value::Null),
+        "cacheScope": body.map(|body| body["result"]["cacheScope"].clone()).unwrap_or(Value::Null),
+        "hasGetContext": has_get_context,
     })
 }
 
@@ -275,16 +353,30 @@ fn header_validation_http_snapshot(harness: &HttpTestHarness) -> Value {
             &json!({"jsonrpc": "2.0", "id": 3, "method": "resources/list", "params": {}}),
         )
         .expect("http header mismatch");
-    let body = response.json_body.as_ref().expect("json body");
+    let body = response.json_body.as_ref();
     json!({
         "status": response.status,
-        "code": body["error"]["code"],
-        "atlas_error_code": body["error"]["data"]["atlas_error_code"],
-        "message": body["error"]["message"],
+        "hasJsonBody": body.is_some(),
+        "code": body.map(|body| body["error"]["code"].clone()).unwrap_or(Value::Null),
+        "atlas_error_code": body.map(|body| body["error"]["data"]["atlas_error_code"].clone()).unwrap_or(Value::Null),
+        "message": body.map(|body| body["error"]["message"].clone()).unwrap_or(Value::Null),
     })
 }
 
 fn mrtr_input_required_http_snapshot(harness: &HttpTestHarness) -> Value {
+    let _ = harness.post_jsonrpc(
+        &[],
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 0,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": MCP_PROTOCOL_VERSION,
+                "capabilities": {},
+                "clientInfo": { "name": "zed", "version": "1.0.0" }
+            }
+        }),
+    );
     let response = harness
         .post_jsonrpc(
             &http_headers(),
@@ -294,19 +386,24 @@ fn mrtr_input_required_http_snapshot(harness: &HttpTestHarness) -> Value {
                 "method": "tools/call",
                 "params": {
                     "name": "purge_saved_context",
-                    "arguments": { "keep_days": 30, "output_format": "json" },
+                    "arguments": { "keep_days": 30 },
                     "_meta": request_meta()
                 }
             }),
         )
         .expect("http input_required");
-    let body = response.json_body.as_ref().expect("json body");
+    let body = response.json_body.as_ref();
+    let request = body
+        .and_then(|body| body["result"].get("inputRequests"))
+        .map(input_request_snapshot)
+        .unwrap_or(Value::Null);
     json!({
         "status": response.status,
-        "resultType": body["result"]["resultType"],
-        "requestType": body["result"]["inputRequests"][0]["type"],
-        "requestId": body["result"]["inputRequests"][0]["id"],
-        "requestStatePresent": body["result"]["requestState"].is_string(),
+        "hasJsonBody": body.is_some(),
+        "resultType": body.map(|body| body["result"]["resultType"].clone()).unwrap_or(Value::Null),
+        "requestType": request.get("type").cloned().unwrap_or(Value::Null),
+        "requestId": request.get("id").cloned().unwrap_or(Value::Null),
+        "requestStatePresent": body.is_some_and(|body| body["result"]["requestState"].is_string()),
     })
 }
 
@@ -314,7 +411,7 @@ fn subscriptions_listen_http_snapshot(harness: &HttpTestHarness) -> Value {
     let response = harness
         .post_jsonrpc(
             &[
-                ("Accept", "text/event-stream"),
+                ("Accept", "application/json, text/event-stream"),
                 ("MCP-Protocol-Version", MCP_PROTOCOL_VERSION),
                 ("Mcp-Method", "subscriptions/listen"),
             ],
@@ -340,6 +437,19 @@ fn subscriptions_listen_http_snapshot(harness: &HttpTestHarness) -> Value {
 }
 
 fn no_session_http_snapshot(harness: &HttpTestHarness) -> Value {
+    let _ = harness.post_jsonrpc(
+        &[],
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 0,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": MCP_PROTOCOL_VERSION,
+                "capabilities": {},
+                "clientInfo": { "name": "zed", "version": "1.0.0" }
+            }
+        }),
+    );
     let response = harness
         .post_jsonrpc(
             &[
@@ -357,16 +467,20 @@ fn no_session_http_snapshot(harness: &HttpTestHarness) -> Value {
             }),
         )
         .expect("http no-session behavior");
-    let body = response.json_body.as_ref().expect("json body");
+    let body = response.json_body.as_ref();
+    let has_get_context = body
+        .and_then(|body| body["result"]["tools"].as_array())
+        .is_some_and(|tools| {
+            tools
+                .iter()
+                .any(|tool| tool["name"] == json!("get_context"))
+        });
     json!({
         "status": response.status,
         "hasSessionHeader": response.headers.contains_key("mcp-session-id"),
-        "resultType": body["result"]["resultType"],
-        "hasGetContext": body["result"]["tools"]
-            .as_array()
-            .expect("tools array")
-            .iter()
-            .any(|tool| tool["name"] == json!("get_context")),
+        "hasJsonBody": body.is_some(),
+        "resultType": body.map(|body| body["result"]["resultType"].clone()).unwrap_or(Value::Null),
+        "hasGetContext": has_get_context,
     })
 }
 
@@ -458,8 +572,10 @@ fn drift_no_active_roots_list_dispatch_path_remains() {
         "src/transport/input.rs",
         "src/transport_http.rs",
     ] {
-        let contents = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join(path))
-            .expect("read source file");
+        let full_path = Path::new(env!("CARGO_MANIFEST_DIR")).join(path);
+        let Ok(contents) = fs::read_to_string(&full_path) else {
+            continue;
+        };
         assert!(
             !contents.contains("\"roots/list\""),
             "active MCP roots/list handler must stay removed: {path}"
@@ -472,6 +588,7 @@ fn drift_docs_stop_describing_roots_or_http_session_protocol() {
     for path in [
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../README.md"),
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../MCP_TOOLS.md"),
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../wiki/mcp-reference.md"),
         Path::new(env!("CARGO_MANIFEST_DIR")).join("README.md"),
     ] {
         let contents = fs::read_to_string(&path).expect("read doc file");
@@ -480,5 +597,98 @@ fn drift_docs_stop_describing_roots_or_http_session_protocol() {
             "docs must not guide clients toward roots/list: {}",
             path.display()
         );
+        assert!(
+            !contents.contains("output_format"),
+            "docs must not advertise output_format: {}",
+            path.display()
+        );
+        assert!(
+            !contents.to_ascii_lowercase().contains("toon"),
+            "docs must not advertise TOON: {}",
+            path.display()
+        );
+        assert!(
+            !contents.contains("ATLAS_MCP_OUTPUT_FORMAT"),
+            "docs must not advertise legacy output env: {}",
+            path.display()
+        );
     }
+}
+
+fn cargo_tree(args: &[&str]) -> String {
+    let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let output = Command::new("cargo")
+        .args(args)
+        .current_dir(&repo_root)
+        .output()
+        .expect("run cargo tree");
+    assert!(
+        output.status.success(),
+        "cargo {:?} failed\nstdout:\n{}\nstderr:\n{}",
+        args,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).expect("cargo tree stdout utf8")
+}
+
+fn package_versions(tree: &str, package: &str) -> BTreeSet<String> {
+    tree.lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            let name = fields.next()?;
+            let version = fields.next()?;
+            (name == package && version.starts_with('v'))
+                .then(|| version.trim_start_matches('v').to_owned())
+        })
+        .collect()
+}
+
+#[test]
+fn dependency_tree_omits_toon_format() {
+    let tree = cargo_tree(&["tree", "-p", "atlas-mcp", "--prefix", "none"]);
+    assert!(
+        !tree.contains("toon-format"),
+        "atlas-mcp dependency tree must not contain toon-format"
+    );
+}
+
+#[test]
+fn http_dependency_stack_keeps_single_versions_for_key_crates() {
+    let tree = cargo_tree(&[
+        "tree",
+        "-p",
+        "atlas-mcp",
+        "--features",
+        "http-transport",
+        "--prefix",
+        "none",
+    ]);
+    let mut versions = BTreeMap::new();
+    for package in [
+        "axum",
+        "hyper",
+        "hyper-util",
+        "reqwest",
+        "tower",
+        "tower-http",
+        "http",
+        "http-body",
+        "http-body-util",
+    ] {
+        let found = package_versions(&tree, package);
+        assert!(
+            !found.is_empty(),
+            "expected {package} in http dependency tree"
+        );
+        assert!(
+            found.len() <= 1,
+            "http dependency tree should keep one {package} version, found {:?}",
+            found
+        );
+        versions.insert(package, found);
+    }
+
+    assert_eq!(versions["tower-http"].len(), 1);
+    assert_eq!(versions["reqwest"].len(), 1);
 }

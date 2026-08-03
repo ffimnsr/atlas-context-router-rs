@@ -2006,3 +2006,674 @@ All sub-patches are shipped. See SHIPPED.md for feature details.
 ## Part IX — MCP Tool Agent-Ergonomics Simplification Roadmap
 
 All phases in this part are shipped. See SHIPPED.md for feature details.
+
+---
+
+## Part X — MCP `rmcp` Official SDK Conversion Roadmap
+
+Goal: replace Atlas handrolled MCP protocol, descriptor, transport, task, and result plumbing with the official `rmcp` Rust SDK while preserving Atlas tool behavior, repo identity invariants, structured JSON contracts, provenance, freshness, budgets, and tests.
+
+Overview: first remove Atlas-specific TOON output because `rmcp` should expose official typed JSON results with `structuredContent` as source of truth. Then add an `rmcp` server adapter around existing Atlas tool business logic, migrate stdio/HTTP/socket transports to official SDK transports, convert tasks/MRTR/elicitation to official SDK types, remove handrolled JSON-RPC code, and finish with typed tool schemas.
+
+Rules:
+- Implement smallest safe phase slices; keep Atlas tool business logic stable until transport parity tests pass.
+- Do not keep TOON compatibility shims; MCP output becomes JSON-only.
+- Use `rmcp::model::*` types at protocol boundaries; keep `serde_json::Value` only inside Atlas tool payload assembly until typed schema migration.
+- Keep `structuredContent` authoritative; `content` may contain concise text only.
+- Preserve `atlas_provenance`, `atlas_freshness`, budget metadata, truncation metadata, and user-visible tool errors.
+- Preserve current public crate API names until downstream CLI tests are migrated.
+- Validate each phase with targeted tests before deleting old code.
+
+### Phase X1 — Remove TOON MCP Output Mode
+
+Goal: remove Atlas-specific TOON rendering and make MCP responses JSON-only before introducing `rmcp`.
+
+Overview: delete `OutputFormat::Toon`, remove `output_format` arguments from MCP schemas and tests, remove `toon-format`, and make budget enforcement measure JSON payload bytes only.
+
+Rules:
+- `structuredContent` is canonical output for all MCP tools.
+- `content` text must be JSON-compatible summary or compact human-readable text, never TOON.
+- Tool callers must not pass `output_format`; JSON is implicit.
+- No `ATLAS_MCP_OUTPUT_FORMAT` environment fallback remains.
+
+- [x] remove TOON dependency and renderer code:
+  - [x] remove `toon-format` from `packages/atlas-mcp/Cargo.toml`
+  - [x] delete TOON-specific imports from `packages/atlas-mcp/src/output.rs`
+  - [x] remove `OutputFormat::Toon` and keep only JSON behavior or replace `OutputFormat` with JSON-only helper functions
+  - [x] remove `ATLAS_MCP_OUTPUT_FORMAT` parsing from `packages/atlas-mcp/src/output.rs`
+  - [x] remove TOON fallback metadata generation for `atlas:fallbackReason`
+  - [x] remove `text/x-toon` MIME type handling from MCP result construction
+- [x] update MCP result construction for JSON-only output:
+  - [x] change `packages/atlas-mcp/src/tool_result.rs` so `ToolResultBuilder` renders JSON-only text content
+  - [x] remove `atlas:outputFormat` from result `_meta`
+  - [x] remove `atlas:requestedOutputFormat` from result `_meta`
+  - [x] remove `atlas:fallbackReason` from result `_meta`
+  - [x] keep `structuredContent` populated for object payloads
+  - [x] keep resource-link inference unchanged when source JSON includes known resource IDs or URIs
+- [x] remove `output_format` from MCP tool inputs:
+  - [x] remove `output_format` properties from all tool input schemas in `packages/atlas-mcp/src/tools/**`
+  - [x] remove `output_format` parsing from `packages/atlas-mcp/src/tools/dispatch.rs`
+  - [x] remove `output_format` parsing from `packages/atlas-mcp/src/discovery/**`
+  - [x] remove `output_format` parsing from `packages/atlas-mcp/src/session_tools.rs`
+  - [x] remove `output_format` parsing from `packages/atlas-mcp/src/session_events.rs`
+  - [x] remove `output_format` parsing from `packages/atlas-mcp/src/tasks.rs`
+  - [x] update helper signatures that currently accept `OutputFormat` to use JSON-only result builders
+- [x] update completions and prompts for JSON-only output:
+  - [x] remove `output_format` completion branch from `packages/atlas-mcp/src/completion.rs`
+  - [x] update completion tests that expect `json` or `toon` suggestions
+  - [x] remove prompt instructions that recommend `output_format = "toon"`
+  - [x] update MCP prompt tests to expect JSON-only workflow text
+- [x] update budget enforcement to measure JSON only:
+  - [x] change `packages/atlas-mcp/src/context.rs` byte measurement to use `serde_json::to_vec` or compact JSON string length
+  - [x] remove output-format-dependent budget calculations
+  - [x] keep existing truncation fields and budget reports stable except output-format fields
+  - [x] add regression test proving budget trimming is deterministic with JSON-only measurement
+- [x] remove TOON docs, fixtures, and installed instructions:
+  - [x] remove `docs/contracts/atlas_toon.v1.md` references from source and docs indexes
+  - [x] delete `packages/atlas-mcp/testdata/atlas_toon.v1/**`
+  - [x] update `packages/atlas-cli/src/install/instructions.rs` to say `Use default JSON output. Trust structuredContent as source of truth.`
+  - [x] update `packages/atlas-cli/src/install/tests.rs` assertion for installed MCP instructions
+- [x] update JSON-RPC and CLI quality-gate fixtures:
+  - [x] remove `"output_format":"json"` from MCP `tools/call` fixtures under `packages/atlas-cli/tests/cli_quality_gates/**`
+  - [x] remove JSON output-format arguments from `packages/atlas-mcp/src/**/tests/**`
+  - [x] assert representative tool calls still include object `structuredContent`
+  - [x] assert representative tool calls no longer include `atlas:outputFormat`
+  - [x] assert representative tool calls no longer include `atlas:requestedOutputFormat`
+- [x] validate Phase X1:
+  - [x] run `cargo fmt --all`
+  - [x] run `cargo clippy --workspace --all-targets --quiet`
+  - [x] run `cargo test --quiet -p atlas-mcp output::tests`
+  - [x] run targeted MCP contract tests with `cargo test --quiet -p atlas-cli stdio_transport_representative_stable_tools_keep_object_structured_content`
+  - [x] run `./scripts/test-workspace-summary.sh`
+
+Phase X1 completion criteria:
+- [x] `toon-format` no longer appears in any `Cargo.toml`
+- [x] `OutputFormat::Toon`, `ATLAS_MCP_OUTPUT_FORMAT`, `text/x-toon`, and `output_format` MCP inputs are removed
+- [x] all MCP tool responses use JSON `structuredContent` as authoritative data
+- [x] installed instructions no longer mention TOON
+- [x] targeted MCP contract tests and workspace summary pass
+
+### Phase X2 — Add `rmcp` Dependency and Server Adapter Shell
+
+Goal: introduce official SDK dependency and compile an `rmcp` `ServerHandler` wrapper without changing default runtime behavior yet.
+
+Overview: add `rmcp` with required features, create `AtlasRmcpServer`, and map server info/discovery/list methods to existing Atlas registries through official model types.
+
+Rules:
+- Keep handrolled transport as default until adapter parity tests pass.
+- Adapter must not duplicate Atlas tool business logic.
+- Adapter must own repo root and DB path explicitly.
+- Adapter must expose only JSON-only contracts from Phase X1.
+
+- [x] add SDK dependencies:
+  - [x] add `rmcp = "3.1.0"` to workspace or `packages/atlas-mcp/Cargo.toml` with server, macros, schemars, transport-io, transport-async-rw, transport-streamable-http-server, and elicitation features
+  - [x] add `schemars = "1"` where typed schema generation will be implemented
+  - [x] align optional HTTP auth dependencies so `cargo tree -p atlas-mcp` has one intended auth stack
+- [x] create adapter module structure:
+  - [x] add `packages/atlas-mcp/src/rmcp_server.rs`
+  - [x] add `packages/atlas-mcp/src/rmcp_types.rs`
+  - [x] add `packages/atlas-mcp/src/rmcp_error.rs`
+  - [x] export adapter modules behind internal crate visibility from `packages/atlas-mcp/src/lib.rs`
+- [x] implement `AtlasRmcpServer` state:
+  - [x] store canonical `repo_root: String`
+  - [x] store `db_path: String`
+  - [x] store `ServerOptions`
+  - [x] add constructor `AtlasRmcpServer::new(repo_root, db_path, options)`
+  - [x] add tests proving constructor preserves repo and DB paths exactly as passed by existing launcher
+- [x] implement `rmcp::handler::server::ServerHandler` shell:
+  - [x] implement `get_info` from current package name, version, and description
+  - [x] implement `supported_protocol_versions` with the currently supported MCP version only
+  - [x] implement `discover` using official `rmcp::model::DiscoverResult`
+  - [x] implement `list_tools` by converting current `tools::tool_descriptors()` into `rmcp::model::Tool`
+  - [x] implement `list_prompts` by converting current prompt descriptors into `rmcp::model::Prompt`
+  - [x] implement `list_resources` by converting current resource descriptors into `rmcp::model::Resource`
+  - [x] implement `list_resource_templates` by converting current resource template descriptors into `rmcp::model::ResourceTemplate`
+- [x] add adapter parity tests:
+  - [x] assert `AtlasRmcpServer::get_info` matches current `spec::server_info`
+  - [x] assert `list_tools` names equal current `tools::tool_list()["tools"]` names
+  - [x] assert `list_prompts` names equal current `prompts::prompt_list()["prompts"]` names
+  - [x] assert `list_resources` URIs equal current `resources::resources_list` URIs
+  - [x] assert `list_resource_templates` URI templates equal current `resources::resources_templates_list` URI templates
+- [x] validate Phase X2:
+  - [x] run `cargo fmt --all`
+  - [x] run `cargo clippy --workspace --all-targets --quiet`
+  - [x] run `cargo test --quiet -p atlas-mcp rmcp_server`
+
+Phase X2 completion criteria:
+- [x] `atlas-mcp` compiles with `rmcp`
+- [x] `AtlasRmcpServer` exposes info, discovery, tools, prompts, resources, and templates through official model types
+- [x] default handrolled transport still works unchanged
+- [x] adapter parity tests pass
+
+### Phase X3 — Convert Tool Calls to `rmcp` Results
+
+Goal: route `tools/call` through `rmcp::model::CallToolRequestParams` and return official tool result types while reusing existing Atlas tool handlers.
+
+Overview: implement `call_tool`, error mapping, metadata preservation, and task deferral behavior through SDK result types.
+
+Rules:
+- User-fixable tool failures become successful MCP tool responses with error content, not JSON-RPC protocol errors.
+- Unknown tool remains protocol method/tool error.
+- `structuredContent` stays object-shaped for normalized Atlas contracts.
+- Existing `McpAdapter` session hooks must still run around tool execution.
+
+- [x] implement request conversion:
+  - [x] parse `CallToolRequestParams.name` into existing Atlas tool name
+  - [x] pass `CallToolRequestParams.arguments` into existing `tasks::execute_tool_call`
+  - [x] strip repo selector fields using existing repo-selection helper before business logic runs
+  - [x] preserve request context fields needed for progress, cancellation, and session tracking
+- [x] implement result conversion:
+  - [x] convert existing JSON tool result envelope into `rmcp::model::CallToolResult` or equivalent `CallToolResponse`
+  - [x] map existing `content` array to official content blocks
+  - [x] map existing `structuredContent` to official structured content field
+  - [x] map existing `_meta` to official result metadata extension map
+  - [x] preserve resource links in official content block form when supported by rmcp
+- [x] implement error conversion:
+  - [x] convert unknown tool to rmcp method-not-found or invalid-params error as appropriate
+  - [x] convert invalid `arguments` shape to rmcp invalid-params error
+  - [x] convert Atlas `ToolErrorPayload` to user-visible tool error result
+  - [x] convert unexpected internal failures with `atlas_error_code` metadata retained where official SDK permits metadata
+  - [x] add tests that user-visible validation failures appear in tool content
+- [x] preserve tool session side effects:
+  - [x] ensure `McpAdapter::before_command` runs before delegated tool execution
+  - [x] ensure `McpAdapter::after_command` records success/failure
+  - [x] ensure session event best-effort emission still runs after successful calls
+  - [x] add regression test around `get_session_status` event count after one rmcp adapter tool call
+- [x] add representative tool parity tests:
+  - [x] compare `query_graph` structured content between handrolled dispatch and rmcp adapter
+  - [x] compare `status` structured content between handrolled dispatch and rmcp adapter
+  - [x] compare `get_context` structured content between handrolled dispatch and rmcp adapter
+  - [x] compare `search_files` structured content between handrolled dispatch and rmcp adapter
+  - [x] compare user-visible error shape for invalid input between handrolled dispatch and rmcp adapter
+- [x] validate Phase X3:
+  - [x] run `cargo fmt --all`
+  - [x] run `cargo clippy --workspace --all-targets --quiet`
+  - [x] run `cargo test --quiet -p atlas-mcp rmcp_server::tests::call_tool`
+
+Phase X3 completion criteria:
+- [x] `AtlasRmcpServer::call_tool` uses official `rmcp` request and result types
+- [x] representative tools produce matching structured content through handrolled and rmcp paths
+- [x] user-visible tool errors render as tool results
+- [x] session hooks remain active for rmcp tool calls
+
+Audit note:
+- second-pass Phase X3 audit found duplicate outer rmcp hook/session wrapper around delegated tool execution
+- fixed by installing rmcp runtime/tool-call context, then delegating directly to `crate::tasks::execute_tool_call(...)`
+- regression coverage now compares rmcp vs handrolled session-event delta after one tool call
+
+### Phase X4 — Convert Prompts, Resources, Completions, and Subscriptions
+
+Goal: move non-tool MCP surfaces to official SDK handler methods.
+
+Overview: implement prompt get/list, resource list/read/templates, completions, and subscription/listen hooks with official model types while preserving Atlas content generation.
+
+Rules:
+- Prompt and resource payload text must remain byte-for-byte stable where current tests assert text.
+- Resource URIs remain stable.
+- Cache metadata remains in `_meta` or official cache fields when available.
+- Completion behavior remains deterministic and sorted.
+- Official `rmcp::model::PaginatedRequestParams` is cursor-only; preserve Atlas pagination through `cursor` semantics and keep default page sizing on rmcp path.
+
+- [x] implement prompt handlers:
+  - [x] convert `prompts::prompt_list` output into `rmcp::model::ListPromptsResult`
+  - [x] convert `prompts::prompt_get` output into `rmcp::model::GetPromptResult`
+  - [x] preserve prompt descriptions, arguments, titles, icons, and metadata
+  - [x] add tests for all prompt names and required arguments
+- [x] implement resource handlers:
+  - [x] convert `resources::resources_list` into `rmcp::model::ListResourcesResult`
+  - [x] convert `resources::resources_templates_list` into `rmcp::model::ListResourceTemplatesResult`
+  - [x] convert `resources::resources_read` into `rmcp::model::ReadResourceResult`
+  - [x] preserve MIME types and text content
+  - [x] preserve resource pagination behavior
+  - [x] add tests for docs index, health status, graph provenance, saved context, tool docs, prompt docs, and docs-section resources
+- [x] implement completion handler:
+  - [x] convert current `completion::complete` result into `rmcp::model::CompleteResult`
+  - [x] remove any leftover output-format completion path
+  - [x] preserve resource URI, prompt argument, tool name, intent, source ID, docs heading, and git ref completions
+  - [x] add tests for each completion source
+- [x] implement subscription/listen support:
+  - [x] map accepted subscription filters to current tools/prompts/resources list-changed categories
+  - [x] map resource updated notifications to official rmcp notification type
+  - [x] add tests that unsupported subscription filters are rejected or reduced deterministically
+- [x] validate Phase X4:
+  - [x] run `cargo fmt --all`
+  - [x] run `cargo clippy --workspace --all-targets --quiet`
+  - [x] run `cargo test --quiet -p atlas-mcp prompts resources completion`
+
+Phase X4 completion criteria:
+- [x] prompts, resources, resource templates, reads, completions, and subscriptions are implemented on `AtlasRmcpServer`
+- [x] resource URIs and prompt names remain stable
+- [x] leftover output-format completion behavior is gone
+- [x] targeted non-tool MCP tests pass
+
+### Phase X4.5 — Convert Lifecycle, Logging, Roots, and Capability Context
+
+Goal: preserve MCP lifecycle behavior and client interaction context before replacing transports.
+
+Overview: implement official rmcp handlers for ping, initialized notifications, logging level changes, trace/log messages, client capability capture, and roots-list-changed dynamic repo refresh.
+
+Rules:
+- Lifecycle methods must be covered before stdio/HTTP transport replacement.
+- Client capability data must flow into Atlas runtime context before tool execution.
+- Dynamic repo/root behavior must stay canonical-path-safe.
+- Logging and tracing are diagnostics only; user-facing command output remains tool result content.
+
+- [x] implement protocol lifecycle handlers:
+  - [x] implement `ServerHandler::ping` with an empty success result
+  - [x] implement `ServerHandler::on_initialized` and preserve current initialized-session side effects
+  - [x] add tests that initialized notification produces no response and marks session ready where existing tests observe readiness
+  - [x] add tests that ping returns a successful empty response through the rmcp adapter
+- [x] implement logging and trace controls:
+  - [x] implement `ServerHandler::set_level` using current `logging::LogLevel` threshold behavior
+  - [x] map rmcp logging levels to Atlas `LogLevel` values deterministically
+  - [x] preserve stderr diagnostic fallback for clients without logging capability
+  - [x] replace custom `$/logMessage` emission with official rmcp logging notification APIs
+  - [x] add tests for threshold filtering and emitted log notification shape
+  - [x] note typed `rmcp::model::LoggingLevel` makes invalid logging-level parsing unreachable on rmcp handler path
+- [x] preserve trace notification behavior:
+  - [x] map current `$/setTrace` support to rmcp custom notification handling if rmcp has no typed trace method
+  - [x] keep `off`, `messages`, and `verbose` values accepted exactly as current parser accepts them
+  - [x] add tests for invalid trace level rejection
+  - [x] note outbound trace lifecycle emission tests are transport-owned and deferred to Phase X5
+- [x] capture client capabilities and request metadata:
+  - [x] map rmcp initialize client capabilities into `runtime_context::ClientInteractionCapabilities`
+  - [x] preserve detection of elicitation form support
+  - [x] preserve detection of elicitation URL support
+  - [x] map authenticated principal from HTTP auth wrapper into rmcp request context metadata
+  - [x] add tests that tool execution sees expected client capability flags
+- [x] preserve roots and dynamic repo refresh behavior:
+  - [x] implement `ServerHandler::on_roots_list_changed` to invalidate cached dynamic roots where current transport state does so
+  - [x] request or read client roots through rmcp peer APIs where current dynamic repo resolution depends on client roots
+  - [x] canonicalize all root paths through existing `atlas_repo` helper APIs
+  - [x] add tests for roots-list-changed invalidating cached candidate roots
+  - [x] add tests for noncanonical root inputs resolving to canonical repo roots
+- transport-owned protocol parity deferred to Phase X5:
+  - missing required params through full rmcp stdio request handling
+  - unknown methods through full rmcp stdio request handling
+  - unsupported protocol versions during rmcp initialize/discover negotiation
+  - malformed JSON-RPC through rmcp transport parser
+- [x] validate Phase X4.5:
+  - [x] run `cargo fmt --all`
+  - [x] run `cargo clippy --workspace --all-targets --quiet`
+  - [x] run `cargo test --quiet -p atlas-mcp rmcp_server lifecycle logging repo_selection`
+
+Phase X4.5 completion criteria:
+- [x] ping, initialized, logging level, trace configuration, and roots-list-changed behavior are implemented on rmcp-backed handlers
+- [x] client capability and authenticated-principal metadata reach Atlas runtime context
+- [x] dynamic roots remain canonical-path-safe and covered by tests
+- [x] transport-owned negative protocol parity items are explicitly deferred to Phase X5
+
+Audit note:
+- handler-layer X4.5 work is complete
+- remaining unticked items were transport-owned, not handler-owned
+- moved those checks to Phase X5 so X4.5 status reflects actual scope
+
+### Phase X5 — Replace Stdio Transport with `rmcp` Stdio
+
+Goal: make default stdio server run through official `rmcp` transport.
+
+Overview: preserve `run_server` and `run_server_with_options` public functions while replacing newline JSON-RPC parsing and dispatch with rmcp stdio service.
+
+Rules:
+- Public launcher function names remain stable.
+- Existing CLI commands that launch MCP stdio must not change flags.
+- Tool timeout and cancellation semantics must remain covered by tests.
+- Legacy compatibility code is removed after parity tests pass.
+
+- [x] add rmcp stdio runner:
+  - [x] update `packages/atlas-mcp/src/transport/stdio.rs` to construct `AtlasRmcpServer`
+  - [x] start rmcp stdio transport from existing `run_server_with_options`
+  - [x] preserve `mark_server_started()` behavior
+  - [x] preserve stderr startup diagnostics expected by tests
+- [x] bridge blocking Atlas tools into async handler execution:
+  - [x] run synchronous tool calls with `tokio::task::spawn_blocking` or equivalent rmcp-safe worker execution
+  - [x] apply `ServerOptions.tool_timeout_ms` to rmcp tool calls
+  - [x] apply `ServerOptions.tool_timeout_ms_by_tool` overrides
+  - [x] return timeout as user-visible tool error with existing timeout error code
+- [x] bridge cancellation and progress:
+  - [x] map rmcp cancellation notification into existing cancel flags
+  - [x] map existing `progress::report` calls into official rmcp progress notifications
+  - [x] add test for cancellation of a long-running test tool
+  - [x] add test for progress notification emission from a long-running test tool
+- [x] migrate stdio tests:
+  - [x] update interactive stdio harness to drive rmcp stdio transport
+  - [x] preserve initialized-session helper behavior
+  - [x] assert representative requests return JSON-RPC 2.0 compliant responses through rmcp
+  - [x] assert notifications do not produce responses
+  - [x] assert malformed `tools/call` request shapes fail with official rmcp request-validation errors at transport boundary
+  - [x] assert unknown methods produce method-not-found errors
+  - [x] assert unsupported protocol versions fail during rmcp initialize/discover negotiation
+  - [x] assert malformed JSON-RPC is handled by rmcp transport
+  - [x] assert verbose trace emits request lifecycle diagnostics and off emits none
+- [x] remove obsolete stdio internals:
+  - [x] stop compiling manual stdin line parser as stdio transport code by moving it into socket-only transport modules
+  - [x] stop compiling manual JSON-RPC response builders as stdio transport code by moving them into socket-only transport modules
+  - [x] stop compiling manual method dispatch as stdio transport code by moving it into socket-only transport modules
+- [x] validate Phase X5:
+  - [x] run `cargo fmt --all`
+  - [x] run `cargo clippy --workspace --all-targets --quiet`
+  - [x] run stdio-focused MCP tests with `cargo test --quiet -p atlas-mcp transport::tests`
+  - [x] run CLI MCP quality gates with `cargo test --quiet -p atlas-cli cli_quality_gates`
+
+Phase X5 completion criteria:
+- [x] default stdio MCP server uses rmcp transport
+- [x] public launch functions and CLI flags remain stable
+- [x] progress, cancellation, timeout, and notification tests pass
+- [x] manual stdio JSON-RPC parser is no longer active
+
+Audit note:
+- rmcp stdio progress and cancellation bridge is covered and passing
+- rmcp stdio unknown-method parity is covered and passing
+- request-shape failures for malformed `tools/call` params are now asserted against official rmcp transport-boundary behavior instead of handrolled `invalid_params` assumptions
+- unsupported initialize version and malformed-first-frame coverage now use raw rmcp stdio capture because server setup can fail before normal response collection completes
+- verbose trace now emits official `notifications/message` lifecycle diagnostics on rmcp stdio, while `off` stays silent
+- dead direct stdio wrapper entrypoints were removed and remaining manual parser/response/dispatch code was renamed into socket-only transport modules
+
+### Phase X6 — Replace Streamable HTTP Transport with `rmcp` HTTP
+
+Goal: replace custom HTTP MCP parser/SSE response code with official rmcp streamable HTTP server transport.
+
+Overview: keep Atlas route surface stable while delegating MCP protocol handling to rmcp and preserving protected-resource metadata/auth behavior.
+
+Rules:
+- `POST /mcp` remains MCP ingress.
+- `GET /health` remains unauthenticated liveness endpoint.
+- `GET /.well-known/oauth-protected-resource` remains available when HTTP auth is configured.
+- Gateway-owned security controls remain out of this crate.
+
+- [x] implement rmcp HTTP service wiring:
+  - [x] construct `AtlasRmcpServer` inside `run_http_server_with_options`
+  - [x] mount rmcp streamable HTTP service at `/mcp`
+  - [x] preserve `ATLAS_HTTP_BIND` behavior
+  - [x] preserve `mark_server_started()` behavior
+  - [x] preserve health route response contract
+- [x] preserve auth behavior:
+  - [x] wrap rmcp HTTP service with existing `ProtectedResourceAuthPolicy` middleware or equivalent rmcp auth layer
+  - [x] keep bearer token validation tests
+  - [x] keep allowed-origin enforcement tests
+  - [x] keep protected-resource metadata tests
+  - [x] ensure unauthenticated `/health` still passes
+- [x] migrate HTTP test harness:
+  - [x] update `HttpTestHarness::post_jsonrpc` to target rmcp HTTP service
+  - [x] preserve helpers for bearer tokens and metadata reads
+  - [x] update tests to official streamable HTTP response shapes where rmcp differs
+  - [x] assert JSON and SSE modes when rmcp exposes both modes
+- [x] remove custom HTTP parser code:
+  - [x] remove manual `MCP-Protocol-Version` header validation when rmcp validates protocol version
+  - [x] remove manual one-shot SSE encoder when rmcp owns it
+  - [x] remove manual JSON-RPC body parsing from `transport_http.rs`
+  - [x] keep only health/auth/router glue code
+- [x] validate Phase X6:
+  - [x] run `cargo fmt --all`
+  - [x] run `cargo clippy --workspace --all-targets --quiet --features http-transport`
+  - [x] run `cargo test --quiet -p atlas-mcp --features http-transport transport_http`
+
+Phase X6 completion criteria:
+- [x] HTTP MCP protocol handling is delegated to rmcp streamable HTTP transport
+- [x] `/mcp`, `/health`, and protected-resource metadata endpoints remain covered by tests
+- [x] HTTP auth tests pass
+- [x] custom HTTP JSON-RPC/SSE parsing code is removed or unreachable
+
+Audit note:
+- official rmcp HTTP responses do not guarantee the old `MCP-Protocol-Version` response header on successful JSON replies, so HTTP fixtures/assertions were updated to check stable body fields instead
+- HTTP test harness now normalizes test-only initialize payloads and request headers to official rmcp transport expectations while keeping runtime server behavior strict
+- SSE fallback coverage now uses progress-emitting tool execution because ordinary request/response methods stay JSON when rmcp can complete them without intermediate messages
+
+### Phase X7 — Convert Socket, Pipe, Broker, and Dynamic Repo Context
+
+Goal: preserve Atlas daemon/socket workflows while moving post-handshake MCP bytes through rmcp async read/write transport.
+
+Overview: keep Atlas-specific repo resolution and broker handshake, then pass the established stream into rmcp transport instead of custom JSON-RPC loop.
+
+Rules:
+- Canonical repo path identity invariant applies to every repo root selected by dynamic repo resolution.
+- Broker handshake remains Atlas-specific only before MCP transport starts.
+- Unix socket and Windows named-pipe behavior remain separately tested.
+- Dynamic repo selection must not create local path-normalization helpers.
+
+- [x] adapt Unix socket transport:
+  - [x] keep existing daemon handshake request/response schema until a separate issue removes it
+  - [x] after successful handshake, wrap Unix stream with rmcp async read/write transport
+  - [x] construct `AtlasRmcpServer` from handshake repo root and DB path
+  - [x] add test proving socket `tools/call` reaches rmcp handler after handshake
+- [x] adapt Windows named pipe transport:
+  - [x] keep existing named-pipe creation and permission behavior
+  - [x] wrap connected pipe stream with rmcp async read/write transport
+  - [x] construct `AtlasRmcpServer` from handshake repo root and DB path
+  - [x] add cfg-gated compile test for Windows pipe rmcp wiring
+- [x] preserve broker status behavior:
+  - [x] keep `broker_status` MCP tool response schema stable
+  - [x] update broker test harness to use rmcp-backed socket server
+  - [x] assert broker liveness and version fields still populate
+- [x] preserve dynamic repo selection:
+  - [x] port dynamic roots and repo selector stripping into rmcp request context setup
+  - [x] ensure selected repo root uses `atlas_repo::CanonicalRepoPath` or existing helper APIs
+  - [x] add test for tool call with repo selector switching active repo
+  - [x] add test for multi-workspace ambiguous repo selection error
+- [x] validate Phase X7:
+  - [x] run `cargo fmt --all`
+  - [x] run `cargo clippy --workspace --all-targets --quiet`
+  - [x] run socket/broker focused tests with `cargo test --quiet -p atlas-mcp broker && cargo test --quiet -p atlas-mcp socket && cargo test --quiet -p atlas-mcp repo_selection`
+
+Phase X7 completion criteria:
+- [x] Unix socket and broker MCP flows use rmcp after Atlas handshake
+- [x] Windows pipe rmcp wiring compiles behind cfg gates
+- [x] dynamic repo selection remains covered and canonical-path-safe
+- [x] broker status tool remains stable
+
+Audit note:
+- roadmap validation command used invalid `cargo test` multi-filter syntax; validation was run with equivalent chained quiet test commands instead
+- dynamic roots now auto-activate single advertised client root and fail closed with `atlas_repo_selection.candidate_roots` when multiple workspace roots remain ambiguous
+
+### Phase X8 — Convert Tasks, MRTR, Elicitation, Progress, and Request State
+
+Goal: replace Atlas handrolled MCP task/input-required shapes with official rmcp task, elicitation, progress, and request-state types.
+
+Overview: keep durable task persistence in `atlas-session`, but use rmcp model types for all MCP-visible task and input-required payloads.
+
+Rules:
+- Durable task records stay in Atlas session storage.
+- MCP-visible task status and input-required schemas use official rmcp types.
+- Destructive operations that require confirmation continue to fail closed without accepted input.
+- Request-state validation remains signed and bound to method, tool, args, and principal.
+
+- [x] convert task API models:
+  - [x] replace local create-task result JSON shape with `rmcp::model::CreateTaskResult`
+  - [x] replace local detailed-task output with `rmcp::model::DetailedTask`
+  - [x] map `atlas_session::DurableTaskStatus` to `rmcp::model::TaskStatusCanonical`
+  - [x] map stored task result/error/progress into official task payload fields
+  - [x] add round-trip tests from durable task records to rmcp task results
+- [x] implement rmcp task handler methods:
+  - [x] implement `ServerHandler::get_task` using existing `tasks_get` storage logic
+  - [x] implement `ServerHandler::update_task` using existing `tasks_update` response ingestion logic
+  - [x] implement `ServerHandler::cancel_task` using existing cancellation logic
+  - [x] remove custom `tasks/get` and `tasks/update` branches from manual dispatch after rmcp transport owns them
+- [x] convert MRTR/input-required:
+  - [x] replace local `mrtr::InputRequiredResult` with `rmcp::model::InputRequiredResult`
+  - [x] replace local `mrtr::InputRequest` with official rmcp input request type
+  - [x] replace local `InputResponses` parsing with official rmcp input response structures where available
+  - [x] preserve `resultType: "input_required"` behavior through official SDK type
+  - [x] add test for purge confirmation first call returning input-required
+  - [x] add test for accepted confirmation completing purge
+  - [x] add test for declined confirmation canceling purge
+- [x] convert request-state signing:
+  - [x] replace custom request-state issue/validate helpers with `rmcp::model::RequestStateCodec` if it supports equivalent HMAC binding
+  - [x] if a thin Atlas binding wrapper remains, back it with rmcp `RequestStateCodec` instead of local JSON signature code
+  - [x] bind request state to method, tool name, arguments digest, authenticated principal, issue time, expiry, and nonce
+  - [x] add tests for tampered state, expired state, mismatched arguments, mismatched principal, and mismatched tool
+- [x] convert elicitation types:
+  - [x] replace local `ElicitationAction` with rmcp elicitation action enum
+  - [x] replace local form schema output with rmcp elicitation schema builder where practical
+  - [x] preserve confirmation schema field name `confirmation`
+  - [x] add tests for invalid response content, unknown fields, and default cancel behavior
+- [x] validate Phase X8:
+  - [x] run `cargo fmt --all`
+  - [x] run `cargo clippy --workspace --all-targets --quiet`
+  - [x] run `cargo test --quiet -p atlas-mcp tasks mrtr elicitation progress`
+
+Phase X8 completion criteria:
+- [x] MCP-visible task, input-required, elicitation, progress, and request-state payloads use rmcp model types
+- [x] durable Atlas task storage remains unchanged except typed conversion boundaries
+- [x] destructive confirmation tests pass
+- [x] request-state security regression tests pass
+
+Audit note:
+- first X8 slice landed official rmcp `CreateTaskResult`, `DetailedTask`, `tasks/get`, `tasks/update`, and `tasks/cancel` wiring on current durable-task storage
+- rmcp `tasks/update` now accepts official `inputResponses` and bridges them into existing Atlas task update ingestion
+- cooperative durable-task cancellation now sets persisted `cancel_requested`, marks task `cancelled`, and flips live worker cancel flags when present
+- official rmcp task-status notifications now serialize for durable states that can be represented from current storage
+- durable task storage now persists `input_requests_json` and `request_state` via session migration `008_durable_task_input_requests`
+- deferred rmcp tool calls that return `input_required` now persist official task `inputRequests` payloads and can round-trip through rmcp `tasks/get`
+- explicit task TTL parsing now accepts rmcp `tools/call.arguments.task.ttl`, not only legacy top-level `task.ttl`
+- MRTR/request-state/elicitation code now uses official rmcp `InputRequiredResult`, `InputRequest`, `InputResponses`, `ElicitationAction`, and `RequestStateCodec`-backed sealing instead of local MCP-visible structs
+- request-state integrity now binds method, tool, arguments digest, and principal through codec associated data, while Atlas keeps explicit issue/expiry/nonce payload checks for deterministic tests
+- purge confirmation retry coverage now includes first-round `input_required`, accepted retry success, and declined retry user-visible cancellation
+- remaining blocker: official task payloads still have no direct field for Atlas progress snapshots, and confirmation schema construction still uses validated JSON value input instead of rmcp schema builder helpers
+
+### Phase X9 — Replace Descriptor and Schema Plumbing with Official Types
+
+Goal: eliminate Atlas MCP descriptor structs and move tool, prompt, resource, and schema exports to official rmcp model types.
+
+Overview: convert descriptor registries first using existing JSON schemas, then incrementally type tool arguments with `schemars`.
+
+Rules:
+- Tool names, prompt names, resource URIs, and resource template URI templates remain stable.
+- JSON Schema remains draft-compatible with current tests until schemars migration updates snapshots.
+- Avoid macro big-bang; use typed structs in batches.
+- Public APIs stay minimal and `pub(crate)` unless external crate use requires otherwise.
+
+- [x] replace descriptor structs:
+  - [x] replace `ToolDescriptor` with `rmcp::model::Tool`
+  - [x] replace `ToolAnnotations` with `rmcp::model::ToolAnnotations`
+  - [x] replace `PromptDescriptor` with `rmcp::model::Prompt`
+  - [x] replace `PromptArgumentDescriptor` with `rmcp::model::PromptArgument`
+  - [x] replace `ResourceDescriptor` with `rmcp::model::Resource`
+  - [x] replace `ResourceTemplateDescriptor` with `rmcp::model::ResourceTemplate`
+  - [x] replace `IconDescriptor` with `rmcp::model::Icon`
+- [x] preserve descriptor validation:
+  - [x] keep descriptor name regex validation if rmcp does not enforce Atlas naming rules
+  - [x] keep local `$ref` validation for any raw JSON schema that remains
+  - [x] keep tests for descriptor sorting and uniqueness
+  - [x] keep tests that crate docs list all current MCP tools and prompts until generated docs replace them
+- [x] introduce typed argument schemas in batches:
+  - [x] add typed args and `schemars::JsonSchema` for health tools: `status`, `doctor`, `db_check`, `debug_graph`, `broker_status`
+  - [x] add typed args and schemas for discovery tools: `search_files`, `search_content`, `read_file_excerpt`, `get_docs_section`, `read_file_around_match`, `search_templates`, `search_text_assets`
+  - [x] add typed args and schemas for graph tools: `query_graph`, `batch_query_graph`, `resolve_symbol`, `symbol_neighbors`, `traverse_graph`, `cross_file_links`, `concept_clusters`, `explain_query`
+  - [x] add typed args and schemas for context/review tools: `detect_changes`, `get_context`, `get_review_context`, `get_minimal_context`, `get_impact_radius`, `explain_change`, `build_or_update_graph`, `postprocess_graph`
+  - [x] add typed args and schemas for analysis/refactor tools: `analyze_*`, `find_*`, `infer_modules`, `label_components`
+  - [x] add typed args and schemas for session/memory tools: `get_session_status`, `compact_session`, `resume_session`, `search_saved_context`, `search_decisions`, `read_saved_context`, `save_context_artifact`, `purge_saved_context`, `cross_session_search`, `get_global_memory`, `memory_store`, `memory_recall`, `record_session_event`, `wake_up`
+- [x] add schema parity tests:
+  - [x] assert required fields remain required for migrated typed schemas
+  - [x] assert enum values remain stable for migrated typed schemas
+  - [x] assert descriptions remain non-empty for all tools
+  - [x] assert output schemas remain present where current contract requires them
+- [x] validate Phase X9:
+  - [x] run `cargo fmt --all`
+  - [x] run `cargo clippy --workspace --all-targets --quiet`
+  - [x] run `cargo test --quiet -p atlas-mcp descriptors`
+  - [x] run `cargo test --quiet -p atlas-mcp tools::tests`
+
+Phase X9 completion criteria:
+- [x] custom descriptor structs are removed or reduced to Atlas-only validation helpers
+- [x] official rmcp model types define MCP descriptors
+- [x] migrated typed schemas pass parity tests
+- [x] all tools still appear in generated registry and docs checks
+
+### Phase X10 — Remove Handrolled Protocol, Transport, and Legacy Code
+
+Goal: delete the old MCP JSON-RPC implementation after rmcp stdio, HTTP, socket, and task paths pass parity tests.
+
+Overview: remove obsolete parser, dispatcher, response builder, legacy protocol, and duplicated metadata code while keeping only Atlas business logic and thin SDK adapters.
+
+Rules:
+- Delete only code made unreachable by earlier phases.
+- Keep tests that protect externally visible behavior.
+- Do not preserve legacy protocol branches unless covered by current supported version tests.
+- Any deleted compatibility behavior must have an rmcp-backed replacement test or be explicitly unsupported by failing tests.
+
+- [x] remove handrolled JSON-RPC modules:
+  - [x] delete `packages/atlas-mcp/src/transport/jsonrpc.rs`
+  - [x] delete manual method routing from `packages/atlas-mcp/src/transport/dispatch.rs`
+  - [x] delete manual input line parsing from `packages/atlas-mcp/src/transport/input.rs`
+  - [x] delete manual output writer helpers that only format JSON-RPC strings
+  - [x] remove module exports from `packages/atlas-mcp/src/transport/mod.rs`
+- [x] remove legacy protocol code:
+  - [x] delete `packages/atlas-mcp/src/transport/legacy_2025.rs` if no current tests require it
+  - [x] remove legacy version negotiation tests that conflict with current official rmcp version support
+  - [x] add test that unsupported protocol versions fail through rmcp negotiation
+- [x] remove duplicate spec parsing:
+  - [x] remove `parse_initialize_request`
+  - [x] remove `parse_request_meta` if rmcp context exposes equivalent metadata
+  - [x] remove `negotiate_initialize`
+  - [x] keep only server constants and Atlas-specific metadata helpers that remain used
+- [x] shrink transport modules:
+  - [x] keep stdio public API wrapper only
+  - [x] keep socket handshake wrapper only
+  - [x] keep HTTP router/auth/health wrapper only
+  - [x] keep worker code only if still needed for blocking tool execution and timeout enforcement
+- [x] add dead-code guard tests:
+  - [x] run `cargo clippy --workspace --all-targets --quiet` with no dead-code allowances added for removed protocol modules
+  - [x] add grep-like test or crate test ensuring `jsonrpc_ok` and `jsonrpc_error` helpers no longer exist
+  - [x] add crate test ensuring `transport::dispatch::dispatch` no longer exists or is not exported
+- [x] validate Phase X10:
+  - [x] run `cargo fmt --all`
+  - [x] run `cargo clippy --workspace --all-targets --quiet --features http-transport`
+  - [x] run `cargo test --quiet -p atlas-mcp --features http-transport`
+  - [x] run `cargo test --quiet -p atlas-cli cli_quality_gates`
+
+Phase X10 completion criteria:
+- [x] handrolled MCP JSON-RPC parser, dispatcher, response builders, and legacy protocol modules are removed
+- [x] rmcp-backed stdio, HTTP, socket, tasks, resources, prompts, completions, and tools pass tests
+- [x] clippy passes without new dead-code suppressions for removed protocol paths
+
+### Phase X11 — Final Contract, Docs, and Workspace Validation
+
+Goal: prove the rmcp conversion is complete, documented, and stable across workspace quality gates.
+
+Overview: update generated docs/instructions, compatibility snapshots, and release-facing tests to reflect JSON-only official SDK behavior.
+
+Rules:
+- Do not add manual-only acceptance steps; every completion item must be verifiable by code, tests, or generated artifacts.
+- Generated docs must be reproducible from source registries.
+- MCP and CLI parity tests remain the strongest compatibility gate.
+- Final validation uses workspace summary script.
+
+- [x] update generated MCP documentation:
+  - [x] regenerate `MCP_TOOLS.md` from the rmcp-backed tool registry
+  - [x] update docs tests to assert generated docs include official SDK-backed schema fields
+  - [x] remove TOON references from generated docs
+  - [x] assert every exported tool has non-empty title, description, input schema, and output schema when required
+- [x] update installed instructions and prompts:
+  - [x] ensure installed instructions mention JSON `structuredContent` as source of truth
+  - [x] ensure installed instructions still require Atlas graph tools before file search
+  - [x] ensure prompts no longer include `output_format` examples
+  - [x] add tests for instruction and prompt text drift
+- [x] update compatibility snapshots:
+  - [x] refresh stdio transcript snapshots for rmcp response formatting
+  - [x] refresh HTTP transcript snapshots for rmcp streamable HTTP formatting
+  - [x] refresh task/input-required snapshots for official rmcp type field ordering and naming
+  - [x] assert `atlas_provenance` and `atlas_freshness` still appear in representative structured content
+- [x] update dependency and feature checks:
+  - [x] add dependency-deny allowlist entry for `rmcp` and transitive crates if deny config requires it
+  - [x] assert `cargo tree -p atlas-mcp` contains no `toon-format`
+  - [x] assert `cargo tree -p atlas-mcp --features http-transport` resolves HTTP dependencies without duplicate incompatible major versions where avoidable
+- [x] run final validation:
+  - [x] run `cargo fmt --all`
+  - [x] run `cargo clippy --workspace --all-targets --quiet --features http-transport`
+  - [x] run `cargo test --quiet -p atlas-mcp --features http-transport`
+  - [x] run `cargo test --quiet -p atlas-cli cli_quality_gates`
+  - [x] run `./scripts/test-workspace-summary.sh`
+
+Phase X11 completion criteria:
+- [x] docs, prompts, and installed instructions describe JSON-only rmcp-backed MCP behavior
+- [x] no TOON dependency, docs, fixtures, schema fields, or instructions remain
+- [x] dependency checks pass for rmcp-backed atlas-mcp
+- [x] full workspace summary passes
+
+Part X completion criteria:
+- [x] Atlas MCP server uses `rmcp` official SDK types and transports for all MCP protocol surfaces
+- [x] handrolled MCP JSON-RPC protocol implementation is removed
+- [x] MCP output is JSON-only with `structuredContent` as source of truth
+- [x] stdio, HTTP, socket/broker, lifecycle, logging, roots, prompts, resources, completions, tools, tasks, MRTR, elicitation, progress, and cancellation are covered by rmcp-backed tests
+- [x] CLI/MCP parity remains covered by quality gates
+- [x] `cargo fmt --all`, `cargo clippy --workspace --all-targets --quiet --features http-transport`, and `./scripts/test-workspace-summary.sh` pass

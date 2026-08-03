@@ -165,9 +165,16 @@ fn instructions_section_references_runtime_docs_without_duplicating_full_tool_in
 fn instructions_section_documents_trust_metadata() {
     assert!(INSTRUCTIONS_SECTION.contains("atlas_provenance"));
     assert!(INSTRUCTIONS_SECTION.contains("atlas_freshness"));
-    assert!(INSTRUCTIONS_SECTION.contains(
-        "ALWAYS use TOON output everytime, and JSON when you expect there's floating numbers."
-    ));
+    assert!(
+        INSTRUCTIONS_SECTION
+            .contains("Use default JSON output. Trust structuredContent as source of truth.")
+    );
+    assert!(
+        INSTRUCTIONS_SECTION
+            .contains("ALWAYS use the\natlas MCP tools BEFORE using file-search or grep")
+    );
+    assert!(!INSTRUCTIONS_SECTION.contains("output_format"));
+    assert!(!INSTRUCTIONS_SECTION.to_ascii_lowercase().contains("toon"));
     assert!(INSTRUCTIONS_SECTION.contains("status` or `doctor"));
     assert!(INSTRUCTIONS_SECTION.contains("Canonicalize repo paths before hashing"));
     assert!(INSTRUCTIONS_SECTION.contains("noncanonical_path_rows"));
@@ -279,6 +286,11 @@ fn generated_mcp_tools_markdown_matches_exported_registry() {
     });
 
     assert_eq!(actual, atlas_mcp::tool_list_markdown());
+    assert!(actual.contains("serialized from `rmcp::model::Tool`"));
+    assert!(actual.contains(
+        "| Tool | Title | Input schema | Result contract | Output schema | Description |"
+    ));
+    assert!(!actual.to_ascii_lowercase().contains("toon"));
 }
 
 #[test]

@@ -6,8 +6,7 @@ use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::descriptors::{
-    ResourceDescriptor, ResourceTemplateDescriptor, descriptor_meta, human_title,
-    validate_descriptor_name,
+    ResourceDescriptor, ResourceTemplateDescriptor, human_title, validate_descriptor_name,
 };
 use crate::prompts::{prompt_descriptors, prompt_get};
 use crate::spec;
@@ -21,22 +20,6 @@ const RESOURCE_TEMPLATES_LIST_CACHE_TTL_MS: u64 = 300_000;
 const RESOURCE_TEMPLATES_LIST_CACHE_SCOPE: &str = spec::CACHE_SCOPE_PUBLIC;
 const RESOURCES_READ_CACHE_TTL_MS: u64 = 60_000;
 const RESOURCES_READ_CACHE_SCOPE: &str = spec::CACHE_SCOPE_PRIVATE;
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ResourceRegistry {
-    resources: Vec<ResourceDescriptor>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    next_cursor: Option<String>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ResourceTemplateRegistry {
-    resource_templates: Vec<ResourceTemplateDescriptor>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    next_cursor: Option<String>,
-}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -55,10 +38,14 @@ struct ResourceContent {
 pub(crate) fn resources_list(args: Option<&Value>) -> Result<Value> {
     let resources = resource_descriptors();
     let (slice, next_cursor) = paginate(&resources, args)?;
-    let mut result = serde_json::to_value(ResourceRegistry {
-        resources: slice,
-        next_cursor,
-    })?;
+    let mut result = serde_json::json!({
+        "resources": slice,
+    });
+    if let Some(next_cursor) = next_cursor
+        && let Some(object) = result.as_object_mut()
+    {
+        object.insert("nextCursor".to_owned(), Value::String(next_cursor));
+    }
     spec::annotate_cacheable_result(
         &mut result,
         RESOURCES_LIST_CACHE_TTL_MS,
@@ -70,10 +57,14 @@ pub(crate) fn resources_list(args: Option<&Value>) -> Result<Value> {
 pub(crate) fn resources_templates_list(args: Option<&Value>) -> Result<Value> {
     let templates = resource_template_descriptors();
     let (slice, next_cursor) = paginate(&templates, args)?;
-    let mut result = serde_json::to_value(ResourceTemplateRegistry {
-        resource_templates: slice,
-        next_cursor,
-    })?;
+    let mut result = serde_json::json!({
+        "resourceTemplates": slice,
+    });
+    if let Some(next_cursor) = next_cursor
+        && let Some(object) = result.as_object_mut()
+    {
+        object.insert("nextCursor".to_owned(), Value::String(next_cursor));
+    }
     spec::annotate_cacheable_result(
         &mut result,
         RESOURCE_TEMPLATES_LIST_CACHE_TTL_MS,
@@ -104,18 +95,13 @@ pub(crate) fn resources_read(
             "application/json",
             extract_structured_or_whole(&crate::tools::call(
                 "status",
-                Some(&json!({"output_format": "json"})),
+                Some(&json!({})),
                 repo_root,
                 db_path,
             )?)?,
         )?
     } else if uri == "atlas://graph/provenance" {
-        let status = crate::tools::call(
-            "status",
-            Some(&json!({"output_format": "json"})),
-            repo_root,
-            db_path,
-        )?;
+        let status = crate::tools::call("status", Some(&json!({})), repo_root, db_path)?;
         let provenance = status
             .get("atlas_provenance")
             .cloned()
@@ -125,8 +111,7 @@ pub(crate) fn resources_read(
         let response = crate::tools::call(
             "read_saved_context",
             Some(&json!({
-                "source_id": source_id,
-                "output_format": "json"
+                "source_id": source_id
             })),
             repo_root,
             db_path,
@@ -175,8 +160,7 @@ pub(crate) fn resources_read(
             "get_docs_section",
             Some(&json!({
                 "file": file,
-                "selector": { "kind": "heading", "heading": heading },
-                "output_format": "json"
+                "selector": { "kind": "heading", "heading": heading }
             })),
             repo_root,
             db_path,
@@ -212,34 +196,27 @@ pub(crate) fn resources_read(
 
 pub(crate) fn resource_descriptors() -> Vec<ResourceDescriptor> {
     let mut resources = vec![
-        ResourceDescriptor {
-            uri: "atlas://docs/index".to_owned(),
-            name: "docs_index".to_owned(),
-            title: human_title("docs_index"),
-            description: "Atlas docs index with resource usage, tool discovery flow, and per-tool docs links."
-                .to_owned(),
-            mime_type: "text/markdown".to_owned(),
-            icons: Vec::new(),
-            meta: descriptor_meta("resource", "content"),
-        },
-        ResourceDescriptor {
-            uri: "atlas://graph/provenance".to_owned(),
-            name: "graph_provenance".to_owned(),
-            title: human_title("graph_provenance"),
-            description: "Atlas graph provenance metadata for current repo and DB.".to_owned(),
-            mime_type: "application/json".to_owned(),
-            icons: Vec::new(),
-            meta: descriptor_meta("resource", "health"),
-        },
-        ResourceDescriptor {
-            uri: "atlas://health/status".to_owned(),
-            name: "health_status".to_owned(),
-            title: human_title("health_status"),
-            description: "Compact Atlas graph health summary for current repo.".to_owned(),
-            mime_type: "application/json".to_owned(),
-            icons: Vec::new(),
-            meta: descriptor_meta("resource", "health"),
-        },
+        build_resource_descriptor(
+            "atlas://docs/index",
+            "docs_index",
+            "Atlas docs index with resource usage, tool discovery flow, and per-tool docs links.",
+            "text/markdown",
+            "content",
+        ),
+        build_resource_descriptor(
+            "atlas://graph/provenance",
+            "graph_provenance",
+            "Atlas graph provenance metadata for current repo and DB.",
+            "application/json",
+            "health",
+        ),
+        build_resource_descriptor(
+            "atlas://health/status",
+            "health_status",
+            "Compact Atlas graph health summary for current repo.",
+            "application/json",
+            "health",
+        ),
     ];
     resources.sort_by(|left, right| left.uri.cmp(&right.uri));
     for resource in &resources {
@@ -248,17 +225,54 @@ pub(crate) fn resource_descriptors() -> Vec<ResourceDescriptor> {
     resources
 }
 
+fn build_resource_descriptor(
+    uri: &str,
+    name: &str,
+    description: &str,
+    mime_type: &str,
+    category: &str,
+) -> ResourceDescriptor {
+    let mut descriptor = ResourceDescriptor::new(uri, name)
+        .with_title(human_title(name))
+        .with_description(description)
+        .with_mime_type(mime_type);
+    if let Some(meta) = crate::rmcp_types::meta_object_from_value(
+        crate::descriptors::descriptor_meta("resource", category),
+    )
+    .expect("resource descriptor meta must be object")
+    {
+        descriptor = descriptor.with_meta(meta);
+    }
+    descriptor
+}
+
+fn build_resource_template_descriptor(
+    uri_template: &str,
+    name: &str,
+    description: &str,
+    mime_type: &str,
+    meta: Value,
+) -> ResourceTemplateDescriptor {
+    let mut descriptor = ResourceTemplateDescriptor::new(uri_template, name)
+        .with_title(human_title(name))
+        .with_description(description)
+        .with_mime_type(mime_type);
+    if let Some(meta) = crate::rmcp_types::meta_object_from_value(meta)
+        .expect("resource template descriptor meta must be object")
+    {
+        descriptor = descriptor.with_meta(meta);
+    }
+    descriptor
+}
+
 pub(crate) fn resource_template_descriptors() -> Vec<ResourceTemplateDescriptor> {
     let mut templates = vec![
-        ResourceTemplateDescriptor {
-            uri_template: "atlas://docs/{file}#{heading}".to_owned(),
-            name: "docs_section".to_owned(),
-            title: human_title("docs_section"),
-            description: "Read Markdown docs section by repo-relative file and heading path/slug."
-                .to_owned(),
-            mime_type: "text/markdown".to_owned(),
-            icons: Vec::new(),
-            meta: json!({
+        build_resource_template_descriptor(
+            "atlas://docs/{file}#{heading}",
+            "docs_section",
+            "Read Markdown docs section by repo-relative file and heading path/slug.",
+            "text/markdown",
+            json!({
                 "atlas:descriptorKind": "resource_template",
                 "atlas:category": "content",
                 "atlas:variables": [
@@ -266,54 +280,46 @@ pub(crate) fn resource_template_descriptors() -> Vec<ResourceTemplateDescriptor>
                     {"name": "heading", "description": "Heading path or slug."}
                 ]
             }),
-        },
-        ResourceTemplateDescriptor {
-            uri_template: "atlas://saved-context/{source_id}".to_owned(),
-            name: "saved_context".to_owned(),
-            title: human_title("saved_context"),
-            description: "Read saved artifact content by source_id.".to_owned(),
-            mime_type: "text/plain".to_owned(),
-            icons: Vec::new(),
-            meta: json!({
+        ),
+        build_resource_template_descriptor(
+            "atlas://saved-context/{source_id}",
+            "saved_context",
+            "Read saved artifact content by source_id.",
+            "text/plain",
+            json!({
                 "atlas:descriptorKind": "resource_template",
                 "atlas:category": "memory",
                 "atlas:variables": [
                     {"name": "source_id", "description": "Saved artifact source identifier."}
                 ]
             }),
-        },
-        ResourceTemplateDescriptor {
-            uri_template: "atlas://tool-docs/{name}".to_owned(),
-            name: "tool_docs".to_owned(),
-            title: human_title("tool_docs"),
-            description: "Read generated Markdown docs, examples, and usage for one exported MCP tool by exact name."
-                .to_owned(),
-            mime_type: "text/markdown".to_owned(),
-            icons: Vec::new(),
-            meta: json!({
+        ),
+        build_resource_template_descriptor(
+            "atlas://tool-docs/{name}",
+            "tool_docs",
+            "Read generated Markdown docs, examples, and usage for one exported MCP tool by exact name.",
+            "text/markdown",
+            json!({
                 "atlas:descriptorKind": "resource_template",
                 "atlas:category": "content",
                 "atlas:variables": [
                     {"name": "name", "description": "Exact exported MCP tool name."}
                 ]
             }),
-        },
-        ResourceTemplateDescriptor {
-            uri_template: "atlas://prompt-docs/{name}".to_owned(),
-            name: "prompt_docs".to_owned(),
-            title: human_title("prompt_docs"),
-            description: "Read generated Markdown docs and default prompt body for one exported MCP prompt by exact name."
-                .to_owned(),
-            mime_type: "text/markdown".to_owned(),
-            icons: Vec::new(),
-            meta: json!({
+        ),
+        build_resource_template_descriptor(
+            "atlas://prompt-docs/{name}",
+            "prompt_docs",
+            "Read generated Markdown docs and default prompt body for one exported MCP prompt by exact name.",
+            "text/markdown",
+            json!({
                 "atlas:descriptorKind": "resource_template",
                 "atlas:category": "content",
                 "atlas:variables": [
                     {"name": "name", "description": "Exact exported MCP prompt name."}
                 ]
             }),
-        },
+        ),
     ];
     templates.sort_by(|left, right| left.uri_template.cmp(&right.uri_template));
     for template in &templates {
@@ -541,7 +547,8 @@ fn render_docs_index_markdown() -> Result<String> {
     for prompt in prompt_descriptors() {
         lines.push(format!(
             "- `atlas://prompt-docs/{}` — {}",
-            prompt.name, prompt.description
+            prompt.name,
+            prompt.description.as_deref().unwrap_or_default()
         ));
     }
 
@@ -708,7 +715,7 @@ fn render_prompt_markdown(name: &str, rendered: &Value) -> String {
         .expect("prompt descriptor must exist for rendered prompt docs");
     let description = rendered["description"]
         .as_str()
-        .unwrap_or(&descriptor.description);
+        .unwrap_or(descriptor.description.as_deref().unwrap_or_default());
     let body = rendered["messages"][0]["content"]["text"]
         .as_str()
         .unwrap_or_default();
@@ -722,21 +729,25 @@ fn render_prompt_markdown(name: &str, rendered: &Value) -> String {
         "".to_owned(),
     ];
 
-    if descriptor.arguments.is_empty() {
-        lines.push("- none".to_owned());
-    } else {
-        for argument in descriptor.arguments {
-            lines.push(format!(
-                "- `{}` ({}) — {}",
-                argument.name,
-                if argument.required {
-                    "required"
-                } else {
-                    "optional"
-                },
-                argument.description
-            ));
+    if let Some(arguments) = descriptor.arguments.as_ref() {
+        if arguments.is_empty() {
+            lines.push("- none".to_owned());
+        } else {
+            for argument in arguments {
+                lines.push(format!(
+                    "- `{}` ({}) — {}",
+                    argument.name,
+                    if argument.required.unwrap_or(false) {
+                        "required"
+                    } else {
+                        "optional"
+                    },
+                    argument.description.as_deref().unwrap_or_default()
+                ));
+            }
         }
+    } else {
+        lines.push("- none".to_owned());
     }
 
     lines.extend([
@@ -819,14 +830,20 @@ mod tests {
     fn resource_descriptors_include_metadata_fields() {
         for resource in resource_descriptors() {
             assert!(!resource.uri.is_empty());
-            assert!(!resource.mime_type.is_empty());
-            assert!(resource.icons.is_empty());
-            assert!(resource.meta.get("atlas:descriptorKind").is_some());
+            assert!(!resource.mime_type.as_deref().unwrap_or_default().is_empty());
+            assert!(resource.icons.is_none());
+            assert!(
+                resource
+                    .meta
+                    .as_ref()
+                    .and_then(|meta| meta.get("atlas:descriptorKind"))
+                    .is_some()
+            );
         }
         for template in resource_template_descriptors() {
             assert!(!template.uri_template.is_empty());
-            assert!(!template.mime_type.is_empty());
-            assert!(template.icons.is_empty());
+            assert!(!template.mime_type.as_deref().unwrap_or_default().is_empty());
+            assert!(template.icons.is_none());
         }
     }
 
@@ -917,8 +934,7 @@ mod tests {
         let saved = tool_save_context_artifact(
             Some(&json!({
                 "label": "artifact",
-                "content": payload,
-                "output_format": "json"
+                "content": payload
             })),
             repo_root,
             &db_path,

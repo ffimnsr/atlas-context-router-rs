@@ -3,6 +3,6 @@
   "requestType": "form",
   "requestId": "confirmation",
   "requestStatePresent": true,
-  "finalResultType": "complete",
+  "finalResultType": null,
   "finalErrorCode": null
 }

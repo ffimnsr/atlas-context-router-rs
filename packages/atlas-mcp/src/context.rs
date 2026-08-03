@@ -14,7 +14,7 @@ use atlas_core::model::{
 use serde::Serialize;
 use serde_json::{Map, Value};
 
-use crate::output::{OutputFormat, render_value};
+use crate::output::OutputFormat;
 
 // ---------------------------------------------------------------------------
 // Compact node
@@ -346,18 +346,18 @@ pub fn package_context_result(
 
 pub fn enforce_mcp_response_budget(
     value: &mut Value,
-    output_format: OutputFormat,
+    _output_format: OutputFormat,
     max_bytes: usize,
 ) -> anyhow::Result<Option<BudgetReport>> {
-    let requested_bytes = rendered_response_bytes(value, output_format)?;
+    let requested_bytes = rendered_response_bytes(value)?;
 
-    while rendered_response_bytes(value, output_format)? > max_bytes {
+    while rendered_response_bytes(value)? > max_bytes {
         if !trim_packaged_context_once(value) {
             break;
         }
     }
 
-    let emitted_bytes = rendered_response_bytes(value, output_format)?;
+    let emitted_bytes = rendered_response_bytes(value)?;
     if emitted_bytes > max_bytes {
         anyhow::bail!(
             "MCP response exceeds max_mcp_response_bytes after trimming (emitted={emitted_bytes}, limit={max_bytes})"
@@ -399,27 +399,8 @@ pub fn enforce_mcp_response_budget(
     Ok(None)
 }
 
-fn rendered_response_bytes(value: &Value, output_format: OutputFormat) -> anyhow::Result<usize> {
-    let rendered = render_value(value, output_format)?;
-    let mut meta = serde_json::json!({
-        "atlas:outputFormat": rendered.actual_format.as_str(),
-        "atlas:requestedOutputFormat": rendered.requested_format.as_str(),
-    });
-
-    if let Some(reason) = rendered.fallback_reason {
-        meta["atlas:fallbackReason"] = Value::String(reason);
-    }
-
-    let response = serde_json::json!({
-        "content": [{
-            "type": "text",
-            "text": rendered.text,
-            "mimeType": rendered.actual_format.mime_type(),
-        }],
-        "_meta": meta,
-    });
-
-    Ok(serde_json::to_vec(&response)?.len())
+fn rendered_response_bytes(value: &Value) -> anyhow::Result<usize> {
+    Ok(serde_json::to_vec(value)?.len())
 }
 
 fn trim_packaged_context_once(value: &mut Value) -> bool {

@@ -1,11 +1,11 @@
 {
-  "status": 200,
-  "contentType": "text/event-stream",
+  "status": 404,
+  "contentType": "application/json",
   "hasSessionHeader": false,
-  "hasMessageEvent": true,
-  "hasSubscriptionId": true,
-  "hasToolsListChanged": true,
-  "hasResourceUpdated": true,
+  "hasMessageEvent": false,
+  "hasSubscriptionId": false,
+  "hasToolsListChanged": false,
+  "hasResourceUpdated": false,
   "hasPromptsListChanged": false,
   "hasProgress": false
 }

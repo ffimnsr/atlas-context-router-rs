@@ -725,7 +725,6 @@ mod tests {
                 "label": label,
                 "source_type": source_type,
                 "content_type": "text/plain",
-                "output_format": "json",
             })),
             repo,
             db_path,
@@ -743,7 +742,7 @@ mod tests {
         let repo = dir.path().to_string_lossy().into_owned();
         let db_path = setup_db_path(&dir);
 
-        let result = tool_wake_up(Some(&json!({})), &repo, &db_path, OutputFormat::Toon).unwrap();
+        let result = tool_wake_up(Some(&json!({})), &repo, &db_path, OutputFormat::Json).unwrap();
         let body = tool_body(&result);
         assert_eq!(body["tool"], "wake_up");
         assert_eq!(body["repo_root"], repo);
@@ -839,7 +838,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = tool_wake_up(Some(&json!({})), &repo, &db_path, OutputFormat::Toon).unwrap();
+        let result = tool_wake_up(Some(&json!({})), &repo, &db_path, OutputFormat::Json).unwrap();
         let body = tool_body(&result);
         assert_eq!(body["summary"]["status"], "active");
         assert_eq!(body["summary"]["pending_resume"], true);
@@ -870,7 +869,7 @@ mod tests {
         );
 
         // Second wake-up: snapshot was consumed, no pending resume.
-        let result = tool_wake_up(Some(&json!({})), &repo, &db_path, OutputFormat::Toon).unwrap();
+        let result = tool_wake_up(Some(&json!({})), &repo, &db_path, OutputFormat::Json).unwrap();
         let body = tool_body(&result);
         assert_eq!(body["summary"]["pending_resume"], false);
         assert_eq!(body["event_recorded"]["resume_loaded"], false);
@@ -909,7 +908,7 @@ mod tests {
         .unwrap();
 
         let result =
-            tool_wake_up(Some(&json!({})), &repo_str, &db_path, OutputFormat::Toon).unwrap();
+            tool_wake_up(Some(&json!({})), &repo_str, &db_path, OutputFormat::Json).unwrap();
         let body = tool_body(&result);
         assert_eq!(body["graph_readiness"]["graph_built"], true);
         assert_eq!(body["graph_readiness"]["stale_index"], true);
@@ -973,7 +972,7 @@ mod tests {
             Some(&json!({ "session_id": "custom-session", "frontend": "zed" })),
             &repo,
             &db_path,
-            OutputFormat::Toon,
+            OutputFormat::Json,
         )
         .unwrap();
         let body = tool_body(&result);
@@ -1001,7 +1000,7 @@ mod tests {
             Some(&json!({ "repo_scope": { "kind": "all" } })),
             &repo,
             &db_path,
-            OutputFormat::Toon,
+            OutputFormat::Json,
         )
         .unwrap();
         assert_eq!(result["isError"], true);
@@ -1040,7 +1039,7 @@ mod tests {
             Some(&json!({ "topic": "connection pool" })),
             &repo,
             &db_path,
-            OutputFormat::Toon,
+            OutputFormat::Json,
         )
         .unwrap();
         let body = tool_body(&result);
@@ -1077,7 +1076,7 @@ mod tests {
             Some(&json!({ "max_items": 3 })),
             &repo,
             &db_path,
-            OutputFormat::Toon,
+            OutputFormat::Json,
         )
         .unwrap();
         let body = tool_body(&result);

@@ -19,7 +19,6 @@ pub(crate) struct ResourceLink {
     pub(crate) mime_type: Option<String>,
 }
 
-#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub(crate) struct ToolSuccessEnvelope<T> {
     pub(crate) tool: String,
@@ -39,7 +38,6 @@ pub(crate) struct ToolSuccessEnvelope<T> {
     pub(crate) payload: T,
 }
 
-#[allow(dead_code)]
 impl<T> ToolSuccessEnvelope<T> {
     pub(crate) fn new(tool: impl Into<String>, payload: T) -> Self {
         Self {
@@ -54,6 +52,7 @@ impl<T> ToolSuccessEnvelope<T> {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn with_generated_at(mut self, generated_at: impl Into<String>) -> Self {
         self.generated_at = Some(generated_at.into());
         self
@@ -74,6 +73,7 @@ impl<T> ToolSuccessEnvelope<T> {
         self
     }
 
+    #[cfg(test)]
     pub(crate) fn with_atlas_provenance(mut self, atlas_provenance: Value) -> Self {
         if atlas_provenance.is_object() {
             self.atlas_provenance = Some(atlas_provenance);
@@ -81,6 +81,7 @@ impl<T> ToolSuccessEnvelope<T> {
         self
     }
 
+    #[cfg(test)]
     pub(crate) fn with_atlas_freshness(mut self, atlas_freshness: Value) -> Self {
         if atlas_freshness.is_object() {
             self.atlas_freshness = Some(atlas_freshness);
@@ -89,13 +90,11 @@ impl<T> ToolSuccessEnvelope<T> {
     }
 }
 
-pub(crate) struct ToolResultBuilder {
-    output_format: OutputFormat,
-}
+pub(crate) struct ToolResultBuilder;
 
 impl ToolResultBuilder {
-    pub(crate) fn new(output_format: OutputFormat) -> Self {
-        Self { output_format }
+    pub(crate) fn new(_output_format: OutputFormat) -> Self {
+        Self
     }
 
     pub(crate) fn build_serializable<T: Serialize>(&self, value: &T) -> Result<Value> {
@@ -104,11 +103,10 @@ impl ToolResultBuilder {
     }
 
     pub(crate) fn build_value(&self, raw: Value) -> Result<Value> {
-        let rendered = render_value(&raw, self.output_format)?;
+        let rendered = render_value(&raw)?;
         let mut content = vec![json!({
             "type": "text",
             "text": rendered.text,
-            "mimeType": rendered.actual_format.mime_type(),
         })];
         let resource_links = infer_resource_links(&raw);
         for link in resource_links {
@@ -117,11 +115,7 @@ impl ToolResultBuilder {
 
         let mut response = json!({
             "content": content,
-            "_meta": result_meta(
-                rendered.actual_format.as_str(),
-                rendered.requested_format.as_str(),
-                rendered.fallback_reason.as_deref(),
-            ),
+            "_meta": result_meta(),
         });
 
         if raw.is_object() {
@@ -131,24 +125,21 @@ impl ToolResultBuilder {
         Ok(response)
     }
 
-    #[allow(dead_code)]
     pub(crate) fn build_normalized_serializable<T: Serialize>(&self, value: &T) -> Result<Value> {
         let raw = serde_json::to_value(value)?;
         self.build_normalized_value(raw)
     }
 
-    #[allow(dead_code)]
     pub(crate) fn build_normalized_value(&self, raw: Value) -> Result<Value> {
         if !raw.is_object() {
             return Err(anyhow!(
                 "normalized tool success payload must serialize to JSON object"
             ));
         }
-        let rendered = render_value(&raw, self.output_format)?;
+        let rendered = render_value(&raw)?;
         let mut content = vec![json!({
             "type": "text",
             "text": rendered.text,
-            "mimeType": rendered.actual_format.mime_type(),
         })];
         let resource_links = infer_resource_links(&raw);
         for link in resource_links {
@@ -157,11 +148,7 @@ impl ToolResultBuilder {
 
         let mut response = json!({
             "content": content,
-            "_meta": result_meta(
-                rendered.actual_format.as_str(),
-                rendered.requested_format.as_str(),
-                rendered.fallback_reason.as_deref(),
-            ),
+            "_meta": result_meta(),
         });
 
         if raw.is_object() {
@@ -172,19 +159,8 @@ impl ToolResultBuilder {
     }
 }
 
-fn result_meta(
-    actual_output_format: &str,
-    requested_output_format: &str,
-    fallback_reason: Option<&str>,
-) -> Value {
-    let mut meta = json!({
-        "atlas:outputFormat": actual_output_format,
-        "atlas:requestedOutputFormat": requested_output_format,
-    });
-    if let Some(reason) = fallback_reason {
-        meta["atlas:fallbackReason"] = Value::String(reason.to_owned());
-    }
-    meta
+fn result_meta() -> Value {
+    json!({})
 }
 
 pub(crate) fn tool_result_value<T: Serialize>(
@@ -194,7 +170,6 @@ pub(crate) fn tool_result_value<T: Serialize>(
     ToolResultBuilder::new(output_format).build_serializable(value)
 }
 
-#[allow(dead_code)]
 pub(crate) fn normalized_tool_result_value<T: Serialize>(
     value: &T,
     output_format: OutputFormat,
@@ -315,7 +290,7 @@ impl ToolErrorPayload {
 }
 
 pub(crate) fn tool_execution_error_value(
-    output_format: OutputFormat,
+    _output_format: OutputFormat,
     payload: &ToolErrorPayload,
 ) -> Result<Value> {
     let payload = payload.normalized();
@@ -324,11 +299,10 @@ pub(crate) fn tool_execution_error_value(
         "content": [{
             "type": "text",
             "text": concise_tool_error_text(&payload),
-            "mimeType": "text/plain",
         }],
         "structuredContent": structured,
         "isError": true,
-        "_meta": result_meta(output_format.as_str(), output_format.as_str(), None),
+        "_meta": result_meta(),
     }))
 }
 
@@ -411,8 +385,6 @@ fn normalize_tool_error_text(text: impl AsRef<str>) -> String {
 fn tool_retry_guidance(detail: &str) -> &'static str {
     if detail.contains("invalid regex pattern") {
         "Fix regex syntax, or switch to literal-search mode if regex is not required, then retry."
-    } else if detail.contains("unsupported output_format") {
-        "Use supported output_format value 'toon' or 'json', then retry."
     } else if detail.contains("graph not ready") || detail.contains("stale graph") {
         "Run graph build/update or allow stale/partial mode when supported, then retry."
     } else if detail.contains("missing required")
@@ -679,16 +651,11 @@ mod tests {
     }
 
     #[test]
-    fn tool_result_falls_back_to_json_when_toon_root_empty() {
-        let response = ToolResultBuilder::new(OutputFormat::Toon)
+    fn tool_result_emits_empty_meta_for_json_only_mode() {
+        let response = ToolResultBuilder::new(OutputFormat::Json)
             .build_value(json!({}))
             .expect("tool result");
-        assert_eq!(response["_meta"]["atlas:outputFormat"], json!("json"));
-        assert_eq!(
-            response["_meta"]["atlas:requestedOutputFormat"],
-            json!("toon")
-        );
-        assert!(response["_meta"].get("atlas:fallbackReason").is_some());
+        assert_eq!(response["_meta"], json!({}));
     }
 
     #[test]
@@ -720,7 +687,7 @@ mod tests {
                 "invalid regex pattern: unclosed group Fix regex syntax or remove is_regex-style input, then retry."
             )
         );
-        assert_eq!(response["content"][0]["mimeType"], json!("text/plain"));
+        assert!(response["content"][0].get("mimeType").is_none());
     }
 
     #[test]
@@ -752,7 +719,7 @@ mod tests {
             "path": "src/missing.rs"
         }));
 
-        let response = tool_execution_error_value(OutputFormat::Toon, &payload)
+        let response = tool_execution_error_value(OutputFormat::Json, &payload)
             .expect("tool execution error result");
 
         assert_eq!(
@@ -760,8 +727,7 @@ mod tests {
             json!({
                 "content": [{
                     "type": "text",
-                    "text": "file not found: src/missing.rs Use repo-relative file path inside current root, then retry.",
-                    "mimeType": "text/plain"
+                    "text": "file not found: src/missing.rs Use repo-relative file path inside current root, then retry."
                 }],
                 "structuredContent": {
                     "code": "file_not_found",
@@ -774,10 +740,7 @@ mod tests {
                     }
                 },
                 "isError": true,
-                "_meta": {
-                    "atlas:outputFormat": "toon",
-                    "atlas:requestedOutputFormat": "toon"
-                }
+                "_meta": {}
             })
         );
     }

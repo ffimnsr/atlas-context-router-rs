@@ -82,7 +82,7 @@ fn open_stamps_session_migration_history_and_provenance() {
         .conn
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 7);
+    assert_eq!(version, 8);
 
     let history_count: i64 = store
         .conn
@@ -90,7 +90,7 @@ fn open_stamps_session_migration_history_and_provenance() {
             row.get(0)
         })
         .unwrap();
-    assert_eq!(history_count, 7);
+    assert_eq!(history_count, 8);
 
     let (db_kind, created_by): (String, String) = store
         .conn
@@ -129,7 +129,7 @@ fn rollback_and_reupgrade_restore_session_schema() {
         .conn
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(restored_version, 7);
+    assert_eq!(restored_version, 8);
     let fts_exists: i64 = store
         .conn
         .query_row(
@@ -404,6 +404,72 @@ fn create_durable_task_with_times(
             params![task_id, created_at, updated_at],
         )
         .unwrap();
+}
+
+#[test]
+fn durable_task_round_trips_input_requests_and_request_state() {
+    let (_dir, mut store) = open_store(16, 1024);
+    store
+        .create_durable_task(&NewDurableTask {
+            task_id: "task-input".to_owned(),
+            originating_method: "tools/call".to_owned(),
+            request_id: Some("request-1".to_owned()),
+            tool_name: Some("purge_saved_context".to_owned()),
+            transport_kind: Some("rmcp".to_owned()),
+            session_id: None,
+            status: DurableTaskStatus::Working,
+            status_message: Some("working".to_owned()),
+            ttl_ms: Some(1000),
+        })
+        .unwrap();
+    store
+        .update_durable_task(
+            "task-input",
+            &DurableTaskUpdate {
+                status: Some(DurableTaskStatus::InputRequired),
+                status_message: Some("input required".to_owned()),
+                input_requests: Some(serde_json::json!({
+                    "confirmation": {
+                        "method": "elicitation/create",
+                        "params": {
+                            "message": "Confirm destructive action",
+                            "requestedSchema": {
+                                "type": "object",
+                                "properties": {
+                                    "confirmation": { "type": "string" }
+                                },
+                                "required": ["confirmation"]
+                            }
+                        }
+                    }
+                })),
+                request_state: Some("sealed-request-state".to_owned()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    let task = store.get_durable_task("task-input").unwrap().unwrap();
+    assert_eq!(task.status, DurableTaskStatus::InputRequired);
+    assert_eq!(task.request_state.as_deref(), Some("sealed-request-state"));
+    assert_eq!(
+        task.input_requests
+            .as_ref()
+            .and_then(|value| value.get("confirmation")),
+        Some(&serde_json::json!({
+            "method": "elicitation/create",
+            "params": {
+                "message": "Confirm destructive action",
+                "requestedSchema": {
+                    "type": "object",
+                    "properties": {
+                        "confirmation": { "type": "string" }
+                    },
+                    "required": ["confirmation"]
+                }
+            }
+        }))
+    );
 }
 
 #[test]

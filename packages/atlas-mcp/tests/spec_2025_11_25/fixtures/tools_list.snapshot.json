@@ -25,7 +25,9 @@
     "explain_change",
     "explain_query",
     "find_complex_functions",
+    "find_duplicates",
     "find_large_functions",
+    "find_similar_functions",
     "get_context",
     "get_context_stats",
     "get_docs_section",
@@ -34,6 +36,8 @@
     "get_minimal_context",
     "get_review_context",
     "get_session_status",
+    "infer_modules",
+    "label_components",
     "list_graph_stats",
     "man",
     "memory_recall",
@@ -44,6 +48,8 @@
     "read_file_around_match",
     "read_file_excerpt",
     "read_saved_context",
+    "record_session_event",
+    "repo_registry",
     "resolve_symbol",
     "resume_session",
     "save_context_artifact",
@@ -58,6 +64,7 @@
     "tool_help",
     "tool_list",
     "tool_search",
-    "traverse_graph"
+    "traverse_graph",
+    "wake_up"
   ]
 }

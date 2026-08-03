@@ -15,8 +15,7 @@
             "required_companion_fields": ["selector.heading"],
             "minimal_example": {
               "file": "README.md",
-              "selector": { "kind": "heading", "heading": "document.install" },
-              "output_format": "json"
+              "selector": { "kind": "heading", "heading": "document.install" }
             }
           },
           {
@@ -24,8 +23,7 @@
             "required_companion_fields": ["selector.line"],
             "minimal_example": {
               "file": "README.md",
-              "selector": { "kind": "line", "line": 42 },
-              "output_format": "json"
+              "selector": { "kind": "line", "line": 42 }
             }
           }
         ]

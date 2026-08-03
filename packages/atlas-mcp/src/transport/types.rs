@@ -1,14 +1,14 @@
-//! Shared types for the transport layer.
+//! Shared transport types still used by rmcp wrappers.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+#[cfg(test)]
 use std::sync::Arc;
 #[cfg(test)]
 use std::sync::Condvar;
+#[cfg(test)]
 use std::sync::Mutex;
-use std::time::Instant;
 
 use super::repo_selection::RepoSelectionSource;
-use crate::output::OutputFormat;
 
 // ---------------------------------------------------------------------------
 // Reverse-request machinery
@@ -52,94 +52,8 @@ impl Default for ServerOptions {
 }
 
 // ---------------------------------------------------------------------------
-// Transport event types
+// Repo resolution state
 // ---------------------------------------------------------------------------
-
-pub(crate) struct PendingRequest {
-    pub(crate) id: serde_json::Value,
-    pub(crate) request: RequestLogContext,
-    pub(crate) queued_at: Instant,
-    pub(crate) deadline: Instant,
-    pub(crate) timeout_ms: u128,
-    pub(crate) output_format: OutputFormat,
-    pub(crate) progress_token: Option<serde_json::Value>,
-    pub(crate) request_log_level: Option<crate::logging::LogLevel>,
-    pub(crate) cancel_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
-}
-
-pub(crate) struct RequestDispatchContext<'a> {
-    pub(crate) worker_pool: &'a super::worker::WorkerPool,
-    pub(crate) server_options: &'a ServerOptions,
-    pub(crate) canceled_tokens: Arc<Mutex<HashSet<u64>>>,
-    pub(crate) event_tx: &'a std::sync::mpsc::Sender<TransportEvent>,
-}
-
-#[derive(Default)]
-pub(crate) struct TransportStats {
-    pub(crate) received: u64,
-    pub(crate) notifications: u64,
-    pub(crate) parse_errors: u64,
-    pub(crate) async_dispatched: u64,
-    pub(crate) completed: u64,
-    pub(crate) completed_ok: u64,
-    pub(crate) completed_err: u64,
-    pub(crate) protocol_errors: u64,
-    pub(crate) tool_execution_errors: u64,
-    pub(crate) timed_out: u64,
-    pub(crate) canceled: u64,
-    pub(crate) dropped_late: u64,
-}
-
-pub(crate) enum TransportEvent {
-    InputLine(String),
-    InputClosed,
-    InputError(String),
-    WorkerStarted {
-        token: u64,
-        queue_wait_ms: u128,
-    },
-    Response {
-        token: u64,
-        response: String,
-        completion: RequestCompletion,
-    },
-    RepoContextResolved {
-        repo_context: ActiveRepoContext,
-        selection_source: RepoSelectionSource,
-        candidate_roots: Option<Vec<String>>,
-    },
-    OutboundJson(String),
-    ProgressReport {
-        token: u64,
-        message: String,
-        percentage: Option<u32>,
-    },
-}
-
-#[derive(Clone)]
-pub(crate) struct RequestLogContext {
-    pub(crate) request_id: String,
-    pub(crate) method: String,
-    pub(crate) tool_name: Option<String>,
-}
-
-pub(crate) struct RequestCompletion {
-    pub(crate) request: RequestLogContext,
-    pub(crate) queue_wait_ms: u128,
-    pub(crate) execution_ms: u128,
-    pub(crate) success: bool,
-}
-
-// ---------------------------------------------------------------------------
-// Connection state
-// ---------------------------------------------------------------------------
-
-pub(crate) struct ConnectionState {
-    pub(crate) trace: TraceLevel,
-    pub(crate) client_capabilities: serde_json::Value,
-    pub(crate) canceled_tokens: Arc<Mutex<HashSet<u64>>>,
-    pub(crate) repo_resolution: RepoResolutionState,
-}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ActiveRepoContext {
@@ -167,50 +81,4 @@ pub(crate) enum TraceLevel {
 pub(crate) enum TraceThreshold {
     Messages,
     Verbose,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ProgressEventKind {
-    Begin,
-    Report,
-    End,
-}
-
-// ---------------------------------------------------------------------------
-// Factory helpers
-// ---------------------------------------------------------------------------
-
-pub(crate) fn connection_state(
-    repo_root: Option<&str>,
-    db_path: Option<&str>,
-    dynamic_roots: bool,
-) -> ConnectionState {
-    let startup = match (repo_root, db_path) {
-        (Some(repo_root), Some(db_path)) if !repo_root.is_empty() && !db_path.is_empty() => {
-            Some(ActiveRepoContext {
-                repo_root: repo_root.to_owned(),
-                db_path: db_path.to_owned(),
-            })
-        }
-        _ => None,
-    };
-    ConnectionState {
-        trace: TraceLevel::Off,
-        client_capabilities: serde_json::Value::Null,
-        canceled_tokens: Arc::new(Mutex::new(HashSet::new())),
-        repo_resolution: RepoResolutionState {
-            startup: startup.clone(),
-            active: startup,
-            active_selection_source: None,
-            candidate_roots: None,
-            dynamic_roots,
-        },
-    }
-}
-
-pub(crate) fn request_id_string(id: &serde_json::Value) -> String {
-    match id {
-        serde_json::Value::String(value) => value.clone(),
-        _ => id.to_string(),
-    }
 }

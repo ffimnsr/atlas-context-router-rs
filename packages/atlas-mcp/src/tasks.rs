@@ -10,7 +10,7 @@ use atlas_session::{
 };
 use serde_json::{Value, json};
 
-use crate::output::{OutputFormat, resolve_output_format};
+use crate::output::OutputFormat;
 use crate::progress;
 use crate::runtime_context::{self, RequestContext};
 use crate::tool_result::normalize_tool_execution_error;
@@ -18,13 +18,15 @@ use crate::tool_result::normalize_tool_execution_error;
 pub(crate) type TaskApiResult<T> = std::result::Result<T, TaskApiError>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[allow(dead_code)]
 pub(crate) enum TaskApiErrorKind {
+    #[allow(dead_code)]
     Cancelled,
+    #[allow(dead_code)]
     Failed,
     Internal,
     InvalidParams,
     NotFound,
+    #[allow(dead_code)]
     NotReady,
 }
 
@@ -69,7 +71,9 @@ thread_local! {
 }
 
 #[derive(Clone)]
-struct LiveTaskHandle;
+struct LiveTaskHandle {
+    cancel_flag: Arc<std::sync::atomic::AtomicBool>,
+}
 
 pub(crate) fn execute_tool_call(
     name: &str,
@@ -117,7 +121,12 @@ pub(crate) fn execute_tool_call(
     live_tasks()
         .lock()
         .expect("live tasks lock poisoned")
-        .insert(task_id.clone(), LiveTaskHandle);
+        .insert(
+            task_id.clone(),
+            LiveTaskHandle {
+                cancel_flag: Arc::clone(&cancel_flag),
+            },
+        );
 
     let (completion_tx, completion_rx) = mpsc::channel();
     let tool_name = name.to_owned();
@@ -225,11 +234,34 @@ fn run_task_worker(
         .as_ref()
         .is_some_and(|task| task.status == DurableTaskStatus::Cancelled);
     match result {
+        Ok(value)
+            if current.is_some() && !already_cancelled && is_input_required_tool_result(&value) =>
+        {
+            let update = DurableTaskUpdate {
+                status: Some(DurableTaskStatus::InputRequired),
+                status_message: Some("input required".to_owned()),
+                input_requests: crate::rmcp_types::persisted_input_requests_from_atlas_tool_result(
+                    &value,
+                )?,
+                request_state: value
+                    .get("requestState")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+                ..Default::default()
+            };
+            update_task_store(repo_root, task_id, update)?;
+            if let Some(client) = request_context.as_ref()
+                && let Some(task) = open_task_record(repo_root, task_id)?
+            {
+                client.notify_task_status(task_status_notification_json(&task))?;
+            }
+            Ok(value)
+        }
         Ok(value) if current.is_some() && !already_cancelled => {
             let update = DurableTaskUpdate {
                 status: Some(DurableTaskStatus::Completed),
                 status_message: Some("completed".to_owned()),
-                result: Some(crate::spec::complete_result(value.clone())),
+                result: Some(value.clone()),
                 ..Default::default()
             };
             update_task_store(repo_root, task_id, update)?;
@@ -296,9 +328,16 @@ fn open_task_record(repo_root: &str, task_id: &str) -> Result<Option<DurableTask
 }
 
 fn task_ttl_from_context_args() -> Option<u64> {
-    current_tool_call_request_params()
-        .and_then(|params| params.get("task").cloned())
-        .and_then(|task| task.get("ttl").and_then(Value::as_u64))
+    current_tool_call_request_params().and_then(|params| {
+        params
+            .get("task")
+            .or_else(|| {
+                params
+                    .get("arguments")
+                    .and_then(|arguments| arguments.get("task"))
+            })
+            .and_then(|task| task.get("ttl").and_then(Value::as_u64))
+    })
 }
 
 fn current_tool_call_request_params() -> Option<Value> {
@@ -313,20 +352,25 @@ pub(crate) fn uninstall_tool_call_request_params() {
     TOOL_CALL_PARAMS.with(|slot| *slot.borrow_mut() = None);
 }
 
-pub(crate) fn tasks_get(
-    params: Option<&Value>,
-    repo_root: &str,
-    _output_format: OutputFormat,
-) -> TaskApiResult<Value> {
-    let task_id = required_task_id(params)?;
-    let task = open_task_record(repo_root, task_id)
+pub(crate) fn task_record(repo_root: &str, task_id: &str) -> TaskApiResult<DurableTaskRecord> {
+    open_task_record(repo_root, task_id)
         .map_err(|error| TaskApiError::new(TaskApiErrorKind::Internal, error))?
         .ok_or_else(|| {
             task_api_error(
                 TaskApiErrorKind::NotFound,
                 format!("unknown task_id '{task_id}'"),
             )
-        })?;
+        })
+}
+
+#[cfg(test)]
+pub(crate) fn tasks_get(
+    params: Option<&Value>,
+    repo_root: &str,
+    _output_format: OutputFormat,
+) -> TaskApiResult<Value> {
+    let task_id = required_task_id(params)?;
+    let task = task_record(repo_root, task_id)?;
     Ok(task_state_json(&task))
 }
 
@@ -337,7 +381,12 @@ pub(crate) fn tasks_update(
 ) -> TaskApiResult<Value> {
     let task_id = required_task_id(params)?;
     let input = params
-        .and_then(|value| value.get("input").or_else(|| value.get("payload")))
+        .and_then(|value| {
+            value
+                .get("input")
+                .or_else(|| value.get("payload"))
+                .or_else(|| value.get("inputResponses"))
+        })
         .cloned()
         .ok_or_else(|| {
             task_api_error(
@@ -345,14 +394,7 @@ pub(crate) fn tasks_update(
                 "missing required argument: input",
             )
         })?;
-    let task = open_task_record(repo_root, task_id)
-        .map_err(|error| TaskApiError::new(TaskApiErrorKind::Internal, error))?
-        .ok_or_else(|| {
-            task_api_error(
-                TaskApiErrorKind::NotFound,
-                format!("unknown task_id '{task_id}'"),
-            )
-        })?;
+    let task = task_record(repo_root, task_id)?;
     match task.status {
         DurableTaskStatus::Completed | DurableTaskStatus::Failed | DurableTaskStatus::Cancelled => {
             return Err(task_api_error(
@@ -373,14 +415,7 @@ pub(crate) fn tasks_update(
         },
     )
     .map_err(|error| TaskApiError::new(TaskApiErrorKind::Internal, error))?;
-    let task = open_task_record(repo_root, task_id)
-        .map_err(|error| TaskApiError::new(TaskApiErrorKind::Internal, error))?
-        .ok_or_else(|| {
-            task_api_error(
-                TaskApiErrorKind::NotFound,
-                format!("unknown task_id '{task_id}'"),
-            )
-        })?;
+    let task = task_record(repo_root, task_id)?;
     if let Ok(client) = runtime_context::current() {
         let _ = client.notify_task_status(task_status_notification_json(&task));
     }
@@ -389,6 +424,46 @@ pub(crate) fn tasks_update(
         "accepted": true,
         "updateKind": "client_input",
     }))
+}
+
+pub(crate) fn tasks_cancel(task_id: &str, repo_root: &str) -> TaskApiResult<DurableTaskRecord> {
+    let task = task_record(repo_root, task_id)?;
+    match task.status {
+        DurableTaskStatus::Completed | DurableTaskStatus::Failed | DurableTaskStatus::Cancelled => {
+            return Err(task_api_error(
+                TaskApiErrorKind::InvalidParams,
+                format!("task '{task_id}' no longer accepts cancellation"),
+            ));
+        }
+        DurableTaskStatus::InputRequired | DurableTaskStatus::Working => {}
+    }
+
+    if let Some(handle) = live_tasks()
+        .lock()
+        .expect("live tasks lock poisoned")
+        .get(task_id)
+        .cloned()
+    {
+        handle.cancel_flag.store(true, Ordering::Relaxed);
+    }
+
+    update_task_store(
+        repo_root,
+        task_id,
+        DurableTaskUpdate {
+            status: Some(DurableTaskStatus::Cancelled),
+            status_message: Some("cancelled".to_owned()),
+            cancel_requested: Some(true),
+            ..Default::default()
+        },
+    )
+    .map_err(|error| TaskApiError::new(TaskApiErrorKind::Internal, error))?;
+
+    let task = task_record(repo_root, task_id)?;
+    if let Ok(client) = runtime_context::current() {
+        let _ = client.notify_task_status(task_status_notification_json(&task));
+    }
+    Ok(task)
 }
 
 fn required_task_id(params: Option<&Value>) -> TaskApiResult<&str> {
@@ -433,17 +508,30 @@ fn create_task_result(task: &DurableTaskRecord) -> Value {
     json!({ "task": task_handle_json(task) })
 }
 
+fn is_input_required_tool_result(value: &Value) -> bool {
+    value.get("resultType").and_then(Value::as_str) == Some("input_required")
+}
+
 fn normalize_tool_call_result(
     tool_name: &str,
     args: Option<&Value>,
     result: Result<Value>,
 ) -> Result<Value> {
     match result {
-        Ok(value) => Ok(value),
+        Ok(value) => {
+            if runtime_context::current().is_ok()
+                || value.get("isError") == Some(&Value::Bool(true))
+            {
+                Ok(value)
+            } else {
+                Ok(crate::tool_result::structured_content(&value)
+                    .cloned()
+                    .unwrap_or(value))
+            }
+        }
         Err(error) => {
-            let output_format =
-                resolve_output_format(args, OutputFormat::Toon).unwrap_or(OutputFormat::Toon);
-            normalize_tool_execution_error(tool_name, output_format, error)
+            let _ = args;
+            normalize_tool_execution_error(tool_name, OutputFormat::Json, error)
         }
     }
 }
@@ -488,6 +576,12 @@ fn task_state_json(task: &DurableTaskRecord) -> Value {
             }
             DurableTaskStatus::InputRequired => {
                 object.insert("inputRequired".to_owned(), Value::Bool(true));
+                if let Some(input_requests) = task.input_requests.clone() {
+                    object.insert("inputRequests".to_owned(), input_requests);
+                }
+                if let Some(request_state) = task.request_state.clone() {
+                    object.insert("requestState".to_owned(), Value::String(request_state));
+                }
             }
             DurableTaskStatus::Cancelled | DurableTaskStatus::Working => {}
         }
@@ -496,6 +590,12 @@ fn task_state_json(task: &DurableTaskRecord) -> Value {
 }
 
 fn task_status_notification_json(task: &DurableTaskRecord) -> Value {
+    if let Ok(notification) = crate::rmcp_types::task_status_notification_from_record(task)
+        && let Ok(value) = serde_json::to_value(notification)
+    {
+        return value;
+    }
+
     let mut value = task_state_json(task);
     if let Some(object) = value.as_object_mut() {
         object.insert("source".to_owned(), json!("tasks"));
@@ -518,6 +618,8 @@ fn fallback_task_status(task_id: &str, status_message: &str) -> DurableTaskRecor
         progress: None,
         result: None,
         error: None,
+        input_requests: None,
+        request_state: None,
         ttl_ms: None,
         cancel_requested: false,
     }
@@ -605,12 +707,46 @@ mod tests {
             progress: None,
             result: None,
             error: None,
+            input_requests: None,
+            request_state: None,
             ttl_ms: Some(5000),
             cancel_requested: false,
         };
         assert_eq!(task_handle_json(&task)["taskId"], json!("task-1"));
         assert_eq!(task_handle_json(&task)["status"], json!("working"));
         assert_eq!(task_state_json(&task)["status"], json!("working"));
+    }
+
+    #[test]
+    fn task_status_notification_uses_rmcp_meta_for_progress_boundary() {
+        let task = DurableTaskRecord {
+            task_id: "task-progress".to_owned(),
+            originating_method: "tools/call".to_owned(),
+            request_id: Some("1".to_owned()),
+            tool_name: Some("doctor".to_owned()),
+            transport_kind: Some("rmcp".to_owned()),
+            session_id: None,
+            created_at: "2026-01-01T00:00:00Z".to_owned(),
+            updated_at: "2026-01-01T00:00:05Z".to_owned(),
+            status: DurableTaskStatus::Working,
+            status_message: Some("indexing".to_owned()),
+            progress: Some(json!({"message": "indexed files", "percentage": 55})),
+            result: None,
+            error: None,
+            input_requests: None,
+            request_state: None,
+            ttl_ms: Some(5000),
+            cancel_requested: false,
+        };
+
+        let notification = task_status_notification_json(&task);
+        assert_eq!(notification["taskId"], json!("task-progress"));
+        assert_eq!(notification["status"], json!("working"));
+        assert_eq!(
+            notification["_meta"][crate::rmcp_types::ATLAS_TASK_META_PROGRESS],
+            json!({"message": "indexed files", "percentage": 55})
+        );
+        assert!(notification.get("progress").is_none());
     }
 
     #[test]

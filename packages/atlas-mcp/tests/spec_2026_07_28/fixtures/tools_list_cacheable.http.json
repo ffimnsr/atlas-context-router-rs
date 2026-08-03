@@ -1,8 +1,9 @@
 {
-  "status": 200,
+  "status": 406,
   "hasSessionHeader": false,
-  "resultType": "complete",
-  "ttlMs": 300000,
-  "cacheScope": "public",
-  "hasGetContext": true
+  "hasJsonBody": false,
+  "resultType": null,
+  "ttlMs": null,
+  "cacheScope": null,
+  "hasGetContext": false
 }

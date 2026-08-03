@@ -2665,8 +2665,7 @@ mod tests {
         let result = tool_search_decisions(
             Some(&serde_json::json!({
                 "query": "src/lib.rs",
-                "session_id": session_id.as_str(),
-                "output_format": "json"
+                "session_id": session_id.as_str()
             })),
             repo_root,
             &db_path,
@@ -2820,9 +2819,9 @@ mod tests {
         let body = tool_body(&result);
         assert_eq!(result["resultType"], serde_json::json!("input_required"));
         assert_eq!(body["resultType"], serde_json::json!("input_required"));
-        assert_eq!(
-            body["inputRequests"][0]["id"],
-            serde_json::json!("confirmation")
+        assert!(
+            body["inputRequests"]["confirmation"].is_object(),
+            "confirmation request must be present by official request id key"
         );
         assert!(body["requestState"].as_str().is_some());
     }
@@ -2924,9 +2923,12 @@ mod tests {
         crate::runtime_context::uninstall();
         let first_body = tool_body(&first);
         let request_state = first_body["requestState"].as_str().unwrap();
-        let mut envelope: Value = serde_json::from_str(request_state).unwrap();
-        envelope["payload"]["tool"] = serde_json::json!("other_tool");
-        let tampered_state = serde_json::to_string(&envelope).unwrap();
+        let mut tampered_chars = request_state.chars().collect::<Vec<_>>();
+        let last = tampered_chars
+            .last_mut()
+            .expect("sealed requestState must not be empty");
+        *last = if *last == 'A' { 'B' } else { 'A' };
+        let tampered_state = tampered_chars.into_iter().collect::<String>();
 
         install_purge_request_context(serde_json::json!({
             "name": "purge_saved_context",
@@ -3577,8 +3579,7 @@ mod tests {
             &db_path,
             &serde_json::json!({
                 "text": "remember hooks",
-                "topic": "hooks",
-                "output_format": "json"
+                "topic": "hooks"
             }),
         );
         let memory = &body["memory"];
@@ -3595,8 +3596,7 @@ mod tests {
         let error = tool_memory_store(
             Some(&serde_json::json!({
                 "text": "x",
-                "importance": "urgent",
-                "output_format": "json"
+                "importance": "urgent"
             })),
             &repo_root,
             &db_path,
@@ -3612,8 +3612,7 @@ mod tests {
         let error = tool_memory_store(
             Some(&serde_json::json!({
                 "text": "x",
-                "scope": "frontend",
-                "output_format": "json"
+                "scope": "frontend"
             })),
             &repo_root,
             &db_path,
@@ -3640,8 +3639,7 @@ mod tests {
                 "importance": "critical",
                 "scope": "frontend",
                 "frontend": "Codex",
-                "source_id": "artifact-9",
-                "output_format": "json"
+                "source_id": "artifact-9"
             }),
         );
         let memory = &body["memory"];
@@ -3657,8 +3655,7 @@ mod tests {
             Some(&serde_json::json!({
                 "text": "x",
                 "scope": "frontend",
-                "frontend": "zed",
-                "output_format": "json"
+                "frontend": "zed"
             })),
             &repo_root,
             &db_path,
@@ -3684,8 +3681,7 @@ mod tests {
                 "text": "deploy pipeline runs weekly",
                 "topic": "hooks",
                 "importance": "critical",
-                "source_id": "src-hooks",
-                "output_format": "json"
+                "source_id": "src-hooks"
             }),
         );
         let session_body = store_via_tool(
@@ -3694,8 +3690,7 @@ mod tests {
             &serde_json::json!({
                 "text": "deploy session note",
                 "topic": "deploy",
-                "scope": "session",
-                "output_format": "json"
+                "scope": "session"
             }),
         );
         store_via_tool(
@@ -3705,15 +3700,13 @@ mod tests {
                 "text": "deploy secrets",
                 "topic": "deploy",
                 "scope": "frontend",
-                "frontend": "codex",
-                "output_format": "json"
+                "frontend": "codex"
             }),
         );
 
         let result = tool_memory_recall(
             Some(&serde_json::json!({
-                "query": "deploy",
-                "output_format": "json"
+                "query": "deploy"
             })),
             &repo_root,
             &db_path,
@@ -3756,8 +3749,7 @@ mod tests {
         let shared = tool_memory_recall(
             Some(&serde_json::json!({
                 "query": "deploy",
-                "shared": true,
-                "output_format": "json"
+                "shared": true
             })),
             &repo_root,
             &db_path,
@@ -3771,8 +3763,7 @@ mod tests {
         let error = tool_memory_recall(
             Some(&serde_json::json!({
                 "query": "deploy",
-                "scope": "org",
-                "output_format": "json"
+                "scope": "org"
             })),
             &repo_root,
             &db_path,
@@ -3791,8 +3782,7 @@ mod tests {
 
         let result = tool_memory_recall(
             Some(&serde_json::json!({
-                "query": "anything",
-                "output_format": "json"
+                "query": "anything"
             })),
             &repo_root,
             &db_path,

@@ -7,7 +7,7 @@ use crate::discovery::{
     tool_get_docs_section, tool_read_file_around_match, tool_read_file_excerpt,
     tool_search_content, tool_search_files, tool_search_templates, tool_search_text_assets,
 };
-use crate::output::{OutputFormat, resolve_output_format};
+use crate::output::OutputFormat;
 use crate::session_events::tool_record_session_event;
 use crate::session_tools::{
     tool_compact_session, tool_cross_session_search, tool_get_context_stats,
@@ -339,8 +339,40 @@ fn call_inner(
             .and_then(|value| value.get("sleep_ms"))
             .and_then(|value| value.as_u64())
             .unwrap_or(25);
-        std::thread::sleep(std::time::Duration::from_millis(sleep_ms));
-        return Ok(serde_json::json!({ "slept_ms": sleep_ms }));
+        let chunk_ms = args
+            .and_then(|value| value.get("chunk_ms"))
+            .and_then(|value| value.as_u64())
+            .filter(|value| *value > 0)
+            .unwrap_or(sleep_ms);
+        let report_progress = args
+            .and_then(|value| value.get("report_progress"))
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false);
+        let mut elapsed_ms = 0_u64;
+        while elapsed_ms < sleep_ms {
+            if crate::progress::is_canceled() {
+                return Err(anyhow::anyhow!("canceled"));
+            }
+            let remaining_ms = sleep_ms.saturating_sub(elapsed_ms);
+            let this_chunk_ms = remaining_ms.min(chunk_ms.max(1));
+            std::thread::sleep(std::time::Duration::from_millis(this_chunk_ms));
+            elapsed_ms = elapsed_ms.saturating_add(this_chunk_ms);
+            if report_progress {
+                let pct = (((elapsed_ms as f64 / sleep_ms.max(1) as f64) * 100.0).round() as u32)
+                    .min(100);
+                crate::progress::report(&format!("slept {elapsed_ms}/{sleep_ms} ms"), Some(pct));
+            }
+        }
+        if crate::progress::is_canceled() {
+            return Err(anyhow::anyhow!("canceled"));
+        }
+        return crate::tool_result::tool_result_value(
+            &serde_json::json!({
+                "tool": "__test_sleep",
+                "slept_ms": sleep_ms,
+            }),
+            OutputFormat::Json,
+        );
     }
 
     #[cfg(test)]
@@ -356,16 +388,7 @@ fn call_inner(
         return Err(anyhow::anyhow!("unknown tool: {name}"));
     }
 
-    let output_format = match resolve_output_format(args, default_output_format_for_tool(name)) {
-        Ok(format) => format,
-        Err(error) => {
-            return normalize_tool_execution_error(
-                name,
-                default_output_format_for_tool(name),
-                error,
-            );
-        }
-    };
+    let output_format = default_output_format_for_tool(name);
 
     // Derive canonical readiness once for graph-backed tools.
     // Non-graph tools (file search, session, broker) skip this.
@@ -551,7 +574,7 @@ fn call_inner(
 }
 
 fn default_output_format_for_tool(_name: &str) -> OutputFormat {
-    OutputFormat::Toon
+    OutputFormat::Json
 }
 
 /// Map a tool name to its [`GraphToolRequirement`] class.
@@ -1017,7 +1040,7 @@ mod tests {
             if tool.output_schema.is_none() {
                 continue;
             }
-            let name = tool.name.as_str();
+            let name = tool.name.as_ref();
             let args = schema_test_args(name, saved_source_id);
             let value = call(name, Some(&args), &repo_root, &db_path)
                 .unwrap_or_else(|error| panic!("{name} should succeed for shape test: {error}"));
@@ -1067,13 +1090,14 @@ mod tests {
             let Some(output_schema) = tool.output_schema.as_ref() else {
                 continue;
             };
+            let schema_value = serde_json::Value::Object((**output_schema).clone());
             let schema = JSONSchema::options()
                 .with_draft(Draft::Draft202012)
-                .compile(output_schema)
+                .compile(&schema_value)
                 .unwrap_or_else(|error| {
                     panic!("{} output schema should compile: {error}", tool.name)
                 });
-            let name = tool.name.as_str();
+            let name = tool.name.as_ref();
             let args = schema_test_args(name, saved_source_id);
             let value = call(name, Some(&args), &repo_root, &db_path)
                 .unwrap_or_else(|error| panic!("{name} should succeed for schema test: {error}"));

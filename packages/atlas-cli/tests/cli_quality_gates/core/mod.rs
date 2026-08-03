@@ -148,10 +148,7 @@ pub(super) fn read_json_tool_result(output: &Output, id: u64) -> Value {
         .into_iter()
         .find(|response| response["id"] == json!(id))
         .unwrap_or_else(|| panic!("missing JSON-RPC response id={id}"));
-    assert_eq!(
-        response["result"]["_meta"]["atlas:outputFormat"],
-        json!("json")
-    );
+
     let text = response["result"]["content"][0]["text"]
         .as_str()
         .expect("tool result content text");
@@ -208,13 +205,13 @@ fn serve_requests_with_session_tools() -> String {
     [
         initialize_request_line(1),
         initialized_notification_line().to_owned(),
-        format!("{{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{{\"name\":\"query_graph\",\"arguments\":{{\"text\":\"greet_twice\",\"output_format\":\"json\"}},{meta}}}}}\n"),
+        format!("{{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{{\"name\":\"query_graph\",\"arguments\":{{\"text\":\"greet_twice\"}},{meta}}}}}\n"),
         format!(
-            "{{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{{\"name\":\"save_context_artifact\",\"arguments\":{{\"label\":\"broker-artifact\",\"content\":\"{}\",\"content_type\":\"text/plain\",\"output_format\":\"json\"}},{}}}}}\n",
+            "{{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{{\"name\":\"save_context_artifact\",\"arguments\":{{\"label\":\"broker-artifact\",\"content\":\"{}\",\"content_type\":\"text/plain\"}},{}}}}}\n",
             artifact,
             meta
         ),
-        format!("{{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{{\"name\":\"get_session_status\",\"arguments\":{{\"output_format\":\"json\"}},{meta}}}}}\n"),
+        format!("{{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{{\"name\":\"get_session_status\",\"arguments\":{{}},{meta}}}}}\n"),
     ]
     .concat()
 }

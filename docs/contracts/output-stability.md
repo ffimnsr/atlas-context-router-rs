@@ -5,12 +5,11 @@ Machine-readable Atlas outputs use explicit version tokens.
 Current versions:
 
 - CLI JSON envelope: `atlas_cli.v1`
-- MCP TOON body contract: `atlas_toon.v1`
+- MCP JSON body contract: `structuredContent` object payloads plus JSON text mirrors
 
 Published contract artifacts:
 
 - `schemas/atlas_cli.v1/*.schema.json`
-- `docs/contracts/atlas_toon.v1.md`
 
 ## `atlas_cli.v1`
 
@@ -47,11 +46,10 @@ No version bump required for:
 - new schema examples
 - additive command that uses its own new `command` token without changing existing ones
 
-## `atlas_toon.v1`
+## MCP JSON output
 
-`atlas_toon.v1` covers rendered MCP body text only.
+Atlas MCP responses are JSON-only.
 
-Top-level MCP metadata such as `atlas_output_format` and fallback metadata are
-outside TOON body contract and version independently from JSON-RPC/MCP surface.
+`structuredContent` is source of truth for machine-readable payloads. Text content is a JSON serialization of the same payload for transports and clients that expect text blocks.
 
-New `atlas_toon.*` version required for any rendered-body compatibility break.
+Changes that remove fields, rename fields, change field types, or change field meaning incompatibly require coordinated schema and contract updates.

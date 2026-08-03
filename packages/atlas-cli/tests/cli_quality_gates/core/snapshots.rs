@@ -77,7 +77,7 @@ fn mcp_query_graph_output_matches_golden() {
         format!(
             "{}{}",
             initialized_session_prelude(1),
-            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"query_graph\",\"arguments\":{\"text\":\"greet_twice\",\"output_format\":\"json\"}}}\n"
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"query_graph\",\"arguments\":{\"text\":\"greet_twice\"}}}\n"
         ),
     );
     assert!(output.status.success(), "serve query_graph failed");
@@ -154,7 +154,7 @@ fn mcp_get_context_output_matches_golden() {
         format!(
             "{}{}",
             initialized_session_prelude(1),
-            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"get_context\",\"arguments\":{\"target\":{\"kind\":\"files\",\"files\":[\"src/lib.rs\"]},\"max_nodes\":1,\"max_edges\":0,\"max_files\":1,\"output_format\":\"json\"}}}\n"
+            "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"get_context\",\"arguments\":{\"target\":{\"kind\":\"files\",\"files\":[\"src/lib.rs\"]},\"max_nodes\":1,\"max_edges\":0,\"max_files\":1}}}\n"
         ),
     );
     assert!(output.status.success(), "serve get_context failed");

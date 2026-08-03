@@ -259,7 +259,7 @@ mod tests {
             Some(&json!({ "event": "session-start" })),
             &repo,
             &db_path,
-            OutputFormat::Toon,
+            OutputFormat::Json,
         )
         .unwrap();
         let body = tool_body(&result);
@@ -293,7 +293,7 @@ mod tests {
             })),
             &repo,
             &db_path,
-            OutputFormat::Toon,
+            OutputFormat::Json,
         )
         .unwrap();
         let body = tool_body(&result);
@@ -315,7 +315,7 @@ mod tests {
             Some(&json!({ "event": "stop" })),
             &repo,
             &db_path,
-            OutputFormat::Toon,
+            OutputFormat::Json,
         )
         .unwrap();
         let body = tool_body(&result);
@@ -340,7 +340,7 @@ mod tests {
             })),
             &repo,
             &db_path,
-            OutputFormat::Toon,
+            OutputFormat::Json,
         )
         .unwrap();
         let body = tool_body(&result);
@@ -361,7 +361,7 @@ mod tests {
             Some(&json!({ "event": "user-prompt", "session_id": "custom-session" })),
             &repo,
             &db_path,
-            OutputFormat::Toon,
+            OutputFormat::Json,
         )
         .unwrap();
         let body = tool_body(&result);
@@ -388,7 +388,7 @@ mod tests {
             Some(&json!({ "event": "mystery-event" })),
             &repo,
             &db_path,
-            OutputFormat::Toon,
+            OutputFormat::Json,
         )
         .unwrap();
         assert_eq!(result["isError"], true);
@@ -409,7 +409,7 @@ mod tests {
             Some(&json!({ "event": "user-prompt", "repo_scope": { "kind": "all" } })),
             &repo,
             &db_path,
-            OutputFormat::Toon,
+            OutputFormat::Json,
         )
         .unwrap();
         assert_eq!(result["isError"], true);
@@ -456,7 +456,7 @@ mod tests {
             })),
             &repo_str,
             &db_path,
-            OutputFormat::Toon,
+            OutputFormat::Json,
         )
         .unwrap();
         let body = tool_body(&result);
@@ -485,7 +485,7 @@ mod tests {
             Some(&json!({ "event": "user-prompt", "payload": { "prompt": "hello" } })),
             &repo,
             &db_path,
-            OutputFormat::Toon,
+            OutputFormat::Json,
         )
         .unwrap();
         let body = tool_body(&result);
@@ -512,7 +512,7 @@ mod tests {
             })),
             &repo,
             &db_path,
-            OutputFormat::Toon,
+            OutputFormat::Json,
         )
         .unwrap();
         let body = tool_body(&result);
