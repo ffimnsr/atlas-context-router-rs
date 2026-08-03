@@ -408,3 +408,251 @@ pub struct GlobalWorkflowPattern {
     pub last_seen: String,
     pub first_seen: String,
 }
+
+// ── ICM-A — Shared memory model ───────────────────────────────────────────────
+// These types form the single memory record shape shared by CLI and MCP so the
+// two surfaces cannot drift on defaults, validation, or visibility semantics.
+
+/// Importance of a memory record. Exact values: `critical`, `high`, `normal`, `low`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum MemoryImportance {
+    Critical,
+    High,
+    #[default]
+    Normal,
+    Low,
+}
+
+impl MemoryImportance {
+    pub const ALL: [Self; 4] = [Self::Critical, Self::High, Self::Normal, Self::Low];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Critical => "critical",
+            Self::High => "high",
+            Self::Normal => "normal",
+            Self::Low => "low",
+        }
+    }
+}
+
+impl std::fmt::Display for MemoryImportance {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for MemoryImportance {
+    type Err = AtlasError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "critical" => Ok(Self::Critical),
+            "high" => Ok(Self::High),
+            "normal" => Ok(Self::Normal),
+            "low" => Ok(Self::Low),
+            other => Err(AtlasError::Other(format!(
+                "unknown memory importance: {other}; expected one of critical, high, normal, low"
+            ))),
+        }
+    }
+}
+
+/// Visibility scope of a memory record. Exact values: `project`, `session`,
+/// `frontend`, `global`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum MemoryScope {
+    #[default]
+    Project,
+    Session,
+    Frontend,
+    Global,
+}
+
+impl MemoryScope {
+    pub const ALL: [Self; 4] = [Self::Project, Self::Session, Self::Frontend, Self::Global];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Project => "project",
+            Self::Session => "session",
+            Self::Frontend => "frontend",
+            Self::Global => "global",
+        }
+    }
+}
+
+impl std::fmt::Display for MemoryScope {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for MemoryScope {
+    type Err = AtlasError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "project" => Ok(Self::Project),
+            "session" => Ok(Self::Session),
+            "frontend" => Ok(Self::Frontend),
+            "global" => Ok(Self::Global),
+            other => Err(AtlasError::Other(format!(
+                "unknown memory scope: {other}; expected one of project, session, frontend, global"
+            ))),
+        }
+    }
+}
+
+/// A stored memory record as persisted in the `memories` table.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MemoryRecord {
+    pub id: String,
+    pub repo_root: String,
+    pub session_id: Option<String>,
+    pub frontend: Option<String>,
+    pub scope: MemoryScope,
+    pub topic: String,
+    pub title: String,
+    pub body: String,
+    pub importance: MemoryImportance,
+    pub created_at: String,
+    pub updated_at: String,
+    pub last_accessed_at: String,
+    pub decay_score: f64,
+    pub source_id: Option<String>,
+    /// Free-form JSON metadata (column `metadata_json`).
+    pub metadata: Value,
+}
+
+/// Input shape for a manual memory write shared by CLI and MCP surfaces.
+///
+/// Defaults: `importance` is `normal`, `scope` is `project`. Call
+/// [`NewMemory::validate`] before persisting.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NewMemory {
+    pub repo_root: String,
+    pub session_id: Option<String>,
+    pub frontend: Option<String>,
+    #[serde(default)]
+    pub scope: MemoryScope,
+    #[serde(default)]
+    pub topic: String,
+    #[serde(default)]
+    pub title: String,
+    pub body: String,
+    #[serde(default)]
+    pub importance: MemoryImportance,
+    pub source_id: Option<String>,
+    #[serde(default = "default_memory_metadata")]
+    pub metadata: Value,
+}
+
+fn default_memory_metadata() -> Value {
+    Value::Object(Default::default())
+}
+
+impl Default for NewMemory {
+    fn default() -> Self {
+        Self {
+            repo_root: String::new(),
+            session_id: None,
+            frontend: None,
+            scope: MemoryScope::default(),
+            topic: String::new(),
+            title: String::new(),
+            body: String::new(),
+            importance: MemoryImportance::default(),
+            source_id: None,
+            metadata: default_memory_metadata(),
+        }
+    }
+}
+
+impl NewMemory {
+    /// Rejects invalid memory writes before they reach storage: `frontend`
+    /// scoped memories require a frontend identifier, `session` scoped
+    /// memories require a session id, and the body must not be empty.
+    pub fn validate(&self) -> atlas_core::Result<()> {
+        if self.body.trim().is_empty() {
+            return Err(AtlasError::Other(
+                "memory body must not be empty".to_owned(),
+            ));
+        }
+        if self.scope == MemoryScope::Frontend
+            && self
+                .frontend
+                .as_deref()
+                .map(str::trim)
+                .is_none_or(str::is_empty)
+        {
+            return Err(AtlasError::Other(
+                "scope 'frontend' requires a frontend identifier".to_owned(),
+            ));
+        }
+        if self.scope == MemoryScope::Session
+            && self
+                .session_id
+                .as_deref()
+                .map(str::trim)
+                .is_none_or(str::is_empty)
+        {
+            return Err(AtlasError::Other(
+                "scope 'session' requires a session_id".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// A recall hit pairing a memory record with its lexical match tier.
+///
+/// Lower `relevance_score` ranks higher: `0` = exact topic match, `1` =
+/// topic/title contains match, `2` = body-only match.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MemorySearchHit {
+    pub memory: MemoryRecord,
+    pub relevance_score: i32,
+}
+
+/// Filters shared by memory recall and list surfaces.
+///
+/// Timestamps are normalized RFC 3339 strings (second precision) so string
+/// comparison equals chronological comparison.
+#[derive(Debug, Clone, Default)]
+pub struct MemoryListFilter {
+    /// Case-insensitive exact topic match.
+    pub topic: Option<String>,
+    pub importance: Option<MemoryImportance>,
+    pub scope: Option<MemoryScope>,
+    /// Only memories updated before this timestamp.
+    pub older_than: Option<String>,
+    /// Only memories updated after this timestamp.
+    pub newer_than: Option<String>,
+}
+
+/// Outcome of a memory delete, including dry-run inspection.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MemoryDeleteResult {
+    pub memory_id: String,
+    /// Whether a memory with the exact id exists in this repo.
+    pub found: bool,
+    /// Whether a row was actually removed (false for dry-run).
+    pub deleted: bool,
+    pub dry_run: bool,
+}
+
+/// Identifies who is viewing memories so recall can enforce visibility rules.
+///
+/// Visibility (ICM-A3): `global` visible everywhere, `project` visible to all
+/// frontends in the repo, `session` visible only to the same session, and
+/// `frontend` visible only to the same repo plus the same frontend.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemoryViewer {
+    /// Canonical frontend identity (`claude`, `codex`, `copilot`, `cli`, `mcp`).
+    pub frontend: String,
+    /// Viewer session id; only `session`-scoped memories with the same id are visible.
+    pub session_id: String,
+}

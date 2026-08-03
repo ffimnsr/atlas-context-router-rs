@@ -49,10 +49,7 @@ fn doctor_reports_mcp_serve_config() {
         .expect("mcp serve config check present");
 
     assert_eq!(mcp_check["ok"], json!(true));
-    assert_eq!(
-        mcp_check["detail"],
-        json!("workers=2 timeout_ms=300000")
-    );
+    assert_eq!(mcp_check["detail"], json!("workers=2 timeout_ms=300000"));
 }
 
 #[test]
@@ -84,7 +81,10 @@ fn doctor_reports_retrieval_index_unavailable_issue_code() {
 
     assert_eq!(doctor["error_code"], json!("checks_failed"));
     assert_eq!(retrieval["ok"], json!(false));
-    assert_eq!(retrieval["issue_code"], json!("retrieval_index_unavailable"));
+    assert_eq!(
+        retrieval["issue_code"],
+        json!("retrieval_index_unavailable")
+    );
 }
 
 #[test]
@@ -132,9 +132,11 @@ fn doctor_reports_noncanonical_content_path_identity() {
 
     assert_eq!(content_check["ok"], json!(false));
     assert_eq!(content_check["issue_code"], json!("noncanonical_path_rows"));
-    assert!(content_check["detail"]
-        .as_str()
-        .is_some_and(|text| text.contains("canonical=src/lib.rs")));
+    assert!(
+        content_check["detail"]
+            .as_str()
+            .is_some_and(|text| text.contains("canonical=src/lib.rs"))
+    );
 }
 
 #[test]
@@ -200,9 +202,17 @@ fn status_clears_stale_index_after_update_indexes_dirty_worktree() {
     run_atlas(repo.path(), &["update"]);
 
     let status = read_json_data_output("status", run_atlas(repo.path(), &["--json", "status"]));
-    assert_ne!(status["error_code"], json!("stale_index"), "status={status:?}");
+    assert_ne!(
+        status["error_code"],
+        json!("stale_index"),
+        "status={status:?}"
+    );
     assert_eq!(status["stale_index"], json!(false), "status={status:?}");
-    assert_eq!(status["pending_graph_change_count"], json!(0), "status={status:?}");
+    assert_eq!(
+        status["pending_graph_change_count"],
+        json!(0),
+        "status={status:?}"
+    );
 }
 
 #[test]
@@ -227,9 +237,73 @@ fn status_reports_schema_mismatch_for_malformed_build_state_table() {
     let status = read_json_data_output("status", run_atlas(repo.path(), &["--json", "status"]));
     assert_eq!(status["ok"], json!(false));
     assert_eq!(status["error_code"], json!("schema_mismatch"));
-    assert!(status["graph_query_error"]
-        .as_str()
-        .is_some_and(|text| text.contains("graph_build_state")));
+    assert!(
+        status["graph_query_error"]
+            .as_str()
+            .is_some_and(|text| text.contains("graph_build_state"))
+    );
+}
+
+#[test]
+fn db_check_validates_memory_schema_when_healthy() {
+    let repo = setup_fixture_repo();
+    run_atlas(repo.path(), &["init"]);
+
+    let result = read_json_data_output("db_check", run_atlas(repo.path(), &["--json", "db-check"]));
+    assert_eq!(result["ok"], json!(true));
+    assert_eq!(result["error_code"], json!("none"));
+
+    let session_db = &result["session_db"];
+    assert_eq!(session_db["exists"], json!(true));
+    assert_eq!(session_db["ok"], json!(true));
+    assert_eq!(session_db["memory_schema"]["ok"], json!(true));
+    assert_eq!(session_db["memory_schema"]["issues"], json!([]));
+}
+
+#[test]
+fn db_check_reports_missing_memories_table_as_schema_mismatch() {
+    let repo = setup_fixture_repo();
+    run_atlas(repo.path(), &["init"]);
+
+    let session_db = repo.path().join(".atlas").join("session.db");
+    let conn = Connection::open(&session_db).expect("open session db");
+    conn.execute_batch("DROP TABLE memories;")
+        .expect("drop memories table");
+    drop(conn);
+
+    let result = read_json_data_output("db_check", run_atlas(repo.path(), &["--json", "db-check"]));
+    assert_eq!(result["ok"], json!(false));
+    assert_eq!(result["error_code"], json!("schema_mismatch"));
+
+    let memory_schema = &result["session_db"]["memory_schema"];
+    assert_eq!(memory_schema["ok"], json!(false));
+    assert_eq!(memory_schema["issues"], json!(["missing table: memories"]));
+}
+
+#[test]
+fn db_check_reports_missing_memory_indexes() {
+    let repo = setup_fixture_repo();
+    run_atlas(repo.path(), &["init"]);
+
+    let session_db = repo.path().join(".atlas").join("session.db");
+    let conn = Connection::open(&session_db).expect("open session db");
+    conn.execute_batch(
+        "DROP INDEX idx_memories_repo_topic;
+         DROP INDEX idx_memories_repo_importance;",
+    )
+    .expect("drop memory indexes");
+    drop(conn);
+
+    let result = read_json_data_output("db_check", run_atlas(repo.path(), &["--json", "db-check"]));
+    let memory_schema = &result["session_db"]["memory_schema"];
+    assert_eq!(memory_schema["ok"], json!(false));
+    assert_eq!(
+        memory_schema["issues"],
+        json!([
+            "missing index: idx_memories_repo_topic",
+            "missing index: idx_memories_repo_importance",
+        ])
+    );
 }
 
 #[test]
@@ -251,7 +325,10 @@ fn update_redacts_internal_sql_errors_from_stderr() {
         .current_dir(repo.path())
         .output()
         .expect("run atlas update");
-    assert!(!output.status.success(), "update should fail on broken schema");
+    assert!(
+        !output.status.success(),
+        "update should fail on broken schema"
+    );
 
     let stderr = String::from_utf8(output.stderr).expect("stderr utf-8");
     assert!(
@@ -282,13 +359,31 @@ fn init_creates_graph_content_and_session_databases() {
     let content_db = repo.path().join(".atlas").join("context.db");
     let session_db = repo.path().join(".atlas").join("session.db");
 
-    assert!(graph_db.is_file(), "graph db missing: {}", graph_db.display());
-    assert!(content_db.is_file(), "content db missing: {}", content_db.display());
-    assert!(session_db.is_file(), "session db missing: {}", session_db.display());
+    assert!(
+        graph_db.is_file(),
+        "graph db missing: {}",
+        graph_db.display()
+    );
+    assert!(
+        content_db.is_file(),
+        "content db missing: {}",
+        content_db.display()
+    );
+    assert!(
+        session_db.is_file(),
+        "session db missing: {}",
+        session_db.display()
+    );
 
     assert_eq!(json_path(&data["db_path"]), canonical_path(&graph_db));
-    assert_eq!(json_path(&data["content_db_path"]), canonical_path(&content_db));
-    assert_eq!(json_path(&data["session_db_path"]), canonical_path(&session_db));
+    assert_eq!(
+        json_path(&data["content_db_path"]),
+        canonical_path(&content_db)
+    );
+    assert_eq!(
+        json_path(&data["session_db_path"]),
+        canonical_path(&session_db)
+    );
 }
 
 #[test]
@@ -307,7 +402,9 @@ fn init_full_profile_writes_active_config_template() {
     assert!(config_text.contains("hybrid_enabled = true"));
     assert!(config_text.contains("[search.embedding]"));
     assert!(config_text.contains("url = \"http://localhost:11434\""));
-    assert!(config_text.contains("tool_timeout_ms_by_tool = { build_or_update_graph = 900000, get_review_context = 120000 }"));
+    assert!(config_text.contains(
+        "tool_timeout_ms_by_tool = { build_or_update_graph = 900000, get_review_context = 120000 }"
+    ));
 }
 
 #[test]
@@ -323,7 +420,11 @@ fn migrate_reports_all_repo_local_databases() {
 
     assert_eq!(databases.len(), 3);
     assert!(databases.iter().any(|db| db["label"] == json!("graph_db")));
-    assert!(databases.iter().all(|db| db["schema_version"] == db["latest_version"]));
+    assert!(
+        databases
+            .iter()
+            .all(|db| db["schema_version"] == db["latest_version"])
+    );
 }
 
 #[test]
@@ -362,7 +463,10 @@ fn debug_config_reports_file_cli_and_env_sources() {
         payload["resolved"]["search.embedding.url"]["value"],
         json!("http://embed.test")
     );
-    assert_eq!(payload["resolved"]["env.ATLAS_HTTP_BIND"]["source"], json!("env"));
+    assert_eq!(
+        payload["resolved"]["env.ATLAS_HTTP_BIND"]["source"],
+        json!("env")
+    );
 }
 
 #[test]
@@ -451,7 +555,10 @@ max_wall_time_ms = 30000
     let status = read_json_data_output("status", run_atlas(repo.path(), &["--json", "status"]));
     assert_eq!(status["error_code"], json!("degraded_build"));
     assert_eq!(status["build_state"], json!("degraded"));
-    assert_eq!(status["build_status"]["budget_stop_reason"], json!("max_files_per_run"));
+    assert_eq!(
+        status["build_status"]["budget_stop_reason"],
+        json!("max_files_per_run")
+    );
     assert_eq!(status["build_status"]["files_accepted"], json!(1));
 }
 
@@ -501,7 +608,10 @@ max_wall_time_ms = 30000
     let status = read_json_data_output("status", run_atlas(repo.path(), &["--json", "status"]));
     assert_eq!(status["error_code"], json!("failed_build"));
     assert_eq!(status["build_state"], json!("build_failed"));
-    assert_eq!(status["build_status"]["budget_stop_reason"], json!("max_parse_failures"));
+    assert_eq!(
+        status["build_status"]["budget_stop_reason"],
+        json!("max_parse_failures")
+    );
 }
 
 #[test]
@@ -540,8 +650,16 @@ fn build_dry_run_does_not_persist_graph_state() {
     assert!(build["parsed"].as_u64().unwrap_or_default() >= 2);
 
     let status = read_json_data_output("status", run_atlas(repo.path(), &["--json", "status"]));
-    assert_eq!(status["graph_built"], json!(false), "dry-run must not build graph");
-    assert_eq!(status["node_count"], json!(0), "dry-run must not persist nodes");
+    assert_eq!(
+        status["graph_built"],
+        json!(false),
+        "dry-run must not build graph"
+    );
+    assert_eq!(
+        status["node_count"],
+        json!(0),
+        "dry-run must not persist nodes"
+    );
 }
 
 #[test]
@@ -577,13 +695,20 @@ fn update_dry_run_keeps_existing_graph_unchanged() {
 
     let dry_run = read_json_data_output(
         "update",
-        run_atlas(repo.path(), &["--json", "update", "--base", "HEAD", "--dry-run"]),
+        run_atlas(
+            repo.path(),
+            &["--json", "update", "--base", "HEAD", "--dry-run"],
+        ),
     );
     assert_eq!(dry_run["dry_run"], json!(true));
     assert!(dry_run["parsed"].as_u64().unwrap_or_default() >= 1);
 
     let status = read_json_data_output("status", run_atlas(repo.path(), &["--json", "status"]));
-    assert_eq!(status["stale_index"], json!(true), "dry-run must not clear stale index state");
+    assert_eq!(
+        status["stale_index"],
+        json!(true),
+        "dry-run must not clear stale index state"
+    );
 
     let query = read_json_data_output(
         "query",
@@ -591,7 +716,9 @@ fn update_dry_run_keeps_existing_graph_unchanged() {
     );
     let results = query["results"].as_array().expect("query results array");
     assert!(
-        results.iter().all(|item| item["node"]["name"] != json!("render")),
+        results
+            .iter()
+            .all(|item| item["node"]["name"] != json!("render")),
         "dry-run must not make newly added symbols queryable yet: {query:?}"
     );
 }

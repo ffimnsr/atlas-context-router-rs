@@ -46,6 +46,8 @@
 //! | `purge_saved_context`     | CM7: delete saved artifacts by session or age            |
 //! | `cross_session_search`    | CM11: search saved context across all sessions for repo  |
 //! | `get_global_memory`       | CM11: frequent symbols/files/workflows; related sessions |
+//! | `memory_store`            | ICM-A: store a memory record through the shared service  |
+//! | `memory_recall`           | ICM-A: recall memories with visibility rules and hints   |
 //! | `symbol_neighbors`        | Immediate callers, callees, tests, and nearby nodes      |
 //! | `cross_file_links`        | Files coupled through shared symbol references           |
 //! | `concept_clusters`        | Related file groups around seed files                    |

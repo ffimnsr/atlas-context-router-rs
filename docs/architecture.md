@@ -96,11 +96,13 @@ Why separate:
 
 ### `.atlas/session.db`
 
-Purpose: bounded event ledger and resume continuity.
+Purpose: bounded event ledger and resume continuity, plus shared memory records.
 
 - session identities
 - event metadata and compact payloads
 - resume snapshots
+- shared `memories` records (project/session/frontend/global scope)
+- decision memory, global access patterns, and durable tasks
 - references into `context.db` for large artifacts
 
 Why separate:
@@ -108,6 +110,7 @@ Why separate:
 - session continuity should survive even when graph is stale
 - event retention differs from graph rebuild lifecycle
 - session writes are best-effort and must not reshape graph schema
+- memory bodies stay out of `worldtree.db` graph storage
 
 ## Atlas-engine pipeline
 

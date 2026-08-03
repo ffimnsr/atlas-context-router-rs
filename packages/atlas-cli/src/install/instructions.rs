@@ -45,6 +45,7 @@ ALWAYS use TOON output everytime, and JSON when you expect there's floating numb
 - **Finding relationships**: `symbol_neighbors` for immediate usage edges, `traverse_graph` for broader callers/callees, and `get_context` for intent-aware usage lookup
 - **Repo health**: `list_graph_stats`, `status`, `doctor`, `db_check`, and `debug_graph` before trusting graph-backed answers
 - **Session continuity**: `get_session_status`, `resume_session`, `search_saved_context`, `search_decisions`, and `save_context_artifact`
+- **Shared memory**: `memory_store` and `memory_recall` for persistent project/global/frontend memories with the same validation and visibility rules as the CLI
 
 Do not treat `query_graph` as caller/callee search. Fall back to file tools **only** after graph relationship tools do not cover what you need.
 
@@ -64,6 +65,7 @@ Runtime docs are canonical for exact current arguments, discriminated input obje
 - repo/graph health: `status`, `doctor`, `db_check`, `debug_graph`, `list_graph_stats`
 - companion file/docs lookup: `search_files`, `search_content`, `read_file_excerpt`, `get_docs_section`, `read_file_around_match`, `search_templates`, `search_text_assets`
 - continuity: `get_session_status`, `resume_session`, `search_saved_context`, `search_decisions`, `save_context_artifact`
+- shared memory: `memory_store`, `memory_recall`
 
 ### Workflow
 

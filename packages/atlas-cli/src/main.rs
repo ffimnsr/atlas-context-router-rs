@@ -77,6 +77,7 @@ fn run_cli() -> anyhow::Result<()> {
         Command::Postprocess { .. } => commands::run_postprocess(&cli),
         Command::Insights { .. } => commands::run_insights(&cli),
         Command::Session { .. } => commands::run_session(&cli),
+        Command::Memory { .. } => commands::run_memory(&cli),
         Command::Hook { .. } => commands::run_hook(&cli),
         Command::History { .. } => commands::run_history(&cli),
         Command::Version => commands::run_version(&cli),

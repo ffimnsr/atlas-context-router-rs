@@ -14,6 +14,11 @@ Session identity, event ledger, and resume snapshots for Atlas context memory. D
   - `resume_snapshot()` — build/consume session state snapshots
   - `get_session_status()` — metadata and event counts
 
+- **Shared memory model (ICM-A)**
+  - `MemoryImportance` / `MemoryScope` — strict enums with exact values
+  - `MemoryRecord` / `NewMemory` — one record shape shared by CLI and MCP
+  - `memories` table — continuity-side persistence, validated by `atlas db check`
+
 - **Identity and lifecycle**
   - Session derivation from anchors
   - Resume-snapshot serialization

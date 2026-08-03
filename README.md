@@ -668,6 +668,8 @@ The MCP server (`atlas serve`) exposes these tools to agents:
 | `purge_saved_context` | Delete saved artifacts by session or age |
 | `cross_session_search` | CM11: search saved context across all sessions for this repo |
 | `get_global_memory` | CM11: frequent symbols/files/workflows and related past sessions |
+| `memory_store` | ICM-A: store a memory record through the shared memory service |
+| `memory_recall` | ICM-A: recall memories with visibility rules and retrieval hints |
 | `symbol_neighbors` | Immediate callers, callees, tests, and nearby graph nodes |
 | `cross_file_links` | Files semantically linked to a file by shared symbol references |
 | `concept_clusters` | Related file groups around seed files by coupling density |

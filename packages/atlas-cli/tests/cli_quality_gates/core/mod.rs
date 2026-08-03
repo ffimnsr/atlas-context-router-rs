@@ -16,6 +16,7 @@ mod history;
 mod hooks;
 mod insights;
 mod man;
+mod memory;
 mod postprocess;
 mod query;
 mod readiness;

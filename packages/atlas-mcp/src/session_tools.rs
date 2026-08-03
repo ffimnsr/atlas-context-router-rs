@@ -22,11 +22,13 @@ use atlas_contentstore::{ContentStore, OutputRouting, SearchFilters, SourceMeta}
 use atlas_core::{BudgetManager, BudgetPolicy, BudgetReport};
 use atlas_session::{
     AgentMemorySummary, CurationResult, DecisionSearchHit, GlobalAccessEntry,
-    GlobalWorkflowPattern, NewSessionEvent, ResumeSnapshot, SessionEventType, SessionId,
-    SessionMeta, SessionStore,
+    GlobalWorkflowPattern, MemoryImportance, MemoryListFilter, MemoryScope, MemoryViewer,
+    NewMemory, NewSessionEvent, ResumeSnapshot, SessionEventType, SessionId, SessionMeta,
+    SessionStore,
 };
 use serde::Serialize;
 use serde_json::Value;
+use std::collections::BTreeSet;
 use tracing::warn;
 
 use crate::output::OutputFormat;
@@ -1821,6 +1823,222 @@ pub fn tool_get_global_memory(
 }
 
 // ---------------------------------------------------------------------------
+// memory_store / memory_recall  (ICM-A shared memory surface)
+// ---------------------------------------------------------------------------
+
+/// Store a memory record through the shared memory service layer. Field names,
+/// defaults, and validation are identical to `atlas memory store`.
+pub fn tool_memory_store(
+    args: Option<&Value>,
+    repo_root: &str,
+    db_path: &str,
+    output_format: OutputFormat,
+) -> Result<Value> {
+    let text = args
+        .and_then(|a| a.get("text"))
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("missing required argument: text"))?;
+    let topic = args.and_then(|a| a.get("topic")).and_then(|v| v.as_str());
+    let title = args.and_then(|a| a.get("title")).and_then(|v| v.as_str());
+    let importance = args
+        .and_then(|a| a.get("importance"))
+        .and_then(|v| v.as_str());
+    let scope = args.and_then(|a| a.get("scope")).and_then(|v| v.as_str());
+    let frontend = args
+        .and_then(|a| a.get("frontend"))
+        .and_then(|v| v.as_str());
+    let source_id = args
+        .and_then(|a| a.get("source_id"))
+        .and_then(|v| v.as_str());
+
+    // Same boundary validation as the CLI: strict enum parsing and
+    // config-gated frontend normalization from the shared layer.
+    let importance = match importance {
+        Some(raw) => raw.parse().map_err(anyhow::Error::from)?,
+        None => MemoryImportance::default(),
+    };
+    let scope = match scope {
+        Some(raw) => raw.parse().map_err(anyhow::Error::from)?,
+        None => MemoryScope::default(),
+    };
+    let config =
+        atlas_engine::Config::load(&atlas_engine::paths::atlas_dir(repo_root)).unwrap_or_default();
+    let frontend = frontend
+        .map(|raw| atlas_session::normalize_frontend(raw, config.allow_custom_frontends()))
+        .transpose()?;
+    let session_id =
+        (scope == MemoryScope::Session).then(|| mcp_session_id(repo_root).as_str().to_owned());
+    let input = NewMemory {
+        repo_root: repo_root.to_owned(),
+        session_id,
+        frontend,
+        scope,
+        topic: topic.unwrap_or_default().to_owned(),
+        title: title.unwrap_or_default().to_owned(),
+        body: text.to_owned(),
+        importance,
+        source_id: source_id.map(str::to_owned),
+        metadata: serde_json::json!({}),
+    };
+    input.validate()?;
+
+    let session_db = derive_session_db_path(db_path);
+    let mut store = SessionStore::open(&session_db)?;
+    let record = store.store_memory(&input)?;
+
+    build_normalized_tool_result_value(
+        &serde_json::json!({
+            "tool": "memory_store",
+            "repo_root": repo_root,
+            "memory": record,
+            "summary": {
+                "memory_id": record.id,
+                "scope": record.scope.as_str(),
+                "importance": record.importance.as_str(),
+            },
+            "warnings": [],
+        }),
+        output_format,
+    )
+}
+
+/// Recall memories through the shared memory service layer with the same
+/// visibility rules and defaults as `atlas memory recall`. The MCP viewer is
+/// the derived `mcp` frontend session; `shared` narrows to project + global.
+pub fn tool_memory_recall(
+    args: Option<&Value>,
+    repo_root: &str,
+    db_path: &str,
+    output_format: OutputFormat,
+) -> Result<Value> {
+    let policy = load_budget_policy(repo_root)?;
+    let mut budgets = BudgetManager::new();
+    let query = args
+        .and_then(|a| a.get("query"))
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("missing required argument: query"))?;
+    let topic = args.and_then(|a| a.get("topic")).and_then(|v| v.as_str());
+    let importance = args
+        .and_then(|a| a.get("importance"))
+        .and_then(|v| v.as_str());
+    let scope = args.and_then(|a| a.get("scope")).and_then(|v| v.as_str());
+    let shared = args
+        .and_then(|a| a.get("shared"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let requested_limit = args
+        .and_then(|a| a.get("limit"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(20) as usize;
+    let limit = budgets.resolve_limit(
+        policy.mcp_cli_payload_serialization.nodes,
+        "mcp_cli_payload_serialization.max_nodes",
+        Some(requested_limit),
+    );
+
+    let filter = MemoryListFilter {
+        topic: topic.map(str::to_owned),
+        importance: importance
+            .map(|raw| raw.parse().map_err(anyhow::Error::from))
+            .transpose()?,
+        scope: scope
+            .map(|raw| raw.parse().map_err(anyhow::Error::from))
+            .transpose()?,
+        ..Default::default()
+    };
+    let viewer = MemoryViewer {
+        frontend: "mcp".to_owned(),
+        session_id: mcp_session_id(repo_root).as_str().to_owned(),
+    };
+
+    let hits = match open_session_store_best_effort(db_path) {
+        Some(store) => store.recall_memories(repo_root, query, &filter, shared, &viewer, limit)?,
+        None => Vec::new(),
+    };
+
+    let results = hits
+        .iter()
+        .map(|hit| {
+            serde_json::json!({
+                "memory": hit.memory,
+                "relevance_score": hit.relevance_score,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    // Compact retrieval hints: distinct topics, scopes, and source ids so
+    // follow-up recall can be targeted without re-reading bodies.
+    let mut topics = BTreeSet::new();
+    let mut scopes = BTreeSet::new();
+    let mut source_ids = BTreeSet::new();
+    for hit in &hits {
+        if !hit.memory.topic.is_empty() {
+            topics.insert(hit.memory.topic.clone());
+        }
+        scopes.insert(hit.memory.scope.as_str().to_owned());
+        if let Some(source_id) = &hit.memory.source_id {
+            source_ids.insert(source_id.clone());
+        }
+    }
+    let mut retrieval_hints = Vec::new();
+    for topic in topics {
+        retrieval_hints.push(serde_json::json!({ "kind": "topic", "value": topic }));
+    }
+    for scope in scopes {
+        retrieval_hints.push(serde_json::json!({ "kind": "scope", "value": scope }));
+    }
+    for source_id in source_ids {
+        retrieval_hints.push(serde_json::json!({ "kind": "source_id", "value": source_id }));
+    }
+
+    let observed = hits.len();
+    if observed >= limit {
+        budgets.record_usage(
+            policy.mcp_cli_payload_serialization.nodes,
+            "mcp_cli_payload_serialization.max_nodes",
+            limit,
+            observed,
+            true,
+        );
+    }
+
+    let mut response = tool_result_value(
+        &serde_json::json!({
+            "tool": "memory_recall",
+            "repo_root": repo_root,
+            "query": {
+                "text": query,
+                "topic": topic,
+                "importance": importance,
+                "scope": scope,
+                "shared": shared,
+                "requested_limit": requested_limit,
+                "applied_limit": limit,
+            },
+            "results": results,
+            "retrieval_hints": retrieval_hints,
+            "summary": {
+                "match_count": hits.len(),
+                "total_matches": hits.len(),
+                "retrieval_hint_count": retrieval_hints.len(),
+            },
+            "truncated": observed >= limit,
+            "warnings": [],
+        }),
+        output_format,
+    )?;
+    inject_budget_metadata(
+        &mut response,
+        &budgets.summary(
+            "mcp_cli_payload_serialization.max_nodes",
+            limit,
+            requested_limit.max(observed),
+        ),
+    );
+    Ok(response)
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 fn resolve_session_id(args: Option<&Value>, repo_root: &str) -> SessionId {
@@ -3338,5 +3556,251 @@ mod tests {
         assert_eq!(body["focus"]["files"][0], "src/focused.rs");
         assert!(!body["relevant_sessions"].as_array().unwrap().is_empty());
         assert!(body["summary"]["relevant_session_count"].as_u64().unwrap() >= 1);
+    }
+
+    // ── ICM-A — memory_store / memory_recall ─────────────────────────────────
+
+    fn store_via_tool(repo_root: &str, db_path: &str, args: &serde_json::Value) -> Value {
+        let result = tool_memory_store(Some(args), repo_root, db_path, OutputFormat::Json).unwrap();
+        tool_body(&result)
+    }
+
+    #[test]
+    fn memory_store_uses_cli_defaults_and_validation() {
+        let dir = TempDir::new().unwrap();
+        let db_path = setup_db_path(&dir);
+        std::fs::create_dir_all(dir.path().join(".atlas")).unwrap();
+        let repo_root = dir.path().to_string_lossy().into_owned();
+
+        let body = store_via_tool(
+            &repo_root,
+            &db_path,
+            &serde_json::json!({
+                "text": "remember hooks",
+                "topic": "hooks",
+                "output_format": "json"
+            }),
+        );
+        let memory = &body["memory"];
+        // Same defaults as `atlas memory store`: normal importance, project scope.
+        assert_eq!(memory["importance"], "normal");
+        assert_eq!(memory["scope"], "project");
+        assert_eq!(memory["frontend"], serde_json::Value::Null);
+        assert_eq!(memory["session_id"], serde_json::Value::Null);
+        assert_eq!(memory["body"], "remember hooks");
+        assert_eq!(memory["decay_score"], serde_json::json!(0.0));
+        assert_eq!(body["summary"]["memory_id"], memory["id"]);
+
+        // Validation errors match the CLI message contract exactly.
+        let error = tool_memory_store(
+            Some(&serde_json::json!({
+                "text": "x",
+                "importance": "urgent",
+                "output_format": "json"
+            })),
+            &repo_root,
+            &db_path,
+            OutputFormat::Json,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.contains("unknown memory importance: urgent"),
+            "got: {error}"
+        );
+
+        let error = tool_memory_store(
+            Some(&serde_json::json!({
+                "text": "x",
+                "scope": "frontend",
+                "output_format": "json"
+            })),
+            &repo_root,
+            &db_path,
+            OutputFormat::Json,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("frontend identifier"), "got: {error}");
+    }
+
+    #[test]
+    fn memory_store_persists_frontend_normalization_and_source_id() {
+        let dir = TempDir::new().unwrap();
+        let db_path = setup_db_path(&dir);
+        std::fs::create_dir_all(dir.path().join(".atlas")).unwrap();
+        let repo_root = dir.path().to_string_lossy().into_owned();
+
+        let body = store_via_tool(
+            &repo_root,
+            &db_path,
+            &serde_json::json!({
+                "text": "codex deploy note",
+                "topic": "deploy",
+                "importance": "critical",
+                "scope": "frontend",
+                "frontend": "Codex",
+                "source_id": "artifact-9",
+                "output_format": "json"
+            }),
+        );
+        let memory = &body["memory"];
+        assert_eq!(
+            memory["frontend"], "codex",
+            "frontend must normalize like the CLI"
+        );
+        assert_eq!(memory["scope"], "frontend");
+        assert_eq!(memory["source_id"], "artifact-9");
+
+        // Unknown frontends are rejected unless config allows custom ones.
+        let error = tool_memory_store(
+            Some(&serde_json::json!({
+                "text": "x",
+                "scope": "frontend",
+                "frontend": "zed",
+                "output_format": "json"
+            })),
+            &repo_root,
+            &db_path,
+            OutputFormat::Json,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("unknown frontend: zed"), "got: {error}");
+    }
+
+    #[test]
+    fn memory_recall_applies_visibility_and_retrieval_hints() {
+        let dir = TempDir::new().unwrap();
+        let db_path = setup_db_path(&dir);
+        std::fs::create_dir_all(dir.path().join(".atlas")).unwrap();
+        let repo_root = dir.path().to_string_lossy().into_owned();
+
+        // A project-scoped memory, an mcp-session memory, and a codex-frontend memory.
+        store_via_tool(
+            &repo_root,
+            &db_path,
+            &serde_json::json!({
+                "text": "deploy pipeline runs weekly",
+                "topic": "hooks",
+                "importance": "critical",
+                "source_id": "src-hooks",
+                "output_format": "json"
+            }),
+        );
+        let session_body = store_via_tool(
+            &repo_root,
+            &db_path,
+            &serde_json::json!({
+                "text": "deploy session note",
+                "topic": "deploy",
+                "scope": "session",
+                "output_format": "json"
+            }),
+        );
+        store_via_tool(
+            &repo_root,
+            &db_path,
+            &serde_json::json!({
+                "text": "deploy secrets",
+                "topic": "deploy",
+                "scope": "frontend",
+                "frontend": "codex",
+                "output_format": "json"
+            }),
+        );
+
+        let result = tool_memory_recall(
+            Some(&serde_json::json!({
+                "query": "deploy",
+                "output_format": "json"
+            })),
+            &repo_root,
+            &db_path,
+            OutputFormat::Json,
+        )
+        .unwrap();
+        let body = tool_body(&result);
+
+        // The mcp viewer sees project + own-session memories, never codex's.
+        let results = body["results"].as_array().unwrap();
+        assert_eq!(results.len(), 2);
+        assert!(
+            !results
+                .iter()
+                .any(|hit| hit["memory"]["scope"] == "frontend"),
+            "codex-frontend memory must be hidden from the mcp viewer"
+        );
+        assert!(
+            results
+                .iter()
+                .any(|hit| { hit["memory"]["id"] == session_body["memory"]["id"] })
+        );
+        assert_eq!(body["summary"]["match_count"], 2);
+        assert_eq!(body["truncated"], false);
+
+        // Compact retrieval hints expose topic + source_id for follow-up recall.
+        let hints = body["retrieval_hints"].as_array().unwrap();
+        assert!(
+            hints
+                .iter()
+                .any(|hint| hint["kind"] == "topic" && hint["value"] == "deploy")
+        );
+        assert!(
+            hints
+                .iter()
+                .any(|hint| hint["kind"] == "source_id" && hint["value"] == "src-hooks")
+        );
+
+        // shared=true returns project + global only.
+        let shared = tool_memory_recall(
+            Some(&serde_json::json!({
+                "query": "deploy",
+                "shared": true,
+                "output_format": "json"
+            })),
+            &repo_root,
+            &db_path,
+            OutputFormat::Json,
+        )
+        .unwrap();
+        let shared_body = tool_body(&shared);
+        assert_eq!(shared_body["summary"]["match_count"], 1);
+
+        // Invalid recall filters fail with the CLI validation contract.
+        let error = tool_memory_recall(
+            Some(&serde_json::json!({
+                "query": "deploy",
+                "scope": "org",
+                "output_format": "json"
+            })),
+            &repo_root,
+            &db_path,
+            OutputFormat::Json,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("unknown memory scope: org"), "got: {error}");
+    }
+
+    #[test]
+    fn memory_recall_without_session_db_returns_empty() {
+        let dir = TempDir::new().unwrap();
+        let db_path = dir.path().join("atlas.db").to_string_lossy().into_owned();
+        let repo_root = dir.path().to_string_lossy().into_owned();
+
+        let result = tool_memory_recall(
+            Some(&serde_json::json!({
+                "query": "anything",
+                "output_format": "json"
+            })),
+            &repo_root,
+            &db_path,
+            OutputFormat::Json,
+        )
+        .unwrap();
+        let body = tool_body(&result);
+        assert_eq!(body["summary"]["match_count"], 0);
+        assert_eq!(body["retrieval_hints"], serde_json::json!([]));
     }
 }

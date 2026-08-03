@@ -11,9 +11,9 @@ use crate::output::{OutputFormat, resolve_output_format};
 use crate::session_events::tool_record_session_event;
 use crate::session_tools::{
     tool_compact_session, tool_cross_session_search, tool_get_context_stats,
-    tool_get_global_memory, tool_get_session_status, tool_purge_saved_context,
-    tool_read_saved_context, tool_resume_session, tool_save_context_artifact,
-    tool_search_decisions, tool_search_saved_context,
+    tool_get_global_memory, tool_get_session_status, tool_memory_recall, tool_memory_store,
+    tool_purge_saved_context, tool_read_saved_context, tool_resume_session,
+    tool_save_context_artifact, tool_search_decisions, tool_search_saved_context,
 };
 use crate::tool_result::{
     ToolErrorCode, ToolErrorPayload, normalize_tool_execution_error, tool_execution_error_value,
@@ -154,6 +154,8 @@ fn normalized_contract_tool(name: &str) -> bool {
             | "purge_saved_context"
             | "cross_session_search"
             | "get_global_memory"
+            | "memory_store"
+            | "memory_recall"
             | "symbol_neighbors"
             | "cross_file_links"
             | "concept_clusters"
@@ -298,6 +300,8 @@ pub(crate) fn is_known_tool_name(name: &str) -> bool {
         | "purge_saved_context"
         | "cross_session_search"
         | "get_global_memory"
+        | "memory_store"
+        | "memory_recall"
         | "symbol_neighbors"
         | "cross_file_links"
         | "concept_clusters"
@@ -475,6 +479,8 @@ fn call_inner(
             tool_cross_session_search(args, repo_root, db_path, output_format)
         }
         "get_global_memory" => tool_get_global_memory(args, repo_root, db_path, output_format),
+        "memory_store" => tool_memory_store(args, repo_root, db_path, output_format),
+        "memory_recall" => tool_memory_recall(args, repo_root, db_path, output_format),
         "symbol_neighbors" => tool_symbol_neighbors(args, repo_root, db_path, output_format),
         "cross_file_links" => tool_cross_file_links(args, repo_root, db_path, output_format),
         "concept_clusters" => tool_concept_clusters(args, repo_root, db_path, output_format),
@@ -936,6 +942,8 @@ mod tests {
             "purge_saved_context" => json!({"keep_days": 36500, "output_format": "json"}),
             "cross_session_search" => json!({"query": "schema-test", "output_format": "json"}),
             "get_global_memory" => json!({"output_format": "json"}),
+            "memory_store" => json!({"text": "schema-test memory", "output_format": "json"}),
+            "memory_recall" => json!({"query": "schema-test", "output_format": "json"}),
             "symbol_neighbors" => {
                 json!({"qname": "src/lib.rs::fn::greet", "output_format": "json"})
             }

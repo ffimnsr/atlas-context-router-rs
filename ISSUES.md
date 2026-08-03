@@ -414,51 +414,51 @@ Implementation structure:
 
 ##### ICM-A1 — Memory model and storage schema
 
-- [ ] define `MemoryImportance` enum with exact values `critical`, `high`, `normal`, and `low`
-- [ ] add `importance` field to stored memory records and default manual writes to `normal`
-- [ ] define `MemoryScope` enum with exact values `project`, `session`, `frontend`, and `global`
-- [ ] add `scope` field to memory records and make `project` default
-- [ ] require `frontend` identifier when scope is `frontend`
-- [ ] add memory tables to continuity-owned storage, preferably existing session-side persistence unless a dedicated memory DB is justified later
-- [ ] create `memories` table with `id`, `repo_root`, `session_id`, `frontend`, `scope`, `topic`, `title`, `body`, `importance`, `created_at`, `updated_at`, `last_accessed_at`, `decay_score`, `source_id`, and `metadata_json`
-- [ ] add indexes for `topic`, `importance`, `scope`, `session_id`, and `last_accessed_at`
-- [ ] reject unknown importance and scope values at CLI, MCP, and storage boundaries
-- [ ] validate memory schema through `atlas db check` and golden schema tests
+- [x] define `MemoryImportance` enum with exact values `critical`, `high`, `normal`, and `low`
+- [x] add `importance` field to stored memory records and default manual writes to `normal`
+- [x] define `MemoryScope` enum with exact values `project`, `session`, `frontend`, and `global`
+- [x] add `scope` field to memory records and make `project` default
+- [x] require `frontend` identifier when scope is `frontend`
+- [x] add memory tables to continuity-owned storage, preferably existing session-side persistence unless a dedicated memory DB is justified later
+- [x] create `memories` table with `id`, `repo_root`, `session_id`, `frontend`, `scope`, `topic`, `title`, `body`, `importance`, `created_at`, `updated_at`, `last_accessed_at`, `decay_score`, `source_id`, and `metadata_json`
+- [x] add indexes for `topic`, `importance`, `scope`, `session_id`, and `last_accessed_at`
+- [x] reject unknown importance and scope values at CLI, MCP, and storage boundaries
+- [x] validate memory schema through `atlas db check` and golden schema tests
 
 ##### ICM-A2 — CLI memory CRUD
 
-- [ ] add `atlas memory store <text>` with flags `--topic`, `--title`, `--importance`, `--scope`, `--frontend`, `--source-id`, and `--json`
-- [ ] store memory text exactly as provided unless central redaction policy strips sensitive content
-- [ ] add `atlas memory recall <query>` with flags `--topic`, `--importance`, `--scope`, `--shared`, `--limit`, and `--json`
-- [ ] use lexical search first for recall and rank exact topic matches above broad text matches
-- [ ] add `atlas memory list` with filters `--topic`, `--importance`, `--scope`, `--older-than`, `--newer-than`, and `--json`
-- [ ] sort memory list by `updated_at DESC` by default
-- [ ] add `atlas memory delete <memory_id>` with `--dry-run` and `--json`
-- [ ] require exact memory id for delete and keep linked saved-context artifacts unless explicit delete-source behavior is added later
+- [x] add `atlas memory store <text>` with flags `--topic`, `--title`, `--importance`, `--scope`, `--frontend`, `--source-id`, and `--json`
+- [x] store memory text exactly as provided unless central redaction policy strips sensitive content
+- [x] add `atlas memory recall <query>` with flags `--topic`, `--importance`, `--scope`, `--shared`, `--limit`, and `--json`
+- [x] use lexical search first for recall and rank exact topic matches above broad text matches
+- [x] add `atlas memory list` with filters `--topic`, `--importance`, `--scope`, `--older-than`, `--newer-than`, and `--json`
+- [x] sort memory list by `updated_at DESC` by default
+- [x] add `atlas memory delete <memory_id>` with `--dry-run` and `--json`
+- [x] require exact memory id for delete and keep linked saved-context artifacts unless explicit delete-source behavior is added later
 
 ##### ICM-A3 — Frontend-aware visibility rules
 
-- [ ] normalize frontend identities to `claude`, `codex`, `copilot`, `cli`, and `mcp`
-- [ ] reject unknown frontend names unless config explicitly allows custom frontends
-- [ ] enforce visibility rules: `global` visible everywhere, `project` visible to all frontends in repo, `session` visible only to same session, `frontend` visible only to same repo plus same frontend
-- [ ] make `atlas memory recall --shared` return only `global` and `project` memories
-- [ ] ensure project-scoped writes work without an active session
+- [x] normalize frontend identities to `claude`, `codex`, `copilot`, `cli`, and `mcp`
+- [x] reject unknown frontend names unless config explicitly allows custom frontends
+- [x] enforce visibility rules: `global` visible everywhere, `project` visible to all frontends in repo, `session` visible only to same session, `frontend` visible only to same repo plus same frontend
+- [x] make `atlas memory recall --shared` return only `global` and `project` memories
+- [x] ensure project-scoped writes work without an active session
 
 ##### ICM-A4 — MCP parity
 
-- [ ] add MCP `memory_store` with same fields and validation as CLI
-- [ ] add MCP `memory_recall` with same visibility rules and bounded default output
-- [ ] keep source ids and retrieval hints available in compact MCP output
-- [ ] add CLI/MCP parity tests so stored record shape, errors, and defaults match
+- [x] add MCP `memory_store` with same fields and validation as CLI
+- [x] add MCP `memory_recall` with same visibility rules and bounded default output
+- [x] keep source ids and retrieval hints available in compact MCP output
+- [x] add CLI/MCP parity tests so stored record shape, errors, and defaults match
 
 ##### ICM-A completion criteria
 
-- [ ] `atlas memory store --importance critical` persists `importance = critical`
-- [ ] `atlas memory store --scope frontend --frontend codex` stores frontend-private memory with correct visibility
-- [ ] `atlas memory recall --shared` excludes frontend-private memories
-- [ ] `atlas memory list --importance critical` filters correctly and emits stable JSON
-- [ ] invalid importance/scope/frontend values fail with clear validation errors
-- [ ] CLI and MCP memory store/recall paths produce equivalent record shapes
+- [x] `atlas memory store --importance critical` persists `importance = critical`
+- [x] `atlas memory store --scope frontend --frontend codex` stores frontend-private memory with correct visibility
+- [x] `atlas memory recall --shared` excludes frontend-private memories
+- [x] `atlas memory list --importance critical` filters correctly and emits stable JSON
+- [x] invalid importance/scope/frontend values fail with clear validation errors
+- [x] CLI and MCP memory store/recall paths produce equivalent record shapes
 
 #### ICM-B — Memory Curation, Decay, Health, and Consolidation
 

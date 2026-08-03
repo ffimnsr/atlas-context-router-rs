@@ -45,6 +45,8 @@ const TOOL_REGISTRY_SNAPSHOT: &[&str] = &[
     "label_components",
     "list_graph_stats",
     "man",
+    "memory_recall",
+    "memory_store",
     "postprocess_graph",
     "purge_saved_context",
     "query_graph",
@@ -200,6 +202,8 @@ fn parity_args(tool_name: &str, source_id: &str) -> Value {
         "purge_saved_context" => json!({ "keep_days": 365, "output_format": "json" }),
         "cross_session_search" => json!({ "query": "parity-seed", "output_format": "json" }),
         "get_global_memory" => json!({ "limit": 5, "output_format": "json" }),
+        "memory_store" => json!({ "text": "parity memory body", "output_format": "json" }),
+        "memory_recall" => json!({ "query": "parity", "output_format": "json" }),
         "symbol_neighbors" => {
             json!({ "qname": "src/service.rs::fn::compute", "output_format": "json" })
         }

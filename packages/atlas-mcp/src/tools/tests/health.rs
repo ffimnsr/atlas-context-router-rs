@@ -414,6 +414,58 @@ fn db_check_healthy_returns_ok() {
 }
 
 #[test]
+fn db_check_absent_session_db_is_not_a_failure() {
+    // The MCP fixture only creates the graph db; a missing session db means
+    // there is no memory schema to validate yet.
+    let fixture = setup_mcp_fixture();
+    let args = serde_json::json!({ "output_format": "json" });
+    let resp = call("db_check", Some(&args), "/repo", &fixture.db_path).expect("db_check call");
+    let text = unwrap_tool_text(resp);
+    let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
+
+    assert_eq!(v["ok"].as_bool(), Some(true));
+    let session_db = &v["session_db"];
+    assert_eq!(session_db["exists"].as_bool(), Some(false));
+    assert_eq!(session_db["ok"].as_bool(), Some(true));
+    assert_eq!(session_db["memory_schema"]["ok"].as_bool(), Some(true));
+    assert_eq!(session_db["memory_schema"]["issues"], serde_json::json!([]));
+}
+
+#[test]
+fn db_check_reports_missing_memories_table() {
+    let fixture = setup_mcp_fixture();
+    let session_db_path = atlas_engine::paths::session_db_path(&fixture.db_path);
+    // Create + migrate the session store, then damage the schema via a raw
+    // connection so the store itself cannot silently repair it.
+    let store = atlas_session::SessionStore::open(&session_db_path).expect("open session store");
+    drop(store);
+    let conn = Connection::open(&session_db_path).expect("open session db");
+    conn.execute_batch("DROP TABLE memories")
+        .expect("drop memories table");
+    drop(conn);
+
+    let args = serde_json::json!({ "output_format": "json" });
+    let resp = call("db_check", Some(&args), "/repo", &fixture.db_path).expect("db_check call");
+    let text = unwrap_tool_text(resp);
+    let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
+
+    assert_eq!(v["ok"].as_bool(), Some(false));
+    assert_eq!(
+        v["summary"]["failure_category"].as_str(),
+        Some("schema_mismatch")
+    );
+    let memory_schema = &v["session_db"]["memory_schema"];
+    assert_eq!(memory_schema["ok"].as_bool(), Some(false));
+    assert!(
+        memory_schema["issues"]
+            .as_array()
+            .expect("memory schema issues array")
+            .iter()
+            .any(|issue| issue.as_str() == Some("missing table: memories"))
+    );
+}
+
+#[test]
 fn db_check_on_path_in_missing_dir_returns_error() {
     let dir = tempfile::tempdir().expect("tempdir");
     let bad_path = dir

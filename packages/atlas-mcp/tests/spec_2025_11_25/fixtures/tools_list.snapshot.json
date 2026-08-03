@@ -36,6 +36,8 @@
     "get_session_status",
     "list_graph_stats",
     "man",
+    "memory_recall",
+    "memory_store",
     "postprocess_graph",
     "purge_saved_context",
     "query_graph",

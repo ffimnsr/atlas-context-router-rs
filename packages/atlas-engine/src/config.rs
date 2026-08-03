@@ -50,6 +50,18 @@ pub struct Config {
     pub context: ContextConfig,
     #[serde(default)]
     pub mcp: McpConfig,
+    #[serde(default)]
+    pub memory: MemoryConfig,
+}
+
+/// Memory surface configuration (ICM-A).
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct MemoryConfig {
+    /// Allow arbitrary frontend identities beyond the known set
+    /// (`claude`, `codex`, `copilot`, `cli`, `mcp`) for memory writes and
+    /// visibility. Defaults to false: unknown frontends are rejected.
+    #[serde(default)]
+    pub allow_custom_frontends: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -958,6 +970,11 @@ impl Config {
     /// Return effective MCP worker thread count, clamped to [1, 64].
     pub fn mcp_worker_threads(&self) -> usize {
         self.mcp.worker_threads.clamp(1, 64)
+    }
+
+    /// Whether memory surfaces accept frontend identities beyond the known set.
+    pub fn allow_custom_frontends(&self) -> bool {
+        self.memory.allow_custom_frontends
     }
 
     /// Return effective MCP tool timeout in milliseconds, clamped to [1_000, 3_600_000].
@@ -1936,6 +1953,20 @@ mod tests {
                 .mcp_response_bytes
                 .default_limit as u64
         );
+    }
+
+    #[test]
+    fn memory_config_defaults_reject_custom_frontends_and_parse_flag() {
+        assert!(!Config::default().allow_custom_frontends());
+
+        let dir = tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("config.toml"),
+            "[memory]\nallow_custom_frontends = true\n",
+        )
+        .unwrap();
+        let config = Config::load(dir.path()).unwrap();
+        assert!(config.allow_custom_frontends());
     }
 
     #[test]

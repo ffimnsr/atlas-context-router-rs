@@ -284,6 +284,99 @@ pub enum SessionCommand {
     Compact,
 }
 
+/// Sub-commands for `atlas memory`.
+#[derive(Debug, Subcommand)]
+pub enum MemoryCommand {
+    /// Store a memory record for the current repo.
+    Store {
+        /// Memory body text; stored exactly as provided.
+        text: String,
+
+        /// Topic label for the memory.
+        #[arg(long)]
+        topic: Option<String>,
+
+        /// Optional title line.
+        #[arg(long)]
+        title: Option<String>,
+
+        /// Importance: critical, high, normal, or low (default: normal).
+        #[arg(long)]
+        importance: Option<String>,
+
+        /// Visibility scope: project, session, frontend, or global (default: project).
+        #[arg(long)]
+        scope: Option<String>,
+
+        /// Frontend identifier; required when --scope is frontend.
+        #[arg(long)]
+        frontend: Option<String>,
+
+        /// Source id linking this memory to a saved-context artifact.
+        #[arg(long)]
+        source_id: Option<String>,
+    },
+
+    /// Recall memories matching a query; exact topic matches rank first.
+    Recall {
+        /// Search text matched against topic, title, and body.
+        query: String,
+
+        /// Restrict recall to one topic (case-insensitive exact match).
+        #[arg(long)]
+        topic: Option<String>,
+
+        /// Restrict recall to one importance level.
+        #[arg(long)]
+        importance: Option<String>,
+
+        /// Restrict recall to one scope.
+        #[arg(long)]
+        scope: Option<String>,
+
+        /// Only return memories visible to every frontend (project + global).
+        #[arg(long, conflicts_with = "scope")]
+        shared: bool,
+
+        /// Maximum memories to return.
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+    },
+
+    /// List stored memories with filters; sorted by updated_at DESC.
+    List {
+        /// Filter by topic (case-insensitive exact match).
+        #[arg(long)]
+        topic: Option<String>,
+
+        /// Filter by importance level.
+        #[arg(long)]
+        importance: Option<String>,
+
+        /// Filter by scope.
+        #[arg(long)]
+        scope: Option<String>,
+
+        /// Only memories updated before this date (YYYY-MM-DD or RFC 3339).
+        #[arg(long)]
+        older_than: Option<String>,
+
+        /// Only memories updated after this date (YYYY-MM-DD or RFC 3339).
+        #[arg(long)]
+        newer_than: Option<String>,
+    },
+
+    /// Delete one memory by its exact id; linked saved-context artifacts are kept.
+    Delete {
+        /// Exact memory id to delete.
+        memory_id: String,
+
+        /// Show what would be deleted without deleting.
+        #[arg(long)]
+        dry_run: bool,
+    },
+}
+
 /// Sub-commands for `atlas flows`.
 #[derive(Debug, Subcommand)]
 pub enum FlowsCommand {

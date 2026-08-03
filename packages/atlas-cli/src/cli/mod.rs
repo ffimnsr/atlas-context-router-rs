@@ -8,7 +8,7 @@ mod tests;
 
 pub use subcommands::{
     AnalyzeCommand, CommunitiesCommand, ConfigCommand, DocsCommand, FlowsCommand, HistoryCommand,
-    InsightsCommand, InstallMode, RefactorCommand, RepoCommand, SessionCommand,
+    InsightsCommand, InstallMode, MemoryCommand, RefactorCommand, RepoCommand, SessionCommand,
 };
 
 use crate::install::InstructionsMode;
@@ -687,6 +687,12 @@ pub enum Command {
     Session {
         #[command(subcommand)]
         subcommand: SessionCommand,
+    },
+
+    /// Manage shared memory records (store, recall, list, delete).
+    Memory {
+        #[command(subcommand)]
+        subcommand: MemoryCommand,
     },
 
     /// Internal hook entrypoint for generated agent hook runners.

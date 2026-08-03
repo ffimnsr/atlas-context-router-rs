@@ -88,6 +88,8 @@ pub(crate) fn tool_result_contract(name: &str) -> ToolResultContract {
         | "symbol_neighbors"
         | "cross_file_links"
         | "concept_clusters"
+        | "memory_store"
+        | "memory_recall"
         | "analyze_safety"
         | "analyze_remove"
         | "analyze_dead_code"
@@ -917,6 +919,41 @@ fn base_tool_list_json() -> Value {
                 }
             },
             {
+                "name": "memory_store",
+                "description": "Store a memory record for this repo through the shared memory service (same fields, defaults, and validation as `atlas memory store`). Returns the persisted memory record including its id, scope, importance, and source_id.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "text":        { "type": "string",  "description": "Memory body text; stored exactly as provided." },
+                        "topic":       { "type": "string",  "description": "Topic label for the memory." },
+                        "title":       { "type": "string",  "description": "Optional title line." },
+                        "importance":  { "type": "string",  "description": "Importance: critical, high, normal, or low (default normal)." },
+                        "scope":       { "type": "string",  "description": "Visibility scope: project, session, frontend, or global (default project)." },
+                        "frontend":    { "type": "string",  "description": "Frontend identifier; required when scope is frontend. Normalized to claude, codex, copilot, cli, or mcp unless config allows custom frontends." },
+                        "source_id":   { "type": "string",  "description": "Source id linking this memory to a saved-context artifact." },
+                        "output_format":{ "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
+                    },
+                    "required": ["text"]
+                }
+            },
+            {
+                "name": "memory_recall",
+                "description": "Recall memories for this repo with the same lexical ranking, defaults, and visibility rules as `atlas memory recall`. Exact topic matches rank first; the viewer is the derived mcp session. Use shared=true for project + global memories only.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "query":        { "type": "string",  "description": "Search text matched against topic, title, and body." },
+                        "topic":        { "type": "string",  "description": "Restrict recall to one topic (case-insensitive exact match)." },
+                        "importance":   { "type": "string",  "description": "Restrict recall to one importance level." },
+                        "scope":        { "type": "string",  "description": "Restrict recall to one scope." },
+                        "shared":       { "type": "boolean", "description": "Only return memories visible to every frontend (project + global)." },
+                        "limit":        { "type": "integer", "description": "Maximum memories to return (default 20)." },
+                        "output_format":{ "type": "string",  "description": DEFAULT_OUTPUT_DESCRIPTION }
+                    },
+                    "required": ["query"]
+                }
+            },
+            {
                 "name": "symbol_neighbors",
                 "description": "Return the immediate graph neighbourhood of a symbol: callers, callees, call edge sites with source lines, test nodes, containment siblings, and import-linked nodes. Useful for understanding a symbol's role and exact direct usage sites without a full traversal.",
                 "inputSchema": {
@@ -1144,7 +1181,7 @@ fn base_tool_list_json() -> Value {
             },
             {
                 "name": "db_check",
-                "description": "Run SQLite integrity check and scan for orphan nodes (no edges) and dangling edges (missing endpoint). Returns ok=true when all checks pass. Use to diagnose corrupt or inconsistent graph rows.",
+                "description": "Run SQLite integrity check, scan for orphan nodes (no edges) and dangling edges (missing endpoint), and validate the session-side memory schema. Returns ok=true when all checks pass. Use to diagnose corrupt or inconsistent graph rows or a missing memories table.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -1404,6 +1441,8 @@ fn tool_output_schema_for(name: &str) -> Option<Value> {
         "purge_saved_context" => Some(purge_saved_context_output_schema()),
         "cross_session_search" => Some(cross_session_search_output_schema()),
         "get_global_memory" => Some(get_global_memory_output_schema()),
+        "memory_store" => Some(memory_store_output_schema()),
+        "memory_recall" => Some(memory_recall_output_schema()),
         "symbol_neighbors" => Some(symbol_neighbors_output_schema()),
         "cross_file_links" => Some(cross_file_links_output_schema()),
         "concept_clusters" => Some(concept_clusters_output_schema()),
@@ -2926,6 +2965,25 @@ fn db_check_output_schema() -> Value {
             "orphan_nodes": { "type": "array", "items": { "$ref": "#/$defs/orphan_node" } },
             "dangling_edges": { "type": "array", "items": { "$ref": "#/$defs/dangling_edge_diagnostic" } },
             "noncanonical_path_rows": { "type": "array", "items": { "type": "string" } },
+            "session_db": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "path": { "type": "string" },
+                    "exists": { "type": "boolean" },
+                    "ok": { "type": "boolean" },
+                    "memory_schema": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                            "ok": { "type": "boolean" },
+                            "issues": { "type": "array", "items": { "type": "string" } }
+                        },
+                        "required": ["ok", "issues"]
+                    }
+                },
+                "required": ["path", "exists", "ok", "memory_schema"]
+            },
             "summary": {
                 "type": "object",
                 "additionalProperties": false,
@@ -2953,6 +3011,7 @@ fn db_check_output_schema() -> Value {
             "orphan_nodes",
             "dangling_edges",
             "noncanonical_path_rows",
+            "session_db",
             "summary",
             "atlas_provenance",
         ],
@@ -4782,6 +4841,140 @@ fn get_global_memory_output_schema() -> Value {
     )
 }
 
+fn memory_record_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "id": { "type": "string" },
+            "repo_root": { "type": "string" },
+            "session_id": { "type": ["string", "null"] },
+            "frontend": { "type": ["string", "null"] },
+            "scope": { "type": "string" },
+            "topic": { "type": "string" },
+            "title": { "type": "string" },
+            "body": { "type": "string" },
+            "importance": { "type": "string" },
+            "created_at": { "type": "string" },
+            "updated_at": { "type": "string" },
+            "last_accessed_at": { "type": "string" },
+            "decay_score": { "type": "number" },
+            "source_id": { "type": ["string", "null"] },
+            "metadata": { "type": "object" }
+        },
+        "required": [
+            "id", "repo_root", "session_id", "frontend", "scope", "topic", "title",
+            "body", "importance", "created_at", "updated_at", "last_accessed_at",
+            "decay_score", "source_id", "metadata"
+        ]
+    })
+}
+
+fn memory_store_output_schema() -> Value {
+    normalized_tool_output_schema(
+        serde_json::json!({
+            "repo_root": { "type": "string" },
+            "memory": { "$ref": "#/$defs/memory_record" },
+            "summary": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "memory_id": { "type": "string" },
+                    "scope": { "type": "string" },
+                    "importance": { "type": "string" }
+                },
+                "required": ["memory_id", "scope", "importance"]
+            },
+            "warnings": { "type": "array", "items": { "type": "string" } },
+            "atlas_provenance": { "type": "object" }
+        }),
+        &[
+            "tool",
+            "repo_root",
+            "memory",
+            "summary",
+            "warnings",
+            "atlas_provenance",
+        ],
+        Some(serde_json::json!({
+            "memory_record": memory_record_schema(),
+        })),
+    )
+}
+
+fn memory_recall_output_schema() -> Value {
+    normalized_tool_output_schema(
+        serde_json::json!({
+            "repo_root": { "type": "string" },
+            "query": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "text": { "type": "string" },
+                    "topic": { "type": ["string", "null"] },
+                    "importance": { "type": ["string", "null"] },
+                    "scope": { "type": ["string", "null"] },
+                    "shared": { "type": "boolean" },
+                    "requested_limit": { "type": "integer" },
+                    "applied_limit": { "type": "integer" }
+                },
+                "required": ["text", "topic", "importance", "scope", "shared", "requested_limit", "applied_limit"]
+            },
+            "results": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "memory": { "$ref": "#/$defs/memory_record" },
+                        "relevance_score": { "type": "integer" }
+                    },
+                    "required": ["memory", "relevance_score"]
+                }
+            },
+            "retrieval_hints": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "kind": { "type": "string" },
+                        "value": { "type": "string" }
+                    },
+                    "required": ["kind", "value"]
+                }
+            },
+            "summary": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "match_count": { "type": "integer" },
+                    "total_matches": { "type": "integer" },
+                    "retrieval_hint_count": { "type": "integer" }
+                },
+                "required": ["match_count", "total_matches", "retrieval_hint_count"]
+            },
+            "truncated": { "type": "boolean" },
+            "warnings": { "type": "array", "items": { "type": "string" } },
+            "atlas_provenance": { "type": "object" }
+        }),
+        &[
+            "tool",
+            "repo_root",
+            "query",
+            "results",
+            "retrieval_hints",
+            "summary",
+            "truncated",
+            "warnings",
+            "atlas_provenance",
+        ],
+        Some(serde_json::json!({
+            "memory_record": memory_record_schema(),
+        })),
+    )
+}
+
 fn symbol_neighbors_output_schema() -> Value {
     normalized_tool_output_schema(
         serde_json::json!({
@@ -5338,7 +5531,9 @@ fn tool_category(name: &str) -> &'static str {
         | "record_session_event"
         | "wake_up"
         | "cross_session_search"
-        | "get_global_memory" => "memory",
+        | "get_global_memory"
+        | "memory_store"
+        | "memory_recall" => "memory",
         "tool_list" | "tool_search" | "tool_help" | "man" | "repo_registry" => "introspection",
         "status" | "doctor" | "db_check" | "debug_graph" | "broker_status" => "health",
         name if name.starts_with("analyze_")

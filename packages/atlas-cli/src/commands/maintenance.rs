@@ -7,7 +7,7 @@ use atlas_core::{
 use atlas_repo::{
     collect_files, find_repo_root, hash_file, stable_repo_fingerprint, stable_repo_id,
 };
-use atlas_session::DEFAULT_SESSION_DB;
+use atlas_session::{DEFAULT_SESSION_DB, SessionStore};
 use atlas_store_sqlite::{GraphBuildState, Store};
 use camino::Utf8Path;
 use std::path::{Path, PathBuf};
@@ -147,6 +147,9 @@ fn config_runtime_json(config: &atlas_engine::Config) -> serde_json::Value {
                 "required_scopes": config.mcp.http_auth.required_scopes,
                 "allowed_origins": config.mcp.http_auth.allowed_origins,
             },
+        },
+        "memory": {
+            "allow_custom_frontends": config.memory.allow_custom_frontends,
         },
     })
 }
@@ -1110,11 +1113,38 @@ pub fn run_db_check(cli: &Cli) -> Result<()> {
     let orphans = structural_orphans(&store, ORPHAN_LIMIT);
     let dangling = structural_dangling_edges(&store, ORPHAN_LIMIT);
 
-    let ok = issues.is_empty() && orphans.is_empty() && dangling.is_empty();
-    let error_code = if ok {
-        "none"
+    // ICM-A1: validate the continuity-side memory schema through db check.
+    // A missing session DB is not a schema violation (created on demand), but
+    // a present one must carry the full `memories` schema.
+    let session_db_path = atlas_engine::paths::session_db_path(&db_path);
+    let session_db_exists = Path::new(&session_db_path).exists();
+    let (session_db_ok, memory_schema_ok, memory_schema_issues) = if session_db_exists {
+        match SessionStore::open(&session_db_path) {
+            Ok(session_store) => {
+                let schema_issues = session_store.memory_schema_issues();
+                (true, schema_issues.is_empty(), schema_issues)
+            }
+            Err(e) => (
+                false,
+                false,
+                vec![format!("cannot open session store: {e}")],
+            ),
+        }
     } else {
+        (true, true, Vec::new())
+    };
+
+    let ok = issues.is_empty()
+        && orphans.is_empty()
+        && dangling.is_empty()
+        && session_db_ok
+        && memory_schema_ok;
+    let error_code = if !issues.is_empty() || !orphans.is_empty() || !dangling.is_empty() {
         integrity_issue_code(&issues, !orphans.is_empty() || !dangling.is_empty())
+    } else if !memory_schema_ok {
+        "schema_mismatch"
+    } else {
+        "none"
     };
 
     if cli.json {
@@ -1128,10 +1158,24 @@ pub fn run_db_check(cli: &Cli) -> Result<()> {
             "integrity_issues": issues,
             "orphan_node_count": orphans.len(),
             "dangling_edge_count": dangling.len(),
+            "session_db": {
+                "path": session_db_path,
+                "exists": session_db_exists,
+                "ok": session_db_ok,
+                "memory_schema": {
+                    "ok": memory_schema_ok,
+                    "issues": memory_schema_issues,
+                },
+            },
         });
         print_json("db_check", result)?;
     } else if ok {
         println!("Database integrity OK: {db_path}");
+        if session_db_exists {
+            println!("Session DB OK: {session_db_path}");
+        } else {
+            println!("Session DB not present: {session_db_path}");
+        }
     } else {
         if !issues.is_empty() {
             eprintln!("Database integrity FAILED: {db_path}");
@@ -1160,6 +1204,12 @@ pub fn run_db_check(cli: &Cli) -> Result<()> {
             }
             if dangling.len() > 10 {
                 eprintln!("  … and {} more", dangling.len() - 10);
+            }
+        }
+        if !memory_schema_ok {
+            eprintln!("Memory schema FAILED: {session_db_path}");
+            for issue in &memory_schema_issues {
+                eprintln!("  {issue}");
             }
         }
         std::process::exit(1);

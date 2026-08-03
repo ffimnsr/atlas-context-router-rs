@@ -9,6 +9,7 @@ mod hook;
 mod init_wizard;
 mod insights;
 mod maintenance;
+mod memory;
 mod platform;
 mod postprocess;
 mod query;
@@ -29,6 +30,7 @@ pub use maintenance::{
     run_db_check, run_debug_config, run_debug_graph, run_doctor, run_embedding_config, run_migrate,
     run_purge_noncanonical, run_selfupdate,
 };
+pub use memory::run_memory;
 pub use platform::{run_completions, run_install, run_serve, run_serve_daemon, run_serve_http};
 pub use postprocess::run_postprocess;
 pub use query::{run_embed, run_explain_query, run_query};

@@ -82,7 +82,7 @@ fn open_stamps_session_migration_history_and_provenance() {
         .conn
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 6);
+    assert_eq!(version, 7);
 
     let history_count: i64 = store
         .conn
@@ -90,7 +90,7 @@ fn open_stamps_session_migration_history_and_provenance() {
             row.get(0)
         })
         .unwrap();
-    assert_eq!(history_count, 6);
+    assert_eq!(history_count, 7);
 
     let (db_kind, created_by): (String, String) = store
         .conn
@@ -129,7 +129,7 @@ fn rollback_and_reupgrade_restore_session_schema() {
         .conn
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(restored_version, 6);
+    assert_eq!(restored_version, 7);
     let fts_exists: i64 = store
         .conn
         .query_row(
@@ -139,6 +139,15 @@ fn rollback_and_reupgrade_restore_session_schema() {
         )
         .unwrap();
     assert_eq!(fts_exists, 1);
+    let memories_exists: i64 = store
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'memories'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(memories_exists, 1);
 }
 
 #[test]
@@ -1441,4 +1450,991 @@ fn compact_session_updates_last_compaction_at() {
         meta.last_compaction_at.is_some(),
         "last_compaction_at must be set after compaction"
     );
+}
+
+// ── ICM-A1 — shared memory model and storage schema ──────────────────────────
+
+#[test]
+fn memories_table_schema_matches_golden() {
+    let (_dir, store) = open_store(16, 1024);
+
+    let columns = table_columns(&store.conn, "memories");
+    assert_eq!(
+        columns,
+        vec![
+            "id",
+            "repo_root",
+            "session_id",
+            "frontend",
+            "scope",
+            "topic",
+            "title",
+            "body",
+            "importance",
+            "created_at",
+            "updated_at",
+            "last_accessed_at",
+            "decay_score",
+            "source_id",
+            "metadata_json",
+        ]
+    );
+
+    let sql: String = store
+        .conn
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'memories'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(sql.contains("CHECK (scope IN ('project', 'session', 'frontend', 'global'))"));
+    assert!(sql.contains("CHECK (importance IN ('critical', 'high', 'normal', 'low'))"));
+    assert!(sql.contains("scope <> 'frontend' OR (frontend IS NOT NULL AND frontend <> '')"));
+    assert!(sql.contains("scope <> 'session' OR (session_id IS NOT NULL AND session_id <> '')"));
+    assert!(sql.contains("decay_score      REAL NOT NULL DEFAULT 0"));
+}
+
+#[test]
+fn memories_indexes_match_golden() {
+    let (_dir, store) = open_store(16, 1024);
+
+    for (name, expected) in [
+        (
+            "idx_memories_repo_topic",
+            "CREATE INDEX idx_memories_repo_topic\n    ON memories(repo_root, topic)",
+        ),
+        (
+            "idx_memories_repo_importance",
+            "CREATE INDEX idx_memories_repo_importance\n    ON memories(repo_root, importance)",
+        ),
+        (
+            "idx_memories_repo_scope",
+            "CREATE INDEX idx_memories_repo_scope\n    ON memories(repo_root, scope)",
+        ),
+        (
+            "idx_memories_repo_session",
+            "CREATE INDEX idx_memories_repo_session\n    ON memories(repo_root, session_id)",
+        ),
+        (
+            "idx_memories_repo_accessed",
+            "CREATE INDEX idx_memories_repo_accessed\n    ON memories(repo_root, last_accessed_at DESC)",
+        ),
+    ] {
+        let sql: String = store
+            .conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?1",
+                params![name],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(sql, expected, "index {name} must match golden SQL");
+    }
+}
+
+#[test]
+fn memory_schema_issues_are_empty_when_healthy() {
+    let (_dir, store) = open_store(16, 1024);
+    assert!(store.memory_schema_issues().is_empty());
+}
+
+#[test]
+fn memory_schema_issues_detect_missing_table_and_indexes() {
+    let (_dir, store) = open_store(16, 1024);
+    store.conn.execute_batch("DROP TABLE memories").unwrap();
+    let issues = store.memory_schema_issues();
+    assert_eq!(issues, vec!["missing table: memories"]);
+
+    // Re-create the table without indexes: every index must be reported.
+    store
+        .conn
+        .execute_batch(
+            "CREATE TABLE memories (
+                id TEXT PRIMARY KEY,
+                repo_root TEXT NOT NULL,
+                session_id TEXT,
+                frontend TEXT,
+                scope TEXT NOT NULL DEFAULT 'project',
+                topic TEXT NOT NULL DEFAULT '',
+                title TEXT NOT NULL DEFAULT '',
+                body TEXT NOT NULL,
+                importance TEXT NOT NULL DEFAULT 'normal',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                last_accessed_at TEXT NOT NULL,
+                decay_score REAL NOT NULL DEFAULT 0,
+                source_id TEXT,
+                metadata_json TEXT NOT NULL DEFAULT '{}'
+            )",
+        )
+        .unwrap();
+    let issues = store.memory_schema_issues();
+    assert_eq!(
+        issues,
+        vec![
+            "missing index: idx_memories_repo_topic",
+            "missing index: idx_memories_repo_importance",
+            "missing index: idx_memories_repo_scope",
+            "missing index: idx_memories_repo_session",
+            "missing index: idx_memories_repo_accessed",
+        ]
+    );
+}
+
+#[test]
+fn memory_importance_and_scope_parse_rejects_unknown_values() {
+    for (value, parsed) in [
+        ("critical", MemoryImportance::Critical),
+        ("high", MemoryImportance::High),
+        ("normal", MemoryImportance::Normal),
+        ("low", MemoryImportance::Low),
+    ] {
+        assert_eq!(value.parse::<MemoryImportance>().unwrap(), parsed);
+    }
+    for value in ["urgent", "CRITICAL", "", "normal "] {
+        assert!(
+            value.parse::<MemoryImportance>().is_err(),
+            "{value:?} must be rejected"
+        );
+    }
+
+    for (value, parsed) in [
+        ("project", MemoryScope::Project),
+        ("session", MemoryScope::Session),
+        ("frontend", MemoryScope::Frontend),
+        ("global", MemoryScope::Global),
+    ] {
+        assert_eq!(value.parse::<MemoryScope>().unwrap(), parsed);
+    }
+    for value in ["org", "workspace", "PROJECT", ""] {
+        assert!(
+            value.parse::<MemoryScope>().is_err(),
+            "{value:?} must be rejected"
+        );
+    }
+}
+
+#[test]
+fn memory_json_deserialization_rejects_unknown_importance_and_scope() {
+    let unknown_importance = serde_json::from_str::<NewMemory>(
+        r#"{"repo_root":"/repo","body":"x","importance":"urgent"}"#,
+    );
+    assert!(unknown_importance.is_err(), "unknown importance rejected");
+
+    let unknown_scope =
+        serde_json::from_str::<NewMemory>(r#"{"repo_root":"/repo","body":"x","scope":"org"}"#);
+    assert!(unknown_scope.is_err(), "unknown scope rejected");
+}
+
+#[test]
+fn new_memory_defaults_to_normal_importance_and_project_scope() {
+    let input =
+        serde_json::from_str::<NewMemory>(r#"{"repo_root":"/repo","body":"remember this"}"#)
+            .unwrap();
+    assert_eq!(input.importance, MemoryImportance::Normal);
+    assert_eq!(input.scope, MemoryScope::Project);
+    assert_eq!(input.metadata, serde_json::json!({}));
+    assert!(input.validate().is_ok());
+}
+
+#[test]
+fn new_memory_validation_requires_frontend_for_frontend_scope_and_session_for_session_scope() {
+    let base = serde_json::from_str::<NewMemory>(r#"{"repo_root":"/repo","body":"remember this"}"#)
+        .unwrap();
+
+    let frontend_scoped = NewMemory {
+        scope: MemoryScope::Frontend,
+        ..base.clone()
+    };
+    let error = frontend_scoped.validate().unwrap_err().to_string();
+    assert!(
+        error.contains("frontend identifier"),
+        "error must name the missing frontend: {error}"
+    );
+
+    let frontend_scoped_ok = NewMemory {
+        scope: MemoryScope::Frontend,
+        frontend: Some("codex".to_owned()),
+        ..base.clone()
+    };
+    assert!(frontend_scoped_ok.validate().is_ok());
+
+    let session_scoped = NewMemory {
+        scope: MemoryScope::Session,
+        ..base.clone()
+    };
+    let error = session_scoped.validate().unwrap_err().to_string();
+    assert!(
+        error.contains("session_id"),
+        "error must name the missing session_id: {error}"
+    );
+
+    let session_scoped_ok = NewMemory {
+        scope: MemoryScope::Session,
+        session_id: Some("s1".to_owned()),
+        ..base
+    };
+    assert!(session_scoped_ok.validate().is_ok());
+}
+
+#[test]
+fn memory_storage_boundary_rejects_unknown_importance_and_scope() {
+    let (_dir, store) = open_store(16, 1024);
+
+    let insert = |importance: &str, scope: &str| -> rusqlite::Result<()> {
+        store
+            .conn
+            .execute(
+                "INSERT INTO memories
+                (id, repo_root, scope, topic, title, body, importance,
+                 created_at, updated_at, last_accessed_at, decay_score, metadata_json)
+             VALUES ('m1', '/repo', ?1, 'hooks', 'T', 'body', ?2,
+                     '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z',
+                     '2026-01-01T00:00:00Z', 0, '{}')",
+                params![scope, importance],
+            )
+            .map(|_| ())
+    };
+
+    let unknown_importance = insert("urgent", "project").unwrap_err().to_string();
+    assert!(
+        unknown_importance.contains("CHECK constraint failed"),
+        "unknown importance must fail at storage: {unknown_importance}"
+    );
+    let unknown_scope = insert("normal", "org").unwrap_err().to_string();
+    assert!(
+        unknown_scope.contains("CHECK constraint failed"),
+        "unknown scope must fail at storage: {unknown_scope}"
+    );
+
+    // Session-scoped memory without session id and frontend-scoped memory
+    // without frontend identifier are rejected by the storage boundary too.
+    let session_without_id = store
+        .conn
+        .execute(
+            "INSERT INTO memories
+                (id, repo_root, scope, topic, title, body, importance,
+                 created_at, updated_at, last_accessed_at, decay_score, metadata_json)
+             VALUES ('m2', '/repo', 'session', 'hooks', 'T', 'body', 'normal',
+                     '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z',
+                     '2026-01-01T00:00:00Z', 0, '{}')",
+            [],
+        )
+        .unwrap_err()
+        .to_string();
+    assert!(
+        session_without_id.contains("CHECK constraint failed"),
+        "session scope without session_id must fail: {session_without_id}"
+    );
+    let frontend_without_name = store
+        .conn
+        .execute(
+            "INSERT INTO memories
+                (id, repo_root, scope, topic, title, body, importance,
+                 created_at, updated_at, last_accessed_at, decay_score, metadata_json)
+             VALUES ('m3', '/repo', 'frontend', 'hooks', 'T', 'body', 'normal',
+                     '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z',
+                     '2026-01-01T00:00:00Z', 0, '{}')",
+            [],
+        )
+        .unwrap_err()
+        .to_string();
+    assert!(
+        frontend_without_name.contains("CHECK constraint failed"),
+        "frontend scope without frontend must fail: {frontend_without_name}"
+    );
+
+    // Valid rows with every scope and importance value are accepted.
+    store
+        .conn
+        .execute_batch(
+            r#"INSERT INTO memories
+                (id, repo_root, session_id, frontend, scope, topic, title, body, importance,
+                 created_at, updated_at, last_accessed_at, decay_score, source_id, metadata_json)
+             VALUES
+                ('m4', '/repo', NULL, NULL, 'project', 'hooks', 'T', 'b', 'critical',
+                 '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 0.5, 'src-1', '{"k":1}'),
+                ('m5', '/repo', NULL, NULL, 'global', 'hooks', 'T', 'b', 'high',
+                 '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 0, NULL, '{}'),
+                ('m6', '/repo', 's1', NULL, 'session', 'hooks', 'T', 'b', 'normal',
+                 '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 0, NULL, '{}'),
+                ('m7', '/repo', NULL, 'codex', 'frontend', 'hooks', 'T', 'b', 'low',
+                 '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 0, NULL, '{}')"#,
+        )
+        .unwrap();
+}
+
+#[test]
+fn memory_row_round_trips_through_record_shape() {
+    let (_dir, store) = open_store(16, 1024);
+    store
+        .conn
+        .execute_batch(
+            r#"INSERT INTO memories
+                (id, repo_root, session_id, frontend, scope, topic, title, body, importance,
+                 created_at, updated_at, last_accessed_at, decay_score, source_id, metadata_json)
+             VALUES ('m1', '/repo', 's1', 'codex', 'frontend', 'hooks', 'Hook notes', 'body text',
+                     'critical', '2026-01-01T00:00:00Z', '2026-01-02T00:00:00Z',
+                     '2026-01-03T00:00:00Z', 0.25, 'src-9', '{"source_kind":"hook"}')"#,
+        )
+        .unwrap();
+
+    let record = store
+        .conn
+        .query_row(
+            "SELECT id, repo_root, session_id, frontend, scope, topic, title, body, importance,
+                    created_at, updated_at, last_accessed_at, decay_score, source_id, metadata_json
+             FROM memories WHERE id = 'm1'",
+            [],
+            super::memory::row_to_memory,
+        )
+        .unwrap();
+    assert_eq!(
+        record,
+        MemoryRecord {
+            id: "m1".to_owned(),
+            repo_root: "/repo".to_owned(),
+            session_id: Some("s1".to_owned()),
+            frontend: Some("codex".to_owned()),
+            scope: MemoryScope::Frontend,
+            topic: "hooks".to_owned(),
+            title: "Hook notes".to_owned(),
+            body: "body text".to_owned(),
+            importance: MemoryImportance::Critical,
+            created_at: "2026-01-01T00:00:00Z".to_owned(),
+            updated_at: "2026-01-02T00:00:00Z".to_owned(),
+            last_accessed_at: "2026-01-03T00:00:00Z".to_owned(),
+            decay_score: 0.25,
+            source_id: Some("src-9".to_owned()),
+            metadata: serde_json::json!({ "source_kind": "hook" }),
+        }
+    );
+}
+
+// ── ICM-A2 — memory CRUD storage layer ────────────────────────────────────────
+
+fn cli_viewer() -> MemoryViewer {
+    MemoryViewer {
+        frontend: "cli".to_owned(),
+        session_id: "s1".to_owned(),
+    }
+}
+
+#[test]
+fn recall_memories_enforces_session_and_frontend_visibility() {
+    let (_dir, store) = open_store(16, 1024);
+    seed_memory(
+        &store,
+        "p",
+        "2026-01-01T00:00:00Z",
+        "project body",
+        "hooks",
+        MemoryImportance::Normal,
+        MemoryScope::Project,
+    );
+    seed_memory(
+        &store,
+        "g",
+        "2026-01-01T00:00:00Z",
+        "global body",
+        "hooks",
+        MemoryImportance::Normal,
+        MemoryScope::Global,
+    );
+    seed_memory(
+        &store,
+        "s",
+        "2026-01-01T00:00:00Z",
+        "session body",
+        "hooks",
+        MemoryImportance::Normal,
+        MemoryScope::Session,
+    );
+    seed_memory(
+        &store,
+        "f",
+        "2026-01-01T00:00:00Z",
+        "frontend body",
+        "hooks",
+        MemoryImportance::Normal,
+        MemoryScope::Frontend,
+    );
+
+    let recall_ids = |viewer: &MemoryViewer| -> Vec<String> {
+        let mut ids = store
+            .recall_memories(
+                "/repo",
+                "body",
+                &MemoryListFilter::default(),
+                false,
+                viewer,
+                10,
+            )
+            .unwrap()
+            .iter()
+            .map(|hit| hit.memory.id.clone())
+            .collect::<Vec<_>>();
+        ids.sort();
+        ids
+    };
+
+    // Same session + same frontend: everything is visible.
+    assert_eq!(
+        recall_ids(&MemoryViewer {
+            frontend: "codex".to_owned(),
+            session_id: "s1".to_owned(),
+        }),
+        vec!["f", "g", "p", "s"]
+    );
+
+    // Same session, different frontend: frontend-scoped memory hidden.
+    assert_eq!(
+        recall_ids(&cli_viewer()),
+        vec!["g", "p", "s"],
+        "session visible to same session; frontend hidden from other frontends"
+    );
+
+    // Same frontend, different session: session-scoped memory hidden.
+    assert_eq!(
+        recall_ids(&MemoryViewer {
+            frontend: "codex".to_owned(),
+            session_id: "other".to_owned(),
+        }),
+        vec!["f", "g", "p"],
+        "frontend visible to same frontend; session hidden from other sessions"
+    );
+
+    // Different session AND different frontend: only project + global remain.
+    assert_eq!(
+        recall_ids(&MemoryViewer {
+            frontend: "claude".to_owned(),
+            session_id: "other".to_owned(),
+        }),
+        vec!["g", "p"],
+        "unrelated viewers see only project and global memories"
+    );
+}
+
+#[test]
+fn recall_memories_shared_excludes_own_session_and_frontend_memories() {
+    let (_dir, store) = open_store(16, 1024);
+    for (id, scope) in [
+        ("p", MemoryScope::Project),
+        ("s", MemoryScope::Session),
+        ("f", MemoryScope::Frontend),
+    ] {
+        seed_memory(
+            &store,
+            id,
+            "2026-01-01T00:00:00Z",
+            "hooks body",
+            "hooks",
+            MemoryImportance::Normal,
+            scope,
+        );
+    }
+
+    // Even the owner's own session/frontend memories are excluded by --shared.
+    let hits = store
+        .recall_memories(
+            "/repo",
+            "hooks",
+            &MemoryListFilter::default(),
+            true,
+            &cli_viewer(),
+            10,
+        )
+        .unwrap();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].memory.id, "p");
+}
+
+fn seed_memory(
+    store: &SessionStore,
+    id: &str,
+    now: &str,
+    body: &str,
+    topic: &str,
+    importance: MemoryImportance,
+    scope: MemoryScope,
+) -> MemoryRecord {
+    let input = NewMemory {
+        repo_root: "/repo".to_owned(),
+        session_id: (scope == MemoryScope::Session).then(|| "s1".to_owned()),
+        frontend: (scope == MemoryScope::Frontend).then(|| "codex".to_owned()),
+        scope,
+        topic: topic.to_owned(),
+        title: format!("title-{topic}"),
+        body: body.to_owned(),
+        importance,
+        source_id: Some(format!("src-{id}")),
+        metadata: serde_json::json!({ "seed": id }),
+    };
+    super::memory::store_memory_at(&store.conn, &input, now, id).unwrap()
+}
+
+#[test]
+fn store_memory_persists_record_with_defaults() {
+    let (_dir, mut store) = open_store(16, 1024);
+    let input = NewMemory {
+        repo_root: "/repo".to_owned(),
+        body: "remember to run the hook tests".to_owned(),
+        ..Default::default()
+    };
+    let record = store.store_memory(&input).unwrap();
+
+    assert_eq!(record.repo_root, "/repo");
+    assert_eq!(record.importance, MemoryImportance::Normal);
+    assert_eq!(record.scope, MemoryScope::Project);
+    assert_eq!(record.decay_score, 0.0);
+    assert_eq!(record.session_id, None);
+    assert_eq!(record.frontend, None);
+    assert_eq!(record.source_id, None);
+    assert_eq!(record.metadata, serde_json::json!({}));
+    assert_eq!(record.topic, "");
+    assert_eq!(record.title, "");
+    assert_eq!(record.body, "remember to run the hook tests");
+    assert_eq!(record.id.len(), 64, "id must be a stable sha256 hex id");
+    assert_eq!(record.created_at, record.updated_at);
+    assert_eq!(record.updated_at, record.last_accessed_at);
+
+    let count: i64 = store
+        .conn
+        .query_row("SELECT COUNT(*) FROM memories", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(count, 1);
+}
+
+#[test]
+fn store_memory_preserves_exact_text_and_metadata() {
+    let (_dir, mut store) = open_store(16, 1024);
+    let body = "  spaced text with\nnewline and \"quotes\"  ";
+    let input = NewMemory {
+        repo_root: "/repo".to_owned(),
+        topic: "hooks".to_owned(),
+        title: "Hook notes".to_owned(),
+        body: body.to_owned(),
+        importance: MemoryImportance::Critical,
+        scope: MemoryScope::Frontend,
+        frontend: Some("codex".to_owned()),
+        source_id: Some("artifact-1".to_owned()),
+        metadata: serde_json::json!({ "source_kind": "hook", "count": 3 }),
+        ..Default::default()
+    };
+    let stored = store.store_memory(&input).unwrap();
+
+    let record = store
+        .conn
+        .query_row(
+            "SELECT id, repo_root, session_id, frontend, scope, topic, title, body, importance,
+                    created_at, updated_at, last_accessed_at, decay_score, source_id,
+                    metadata_json
+             FROM memories WHERE id = ?1",
+            [&stored.id],
+            super::memory::row_to_memory,
+        )
+        .unwrap();
+    assert_eq!(record.body, body, "body must be stored exactly as provided");
+    assert_eq!(record.importance, MemoryImportance::Critical);
+    assert_eq!(record.scope, MemoryScope::Frontend);
+    assert_eq!(record.frontend.as_deref(), Some("codex"));
+    assert_eq!(record.source_id.as_deref(), Some("artifact-1"));
+    assert_eq!(
+        record.metadata,
+        serde_json::json!({ "source_kind": "hook", "count": 3 })
+    );
+}
+
+#[test]
+fn store_memory_rejects_invalid_inputs() {
+    let (_dir, mut store) = open_store(16, 1024);
+
+    let empty = NewMemory {
+        repo_root: "/repo".to_owned(),
+        body: "   ".to_owned(),
+        ..Default::default()
+    };
+    let error = store.store_memory(&empty).unwrap_err().to_string();
+    assert!(error.contains("must not be empty"), "got: {error}");
+
+    let frontend_without_name = NewMemory {
+        repo_root: "/repo".to_owned(),
+        body: "x".to_owned(),
+        scope: MemoryScope::Frontend,
+        ..Default::default()
+    };
+    let error = store
+        .store_memory(&frontend_without_name)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("frontend identifier"), "got: {error}");
+
+    let count: i64 = store
+        .conn
+        .query_row("SELECT COUNT(*) FROM memories", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(count, 0, "rejected writes must not persist rows");
+}
+
+#[test]
+fn recall_memories_ranks_exact_topic_above_broad_matches() {
+    let (_dir, store) = open_store(16, 1024);
+    seed_memory(
+        &store,
+        "m1",
+        "2026-01-01T00:00:00Z",
+        "deploy pipeline runs weekly",
+        "hooks",
+        MemoryImportance::Critical,
+        MemoryScope::Project,
+    );
+    seed_memory(
+        &store,
+        "m2",
+        "2026-01-02T00:00:00Z",
+        "deploy notes",
+        "deploy",
+        MemoryImportance::Low,
+        MemoryScope::Project,
+    );
+    seed_memory(
+        &store,
+        "m3",
+        "2026-01-03T00:00:00Z",
+        "unrelated body",
+        "deployment",
+        MemoryImportance::High,
+        MemoryScope::Project,
+    );
+
+    let hits = store
+        .recall_memories(
+            "/repo",
+            "deploy",
+            &MemoryListFilter::default(),
+            false,
+            &MemoryViewer {
+                frontend: "cli".to_owned(),
+                session_id: "s1".to_owned(),
+            },
+            10,
+        )
+        .unwrap();
+    let order = hits
+        .iter()
+        .map(|hit| hit.memory.id.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(order, vec!["m2", "m3", "m1"]);
+    assert_eq!(
+        hits.iter()
+            .map(|hit| hit.relevance_score)
+            .collect::<Vec<_>>(),
+        vec![0, 1, 2],
+        "exact topic must rank above contains matches above body-only matches"
+    );
+}
+
+#[test]
+fn recall_memories_respects_scope_and_shared_filters() {
+    let (_dir, store) = open_store(16, 1024);
+    for (id, scope) in [
+        ("p", MemoryScope::Project),
+        ("g", MemoryScope::Global),
+        ("s", MemoryScope::Session),
+        ("f", MemoryScope::Frontend),
+    ] {
+        seed_memory(
+            &store,
+            id,
+            "2026-01-01T00:00:00Z",
+            "shared topic body",
+            "hooks",
+            MemoryImportance::Normal,
+            scope,
+        );
+    }
+
+    let shared = store
+        .recall_memories(
+            "/repo",
+            "hooks",
+            &MemoryListFilter::default(),
+            true,
+            &cli_viewer(),
+            10,
+        )
+        .unwrap();
+    let mut shared_ids = shared
+        .iter()
+        .map(|hit| hit.memory.id.as_str())
+        .collect::<Vec<_>>();
+    shared_ids.sort();
+    assert_eq!(
+        shared_ids,
+        vec!["g", "p"],
+        "--shared must exclude session/frontend"
+    );
+
+    let frontend_only = store
+        .recall_memories(
+            "/repo",
+            "hooks",
+            &MemoryListFilter {
+                scope: Some(MemoryScope::Frontend),
+                ..Default::default()
+            },
+            false,
+            &MemoryViewer {
+                frontend: "codex".to_owned(),
+                session_id: "s1".to_owned(),
+            },
+            10,
+        )
+        .unwrap();
+    assert_eq!(frontend_only.len(), 1);
+    assert_eq!(frontend_only[0].memory.id, "f");
+
+    // Visibility: the codex viewer sees everything (session s1 + codex), the
+    // cli viewer does not see codex-frontend memories.
+    let codex_view = store
+        .recall_memories(
+            "/repo",
+            "hooks",
+            &MemoryListFilter::default(),
+            false,
+            &MemoryViewer {
+                frontend: "codex".to_owned(),
+                session_id: "s1".to_owned(),
+            },
+            10,
+        )
+        .unwrap();
+    assert_eq!(codex_view.len(), 4);
+    let cli_view = store
+        .recall_memories(
+            "/repo",
+            "hooks",
+            &MemoryListFilter::default(),
+            false,
+            &cli_viewer(),
+            10,
+        )
+        .unwrap();
+    let mut cli_ids = cli_view
+        .iter()
+        .map(|hit| hit.memory.id.as_str())
+        .collect::<Vec<_>>();
+    cli_ids.sort();
+    assert_eq!(
+        cli_ids,
+        vec!["g", "p", "s"],
+        "cli viewer sees project/global/session"
+    );
+}
+
+#[test]
+fn recall_memories_applies_topic_and_importance_filters_and_escapes_like() {
+    let (_dir, store) = open_store(16, 1024);
+    seed_memory(
+        &store,
+        "m1",
+        "2026-01-01T00:00:00Z",
+        "progress is 100% done",
+        "hooks",
+        MemoryImportance::Critical,
+        MemoryScope::Project,
+    );
+    seed_memory(
+        &store,
+        "m2",
+        "2026-01-01T00:00:00Z",
+        "progress is 10000",
+        "hooks",
+        MemoryImportance::Low,
+        MemoryScope::Project,
+    );
+    seed_memory(
+        &store,
+        "m3",
+        "2026-01-01T00:00:00Z",
+        "deploy",
+        "deploy",
+        MemoryImportance::Critical,
+        MemoryScope::Project,
+    );
+
+    // Literal substring match: the `%` in the query must not act as a wildcard.
+    let literal = store
+        .recall_memories(
+            "/repo",
+            "100%",
+            &MemoryListFilter::default(),
+            false,
+            &cli_viewer(),
+            10,
+        )
+        .unwrap();
+    assert_eq!(literal.len(), 1);
+    assert_eq!(literal[0].memory.id, "m1");
+
+    // Topic and importance filters restrict recall.
+    let filtered = store
+        .recall_memories(
+            "/repo",
+            "deploy",
+            &MemoryListFilter {
+                topic: Some("HOOKS".to_owned()),
+                ..Default::default()
+            },
+            false,
+            &cli_viewer(),
+            10,
+        )
+        .unwrap();
+    assert!(
+        filtered.is_empty(),
+        "topic filter is exact and case-insensitive"
+    );
+
+    let critical = store
+        .recall_memories(
+            "/repo",
+            "deploy",
+            &MemoryListFilter {
+                importance: Some(MemoryImportance::Critical),
+                ..Default::default()
+            },
+            false,
+            &cli_viewer(),
+            10,
+        )
+        .unwrap();
+    assert_eq!(critical.len(), 1);
+    assert_eq!(critical[0].memory.id, "m3");
+}
+
+#[test]
+fn list_memories_sorts_by_updated_at_desc_and_filters() {
+    let (_dir, store) = open_store(16, 1024);
+    seed_memory(
+        &store,
+        "old",
+        "2026-01-01T00:00:00Z",
+        "b",
+        "hooks",
+        MemoryImportance::Low,
+        MemoryScope::Project,
+    );
+    seed_memory(
+        &store,
+        "mid",
+        "2026-01-02T00:00:00Z",
+        "b",
+        "hooks",
+        MemoryImportance::Critical,
+        MemoryScope::Project,
+    );
+    seed_memory(
+        &store,
+        "new",
+        "2026-01-03T00:00:00Z",
+        "b",
+        "other",
+        MemoryImportance::Critical,
+        MemoryScope::Global,
+    );
+
+    let all = store
+        .list_memories("/repo", &MemoryListFilter::default())
+        .unwrap();
+    assert_eq!(
+        all.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+        vec!["new", "mid", "old"],
+        "list must sort by updated_at DESC"
+    );
+
+    let critical = store
+        .list_memories(
+            "/repo",
+            &MemoryListFilter {
+                importance: Some(MemoryImportance::Critical),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        critical.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+        vec!["new", "mid"]
+    );
+
+    let hooks = store
+        .list_memories(
+            "/repo",
+            &MemoryListFilter {
+                topic: Some("HOOKS".to_owned()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        hooks.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+        vec!["mid", "old"],
+        "topic filter must be case-insensitive exact match"
+    );
+
+    let range = store
+        .list_memories(
+            "/repo",
+            &MemoryListFilter {
+                older_than: Some("2026-01-03T00:00:00Z".to_owned()),
+                newer_than: Some("2026-01-01T00:00:00Z".to_owned()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        range.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+        vec!["mid"]
+    );
+}
+
+#[test]
+fn delete_memory_requires_exact_id_and_respects_dry_run() {
+    let (_dir, mut store) = open_store(16, 1024);
+    seed_memory(
+        &store,
+        "m1",
+        "2026-01-01T00:00:00Z",
+        "b",
+        "hooks",
+        MemoryImportance::Normal,
+        MemoryScope::Project,
+    );
+
+    let dry = store.delete_memory("/repo", "m1", true).unwrap();
+    assert!(dry.found);
+    assert!(!dry.deleted);
+    assert!(dry.dry_run);
+    let count: i64 = store
+        .conn
+        .query_row("SELECT COUNT(*) FROM memories", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(count, 1, "dry-run must not mutate storage");
+
+    let missing = store.delete_memory("/repo", "nope", false).unwrap();
+    assert!(!missing.found);
+    assert!(!missing.deleted);
+
+    let other_repo = store.delete_memory("/elsewhere", "m1", false).unwrap();
+    assert!(!other_repo.found, "delete is repo-scoped by exact id");
+
+    let removed = store.delete_memory("/repo", "m1", false).unwrap();
+    assert!(removed.found);
+    assert!(removed.deleted);
+    let count: i64 = store
+        .conn
+        .query_row("SELECT COUNT(*) FROM memories", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(count, 0);
 }

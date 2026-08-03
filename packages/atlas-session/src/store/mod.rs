@@ -21,6 +21,7 @@ mod agent_memory;
 mod curation;
 mod decision_memory;
 mod global_memory;
+mod memory;
 mod resume;
 #[cfg(test)]
 mod tests;
@@ -32,14 +33,18 @@ pub use self::types::{
     DEFAULT_DEDUP_WINDOW_SECS, DEFAULT_MAX_SNAPSHOT_BYTES, DEFAULT_SESSION_DB,
     DEFAULT_SESSION_MAX_EVENTS, DecisionRecord, DecisionSearchHit, DelegatedTaskSummary,
     DurableTaskListPage, DurableTaskRecord, DurableTaskStatus, DurableTaskUpdate, EventCategory,
-    GlobalAccessEntry, GlobalWorkflowPattern, MAX_INLINE_EVENT_PAYLOAD_BYTES, NewDurableTask,
-    NewSessionEvent, ResumeSnapshot, SessionEventRow, SessionEventType, SessionMeta, SessionStats,
-    SessionStoreConfig,
+    GlobalAccessEntry, GlobalWorkflowPattern, MAX_INLINE_EVENT_PAYLOAD_BYTES, MemoryDeleteResult,
+    MemoryImportance, MemoryListFilter, MemoryRecord, MemoryScope, MemorySearchHit, MemoryViewer,
+    NewDurableTask, NewMemory, NewSessionEvent, ResumeSnapshot, SessionEventRow, SessionEventType,
+    SessionMeta, SessionStats, SessionStoreConfig,
 };
 
 use self::agent_memory::{summarize_agent_memory, summarize_agent_memory_from_events};
 use self::curation::compact_session_events;
 use self::decision_memory::{search_decisions, upsert_decision_from_event};
+use self::memory::{
+    delete_memory, list_memories, memory_schema_issues, recall_memories, store_memory,
+};
 use self::resume::build_resume_snapshot;
 use self::util::{
     canonical_json, enforce_event_limit, format_days_ago, format_now, format_seconds_ago,
@@ -152,6 +157,59 @@ impl SessionStore {
                 |row| row.get(0),
             )
             .map_err(|e| AtlasError::Db(e.to_string()))
+    }
+
+    /// Validates the shared memory schema (`memories` table, columns, and
+    /// indexes). Returns an empty list when healthy; used by `atlas db check`.
+    pub fn memory_schema_issues(&self) -> Vec<String> {
+        memory_schema_issues(&self.conn)
+    }
+
+    /// Validate and persist a new memory, returning the stored record.
+    pub fn store_memory(&mut self, input: &NewMemory) -> Result<MemoryRecord> {
+        store_memory(&self.conn, input)
+    }
+
+    /// Lexical recall; exact topic matches rank above broad text matches.
+    /// Visibility rules (ICM-A3) are enforced for `viewer`; `shared_only`
+    /// restricts results to `project` and `global` scopes.
+    pub fn recall_memories(
+        &self,
+        repo_root: &str,
+        query: &str,
+        filter: &MemoryListFilter,
+        shared_only: bool,
+        viewer: &MemoryViewer,
+        limit: usize,
+    ) -> Result<Vec<MemorySearchHit>> {
+        recall_memories(
+            &self.conn,
+            repo_root,
+            query,
+            filter,
+            shared_only,
+            viewer,
+            limit,
+        )
+    }
+
+    /// List memories for a repo, filtered and sorted by `updated_at DESC`.
+    pub fn list_memories(
+        &self,
+        repo_root: &str,
+        filter: &MemoryListFilter,
+    ) -> Result<Vec<MemoryRecord>> {
+        list_memories(&self.conn, repo_root, filter)
+    }
+
+    /// Delete a memory by exact id within a repo; `dry_run` only inspects.
+    pub fn delete_memory(
+        &mut self,
+        repo_root: &str,
+        memory_id: &str,
+        dry_run: bool,
+    ) -> Result<MemoryDeleteResult> {
+        delete_memory(&self.conn, repo_root, memory_id, dry_run)
     }
 
     pub fn upsert_session_meta(
