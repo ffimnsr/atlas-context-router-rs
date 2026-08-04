@@ -1,4 +1,3 @@
-
 use super::*;
 use atlas_core::SearchQuery;
 use atlas_core::{Edge, EdgeKind, Node, NodeId};

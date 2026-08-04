@@ -2,7 +2,7 @@
 //!
 //! [`generate_docs`] renders the whole graph into five files: `index.md`,
 //! `files.md`, `symbols.md`, `modules.md`, and `components.md`.  Every list
-//! is sorted and the timestamp comes from [`DocsData::generated_at`], so
+//! is sorted and the timestamp comes from [`crate::model::DocsData::generated_at`], so
 //! output is stable across runs for the same graph.
 
 use std::collections::BTreeMap;
