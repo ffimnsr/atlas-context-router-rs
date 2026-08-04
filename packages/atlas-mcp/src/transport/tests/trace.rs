@@ -194,12 +194,29 @@ fn rmcp_stdio_off_trace_emits_no_request_lifecycle_diagnostics() {
 #[test]
 fn stdio_transport_emits_progress_without_mcp_log_notifications() {
     let fixture = setup_fixture();
-    let input = "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"query_graph\",\"progressToken\":\"tok-1\",\"arguments\":{\"text\":\"compute\"},\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\",\"io.modelcontextprotocol/clientCapabilities\":{},\"io.modelcontextprotocol/clientInfo\":{\"name\":\"zed\",\"version\":\"1.0.0\"},\"io.modelcontextprotocol/logLevel\":\"warning\"}}}\n";
+    let input = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {
+            "name": "query_graph",
+            "progressToken": "tok-1",
+            "arguments": {"text": "compute"},
+            "_meta": {
+                crate::spec::META_PROTOCOL_VERSION: crate::MCP_PROTOCOL_VERSION,
+                crate::spec::META_CLIENT_CAPABILITIES: {},
+                crate::spec::META_CLIENT_INFO: {"name": "zed", "version": "1.0.0"},
+                crate::spec::META_LOG_LEVEL: "warning"
+            }
+        }
+    })
+    .to_string()
+        + "\n";
     let repo_root = fixture._dir.path().to_string_lossy().into_owned();
     let responses = run_rmcp_script(
         &repo_root,
         &fixture.db_path,
-        input,
+        &input,
         ServerOptions::default(),
     );
     assert!(

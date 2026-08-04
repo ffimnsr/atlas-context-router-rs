@@ -45,7 +45,7 @@ fn tools_list_works_as_first_stdio_request_with_valid_request_meta() {
 }
 
 #[test]
-fn unsupported_request_protocol_version_returns_mcp_error() {
+fn previous_request_protocol_version_is_supported() {
     let fixture = setup_fixture();
     let repo_root = fixture._dir.path().to_string_lossy().into_owned();
 
@@ -58,17 +58,14 @@ fn unsupported_request_protocol_version_returns_mcp_error() {
             "method": "tools/list",
             "params": {
                 "_meta": {
-                    crate::spec::META_PROTOCOL_VERSION: "2025-11-25",
+                    crate::spec::META_PROTOCOL_VERSION: crate::spec::MCP_PREVIOUS_PROTOCOL_VERSION,
                     crate::spec::META_CLIENT_CAPABILITIES: {}
                 }
             }
         }),
     );
 
-    assert_eq!(
-        response["error"]["code"],
-        serde_json::json!(UNSUPPORTED_PROTOCOL_VERSION_CODE)
-    );
+    assert!(response["result"]["tools"].is_array());
 }
 
 #[test]
@@ -90,7 +87,7 @@ fn server_discover_works_without_initialize_and_matches_initialize_capabilities(
     let result = &response["result"];
     assert_eq!(
         result["supportedVersions"],
-        serde_json::json!([MCP_PROTOCOL_VERSION])
+        crate::spec::supported_protocol_versions_value()
     );
     assert_eq!(
         result["capabilities"],

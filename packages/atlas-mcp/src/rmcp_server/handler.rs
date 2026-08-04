@@ -37,7 +37,10 @@ impl ServerHandler for AtlasRmcpServer {
     }
 
     fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
-        Cow::Owned(vec![ProtocolVersion::V_2026_07_28])
+        Cow::Owned(vec![
+            ProtocolVersion::V_2026_07_28,
+            ProtocolVersion::V_2025_11_25,
+        ])
     }
 
     async fn discover(

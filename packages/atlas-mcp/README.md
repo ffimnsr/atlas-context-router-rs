@@ -24,9 +24,9 @@ MCP server exposing Atlas graph, impact, and review tools over stdio. Implements
 
 Listens on stdio or Unix socket; supports JSON-RPC 2.0 message framing.
 
-## MCP 2026 behavior
+## MCP behavior
 
-- protocol version: `2026-07-28`
+- protocol versions: `2026-07-28`, `2025-11-25`
 - discovery: call `server/discover` before assuming capabilities
 - stdio: modern clients may skip initialize and send per-request `params._meta`
 - HTTP: no protocol session header, no `GET /mcp`, no `DELETE /mcp`, no `Last-Event-ID` resume path

@@ -3,7 +3,11 @@ use serde::Serialize;
 use serde_json::{Map, Value, json};
 
 pub const MCP_PROTOCOL_VERSION: &str = "2026-07-28";
+pub const MCP_PREVIOUS_PROTOCOL_VERSION: &str = "2025-11-25";
 pub const MCP_SERVER_NAME: &str = "atlas";
+
+pub const MCP_SUPPORTED_PROTOCOL_VERSIONS: &[&str] =
+    &[MCP_PROTOCOL_VERSION, MCP_PREVIOUS_PROTOCOL_VERSION];
 
 pub const META_PROTOCOL_VERSION: &str = "io.modelcontextprotocol/protocolVersion";
 pub const META_CLIENT_INFO: &str = "io.modelcontextprotocol/clientInfo";
@@ -14,7 +18,7 @@ pub const CACHE_SCOPE_PUBLIC: &str = "public";
 pub const CACHE_SCOPE_PRIVATE: &str = "private";
 pub const DISCOVER_CACHE_TTL_MS: u64 = 300_000;
 pub const DISCOVER_CACHE_SCOPE: &str = CACHE_SCOPE_PUBLIC;
-pub const DISCOVER_INSTRUCTIONS: &str = "Use server/discover for capability negotiation. For 2026 requests after discovery, include params._meta with protocol version and client capabilities.";
+pub const DISCOVER_INSTRUCTIONS: &str = "Use server/discover for capability negotiation. After discovery, include params._meta with protocol version and client capabilities.";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct ServerInfo {
@@ -100,7 +104,11 @@ pub fn server_info_meta_value() -> Value {
 }
 
 pub fn supported_protocol_versions_value() -> Value {
-    json!([MCP_PROTOCOL_VERSION])
+    json!(MCP_SUPPORTED_PROTOCOL_VERSIONS)
+}
+
+pub fn supported_protocol_versions_display() -> String {
+    MCP_SUPPORTED_PROTOCOL_VERSIONS.join(", ")
 }
 
 pub fn initialize_capabilities() -> InitializeCapabilities {
@@ -168,11 +176,12 @@ pub fn complete_result(mut result: Value) -> Value {
 }
 
 pub fn ensure_supported_protocol_version(protocol_version: &str) -> Result<()> {
-    if protocol_version == MCP_PROTOCOL_VERSION {
+    if MCP_SUPPORTED_PROTOCOL_VERSIONS.contains(&protocol_version) {
         Ok(())
     } else {
         Err(anyhow!(
-            "unsupported protocol version '{protocol_version}'; supported version: {MCP_PROTOCOL_VERSION}"
+            "unsupported protocol version '{protocol_version}'; supported versions: {}",
+            supported_protocol_versions_display()
         ))
     }
 }
@@ -204,7 +213,7 @@ mod tests {
         let error = ensure_supported_protocol_version("2024-11-05").unwrap_err();
         assert_eq!(
             error.to_string(),
-            "unsupported protocol version '2024-11-05'; supported version: 2026-07-28"
+            "unsupported protocol version '2024-11-05'; supported versions: 2026-07-28, 2025-11-25"
         );
     }
 
@@ -222,7 +231,10 @@ mod tests {
     fn discover_result_includes_required_fields_and_initialize_capabilities() {
         let result = discover_result();
 
-        assert_eq!(result["supportedVersions"], json!([MCP_PROTOCOL_VERSION]));
+        assert_eq!(
+            result["supportedVersions"],
+            supported_protocol_versions_value()
+        );
         assert_eq!(
             result["capabilities"],
             serde_json::to_value(initialize_capabilities()).expect("capabilities")

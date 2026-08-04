@@ -111,37 +111,38 @@ fn perform_socket_handshake<R: std::io::BufRead, W: std::io::Write>(
 
     let request: DaemonHandshakeRequest =
         serde_json::from_str(line.trim()).context("invalid daemon handshake")?;
-    let response = if request.protocol_version != crate::spec::MCP_PROTOCOL_VERSION {
-        DaemonHandshakeResponse::err(
-            crate::spec::MCP_PROTOCOL_VERSION,
-            repo_root,
-            db_path,
-            format!(
-                "protocol mismatch: client={} server={}",
-                request.protocol_version,
-                crate::spec::MCP_PROTOCOL_VERSION
-            ),
-        )
-    } else if request.repo_root != repo_root {
-        DaemonHandshakeResponse::err(
-            crate::MCP_PROTOCOL_VERSION,
-            repo_root,
-            db_path,
-            format!(
-                "repo mismatch: client={} server={repo_root}",
-                request.repo_root
-            ),
-        )
-    } else if request.db_path != db_path {
-        DaemonHandshakeResponse::err(
-            crate::MCP_PROTOCOL_VERSION,
-            repo_root,
-            db_path,
-            format!("db mismatch: client={} server={db_path}", request.db_path),
-        )
-    } else {
-        DaemonHandshakeResponse::ok(crate::MCP_PROTOCOL_VERSION, repo_root, db_path)
-    };
+    let response =
+        if crate::spec::ensure_supported_protocol_version(&request.protocol_version).is_err() {
+            DaemonHandshakeResponse::err(
+                crate::spec::MCP_PROTOCOL_VERSION,
+                repo_root,
+                db_path,
+                format!(
+                    "protocol mismatch: client={} server supported=[{}]",
+                    request.protocol_version,
+                    crate::spec::supported_protocol_versions_display()
+                ),
+            )
+        } else if request.repo_root != repo_root {
+            DaemonHandshakeResponse::err(
+                crate::MCP_PROTOCOL_VERSION,
+                repo_root,
+                db_path,
+                format!(
+                    "repo mismatch: client={} server={repo_root}",
+                    request.repo_root
+                ),
+            )
+        } else if request.db_path != db_path {
+            DaemonHandshakeResponse::err(
+                crate::MCP_PROTOCOL_VERSION,
+                repo_root,
+                db_path,
+                format!("db mismatch: client={} server={db_path}", request.db_path),
+            )
+        } else {
+            DaemonHandshakeResponse::ok(&request.protocol_version, repo_root, db_path)
+        };
 
     writeln!(writer, "{}", serde_json::to_string(&response)?)?;
     writer.flush()?;
@@ -737,7 +738,7 @@ mod tests {
                 "id": 1,
                 "method": "initialize",
                 "params": {
-                    "protocolVersion": "2026-07-28",
+                    "protocolVersion": crate::MCP_PROTOCOL_VERSION,
                     "capabilities": {},
                     "clientInfo": {"name": "socket-test", "version": "1.0.0"}
                 }
@@ -752,7 +753,10 @@ mod tests {
         let initialize: serde_json::Value =
             serde_json::from_str(line.trim()).expect("parse initialize response");
         assert_eq!(initialize["id"], json!(1));
-        assert_eq!(initialize["result"]["protocolVersion"], json!("2026-07-28"));
+        assert_eq!(
+            initialize["result"]["protocolVersion"],
+            json!(crate::MCP_PROTOCOL_VERSION)
+        );
 
         writeln!(
             client_stream,

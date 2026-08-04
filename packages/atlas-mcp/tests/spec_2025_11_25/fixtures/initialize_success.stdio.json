@@ -3,7 +3,7 @@
     "jsonrpc": "2.0",
     "id": 1,
     "result": {
-      "protocolVersion": "2026-07-28",
+      "protocolVersion": "2026-07-28"
       "capabilities": {
         "tools": { "listChanged": true },
         "prompts": { "listChanged": true },
@@ -19,7 +19,7 @@
         "version": "1.6.1",
         "description": "MCP server exposing Atlas graph, impact, and review tools over stdio"
       },
-      "instructions": "Use server/discover for capability negotiation. For 2026 requests after discovery, include params._meta with protocol version and client capabilities."
+      "instructions": "Use server/discover for capability negotiation. After discovery, include params._meta with protocol version and client capabilities."
     }
   }
 }

@@ -145,7 +145,6 @@ fn run_rmcp_script_capture(
 }
 
 const METHOD_NOT_FOUND_CODE: i64 = -32601;
-const UNSUPPORTED_PROTOCOL_VERSION_CODE: i64 = -32022;
 
 fn initialize_request_line() -> String {
     format!(

@@ -54,11 +54,12 @@ fn get_info_matches_current_spec_server_info() {
 #[test]
 fn discover_uses_official_result_and_current_cache_policy() {
     let discover = server().discover_result();
-    assert_eq!(discover.supported_versions.len(), 1);
-    assert_eq!(
-        discover.supported_versions[0].as_str(),
-        spec::MCP_PROTOCOL_VERSION
-    );
+    let supported_versions = discover
+        .supported_versions
+        .iter()
+        .map(|version| version.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(supported_versions, spec::MCP_SUPPORTED_PROTOCOL_VERSIONS);
     assert_eq!(
         discover.instructions.as_deref(),
         Some(spec::DISCOVER_INSTRUCTIONS)

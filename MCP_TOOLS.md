@@ -2,8 +2,8 @@
 
 This file is generated from rmcp-backed `atlas_mcp::tool_list()` descriptors serialized from `rmcp::model::Tool`. Do not edit by hand.
 
-MCP 2026 quick guidance:
-- protocol version: `2026-07-28`
+MCP quick guidance:
+- protocol versions: `2026-07-28, 2025-11-25`
 - call `server/discover` for capability negotiation
 - on stdio and HTTP requests after discovery, include `params._meta` with protocol version and client capabilities
 - use explicit `arguments.repo_root` or server launch cwd for repo selection; do not rely on MCP Roots

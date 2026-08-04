@@ -36,10 +36,13 @@ fn constructor_preserves_repo_and_db_paths_exactly() {
 }
 
 #[test]
-fn supported_protocol_versions_only_exposes_current_version() {
+fn supported_protocol_versions_exposes_current_and_previous_versions() {
     let versions = server().supported_protocol_versions();
-    assert_eq!(versions.len(), 1);
-    assert_eq!(versions[0].as_str(), spec::MCP_PROTOCOL_VERSION);
+    let versions = versions
+        .iter()
+        .map(|version| version.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(versions, spec::MCP_SUPPORTED_PROTOCOL_VERSIONS);
 }
 
 #[test]

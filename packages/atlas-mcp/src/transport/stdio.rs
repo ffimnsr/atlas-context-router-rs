@@ -284,12 +284,11 @@ fn normalize_stdio_test_script(input: &str) -> String {
     if matches!(method, Some("initialize") | Some("server/discover")) {
         return input.to_owned();
     }
-    concat!(
-        "{\"jsonrpc\":\"2.0\",\"id\":-1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2026-07-28\",\"capabilities\":{},\"clientInfo\":{\"name\":\"zed\",\"version\":\"1.0.0\"}}}\n",
-        "{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{}}\n"
+    format!(
+        "{{\"jsonrpc\":\"2.0\",\"id\":-1,\"method\":\"initialize\",\"params\":{{\"protocolVersion\":\"{}\",\"capabilities\":{{}},\"clientInfo\":{{\"name\":\"zed\",\"version\":\"1.0.0\"}}}}}}\n{{\"jsonrpc\":\"2.0\",\"method\":\"initialized\",\"params\":{{}}}}\n{}",
+        crate::MCP_PROTOCOL_VERSION,
+        input
     )
-    .to_owned()
-        + input
 }
 
 async fn forward_rmcp_output<R>(reader: R, output_tx: mpsc::Sender<serde_json::Value>) -> Result<()>

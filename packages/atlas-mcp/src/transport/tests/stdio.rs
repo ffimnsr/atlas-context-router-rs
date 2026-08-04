@@ -350,6 +350,31 @@ fn rmcp_stdio_unknown_method_returns_method_not_found() {
 }
 
 #[test]
+fn stdio_transport_negotiates_previous_initialize_protocol_version() {
+    let fixture = setup_fixture();
+    let input = format!(
+        "{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{{\"protocolVersion\":\"{}\",\"capabilities\":{{}},\"clientInfo\":{{\"name\":\"zed\",\"version\":\"1.0.0\"}}}}}}\n",
+        crate::spec::MCP_PREVIOUS_PROTOCOL_VERSION
+    );
+    let repo_root = fixture._dir.path().to_string_lossy().into_owned();
+    let responses = run_stdio_jsonrpc_session_for_tests(
+        &input,
+        &repo_root,
+        &fixture.db_path,
+        ServerOptions::default(),
+    )
+    .expect("run previous-version initialize script");
+    let response = responses
+        .into_iter()
+        .find(|value| value["id"] == serde_json::json!(1))
+        .expect("initialize response");
+    assert_eq!(
+        response["result"]["protocolVersion"],
+        serde_json::json!(crate::spec::MCP_PREVIOUS_PROTOCOL_VERSION)
+    );
+}
+
+#[test]
 fn stdio_transport_rejects_unsupported_initialize_protocol_version() {
     let fixture = setup_fixture();
     let input = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{},\"clientInfo\":{\"name\":\"zed\",\"version\":\"1.0.0\"}}}\n";
