@@ -4,6 +4,13 @@ All notable changes to this project should be recorded in this file.
 
 Versioning policy may evolve while Atlas is still moving quickly, but release notes should still group changes by user-visible impact.
 
+## 1.7.1 - 2026-08-04
+
+### Features
+
+- support 2 last versions of mcp (`5af60e5`)
+
+
 ## 1.7.0 - 2026-08-04
 
 ### Features
