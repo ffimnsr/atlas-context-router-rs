@@ -4,6 +4,21 @@ All notable changes to this project should be recorded in this file.
 
 Versioning policy may evolve while Atlas is still moving quickly, but release notes should still group changes by user-visible impact.
 
+## 1.7.0 - 2026-08-04
+
+### Features
+
+- add docs generation to atlas (`8f4289b`)
+- add memory tools for any decisions that can be recalled (`9873747`)
+- add official mcp sdk to have stable footing (`4d54e6f`)
+- cleanup and modularize large files (`43accfc`)
+
+
+### Maintenance
+
+- fix the formatting to satisfy ci (`93aa2f3`)
+
+
 ## 1.6.1 - 2026-08-02
 
 ### Features

@@ -1,14 +1,14 @@
 [package]
 name = "atlas-docs"
-version = "1.6.1"
+version = "1.7.0"
 edition = "2024"
 description = "Markdown documentation generation and dependency diagram export for Atlas code graphs"
 
 [dependencies]
 atlas-core.workspace = true
 atlas-engine.workspace = true
-atlas-reasoning = { path = "../atlas-reasoning", version = "1.6.1" }
-atlas-store-sqlite = { path = "../atlas-store-sqlite", version = "1.6.1" }
+atlas-reasoning = { path = "../atlas-reasoning", version = "1.7.0" }
+atlas-store-sqlite = { path = "../atlas-store-sqlite", version = "1.7.0" }
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
