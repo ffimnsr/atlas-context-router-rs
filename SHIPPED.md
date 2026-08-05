@@ -68,6 +68,17 @@ For active backlog, see ISSUES.md.
 - Pattern detection is implemented for repeated call chains, unused/isolated structures with removal blockers, high-centrality hubs and bottlenecks, and deep chains with traversal caps and cycle guards.
 - Insights surfaces are implemented across CLI (`atlas insights architecture|metrics|risk|patterns|large-functions|complex-functions` with `--json` and `--limit`) and MCP (`analyze_architecture`, `analyze_metrics`, `assess_risk`, `analyze_patterns`, `find_large_functions`, `find_complex_functions`) with freshness/provenance metadata and CLI/MCP parity coverage.
 - Insight thresholds and inline layer rules are config-driven under `.atlas/config.toml` with positive-value validation, ignore lists for files/modules/node kinds, and actionable config errors.
+- Similar-function detection is implemented with deterministic callable fingerprints from canonical file paths, symbol kind/name tokens, normalized signature tokens, call/import/reference neighborhood, module bucket, source-body shingles, and duplicate-normalized shingles; candidates are scored with weighted name/signature/body/neighborhood/module/size buckets and return feature score breakdowns, matched and differing features, and similarity band, with language/kind/arity/same-file bounds and stable JSON through CLI and MCP surfaces.
+- Duplicate detection is implemented beyond exact structural patterns by normalizing callable source tokens (keywords and control flow preserved, identifiers and literals replaced), detecting `exact_normalized` and `near_duplicate` groups with normalized token shingles, ranking groups by confidence, duplicated token/line count, member count, and stable deterministic group ID, and exposing members, files, normalized pattern summary, suggested extraction target, and source-span records through CLI/MCP.
+- Inferred module analysis is implemented with stable module IDs, display names, root paths, owned symbols, inbound/outbound dependencies, confidence and evidence, explicit-owner flags, package-owner preference, path-bucket inference (`packages/<name>`, `src/<segment>`, tests, docs/wiki/markdown), graph-community clustering before path fallback when no explicit owner exists, and deterministic module dependency edges.
+- Component labeling is implemented with the Atlas component taxonomy (repo scan, parse, persist graph, incremental update, search/traverse, review context, context memory, session continuity, CLI, MCP, config, diagnostics, tests, docs) and deterministic multi-label file/symbol assignment from path and symbol-name rules with confidence and evidence, plus component-label propagation into review/context workflow impacted components.
+- Similarity and duplicate band thresholds are configurable via `insights.*_threshold` config, duplicate suppressions are supported from config and CLI/MCP request filters, and a persisted fingerprint cache with incremental invalidation backs repeated analysis.
+
+## Docs Generation and Export
+
+- `atlas docs generate` CLI command is implemented for deterministic Markdown documentation: `index.md`, `files.md`, `symbols.md`, `modules.md`, and `components.md` with repo summary, graph stats, generated timestamp, indexed file count, symbol counts by kind, inferred modules, component labels, and top-level dependency summaries; per-file sections carry canonical path, language, package/module/component labels, owned symbols, inbound/outbound dependency counts, and notable duplicates; per-symbol sections carry qualified name, kind, file/span, documentation snippet, callers/callees, tests, and owning module/component labels.
+- Docs output is stable for tests through deterministic sorting of paths/symbols/modules/components and timestamp override in fixtures; missing, stale, or unreadable graph state fails with actionable errors and never silently generates partial docs unless `--allow-partial` is passed.
+- `atlas docs export` is implemented with `--format mermaid` and `--format dot` for module, component, and selected symbol-neighborhood dependency diagrams, `--scope repo|module|component|file|symbol` plus `--name` for focused exports, stable node IDs, human-readable labels, edge kinds and counts with collapsed high-volume edges, `--include-diagrams` integration into generated Markdown, and `--max-nodes`/`--max-edges` caps with deterministic omission reporting.
 
 ## CLI and MCP Interfaces
 
@@ -89,6 +100,10 @@ For active backlog, see ISSUES.md.
 - Decision memory with persistent decision events, artifact linking, reasoning storage, and decision retrieval is implemented.
 - Agent-scoped context and session management is implemented with agent_id partitioning, agent memory summaries, delegated task tracking, and agent responsibility summaries.
 - Agent-aware context isolation, intentional merged views, and agent-scoped session continuity are implemented.
+- Shared memory surface is implemented over continuity-owned storage with `MemoryImportance` (`critical`, `high`, `normal`, `low`) and `MemoryScope` (`project`, `session`, `frontend`, `global`) validation at CLI, MCP, and storage boundaries, a `memories` table with topic/title/body/importance/decay/source metadata plus indexes for `topic`, `importance`, `scope`, `session_id`, and `last_accessed_at`, and `atlas db check` schema validation.
+- `atlas memory store|recall|list|delete` CLI commands are implemented with `--topic`, `--title`, `--importance`, `--scope`, `--frontend`, `--source-id`, `--shared`, `--older-than`/`--newer-than` filters, and `--json`; recall uses lexical search with exact topic matches ranked first, list sorts by `updated_at DESC`, delete requires exact memory id with `--dry-run`, and stored text is kept exactly as provided except central redaction policy.
+- Frontend-aware visibility rules are implemented: `global` visible everywhere, `project` visible to all frontends in the repo, `session` visible only to the same session, `frontend` visible only to the same repo plus same frontend; `--shared` recall returns only `global` and `project` memories, project-scoped writes work without an active session, and frontend identities normalize to `claude`, `codex`, `copilot`, `cli`, and `mcp` with unknown names rejected unless explicitly allowed.
+- MCP `memory_store` and `memory_recall` are implemented with the same fields, validation, visibility rules, and bounded default output as the CLI, with parity tests proving stored record shapes, errors, and defaults match.
 
 ## Hook and Agent Host Integration
 
@@ -176,6 +191,7 @@ For active backlog, see ISSUES.md.
 - Stdio runs modern-first: per-request `_meta`, `server/discover` or `tools/list` as first request, no initialize dependency, diagnostics on stderr only, and protocol-clean stdout with isolated legacy fallback.
 - Cacheable result metadata is implemented for `tools/list`, `prompts/list`, `resources/list`, `resources/templates/list`, `resources/read`, and `server/discover` with `ttlMs`, `cacheScope`, and deterministic list ordering.
 - `subscriptions/listen` is implemented as a long-lived POST response stream with opted-in notification types, `subscriptionId` tagging, and request-scoped notification isolation.
+- Handrolled MCP JSON-RPC parser, dispatcher, response builders, TOON output mode, and legacy protocol modules are removed; MCP output is JSON-only with object `structuredContent` as the source of truth, and generated docs, prompts, and installed instructions describe JSON-only behavior.
 
 ## MCP Server Features
 
@@ -205,6 +221,12 @@ For active backlog, see ISSUES.md.
 - Runtime `tool_help`/`man` output includes an `input_contract` section per tool with discriminant field, accepted enum values, required companion fields, mutually exclusive legacy fields, and one minimal valid example per variant; generated `MCP_TOOLS.md` and installed AGENTS instructions reference runtime docs as canonical.
 - Registry and snapshot tests enforce the contracts: hidden precedence wording, legacy ambiguous field groups, missing object `structuredContent` schemas, and stale manual docs fail CI.
 
+## MCP Tool Manual and Schema Introspection
+
+- Shared manual-documentation service is implemented from the live MCP tool registry so per-tool docs are never duplicated in hardcoded tables; lookup requires exact case-sensitive tool names, supports namespace `mcp` only with clear validation errors for unknown namespaces, returns deterministic document payloads without executing the target tool, and stays read-only and safe in restricted environments.
+- `man` response shape is implemented with requested and resolved tool identity, description, tool structure, input-args section (field name, type, required/optional state, default, accepted enum values, per-field description), output-response section with optionality and metadata/error payload shapes, usage section in `man mcp <tool>` form with invocation examples, error section for unknown/deprecated/hidden/schema-unavailable tools, and deterministic field ordering for CLI, MCP, snapshots, and generated docs.
+- MCP `man` tool and CLI `atlas man mcp <tool>` are implemented with parity: compact default output for agents, `--json` matching the structured payload, visible registered tools only, nearest-name suggestions on unknown targets using deterministic ranking, bounded truncation of oversized examples and descriptions without dropping required sections, and freshness/provenance metadata when manual output depends on generated registry state.
+
 ## MCP Elicitation, Durable Tasks, and MRTR
 
 - Elicitation is implemented with form and URL modes, single- and multi-select enums, titled and untitled enum values, default values on primitive fields, and typed response validation; `purge_saved_context` requires elicited confirmation before running without a `session_id`.
@@ -222,5 +244,6 @@ For active backlog, see ISSUES.md.
 
 ## Still Open
 
-- Phase 30 remaining code intelligence, Phase 31 lowest-priority features, and the ICM-inspired memory follow-on roadmap (ICM-A through ICM-H) remain in ISSUES.md.
+- ICM-inspired memory follow-on roadmap (ICM-B through ICM-H) remains in ISSUES.md.
 - Retrieval post-retrieval compaction experiment, runtime event enrichment and graph linking, Rust reachability guard, shared parser query migration, context escalation contract, dynamic agent policy and hook enforcement, graph store corruption recovery, and measured SQLite read pooling remain in ISSUES.md.
+- Tokenizer-backed context budget accounting and remaining Additional Backlog items (metrics counters, parser-cache CI gate, LSP shim, budget-policy documentation) remain in ISSUES.md.

@@ -63,6 +63,47 @@ fn fail_build_after_begin_sets_build_failed_with_error() {
 }
 
 #[test]
+fn build_recovery_metadata_persists_quarantine_details() {
+    let store = open_in_memory();
+    store.begin_build("/repo").unwrap();
+    store
+        .finish_build(
+            "/repo",
+            BuildFinishStats {
+                state: GraphBuildState::Built,
+                files_discovered: 1,
+                files_processed: 1,
+                files_accepted: 1,
+                files_skipped_by_byte_budget: 0,
+                files_failed: 0,
+                bytes_accepted: 10,
+                bytes_skipped: 0,
+                nodes_written: 1,
+                edges_written: 0,
+                budget_stop_reason: None,
+            },
+        )
+        .unwrap();
+    store
+        .set_build_recovery_metadata(
+            "/repo",
+            Some("auto_quarantine_and_rebuild"),
+            Some("/repo/.atlas/worldtree.db.quarantine.20260805T010203Z.0"),
+        )
+        .unwrap();
+
+    let status = store.get_build_status("/repo").unwrap().unwrap();
+    assert_eq!(
+        status.recovery_mode.as_deref(),
+        Some("auto_quarantine_and_rebuild")
+    );
+    assert_eq!(
+        status.quarantine_path.as_deref(),
+        Some("/repo/.atlas/worldtree.db.quarantine.20260805T010203Z.0")
+    );
+}
+
+#[test]
 fn get_build_status_returns_none_when_no_row() {
     let store = open_in_memory();
     let result = store.get_build_status("/nonexistent").unwrap();

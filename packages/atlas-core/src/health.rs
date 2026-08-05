@@ -1,10 +1,44 @@
+use serde::{Deserialize, Serialize};
+
 #[derive(Debug, Clone, Copy)]
 pub struct GraphHealthInput<'a> {
     pub db_exists: bool,
-    pub graph_error: Option<&'a str>,
+    pub graph_built: bool,
+    pub health_class: Option<GraphStoreHealthClass>,
     pub build_state: Option<&'a str>,
-    pub stale_index: bool,
     pub retrieval_unavailable: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GraphStoreHealthClass {
+    Healthy,
+    Stale,
+    InterruptedBuild,
+    FailedBuild,
+    SqliteCorrupt,
+    SchemaMismatch,
+    LogicalInconsistency,
+}
+
+impl GraphStoreHealthClass {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Healthy => "healthy",
+            Self::Stale => "stale",
+            Self::InterruptedBuild => "interrupted_build",
+            Self::FailedBuild => "failed_build",
+            Self::SqliteCorrupt => "sqlite_corrupt",
+            Self::SchemaMismatch => "schema_mismatch",
+            Self::LogicalInconsistency => "logical_inconsistency",
+        }
+    }
+}
+
+impl std::fmt::Display for GraphStoreHealthClass {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 pub fn is_schema_mismatch_error(error: &str) -> bool {
@@ -25,26 +59,47 @@ pub fn is_schema_mismatch_error(error: &str) -> bool {
     .any(|needle| lower.contains(needle))
 }
 
+pub fn classify_graph_store_error(error: &str) -> GraphStoreHealthClass {
+    if is_schema_mismatch_error(error) {
+        return GraphStoreHealthClass::SchemaMismatch;
+    }
+
+    let lower = error.to_ascii_lowercase();
+    if looks_like_logical_inconsistency(&lower) {
+        return GraphStoreHealthClass::LogicalInconsistency;
+    }
+
+    GraphStoreHealthClass::SqliteCorrupt
+}
+
 pub fn select_graph_health_error_code(input: GraphHealthInput<'_>) -> &'static str {
     if !input.db_exists {
         return "missing_graph_db";
     }
-    if let Some(error) = input.graph_error {
-        if is_schema_mismatch_error(error) {
-            return "schema_mismatch";
-        }
-        return "corrupt_or_inconsistent_graph_rows";
+    if let Some(health_class) = input.health_class {
+        return match health_class {
+            GraphStoreHealthClass::Healthy => {
+                if input.retrieval_unavailable && input.graph_built {
+                    "retrieval_index_unavailable"
+                } else {
+                    "none"
+                }
+            }
+            GraphStoreHealthClass::Stale => "stale_index",
+            GraphStoreHealthClass::InterruptedBuild => "interrupted_build",
+            GraphStoreHealthClass::FailedBuild => "failed_build",
+            GraphStoreHealthClass::SqliteCorrupt => "sqlite_corrupt",
+            GraphStoreHealthClass::SchemaMismatch => "schema_mismatch",
+            GraphStoreHealthClass::LogicalInconsistency => "logical_inconsistency",
+        };
     }
     match input.build_state {
-        Some("building") => return "interrupted_build",
         Some("degraded") => return "degraded_build",
+        Some("building") => return "interrupted_build",
         Some("build_failed") => return "failed_build",
         _ => {}
     }
-    if input.stale_index {
-        return "stale_index";
-    }
-    if input.retrieval_unavailable {
+    if input.retrieval_unavailable && input.graph_built {
         return "retrieval_index_unavailable";
     }
     "none"
@@ -59,6 +114,12 @@ pub fn graph_health_error_message(error_code: &str) -> &'static str {
         }
         "schema_mismatch" => {
             "Graph database schema does not match this Atlas build. Rebuild the graph to refresh the schema."
+        }
+        "sqlite_corrupt" => {
+            "Graph SQLite store is physically corrupt or unreadable. Rebuild graph data from repository source."
+        }
+        "logical_inconsistency" => {
+            "Graph database opened, but graph invariants failed. Rebuild graph data from repository source."
         }
         "corrupt_or_inconsistent_graph_rows" => {
             "Graph database has integrity issues. Run `atlas build` to rebuild from scratch."
@@ -99,6 +160,14 @@ pub fn graph_health_error_suggestions(error_code: &str) -> &'static [&'static st
         "schema_mismatch" => &[
             "run `atlas build` to rebuild the graph with the current schema",
             "delete the stale database file if rebuild keeps failing",
+        ],
+        "sqlite_corrupt" => &[
+            "run `atlas build` to recreate the graph database from repository source",
+            "inspect `.atlas/worldtree.db` before deleting it if forensic evidence matters",
+        ],
+        "logical_inconsistency" => &[
+            "run `atlas db-check` to inspect failing graph invariants",
+            "run `atlas build` to rebuild the graph from repository source",
         ],
         "corrupt_or_inconsistent_graph_rows" => {
             &["run `atlas build` to rebuild the graph from scratch"]
@@ -153,11 +222,22 @@ fn internal_error_code(detail: &str) -> Option<&'static str> {
     if is_schema_mismatch_error(detail) {
         return Some("schema_mismatch");
     }
+    if looks_like_logical_inconsistency(&lower) {
+        return Some("logical_inconsistency");
+    }
     if looks_like_missing_graph_db(&lower) {
         return Some("missing_graph_db");
     }
     if looks_like_internal_storage_error(&lower) {
-        return Some("corrupt_or_inconsistent_graph_rows");
+        return Some(match classify_graph_store_error(detail) {
+            GraphStoreHealthClass::SchemaMismatch => "schema_mismatch",
+            GraphStoreHealthClass::LogicalInconsistency => "logical_inconsistency",
+            GraphStoreHealthClass::SqliteCorrupt => "sqlite_corrupt",
+            GraphStoreHealthClass::Healthy
+            | GraphStoreHealthClass::Stale
+            | GraphStoreHealthClass::InterruptedBuild
+            | GraphStoreHealthClass::FailedBuild => "sqlite_corrupt",
+        });
     }
 
     None
@@ -170,12 +250,32 @@ fn looks_like_missing_graph_db(lower: &str) -> bool {
         && (lower.contains("no such file or directory") || lower.contains("os error 2"))
 }
 
+fn looks_like_logical_inconsistency(lower: &str) -> bool {
+    [
+        "noncanonical_path:",
+        "noncanonical_path_rows",
+        "missing_repo_provenance:",
+        "foreign key",
+        "pragma foreign_key_check",
+        "dangling edge",
+        "dangling_edge",
+        "orphan node",
+        "orphan_node",
+        "graph invariant",
+        "missing endpoint",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
+}
+
 fn looks_like_internal_storage_error(lower: &str) -> bool {
     [
         "sqlite",
         "rusqlite",
         "fts5",
         "database disk image is malformed",
+        "file is not a database",
+        "file is encrypted or is not a database",
         "readonly database",
         "constraint failed",
         "failed to prepare",
@@ -217,7 +317,104 @@ fn contains_sql_statement(lower: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{graph_health_error_message, user_facing_error_message};
+    use super::{
+        GraphHealthInput, GraphStoreHealthClass, classify_graph_store_error,
+        graph_health_error_message, select_graph_health_error_code, user_facing_error_message,
+    };
+
+    #[test]
+    fn classify_graph_store_error_distinguishes_schema_sqlite_and_logical() {
+        assert_eq!(
+            classify_graph_store_error("table nodes has no column named extra_json"),
+            GraphStoreHealthClass::SchemaMismatch
+        );
+        assert_eq!(
+            classify_graph_store_error("rusqlite error: database disk image is malformed"),
+            GraphStoreHealthClass::SqliteCorrupt
+        );
+        assert_eq!(
+            classify_graph_store_error("dangling edge detected during graph invariant scan"),
+            GraphStoreHealthClass::LogicalInconsistency
+        );
+    }
+
+    #[test]
+    fn select_graph_health_error_code_maps_health_classes() {
+        let base = GraphHealthInput {
+            db_exists: true,
+            graph_built: true,
+            health_class: None,
+            build_state: Some("built"),
+            retrieval_unavailable: false,
+        };
+
+        assert_eq!(
+            select_graph_health_error_code(GraphHealthInput {
+                health_class: Some(GraphStoreHealthClass::Healthy),
+                ..base
+            }),
+            "none"
+        );
+        assert_eq!(
+            select_graph_health_error_code(GraphHealthInput {
+                health_class: Some(GraphStoreHealthClass::Stale),
+                ..base
+            }),
+            "stale_index"
+        );
+        assert_eq!(
+            select_graph_health_error_code(GraphHealthInput {
+                health_class: Some(GraphStoreHealthClass::InterruptedBuild),
+                ..base
+            }),
+            "interrupted_build"
+        );
+        assert_eq!(
+            select_graph_health_error_code(GraphHealthInput {
+                health_class: Some(GraphStoreHealthClass::FailedBuild),
+                ..base
+            }),
+            "failed_build"
+        );
+        assert_eq!(
+            select_graph_health_error_code(GraphHealthInput {
+                health_class: Some(GraphStoreHealthClass::SqliteCorrupt),
+                ..base
+            }),
+            "sqlite_corrupt"
+        );
+        assert_eq!(
+            select_graph_health_error_code(GraphHealthInput {
+                health_class: Some(GraphStoreHealthClass::SchemaMismatch),
+                ..base
+            }),
+            "schema_mismatch"
+        );
+        assert_eq!(
+            select_graph_health_error_code(GraphHealthInput {
+                health_class: Some(GraphStoreHealthClass::LogicalInconsistency),
+                ..base
+            }),
+            "logical_inconsistency"
+        );
+        assert_eq!(
+            select_graph_health_error_code(GraphHealthInput {
+                health_class: None,
+                build_state: Some("degraded"),
+                ..base
+            }),
+            "degraded_build"
+        );
+        assert_eq!(
+            select_graph_health_error_code(GraphHealthInput {
+                db_exists: false,
+                health_class: None,
+                build_state: None,
+                ..base
+            }),
+            "missing_graph_db"
+        );
+    }
 
     #[test]
     fn user_facing_error_message_redacts_schema_mismatch_details() {
@@ -234,7 +431,7 @@ mod tests {
     }
 
     #[test]
-    fn user_facing_error_message_redacts_internal_sql_details() {
+    fn user_facing_error_message_redacts_sqlite_corruption_details() {
         let primary = "atlas update failed";
         let detail = concat!(
             "rusqlite error: database disk image is malformed\n",
@@ -243,7 +440,18 @@ mod tests {
 
         assert_eq!(
             user_facing_error_message(primary, detail),
-            graph_health_error_message("corrupt_or_inconsistent_graph_rows")
+            graph_health_error_message("sqlite_corrupt")
+        );
+    }
+
+    #[test]
+    fn user_facing_error_message_redacts_logical_inconsistency_details() {
+        let primary = "atlas db-check failed";
+        let detail = "dangling edge detected during graph invariant scan";
+
+        assert_eq!(
+            user_facing_error_message(primary, detail),
+            graph_health_error_message("logical_inconsistency")
         );
     }
 

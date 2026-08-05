@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
 use atlas_contentstore::{ContentStore, IndexState};
 use atlas_core::{
-    GraphExecutionState, NodeKind, graph_health_error_message, graph_health_error_suggestions,
-    is_schema_mismatch_error,
+    GraphExecutionState, NodeKind, classify_graph_store_error, graph_health_error_message,
+    graph_health_error_suggestions,
 };
 use atlas_repo::{
     collect_files, find_repo_root, hash_file, stable_repo_fingerprint, stable_repo_id,
@@ -337,28 +337,24 @@ impl CheckResult {
 }
 
 fn graph_issue_code(error: &str) -> &'static str {
-    if is_schema_mismatch_error(error) {
-        "schema_mismatch"
-    } else {
-        "corrupt_or_inconsistent_graph_rows"
+    match classify_graph_store_error(error).as_str() {
+        "schema_mismatch" => "schema_mismatch",
+        "logical_inconsistency" => "logical_inconsistency",
+        _ => "sqlite_corrupt",
     }
 }
 
 fn integrity_issue_code(issues: &[String], structural_problem: bool) -> &'static str {
-    if structural_problem {
-        "corrupt_or_inconsistent_graph_rows"
-    } else if issues
-        .iter()
-        .any(|issue| issue.starts_with("missing_repo_provenance:"))
+    if structural_problem
+        || issues.iter().any(|issue| {
+            issue.starts_with("missing_repo_provenance:")
+                || issue.starts_with("noncanonical_path:")
+                || issue.to_ascii_lowercase().contains("foreign key")
+        })
     {
-        "missing_repo_provenance_rows"
-    } else if issues
-        .iter()
-        .any(|issue| issue.starts_with("noncanonical_path:"))
-    {
-        "noncanonical_path_rows"
+        "logical_inconsistency"
     } else {
-        "corrupt_or_inconsistent_graph_rows"
+        "sqlite_corrupt"
     }
 }
 
@@ -417,6 +413,7 @@ fn print_doctor_report(
     checks: &[CheckResult],
     all_ok: bool,
     execution_state: Option<GraphExecutionState>,
+    health_class: Option<&str>,
 ) -> Result<()> {
     if cli.json {
         let items: Vec<serde_json::Value> = checks
@@ -436,10 +433,15 @@ fn print_doctor_report(
             serde_json::json!({
                 "ok": all_ok,
                 "error_code": error_code,
+                "recovery_mode": "block_only",
+                "quarantine_path": serde_json::Value::Null,
+                "rebuild_result": if all_ok { "not_needed" } else { "blocked" },
+                "failure_reason": serde_json::Value::Null,
                 "message": graph_health_error_message(error_code),
                 "suggestions": graph_health_error_suggestions(error_code),
                 "repo_provenance": repo_provenance_json(repo_root),
                 "execution_state": execution_state.map(|s| s.as_str()),
+                "health_class": health_class,
                 "checks": items,
             }),
         )?;
@@ -700,7 +702,7 @@ pub fn run_doctor(cli: &Cli) -> Result<()> {
         }
         Err(e) => {
             checks.push(CheckResult::fail("repo_root", e.to_string(), None));
-            return print_doctor_report(cli, ".", &checks, false, None);
+            return print_doctor_report(cli, ".", &checks, false, None, None);
         }
     };
 
@@ -1080,20 +1082,22 @@ pub fn run_doctor(cli: &Cli) -> Result<()> {
     }
 
     let all_ok = checks.iter().all(|c| c.ok);
-    let execution_state = if db_exists {
+    let readiness = if db_exists {
         match Store::open(&db_path_str) {
-            Ok(store) => Some(derive_graph_readiness(&store, &repo, &db_path_str).execution_state),
-            Err(e) => Some(
-                derive_graph_readiness_open_failed(&repo, &db_path_str, &e.to_string())
-                    .execution_state,
-            ),
+            Ok(store) => derive_graph_readiness(&store, &repo, &db_path_str),
+            Err(e) => derive_graph_readiness_open_failed(&repo, &db_path_str, &e.to_string()),
         }
     } else {
-        Some(
-            derive_graph_readiness_open_failed(&repo, &db_path_str, "db not found").execution_state,
-        )
+        derive_graph_readiness_open_failed(&repo, &db_path_str, "db not found")
     };
-    print_doctor_report(cli, &repo, &checks, all_ok, execution_state)?;
+    print_doctor_report(
+        cli,
+        &repo,
+        &checks,
+        all_ok,
+        Some(readiness.execution_state),
+        readiness.health_class.map(|class| class.as_str()),
+    )?;
     if !all_ok {
         std::process::exit(1);
     }
@@ -1104,10 +1108,61 @@ pub fn run_db_check(cli: &Cli) -> Result<()> {
     let repo = resolve_repo(cli)?;
     let db_path = db_path(cli, &repo);
 
-    let store =
-        Store::open(&db_path).with_context(|| format!("cannot open database at {db_path}"))?;
+    let fail_closed_json = |error_code: &'static str, failure_reason: String| -> Result<()> {
+        let result = serde_json::json!({
+            "db_path": db_path,
+            "repo_provenance": repo_provenance_json(&repo),
+            "ok": false,
+            "health_class": error_code,
+            "recovery_mode": "block_only",
+            "quarantine_path": serde_json::Value::Null,
+            "rebuild_result": "blocked",
+            "failure_reason": failure_reason,
+            "error_code": error_code,
+            "message": graph_health_error_message(error_code),
+            "suggestions": graph_health_error_suggestions(error_code),
+            "integrity_issues": serde_json::Value::Null,
+            "orphan_node_count": 0,
+            "dangling_edge_count": 0,
+            "session_db": {
+                "path": atlas_engine::paths::session_db_path(&db_path),
+                "exists": std::path::Path::new(&atlas_engine::paths::session_db_path(&db_path)).exists(),
+                "ok": serde_json::Value::Null,
+                "memory_schema": {
+                    "ok": serde_json::Value::Null,
+                    "issues": []
+                }
+            },
+        });
+        print_json("db_check", result)?;
+        std::process::exit(1);
+    };
 
-    let issues = store.integrity_check().context("integrity check failed")?;
+    let store = match Store::open(&db_path) {
+        Ok(store) => store,
+        Err(error) => {
+            if cli.json {
+                return fail_closed_json(
+                    classify_graph_store_error(&error.to_string()).as_str(),
+                    format!("cannot open database at {db_path}: {error}"),
+                );
+            }
+            return Err(error).with_context(|| format!("cannot open database at {db_path}"));
+        }
+    };
+
+    let issues = match store.integrity_check() {
+        Ok(issues) => issues,
+        Err(error) => {
+            if cli.json {
+                return fail_closed_json(
+                    classify_graph_store_error(&error.to_string()).as_str(),
+                    format!("integrity check failed: {error}"),
+                );
+            }
+            return Err(error).context("integrity check failed");
+        }
+    };
 
     const ORPHAN_LIMIT: usize = 100;
     let orphans = structural_orphans(&store, ORPHAN_LIMIT);
@@ -1146,12 +1201,24 @@ pub fn run_db_check(cli: &Cli) -> Result<()> {
     } else {
         "none"
     };
+    let health_class = match error_code {
+        "none" => Some("healthy"),
+        "schema_mismatch" => Some("schema_mismatch"),
+        "sqlite_corrupt" => Some("sqlite_corrupt"),
+        "logical_inconsistency" => Some("logical_inconsistency"),
+        _ => None,
+    };
 
     if cli.json {
         let result = serde_json::json!({
             "db_path": db_path,
             "repo_provenance": repo_provenance_json(&repo),
             "ok": ok,
+            "health_class": health_class,
+            "recovery_mode": "block_only",
+            "quarantine_path": serde_json::Value::Null,
+            "rebuild_result": if ok { "not_needed" } else { "blocked" },
+            "failure_reason": serde_json::Value::Null,
             "error_code": error_code,
             "message": graph_health_error_message(error_code),
             "suggestions": graph_health_error_suggestions(error_code),

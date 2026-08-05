@@ -1,6 +1,21 @@
 use super::*;
 use std::os::unix::fs::PermissionsExt;
 
+fn quarantine_artifacts(atlas_dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let Ok(entries) = fs::read_dir(atlas_dir) else {
+        return Vec::new();
+    };
+    entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("worldtree.db.quarantine."))
+        })
+        .collect()
+}
+
 #[test]
 fn sqlite_fts5_smoke_round_trip() {
     let repo = setup_fixture_repo();
@@ -237,6 +252,7 @@ fn status_reports_schema_mismatch_for_malformed_build_state_table() {
     let status = read_json_data_output("status", run_atlas(repo.path(), &["--json", "status"]));
     assert_eq!(status["ok"], json!(false));
     assert_eq!(status["error_code"], json!("schema_mismatch"));
+    assert_eq!(status["health_class"], json!("schema_mismatch"));
     assert!(
         status["graph_query_error"]
             .as_str()
@@ -252,6 +268,7 @@ fn db_check_validates_memory_schema_when_healthy() {
     let result = read_json_data_output("db_check", run_atlas(repo.path(), &["--json", "db-check"]));
     assert_eq!(result["ok"], json!(true));
     assert_eq!(result["error_code"], json!("none"));
+    assert_eq!(result["health_class"], json!("healthy"));
 
     let session_db = &result["session_db"];
     assert_eq!(session_db["exists"], json!(true));
@@ -274,10 +291,43 @@ fn db_check_reports_missing_memories_table_as_schema_mismatch() {
     let result = read_json_data_output("db_check", run_atlas(repo.path(), &["--json", "db-check"]));
     assert_eq!(result["ok"], json!(false));
     assert_eq!(result["error_code"], json!("schema_mismatch"));
+    assert_eq!(result["health_class"], json!("schema_mismatch"));
 
     let memory_schema = &result["session_db"]["memory_schema"];
     assert_eq!(memory_schema["ok"], json!(false));
     assert_eq!(memory_schema["issues"], json!(["missing table: memories"]));
+}
+
+#[test]
+fn db_check_reports_logical_inconsistency_for_dangling_graph_edge() {
+    let repo = setup_fixture_repo();
+    run_atlas(repo.path(), &["init"]);
+
+    let db_path = repo.path().join(".atlas").join("worldtree.db");
+    let conn = Connection::open(&db_path).expect("open atlas db");
+    conn.execute(
+        "INSERT INTO edges (
+            kind, source_qualified, target_qualified, file_path, line, confidence, confidence_tier, extra_json
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        rusqlite::params![
+            "contains",
+            "missing::source",
+            "missing::target",
+            "src/lib.rs",
+            1,
+            1.0_f64,
+            "definite",
+            "{}"
+        ],
+    )
+    .expect("seed dangling edge");
+    drop(conn);
+
+    let result = read_json_data_output("db_check", run_atlas(repo.path(), &["--json", "db-check"]));
+    assert_eq!(result["ok"], json!(false));
+    assert_eq!(result["error_code"], json!("logical_inconsistency"));
+    assert_eq!(result["health_class"], json!("logical_inconsistency"));
+    assert!(result["dangling_edge_count"].as_u64().unwrap_or(0) >= 1);
 }
 
 #[test]
@@ -307,7 +357,150 @@ fn db_check_reports_missing_memory_indexes() {
 }
 
 #[test]
-fn update_redacts_internal_sql_errors_from_stderr() {
+fn status_reports_sqlite_corrupt_for_non_sqlite_worldtree() {
+    let repo = setup_fixture_repo();
+
+    run_atlas(repo.path(), &["init"]);
+
+    let db_path = repo.path().join(".atlas").join("worldtree.db");
+    std::fs::write(&db_path, "not a sqlite database").expect("overwrite graph db");
+
+    let output = run_atlas_capture(repo.path(), &["--json", "status"]);
+    assert!(
+        !output.status.success(),
+        "status should fail closed on corrupt db"
+    );
+    let status = read_json_data_output("status", output);
+    assert_eq!(status["error_code"], json!("sqlite_corrupt"));
+    assert_eq!(status["health_class"], json!("sqlite_corrupt"));
+    assert_eq!(status["execution_state"], json!("corrupt"));
+}
+
+#[test]
+fn diagnostics_report_corruption_without_mutating_db() {
+    let repo = setup_fixture_repo();
+
+    run_atlas(repo.path(), &["init"]);
+
+    let atlas_dir = repo.path().join(".atlas");
+    let db_path = atlas_dir.join("worldtree.db");
+    let original_bytes = b"not a sqlite database";
+    fs::write(&db_path, original_bytes).expect("overwrite graph db");
+
+    let status_output = run_atlas_capture(repo.path(), &["--json", "status"]);
+    assert!(
+        !status_output.status.success(),
+        "status should fail closed on corrupt db"
+    );
+    let status = read_json_data_output("status", status_output);
+    assert_eq!(status["error_code"], json!("sqlite_corrupt"));
+    assert_eq!(status["recovery_mode"], json!("block_only"));
+    assert_eq!(status["quarantine_path"], json!(null));
+
+    let db_check_output = run_atlas_capture(repo.path(), &["--json", "db-check"]);
+    assert!(
+        !db_check_output.status.success(),
+        "db-check should fail closed on corrupt db"
+    );
+    let db_check = read_json_data_output("db_check", db_check_output);
+    assert_eq!(db_check["error_code"], json!("sqlite_corrupt"));
+    assert_eq!(db_check["recovery_mode"], json!("block_only"));
+    assert_eq!(db_check["quarantine_path"], json!(null));
+
+    assert_eq!(
+        fs::read(&db_path).expect("read corrupt graph db after diagnostics"),
+        original_bytes,
+        "diagnostics must not rewrite corrupt graph db"
+    );
+    assert!(
+        quarantine_artifacts(&atlas_dir).is_empty(),
+        "diagnostics must not quarantine graph db"
+    );
+}
+
+#[test]
+fn update_reports_actionable_failure_when_rebuild_after_quarantine_fails() {
+    let repo = setup_fixture_repo();
+
+    run_atlas(repo.path(), &["init"]);
+    run_atlas(repo.path(), &["build"]);
+
+    let db_path = repo.path().join(".atlas").join("worldtree.db");
+    let conn = Connection::open(&db_path).expect("open atlas db");
+    conn.execute_batch("DROP TABLE files;")
+        .expect("drop files table to force schema mismatch");
+    drop(conn);
+
+    let fake_bin = repo.path().join("fake-bin");
+    fs::create_dir_all(&fake_bin).expect("create fake bin dir");
+    let fake_git = fake_bin.join("git");
+    fs::write(
+        &fake_git,
+        "#!/bin/sh\necho forced git failure >&2\nexit 1\n",
+    )
+    .expect("write fake git");
+    let mut perms = fs::metadata(&fake_git)
+        .expect("fake git metadata")
+        .permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(&fake_git, perms).expect("chmod fake git");
+
+    let output = sanitized_command(env!("CARGO_BIN_EXE_atlas"))
+        .args(["--json", "update", "--fail-fast"])
+        .env("PATH", fake_bin.as_os_str())
+        .current_dir(repo.path())
+        .output()
+        .expect("run atlas update with failing git");
+    assert!(
+        output.status.success(),
+        "json update should return payload even on rebuild failure"
+    );
+
+    let update = read_json_data_output("update", output);
+    assert_eq!(update["ok"], json!(false));
+    assert_eq!(update["error_code"], json!("failed_build"));
+    assert_eq!(update["health_class"], json!("schema_mismatch"));
+    assert_eq!(
+        update["recovery_mode"],
+        json!("auto_quarantine_and_rebuild")
+    );
+    assert_eq!(update["rebuild_result"], json!("rebuild_failed"));
+    assert_eq!(
+        update["rebuild_strategy"],
+        json!("full_rebuild_from_source")
+    );
+    assert!(update["quarantine_path"].is_string());
+    assert!(
+        update["failure_reason"]
+            .as_str()
+            .is_some_and(|text| text.contains("cannot discover package owners")),
+        "failure reason should preserve rebuild error: {update:?}"
+    );
+    assert!(
+        update["suggestions"].as_array().is_some_and(|items| items
+            .iter()
+            .any(|item| item == "run `atlas build` to retry")),
+        "failed rebuild should surface actionable retry suggestion: {update:?}"
+    );
+
+    let status_output = run_atlas_capture(repo.path(), &["--json", "status"]);
+    let status = read_json_data_output("status", status_output);
+    assert_eq!(status["ok"], json!(false));
+    assert_eq!(status["error_code"], json!("failed_build"));
+    assert_eq!(status["health_class"], json!("failed_build"));
+    assert_eq!(status["recovery_mode"], json!("block_only"));
+    assert_eq!(status["rebuild_result"], json!("rebuild_failed"));
+    assert!(status["quarantine_path"].is_string());
+    assert!(
+        status["failure_reason"]
+            .as_str()
+            .is_some_and(|text| text.contains("cannot discover package owners")),
+        "status should keep actionable rebuild failure: {status:?}"
+    );
+}
+
+#[test]
+fn update_auto_quarantines_schema_mismatch_and_rebuilds() {
     let repo = setup_fixture_repo();
 
     run_atlas(repo.path(), &["init"]);
@@ -320,33 +513,21 @@ fn update_redacts_internal_sql_errors_from_stderr() {
         .expect("drop files table to force schema mismatch");
     drop(conn);
 
-    let output = sanitized_command(env!("CARGO_BIN_EXE_atlas"))
-        .args(["update"])
-        .current_dir(repo.path())
-        .output()
-        .expect("run atlas update");
-    assert!(
-        !output.status.success(),
-        "update should fail on broken schema"
-    );
+    let output = run_atlas_capture(repo.path(), &["--json", "update"]);
+    assert!(output.status.success(), "update should recover via rebuild");
 
-    let stderr = String::from_utf8(output.stderr).expect("stderr utf-8");
-    assert!(
-        stderr.contains("Graph database schema does not match this Atlas build."),
-        "stderr should contain friendly graph message\nstderr:\n{stderr}"
+    let update = read_json_data_output("update", output);
+    assert_eq!(update["ok"], json!(true));
+    assert_eq!(
+        update["recovery_mode"],
+        json!("auto_quarantine_and_rebuild")
     );
-    assert!(
-        !stderr.to_ascii_lowercase().contains("sqlite"),
-        "stderr must not leak sqlite internals\nstderr:\n{stderr}"
+    assert_eq!(update["rebuild_result"], json!("rebuilt_fresh"));
+    assert_eq!(
+        update["rebuild_strategy"],
+        json!("full_rebuild_from_source")
     );
-    assert!(
-        !stderr.to_ascii_lowercase().contains("sql"),
-        "stderr must not leak sql internals\nstderr:\n{stderr}"
-    );
-    assert!(
-        !stderr.contains("no such table"),
-        "stderr must not leak raw schema failure\nstderr:\n{stderr}"
-    );
+    assert!(update["quarantine_path"].is_string());
 }
 
 #[test]

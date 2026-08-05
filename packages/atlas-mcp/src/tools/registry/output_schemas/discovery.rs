@@ -213,12 +213,26 @@ pub(crate) fn man_output_schema() -> Value {
                 "properties": {
                     "cli": { "type": "string" },
                     "mcp_manual_tool_call": { "type": "string" },
+                    "tool_usage": {
+                        "type": "array",
+                        "items": { "type": "string" }
+                    },
                     "target_tool_call_examples": {
+                        "type": "array",
+                        "items": { "type": "string" }
+                    },
+                    "few_shot_prompts": {
                         "type": "array",
                         "items": { "type": "string" }
                     }
                 },
-                "required": ["cli", "mcp_manual_tool_call", "target_tool_call_examples"]
+                "required": [
+                    "cli",
+                    "mcp_manual_tool_call",
+                    "tool_usage",
+                    "target_tool_call_examples",
+                    "few_shot_prompts"
+                ]
             },
             "error_cases": {
                 "type": "array",

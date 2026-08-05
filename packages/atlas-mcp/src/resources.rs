@@ -675,11 +675,29 @@ fn render_tool_manual_markdown(document: &crate::tools::ToolManualDocument) -> S
             document.usage.mcp_manual_tool_call
         ),
         "".to_owned(),
+        "### Tool Usage Guidance".to_owned(),
+        "".to_owned(),
+    ]);
+    for guidance in &document.usage.tool_usage {
+        lines.push(format!("- {guidance}"));
+    }
+
+    lines.extend([
+        "".to_owned(),
         "### Target Tool Call Examples".to_owned(),
         "".to_owned(),
     ]);
     for example in &document.usage.target_tool_call_examples {
         lines.push(format!("- `{example}`"));
+    }
+
+    lines.extend([
+        "".to_owned(),
+        "### Few-Shot Prompts".to_owned(),
+        "".to_owned(),
+    ]);
+    for prompt in &document.usage.few_shot_prompts {
+        lines.push(format!("- {prompt}"));
     }
 
     lines.extend([
@@ -977,7 +995,9 @@ mod tests {
         assert!(text.contains("# Tool Docs: `query_graph`"));
         assert!(text.contains("## Input Contract"));
         assert!(text.contains("## Usage"));
+        assert!(text.contains("### Tool Usage Guidance"));
         assert!(text.contains("### Target Tool Call Examples"));
+        assert!(text.contains("### Few-Shot Prompts"));
     }
 
     #[test]

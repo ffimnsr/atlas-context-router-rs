@@ -4,8 +4,8 @@ use atlas_core::model::ContextIntent;
 use atlas_core::model::{ChangeType, ChangedFile, ContextRequest, ContextTarget};
 use atlas_core::{
     BudgetPolicy, BudgetReport, GraphHealthInput, GraphReadiness, GraphReadinessInput,
-    error_code_docs_ref, graph_health_error_message, graph_health_error_suggestions,
-    is_schema_mismatch_error, select_graph_health_error_code,
+    GraphStoreHealthClass, classify_graph_store_error, error_code_docs_ref,
+    graph_health_error_message, graph_health_error_suggestions, select_graph_health_error_code,
 };
 use atlas_parser::ParserRegistry;
 use atlas_repo::{
@@ -252,16 +252,16 @@ pub(super) fn load_embedding_config(
 
 pub(super) fn failure_category(
     db_exists: bool,
-    graph_error: Option<&str>,
+    graph_built: bool,
+    health_class: Option<GraphStoreHealthClass>,
     build_state: Option<&str>,
-    stale_index: bool,
     retrieval_unavailable: bool,
 ) -> &'static str {
     select_graph_health_error_code(GraphHealthInput {
         db_exists,
-        graph_error,
+        graph_built,
+        health_class,
         build_state,
-        stale_index,
         retrieval_unavailable,
     })
 }
@@ -279,10 +279,10 @@ pub(super) fn error_code_docs(error_code: &str) -> String {
 }
 
 pub(super) fn graph_issue_code(error: &str) -> &'static str {
-    if is_schema_mismatch_error(error) {
-        "schema_mismatch"
-    } else {
-        "corrupt_or_inconsistent_graph_rows"
+    match classify_graph_store_error(error).as_str() {
+        "schema_mismatch" => "schema_mismatch",
+        "logical_inconsistency" => "logical_inconsistency",
+        _ => "sqlite_corrupt",
     }
 }
 
@@ -1055,26 +1055,64 @@ pub(crate) fn derive_graph_readiness(
 ) -> GraphReadiness {
     let db_exists = std::path::Path::new(db_path).exists();
 
-    let (build_state_str, build_last_error) = match store.get_build_status(repo_root) {
-        Ok(Some(bs)) => {
-            let state = match bs.state {
-                atlas_store_sqlite::GraphBuildState::Building => "building",
-                atlas_store_sqlite::GraphBuildState::Built => "built",
-                atlas_store_sqlite::GraphBuildState::Degraded => "degraded",
-                atlas_store_sqlite::GraphBuildState::BuildFailed => "build_failed",
-            };
-            (Some(state.to_owned()), bs.last_error)
-        }
-        _ => (None, None),
-    };
+    let mut graph_error = None;
+    let (build_state_str, build_last_error, recovery_mode, quarantine_path) =
+        match store.get_build_status(repo_root) {
+            Ok(Some(bs)) => {
+                let state = match bs.state {
+                    atlas_store_sqlite::GraphBuildState::Building => "building",
+                    atlas_store_sqlite::GraphBuildState::Built => "built",
+                    atlas_store_sqlite::GraphBuildState::Degraded => "degraded",
+                    atlas_store_sqlite::GraphBuildState::BuildFailed => "build_failed",
+                };
+                (
+                    Some(state.to_owned()),
+                    bs.last_error,
+                    bs.recovery_mode,
+                    bs.quarantine_path,
+                )
+            }
+            Ok(None) => (None, None, None, None),
+            Err(error) => {
+                graph_error = Some(error.to_string());
+                (None, None, None, None)
+            }
+        };
 
-    let (file_count, graph_has_content, last_indexed_at, graph_error) = match store.stats() {
+    let (file_count, graph_has_content, last_indexed_at) = match store.stats() {
         Ok(s) => {
             let has_content = s.node_count > 0 || s.edge_count > 0 || s.file_count > 0;
-            (s.file_count, has_content, s.last_indexed_at, None)
+            (s.file_count, has_content, s.last_indexed_at)
         }
-        Err(e) => (0, false, None, Some(e.to_string())),
+        Err(e) => {
+            graph_error.get_or_insert_with(|| e.to_string());
+            (0, false, None)
+        }
     };
+    if graph_error.is_none() {
+        match store.graph_store_health_class() {
+            Ok(Some(GraphStoreHealthClass::SchemaMismatch)) => {
+                graph_error = Some(
+                    "schema_mismatch: graph store schema does not match current Atlas build"
+                        .to_owned(),
+                );
+            }
+            Ok(Some(GraphStoreHealthClass::SqliteCorrupt)) => {
+                graph_error = Some(
+                    "sqlite_corrupt: graph integrity check reported physical corruption".to_owned(),
+                );
+            }
+            Ok(Some(GraphStoreHealthClass::LogicalInconsistency)) => {
+                graph_error = Some(
+                    "logical_inconsistency: graph invariant scan found unsafe rows".to_owned(),
+                );
+            }
+            Ok(_) => {}
+            Err(error) => {
+                graph_error = Some(error.to_string());
+            }
+        }
+    }
 
     let pending = pending_graph_relevant_changes(repo_root, db_path).unwrap_or_default();
 
@@ -1098,6 +1136,8 @@ pub(crate) fn derive_graph_readiness(
         build_state: build_state_str.as_deref(),
         build_last_error: build_last_error.as_deref(),
         graph_error: graph_error.as_deref(),
+        recovery_mode: recovery_mode.as_deref(),
+        quarantine_path: quarantine_path.as_deref(),
         pending_graph_changes: &pending,
         indexed_file_count: file_count,
         graph_has_content,
@@ -1124,6 +1164,8 @@ pub(crate) fn derive_graph_readiness_open_failed(
         build_state: None,
         build_last_error: None,
         graph_error: None,
+        recovery_mode: None,
+        quarantine_path: None,
         pending_graph_changes: &[],
         indexed_file_count: 0,
         graph_has_content: false,

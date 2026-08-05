@@ -196,6 +196,16 @@ pub(crate) fn build_or_update_graph_output_schema() -> Value {
         serde_json::json!({
             "mode": { "type": "string" },
             "status": { "type": "string" },
+            "health_class": { "type": ["string", "null"] },
+            "recovery_mode": { "type": "string" },
+            "quarantine_path": { "type": ["string", "null"] },
+            "rebuild_result": { "type": "string" },
+            "failure_reason": { "type": ["string", "null"] },
+            "rebuild_strategy": { "type": "string" },
+            "error_code": { "type": "string" },
+            "message": { "type": "string" },
+            "suggestions": { "type": "array", "items": { "type": "string" } },
+            "error_code_docs": { "type": "string" },
             "source": {
                 "type": "object",
                 "additionalProperties": false,
@@ -248,6 +258,16 @@ pub(crate) fn build_or_update_graph_output_schema() -> Value {
             "duration_ms",
             "stages",
             "warnings",
+            "health_class",
+            "recovery_mode",
+            "quarantine_path",
+            "rebuild_result",
+            "failure_reason",
+            "rebuild_strategy",
+            "error_code",
+            "message",
+            "suggestions",
+            "error_code_docs",
             "atlas_provenance",
         ],
         Some(serde_json::json!({
@@ -319,6 +339,11 @@ pub(crate) fn postprocess_graph_output_schema() -> Value {
 pub(crate) fn status_output_schema() -> Value {
     normalized_tool_output_schema(
         serde_json::json!({
+            "health_class": { "type": ["string", "null"] },
+            "recovery_mode": { "type": "string" },
+            "quarantine_path": { "type": ["string", "null"] },
+            "rebuild_result": { "type": "string" },
+            "failure_reason": { "type": ["string", "null"] },
             "graph_state": {
                 "type": "object",
                 "additionalProperties": false,
@@ -362,11 +387,12 @@ pub(crate) fn status_output_schema() -> Value {
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
+                    "health_class": { "type": ["string", "null"] },
                     "message": { "type": "string" },
                     "suggestions": { "type": "array", "items": { "type": "string" } },
                     "error_code_docs": { "type": "string" }
                 },
-                "required": ["message", "suggestions", "error_code_docs"]
+                "required": ["health_class", "message", "suggestions", "error_code_docs"]
             },
             "warnings": { "type": "array", "items": { "type": "string" } },
             "atlas_provenance": { "type": "object" },
@@ -374,6 +400,10 @@ pub(crate) fn status_output_schema() -> Value {
         }),
         &[
             "tool",
+            "recovery_mode",
+            "quarantine_path",
+            "rebuild_result",
+            "failure_reason",
             "graph_state",
             "db_state",
             "indexed_file_count",
@@ -391,6 +421,11 @@ pub(crate) fn doctor_output_schema() -> Value {
     normalized_tool_output_schema(
         serde_json::json!({
             "overall_status": { "type": "string" },
+            "health_class": { "type": ["string", "null"] },
+            "recovery_mode": { "type": "string" },
+            "quarantine_path": { "type": ["string", "null"] },
+            "rebuild_result": { "type": "string" },
+            "failure_reason": { "type": ["string", "null"] },
             "checks": { "type": "array", "items": { "$ref": "#/$defs/doctor_check" } },
             "summary": {
                 "type": "object",
@@ -399,11 +434,12 @@ pub(crate) fn doctor_output_schema() -> Value {
                     "total_count": { "type": "integer" },
                     "pass_count": { "type": "integer" },
                     "fail_count": { "type": "integer" },
+                    "health_class": { "type": ["string", "null"] },
                     "message": { "type": "string" },
                     "suggestions": { "type": "array", "items": { "type": "string" } },
                     "error_code_docs": { "type": "string" }
                 },
-                "required": ["total_count", "pass_count", "fail_count", "message", "suggestions", "error_code_docs"]
+                "required": ["total_count", "pass_count", "fail_count", "health_class", "message", "suggestions", "error_code_docs"]
             },
             "warnings": { "type": "array", "items": { "type": "string" } },
             "atlas_provenance": { "type": "object" },
@@ -412,6 +448,11 @@ pub(crate) fn doctor_output_schema() -> Value {
         &[
             "tool",
             "overall_status",
+            "health_class",
+            "recovery_mode",
+            "quarantine_path",
+            "rebuild_result",
+            "failure_reason",
             "checks",
             "summary",
             "atlas_provenance",
@@ -426,6 +467,11 @@ pub(crate) fn db_check_output_schema() -> Value {
     normalized_tool_output_schema(
         serde_json::json!({
             "ok": { "type": "boolean" },
+            "health_class": { "type": ["string", "null"] },
+            "recovery_mode": { "type": "string" },
+            "quarantine_path": { "type": ["string", "null"] },
+            "rebuild_result": { "type": "string" },
+            "failure_reason": { "type": ["string", "null"] },
             "integrity": {
                 "type": "object",
                 "additionalProperties": false,
@@ -464,6 +510,7 @@ pub(crate) fn db_check_output_schema() -> Value {
                 "properties": {
                     "ok": { "type": "boolean" },
                     "failure_category": { "type": "string" },
+                    "health_class": { "type": ["string", "null"] },
                     "message": { "type": "string" },
                     "suggestions": { "type": "array", "items": { "type": "string" } },
                     "error_code_docs": { "type": "string" },
@@ -471,7 +518,7 @@ pub(crate) fn db_check_output_schema() -> Value {
                     "dangling_edge_count": { "type": "integer" },
                     "noncanonical_path_row_count": { "type": "integer" }
                 },
-                "required": ["ok", "failure_category", "message", "suggestions", "error_code_docs", "orphan_node_count", "dangling_edge_count", "noncanonical_path_row_count"]
+                "required": ["ok", "failure_category", "health_class", "message", "suggestions", "error_code_docs", "orphan_node_count", "dangling_edge_count", "noncanonical_path_row_count"]
             },
             "warnings": { "type": "array", "items": { "type": "string" } },
             "db_path": { "type": "string" },
@@ -481,6 +528,11 @@ pub(crate) fn db_check_output_schema() -> Value {
         &[
             "tool",
             "ok",
+            "health_class",
+            "recovery_mode",
+            "quarantine_path",
+            "rebuild_result",
+            "failure_reason",
             "integrity",
             "orphan_nodes",
             "dangling_edges",

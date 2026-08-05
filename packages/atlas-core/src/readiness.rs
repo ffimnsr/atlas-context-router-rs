@@ -29,8 +29,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::health::{
-    GraphHealthInput, graph_health_error_message, graph_health_error_suggestions,
-    is_schema_mismatch_error, select_graph_health_error_code,
+    GraphHealthInput, GraphStoreHealthClass, classify_graph_store_error,
+    graph_health_error_message, graph_health_error_suggestions, select_graph_health_error_code,
 };
 
 /// Integrity classification of the graph database.
@@ -40,12 +40,12 @@ pub enum IntegrityState {
     /// No integrity issues detected.
     #[default]
     Clean,
-    /// Persisted path rows are not canonical; rebuild required.
-    NoncanonicalPaths,
     /// SQLite schema does not match this Atlas build; rebuild required.
     SchemaMismatch,
-    /// Graph has SQLite integrity errors, orphan nodes, or dangling edges.
-    Corrupt,
+    /// SQLite storage is physically corrupt or unreadable.
+    SqliteCorrupt,
+    /// SQLite opened, but graph invariants failed.
+    LogicalInconsistency,
 }
 
 impl IntegrityState {
@@ -53,15 +53,25 @@ impl IntegrityState {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Clean => "clean",
-            Self::NoncanonicalPaths => "noncanonical_paths",
             Self::SchemaMismatch => "schema_mismatch",
-            Self::Corrupt => "corrupt",
+            Self::SqliteCorrupt => "sqlite_corrupt",
+            Self::LogicalInconsistency => "logical_inconsistency",
         }
     }
 
     /// Returns `true` when no integrity issues are present.
     pub fn is_clean(&self) -> bool {
         matches!(self, Self::Clean)
+    }
+
+    /// Shared graph-store health class implied by this integrity state.
+    pub fn health_class(&self) -> Option<GraphStoreHealthClass> {
+        match self {
+            Self::Clean => None,
+            Self::SchemaMismatch => Some(GraphStoreHealthClass::SchemaMismatch),
+            Self::SqliteCorrupt => Some(GraphStoreHealthClass::SqliteCorrupt),
+            Self::LogicalInconsistency => Some(GraphStoreHealthClass::LogicalInconsistency),
+        }
     }
 }
 
@@ -250,9 +260,17 @@ pub struct GraphReadiness {
     pub pending_graph_changes: Vec<String>,
     /// Integrity classification of the graph database.
     pub integrity_state: IntegrityState,
+    /// Canonical graph-store health class when the DB exists and the state is
+    /// classifiable, or `None` when the store is missing or only retrieval is
+    /// degraded.
+    pub health_class: Option<GraphStoreHealthClass>,
     /// Short machine-readable error code for the most significant readiness
     /// issue, or `"none"` when the graph is ready.
     pub error_code: String,
+    /// Recovery mode last recorded in build lifecycle metadata, when present.
+    pub recovery_mode: Option<String>,
+    /// Quarantine path recorded for the graph store, when present.
+    pub quarantine_path: Option<String>,
     /// Human-readable message describing the readiness state.
     pub message: String,
     /// Suggested actions to resolve any readiness issue.
@@ -274,6 +292,11 @@ impl GraphReadiness {
     /// current with no integrity issues.
     pub fn is_ok(&self) -> bool {
         self.error_code == "none" && self.graph_built
+    }
+
+    /// Canonical rebuild command to surface in fail-closed responses.
+    pub fn recommended_rebuild_command(&self) -> &'static str {
+        "atlas build"
     }
 
     /// Returns the [`ReadinessVerdict`] for the given tool class and override
@@ -393,6 +416,10 @@ pub struct GraphReadinessInput<'a> {
     pub build_last_error: Option<&'a str>,
     /// Error string from querying graph content (e.g. stats), if any.
     pub graph_error: Option<&'a str>,
+    /// Recovery mode last recorded in build lifecycle metadata, when present.
+    pub recovery_mode: Option<&'a str>,
+    /// Quarantine path recorded in build lifecycle metadata, when present.
+    pub quarantine_path: Option<&'a str>,
     /// Graph-relevant changed files that have not been indexed yet.
     pub pending_graph_changes: &'a [String],
     /// Number of files in the current index.
@@ -433,14 +460,19 @@ impl GraphReadiness {
         let stale_index = graph_built && !input.pending_graph_changes.is_empty();
         let graph_current = graph_queryable && !stale_index;
 
-        // Combine db open and query errors for error code selection.
-        let combined_error = input.db_open_error.or(input.graph_error);
+        let health_class = derive_health_class(
+            input.db_exists,
+            &integrity_state,
+            graph_built,
+            input.build_state,
+            stale_index,
+        );
 
         let error_code = select_graph_health_error_code(GraphHealthInput {
             db_exists: input.db_exists,
-            graph_error: combined_error,
+            graph_built,
+            health_class,
             build_state: input.build_state,
-            stale_index,
             retrieval_unavailable: input.retrieval_unavailable,
         });
         let message = graph_health_error_message(error_code).to_owned();
@@ -472,7 +504,10 @@ impl GraphReadiness {
             stale_index,
             pending_graph_changes: input.pending_graph_changes.to_vec(),
             integrity_state,
+            health_class,
             error_code: error_code.to_owned(),
+            recovery_mode: input.recovery_mode.map(str::to_owned),
+            quarantine_path: input.quarantine_path.map(str::to_owned),
             message,
             suggestions,
             last_indexed_at: input.last_indexed_at.map(str::to_owned),
@@ -491,16 +526,42 @@ fn derive_integrity_state(
         return IntegrityState::Clean;
     };
 
-    if is_schema_mismatch_error(err) {
-        return IntegrityState::SchemaMismatch;
+    match classify_graph_store_error(err) {
+        GraphStoreHealthClass::SchemaMismatch => IntegrityState::SchemaMismatch,
+        GraphStoreHealthClass::SqliteCorrupt => IntegrityState::SqliteCorrupt,
+        GraphStoreHealthClass::LogicalInconsistency => IntegrityState::LogicalInconsistency,
+        GraphStoreHealthClass::Healthy
+        | GraphStoreHealthClass::Stale
+        | GraphStoreHealthClass::InterruptedBuild
+        | GraphStoreHealthClass::FailedBuild => IntegrityState::SqliteCorrupt,
     }
+}
 
-    let lower = err.to_ascii_lowercase();
-    if lower.contains("noncanonical_path") {
-        return IntegrityState::NoncanonicalPaths;
+fn derive_health_class(
+    db_exists: bool,
+    integrity_state: &IntegrityState,
+    graph_built: bool,
+    build_state: Option<&str>,
+    stale_index: bool,
+) -> Option<GraphStoreHealthClass> {
+    if !db_exists {
+        return None;
     }
-
-    IntegrityState::Corrupt
+    if let Some(health_class) = integrity_state.health_class() {
+        return Some(health_class);
+    }
+    match build_state {
+        Some("building") => return Some(GraphStoreHealthClass::InterruptedBuild),
+        Some("build_failed") => return Some(GraphStoreHealthClass::FailedBuild),
+        _ => {}
+    }
+    if stale_index {
+        return Some(GraphStoreHealthClass::Stale);
+    }
+    if graph_built {
+        return Some(GraphStoreHealthClass::Healthy);
+    }
+    None
 }
 
 /// Derive the [`GraphExecutionState`] from the already-computed readiness
@@ -549,6 +610,8 @@ mod tests {
             build_state: Some("built"),
             build_last_error: None,
             graph_error: None,
+            recovery_mode: None,
+            quarantine_path: None,
             pending_graph_changes: &[],
             indexed_file_count: 42,
             graph_has_content: true,
@@ -568,6 +631,7 @@ mod tests {
         assert!(!r.stale_index, "stale_index");
         assert!(r.pending_graph_changes.is_empty());
         assert_eq!(r.integrity_state, IntegrityState::Clean);
+        assert_eq!(r.health_class, Some(GraphStoreHealthClass::Healthy));
         assert_eq!(r.error_code, "none");
         assert!(r.is_ok());
         assert_eq!(r.indexed_file_count, 42);
@@ -591,6 +655,7 @@ mod tests {
         assert!(!r.graph_queryable);
         assert!(!r.graph_current);
         assert_eq!(r.integrity_state, IntegrityState::Clean);
+        assert_eq!(r.health_class, None);
         assert_eq!(r.error_code, "missing_graph_db");
         assert!(!r.is_ok());
     }
@@ -609,6 +674,7 @@ mod tests {
         assert!(!r.graph_current, "not current when stale");
         assert!(r.stale_index);
         assert_eq!(r.pending_graph_changes.len(), 2);
+        assert_eq!(r.health_class, Some(GraphStoreHealthClass::Stale));
         assert_eq!(r.error_code, "stale_index");
         assert!(!r.is_ok());
     }
@@ -625,6 +691,10 @@ mod tests {
         assert!(!r.graph_built, "in-progress build is not built");
         assert!(!r.graph_queryable);
         assert!(!r.graph_current);
+        assert_eq!(
+            r.health_class,
+            Some(GraphStoreHealthClass::InterruptedBuild)
+        );
         assert_eq!(r.error_code, "interrupted_build");
         assert_eq!(r.build_state.as_deref(), Some("building"));
     }
@@ -638,6 +708,7 @@ mod tests {
         });
         assert!(!r.graph_built);
         assert!(!r.graph_queryable);
+        assert_eq!(r.health_class, None);
         assert_eq!(r.error_code, "degraded_build");
     }
 
@@ -652,6 +723,7 @@ mod tests {
         });
         assert!(!r.graph_built);
         assert!(!r.graph_queryable);
+        assert_eq!(r.health_class, Some(GraphStoreHealthClass::FailedBuild));
         assert_eq!(r.error_code, "failed_build");
         assert_eq!(r.build_last_error.as_deref(), last_err);
     }
@@ -668,6 +740,7 @@ mod tests {
         assert!(r.graph_built, "inferred from content");
         assert!(r.graph_queryable);
         assert!(r.graph_current);
+        assert_eq!(r.health_class, Some(GraphStoreHealthClass::Healthy));
         assert_eq!(r.error_code, "none");
     }
 
@@ -686,6 +759,7 @@ mod tests {
         assert!(!r.graph_current);
         // health.rs returns "none" when db_exists=true and no error: the DB
         // file is present but unpopulated, which is distinct from missing.
+        assert_eq!(r.health_class, None);
         assert_eq!(r.error_code, "none");
         assert!(!r.is_ok(), "is_ok requires graph_built");
     }
@@ -702,6 +776,7 @@ mod tests {
             ..healthy_input()
         });
         assert_eq!(r.integrity_state, IntegrityState::SchemaMismatch);
+        assert_eq!(r.health_class, Some(GraphStoreHealthClass::SchemaMismatch));
         assert!(!r.graph_queryable, "blocked on integrity");
         assert!(!r.graph_built);
         assert_eq!(r.error_code, "schema_mismatch");
@@ -709,7 +784,7 @@ mod tests {
     }
 
     #[test]
-    fn corrupt_db_error_yields_corrupt_integrity() {
+    fn corrupt_db_error_yields_sqlite_corrupt_integrity() {
         let err = "sqlite error: database disk image is malformed";
         let r = GraphReadiness::derive(GraphReadinessInput {
             db_open_error: Some(err),
@@ -717,9 +792,10 @@ mod tests {
             graph_has_content: false,
             ..healthy_input()
         });
-        assert_eq!(r.integrity_state, IntegrityState::Corrupt);
+        assert_eq!(r.integrity_state, IntegrityState::SqliteCorrupt);
+        assert_eq!(r.health_class, Some(GraphStoreHealthClass::SqliteCorrupt));
         assert!(!r.graph_queryable);
-        assert_eq!(r.error_code, "corrupt_or_inconsistent_graph_rows");
+        assert_eq!(r.error_code, "sqlite_corrupt");
     }
 
     #[test]
@@ -733,19 +809,24 @@ mod tests {
         assert!(!r.graph_queryable, "blocked by query error");
         assert!(!r.graph_current);
         assert_eq!(r.integrity_state, IntegrityState::SchemaMismatch);
+        assert_eq!(r.health_class, Some(GraphStoreHealthClass::SchemaMismatch));
         assert_eq!(r.error_code, "schema_mismatch");
     }
 
     #[test]
-    fn generic_graph_query_error_yields_corrupt_integrity() {
-        let err = "constraint failed: UNIQUE constraint on edges";
+    fn graph_invariant_error_yields_logical_inconsistency_integrity() {
+        let err = "dangling edge detected during graph invariant scan";
         let r = GraphReadiness::derive(GraphReadinessInput {
             graph_error: Some(err),
             ..healthy_input()
         });
         assert!(!r.graph_queryable);
-        assert_eq!(r.integrity_state, IntegrityState::Corrupt);
-        assert_eq!(r.error_code, "corrupt_or_inconsistent_graph_rows");
+        assert_eq!(r.integrity_state, IntegrityState::LogicalInconsistency);
+        assert_eq!(
+            r.health_class,
+            Some(GraphStoreHealthClass::LogicalInconsistency)
+        );
+        assert_eq!(r.error_code, "logical_inconsistency");
     }
 
     // ── retrieval unavailable ────────────────────────────────────────────────
@@ -757,6 +838,7 @@ mod tests {
             ..healthy_input()
         });
         assert!(r.graph_built);
+        assert_eq!(r.health_class, Some(GraphStoreHealthClass::Healthy));
         assert!(r.graph_queryable, "graph itself is queryable");
         assert!(r.graph_current);
         assert_eq!(r.error_code, "retrieval_index_unavailable");
@@ -834,20 +916,20 @@ mod tests {
     #[test]
     fn integrity_state_as_str_round_trips() {
         assert_eq!(IntegrityState::Clean.as_str(), "clean");
-        assert_eq!(
-            IntegrityState::NoncanonicalPaths.as_str(),
-            "noncanonical_paths"
-        );
         assert_eq!(IntegrityState::SchemaMismatch.as_str(), "schema_mismatch");
-        assert_eq!(IntegrityState::Corrupt.as_str(), "corrupt");
+        assert_eq!(IntegrityState::SqliteCorrupt.as_str(), "sqlite_corrupt");
+        assert_eq!(
+            IntegrityState::LogicalInconsistency.as_str(),
+            "logical_inconsistency"
+        );
     }
 
     #[test]
     fn integrity_state_is_clean_helper() {
         assert!(IntegrityState::Clean.is_clean());
-        assert!(!IntegrityState::Corrupt.is_clean());
+        assert!(!IntegrityState::SqliteCorrupt.is_clean());
         assert!(!IntegrityState::SchemaMismatch.is_clean());
-        assert!(!IntegrityState::NoncanonicalPaths.is_clean());
+        assert!(!IntegrityState::LogicalInconsistency.is_clean());
     }
 
     // ── suggestions and message presence ────────────────────────────────────
@@ -864,6 +946,26 @@ mod tests {
             "should have suggestions for failed build"
         );
         assert!(!r.message.is_empty());
+    }
+
+    #[test]
+    fn readiness_carries_recovery_metadata_and_rebuild_hint() {
+        let r = GraphReadiness::derive(GraphReadinessInput {
+            build_state: Some("build_failed"),
+            recovery_mode: Some("auto_quarantine_and_rebuild"),
+            quarantine_path: Some("/repo/.atlas/worldtree.db.quarantine.20260805T000000Z.0"),
+            graph_has_content: false,
+            ..healthy_input()
+        });
+        assert_eq!(
+            r.recovery_mode.as_deref(),
+            Some("auto_quarantine_and_rebuild")
+        );
+        assert_eq!(
+            r.quarantine_path.as_deref(),
+            Some("/repo/.atlas/worldtree.db.quarantine.20260805T000000Z.0")
+        );
+        assert_eq!(r.recommended_rebuild_command(), "atlas build");
     }
 
     #[test]
@@ -890,9 +992,9 @@ mod tests {
     fn integrity_state_serde_round_trips() {
         for state in [
             IntegrityState::Clean,
-            IntegrityState::NoncanonicalPaths,
             IntegrityState::SchemaMismatch,
-            IntegrityState::Corrupt,
+            IntegrityState::SqliteCorrupt,
+            IntegrityState::LogicalInconsistency,
         ] {
             let json = serde_json::to_string(&state).expect("serialize");
             let back: IntegrityState = serde_json::from_str(&json).expect("deserialize");

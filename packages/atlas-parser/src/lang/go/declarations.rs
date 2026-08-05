@@ -5,6 +5,11 @@ use atlas_core::{Edge, EdgeKind, Node, NodeId, NodeKind};
 use crate::ast_helpers::{end_line, field_text, node_text, start_line};
 use crate::traits::ParseContext;
 
+// SQ1 migration checklist:
+// - manual extraction below owns Go declaration, import, package, scope, and qualified-name semantics
+// - keep parser API and graph output unchanged while query captures replace syntax-node walks
+// - move tree-sitter syntax matching only into shared @atlas.* query captures
+
 pub(super) struct GoPackage {
     pub(super) name: String,
     pub(super) line: u32,

@@ -1,15 +1,61 @@
 //! HTML parser backed by `tree-sitter-html`.
 //! Grammar source: `tree-sitter/tree-sitter-html`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use atlas_core::{Edge, EdgeKind, Node, NodeId, NodeKind, ParsedFile};
 use tree_sitter::Node as TsNode;
 
 use crate::ast_helpers::{end_line, node_text, start_line};
+use crate::query_helpers::{compile_static_query, run_query};
 use crate::traits::{LangParser, ParseContext};
 
+// SQ1 migration checklist:
+// - manual extraction below owns declaration walks, scope and qualified-name rules, import/reference detection,
+//   call-edge heuristics, and source metadata attachment
+// - keep public parser API, graph schema, and output contracts unchanged during query migration
+// - move tree-sitter syntax matching only into shared @atlas.* query captures
+
 pub struct HtmlParser;
+
+const HTML_QUERY: &str = include_str!("../../queries/html.scm");
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct HtmlNodeKey {
+    start_byte: usize,
+    end_byte: usize,
+}
+
+#[derive(Debug, Default)]
+struct HtmlSyntaxFacts {
+    tag_nodes: HashSet<HtmlNodeKey>,
+    import_attributes: HashSet<HtmlNodeKey>,
+}
+
+impl HtmlSyntaxFacts {
+    fn extract(root: TsNode<'_>, source: &[u8]) -> Result<Self, String> {
+        let query = compile_static_query(tree_sitter_html::LANGUAGE.into(), "html", HTML_QUERY)?;
+        let matches = run_query(&query, root, source);
+        let mut facts = Self::default();
+
+        for group in matches {
+            for capture in group.captures {
+                let key = node_key(capture.node);
+                match capture.name.as_str() {
+                    "atlas.definition.module" => {
+                        facts.tag_nodes.insert(key);
+                    }
+                    "atlas.import" => {
+                        facts.import_attributes.insert(key);
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        Ok(facts)
+    }
+}
 
 impl LangParser for HtmlParser {
     fn language_name(&self) -> &'static str {
@@ -34,6 +80,8 @@ impl LangParser for HtmlParser {
 
         if let Some(ref tree) = tree {
             let root = tree.root_node();
+            let facts = HtmlSyntaxFacts::extract(root, ctx.source)
+                .unwrap_or_else(|err| panic!("html query extraction failed: {err}"));
             let document_qn = format!("{}::document", ctx.rel_path);
             nodes.push(Node {
                 id: NodeId::UNSET,
@@ -59,6 +107,7 @@ impl LangParser for HtmlParser {
             walk_html_children(
                 root,
                 ctx,
+                &facts,
                 &document_qn,
                 "document",
                 &mut nodes,
@@ -81,9 +130,11 @@ impl LangParser for HtmlParser {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn walk_html_children(
     node: TsNode<'_>,
     ctx: &ParseContext<'_>,
+    facts: &HtmlSyntaxFacts,
     parent_qn: &str,
     parent_path: &str,
     nodes: &mut Vec<Node>,
@@ -93,15 +144,7 @@ fn walk_html_children(
     let mut counts = HashMap::<String, usize>::new();
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
-        let tag_name = match child.kind() {
-            "element" => start_tag_name(child, ctx.source),
-            "self_closing_tag" => tag_name_from_tag(child, ctx.source),
-            "start_tag" => tag_name_from_tag(child, ctx.source).filter(|tag| is_void_html_tag(tag)),
-            "script_element" => Some("script".to_owned()),
-            "style_element" => Some("style".to_owned()),
-            _ => None,
-        };
-        let Some(tag_name) = tag_name else {
+        let Some(tag_name) = html_tag_name(child, ctx.source, facts) else {
             continue;
         };
 
@@ -138,11 +181,14 @@ fn walk_html_children(
         });
         edges.push(contains_edge(parent_qn, &child_qn, ctx.rel_path, line));
 
-        emit_html_imports(child, &child_qn, ctx, nodes, edges, import_index);
-        if matches!(child.kind(), "element" | "script_element" | "style_element") {
+        emit_html_imports(child, &child_qn, ctx, facts, nodes, edges, import_index);
+        if matches!(child.kind(), "element" | "script_element" | "style_element")
+            && facts.tag_nodes.contains(&node_key(child))
+        {
             walk_html_children(
                 child,
                 ctx,
+                facts,
                 &child_qn,
                 &child_path,
                 nodes,
@@ -153,10 +199,26 @@ fn walk_html_children(
     }
 }
 
+fn html_tag_name(node: TsNode<'_>, source: &[u8], facts: &HtmlSyntaxFacts) -> Option<String> {
+    if !facts.tag_nodes.contains(&node_key(node)) {
+        return None;
+    }
+
+    match node.kind() {
+        "element" => start_tag_name(node, source),
+        "self_closing_tag" => tag_name_from_tag(node, source),
+        "start_tag" => tag_name_from_tag(node, source).filter(|tag| is_void_html_tag(tag)),
+        "script_element" => Some("script".to_owned()),
+        "style_element" => Some("style".to_owned()),
+        _ => None,
+    }
+}
+
 fn emit_html_imports(
     node: TsNode<'_>,
     container_qn: &str,
     ctx: &ParseContext<'_>,
+    facts: &HtmlSyntaxFacts,
     nodes: &mut Vec<Node>,
     edges: &mut Vec<Edge>,
     import_index: &mut usize,
@@ -181,7 +243,7 @@ fn emit_html_imports(
 
     let mut cursor = attr_container.walk();
     for child in attr_container.named_children(&mut cursor) {
-        if child.kind() != "attribute" {
+        if !facts.import_attributes.contains(&node_key(child)) {
             continue;
         }
         let Some((name, value)) = parse_html_attribute(child, ctx.source) else {
@@ -232,6 +294,13 @@ fn emit_html_imports(
             extra_json: serde_json::Value::Null,
             repo_provenance: None,
         });
+    }
+}
+
+fn node_key(node: TsNode<'_>) -> HtmlNodeKey {
+    HtmlNodeKey {
+        start_byte: node.start_byte(),
+        end_byte: node.end_byte(),
     }
 }
 

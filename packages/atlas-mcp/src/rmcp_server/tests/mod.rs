@@ -229,6 +229,30 @@ impl ToolFixture {
     }
 }
 
+fn overwrite_graph_db_with_garbage(fixture: &ToolFixture) {
+    fs::write(&fixture.db_path, b"not a sqlite database").expect("overwrite graph db");
+}
+
+fn seed_dangling_graph_edge(fixture: &ToolFixture) {
+    let conn = rusqlite::Connection::open(&fixture.db_path).expect("open graph db");
+    conn.execute(
+        "INSERT INTO edges (
+            kind, source_qualified, target_qualified, file_path, line, confidence, confidence_tier, extra_json
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        rusqlite::params![
+            "contains",
+            "missing::source",
+            "missing::target",
+            "src/lib.rs",
+            1,
+            1.0_f64,
+            "definite",
+            "{}",
+        ],
+    )
+    .expect("seed dangling edge");
+}
+
 fn seed_durable_task(
     fixture: &ToolFixture,
     task_id: &str,

@@ -27,18 +27,9 @@ pub(super) struct RequestedLineRange {
 }
 
 #[derive(Clone, Serialize)]
-struct ExcerptLine {
-    line: u64,
-    text: String,
-}
-
-#[derive(Clone, Serialize)]
 struct FileExcerpt {
-    start_line: u64,
-    end_line: u64,
-    line_count: usize,
-    content: String,
-    lines: Vec<ExcerptLine>,
+    range: [u64; 2],
+    lines: Vec<LineTuple>,
 }
 
 #[derive(Clone, Debug)]
@@ -48,20 +39,15 @@ struct LineSnippetWindow {
     match_lines: Vec<usize>,
 }
 
-#[derive(Clone, Serialize)]
-struct AroundMatchLine {
-    line: u64,
-    text: String,
-    kind: &'static str,
-}
+type LineTuple = (u64, String);
 
 #[derive(Clone, Serialize)]
 struct AroundMatchSnippet {
-    start_line: u64,
-    end_line: u64,
-    match_lines: Vec<u64>,
-    content: String,
-    lines: Vec<AroundMatchLine>,
+    range: [u64; 2],
+    before: Vec<LineTuple>,
+    #[serde(rename = "match")]
+    matches: Vec<LineTuple>,
+    after: Vec<LineTuple>,
 }
 
 // ---------------------------------------------------------------------------
@@ -167,37 +153,31 @@ fn build_around_match_snippets(
             window.end_line
         };
 
-        let snippet_lines: Vec<AroundMatchLine> = (window.start_line..=end_line)
-            .map(|line_number| AroundMatchLine {
-                line: line_number as u64,
-                text: extract_line_text(lines, line_number),
-                kind: if window.match_lines.contains(&line_number) {
-                    "match"
-                } else if line_number < *window.match_lines.first().unwrap_or(&line_number) {
-                    "before"
-                } else {
-                    "after"
-                },
-            })
-            .collect();
-        let content = snippet_lines
-            .iter()
-            .map(|line| line.text.as_str())
-            .collect::<Vec<_>>()
-            .join("\n");
-        let match_lines = window
+        let first_match_line = *window.match_lines.first().unwrap_or(&window.start_line);
+        let visible_match_lines = window
             .match_lines
             .into_iter()
             .filter(|line| *line <= end_line)
-            .map(|line| line as u64)
-            .collect();
-        remaining_lines = remaining_lines.saturating_sub(snippet_lines.len());
+            .collect::<Vec<_>>();
+        let mut before_lines = Vec::new();
+        let mut match_lines = Vec::new();
+        let mut after_lines = Vec::new();
+        for line_number in window.start_line..=end_line {
+            let line_tuple = (line_number as u64, extract_line_text(lines, line_number));
+            if visible_match_lines.contains(&line_number) {
+                match_lines.push(line_tuple);
+            } else if line_number < first_match_line {
+                before_lines.push(line_tuple);
+            } else {
+                after_lines.push(line_tuple);
+            }
+        }
+        remaining_lines = remaining_lines.saturating_sub(end_line - window.start_line + 1);
         snippets.push(AroundMatchSnippet {
-            start_line: window.start_line as u64,
-            end_line: end_line as u64,
-            match_lines,
-            content,
-            lines: snippet_lines,
+            range: [window.start_line as u64, end_line as u64],
+            before: before_lines,
+            matches: match_lines,
+            after: after_lines,
         });
     }
 
@@ -574,39 +554,35 @@ pub(crate) fn tool_read_file_excerpt(
             .map(|range| range.end_line - range.start_line + 1)
             .sum();
         #[derive(Serialize)]
-        struct ExcerptRange {
-            start_line: u64,
-            end_line: u64,
-        }
-
-        #[derive(Serialize)]
         struct ReadFileExcerptSummary {
-            total_lines: usize,
-            requested_range_count: usize,
-            returned_snippet_count: usize,
-            total_selected_lines: usize,
+            snippets: usize,
+            ranges: ReadFileExcerptRangeSummary,
+            lines: ReadFileExcerptLineSummary,
             has_matches: bool,
         }
 
         #[derive(Serialize)]
+        struct ReadFileExcerptRangeSummary {
+            requested: usize,
+        }
+
+        #[derive(Serialize)]
+        struct ReadFileExcerptLineSummary {
+            total: usize,
+            selected: usize,
+        }
+
+        #[derive(Serialize)]
         struct ReadFileExcerptResult {
+            schema_version: u8,
             tool: &'static str,
             file: String,
             selection_mode: &'static str,
-            ranges: Vec<ExcerptRange>,
             snippets: Vec<FileExcerpt>,
             summary: ReadFileExcerptSummary,
             truncated: bool,
             warnings: Vec<String>,
         }
-
-        let normalized_ranges = resolved_ranges
-            .iter()
-            .map(|range| ExcerptRange {
-                start_line: range.start_line as u64,
-                end_line: range.end_line as u64,
-            })
-            .collect::<Vec<_>>();
 
         let mut remaining_lines = max_lines;
         let mut snippets = Vec::with_capacity(resolved_ranges.len());
@@ -626,23 +602,17 @@ pub(crate) fn tool_read_file_excerpt(
                 range.end_line
             };
 
-            let excerpt_lines: Vec<ExcerptLine> = (range.start_line..=excerpt_end)
-                .map(|line_number| ExcerptLine {
-                    line: line_number as u64,
-                    text: lines[line_number - 1].trim_end_matches('\r').to_owned(),
+            let excerpt_lines: Vec<LineTuple> = (range.start_line..=excerpt_end)
+                .map(|line_number| {
+                    (
+                        line_number as u64,
+                        lines[line_number - 1].trim_end_matches('\r').to_owned(),
+                    )
                 })
                 .collect();
-            let content = excerpt_lines
-                .iter()
-                .map(|entry| entry.text.as_str())
-                .collect::<Vec<_>>()
-                .join("\n");
             remaining_lines = remaining_lines.saturating_sub(excerpt_lines.len());
             snippets.push(FileExcerpt {
-                start_line: range.start_line as u64,
-                end_line: excerpt_end as u64,
-                line_count: excerpt_lines.len(),
-                content,
+                range: [range.start_line as u64, excerpt_end as u64],
                 lines: excerpt_lines,
             });
         }
@@ -667,15 +637,19 @@ pub(crate) fn tool_read_file_excerpt(
             Vec::new()
         };
         let result = ReadFileExcerptResult {
+            schema_version: 2,
             tool: "read_file_excerpt",
             file,
             selection_mode: selection.selection_mode,
-            ranges: normalized_ranges,
             summary: ReadFileExcerptSummary {
-                total_lines,
-                requested_range_count,
-                returned_snippet_count: snippets.len(),
-                total_selected_lines,
+                snippets: snippets.len(),
+                ranges: ReadFileExcerptRangeSummary {
+                    requested: requested_range_count,
+                },
+                lines: ReadFileExcerptLineSummary {
+                    total: total_lines,
+                    selected: total_selected_lines,
+                },
                 has_matches: !snippets.is_empty(),
             },
             snippets,
@@ -1059,45 +1033,63 @@ pub(crate) fn tool_read_file_around_match(
         };
 
         #[derive(Serialize)]
+        struct ReadFileAroundMatchContext {
+            before: usize,
+            after: usize,
+        }
+
+        #[derive(Serialize)]
         struct ReadFileAroundMatchSummary {
-            total_matches: usize,
-            returned_matches: usize,
-            snippet_count: usize,
-            observed_lines: usize,
+            snippets: usize,
+            matches: ReadFileAroundMatchMatchSummary,
+            lines: ReadFileAroundMatchLineSummary,
+        }
+
+        #[derive(Serialize)]
+        struct ReadFileAroundMatchMatchSummary {
+            returned: usize,
+            total: usize,
+        }
+
+        #[derive(Serialize)]
+        struct ReadFileAroundMatchLineSummary {
+            observed: usize,
         }
 
         #[derive(Serialize)]
         struct AroundMatchResult {
+            schema_version: u8,
             tool: &'static str,
+            query: String,
             file: String,
             match_mode: &'static str,
-            query: String,
-            before: usize,
-            after: usize,
-            matches: Vec<AroundMatchSnippet>,
+            context: ReadFileAroundMatchContext,
+            snippets: Vec<AroundMatchSnippet>,
             summary: ReadFileAroundMatchSummary,
             truncated: bool,
             warnings: Vec<String>,
         }
 
-        let returned_matches = snippets
-            .iter()
-            .map(|snippet| snippet.match_lines.len())
-            .sum();
+        let returned_matches = snippets.iter().map(|snippet| snippet.matches.len()).sum();
+        let snippet_count = snippets.len();
         let result = AroundMatchResult {
+            schema_version: 2,
             tool: "read_file_around_match",
+            query: query.to_owned(),
             file,
             match_mode: if is_regex { "regex" } else { "literal" },
-            query: query.to_owned(),
-            before,
-            after,
+            context: ReadFileAroundMatchContext { before, after },
+            snippets,
             summary: ReadFileAroundMatchSummary {
-                total_matches,
-                returned_matches,
-                snippet_count: snippets.len(),
-                observed_lines,
+                snippets: snippet_count,
+                matches: ReadFileAroundMatchMatchSummary {
+                    returned: returned_matches,
+                    total: total_matches,
+                },
+                lines: ReadFileAroundMatchLineSummary {
+                    observed: observed_lines,
+                },
             },
-            matches: snippets,
             truncated,
             warnings,
         };

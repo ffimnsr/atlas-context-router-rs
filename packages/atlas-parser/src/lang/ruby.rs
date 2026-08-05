@@ -1,15 +1,79 @@
 //! Ruby parser backed by `tree-sitter-ruby`.
 //! Grammar source: `tree-sitter/tree-sitter-ruby`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use atlas_core::{Edge, EdgeKind, Node, NodeId, NodeKind, ParsedFile};
 use tree_sitter::Node as TsNode;
 
 use crate::ast_helpers::{end_line, field_text, node_text, start_line};
+use crate::query_helpers::{compile_static_query, run_query};
 use crate::traits::{LangParser, ParseContext};
 
+// SQ1 migration checklist:
+// - manual extraction below owns declaration walks, scope and qualified-name rules, import/reference detection,
+//   call-edge heuristics, and source metadata attachment
+// - keep public parser API, graph schema, and output contracts unchanged during query migration
+// - move tree-sitter syntax matching only into shared @atlas.* query captures
+
+const RUBY_QUERY: &str = include_str!("../../queries/ruby.scm");
+
 pub struct RubyParser;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct RubyNodeKey {
+    start_byte: usize,
+    end_byte: usize,
+}
+
+#[derive(Debug, Default)]
+struct RubySyntaxFacts {
+    modules: HashSet<RubyNodeKey>,
+    classes: HashSet<RubyNodeKey>,
+    methods: HashSet<RubyNodeKey>,
+    singleton_methods: HashSet<RubyNodeKey>,
+    _constants: HashSet<RubyNodeKey>,
+    calls: HashSet<RubyNodeKey>,
+}
+
+impl RubySyntaxFacts {
+    fn extract(root: TsNode<'_>, _source: &[u8]) -> Result<Self, String> {
+        let language: tree_sitter::Language = tree_sitter_ruby::LANGUAGE.into();
+        let query = compile_static_query(language, "ruby", RUBY_QUERY)?;
+        let matches = run_query(&query, root, _source);
+        let mut facts = Self::default();
+
+        for group in matches {
+            for capture in group.captures {
+                let key = node_key(capture.node);
+                match capture.name.as_str() {
+                    "atlas.definition.module" => {
+                        facts.modules.insert(key);
+                    }
+                    "atlas.definition.class" => {
+                        facts.classes.insert(key);
+                    }
+                    "atlas.definition.method" => {
+                        if capture.node.kind() == "singleton_method" {
+                            facts.singleton_methods.insert(key);
+                        } else {
+                            facts.methods.insert(key);
+                        }
+                    }
+                    "atlas.definition.constant" => {
+                        facts._constants.insert(key);
+                    }
+                    "atlas.call" => {
+                        facts.calls.insert(key);
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        Ok(facts)
+    }
+}
 
 impl LangParser for RubyParser {
     fn language_name(&self) -> &'static str {
@@ -34,12 +98,15 @@ impl LangParser for RubyParser {
 
         if let Some(ref tree) = tree {
             let root = tree.root_node();
+            let facts = RubySyntaxFacts::extract(root, ctx.source)
+                .unwrap_or_else(|err| panic!("ruby query extraction failed: {err}"));
             let mut import_index = 0usize;
             let mut cursor = root.walk();
             for child in root.named_children(&mut cursor) {
                 visit_ruby_node(
                     child,
                     ctx,
+                    &facts,
                     ctx.rel_path,
                     None,
                     &mut import_index,
@@ -50,7 +117,7 @@ impl LangParser for RubyParser {
 
             let callable_map = callable_qn_map(&nodes);
             let mut call_edges = Vec::new();
-            walk_calls(root, ctx, &callable_map, None, &mut call_edges);
+            walk_calls(root, ctx, &facts, &callable_map, None, &mut call_edges);
             edges.extend(call_edges);
         }
 
@@ -68,23 +135,36 @@ impl LangParser for RubyParser {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn visit_ruby_node(
     node: TsNode<'_>,
     ctx: &ParseContext<'_>,
+    facts: &RubySyntaxFacts,
     parent_qn: &str,
     current_owner: Option<&str>,
     import_index: &mut usize,
     nodes: &mut Vec<Node>,
     edges: &mut Vec<Edge>,
 ) {
-    match node.kind() {
-        "module" => emit_module(node, ctx, parent_qn, import_index, nodes, edges),
-        "class" => emit_class(node, ctx, parent_qn, import_index, nodes, edges),
-        "method" => emit_method(node, ctx, parent_qn, current_owner, nodes, edges),
-        "singleton_method" => {
-            emit_singleton_method(node, ctx, parent_qn, current_owner, nodes, edges)
-        }
-        "call" => emit_import_like_call(
+    let key = node_key(node);
+    if facts.modules.contains(&key) {
+        emit_module(node, ctx, facts, parent_qn, import_index, nodes, edges);
+        return;
+    }
+    if facts.classes.contains(&key) {
+        emit_class(node, ctx, facts, parent_qn, import_index, nodes, edges);
+        return;
+    }
+    if facts.methods.contains(&key) {
+        emit_method(node, ctx, parent_qn, current_owner, nodes, edges);
+        return;
+    }
+    if facts.singleton_methods.contains(&key) {
+        emit_singleton_method(node, ctx, parent_qn, current_owner, nodes, edges);
+        return;
+    }
+    if facts.calls.contains(&key) {
+        emit_import_like_call(
             node,
             ctx,
             parent_qn,
@@ -92,27 +172,28 @@ fn visit_ruby_node(
             import_index,
             nodes,
             edges,
-        ),
-        _ => {
-            let mut cursor = node.walk();
-            for child in node.named_children(&mut cursor) {
-                visit_ruby_node(
-                    child,
-                    ctx,
-                    parent_qn,
-                    current_owner,
-                    import_index,
-                    nodes,
-                    edges,
-                );
-            }
-        }
+        );
+    }
+
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        visit_ruby_node(
+            child,
+            ctx,
+            facts,
+            parent_qn,
+            current_owner,
+            import_index,
+            nodes,
+            edges,
+        );
     }
 }
 
 fn emit_module(
     node: TsNode<'_>,
     ctx: &ParseContext<'_>,
+    facts: &RubySyntaxFacts,
     parent_qn: &str,
     import_index: &mut usize,
     nodes: &mut Vec<Node>,
@@ -149,6 +230,7 @@ fn emit_module(
             visit_ruby_node(
                 child,
                 ctx,
+                facts,
                 &qn,
                 Some(name.as_str()),
                 import_index,
@@ -162,6 +244,7 @@ fn emit_module(
 fn emit_class(
     node: TsNode<'_>,
     ctx: &ParseContext<'_>,
+    facts: &RubySyntaxFacts,
     parent_qn: &str,
     import_index: &mut usize,
     nodes: &mut Vec<Node>,
@@ -198,6 +281,7 @@ fn emit_class(
             visit_ruby_node(
                 child,
                 ctx,
+                facts,
                 &qn,
                 Some(name.as_str()),
                 import_index,
@@ -349,16 +433,18 @@ fn callable_qn_map(nodes: &[Node]) -> HashMap<String, String> {
 fn walk_calls(
     node: TsNode<'_>,
     ctx: &ParseContext<'_>,
+    facts: &RubySyntaxFacts,
     callables: &HashMap<String, String>,
     current_callable: Option<String>,
     edges: &mut Vec<Edge>,
 ) {
     let mut next_callable = current_callable;
-    if matches!(node.kind(), "method" | "singleton_method") {
+    let key = node_key(node);
+    if facts.methods.contains(&key) || facts.singleton_methods.contains(&key) {
         if let Some(name) = field_text(node, "name", ctx.source) {
             next_callable = callables.get(name).cloned();
         }
-    } else if node.kind() == "call"
+    } else if facts.calls.contains(&key)
         && let Some(owner_qn) = next_callable.as_ref()
         && let Some(callee) = ruby_call_name(node, ctx.source)
         && !matches!(
@@ -378,7 +464,7 @@ fn walk_calls(
 
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
-        walk_calls(child, ctx, callables, next_callable.clone(), edges);
+        walk_calls(child, ctx, facts, callables, next_callable.clone(), edges);
     }
 }
 
@@ -415,6 +501,13 @@ fn singleton_owner(node: TsNode<'_>, source: &[u8], current_owner: Option<&str>)
         .unwrap_or(raw.as_str())
         .trim_start_matches('@')
         .to_owned()
+}
+
+fn node_key(node: TsNode<'_>) -> RubyNodeKey {
+    RubyNodeKey {
+        start_byte: node.start_byte(),
+        end_byte: node.end_byte(),
+    }
 }
 
 fn file_node(rel_path: &str, file_hash: &str, line_end: u32) -> Node {
@@ -535,5 +628,25 @@ mod tests {
         assert!(pf.edges.iter().any(|edge| {
             edge.kind == EdgeKind::Calls && edge.target_qn == "lib/app.rb::method::Runner.helper"
         }));
+    }
+
+    #[test]
+    fn query_extracts_ruby_syntax_facts() {
+        let mut parser = tree_sitter::Parser::new();
+        let language: tree_sitter::Language = tree_sitter_ruby::LANGUAGE.into();
+        parser
+            .set_language(&language)
+            .expect("tree-sitter-ruby grammar failed to load");
+        let source = b"module Demo\n  class Runner\n    VALUE = 1\n    def run\n      helper()\n    end\n\n    def self.build\n    end\n  end\nend\n";
+        let tree = parser.parse(source, None).expect("fixture should parse");
+        let facts = RubySyntaxFacts::extract(tree.root_node(), source)
+            .expect("ruby query extraction should succeed");
+
+        assert!(!facts.modules.is_empty());
+        assert!(!facts.classes.is_empty());
+        assert!(!facts.methods.is_empty());
+        assert!(!facts.singleton_methods.is_empty());
+        assert!(!facts._constants.is_empty());
+        assert!(!facts.calls.is_empty());
     }
 }

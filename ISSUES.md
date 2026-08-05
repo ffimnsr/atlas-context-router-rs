@@ -39,217 +39,19 @@ For terms that are easy to misread in this document:
 
 ## Roadmap Layout
 
-- Part III. Remaining product expansion roadmap: Phases 29 through 31
-- Part IV. Remaining context continuity roadmap: ICM-inspired memory follow-on roadmap (ICM-0 through ICM-H)
+- Part IV. Remaining context continuity roadmap: ICM-inspired memory follow-on roadmap (ICM-B through ICM-H)
 - Part V. Remaining focused follow-up patches: Retrieval Follow-Up Patch remainder, Runtime Event Enrichment and Graph Linking Patch, Rust Reachability Guard Patch, Shared Parser Query Migration Patch, Context Escalation Contract Patch, Dynamic Agent Policy and Hook Enforcement Patch, Graph Store Corruption Recovery Patch, SQLite Connection Concurrency Policy Patch remainder
+- Part XI. Tokenizer-backed context budget accounting
 
 ## Cross-Cutting Track Map
 
-- Historical and analytics work: Phase 29, Phase 30, Phase 31
 - Retrieval and search follow-ups: Retrieval Follow-Up Patch remainder
-- Context continuity and runtime memory: ICM-0 universal MCP session capture fallback, ICM-inspired memory follow-on roadmap, Runtime Event Enrichment and Graph Linking Patch
+- Context continuity and runtime memory: ICM-inspired memory follow-on roadmap (ICM-B through ICM-H), Runtime Event Enrichment and Graph Linking Patch
 - Graph safety and workflow: Context Escalation Contract Patch, Graph Store Corruption Recovery Patch, SQLite Connection Concurrency Policy Patch remainder
 - Rust parser correctness: Rust Reachability Guard Patch, Shared Parser Query Migration Patch
 - Agent policy and enforcement: Dynamic Agent Policy and Hook Enforcement Patch
 
 ---
-
-## Part III — Post-MVP Product Expansion
-
-Use this part for advanced retrieval, analysis, refactoring, observability, real-time updates, insights, optional features, and MCP-facing payload optimizations.
-
-These phases extend v1 after core graph/build/update/query path is reliable.
-
-### Phase 29 — Intelligence & Insights
-
-Shipped: insights engine foundation, code health metrics engine, large/complex function finder, architecture analysis, risk assessment, pattern detection, and CLI/MCP insight surfaces. See SHIPPED.md for details.
-
-Remaining:
-
-- [x] add configurable layer-rules file surface for architecture validation:
-  - [x] config shape:
-    - [x] add `insights.layer_rules_file: Option<String>` to `packages/atlas-engine/src/config.rs`
-    - [x] keep existing inline `[[insights.layer_rules]]` support for now; define precedence as `layer_rules_file` replaces inline rules when set
-    - [x] resolve relative `layer_rules_file` paths from `.atlas/`, matching `sanitization.redaction_rules_file`
-  - [x] external file schema:
-    - [x] support TOML files containing `[[layer_rules]]` entries with same fields as inline rules: `name`, `path_prefixes`, `module_prefixes`
-    - [x] deserialize through existing `InsightsLayerRule` so validation stays shared
-    - [x] document example file as `.atlas/layer-rules.toml`
-  - [x] loader/validation:
-    - [x] add `InsightsConfig::resolve_layer_rules_file(atlas_dir)` helper
-    - [x] add `InsightsConfig::effective_layer_rules(atlas_dir) -> Result<Vec<InsightsLayerRule>>` or equivalent runtime loader
-    - [x] reject blank `insights.layer_rules_file`
-    - [x] reject missing paths with error naming `insights.layer_rules_file` and resolved path
-    - [x] reject directories/unreadable files with actionable error naming `insights.layer_rules_file`
-    - [x] reject malformed TOML with parse context naming `insights.layer_rules_file`
-    - [x] reuse existing layer-rule validation for duplicate names, empty matchers, and rules missing both matcher lists
-  - [x] runtime integration:
-    - [x] update architecture analysis config construction so `atlas-reasoning/src/engine/architecture.rs` receives effective runtime rules
-    - [x] verify CLI `insights architecture` and MCP `analyze_architecture` both load external rules via normal `Config::load` paths
-    - [x] preserve no-rules behavior when neither inline rules nor file path is configured
-  - [x] templates/docs:
-    - [x] update config template rendering to include commented `layer_rules_file = "layer-rules.toml"` near `[insights]`
-    - [x] decide whether full profile should prefer inline sample rules or external sample path; do not emit a non-existent active file path
-    - [x] update relevant docs or config examples if present
-  - [x] tests:
-    - [x] unit: `Config::load` accepts valid external layer-rules file
-    - [x] unit: `Config::load` rejects missing external layer-rules file
-    - [x] unit: `Config::load` rejects directory/unreadable external layer-rules file
-    - [x] unit: `Config::load` rejects malformed external layer-rules TOML
-    - [x] unit: external file reuses duplicate-name and empty-matcher validation
-    - [x] CLI quality gate: `insights architecture` reports `layer_violation` from `.atlas/layer-rules.toml`
-    - [x] regression: inline `[[insights.layer_rules]]` still works when `layer_rules_file` unset
-  - [x] validation commands:
-    - [x] `cargo fmt --all`
-    - [x] `cargo clippy --workspace --all-targets --quiet`
-    - [x] `cargo test --quiet -p atlas-engine config::tests::load_accepts_valid_external_layer_rules_file`
-    - [x] `cargo test --quiet -p atlas-cli --test cli_quality_gates insights_architecture_reports_layer_violations_from_external_config_file`
-    - [x] `./scripts/test-workspace-summary.sh`
-- [x] completion criteria: config supports runtime-loaded external layer-rules files with validation, CLI/MCP architecture analysis both use effective external rules, and tests cover valid/missing/unreadable/malformed files
-
-### Phase 30 — Optional Advanced Features
-
-#### 30.1 Multi-repo
-
-Shipped: repo registry, discovery and bootstrap, identity and storage model, per-repo build/update flows, cross-repo resolution and graph semantics, CLI/MCP surfaces, review/context/saved-artifact integration, and safety/rollout behavior. See SHIPPED.md for details.
-
-Remaining:
-
-- [x] store repo provenance on nodes, edges, files, saved context, and diagnostics output:
-  - [x] data model:
-    - [x] define shared repo provenance shape with canonical repo identity fields: `repo_id`, `repo_root`, `repo_fingerprint`/registry fingerprint, and optional `remote_url` when already available
-    - [x] persist provenance on graph nodes and edges without deriving identity from non-canonical paths
-    - [x] persist provenance on file/content records and source references used by retrieval/review context
-    - [x] persist provenance on saved context artifacts and session continuity records
-    - [x] include provenance in diagnostics records/output payloads so stale or cross-repo diagnostics can be traced
-  - [x] write path:
-    - [x] populate provenance from repo registry/discovery bootstrap during full graph build
-    - [x] preserve/update provenance during incremental graph updates, deletes, and cross-repo edge creation
-    - [x] reject or fail closed when required repo provenance is missing for persisted multi-repo data
-  - [x] read/API surfaces:
-    - [x] expose provenance in CLI JSON outputs for graph/context/review/diagnostics commands that emit nodes, edges, files, saved context, or diagnostics
-    - [x] expose provenance in MCP TOON/JSON responses for affected tools, keeping existing fields stable where possible
-    - [x] ensure diagnostics output includes enough repo metadata to distinguish same relative path across repos
-  - [x] migration/backfill:
-    - [x] add schema migration for new provenance columns/tables/indexes
-    - [x] backfill single-repo databases from current repo registry/default repo identity
-    - [x] make `doctor`/`db_check` report missing or inconsistent repo provenance separately from `noncanonical_path_rows`
-  - [x] tests:
-    - [x] unit: provenance shape serializes/deserializes for CLI JSON and MCP responses
-    - [x] integration: full graph build stores provenance on nodes, edges, and files
-    - [x] integration: incremental update preserves provenance and removes stale rows for deleted files
-    - [x] integration: saved context artifact round-trips repo provenance
-    - [x] integration: diagnostics output distinguishes two repos with same relative file path
-    - [x] regression: canonical path identity invariant still holds for path-derived IDs/cache keys
-  - [x] validation commands:
-    - [x] `cargo fmt --all`
-    - [x] `cargo clippy --workspace --all-targets --quiet`
-    - [x] targeted provenance tests with `cargo test --quiet ...`
-    - [x] `./scripts/test-workspace-summary.sh`
-  - [x] completion criteria: every persisted/output entity that can cross repo boundaries carries canonical repo provenance, health checks detect missing provenance, and tests prove same-relative-path multi-repo cases remain unambiguous
-
-#### 30.2 Remaining code intelligence
-
-Make higher-level code intelligence explicit, deterministic, and implementable on top of canonical graph/content inputs.
-
-- [x] similar-function detection beyond graph-shape heuristics:
-  - [x] compute deterministic callable fingerprints from canonical file paths, symbol kind/name tokens, normalized signature tokens, call/import/reference neighborhood, module bucket, source-body shingles, and normalized duplicate shingles
-  - [x] score candidates with weighted name/signature/body/neighborhood/module/size buckets and return feature score breakdowns, matched features, differing features, and similarity band
-  - [x] bound candidates by language, callable kind, arity shape, same-file option, and deterministic result limits
-  - [x] expose CLI/MCP entry points with stable JSON schemas and freshness/provenance metadata from existing command/tool wrappers
-  - [x] tests: known similar but non-identical callable fixture
-- [x] duplicate detection beyond exact structural patterns:
-  - [x] normalize callable source tokens by preserving keywords/control-flow structure while replacing identifiers/literals
-  - [x] detect `exact_normalized` and `near_duplicate` callable groups with normalized token shingles
-  - [x] rank duplicate groups by confidence, duplicated token/line count, member count, and stable deterministic group ID
-  - [x] expose groups through CLI/MCP with members, files, normalized pattern summary, and suggested extraction target
-  - [x] tests: multi-file near-duplicate callable fixture
-- [x] infer modules:
-  - [x] define inferred module model with stable ID, display name, root paths, owned symbols, inbound/outbound dependencies, confidence, evidence, and explicit-owner flag
-  - [x] prefer explicit package ownership when stored; otherwise infer from `packages/<name>`, `src/<segment>`, `tests`, docs/wiki/markdown paths, or parent-directory fallback
-  - [x] compute module dependency edges from graph edges with deterministic ordering
-  - [x] expose inferred modules through CLI/MCP with stable JSON schemas
-  - [x] tests: explicit owner plus path-bucket fixture
-- [x] label components:
-  - [x] define Atlas taxonomy: repo scan, parse, persist graph, incremental update, search/traverse, review context, context memory, session continuity, CLI, MCP, config, diagnostics, tests, docs
-  - [x] implement deterministic multi-label file/symbol assignment from path and symbol-name rules with confidence/evidence
-  - [x] expose scoped CLI/MCP label queries for files and symbols with stable JSON schemas
-  - [x] tests: multi-label CLI/review fixture
-- [x] Follow-up hardening:
-  - [x] configurable similarity and duplicate band thresholds via `insights.*_threshold` config
-  - [x] graph-community module clustering used before path fallback when explicit package owner is absent
-  - [x] duplicate suppressions from config and CLI/MCP request filters
-  - [x] source-span records inside duplicate members
-  - [x] component-label propagation into review/context workflow impacted components
-  - [x] persisted fingerprint cache with incremental invalidation
-
-### Phase 31 — Lowest Priority
-
-#### 31.1 Docs generation (CLI command)
-
-- [x] add `atlas docs generate` CLI command for Markdown documentation:
-  - [x] support `--repo <path>` and reuse existing graph DB/config discovery
-  - [x] support `--output <dir>` and create deterministic `index.md`, `files.md`, `symbols.md`, `modules.md`, and `components.md`
-  - [x] include repo summary, graph stats, generated timestamp, indexed file count, symbol counts by kind, inferred modules, component labels, and top-level dependency summaries
-  - [x] include per-file sections with canonical path, language, package/module/component labels, owned symbols, inbound/outbound dependency counts, and notable duplicates when available
-  - [x] include per-symbol sections with qualified name, kind, file/span, documentation snippet when available, callers/callees, tests, and owning module/component labels
-  - [x] make output stable for tests by sorting paths/symbols/modules/components deterministically and allowing timestamp override in test fixtures
-  - [x] fail with actionable errors when graph DB missing, stale, or unreadable; never silently generate partial docs unless `--allow-partial` is passed
-  - [x] tests: fixture repo generates deterministic Markdown snapshots and validates missing/stale graph error paths
-- [x] add visualization/export support for generated docs:
-  - [x] support `atlas docs export --format mermaid` to emit dependency diagrams for modules, components, and selected symbol neighborhoods
-  - [x] support `atlas docs export --format dot` for Graphviz-compatible module/component dependency graphs
-  - [x] support `--scope repo|module|component|file|symbol` plus `--name <value>` for focused exports
-  - [x] include stable node IDs, human-readable labels, edge kinds, and edge counts; collapse high-volume edges with summarized counts
-  - [x] integrate export links or fenced Mermaid diagrams into generated Markdown when `atlas docs generate --include-diagrams` is passed
-  - [x] cap diagram size by default with `--max-nodes`/`--max-edges` and report omitted nodes/edges deterministically
-  - [x] tests: deterministic Mermaid/DOT snapshot fixtures for repo, module, component, and symbol-neighborhood scopes
-
-#### 31.2 MCP tool manual and schema introspection
-
-Add built-in manual and schema-introspection surface for MCP tools so agents and users can request authoritative tool docs at runtime instead of relying on external docs or stale prompt text.
-
-- [x] add shared manual-documentation service for MCP tools:
-  - [x] load tool metadata from live MCP tool registry instead of duplicating per-tool docs in separate hardcoded tables
-  - [x] require canonical tool identity lookup by exact tool name and preserve case-sensitive output name
-  - [x] allow manual namespace `mcp` first and reject unknown manual namespaces with clear validation errors
-  - [x] return deterministic document payload without executing target tool
-  - [x] keep service read-only and safe to call in restricted environments
-- [x] define `man` response shape for MCP tool docs:
-  - [x] include requested namespace and requested tool name
-  - [x] include resolved tool name and description from registry
-  - [x] include tool structure section describing tool purpose, exposed operation name, and top-level request/response shape
-  - [x] include input-args section with field name, type, required/optional state, default value when available, accepted enum values when applicable, and per-field description
-  - [x] include output-response section with response fields, field meanings, optional/required state, and metadata/error payload shape when available
-  - [x] include usage section with exact form `man mcp <mcp_tool_name>` plus direct target-tool invocation examples when available
-  - [x] include error section for unknown tool, deprecated tool, hidden/internal tool, or schema-unavailable cases
-  - [x] keep field ordering deterministic so CLI output, MCP output, snapshots, and future generated docs stay stable
-- [x] add MCP surface:
-  - [x] expose MCP tool `man`
-  - [x] accept exact arguments representing `man mcp <mcp_tool_name>` request
-  - [x] require namespace `mcp` and target tool name
-  - [x] return compact default output suitable for agent consumption
-  - [x] add optional verbose or structured output mode if existing MCP tool patterns already support it
-- [x] add CLI parity surface:
-  - [x] add `atlas man mcp <mcp_tool_name>`
-  - [x] keep human-readable output aligned with MCP default text
-  - [x] add `--json` output that matches MCP structured payload as closely as current CLI/MCP parity rules allow
-- [x] implement lookup and rendering behavior:
-  - [x] resolve visible registered tools only and exclude disabled or non-exported tools unless explicit internal-doc mode is added later
-  - [x] derive structure, input-args, output-response, and usage sections from registry/schema data when available instead of duplicating static prose
-  - [x] suggest nearest tool names on unknown target using existing deterministic ranking helper if available
-  - [x] truncate oversized examples or descriptions using same bounded-output policy used by other MCP-facing surfaces without dropping required structure, input, output, or usage sections
-  - [x] include freshness/provenance metadata when manual output depends on generated registry state
-- [x] add docs and tests:
-  - [x] document `atlas man mcp <mcp_tool_name>` and MCP `man` in README and MCP tool docs
-  - [x] add snapshot tests for human-readable output and JSON output
-  - [x] add unknown-tool test with deterministic suggestion order
-  - [x] add hidden-tool or disabled-tool behavior test
-  - [x] add CLI/MCP parity test for at least one representative tool with required and optional args
-
-Why:
-- agents need fast authoritative tool docs during tool selection and argument construction
-- one runtime-backed manual surface reduces drift between registry schema, CLI help, MCP docs, and prompt instructions
 
 ## Part IV — Context Continuity and Memory
 
@@ -280,7 +82,7 @@ Core Design Rules:
 
 ---
 
-Phases CM14 (Decision Memory) and CM15 (Agent-Aware Context) are shipped. See SHIPPED.md for details. Remaining memory quality work is tracked in the ICM roadmap below.
+Phases CM14 (Decision Memory) and CM15 (Agent-Aware Context), ICM-0 (universal MCP session capture fallback), and ICM-A (shared memory surface) are shipped. See SHIPPED.md for details. Remaining memory quality work (ICM-B through ICM-H) is tracked in the ICM roadmap below.
 
 ### ICM-Inspired Memory Follow-On Roadmap
 
@@ -297,168 +99,6 @@ Before implementing any ICM checklist item:
 - do not mark `Rules:` bullets done; they are never checklist items
 - implement checklist items only under `Implementation structure` and `completion criteria`
 - if a checklist item conflicts with `Rules:`, follow `Rules:` and update the checklist wording before implementation
-
-#### ICM-0 — Universal MCP Session Capture Fallback
-
-Priority: implement this before ICM-A through ICM-H unless a blocking dependency is explicitly discovered.
-
-Rules:
-
-- provide hook-equivalent session capture for MCP-capable agents whose host does not expose native LLM hooks
-- keep native hooks as the automatic path and MCP fallback as the universal instruction-driven path
-- route native hooks and MCP fallback through one shared event service so event semantics, redaction, storage routing, lifecycle actions, graph freshness, and review refresh never drift
-- do not make generated instructions write SQLite directly; instructions may only tell agents to call Atlas MCP tools or Atlas CLI commands
-- keep fallback capture best-effort and non-blocking; failures must be visible as structured metadata or warnings
-- store compact summaries and source references, never raw secrets or large unbounded transcripts
-- preserve existing `session.db` / `context.db` / `worldtree.db` boundaries and never store runtime memory bodies in `worldtree.db`
-
-Rules apply to every checklist item in this ICM-0 section.
-
-Implementation structure:
-
-##### ICM-0A — Shared agent event service
-
-- [x] create shared crate or service module for hook-compatible agent events outside `atlas-cli`, preferably `packages/atlas-agent-events`
-- [x] move hook event policy, canonical event names, aliases, priorities, storage mode, lifecycle mode, prompt-routing flag, freshness flag, graph-refresh flag, review-refresh flag, resume-snapshot flag, and session-start flag out of `packages/atlas-cli/src/commands/hook/policy.rs`
-- [x] move hook payload extraction helpers, payload redaction/sanitization, changed-file extraction, tool-name extraction, command/status extraction, and graph-relevance checks out of CLI-only hook modules
-- [x] move hook metadata builders, prompt-routing metadata, freshness metadata, and context-hint collection into the shared event service
-- [x] move lifecycle actions into the shared event service: load restore state, persist handoff artifact, verify restore state, prompt routing, graph refresh, freshness metadata, and review refresh
-- [x] expose `AgentEventRequest` with fields `repo_root`, `graph_db_path`, `frontend`, `event`, `session_id`, `agent_id`, `payload`, and `source`
-- [x] expose `AgentEventSource` with exact values `hook` and `mcp_fallback`
-- [x] expose `AgentEventResult` with fields `event`, `canonical_event`, `frontend`, `session_id`, `pending_resume`, `stored`, `event_id`, `source_id`, `storage_kind`, `snapshot`, `actions`, and `warnings`
-- [x] expose one `record_agent_event` function that validates event aliases, redacts payloads, persists session events, routes oversized payloads through content-store, and executes policy actions
-- [x] keep service APIs canonical-path aware for repo roots and path-derived identity; use existing `atlas_repo::CanonicalRepoPath` or helper APIs built on it
-- [x] add unit tests for policy alias resolution covering `SessionStart`, `UserPromptSubmit`, `PostToolUse`, `FileChanged`, `Stop`, and kebab-case equivalents
-- [x] add unit tests for redaction and oversized payload routing through raw, preview, and pointer content-store paths
-
-##### ICM-0B — Rewire native `atlas hook` to shared service
-
-- [x] update `packages/atlas-cli/src/commands/hook/mod.rs` so `run_hook` builds `AgentEventRequest` and calls `record_agent_event`
-- [x] keep CLI-only behavior limited to resolving repo, deriving graph DB path, reading stdin payload, reading `ATLAS_HOOK_FRONTEND`, and printing JSON output
-- [x] preserve existing `atlas hook <event>` JSON fields so current hook users do not need config changes
-- [x] keep `atlas hook` failures non-blocking only in generated shell runners; direct CLI invocation should still return actionable errors
-- [x] update hook tests to assert parity with pre-refactor output for `session-start`, `user-prompt`, `post-tool-use`, `pre-compact`, `post-compact`, `stop`, and `file-changed`
-- [x] add regression test proving generated `.atlas/hooks/atlas-hook` still calls `atlas hook` and never writes SQLite directly
-
-##### ICM-0C — MCP `record_session_event` fallback tool
-
-- [x] add MCP tool descriptor `record_session_event` in `packages/atlas-mcp/src/tools/registry.rs`
-- [x] add MCP dispatch arm for `record_session_event` in `packages/atlas-mcp/src/tools/dispatch.rs`
-- [x] implement MCP handler in a new module such as `packages/atlas-mcp/src/session_events.rs` instead of growing `session_tools.rs` further
-- [x] accept input fields `event`, `payload`, `frontend`, `session_id`, `agent_id`, `repo_scope`, and `output_format`
-- [x] default `frontend` to `mcp` and event `source` to `mcp_fallback`
-- [x] accept the same event names and aliases as native hooks, including `session-start`, `user-prompt`, `pre-tool-use`, `post-tool-use`, `pre-compact`, `post-compact`, `stop`, `session-end`, `permission-request`, `permission-denied`, `tool-failure`, `stop-failure`, `error`, `elicitation`, `elicitation-result`, `instructions-loaded`, `notification`, `subagent-start`, `subagent-stop`, `task-created`, `task-completed`, `config-change`, `cwd-changed`, `file-changed`, `worktree-create`, and `worktree-remove`
-- [x] return stable object `structuredContent` with `event`, `canonical_event`, `frontend`, `session_id`, `stored`, `event_id`, `source_id`, `storage_kind`, `pending_resume`, `snapshot`, `actions`, and `warnings`
-- [x] add output schema for `record_session_event` and ensure schema compiles under JSON Schema 2020-12
-- [x] add MCP tests proving `record_session_event` persists session events for `session-start`, `user-prompt`, `post-tool-use`, `file-changed`, and `stop`
-- [x] add MCP test proving unknown event names return structured validation errors with supported examples
-- [x] add MCP test proving `post-tool-use` with changed files returns graph-refresh/review-refresh action metadata or explicit skip/error metadata
-
-##### ICM-0D — Mandatory installed instruction fallback protocol
-
-- [x] update `packages/atlas-cli/src/install/instructions.rs` injected block with a dedicated `Atlas session memory fallback` section
-- [x] require agents to call `wake_up` when available, otherwise `resume_session`, at session start before substantive work
-- [x] require agents to call `record_session_event` with event `user-prompt` when user gives a substantial task and hooks are unavailable or unknown
-- [x] require agents to call `record_session_event` with event `post-tool-use` after MCP/client tool calls that create, edit, delete, rename, or generate files
-- [x] require agents to call `record_session_event` with event `file-changed` when they know exact changed files but not the originating tool payload
-- [x] require agents to call `save_context_artifact` for resolved errors, architecture/design decisions, user preferences, major investigation summaries, review summaries, and handoff summaries
-- [x] require agents to call `compact_session` and `record_session_event` with `pre-compact` before context compression when they can detect compaction risk
-- [x] require agents to call `record_session_event` with `stop` or `session-end` plus a handoff artifact before final response when major work was completed
-- [x] tell agents not to store trivial logs, raw secrets, duplicate facts, raw unbounded transcripts, or facts already in repository instruction files
-- [x] keep installed instruction block idempotent under existing `<!-- atlas MCP tools -->` markers
-- [x] add install tests proving generated `AGENTS.md` and `CLAUDE.md` contain the fallback protocol and preserve user-authored content before and after the managed block
-
-##### ICM-0E — Wake-up MCP parity for session start
-
-- [x] add MCP tool `wake_up` with compact default output for hookless session-start context injection
-- [x] make `wake_up` assemble bounded context from resume snapshot, decision memory, saved context hints, global memory, changed files, graph readiness, and retrieval hints
-- [x] accept `topic`, `session_id`, `frontend`, `agent_id`, `max_items`, `repo_scope`, and `output_format`
-- [x] include output fields `repo_root`, `session_id`, `frontend`, `current_focus`, `recent_decisions`, `critical_memories`, `recent_feedback`, `active_memoir_concepts`, `changed_files`, `graph_readiness`, `retrieval_hints`, `generated_at`, and `warnings`
-- [x] reference large artifacts by `source_id` only and never inline large artifact bodies in wake-up output
-- [x] record wake-up generation success or failure metadata through `record_agent_event` or the shared session event service
-- [x] add snapshot tests covering empty repo memory, normal memory, stale graph, and oversized saved artifacts
-
-##### ICM-0F — Installer modes, docs, and compatibility matrix
-
-- [x] update install mode docs so `mcp` installs MCP config, `hook` installs native hooks, `cli` installs instruction fallback text, and `all` installs all three surfaces
-- [x] update `atlas install --dry-run` output to show which instruction fallback files would be created or refreshed
-- [x] document native hook support versus MCP fallback support in README and wiki with columns `surface`, `works_with`, `automatic`, `token_cost`, and `best_for`
-- [x] add `wiki/session-memory-fallback.md` explaining how hookless agents should use `wake_up`, `record_session_event`, `save_context_artifact`, `search_decisions`, `search_saved_context`, `get_global_memory`, and `compact_session`
-- [x] update `wiki/hooks-claude.md` and `wiki/hooks-codex.md` to say native hooks and MCP fallback share one event service
-- [x] add tests or snapshots proving MCP registry descriptions, installed instructions, and docs do not describe conflicting event names
-
-##### ICM-0 completion criteria
-
-- [x] native hooks and MCP `record_session_event` share one event policy and one persistence/action pipeline
-- [x] hookless MCP agents can capture session-start, user-prompt, post-tool-use, file-changed, stop, session-end, and handoff events through installed instructions alone
-- [x] `wake_up` exists as a bounded MCP session-start recall surface and never inlines oversized artifacts
-- [x] generated `AGENTS.md` and `CLAUDE.md` include mandatory fallback triggers modeled after ICM-style memory instructions
-- [x] generated hooks, installed instructions, MCP tools, README, and wiki agree on event names and fallback behavior
-- [x] fallback capture remains best-effort, structured, and non-blocking, with tests covering success, skipped, and failure action metadata
-- [x] no hook runner, generated instruction, or MCP fallback path writes SQLite directly outside shared Atlas storage/service APIs
-
-#### ICM-A — Shared Memory Surface Over Existing Storage
-
-Rules:
-
-- add one shared memory service layer over existing continuity crates so CLI and MCP reuse identical validation, visibility, and storage behavior
-- restore detailed subphase structure here so `ISSUES.md` can replace source roadmap file without losing implementation guidance
-- do not create a separate memory architecture that bypasses shipped decision-memory and agent-partition services
-- do not store memory bodies or runtime artifacts in `worldtree.db`
-- do not require an active session for `project` or `global` writes
-- do not let CLI and MCP drift on record shape, defaults, or visibility rules
-
-Rules apply to every checklist item in this ICM section.
-
-Implementation structure:
-
-##### ICM-A1 — Memory model and storage schema
-
-- [x] define `MemoryImportance` enum with exact values `critical`, `high`, `normal`, and `low`
-- [x] add `importance` field to stored memory records and default manual writes to `normal`
-- [x] define `MemoryScope` enum with exact values `project`, `session`, `frontend`, and `global`
-- [x] add `scope` field to memory records and make `project` default
-- [x] require `frontend` identifier when scope is `frontend`
-- [x] add memory tables to continuity-owned storage, preferably existing session-side persistence unless a dedicated memory DB is justified later
-- [x] create `memories` table with `id`, `repo_root`, `session_id`, `frontend`, `scope`, `topic`, `title`, `body`, `importance`, `created_at`, `updated_at`, `last_accessed_at`, `decay_score`, `source_id`, and `metadata_json`
-- [x] add indexes for `topic`, `importance`, `scope`, `session_id`, and `last_accessed_at`
-- [x] reject unknown importance and scope values at CLI, MCP, and storage boundaries
-- [x] validate memory schema through `atlas db check` and golden schema tests
-
-##### ICM-A2 — CLI memory CRUD
-
-- [x] add `atlas memory store <text>` with flags `--topic`, `--title`, `--importance`, `--scope`, `--frontend`, `--source-id`, and `--json`
-- [x] store memory text exactly as provided unless central redaction policy strips sensitive content
-- [x] add `atlas memory recall <query>` with flags `--topic`, `--importance`, `--scope`, `--shared`, `--limit`, and `--json`
-- [x] use lexical search first for recall and rank exact topic matches above broad text matches
-- [x] add `atlas memory list` with filters `--topic`, `--importance`, `--scope`, `--older-than`, `--newer-than`, and `--json`
-- [x] sort memory list by `updated_at DESC` by default
-- [x] add `atlas memory delete <memory_id>` with `--dry-run` and `--json`
-- [x] require exact memory id for delete and keep linked saved-context artifacts unless explicit delete-source behavior is added later
-
-##### ICM-A3 — Frontend-aware visibility rules
-
-- [x] normalize frontend identities to `claude`, `codex`, `copilot`, `cli`, and `mcp`
-- [x] reject unknown frontend names unless config explicitly allows custom frontends
-- [x] enforce visibility rules: `global` visible everywhere, `project` visible to all frontends in repo, `session` visible only to same session, `frontend` visible only to same repo plus same frontend
-- [x] make `atlas memory recall --shared` return only `global` and `project` memories
-- [x] ensure project-scoped writes work without an active session
-
-##### ICM-A4 — MCP parity
-
-- [x] add MCP `memory_store` with same fields and validation as CLI
-- [x] add MCP `memory_recall` with same visibility rules and bounded default output
-- [x] keep source ids and retrieval hints available in compact MCP output
-- [x] add CLI/MCP parity tests so stored record shape, errors, and defaults match
-
-##### ICM-A completion criteria
-
-- [x] `atlas memory store --importance critical` persists `importance = critical`
-- [x] `atlas memory store --scope frontend --frontend codex` stores frontend-private memory with correct visibility
-- [x] `atlas memory recall --shared` excludes frontend-private memories
-- [x] `atlas memory list --importance critical` filters correctly and emits stable JSON
-- [x] invalid importance/scope/frontend values fail with clear validation errors
-- [x] CLI and MCP memory store/recall paths produce equivalent record shapes
 
 #### ICM-B — Memory Curation, Decay, Health, and Consolidation
 
@@ -1341,43 +981,43 @@ Use Helix queries only as grammar reference for tree-sitter node names and scope
 
 #### Patch SQ1 — Shared query contract and migration harness
 
-- [ ] document the shared query-backed parser contract in `packages/atlas-parser/README.md`:
-  - [ ] query files live under `packages/atlas-parser/queries/<language>.scm`
-  - [ ] capture names use the `@atlas.*` namespace
-  - [ ] queries capture syntax facts only
-  - [ ] language parser code maps captures into `Node`, `Edge`, and `ParsedFile`
-  - [ ] language parser public APIs remain unchanged
-- [ ] harden shared query helpers created by Patch Q:
-  - [ ] support loading one static query per language via `include_str!`
-  - [ ] expose helper for capture lookup by exact capture name
-  - [ ] expose helper for optional and required captures with clear test failures
-  - [ ] expose helper to sort captures by byte range for deterministic output
-  - [ ] expose helper to preserve source-order traversal when multiple query matches overlap
-- [ ] define common capture naming conventions:
-  - [ ] `@atlas.definition.function`
-  - [ ] `@atlas.definition.method`
-  - [ ] `@atlas.definition.class`
-  - [ ] `@atlas.definition.module`
-  - [ ] `@atlas.definition.struct`
-  - [ ] `@atlas.definition.enum`
-  - [ ] `@atlas.definition.interface`
-  - [ ] `@atlas.definition.trait`
-  - [ ] `@atlas.definition.constant`
-  - [ ] `@atlas.definition.variable`
-  - [ ] `@atlas.import`
-  - [ ] `@atlas.call`
-  - [ ] `@atlas.reference`
-  - [ ] `@atlas.name`
-  - [ ] `@atlas.parameters`
-  - [ ] `@atlas.return_type`
-  - [ ] `@atlas.receiver`
-- [ ] add query helper tests:
-  - [ ] invalid query text returns a clear error
-  - [ ] missing required capture returns a clear error
-  - [ ] optional capture absence does not fail
-  - [ ] capture order is deterministic across repeated runs
-  - [ ] overlapping captures preserve match order before graph builder filtering
-- [ ] add migration checklist comments in each remaining parser file naming the existing manual extraction responsibilities before refactor starts
+- [x] document the shared query-backed parser contract in `packages/atlas-parser/README.md`:
+  - [x] query files live under `packages/atlas-parser/queries/<language>.scm`
+  - [x] capture names use the `@atlas.*` namespace
+  - [x] queries capture syntax facts only
+  - [x] language parser code maps captures into `Node`, `Edge`, and `ParsedFile`
+  - [x] language parser public APIs remain unchanged
+- [x] harden shared query helpers created by Patch Q:
+  - [x] support loading one static query per language via `include_str!`
+  - [x] expose helper for capture lookup by exact capture name
+  - [x] expose helper for optional and required captures with clear test failures
+  - [x] expose helper to sort captures by byte range for deterministic output
+  - [x] expose helper to preserve source-order traversal when multiple query matches overlap
+- [x] define common capture naming conventions:
+  - [x] `@atlas.definition.function`
+  - [x] `@atlas.definition.method`
+  - [x] `@atlas.definition.class`
+  - [x] `@atlas.definition.module`
+  - [x] `@atlas.definition.struct`
+  - [x] `@atlas.definition.enum`
+  - [x] `@atlas.definition.interface`
+  - [x] `@atlas.definition.trait`
+  - [x] `@atlas.definition.constant`
+  - [x] `@atlas.definition.variable`
+  - [x] `@atlas.import`
+  - [x] `@atlas.call`
+  - [x] `@atlas.reference`
+  - [x] `@atlas.name`
+  - [x] `@atlas.parameters`
+  - [x] `@atlas.return_type`
+  - [x] `@atlas.receiver`
+- [x] add query helper tests:
+  - [x] invalid query text returns a clear error
+  - [x] missing required capture returns a clear error
+  - [x] optional capture absence does not fail
+  - [x] capture order is deterministic across repeated runs
+  - [x] overlapping captures preserve match order before graph builder filtering
+- [x] add migration checklist comments in each remaining parser file naming the existing manual extraction responsibilities before refactor starts
 
 Why:
 - prevents each language migration from inventing incompatible capture names
@@ -1386,30 +1026,30 @@ Why:
 
 #### Patch SQ2 — Migrate C-family compiled language parsers
 
-- [ ] migrate `packages/atlas-parser/src/lang/c.rs`:
-  - [ ] add `packages/atlas-parser/queries/c.scm`
-  - [ ] query functions, structs, enums, typedefs, includes, and calls
-  - [ ] preserve existing C qualified names and `NodeKind` choices
-  - [ ] preserve existing include/import edge behavior
-  - [ ] preserve existing same-file call behavior
-  - [ ] keep `tests/fixtures/c/*.golden.json` unchanged unless a semantic fix is explicitly itemized
-- [ ] migrate `packages/atlas-parser/src/lang/cpp.rs`:
-  - [ ] add `packages/atlas-parser/queries/cpp.scm`
-  - [ ] query functions, methods, classes, structs, namespaces, includes, and calls
-  - [ ] preserve existing C++ qualified names and `NodeKind` choices
-  - [ ] preserve existing namespace and class parent scope behavior
-  - [ ] keep `tests/fixtures/cpp/*.golden.json` unchanged unless a semantic fix is explicitly itemized
-- [ ] migrate `packages/atlas-parser/src/lang/csharp.rs`:
-  - [ ] add `packages/atlas-parser/queries/csharp.scm`
-  - [ ] query namespaces, classes, interfaces, methods, fields, using directives, and calls
-  - [ ] preserve existing C# qualified names and `NodeKind` choices
-  - [ ] preserve existing test detection behavior
-  - [ ] keep `tests/fixtures/csharp/*.golden.json` unchanged unless a semantic fix is explicitly itemized
-- [ ] run tests after this batch:
-  - [ ] `cargo test -p atlas-parser lang::c`
-  - [ ] `cargo test -p atlas-parser lang::cpp`
-  - [ ] `cargo test -p atlas-parser lang::csharp`
-  - [ ] `cargo test -p atlas-parser --test parser_golden`
+- [x] migrate `packages/atlas-parser/src/lang/c.rs`:
+  - [x] add `packages/atlas-parser/queries/c.scm`
+  - [x] query functions, structs, enums, typedefs, includes, and calls
+  - [x] preserve existing C qualified names and `NodeKind` choices
+  - [x] preserve existing include/import edge behavior
+  - [x] preserve existing same-file call behavior
+  - [x] keep `tests/fixtures/c/*.golden.json` unchanged unless a semantic fix is explicitly itemized
+- [x] migrate `packages/atlas-parser/src/lang/cpp.rs`:
+  - [x] add `packages/atlas-parser/queries/cpp.scm`
+  - [x] query functions, methods, classes, structs, namespaces, includes, and calls
+  - [x] preserve existing C++ qualified names and `NodeKind` choices
+  - [x] preserve existing namespace and class parent scope behavior
+  - [x] keep `tests/fixtures/cpp/*.golden.json` unchanged unless a semantic fix is explicitly itemized
+- [x] migrate `packages/atlas-parser/src/lang/csharp.rs`:
+  - [x] add `packages/atlas-parser/queries/csharp.scm`
+  - [x] query namespaces, classes, interfaces, methods, fields, using directives, and calls
+  - [x] preserve existing C# qualified names and `NodeKind` choices
+  - [x] preserve existing test detection behavior
+  - [x] keep `tests/fixtures/csharp/*.golden.json` unchanged unless a semantic fix is explicitly itemized
+- [x] run tests after this batch:
+  - [x] `cargo test -p atlas-parser lang::c`
+  - [x] `cargo test -p atlas-parser lang::cpp`
+  - [x] `cargo test -p atlas-parser lang::csharp`
+  - [x] `cargo test -p atlas-parser --test parser_golden`
 
 Why:
 - C-family parsers share enough syntax shape to validate query conventions for compiled languages
@@ -1417,22 +1057,22 @@ Why:
 
 #### Patch SQ3 — Migrate JVM and static OO language parsers
 
-- [ ] migrate `packages/atlas-parser/src/lang/java.rs`:
-  - [ ] add `packages/atlas-parser/queries/java.scm`
-  - [ ] query packages, imports, classes, interfaces, enums, methods, fields, and calls
-  - [ ] preserve existing Java qualified names and `NodeKind` choices
-  - [ ] preserve existing parent scope behavior
-  - [ ] keep `tests/fixtures/java/*.golden.json` unchanged unless a semantic fix is explicitly itemized
-- [ ] migrate `packages/atlas-parser/src/lang/scala.rs`:
-  - [ ] add `packages/atlas-parser/queries/scala.scm`
-  - [ ] query packages, imports, classes, objects, traits, functions, vals, vars, and calls
-  - [ ] preserve existing Scala qualified names and `NodeKind` choices
-  - [ ] preserve existing object/class/trait scope behavior
-  - [ ] keep `tests/fixtures/scala/*.golden.json` unchanged unless a semantic fix is explicitly itemized
-- [ ] run tests after this batch:
-  - [ ] `cargo test -p atlas-parser lang::java`
-  - [ ] `cargo test -p atlas-parser lang::scala`
-  - [ ] `cargo test -p atlas-parser --test parser_golden`
+- [x] migrate `packages/atlas-parser/src/lang/java.rs`:
+  - [x] add `packages/atlas-parser/queries/java.scm`
+  - [x] query packages, imports, classes, interfaces, enums, methods, fields, and calls
+  - [x] preserve existing Java qualified names and `NodeKind` choices
+  - [x] preserve existing parent scope behavior
+  - [x] keep `tests/fixtures/java/*.golden.json` unchanged unless a semantic fix is explicitly itemized
+- [x] migrate `packages/atlas-parser/src/lang/scala.rs`:
+  - [x] add `packages/atlas-parser/queries/scala.scm`
+  - [x] query packages, imports, classes, objects, traits, functions, vals, vars, and calls
+  - [x] preserve existing Scala qualified names and `NodeKind` choices
+  - [x] preserve existing object/class/trait scope behavior
+  - [x] keep `tests/fixtures/scala/*.golden.json` unchanged unless a semantic fix is explicitly itemized
+- [x] run tests after this batch:
+  - [x] `cargo test -p atlas-parser lang::java`
+  - [x] `cargo test -p atlas-parser lang::scala`
+  - [x] `cargo test -p atlas-parser --test parser_golden`
 
 Why:
 - Java and Scala exercise package/import scope semantics after C-family migration
@@ -1440,19 +1080,19 @@ Why:
 
 #### Patch SQ4 — Migrate JavaScript and TypeScript parsers
 
-- [ ] migrate shared JavaScript/TypeScript parser code in `packages/atlas-parser/src/lang/javascript.rs`:
-  - [ ] add `packages/atlas-parser/queries/javascript.scm`
-  - [ ] add `packages/atlas-parser/queries/typescript.scm`
-  - [ ] query imports, exports, functions, arrow functions assigned to names, classes, methods, variables, and calls
-  - [ ] preserve existing JavaScript qualified names and `NodeKind` choices
-  - [ ] preserve existing TypeScript qualified names and `NodeKind` choices
-  - [ ] preserve existing JSX/TSX support behavior
-  - [ ] preserve existing call/reference confidence tiers
-  - [ ] keep `tests/fixtures/javascript/*.golden.json` unchanged unless a semantic fix is explicitly itemized
-  - [ ] keep `tests/fixtures/typescript/*.golden.json` unchanged unless a semantic fix is explicitly itemized
-- [ ] run tests after this batch:
-  - [ ] `cargo test -p atlas-parser lang::javascript`
-  - [ ] `cargo test -p atlas-parser --test parser_golden`
+- [x] migrate shared JavaScript/TypeScript parser code in `packages/atlas-parser/src/lang/javascript.rs`:
+  - [x] add `packages/atlas-parser/queries/javascript.scm`
+  - [x] add `packages/atlas-parser/queries/typescript.scm`
+  - [x] query imports, exports, functions, arrow functions assigned to names, classes, methods, variables, and calls
+  - [x] preserve existing JavaScript qualified names and `NodeKind` choices
+  - [x] preserve existing TypeScript qualified names and `NodeKind` choices
+  - [x] preserve existing JSX/TSX support behavior
+  - [x] preserve existing call/reference confidence tiers
+  - [x] keep `tests/fixtures/javascript/*.golden.json` unchanged unless a semantic fix is explicitly itemized
+  - [x] keep `tests/fixtures/typescript/*.golden.json` unchanged unless a semantic fix is explicitly itemized
+- [x] run tests after this batch:
+  - [x] `cargo test -p atlas-parser lang::javascript`
+  - [x] `cargo test -p atlas-parser --test parser_golden`
 
 Why:
 - JavaScript and TypeScript share parser code and must migrate together to avoid divergent behavior
@@ -1460,35 +1100,35 @@ Why:
 
 #### Patch SQ5 — Migrate dynamic language parsers
 
-- [ ] migrate `packages/atlas-parser/src/lang/python.rs`:
-  - [ ] add `packages/atlas-parser/queries/python.scm`
-  - [ ] query imports, classes, functions, methods, assignments, and calls
-  - [ ] preserve existing Python qualified names and `NodeKind` choices
-  - [ ] preserve existing indentation/scope behavior from AST parentage
-  - [ ] keep `tests/fixtures/python/*.golden.json` unchanged unless a semantic fix is explicitly itemized
-- [ ] migrate `packages/atlas-parser/src/lang/ruby.rs`:
-  - [ ] add `packages/atlas-parser/queries/ruby.scm`
-  - [ ] query requires, modules, classes, instance methods, singleton methods, constants, and calls
-  - [ ] preserve existing Ruby qualified names and `NodeKind` choices
-  - [ ] preserve existing current-owner behavior
-  - [ ] keep `tests/fixtures/ruby/*.golden.json` unchanged unless a semantic fix is explicitly itemized
-- [ ] migrate `packages/atlas-parser/src/lang/php.rs`:
-  - [ ] add `packages/atlas-parser/queries/php.scm`
-  - [ ] query namespaces, uses, classes, interfaces, traits, functions, methods, constants, and calls
-  - [ ] preserve existing PHP qualified names and `NodeKind` choices
-  - [ ] preserve existing PHP language mode setup
-  - [ ] keep `tests/fixtures/php/*.golden.json` unchanged unless a semantic fix is explicitly itemized
-- [ ] migrate `packages/atlas-parser/src/lang/bash.rs`:
-  - [ ] add `packages/atlas-parser/queries/bash.scm`
-  - [ ] query function definitions, command invocations, variables, and source/import-like commands
-  - [ ] preserve existing Bash qualified names and `NodeKind` choices
-  - [ ] keep `tests/fixtures/bash/*.golden.json` unchanged unless a semantic fix is explicitly itemized
-- [ ] run tests after this batch:
-  - [ ] `cargo test -p atlas-parser lang::python`
-  - [ ] `cargo test -p atlas-parser lang::ruby`
-  - [ ] `cargo test -p atlas-parser lang::php`
-  - [ ] `cargo test -p atlas-parser lang::bash`
-  - [ ] `cargo test -p atlas-parser --test parser_golden`
+- [x] migrate `packages/atlas-parser/src/lang/python.rs`:
+  - [x] add `packages/atlas-parser/queries/python.scm`
+  - [x] query imports, classes, functions, methods, assignments, and calls
+  - [x] preserve existing Python qualified names and `NodeKind` choices
+  - [x] preserve existing indentation/scope behavior from AST parentage
+  - [x] keep `tests/fixtures/python/*.golden.json` unchanged unless a semantic fix is explicitly itemized
+- [x] migrate `packages/atlas-parser/src/lang/ruby.rs`:
+  - [x] add `packages/atlas-parser/queries/ruby.scm`
+  - [x] query requires, modules, classes, instance methods, singleton methods, constants, and calls
+  - [x] preserve existing Ruby qualified names and `NodeKind` choices
+  - [x] preserve existing current-owner behavior
+  - [x] keep `tests/fixtures/ruby/*.golden.json` unchanged unless a semantic fix is explicitly itemized
+- [x] migrate `packages/atlas-parser/src/lang/php.rs`:
+  - [x] add `packages/atlas-parser/queries/php.scm`
+  - [x] query namespaces, uses, classes, interfaces, traits, functions, methods, constants, and calls
+  - [x] preserve existing PHP qualified names and `NodeKind` choices
+  - [x] preserve existing PHP language mode setup
+  - [x] keep `tests/fixtures/php/*.golden.json` unchanged unless a semantic fix is explicitly itemized
+- [x] migrate `packages/atlas-parser/src/lang/bash.rs`:
+  - [x] add `packages/atlas-parser/queries/bash.scm`
+  - [x] query function definitions, command invocations, variables, and source/import-like commands
+  - [x] preserve existing Bash qualified names and `NodeKind` choices
+  - [x] keep `tests/fixtures/bash/*.golden.json` unchanged unless a semantic fix is explicitly itemized
+- [x] run tests after this batch:
+  - [x] `cargo test -p atlas-parser lang::python`
+  - [x] `cargo test -p atlas-parser lang::ruby`
+  - [x] `cargo test -p atlas-parser lang::php`
+  - [x] `cargo test -p atlas-parser lang::bash`
+  - [x] `cargo test -p atlas-parser --test parser_golden`
 
 Why:
 - dynamic languages rely heavily on scope heuristics, so they should migrate after query helpers are proven
@@ -1496,34 +1136,34 @@ Why:
 
 #### Patch SQ6 — Migrate data, markup, and style parsers where queries add value
 
-- [ ] evaluate query migration for `packages/atlas-parser/src/lang/json.rs`:
+- [x] evaluate query migration for `packages/atlas-parser/src/lang/json.rs`:
   - [ ] migrate to `packages/atlas-parser/queries/json.scm` only if it reduces manual traversal without losing object/key path semantics
-  - [ ] otherwise document why JSON remains manual
-  - [ ] keep `tests/fixtures/json/*.golden.json` unchanged unless a semantic fix is explicitly itemized
-- [ ] evaluate query migration for `packages/atlas-parser/src/lang/toml.rs`:
+  - [x] otherwise document why JSON remains manual
+  - [x] keep `tests/fixtures/json/*.golden.json` unchanged unless a semantic fix is explicitly itemized
+- [x] evaluate query migration for `packages/atlas-parser/src/lang/toml.rs`:
   - [ ] migrate to `packages/atlas-parser/queries/toml.scm` only if it reduces manual traversal without losing table/key path semantics
-  - [ ] otherwise document why TOML remains manual
-  - [ ] keep `tests/fixtures/toml/*.golden.json` unchanged unless a semantic fix is explicitly itemized
-- [ ] evaluate query migration for `packages/atlas-parser/src/lang/html.rs`:
-  - [ ] migrate to `packages/atlas-parser/queries/html.scm` only if query captures improve element/script/style extraction
+  - [x] otherwise document why TOML remains manual
+  - [x] keep `tests/fixtures/toml/*.golden.json` unchanged unless a semantic fix is explicitly itemized
+- [x] evaluate query migration for `packages/atlas-parser/src/lang/html.rs`:
+  - [x] migrate to `packages/atlas-parser/queries/html.scm` only if query captures improve element/script/style extraction
   - [ ] otherwise document why HTML remains manual
-  - [ ] keep `tests/fixtures/html/*.golden.json` unchanged unless a semantic fix is explicitly itemized
-- [ ] evaluate query migration for `packages/atlas-parser/src/lang/css.rs`:
-  - [ ] migrate to `packages/atlas-parser/queries/css.scm` only if query captures improve selector/rule extraction
+  - [x] keep `tests/fixtures/html/*.golden.json` unchanged unless a semantic fix is explicitly itemized
+- [x] evaluate query migration for `packages/atlas-parser/src/lang/css.rs`:
+  - [x] migrate to `packages/atlas-parser/queries/css.scm` only if query captures improve selector/rule extraction
   - [ ] otherwise document why CSS remains manual
-  - [ ] keep `tests/fixtures/css/*.golden.json` unchanged unless a semantic fix is explicitly itemized
-- [ ] evaluate query migration for `packages/atlas-parser/src/lang/markdown.rs`:
+  - [x] keep `tests/fixtures/css/*.golden.json` unchanged unless a semantic fix is explicitly itemized
+- [x] evaluate query migration for `packages/atlas-parser/src/lang/markdown.rs`:
   - [ ] migrate to `packages/atlas-parser/queries/markdown.scm` only if tree-sitter-md query behavior stays stable for malformed shorter inputs
-  - [ ] otherwise document why Markdown remains manual
-  - [ ] preserve current decision to avoid unstable incremental reuse for Markdown unless separately fixed
-  - [ ] keep `tests/fixtures/markdown/*.golden.json` unchanged unless a semantic fix is explicitly itemized
-- [ ] run tests after this batch:
-  - [ ] `cargo test -p atlas-parser lang::json`
-  - [ ] `cargo test -p atlas-parser lang::toml`
-  - [ ] `cargo test -p atlas-parser lang::html`
-  - [ ] `cargo test -p atlas-parser lang::css`
-  - [ ] `cargo test -p atlas-parser lang::markdown`
-  - [ ] `cargo test -p atlas-parser --test parser_golden`
+  - [x] otherwise document why Markdown remains manual
+  - [x] preserve current decision to avoid unstable incremental reuse for Markdown unless separately fixed
+  - [x] keep `tests/fixtures/markdown/*.golden.json` unchanged unless a semantic fix is explicitly itemized
+- [x] run tests after this batch:
+  - [x] `cargo test -p atlas-parser lang::json`
+  - [x] `cargo test -p atlas-parser lang::toml`
+  - [x] `cargo test -p atlas-parser lang::html`
+  - [x] `cargo test -p atlas-parser lang::css`
+  - [x] `cargo test -p atlas-parser lang::markdown`
+  - [x] `cargo test -p atlas-parser --test parser_golden`
 
 Why:
 - data/markup/style parsers may not benefit equally from queries
@@ -1532,13 +1172,12 @@ Why:
 #### Patch SQ completion criteria
 
 - [ ] every non-Rust parser has either an Atlas-owned query file or a documented reason to remain manual
-- [ ] all migrated parsers use shared query helpers instead of ad hoc `tree_sitter::QueryCursor` code
-- [ ] all migrated parsers keep public parser APIs unchanged
-- [ ] golden outputs remain unchanged unless semantic fixes are explicitly itemized in the corresponding patch
-- [ ] parser docs describe the query-backed extraction contract and capture naming convention
-- [ ] `cargo test -p atlas-parser --test parser_golden` passes after each migration batch
+- [x] all migrated parsers use shared query helpers instead of ad hoc `tree_sitter::QueryCursor` code
+- [x] all migrated parsers keep public parser APIs unchanged
+- [x] golden outputs remain unchanged unless semantic fixes are explicitly itemized in the corresponding patch
+- [x] parser docs describe the query-backed extraction contract and capture naming convention
+- [x] `cargo test -p atlas-parser --test parser_golden` passes after each migration batch
 - [ ] `cargo test -p atlas-parser` passes after the final migration batch
-- [ ] `./scripts/test-workspace-summary.sh` passes after the final migration batch
 - [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings` passes after the final migration batch
 - [ ] `cargo fmt --all` has been run after the final migration batch
 
@@ -1584,7 +1223,7 @@ Why:
 - [ ] update MCP tool descriptions to mention minimal-first escalation where relevant
 - [ ] update `review_change` prompt to make minimal context first a requirement, not just a recommendation
 - [ ] update `inspect_symbol` prompt to require direct-neighbor context before wider traversal
-- [ ] update installed AGENTS instructions to state escalation order clearly
+- [x] update installed AGENTS instructions to state escalation order clearly
 - [ ] update README MCP workflow section to match same order
 - [ ] ensure wording is consistent across CLI install block, MCP prompts, and README
 
@@ -1803,95 +1442,130 @@ Why:
 
 ### Graph Store Corruption Recovery Patch
 
-Atlas can detect SQLite integrity failures, orphan nodes, dangling edges, stale graph state, and interrupted builds, but the operational policy for a damaged `.atlas/worldtree.db` is not explicit enough. Detection should lead to one clear outcome: quarantine unusable graph data, rebuild from repository source, and block graph-backed answers while stored graph facts are unsafe.
+Atlas already has partial readiness plumbing in `packages/atlas-core/src/readiness.rs` (`IntegrityState`, `GraphExecutionState`) and shared error-code text in `packages/atlas-core/src/health.rs` / `docs/error_codes.md`. It can report SQLite failures, stale graph state, interrupted builds, orphan nodes, and dangling edges, but graph-store corruption policy for `.atlas/worldtree.db` is still incomplete. Detection must lead to one clear outcome: quarantine unusable graph data, rebuild from repository source, and block graph-backed answers while stored graph facts are unsafe.
+
+Current gap to close after Phase C1: physical SQLite corruption and logical graph inconsistency are now split into stable `sqlite_corrupt` vs `logical_inconsistency` classes/codes, but graph `worldtree.db` quarantine/rebuild is still not implemented. Existing `quarantine_db` helpers are for content/session stores, not graph store.
 
 #### Patch C1 — Graph DB corruption classification
 
-- [ ] define graph-store health classes:
-  - [ ] `healthy`
-  - [ ] `stale`
-  - [ ] `interrupted_build`
-  - [ ] `failed_build`
-  - [ ] `sqlite_corrupt`
-  - [ ] `schema_mismatch`
-  - [ ] `logical_inconsistency`
-- [ ] classify evidence sources consistently:
-  - [ ] `Store::open` errors
-  - [ ] `PRAGMA integrity_check`
-  - [ ] `PRAGMA foreign_key_check`
-  - [ ] orphan-node scan
-  - [ ] dangling-edge scan
-  - [ ] graph build lifecycle state
-  - [ ] freshness check against changed graph-relevant files
-- [ ] ensure CLI and MCP use the same classification and `error_code` values
-- [ ] add tests for each health class and error-code mapping
+- [x] define a shared `GraphStoreHealthClass` (or equivalent) in core health/readiness code, mapped from existing `IntegrityState`, `GraphExecutionState`, and graph build lifecycle state:
+  - [x] `healthy` — existing execution state `fresh` with clean integrity
+  - [x] `stale` — existing execution state `stale`; queryable with freshness warning
+  - [x] `interrupted_build` — build lifecycle state `building` left from previous run
+  - [x] `failed_build` — build lifecycle state `build_failed`
+  - [x] `sqlite_corrupt` — `Store::open`, SQLite integrity, or SQLite execution failure proves physical DB corruption
+  - [x] `schema_mismatch` — existing schema mismatch detection (`no such table`, missing columns, old migrations)
+  - [x] `logical_inconsistency` — DB opens, but graph invariants fail (`foreign_key_check`, dangling edges, structural orphan rows, noncanonical graph path rows)
+- [x] split current `corrupt_or_inconsistent_graph_rows` handling into stable machine-readable classes/codes for `sqlite_corrupt` vs `logical_inconsistency`, while preserving any compatibility alias only if needed by callers
+- [x] classify evidence sources consistently:
+  - [x] `Store::open` errors in `packages/atlas-store-sqlite` callers
+  - [x] `PRAGMA integrity_check`
+  - [x] `PRAGMA foreign_key_check`
+  - [x] orphan-node scan, excluding expected file nodes the same way `db_check` does
+  - [x] dangling-edge scan for graph-semantic edge kinds
+  - [x] graph build lifecycle state from `graph_build_state`
+  - [x] freshness check against changed graph-relevant files
+- [x] ensure CLI and MCP use the same classification, `health_class`, `error_code`, message, and suggestions from shared core helpers
+- [x] update output schemas and docs for `status`, `doctor`, `db_check`, and `build_or_update_graph`
+- [x] add tests for each health class and error-code mapping in core, CLI, and MCP paths
 
 Why:
 - makes corruption versus stale data explicit
 - avoids treating dangling/orphan graph rows as a generic diagnostics warning
+- aligns new policy with existing readiness model instead of adding parallel ad hoc states
+
+Implementation anchors:
+- `packages/atlas-core/src/readiness.rs`
+- `packages/atlas-core/src/health.rs`
+- `packages/atlas-mcp/src/tools/health.rs`
+- `packages/atlas-cli/src/commands/maintenance.rs`
+- `docs/error_codes.md`
 
 #### Patch C2 — Quarantine and rebuild policy for `worldtree.db`
 
-- [ ] define no partial salvage for graph DB corruption unless a future task explicitly adds verified salvage
-- [ ] define recovery modes:
-  - [ ] `manual_rebuild_required` — diagnostics report command; operator runs rebuild
-  - [ ] `auto_quarantine_and_rebuild` — Atlas quarantines DB and rebuilds when command policy allows
-  - [ ] `block_only` — graph-backed tools refuse answers but do not mutate DB
-- [ ] define default recovery mode per entry point:
-  - [ ] `status` / `doctor` / `db_check`: `block_only` diagnostics, no mutation
-  - [ ] explicit `build` / `update`: `auto_quarantine_and_rebuild` when corruption is detected
-  - [ ] graph-backed query/context/analyze tools: `block_only` with rebuild command
-- [ ] require explicit flag for automatic quarantine outside build/update commands
-- [ ] quarantine physically corrupt or logically inconsistent `.atlas/worldtree.db` before rebuilding
-- [ ] use deterministic quarantine path with timestamp or collision-safe suffix
-- [ ] keep quarantined DB for inspection instead of deleting it
-- [ ] create fresh `worldtree.db` from migrations after quarantine
-- [ ] run full graph rebuild from repository source after quarantine
-- [ ] record rebuild result in graph build lifecycle state
-- [ ] surface quarantine path, rebuild result, and failure reason in CLI JSON output
-- [ ] surface same fields in MCP `build_or_update_graph`, `status`, `doctor`, and `db_check` where relevant
-- [ ] add tests:
-  - [ ] corrupt SQLite file is quarantined
-  - [ ] logical dangling-edge inconsistency triggers rebuild policy
-  - [ ] rebuild after quarantine creates usable fresh graph DB
-  - [ ] failed rebuild leaves graph unavailable with actionable error
+- [x] define no partial salvage for graph DB corruption unless a future task explicitly adds verified salvage
+- [x] define recovery modes:
+  - [x] `manual_rebuild_required` — diagnostics report command; operator runs rebuild
+  - [x] `auto_quarantine_and_rebuild` — Atlas quarantines DB and rebuilds when command policy allows
+  - [x] `block_only` — graph-backed tools refuse answers but do not mutate DB
+- [x] define default recovery mode per entry point:
+  - [x] `status` / `doctor` / `db_check`: `block_only` diagnostics, no mutation
+  - [x] explicit `build` / `update`: `auto_quarantine_and_rebuild` when corruption is detected before graph access
+  - [x] graph-backed query/context/analyze tools: `block_only` with rebuild command
+- [x] require explicit flag for automatic quarantine outside build/update commands
+- [x] implement graph-store quarantine for `.atlas/worldtree.db`; do not reuse content/session quarantine helpers unless they are generalized safely
+- [x] quarantine physically corrupt or logically inconsistent `.atlas/worldtree.db` before rebuilding
+- [x] use deterministic quarantine path with timestamp and collision-safe suffix, e.g. `.atlas/worldtree.db.quarantine.<UTC>.<n>`
+- [x] keep quarantined DB for inspection instead of deleting it
+- [x] remove stale WAL/SHM sidecars only as part of the same quarantine operation, preserving them with the quarantined DB when present
+- [x] create fresh `worldtree.db` from migrations after quarantine
+- [x] run full graph rebuild from repository source after quarantine; do not run incremental update against fresh empty DB
+- [x] record quarantine and rebuild result in graph build lifecycle state, including failed rebuild reason
+- [x] surface `health_class`, `recovery_mode`, `quarantine_path`, rebuild result, and failure reason in CLI JSON output
+- [x] surface same fields in MCP `build_or_update_graph`, `status`, `doctor`, and `db_check` where relevant
+- [x] add tests:
+  - [x] corrupt SQLite file is quarantined before rebuild
+  - [x] logical dangling-edge inconsistency triggers rebuild policy
+  - [x] rebuild after quarantine creates usable fresh graph DB
+  - [x] failed rebuild leaves graph unavailable with actionable error
+  - [x] diagnostics modes report corruption without mutating DB
 
 Why:
 - graph data is derived from repo source, so clean rebuild is safer than partial salvage
 - quarantine preserves evidence without serving unsafe facts
 
+Implementation anchors:
+- `packages/atlas-engine/src/build.rs`
+- `packages/atlas-engine/src/update.rs`
+- `packages/atlas-mcp/src/tools/context_ops/build.rs`
+- `packages/atlas-cli/src/commands/graph/build.rs`
+- `packages/atlas-cli/src/commands/graph/update.rs`
+- `packages/atlas-store-sqlite`
+
 #### Patch C3 — Block unsafe graph-backed answers
 
-- [ ] block graph-backed query/context tools when health class is `sqlite_corrupt`, `schema_mismatch`, or `logical_inconsistency`
-- [ ] return machine-readable failure with:
-  - [ ] `error_code`
-  - [ ] `health_class`
-  - [ ] `db_path`
-  - [ ] `quarantine_path` when available
-  - [ ] recommended rebuild command
-- [ ] allow non-graph diagnostics tools to keep working:
-  - [ ] `status`
-  - [ ] `doctor`
-  - [ ] `db_check`
-  - [ ] `debug_graph` only when DB can open safely
-- [ ] distinguish stale-but-queryable graph state from corrupt-and-blocked graph state
-- [ ] document agent behavior: do not answer from graph facts when corrupt/inconsistent
-- [ ] add MCP tests that graph-backed tools fail closed on corrupt/inconsistent DB
+- [x] block graph-backed query/context/traversal/analyze tools when health class is `sqlite_corrupt`, `schema_mismatch`, or `logical_inconsistency`
+- [x] wire existing `GraphReadiness::check_tool` policy into MCP graph-backed tools before they call `open_store(db_path)?` and run graph queries
+- [x] ensure CLI graph-backed commands keep using the same readiness gate and surface the same class/code fields
+- [x] return machine-readable failure with:
+  - [x] `error_code`
+  - [x] `health_class`
+  - [x] `execution_state`
+  - [x] `db_path`
+  - [x] `quarantine_path` when available
+  - [x] `recommended_rebuild_command`
+- [x] allow non-graph diagnostics tools to keep working:
+  - [x] `status`
+  - [x] `doctor`
+  - [x] `db_check`
+  - [x] `debug_graph` only when DB can open safely
+- [x] distinguish stale-but-queryable graph state from corrupt-and-blocked graph state in both payload and `atlas_freshness` / readiness metadata
+- [x] document agent behavior: do not answer from graph facts when corrupt/inconsistent; run diagnostics or rebuild instead
+- [x] add MCP tests that graph-backed tools fail closed on corrupt/inconsistent DB
 
 Why:
 - prevents confident answers from known-bad graph rows
 - keeps diagnostics available while blocking unsafe context
 
+Implementation anchors:
+- `packages/atlas-core/src/readiness.rs`
+- `packages/atlas-mcp/src/tools/graph.rs`
+- `packages/atlas-mcp/src/tools/context.rs`
+- `packages/atlas-mcp/src/tools/review.rs`
+- `packages/atlas-mcp/src/tools/analysis.rs`
+- `packages/atlas-cli/src/commands/mod.rs`
+
 #### Patch C completion criteria
 
-- [ ] graph DB health classes are explicit and shared by CLI/MCP
-- [ ] corrupt graph execution state maps to block + quarantine + rebuild behavior
-- [ ] auto rebuild, manual rebuild, and block-only recovery modes are explicit per command/tool
-- [ ] corrupt or logically inconsistent `worldtree.db` is quarantined before rebuild
-- [ ] rebuild from source is default policy; partial salvage is explicitly out of scope
-- [ ] graph-backed tools fail closed when graph facts are corrupt or inconsistent
-- [ ] diagnostics expose exact reason, quarantine path, and next command
-- [ ] tests cover physical corruption, logical inconsistency, rebuild success, rebuild failure, and fail-closed query behavior
+- [x] graph DB health classes are explicit, mapped from existing readiness state, and shared by CLI/MCP
+- [x] physical SQLite corruption and logical graph inconsistency no longer collapse into one ambiguous class
+- [x] corrupt graph execution state maps to block + quarantine + rebuild behavior
+- [x] auto rebuild, manual rebuild, and block-only recovery modes are explicit per command/tool
+- [x] corrupt or logically inconsistent `worldtree.db` is quarantined before rebuild
+- [x] rebuild from source is default policy; partial salvage is explicitly out of scope
+- [x] graph-backed tools fail closed when graph facts are corrupt or inconsistent
+- [x] diagnostics expose exact reason, health class, quarantine path, and next command
+- [x] tests cover physical corruption, logical inconsistency, rebuild success, rebuild failure, diagnostics-no-mutation, and fail-closed query behavior
 
 ### SQLite Connection Concurrency Policy Patch
 
@@ -1967,713 +1641,482 @@ Why:
 
 ---
 
-## Part VI — MCP 2025-11-25 Spec Upgrade Roadmap
+## Part XI — Tokenizer-Backed Context Budget Accounting
 
-All phases and the MCP Tools Schema Compliance Patch in this part are shipped. See SHIPPED.md for feature details.
+Goal: replace byte-per-token estimates in context/review payload budgeting with deterministic tokenizer-backed counting using the Rust `tokenizers` crate, while preserving safe byte caps and explicit fallback metadata.
 
----
-
-## MCP Tool Error Payload Normalization Patch
-
-All sub-patches are shipped. See SHIPPED.md for feature details.
-
----
-
-## MCP Transcript Failure Hardening Patch
-
-All sub-patches are shipped. See SHIPPED.md for feature details.
-
----
-
-## Part VII — Dynamic MCP Repo Resolution for Multi-Workspace Editors
-
-All phases in this part are shipped. See SHIPPED.md for feature details.
-
----
-
-## Part VIII — MCP 2026-07-28 Spec Migration Roadmap
-
-All phases in this part are shipped. See SHIPPED.md for feature details.
-
----
-
-## MCP Mixed Result Contract Normalization Patch
-
-All sub-patches are shipped. See SHIPPED.md for feature details.
-
----
-
-## Part IX — MCP Tool Agent-Ergonomics Simplification Roadmap
-
-All phases in this part are shipped. See SHIPPED.md for feature details.
-
----
-
-## Part X — MCP `rmcp` Official SDK Conversion Roadmap
-
-Goal: replace Atlas handrolled MCP protocol, descriptor, transport, task, and result plumbing with the official `rmcp` Rust SDK while preserving Atlas tool behavior, repo identity invariants, structured JSON contracts, provenance, freshness, budgets, and tests.
-
-Overview: first remove Atlas-specific TOON output because `rmcp` should expose official typed JSON results with `structuredContent` as source of truth. Then add an `rmcp` server adapter around existing Atlas tool business logic, migrate stdio/HTTP/socket transports to official SDK transports, convert tasks/MRTR/elicitation to official SDK types, remove handrolled JSON-RPC code, and finish with typed tool schemas.
+Overview: Atlas currently counts context tokens with `bytes.div_ceil(4)` in `packages/atlas-review/src/context/payload.rs`. This part adds a shared token-counting crate, configuration, runtime integration, output metadata, tests, and validation so CLI/MCP payload truncation can enforce real tokenizer counts without network access.
 
 Rules:
-- Implement smallest safe phase slices; keep Atlas tool business logic stable until transport parity tests pass.
-- Do not keep TOON compatibility shims; MCP output becomes JSON-only.
-- Use `rmcp::model::*` types at protocol boundaries; keep `serde_json::Value` only inside Atlas tool payload assembly until typed schema migration.
-- Keep `structuredContent` authoritative; `content` may contain concise text only.
-- Preserve `atlas_provenance`, `atlas_freshness`, budget metadata, truncation metadata, and user-visible tool errors.
-- Preserve current public crate API names until downstream CLI tests are migrated.
-- Validate each phase with targeted tests before deleting old code.
+- Use local tokenizer JSON files only; do not add runtime network downloads.
+- Keep byte caps as transport and memory safety limits even when tokenizer counts are available.
+- Keep additive output changes only; do not remove existing `tokens_estimated` fields in this part.
+- Preserve deterministic trimming order across tokenizer and fallback modes.
+- Surface fallback metadata in JSON whenever heuristic counting is used because tokenizer loading/counting failed.
+- Keep manual setup out of acceptance; every checklist item must be verifiable by tests, generated config, or code.
+- Prefer `pub(crate)` APIs unless cross-crate exposure is required.
+- Run `cargo fmt --all` after implementation.
+- Run clippy quiet mode before completion.
 
-### Phase X1 — Remove TOON MCP Output Mode
+### Phase XI.1 — Token Counting Crate Foundation
 
-Goal: remove Atlas-specific TOON rendering and make MCP responses JSON-only before introducing `rmcp`.
+Goal: add one reusable crate that wraps `tokenizers` and current heuristic behavior behind a deterministic API.
 
-Overview: delete `OutputFormat::Toon`, remove `output_format` arguments from MCP schemas and tests, remove `toon-format`, and make budget enforcement measure JSON payload bytes only.
-
-Rules:
-- `structuredContent` is canonical output for all MCP tools.
-- `content` text must be JSON-compatible summary or compact human-readable text, never TOON.
-- Tool callers must not pass `output_format`; JSON is implicit.
-- No `ATLAS_MCP_OUTPUT_FORMAT` environment fallback remains.
-
-- [x] remove TOON dependency and renderer code:
-  - [x] remove `toon-format` from `packages/atlas-mcp/Cargo.toml`
-  - [x] delete TOON-specific imports from `packages/atlas-mcp/src/output.rs`
-  - [x] remove `OutputFormat::Toon` and keep only JSON behavior or replace `OutputFormat` with JSON-only helper functions
-  - [x] remove `ATLAS_MCP_OUTPUT_FORMAT` parsing from `packages/atlas-mcp/src/output.rs`
-  - [x] remove TOON fallback metadata generation for `atlas:fallbackReason`
-  - [x] remove `text/x-toon` MIME type handling from MCP result construction
-- [x] update MCP result construction for JSON-only output:
-  - [x] change `packages/atlas-mcp/src/tool_result.rs` so `ToolResultBuilder` renders JSON-only text content
-  - [x] remove `atlas:outputFormat` from result `_meta`
-  - [x] remove `atlas:requestedOutputFormat` from result `_meta`
-  - [x] remove `atlas:fallbackReason` from result `_meta`
-  - [x] keep `structuredContent` populated for object payloads
-  - [x] keep resource-link inference unchanged when source JSON includes known resource IDs or URIs
-- [x] remove `output_format` from MCP tool inputs:
-  - [x] remove `output_format` properties from all tool input schemas in `packages/atlas-mcp/src/tools/**`
-  - [x] remove `output_format` parsing from `packages/atlas-mcp/src/tools/dispatch.rs`
-  - [x] remove `output_format` parsing from `packages/atlas-mcp/src/discovery/**`
-  - [x] remove `output_format` parsing from `packages/atlas-mcp/src/session_tools.rs`
-  - [x] remove `output_format` parsing from `packages/atlas-mcp/src/session_events.rs`
-  - [x] remove `output_format` parsing from `packages/atlas-mcp/src/tasks.rs`
-  - [x] update helper signatures that currently accept `OutputFormat` to use JSON-only result builders
-- [x] update completions and prompts for JSON-only output:
-  - [x] remove `output_format` completion branch from `packages/atlas-mcp/src/completion.rs`
-  - [x] update completion tests that expect `json` or `toon` suggestions
-  - [x] remove prompt instructions that recommend `output_format = "toon"`
-  - [x] update MCP prompt tests to expect JSON-only workflow text
-- [x] update budget enforcement to measure JSON only:
-  - [x] change `packages/atlas-mcp/src/context.rs` byte measurement to use `serde_json::to_vec` or compact JSON string length
-  - [x] remove output-format-dependent budget calculations
-  - [x] keep existing truncation fields and budget reports stable except output-format fields
-  - [x] add regression test proving budget trimming is deterministic with JSON-only measurement
-- [x] remove TOON docs, fixtures, and installed instructions:
-  - [x] remove `docs/contracts/atlas_toon.v1.md` references from source and docs indexes
-  - [x] delete `packages/atlas-mcp/testdata/atlas_toon.v1/**`
-  - [x] update `packages/atlas-cli/src/install/instructions.rs` to say `Use default JSON output. Trust structuredContent as source of truth.`
-  - [x] update `packages/atlas-cli/src/install/tests.rs` assertion for installed MCP instructions
-- [x] update JSON-RPC and CLI quality-gate fixtures:
-  - [x] remove `"output_format":"json"` from MCP `tools/call` fixtures under `packages/atlas-cli/tests/cli_quality_gates/**`
-  - [x] remove JSON output-format arguments from `packages/atlas-mcp/src/**/tests/**`
-  - [x] assert representative tool calls still include object `structuredContent`
-  - [x] assert representative tool calls no longer include `atlas:outputFormat`
-  - [x] assert representative tool calls no longer include `atlas:requestedOutputFormat`
-- [x] validate Phase X1:
-  - [x] run `cargo fmt --all`
-  - [x] run `cargo clippy --workspace --all-targets --quiet`
-  - [x] run `cargo test --quiet -p atlas-mcp output::tests`
-  - [x] run targeted MCP contract tests with `cargo test --quiet -p atlas-cli stdio_transport_representative_stable_tools_keep_object_structured_content`
-  - [x] run `./scripts/test-workspace-summary.sh`
-
-Phase X1 completion criteria:
-- [x] `toon-format` no longer appears in any `Cargo.toml`
-- [x] `OutputFormat::Toon`, `ATLAS_MCP_OUTPUT_FORMAT`, `text/x-toon`, and `output_format` MCP inputs are removed
-- [x] all MCP tool responses use JSON `structuredContent` as authoritative data
-- [x] installed instructions no longer mention TOON
-- [x] targeted MCP contract tests and workspace summary pass
-
-### Phase X2 — Add `rmcp` Dependency and Server Adapter Shell
-
-Goal: introduce official SDK dependency and compile an `rmcp` `ServerHandler` wrapper without changing default runtime behavior yet.
-
-Overview: add `rmcp` with required features, create `AtlasRmcpServer`, and map server info/discovery/list methods to existing Atlas registries through official model types.
+Overview: create `atlas-token-count` as the only crate that depends directly on external tokenizer machinery. Other crates ask this crate to count tokens and receive count method metadata.
 
 Rules:
-- Keep handrolled transport as default until adapter parity tests pass.
-- Adapter must not duplicate Atlas tool business logic.
-- Adapter must own repo root and DB path explicitly.
-- Adapter must expose only JSON-only contracts from Phase X1.
+- Do not put `tokenizers` dependency in `atlas-core`.
+- Do not make model discovery dynamic or network-backed.
+- Count exact UTF-8 text passed by callers; do not normalize text before counting.
+- Fallback heuristic must match current behavior: `bytes.div_ceil(4)`.
+- Errors must include path/config context without leaking payload content.
 
-- [x] add SDK dependencies:
-  - [x] add `rmcp = "3.1.0"` to workspace or `packages/atlas-mcp/Cargo.toml` with server, macros, schemars, transport-io, transport-async-rw, transport-streamable-http-server, and elicitation features
-  - [x] add `schemars = "1"` where typed schema generation will be implemented
-  - [x] align optional HTTP auth dependencies so `cargo tree -p atlas-mcp` has one intended auth stack
-- [x] create adapter module structure:
-  - [x] add `packages/atlas-mcp/src/rmcp_server.rs`
-  - [x] add `packages/atlas-mcp/src/rmcp_types.rs`
-  - [x] add `packages/atlas-mcp/src/rmcp_error.rs`
-  - [x] export adapter modules behind internal crate visibility from `packages/atlas-mcp/src/lib.rs`
-- [x] implement `AtlasRmcpServer` state:
-  - [x] store canonical `repo_root: String`
-  - [x] store `db_path: String`
-  - [x] store `ServerOptions`
-  - [x] add constructor `AtlasRmcpServer::new(repo_root, db_path, options)`
-  - [x] add tests proving constructor preserves repo and DB paths exactly as passed by existing launcher
-- [x] implement `rmcp::handler::server::ServerHandler` shell:
-  - [x] implement `get_info` from current package name, version, and description
-  - [x] implement `supported_protocol_versions` with the currently supported MCP version only
-  - [x] implement `discover` using official `rmcp::model::DiscoverResult`
-  - [x] implement `list_tools` by converting current `tools::tool_descriptors()` into `rmcp::model::Tool`
-  - [x] implement `list_prompts` by converting current prompt descriptors into `rmcp::model::Prompt`
-  - [x] implement `list_resources` by converting current resource descriptors into `rmcp::model::Resource`
-  - [x] implement `list_resource_templates` by converting current resource template descriptors into `rmcp::model::ResourceTemplate`
-- [x] add adapter parity tests:
-  - [x] assert `AtlasRmcpServer::get_info` matches current `spec::server_info`
-  - [x] assert `list_tools` names equal current `tools::tool_list()["tools"]` names
-  - [x] assert `list_prompts` names equal current `prompts::prompt_list()["prompts"]` names
-  - [x] assert `list_resources` URIs equal current `resources::resources_list` URIs
-  - [x] assert `list_resource_templates` URI templates equal current `resources::resources_templates_list` URI templates
-- [x] validate Phase X2:
-  - [x] run `cargo fmt --all`
-  - [x] run `cargo clippy --workspace --all-targets --quiet`
-  - [x] run `cargo test --quiet -p atlas-mcp rmcp_server`
+- [ ] add `packages/atlas-token-count` crate:
+  - [ ] create `packages/atlas-token-count/Cargo.toml`:
+    - [ ] set package name to `atlas-token-count`
+    - [ ] set version to current workspace package version
+    - [ ] set edition to `2024`
+    - [ ] set `publish = false`
+    - [ ] add dependencies:
+      - [ ] `anyhow.workspace = true`
+      - [ ] `serde.workspace = true`
+      - [ ] `tokenizers.workspace = true`
+    - [ ] add workspace lint inheritance
+  - [ ] create `packages/atlas-token-count/src/lib.rs`:
+    - [ ] define `TokenCountMethod` enum:
+      - [ ] add `Tokenizer { provider: String, model: Option<String> }`
+      - [ ] add `HeuristicBytes { bytes_per_token: usize }`
+    - [ ] define `TokenCount` struct:
+      - [ ] add `tokens: usize`
+      - [ ] add `method: TokenCountMethod`
+      - [ ] add `fallback_reason: Option<String>`
+    - [ ] define `TokenCounter` enum:
+      - [ ] add `Tokenizer { tokenizer: std::sync::Arc<tokenizers::Tokenizer>, provider: String, model: Option<String> }`
+      - [ ] add `Heuristic { bytes_per_token: usize }`
+    - [ ] implement `TokenCounter::heuristic(bytes_per_token: usize) -> anyhow::Result<Self>`:
+      - [ ] reject `bytes_per_token == 0`
+      - [ ] store validated value
+    - [ ] implement `TokenCounter::from_file(path, provider, model) -> anyhow::Result<Self>`:
+      - [ ] load tokenizer with `tokenizers::Tokenizer::from_file`
+      - [ ] attach error context containing tokenizer path
+      - [ ] store tokenizer in `Arc`
+      - [ ] store provider and model metadata
+    - [ ] implement `TokenCounter::count_text(&self, text: &str) -> anyhow::Result<TokenCount>`:
+      - [ ] for tokenizer mode, call `encode(text, false)`
+      - [ ] return encoded token length
+      - [ ] for heuristic mode, return `text.len().div_ceil(bytes_per_token)`
+      - [ ] return corresponding `TokenCountMethod`
+    - [ ] implement `TokenCounter::count_json_bytes(&self, bytes: &[u8]) -> anyhow::Result<TokenCount>`:
+      - [ ] convert UTF-8 bytes with error context
+      - [ ] delegate to `count_text`
+  - [ ] add crate to root workspace members:
+    - [ ] append `packages/atlas-token-count` to `[workspace].members`
+    - [ ] add `atlas-token-count = { path = "packages/atlas-token-count" }` to `[workspace.dependencies]`
+  - [ ] add external `tokenizers` workspace dependency:
+    - [ ] add `tokenizers` under `[workspace.dependencies]`
+    - [ ] disable default features unless tests prove a required feature is needed
+    - [ ] keep version pinned by `Cargo.lock`
 
-Phase X2 completion criteria:
-- [x] `atlas-mcp` compiles with `rmcp`
-- [x] `AtlasRmcpServer` exposes info, discovery, tools, prompts, resources, and templates through official model types
-- [x] default handrolled transport still works unchanged
-- [x] adapter parity tests pass
+- [ ] add token-count unit tests:
+  - [ ] create heuristic tests in `packages/atlas-token-count/src/lib.rs` or `tests/heuristic.rs`:
+    - [ ] assert empty string counts as `0`
+    - [ ] assert one byte counts as `1` with `bytes_per_token = 4`
+    - [ ] assert four bytes count as `1`
+    - [ ] assert five bytes count as `2`
+    - [ ] assert `bytes_per_token = 0` returns error
+  - [ ] create tokenizer fixture test:
+    - [ ] add minimal valid tokenizer JSON fixture under `packages/atlas-token-count/tests/fixtures/simple-tokenizer.json`
+    - [ ] load fixture with `TokenCounter::from_file`
+    - [ ] count deterministic sample text
+    - [ ] assert `TokenCountMethod::Tokenizer` metadata contains provider and model
+  - [ ] create invalid tokenizer test:
+    - [ ] pass missing fixture path to `TokenCounter::from_file`
+    - [ ] assert error string includes tokenizer path
 
-### Phase X3 — Convert Tool Calls to `rmcp` Results
+- [ ] validate Phase XI.1:
+  - [ ] run `cargo fmt --all`
+  - [ ] run `cargo test --quiet -p atlas-token-count`
+  - [ ] run `cargo clippy --workspace --all-targets --quiet`
 
-Goal: route `tools/call` through `rmcp::model::CallToolRequestParams` and return official tool result types while reusing existing Atlas tool handlers.
+Phase XI.1 completion criteria:
+- [ ] `atlas-token-count` compiles as workspace crate
+- [ ] tokenizer-backed counting works from local fixture file
+- [ ] heuristic counting exactly preserves current `bytes.div_ceil(4)` behavior
+- [ ] invalid tokenizer paths fail with actionable path context
+- [ ] `cargo test --quiet -p atlas-token-count` passes
 
-Overview: implement `call_tool`, error mapping, metadata preservation, and task deferral behavior through SDK result types.
+### Phase XI.2 — Configuration and Runtime Token Counter Loading
 
-Rules:
-- User-fixable tool failures become successful MCP tool responses with error content, not JSON-RPC protocol errors.
-- Unknown tool remains protocol method/tool error.
-- `structuredContent` stays object-shaped for normalized Atlas contracts.
-- Existing `McpAdapter` session hooks must still run around tool execution.
+Goal: make tokenizer accounting configurable from `.atlas/config.toml` with deterministic heuristic fallback.
 
-- [x] implement request conversion:
-  - [x] parse `CallToolRequestParams.name` into existing Atlas tool name
-  - [x] pass `CallToolRequestParams.arguments` into existing `tasks::execute_tool_call`
-  - [x] strip repo selector fields using existing repo-selection helper before business logic runs
-  - [x] preserve request context fields needed for progress, cancellation, and session tracking
-- [x] implement result conversion:
-  - [x] convert existing JSON tool result envelope into `rmcp::model::CallToolResult` or equivalent `CallToolResponse`
-  - [x] map existing `content` array to official content blocks
-  - [x] map existing `structuredContent` to official structured content field
-  - [x] map existing `_meta` to official result metadata extension map
-  - [x] preserve resource links in official content block form when supported by rmcp
-- [x] implement error conversion:
-  - [x] convert unknown tool to rmcp method-not-found or invalid-params error as appropriate
-  - [x] convert invalid `arguments` shape to rmcp invalid-params error
-  - [x] convert Atlas `ToolErrorPayload` to user-visible tool error result
-  - [x] convert unexpected internal failures with `atlas_error_code` metadata retained where official SDK permits metadata
-  - [x] add tests that user-visible validation failures appear in tool content
-- [x] preserve tool session side effects:
-  - [x] ensure `McpAdapter::before_command` runs before delegated tool execution
-  - [x] ensure `McpAdapter::after_command` records success/failure
-  - [x] ensure session event best-effort emission still runs after successful calls
-  - [x] add regression test around `get_session_status` event count after one rmcp adapter tool call
-- [x] add representative tool parity tests:
-  - [x] compare `query_graph` structured content between handrolled dispatch and rmcp adapter
-  - [x] compare `status` structured content between handrolled dispatch and rmcp adapter
-  - [x] compare `get_context` structured content between handrolled dispatch and rmcp adapter
-  - [x] compare `search_files` structured content between handrolled dispatch and rmcp adapter
-  - [x] compare user-visible error shape for invalid input between handrolled dispatch and rmcp adapter
-- [x] validate Phase X3:
-  - [x] run `cargo fmt --all`
-  - [x] run `cargo clippy --workspace --all-targets --quiet`
-  - [x] run `cargo test --quiet -p atlas-mcp rmcp_server::tests::call_tool`
-
-Phase X3 completion criteria:
-- [x] `AtlasRmcpServer::call_tool` uses official `rmcp` request and result types
-- [x] representative tools produce matching structured content through handrolled and rmcp paths
-- [x] user-visible tool errors render as tool results
-- [x] session hooks remain active for rmcp tool calls
-
-Audit note:
-- second-pass Phase X3 audit found duplicate outer rmcp hook/session wrapper around delegated tool execution
-- fixed by installing rmcp runtime/tool-call context, then delegating directly to `crate::tasks::execute_tool_call(...)`
-- regression coverage now compares rmcp vs handrolled session-event delta after one tool call
-
-### Phase X4 — Convert Prompts, Resources, Completions, and Subscriptions
-
-Goal: move non-tool MCP surfaces to official SDK handler methods.
-
-Overview: implement prompt get/list, resource list/read/templates, completions, and subscription/listen hooks with official model types while preserving Atlas content generation.
+Overview: add context tokenizer configuration in `atlas-engine`, render it in config templates, and provide a runtime builder that returns a ready `TokenCounter` plus fallback metadata.
 
 Rules:
-- Prompt and resource payload text must remain byte-for-byte stable where current tests assert text.
-- Resource URIs remain stable.
-- Cache metadata remains in `_meta` or official cache fields when available.
-- Completion behavior remains deterministic and sorted.
-- Official `rmcp::model::PaginatedRequestParams` is cursor-only; preserve Atlas pagination through `cursor` semantics and keep default page sizing on rmcp path.
+- Default config must preserve current heuristic behavior.
+- Relative tokenizer paths resolve from `.atlas/`, matching existing external config file patterns.
+- `fallback = "heuristic"` is default and safe-to-answer.
+- `fallback = "fail_closed"` must error before payload truncation when tokenizer loading fails.
+- Config validation rejects blank strings and zero byte-per-token values.
+- Do not add manual tokenizer download steps.
 
-- [x] implement prompt handlers:
-  - [x] convert `prompts::prompt_list` output into `rmcp::model::ListPromptsResult`
-  - [x] convert `prompts::prompt_get` output into `rmcp::model::GetPromptResult`
-  - [x] preserve prompt descriptions, arguments, titles, icons, and metadata
-  - [x] add tests for all prompt names and required arguments
-- [x] implement resource handlers:
-  - [x] convert `resources::resources_list` into `rmcp::model::ListResourcesResult`
-  - [x] convert `resources::resources_templates_list` into `rmcp::model::ListResourceTemplatesResult`
-  - [x] convert `resources::resources_read` into `rmcp::model::ReadResourceResult`
-  - [x] preserve MIME types and text content
-  - [x] preserve resource pagination behavior
-  - [x] add tests for docs index, health status, graph provenance, saved context, tool docs, prompt docs, and docs-section resources
-- [x] implement completion handler:
-  - [x] convert current `completion::complete` result into `rmcp::model::CompleteResult`
-  - [x] remove any leftover output-format completion path
-  - [x] preserve resource URI, prompt argument, tool name, intent, source ID, docs heading, and git ref completions
-  - [x] add tests for each completion source
-- [x] implement subscription/listen support:
-  - [x] map accepted subscription filters to current tools/prompts/resources list-changed categories
-  - [x] map resource updated notifications to official rmcp notification type
-  - [x] add tests that unsupported subscription filters are rejected or reduced deterministically
-- [x] validate Phase X4:
-  - [x] run `cargo fmt --all`
-  - [x] run `cargo clippy --workspace --all-targets --quiet`
-  - [x] run `cargo test --quiet -p atlas-mcp prompts resources completion`
+- [ ] add config model in `packages/atlas-engine/src/config/context.rs`:
+  - [ ] add `TokenizerProvider` enum:
+    - [ ] support `heuristic`
+    - [ ] support `tokenizers`
+    - [ ] deserialize from lowercase kebab/snake-friendly strings if existing config style requires it
+  - [ ] add `TokenizerFallbackMode` enum:
+    - [ ] support `heuristic`
+    - [ ] support `fail_closed`
+  - [ ] add `ContextTokenizerConfig` struct:
+    - [ ] add `provider: TokenizerProvider`
+    - [ ] add `model: Option<String>`
+    - [ ] add `tokenizer_file: Option<String>`
+    - [ ] add `fallback: TokenizerFallbackMode`
+    - [ ] add `bytes_per_token: usize`
+  - [ ] add `tokenizer: ContextTokenizerConfig` to `ContextConfig`
+  - [ ] implement defaults:
+    - [ ] set `provider = heuristic`
+    - [ ] set `model = None`
+    - [ ] set `tokenizer_file = None`
+    - [ ] set `fallback = heuristic`
+    - [ ] set `bytes_per_token = 4`
 
-Phase X4 completion criteria:
-- [x] prompts, resources, resource templates, reads, completions, and subscriptions are implemented on `AtlasRmcpServer`
-- [x] resource URIs and prompt names remain stable
-- [x] leftover output-format completion behavior is gone
-- [x] targeted non-tool MCP tests pass
+- [ ] add validation helpers in `atlas-engine`:
+  - [ ] implement `ContextTokenizerConfig::validate(&self) -> anyhow::Result<()>`:
+    - [ ] reject `bytes_per_token == 0`
+    - [ ] reject blank `model` when `Some`
+    - [ ] reject blank `tokenizer_file` when `Some`
+    - [ ] require `tokenizer_file` when `provider = tokenizers`
+    - [ ] reject `tokenizer_file` when `provider = heuristic` if existing config policy rejects ignored fields
+  - [ ] call tokenizer validation from `Config::load` validation path
+  - [ ] include config key names in validation errors:
+    - [ ] `context.tokenizer.bytes_per_token`
+    - [ ] `context.tokenizer.model`
+    - [ ] `context.tokenizer.tokenizer_file`
 
-### Phase X4.5 — Convert Lifecycle, Logging, Roots, and Capability Context
+- [ ] add runtime builder in `atlas-engine`:
+  - [ ] add `Config::token_counter(&self, atlas_dir: &Utf8Path) -> anyhow::Result<TokenCounterLoadResult>`
+  - [ ] define `TokenCounterLoadResult`:
+    - [ ] add `counter: atlas_token_count::TokenCounter`
+    - [ ] add `fallback_used: bool`
+    - [ ] add `fallback_reason: Option<String>`
+  - [ ] implement heuristic provider path:
+    - [ ] return `TokenCounter::heuristic(bytes_per_token)`
+    - [ ] set `fallback_used = false`
+  - [ ] implement tokenizers provider success path:
+    - [ ] resolve relative `tokenizer_file` from `atlas_dir`
+    - [ ] load tokenizer via `TokenCounter::from_file`
+    - [ ] set provider string to `tokenizers`
+    - [ ] preserve configured model metadata
+  - [ ] implement tokenizers provider load failure with heuristic fallback:
+    - [ ] when `fallback = heuristic`, return heuristic counter
+    - [ ] set `fallback_used = true`
+    - [ ] set fallback reason to load error summary without payload text
+  - [ ] implement tokenizers provider load failure with fail-closed:
+    - [ ] when `fallback = fail_closed`, return error
+    - [ ] include `context.tokenizer.tokenizer_file` and resolved path in error context
 
-Goal: preserve MCP lifecycle behavior and client interaction context before replacing transports.
+- [ ] update config template rendering:
+  - [ ] add `[context.tokenizer]` block in `packages/atlas-engine/src/config/template.rs`
+  - [ ] render default profile with active heuristic values
+  - [ ] include commented tokenizer-backed example values without activating nonexistent files
+  - [ ] ensure generated template never points to missing active tokenizer file by default
 
-Overview: implement official rmcp handlers for ping, initialized notifications, logging level changes, trace/log messages, client capability capture, and roots-list-changed dynamic repo refresh.
+- [ ] update doctor/runtime config output:
+  - [ ] include tokenizer provider in `packages/atlas-cli/src/commands/maintenance.rs` runtime JSON
+  - [ ] include tokenizer model when configured
+  - [ ] include fallback mode
+  - [ ] include bytes-per-token
+  - [ ] do not include resolved tokenizer contents
 
-Rules:
-- Lifecycle methods must be covered before stdio/HTTP transport replacement.
-- Client capability data must flow into Atlas runtime context before tool execution.
-- Dynamic repo/root behavior must stay canonical-path-safe.
-- Logging and tracing are diagnostics only; user-facing command output remains tool result content.
+- [ ] add config tests:
+  - [ ] load default config and assert heuristic tokenizer defaults
+  - [ ] load config with `provider = "tokenizers"` and valid relative `tokenizer_file`
+  - [ ] assert relative `tokenizer_file` resolves from `.atlas/`
+  - [ ] reject missing `tokenizer_file` when provider is `tokenizers`
+  - [ ] reject blank `tokenizer_file`
+  - [ ] reject blank `model`
+  - [ ] reject `bytes_per_token = 0`
+  - [ ] assert missing tokenizer file falls back when fallback mode is heuristic
+  - [ ] assert missing tokenizer file errors when fallback mode is fail-closed
+  - [ ] assert config template includes `[context.tokenizer]`
 
-- [x] implement protocol lifecycle handlers:
-  - [x] implement `ServerHandler::ping` with an empty success result
-  - [x] implement `ServerHandler::on_initialized` and preserve current initialized-session side effects
-  - [x] add tests that initialized notification produces no response and marks session ready where existing tests observe readiness
-  - [x] add tests that ping returns a successful empty response through the rmcp adapter
-- [x] implement logging and trace controls:
-  - [x] implement `ServerHandler::set_level` using current `logging::LogLevel` threshold behavior
-  - [x] map rmcp logging levels to Atlas `LogLevel` values deterministically
-  - [x] preserve stderr diagnostic fallback for clients without logging capability
-  - [x] replace custom `$/logMessage` emission with official rmcp logging notification APIs
-  - [x] add tests for threshold filtering and emitted log notification shape
-  - [x] note typed `rmcp::model::LoggingLevel` makes invalid logging-level parsing unreachable on rmcp handler path
-- [x] preserve trace notification behavior:
-  - [x] map current `$/setTrace` support to rmcp custom notification handling if rmcp has no typed trace method
-  - [x] keep `off`, `messages`, and `verbose` values accepted exactly as current parser accepts them
-  - [x] add tests for invalid trace level rejection
-  - [x] note outbound trace lifecycle emission tests are transport-owned and deferred to Phase X5
-- [x] capture client capabilities and request metadata:
-  - [x] map rmcp initialize client capabilities into `runtime_context::ClientInteractionCapabilities`
-  - [x] preserve detection of elicitation form support
-  - [x] preserve detection of elicitation URL support
-  - [x] map authenticated principal from HTTP auth wrapper into rmcp request context metadata
-  - [x] add tests that tool execution sees expected client capability flags
-- [x] preserve roots and dynamic repo refresh behavior:
-  - [x] implement `ServerHandler::on_roots_list_changed` to invalidate cached dynamic roots where current transport state does so
-  - [x] request or read client roots through rmcp peer APIs where current dynamic repo resolution depends on client roots
-  - [x] canonicalize all root paths through existing `atlas_repo` helper APIs
-  - [x] add tests for roots-list-changed invalidating cached candidate roots
-  - [x] add tests for noncanonical root inputs resolving to canonical repo roots
-- transport-owned protocol parity deferred to Phase X5:
-  - missing required params through full rmcp stdio request handling
-  - unknown methods through full rmcp stdio request handling
-  - unsupported protocol versions during rmcp initialize/discover negotiation
-  - malformed JSON-RPC through rmcp transport parser
-- [x] validate Phase X4.5:
-  - [x] run `cargo fmt --all`
-  - [x] run `cargo clippy --workspace --all-targets --quiet`
-  - [x] run `cargo test --quiet -p atlas-mcp rmcp_server lifecycle logging repo_selection`
+- [ ] validate Phase XI.2:
+  - [ ] run `cargo fmt --all`
+  - [ ] run `cargo test --quiet -p atlas-engine config::tests::load_default_context_tokenizer_config`
+  - [ ] run `cargo test --quiet -p atlas-engine config::tests::load_tokenizers_provider_with_relative_file`
+  - [ ] run `cargo test --quiet -p atlas-engine config::tests::tokenizer_provider_missing_file_falls_back_to_heuristic`
+  - [ ] run `cargo test --quiet -p atlas-engine config::tests::tokenizer_provider_missing_file_fail_closed_errors`
+  - [ ] run `cargo clippy --workspace --all-targets --quiet`
 
-Phase X4.5 completion criteria:
-- [x] ping, initialized, logging level, trace configuration, and roots-list-changed behavior are implemented on rmcp-backed handlers
-- [x] client capability and authenticated-principal metadata reach Atlas runtime context
-- [x] dynamic roots remain canonical-path-safe and covered by tests
-- [x] transport-owned negative protocol parity items are explicitly deferred to Phase X5
+Phase XI.2 completion criteria:
+- [ ] `.atlas/config.toml` supports `[context.tokenizer]`
+- [ ] default behavior remains heuristic with four bytes per token
+- [ ] tokenizer files resolve relative to `.atlas/`
+- [ ] fallback and fail-closed modes are covered by automated tests
+- [ ] runtime config output exposes tokenizer settings without exposing tokenizer contents
 
-Audit note:
-- handler-layer X4.5 work is complete
-- remaining unticked items were transport-owned, not handler-owned
-- moved those checks to Phase X5 so X4.5 status reflects actual scope
+### Phase XI.3 — Review Context Payload Integration
 
-### Phase X5 — Replace Stdio Transport with `rmcp` Stdio
+Goal: enforce context token budgets with `TokenCounter` instead of byte-derived token estimates.
 
-Goal: make default stdio server run through official `rmcp` transport.
-
-Overview: preserve `run_server` and `run_server_with_options` public functions while replacing newline JSON-RPC parsing and dispatch with rmcp stdio service.
-
-Rules:
-- Public launcher function names remain stable.
-- Existing CLI commands that launch MCP stdio must not change flags.
-- Tool timeout and cancellation semantics must remain covered by tests.
-- Legacy compatibility code is removed after parity tests pass.
-
-- [x] add rmcp stdio runner:
-  - [x] update `packages/atlas-mcp/src/transport/stdio.rs` to construct `AtlasRmcpServer`
-  - [x] start rmcp stdio transport from existing `run_server_with_options`
-  - [x] preserve `mark_server_started()` behavior
-  - [x] preserve stderr startup diagnostics expected by tests
-- [x] bridge blocking Atlas tools into async handler execution:
-  - [x] run synchronous tool calls with `tokio::task::spawn_blocking` or equivalent rmcp-safe worker execution
-  - [x] apply `ServerOptions.tool_timeout_ms` to rmcp tool calls
-  - [x] apply `ServerOptions.tool_timeout_ms_by_tool` overrides
-  - [x] return timeout as user-visible tool error with existing timeout error code
-- [x] bridge cancellation and progress:
-  - [x] map rmcp cancellation notification into existing cancel flags
-  - [x] map existing `progress::report` calls into official rmcp progress notifications
-  - [x] add test for cancellation of a long-running test tool
-  - [x] add test for progress notification emission from a long-running test tool
-- [x] migrate stdio tests:
-  - [x] update interactive stdio harness to drive rmcp stdio transport
-  - [x] preserve initialized-session helper behavior
-  - [x] assert representative requests return JSON-RPC 2.0 compliant responses through rmcp
-  - [x] assert notifications do not produce responses
-  - [x] assert malformed `tools/call` request shapes fail with official rmcp request-validation errors at transport boundary
-  - [x] assert unknown methods produce method-not-found errors
-  - [x] assert unsupported protocol versions fail during rmcp initialize/discover negotiation
-  - [x] assert malformed JSON-RPC is handled by rmcp transport
-  - [x] assert verbose trace emits request lifecycle diagnostics and off emits none
-- [x] remove obsolete stdio internals:
-  - [x] stop compiling manual stdin line parser as stdio transport code by moving it into socket-only transport modules
-  - [x] stop compiling manual JSON-RPC response builders as stdio transport code by moving them into socket-only transport modules
-  - [x] stop compiling manual method dispatch as stdio transport code by moving it into socket-only transport modules
-- [x] validate Phase X5:
-  - [x] run `cargo fmt --all`
-  - [x] run `cargo clippy --workspace --all-targets --quiet`
-  - [x] run stdio-focused MCP tests with `cargo test --quiet -p atlas-mcp transport::tests`
-  - [x] run CLI MCP quality gates with `cargo test --quiet -p atlas-cli cli_quality_gates`
-
-Phase X5 completion criteria:
-- [x] default stdio MCP server uses rmcp transport
-- [x] public launch functions and CLI flags remain stable
-- [x] progress, cancellation, timeout, and notification tests pass
-- [x] manual stdio JSON-RPC parser is no longer active
-
-Audit note:
-- rmcp stdio progress and cancellation bridge is covered and passing
-- rmcp stdio unknown-method parity is covered and passing
-- request-shape failures for malformed `tools/call` params are now asserted against official rmcp transport-boundary behavior instead of handrolled `invalid_params` assumptions
-- unsupported initialize version and malformed-first-frame coverage now use raw rmcp stdio capture because server setup can fail before normal response collection completes
-- verbose trace now emits official `notifications/message` lifecycle diagnostics on rmcp stdio, while `off` stays silent
-- dead direct stdio wrapper entrypoints were removed and remaining manual parser/response/dispatch code was renamed into socket-only transport modules
-
-### Phase X6 — Replace Streamable HTTP Transport with `rmcp` HTTP
-
-Goal: replace custom HTTP MCP parser/SSE response code with official rmcp streamable HTTP server transport.
-
-Overview: keep Atlas route surface stable while delegating MCP protocol handling to rmcp and preserving protected-resource metadata/auth behavior.
+Overview: update `atlas-review` payload budgeting to measure serialized context payloads through the configured counter, while keeping byte caps and current item trimming priority.
 
 Rules:
-- `POST /mcp` remains MCP ingress.
-- `GET /health` remains unauthenticated liveness endpoint.
-- `GET /.well-known/oauth-protected-resource` remains available when HTTP auth is configured.
-- Gateway-owned security controls remain out of this crate.
+- Measure the same serialized JSON payload that CLI/MCP emits after removing payload metadata from the clone.
+- Keep byte-limit trimming active even when tokenizer count is below token limit.
+- Preserve existing direct-target retention behavior.
+- Do not reorder trimming candidates.
+- Do not add token counting to graph traversal or ranking in this phase.
+- Do not panic on tokenizer errors; use loaded fallback counter or return typed build error from fail-closed config path.
 
-- [x] implement rmcp HTTP service wiring:
-  - [x] construct `AtlasRmcpServer` inside `run_http_server_with_options`
-  - [x] mount rmcp streamable HTTP service at `/mcp`
-  - [x] preserve `ATLAS_HTTP_BIND` behavior
-  - [x] preserve `mark_server_started()` behavior
-  - [x] preserve health route response contract
-- [x] preserve auth behavior:
-  - [x] wrap rmcp HTTP service with existing `ProtectedResourceAuthPolicy` middleware or equivalent rmcp auth layer
-  - [x] keep bearer token validation tests
-  - [x] keep allowed-origin enforcement tests
-  - [x] keep protected-resource metadata tests
-  - [x] ensure unauthenticated `/health` still passes
-- [x] migrate HTTP test harness:
-  - [x] update `HttpTestHarness::post_jsonrpc` to target rmcp HTTP service
-  - [x] preserve helpers for bearer tokens and metadata reads
-  - [x] update tests to official streamable HTTP response shapes where rmcp differs
-  - [x] assert JSON and SSE modes when rmcp exposes both modes
-- [x] remove custom HTTP parser code:
-  - [x] remove manual `MCP-Protocol-Version` header validation when rmcp validates protocol version
-  - [x] remove manual one-shot SSE encoder when rmcp owns it
-  - [x] remove manual JSON-RPC body parsing from `transport_http.rs`
-  - [x] keep only health/auth/router glue code
-- [x] validate Phase X6:
-  - [x] run `cargo fmt --all`
-  - [x] run `cargo clippy --workspace --all-targets --quiet --features http-transport`
-  - [x] run `cargo test --quiet -p atlas-mcp --features http-transport transport_http`
+- [ ] add dependency to `atlas-review`:
+  - [ ] add `atlas-token-count.workspace = true` to `packages/atlas-review/Cargo.toml`
 
-Phase X6 completion criteria:
-- [x] HTTP MCP protocol handling is delegated to rmcp streamable HTTP transport
-- [x] `/mcp`, `/health`, and protected-resource metadata endpoints remain covered by tests
-- [x] HTTP auth tests pass
-- [x] custom HTTP JSON-RPC/SSE parsing code is removed or unreachable
+- [ ] thread token counter into `ContextEngine`:
+  - [ ] add token counter field to context engine state with heuristic default
+  - [ ] add builder method `ContextEngine::with_token_counter(counter: TokenCounter) -> Self`
+  - [ ] keep existing constructors behavior-compatible by defaulting to heuristic `bytes_per_token = 4`
+  - [ ] update engine call sites to pass configured counter from `atlas-engine::Config::token_counter`
+  - [ ] update CLI context command path to load token counter from config
+  - [ ] update MCP context/review tool path to load token counter from config
+  - [ ] update session/review refresh action path to load token counter from config
 
-Audit note:
-- official rmcp HTTP responses do not guarantee the old `MCP-Protocol-Version` response header on successful JSON replies, so HTTP fixtures/assertions were updated to check stable body fields instead
-- HTTP test harness now normalizes test-only initialize payloads and request headers to official rmcp transport expectations while keeping runtime server behavior strict
-- SSE fallback coverage now uses progress-emitting tool execution because ordinary request/response methods stay JSON when rmcp can complete them without intermediate messages
+- [ ] replace heuristic-only measurement in `packages/atlas-review/src/context/payload.rs`:
+  - [ ] replace `estimate_tokens(bytes: usize)` helper with serialized-payload measurement helper
+  - [ ] add `PayloadMeasurement` struct:
+    - [ ] `bytes: usize`
+    - [ ] `tokens: usize`
+    - [ ] `method: TokenCountMethod`
+    - [ ] `fallback_reason: Option<String>`
+  - [ ] update `context_bytes` helper to return serialized bytes or shared measurement input
+  - [ ] update `trim_context_payload` signature:
+    - [ ] accept `counter: &TokenCounter`
+    - [ ] count current serialized payload each loop
+    - [ ] break only when `bytes <= byte_limit` and `tokens <= token_limit`
+    - [ ] return final `PayloadMeasurement`
+  - [ ] update `apply_payload_budgets`:
+    - [ ] accept `counter: &TokenCounter`
+    - [ ] compute requested payload bytes and requested token count before trimming
+    - [ ] compute final emitted payload bytes and final token count after trimming
+    - [ ] populate `tokens_estimated` with tokenizer-backed count for compatibility
+    - [ ] preserve `omitted_byte_count` semantics as requested bytes minus emitted bytes
+  - [ ] update source mix calculation:
+    - [ ] accept `counter: &TokenCounter`
+    - [ ] count serialized graph context section with tokenizer
+    - [ ] count serialized content assets section with tokenizer
+    - [ ] count serialized saved artifacts section with tokenizer
+    - [ ] keep item included/dropped counts unchanged
+    - [ ] use heuristic fallback only when counter itself is heuristic
 
-### Phase X7 — Convert Socket, Pipe, Broker, and Dynamic Repo Context
+- [ ] keep byte-derived byte limit calculation safe:
+  - [ ] remove token-to-byte limit derivation as primary enforcement
+  - [ ] set effective byte limit to policy `context_payload_bytes.default_limit`
+  - [ ] rely on tokenizer count for token budget and byte cap for payload size
+  - [ ] keep per-request `token_budget` capped by policy default and max limit exactly as current behavior
 
-Goal: preserve Atlas daemon/socket workflows while moving post-handshake MCP bytes through rmcp async read/write transport.
+- [ ] preserve existing trimming helpers:
+  - [ ] keep `trim_file_excerpt_bytes` behavior unchanged
+  - [ ] keep `trim_saved_context_bytes` behavior unchanged
+  - [ ] keep `trim_review_source_bytes` behavior unchanged
+  - [ ] keep `trim_one_payload_unit` candidate priority unchanged
+  - [ ] keep direct target retention tests passing
 
-Overview: keep Atlas-specific repo resolution and broker handshake, then pass the established stream into rmcp transport instead of custom JSON-RPC loop.
+- [ ] update call sites and tests that call `apply_payload_budgets` directly:
+  - [ ] pass `&TokenCounter::heuristic(4).expect(...)` in existing unit tests
+  - [ ] avoid global/static token counter state in tests
+  - [ ] keep per-test local counter values
 
-Rules:
-- Canonical repo path identity invariant applies to every repo root selected by dynamic repo resolution.
-- Broker handshake remains Atlas-specific only before MCP transport starts.
-- Unix socket and Windows named-pipe behavior remain separately tested.
-- Dynamic repo selection must not create local path-normalization helpers.
+- [ ] validate Phase XI.3:
+  - [ ] run `cargo fmt --all`
+  - [ ] run `cargo test --quiet -p atlas-review context::tests::budget`
+  - [ ] run `cargo test --quiet -p atlas-cli cli_quality_gates`
+  - [ ] run `cargo clippy --workspace --all-targets --quiet`
 
-- [x] adapt Unix socket transport:
-  - [x] keep existing daemon handshake request/response schema until a separate issue removes it
-  - [x] after successful handshake, wrap Unix stream with rmcp async read/write transport
-  - [x] construct `AtlasRmcpServer` from handshake repo root and DB path
-  - [x] add test proving socket `tools/call` reaches rmcp handler after handshake
-- [x] adapt Windows named pipe transport:
-  - [x] keep existing named-pipe creation and permission behavior
-  - [x] wrap connected pipe stream with rmcp async read/write transport
-  - [x] construct `AtlasRmcpServer` from handshake repo root and DB path
-  - [x] add cfg-gated compile test for Windows pipe rmcp wiring
-- [x] preserve broker status behavior:
-  - [x] keep `broker_status` MCP tool response schema stable
-  - [x] update broker test harness to use rmcp-backed socket server
-  - [x] assert broker liveness and version fields still populate
-- [x] preserve dynamic repo selection:
-  - [x] port dynamic roots and repo selector stripping into rmcp request context setup
-  - [x] ensure selected repo root uses `atlas_repo::CanonicalRepoPath` or existing helper APIs
-  - [x] add test for tool call with repo selector switching active repo
-  - [x] add test for multi-workspace ambiguous repo selection error
-- [x] validate Phase X7:
-  - [x] run `cargo fmt --all`
-  - [x] run `cargo clippy --workspace --all-targets --quiet`
-  - [x] run socket/broker focused tests with `cargo test --quiet -p atlas-mcp broker && cargo test --quiet -p atlas-mcp socket && cargo test --quiet -p atlas-mcp repo_selection`
+Phase XI.3 completion criteria:
+- [ ] context/review payload token budgets use `TokenCounter`
+- [ ] default review behavior remains compatible through heuristic counter
+- [ ] byte caps still enforce payload safety independently of token counts
+- [ ] direct target retention and truncation metadata tests pass
+- [ ] CLI, MCP, and session refresh paths use configured token accounting
 
-Phase X7 completion criteria:
-- [x] Unix socket and broker MCP flows use rmcp after Atlas handshake
-- [x] Windows pipe rmcp wiring compiles behind cfg gates
-- [x] dynamic repo selection remains covered and canonical-path-safe
-- [x] broker status tool remains stable
+### Phase XI.4 — Token Accounting Metadata in CLI and MCP Outputs
 
-Audit note:
-- roadmap validation command used invalid `cargo test` multi-filter syntax; validation was run with equivalent chained quiet test commands instead
-- dynamic roots now auto-activate single advertised client root and fail closed with `atlas_repo_selection.candidate_roots` when multiple workspace roots remain ambiguous
+Goal: expose how tokens were counted so agents can tell tokenizer-backed counts from heuristic fallback.
 
-### Phase X8 — Convert Tasks, MRTR, Elicitation, Progress, and Request State
-
-Goal: replace Atlas handrolled MCP task/input-required shapes with official rmcp task, elicitation, progress, and request-state types.
-
-Overview: keep durable task persistence in `atlas-session`, but use rmcp model types for all MCP-visible task and input-required payloads.
+Overview: add optional metadata next to existing payload truncation fields. Keep current `tokens_estimated` field stable and populate it with the actual count from whichever method was used.
 
 Rules:
-- Durable task records stay in Atlas session storage.
-- MCP-visible task status and input-required schemas use official rmcp types.
-- Destructive operations that require confirmation continue to fail closed without accepted input.
-- Request-state validation remains signed and bound to method, tool, args, and principal.
+- Add fields only; do not remove or rename existing JSON keys.
+- Serialize metadata only when payload trimming metadata exists.
+- Do not include tokenizer file contents or absolute secret-bearing paths in MCP payloads.
+- Keep CLI text concise; JSON carries full structured metadata.
+- MCP schema additions must remain compatible with current structured content response shapes.
 
-- [x] convert task API models:
-  - [x] replace local create-task result JSON shape with `rmcp::model::CreateTaskResult`
-  - [x] replace local detailed-task output with `rmcp::model::DetailedTask`
-  - [x] map `atlas_session::DurableTaskStatus` to `rmcp::model::TaskStatusCanonical`
-  - [x] map stored task result/error/progress into official task payload fields
-  - [x] add round-trip tests from durable task records to rmcp task results
-- [x] implement rmcp task handler methods:
-  - [x] implement `ServerHandler::get_task` using existing `tasks_get` storage logic
-  - [x] implement `ServerHandler::update_task` using existing `tasks_update` response ingestion logic
-  - [x] implement `ServerHandler::cancel_task` using existing cancellation logic
-  - [x] remove custom `tasks/get` and `tasks/update` branches from manual dispatch after rmcp transport owns them
-- [x] convert MRTR/input-required:
-  - [x] replace local `mrtr::InputRequiredResult` with `rmcp::model::InputRequiredResult`
-  - [x] replace local `mrtr::InputRequest` with official rmcp input request type
-  - [x] replace local `InputResponses` parsing with official rmcp input response structures where available
-  - [x] preserve `resultType: "input_required"` behavior through official SDK type
-  - [x] add test for purge confirmation first call returning input-required
-  - [x] add test for accepted confirmation completing purge
-  - [x] add test for declined confirmation canceling purge
-- [x] convert request-state signing:
-  - [x] replace custom request-state issue/validate helpers with `rmcp::model::RequestStateCodec` if it supports equivalent HMAC binding
-  - [x] if a thin Atlas binding wrapper remains, back it with rmcp `RequestStateCodec` instead of local JSON signature code
-  - [x] bind request state to method, tool name, arguments digest, authenticated principal, issue time, expiry, and nonce
-  - [x] add tests for tampered state, expired state, mismatched arguments, mismatched principal, and mismatched tool
-- [x] convert elicitation types:
-  - [x] replace local `ElicitationAction` with rmcp elicitation action enum
-  - [x] replace local form schema output with rmcp elicitation schema builder where practical
-  - [x] preserve confirmation schema field name `confirmation`
-  - [x] add tests for invalid response content, unknown fields, and default cancel behavior
-- [x] validate Phase X8:
-  - [x] run `cargo fmt --all`
-  - [x] run `cargo clippy --workspace --all-targets --quiet`
-  - [x] run `cargo test --quiet -p atlas-mcp tasks mrtr elicitation progress`
+- [ ] add core model metadata in `packages/atlas-core/src/model/context.rs`:
+  - [ ] define `TokenAccountingMeta`:
+    - [ ] `provider: String`
+    - [ ] `model: Option<String>` with `skip_serializing_if`
+    - [ ] `fallback_used: bool`
+    - [ ] `fallback_reason: Option<String>` with `skip_serializing_if`
+    - [ ] `bytes_per_token: Option<usize>` with `skip_serializing_if`
+  - [ ] add `token_accounting: Option<TokenAccountingMeta>` to `PayloadTruncationMeta`
+  - [ ] add serde skip for `None`
+  - [ ] keep `tokens_estimated` unchanged
+  - [ ] update doc comments to say `tokens_estimated` is compatibility name for counted tokens
 
-Phase X8 completion criteria:
-- [x] MCP-visible task, input-required, elicitation, progress, and request-state payloads use rmcp model types
-- [x] durable Atlas task storage remains unchanged except typed conversion boundaries
-- [x] destructive confirmation tests pass
-- [x] request-state security regression tests pass
+- [ ] populate token accounting metadata in `atlas-review`:
+  - [ ] map `TokenCountMethod::Tokenizer` to provider/model metadata
+  - [ ] map `TokenCountMethod::HeuristicBytes` to provider `heuristic`
+  - [ ] set `bytes_per_token` for heuristic counts
+  - [ ] set `fallback_used = true` when load result indicated fallback
+  - [ ] copy fallback reason from load result or count result
+  - [ ] ensure metadata appears when caller token budget override applies but no payload units dropped
 
-Audit note:
-- first X8 slice landed official rmcp `CreateTaskResult`, `DetailedTask`, `tasks/get`, `tasks/update`, and `tasks/cancel` wiring on current durable-task storage
-- rmcp `tasks/update` now accepts official `inputResponses` and bridges them into existing Atlas task update ingestion
-- cooperative durable-task cancellation now sets persisted `cancel_requested`, marks task `cancelled`, and flips live worker cancel flags when present
-- official rmcp task-status notifications now serialize for durable states that can be represented from current storage
-- durable task storage now persists `input_requests_json` and `request_state` via session migration `008_durable_task_input_requests`
-- deferred rmcp tool calls that return `input_required` now persist official task `inputRequests` payloads and can round-trip through rmcp `tasks/get`
-- explicit task TTL parsing now accepts rmcp `tools/call.arguments.task.ttl`, not only legacy top-level `task.ttl`
-- MRTR/request-state/elicitation code now uses official rmcp `InputRequiredResult`, `InputRequest`, `InputResponses`, `ElicitationAction`, and `RequestStateCodec`-backed sealing instead of local MCP-visible structs
-- request-state integrity now binds method, tool, arguments digest, and principal through codec associated data, while Atlas keeps explicit issue/expiry/nonce payload checks for deterministic tests
-- purge confirmation retry coverage now includes first-round `input_required`, accepted retry success, and declined retry user-visible cancellation
-- remaining blocker: official task payloads still have no direct field for Atlas progress snapshots, and confirmation schema construction still uses validated JSON value input instead of rmcp schema builder helpers
+- [ ] update CLI text output for review/context truncation:
+  - [ ] print token provider when payload metadata exists
+  - [ ] print model when present
+  - [ ] print fallback marker when fallback was used
+  - [ ] preserve existing truncation lines and ordering where possible
 
-### Phase X9 — Replace Descriptor and Schema Plumbing with Official Types
+- [ ] update MCP schemas/manual-generated docs through registry-backed tests:
+  - [ ] add `token_accounting` metadata to relevant response schema if schema is explicit
+  - [ ] update manual docs tests to assert payload metadata includes token accounting fields where applicable
+  - [ ] keep `structuredContent` JSON source of truth
 
-Goal: eliminate Atlas MCP descriptor structs and move tool, prompt, resource, and schema exports to official rmcp model types.
+- [ ] add metadata tests:
+  - [ ] assert heuristic mode emits `token_accounting.provider = "heuristic"`
+  - [ ] assert heuristic mode emits `bytes_per_token = 4`
+  - [ ] assert tokenizer mode emits `provider = "tokenizers"`
+  - [ ] assert tokenizer mode emits configured model
+  - [ ] assert fallback mode emits `fallback_used = true`
+  - [ ] assert fallback mode emits non-empty fallback reason
+  - [ ] assert serialized old fields still include `tokens_estimated`
 
-Overview: convert descriptor registries first using existing JSON schemas, then incrementally type tool arguments with `schemars`.
+- [ ] validate Phase XI.4:
+  - [ ] run `cargo fmt --all`
+  - [ ] run `cargo test --quiet -p atlas-core context`
+  - [ ] run `cargo test --quiet -p atlas-review context::tests::budget`
+  - [ ] run `cargo test --quiet -p atlas-mcp`
+  - [ ] run `cargo clippy --workspace --all-targets --quiet`
 
-Rules:
-- Tool names, prompt names, resource URIs, and resource template URI templates remain stable.
-- JSON Schema remains draft-compatible with current tests until schemars migration updates snapshots.
-- Avoid macro big-bang; use typed structs in batches.
-- Public APIs stay minimal and `pub(crate)` unless external crate use requires otherwise.
+Phase XI.4 completion criteria:
+- [ ] JSON payload truncation metadata reports tokenizer provider/method
+- [ ] fallback use is visible to CLI/MCP callers
+- [ ] `tokens_estimated` remains present for compatibility
+- [ ] MCP schema/manual tests pass with additive metadata fields
 
-- [x] replace descriptor structs:
-  - [x] replace `ToolDescriptor` with `rmcp::model::Tool`
-  - [x] replace `ToolAnnotations` with `rmcp::model::ToolAnnotations`
-  - [x] replace `PromptDescriptor` with `rmcp::model::Prompt`
-  - [x] replace `PromptArgumentDescriptor` with `rmcp::model::PromptArgument`
-  - [x] replace `ResourceDescriptor` with `rmcp::model::Resource`
-  - [x] replace `ResourceTemplateDescriptor` with `rmcp::model::ResourceTemplate`
-  - [x] replace `IconDescriptor` with `rmcp::model::Icon`
-- [x] preserve descriptor validation:
-  - [x] keep descriptor name regex validation if rmcp does not enforce Atlas naming rules
-  - [x] keep local `$ref` validation for any raw JSON schema that remains
-  - [x] keep tests for descriptor sorting and uniqueness
-  - [x] keep tests that crate docs list all current MCP tools and prompts until generated docs replace them
-- [x] introduce typed argument schemas in batches:
-  - [x] add typed args and `schemars::JsonSchema` for health tools: `status`, `doctor`, `db_check`, `debug_graph`, `broker_status`
-  - [x] add typed args and schemas for discovery tools: `search_files`, `search_content`, `read_file_excerpt`, `get_docs_section`, `read_file_around_match`, `search_templates`, `search_text_assets`
-  - [x] add typed args and schemas for graph tools: `query_graph`, `batch_query_graph`, `resolve_symbol`, `symbol_neighbors`, `traverse_graph`, `cross_file_links`, `concept_clusters`, `explain_query`
-  - [x] add typed args and schemas for context/review tools: `detect_changes`, `get_context`, `get_review_context`, `get_minimal_context`, `get_impact_radius`, `explain_change`, `build_or_update_graph`, `postprocess_graph`
-  - [x] add typed args and schemas for analysis/refactor tools: `analyze_*`, `find_*`, `infer_modules`, `label_components`
-  - [x] add typed args and schemas for session/memory tools: `get_session_status`, `compact_session`, `resume_session`, `search_saved_context`, `search_decisions`, `read_saved_context`, `save_context_artifact`, `purge_saved_context`, `cross_session_search`, `get_global_memory`, `memory_store`, `memory_recall`, `record_session_event`, `wake_up`
-- [x] add schema parity tests:
-  - [x] assert required fields remain required for migrated typed schemas
-  - [x] assert enum values remain stable for migrated typed schemas
-  - [x] assert descriptions remain non-empty for all tools
-  - [x] assert output schemas remain present where current contract requires them
-- [x] validate Phase X9:
-  - [x] run `cargo fmt --all`
-  - [x] run `cargo clippy --workspace --all-targets --quiet`
-  - [x] run `cargo test --quiet -p atlas-mcp descriptors`
-  - [x] run `cargo test --quiet -p atlas-mcp tools::tests`
+### Phase XI.5 — Deterministic Tokenizer Truncation Tests and Quality Gates
 
-Phase X9 completion criteria:
-- [x] custom descriptor structs are removed or reduced to Atlas-only validation helpers
-- [x] official rmcp model types define MCP descriptors
-- [x] migrated typed schemas pass parity tests
-- [x] all tools still appear in generated registry and docs checks
+Goal: prove tokenizer-backed budgeting is deterministic, bounded, and behavior-compatible across CLI/MCP/review paths.
 
-### Phase X10 — Remove Handrolled Protocol, Transport, and Legacy Code
-
-Goal: delete the old MCP JSON-RPC implementation after rmcp stdio, HTTP, socket, and task paths pass parity tests.
-
-Overview: remove obsolete parser, dispatcher, response builder, legacy protocol, and duplicated metadata code while keeping only Atlas business logic and thin SDK adapters.
+Overview: add fixtures and tests that force different token counts than byte heuristic so regressions cannot silently return to byte-only accounting.
 
 Rules:
-- Delete only code made unreachable by earlier phases.
-- Keep tests that protect externally visible behavior.
-- Do not preserve legacy protocol branches unless covered by current supported version tests.
-- Any deleted compatibility behavior must have an rmcp-backed replacement test or be explicitly unsupported by failing tests.
+- Tests must not depend on real network, global env, or shared mutable tokenizer cache.
+- Tests must use per-test temp directories or committed fixtures.
+- Avoid fixed sleeps and retries.
+- Do not use shell-level test retries.
+- Keep tests quiet and targeted.
 
-- [x] remove handrolled JSON-RPC modules:
-  - [x] delete `packages/atlas-mcp/src/transport/jsonrpc.rs`
-  - [x] delete manual method routing from `packages/atlas-mcp/src/transport/dispatch.rs`
-  - [x] delete manual input line parsing from `packages/atlas-mcp/src/transport/input.rs`
-  - [x] delete manual output writer helpers that only format JSON-RPC strings
-  - [x] remove module exports from `packages/atlas-mcp/src/transport/mod.rs`
-- [x] remove legacy protocol code:
-  - [x] delete `packages/atlas-mcp/src/transport/legacy_2025.rs` if no current tests require it
-  - [x] remove legacy version negotiation tests that conflict with current official rmcp version support
-  - [x] add test that unsupported protocol versions fail through rmcp negotiation
-- [x] remove duplicate spec parsing:
-  - [x] remove `parse_initialize_request`
-  - [x] remove `parse_request_meta` if rmcp context exposes equivalent metadata
-  - [x] remove `negotiate_initialize`
-  - [x] keep only server constants and Atlas-specific metadata helpers that remain used
-- [x] shrink transport modules:
-  - [x] keep stdio public API wrapper only
-  - [x] keep socket handshake wrapper only
-  - [x] keep HTTP router/auth/health wrapper only
-  - [x] keep worker code only if still needed for blocking tool execution and timeout enforcement
-- [x] add dead-code guard tests:
-  - [x] run `cargo clippy --workspace --all-targets --quiet` with no dead-code allowances added for removed protocol modules
-  - [x] add grep-like test or crate test ensuring `jsonrpc_ok` and `jsonrpc_error` helpers no longer exist
-  - [x] add crate test ensuring `transport::dispatch::dispatch` no longer exists or is not exported
-- [x] validate Phase X10:
-  - [x] run `cargo fmt --all`
-  - [x] run `cargo clippy --workspace --all-targets --quiet --features http-transport`
-  - [x] run `cargo test --quiet -p atlas-mcp --features http-transport`
-  - [x] run `cargo test --quiet -p atlas-cli cli_quality_gates`
+- [ ] add tokenizer-sensitive fixture coverage:
+  - [ ] create committed tokenizer fixture that produces known counts for repeated punctuation/text samples
+  - [ ] add review payload sample where tokenizer count differs from `bytes.div_ceil(4)`
+  - [ ] assert trimming happens due to tokenizer token count while byte cap remains high
+  - [ ] assert no trimming happens when tokenizer token count is below cap and byte cap is high
 
-Phase X10 completion criteria:
-- [x] handrolled MCP JSON-RPC parser, dispatcher, response builders, and legacy protocol modules are removed
-- [x] rmcp-backed stdio, HTTP, socket, tasks, resources, prompts, completions, and tools pass tests
-- [x] clippy passes without new dead-code suppressions for removed protocol paths
+- [ ] add truncation-order regression tests:
+  - [ ] seed result with saved context, workflow metadata, ambiguity metadata, files, edges, and nodes
+  - [ ] apply tight token budget
+  - [ ] assert saved context drops before graph files
+  - [ ] assert files drop before direct target nodes
+  - [ ] assert direct target nodes remain when any removable lower-priority item exists
+  - [ ] assert source mix item counts reflect dropped sections
 
-### Phase X11 — Final Contract, Docs, and Workspace Validation
+- [ ] add CLI integration tests:
+  - [ ] create temp repo config with `[context.tokenizer] provider = "tokenizers"`
+  - [ ] place tokenizer fixture under temp `.atlas/tokenizers/`
+  - [ ] run focused CLI context/review command with JSON output
+  - [ ] assert `truncation.payload.token_accounting.provider = "tokenizers"`
+  - [ ] assert `tokens_estimated` equals fixture-backed expected count
 
-Goal: prove the rmcp conversion is complete, documented, and stable across workspace quality gates.
+- [ ] add fallback integration tests:
+  - [ ] create temp config with missing tokenizer file and `fallback = "heuristic"`
+  - [ ] run focused context/review command
+  - [ ] assert command succeeds
+  - [ ] assert `fallback_used = true`
+  - [ ] assert fallback reason is non-empty
+  - [ ] create temp config with missing tokenizer file and `fallback = "fail_closed"`
+  - [ ] run focused context/review command
+  - [ ] assert command fails with error naming `context.tokenizer.tokenizer_file`
 
-Overview: update generated docs/instructions, compatibility snapshots, and release-facing tests to reflect JSON-only official SDK behavior.
+- [ ] add MCP parity tests:
+  - [ ] run MCP `get_context` path with tokenizer config fixture
+  - [ ] assert structured content contains token accounting metadata
+  - [ ] assert CLI and MCP JSON agree on token provider and fallback flag for same fixture input
+
+- [ ] validate Phase XI.5:
+  - [ ] run `cargo fmt --all`
+  - [ ] run `cargo test --quiet -p atlas-review tokenizer_budget`
+  - [ ] run `cargo test --quiet -p atlas-cli --test cli_quality_gates tokenizer_budget`
+  - [ ] run `cargo test --quiet -p atlas-mcp tokenizer_budget`
+  - [ ] run `cargo clippy --workspace --all-targets --quiet`
+
+Phase XI.5 completion criteria:
+- [ ] tokenizer-specific tests fail if code returns to byte-only token counting
+- [ ] truncation order remains deterministic under tokenizer-backed counting
+- [ ] CLI JSON exposes tokenizer metadata and fallback metadata
+- [ ] MCP structured content matches CLI token accounting behavior
+- [ ] fail-closed tokenizer config fails with actionable config-key error
+
+### Phase XI.6 — Documentation, Issue Closure, and Workspace Validation
+
+Goal: finalize tokenizer-backed budget accounting with generated docs, config examples, and workspace-wide validation.
+
+Overview: update checked-in docs/templates and mark this backlog as complete only after automated gates prove runtime, config, and output behavior.
 
 Rules:
-- Do not add manual-only acceptance steps; every completion item must be verifiable by code, tests, or generated artifacts.
-- Generated docs must be reproducible from source registries.
-- MCP and CLI parity tests remain the strongest compatibility gate.
-- Final validation uses workspace summary script.
+- Do not add manual verification checklist items.
+- Do not mark completion until formatter, clippy, targeted tests, and workspace summary pass.
+- Documentation examples must be generated or test-covered when possible.
+- Keep docs clear that tokenizer JSON files are local inputs and not downloaded automatically.
 
-- [x] update generated MCP documentation:
-  - [x] regenerate `MCP_TOOLS.md` from the rmcp-backed tool registry
-  - [x] update docs tests to assert generated docs include official SDK-backed schema fields
-  - [x] remove TOON references from generated docs
-  - [x] assert every exported tool has non-empty title, description, input schema, and output schema when required
-- [x] update installed instructions and prompts:
-  - [x] ensure installed instructions mention JSON `structuredContent` as source of truth
-  - [x] ensure installed instructions still require Atlas graph tools before file search
-  - [x] ensure prompts no longer include `output_format` examples
-  - [x] add tests for instruction and prompt text drift
-- [x] update compatibility snapshots:
-  - [x] refresh stdio transcript snapshots for rmcp response formatting
-  - [x] refresh HTTP transcript snapshots for rmcp streamable HTTP formatting
-  - [x] refresh task/input-required snapshots for official rmcp type field ordering and naming
-  - [x] assert `atlas_provenance` and `atlas_freshness` still appear in representative structured content
-- [x] update dependency and feature checks:
-  - [x] add dependency-deny allowlist entry for `rmcp` and transitive crates if deny config requires it
-  - [x] assert `cargo tree -p atlas-mcp` contains no `toon-format`
-  - [x] assert `cargo tree -p atlas-mcp --features http-transport` resolves HTTP dependencies without duplicate incompatible major versions where avoidable
-- [x] run final validation:
-  - [x] run `cargo fmt --all`
-  - [x] run `cargo clippy --workspace --all-targets --quiet --features http-transport`
-  - [x] run `cargo test --quiet -p atlas-mcp --features http-transport`
-  - [x] run `cargo test --quiet -p atlas-cli cli_quality_gates`
-  - [x] run `./scripts/test-workspace-summary.sh`
+- [ ] update generated/config documentation:
+  - [ ] update config template snapshot tests for `[context.tokenizer]`
+  - [ ] update docs that describe budget limits:
+    - [ ] distinguish byte caps from tokenizer-backed token caps
+    - [ ] describe default heuristic mode
+    - [ ] describe local tokenizer file mode
+    - [ ] describe fallback metadata fields
+    - [ ] describe fail-closed behavior
+  - [ ] update any generated MCP tool docs that include context payload metadata
+  - [ ] add docs drift tests when existing docs pipeline supports them
 
-Phase X11 completion criteria:
-- [x] docs, prompts, and installed instructions describe JSON-only rmcp-backed MCP behavior
-- [x] no TOON dependency, docs, fixtures, schema fields, or instructions remain
-- [x] dependency checks pass for rmcp-backed atlas-mcp
-- [x] full workspace summary passes
+- [ ] update `ISSUES.md` tracking:
+  - [ ] mark the Additional Backlog token-budget item as complete only after all Phase XI criteria pass
+  - [ ] mark all Part XI checklist items complete after validation commands pass
 
-Part X completion criteria:
-- [x] Atlas MCP server uses `rmcp` official SDK types and transports for all MCP protocol surfaces
-- [x] handrolled MCP JSON-RPC protocol implementation is removed
-- [x] MCP output is JSON-only with `structuredContent` as source of truth
-- [x] stdio, HTTP, socket/broker, lifecycle, logging, roots, prompts, resources, completions, tools, tasks, MRTR, elicitation, progress, and cancellation are covered by rmcp-backed tests
-- [x] CLI/MCP parity remains covered by quality gates
-- [x] `cargo fmt --all`, `cargo clippy --workspace --all-targets --quiet --features http-transport`, and `./scripts/test-workspace-summary.sh` pass
+- [ ] run final validation:
+  - [ ] run `cargo fmt --all`
+  - [ ] run `cargo clippy --workspace --all-targets --quiet`
+  - [ ] run `cargo test --quiet -p atlas-token-count`
+  - [ ] run `cargo test --quiet -p atlas-engine config`
+  - [ ] run `cargo test --quiet -p atlas-review context::tests::budget`
+  - [ ] run `cargo test --quiet -p atlas-cli --test cli_quality_gates`
+  - [ ] run `cargo test --quiet -p atlas-mcp`
+  - [ ] run `./scripts/test-workspace-summary.sh`
+
+Phase XI.6 completion criteria:
+- [ ] config templates and docs describe tokenizer-backed budget accounting
+- [ ] existing backlog token-budget item is marked complete
+- [ ] all targeted tokenizer/config/review/CLI/MCP tests pass
+- [ ] `cargo clippy --workspace --all-targets --quiet` passes
+- [ ] `./scripts/test-workspace-summary.sh` passes
+
+Part XI completion criteria:
+- [ ] Atlas supports local-file `tokenizers` counting for context/review payload budgets
+- [ ] Atlas defaults remain deterministic and compatible through four-bytes-per-token heuristic mode
+- [ ] CLI/MCP outputs expose token accounting method and fallback metadata
+- [ ] byte caps remain enforced independently from token caps
+- [ ] tokenizer-backed, heuristic fallback, and fail-closed modes are covered by automated tests
+- [ ] docs/templates describe byte-based and tokenizer-backed budget limits

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use tree_sitter::Node as TsNode;
 
 use crate::ast_helpers::node_text;
-use crate::query_helpers::{QueryCaptureGroup, compile_query, run_query};
+use crate::query_helpers::{QueryCaptureGroup, compile_static_query, run_query};
 
 use super::RUST_DEFINITION_QUERY;
 
@@ -65,37 +65,48 @@ impl RustItemKind {
             _ => None,
         }
     }
+
+    fn definition_capture_name(self) -> &'static str {
+        match self {
+            Self::Function => "atlas.definition.function",
+            Self::FunctionSignature => "atlas.definition.function_signature",
+            Self::Module => "atlas.definition.module",
+            Self::Struct => "atlas.definition.struct",
+            Self::Enum => "atlas.definition.enum",
+            Self::Trait => "atlas.definition.trait",
+            Self::Const => "atlas.definition.const",
+            Self::Static => "atlas.definition.static",
+            Self::Impl => "atlas.definition.impl",
+        }
+    }
 }
 
 impl<'tree> RustItem<'tree> {
     fn from_capture_group(group: &QueryCaptureGroup<'tree>) -> Result<Option<Self>, String> {
         let _ = group.pattern_index;
         let mut kind = None;
-        let mut definition_node = None;
-        let mut name_node = None;
-        let mut impl_type_node = None;
-        let mut impl_trait_node = None;
 
         for capture in &group.captures {
             if let Some(capture_kind) = RustItemKind::from_definition_capture(&capture.name) {
                 kind = Some(capture_kind);
-                definition_node = Some(capture.node);
                 continue;
             }
-
-            match capture.name.as_str() {
-                "atlas.name" => name_node = Some(capture.node),
-                "atlas.impl.type" => impl_type_node = Some(capture.node),
-                "atlas.impl.trait" => impl_trait_node = Some(capture.node),
-                _ => {}
-            }
         }
+
+        let name_node = group
+            .optional_capture("atlas.name")
+            .map(|capture| capture.node);
+        let impl_type_node = group
+            .optional_capture("atlas.impl.type")
+            .map(|capture| capture.node);
+        let impl_trait_node = group
+            .optional_capture("atlas.impl.trait")
+            .map(|capture| capture.node);
 
         let Some(kind) = kind else {
             return Ok(None);
         };
-        let definition_node = definition_node
-            .ok_or_else(|| "rust query match missing definition capture".to_owned())?;
+        let definition_node = group.required_capture(kind.definition_capture_name())?.node;
         let rust_impl = if kind == RustItemKind::Impl {
             Some(RustImpl {
                 node: definition_node,
@@ -124,7 +135,7 @@ impl<'tree> RustItem<'tree> {
 impl<'tree> RustSyntaxFacts<'tree> {
     pub(super) fn extract(root: TsNode<'tree>, source: &'tree [u8]) -> Result<Self, String> {
         let language: tree_sitter::Language = tree_sitter_rust::LANGUAGE.into();
-        let query = compile_query(language, RUST_DEFINITION_QUERY)?;
+        let query = compile_static_query(language, "rust", RUST_DEFINITION_QUERY)?;
         let matches = run_query(&query, root, source);
         let impl_trait_captures = collect_impl_trait_captures(&matches);
         let mut items = Vec::new();
@@ -274,6 +285,6 @@ pub(super) fn rust_query_matches<'tree>(
     source: &'tree [u8],
 ) -> Result<Vec<QueryCaptureGroup<'tree>>, String> {
     let language: tree_sitter::Language = tree_sitter_rust::LANGUAGE.into();
-    let query = compile_query(language, RUST_DEFINITION_QUERY)?;
+    let query = compile_static_query(language, "rust", RUST_DEFINITION_QUERY)?;
     Ok(run_query(&query, root, source))
 }

@@ -11,6 +11,11 @@
     "repo_root": "<repo_root>"
   },
   "execution_state": "fresh",
+  "failure_reason": null,
+  "health_class": "healthy",
+  "quarantine_path": null,
+  "rebuild_result": "blocked",
+  "recovery_mode": "block_only",
   "checks": [
     {
       "check": "repo_root",

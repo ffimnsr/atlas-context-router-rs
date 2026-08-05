@@ -14,8 +14,8 @@ use atlas_store_sqlite::Store;
 use camino::Utf8Path;
 
 use super::super::{
-    augment_changes_with_node_counts, change_tag, db_path, detect_changes_target, print_json,
-    public_graph_stats, resolve_repo,
+    augment_changes_with_node_counts, change_tag, db_path, derive_graph_readiness_open_failed,
+    detect_changes_target, print_json, public_graph_stats, resolve_repo,
 };
 
 struct StatusPayloadContext<'a> {
@@ -32,6 +32,7 @@ struct StatusPayloadContext<'a> {
 struct StatusDiagnostics {
     ok: bool,
     error_code: &'static str,
+    health_class: Option<String>,
     graph_built: bool,
     build_state: Option<String>,
     build_last_error: Option<String>,
@@ -212,20 +213,11 @@ fn collect_status_diagnostics(ctx: &StatusPayloadContext<'_>) -> StatusDiagnosti
         .store
         .map(|store| graph_relevant_changed_files(store, Utf8Path::new(ctx.repo), ctx.changes))
         .unwrap_or_default();
-    let stale_index = graph_built && !pending_graph_changes.is_empty();
     let retrieval_index = retrieval_index_value(ctx.repo, ctx.db_path);
     let retrieval_unavailable = graph_built
         && (!retrieval_index["available"].as_bool().unwrap_or(false)
             || !retrieval_index["searchable"].as_bool().unwrap_or(false)
             || retrieval_index["state"].as_str() != Some("indexed"));
-    let error_code = select_graph_health_error_code(GraphHealthInput {
-        db_exists: true,
-        graph_error: graph_query_error.as_deref(),
-        build_state,
-        stale_index,
-        retrieval_unavailable,
-    });
-
     // Derive canonical execution state via GraphReadiness.
     let graph_has_content =
         ctx.stats.node_count > 0 || ctx.stats.edge_count > 0 || ctx.stats.file_count > 0;
@@ -239,6 +231,12 @@ fn collect_status_diagnostics(ctx: &StatusPayloadContext<'_>) -> StatusDiagnosti
             .as_ref()
             .and_then(|bs| bs.last_error.as_deref()),
         graph_error: graph_query_error.as_deref(),
+        recovery_mode: build_status
+            .as_ref()
+            .and_then(|bs| bs.recovery_mode.as_deref()),
+        quarantine_path: build_status
+            .as_ref()
+            .and_then(|bs| bs.quarantine_path.as_deref()),
         pending_graph_changes: &pending_graph_changes,
         indexed_file_count: ctx.stats.file_count,
         graph_has_content,
@@ -246,9 +244,20 @@ fn collect_status_diagnostics(ctx: &StatusPayloadContext<'_>) -> StatusDiagnosti
         retrieval_unavailable,
     });
 
+    let error_code = select_graph_health_error_code(GraphHealthInput {
+        db_exists: true,
+        graph_built,
+        health_class: readiness.health_class,
+        build_state,
+        retrieval_unavailable,
+    });
+
     StatusDiagnostics {
         ok: error_code == "none" && graph_built,
         error_code,
+        health_class: readiness
+            .health_class
+            .map(|class| class.as_str().to_owned()),
         graph_built,
         build_state: build_state.map(str::to_owned),
         build_last_error: build_status.and_then(|status| status.last_error),
@@ -285,13 +294,33 @@ fn status_payload(ctx: StatusPayloadContext<'_>) -> serde_json::Value {
             "budget_stop_reason": bs.budget_stop_reason,
             "last_built_at": bs.last_built_at,
             "last_error": bs.last_error,
+            "recovery_mode": bs.recovery_mode,
+            "quarantine_path": bs.quarantine_path,
         })
     });
+    let quarantine_path = build_status
+        .as_ref()
+        .and_then(|status| status.quarantine_path.clone());
+    let rebuild_result = if let Some(path) = &quarantine_path {
+        let _ = path;
+        match diagnostics.build_state.as_deref() {
+            Some("build_failed") => "rebuild_failed",
+            Some("built") | Some("degraded") => "rebuilt_fresh",
+            _ => "blocked",
+        }
+    } else {
+        "not_needed"
+    };
     let repo_id = stable_repo_id(Utf8Path::new(ctx.repo));
     let repo_fingerprint = stable_repo_fingerprint(Utf8Path::new(ctx.repo), None);
     serde_json::json!({
         "ok": diagnostics.ok,
         "error_code": diagnostics.error_code,
+        "health_class": diagnostics.health_class,
+        "recovery_mode": "block_only",
+        "quarantine_path": quarantine_path,
+        "rebuild_result": rebuild_result,
+        "failure_reason": diagnostics.build_last_error.clone(),
         "message": graph_health_error_message(diagnostics.error_code),
         "suggestions": graph_health_error_suggestions(diagnostics.error_code),
         "repo_root": ctx.repo,
@@ -331,6 +360,65 @@ fn status_payload(ctx: StatusPayloadContext<'_>) -> serde_json::Value {
         "build_status": build_state_val,
     })
 }
+
+fn status_fail_closed_payload(
+    repo: &str,
+    db_path: &str,
+    config: &atlas_engine::Config,
+    base: &Option<String>,
+    staged: bool,
+    readiness: &GraphReadiness,
+) -> serde_json::Value {
+    let repo_id = stable_repo_id(Utf8Path::new(repo));
+    let repo_fingerprint = stable_repo_fingerprint(Utf8Path::new(repo), None);
+    serde_json::json!({
+        "ok": false,
+        "error_code": &readiness.error_code,
+        "health_class": readiness.health_class.map(|class| class.as_str()),
+        "recovery_mode": "block_only",
+        "quarantine_path": serde_json::Value::Null,
+        "rebuild_result": "blocked",
+        "failure_reason": &readiness.db_open_error,
+        "message": &readiness.message,
+        "suggestions": &readiness.suggestions,
+        "repo_root": repo,
+        "repo_provenance": {
+            "repo_id": repo_id,
+            "repo_fingerprint": repo_fingerprint,
+            "repo_root": repo,
+        },
+        "db_path": db_path,
+        "mcp": {
+            "worker_threads": config.mcp_worker_threads(),
+            "tool_timeout_ms": config.mcp_tool_timeout_ms(),
+            "tool_timeout_ms_by_tool": config.mcp_tool_timeout_ms_by_tool(),
+        },
+        "diff_target": {
+            "base": base,
+            "staged": staged,
+            "kind": if staged { "staged" } else if base.is_some() { "base_ref" } else { "working_tree" },
+        },
+        "indexed_file_count": 0,
+        "node_count": 0,
+        "edge_count": 0,
+        "nodes_by_kind": Vec::<(String, i64)>::new(),
+        "languages": Vec::<String>::new(),
+        "last_indexed_at": serde_json::Value::Null,
+        "graph_built": readiness.graph_built,
+        "build_state": &readiness.build_state,
+        "build_last_error": &readiness.build_last_error,
+        "graph_query_error": &readiness.db_open_error,
+        "stale_index": readiness.stale_index,
+        "pending_graph_change_count": readiness.pending_graph_changes.len(),
+        "pending_graph_changes": &readiness.pending_graph_changes,
+        "execution_state": readiness.execution_state.as_str(),
+        "retrieval_index": retrieval_index_value(repo, db_path),
+        "changed_file_count": 0,
+        "changed_files": Vec::<serde_json::Value>::new(),
+        "build_status": serde_json::Value::Null,
+    })
+}
+
 pub fn run_status(cli: &Cli) -> Result<()> {
     let repo = resolve_repo(cli)?;
     let repo_root_path =
@@ -343,9 +431,25 @@ pub fn run_status(cli: &Cli) -> Result<()> {
         _ => unreachable!(),
     };
 
-    let store =
-        Store::open(&db_path).with_context(|| format!("cannot open database at {db_path}"))?;
     let config = atlas_engine::Config::load(&atlas_engine::paths::atlas_dir(&repo))?;
+    let store = match Store::open(&db_path) {
+        Ok(store) => store,
+        Err(error) => {
+            let readiness = derive_graph_readiness_open_failed(&repo, &db_path, &error.to_string());
+            if cli.json {
+                print_json(
+                    "status",
+                    status_fail_closed_payload(&repo, &db_path, &config, &base, staged, &readiness),
+                )?;
+            } else {
+                eprintln!("Error: {}", readiness.message);
+                for suggestion in &readiness.suggestions {
+                    eprintln!("  → {suggestion}");
+                }
+            }
+            anyhow::bail!("{}", readiness.message)
+        }
+    };
     let source_repo_id = stable_repo_id(repo_root);
     let stats = public_graph_stats(&store, &source_repo_id).context("cannot read stats")?;
     let changes = changed_files(repo_root, &detect_changes_target(&base, staged))

@@ -1,11 +1,75 @@
 use atlas_core::{Edge, EdgeKind, Node, NodeId, NodeKind, ParsedFile};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use tree_sitter::Node as TsNode;
 
 use crate::ast_helpers::{end_line, node_text, start_line};
+use crate::query_helpers::{compile_static_query, run_query};
 use crate::traits::{LangParser, ParseContext};
 
+// SQ1 migration checklist:
+// - manual extraction below owns declaration walks, scope and qualified-name rules, import/reference detection,
+//   call-edge heuristics, and source metadata attachment
+// - keep public parser API, graph schema, and output contracts unchanged during query migration
+// - move tree-sitter syntax matching only into shared @atlas.* query captures
+
+const PYTHON_QUERY: &str = include_str!("../../queries/python.scm");
+
 pub struct PythonParser;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct PythonNodeKey {
+    start_byte: usize,
+    end_byte: usize,
+}
+
+#[derive(Debug, Default)]
+struct PythonSyntaxFacts {
+    imports: HashSet<PythonNodeKey>,
+    classes: HashSet<PythonNodeKey>,
+    functions: HashSet<PythonNodeKey>,
+    methods: HashSet<PythonNodeKey>,
+    _assignments: HashSet<PythonNodeKey>,
+    calls: HashSet<PythonNodeKey>,
+}
+
+impl PythonSyntaxFacts {
+    fn extract(root: TsNode<'_>, _source: &[u8]) -> Result<Self, String> {
+        let language: tree_sitter::Language = tree_sitter_python::LANGUAGE.into();
+        let query = compile_static_query(language, "python", PYTHON_QUERY)?;
+        let matches = run_query(&query, root, _source);
+        let mut facts = Self::default();
+
+        for group in matches {
+            for capture in group.captures {
+                let key = node_key(capture.node);
+                match capture.name.as_str() {
+                    "atlas.import" => {
+                        facts.imports.insert(key);
+                    }
+                    "atlas.definition.class" => {
+                        facts.classes.insert(key);
+                    }
+                    "atlas.definition.function" => {
+                        if is_method_definition(capture.node) {
+                            facts.methods.insert(key);
+                        } else {
+                            facts.functions.insert(key);
+                        }
+                    }
+                    "atlas.definition.variable" => {
+                        facts._assignments.insert(key);
+                    }
+                    "atlas.call" => {
+                        facts.calls.insert(key);
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        Ok(facts)
+    }
+}
 
 impl LangParser for PythonParser {
     fn language_name(&self) -> &'static str {
@@ -31,13 +95,16 @@ impl LangParser for PythonParser {
 
         if let Some(ref tree) = tree {
             let root = tree.root_node();
+            let facts = PythonSyntaxFacts::extract(root, ctx.source)
+                .unwrap_or_else(|err| panic!("python query extraction failed: {err}"));
             let mut cursor = root.walk();
             for child in root.children(&mut cursor) {
-                visit_toplevel(child, ctx, &mut nodes, &mut edges);
+                visit_toplevel(child, ctx, &facts, &mut nodes, &mut edges);
             }
 
             // Second pass: same-file call resolution.
-            let mut call_edges = resolve_python_calls(root, ctx.source, ctx.rel_path, &nodes);
+            let mut call_edges =
+                resolve_python_calls(root, ctx.source, ctx.rel_path, &facts, &nodes);
             edges.append(&mut call_edges);
         }
 
@@ -96,26 +163,33 @@ fn contains_edge(parent_qn: &str, child_qn: &str, file_path: &str, line: u32) ->
 fn visit_toplevel(
     node: TsNode<'_>,
     ctx: &ParseContext<'_>,
+    facts: &PythonSyntaxFacts,
     nodes: &mut Vec<Node>,
     edges: &mut Vec<Edge>,
 ) {
-    match node.kind() {
-        "function_definition" => {
+    let key = node_key(node);
+    if facts.functions.contains(&key) {
+        if node.kind() == "decorated_definition" {
+            visit_decorated(node, ctx, facts, nodes, edges);
+        } else {
             visit_function(node, ctx, ctx.rel_path, false, nodes, edges);
         }
-        "class_definition" => {
-            visit_class(node, ctx, nodes, edges);
+        return;
+    }
+    if facts.classes.contains(&key) {
+        if node.kind() == "decorated_definition" {
+            visit_decorated(node, ctx, facts, nodes, edges);
+        } else {
+            visit_class(node, ctx, facts, nodes, edges);
         }
-        "decorated_definition" => {
-            visit_decorated(node, ctx, nodes, edges);
+        return;
+    }
+    if facts.imports.contains(&key) {
+        match node.kind() {
+            "import_statement" => visit_import(node, ctx, nodes, edges),
+            "import_from_statement" => visit_import_from(node, ctx, nodes, edges),
+            _ => {}
         }
-        "import_statement" => {
-            visit_import(node, ctx, nodes, edges);
-        }
-        "import_from_statement" => {
-            visit_import_from(node, ctx, nodes, edges);
-        }
-        _ => {}
     }
 }
 
@@ -208,15 +282,17 @@ fn visit_function_with_decorators(
 fn visit_class(
     node: TsNode<'_>,
     ctx: &ParseContext<'_>,
+    facts: &PythonSyntaxFacts,
     nodes: &mut Vec<Node>,
     edges: &mut Vec<Edge>,
 ) {
-    visit_class_with_decorators(node, ctx, &[], nodes, edges);
+    visit_class_with_decorators(node, ctx, facts, &[], nodes, edges);
 }
 
 fn visit_class_with_decorators(
     node: TsNode<'_>,
     ctx: &ParseContext<'_>,
+    facts: &PythonSyntaxFacts,
     decorators: &[serde_json::Value],
     nodes: &mut Vec<Node>,
     edges: &mut Vec<Edge>,
@@ -260,31 +336,33 @@ fn visit_class_with_decorators(
     if let Some(body) = node.child_by_field_name("body") {
         let mut cursor = body.walk();
         for child in body.children(&mut cursor) {
-            match child.kind() {
-                "function_definition" => {
+            let child_key = node_key(child);
+            if facts.methods.contains(&child_key) {
+                if child.kind() == "function_definition" {
                     visit_function(child, ctx, &qn, true, nodes, edges);
-                }
-                "decorated_definition" => {
+                } else if child.kind() == "decorated_definition" {
                     let decorators = decorated_metadata(child, ctx.source);
-                    if let Some(def) = child.child_by_field_name("definition") {
-                        match def.kind() {
-                            "function_definition" => visit_function_with_decorators(
-                                def,
-                                ctx,
-                                &qn,
-                                true,
-                                &decorators,
-                                nodes,
-                                edges,
-                            ),
-                            "class_definition" => {
-                                visit_class_with_decorators(def, ctx, &decorators, nodes, edges);
-                            }
-                            _ => {}
-                        }
+                    if let Some(def) = child.child_by_field_name("definition")
+                        && def.kind() == "function_definition"
+                    {
+                        visit_function_with_decorators(
+                            def,
+                            ctx,
+                            &qn,
+                            true,
+                            &decorators,
+                            nodes,
+                            edges,
+                        );
                     }
                 }
-                _ => {}
+            } else if facts.classes.contains(&child_key) && child.kind() == "decorated_definition" {
+                let decorators = decorated_metadata(child, ctx.source);
+                if let Some(def) = child.child_by_field_name("definition")
+                    && def.kind() == "class_definition"
+                {
+                    visit_class_with_decorators(def, ctx, facts, &decorators, nodes, edges);
+                }
             }
         }
     }
@@ -293,6 +371,7 @@ fn visit_class_with_decorators(
 fn visit_decorated(
     node: TsNode<'_>,
     ctx: &ParseContext<'_>,
+    facts: &PythonSyntaxFacts,
     nodes: &mut Vec<Node>,
     edges: &mut Vec<Edge>,
 ) {
@@ -308,7 +387,9 @@ fn visit_decorated(
                 nodes,
                 edges,
             ),
-            "class_definition" => visit_class_with_decorators(def, ctx, &decorators, nodes, edges),
+            "class_definition" => {
+                visit_class_with_decorators(def, ctx, facts, &decorators, nodes, edges)
+            }
             _ => {}
         }
     }
@@ -530,6 +611,7 @@ fn resolve_python_calls(
     root: TsNode<'_>,
     source: &[u8],
     rel_path: &str,
+    facts: &PythonSyntaxFacts,
     nodes: &[Node],
 ) -> Vec<Edge> {
     let mut callables: HashMap<String, String> = HashMap::new();
@@ -543,7 +625,9 @@ fn resolve_python_calls(
     }
     let mut edges = Vec::new();
     let mut scope: Vec<String> = Vec::new();
-    walk_python_calls(root, source, rel_path, &callables, &mut scope, &mut edges);
+    walk_python_calls(
+        root, source, rel_path, facts, &callables, &mut scope, &mut edges,
+    );
     edges
 }
 
@@ -551,72 +635,72 @@ fn walk_python_calls<'a>(
     node: TsNode<'a>,
     source: &[u8],
     rel_path: &str,
+    facts: &PythonSyntaxFacts,
     callables: &HashMap<String, String>,
     scope: &mut Vec<String>,
     edges: &mut Vec<Edge>,
 ) {
-    match node.kind() {
-        "function_definition" => {
-            let pushed = if let Some(name_node) = node.child_by_field_name("name") {
-                let name = node_text(name_node, source);
-                if let Some(qn) = callables.get(name) {
-                    scope.push(qn.clone());
-                    true
-                } else {
-                    false
-                }
+    let key = node_key(node);
+    if node.kind() == "function_definition"
+        && (facts.functions.contains(&key) || facts.methods.contains(&key))
+    {
+        let pushed = if let Some(name_node) = node.child_by_field_name("name") {
+            let name = node_text(name_node, source);
+            if let Some(qn) = callables.get(name) {
+                scope.push(qn.clone());
+                true
             } else {
                 false
-            };
-            let mut cursor = node.walk();
-            for child in node.children(&mut cursor) {
-                walk_python_calls(child, source, rel_path, callables, scope, edges);
             }
-            if pushed {
-                scope.pop();
-            }
-            return;
+        } else {
+            false
+        };
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            walk_python_calls(child, source, rel_path, facts, callables, scope, edges);
         }
-        "call" => {
-            if let Some(caller_qn) = scope.last().cloned() {
-                // `function` field holds the called expression.
-                let called = node
-                    .child_by_field_name("function")
-                    .and_then(|f| python_call_target(f, source));
-                if let Some((text, name, receiver)) = called
-                    && !is_self_call(&caller_qn, &name, receiver.as_deref())
-                {
-                    if let Some(callee_qn) = callables.get(&name)
-                        && *callee_qn != caller_qn
-                    {
-                        edges.push(py_call_edge(
-                            &caller_qn,
-                            callee_qn,
-                            rel_path,
-                            start_line(node),
-                            &text,
-                            receiver.as_deref(),
-                            true,
-                        ));
-                    } else if !text.is_empty() {
-                        edges.push(py_call_edge(
-                            &caller_qn,
-                            &text,
-                            rel_path,
-                            start_line(node),
-                            &text,
-                            receiver.as_deref(),
-                            false,
-                        ));
-                    }
-                }
+        if pushed {
+            scope.pop();
+        }
+        return;
+    }
+    if facts.calls.contains(&key)
+        && let Some(caller_qn) = scope.last().cloned()
+    {
+        let called = node
+            .child_by_field_name("function")
+            .and_then(|f| python_call_target(f, source));
+        if let Some((text, name, receiver)) = called
+            && !is_self_call(&caller_qn, &name, receiver.as_deref())
+        {
+            if let Some(callee_qn) = callables.get(&name)
+                && *callee_qn != caller_qn
+            {
+                edges.push(py_call_edge(
+                    &caller_qn,
+                    callee_qn,
+                    rel_path,
+                    start_line(node),
+                    &text,
+                    receiver.as_deref(),
+                    true,
+                ));
+            } else if !text.is_empty() {
+                edges.push(py_call_edge(
+                    &caller_qn,
+                    &text,
+                    rel_path,
+                    start_line(node),
+                    &text,
+                    receiver.as_deref(),
+                    false,
+                ));
             }
         }
-        _ => {}
     }
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
-        walk_python_calls(child, source, rel_path, callables, scope, edges);
+        walk_python_calls(child, source, rel_path, facts, callables, scope, edges);
     }
 }
 
@@ -685,6 +769,26 @@ fn py_call_edge(
     }
 }
 
+fn is_method_definition(node: TsNode<'_>) -> bool {
+    let Some(parent) = node.parent() else {
+        return false;
+    };
+    if parent.kind() != "block" {
+        return false;
+    }
+    let Some(owner) = parent.parent() else {
+        return false;
+    };
+    owner.kind() == "class_definition"
+}
+
+fn node_key(node: TsNode<'_>) -> PythonNodeKey {
+    PythonNodeKey {
+        start_byte: node.start_byte(),
+        end_byte: node.end_byte(),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -742,6 +846,26 @@ mod tests {
                 .iter()
                 .any(|n| n.kind == NodeKind::Method && n.name == "bar")
         );
+    }
+
+    #[test]
+    fn query_extracts_python_syntax_facts() {
+        let mut parser = tree_sitter::Parser::new();
+        let language: tree_sitter::Language = tree_sitter_python::LANGUAGE.into();
+        parser
+            .set_language(&language)
+            .expect("tree-sitter-python grammar failed to load");
+        let source = b"import os\nfrom pkg import helper\n@decorator\nclass Foo:\n    value = 1\n\n    @trace\n    def bar(self):\n        helper()\n\ndef top():\n    bar()\n";
+        let tree = parser.parse(source, None).expect("fixture should parse");
+        let facts = PythonSyntaxFacts::extract(tree.root_node(), source)
+            .expect("python query extraction should succeed");
+
+        assert!(!facts.imports.is_empty());
+        assert!(!facts.classes.is_empty());
+        assert!(!facts.functions.is_empty());
+        assert!(!facts.methods.is_empty());
+        assert!(!facts._assignments.is_empty());
+        assert!(!facts.calls.is_empty());
     }
 
     #[test]

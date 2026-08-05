@@ -1,15 +1,80 @@
 //! C parser backed by `tree-sitter-c`.
 //! Grammar source: `tree-sitter/tree-sitter-c`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use atlas_core::{Edge, EdgeKind, Node, NodeId, NodeKind, ParsedFile};
 use tree_sitter::Node as TsNode;
 
 use crate::ast_helpers::{end_line, node_text, start_line};
+use crate::query_helpers::{compile_static_query, run_query};
 use crate::traits::{LangParser, ParseContext};
 
+// SQ1 migration checklist:
+// - manual extraction below owns declaration walks, scope and qualified-name rules, import/reference detection,
+//   call-edge heuristics, and source metadata attachment
+// - keep public parser API, graph schema, and output contracts unchanged during query migration
+// - move tree-sitter syntax matching only into shared @atlas.* query captures
+
+const C_QUERY: &str = include_str!("../../queries/c.scm");
+
 pub struct CParser;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct CNodeKey {
+    start_byte: usize,
+    end_byte: usize,
+}
+
+#[derive(Debug, Default)]
+struct CSyntaxFacts {
+    includes: HashSet<CNodeKey>,
+    functions: HashSet<CNodeKey>,
+    structs: HashSet<CNodeKey>,
+    enums: HashSet<CNodeKey>,
+    typedefs: HashSet<CNodeKey>,
+    calls: HashSet<CNodeKey>,
+}
+
+impl CSyntaxFacts {
+    fn extract(root: TsNode<'_>, source: &[u8]) -> Result<Self, String> {
+        let language: tree_sitter::Language = tree_sitter_c::LANGUAGE.into();
+        let query = compile_static_query(language, "c", C_QUERY)?;
+        let matches = run_query(&query, root, source);
+        let mut facts = Self::default();
+
+        for group in matches {
+            for capture in group.captures {
+                let key = node_key(capture.node);
+                match capture.name.as_str() {
+                    "atlas.import" => {
+                        facts.includes.insert(key);
+                    }
+                    "atlas.definition.function" => {
+                        facts.functions.insert(key);
+                    }
+                    "atlas.definition.struct" => {
+                        facts.structs.insert(key);
+                    }
+                    "atlas.definition.enum" => {
+                        facts.enums.insert(key);
+                    }
+                    "atlas.definition.variable"
+                        if node_text(capture.node, source).contains("typedef") =>
+                    {
+                        facts.typedefs.insert(key);
+                    }
+                    "atlas.call" => {
+                        facts.calls.insert(key);
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        Ok(facts)
+    }
+}
 
 impl LangParser for CParser {
     fn language_name(&self) -> &'static str {
@@ -34,18 +99,24 @@ impl LangParser for CParser {
 
         if let Some(ref tree) = tree {
             let root = tree.root_node();
+            let facts = CSyntaxFacts::extract(root, ctx.source)
+                .unwrap_or_else(|err| panic!("c query extraction failed: {err}"));
             let mut import_index = 0usize;
             let mut cursor = root.walk();
             for child in root.named_children(&mut cursor) {
-                visit_node(child, ctx, &mut import_index, &mut nodes, &mut edges);
-                if child.kind() == "preproc_include" {
-                    import_index += 1;
-                }
+                visit_node(
+                    child,
+                    ctx,
+                    &facts,
+                    &mut import_index,
+                    &mut nodes,
+                    &mut edges,
+                );
             }
 
             let function_map = function_qn_map(&nodes);
             let mut call_edges = Vec::new();
-            walk_calls(root, ctx, &function_map, None, &mut call_edges);
+            walk_calls(root, ctx, &facts, &function_map, None, &mut call_edges);
             edges.extend(call_edges);
         }
 
@@ -66,25 +137,37 @@ impl LangParser for CParser {
 fn visit_node(
     node: TsNode<'_>,
     ctx: &ParseContext<'_>,
+    facts: &CSyntaxFacts,
     import_index: &mut usize,
     nodes: &mut Vec<Node>,
     edges: &mut Vec<Edge>,
 ) {
-    match node.kind() {
-        "preproc_include" => emit_include(node, ctx, *import_index + 1, nodes, edges),
-        "function_definition" => emit_function(node, ctx, nodes, edges),
-        "struct_specifier" => emit_named_type(node, ctx, "struct", NodeKind::Struct, nodes, edges),
-        "enum_specifier" => emit_named_type(node, ctx, "enum", NodeKind::Enum, nodes, edges),
-        "type_definition" => emit_typedef(node, ctx, nodes, edges),
-        "declaration" if node_text(node, ctx.source).contains("typedef") => {
-            emit_typedef(node, ctx, nodes, edges)
-        }
-        _ => {
-            let mut cursor = node.walk();
-            for child in node.named_children(&mut cursor) {
-                visit_node(child, ctx, import_index, nodes, edges);
-            }
-        }
+    let key = node_key(node);
+    if facts.includes.contains(&key) {
+        *import_index += 1;
+        emit_include(node, ctx, *import_index, nodes, edges);
+        return;
+    }
+    if facts.functions.contains(&key) {
+        emit_function(node, ctx, nodes, edges);
+        return;
+    }
+    if facts.structs.contains(&key) {
+        emit_named_type(node, ctx, "struct", NodeKind::Struct, nodes, edges);
+        return;
+    }
+    if facts.enums.contains(&key) {
+        emit_named_type(node, ctx, "enum", NodeKind::Enum, nodes, edges);
+        return;
+    }
+    if facts.typedefs.contains(&key) {
+        emit_typedef(node, ctx, nodes, edges);
+        return;
+    }
+
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        visit_node(child, ctx, facts, import_index, nodes, edges);
     }
 }
 
@@ -254,17 +337,19 @@ fn function_qn_map(nodes: &[Node]) -> HashMap<String, String> {
 fn walk_calls(
     node: TsNode<'_>,
     ctx: &ParseContext<'_>,
+    facts: &CSyntaxFacts,
     functions: &HashMap<String, String>,
     current_fn: Option<String>,
     edges: &mut Vec<Edge>,
 ) {
     let mut next_fn = current_fn;
-    if node.kind() == "function_definition"
+    let key = node_key(node);
+    if facts.functions.contains(&key)
         && let Some(declarator) = node.child_by_field_name("declarator")
         && let Some(name) = declarator_name(declarator, ctx.source)
     {
         next_fn = functions.get(&name).cloned();
-    } else if node.kind() == "call_expression"
+    } else if facts.calls.contains(&key)
         && let Some(owner_qn) = next_fn.as_ref()
         && let Some(function_node) = node.child_by_field_name("function")
         && let Some(name) = declarator_name(function_node, ctx.source)
@@ -281,7 +366,7 @@ fn walk_calls(
 
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
-        walk_calls(child, ctx, functions, next_fn.clone(), edges);
+        walk_calls(child, ctx, facts, functions, next_fn.clone(), edges);
     }
 }
 
@@ -299,6 +384,13 @@ fn declarator_name(node: TsNode<'_>, source: &[u8]) -> Option<String> {
             }
             None
         }
+    }
+}
+
+fn node_key(node: TsNode<'_>) -> CNodeKey {
+    CNodeKey {
+        start_byte: node.start_byte(),
+        end_byte: node.end_byte(),
     }
 }
 

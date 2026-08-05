@@ -41,6 +41,8 @@ pub struct GraphBuildStatus {
     pub budget_stop_reason: Option<String>,
     pub last_built_at: Option<String>,
     pub last_error: Option<String>,
+    pub recovery_mode: Option<String>,
+    pub quarantine_path: Option<String>,
     pub updated_at: String,
 }
 
@@ -86,7 +88,9 @@ fn row_to_build_status(row: &Row<'_>) -> rusqlite::Result<GraphBuildStatus> {
         budget_stop_reason: row.get(12)?,
         last_built_at: row.get(13)?,
         last_error: row.get(14)?,
-        updated_at: row.get(15)?,
+        recovery_mode: row.get(15)?,
+        quarantine_path: row.get(16)?,
+        updated_at: row.get(17)?,
     })
 }
 
@@ -103,8 +107,8 @@ impl Store {
                     (repo_root, source_repo_id, state, files_discovered, files_processed, files_accepted,
                      files_skipped_by_byte_budget, files_failed, bytes_accepted, bytes_skipped,
                      nodes_written, edges_written, budget_stop_reason, last_built_at, last_error,
-                     updated_at)
-                 VALUES (?1, ?2, 'building', 0, 0, 0, 0, 0, 0, 0, 0, 0, NULL, NULL, NULL, datetime('now'))
+                     recovery_mode, quarantine_path, updated_at)
+                 VALUES (?1, ?2, 'building', 0, 0, 0, 0, 0, 0, 0, 0, 0, NULL, NULL, NULL, NULL, NULL, datetime('now'))
                  ON CONFLICT(repo_root) DO UPDATE SET
                     source_repo_id   = ?2,
                     state            = 'building',
@@ -119,6 +123,8 @@ impl Store {
                     edges_written    = 0,
                     budget_stop_reason = NULL,
                     last_error       = NULL,
+                    recovery_mode    = NULL,
+                    quarantine_path  = NULL,
                     updated_at       = datetime('now')",
                 params![repo_root, source_repo_id],
             )
@@ -143,8 +149,8 @@ impl Store {
                     (repo_root, source_repo_id, state, files_discovered, files_processed, files_accepted,
                      files_skipped_by_byte_budget, files_failed, bytes_accepted, bytes_skipped,
                      nodes_written, edges_written, budget_stop_reason, last_built_at, last_error,
-                     updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, datetime('now'), NULL, datetime('now'))
+                     recovery_mode, quarantine_path, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, datetime('now'), NULL, NULL, NULL, datetime('now'))
                  ON CONFLICT(repo_root) DO UPDATE SET
                     source_repo_id   = ?2,
                     state            = ?3,
@@ -196,8 +202,9 @@ impl Store {
             .execute(
                 "INSERT INTO graph_build_state
                     (repo_root, source_repo_id, state, files_discovered, files_processed, files_failed,
-                     nodes_written, edges_written, last_built_at, last_error, updated_at)
-                 VALUES (?1, ?2, 'build_failed', 0, 0, 0, 0, 0, NULL, ?3, datetime('now'))
+                     nodes_written, edges_written, last_built_at, last_error, recovery_mode,
+                     quarantine_path, updated_at)
+                 VALUES (?1, ?2, 'build_failed', 0, 0, 0, 0, 0, NULL, ?3, NULL, NULL, datetime('now'))
                  ON CONFLICT(repo_root) DO UPDATE SET
                     source_repo_id = ?2,
                     state      = 'build_failed',
@@ -217,7 +224,8 @@ impl Store {
                 "SELECT repo_root, state, source_repo_id, files_discovered, files_processed,
                     files_accepted, files_skipped_by_byte_budget, files_failed,
                     bytes_accepted, bytes_skipped, nodes_written, edges_written,
-                    budget_stop_reason, last_built_at, last_error, updated_at
+                    budget_stop_reason, last_built_at, last_error, recovery_mode,
+                    quarantine_path, updated_at
                  FROM graph_build_state
                  WHERE repo_root = ?1",
             )
@@ -240,7 +248,8 @@ impl Store {
                 "SELECT repo_root, state, source_repo_id, files_discovered, files_processed,
                     files_accepted, files_skipped_by_byte_budget, files_failed,
                     bytes_accepted, bytes_skipped, nodes_written, edges_written,
-                    budget_stop_reason, last_built_at, last_error, updated_at
+                    budget_stop_reason, last_built_at, last_error, recovery_mode,
+                    quarantine_path, updated_at
                  FROM graph_build_state
                  ORDER BY repo_root",
             )
@@ -251,5 +260,44 @@ impl Store {
             .filter_map(|r| r.ok())
             .collect();
         Ok(rows)
+    }
+
+    pub fn set_build_recovery_metadata(
+        &self,
+        repo_root: &str,
+        recovery_mode: Option<&str>,
+        quarantine_path: Option<&str>,
+    ) -> Result<()> {
+        self.set_build_recovery_metadata_for_repo(
+            "legacy",
+            repo_root,
+            recovery_mode,
+            quarantine_path,
+        )
+    }
+
+    pub fn set_build_recovery_metadata_for_repo(
+        &self,
+        source_repo_id: &str,
+        repo_root: &str,
+        recovery_mode: Option<&str>,
+        quarantine_path: Option<&str>,
+    ) -> Result<()> {
+        self.conn
+            .execute(
+                "INSERT INTO graph_build_state
+                    (repo_root, source_repo_id, state, files_discovered, files_processed, files_failed,
+                     nodes_written, edges_written, last_built_at, last_error, recovery_mode,
+                     quarantine_path, updated_at)
+                 VALUES (?1, ?2, 'build_failed', 0, 0, 0, 0, 0, NULL, NULL, ?3, ?4, datetime('now'))
+                 ON CONFLICT(repo_root) DO UPDATE SET
+                    source_repo_id = ?2,
+                    recovery_mode = ?3,
+                    quarantine_path = ?4,
+                    updated_at = datetime('now')",
+                params![repo_root, source_repo_id, recovery_mode, quarantine_path],
+            )
+            .map_err(|e| AtlasError::Db(e.to_string()))?;
+        Ok(())
     }
 }

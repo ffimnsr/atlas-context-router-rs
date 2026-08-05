@@ -1,15 +1,91 @@
 //! Java parser backed by `tree-sitter-java`.
 //! Grammar source: `tree-sitter/tree-sitter-java`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use atlas_core::{Edge, EdgeKind, Node, NodeId, NodeKind, ParsedFile};
 use tree_sitter::Node as TsNode;
 
 use crate::ast_helpers::{end_line, node_text, start_line};
+use crate::query_helpers::{compile_static_query, run_query};
 use crate::traits::{LangParser, ParseContext};
 
+// SQ1 migration checklist:
+// - manual extraction below owns declaration walks, scope and qualified-name rules, import/reference detection,
+//   call-edge heuristics, and source metadata attachment
+// - keep public parser API, graph schema, and output contracts unchanged during query migration
+// - move tree-sitter syntax matching only into shared @atlas.* query captures
+
+const JAVA_QUERY: &str = include_str!("../../queries/java.scm");
+
 pub struct JavaParser;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct JavaNodeKey {
+    start_byte: usize,
+    end_byte: usize,
+}
+
+#[derive(Debug, Default)]
+struct JavaSyntaxFacts {
+    packages: HashSet<JavaNodeKey>,
+    imports: HashSet<JavaNodeKey>,
+    classes: HashSet<JavaNodeKey>,
+    interfaces: HashSet<JavaNodeKey>,
+    enums: HashSet<JavaNodeKey>,
+    annotation_types: HashSet<JavaNodeKey>,
+    methods: HashSet<JavaNodeKey>,
+    _fields: HashSet<JavaNodeKey>,
+    calls: HashSet<JavaNodeKey>,
+}
+
+impl JavaSyntaxFacts {
+    fn extract(root: TsNode<'_>, _source: &[u8]) -> Result<Self, String> {
+        let language: tree_sitter::Language = tree_sitter_java::LANGUAGE.into();
+        let query = compile_static_query(language, "java", JAVA_QUERY)?;
+        let matches = run_query(&query, root, _source);
+        let mut facts = Self::default();
+
+        for group in matches {
+            for capture in group.captures {
+                let key = node_key(capture.node);
+                match capture.name.as_str() {
+                    "atlas.definition.module" => {
+                        facts.packages.insert(key);
+                    }
+                    "atlas.import" => {
+                        facts.imports.insert(key);
+                    }
+                    "atlas.definition.class" => {
+                        facts.classes.insert(key);
+                    }
+                    "atlas.definition.interface" => {
+                        if capture.node.kind() == "annotation_type_declaration" {
+                            facts.annotation_types.insert(key);
+                        } else {
+                            facts.interfaces.insert(key);
+                        }
+                    }
+                    "atlas.definition.enum" => {
+                        facts.enums.insert(key);
+                    }
+                    "atlas.definition.method" => {
+                        facts.methods.insert(key);
+                    }
+                    "atlas.definition.variable" => {
+                        facts._fields.insert(key);
+                    }
+                    "atlas.call" => {
+                        facts.calls.insert(key);
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        Ok(facts)
+    }
+}
 
 impl LangParser for JavaParser {
     fn language_name(&self) -> &'static str {
@@ -34,7 +110,9 @@ impl LangParser for JavaParser {
 
         if let Some(ref tree) = tree {
             let root = tree.root_node();
-            let package_qn = emit_package(root, ctx, &mut nodes, &mut edges);
+            let facts = JavaSyntaxFacts::extract(root, ctx.source)
+                .unwrap_or_else(|err| panic!("java query extraction failed: {err}"));
+            let package_qn = emit_package(root, ctx, &facts, &mut nodes, &mut edges);
             let parent_qn = package_qn.as_deref().unwrap_or(ctx.rel_path).to_owned();
             let mut import_index = 0usize;
             let mut annotation_index = 0usize;
@@ -44,6 +122,7 @@ impl LangParser for JavaParser {
                 visit_java_node(
                     child,
                     ctx,
+                    &facts,
                     &parent_qn,
                     None,
                     &mut import_index,
@@ -55,7 +134,7 @@ impl LangParser for JavaParser {
 
             let method_map = method_qn_map(&nodes);
             let mut call_edges = Vec::new();
-            walk_method_calls(root, ctx, &method_map, None, &mut call_edges);
+            walk_method_calls(root, ctx, &facts, &method_map, None, &mut call_edges);
             edges.extend(call_edges);
         }
 
@@ -77,6 +156,7 @@ impl LangParser for JavaParser {
 fn visit_java_node(
     node: TsNode<'_>,
     ctx: &ParseContext<'_>,
+    facts: &JavaSyntaxFacts,
     parent_qn: &str,
     current_type: Option<&str>,
     import_index: &mut usize,
@@ -84,12 +164,20 @@ fn visit_java_node(
     nodes: &mut Vec<Node>,
     edges: &mut Vec<Edge>,
 ) {
-    match node.kind() {
-        "package_declaration" => {}
-        "import_declaration" => emit_import(node, ctx, parent_qn, import_index, nodes, edges),
-        "class_declaration" => emit_type(
+    let key = node_key(node);
+
+    if facts.packages.contains(&key) {
+        return;
+    }
+    if facts.imports.contains(&key) {
+        emit_import(node, ctx, parent_qn, import_index, nodes, edges);
+        return;
+    }
+    if facts.classes.contains(&key) {
+        emit_type(
             node,
             ctx,
+            facts,
             parent_qn,
             "class",
             NodeKind::Class,
@@ -97,10 +185,14 @@ fn visit_java_node(
             annotation_index,
             nodes,
             edges,
-        ),
-        "interface_declaration" => emit_type(
+        );
+        return;
+    }
+    if facts.interfaces.contains(&key) {
+        emit_type(
             node,
             ctx,
+            facts,
             parent_qn,
             "interface",
             NodeKind::Interface,
@@ -108,10 +200,14 @@ fn visit_java_node(
             annotation_index,
             nodes,
             edges,
-        ),
-        "enum_declaration" => emit_type(
+        );
+        return;
+    }
+    if facts.enums.contains(&key) {
+        emit_type(
             node,
             ctx,
+            facts,
             parent_qn,
             "enum",
             NodeKind::Enum,
@@ -119,10 +215,14 @@ fn visit_java_node(
             annotation_index,
             nodes,
             edges,
-        ),
-        "annotation_type_declaration" => emit_type(
+        );
+        return;
+    }
+    if facts.annotation_types.contains(&key) {
+        emit_type(
             node,
             ctx,
+            facts,
             parent_qn,
             "annotation_type",
             NodeKind::Interface,
@@ -130,44 +230,51 @@ fn visit_java_node(
             annotation_index,
             nodes,
             edges,
-        ),
-        "method_declaration" if current_type.is_some() => emit_method(
+        );
+        return;
+    }
+    if facts.methods.contains(&key)
+        && let Some(owner_name) = current_type
+    {
+        emit_method(
             node,
             ctx,
             parent_qn,
-            current_type.expect("current_type checked"),
+            owner_name,
             annotation_index,
             nodes,
             edges,
-        ),
-        _ => {
-            let mut cursor = node.walk();
-            for child in node.named_children(&mut cursor) {
-                visit_java_node(
-                    child,
-                    ctx,
-                    parent_qn,
-                    current_type,
-                    import_index,
-                    annotation_index,
-                    nodes,
-                    edges,
-                );
-            }
-        }
+        );
+        return;
+    }
+
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        visit_java_node(
+            child,
+            ctx,
+            facts,
+            parent_qn,
+            current_type,
+            import_index,
+            annotation_index,
+            nodes,
+            edges,
+        );
     }
 }
 
 fn emit_package(
     root: TsNode<'_>,
     ctx: &ParseContext<'_>,
+    facts: &JavaSyntaxFacts,
     nodes: &mut Vec<Node>,
     edges: &mut Vec<Edge>,
 ) -> Option<String> {
     let mut cursor = root.walk();
     let package = root
         .named_children(&mut cursor)
-        .find(|child| child.kind() == "package_declaration")?;
+        .find(|child| facts.packages.contains(&node_key(*child)))?;
     let name = child_name_or_text(package, ctx.source, &["scoped_identifier", "identifier"])?;
     let qn = format!("{}::package::{}", ctx.rel_path, name);
     let line = start_line(package);
@@ -197,6 +304,7 @@ fn emit_package(
 fn emit_type(
     node: TsNode<'_>,
     ctx: &ParseContext<'_>,
+    facts: &JavaSyntaxFacts,
     parent_qn: &str,
     qn_prefix: &str,
     kind: NodeKind,
@@ -240,6 +348,7 @@ fn emit_type(
             visit_java_node(
                 child,
                 ctx,
+                facts,
                 &qn,
                 Some(&name),
                 import_index,
@@ -401,17 +510,19 @@ fn method_qn_map(nodes: &[Node]) -> HashMap<String, String> {
 fn walk_method_calls(
     node: TsNode<'_>,
     ctx: &ParseContext<'_>,
+    facts: &JavaSyntaxFacts,
     methods: &HashMap<String, String>,
     current_method: Option<String>,
     edges: &mut Vec<Edge>,
 ) {
     let mut next_method = current_method;
-    if node.kind() == "method_declaration" {
+    let key = node_key(node);
+    if facts.methods.contains(&key) {
         if let Some(name_node) = node.child_by_field_name("name") {
             let name = node_text(name_node, ctx.source);
             next_method = methods.get(name).cloned();
         }
-    } else if node.kind() == "method_invocation"
+    } else if facts.calls.contains(&key)
         && let Some(owner_qn) = next_method.as_ref()
         && let Some(name_node) = node.child_by_field_name("name")
     {
@@ -429,7 +540,7 @@ fn walk_method_calls(
 
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
-        walk_method_calls(child, ctx, methods, next_method.clone(), edges);
+        walk_method_calls(child, ctx, facts, methods, next_method.clone(), edges);
     }
 }
 
@@ -441,6 +552,13 @@ fn child_name_or_text(node: TsNode<'_>, source: &[u8], kinds: &[&str]) -> Option
         }
     }
     None
+}
+
+fn node_key(node: TsNode<'_>) -> JavaNodeKey {
+    JavaNodeKey {
+        start_byte: node.start_byte(),
+        end_byte: node.end_byte(),
+    }
 }
 
 fn file_node(rel_path: &str, file_hash: &str, line_end: u32) -> Node {

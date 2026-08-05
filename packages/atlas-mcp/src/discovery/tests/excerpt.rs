@@ -75,17 +75,21 @@ fn read_file_excerpt_reads_single_range() {
     let v: serde_json::Value =
         serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
 
+    assert_eq!(v["schema_version"], 2);
     assert_eq!(v["tool"], "read_file_excerpt");
     assert_eq!(v["selection_mode"], "range");
-    assert_eq!(v["ranges"][0]["start_line"], 2);
-    assert_eq!(v["snippets"][0]["start_line"], 2);
-    assert_eq!(v["snippets"][0]["end_line"], 3);
-    assert_eq!(v["summary"]["returned_snippet_count"], 1);
-    assert!(
-        v["snippets"][0]["content"]
-            .as_str()
-            .is_some_and(|text| { text.contains("fn two() {}") && text.contains("fn three() {}") })
-    );
+    assert_eq!(v["summary"]["snippets"], 1);
+    assert_eq!(v["summary"]["ranges"]["requested"], 1);
+    assert_eq!(v["summary"]["lines"]["selected"], 2);
+    let snippet = &v["snippets"][0];
+    assert_eq!(snippet["range"], serde_json::json!([2, 3]));
+    assert_eq!(snippet["lines"][0], serde_json::json!([2, "fn two() {}"]));
+    assert_eq!(snippet["lines"][1], serde_json::json!([3, "fn three() {}"]));
+    assert!(v.get("ranges").is_none());
+    assert!(snippet.get("content").is_none());
+    assert!(snippet.get("start_line").is_none());
+    assert!(snippet.get("end_line").is_none());
+    assert!(snippet.get("line_count").is_none());
 }
 
 #[test]
@@ -103,9 +107,8 @@ fn read_file_excerpt_ignores_absent_equivalent_wrapper_fields_for_single_range()
         serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
 
     assert_eq!(v["selection_mode"], "range");
-    assert_eq!(v["summary"]["returned_snippet_count"], 1);
-    assert_eq!(v["snippets"][0]["start_line"], 2);
-    assert_eq!(v["snippets"][0]["end_line"], 3);
+    assert_eq!(v["summary"]["snippets"], 1);
+    assert_eq!(v["snippets"][0]["range"], serde_json::json!([2, 3]));
 }
 
 #[test]
@@ -125,9 +128,8 @@ fn read_file_excerpt_ignores_zero_line_when_line_ranges_is_real_selector() {
         serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
 
     assert_eq!(v["selection_mode"], "ranges");
-    assert_eq!(v["summary"]["returned_snippet_count"], 1);
-    assert_eq!(v["snippets"][0]["start_line"], 2);
-    assert_eq!(v["snippets"][0]["end_line"], 4);
+    assert_eq!(v["summary"]["snippets"], 1);
+    assert_eq!(v["snippets"][0]["range"], serde_json::json!([2, 4]));
 }
 
 #[test]
@@ -145,12 +147,10 @@ fn read_file_excerpt_supports_line_with_context() {
         serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
 
     assert_eq!(v["selection_mode"], "context");
-    assert_eq!(v["snippets"][0]["start_line"], 2);
-    assert_eq!(v["snippets"][0]["end_line"], 4);
+    assert_eq!(v["snippets"][0]["range"], serde_json::json!([2, 4]));
     let lines = v["snippets"][0]["lines"].as_array().expect("excerpt lines");
     assert_eq!(lines.len(), 3);
-    assert_eq!(lines[1]["line"], 3);
-    assert_eq!(lines[1]["text"], "fn three() {}");
+    assert_eq!(lines[1], serde_json::json!([3, "fn three() {}"]));
 }
 
 #[test]
@@ -171,9 +171,8 @@ fn read_file_excerpt_merges_overlapping_ranges() {
         serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
 
     assert_eq!(v["selection_mode"], "ranges");
-    assert_eq!(v["summary"]["returned_snippet_count"], 1);
-    assert_eq!(v["snippets"][0]["start_line"], 1);
-    assert_eq!(v["snippets"][0]["end_line"], 4);
+    assert_eq!(v["summary"]["snippets"], 1);
+    assert_eq!(v["snippets"][0]["range"], serde_json::json!([1, 4]));
 }
 
 #[test]
@@ -196,7 +195,7 @@ fn read_file_excerpt_truncates_to_budgeted_max_lines() {
     assert_eq!(resp["budget_observed"], 4);
     assert_eq!(resp["budget_hit"], true);
     assert_eq!(v["truncated"], true);
-    assert_eq!(v["snippets"][0]["end_line"], 2);
+    assert_eq!(v["snippets"][0]["range"], serde_json::json!([1, 2]));
 }
 
 #[test]
@@ -668,15 +667,23 @@ fn read_file_around_match_groups_nearby_matches() {
     let v: serde_json::Value =
         serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
 
+    assert_eq!(v["schema_version"], 2);
     assert_eq!(v["tool"], "read_file_around_match");
     assert_eq!(v["match_mode"], "literal");
-    assert_eq!(v["summary"]["total_matches"], 2);
-    assert_eq!(v["summary"]["snippet_count"], 1);
-    let snippet = &v["matches"][0];
-    assert_eq!(snippet["start_line"], 1);
-    assert_eq!(snippet["end_line"], 5);
-    assert_eq!(snippet["match_lines"][0], 2);
-    assert_eq!(snippet["match_lines"][1], 4);
+    assert_eq!(v["context"]["before"], 1);
+    assert_eq!(v["context"]["after"], 1);
+    assert_eq!(v["summary"]["matches"]["total"], 2);
+    assert_eq!(v["summary"]["matches"]["returned"], 2);
+    assert_eq!(v["summary"]["snippets"], 1);
+    let snippet = &v["snippets"][0];
+    assert_eq!(snippet["range"], serde_json::json!([1, 5]));
+    assert_eq!(snippet["match"][0][0], 2);
+    assert_eq!(snippet["match"][1][0], 4);
+    assert!(snippet.get("lines").is_none());
+    assert!(snippet.get("content").is_none());
+    assert!(snippet.get("start_line").is_none());
+    assert!(snippet.get("end_line").is_none());
+    assert!(snippet.get("match_lines").is_none());
 }
 
 #[test]
@@ -693,8 +700,8 @@ fn read_file_around_match_supports_regex() {
     let v: serde_json::Value =
         serde_json::from_str(resp["content"][0]["text"].as_str().unwrap()).unwrap();
 
-    assert_eq!(v["summary"]["total_matches"], 1);
-    assert_eq!(v["matches"][0]["match_lines"][0], 2);
+    assert_eq!(v["summary"]["matches"]["total"], 1);
+    assert_eq!(v["snippets"][0]["match"][0][0], 2);
 }
 
 #[test]

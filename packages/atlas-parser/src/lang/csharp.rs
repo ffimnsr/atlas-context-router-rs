@@ -1,16 +1,91 @@
 //! C# parser backed by `tree-sitter-c-sharp`.
 //! Grammar source: `tree-sitter/tree-sitter-c-sharp`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use atlas_core::{Edge, EdgeKind, Node, NodeId, NodeKind, ParsedFile};
 use regex::Regex;
 use tree_sitter::Node as TsNode;
 
 use crate::ast_helpers::{end_line, node_text, start_line};
+use crate::query_helpers::{compile_static_query, run_query};
 use crate::traits::{LangParser, ParseContext};
 
+// SQ1 migration checklist:
+// - manual extraction below owns declaration walks, scope and qualified-name rules, import/reference detection,
+//   call-edge heuristics, and source metadata attachment
+// - keep public parser API, graph schema, and output contracts unchanged during query migration
+// - move tree-sitter syntax matching only into shared @atlas.* query captures
+
+const CSHARP_QUERY: &str = include_str!("../../queries/csharp.scm");
+
 pub struct CSharpParser;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct CSharpNodeKey {
+    start_byte: usize,
+    end_byte: usize,
+}
+
+#[derive(Debug, Default)]
+struct CSharpSyntaxFacts {
+    usings: HashSet<CSharpNodeKey>,
+    namespaces: HashSet<CSharpNodeKey>,
+    classes: HashSet<CSharpNodeKey>,
+    interfaces: HashSet<CSharpNodeKey>,
+    enums: HashSet<CSharpNodeKey>,
+    structs: HashSet<CSharpNodeKey>,
+    methods: HashSet<CSharpNodeKey>,
+    _fields: HashSet<CSharpNodeKey>,
+    calls: HashSet<CSharpNodeKey>,
+}
+
+impl CSharpSyntaxFacts {
+    fn extract(root: TsNode<'_>, source: &[u8]) -> Result<Self, String> {
+        let language: tree_sitter::Language = tree_sitter_c_sharp::LANGUAGE.into();
+        let query = compile_static_query(language, "csharp", CSHARP_QUERY)?;
+        let matches = run_query(&query, root, source);
+        let mut facts = Self::default();
+
+        for group in matches {
+            for capture in group.captures {
+                let key = node_key(capture.node);
+                match capture.name.as_str() {
+                    "atlas.import" => {
+                        facts.usings.insert(key);
+                    }
+                    "atlas.definition.module" => {
+                        facts.namespaces.insert(key);
+                    }
+                    "atlas.definition.class" => {
+                        facts.classes.insert(key);
+                    }
+                    "atlas.definition.interface" => {
+                        facts.interfaces.insert(key);
+                    }
+                    "atlas.definition.enum" => {
+                        facts.enums.insert(key);
+                    }
+                    "atlas.definition.struct" => {
+                        facts.structs.insert(key);
+                    }
+                    "atlas.definition.method" => {
+                        facts.methods.insert(key);
+                    }
+                    "atlas.definition.variable" => {
+                        facts._fields.insert(key);
+                    }
+                    "atlas.call" => {
+                        facts.calls.insert(key);
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        Ok(facts)
+    }
+}
 
 impl LangParser for CSharpParser {
     fn language_name(&self) -> &'static str {
@@ -35,6 +110,8 @@ impl LangParser for CSharpParser {
 
         if let Some(ref tree) = tree {
             let root = tree.root_node();
+            let facts = CSharpSyntaxFacts::extract(root, ctx.source)
+                .unwrap_or_else(|err| panic!("csharp query extraction failed: {err}"));
             let mut import_index = 0usize;
             let mut attribute_index = 0usize;
             let mut cursor = root.walk();
@@ -42,6 +119,7 @@ impl LangParser for CSharpParser {
                 visit_node(
                     child,
                     ctx,
+                    &facts,
                     ctx.rel_path,
                     None,
                     &mut import_index,
@@ -53,7 +131,7 @@ impl LangParser for CSharpParser {
 
             let method_map = method_qn_map(&nodes);
             let mut call_edges = Vec::new();
-            walk_calls(root, ctx, &method_map, None, &mut call_edges);
+            walk_calls(root, ctx, &facts, &method_map, None, &mut call_edges);
             edges.extend(call_edges);
         }
 
@@ -75,6 +153,7 @@ impl LangParser for CSharpParser {
 fn visit_node(
     node: TsNode<'_>,
     ctx: &ParseContext<'_>,
+    facts: &CSharpSyntaxFacts,
     parent_qn: &str,
     current_type: Option<&str>,
     import_index: &mut usize,
@@ -82,20 +161,29 @@ fn visit_node(
     nodes: &mut Vec<Node>,
     edges: &mut Vec<Edge>,
 ) {
-    match node.kind() {
-        "using_directive" => emit_using(node, ctx, parent_qn, import_index, nodes, edges),
-        "namespace_declaration" | "file_scoped_namespace_declaration" => emit_namespace(
+    let key = node_key(node);
+    if facts.usings.contains(&key) {
+        emit_using(node, ctx, parent_qn, import_index, nodes, edges);
+        return;
+    }
+    if facts.namespaces.contains(&key) {
+        emit_namespace(
             node,
             ctx,
+            facts,
             parent_qn,
             import_index,
             attribute_index,
             nodes,
             edges,
-        ),
-        "class_declaration" => emit_type(
+        );
+        return;
+    }
+    if facts.classes.contains(&key) {
+        emit_type(
             node,
             ctx,
+            facts,
             parent_qn,
             "class",
             NodeKind::Class,
@@ -103,10 +191,14 @@ fn visit_node(
             attribute_index,
             nodes,
             edges,
-        ),
-        "interface_declaration" => emit_type(
+        );
+        return;
+    }
+    if facts.interfaces.contains(&key) {
+        emit_type(
             node,
             ctx,
+            facts,
             parent_qn,
             "interface",
             NodeKind::Interface,
@@ -114,10 +206,14 @@ fn visit_node(
             attribute_index,
             nodes,
             edges,
-        ),
-        "enum_declaration" => emit_type(
+        );
+        return;
+    }
+    if facts.enums.contains(&key) {
+        emit_type(
             node,
             ctx,
+            facts,
             parent_qn,
             "enum",
             NodeKind::Enum,
@@ -125,10 +221,14 @@ fn visit_node(
             attribute_index,
             nodes,
             edges,
-        ),
-        "struct_declaration" => emit_type(
+        );
+        return;
+    }
+    if facts.structs.contains(&key) {
+        emit_type(
             node,
             ctx,
+            facts,
             parent_qn,
             "struct",
             NodeKind::Struct,
@@ -136,31 +236,37 @@ fn visit_node(
             attribute_index,
             nodes,
             edges,
-        ),
-        "method_declaration" if current_type.is_some() => emit_method(
+        );
+        return;
+    }
+    if facts.methods.contains(&key)
+        && let Some(owner_name) = current_type
+    {
+        emit_method(
             node,
             ctx,
             parent_qn,
-            current_type.expect("current_type checked"),
+            owner_name,
             attribute_index,
             nodes,
             edges,
-        ),
-        _ => {
-            let mut cursor = node.walk();
-            for child in node.named_children(&mut cursor) {
-                visit_node(
-                    child,
-                    ctx,
-                    parent_qn,
-                    current_type,
-                    import_index,
-                    attribute_index,
-                    nodes,
-                    edges,
-                );
-            }
-        }
+        );
+        return;
+    }
+
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        visit_node(
+            child,
+            ctx,
+            facts,
+            parent_qn,
+            current_type,
+            import_index,
+            attribute_index,
+            nodes,
+            edges,
+        );
     }
 }
 
@@ -168,6 +274,7 @@ fn visit_node(
 fn emit_namespace(
     node: TsNode<'_>,
     ctx: &ParseContext<'_>,
+    facts: &CSharpSyntaxFacts,
     parent_qn: &str,
     import_index: &mut usize,
     attribute_index: &mut usize,
@@ -208,6 +315,7 @@ fn emit_namespace(
         visit_node(
             child,
             ctx,
+            facts,
             &qn,
             None,
             import_index,
@@ -222,6 +330,7 @@ fn emit_namespace(
 fn emit_type(
     node: TsNode<'_>,
     ctx: &ParseContext<'_>,
+    facts: &CSharpSyntaxFacts,
     parent_qn: &str,
     qn_prefix: &str,
     kind: NodeKind,
@@ -264,6 +373,7 @@ fn emit_type(
         visit_node(
             child,
             ctx,
+            facts,
             &qn,
             Some(&name),
             import_index,
@@ -417,16 +527,18 @@ fn method_qn_map(nodes: &[Node]) -> HashMap<String, String> {
 fn walk_calls(
     node: TsNode<'_>,
     ctx: &ParseContext<'_>,
+    facts: &CSharpSyntaxFacts,
     methods: &HashMap<String, String>,
     current_method: Option<String>,
     edges: &mut Vec<Edge>,
 ) {
     let mut next_method = current_method;
-    if node.kind() == "method_declaration" {
+    let key = node_key(node);
+    if facts.methods.contains(&key) {
         if let Some(name_node) = node.child_by_field_name("name") {
             next_method = methods.get(node_text(name_node, ctx.source)).cloned();
         }
-    } else if node.kind() == "invocation_expression"
+    } else if facts.calls.contains(&key)
         && let Some(owner_qn) = next_method.as_ref()
         && let Some(callee) = invocation_name(node, ctx.source)
         && let Some(target_qn) = methods.get(&callee)
@@ -442,7 +554,7 @@ fn walk_calls(
 
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
-        walk_calls(child, ctx, methods, next_method.clone(), edges);
+        walk_calls(child, ctx, facts, methods, next_method.clone(), edges);
     }
 }
 
@@ -469,6 +581,13 @@ fn first_named_text(node: TsNode<'_>, source: &[u8], kinds: &[&str]) -> Option<S
         }
     }
     None
+}
+
+fn node_key(node: TsNode<'_>) -> CSharpNodeKey {
+    CSharpNodeKey {
+        start_byte: node.start_byte(),
+        end_byte: node.end_byte(),
+    }
 }
 
 fn file_node(rel_path: &str, file_hash: &str, line_end: u32) -> Node {

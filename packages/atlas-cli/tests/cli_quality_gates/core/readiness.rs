@@ -11,8 +11,7 @@ fn status_emits_execution_state_fresh_after_build() {
     run_atlas(repo.path(), &["init"]);
     run_atlas(repo.path(), &["build"]);
 
-    let status =
-        read_json_data_output("status", run_atlas(repo.path(), &["--json", "status"]));
+    let status = read_json_data_output("status", run_atlas(repo.path(), &["--json", "status"]));
     assert_eq!(
         status["execution_state"],
         json!("fresh"),
@@ -102,7 +101,9 @@ fn query_blocked_on_missing_graph() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let combined = format!("{stdout}{stderr}");
     assert!(
-        combined.contains("missing") || combined.contains("not been built") || combined.contains("build"),
+        combined.contains("missing")
+            || combined.contains("not been built")
+            || combined.contains("build"),
         "error message should mention graph state: {combined}"
     );
 }
@@ -114,20 +115,21 @@ fn query_blocked_on_missing_graph_json_execution_state() {
     run_atlas(repo.path(), &["init"]);
 
     let output = run_atlas_capture(repo.path(), &["--json", "query", "greet"]);
-    assert!(!output.status.success(), "query must fail with missing graph");
+    assert!(
+        !output.status.success(),
+        "query must fail with missing graph"
+    );
 
-    // JSON error output should include execution_state.
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    if !stdout.trim().is_empty() {
-        let value: serde_json::Value =
-            serde_json::from_str(&stdout).expect("json error output");
-        // Envelope or raw data both acceptable; look for execution_state anywhere.
-        let serialized = value.to_string();
-        assert!(
-            serialized.contains("missing"),
-            "json error should include execution_state=missing: {serialized}"
-        );
-    }
+    let value = read_json_output(output);
+    let data = value["data"].clone();
+    assert_eq!(data["ok"], json!(false));
+    assert_eq!(data["blocked"], json!(true));
+    assert_eq!(data["execution_state"], json!("missing"));
+    assert_eq!(data["error_code"], json!("missing_graph_db"));
+    assert_eq!(
+        data["message"],
+        json!("Graph database not found. Run `atlas build` to create it.")
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -135,18 +137,50 @@ fn query_blocked_on_missing_graph_json_execution_state() {
 // ---------------------------------------------------------------------------
 
 #[test]
+fn query_blocked_on_sqlite_corrupt_graph_includes_rebuild_metadata() {
+    let repo = setup_fixture_repo();
+
+    run_atlas(repo.path(), &["init"]);
+
+    let db_path = repo.path().join(".atlas").join("worldtree.db");
+    std::fs::write(&db_path, "not a sqlite database").expect("overwrite graph db");
+
+    let output = run_atlas_capture(repo.path(), &["--json", "query", "greet"]);
+    assert!(
+        !output.status.success(),
+        "query must fail closed on corrupt graph"
+    );
+
+    let value = read_json_output(output);
+    let data = value["data"].clone();
+    assert_eq!(data["ok"], json!(false));
+    assert_eq!(data["blocked"], json!(true));
+    assert_eq!(data["error_code"], json!("sqlite_corrupt"));
+    assert_eq!(data["health_class"], json!("sqlite_corrupt"));
+    assert_eq!(data["execution_state"], json!("corrupt"));
+    assert_eq!(data["quarantine_path"], json!(null));
+    assert_eq!(data["recommended_rebuild_command"], json!("atlas build"));
+}
+
+#[test]
 fn query_allowed_on_stale_graph_with_warning() {
     let repo = setup_repo(&[
         ("src/lib.rs", "pub fn hello() {}"),
-        ("Cargo.toml", "[package]\nname = \"test\"\nversion = \"0.1.0\"\nedition = \"2021\"\n"),
+        (
+            "Cargo.toml",
+            "[package]\nname = \"test\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        ),
     ]);
 
     run_atlas(repo.path(), &["init"]);
     run_atlas(repo.path(), &["build"]);
 
     // Modify a file to make the graph stale.
-    std::fs::write(repo.path().join("src").join("lib.rs"), "pub fn hello() {}\npub fn world() {}")
-        .expect("write new file");
+    std::fs::write(
+        repo.path().join("src").join("lib.rs"),
+        "pub fn hello() {}\npub fn world() {}",
+    )
+    .expect("write new file");
 
     // Query should still succeed (stale is allowed by default for SymbolLookup).
     let output = run_atlas_capture(repo.path(), &["--json", "query", "hello"]);
@@ -197,8 +231,7 @@ fn analyze_blocked_on_missing_graph() {
 
     run_atlas(repo.path(), &["init"]);
 
-    let output =
-        run_atlas_capture(repo.path(), &["--json", "analyze", "dead-code"]);
+    let output = run_atlas_capture(repo.path(), &["--json", "analyze", "dead-code"]);
     assert!(
         !output.status.success(),
         "analyze should fail when graph is missing"

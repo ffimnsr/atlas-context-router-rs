@@ -95,10 +95,26 @@ pub(crate) fn search_content_output_schema() -> Value {
 pub(crate) fn read_file_excerpt_output_schema() -> Value {
     normalized_tool_output_schema(
         serde_json::json!({
+            "schema_version": { "type": "integer", "const": 2 },
+            "tool": { "type": "string", "const": "read_file_excerpt" },
             "file": { "type": "string" },
             "selection_mode": { "type": "string" },
-            "ranges": { "type": "array", "items": { "type": "object" } },
-            "snippets": { "type": "array", "items": { "type": "object" } },
+            "snippets": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "range": {
+                            "type": "array",
+                            "items": { "type": "integer" },
+                            "minItems": 2,
+                            "maxItems": 2
+                        },
+                        "lines": { "type": "array" }
+                    },
+                    "required": ["range", "lines"]
+                }
+            },
             "summary": { "type": "object" },
             "truncated": { "type": "boolean" },
             "warnings": { "type": "array", "items": { "type": "string" } },
@@ -106,10 +122,10 @@ pub(crate) fn read_file_excerpt_output_schema() -> Value {
             "atlas_freshness": { "type": "object" }
         }),
         &[
+            "schema_version",
             "tool",
             "file",
             "selection_mode",
-            "ranges",
             "snippets",
             "summary",
             "truncated",
@@ -165,12 +181,37 @@ pub(crate) fn get_docs_section_output_schema() -> Value {
 pub(crate) fn read_file_around_match_output_schema() -> Value {
     normalized_tool_output_schema(
         serde_json::json!({
+            "schema_version": { "type": "integer", "const": 2 },
+            "tool": { "type": "string", "const": "read_file_around_match" },
+            "query": { "type": "string" },
             "file": { "type": "string" },
             "match_mode": { "type": "string", "enum": ["literal", "regex"] },
-            "query": { "type": "string" },
-            "before": { "type": "integer" },
-            "after": { "type": "integer" },
-            "matches": { "type": "array", "items": { "type": "object" } },
+            "context": {
+                "type": "object",
+                "properties": {
+                    "before": { "type": "integer" },
+                    "after": { "type": "integer" }
+                },
+                "required": ["before", "after"]
+            },
+            "snippets": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "range": {
+                            "type": "array",
+                            "items": { "type": "integer" },
+                            "minItems": 2,
+                            "maxItems": 2
+                        },
+                        "before": { "type": "array" },
+                        "match": { "type": "array" },
+                        "after": { "type": "array" }
+                    },
+                    "required": ["range", "before", "match", "after"]
+                }
+            },
             "summary": { "type": "object" },
             "truncated": { "type": "boolean" },
             "warnings": { "type": "array", "items": { "type": "string" } },
@@ -178,13 +219,13 @@ pub(crate) fn read_file_around_match_output_schema() -> Value {
             "atlas_freshness": { "type": "object" }
         }),
         &[
+            "schema_version",
             "tool",
+            "query",
             "file",
             "match_mode",
-            "query",
-            "before",
-            "after",
-            "matches",
+            "context",
+            "snippets",
             "summary",
             "truncated",
             "warnings",

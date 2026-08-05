@@ -359,21 +359,27 @@ pub(crate) fn derive_graph_readiness(
 ) -> GraphReadiness {
     let db_exists = std::path::Path::new(db_path).exists();
 
-    let (build_state_str, build_last_error) = match store.get_build_status(repo_root) {
-        Ok(Some(bs)) => {
-            let state = match bs.state {
-                GraphBuildState::Building => "building",
-                GraphBuildState::Built => "built",
-                GraphBuildState::Degraded => "degraded",
-                GraphBuildState::BuildFailed => "build_failed",
-            };
-            (Some(state.to_owned()), bs.last_error)
-        }
-        _ => (None, None),
-    };
+    let (build_state_str, build_last_error, recovery_mode, quarantine_path) =
+        match store.get_build_status(repo_root) {
+            Ok(Some(bs)) => {
+                let state = match bs.state {
+                    GraphBuildState::Building => "building",
+                    GraphBuildState::Built => "built",
+                    GraphBuildState::Degraded => "degraded",
+                    GraphBuildState::BuildFailed => "build_failed",
+                };
+                (
+                    Some(state.to_owned()),
+                    bs.last_error,
+                    bs.recovery_mode,
+                    bs.quarantine_path,
+                )
+            }
+            _ => (None, None, None, None),
+        };
 
     let source_repo_id = stable_repo_id(Utf8Path::new(repo_root));
-    let (stats, graph_error) = match public_graph_stats(store, &source_repo_id) {
+    let (stats, mut graph_error) = match public_graph_stats(store, &source_repo_id) {
         Ok(s) => (s, None),
         Err(e) => {
             let dummy = atlas_core::GraphStats {
@@ -387,6 +393,30 @@ pub(crate) fn derive_graph_readiness(
             (dummy, Some(e.to_string()))
         }
     };
+    if graph_error.is_none() {
+        match store.graph_store_health_class() {
+            Ok(Some(atlas_core::GraphStoreHealthClass::SchemaMismatch)) => {
+                graph_error = Some(
+                    "schema_mismatch: graph store schema does not match current Atlas build"
+                        .to_owned(),
+                );
+            }
+            Ok(Some(atlas_core::GraphStoreHealthClass::SqliteCorrupt)) => {
+                graph_error = Some(
+                    "sqlite_corrupt: graph integrity check reported physical corruption".to_owned(),
+                );
+            }
+            Ok(Some(atlas_core::GraphStoreHealthClass::LogicalInconsistency)) => {
+                graph_error = Some(
+                    "logical_inconsistency: graph invariant scan found unsafe rows".to_owned(),
+                );
+            }
+            Ok(_) => {}
+            Err(error) => {
+                graph_error = Some(error.to_string());
+            }
+        }
+    }
 
     let pending = pending_graph_changes(store, repo_root);
 
@@ -410,6 +440,8 @@ pub(crate) fn derive_graph_readiness(
         build_state: build_state_str.as_deref(),
         build_last_error: build_last_error.as_deref(),
         graph_error: graph_error.as_deref(),
+        recovery_mode: recovery_mode.as_deref(),
+        quarantine_path: quarantine_path.as_deref(),
         pending_graph_changes: &pending,
         indexed_file_count: stats.file_count,
         graph_has_content: stats.node_count > 0 || stats.edge_count > 0 || stats.file_count > 0,
@@ -436,6 +468,8 @@ pub(crate) fn derive_graph_readiness_open_failed(
         build_state: None,
         build_last_error: None,
         graph_error: None,
+        recovery_mode: None,
+        quarantine_path: None,
         pending_graph_changes: &[],
         indexed_file_count: 0,
         graph_has_content: false,
@@ -465,6 +499,25 @@ pub(crate) fn check_graph_readiness(
     command: &str,
     cli: &Cli,
 ) -> Result<Option<String>> {
+    fn blocked_error_code(
+        readiness: &GraphReadiness,
+        execution_state: atlas_core::GraphExecutionState,
+    ) -> &str {
+        if readiness.error_code != "none" {
+            return &readiness.error_code;
+        }
+        match execution_state {
+            atlas_core::GraphExecutionState::Missing => "missing_graph_db",
+            atlas_core::GraphExecutionState::Partial => "degraded_build",
+            atlas_core::GraphExecutionState::Corrupt => match readiness.health_class {
+                Some(class) => class.as_str(),
+                None => "sqlite_corrupt",
+            },
+            atlas_core::GraphExecutionState::Stale => "stale_index",
+            atlas_core::GraphExecutionState::Fresh => "none",
+        }
+    }
+
     let verdict = readiness.check_tool(requirement, overrides);
     match verdict {
         ReadinessVerdict::Allowed { warning, .. } => Ok(warning),
@@ -473,13 +526,25 @@ pub(crate) fn check_graph_readiness(
             reason,
             suggestions,
         } => {
+            let error_code = blocked_error_code(readiness, execution_state);
+            let message = atlas_core::graph_health_error_message(error_code);
             if cli.json {
                 print_json(
                     command,
                     serde_json::json!({
-                        "error": reason,
+                        "ok": false,
+                        "error_code": error_code,
+                        "health_class": readiness.health_class.map(|class| class.as_str()),
+                        "message": message,
+                        "error": &reason,
+                        "reason": &reason,
                         "execution_state": execution_state.as_str(),
-                        "suggestions": suggestions,
+                        "suggestions": &suggestions,
+                        "blocked": true,
+                        "db_path": &readiness.db_path,
+                        "repo_root": &readiness.repo_root,
+                        "quarantine_path": &readiness.quarantine_path,
+                        "recommended_rebuild_command": readiness.recommended_rebuild_command(),
                     }),
                 )?;
             } else {

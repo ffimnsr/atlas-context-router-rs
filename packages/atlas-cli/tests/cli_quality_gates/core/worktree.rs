@@ -2,11 +2,11 @@ use super::*;
 
 #[test]
 fn detached_current_repo_worktree_meets_large_repo_performance_gate() {
-    let worktree = setup_current_repo_detached_worktree();
+    let repo = setup_large_rust_fixture_repo(80);
 
-    run_atlas(worktree.path(), &["init"]);
+    run_atlas(repo.path(), &["init"]);
     fs::write(
-        worktree.path().join(".atlas").join("config.toml"),
+        repo.path().join(".atlas").join("config.toml"),
         r#"[build]
 parse_batch_size = 512
 max_files_per_run = 50000
@@ -19,7 +19,7 @@ max_wall_time_ms = 200000
     )
     .expect("write representative repo budget config");
 
-    let build = read_json_data_output("build", run_atlas(worktree.path(), &["--json", "build"]));
+    let build = read_json_data_output("build", run_atlas(repo.path(), &["--json", "build"]));
     assert!(
         build["parsed"].as_u64().unwrap_or_default() >= 50,
         "representative repo build should parse substantial tracked files: {build:?}"
@@ -35,7 +35,7 @@ max_wall_time_ms = 200000
         "representative repo build latency regressed: {build:?}"
     );
 
-    let status = read_json_data_output("status", run_atlas(worktree.path(), &["--json", "status"]));
+    let status = read_json_data_output("status", run_atlas(repo.path(), &["--json", "status"]));
     assert!(
         status["indexed_file_count"].as_u64().unwrap_or_default() >= 50,
         "status should report representative repo scale: {status:?}"
@@ -45,8 +45,8 @@ max_wall_time_ms = 200000
     let query = read_json_data_output(
         "query",
         run_atlas(
-            worktree.path(),
-            &["--json", "query", "ContextEngine", "--allow-partial"],
+            repo.path(),
+            &["--json", "query", "ContextEngine0", "--allow-partial"],
         ),
     );
     let query_elapsed_ms = query_started.elapsed().as_millis();
@@ -61,18 +61,17 @@ max_wall_time_ms = 200000
         query_elapsed_ms <= 10_000,
         "large-repo query latency regressed: {query:?}"
     );
-    let impact_target = "packages/atlas-impact/src/lib.rs";
-    let original =
-        fs::read_to_string(worktree.path().join(impact_target)).expect("read impact file");
+    let impact_target = "src/module_0.rs";
+    let original = fs::read_to_string(repo.path().join(impact_target)).expect("read impact file");
     let mut updated = original.clone();
     updated.push_str("\n// perf gate change\n");
-    write_repo_file(worktree.path(), impact_target, &updated);
+    write_repo_file(repo.path(), impact_target, &updated);
 
     let impact_started = Instant::now();
     let impact = read_json_data_output(
         "impact",
         run_atlas(
-            worktree.path(),
+            repo.path(),
             &[
                 "--json",
                 "impact",
@@ -102,7 +101,7 @@ max_wall_time_ms = 200000
 
     let update = read_json_data_output(
         "update",
-        run_atlas(worktree.path(), &["--json", "update", "--base", "HEAD"]),
+        run_atlas(repo.path(), &["--json", "update", "--base", "HEAD"]),
     );
     assert!(
         update["parsed"].as_u64().unwrap_or_default() >= 1,

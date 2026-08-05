@@ -1,5 +1,5 @@
--- schema_version: 14
-PRAGMA user_version = 14;
+-- schema_version: 15
+PRAGMA user_version = 15;
 
 -- table: atlas_provenance
 CREATE TABLE atlas_provenance ( singleton_key INTEGER PRIMARY KEY CHECK(singleton_key = 1), db_kind TEXT NOT NULL, created_by TEXT NOT NULL, created_at TEXT NOT NULL, last_opened_by TEXT NOT NULL, last_opened_at TEXT NOT NULL );
@@ -29,7 +29,7 @@ CREATE TABLE "flow_memberships" ( flow_id INTEGER NOT NULL, node_qualified_name 
 CREATE TABLE flows ( id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, kind TEXT, description TEXT, extra_json TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP );
 
 -- table: graph_build_state
-CREATE TABLE graph_build_state ( repo_root TEXT PRIMARY KEY, state TEXT NOT NULL DEFAULT 'built', files_discovered INTEGER NOT NULL DEFAULT 0, files_processed INTEGER NOT NULL DEFAULT 0, files_failed INTEGER NOT NULL DEFAULT 0, nodes_written INTEGER NOT NULL DEFAULT 0, edges_written INTEGER NOT NULL DEFAULT 0, last_built_at TEXT, last_error TEXT, updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')) , files_accepted INTEGER NOT NULL DEFAULT 0, files_skipped_by_byte_budget INTEGER NOT NULL DEFAULT 0, bytes_accepted INTEGER NOT NULL DEFAULT 0, bytes_skipped INTEGER NOT NULL DEFAULT 0, budget_stop_reason TEXT, source_repo_id TEXT NOT NULL DEFAULT 'legacy');
+CREATE TABLE graph_build_state ( repo_root TEXT PRIMARY KEY, state TEXT NOT NULL DEFAULT 'built', files_discovered INTEGER NOT NULL DEFAULT 0, files_processed INTEGER NOT NULL DEFAULT 0, files_failed INTEGER NOT NULL DEFAULT 0, nodes_written INTEGER NOT NULL DEFAULT 0, edges_written INTEGER NOT NULL DEFAULT 0, last_built_at TEXT, last_error TEXT, updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')) , files_accepted INTEGER NOT NULL DEFAULT 0, files_skipped_by_byte_budget INTEGER NOT NULL DEFAULT 0, bytes_accepted INTEGER NOT NULL DEFAULT 0, bytes_skipped INTEGER NOT NULL DEFAULT 0, budget_stop_reason TEXT, source_repo_id TEXT NOT NULL DEFAULT 'legacy', recovery_mode TEXT, quarantine_path TEXT);
 
 -- table: graph_snapshots
 CREATE TABLE graph_snapshots ( snapshot_id INTEGER PRIMARY KEY, repo_id INTEGER NOT NULL REFERENCES repos (repo_id), commit_sha TEXT NOT NULL, root_tree_hash TEXT, node_count INTEGER NOT NULL DEFAULT 0, edge_count INTEGER NOT NULL DEFAULT 0, file_count INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, completeness REAL NOT NULL DEFAULT 1.0, parse_error_count INTEGER NOT NULL DEFAULT 0, UNIQUE (repo_id, commit_sha) );

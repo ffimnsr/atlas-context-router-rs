@@ -1,15 +1,94 @@
 //! Scala parser backed by `tree-sitter-scala`.
 //! Grammar source: `tree-sitter/tree-sitter-scala`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use atlas_core::{Edge, EdgeKind, Node, NodeId, NodeKind, ParsedFile};
 use tree_sitter::Node as TsNode;
 
 use crate::ast_helpers::{end_line, field_text, node_text, start_line};
+use crate::query_helpers::{compile_static_query, run_query};
 use crate::traits::{LangParser, ParseContext};
 
+// SQ1 migration checklist:
+// - manual extraction below owns declaration walks, scope and qualified-name rules, import/reference detection,
+//   call-edge heuristics, and source metadata attachment
+// - keep public parser API, graph schema, and output contracts unchanged during query migration
+// - move tree-sitter syntax matching only into shared @atlas.* query captures
+
+const SCALA_QUERY: &str = include_str!("../../queries/scala.scm");
+
 pub struct ScalaParser;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct ScalaNodeKey {
+    start_byte: usize,
+    end_byte: usize,
+}
+
+#[derive(Debug, Default)]
+struct ScalaSyntaxFacts {
+    packages: HashSet<ScalaNodeKey>,
+    imports: HashSet<ScalaNodeKey>,
+    objects: HashSet<ScalaNodeKey>,
+    classes: HashSet<ScalaNodeKey>,
+    traits: HashSet<ScalaNodeKey>,
+    functions: HashSet<ScalaNodeKey>,
+    _vals: HashSet<ScalaNodeKey>,
+    _vars: HashSet<ScalaNodeKey>,
+    calls: HashSet<ScalaNodeKey>,
+}
+
+impl ScalaSyntaxFacts {
+    fn extract(root: TsNode<'_>, _source: &[u8]) -> Result<Self, String> {
+        let language: tree_sitter::Language = tree_sitter_scala::LANGUAGE.into();
+        let query = compile_static_query(language, "scala", SCALA_QUERY)?;
+        let matches = run_query(&query, root, _source);
+        let mut facts = Self::default();
+
+        for group in matches {
+            for capture in group.captures {
+                let key = node_key(capture.node);
+                match capture.name.as_str() {
+                    "atlas.definition.module" => {
+                        if capture.node.kind() == "package_clause" {
+                            facts.packages.insert(key);
+                        } else {
+                            facts.objects.insert(key);
+                        }
+                    }
+                    "atlas.import" => {
+                        facts.imports.insert(key);
+                    }
+                    "atlas.definition.class" => {
+                        facts.classes.insert(key);
+                    }
+                    "atlas.definition.trait" => {
+                        facts.traits.insert(key);
+                    }
+                    "atlas.definition.function" => {
+                        facts.functions.insert(key);
+                    }
+                    "atlas.definition.variable" => match capture.node.kind() {
+                        "val_definition" => {
+                            facts._vals.insert(key);
+                        }
+                        "var_definition" => {
+                            facts._vars.insert(key);
+                        }
+                        _ => {}
+                    },
+                    "atlas.call" => {
+                        facts.calls.insert(key);
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        Ok(facts)
+    }
+}
 
 impl LangParser for ScalaParser {
     fn language_name(&self) -> &'static str {
@@ -34,19 +113,22 @@ impl LangParser for ScalaParser {
 
         if let Some(ref tree) = tree {
             let root = tree.root_node();
-            let package_qn = emit_top_package(root, ctx, &mut nodes, &mut edges);
+            let facts = ScalaSyntaxFacts::extract(root, ctx.source)
+                .unwrap_or_else(|err| panic!("scala query extraction failed: {err}"));
+            let package_qn = emit_top_package(root, ctx, &facts, &mut nodes, &mut edges);
             let default_parent = package_qn.as_deref().unwrap_or(ctx.rel_path).to_owned();
             let mut import_index = 0usize;
 
             let mut cursor = root.walk();
             for child in root.named_children(&mut cursor) {
-                if child.kind() == "package_clause" {
+                if facts.packages.contains(&node_key(child)) {
                     if let Some(body) = child.child_by_field_name("body") {
                         let mut body_cursor = body.walk();
                         for body_child in body.named_children(&mut body_cursor) {
                             visit_scala_node(
                                 body_child,
                                 ctx,
+                                &facts,
                                 package_qn.as_deref().unwrap_or(ctx.rel_path),
                                 None,
                                 &mut import_index,
@@ -61,6 +143,7 @@ impl LangParser for ScalaParser {
                 visit_scala_node(
                     child,
                     ctx,
+                    &facts,
                     &default_parent,
                     None,
                     &mut import_index,
@@ -71,7 +154,7 @@ impl LangParser for ScalaParser {
 
             let callable_map = callable_qn_map(&nodes);
             let mut call_edges = Vec::new();
-            walk_calls(root, ctx, &callable_map, None, &mut call_edges);
+            walk_calls(root, ctx, &facts, &callable_map, None, &mut call_edges);
             edges.extend(call_edges);
         }
 
@@ -92,13 +175,14 @@ impl LangParser for ScalaParser {
 fn emit_top_package(
     root: TsNode<'_>,
     ctx: &ParseContext<'_>,
+    facts: &ScalaSyntaxFacts,
     nodes: &mut Vec<Node>,
     edges: &mut Vec<Edge>,
 ) -> Option<String> {
     let mut cursor = root.walk();
     let package = root
         .named_children(&mut cursor)
-        .find(|child| child.kind() == "package_clause")?;
+        .find(|child| facts.packages.contains(&node_key(*child)))?;
     let name = package_name(package, ctx.source)?;
     let qn = format!("{}::package::{}", ctx.rel_path, name);
     let line = start_line(package);
@@ -124,43 +208,58 @@ fn emit_top_package(
     Some(qn)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn visit_scala_node(
     node: TsNode<'_>,
     ctx: &ParseContext<'_>,
+    facts: &ScalaSyntaxFacts,
     parent_qn: &str,
     current_owner: Option<&str>,
     import_index: &mut usize,
     nodes: &mut Vec<Node>,
     edges: &mut Vec<Edge>,
 ) {
-    match node.kind() {
-        "import_declaration" => emit_import(node, ctx, parent_qn, import_index, nodes, edges),
-        "object_definition" => emit_object(node, ctx, parent_qn, import_index, nodes, edges),
-        "class_definition" => emit_class(node, ctx, parent_qn, import_index, nodes, edges),
-        "trait_definition" => emit_trait(node, ctx, parent_qn, import_index, nodes, edges),
-        "function_definition" | "function_declaration" => {
-            emit_function(node, ctx, parent_qn, current_owner, nodes, edges)
-        }
-        _ => {
-            let mut cursor = node.walk();
-            for child in node.named_children(&mut cursor) {
-                visit_scala_node(
-                    child,
-                    ctx,
-                    parent_qn,
-                    current_owner,
-                    import_index,
-                    nodes,
-                    edges,
-                );
-            }
-        }
+    let key = node_key(node);
+    if facts.imports.contains(&key) {
+        emit_import(node, ctx, parent_qn, import_index, nodes, edges);
+        return;
+    }
+    if facts.objects.contains(&key) {
+        emit_object(node, ctx, facts, parent_qn, import_index, nodes, edges);
+        return;
+    }
+    if facts.classes.contains(&key) {
+        emit_class(node, ctx, facts, parent_qn, import_index, nodes, edges);
+        return;
+    }
+    if facts.traits.contains(&key) {
+        emit_trait(node, ctx, facts, parent_qn, import_index, nodes, edges);
+        return;
+    }
+    if facts.functions.contains(&key) {
+        emit_function(node, ctx, parent_qn, current_owner, nodes, edges);
+        return;
+    }
+
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        visit_scala_node(
+            child,
+            ctx,
+            facts,
+            parent_qn,
+            current_owner,
+            import_index,
+            nodes,
+            edges,
+        );
     }
 }
 
 fn emit_object(
     node: TsNode<'_>,
     ctx: &ParseContext<'_>,
+    facts: &ScalaSyntaxFacts,
     parent_qn: &str,
     import_index: &mut usize,
     nodes: &mut Vec<Node>,
@@ -197,6 +296,7 @@ fn emit_object(
             visit_scala_node(
                 child,
                 ctx,
+                facts,
                 &qn,
                 Some(name.as_str()),
                 import_index,
@@ -210,6 +310,7 @@ fn emit_object(
 fn emit_class(
     node: TsNode<'_>,
     ctx: &ParseContext<'_>,
+    facts: &ScalaSyntaxFacts,
     parent_qn: &str,
     import_index: &mut usize,
     nodes: &mut Vec<Node>,
@@ -252,6 +353,7 @@ fn emit_class(
             visit_scala_node(
                 child,
                 ctx,
+                facts,
                 &qn,
                 Some(name.as_str()),
                 import_index,
@@ -265,6 +367,7 @@ fn emit_class(
 fn emit_trait(
     node: TsNode<'_>,
     ctx: &ParseContext<'_>,
+    facts: &ScalaSyntaxFacts,
     parent_qn: &str,
     import_index: &mut usize,
     nodes: &mut Vec<Node>,
@@ -303,6 +406,7 @@ fn emit_trait(
             visit_scala_node(
                 child,
                 ctx,
+                facts,
                 &qn,
                 Some(name.as_str()),
                 import_index,
@@ -411,16 +515,18 @@ fn callable_qn_map(nodes: &[Node]) -> HashMap<String, String> {
 fn walk_calls(
     node: TsNode<'_>,
     ctx: &ParseContext<'_>,
+    facts: &ScalaSyntaxFacts,
     callables: &HashMap<String, String>,
     current_callable: Option<String>,
     edges: &mut Vec<Edge>,
 ) {
     let mut next_callable = current_callable;
-    if matches!(node.kind(), "function_definition" | "function_declaration") {
+    let key = node_key(node);
+    if facts.functions.contains(&key) {
         if let Some(name) = field_text(node, "name", ctx.source) {
             next_callable = callables.get(name).cloned();
         }
-    } else if node.kind() == "call_expression"
+    } else if facts.calls.contains(&key)
         && let Some(owner_qn) = next_callable.as_ref()
         && let Some(callee) = scala_call_name(node, ctx.source)
         && let Some(target_qn) = callables.get(&callee)
@@ -436,7 +542,7 @@ fn walk_calls(
 
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
-        walk_calls(child, ctx, callables, next_callable.clone(), edges);
+        walk_calls(child, ctx, facts, callables, next_callable.clone(), edges);
     }
 }
 
@@ -512,6 +618,13 @@ fn scala_import_targets(raw: &str) -> Vec<String> {
 fn package_name(node: TsNode<'_>, source: &[u8]) -> Option<String> {
     node.child_by_field_name("name")
         .map(|name| node_text(name, source).replace(' ', ""))
+}
+
+fn node_key(node: TsNode<'_>) -> ScalaNodeKey {
+    ScalaNodeKey {
+        start_byte: node.start_byte(),
+        end_byte: node.end_byte(),
+    }
 }
 
 fn file_node(rel_path: &str, file_hash: &str, line_end: u32) -> Node {

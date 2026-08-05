@@ -1,19 +1,107 @@
 use atlas_core::{Edge, EdgeKind, Node, NodeId, NodeKind, ParsedFile};
-use std::collections::HashMap;
-use tree_sitter::Node as TsNode;
+use std::collections::{HashMap, HashSet};
+use tree_sitter::{Language, Node as TsNode};
 
 use crate::ast_helpers::{end_line, node_text, start_line};
+use crate::query_helpers::{compile_static_query, run_query};
 use crate::traits::{LangParser, ParseContext};
 
 // ---------------------------------------------------------------------------
 // Public parser types
 // ---------------------------------------------------------------------------
 
+// SQ1 migration checklist:
+// - manual extraction below owns declaration walks, scope and qualified-name rules, import/reference detection,
+//   call-edge heuristics, and source metadata attachment
+// - keep public parser API, graph schema, and output contracts unchanged during query migration
+// - move tree-sitter syntax matching only into shared @atlas.* query captures
+
 /// JavaScript / JSX parser (`.js`, `.jsx`, `.mjs`, `.cjs`).
 pub struct JsParser;
 
 /// TypeScript / TSX parser (`.ts`, `.tsx`).
 pub struct TsParser;
+
+const JAVASCRIPT_QUERY: &str = include_str!("../../queries/javascript.scm");
+const TYPESCRIPT_QUERY: &str = include_str!("../../queries/typescript.scm");
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct JsTsNodeKey {
+    start_byte: usize,
+    end_byte: usize,
+}
+
+#[derive(Clone)]
+struct JsTsQueryConfig {
+    language_name: &'static str,
+    language: Language,
+    query_text: &'static str,
+}
+
+#[derive(Debug, Default)]
+struct JsTsSyntaxFacts {
+    exports: HashSet<JsTsNodeKey>,
+    imports: HashSet<JsTsNodeKey>,
+    functions: HashSet<JsTsNodeKey>,
+    classes: HashSet<JsTsNodeKey>,
+    methods: HashSet<JsTsNodeKey>,
+    variables: HashSet<JsTsNodeKey>,
+    interfaces: HashSet<JsTsNodeKey>,
+    type_aliases: HashSet<JsTsNodeKey>,
+    enums: HashSet<JsTsNodeKey>,
+    calls: HashSet<JsTsNodeKey>,
+}
+
+impl JsTsSyntaxFacts {
+    fn extract(config: JsTsQueryConfig, root: TsNode<'_>, source: &[u8]) -> Result<Self, String> {
+        let query = compile_static_query(config.language, config.language_name, config.query_text)?;
+        let matches = run_query(&query, root, source);
+        let mut facts = Self::default();
+
+        for group in matches {
+            for capture in group.captures {
+                let key = node_key(capture.node);
+                match capture.name.as_str() {
+                    "atlas.export" => {
+                        facts.exports.insert(key);
+                    }
+                    "atlas.import" => {
+                        facts.imports.insert(key);
+                    }
+                    "atlas.definition.function" => {
+                        facts.functions.insert(key);
+                    }
+                    "atlas.definition.class" => {
+                        facts.classes.insert(key);
+                    }
+                    "atlas.definition.method" => {
+                        facts.methods.insert(key);
+                    }
+                    "atlas.definition.interface" => {
+                        facts.interfaces.insert(key);
+                    }
+                    "atlas.definition.enum" => {
+                        facts.enums.insert(key);
+                    }
+                    "atlas.definition.variable" => match capture.node.kind() {
+                        "type_alias_declaration" => {
+                            facts.type_aliases.insert(key);
+                        }
+                        _ => {
+                            facts.variables.insert(key);
+                        }
+                    },
+                    "atlas.call" => {
+                        facts.calls.insert(key);
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        Ok(facts)
+    }
+}
 
 impl LangParser for JsParser {
     fn language_name(&self) -> &'static str {
@@ -32,7 +120,16 @@ impl LangParser for JsParser {
         parser
             .set_language(&tree_sitter_javascript::LANGUAGE.into())
             .expect("tree-sitter-javascript grammar failed to load");
-        parse_source(&mut parser, ctx, "javascript")
+        parse_source(
+            &mut parser,
+            ctx,
+            "javascript",
+            JsTsQueryConfig {
+                language_name: "javascript",
+                language: tree_sitter_javascript::LANGUAGE.into(),
+                query_text: JAVASCRIPT_QUERY,
+            },
+        )
     }
 }
 
@@ -59,7 +156,16 @@ impl LangParser for TsParser {
         parser
             .set_language(&lang)
             .expect("tree-sitter-typescript grammar failed to load");
-        parse_source(&mut parser, ctx, "typescript")
+        parse_source(
+            &mut parser,
+            ctx,
+            "typescript",
+            JsTsQueryConfig {
+                language_name: "typescript",
+                language: lang,
+                query_text: TYPESCRIPT_QUERY,
+            },
+        )
     }
 }
 
@@ -71,6 +177,7 @@ fn parse_source(
     parser: &mut tree_sitter::Parser,
     ctx: &ParseContext<'_>,
     lang: &'static str,
+    query_config: JsTsQueryConfig,
 ) -> (ParsedFile, Option<tree_sitter::Tree>) {
     let tree = crate::parse_runtime::parse_tree(parser, ctx.source, ctx.old_tree);
     let mut nodes: Vec<Node> = Vec::new();
@@ -81,13 +188,15 @@ fn parse_source(
 
     if let Some(ref tree) = tree {
         let root = tree.root_node();
+        let facts = JsTsSyntaxFacts::extract(query_config, root, ctx.source)
+            .unwrap_or_else(|err| panic!("{lang} query extraction failed: {err}"));
         let mut cursor = root.walk();
         for child in root.children(&mut cursor) {
-            visit_toplevel(child, ctx, lang, &mut nodes, &mut edges);
+            visit_toplevel(child, ctx, lang, &facts, &mut nodes, &mut edges);
         }
 
         // Second pass: same-file call resolution.
-        let mut call_edges = resolve_js_calls(root, ctx.source, ctx.rel_path, &nodes);
+        let mut call_edges = resolve_js_calls(root, ctx.source, ctx.rel_path, &facts, &nodes);
         edges.append(&mut call_edges);
     }
 
@@ -150,36 +259,28 @@ fn visit_toplevel(
     node: TsNode<'_>,
     ctx: &ParseContext<'_>,
     lang: &str,
+    facts: &JsTsSyntaxFacts,
     nodes: &mut Vec<Node>,
     edges: &mut Vec<Edge>,
 ) {
-    match node.kind() {
-        "function_declaration" | "generator_function_declaration" => {
-            visit_function(node, ctx, ctx.rel_path, lang, nodes, edges);
-        }
-        "class_declaration" | "abstract_class_declaration" => {
-            visit_class(node, ctx, lang, nodes, edges);
-        }
-        "export_statement" => {
-            visit_export(node, ctx, lang, nodes, edges);
-        }
-        "import_statement" => {
-            visit_import(node, ctx, lang, nodes, edges);
-        }
-        "lexical_declaration" | "variable_declaration" => {
-            visit_variable_declaration(node, ctx, lang, nodes, edges);
-        }
-        // TypeScript-specific top-level declarations.
-        "interface_declaration" => {
-            visit_ts_interface(node, ctx, lang, nodes, edges);
-        }
-        "type_alias_declaration" => {
-            visit_ts_type_alias(node, ctx, lang, nodes, edges);
-        }
-        "enum_declaration" => {
-            visit_ts_enum(node, ctx, lang, nodes, edges);
-        }
-        _ => {}
+    let key = node_key(node);
+
+    if facts.functions.contains(&key) {
+        visit_function(node, ctx, ctx.rel_path, lang, nodes, edges);
+    } else if facts.classes.contains(&key) {
+        visit_class(node, ctx, lang, facts, nodes, edges);
+    } else if facts.exports.contains(&key) {
+        visit_export(node, ctx, lang, facts, nodes, edges);
+    } else if facts.imports.contains(&key) {
+        visit_import(node, ctx, lang, nodes, edges);
+    } else if has_captured_variable_declarator(node, facts) {
+        visit_variable_declaration(node, ctx, lang, facts, nodes, edges);
+    } else if facts.interfaces.contains(&key) {
+        visit_ts_interface(node, ctx, lang, nodes, edges);
+    } else if facts.type_aliases.contains(&key) {
+        visit_ts_type_alias(node, ctx, lang, nodes, edges);
+    } else if facts.enums.contains(&key) {
+        visit_ts_enum(node, ctx, lang, nodes, edges);
     }
 }
 
@@ -237,6 +338,7 @@ fn visit_class(
     node: TsNode<'_>,
     ctx: &ParseContext<'_>,
     lang: &str,
+    facts: &JsTsSyntaxFacts,
     nodes: &mut Vec<Node>,
     edges: &mut Vec<Edge>,
 ) {
@@ -279,7 +381,7 @@ fn visit_class(
     if let Some(body) = node.child_by_field_name("body") {
         let mut cursor = body.walk();
         for child in body.children(&mut cursor) {
-            if child.kind() == "method_definition" {
+            if facts.methods.contains(&node_key(child)) {
                 visit_method(child, ctx, &qn, lang, nodes, edges);
             }
         }
@@ -336,6 +438,7 @@ fn visit_export(
     node: TsNode<'_>,
     ctx: &ParseContext<'_>,
     lang: &str,
+    facts: &JsTsSyntaxFacts,
     nodes: &mut Vec<Node>,
     edges: &mut Vec<Edge>,
 ) {
@@ -345,7 +448,7 @@ fn visit_export(
                 visit_function(decl, ctx, ctx.rel_path, lang, nodes, edges);
             }
             "class_declaration" | "abstract_class_declaration" => {
-                visit_class(decl, ctx, lang, nodes, edges);
+                visit_class(decl, ctx, lang, facts, nodes, edges);
             }
             "interface_declaration" => {
                 visit_ts_interface(decl, ctx, lang, nodes, edges);
@@ -357,7 +460,7 @@ fn visit_export(
                 visit_ts_enum(decl, ctx, lang, nodes, edges);
             }
             "lexical_declaration" | "variable_declaration" => {
-                visit_variable_declaration(decl, ctx, lang, nodes, edges);
+                visit_variable_declaration(decl, ctx, lang, facts, nodes, edges);
             }
             _ => {}
         }
@@ -365,7 +468,7 @@ fn visit_export(
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
             if matches!(child.kind(), "lexical_declaration" | "variable_declaration") {
-                visit_variable_declaration(child, ctx, lang, nodes, edges);
+                visit_variable_declaration(child, ctx, lang, facts, nodes, edges);
             }
         }
     }
@@ -559,12 +662,13 @@ fn visit_variable_declaration(
     node: TsNode<'_>,
     ctx: &ParseContext<'_>,
     lang: &str,
+    facts: &JsTsSyntaxFacts,
     nodes: &mut Vec<Node>,
     edges: &mut Vec<Edge>,
 ) {
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
-        if child.kind() == "variable_declarator" {
+        if child.kind() == "variable_declarator" && facts.variables.contains(&node_key(child)) {
             visit_variable_declarator(child, ctx, lang, nodes, edges);
         }
     }
@@ -662,6 +766,20 @@ fn is_identifier_like(name: &str) -> bool {
             .all(|c| c == '_' || c == '$' || c.is_ascii_alphanumeric())
 }
 
+fn node_key(node: TsNode<'_>) -> JsTsNodeKey {
+    JsTsNodeKey {
+        start_byte: node.start_byte(),
+        end_byte: node.end_byte(),
+    }
+}
+
+fn has_captured_variable_declarator(node: TsNode<'_>, facts: &JsTsSyntaxFacts) -> bool {
+    let mut cursor = node.walk();
+    node.children(&mut cursor).any(|child| {
+        child.kind() == "variable_declarator" && facts.variables.contains(&node_key(child))
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Same-file call resolution (JavaScript / TypeScript)
 // ---------------------------------------------------------------------------
@@ -733,7 +851,13 @@ fn parse_js_import_bindings(statement: &str) -> Vec<serde_json::Value> {
     bindings
 }
 
-fn resolve_js_calls(root: TsNode<'_>, source: &[u8], rel_path: &str, nodes: &[Node]) -> Vec<Edge> {
+fn resolve_js_calls(
+    root: TsNode<'_>,
+    source: &[u8],
+    rel_path: &str,
+    facts: &JsTsSyntaxFacts,
+    nodes: &[Node],
+) -> Vec<Edge> {
     let mut callables: HashMap<String, String> = HashMap::new();
     for n in nodes {
         if matches!(
@@ -745,7 +869,9 @@ fn resolve_js_calls(root: TsNode<'_>, source: &[u8], rel_path: &str, nodes: &[No
     }
     let mut edges = Vec::new();
     let mut scope: Vec<String> = Vec::new();
-    walk_js_calls(root, source, rel_path, &callables, &mut scope, &mut edges);
+    walk_js_calls(
+        root, source, rel_path, facts, &callables, &mut scope, &mut edges,
+    );
     edges
 }
 
@@ -753,24 +879,16 @@ fn walk_js_calls<'a>(
     node: TsNode<'a>,
     source: &[u8],
     rel_path: &str,
+    facts: &JsTsSyntaxFacts,
     callables: &HashMap<String, String>,
     scope: &mut Vec<String>,
     edges: &mut Vec<Edge>,
 ) {
     let kind = node.kind();
-    let is_function_scope = matches!(
-        kind,
-        "function_declaration"
-            | "function"
-            | "function_expression"
-            | "arrow_function"
-            | "method_definition"
-            | "function_signature" // TS
-            | "method_signature" // TS
-    );
+    let key = node_key(node);
+    let is_function_scope = facts.functions.contains(&key) || facts.methods.contains(&key);
 
     if is_function_scope {
-        // Try to find the function name.
         let pushed = if let Some(name_node) = node.child_by_field_name("name") {
             let name = node_text(name_node, source);
             if let Some(qn) = callables.get(name) {
@@ -784,7 +902,7 @@ fn walk_js_calls<'a>(
         };
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
-            walk_js_calls(child, source, rel_path, callables, scope, edges);
+            walk_js_calls(child, source, rel_path, facts, callables, scope, edges);
         }
         if pushed {
             scope.pop();
@@ -792,15 +910,12 @@ fn walk_js_calls<'a>(
         return;
     }
 
-    if kind == "variable_declarator"
+    if facts.variables.contains(&key)
         && let (Some(name_node), Some(value_node)) = (
             node.child_by_field_name("name"),
             node.child_by_field_name("value"),
         )
-        && matches!(
-            value_node.kind(),
-            "function" | "function_expression" | "arrow_function" | "call_expression"
-        )
+        && function_value_node(value_node, source).is_some()
     {
         let name = node_text(name_node, source);
         let pushed = if let Some(qn) = callables.get(name) {
@@ -811,7 +926,7 @@ fn walk_js_calls<'a>(
         };
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
-            walk_js_calls(child, source, rel_path, callables, scope, edges);
+            walk_js_calls(child, source, rel_path, facts, callables, scope, edges);
         }
         if pushed {
             scope.pop();
@@ -819,7 +934,8 @@ fn walk_js_calls<'a>(
         return;
     }
 
-    if kind == "call_expression"
+    if facts.calls.contains(&key)
+        && kind == "call_expression"
         && let Some(caller_qn) = scope.last().cloned()
     {
         let called = node
@@ -883,10 +999,9 @@ fn walk_js_calls<'a>(
         }
     }
 
-    // Default recursive walk.
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
-        walk_js_calls(child, source, rel_path, callables, scope, edges);
+        walk_js_calls(child, source, rel_path, facts, callables, scope, edges);
     }
 }
 
@@ -1059,6 +1174,16 @@ mod tests {
                 .iter()
                 .any(|n| n.kind == NodeKind::Function && n.name == "add")
         );
+    }
+
+    #[test]
+    fn js_extracts_named_arrow_function_variable() {
+        let pf = parse_js("const greet = (name) => name;\n");
+        assert!(pf.nodes.iter().any(|n| {
+            n.kind == NodeKind::Function
+                && n.name == "greet"
+                && n.qualified_name == "src/app.js::fn::greet"
+        }));
     }
 
     #[test]

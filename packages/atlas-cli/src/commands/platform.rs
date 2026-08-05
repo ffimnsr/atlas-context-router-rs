@@ -764,6 +764,14 @@ fn resolve_mode_skips(mode: InstallMode) -> (bool, bool, bool) {
     )
 }
 
+fn should_warn_no_platforms_detected(
+    platform: &str,
+    no_platform_config: bool,
+    configured_count: usize,
+) -> bool {
+    platform == "all" && !no_platform_config && configured_count == 0
+}
+
 pub fn run_install(cli: &Cli) -> Result<()> {
     let (
         platform,
@@ -885,7 +893,7 @@ pub fn run_install(cli: &Cli) -> Result<()> {
         }
 
         let total = summary.configured.len() + summary.already_configured.len();
-        if total == 0 {
+        if should_warn_no_platforms_detected(&platform, no_platform_config, total) {
             println!("No platforms detected. Use --platform to target one explicitly.");
         } else if !dry_run && !validate_only {
             println!("\nDone. Restart your AI coding tool to pick up the new config.");
@@ -962,6 +970,16 @@ mod tests {
         assert_eq!(resolve_mode_skips(InstallMode::Mcp), (false, true, true));
         assert_eq!(resolve_mode_skips(InstallMode::Hook), (true, false, true));
         assert_eq!(resolve_mode_skips(InstallMode::Cli), (true, true, false));
+    }
+
+    #[test]
+    fn no_platform_warning_only_applies_to_auto_detected_platform_config() {
+        use super::should_warn_no_platforms_detected;
+
+        assert!(should_warn_no_platforms_detected("all", false, 0));
+        assert!(!should_warn_no_platforms_detected("codex", false, 0));
+        assert!(!should_warn_no_platforms_detected("all", true, 0));
+        assert!(!should_warn_no_platforms_detected("all", false, 1));
     }
 
     #[test]

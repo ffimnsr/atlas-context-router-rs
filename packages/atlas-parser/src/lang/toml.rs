@@ -5,6 +5,15 @@ use toml::Value;
 
 use crate::traits::{LangParser, ParseContext};
 
+// SQ1 migration checklist:
+// - manual extraction below owns structural node selection, scope and qualified-name rules, and source metadata attachment
+// - keep public parser API, graph schema, and output contracts unchanged during query migration
+// - move tree-sitter syntax matching only into shared @atlas.* query captures
+//
+// SQ6 decision: keep TOML manual.
+// Parser intentionally uses `toml::Value` plus custom line indexing to preserve stable table/key-path
+// semantics on valid TOML without reintroducing tree-sitter-only syntax matching.
+
 pub struct TomlParser;
 
 impl LangParser for TomlParser {

@@ -10,6 +10,17 @@ use tree_sitter::Node as TsNode;
 use crate::ast_helpers::{end_line, node_text, start_line};
 use crate::traits::{LangParser, ParseContext};
 
+// SQ1 migration checklist:
+// - manual extraction below owns structural node selection, scope and qualified-name rules, link/reference detection,
+//   and source metadata attachment
+// - keep public parser API, graph schema, and output contracts unchanged during query migration
+// - move tree-sitter syntax matching only into shared @atlas.* query captures
+//
+// SQ6 decision: keep Markdown manual.
+// tree-sitter-md query migration stays deferred until malformed shorter input behavior is proven stable.
+// Current parser also depends on ordered section walking for heading hierarchy, duplicate slug handling,
+// fenced-code ownership, and regex-based link extraction.
+
 pub struct MarkdownParser;
 
 impl LangParser for MarkdownParser {

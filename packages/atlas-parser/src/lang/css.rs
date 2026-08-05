@@ -1,13 +1,69 @@
 //! CSS parser backed by `tree-sitter-css`.
 //! Grammar source: `tree-sitter/tree-sitter-css`.
 
+use std::collections::HashSet;
+
 use atlas_core::{Edge, EdgeKind, Node, NodeId, NodeKind, ParsedFile};
 use tree_sitter::Node as TsNode;
 
 use crate::ast_helpers::{end_line, node_text, start_line};
+use crate::query_helpers::{compile_static_query, run_query};
 use crate::traits::{LangParser, ParseContext};
 
+// SQ1 migration checklist:
+// - manual extraction below owns declaration walks, scope and qualified-name rules, import/reference detection,
+//   call-edge heuristics, and source metadata attachment
+// - keep public parser API, graph schema, and output contracts unchanged during query migration
+// - move tree-sitter syntax matching only into shared @atlas.* query captures
+
 pub struct CssParser;
+
+const CSS_QUERY: &str = include_str!("../../queries/css.scm");
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct CssNodeKey {
+    start_byte: usize,
+    end_byte: usize,
+}
+
+#[derive(Debug, Default)]
+struct CssSyntaxFacts {
+    imports: HashSet<CssNodeKey>,
+    rules: HashSet<CssNodeKey>,
+    selectors: HashSet<CssNodeKey>,
+    declarations: HashSet<CssNodeKey>,
+}
+
+impl CssSyntaxFacts {
+    fn extract(root: TsNode<'_>, source: &[u8]) -> Result<Self, String> {
+        let query = compile_static_query(tree_sitter_css::LANGUAGE.into(), "css", CSS_QUERY)?;
+        let matches = run_query(&query, root, source);
+        let mut facts = Self::default();
+
+        for group in matches {
+            for capture in group.captures {
+                let key = node_key(capture.node);
+                match capture.name.as_str() {
+                    "atlas.import" => {
+                        facts.imports.insert(key);
+                    }
+                    "atlas.definition.module" => {
+                        facts.rules.insert(key);
+                    }
+                    "atlas.definition.class" | "atlas.reference" => {
+                        facts.selectors.insert(key);
+                    }
+                    "atlas.definition.variable" => {
+                        facts.declarations.insert(key);
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        Ok(facts)
+    }
+}
 
 impl LangParser for CssParser {
     fn language_name(&self) -> &'static str {
@@ -32,19 +88,20 @@ impl LangParser for CssParser {
 
         if let Some(ref tree) = tree {
             let root = tree.root_node();
+            let facts = CssSyntaxFacts::extract(root, ctx.source)
+                .unwrap_or_else(|err| panic!("css query extraction failed: {err}"));
             let mut rule_index = 0usize;
             let mut import_index = 0usize;
             let mut cursor = root.walk();
             for child in root.named_children(&mut cursor) {
-                match child.kind() {
-                    "import_statement" => {
-                        emit_css_import(child, ctx, &mut nodes, &mut edges, &mut import_index)
-                    }
-                    "rule_set" => {
-                        rule_index += 1;
-                        emit_rule_set(child, ctx, &mut nodes, &mut edges, rule_index)
-                    }
-                    _ => {}
+                let key = node_key(child);
+                if facts.imports.contains(&key) {
+                    emit_css_import(child, ctx, &mut nodes, &mut edges, &mut import_index);
+                    continue;
+                }
+                if facts.rules.contains(&key) {
+                    rule_index += 1;
+                    emit_rule_set(child, ctx, &facts, &mut nodes, &mut edges, rule_index);
                 }
             }
         }
@@ -106,6 +163,7 @@ fn emit_css_import(
 fn emit_rule_set(
     node: TsNode<'_>,
     ctx: &ParseContext<'_>,
+    facts: &CssSyntaxFacts,
     nodes: &mut Vec<Node>,
     edges: &mut Vec<Edge>,
     rule_index: usize,
@@ -139,7 +197,7 @@ fn emit_rule_set(
         let mut selector_index = 0usize;
         let mut cursor = selectors_node.walk();
         for child in selectors_node.named_children(&mut cursor) {
-            if !matches!(child.kind(), "class_selector" | "id_selector" | "tag_name") {
+            if !facts.selectors.contains(&node_key(child)) {
                 continue;
             }
             selector_index += 1;
@@ -183,7 +241,7 @@ fn emit_rule_set(
         let mut declaration_index = 0usize;
         let mut cursor = block.walk();
         for child in block.named_children(&mut cursor) {
-            if child.kind() != "declaration" {
+            if !facts.declarations.contains(&node_key(child)) {
                 continue;
             }
             let Some(property) = find_direct_child(child, "property_name") else {
@@ -245,6 +303,13 @@ fn extract_css_import_target(statement: &str) -> Option<String> {
 
 fn compact_css_text(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn node_key(node: TsNode<'_>) -> CssNodeKey {
+    CssNodeKey {
+        start_byte: node.start_byte(),
+        end_byte: node.end_byte(),
+    }
 }
 
 fn find_direct_child<'a>(node: TsNode<'a>, kind: &str) -> Option<TsNode<'a>> {

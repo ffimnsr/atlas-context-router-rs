@@ -8,6 +8,7 @@ mod history;
 mod lifecycle;
 mod mutation;
 mod postprocess;
+mod recovery;
 mod retrieval;
 mod search;
 mod taxonomy;
@@ -17,6 +18,7 @@ pub use self::history::{
     HistoricalEdge, HistoricalNode, HistoryStatusSummary, StoredCommit, StoredEdgeHistory,
     StoredNodeHistory, StoredSnapshot, StoredSnapshotFile, StoredSnapshotMembershipBlob,
 };
+pub use self::recovery::{GraphRecoveryMode, GraphStoreRecovery, GraphStoreRecoveryError};
 
 type DanglingEdge = (i64, String, String, String, &'static str);
 

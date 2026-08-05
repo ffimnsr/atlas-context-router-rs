@@ -6,13 +6,64 @@ use atlas_repo::{
     RepoRegistration, RepoRegistry, RepoRelationshipKind, find_repo_root,
     phase1_multi_repo_supported, stable_repo_id,
 };
-use atlas_store_sqlite::{BuildFinishStats, Store};
+use atlas_store_sqlite::{BuildFinishStats, GraphRecoveryMode, GraphStoreRecovery, Store};
 use camino::Utf8Path;
 
 use super::super::{db_path, print_json, resolve_repo};
 use super::{MultiRepoBudgetAggregate, print_summary_value};
 
 pub(super) const MAX_MULTI_REPO_SELECTION: usize = 32;
+
+pub(super) fn graph_recovery_mode(dry_run: bool) -> GraphRecoveryMode {
+    if dry_run {
+        GraphRecoveryMode::BlockOnly
+    } else {
+        GraphRecoveryMode::AutoQuarantineAndRebuild
+    }
+}
+
+pub(super) fn rebuild_strategy_label(full_rebuild: bool) -> &'static str {
+    if full_rebuild {
+        "full_rebuild_from_source"
+    } else {
+        "incremental_update"
+    }
+}
+
+pub(super) fn rebuild_result_label(
+    recovery: Option<&GraphStoreRecovery>,
+    failure_reason: Option<&str>,
+) -> &'static str {
+    if failure_reason.is_some() {
+        if recovery.is_some_and(|recovery| recovery.quarantine_path.is_some()) {
+            "rebuild_failed"
+        } else {
+            "failed"
+        }
+    } else if recovery.is_some_and(|recovery| recovery.quarantine_path.is_some()) {
+        "rebuilt_fresh"
+    } else {
+        "not_needed"
+    }
+}
+
+pub(super) fn persist_build_recovery_metadata(
+    db_path: &str,
+    source_repo_id: &str,
+    repo_root: &str,
+    recovery: Option<&GraphStoreRecovery>,
+) {
+    if let Some(recovery) = recovery
+        && let Ok(store) = Store::open(db_path)
+    {
+        let _ = store.set_build_recovery_metadata_for_repo(
+            source_repo_id,
+            repo_root,
+            Some(recovery.recovery_mode.as_str()),
+            recovery.quarantine_path.as_deref(),
+        );
+    }
+}
 fn excluded_manual_repo_count(registry: &RepoRegistry) -> usize {
     registry
         .registrations
@@ -59,8 +110,34 @@ pub fn run_build(cli: &Cli) -> Result<()> {
         }
 
         let source_repo_id = stable_repo_id(repo_root_path.as_path());
+        let recovery =
+            Store::prepare_graph_store_rebuild(&db_path, graph_recovery_mode(dry_run), !dry_run);
+        let recovery = match recovery {
+            Ok(recovery) => recovery,
+            Err(error) => {
+                if cli.json {
+                    print_json(
+                        "build",
+                        serde_json::json!({
+                            "ok": false,
+                            "dry_run": dry_run,
+                            "error_code": error.error_code,
+                            "health_class": error.health_class.as_str(),
+                            "recovery_mode": error.recovery_mode.as_str(),
+                            "quarantine_path": error.quarantine_path,
+                            "rebuild_result": rebuild_result_label(None, error.failure_reason.as_deref()),
+                            "failure_reason": error.failure_reason,
+                            "message": error.message,
+                            "suggestions": error.suggestions,
+                            "rebuild_strategy": "full_rebuild_from_source",
+                        }),
+                    )?;
+                    return Ok(());
+                }
+                anyhow::bail!(error);
+            }
+        };
 
-        // Record lifecycle: building.
         if !dry_run && let Ok(store) = Store::open(&db_path) {
             let _ = store.begin_build_for_repo(&source_repo_id, repo_root_path.as_str());
         }
@@ -78,23 +155,14 @@ pub fn run_build(cli: &Cli) -> Result<()> {
             },
         );
 
-        // Record lifecycle: built or build_failed.
         if !dry_run && let Ok(store) = Store::open(&db_path) {
             match &build_result {
                 Ok(s) => {
-                    let state =
-                        if matches!(s.budget.budget_status, atlas_core::BudgetStatus::Blocked) {
-                            atlas_store_sqlite::GraphBuildState::BuildFailed
-                        } else if s.is_degraded() {
-                            atlas_store_sqlite::GraphBuildState::Degraded
-                        } else {
-                            atlas_store_sqlite::GraphBuildState::Built
-                        };
                     let _ = store.finish_build_for_repo(
                         &source_repo_id,
                         repo_root_path.as_str(),
                         BuildFinishStats {
-                            state,
+                            state: build_state_for_summary(s),
                             files_discovered: s.scanned as i64,
                             files_processed: s.parsed as i64,
                             files_accepted: s.budget_counters.files_accepted as i64,
@@ -110,6 +178,12 @@ pub fn run_build(cli: &Cli) -> Result<()> {
                             budget_stop_reason: s.budget_counters.budget_stop_reason.clone(),
                         },
                     );
+                    persist_build_recovery_metadata(
+                        &db_path,
+                        &source_repo_id,
+                        repo_root_path.as_str(),
+                        Some(&recovery),
+                    );
                 }
                 Err(e) => {
                     let _ = store.fail_build_for_repo(
@@ -117,17 +191,54 @@ pub fn run_build(cli: &Cli) -> Result<()> {
                         repo_root_path.as_str(),
                         &e.to_string(),
                     );
+                    persist_build_recovery_metadata(
+                        &db_path,
+                        &source_repo_id,
+                        repo_root_path.as_str(),
+                        Some(&recovery),
+                    );
                 }
             }
         }
 
-        let summary = build_result?;
+        let summary = match build_result {
+            Ok(summary) => summary,
+            Err(error) => {
+                if cli.json {
+                    print_json(
+                        "build",
+                        serde_json::json!({
+                            "ok": false,
+                            "dry_run": dry_run,
+                            "error_code": "failed_build",
+                            "health_class": recovery.health_class.map(|class| class.as_str()),
+                            "recovery_mode": recovery.recovery_mode.as_str(),
+                            "quarantine_path": recovery.quarantine_path,
+                            "rebuild_result": rebuild_result_label(Some(&recovery), Some(&error.to_string())),
+                            "failure_reason": error.to_string(),
+                            "message": atlas_core::graph_health_error_message("failed_build"),
+                            "suggestions": atlas_core::graph_health_error_suggestions("failed_build"),
+                            "rebuild_strategy": "full_rebuild_from_source",
+                        }),
+                    )?;
+                    return Ok(());
+                }
+                return Err(error);
+            }
+        };
 
         if cli.json {
             print_json(
                 "build",
                 serde_json::json!({
+                    "ok": true,
                     "dry_run": dry_run,
+                    "health_class": recovery.health_class.map(|class| class.as_str()),
+                    "recovery_mode": recovery.recovery_mode.as_str(),
+                    "quarantine_path": recovery.quarantine_path,
+                    "rebuild_result": rebuild_result_label(Some(&recovery), None),
+                    "failure_reason": serde_json::Value::Null,
+                    "rebuild_strategy": "full_rebuild_from_source",
                     "scanned": summary.scanned,
                     "skipped_unsupported": summary.skipped_unsupported,
                     "skipped_unchanged": summary.skipped_unchanged,

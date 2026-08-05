@@ -91,7 +91,9 @@ pub struct ToolManualOutputResponse {
 pub struct ToolManualUsage {
     pub cli: String,
     pub mcp_manual_tool_call: String,
+    pub tool_usage: Vec<String>,
     pub target_tool_call_examples: Vec<String>,
+    pub few_shot_prompts: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -293,9 +295,17 @@ pub fn render_tool_manual_text(document: &ToolManualDocument) -> String {
         "  mcp_manual_tool_call: {}",
         document.usage.mcp_manual_tool_call
     ));
+    lines.push("  tool_usage:".to_owned());
+    for guidance in &document.usage.tool_usage {
+        lines.push(format!("    - {guidance}"));
+    }
     lines.push("  target_tool_call_examples:".to_owned());
     for example in &document.usage.target_tool_call_examples {
         lines.push(format!("    - {example}"));
+    }
+    lines.push("  few_shot_prompts:".to_owned());
+    for prompt in &document.usage.few_shot_prompts {
+        lines.push(format!("    - {prompt}"));
     }
 
     lines.push(String::new());
@@ -469,7 +479,12 @@ fn lookup_tool_manual(
         usage: ToolManualUsage {
             cli: format!("man mcp {}", tool.name),
             mcp_manual_tool_call: mcp_manual_call,
+            tool_usage: tool_usage_guidance(&tool.name),
             target_tool_call_examples: target_examples,
+            few_shot_prompts: few_shot_prompts(
+                &tool.name,
+                tool.description.as_deref().unwrap_or_default(),
+            ),
         },
         error_cases: error_cases(),
         truncation: ToolManualTruncation {
@@ -1290,6 +1305,92 @@ fn top_level_shape(label: &str, schema: &Value) -> String {
     format!("{label}: object with {properties} top-level fields ({required} required)")
 }
 
+fn tool_usage_guidance(tool_name: &str) -> Vec<String> {
+    let mut usage = match tool_name {
+        "status" | "doctor" | "db_check" | "debug_graph" | "list_graph_stats" => vec![
+            "Use before trusting graph-backed context or when graph results look empty/stale.",
+            "Read health fields first; only rebuild or run deeper diagnostics when readiness says unsafe or stale.",
+        ],
+        "query_graph" | "batch_query_graph" | "resolve_symbol" => vec![
+            "Use for symbol/name resolution before relationship tools or file reads.",
+            "Pass short exact identifiers or qualified names; avoid natural-language-only phrases unless documented by query grammar.",
+        ],
+        "symbol_neighbors" | "traverse_graph" | "cross_file_links" | "concept_clusters" => vec![
+            "Use after resolving exact symbols or files to inspect direct relationships and bounded dependency paths.",
+            "Keep depth and limits small first; escalate only when direct callers/callees are insufficient.",
+        ],
+        "get_context" | "get_review_context" | "get_minimal_context" | "get_impact_radius" | "explain_change" | "detect_changes" => vec![
+            "Use for review, impact, and bounded context assembly around changed files or concrete targets.",
+            "Prefer minimal/change detection first; escalate to broader context only when risk or missing evidence requires it.",
+        ],
+        name if name.starts_with("analyze_") || name.starts_with("assess_") || name.starts_with("find_") || matches!(name, "infer_modules" | "label_components") => vec![
+            "Use for deterministic analysis after target files or symbols are known.",
+            "Treat ranked findings as triage; validate risky refactors with tests or narrower graph context before editing.",
+        ],
+        name if name.starts_with("search_") || name.starts_with("read_") || matches!(name, "get_docs_section" | "search_templates" | "search_text_assets") => vec![
+            "Use for non-code assets, saved artifacts, docs, templates, SQL, prompts, or exact file excerpts.",
+            "For symbol relationships, resolve graph symbols first; use content tools as companion evidence.",
+        ],
+        "tool_list" | "tool_search" | "tool_help" | "man" | "repo_registry" | "broker_status" => vec![
+            "Use for live MCP capability discovery and exact runtime docs before guessing tool arguments.",
+            "Prefer tool_search when name is unclear, then tool_help or atlas://tool-docs/{name} for full usage.",
+        ],
+        _ => vec![
+            "Use when request matches tool description and required input fields are known.",
+            "Read structuredContent as source of truth in JSON mode; inspect retry_guidance on errors before retrying.",
+        ],
+    }
+    .into_iter()
+    .map(str::to_owned)
+    .collect::<Vec<_>>();
+
+    if matches!(
+        tool_name,
+        "build_or_update_graph"
+            | "postprocess_graph"
+            | "compact_session"
+            | "record_session_event"
+            | "wake_up"
+            | "purge_saved_context"
+    ) {
+        usage.push("State-changing tool: call intentionally, avoid speculative execution, and preserve user work.".to_owned());
+    }
+    usage
+}
+
+fn few_shot_prompts(tool_name: &str, description: &str) -> Vec<String> {
+    let default_prompt = format!(
+        "User asks for: {description}. Use `{tool_name}` with documented arguments, then answer from structuredContent."
+    );
+    let prompts = match tool_name {
+        "query_graph" => vec![
+            "User asks: 'Where is compute defined?' Call `query_graph` with `{ \"text\": \"compute\" }`, then resolve ambiguity before reading files.".to_owned(),
+            "User asks: 'Who calls compute?' Call `query_graph` with `{ \"text\": \"who calls compute\" }`, then follow with `symbol_neighbors` if usage edges are needed.".to_owned(),
+        ],
+        "get_context" => vec![
+            "User asks: 'Give me bounded context for compute.' Call `get_context` with `{ \"target\": { \"kind\": \"query\", \"query\": \"compute\" } }`.".to_owned(),
+            "User asks: 'Review context for src/lib.rs.' Call `get_context` with `{ \"target\": { \"kind\": \"file\", \"file\": \"src/lib.rs\" } }`.".to_owned(),
+        ],
+        "detect_changes" => vec![
+            "User asks: 'What changed in my working tree?' Call `detect_changes` with `{ \"change_source\": { \"kind\": \"working_tree\" } }`.".to_owned(),
+            "User asks: 'Compare against origin/main.' Call `detect_changes` with `{ \"change_source\": { \"kind\": \"base\", \"base\": \"origin/main\" } }`.".to_owned(),
+        ],
+        "tool_search" => vec![
+            "User asks: 'Which tool finds docs?' Call `tool_search` with `{ \"query\": \"docs\" }`, then call `tool_help` for selected exact tool.".to_owned(),
+            "User mistypes tool name. Call `tool_search` with typo text and use ranked suggestions instead of guessing.".to_owned(),
+        ],
+        "tool_help" | "man" => vec![
+            format!("User asks how to call `{tool_name}`. Request docs for exact exported MCP tool name, then follow examples shown in usage."),
+            "User asks for resource docs. Read `atlas://tool-docs/{name}` when MCP resources are easier than a tool call.".to_owned(),
+        ],
+        _ => vec![default_prompt],
+    };
+    prompts
+        .into_iter()
+        .map(|prompt| truncate_text(&prompt, MAX_EXAMPLE_CHARS))
+        .collect()
+}
+
 fn target_tool_examples(tool_name: &str, input_schema: &Value) -> Vec<String> {
     let special = match tool_name {
         "query_graph" => Some(vec![
@@ -1541,6 +1642,30 @@ mod tests {
             assert!(text.contains(section), "missing section {section}");
         }
         assert!(text.contains("man mcp query_graph"));
+        assert!(text.contains("tool_usage:"));
+        assert!(text.contains("few_shot_prompts:"));
+    }
+
+    #[test]
+    fn every_visible_tool_manual_includes_usage_examples_and_few_shots() {
+        for tool in tool_descriptors() {
+            let doc = tool_manual("mcp", &tool.name).expect("manual doc");
+            assert!(
+                !doc.usage.tool_usage.is_empty(),
+                "{} missing tool usage guidance",
+                tool.name
+            );
+            assert!(
+                !doc.usage.target_tool_call_examples.is_empty(),
+                "{} missing target call examples",
+                tool.name
+            );
+            assert!(
+                !doc.usage.few_shot_prompts.is_empty(),
+                "{} missing few-shot prompts",
+                tool.name
+            );
+        }
     }
 
     #[test]

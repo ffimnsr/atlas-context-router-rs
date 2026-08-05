@@ -203,6 +203,101 @@ fn mirror_metadata_into_structured_content(
     structured_obj.insert(field.to_owned(), value);
 }
 
+fn blocked_error_code(
+    readiness: &atlas_core::GraphReadiness,
+    execution_state: atlas_core::GraphExecutionState,
+) -> &str {
+    if readiness.error_code != "none" {
+        return &readiness.error_code;
+    }
+    match execution_state {
+        atlas_core::GraphExecutionState::Missing => "missing_graph_db",
+        atlas_core::GraphExecutionState::Partial => "degraded_build",
+        atlas_core::GraphExecutionState::Corrupt => match readiness.health_class {
+            Some(class) => class.as_str(),
+            None => "sqlite_corrupt",
+        },
+        atlas_core::GraphExecutionState::Stale => "stale_index",
+        atlas_core::GraphExecutionState::Fresh => "none",
+    }
+}
+
+fn blocked_graph_tool_response(
+    name: &str,
+    readiness: &atlas_core::GraphReadiness,
+    execution_state: atlas_core::GraphExecutionState,
+    reason: &str,
+    suggestions: &[String],
+    output_format: OutputFormat,
+) -> Result<serde_json::Value> {
+    let error_code = blocked_error_code(readiness, execution_state);
+    let message = atlas_core::graph_health_error_message(error_code);
+    let health_class = readiness.health_class.map(|class| class.as_str());
+    let recommended_rebuild_command = readiness.recommended_rebuild_command();
+    let details = serde_json::json!({
+        "blocked": true,
+        "error_code": error_code,
+        "health_class": health_class,
+        "reason": reason,
+        "execution_state": execution_state.as_str(),
+        "suggestions": suggestions,
+        "db_path": &readiness.db_path,
+        "repo_root": &readiness.repo_root,
+        "quarantine_path": &readiness.quarantine_path,
+        "recommended_rebuild_command": recommended_rebuild_command,
+    });
+    let payload = ToolErrorPayload::new(ToolErrorCode::GraphStale, message)
+        .with_tool(name)
+        .with_retry_guidance("Run diagnostics or rebuild graph, then retry.")
+        .with_details(details);
+    let mut response = tool_execution_error_value(output_format, &payload)?;
+    response["atlas_readiness"] = serde_json::json!({
+        "blocked": true,
+        "safe_to_answer": false,
+        "execution_state": execution_state.as_str(),
+        "health_class": health_class,
+        "error_code": error_code,
+        "reason": reason,
+        "suggestions": suggestions,
+        "quarantine_path": &readiness.quarantine_path,
+        "recommended_rebuild_command": recommended_rebuild_command,
+    });
+    response["atlas_freshness"] = serde_json::json!({
+        "stale": execution_state == atlas_core::GraphExecutionState::Stale,
+        "blocked": true,
+        "safe_to_answer": false,
+        "execution_state": execution_state.as_str(),
+        "reason": "graph facts unavailable; run diagnostics or rebuild before answering from graph state"
+    });
+
+    let atlas_readiness = response["atlas_readiness"].clone();
+    let atlas_freshness = response["atlas_freshness"].clone();
+    if let Some(structured) = response
+        .get_mut("structuredContent")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        structured.insert("ok".to_owned(), serde_json::json!(false));
+        structured.insert("blocked".to_owned(), serde_json::json!(true));
+        structured.insert("error_code".to_owned(), serde_json::json!(error_code));
+        structured.insert("health_class".to_owned(), serde_json::json!(health_class));
+        structured.insert(
+            "execution_state".to_owned(),
+            serde_json::json!(execution_state.as_str()),
+        );
+        structured.insert(
+            "recommended_rebuild_command".to_owned(),
+            serde_json::json!(recommended_rebuild_command),
+        );
+        structured.insert(
+            "quarantine_path".to_owned(),
+            serde_json::json!(&readiness.quarantine_path),
+        );
+        structured.insert("atlas_readiness".to_owned(), atlas_readiness);
+        structured.insert("atlas_freshness".to_owned(), atlas_freshness);
+    }
+    Ok(response)
+}
+
 fn inject_freshness_warning(
     response: &mut serde_json::Value,
     name: &str,
@@ -417,28 +512,20 @@ fn call_inner(
             suggestions,
         } = readiness.check_tool(req, overrides)
         {
-            let payload = ToolErrorPayload::new(
-                ToolErrorCode::GraphStale,
-                format!("Graph not ready: {reason}"),
-            )
-            .with_tool(name)
-            .with_retry_guidance(
-                "Run graph build/update or allow stale/partial mode when supported, then retry.",
-            )
-            .with_details(serde_json::json!({
-                "detail": format!("graph readiness blocked: {reason}"),
-                "execution_state": execution_state.as_str(),
-                "reason": reason,
-                "suggestions": suggestions,
-            }));
-            let mut blocked = tool_execution_error_value(output_format, &payload)?;
-            blocked["atlas_readiness"] = serde_json::json!({
-                "execution_state": execution_state.as_str(),
-                "blocked": true,
-                "reason": reason,
-                "suggestions": suggestions,
-            });
+            let mut blocked = blocked_graph_tool_response(
+                name,
+                readiness,
+                execution_state,
+                &reason,
+                &suggestions,
+                output_format,
+            )?;
             inject_provenance(&mut blocked, args, repo_root, db_path);
+            mirror_metadata_into_structured_content(
+                &mut blocked,
+                "atlas_freshness",
+                normalized_contract_tool,
+            );
             return Ok(blocked);
         }
     }
@@ -563,6 +650,11 @@ fn call_inner(
         let mut atlas_readiness = serde_json::json!({
             "execution_state": execution_state.as_str(),
             "safe_to_answer": safe_to_answer,
+            "blocked": false,
+            "health_class": readiness.health_class.map(|class| class.as_str()),
+            "error_code": &readiness.error_code,
+            "quarantine_path": &readiness.quarantine_path,
+            "recommended_rebuild_command": readiness.recommended_rebuild_command(),
         });
         if let Some(w) = warning {
             atlas_readiness["warning"] = serde_json::Value::String(w);

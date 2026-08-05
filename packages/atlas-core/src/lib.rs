@@ -27,8 +27,9 @@ pub use clock::{Clock, FixedClock, SystemClock, format_rfc3339, now_utc};
 pub use error::{AtlasError, Result};
 pub use error_codes::{ERROR_CODE_CATALOG_PATH, error_code_docs_ref};
 pub use health::{
-    GraphHealthInput, graph_health_error_message, graph_health_error_suggestions,
-    is_schema_mismatch_error, select_graph_health_error_code, user_facing_error_message,
+    GraphHealthInput, GraphStoreHealthClass, classify_graph_store_error,
+    graph_health_error_message, graph_health_error_suggestions, is_schema_mismatch_error,
+    select_graph_health_error_code, user_facing_error_message,
 };
 pub use kinds::{EdgeKind, NodeKind};
 pub use model::{

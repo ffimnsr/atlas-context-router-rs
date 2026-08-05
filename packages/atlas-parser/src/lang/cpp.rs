@@ -1,15 +1,86 @@
 //! C++ parser backed by `tree-sitter-cpp`.
 //! Grammar source: `tree-sitter/tree-sitter-cpp`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use atlas_core::{Edge, EdgeKind, Node, NodeId, NodeKind, ParsedFile};
 use tree_sitter::Node as TsNode;
 
 use crate::ast_helpers::{end_line, node_text, start_line};
+use crate::query_helpers::{compile_static_query, run_query};
 use crate::traits::{LangParser, ParseContext};
 
+// SQ1 migration checklist:
+// - manual extraction below owns declaration walks, scope and qualified-name rules, import/reference detection,
+//   call-edge heuristics, and source metadata attachment
+// - keep public parser API, graph schema, and output contracts unchanged during query migration
+// - move tree-sitter syntax matching only into shared @atlas.* query captures
+
+const CPP_QUERY: &str = include_str!("../../queries/cpp.scm");
+
 pub struct CppParser;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct CppNodeKey {
+    start_byte: usize,
+    end_byte: usize,
+}
+
+#[derive(Debug, Default)]
+struct CppSyntaxFacts {
+    includes: HashSet<CppNodeKey>,
+    namespaces: HashSet<CppNodeKey>,
+    classes: HashSet<CppNodeKey>,
+    structs: HashSet<CppNodeKey>,
+    enums: HashSet<CppNodeKey>,
+    functions: HashSet<CppNodeKey>,
+    methods: HashSet<CppNodeKey>,
+    calls: HashSet<CppNodeKey>,
+}
+
+impl CppSyntaxFacts {
+    fn extract(root: TsNode<'_>, source: &[u8]) -> Result<Self, String> {
+        let language: tree_sitter::Language = tree_sitter_cpp::LANGUAGE.into();
+        let query = compile_static_query(language, "cpp", CPP_QUERY)?;
+        let matches = run_query(&query, root, source);
+        let mut facts = Self::default();
+
+        for group in matches {
+            for capture in group.captures {
+                let key = node_key(capture.node);
+                match capture.name.as_str() {
+                    "atlas.import" => {
+                        facts.includes.insert(key);
+                    }
+                    "atlas.definition.module" => {
+                        facts.namespaces.insert(key);
+                    }
+                    "atlas.definition.class" => {
+                        facts.classes.insert(key);
+                    }
+                    "atlas.definition.struct" => {
+                        facts.structs.insert(key);
+                    }
+                    "atlas.definition.enum" => {
+                        facts.enums.insert(key);
+                    }
+                    "atlas.definition.function" => {
+                        facts.functions.insert(key);
+                    }
+                    "atlas.definition.method" => {
+                        facts.methods.insert(key);
+                    }
+                    "atlas.call" => {
+                        facts.calls.insert(key);
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        Ok(facts)
+    }
+}
 
 impl LangParser for CppParser {
     fn language_name(&self) -> &'static str {
@@ -34,12 +105,15 @@ impl LangParser for CppParser {
 
         if let Some(ref tree) = tree {
             let root = tree.root_node();
+            let facts = CppSyntaxFacts::extract(root, ctx.source)
+                .unwrap_or_else(|err| panic!("cpp query extraction failed: {err}"));
             let mut import_index = 0usize;
             let mut cursor = root.walk();
             for child in root.named_children(&mut cursor) {
                 visit_node(
                     child,
                     ctx,
+                    &facts,
                     ctx.rel_path,
                     false,
                     &mut import_index,
@@ -50,7 +124,7 @@ impl LangParser for CppParser {
 
             let callable_map = callable_qn_map(&nodes);
             let mut call_edges = Vec::new();
-            walk_calls(root, ctx, &callable_map, None, &mut call_edges);
+            walk_calls(root, ctx, &facts, &callable_map, None, &mut call_edges);
             edges.extend(call_edges);
         }
 
@@ -68,21 +142,31 @@ impl LangParser for CppParser {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn visit_node(
     node: TsNode<'_>,
     ctx: &ParseContext<'_>,
+    facts: &CppSyntaxFacts,
     parent_qn: &str,
     templated: bool,
     import_index: &mut usize,
     nodes: &mut Vec<Node>,
     edges: &mut Vec<Edge>,
 ) {
-    match node.kind() {
-        "preproc_include" => emit_include(node, ctx, parent_qn, import_index, nodes, edges),
-        "namespace_definition" => emit_namespace(node, ctx, import_index, nodes, edges),
-        "class_specifier" => emit_type(
+    let key = node_key(node);
+    if facts.includes.contains(&key) {
+        emit_include(node, ctx, parent_qn, import_index, nodes, edges);
+        return;
+    }
+    if facts.namespaces.contains(&key) {
+        emit_namespace(node, ctx, facts, import_index, nodes, edges);
+        return;
+    }
+    if facts.classes.contains(&key) {
+        emit_type(
             node,
             ctx,
+            facts,
             parent_qn,
             "class",
             NodeKind::Class,
@@ -90,10 +174,14 @@ fn visit_node(
             import_index,
             nodes,
             edges,
-        ),
-        "struct_specifier" => emit_type(
+        );
+        return;
+    }
+    if facts.structs.contains(&key) {
+        emit_type(
             node,
             ctx,
+            facts,
             parent_qn,
             "struct",
             NodeKind::Struct,
@@ -101,10 +189,14 @@ fn visit_node(
             import_index,
             nodes,
             edges,
-        ),
-        "enum_specifier" => emit_type(
+        );
+        return;
+    }
+    if facts.enums.contains(&key) {
+        emit_type(
             node,
             ctx,
+            facts,
             parent_qn,
             "enum",
             NodeKind::Enum,
@@ -112,20 +204,42 @@ fn visit_node(
             import_index,
             nodes,
             edges,
-        ),
-        "function_definition" => emit_function(node, ctx, parent_qn, templated, nodes, edges),
-        "template_declaration" => {
-            let mut cursor = node.walk();
-            for child in node.named_children(&mut cursor) {
-                visit_node(child, ctx, parent_qn, true, import_index, nodes, edges);
-            }
+        );
+        return;
+    }
+    if facts.functions.contains(&key) || facts.methods.contains(&key) {
+        emit_function(node, ctx, parent_qn, templated, nodes, edges);
+        return;
+    }
+    if node.kind() == "template_declaration" {
+        let mut cursor = node.walk();
+        for child in node.named_children(&mut cursor) {
+            visit_node(
+                child,
+                ctx,
+                facts,
+                parent_qn,
+                true,
+                import_index,
+                nodes,
+                edges,
+            );
         }
-        _ => {
-            let mut cursor = node.walk();
-            for child in node.named_children(&mut cursor) {
-                visit_node(child, ctx, parent_qn, templated, import_index, nodes, edges);
-            }
-        }
+        return;
+    }
+
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        visit_node(
+            child,
+            ctx,
+            facts,
+            parent_qn,
+            templated,
+            import_index,
+            nodes,
+            edges,
+        );
     }
 }
 
@@ -180,6 +294,7 @@ fn emit_include(
 fn emit_namespace(
     node: TsNode<'_>,
     ctx: &ParseContext<'_>,
+    facts: &CppSyntaxFacts,
     import_index: &mut usize,
     nodes: &mut Vec<Node>,
     edges: &mut Vec<Edge>,
@@ -212,7 +327,7 @@ fn emit_namespace(
 
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
-        visit_node(child, ctx, &qn, false, import_index, nodes, edges);
+        visit_node(child, ctx, facts, &qn, false, import_index, nodes, edges);
     }
 }
 
@@ -220,6 +335,7 @@ fn emit_namespace(
 fn emit_type(
     node: TsNode<'_>,
     ctx: &ParseContext<'_>,
+    facts: &CppSyntaxFacts,
     parent_qn: &str,
     qn_prefix: &str,
     kind: NodeKind,
@@ -256,7 +372,7 @@ fn emit_type(
 
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
-        visit_node(child, ctx, &qn, false, import_index, nodes, edges);
+        visit_node(child, ctx, facts, &qn, false, import_index, nodes, edges);
     }
 }
 
@@ -331,12 +447,14 @@ fn callable_qn_map(nodes: &[Node]) -> HashMap<String, String> {
 fn walk_calls(
     node: TsNode<'_>,
     ctx: &ParseContext<'_>,
+    facts: &CppSyntaxFacts,
     callables: &HashMap<String, String>,
     current_owner: Option<String>,
     edges: &mut Vec<Edge>,
 ) {
     let mut next_owner = current_owner;
-    if node.kind() == "function_definition"
+    let key = node_key(node);
+    if (facts.functions.contains(&key) || facts.methods.contains(&key))
         && let Some(declarator) = node.child_by_field_name("declarator")
         && let Some(signature) = declarator_signature(declarator, ctx.source)
     {
@@ -344,7 +462,7 @@ fn walk_calls(
             .map(|(_, method_name)| method_name)
             .unwrap_or_else(|| final_segment(&signature));
         next_owner = callables.get(&lookup).cloned();
-    } else if node.kind() == "call_expression"
+    } else if facts.calls.contains(&key)
         && let Some(owner_qn) = next_owner.as_ref()
         && let Some(function_node) = node.child_by_field_name("function")
     {
@@ -362,7 +480,7 @@ fn walk_calls(
 
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
-        walk_calls(child, ctx, callables, next_owner.clone(), edges);
+        walk_calls(child, ctx, facts, callables, next_owner.clone(), edges);
     }
 }
 
@@ -401,6 +519,13 @@ fn normalize_name(name: &str) -> String {
         .unwrap_or(name)
         .trim()
         .to_owned()
+}
+
+fn node_key(node: TsNode<'_>) -> CppNodeKey {
+    CppNodeKey {
+        start_byte: node.start_byte(),
+        end_byte: node.end_byte(),
+    }
 }
 
 fn file_node(rel_path: &str, file_hash: &str, line_end: u32) -> Node {

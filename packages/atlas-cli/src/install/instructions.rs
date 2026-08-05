@@ -28,54 +28,74 @@ impl InstructionsMode {
 pub(super) const INSTRUCTIONS_SECTION: &str = r#"<!-- atlas MCP tools -->
 ## MCP Tools: atlas
 
-**IMPORTANT: This project has a code knowledge graph. ALWAYS use the
-atlas MCP tools BEFORE using file-search or grep to explore the codebase.**
-The graph is faster, cheaper (fewer tokens), and gives you structural context
-(callers, dependents, test coverage) that file scanning cannot.
+**Atlas first.** This repository has a code knowledge graph. For code exploration, use Atlas MCP tools before `grep`, file search, broad reads, or exploratory terminal commands.
 
-Use default JSON output. Trust structuredContent as source of truth.
+Why: Atlas is cheaper, faster, and returns structure file search cannot: symbols, callers, callees, tests, dependents, impact radius, and review context.
 
-### When to use atlas tools first
+Priority rule: if instructions conflict, prefer Atlas for discovery and relationship lookup. Exceptions: read/edit exact files already identified, run validation commands (`cargo test --quiet`, clippy, format), or inspect non-code assets after Atlas points to them.
 
-- **Exploring code**: `query_graph` to find candidate symbols, then `symbol_neighbors`, `traverse_graph`, or `get_context` for callers/callees and usage relationships
-- **Companion content lookup**: after graph tools surface structural context, use `search_files`, `search_content`, `search_templates`, or `search_text_assets` when changed files or graph evidence points to non-code assets (docs, config, SQL, templates, prompts). Do not search content before graph resolution for symbol questions.
-- **Mixed graph/content context**: pass non-code asset paths into `get_context` via `files` to merge graph and content evidence under one bounded selection, ranking, and truncation policy.
-- **Understanding impact**: `get_impact_radius` for blast radius, `explain_change` for richer risk analysis
-- **Code review**: `detect_changes` + `get_review_context`, or `get_minimal_context` when tokens matter; follow up with `search_text_assets` or `search_templates` when changed files include config/templates/SQL/prompts
-- **Finding relationships**: `symbol_neighbors` for immediate usage edges, `traverse_graph` for broader callers/callees, and `get_context` for intent-aware usage lookup
-- **Repo health**: `list_graph_stats`, `status`, `doctor`, `db_check`, and `debug_graph` before trusting graph-backed answers
-- **Session continuity**: `get_session_status`, `resume_session`, `search_saved_context`, `search_decisions`, and `save_context_artifact`
-- **Shared memory**: `memory_store` and `memory_recall` for persistent project/global/frontend memories with the same validation and visibility rules as the CLI
+Use default JSON output. Trust `structuredContent` as source of truth when present.
 
-Do not treat `query_graph` as caller/callee search. Fall back to file tools **only** after graph relationship tools do not cover what you need.
+### Atlas-first requirements
+
+- First code-exploration step: call `status` unless graph freshness is already known from current turn.
+- Symbol or usage question: start with `query_graph` or `resolve_symbol`.
+- Caller/callee/test question: use `symbol_neighbors` before wider traversal.
+- Broader context needed: use `get_context` before `traverse_graph`.
+- Last resort for relationships: use `traverse_graph` with bounded `max_depth` and `max_nodes`.
+- File reads/edits are OK after Atlas identifies exact files, or when user already named exact files.
+- Content search tools (`search_files`, `search_content`, `search_templates`, `search_text_assets`) are companion tools for docs, config, SQL, templates, prompts, or exact non-code evidence. Do not use them first for symbol questions.
+
+### Minimal-first escalation order
+
+Review/change tasks:
+1. `detect_changes` when changed files are unknown.
+2. `get_minimal_context` for first bounded triage.
+3. `get_review_context` when changed-symbol, neighbor, or risk detail is needed.
+4. `explain_change` when deterministic risk/test-gap explanation is needed.
+5. `get_impact_radius` when explicit blast radius is needed.
+
+Symbol/usage tasks:
+1. `query_graph` or `resolve_symbol`.
+2. `symbol_neighbors` for direct callers, callees, and tests.
+3. `get_context` for bounded ranked context.
+4. `traverse_graph` only when one-hop context is insufficient.
+
+Allowed reasons to escalate:
+- ambiguous symbol resolution
+- truncated result
+- missing caller/callee/test evidence
+- cross-file or cross-package risk
+- explicit user request for broader context
+- safety-critical uncertainty
+
+Anti-patterns:
+- starting with `grep`, file search, or broad reads for structural code questions
+- using `query_graph` as caller/callee search instead of following with relationship tools
+- using `traverse_graph` before symbol resolution
+- broad traversal without bounded `max_depth` and `max_nodes`
+- using full review context when minimal context is enough
+- skipping Atlas because a terminal command feels faster
 
 ### Tool discovery
 
-Runtime docs are canonical for exact current arguments, discriminated input objects, legacy-compatibility windows, and output contracts. Do not treat this instruction block as exhaustive inventory.
+Runtime docs are canonical for current arguments and output contracts. Do not treat this instruction block as exhaustive inventory.
 
-- `tool_list`: list current visible exported MCP tools at runtime instead of hardcoding long tool tables in agent instructions
-- `tool_search`: search tools by name/title/description with explicit score factors and typo-tolerant fuzzy name matching when exact tool name is unclear
-- `tool_help`: read runtime docs for one exact exported MCP tool name, including `input_contract` with discriminants, accepted values, companion fields, legacy conflicts, and minimal examples
-- `man`: legacy namespace-aware manual alias; use when caller already speaks `namespace/tool_name`
+- `tool_list`: list visible Atlas MCP tools
+- `tool_search`: find tools by name or capability
+- `tool_help`: read exact runtime docs for one tool, including input contracts and minimal examples
+- `man`: legacy namespace-aware manual alias
 
-### Workflow surfaces
+### Common tool map
 
-- symbol lookup/relationships: `query_graph`, `symbol_neighbors`, `traverse_graph`, `get_context`
-- change review/blast radius: `detect_changes`, `get_review_context`, `get_minimal_context`, `get_impact_radius`, `explain_change`
-- repo/graph health: `status`, `doctor`, `db_check`, `debug_graph`, `list_graph_stats`
-- companion file/docs lookup: `search_files`, `search_content`, `read_file_excerpt`, `get_docs_section`, `read_file_around_match`, `search_templates`, `search_text_assets`
-- continuity: `get_session_status`, `resume_session`, `search_saved_context`, `search_decisions`, `save_context_artifact`
+- symbol lookup: `query_graph`, `resolve_symbol`
+- relationships: `symbol_neighbors`, `traverse_graph`, `get_context`
+- review/change context: `detect_changes`, `get_minimal_context`, `get_review_context`
+- impact/risk: `get_impact_radius`, `explain_change`, `assess_risk`, `analyze_safety`
+- repo health: `status`, `doctor`, `db_check`, `debug_graph`, `list_graph_stats`
+- companion non-code lookup: `search_files`, `search_content`, `read_file_excerpt`, `get_docs_section`, `read_file_around_match`, `search_templates`, `search_text_assets`
+- continuity: `wake_up`, `get_session_status`, `resume_session`, `search_saved_context`, `search_decisions`, `save_context_artifact`
 - shared memory: `memory_store`, `memory_recall`
-
-### Workflow
-
-1. Start with MCP graph tools to get structural context.
-2. For usage questions, use `query_graph` to find the qualified name, then `symbol_neighbors`, `traverse_graph`, or `get_context`.
-3. Use `detect_changes` to identify changed files.
-4. Use `get_review_context` or `get_minimal_context` for review.
-5. Use `get_impact_radius` or `explain_change` to assess change risk.
-6. When changed files include docs, config, templates, prompts, or SQL, call `search_text_assets` or `search_templates` as companion lookup after graph tools run. Pass asset paths into `get_context` via `files` to merge graph and content under one bounded budget.
-7. When graph evidence shows edges to non-code files (config, SQL, template, prompt), use `search_text_assets` or `search_content` as companion lookup. Do not search content before graph resolution for symbol questions.
 
 ### Trust Metadata
 

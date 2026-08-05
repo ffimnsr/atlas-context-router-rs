@@ -2,7 +2,7 @@ use crate::traits::LangParser;
 use atlas_core::{EdgeKind, NodeKind, ParsedFile};
 
 use super::*;
-use crate::query_helpers::{compile_query, read_capture_text, run_query};
+use crate::query_helpers::{compile_static_query, read_capture_text, run_query};
 use crate::traits::ParseContext;
 
 fn parse(src: &str) -> ParsedFile {
@@ -517,7 +517,7 @@ fn malformed_source_keeps_file_node_and_best_effort_symbols() {
 #[test]
 fn rust_definition_query_extracts_function_capture() {
     let language: tree_sitter::Language = tree_sitter_rust::LANGUAGE.into();
-    let query = compile_query(language.clone(), RUST_DEFINITION_QUERY)
+    let query = compile_static_query(language.clone(), "rust", RUST_DEFINITION_QUERY)
         .expect("rust definition query should compile");
     let source = b"fn helper() {}";
 
@@ -541,7 +541,7 @@ fn rust_definition_query_extracts_function_capture() {
 #[test]
 fn rust_definition_query_extracts_impl_trait_capture() {
     let language: tree_sitter::Language = tree_sitter_rust::LANGUAGE.into();
-    let query = compile_query(language.clone(), RUST_DEFINITION_QUERY)
+    let query = compile_static_query(language.clone(), "rust", RUST_DEFINITION_QUERY)
         .expect("rust definition query should compile");
     let source = b"trait Draw {} struct Shape; impl Draw for Shape {}";
 
@@ -564,7 +564,7 @@ fn rust_definition_query_extracts_impl_trait_capture() {
 #[test]
 fn rust_definition_query_extracts_method_call_receiver_and_name() {
     let language: tree_sitter::Language = tree_sitter_rust::LANGUAGE.into();
-    let query = compile_query(language.clone(), RUST_DEFINITION_QUERY)
+    let query = compile_static_query(language.clone(), "rust", RUST_DEFINITION_QUERY)
         .expect("rust definition query should compile");
     let source = b"struct S; impl S { fn run(&self) {} fn call(&self) { self.run(); } }";
 

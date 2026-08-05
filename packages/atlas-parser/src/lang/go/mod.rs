@@ -14,6 +14,11 @@ use declarations::{
     visit_method, visit_type_decl, visit_value_decl,
 };
 
+// SQ1 migration checklist:
+// - manual extraction below owns package, declaration, import, call-edge, scope, and qualified-name semantics
+// - keep public parser API, graph schema, and output contracts unchanged during query migration
+// - move tree-sitter syntax matching only into shared @atlas.* query captures
+
 pub struct GoParser;
 impl LangParser for GoParser {
     fn language_name(&self) -> &'static str {

@@ -31,6 +31,8 @@ fn status_healthy_repo_returns_ok() {
 
     assert_eq!(v["ready"].as_bool(), Some(true));
     assert_eq!(v["failure_category"].as_str(), Some("none"));
+    assert_eq!(v["health_class"].as_str(), Some("healthy"));
+    assert_eq!(v["summary"]["health_class"].as_str(), Some("healthy"));
     assert_error_code_doc_link(
         v["summary"]["error_code_docs"]
             .as_str()
@@ -96,6 +98,7 @@ fn status_build_failed_returns_error_code() {
 
     assert_eq!(v["ready"].as_bool(), Some(false));
     assert_eq!(v["failure_category"].as_str(), Some("failed_build"));
+    assert_eq!(v["health_class"].as_str(), Some("failed_build"));
     assert!(v["summary"]["message"].as_str().is_some());
     assert_eq!(
         v["graph_state"]["build_state"].as_str(),
@@ -116,6 +119,7 @@ fn status_interrupted_build_returns_category() {
 
     assert_eq!(v["ready"].as_bool(), Some(false));
     assert_eq!(v["failure_category"].as_str(), Some("interrupted_build"));
+    assert_eq!(v["health_class"].as_str(), Some("interrupted_build"));
     assert!(v["summary"]["message"].as_str().is_some());
     assert_eq!(v["graph_state"]["build_state"].as_str(), Some("building"));
 }
@@ -137,6 +141,7 @@ fn status_stale_graph_returns_error_code() {
 
     assert_eq!(v["ready"].as_bool(), Some(false));
     assert_eq!(v["failure_category"].as_str(), Some("stale_index"));
+    assert_eq!(v["health_class"].as_str(), Some("stale"));
     assert_eq!(v["graph_state"]["stale_index"].as_bool(), Some(true));
     assert_eq!(
         v["graph_state"]["pending_graph_change_count"].as_u64(),
@@ -247,11 +252,28 @@ fn status_schema_mismatch_returns_error_code() {
 
     assert_eq!(v["ready"].as_bool(), Some(false));
     assert_eq!(v["failure_category"].as_str(), Some("schema_mismatch"));
+    assert_eq!(v["health_class"].as_str(), Some("schema_mismatch"));
     assert!(
         v["db_state"]["query_error"]
             .as_str()
             .is_some_and(|text| text.contains("graph_build_state"))
     );
+}
+
+#[test]
+fn status_non_sqlite_db_reports_sqlite_corrupt() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let db_path = dir.path().join("atlas.db");
+    std::fs::write(&db_path, "not a sqlite database").expect("write malformed db");
+    let db_path = db_path.to_string_lossy().to_string();
+
+    let args = serde_json::json!({ "output_format": "json" });
+    let resp = call("status", Some(&args), "/repo", &db_path).expect("status call");
+    let text = unwrap_tool_text(resp);
+    let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
+
+    assert_eq!(v["failure_category"].as_str(), Some("sqlite_corrupt"));
+    assert_eq!(v["health_class"].as_str(), Some("sqlite_corrupt"));
 }
 
 #[test]
@@ -380,9 +402,14 @@ fn db_check_reports_noncanonical_path_rows() {
     let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
 
     assert_eq!(v["summary"]["ok"].as_bool(), Some(false));
+    assert_eq!(v["health_class"].as_str(), Some("logical_inconsistency"));
     assert_eq!(
         v["summary"]["failure_category"].as_str(),
-        Some("noncanonical_path_rows")
+        Some("logical_inconsistency")
+    );
+    assert_eq!(
+        v["summary"]["health_class"].as_str(),
+        Some("logical_inconsistency")
     );
     assert!(
         v["noncanonical_path_rows"]
@@ -404,7 +431,9 @@ fn db_check_healthy_returns_ok() {
     let v: serde_json::Value = serde_json::from_str(&text).expect("parse json");
 
     assert_eq!(v["ok"].as_bool(), Some(true));
+    assert_eq!(v["health_class"].as_str(), Some("healthy"));
     assert_eq!(v["summary"]["failure_category"].as_str(), Some("none"));
+    assert_eq!(v["summary"]["health_class"].as_str(), Some("healthy"));
     assert!(v["summary"]["message"].as_str().is_some());
     assert!(v["summary"]["suggestions"].as_array().is_some());
     let issues = v["integrity"]["issues"]

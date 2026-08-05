@@ -42,6 +42,8 @@ pub(crate) fn tool_build_or_update_graph(
             "budget_stop_reason": bs.budget_stop_reason,
             "last_built_at": bs.last_built_at,
             "last_error": bs.last_error,
+            "recovery_mode": bs.recovery_mode,
+            "quarantine_path": bs.quarantine_path,
         })
     }
 
@@ -52,6 +54,72 @@ pub(crate) fn tool_build_or_update_graph(
             atlas_core::BudgetStatus::PartialResult => "partial_result",
             atlas_core::BudgetStatus::Blocked => "blocked",
         }
+    }
+
+    fn rebuild_result_label(
+        recovery: Option<&atlas_store_sqlite::GraphStoreRecovery>,
+        failure_reason: Option<&str>,
+    ) -> &'static str {
+        if failure_reason.is_some() {
+            if recovery.is_some_and(|recovery| recovery.quarantine_path.is_some()) {
+                "rebuild_failed"
+            } else {
+                "failed"
+            }
+        } else if recovery.is_some_and(|recovery| recovery.quarantine_path.is_some()) {
+            "rebuilt_fresh"
+        } else {
+            "not_needed"
+        }
+    }
+
+    fn rebuild_strategy_label(full_rebuild: bool) -> &'static str {
+        if full_rebuild {
+            "full_rebuild_from_source"
+        } else {
+            "incremental_update"
+        }
+    }
+
+    fn readiness_summary(
+        db_path: &str,
+        repo_root: &str,
+    ) -> (Option<String>, String, String, Vec<String>, String) {
+        let readiness = match Store::open(db_path) {
+            Ok(store) => super::super::shared::derive_graph_readiness(&store, repo_root, db_path),
+            Err(error) => {
+                use atlas_core::{GraphReadiness, GraphReadinessInput};
+                GraphReadiness::derive(GraphReadinessInput {
+                    repo_root,
+                    db_path,
+                    db_exists: std::path::Path::new(db_path).exists(),
+                    db_open_error: Some(&error.to_string()),
+                    build_state: None,
+                    build_last_error: None,
+                    graph_error: None,
+                    recovery_mode: None,
+                    quarantine_path: None,
+                    pending_graph_changes: &[],
+                    indexed_file_count: 0,
+                    graph_has_content: false,
+                    last_indexed_at: None,
+                    retrieval_unavailable: true,
+                })
+            }
+        };
+        let error_code = readiness.error_code.clone();
+        (
+            readiness
+                .health_class
+                .map(|class| class.as_str().to_owned()),
+            error_code.clone(),
+            atlas_core::graph_health_error_message(&error_code).to_owned(),
+            atlas_core::graph_health_error_suggestions(&error_code)
+                .iter()
+                .map(|item| (*item).to_owned())
+                .collect(),
+            atlas_core::error_code_docs_ref(&error_code),
+        )
     }
 
     if operation.kind == BuildOperationKind::Update {
@@ -76,6 +144,36 @@ pub(crate) fn tool_build_or_update_graph(
             .unwrap_or_default();
         let build_budget = config.build_run_budget()?;
 
+        let recovery = match Store::prepare_graph_store_rebuild(
+            db_path,
+            atlas_store_sqlite::GraphRecoveryMode::AutoQuarantineAndRebuild,
+            true,
+        ) {
+            Ok(recovery) => recovery,
+            Err(error) => {
+                let payload = json!({
+                    "mode": operation.kind.as_str(),
+                    "status": "error",
+                    "health_class": error.health_class.as_str(),
+                    "error_code": error.error_code,
+                    "message": error.message,
+                    "suggestions": error.suggestions,
+                    "error_code_docs": atlas_core::error_code_docs_ref(error.health_class.as_str()),
+                    "recovery_mode": error.recovery_mode.as_str(),
+                    "quarantine_path": error.quarantine_path,
+                    "rebuild_result": rebuild_result_label(None, error.failure_reason.as_deref()),
+                    "failure_reason": error.failure_reason,
+                    "rebuild_strategy": "full_rebuild_from_source",
+                    "build_status": build_status_json(db_path, repo_root_str),
+                });
+                let envelope = ToolSuccessEnvelope::new("build_or_update_graph", payload);
+                let mut response = normalized_tool_result_value(&envelope, output_format)?;
+                inject_deprecated_input_fields(&mut response, &deprecated_operation_fields);
+                return Ok(response);
+            }
+        };
+        let full_rebuild = recovery.full_rebuild_required;
+
         if let Ok(s) = Store::open(db_path) {
             let _ = s.begin_build(repo_root_str);
         }
@@ -86,19 +184,49 @@ pub(crate) fn tool_build_or_update_graph(
         }
         crate::progress::report("updating graph", Some(10));
 
-        let update_result = update_graph(
-            repo_root_path.as_path(),
-            db_path,
-            &UpdateOptions {
-                fail_fast: false,
-                dry_run: false,
-                batch_size: config.parse_batch_size(),
-                target,
-                budget: build_budget,
-                source_repo_id: Some(stable_repo_id(repo_root_path.as_path())),
-                namespace_qualified_names: false,
-            },
-        );
+        let update_result = if full_rebuild {
+            build_graph(
+                repo_root_path.as_path(),
+                db_path,
+                &BuildOptions {
+                    fail_fast: false,
+                    dry_run: false,
+                    batch_size: config.parse_batch_size(),
+                    budget: build_budget,
+                    source_repo_id: Some(stable_repo_id(repo_root_path.as_path())),
+                    namespace_qualified_names: false,
+                },
+            )
+            .map(|summary| atlas_engine::UpdateSummary {
+                deleted: 0,
+                renamed: 0,
+                parsed: summary.parsed,
+                skipped_unsupported: summary.skipped_unsupported,
+                parse_errors: summary.parse_errors,
+                chunk_upsert_failures: summary.chunk_upsert_failures,
+                call_target_reconcile_failures: summary.call_target_reconcile_failures,
+                nodes_updated: summary.nodes_inserted,
+                edges_updated: summary.edges_inserted,
+                warnings: summary.warnings,
+                budget_counters: summary.budget_counters,
+                budget: summary.budget,
+                elapsed_ms: summary.elapsed_ms,
+            })
+        } else {
+            update_graph(
+                repo_root_path.as_path(),
+                db_path,
+                &UpdateOptions {
+                    fail_fast: false,
+                    dry_run: false,
+                    batch_size: config.parse_batch_size(),
+                    target,
+                    budget: build_budget,
+                    source_repo_id: Some(stable_repo_id(repo_root_path.as_path())),
+                    namespace_qualified_names: false,
+                },
+            )
+        };
 
         if let Ok(s) = Store::open(db_path) {
             match &update_result {
@@ -130,15 +258,48 @@ pub(crate) fn tool_build_or_update_graph(
                             budget_stop_reason: sum.budget_counters.budget_stop_reason.clone(),
                         },
                     );
+                    let _ = s.set_build_recovery_metadata(
+                        repo_root_str,
+                        Some(recovery.recovery_mode.as_str()),
+                        recovery.quarantine_path.as_deref(),
+                    );
                 }
                 Err(e) => {
                     let _ = s.fail_build(repo_root_str, &e.to_string());
+                    let _ = s.set_build_recovery_metadata(
+                        repo_root_str,
+                        Some(recovery.recovery_mode.as_str()),
+                        recovery.quarantine_path.as_deref(),
+                    );
                 }
             }
         }
 
         crate::progress::report("writing results", Some(90));
-        let summary = update_result?;
+        let summary = match update_result {
+            Ok(summary) => summary,
+            Err(error) => {
+                let payload = json!({
+                    "mode": operation.kind.as_str(),
+                    "status": "error",
+                    "health_class": recovery.health_class.map(|class| class.as_str()),
+                    "error_code": "failed_build",
+                    "message": atlas_core::graph_health_error_message("failed_build"),
+                    "suggestions": atlas_core::graph_health_error_suggestions("failed_build"),
+                    "error_code_docs": atlas_core::error_code_docs_ref("failed_build"),
+                    "recovery_mode": recovery.recovery_mode.as_str(),
+                    "quarantine_path": recovery.quarantine_path,
+                    "rebuild_result": rebuild_result_label(Some(&recovery), Some(&error.to_string())),
+                    "failure_reason": error.to_string(),
+                    "rebuild_strategy": rebuild_strategy_label(full_rebuild),
+                    "build_status": build_status_json(db_path, repo_root_str),
+                });
+                let envelope = ToolSuccessEnvelope::new("build_or_update_graph", payload);
+                let mut response = normalized_tool_result_value(&envelope, output_format)?;
+                inject_deprecated_input_fields(&mut response, &deprecated_operation_fields);
+                return Ok(response);
+            }
+        };
         crate::progress::report("update complete", Some(100));
 
         let status = if matches!(
@@ -151,10 +312,22 @@ pub(crate) fn tool_build_or_update_graph(
         } else {
             "completed"
         };
+        let (health_class, error_code, message, suggestions, error_code_docs) =
+            readiness_summary(db_path, repo_root_str);
         let warnings = summary.warnings.clone();
         let payload = json!({
             "mode": operation.kind.as_str(),
             "status": status,
+            "health_class": health_class,
+            "error_code": error_code,
+            "message": message,
+            "suggestions": suggestions,
+            "error_code_docs": error_code_docs,
+            "recovery_mode": recovery.recovery_mode.as_str(),
+            "quarantine_path": recovery.quarantine_path,
+            "rebuild_result": rebuild_result_label(Some(&recovery), None),
+            "failure_reason": Value::Null,
+            "rebuild_strategy": rebuild_strategy_label(full_rebuild),
             "source": {
                 "target_kind": target_kind,
                 "base_ref": base,
@@ -220,6 +393,34 @@ pub(crate) fn tool_build_or_update_graph(
         let config = atlas_engine::Config::load(&atlas_engine::paths::atlas_dir(repo_root))
             .unwrap_or_default();
         let build_budget = config.build_run_budget()?;
+        let recovery = match Store::prepare_graph_store_rebuild(
+            db_path,
+            atlas_store_sqlite::GraphRecoveryMode::AutoQuarantineAndRebuild,
+            true,
+        ) {
+            Ok(recovery) => recovery,
+            Err(error) => {
+                let payload = json!({
+                    "mode": operation.kind.as_str(),
+                    "status": "error",
+                    "health_class": error.health_class.as_str(),
+                    "error_code": error.error_code,
+                    "message": error.message,
+                    "suggestions": error.suggestions,
+                    "error_code_docs": atlas_core::error_code_docs_ref(error.health_class.as_str()),
+                    "recovery_mode": error.recovery_mode.as_str(),
+                    "quarantine_path": error.quarantine_path,
+                    "rebuild_result": rebuild_result_label(None, error.failure_reason.as_deref()),
+                    "failure_reason": error.failure_reason,
+                    "rebuild_strategy": "full_rebuild_from_source",
+                    "build_status": build_status_json(db_path, repo_root_str),
+                });
+                let envelope = ToolSuccessEnvelope::new("build_or_update_graph", payload);
+                let mut response = normalized_tool_result_value(&envelope, output_format)?;
+                inject_deprecated_input_fields(&mut response, &deprecated_operation_fields);
+                return Ok(response);
+            }
+        };
 
         if let Ok(s) = Store::open(db_path) {
             let _ = s.begin_build(repo_root_str);
@@ -274,15 +475,48 @@ pub(crate) fn tool_build_or_update_graph(
                             budget_stop_reason: sum.budget_counters.budget_stop_reason.clone(),
                         },
                     );
+                    let _ = s.set_build_recovery_metadata(
+                        repo_root_str,
+                        Some(recovery.recovery_mode.as_str()),
+                        recovery.quarantine_path.as_deref(),
+                    );
                 }
                 Err(e) => {
                     let _ = s.fail_build(repo_root_str, &e.to_string());
+                    let _ = s.set_build_recovery_metadata(
+                        repo_root_str,
+                        Some(recovery.recovery_mode.as_str()),
+                        recovery.quarantine_path.as_deref(),
+                    );
                 }
             }
         }
 
         crate::progress::report("writing results", Some(90));
-        let summary = build_result?;
+        let summary = match build_result {
+            Ok(summary) => summary,
+            Err(error) => {
+                let payload = json!({
+                    "mode": operation.kind.as_str(),
+                    "status": "error",
+                    "health_class": recovery.health_class.map(|class| class.as_str()),
+                    "error_code": "failed_build",
+                    "message": atlas_core::graph_health_error_message("failed_build"),
+                    "suggestions": atlas_core::graph_health_error_suggestions("failed_build"),
+                    "error_code_docs": atlas_core::error_code_docs_ref("failed_build"),
+                    "recovery_mode": recovery.recovery_mode.as_str(),
+                    "quarantine_path": recovery.quarantine_path,
+                    "rebuild_result": rebuild_result_label(Some(&recovery), Some(&error.to_string())),
+                    "failure_reason": error.to_string(),
+                    "rebuild_strategy": "full_rebuild_from_source",
+                    "build_status": build_status_json(db_path, repo_root_str),
+                });
+                let envelope = ToolSuccessEnvelope::new("build_or_update_graph", payload);
+                let mut response = normalized_tool_result_value(&envelope, output_format)?;
+                inject_deprecated_input_fields(&mut response, &deprecated_operation_fields);
+                return Ok(response);
+            }
+        };
         crate::progress::report("build complete", Some(100));
 
         let status = if matches!(
@@ -295,10 +529,22 @@ pub(crate) fn tool_build_or_update_graph(
         } else {
             "completed"
         };
+        let (health_class, error_code, message, suggestions, error_code_docs) =
+            readiness_summary(db_path, repo_root_str);
         let warnings = summary.warnings.clone();
         let payload = json!({
             "mode": operation.kind.as_str(),
             "status": status,
+            "health_class": health_class,
+            "error_code": error_code,
+            "message": message,
+            "suggestions": suggestions,
+            "error_code_docs": error_code_docs,
+            "recovery_mode": recovery.recovery_mode.as_str(),
+            "quarantine_path": recovery.quarantine_path,
+            "rebuild_result": rebuild_result_label(Some(&recovery), None),
+            "failure_reason": Value::Null,
+            "rebuild_strategy": "full_rebuild_from_source",
             "source": {
                 "target_kind": "full_build",
                 "base_ref": Value::Null,

@@ -146,51 +146,47 @@ fn init_committed_submodule(parent: &Path, path: &str, files: &[(&str, &str)]) -
     submodule_dir
 }
 
-struct DetachedWorktree {
-    temp_dir: TempDir,
-    source_repo: PathBuf,
-    path: PathBuf,
-}
-
-impl DetachedWorktree {
-    fn path(&self) -> &Path {
-        &self.path
-    }
-}
-
-impl Drop for DetachedWorktree {
-    fn drop(&mut self) {
-        let _ = sanitized_command("git")
-            .args(["worktree", "remove", "--force"])
-            .arg(&self.path)
-            .current_dir(&self.source_repo)
-            .output();
-        let _ = &self.temp_dir;
-    }
-}
-
-fn setup_current_repo_detached_worktree() -> DetachedWorktree {
+fn setup_large_rust_fixture_repo(file_count: usize) -> TempDir {
     let temp_dir = tempfile::tempdir().expect("temp dir");
-    let path = temp_dir.path().join("repo-worktree");
-    let source_repo = current_repo_root();
+    fs::write(
+        temp_dir.path().join("Cargo.toml"),
+        "[package]\nname = \"large-fixture\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    )
+    .expect("write Cargo.toml");
 
-    run_command(
-        &source_repo,
-        "git",
-        &[
-            "worktree",
-            "add",
-            "--detach",
-            path.to_str().expect("worktree path"),
-            "HEAD",
-        ],
-    );
+    let src = temp_dir.path().join("src");
+    fs::create_dir_all(&src).expect("create src dir");
+    for index in 0..file_count {
+        fs::write(
+            src.join(format!("module_{index}.rs")),
+            format!(
+                r#"pub struct ContextEngine{index};
 
-    DetachedWorktree {
-        temp_dir,
-        source_repo,
-        path,
+impl ContextEngine{index} {{
+    pub fn new() -> Self {{
+        Self
+    }}
+
+    pub fn route_{index}(&self, value: usize) -> usize {{
+        helper_{index}(value) + {index}
+    }}
+}}
+
+pub fn helper_{index}(value: usize) -> usize {{
+    value + 1
+}}
+
+pub fn caller_{index}() -> usize {{
+    ContextEngine{index}::new().route_{index}({index})
+}}
+"#
+            ),
+        )
+        .expect("write generated rust file");
     }
+
+    init_git_repo(temp_dir.path());
+    temp_dir
 }
 
 fn init_git_repo(path: &Path) {

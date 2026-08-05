@@ -85,6 +85,87 @@ fn call_tool_unknown_tool_returns_protocol_error() {
 }
 
 #[test]
+fn call_tool_query_graph_fails_closed_on_sqlite_corrupt_graph_db() {
+    let fixture = ToolFixture::new();
+    overwrite_graph_db_with_garbage(&fixture);
+
+    let rmcp = fixture
+        .server
+        .call_tool_for_tests(call_tool_request(
+            "query_graph",
+            Some(json!({"text": "greet", "output_format": "json"})),
+        ))
+        .expect("rmcp query_graph blocked response");
+    let rmcp_complete = expect_complete(rmcp);
+    let rmcp_body = rmcp_complete
+        .structured_content
+        .clone()
+        .expect("rmcp structured content");
+
+    assert_eq!(rmcp_complete.is_error, Some(true));
+    assert_eq!(rmcp_body["ok"], json!(false));
+    assert_eq!(rmcp_body["blocked"], json!(true));
+    assert_eq!(rmcp_body["error_code"], json!("sqlite_corrupt"));
+    assert_eq!(rmcp_body["health_class"], json!("sqlite_corrupt"));
+    assert_eq!(rmcp_body["execution_state"], json!("corrupt"));
+    assert_eq!(
+        rmcp_body["recommended_rebuild_command"],
+        json!("atlas build")
+    );
+    assert_eq!(rmcp_body["quarantine_path"], json!(null));
+    assert_eq!(rmcp_body["atlas_readiness"]["blocked"], json!(true));
+    assert_eq!(rmcp_body["atlas_freshness"]["blocked"], json!(true));
+
+    let handrolled = handrolled_tools_call(
+        &fixture,
+        "query_graph",
+        &json!({"text": "greet", "output_format": "json"}),
+    )
+    .expect("handrolled query_graph blocked response");
+    assert_eq!(
+        rmcp_body, handrolled["structuredContent"],
+        "rmcp and handrolled blocked payload must match"
+    );
+}
+
+#[test]
+fn call_tool_get_context_fails_closed_on_logical_inconsistency() {
+    let fixture = ToolFixture::new();
+    seed_dangling_graph_edge(&fixture);
+
+    let rmcp = fixture
+        .server
+        .call_tool_for_tests(call_tool_request(
+            "get_context",
+            Some(json!({
+                "target": {"kind": "query", "query": "greet"},
+                "output_format": "json"
+            })),
+        ))
+        .expect("rmcp get_context blocked response");
+    let rmcp_complete = expect_complete(rmcp);
+    let rmcp_body = rmcp_complete
+        .structured_content
+        .clone()
+        .expect("rmcp structured content");
+
+    assert_eq!(rmcp_complete.is_error, Some(true));
+    assert_eq!(rmcp_body["ok"], json!(false));
+    assert_eq!(rmcp_body["blocked"], json!(true));
+    assert_eq!(rmcp_body["error_code"], json!("logical_inconsistency"));
+    assert_eq!(rmcp_body["health_class"], json!("logical_inconsistency"));
+    assert_eq!(rmcp_body["execution_state"], json!("corrupt"));
+    assert_eq!(
+        rmcp_body["recommended_rebuild_command"],
+        json!("atlas build")
+    );
+    assert_eq!(
+        rmcp_body["atlas_readiness"]["error_code"],
+        json!("logical_inconsistency")
+    );
+}
+
+#[test]
 fn call_tool_query_graph_increments_session_event_count() {
     let rmcp_fixture = ToolFixture::new();
     let rmcp_before = session_event_count(&rmcp_fixture.repo_root, &rmcp_fixture.db_path);

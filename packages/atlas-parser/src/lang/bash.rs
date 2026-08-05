@@ -1,15 +1,66 @@
 //! Bash parser backed by `tree-sitter-bash`.
 //! Grammar source: `tree-sitter/tree-sitter-bash`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use atlas_core::{Edge, EdgeKind, Node, NodeId, NodeKind, ParsedFile};
 use tree_sitter::Node as TsNode;
 
 use crate::ast_helpers::{end_line, node_text, start_line};
+use crate::query_helpers::{compile_static_query, run_query};
 use crate::traits::{LangParser, ParseContext};
 
+// SQ1 migration checklist:
+// - manual extraction below owns declaration walks, scope and qualified-name rules, import/reference detection,
+//   call-edge heuristics, and source metadata attachment
+// - keep public parser API, graph schema, and output contracts unchanged during query migration
+// - move tree-sitter syntax matching only into shared @atlas.* query captures
+
+const BASH_QUERY: &str = include_str!("../../queries/bash.scm");
+
 pub struct BashParser;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct BashNodeKey {
+    start_byte: usize,
+    end_byte: usize,
+}
+
+#[derive(Debug, Default)]
+struct BashSyntaxFacts {
+    functions: HashSet<BashNodeKey>,
+    commands: HashSet<BashNodeKey>,
+    _variables: HashSet<BashNodeKey>,
+}
+
+impl BashSyntaxFacts {
+    fn extract(root: TsNode<'_>, _source: &[u8]) -> Result<Self, String> {
+        let language: tree_sitter::Language = tree_sitter_bash::LANGUAGE.into();
+        let query = compile_static_query(language, "bash", BASH_QUERY)?;
+        let matches = run_query(&query, root, _source);
+        let mut facts = Self::default();
+
+        for group in matches {
+            for capture in group.captures {
+                let key = node_key(capture.node);
+                match capture.name.as_str() {
+                    "atlas.definition.function" => {
+                        facts.functions.insert(key);
+                    }
+                    "atlas.import" | "atlas.call" => {
+                        facts.commands.insert(key);
+                    }
+                    "atlas.definition.variable" => {
+                        facts._variables.insert(key);
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        Ok(facts)
+    }
+}
 
 impl LangParser for BashParser {
     fn language_name(&self) -> &'static str {
@@ -34,7 +85,9 @@ impl LangParser for BashParser {
 
         if let Some(ref tree) = tree {
             let root = tree.root_node();
-            collect_functions(root, ctx, ctx.rel_path, &mut nodes, &mut edges);
+            let facts = BashSyntaxFacts::extract(root, ctx.source)
+                .unwrap_or_else(|err| panic!("bash query extraction failed: {err}"));
+            collect_functions(root, ctx, &facts, ctx.rel_path, &mut nodes, &mut edges);
 
             let function_map = function_qn_map(&nodes);
             let mut call_edges = Vec::new();
@@ -44,6 +97,7 @@ impl LangParser for BashParser {
             walk_commands(
                 root,
                 ctx,
+                &facts,
                 &function_map,
                 None,
                 &mut import_index,
@@ -73,12 +127,13 @@ impl LangParser for BashParser {
 fn collect_functions(
     node: TsNode<'_>,
     ctx: &ParseContext<'_>,
+    facts: &BashSyntaxFacts,
     parent_qn: &str,
     nodes: &mut Vec<Node>,
     edges: &mut Vec<Edge>,
 ) {
     let mut next_parent_qn = parent_qn.to_owned();
-    if node.kind() == "function_definition"
+    if facts.functions.contains(&node_key(node))
         && let Some(function_qn) = emit_function(node, ctx, parent_qn, nodes, edges)
     {
         next_parent_qn = function_qn;
@@ -86,7 +141,7 @@ fn collect_functions(
 
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
-        collect_functions(child, ctx, &next_parent_qn, nodes, edges);
+        collect_functions(child, ctx, facts, &next_parent_qn, nodes, edges);
     }
 }
 
@@ -177,6 +232,7 @@ fn function_qn_map(nodes: &[Node]) -> HashMap<String, String> {
 fn walk_commands(
     node: TsNode<'_>,
     ctx: &ParseContext<'_>,
+    facts: &BashSyntaxFacts,
     functions: &HashMap<String, String>,
     current_fn: Option<String>,
     import_index: &mut usize,
@@ -185,7 +241,7 @@ fn walk_commands(
     call_edges: &mut Vec<Edge>,
 ) {
     let mut next_fn = current_fn;
-    if node.kind() == "function_definition"
+    if facts.functions.contains(&node_key(node))
         && let Some(name_node) = node.child_by_field_name("name")
     {
         let name = node_text(name_node, ctx.source);
@@ -193,7 +249,7 @@ fn walk_commands(
         next_fn = Some(function_qn(parent_qn, ctx.rel_path, name));
     }
 
-    if node.kind() == "command" {
+    if facts.commands.contains(&node_key(node)) {
         let owner_qn = next_fn.clone().unwrap_or_else(|| ctx.rel_path.to_owned());
         if let Some(command_name) = command_name(node, ctx.source)
             && let Some(ref function_owner) = next_fn
@@ -230,6 +286,7 @@ fn walk_commands(
         walk_commands(
             child,
             ctx,
+            facts,
             functions,
             next_fn.clone(),
             import_index,
@@ -336,6 +393,13 @@ fn resolve_nested_scope_target<'a>(
 fn parent_function_qn(qn: &str) -> Option<&str> {
     qn.rsplit_once("::fn::")
         .and_then(|(parent, _)| parent.contains("::fn::").then_some(parent))
+}
+
+fn node_key(node: TsNode<'_>) -> BashNodeKey {
+    BashNodeKey {
+        start_byte: node.start_byte(),
+        end_byte: node.end_byte(),
+    }
 }
 
 fn file_node(rel_path: &str, file_hash: &str, line_end: u32, language: &str) -> Node {
@@ -466,6 +530,24 @@ mod tests {
         assert!(pf.edges.iter().any(|edge| edge.kind == EdgeKind::Calls
             && edge.source_qn == "scripts/deploy.sh::fn::second"
             && edge.target_qn == "scripts/deploy.sh::fn::second::fn::helper"));
+    }
+
+    #[test]
+    fn query_extracts_bash_syntax_facts() {
+        let mut parser = tree_sitter::Parser::new();
+        let language: tree_sitter::Language = tree_sitter_bash::LANGUAGE.into();
+        parser
+            .set_language(&language)
+            .expect("tree-sitter-bash grammar failed to load");
+        let source =
+            b"CONFIG=prod\nsource ./env.sh\nsetup() {\n  helper\n}\nhelper() {\n  echo hi\n}\n";
+        let tree = parser.parse(source, None).expect("fixture should parse");
+        let facts = BashSyntaxFacts::extract(tree.root_node(), source)
+            .expect("bash query extraction should succeed");
+
+        assert!(!facts.functions.is_empty());
+        assert!(!facts.commands.is_empty());
+        assert!(!facts._variables.is_empty());
     }
 
     #[test]

@@ -75,7 +75,7 @@ fn instructions_section_mentions_tool_discovery_helpers() {
     assert!(INSTRUCTIONS_SECTION.contains("`tool_search`"));
     assert!(INSTRUCTIONS_SECTION.contains("`tool_help`"));
     assert!(INSTRUCTIONS_SECTION.contains("Runtime docs are canonical"));
-    assert!(INSTRUCTIONS_SECTION.contains("input_contract"));
+    assert!(INSTRUCTIONS_SECTION.contains("input contracts"));
 }
 
 #[test]
@@ -165,19 +165,32 @@ fn instructions_section_references_runtime_docs_without_duplicating_full_tool_in
 fn instructions_section_documents_trust_metadata() {
     assert!(INSTRUCTIONS_SECTION.contains("atlas_provenance"));
     assert!(INSTRUCTIONS_SECTION.contains("atlas_freshness"));
-    assert!(
-        INSTRUCTIONS_SECTION
-            .contains("Use default JSON output. Trust structuredContent as source of truth.")
-    );
-    assert!(
-        INSTRUCTIONS_SECTION
-            .contains("ALWAYS use the\natlas MCP tools BEFORE using file-search or grep")
-    );
+    assert!(INSTRUCTIONS_SECTION.contains(
+        "Use default JSON output. Trust `structuredContent` as source of truth when present."
+    ));
+    assert!(INSTRUCTIONS_SECTION.contains("Atlas first."));
+    assert!(INSTRUCTIONS_SECTION.contains("Priority rule: if instructions conflict, prefer Atlas"));
     assert!(!INSTRUCTIONS_SECTION.contains("output_format"));
     assert!(!INSTRUCTIONS_SECTION.to_ascii_lowercase().contains("toon"));
     assert!(INSTRUCTIONS_SECTION.contains("status` or `doctor"));
     assert!(INSTRUCTIONS_SECTION.contains("Canonicalize repo paths before hashing"));
     assert!(INSTRUCTIONS_SECTION.contains("noncanonical_path_rows"));
+}
+
+#[test]
+fn instructions_section_documents_minimal_first_escalation() {
+    assert!(INSTRUCTIONS_SECTION.contains("First code-exploration step: call `status`"));
+    assert!(INSTRUCTIONS_SECTION.contains("Review/change tasks:"));
+    assert!(INSTRUCTIONS_SECTION.contains("`get_minimal_context` for first bounded triage"));
+    assert!(INSTRUCTIONS_SECTION.contains("Symbol/usage tasks:"));
+    assert!(
+        INSTRUCTIONS_SECTION.contains("`symbol_neighbors` for direct callers, callees, and tests")
+    );
+    assert!(INSTRUCTIONS_SECTION.contains("Allowed reasons to escalate:"));
+    assert!(INSTRUCTIONS_SECTION.contains("Anti-patterns:"));
+    assert!(
+        INSTRUCTIONS_SECTION.contains("skipping Atlas because a terminal command feels faster")
+    );
 }
 
 #[test]

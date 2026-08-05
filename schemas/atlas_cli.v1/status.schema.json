@@ -14,6 +14,10 @@
       "required": [
         "ok",
         "error_code",
+        "recovery_mode",
+        "quarantine_path",
+        "rebuild_result",
+        "failure_reason",
         "message",
         "suggestions",
         "repo_root",
@@ -41,6 +45,10 @@
       "properties": {
         "ok": { "type": "boolean" },
         "error_code": { "type": "string" },
+        "recovery_mode": { "type": "string" },
+        "quarantine_path": { "type": ["string", "null"] },
+        "rebuild_result": { "type": "string" },
+        "failure_reason": { "type": ["string", "null"] },
         "message": { "type": "string" },
         "suggestions": { "type": "array", "items": { "type": "string" } },
         "repo_root": { "type": "string" },

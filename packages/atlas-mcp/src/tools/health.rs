@@ -133,15 +133,16 @@ fn structural_dangling_edges(
 }
 
 fn integrity_issue_code(issues: &[String], structural_problem: bool) -> &'static str {
-    if structural_problem {
-        "corrupt_or_inconsistent_graph_rows"
-    } else if issues
-        .iter()
-        .any(|issue| issue.starts_with("noncanonical_path:"))
+    if structural_problem
+        || issues.iter().any(|issue| {
+            issue.starts_with("noncanonical_path:")
+                || issue.starts_with("missing_repo_provenance:")
+                || issue.to_ascii_lowercase().contains("foreign key")
+        })
     {
-        "noncanonical_path_rows"
+        "logical_inconsistency"
     } else {
-        "corrupt_or_inconsistent_graph_rows"
+        "sqlite_corrupt"
     }
 }
 
@@ -259,18 +260,8 @@ pub(super) fn tool_status(
         && (!retrieval_index.available
             || !retrieval_index.searchable
             || retrieval_index.state.as_deref() != Some("indexed"));
-    let graph_error = db_open_error.as_deref().or(graph_query_error.as_deref());
-    let category = failure_category(
-        db_exists,
-        graph_error,
-        build_state_str,
-        stale_index,
-        retrieval_unavailable,
-    );
-    let ok = category == "none" && graph_built;
-
-    let execution_state = if let Some(store) = store.as_ref() {
-        derive_graph_readiness(store, repo_root, db_path).execution_state
+    let readiness = if let Some(store) = store.as_ref() {
+        derive_graph_readiness(store, repo_root, db_path)
     } else {
         use atlas_core::{GraphReadiness, GraphReadinessInput};
         GraphReadiness::derive(GraphReadinessInput {
@@ -281,14 +272,24 @@ pub(super) fn tool_status(
             build_state: None,
             build_last_error: None,
             graph_error: None,
+            recovery_mode: None,
+            quarantine_path: None,
             pending_graph_changes: &[],
             indexed_file_count: 0,
             graph_has_content: false,
             last_indexed_at: None,
             retrieval_unavailable: true,
         })
-        .execution_state
     };
+    let category = failure_category(
+        db_exists,
+        graph_built,
+        readiness.health_class,
+        build_state_str,
+        retrieval_unavailable,
+    );
+    let ok = category == "none" && graph_built;
+    let execution_state = readiness.execution_state;
 
     let mut warnings = Vec::new();
     if stale_index {
@@ -322,13 +323,32 @@ pub(super) fn tool_status(
             "budget_stop_reason": bs.budget_stop_reason,
             "last_built_at": bs.last_built_at,
             "last_error": bs.last_error,
+            "recovery_mode": bs.recovery_mode,
+            "quarantine_path": bs.quarantine_path,
         })
     });
+    let quarantine_path = build_status
+        .as_ref()
+        .and_then(|status| status.quarantine_path.clone());
+    let rebuild_result = if quarantine_path.is_some() {
+        match build_state_str {
+            Some("build_failed") => "rebuild_failed",
+            Some("built") | Some("degraded") => "rebuilt_fresh",
+            _ => "blocked",
+        }
+    } else {
+        "not_needed"
+    };
 
     let payload = json!({
         "node_count": node_count,
         "edge_count": edge_count,
         "last_indexed_at": last_indexed_at,
+        "health_class": readiness.health_class.map(|class| class.as_str()),
+        "recovery_mode": "block_only",
+        "quarantine_path": quarantine_path,
+        "rebuild_result": rebuild_result,
+        "failure_reason": build_status.as_ref().and_then(|status| status.last_error.clone()),
         "graph_state": {
             "graph_built": graph_built,
             "build_state": build_state_str,
@@ -356,6 +376,7 @@ pub(super) fn tool_status(
         "safe_for_analysis": matches!(execution_state, atlas_core::GraphExecutionState::Fresh),
         "retrieval_index": retrieval_index,
         "summary": {
+            "health_class": readiness.health_class.map(|class| class.as_str()),
             "message": error_message(category),
             "suggestions": error_suggestions(category),
             "error_code_docs": error_code_docs(category),
@@ -708,14 +729,62 @@ pub(super) fn tool_doctor(
         })
         .collect::<Vec<_>>();
     let overall_status = if fail_count == 0 { "ok" } else { "fail" };
+    let readiness = if db_exists {
+        match atlas_store_sqlite::Store::open(db_path) {
+            Ok(store) => derive_graph_readiness(&store, repo_root, db_path),
+            Err(error) => {
+                use atlas_core::{GraphReadiness, GraphReadinessInput};
+                GraphReadiness::derive(GraphReadinessInput {
+                    repo_root,
+                    db_path,
+                    db_exists,
+                    db_open_error: Some(&error.to_string()),
+                    build_state: None,
+                    build_last_error: None,
+                    graph_error: None,
+                    recovery_mode: None,
+                    quarantine_path: None,
+                    pending_graph_changes: &[],
+                    indexed_file_count: 0,
+                    graph_has_content: false,
+                    last_indexed_at: None,
+                    retrieval_unavailable: true,
+                })
+            }
+        }
+    } else {
+        use atlas_core::{GraphReadiness, GraphReadinessInput};
+        GraphReadiness::derive(GraphReadinessInput {
+            repo_root,
+            db_path,
+            db_exists,
+            db_open_error: Some("db not found"),
+            build_state: None,
+            build_last_error: None,
+            graph_error: None,
+            recovery_mode: None,
+            quarantine_path: None,
+            pending_graph_changes: &[],
+            indexed_file_count: 0,
+            graph_has_content: false,
+            last_indexed_at: None,
+            retrieval_unavailable: true,
+        })
+    };
 
     let payload = json!({
         "overall_status": overall_status,
+        "health_class": readiness.health_class.map(|class| class.as_str()),
+        "recovery_mode": "block_only",
+        "quarantine_path": serde_json::Value::Null,
+        "rebuild_result": if fail_count == 0 { "not_needed" } else { "blocked" },
+        "failure_reason": serde_json::Value::Null,
         "checks": normalized_checks,
         "summary": {
             "total_count": checks.len(),
             "pass_count": ok_count,
             "fail_count": fail_count,
+            "health_class": readiness.health_class.map(|class| class.as_str()),
             "message": error_message(if fail_count == 0 { "none" } else { "checks_failed" }),
             "suggestions": error_suggestions(if fail_count == 0 { "none" } else { "checks_failed" }),
             "error_code_docs": error_code_docs(if fail_count == 0 { "none" } else { "checks_failed" }),
@@ -818,6 +887,13 @@ pub(super) fn tool_db_check(
     } else {
         "none"
     };
+    let health_class = match failure_category {
+        "none" => Some("healthy"),
+        "schema_mismatch" => Some("schema_mismatch"),
+        "sqlite_corrupt" => Some("sqlite_corrupt"),
+        "logical_inconsistency" => Some("logical_inconsistency"),
+        _ => None,
+    };
     let mut warnings = if noncanonical_path_rows.is_empty() {
         Vec::new()
     } else {
@@ -835,6 +911,11 @@ pub(super) fn tool_db_check(
 
     let payload = json!({
         "ok": ok,
+        "health_class": health_class,
+        "recovery_mode": "block_only",
+        "quarantine_path": serde_json::Value::Null,
+        "rebuild_result": if ok { "not_needed" } else { "blocked" },
+        "failure_reason": serde_json::Value::Null,
         "integrity": {
             "ok": integrity_issues.is_empty() && noncanonical_path_rows.is_empty(),
             "issues": integrity_issues,
@@ -855,6 +936,7 @@ pub(super) fn tool_db_check(
         "summary": {
             "ok": ok,
             "failure_category": failure_category,
+            "health_class": health_class,
             "message": error_message(failure_category),
             "suggestions": error_suggestions(failure_category),
             "error_code_docs": error_code_docs(failure_category),

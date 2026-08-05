@@ -4,6 +4,15 @@ use tree_sitter::Node as TsNode;
 use crate::ast_helpers::{end_line, node_text, start_line};
 use crate::traits::{LangParser, ParseContext};
 
+// SQ1 migration checklist:
+// - manual extraction below owns structural node selection, scope and qualified-name rules, and source metadata attachment
+// - keep public parser API, graph schema, and output contracts unchanged during query migration
+// - move tree-sitter syntax matching only into shared @atlas.* query captures
+//
+// SQ6 decision: keep JSON manual.
+// Query captures do not reduce recursive traversal here because Atlas semantics depend on parent-driven
+// object/key path and array index construction, including best-effort partial trees on malformed input.
+
 pub struct JsonParser;
 
 impl LangParser for JsonParser {

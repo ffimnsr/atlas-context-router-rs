@@ -13,6 +13,11 @@ use super::declarations::{find_descendant_kind, method_receiver, normalize_recei
 // Same-file call resolution (Go)
 // ---------------------------------------------------------------------------
 
+// SQ1 migration checklist:
+// - manual extraction below owns same-file call resolution, receiver heuristics, and edge metadata
+// - keep parser API and graph output unchanged while query captures replace syntax-node walks
+// - move tree-sitter syntax matching only into shared @atlas.* query captures
+
 pub(super) fn resolve_go_calls(
     root: TsNode<'_>,
     source: &[u8],
