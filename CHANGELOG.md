@@ -4,6 +4,13 @@ All notable changes to this project should be recorded in this file.
 
 Versioning policy may evolve while Atlas is still moving quickly, but release notes should still group changes by user-visible impact.
 
+## 1.7.2 - 2026-08-05
+
+### Features
+
+- large sqlite store update for fixing corrupt db (`01d49b6`)
+
+
 ## 1.7.1 - 2026-08-04
 
 ### Features
