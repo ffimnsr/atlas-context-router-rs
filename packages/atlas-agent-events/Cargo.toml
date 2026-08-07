@@ -1,18 +1,18 @@
 [package]
 name = "atlas-agent-events"
-version = "1.7.2"
+version = "1.7.3"
 edition = "2024"
 description = "Shared agent event service for native hook capture and MCP fallback capture"
 
 [dependencies]
-atlas-adapters = { path = "../atlas-adapters" , version = "1.7.2"}
-atlas-contentstore = { path = "../atlas-contentstore" , version = "1.7.2"}
+atlas-adapters = { path = "../atlas-adapters" , version = "1.7.3"}
+atlas-contentstore = { path = "../atlas-contentstore" , version = "1.7.3"}
 atlas-core.workspace = true
 atlas-engine.workspace = true
-atlas-impact = { path = "../atlas-impact" , version = "1.7.2"}
-atlas-review = { path = "../atlas-review" , version = "1.7.2"}
-atlas-session = { path = "../atlas-session" , version = "1.7.2"}
-atlas-store-sqlite = { path = "../atlas-store-sqlite" , version = "1.7.2"}
+atlas-impact = { path = "../atlas-impact" , version = "1.7.3"}
+atlas-review = { path = "../atlas-review" , version = "1.7.3"}
+atlas-session = { path = "../atlas-session" , version = "1.7.3"}
+atlas-store-sqlite = { path = "../atlas-store-sqlite" , version = "1.7.3"}
 anyhow.workspace = true
 camino.workspace = true
 serde_json.workspace = true

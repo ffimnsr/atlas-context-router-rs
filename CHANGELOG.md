@@ -4,6 +4,18 @@ All notable changes to this project should be recorded in this file.
 
 Versioning policy may evolve while Atlas is still moving quickly, but release notes should still group changes by user-visible impact.
 
+## 1.7.3 - 2026-08-07
+
+### Fixes
+
+- update flow when client doesn't support tasks (`832a6c7`)
+
+
+### Documentation
+
+- update ISSUES.md (`06b6b50`)
+
+
 ## 1.7.2 - 2026-08-05
 
 ### Features
