@@ -32,6 +32,10 @@ tasks:
     commands:
       - bash scripts/tests/test-workspace-summary-test.sh
     description: Verify merged test summary parser fixtures.
+  git-hooks-check:
+    commands:
+      - bash scripts/tests/git-hooks-test.sh
+    description: Verify pre-commit and pre-push quality-gate placement.
   doc-check:
     commands:
       - cargo doc --workspace --no-deps --document-private-items

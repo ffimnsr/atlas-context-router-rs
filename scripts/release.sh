@@ -454,8 +454,6 @@ main() {
   cargo check --workspace --all-targets --quiet
   cargo fmt --all --check
   cargo clippy --workspace --all-targets --all-features -- -D warnings
-  cargo test --workspace
-  cargo test -p atlas-cli --test cli_quality_gates sqlite_fts5_smoke_round_trip -- --exact
 
   git add Cargo.lock packages/*/Cargo.toml "$CHANGELOG_FILE"
   git commit -m "release: $tag_name"
