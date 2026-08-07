@@ -25,8 +25,11 @@ use serde::{Deserialize, Serialize};
 
 pub use analysis::AnalysisConfig;
 pub use build::{BuildConfig, BuildRunBudget, DEFAULT_PARSE_BATCH_SIZE};
-pub use context::ContextConfig;
+pub use context::{
+    ContextConfig, ContextTokenizerConfig, TokenizerFallbackMode, TokenizerProvider,
+};
 pub use insights::{InsightsConfig, InsightsLayerRule};
+pub use load::TokenCounterLoadResult;
 pub use mcp::{
     DEFAULT_MCP_TOOL_TIMEOUT_MS, DEFAULT_MCP_WORKER_THREADS, McpConfig, McpHttpAuthConfig,
     ValidatedMcpHttpAuthConfig,

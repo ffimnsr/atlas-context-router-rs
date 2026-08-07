@@ -30,6 +30,7 @@ atlas-search = { path = "../atlas-search" , version = "1.7.3"}
 atlas-review = { path = "../atlas-review" , version = "1.7.3"}
 atlas-session = { path = "../atlas-session" , version = "1.7.3"}
 atlas-store-sqlite = { path = "../atlas-store-sqlite" , version = "1.7.3"}
+atlas-token-count.workspace = true
 anyhow.workspace = true
 camino.workspace = true
 clap.workspace = true

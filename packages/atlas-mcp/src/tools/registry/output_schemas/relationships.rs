@@ -165,6 +165,7 @@ pub(crate) fn get_context_output_schema() -> Value {
             "traversal_budget": traversal_budget_schema(),
             "context_source_mix": context_source_mix_schema(),
             "payload_truncation": payload_truncation_schema(),
+            "token_accounting": token_accounting_schema(),
         })),
     )
 }

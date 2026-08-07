@@ -76,6 +76,11 @@ pub struct ContextEngine<'a> {
     /// graph/content companion content-asset lookup (Patch N2).
     content_store: Option<&'a ContentStore>,
     budget_policy: BudgetPolicy,
+    /// Token accounting for serialized payload budgets; defaults to the
+    /// byte heuristic (4 bytes per token) for behavior compatibility.
+    token_counter: atlas_token_count::TokenCounter,
+    /// Load-time fallback metadata for `token_counter`.
+    token_fallback: self::payload::TokenFallbackInfo,
 }
 
 impl<'a> ContextEngine<'a> {
@@ -85,6 +90,9 @@ impl<'a> ContextEngine<'a> {
             store,
             content_store: None,
             budget_policy: BudgetPolicy::default(),
+            token_counter: atlas_token_count::TokenCounter::heuristic(4)
+                .expect("bytes_per_token=4 is a valid heuristic"),
+            token_fallback: self::payload::TokenFallbackInfo::default(),
         }
     }
 
@@ -107,6 +115,21 @@ impl<'a> ContextEngine<'a> {
 
     pub fn with_budget_policy(mut self, policy: BudgetPolicy) -> Self {
         self.budget_policy = policy;
+        self
+    }
+
+    /// Attach a token counter for serialized payload budget accounting
+    /// (tokenizer-backed or heuristic). Defaults to the byte heuristic with
+    /// `bytes_per_token = 4` when not set.
+    pub fn with_token_counter(mut self, counter: atlas_token_count::TokenCounter) -> Self {
+        self.token_counter = counter;
+        self
+    }
+
+    /// Record load-time fallback metadata for the active counter: true when
+    /// the configured tokenizer failed to load and the heuristic was used.
+    pub fn with_token_fallback(mut self, used: bool, reason: Option<String>) -> Self {
+        self.token_fallback = self::payload::TokenFallbackInfo { used, reason };
         self
     }
 
@@ -200,7 +223,12 @@ impl<'a> ContextEngine<'a> {
             );
             result.content_assets = assets;
         }
-        apply_payload_budgets(&mut result, &self.budget_policy);
+        apply_payload_budgets(
+            &mut result,
+            &self.budget_policy,
+            &self.token_counter,
+            &self.token_fallback,
+        );
         let node_limit = result.request.max_nodes.unwrap_or(DEFAULT_MAX_NODES);
         let edge_limit = result.request.max_edges.unwrap_or(DEFAULT_MAX_EDGES);
         let file_limit = result.request.max_files.unwrap_or(DEFAULT_MAX_FILES);

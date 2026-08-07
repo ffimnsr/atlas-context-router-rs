@@ -52,6 +52,52 @@ fn render_template_full_activates_keys() {
     assert!(template.contains("[sanitization]\nredaction_rules_file = \"\""));
     assert!(template.contains("[mcp.http_auth]\nenabled = true"));
     assert!(template.contains("required_scopes = { mcp = [\"atlas:mcp\", \"atlas:read\"] }"));
+    // Tokenizer accounting: active heuristic defaults in the full profile.
+    assert!(template.contains(
+        "[context.tokenizer]\nprovider = \"heuristic\"\nmodel = \"\"\ntokenizer_file = \"\"\nfallback = \"heuristic\"\nbytes_per_token = 4"
+    ));
+}
+
+#[test]
+fn tokenizer_template_block_snapshot_matches_minimal_profile() {
+    // Snapshot of the generated [context.tokenizer] block: active heuristic
+    // defaults commented out, tokenizer-backed example values never active.
+    let template = Config::render_template(ConfigTemplateProfile::Minimal).expect("template");
+    assert!(template.contains(
+        "[context.tokenizer]\n# provider = \"heuristic\"\n# model = \"cl100k_base\"\n# tokenizer_file = \"tokenizer.json\"\n# fallback = \"heuristic\"\n# bytes_per_token = 4"
+    ));
+}
+
+#[test]
+fn readme_describes_tokenizer_budget_accounting() {
+    // Docs drift guard: the README must keep describing tokenizer-backed
+    // budget accounting whenever the config surface changes.
+    let readme = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../README.md"))
+        .expect("read README");
+    assert!(
+        readme.contains("### Payload budgets"),
+        "README payload budgets section"
+    );
+    assert!(
+        readme.contains("[context.tokenizer]"),
+        "README tokenizer config block"
+    );
+    assert!(
+        readme.contains("provider = \"tokenizers\""),
+        "README tokenizer mode"
+    );
+    assert!(
+        readme.contains("fail_closed"),
+        "README fail-closed behavior"
+    );
+    assert!(
+        readme.contains("token_accounting"),
+        "README fallback metadata"
+    );
+    assert!(
+        readme.contains("never downloads"),
+        "README local-file-only rule"
+    );
 }
 
 #[test]

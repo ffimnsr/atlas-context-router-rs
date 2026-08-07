@@ -339,6 +339,30 @@ fn get_context_applies_mcp_response_byte_cap() {
 }
 
 #[test]
+fn get_context_reports_token_accounting_metadata() {
+    let fixture = setup_mcp_fixture();
+    let repo_root = fixture._dir.path().to_string_lossy().to_string();
+    let args = serde_json::json!({
+        "target": { "kind": "query", "query": "compute" },
+        "token_budget": 1,
+        "output_format": "json"
+    });
+    let resp = call("get_context", Some(&args), &repo_root, &fixture.db_path).expect("call");
+
+    let value = resp["structuredContent"].clone();
+    let accounting = value["payload_truncation"]["token_accounting"].clone();
+    assert_eq!(accounting["provider"], serde_json::json!("heuristic"));
+    assert_eq!(accounting["bytes_per_token"], serde_json::json!(4));
+    assert_eq!(accounting["fallback_used"], serde_json::json!(false));
+    assert!(
+        value["payload_truncation"]["tokens_estimated"]
+            .as_u64()
+            .is_some(),
+        "tokens_estimated must remain present for compatibility"
+    );
+}
+
+#[test]
 fn get_context_fails_closed_when_mcp_response_budget_is_impossible() {
     let fixture = setup_mcp_fixture();
     let atlas_dir = fixture._dir.path().join(".atlas");

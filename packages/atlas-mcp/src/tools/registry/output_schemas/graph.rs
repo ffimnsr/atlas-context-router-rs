@@ -264,6 +264,21 @@ pub(crate) fn context_source_mix_schema() -> Value {
     })
 }
 
+pub(crate) fn token_accounting_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "provider": { "type": "string" },
+            "model": { "type": "string" },
+            "fallback_used": { "type": "boolean" },
+            "fallback_reason": { "type": "string" },
+            "bytes_per_token": { "type": "integer" }
+        },
+        "required": ["provider", "fallback_used"]
+    })
+}
+
 pub(crate) fn payload_truncation_schema() -> Value {
     serde_json::json!({
         "type": "object",
@@ -278,7 +293,8 @@ pub(crate) fn payload_truncation_schema() -> Value {
             "omitted_source_count": { "type": "integer" },
             "omitted_byte_count": { "type": "integer" },
             "continuation_hint": { "type": "string" },
-            "source_mix": { "type": "array", "items": { "$ref": "#/$defs/context_source_mix" } }
+            "source_mix": { "type": "array", "items": { "$ref": "#/$defs/context_source_mix" } },
+            "token_accounting": { "$ref": "#/$defs/token_accounting" }
         },
         "required": [
             "bytes_requested",

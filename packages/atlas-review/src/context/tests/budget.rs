@@ -1,4 +1,5 @@
 use super::*;
+use atlas_token_count::TokenCounter;
 
 #[test]
 fn review_context_payload_byte_cap_keeps_direct_targets() {
@@ -126,7 +127,12 @@ fn saved_context_cap_drops_low_ranked_sources() {
     policy.mcp_cli_payload_serialization.saved_context_bytes =
         BudgetLimitRule::new(120, 120, atlas_core::BudgetHitBehavior::Partial, true);
 
-    super::payload::apply_payload_budgets(&mut result, &policy);
+    super::payload::apply_payload_budgets(
+        &mut result,
+        &policy,
+        &TokenCounter::heuristic(4).expect("test heuristic counter"),
+        &super::payload::TokenFallbackInfo::default(),
+    );
 
     let payload = result
         .truncation
@@ -170,7 +176,12 @@ fn token_budget_override_restricts_payload() {
     req_tight.token_budget = Some(100);
     let mut result_tight =
         build_symbol_context(&store, seed, &req_tight).expect("build symbol context tight");
-    super::payload::apply_payload_budgets(&mut result_tight, &BudgetPolicy::default());
+    super::payload::apply_payload_budgets(
+        &mut result_tight,
+        &BudgetPolicy::default(),
+        &TokenCounter::heuristic(4).expect("test heuristic counter"),
+        &super::payload::TokenFallbackInfo::default(),
+    );
 
     // Tight budget must reduce content compared to uncapped full result.
     let tight_nodes = result_tight.nodes.len();
@@ -209,13 +220,17 @@ fn token_budget_applies_source_mix() {
         ..ContextRequest::default()
     };
     let mut result = build_symbol_context(&store, seed, &req).expect("build symbol context");
-    super::payload::apply_payload_budgets(&mut result, &BudgetPolicy::default());
+    super::payload::apply_payload_budgets(
+        &mut result,
+        &BudgetPolicy::default(),
+        &TokenCounter::heuristic(4).expect("test heuristic counter"),
+        &super::payload::TokenFallbackInfo::default(),
+    );
 
-    // With a 1-token budget something must be trimmed and source_mix must be populated.
     let payload = result
         .truncation
         .payload
-        .expect("payload truncation metadata must exist with 1-token budget");
+        .expect("payload truncation must run with 1-token budget");
 
     // source_mix must include graph_context when nodes are present.
     if !payload.source_mix.is_empty() {
@@ -245,7 +260,12 @@ fn token_budget_capped_by_policy_ceiling() {
     };
     let mut result = build_symbol_context(&store, seed, &req).expect("build symbol context");
     let policy = BudgetPolicy::default();
-    super::payload::apply_payload_budgets(&mut result, &policy);
+    super::payload::apply_payload_budgets(
+        &mut result,
+        &policy,
+        &TokenCounter::heuristic(4).expect("test heuristic counter"),
+        &super::payload::TokenFallbackInfo::default(),
+    );
 
     // token_budget_applied is only set when the per-request budget is tighter
     // than the policy default. An above-ceiling value should be clamped to the

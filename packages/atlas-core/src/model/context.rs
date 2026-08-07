@@ -414,6 +414,8 @@ pub struct TruncationMeta {
 pub struct PayloadTruncationMeta {
     pub bytes_requested: usize,
     pub bytes_emitted: usize,
+    /// Token count for the emitted payload. Compatibility name for the
+    /// counted tokens produced by whichever method `token_accounting` reports.
     pub tokens_estimated: usize,
     /// Effective token budget that was enforced (from request or policy default).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -429,6 +431,29 @@ pub struct PayloadTruncationMeta {
     /// can understand how the budget was allocated.
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub source_mix: Vec<ContextSourceMix>,
+    /// How `tokens_estimated` was produced: provider/model and whether a
+    /// heuristic fallback counted the payload.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token_accounting: Option<TokenAccountingMeta>,
+}
+
+/// How tokens were counted for a truncated payload.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TokenAccountingMeta {
+    /// Counting provider: `"tokenizers"` or `"heuristic"`.
+    pub provider: String,
+    /// Configured model identifier when a tokenizer was used.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// True when the tokenizer could not be used and the byte heuristic
+    /// counted the payload instead.
+    pub fallback_used: bool,
+    /// Why the heuristic was used; present when `fallback_used`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fallback_reason: Option<String>,
+    /// Bytes per token for heuristic counts.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bytes_per_token: Option<usize>,
 }
 
 /// Token/byte usage for a single context source kind inside a [`ContextResult`].
@@ -733,4 +758,78 @@ pub struct ContextResult {
     pub saved_context_sources: Vec<SavedContextSource>,
     #[serde(flatten)]
     pub budget: BudgetReport,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn payload_meta(token_accounting: Option<TokenAccountingMeta>) -> PayloadTruncationMeta {
+        PayloadTruncationMeta {
+            bytes_requested: 1000,
+            bytes_emitted: 500,
+            tokens_estimated: 125,
+            token_budget_applied: Some(100),
+            omitted_node_count: 2,
+            omitted_file_count: 0,
+            omitted_source_count: 1,
+            omitted_byte_count: 500,
+            continuation_hint: None,
+            source_mix: Vec::new(),
+            token_accounting,
+        }
+    }
+
+    #[test]
+    fn payload_truncation_keeps_tokens_estimated_and_emits_token_accounting() {
+        let meta = payload_meta(Some(TokenAccountingMeta {
+            provider: "heuristic".to_owned(),
+            model: None,
+            fallback_used: true,
+            fallback_reason: Some("tokenizer file missing".to_owned()),
+            bytes_per_token: Some(4),
+        }));
+        let value = serde_json::to_value(&meta).expect("serialize");
+        // Compatibility field must remain present with the counted value.
+        assert_eq!(value["tokens_estimated"], serde_json::json!(125));
+        assert_eq!(
+            value["token_accounting"]["provider"],
+            serde_json::json!("heuristic")
+        );
+        assert_eq!(
+            value["token_accounting"]["fallback_used"],
+            serde_json::json!(true)
+        );
+        assert_eq!(
+            value["token_accounting"]["fallback_reason"],
+            serde_json::json!("tokenizer file missing")
+        );
+        assert_eq!(
+            value["token_accounting"]["bytes_per_token"],
+            serde_json::json!(4)
+        );
+    }
+
+    #[test]
+    fn token_accounting_skips_none_fields() {
+        let meta = payload_meta(Some(TokenAccountingMeta {
+            provider: "tokenizers".to_owned(),
+            model: Some("simple-bpe".to_owned()),
+            fallback_used: false,
+            fallback_reason: None,
+            bytes_per_token: None,
+        }));
+        let value = serde_json::to_value(&meta).expect("serialize");
+        let accounting = &value["token_accounting"];
+        assert_eq!(accounting["model"], serde_json::json!("simple-bpe"));
+        assert!(accounting.get("fallback_reason").is_none());
+        assert!(accounting.get("bytes_per_token").is_none());
+    }
+
+    #[test]
+    fn token_accounting_omitted_when_none() {
+        let value = serde_json::to_value(payload_meta(None)).expect("serialize");
+        assert!(value.get("token_accounting").is_none());
+        assert_eq!(value["tokens_estimated"], serde_json::json!(125));
+    }
 }

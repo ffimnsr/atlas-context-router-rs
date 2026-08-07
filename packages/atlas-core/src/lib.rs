@@ -52,8 +52,8 @@ pub use model::{
     ReviewContext, ReviewImpactOverview, RiskLevel, RiskReport, RiskSummary, SafetyBand,
     SafetyScore, SavedContextSource, ScoreEvidence, ScoredImpactNode, ScoredNode,
     SearchMatchedField, SearchQuery, SelectedEdge, SelectedFile, SelectedNode, SelectionReason,
-    SimulatedRefactorImpact, TestAdjacencyResult, TestImpactResult, TruncationMeta,
-    WorkflowCallChain, WorkflowComponent, WorkflowFocusNode, WorkflowSummary,
+    SimulatedRefactorImpact, TestAdjacencyResult, TestImpactResult, TokenAccountingMeta,
+    TruncationMeta, WorkflowCallChain, WorkflowComponent, WorkflowFocusNode, WorkflowSummary,
     context_ranking_evidence_legend, ranking_evidence_legend,
 };
 pub use readiness::{

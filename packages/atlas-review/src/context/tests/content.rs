@@ -1,4 +1,5 @@
 use super::*;
+use atlas_token_count::TokenCounter;
 
 #[test]
 fn source_mix_lists_saved_artifacts_when_present() {
@@ -27,7 +28,12 @@ fn source_mix_lists_saved_artifacts_when_present() {
         repo_provenance: None,
         context_ranking_evidence: None,
     }];
-    super::payload::apply_payload_budgets(&mut result, &BudgetPolicy::default());
+    super::payload::apply_payload_budgets(
+        &mut result,
+        &BudgetPolicy::default(),
+        &TokenCounter::heuristic(4).expect("test heuristic counter"),
+        &super::payload::TokenFallbackInfo::default(),
+    );
 
     let payload = result
         .truncation
@@ -90,7 +96,12 @@ fn content_assets_dropped_field_is_zero_by_default() {
     };
     let mut result = build_symbol_context(&store, seed, &req).expect("build symbol context");
     let policy = BudgetPolicy::default();
-    super::payload::apply_payload_budgets(&mut result, &policy);
+    super::payload::apply_payload_budgets(
+        &mut result,
+        &policy,
+        &TokenCounter::heuristic(4).expect("test heuristic counter"),
+        &super::payload::TokenFallbackInfo::default(),
+    );
 
     assert_eq!(
         result.truncation.content_assets_dropped, 0,
@@ -125,7 +136,12 @@ fn source_mix_includes_content_assets_when_present() {
         relevance_score: 0.8,
         context_ranking_evidence: None,
     }];
-    super::payload::apply_payload_budgets(&mut result, &BudgetPolicy::default());
+    super::payload::apply_payload_budgets(
+        &mut result,
+        &BudgetPolicy::default(),
+        &TokenCounter::heuristic(4).expect("test heuristic counter"),
+        &super::payload::TokenFallbackInfo::default(),
+    );
 
     let payload = result
         .truncation

@@ -20,6 +20,7 @@ members = [
   "packages/atlas-db-utils",
   "packages/atlas-agent-events",
   "packages/atlas-docs",
+  "packages/atlas-token-count",
 ]
 exclude = ["fuzz"]
 resolver = "2"
@@ -110,6 +111,11 @@ regex = { version = "1", default-features = false, features = ["std", "unicode-p
 rayon = "1"
 notify = "7"
 
+# token counting
+# `fancy-regex` backend required: pre-tokenizer regexes are compiled from
+# tokenizer JSON, and tokenizers requires one of `onig`/`fancy-regex`.
+tokenizers = { version = "0.23", default-features = false, features = ["fancy-regex"] }
+
 # internal crates
 atlas-core      = { path = "packages/atlas-core" }
 atlas-engine    = { path = "packages/atlas-engine" }
@@ -117,6 +123,7 @@ atlas-mcp       = { path = "packages/atlas-mcp" }
 atlas-reasoning = { path = "packages/atlas-reasoning" }
 atlas-agent-events = { path = "packages/atlas-agent-events" }
 atlas-docs      = { path = "packages/atlas-docs" }
+atlas-token-count = { path = "packages/atlas-token-count" }
 
 [profile.dev]
 debug = 1

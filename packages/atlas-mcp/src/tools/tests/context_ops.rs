@@ -15,3 +15,4 @@ mod legacy_fields;
 mod minimal_context;
 mod postprocess;
 mod provenance;
+mod tokenizer_budget;

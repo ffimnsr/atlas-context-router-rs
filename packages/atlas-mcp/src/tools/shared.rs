@@ -234,6 +234,21 @@ pub(super) fn load_budget_policy(repo_root: &str) -> Result<BudgetPolicy> {
     config.budget_policy()
 }
 
+/// Load the configured runtime token counter for context payload budgets.
+///
+/// Missing/invalid config yields the default heuristic counter; a
+/// `fail_closed` tokenizer config propagates its load error. Returns the
+/// full load result so callers can surface fallback metadata.
+pub(super) fn load_token_counter(
+    repo_root: &str,
+) -> Result<atlas_engine::config::TokenCounterLoadResult> {
+    let atlas_dir = atlas_engine::paths::atlas_dir(repo_root);
+    let config = atlas_engine::Config::load(&atlas_dir).unwrap_or_default();
+    let atlas_dir_utf8 = camino::Utf8Path::from_path(&atlas_dir)
+        .ok_or_else(|| anyhow::anyhow!("atlas dir is not valid UTF-8: {}", atlas_dir.display()))?;
+    config.token_counter(atlas_dir_utf8)
+}
+
 pub(super) fn load_embedding_config(
     repo_root: &str,
 ) -> Result<Option<atlas_search::embed::EmbeddingConfig>> {

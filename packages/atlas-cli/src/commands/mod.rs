@@ -73,7 +73,7 @@ use std::io::IsTerminal;
 
 use anyhow::{Context, Result};
 use atlas_contentstore::{ContentStore, IndexState};
-use atlas_core::model::{ChangeType, ChangedFile};
+use atlas_core::model::{ChangeType, ChangedFile, PayloadTruncationMeta};
 use atlas_core::{
     BudgetPolicy, GraphReadiness, GraphReadinessInput, GraphStats, GraphToolRequirement,
     ReadinessOverride, ReadinessVerdict,
@@ -84,6 +84,31 @@ use atlas_store_sqlite::{GraphBuildState, Store};
 use camino::Utf8Path;
 
 use crate::cli::Cli;
+
+/// One-line payload token-accounting summary for text output.
+///
+/// JSON output carries the full structured metadata; text stays concise.
+pub(crate) fn payload_accounting_text(payload: &PayloadTruncationMeta) -> String {
+    let mut detail = Vec::new();
+    if let Some(meta) = &payload.token_accounting {
+        detail.push(format!("provider: {}", meta.provider));
+        if let Some(model) = &meta.model {
+            detail.push(format!("model: {model}"));
+        }
+        if meta.fallback_used {
+            detail.push("heuristic fallback".to_owned());
+        }
+    }
+    let suffix = if detail.is_empty() {
+        String::new()
+    } else {
+        format!(" ({})", detail.join(", "))
+    };
+    format!(
+        "[payload: {} bytes, {} tokens{}]",
+        payload.bytes_emitted, payload.tokens_estimated, suffix
+    )
+}
 
 pub(crate) const MACHINE_SCHEMA_VERSION: &str = "atlas_cli.v1";
 
@@ -147,6 +172,22 @@ pub(crate) fn load_budget_policy(repo_root: &str) -> Result<BudgetPolicy> {
     let config =
         atlas_engine::Config::load(&atlas_engine::paths::atlas_dir(repo_root)).unwrap_or_default();
     config.budget_policy()
+}
+
+/// Load the configured runtime token counter for context payload budgets.
+///
+/// A missing/invalid config file yields the default heuristic counter
+/// (safe-to-answer); a `fail_closed` tokenizer config propagates its load
+/// error so payload truncation never runs without the required tokenizer.
+/// Returns the full load result so callers can surface fallback metadata.
+pub(crate) fn load_token_counter(
+    repo_root: &str,
+) -> Result<atlas_engine::config::TokenCounterLoadResult> {
+    let atlas_dir = atlas_engine::paths::atlas_dir(repo_root);
+    let config = atlas_engine::Config::load(&atlas_dir).unwrap_or_default();
+    let atlas_dir_utf8 = camino::Utf8Path::from_path(&atlas_dir)
+        .ok_or_else(|| anyhow::anyhow!("atlas dir is not valid UTF-8: {}", atlas_dir.display()))?;
+    config.token_counter(atlas_dir_utf8)
 }
 
 pub(crate) fn load_embedding_config(

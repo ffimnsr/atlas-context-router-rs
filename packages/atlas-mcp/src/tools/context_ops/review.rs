@@ -18,7 +18,11 @@ pub(crate) fn tool_get_review_context(
 
     let store = open_store(db_path)?;
     let policy = load_budget_policy(repo_root)?;
-    let engine = ContextEngine::new(&store).with_budget_policy(policy);
+    let token_counter = load_token_counter(repo_root)?;
+    let engine = ContextEngine::new(&store)
+        .with_budget_policy(policy)
+        .with_token_counter(token_counter.counter)
+        .with_token_fallback(token_counter.fallback_used, token_counter.fallback_reason);
     let request = ContextRequest {
         intent: ContextIntent::Review,
         target: ContextTarget::ChangedFiles {

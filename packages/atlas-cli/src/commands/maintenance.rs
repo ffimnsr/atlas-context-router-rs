@@ -132,6 +132,13 @@ fn config_runtime_json(config: &atlas_engine::Config) -> serde_json::Value {
             "max_context_tokens_estimate": config.context.max_context_tokens_estimate,
             "max_file_excerpt_bytes": config.context.max_file_excerpt_bytes,
             "max_saved_context_bytes": config.context.max_saved_context_bytes,
+            "tokenizer": {
+                "provider": config.context.tokenizer.provider.as_str(),
+                "model": config.context.tokenizer.model,
+                "tokenizer_file": config.context.tokenizer.tokenizer_file,
+                "fallback": config.context.tokenizer.fallback.as_str(),
+                "bytes_per_token": config.context.tokenizer.bytes_per_token,
+            },
         },
         "mcp": {
             "worker_threads": config.mcp_worker_threads(),

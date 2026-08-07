@@ -1,9 +1,42 @@
 use super::*;
-use atlas_core::model::{ContextSourceMix, PayloadTruncationMeta};
+use atlas_core::model::{ContextSourceMix, PayloadTruncationMeta, TokenAccountingMeta};
+use atlas_token_count::{TokenCount, TokenCountMethod, TokenCounter};
 use std::cmp::Ordering;
 
-pub(super) fn apply_payload_budgets(result: &mut ContextResult, policy: &BudgetPolicy) {
-    let requested_bytes = context_bytes(result);
+/// Load-time fallback info for the active counter (tokenizer load failed
+/// and the heuristic was used instead).
+#[derive(Debug, Clone, Default)]
+pub(super) struct TokenFallbackInfo {
+    pub used: bool,
+    pub reason: Option<String>,
+}
+
+/// Serialized payload size plus tokenizer-backed token count.
+///
+/// `method`/`fallback_reason` are part of the measurement contract and are
+/// surfaced in JSON output by a later phase; trimming itself only reads
+/// `bytes`/`tokens`.
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub(super) struct PayloadMeasurement {
+    /// Serialized payload bytes (payload metadata stripped).
+    pub bytes: usize,
+    /// Token count for the same serialized payload.
+    pub tokens: usize,
+    /// Counting method used for `tokens`.
+    pub method: TokenCountMethod,
+    /// Why a heuristic count was used, when tokenizer counting failed.
+    pub fallback_reason: Option<String>,
+}
+
+pub(super) fn apply_payload_budgets(
+    result: &mut ContextResult,
+    policy: &BudgetPolicy,
+    counter: &TokenCounter,
+    fallback: &TokenFallbackInfo,
+) {
+    let requested = measure_payload(result, counter);
+    let requested_bytes = requested.bytes;
     let initial_nodes = result.nodes.len();
     let initial_edges = result.edges.len();
     let initial_files = result.files.len();
@@ -29,13 +62,13 @@ pub(super) fn apply_payload_budgets(result: &mut ContextResult, policy: &BudgetP
         Some(requested) => requested.min(token_ceiling).min(policy_token_limit),
         None => policy_token_limit,
     };
-    // When a per-request token budget is tighter than the byte cap, derive an
-    // equivalent byte limit (4 bytes/token approximation).
-    let policy_byte_limit = policy
+    // Byte caps stay independent of token accounting: the policy byte limit
+    // is the transport/memory safety cap, while the token budget is enforced
+    // via the configured counter (tokenizer or byte heuristic).
+    let effective_byte_limit = policy
         .mcp_cli_payload_serialization
         .context_payload_bytes
         .default_limit;
-    let effective_byte_limit = (effective_token_limit * 4).min(policy_byte_limit);
 
     // Track whether the token budget was overridden by the caller.
     let token_budget_applied =
@@ -66,7 +99,8 @@ pub(super) fn apply_payload_budgets(result: &mut ContextResult, policy: &BudgetP
             .review_source_bytes
             .default_limit,
     );
-    trim_context_payload(result, effective_byte_limit, effective_token_limit);
+    let emitted =
+        trim_context_payload(result, effective_byte_limit, effective_token_limit, counter);
     update_file_node_counts(result);
 
     let payload_nodes_dropped = initial_nodes.saturating_sub(result.nodes.len());
@@ -76,8 +110,8 @@ pub(super) fn apply_payload_budgets(result: &mut ContextResult, policy: &BudgetP
         initial_sources.saturating_sub(result.saved_context_sources.len());
     let payload_content_assets_dropped =
         initial_content_assets.saturating_sub(result.content_assets.len());
-    let emitted_bytes = context_bytes(result);
-    let tokens_estimated = estimate_tokens(emitted_bytes);
+    let emitted_bytes = emitted.bytes;
+    let tokens_estimated = emitted.tokens;
     let omitted_byte_count = requested_bytes.saturating_sub(emitted_bytes);
 
     if payload_nodes_dropped > 0
@@ -110,7 +144,7 @@ pub(super) fn apply_payload_budgets(result: &mut ContextResult, policy: &BudgetP
                 sources: payload_sources_dropped,
                 content_assets: payload_content_assets_dropped,
             },
-            emitted_bytes,
+            counter,
         );
 
         result.truncation.payload = Some(PayloadTruncationMeta {
@@ -131,7 +165,62 @@ pub(super) fn apply_payload_budgets(result: &mut ContextResult, policy: &BudgetP
                 None
             },
             source_mix,
+            token_accounting: Some(build_token_accounting_meta(&emitted, fallback)),
         });
+    }
+}
+
+/// Map a payload measurement plus load-time fallback info into JSON metadata.
+fn build_token_accounting_meta(
+    emitted: &PayloadMeasurement,
+    fallback: &TokenFallbackInfo,
+) -> TokenAccountingMeta {
+    let (provider, model, bytes_per_token) = match &emitted.method {
+        TokenCountMethod::Tokenizer { provider, model } => (provider.clone(), model.clone(), None),
+        TokenCountMethod::HeuristicBytes { bytes_per_token } => {
+            ("heuristic".to_owned(), None, Some(*bytes_per_token))
+        }
+    };
+    let fallback_used = fallback.used || emitted.fallback_reason.is_some();
+    let fallback_reason = fallback
+        .reason
+        .clone()
+        .or_else(|| emitted.fallback_reason.clone());
+    TokenAccountingMeta {
+        provider,
+        model,
+        fallback_used,
+        fallback_reason,
+        bytes_per_token,
+    }
+}
+
+/// Serialize the payload without payload metadata and measure bytes and
+/// tokens. Tokenizer failures never panic: they degrade to the byte
+/// heuristic with a recorded reason.
+fn measure_payload(result: &ContextResult, counter: &TokenCounter) -> PayloadMeasurement {
+    let mut clone = result.clone();
+    clone.truncation.payload = None;
+    let Some(bytes) = serde_json::to_vec(&clone).ok() else {
+        return PayloadMeasurement {
+            bytes: 0,
+            tokens: 0,
+            method: TokenCountMethod::HeuristicBytes { bytes_per_token: 4 },
+            fallback_reason: Some("payload serialization failed".to_owned()),
+        };
+    };
+    let count = counter
+        .count_json_bytes(&bytes)
+        .unwrap_or_else(|_| TokenCount {
+            tokens: bytes.len().div_ceil(4),
+            method: TokenCountMethod::HeuristicBytes { bytes_per_token: 4 },
+            fallback_reason: Some("tokenizer count failed".to_owned()),
+        });
+    PayloadMeasurement {
+        bytes: bytes.len(),
+        tokens: count.tokens,
+        method: count.method,
+        fallback_reason: count.fallback_reason,
     }
 }
 
@@ -148,38 +237,35 @@ struct DropCounts {
 /// Source priority (highest first): graph_context > saved_artifacts.
 /// Resume snapshot is not a separate source type in the current model; saved
 /// artifacts produced by resume are included in `saved_artifacts`.
+///
+/// Sections are counted with the configured counter. Heuristic fallback is
+/// only used when the counter itself is heuristic; tokenizer count errors
+/// yield zero tokens rather than silently switching methods.
 fn compute_source_mix(
     result: &ContextResult,
     dropped: &DropCounts,
-    emitted_bytes: usize,
+    counter: &TokenCounter,
 ) -> Vec<ContextSourceMix> {
     let dropped_nodes = dropped.nodes;
     let dropped_edges = dropped.edges;
     let dropped_files = dropped.files;
     let dropped_sources = dropped.sources;
     let dropped_content_assets = dropped.content_assets;
-    let total_tokens = estimate_tokens(emitted_bytes);
-    if total_tokens == 0 {
+
+    // Serialize each source-kind section once and count it with the counter.
+    let graph_node_bytes = serde_json::to_vec(&result.nodes).unwrap_or_default();
+    let graph_edge_bytes = serde_json::to_vec(&result.edges).unwrap_or_default();
+    let graph_file_bytes = serde_json::to_vec(&result.files).unwrap_or_default();
+    let saved_bytes = serde_json::to_vec(&result.saved_context_sources).unwrap_or_default();
+    let content_asset_bytes = serde_json::to_vec(&result.content_assets).unwrap_or_default();
+    let graph_tokens = count_section_tokens(&graph_node_bytes, counter)
+        + count_section_tokens(&graph_edge_bytes, counter)
+        + count_section_tokens(&graph_file_bytes, counter);
+    let saved_tokens = count_section_tokens(&saved_bytes, counter);
+    let content_asset_tokens = count_section_tokens(&content_asset_bytes, counter);
+    if graph_tokens + saved_tokens + content_asset_tokens == 0 {
         return Vec::new();
     }
-
-    // Estimate how many bytes each source kind occupies in the result.
-    let graph_node_bytes = serde_json::to_vec(&result.nodes)
-        .map(|b| b.len())
-        .unwrap_or(0);
-    let graph_edge_bytes = serde_json::to_vec(&result.edges)
-        .map(|b| b.len())
-        .unwrap_or(0);
-    let graph_file_bytes = serde_json::to_vec(&result.files)
-        .map(|b| b.len())
-        .unwrap_or(0);
-    let graph_bytes = graph_node_bytes + graph_edge_bytes + graph_file_bytes;
-    let saved_bytes = serde_json::to_vec(&result.saved_context_sources)
-        .map(|b| b.len())
-        .unwrap_or(0);
-    let content_asset_bytes = serde_json::to_vec(&result.content_assets)
-        .map(|b| b.len())
-        .unwrap_or(0);
 
     let mut mix = Vec::new();
 
@@ -191,7 +277,7 @@ fn compute_source_mix(
             source_kind: "graph_context".to_owned(),
             items_included: graph_included,
             items_dropped: graph_dropped,
-            tokens_used: estimate_tokens(graph_bytes),
+            tokens_used: graph_tokens,
         });
     }
 
@@ -203,7 +289,7 @@ fn compute_source_mix(
             source_kind: "content_assets".to_owned(),
             items_included: ca_included,
             items_dropped: dropped_content_assets,
-            tokens_used: estimate_tokens(content_asset_bytes),
+            tokens_used: content_asset_tokens,
         });
     }
 
@@ -214,7 +300,7 @@ fn compute_source_mix(
             source_kind: "saved_artifacts".to_owned(),
             items_included: saved_included,
             items_dropped: dropped_sources,
-            tokens_used: estimate_tokens(saved_bytes),
+            tokens_used: saved_tokens,
         });
     }
 
@@ -229,6 +315,15 @@ fn compute_source_mix(
     mix
 }
 
+/// Count tokens for one serialized JSON section. Tokenizer count failures
+/// yield zero rather than falling back to a different method.
+fn count_section_tokens(bytes: &[u8], counter: &TokenCounter) -> usize {
+    counter
+        .count_json_bytes(bytes)
+        .map(|count| count.tokens)
+        .unwrap_or(0)
+}
+
 fn continuation_hint(result: &ContextResult, omitted_sources: usize) -> String {
     if omitted_sources > 0 {
         return "reduce saved-context scope or retrieve full artifacts by source_id".to_owned();
@@ -237,14 +332,6 @@ fn continuation_hint(result: &ContextResult, omitted_sources: usize) -> String {
         return "narrow query, lower depth, or disable code_spans for larger payloads".to_owned();
     }
     "narrow query, lower depth, or split changed-file set".to_owned()
-}
-
-fn context_bytes(result: &ContextResult) -> usize {
-    let mut clone = result.clone();
-    clone.truncation.payload = None;
-    serde_json::to_vec(&clone)
-        .map(|bytes| bytes.len())
-        .unwrap_or(0)
 }
 
 fn files_bytes(result: &ContextResult) -> usize {
@@ -268,10 +355,6 @@ fn saved_context_bytes(result: &ContextResult) -> usize {
     serde_json::to_vec(&result.saved_context_sources)
         .map(|bytes| bytes.len())
         .unwrap_or(0)
-}
-
-fn estimate_tokens(bytes: usize) -> usize {
-    bytes.div_ceil(4)
 }
 
 fn trim_file_excerpt_bytes(result: &mut ContextResult, limit: usize) {
@@ -304,21 +387,28 @@ fn trim_review_source_bytes(result: &mut ContextResult, limit: usize) {
     }
 }
 
-fn trim_context_payload(result: &mut ContextResult, byte_limit: usize, token_limit: usize) {
+/// Trim payload items until both byte and token limits hold. Returns the
+/// final measurement of the trimmed payload.
+fn trim_context_payload(
+    result: &mut ContextResult,
+    byte_limit: usize,
+    token_limit: usize,
+    counter: &TokenCounter,
+) -> PayloadMeasurement {
     loop {
-        let current_bytes = context_bytes(result);
-        if current_bytes <= byte_limit && estimate_tokens(current_bytes) <= token_limit {
-            break;
+        let measurement = measure_payload(result, counter);
+        if measurement.bytes <= byte_limit && measurement.tokens <= token_limit {
+            return measurement;
         }
-
-        let changed = trim_one_payload_unit(result);
-        if !changed {
-            break;
+        if !trim_one_payload_unit(result) {
+            return measurement;
         }
     }
 }
 
-fn trim_one_payload_unit(result: &mut ContextResult) -> bool {
+/// Drop exactly one payload unit in deterministic priority order; returns
+/// false when nothing removable remains.
+pub(super) fn trim_one_payload_unit(result: &mut ContextResult) -> bool {
     if let Some(index) = select_saved_source_drop_index(result) {
         result.saved_context_sources.remove(index);
         return true;

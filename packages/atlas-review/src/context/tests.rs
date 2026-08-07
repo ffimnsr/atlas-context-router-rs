@@ -179,3 +179,5 @@ mod resolve;
 mod review;
 mod spans_tests;
 mod symbol_context;
+mod token_accounting;
+mod tokenizer_budget;

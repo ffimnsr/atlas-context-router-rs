@@ -38,6 +38,7 @@ mod core;
 mod docs;
 mod resolution;
 mod shell;
+mod tokenizer_budget;
 mod watch;
 mod workspace;
 

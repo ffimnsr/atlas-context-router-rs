@@ -16,7 +16,7 @@ use std::collections::BTreeSet;
 
 use super::shared::{
     ResolvedChangeSourceKind, bool_arg, error_code_docs, error_message, error_suggestions,
-    inject_budget_metadata, inject_deprecated_input_fields, load_budget_policy,
+    inject_budget_metadata, inject_deprecated_input_fields, load_budget_policy, load_token_counter,
     mcp_query_looks_like_unstructured_description, mcp_supported_query_grammar_examples,
     open_store, parse_mcp_intent, parse_mcp_query_grammar, repo_aliases_by_id,
     resolve_change_source_selection, resolve_repo_scope_selection, str_arg, u64_arg,

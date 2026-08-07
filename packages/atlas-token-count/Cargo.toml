@@ -1,0 +1,14 @@
+[package]
+name = "atlas-token-count"
+version = "1.7.3"
+edition = "2024"
+description = "Deterministic token counting backed by local tokenizer files or byte heuristics"
+publish = false
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+tokenizers.workspace = true
+
+[lints]
+workspace = true

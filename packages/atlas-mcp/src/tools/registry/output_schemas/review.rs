@@ -377,6 +377,7 @@ pub(crate) fn get_review_context_output_schema() -> Value {
             "traversal_budget": traversal_budget_schema(),
             "context_source_mix": context_source_mix_schema(),
             "payload_truncation": payload_truncation_schema(),
+            "token_accounting": token_accounting_schema(),
             "review_risk_summary": review_risk_summary_schema(),
             "boundary_summary": boundary_summary_schema(),
         })),

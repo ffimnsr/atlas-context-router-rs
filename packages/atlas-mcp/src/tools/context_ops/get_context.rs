@@ -99,6 +99,7 @@ pub(crate) fn tool_get_context(
 
     let store = open_store(db_path)?;
     let policy = load_budget_policy(repo_root)?;
+    let token_counter = load_token_counter(repo_root)?;
 
     // --semantic: when target is a SymbolName, run graph-aware semantic search
     // first to resolve the best-matching qualified name, then build context
@@ -119,7 +120,10 @@ pub(crate) fn tool_get_context(
         }
     }
 
-    let engine = ContextEngine::new(&store).with_budget_policy(policy);
+    let engine = ContextEngine::new(&store)
+        .with_budget_policy(policy)
+        .with_token_counter(token_counter.counter)
+        .with_token_fallback(token_counter.fallback_used, token_counter.fallback_reason);
 
     let result = if include_saved_context {
         let content_db = derive_content_db_path(db_path);

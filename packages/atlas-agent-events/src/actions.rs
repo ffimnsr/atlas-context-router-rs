@@ -520,12 +520,18 @@ fn build_review_refresh_artifacts(
         depth: Some(MAX_HOOK_REVIEW_REFRESH_DEPTH),
         ..ContextRequest::default()
     };
-    let review_policy = Config::load(&atlas_engine::paths::atlas_dir(repo))
-        .unwrap_or_default()
+    let atlas_dir = atlas_engine::paths::atlas_dir(repo);
+    let config = Config::load(&atlas_dir).unwrap_or_default();
+    let review_policy = config
         .budget_policy()
         .unwrap_or_else(|_| BudgetPolicy::default());
+    let atlas_dir_utf8 = Utf8Path::from_path(&atlas_dir)
+        .ok_or_else(|| anyhow::anyhow!("atlas dir is not valid UTF-8: {}", atlas_dir.display()))?;
+    let token_counter = config.token_counter(atlas_dir_utf8)?;
     let review_context = ContextEngine::new(&store)
         .with_budget_policy(review_policy)
+        .with_token_counter(token_counter.counter)
+        .with_token_fallback(token_counter.fallback_used, token_counter.fallback_reason)
         .build(&review_request)
         .context("review context generation failed")?;
     let explain_change = build_explain_change_summary(

@@ -30,6 +30,7 @@ impl Config {
         active.build_run_budget()?;
         active.budget_policy()?;
         active.insights.validate()?;
+        active.context.tokenizer.validate()?;
 
         let mut lines = vec![
             "# Atlas config template.",
@@ -402,6 +403,54 @@ impl Config {
             ],
             profile == ConfigTemplateProfile::Full,
         ));
+
+        lines.extend(render_section(
+            "context.tokenizer",
+            &[
+                (
+                    "provider",
+                    format!("\"{}\"", active.context.tokenizer.provider.as_str()),
+                ),
+                (
+                    "model",
+                    if profile == ConfigTemplateProfile::Full {
+                        render_optional_string(active.context.tokenizer.model.as_deref())
+                    } else {
+                        render_optional_example_string(
+                            active.context.tokenizer.model.as_deref(),
+                            "cl100k_base",
+                        )
+                    },
+                ),
+                (
+                    "tokenizer_file",
+                    if profile == ConfigTemplateProfile::Full {
+                        render_optional_string(active.context.tokenizer.tokenizer_file.as_deref())
+                    } else {
+                        render_optional_example_string(
+                            active.context.tokenizer.tokenizer_file.as_deref(),
+                            "tokenizer.json",
+                        )
+                    },
+                ),
+                (
+                    "fallback",
+                    format!("\"{}\"", active.context.tokenizer.fallback.as_str()),
+                ),
+                (
+                    "bytes_per_token",
+                    active.context.tokenizer.bytes_per_token.to_string(),
+                ),
+            ],
+            profile == ConfigTemplateProfile::Full,
+        ));
+        // Tokenizer-backed example: keep commented unless a real local file
+        // exists, so generated templates never activate a missing file.
+        lines.push(
+            "# To count with a local tokenizer instead of the byte heuristic, activate:".to_owned(),
+        );
+        lines.push("# provider = \"tokenizers\"".to_owned());
+        lines.push(String::new());
 
         lines.extend(render_section(
             "mcp",

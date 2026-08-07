@@ -25,8 +25,9 @@ use crate::cli::{Cli, Command};
 
 use super::{
     change_tag, check_graph_readiness, colorize, db_path, derive_graph_readiness,
-    derive_graph_readiness_open_failed, detect_changes_target, load_budget_policy, print_json,
-    query_display_path, readiness_overrides, resolve_repo,
+    derive_graph_readiness_open_failed, detect_changes_target, load_budget_policy,
+    load_token_counter, payload_accounting_text, print_json, query_display_path,
+    readiness_overrides, resolve_repo,
 };
 
 fn parse_intent_str(s: &str) -> Option<ContextIntent> {
@@ -247,6 +248,9 @@ fn format_context_output_with_decisions(
             result.truncation.edges_dropped,
             result.truncation.files_dropped,
         ));
+    }
+    if let Some(payload) = &result.truncation.payload {
+        out.push(payload_accounting_text(payload));
     }
 
     let direct_count = result
@@ -527,7 +531,11 @@ pub fn run_context(cli: &Cli) -> Result<()> {
             }
         }
 
-        let engine = ContextEngine::new(&store).with_budget_policy(load_budget_policy(&repo)?);
+        let token_counter = load_token_counter(&repo)?;
+        let engine = ContextEngine::new(&store)
+            .with_budget_policy(load_budget_policy(&repo)?)
+            .with_token_counter(token_counter.counter)
+            .with_token_fallback(token_counter.fallback_used, token_counter.fallback_reason);
         let result = engine.build(&request).context("context engine failed")?;
         let linked_decisions = search_linked_decisions(&repo, &request);
 
@@ -876,8 +884,11 @@ fn render_shell_explain_output(store: &Store, repo: &str, args: &ShellArgs) -> R
         depth: Some(max_depth),
         ..ContextRequest::default()
     };
+    let token_counter = load_token_counter(repo)?;
     let workflow_result = ContextEngine::new(store)
         .with_budget_policy(policy)
+        .with_token_counter(token_counter.counter)
+        .with_token_fallback(token_counter.fallback_used, token_counter.fallback_reason)
         .build(&workflow_request)
         .context("workflow summary failed")?;
     let workflow = workflow_result.workflow;
@@ -978,7 +989,10 @@ fn render_shell_review_output(store: &Store, repo: &str, args: &ShellArgs) -> Re
         depth: Some(max_depth),
         ..ContextRequest::default()
     };
+    let token_counter = load_token_counter(repo)?;
     let ctx = ContextEngine::new(store)
+        .with_token_counter(token_counter.counter)
+        .with_token_fallback(token_counter.fallback_used, token_counter.fallback_reason)
         .build(&request)
         .context("context engine failed")?;
 
@@ -1083,6 +1097,10 @@ fn render_shell_review_output(store: &Store, repo: &str, args: &ShellArgs) -> Re
             ctx.truncation.edges_dropped,
             ctx.truncation.files_dropped
         ));
+    }
+    if let Some(payload) = &ctx.truncation.payload {
+        lines.push(colorize("  Payload:", "1;33"));
+        lines.push(format!("    {}", payload_accounting_text(payload)));
     }
 
     if !ctx.files.is_empty() {
@@ -1236,9 +1254,12 @@ fn render_shell_traverse_output(store: &Store, repo: &str, args: &ShellArgs) -> 
     Ok(lines.join("\n"))
 }
 
-fn render_shell_context_output(store: &Store, text: &str) -> Result<String> {
+fn render_shell_context_output(store: &Store, repo: &str, text: &str) -> Result<String> {
     let request = query_parser::parse_query(text);
+    let token_counter = load_token_counter(repo)?;
     let result = ContextEngine::new(store)
+        .with_token_counter(token_counter.counter)
+        .with_token_fallback(token_counter.fallback_used, token_counter.fallback_reason)
         .build(&request)
         .context("context engine failed")?;
     Ok(format_context_output(&result))
@@ -1469,7 +1490,11 @@ pub fn run_shell(cli: &Cli) -> Result<()> {
     )? {
         eprintln!("Warning: {warning}");
     }
-    let engine = ContextEngine::new(&store).with_budget_policy(load_budget_policy(&repo)?);
+    let token_counter = load_token_counter(&repo)?;
+    let engine = ContextEngine::new(&store)
+        .with_budget_policy(load_budget_policy(&repo)?)
+        .with_token_counter(token_counter.counter)
+        .with_token_fallback(token_counter.fallback_used, token_counter.fallback_reason);
     let stdin = io::stdin();
     let mut line = String::new();
 
@@ -1537,7 +1562,7 @@ pub fn run_shell(cli: &Cli) -> Result<()> {
             if text.is_empty() {
                 "Usage: /context <natural-language query>".to_string()
             } else {
-                render_shell_context_output(&store, text)?
+                render_shell_context_output(&store, &repo, text)?
             }
         } else if let Some(rest) = input.strip_prefix("/session") {
             render_shell_session_output(&repo, rest.trim())?

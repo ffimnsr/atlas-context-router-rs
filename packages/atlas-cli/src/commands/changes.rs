@@ -20,7 +20,8 @@ use std::fmt::Write as _;
 use super::{
     augment_changes_with_node_counts, change_tag, check_graph_readiness, db_path,
     derive_graph_readiness, derive_graph_readiness_open_failed, detect_changes_target,
-    load_budget_policy, print_json, readiness_overrides, resolve_repo,
+    load_budget_policy, load_token_counter, payload_accounting_text, print_json,
+    readiness_overrides, resolve_repo,
 };
 
 // ---------------------------------------------------------------------------
@@ -225,6 +226,9 @@ fn print_review_context_text(ctx: &ContextResult, changed_files: &[String]) {
         println!("  Nodes dropped    : {}", ctx.truncation.nodes_dropped);
         println!("  Edges dropped    : {}", ctx.truncation.edges_dropped);
         println!("  Files dropped    : {}", ctx.truncation.files_dropped);
+    }
+    if let Some(payload) = &ctx.truncation.payload {
+        println!("  Payload          : {}", payload_accounting_text(payload));
     }
 }
 
@@ -1309,8 +1313,11 @@ pub fn run_review_context(cli: &Cli) -> Result<()> {
             depth: Some(max_depth),
             ..ContextRequest::default()
         };
+        let token_counter = load_token_counter(repo_root.as_str())?;
         let workflow_result = ContextEngine::new(&store)
             .with_budget_policy(load_budget_policy(repo_root.as_str())?)
+            .with_token_counter(token_counter.counter)
+            .with_token_fallback(token_counter.fallback_used, token_counter.fallback_reason)
             .build(&workflow_request)
             .context("context engine failed")?;
 

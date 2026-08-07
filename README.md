@@ -504,6 +504,7 @@ Key knobs:
 
 - `--intent`: `symbol`, `file`, `review`, `impact`, `usage_lookup`, `refactor_safety`, `dead_code_check`, `rename_preview`, `dependency_removal`
 - limits: `--max-nodes`, `--max-edges`, `--max-files`, `--depth`
+- payload budget: `--token-budget <N>` caps the serialized payload token count for the request
 - extra detail: `--code-spans`, `--tests`, `--imports`, `--neighbors`
 
 Default limits: 100 nodes, 100 edges, 20 files, depth 2.
@@ -514,6 +515,70 @@ Contract references:
 
 - [Output stability policy](docs/contracts/output-stability.md)
 - `schemas/atlas_cli.v1/*.schema.json`
+
+### Payload budgets
+
+Serialized context payloads are bounded by two independent caps:
+
+- **Byte cap** — `context.max_context_payload_bytes` (default from the
+  `mcp_cli_payload_serialization.context_payload_bytes` policy) is a transport
+  and memory safety limit. It always applies, regardless of token accounting.
+- **Token cap** — `context.max_context_tokens_estimate` (or a per-request
+  `--token-budget`, capped by the policy ceiling) limits how many tokens the
+  serialized payload counts as.
+
+Token accounting has two modes, selected under `.atlas/config.toml`:
+
+```toml
+[context.tokenizer]
+provider = "heuristic"   # default: bytes.div_ceil(bytes_per_token)
+bytes_per_token = 4
+fallback = "heuristic"   # or "fail_closed"
+```
+
+- **Heuristic mode (default)** — counts `bytes / bytes_per_token` (4 bytes per
+  token), deterministic and always available. This is the historical Atlas
+  behavior.
+- **Tokenizer mode** — counts with a local tokenizer JSON file:
+
+  ```toml
+  [context.tokenizer]
+  provider = "tokenizers"
+  model = "cl100k_base"            # optional metadata label
+  tokenizer_file = "tokenizers/tokenizer.json"   # relative to .atlas/
+  fallback = "heuristic"
+  ```
+
+  Tokenizer JSON files are local inputs only; Atlas never downloads them.
+  Relative `tokenizer_file` paths resolve from `.atlas/`.
+
+When the configured tokenizer cannot be loaded:
+
+- `fallback = "heuristic"` (default) counts with the byte heuristic and marks
+  the result as a fallback.
+- `fallback = "fail_closed"` fails the command before payload truncation with
+  an error naming `context.tokenizer.tokenizer_file` and the resolved path.
+
+Truncation metadata (`truncation.payload`) reports how tokens were counted so
+agents can tell tokenizer-backed counts from heuristic fallback:
+
+```json
+{
+  "bytes_emitted": 1234,
+  "tokens_estimated": 300,
+  "token_accounting": {
+    "provider": "heuristic",
+    "fallback_used": true,
+    "fallback_reason": "failed to load tokenizer from ...",
+    "bytes_per_token": 4
+  }
+}
+```
+
+`tokens_estimated` stays present for compatibility; `token_accounting`
+`provider` is `"tokenizers"` (with `model` when configured) or `"heuristic"`
+(with `bytes_per_token`). `fallback_used`/`fallback_reason` are set whenever
+heuristic counting replaced a failed tokenizer load or count.
 
 ## Output Modes
 
