@@ -211,7 +211,10 @@ fn explicit_task_persists_input_required_payload_for_rmcp_tasks_get() {
             ),
             super::AtlasRmcpCallContext {
                 request_id: "req-task-input".to_owned(),
-                client_capabilities: Some(json!({"elicitation": {"form": {}}})),
+                client_capabilities: Some(json!({
+                    "elicitation": {"form": {}},
+                    "extensions": {"io.modelcontextprotocol/tasks": {}}
+                })),
                 authenticated_principal: Some("user@example.com".to_owned()),
                 progress: None,
             },
@@ -241,6 +244,44 @@ fn explicit_task_persists_input_required_payload_for_rmcp_tasks_get() {
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
     panic!("timed out waiting for input_required durable task state");
+}
+
+#[test]
+fn explicit_task_without_client_task_capability_fails_before_persistence() {
+    let fixture = ToolFixture::new();
+    let error = fixture
+        .server
+        .call_tool_for_tests_with_context(
+            call_tool_request(
+                "purge_saved_context",
+                Some(json!({"keep_days": 30, "output_format": "json", "task": {"ttl": 1000}})),
+            ),
+            super::AtlasRmcpCallContext {
+                request_id: "req-task-unsupported".to_owned(),
+                client_capabilities: Some(json!({"elicitation": {"form": {}}})),
+                authenticated_principal: Some("user@example.com".to_owned()),
+                progress: None,
+            },
+        )
+        .expect_err("explicit task without Tasks capability must fail");
+
+    assert_eq!(error.code, ErrorCode::MISSING_REQUIRED_CLIENT_CAPABILITY);
+    assert_eq!(
+        error
+            .data
+            .as_ref()
+            .and_then(|data| data
+                .pointer("/requiredCapabilities/extensions/io.modelcontextprotocol~1tasks")),
+        Some(&json!({}))
+    );
+    assert!(
+        SessionStore::open_in_repo(&fixture.repo_root)
+            .expect("open session store")
+            .list_durable_tasks(None, 10)
+            .expect("list durable tasks")
+            .tasks
+            .is_empty()
+    );
 }
 
 #[test]

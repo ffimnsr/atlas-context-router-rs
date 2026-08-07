@@ -11,6 +11,7 @@ pub(crate) struct ClientInteractionCapabilities {
     pub supports_elicitation_form: bool,
     #[allow(dead_code)]
     pub supports_elicitation_url: bool,
+    pub supports_tasks: bool,
 }
 
 #[derive(Clone)]
@@ -85,6 +86,7 @@ mod tests {
             ClientInteractionCapabilities {
                 supports_elicitation_form: true,
                 supports_elicitation_url: false,
+                supports_tasks: true,
             },
             "stdio",
             None,
@@ -96,6 +98,7 @@ mod tests {
         install(client.clone());
         let active = current().unwrap();
         assert!(active.capabilities.supports_elicitation_form);
+        assert!(active.capabilities.supports_tasks);
         assert_eq!(active.transport_kind, "stdio");
         assert_eq!(active.request_method, "tools/call");
         uninstall();

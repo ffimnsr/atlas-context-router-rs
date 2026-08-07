@@ -207,9 +207,31 @@ pub(super) fn client_interaction_capabilities(
     client_capabilities: Option<&Value>,
 ) -> ClientInteractionCapabilities {
     let elicitation = client_capabilities.and_then(|value| value.get("elicitation"));
+    let extensions = client_capabilities.and_then(|value| value.get("extensions"));
     ClientInteractionCapabilities {
         supports_elicitation_form: elicitation.and_then(|value| value.get("form")).is_some(),
         supports_elicitation_url: elicitation.and_then(|value| value.get("url")).is_some(),
+        supports_tasks: extensions
+            .and_then(|value| value.get("io.modelcontextprotocol/tasks"))
+            .is_some(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::client_interaction_capabilities;
+
+    #[test]
+    fn task_capability_requires_tasks_extension() {
+        assert!(!client_interaction_capabilities(Some(&json!({}))).supports_tasks);
+        assert!(
+            client_interaction_capabilities(Some(&json!({
+                "extensions": {"io.modelcontextprotocol/tasks": {}}
+            })))
+            .supports_tasks
+        );
     }
 }
 

@@ -95,6 +95,7 @@ pub(super) fn install_purge_request_context(params: Value) {
         crate::runtime_context::ClientInteractionCapabilities {
             supports_elicitation_form: true,
             supports_elicitation_url: false,
+            supports_tasks: false,
         },
         "stdio",
         None,

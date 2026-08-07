@@ -144,6 +144,23 @@ For dynamic MCP repo-selection failures, Atlas may also include `error.data.atla
 - `recommended_fix`
 - `session_mode`
 
+<a id="missing_required_client_capability"></a>
+### `missing_required_client_capability`
+
+MCP client called a capability-gated feature without advertising required support. Atlas uses JSON-RPC error `-32021` and includes `error.data.requiredCapabilities`.
+
+Atlas creates or returns deferred task handles only for clients advertising:
+
+```json
+{
+  "extensions": {
+    "io.modelcontextprotocol/tasks": {}
+  }
+}
+```
+
+Clients without this extension receive a synchronous result for auto-deferred tools, or a normal tool timeout. Explicit task requests fail before Atlas creates durable task state.
+
 <a id="internal_error"></a>
 ### `internal_error`
 

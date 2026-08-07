@@ -6,6 +6,7 @@ MCP quick guidance:
 - protocol versions: `2026-07-28, 2025-11-25`
 - call `server/discover` for capability negotiation
 - on stdio and HTTP requests after discovery, include `params._meta` with protocol version and client capabilities
+- advertise `extensions.io.modelcontextprotocol/tasks` only when client implements task-handle polling; Atlas otherwise returns auto-deferred tools synchronously
 - use explicit `arguments.repo_root` or server launch cwd for repo selection; do not rely on MCP Roots
 - HTTP transport is stateless at protocol level: no `Mcp-Session-Id`, `GET /mcp`, `DELETE /mcp`, or `Last-Event-ID` flow
 

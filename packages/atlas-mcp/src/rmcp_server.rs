@@ -21,11 +21,12 @@ use rmcp::ErrorData as McpError;
 use rmcp::ServerHandler;
 use rmcp::model::{
     CallToolRequestMethod, CallToolRequestParams, CallToolResponse, CancelTaskParams,
-    CompleteRequestParams, CompleteResult, ConstString, DiscoverResult, GetPromptResult,
-    GetTaskParams, GetTaskResult, Implementation, ListPromptsResult, ListResourceTemplatesResult,
-    ListResourcesResult, ListToolsResult, PaginatedRequestParams, PromptsCapability,
-    ProtocolVersion, ReadResourceResult, ResourcesCapability, Root, ServerCapabilities, ServerInfo,
-    SetLevelRequestParams, SubscriptionFilter, ToolsCapability, UpdateTaskParams,
+    ClientCapabilities, CompleteRequestParams, CompleteResult, ConstString, DiscoverResult,
+    GetPromptResult, GetTaskParams, GetTaskResult, Implementation, ListPromptsResult,
+    ListResourceTemplatesResult, ListResourcesResult, ListToolsResult, PaginatedRequestParams,
+    PromptsCapability, ProtocolVersion, ReadResourceResult, ResourcesCapability, Root,
+    ServerCapabilities, ServerInfo, SetLevelRequestParams, SubscriptionFilter, ToolsCapability,
+    UpdateTaskParams,
 };
 use rmcp::service::{RequestContext, RoleServer};
 use serde_json::{Value, json};
@@ -533,6 +534,15 @@ impl AtlasRmcpServer {
 
         let request_params = serde_json::to_value(&request)
             .map_err(|error| crate::rmcp_error::invalid_params(error.to_string(), None))?;
+        let client_capabilities =
+            client_interaction_capabilities(context.client_capabilities.as_ref());
+        if crate::tasks::task_ttl_from_request_params(&request_params).is_some()
+            && !client_capabilities.supports_tasks
+        {
+            return Err(McpError::missing_required_client_capability(
+                ClientCapabilities::builder().enable_tasks().build(),
+            ));
+        }
         let raw_args = request.arguments.clone().map(Value::Object);
         let args = raw_args.clone().map(strip_repo_selector_fields);
         let selection = resolve_repo_context_for_tool_call(
@@ -548,7 +558,7 @@ impl AtlasRmcpServer {
 
         let runtime_context = AtlasRequestContext::new(
             Arc::new(|_| Ok(())),
-            client_interaction_capabilities(context.client_capabilities.as_ref()),
+            client_capabilities,
             "rmcp",
             None,
             context.authenticated_principal,

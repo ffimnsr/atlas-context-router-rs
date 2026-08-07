@@ -84,7 +84,10 @@ pub(crate) fn execute_tool_call(
     let defer_threshold = Duration::from_millis(resolve_defer_threshold_ms());
     let request_context = runtime_context::current().ok();
     let explicit_task = task_ttl_from_context_args();
-    let auto_defer = explicit_task.is_none() && is_auto_defer_candidate(name);
+    let supports_tasks = request_context
+        .as_ref()
+        .is_some_and(|context| context.capabilities.supports_tasks);
+    let auto_defer = supports_tasks && explicit_task.is_none() && is_auto_defer_candidate(name);
     if explicit_task.is_none() && !auto_defer {
         return normalize_tool_call_result(
             name,
@@ -327,17 +330,19 @@ fn open_task_record(repo_root: &str, task_id: &str) -> Result<Option<DurableTask
     Ok(store.get_durable_task(task_id)?)
 }
 
+pub(crate) fn task_ttl_from_request_params(params: &Value) -> Option<u64> {
+    params
+        .get("task")
+        .or_else(|| {
+            params
+                .get("arguments")
+                .and_then(|arguments| arguments.get("task"))
+        })
+        .and_then(|task| task.get("ttl").and_then(Value::as_u64))
+}
+
 fn task_ttl_from_context_args() -> Option<u64> {
-    current_tool_call_request_params().and_then(|params| {
-        params
-            .get("task")
-            .or_else(|| {
-                params
-                    .get("arguments")
-                    .and_then(|arguments| arguments.get("task"))
-            })
-            .and_then(|task| task.get("ttl").and_then(Value::as_u64))
-    })
+    current_tool_call_request_params().and_then(|params| task_ttl_from_request_params(&params))
 }
 
 fn current_tool_call_request_params() -> Option<Value> {
@@ -789,6 +794,23 @@ mod tests {
         assert_eq!(page.tasks[0].status, DurableTaskStatus::Completed);
     }
 
+    fn install_task_context(supports_tasks: bool) {
+        runtime_context::install(runtime_context::RequestContext::new(
+            Arc::new(|_| Ok(())),
+            runtime_context::ClientInteractionCapabilities {
+                supports_elicitation_form: false,
+                supports_elicitation_url: false,
+                supports_tasks,
+            },
+            "test",
+            None,
+            None,
+            "test-request",
+            "tools/call",
+            None,
+        ));
+    }
+
     #[test]
     fn explicit_task_create_poll_result_and_reopen_work() {
         let dir = TempDir::new().unwrap();
@@ -929,6 +951,7 @@ mod tests {
     #[test]
     fn implicit_auto_defer_short_run_skips_task_persistence() {
         let dir = TempDir::new().unwrap();
+        install_task_context(true);
         install_test_auto_defer_tool("__test_sleep");
         install_test_defer_threshold_ms(100);
         let result = execute_tool_call(
@@ -940,8 +963,34 @@ mod tests {
         .unwrap();
         uninstall_test_defer_threshold_ms();
         uninstall_test_auto_defer_tool("__test_sleep");
+        runtime_context::uninstall();
 
-        assert_eq!(result["slept_ms"], json!(5));
+        assert_eq!(result["structuredContent"]["slept_ms"], json!(5));
+        let page = SessionStore::open_in_repo(dir.path())
+            .unwrap()
+            .list_durable_tasks(None, 10)
+            .unwrap();
+        assert!(page.tasks.is_empty());
+    }
+
+    #[test]
+    fn implicit_auto_defer_without_task_capability_runs_synchronously() {
+        let dir = TempDir::new().unwrap();
+        install_task_context(false);
+        install_test_auto_defer_tool("__test_sleep");
+        install_test_defer_threshold_ms(10);
+        let result = execute_tool_call(
+            "__test_sleep",
+            Some(json!({"sleep_ms": 25})),
+            dir.path().to_str().unwrap(),
+            "db",
+        )
+        .unwrap();
+        uninstall_test_defer_threshold_ms();
+        uninstall_test_auto_defer_tool("__test_sleep");
+        runtime_context::uninstall();
+
+        assert_eq!(result["structuredContent"]["slept_ms"], json!(25));
         let page = SessionStore::open_in_repo(dir.path())
             .unwrap()
             .list_durable_tasks(None, 10)
@@ -952,6 +1001,7 @@ mod tests {
     #[test]
     fn implicit_auto_defer_returns_task_handle_after_threshold() {
         let dir = TempDir::new().unwrap();
+        install_task_context(true);
         install_test_auto_defer_tool("__test_sleep");
         install_test_defer_threshold_ms(10);
         let created = execute_tool_call(
@@ -963,6 +1013,7 @@ mod tests {
         .unwrap();
         uninstall_test_defer_threshold_ms();
         uninstall_test_auto_defer_tool("__test_sleep");
+        runtime_context::uninstall();
 
         let task_id = created["task"]["taskId"].as_str().unwrap().to_owned();
         assert_eq!(created["task"]["status"], json!("working"));
@@ -984,7 +1035,10 @@ mod tests {
             OutputFormat::Json,
         )
         .unwrap();
-        assert_eq!(result["result"]["slept_ms"], json!(100));
+        assert_eq!(
+            result["result"]["structuredContent"]["slept_ms"],
+            json!(100)
+        );
     }
 
     #[test]
