@@ -4,6 +4,17 @@ All notable changes to this project should be recorded in this file.
 
 Versioning policy may evolve while Atlas is still moving quickly, but release notes should still group changes by user-visible impact.
 
+## 1.7.4 - 2026-08-14
+
+### Features
+
+- update githooks (`1b55a49`)
+- add tokenizer for token budgets (`617a4bf`)
+- update the build and update graph command separate the two (`77fe04e`)
+- update tooling and context mcp tools docs (`d97e5d2`)
+- update stale docs and test that comes along it (`0f4a349`)
+
+
 ## 1.7.3 - 2026-08-07
 
 ### Fixes
