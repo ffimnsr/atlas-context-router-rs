@@ -89,7 +89,15 @@ pub(super) fn tool_body(result: &Value) -> Value {
         .expect("tool body")
 }
 
-pub(super) fn install_purge_request_context(params: Value) {
+pub(super) struct PurgeRequestContextGuard;
+
+impl Drop for PurgeRequestContextGuard {
+    fn drop(&mut self) {
+        crate::runtime_context::uninstall();
+    }
+}
+
+pub(super) fn install_purge_request_context(params: Value) -> PurgeRequestContextGuard {
     let client = crate::runtime_context::RequestContext::new(
         std::sync::Arc::new(|_| Ok(())),
         crate::runtime_context::ClientInteractionCapabilities {
@@ -105,6 +113,7 @@ pub(super) fn install_purge_request_context(params: Value) {
         Some(params),
     );
     crate::runtime_context::install(client);
+    PurgeRequestContextGuard
 }
 
 pub(super) fn purge_request_params(arguments: &Value) -> Value {

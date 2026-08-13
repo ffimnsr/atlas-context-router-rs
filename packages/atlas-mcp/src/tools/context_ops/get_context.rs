@@ -365,7 +365,7 @@ pub(crate) fn tool_get_context(
         }),
     );
     let missing_lookup_hint = "No graph nodes matched this request. Possible causes: \
-         (1) the graph has not been built yet — run build_graph first; \
+         (1) the graph has not been built yet — call build_graph with {} first; \
          (2) 'query' contained a natural-language phrase instead of a symbol name or \
          qualified name — try a short exact identifier (e.g. 'BalancesTab') or \
          use query_graph with regex for pattern matching; \

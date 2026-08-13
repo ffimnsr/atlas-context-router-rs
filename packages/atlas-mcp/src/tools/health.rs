@@ -379,6 +379,7 @@ pub(super) fn tool_status(
             "health_class": readiness.health_class.map(|class| class.as_str()),
             "message": error_message(category),
             "suggestions": error_suggestions(category),
+            "mcp_suggestions": mcp_graph_recovery_suggestions(category),
             "error_code_docs": error_code_docs(category),
         },
         "warnings": warnings,
@@ -386,6 +387,28 @@ pub(super) fn tool_status(
 
     let envelope = ToolSuccessEnvelope::new("status", payload);
     normalized_tool_result_value(&envelope, output_format)
+}
+
+fn mcp_graph_recovery_suggestions(category: &str) -> Vec<&'static str> {
+    match category {
+        "missing_graph_db"
+        | "noncanonical_path_rows"
+        | "schema_mismatch"
+        | "sqlite_corrupt"
+        | "logical_inconsistency"
+        | "corrupt_or_inconsistent_graph_rows"
+        | "interrupted_build"
+        | "degraded_build"
+        | "failed_build" => vec!["call build_graph with {}"],
+        "stale_index" => {
+            vec!["call update_graph with {\"change_source\":{\"kind\":\"working_tree\"}}"]
+        }
+        "retrieval_index_unavailable" => vec![
+            "call build_graph with {} for a full refresh",
+            "or call update_graph with {\"change_source\":{\"kind\":\"working_tree\"}} after edits",
+        ],
+        _ => Vec::new(),
+    }
 }
 
 pub(super) fn tool_doctor(
@@ -966,6 +989,7 @@ pub(super) fn tool_db_check(
             "health_class": health_class,
             "message": error_message(failure_category),
             "suggestions": error_suggestions(failure_category),
+            "mcp_suggestions": mcp_graph_recovery_suggestions(failure_category),
             "error_code_docs": error_code_docs(failure_category),
             "orphan_node_count": orphans.len(),
             "dangling_edge_count": dangling.len(),

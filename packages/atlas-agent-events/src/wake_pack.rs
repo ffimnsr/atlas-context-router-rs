@@ -553,7 +553,8 @@ pub fn build_wake_pack(opts: &WakePackOptions<'_>) -> WakePackBuild {
     };
     if !readiness.graph_built {
         warnings.push(
-            "graph has not been built yet; run build_graph before graph-backed queries".to_owned(),
+            "graph has not been built yet; call build_graph with {} before graph-backed queries"
+                .to_owned(),
         );
     } else if readiness.stale_index {
         warnings.push(format!(

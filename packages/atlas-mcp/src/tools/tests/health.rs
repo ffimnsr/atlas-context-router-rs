@@ -41,6 +41,7 @@ fn status_healthy_repo_returns_ok() {
     );
     assert!(v["summary"]["message"].as_str().is_some());
     assert!(v["summary"]["suggestions"].as_array().is_some());
+    assert_eq!(v["summary"]["mcp_suggestions"], serde_json::json!([]));
     assert_eq!(v["graph_state"]["build_state"].as_str(), Some("built"));
     assert_eq!(
         v["db_state"]["build_status"]["files_accepted"].as_i64(),
@@ -80,6 +81,10 @@ fn status_missing_db_returns_error_code() {
             .is_empty()
     );
     assert_eq!(v["db_state"]["exists"].as_bool(), Some(false));
+    assert_eq!(
+        v["summary"]["mcp_suggestions"],
+        serde_json::json!(["call build_graph with {}"])
+    );
 }
 
 #[test]

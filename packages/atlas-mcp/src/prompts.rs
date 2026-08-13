@@ -167,7 +167,7 @@ fn render_review_change(args: Option<&serde_json::Value>) -> Result<PromptGetRes
         .unwrap_or_else(|| "bugs, regressions, missing tests, and cross-boundary risk".to_owned());
 
     let text = format!(
-        "Use Atlas MCP to review code changes. Stay grounded in tool output only. Prefer graph tools before file search.\n\nTarget inputs:\n- files: {files}\n- base: {base}\n- focus: {focus}\n\nRecommended workflow:\n1. If files are unknown, call detect_changes with base={base}. If files are already known, skip directly to context.\n2. Check `atlas_provenance` on first result. If repo_root or db_path looks wrong, call status or doctor before continuing.\n3. Call get_minimal_context for cheap triage.\n4. Call get_review_context for fuller changed-symbol, neighbor, and risk detail.\n5. If any result emits `atlas_freshness`, treat graph facts as potentially stale until update_graph runs.\n6. Call explain_change when API/signature risk, boundary violations, or test gaps need confirmation.\n7. Call get_impact_radius when blast radius needs explicit changed/impacted nodes and files.\n8. If changed files include docs, config, templates, prompts, or SQL (e.g. .md, .toml, .yaml, .sql, .html, .j2, .env files), call search_text_assets or search_templates as companion lookup after graph tools run. Pass the discovered asset paths into get_context via 'files' to merge graph and content evidence under one bounded budget.\n9. Use query_graph, symbol_neighbors, traverse_graph, or get_context only for targeted follow-up on symbols surfaced by review flow.\n\nResponse requirements:\n- Findings first, ordered by severity.\n- Mention changed symbols, impacted tests, ambiguity, truncation, confidence limits, and trust warnings from atlas_provenance/atlas_freshness.\n- Do not invent callers, tests, or dependencies not returned by Atlas."
+        "Use Atlas MCP to review code changes. Stay grounded in tool output only. Prefer graph tools before file search.\n\nTarget inputs:\n- files: {files}\n- base: {base}\n- focus: {focus}\n\nRecommended workflow:\n1. If files are unknown and base is a git ref, call detect_changes with `{{ \"change_source\": {{ \"kind\": \"base\", \"base\": \"{base}\" }} }}`. If files are unknown and base is `<working tree>`, call detect_changes with `{{ \"change_source\": {{ \"kind\": \"working_tree\" }} }}`. If files are already known, skip directly to context.\n2. Check `atlas_provenance` on first result. If repo_root or db_path looks wrong, call status or doctor before continuing.\n3. Call get_minimal_context for cheap triage.\n4. Call get_review_context for fuller changed-symbol, neighbor, and risk detail.\n5. If any result emits `atlas_freshness`, treat graph facts as potentially stale until update_graph runs.\n6. Call explain_change when API/signature risk, boundary violations, or test gaps need confirmation.\n7. Call get_impact_radius when blast radius needs explicit changed/impacted nodes and files.\n8. If changed files include docs, config, templates, prompts, or SQL (e.g. .md, .toml, .yaml, .sql, .html, .j2, .env files), call search_text_assets or search_templates as companion lookup after graph tools run. Merge discovered assets with get_context using `{{ \"target\": {{ \"kind\": \"files\", \"files\": [\"<path>\"] }} }}`.\n9. Use query_graph, symbol_neighbors, traverse_graph, or get_context only for targeted follow-up on symbols surfaced by review flow.\n\nResponse requirements:\n- Findings first, ordered by severity.\n- Mention changed symbols, impacted tests, ambiguity, truncation, confidence limits, and trust warnings from atlas_provenance/atlas_freshness.\n- Do not invent callers, tests, or dependencies not returned by Atlas."
     );
 
     Ok(single_message_response(
@@ -183,7 +183,7 @@ fn render_inspect_symbol(args: Option<&serde_json::Value>) -> Result<PromptGetRe
     });
 
     let text = format!(
-        "Use Atlas MCP to inspect symbol '{symbol}'. Stay grounded in graph results.\n\nQuestion:\n{question}\n\nRecommended workflow:\n1. Call query_graph with text='{symbol}'. Use semantic=true if name is short or ambiguous.\n2. Check `atlas_provenance`. If repo_root or db_path looks wrong for current workspace, stop and call status or doctor.\n3. If multiple candidates appear, compare qname, kind, and file path before choosing. Report ambiguity if unresolved.\n4. Call symbol_neighbors on chosen qname for immediate callers, callees, tests, and local neighborhood.\n5. Call get_context with query='{symbol}' for bounded ranked context. Use intent='usage_lookup' when appropriate.\n6. If any graph result emits `atlas_freshness`, note that pending edits may make edges or locations stale.\n7. Call traverse_graph only if one-hop neighbors are insufficient and you need wider caller/callee reach.\n8. If graph evidence shows edges to config, SQL, template, or prompt files (e.g. file nodes with non-code extensions), call search_text_assets or search_content as companion lookup. Do not search content assets before graph resolution.\n9. Fall back to file reads only after graph tools stop answering structural questions.\n\nResponse requirements:\n- Name exact qname chosen.\n- Separate direct facts from weaker inferences.\n- Mention truncation, trust warnings, or unresolved edges when present."
+        "Use Atlas MCP to inspect symbol '{symbol}'. Stay grounded in graph results.\n\nQuestion:\n{question}\n\nRecommended workflow:\n1. Call query_graph with text='{symbol}'. Use semantic=true if name is short or ambiguous.\n2. Check `atlas_provenance`. If repo_root or db_path looks wrong for current workspace, stop and call status or doctor.\n3. If multiple candidates appear, compare qname, kind, and file path before choosing. Report ambiguity if unresolved.\n4. Call symbol_neighbors on chosen qname for immediate callers, callees, tests, and local neighborhood.\n5. Call get_context with `{{ \"target\": {{ \"kind\": \"query\", \"query\": \"{symbol}\" }}, \"intent\": \"usage_lookup\" }}` for bounded ranked context when usage detail is needed.\n6. If any graph result emits `atlas_freshness`, note that pending edits may make edges or locations stale.\n7. Call traverse_graph only if one-hop neighbors are insufficient and you need wider caller/callee reach.\n8. If graph evidence shows edges to config, SQL, template, or prompt files (e.g. file nodes with non-code extensions), call search_text_assets or search_content as companion lookup. Do not search content assets before graph resolution.\n9. Fall back to file reads only after graph tools stop answering structural questions.\n\nResponse requirements:\n- Name exact qname chosen.\n- Separate direct facts from weaker inferences.\n- Mention truncation, trust warnings, or unresolved edges when present."
     );
 
     Ok(single_message_response(
@@ -197,7 +197,7 @@ fn render_plan_refactor(args: Option<&serde_json::Value>) -> Result<PromptGetRes
     let goal = opt_string_arg(args, "goal")?.unwrap_or_else(|| "improve code safely".to_owned());
 
     let text = format!(
-        "Use Atlas MCP to plan refactor for target '{target}'. Goal: {goal}. Keep plan deterministic and evidence-backed.\n\nRecommended workflow:\n1. Resolve target with query_graph. If ambiguous, stop and surface ranked candidates.\n2. Check `atlas_provenance`. If repo_root or db_path does not match expected session, stop and repair session wiring first.\n3. Call get_context for target-centered context. Prefer intent='refactor_safety', 'rename_preview', or 'dependency_removal' when they match goal.\n4. Call symbol_neighbors for direct callers, callees, tests, and nearby nodes.\n5. If any response emits `atlas_freshness`, treat current graph as lagging local edits and include rebuild in validation plan.\n6. Call explain_change or get_impact_radius if likely blast radius crosses files or packages.\n7. Use cross_file_links or concept_clusters when refactor may affect tightly coupled files beyond direct call edges.\n\nResponse requirements:\n- State exact target resolved.\n- List primary risks, affected files/symbols, test coverage gaps, and trust warnings.\n- Recommend validation steps before apply.\n- Do not claim rename/removal safety unless Atlas evidence supports it."
+        "Use Atlas MCP to plan refactor for target '{target}'. Goal: {goal}. Keep plan deterministic and evidence-backed.\n\nRecommended workflow:\n1. Resolve target with query_graph. If ambiguous, stop and surface ranked candidates.\n2. Check `atlas_provenance`. If repo_root or db_path does not match expected session, stop and repair session wiring first.\n3. Call get_context for target-centered context: symbol target `{{ \"target\": {{ \"kind\": \"query\", \"query\": \"{target}\" }} }}`; known file target `{{ \"target\": {{ \"kind\": \"file\", \"file\": \"<path>\" }} }}`. Prefer intent='refactor_safety', 'rename_preview', or 'dependency_removal' when they match goal.\n4. Call symbol_neighbors for direct callers, callees, tests, and nearby nodes.\n5. If any response emits `atlas_freshness`, treat current graph as lagging local edits and include rebuild in validation plan.\n6. Call explain_change or get_impact_radius if likely blast radius crosses files or packages.\n7. Use cross_file_links or concept_clusters when refactor may affect tightly coupled files beyond direct call edges.\n\nResponse requirements:\n- State exact target resolved.\n- List primary risks, affected files/symbols, test coverage gaps, and trust warnings.\n- Recommend validation steps before apply.\n- Do not claim rename/removal safety unless Atlas evidence supports it."
     );
 
     Ok(single_message_response(
@@ -329,6 +329,10 @@ mod tests {
         assert!(review_text.contains("Prefer graph tools before file search."));
         assert!(review_text.contains("atlas_provenance"));
         assert!(review_text.contains("atlas_freshness"));
+        assert!(review_text.contains("\"change_source\": { \"kind\": \"working_tree\" }"));
+        assert!(review_text.contains("\"target\": { \"kind\": \"files\""));
+        assert!(!review_text.contains("detect_changes with base="));
+        assert!(!review_text.contains("get_context via 'files'"));
     }
 
     #[test]
@@ -352,6 +356,23 @@ mod tests {
         assert!(text.contains("atlas_provenance"));
         assert!(text.contains("atlas_freshness"));
         assert!(text.contains("status or doctor"));
+        assert!(text.contains("\"target\": { \"kind\": \"query\""));
+        assert!(!text.contains("get_context with query="));
+    }
+
+    #[test]
+    fn plan_refactor_prompt_uses_canonical_context_targets() {
+        let rendered = prompt_get(
+            "plan_refactor",
+            Some(&serde_json::json!({ "target": "src/lib.rs::fn::compute" })),
+        )
+        .expect("prompt get");
+        let text = rendered["messages"][0]["content"]["text"]
+            .as_str()
+            .expect("prompt text");
+
+        assert!(text.contains("\"target\": { \"kind\": \"query\""));
+        assert!(text.contains("\"target\": { \"kind\": \"file\""));
     }
 
     #[test]

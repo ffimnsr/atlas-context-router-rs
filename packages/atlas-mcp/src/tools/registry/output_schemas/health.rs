@@ -390,9 +390,10 @@ pub(crate) fn status_output_schema() -> Value {
                     "health_class": { "type": ["string", "null"] },
                     "message": { "type": "string" },
                     "suggestions": { "type": "array", "items": { "type": "string" } },
+                    "mcp_suggestions": { "type": "array", "items": { "type": "string" } },
                     "error_code_docs": { "type": "string" }
                 },
-                "required": ["health_class", "message", "suggestions", "error_code_docs"]
+                "required": ["health_class", "message", "suggestions", "mcp_suggestions", "error_code_docs"]
             },
             "warnings": { "type": "array", "items": { "type": "string" } },
             "atlas_provenance": { "type": "object" },
@@ -522,12 +523,13 @@ pub(crate) fn db_check_output_schema() -> Value {
                     "health_class": { "type": ["string", "null"] },
                     "message": { "type": "string" },
                     "suggestions": { "type": "array", "items": { "type": "string" } },
+                    "mcp_suggestions": { "type": "array", "items": { "type": "string" } },
                     "error_code_docs": { "type": "string" },
                     "orphan_node_count": { "type": "integer" },
                     "dangling_edge_count": { "type": "integer" },
                     "noncanonical_path_row_count": { "type": "integer" }
                 },
-                "required": ["ok", "failure_category", "health_class", "message", "suggestions", "error_code_docs", "orphan_node_count", "dangling_edge_count", "noncanonical_path_row_count"]
+                "required": ["ok", "failure_category", "health_class", "message", "suggestions", "mcp_suggestions", "error_code_docs", "orphan_node_count", "dangling_edge_count", "noncanonical_path_row_count"]
             },
             "warnings": { "type": "array", "items": { "type": "string" } },
             "db_path": { "type": "string" },

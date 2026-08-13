@@ -437,10 +437,9 @@ fn test_purge_saved_context_requires_confirmation_when_mcp_context_is_active() {
     let repo_root = dir.path().to_str().unwrap();
     let args = serde_json::json!({"keep_days": 30});
 
-    install_purge_request_context(purge_request_params(&args));
+    let _context = install_purge_request_context(purge_request_params(&args));
     let result =
         tool_purge_saved_context(Some(&args), repo_root, &db_path, OutputFormat::Json).unwrap();
-    crate::runtime_context::uninstall();
 
     let body = tool_body(&result);
     assert_eq!(result["resultType"], serde_json::json!("input_required"));
@@ -460,36 +459,37 @@ fn test_purge_saved_context_accept_retry_executes_purge() {
     let repo_root = dir.path().to_str().unwrap();
     let args = serde_json::json!({"keep_days": 30});
 
-    install_purge_request_context(purge_request_params(&args));
-    let first =
-        tool_purge_saved_context(Some(&args), repo_root, &db_path, OutputFormat::Json).unwrap();
-    crate::runtime_context::uninstall();
+    let first = {
+        let _context = install_purge_request_context(purge_request_params(&args));
+        tool_purge_saved_context(Some(&args), repo_root, &db_path, OutputFormat::Json).unwrap()
+    };
     let request_state = tool_body(&first)["requestState"]
         .as_str()
         .unwrap()
         .to_owned();
 
-    install_purge_request_context(serde_json::json!({
-        "name": "purge_saved_context",
-        "arguments": args,
-        "requestState": request_state,
-        "inputResponses": {
-            "confirmation": {
-                "action": "accept",
-                "content": {
-                    "confirmation": "confirm"
+    let result = {
+        let _context = install_purge_request_context(serde_json::json!({
+            "name": "purge_saved_context",
+            "arguments": args,
+            "requestState": request_state,
+            "inputResponses": {
+                "confirmation": {
+                    "action": "accept",
+                    "content": {
+                        "confirmation": "confirm"
+                    }
                 }
             }
-        }
-    }));
-    let result = tool_purge_saved_context(
-        Some(&serde_json::json!({"keep_days": 30})),
-        repo_root,
-        &db_path,
-        OutputFormat::Json,
-    )
-    .unwrap();
-    crate::runtime_context::uninstall();
+        }));
+        tool_purge_saved_context(
+            Some(&serde_json::json!({"keep_days": 30})),
+            repo_root,
+            &db_path,
+            OutputFormat::Json,
+        )
+        .unwrap()
+    };
 
     let body = tool_body(&result);
     assert_eq!(body["mode"], serde_json::json!("age_based"));
@@ -504,33 +504,34 @@ fn test_purge_saved_context_cancel_retry_returns_cancelled_error() {
     let repo_root = dir.path().to_str().unwrap();
     let args = serde_json::json!({"keep_days": 30});
 
-    install_purge_request_context(purge_request_params(&args));
-    let first =
-        tool_purge_saved_context(Some(&args), repo_root, &db_path, OutputFormat::Json).unwrap();
-    crate::runtime_context::uninstall();
+    let first = {
+        let _context = install_purge_request_context(purge_request_params(&args));
+        tool_purge_saved_context(Some(&args), repo_root, &db_path, OutputFormat::Json).unwrap()
+    };
     let request_state = tool_body(&first)["requestState"]
         .as_str()
         .unwrap()
         .to_owned();
 
-    install_purge_request_context(serde_json::json!({
-        "name": "purge_saved_context",
-        "arguments": args,
-        "requestState": request_state,
-        "inputResponses": {
-            "confirmation": {
-                "action": "cancel"
+    let error = {
+        let _context = install_purge_request_context(serde_json::json!({
+            "name": "purge_saved_context",
+            "arguments": args,
+            "requestState": request_state,
+            "inputResponses": {
+                "confirmation": {
+                    "action": "cancel"
+                }
             }
-        }
-    }));
-    let error = tool_purge_saved_context(
-        Some(&serde_json::json!({"keep_days": 30})),
-        repo_root,
-        &db_path,
-        OutputFormat::Json,
-    )
-    .unwrap_err();
-    crate::runtime_context::uninstall();
+        }));
+        tool_purge_saved_context(
+            Some(&serde_json::json!({"keep_days": 30})),
+            repo_root,
+            &db_path,
+            OutputFormat::Json,
+        )
+        .unwrap_err()
+    };
 
     assert!(error.to_string().contains("cancelled by client"));
 }
@@ -543,10 +544,10 @@ fn test_purge_saved_context_rejects_tampered_request_state() {
     let repo_root = dir.path().to_str().unwrap();
     let args = serde_json::json!({"keep_days": 30});
 
-    install_purge_request_context(purge_request_params(&args));
-    let first =
-        tool_purge_saved_context(Some(&args), repo_root, &db_path, OutputFormat::Json).unwrap();
-    crate::runtime_context::uninstall();
+    let first = {
+        let _context = install_purge_request_context(purge_request_params(&args));
+        tool_purge_saved_context(Some(&args), repo_root, &db_path, OutputFormat::Json).unwrap()
+    };
     let first_body = tool_body(&first);
     let request_state = first_body["requestState"].as_str().unwrap();
     let mut tampered_chars = request_state.chars().collect::<Vec<_>>();
@@ -556,27 +557,28 @@ fn test_purge_saved_context_rejects_tampered_request_state() {
     *last = if *last == 'A' { 'B' } else { 'A' };
     let tampered_state = tampered_chars.into_iter().collect::<String>();
 
-    install_purge_request_context(serde_json::json!({
-        "name": "purge_saved_context",
-        "arguments": args,
-        "requestState": tampered_state,
-        "inputResponses": {
-            "confirmation": {
-                "action": "accept",
-                "content": {
-                    "confirmation": "confirm"
+    let error = {
+        let _context = install_purge_request_context(serde_json::json!({
+            "name": "purge_saved_context",
+            "arguments": args,
+            "requestState": tampered_state,
+            "inputResponses": {
+                "confirmation": {
+                    "action": "accept",
+                    "content": {
+                        "confirmation": "confirm"
+                    }
                 }
             }
-        }
-    }));
-    let error = tool_purge_saved_context(
-        Some(&serde_json::json!({"keep_days": 30})),
-        repo_root,
-        &db_path,
-        OutputFormat::Json,
-    )
-    .unwrap_err();
-    crate::runtime_context::uninstall();
+        }));
+        tool_purge_saved_context(
+            Some(&serde_json::json!({"keep_days": 30})),
+            repo_root,
+            &db_path,
+            OutputFormat::Json,
+        )
+        .unwrap_err()
+    };
 
     assert!(
         error
