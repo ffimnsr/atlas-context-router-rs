@@ -367,25 +367,16 @@ pub(crate) struct ChangeSourceWithoutFilesArgsSchema {
 
 #[allow(dead_code)]
 #[derive(Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum BuildOperationKindSchema {
-    Build,
-    Update,
+#[serde(deny_unknown_fields)]
+pub(crate) struct BuildGraphArgsSchema {
+    output_format: Option<String>,
 }
 
 #[allow(dead_code)]
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct BuildOperationArgsSchema {
-    kind: BuildOperationKindSchema,
-    change_source: Option<ChangeSourceWithFilesArgsSchema>,
-}
-
-#[allow(dead_code)]
-#[derive(Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct BuildOrUpdateGraphArgsSchema {
-    operation: Option<BuildOperationArgsSchema>,
+pub(crate) struct UpdateGraphArgsSchema {
+    change_source: ChangeSourceWithFilesArgsSchema,
     output_format: Option<String>,
 }
 
@@ -860,5 +851,20 @@ pub(crate) struct MemoryRecallArgsSchema {
     scope: Option<MemoryScopeSchema>,
     shared: Option<bool>,
     limit: Option<u64>,
+    output_format: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct FeedbackRecordArgsSchema {
+    predicted: String,
+    actual: String,
+    correction: Option<String>,
+    tool: Option<String>,
+    analysis_kind: Option<String>,
+    symbol: Option<String>,
+    file: Option<String>,
+    source_id: Option<String>,
     output_format: Option<String>,
 }

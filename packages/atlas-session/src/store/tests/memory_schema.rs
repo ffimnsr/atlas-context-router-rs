@@ -25,6 +25,7 @@ fn memories_table_schema_matches_golden() {
             "decay_score",
             "source_id",
             "metadata_json",
+            "superseded_by",
         ]
     );
 
@@ -94,7 +95,12 @@ fn memory_schema_issues_detect_missing_table_and_indexes() {
     let issues = store.memory_schema_issues();
     assert_eq!(issues, vec!["missing table: memories"]);
 
-    // Re-create the table without indexes: every index must be reported.
+    // Re-create the table without indexes and drop the supersession table:
+    // every index and the link table must be reported.
+    store
+        .conn
+        .execute_batch("DROP TABLE memory_supersessions")
+        .unwrap();
     store
         .conn
         .execute_batch(
@@ -113,7 +119,8 @@ fn memory_schema_issues_detect_missing_table_and_indexes() {
                 last_accessed_at TEXT NOT NULL,
                 decay_score REAL NOT NULL DEFAULT 0,
                 source_id TEXT,
-                metadata_json TEXT NOT NULL DEFAULT '{}'
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                superseded_by TEXT
             )",
         )
         .unwrap();
@@ -126,6 +133,8 @@ fn memory_schema_issues_detect_missing_table_and_indexes() {
             "missing index: idx_memories_repo_scope",
             "missing index: idx_memories_repo_session",
             "missing index: idx_memories_repo_accessed",
+            "missing index: idx_memories_superseded",
+            "missing table: memory_supersessions",
         ]
     );
 }
@@ -332,7 +341,8 @@ fn memory_row_round_trips_through_record_shape() {
         .conn
         .query_row(
             "SELECT id, repo_root, session_id, frontend, scope, topic, title, body, importance,
-                    created_at, updated_at, last_accessed_at, decay_score, source_id, metadata_json
+                    created_at, updated_at, last_accessed_at, decay_score, source_id, metadata_json,
+                    superseded_by
              FROM memories WHERE id = 'm1'",
             [],
             super::memory::row_to_memory,
@@ -356,6 +366,7 @@ fn memory_row_round_trips_through_record_shape() {
             decay_score: 0.25,
             source_id: Some("src-9".to_owned()),
             metadata: serde_json::json!({ "source_kind": "hook" }),
+            superseded_by: None,
         }
     );
 }

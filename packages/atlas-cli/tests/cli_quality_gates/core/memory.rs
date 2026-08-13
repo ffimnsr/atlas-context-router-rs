@@ -92,12 +92,7 @@ fn mcp_memory_store_and_recall_match_cli_record_shape() {
 
     // MCP recall sees the memories stored through both surfaces (project scope
     // is visible to the mcp viewer) and returns retrieval hints.
-    let recall = mcp_call(
-        repo.path(),
-        4,
-        "memory_recall",
-        r#"{"query":"parity"}"#,
-    );
+    let recall = mcp_call(repo.path(), 4, "memory_recall", r#"{"query":"parity"}"#);
     assert!(recall["summary"]["match_count"].as_u64().unwrap() >= 1);
     assert!(
         recall["results"]
@@ -589,4 +584,471 @@ fn memory_delete_requires_exact_id_and_respects_dry_run() {
         stderr.contains("no memory with id does-not-exist"),
         "got: {stderr}"
     );
+}
+
+// ── ICM-B — decay, stale, prune, health, consolidate ──────────────────────────
+
+/// Backdates a stored memory row so decay math sees it as old.
+fn backdate_memory(repo: &Path, id: &str, updated_at: &str) {
+    let conn = Connection::open(repo.join(".atlas").join("session.db")).expect("open db");
+    conn.execute(
+        "UPDATE memories SET updated_at = ?1 WHERE id = ?2",
+        rusqlite::params![updated_at, id],
+    )
+    .expect("backdate memory");
+}
+
+#[test]
+fn memory_decay_dry_run_reports_scores_without_writing() {
+    let repo = setup_fixture_repo();
+
+    let stored = store_memory(
+        repo.path(),
+        &["old low fact", "--topic", "hooks", "--importance", "low"],
+    );
+    let id = memory_id(&stored);
+    backdate_memory(repo.path(), &id, "2026-01-01T00:00:00Z");
+
+    // Dry-run reports the score but must not persist it.
+    let plan = read_json_data_output(
+        "memory.decay",
+        run_atlas(
+            repo.path(),
+            &["--json", "memory", "decay", "--topic", "hooks", "--dry-run"],
+        ),
+    );
+    assert_eq!(plan["dry_run"], json!(true));
+    assert_eq!(plan["enabled"], json!(true));
+    assert_eq!(plan["count"], json!(1));
+    assert_eq!(plan["reports"][0]["memory"]["id"], json!(id));
+    assert_eq!(plan["reports"][0]["stale"], json!(true));
+    assert_eq!(plan["reports"][0]["updated_decay_score"], json!(1.0));
+
+    let conn = Connection::open(repo.path().join(".atlas").join("session.db")).expect("open db");
+    let score: f64 = conn
+        .query_row(
+            "SELECT decay_score FROM memories WHERE id = ?1",
+            [&id],
+            |row| row.get(0),
+        )
+        .expect("score");
+    assert_eq!(score, 0.0, "dry-run must not write decay scores");
+
+    // Apply mode persists the score.
+    let applied = read_json_data_output(
+        "memory.decay",
+        run_atlas(
+            repo.path(),
+            &["--json", "memory", "decay", "--topic", "hooks"],
+        ),
+    );
+    assert_eq!(applied["dry_run"], json!(false));
+    let score: f64 = conn
+        .query_row(
+            "SELECT decay_score FROM memories WHERE id = ?1",
+            [&id],
+            |row| row.get(0),
+        )
+        .expect("score");
+    assert_eq!(score, 1.0);
+}
+
+#[test]
+fn memory_decay_protects_critical_rows_and_respects_disabled_config() {
+    let repo = setup_fixture_repo();
+
+    let critical = store_memory(
+        repo.path(),
+        &[
+            "old critical decision",
+            "--topic",
+            "deploy",
+            "--importance",
+            "critical",
+        ],
+    );
+    backdate_memory(repo.path(), &memory_id(&critical), "2020-01-01T00:00:00Z");
+
+    let decay = read_json_data_output(
+        "memory.decay",
+        run_atlas(repo.path(), &["--json", "memory", "decay", "--dry-run"]),
+    );
+    let critical_report = decay["reports"]
+        .as_array()
+        .expect("reports")
+        .iter()
+        .find(|report| report["memory"]["id"] == json!(memory_id(&critical)))
+        .expect("critical report");
+    assert_eq!(critical_report["protected"], json!(true));
+    assert_eq!(critical_report["stale"], json!(false));
+    assert_eq!(critical_report["retention_days"], json!(null));
+    assert_eq!(critical_report["updated_decay_score"], json!(0.0));
+
+    // Config disabling decay makes every curation command a no-op.
+    fs::write(
+        repo.path().join(".atlas").join("config.toml"),
+        "[memory.decay]\nenabled = false\n",
+    )
+    .expect("write config");
+    let disabled = read_json_data_output(
+        "memory.decay",
+        run_atlas(repo.path(), &["--json", "memory", "decay", "--dry-run"]),
+    );
+    assert_eq!(disabled["enabled"], json!(false));
+    assert_eq!(disabled["count"], json!(0));
+}
+
+#[test]
+fn memory_stale_lists_only_pruneable_rows() {
+    let repo = setup_fixture_repo();
+
+    let low = store_memory(
+        repo.path(),
+        &["stale low note", "--topic", "hooks", "--importance", "low"],
+    );
+    backdate_memory(repo.path(), &memory_id(&low), "2026-01-01T00:00:00Z");
+    let fresh = store_memory(
+        repo.path(),
+        &["fresh note", "--topic", "hooks", "--importance", "low"],
+    );
+
+    let stale = read_json_data_output(
+        "memory.stale",
+        run_atlas(
+            repo.path(),
+            &["--json", "memory", "stale", "--topic", "hooks"],
+        ),
+    );
+    assert_eq!(stale["count"], json!(1));
+    assert_eq!(stale["reports"][0]["memory"]["id"], json!(memory_id(&low)));
+    assert!(
+        stale["reports"]
+            .as_array()
+            .expect("reports")
+            .iter()
+            .all(|report| report["memory"]["id"].as_str() != Some(memory_id(&fresh).as_str())),
+        "fresh memories must never be stale candidates"
+    );
+}
+
+#[test]
+fn memory_prune_dry_run_then_apply_only_prunes_low_rows() {
+    let repo = setup_fixture_repo();
+
+    let low = store_memory(
+        repo.path(),
+        &[
+            "pruneable low note",
+            "--topic",
+            "hooks",
+            "--importance",
+            "low",
+        ],
+    );
+    backdate_memory(repo.path(), &memory_id(&low), "2026-01-01T00:00:00Z");
+    let fresh = store_memory(
+        repo.path(),
+        &["keep me", "--topic", "hooks", "--importance", "low"],
+    );
+
+    // --importance low --dry-run reports only pruneable low rows.
+    let plan = read_json_data_output(
+        "memory.prune",
+        run_atlas(
+            repo.path(),
+            &[
+                "--json",
+                "memory",
+                "prune",
+                "--importance",
+                "low",
+                "--dry-run",
+            ],
+        ),
+    );
+    assert_eq!(plan["dry_run"], json!(true));
+    assert_eq!(plan["candidate_count"], json!(1));
+    assert_eq!(plan["candidates"][0]["id"], json!(memory_id(&low)));
+
+    let conn = Connection::open(repo.path().join(".atlas").join("session.db")).expect("open db");
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM memories", [], |row| row.get(0))
+        .expect("count");
+    assert_eq!(count, 2, "dry-run must not delete");
+
+    let applied = read_json_data_output(
+        "memory.prune",
+        run_atlas(
+            repo.path(),
+            &["--json", "memory", "prune", "--importance", "low"],
+        ),
+    );
+    assert_eq!(applied["deleted_count"], json!(1));
+
+    let remaining: Vec<String> = conn
+        .prepare("SELECT id FROM memories")
+        .expect("prepare")
+        .query_map([], |row| row.get(0))
+        .expect("query")
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .expect("rows");
+    assert_eq!(remaining, vec![memory_id(&fresh).as_str()]);
+}
+
+#[test]
+fn memory_prune_requires_allow_critical_override() {
+    let repo = setup_fixture_repo();
+
+    let critical = store_memory(
+        repo.path(),
+        &[
+            "critical note",
+            "--topic",
+            "hooks",
+            "--importance",
+            "critical",
+        ],
+    );
+    backdate_memory(repo.path(), &memory_id(&critical), "2020-01-01T00:00:00Z");
+
+    // Filtering by critical without the override fails validation.
+    let blocked = run_atlas_capture(
+        repo.path(),
+        &[
+            "--json",
+            "memory",
+            "prune",
+            "--importance",
+            "critical",
+            "--dry-run",
+        ],
+    );
+    assert!(!blocked.status.success());
+    let stderr = String::from_utf8(blocked.stderr).expect("stderr utf-8");
+    assert!(
+        stderr.contains("--allow-critical"),
+        "override must be required: {stderr}"
+    );
+
+    // Without an importance filter, protected critical rows are never candidates.
+    let plan = read_json_data_output(
+        "memory.prune",
+        run_atlas(repo.path(), &["--json", "memory", "prune", "--dry-run"]),
+    );
+    assert_eq!(plan["protected_count"], json!(1));
+    assert_eq!(plan["candidate_count"], json!(0));
+}
+
+#[test]
+fn memory_health_reports_deterministic_findings() {
+    let repo = setup_fixture_repo();
+
+    let duplicate_a = store_memory(repo.path(), &["deploy uses helm", "--topic", "deploy"]);
+    let duplicate_b = store_memory(repo.path(), &["deploy uses helm", "--topic", "deploy"]);
+    let orphan = store_memory(
+        repo.path(),
+        &[
+            "references removed artifact",
+            "--topic",
+            "deploy",
+            "--source-id",
+            "artifact-gone",
+        ],
+    );
+    let stale = store_memory(
+        repo.path(),
+        &["stale low note", "--topic", "hooks", "--importance", "low"],
+    );
+    backdate_memory(repo.path(), &memory_id(&stale), "2026-01-01T00:00:00Z");
+
+    let health = read_json_data_output(
+        "memory.health",
+        run_atlas(repo.path(), &["--json", "memory", "health"]),
+    );
+    assert_eq!(health["total_memories"], json!(4));
+    let findings = health["findings"].as_array().expect("findings");
+    let kinds = findings
+        .iter()
+        .map(|finding| {
+            (
+                finding["kind"].as_str().expect("kind"),
+                finding["memory_id"].as_str().unwrap_or_default(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert!(kinds.contains(&("stale_memory", memory_id(&stale).as_str())));
+    // With identical timestamps the duplicate id tiebreak is nondeterministic
+    // across runs, so exactly one of the two same-body rows must be flagged.
+    let duplicated = kinds
+        .iter()
+        .filter(|(kind, _)| *kind == "duplicated_memory")
+        .map(|(_, id)| *id)
+        .collect::<Vec<_>>();
+    assert_eq!(duplicated.len(), 1);
+    assert!(
+        duplicated[0] == memory_id(&duplicate_a).as_str()
+            || duplicated[0] == memory_id(&duplicate_b).as_str(),
+        "one same-body duplicate must be flagged"
+    );
+    assert!(kinds.contains(&("orphaned_source", memory_id(&orphan).as_str())));
+    assert!(
+        findings.iter().any(|finding| {
+            finding["command"]
+                .as_str()
+                .is_some_and(|command| command.starts_with("atlas memory "))
+        }),
+        "findings must carry actionable follow-up commands"
+    );
+    assert!(health["by_category"]["duplicated"].as_u64().unwrap_or(0) >= 1);
+    assert!(health["by_category"]["orphaned"].as_u64().unwrap_or(0) >= 1);
+}
+
+#[test]
+fn memory_consolidate_dry_run_then_apply_supersedes_duplicates() {
+    let repo = setup_fixture_repo();
+
+    let first = store_memory(
+        repo.path(),
+        &[
+            "helm deploy steps",
+            "--topic",
+            "deploy",
+            "--title",
+            "Deploy runbook",
+        ],
+    );
+    let second = store_memory(
+        repo.path(),
+        &[
+            "helm rollback steps",
+            "--topic",
+            "deploy",
+            "--title",
+            "Deploy runbook",
+        ],
+    );
+
+    let plan = read_json_data_output(
+        "memory.consolidate",
+        run_atlas(
+            repo.path(),
+            &[
+                "--json",
+                "memory",
+                "consolidate",
+                "--topic",
+                "deploy",
+                "--dry-run",
+            ],
+        ),
+    );
+    assert_eq!(plan["dry_run"], json!(true));
+    assert_eq!(plan["group_count"], json!(1));
+    assert_eq!(plan["merged_count"], json!(1));
+    // With identical timestamps the kept row is the lexicographically smallest
+    // id, so the test must not assume store order.
+    let kept_id = plan["groups"][0]["kept_memory_id"]
+        .as_str()
+        .expect("kept id")
+        .to_owned();
+    let merged_id = plan["groups"][0]["merged_memory_ids"][0]
+        .as_str()
+        .expect("merged id")
+        .to_owned();
+    assert!(
+        kept_id == memory_id(&first) || kept_id == memory_id(&second),
+        "kept row must be one of the stored memories"
+    );
+    assert!(
+        merged_id == memory_id(&first) || merged_id == memory_id(&second),
+        "merged row must be the other stored memory"
+    );
+    assert_ne!(kept_id, merged_id);
+    assert_eq!(plan["groups"][0]["consolidated_id"], json!(null));
+
+    // Dry-run is read-only: both rows still active.
+    let conn = Connection::open(repo.path().join(".atlas").join("session.db")).expect("open db");
+    let active: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM memories WHERE superseded_by IS NULL",
+            [],
+            |row| row.get(0),
+        )
+        .expect("active count");
+    assert_eq!(active, 2);
+
+    // Apply: consolidated row created, merged row superseded.
+    let applied = read_json_data_output(
+        "memory.consolidate",
+        run_atlas(
+            repo.path(),
+            &["--json", "memory", "consolidate", "--topic", "deploy"],
+        ),
+    );
+    let consolidated_id = applied["groups"][0]["consolidated_id"]
+        .as_str()
+        .expect("consolidated id")
+        .to_owned();
+    assert_eq!(applied["group_count"], json!(1));
+    assert_eq!(applied["kept_count"], json!(1));
+
+    let (superseded_by, link_count): (Option<String>, i64) = conn
+        .query_row(
+            "SELECT superseded_by, (SELECT COUNT(*) FROM memory_supersessions) FROM memories WHERE id = ?1",
+            [&merged_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("superseded row");
+    assert_eq!(superseded_by.as_deref(), Some(consolidated_id.as_str()));
+    assert_eq!(link_count, 1);
+
+    // Default list hides the superseded row; the consolidated row remains.
+    let listed = read_json_data_output(
+        "memory.list",
+        run_atlas(
+            repo.path(),
+            &["--json", "memory", "list", "--topic", "deploy"],
+        ),
+    );
+    assert_eq!(listed["count"], json!(2));
+    assert!(
+        !listed["memories"]
+            .as_array()
+            .expect("memories")
+            .iter()
+            .any(|memory| memory["id"] == json!(merged_id)),
+        "superseded rows must be hidden from default listing"
+    );
+    assert!(
+        listed["memories"]
+            .as_array()
+            .expect("memories")
+            .iter()
+            .any(|memory| memory["id"] == json!(consolidated_id)),
+        "consolidated row must be listed"
+    );
+
+    // Recall prefers the active consolidated row over the superseded one.
+    let recall = read_json_data_output(
+        "memory.recall",
+        run_atlas(repo.path(), &["--json", "memory", "recall", "helm"]),
+    );
+    let positions = recall["results"]
+        .as_array()
+        .expect("results")
+        .iter()
+        .enumerate()
+        .map(|(index, hit)| (hit["memory"]["id"].as_str().unwrap_or_default(), index))
+        .collect::<Vec<_>>();
+    let consolidated_pos = positions
+        .iter()
+        .find(|(id, _)| *id == consolidated_id.as_str())
+        .map(|(_, index)| *index)
+        .expect("consolidated row in recall");
+    let superseded_pos = positions
+        .iter()
+        .find(|(id, _)| *id == merged_id.as_str())
+        .map(|(_, index)| *index)
+        .expect("superseded row in recall");
+    assert!(consolidated_pos < superseded_pos);
 }

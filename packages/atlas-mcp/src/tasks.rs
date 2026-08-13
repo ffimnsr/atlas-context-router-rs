@@ -633,7 +633,8 @@ fn fallback_task_status(task_id: &str, status_message: &str) -> DurableTaskRecor
 fn is_auto_defer_candidate(name: &str) -> bool {
     matches!(
         name,
-        "build_or_update_graph"
+        "build_graph"
+            | "update_graph"
             | "postprocess_graph"
             | "doctor"
             | "analyze_architecture"

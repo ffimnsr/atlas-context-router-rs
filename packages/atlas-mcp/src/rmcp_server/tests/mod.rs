@@ -213,8 +213,8 @@ impl ToolFixture {
         let (dir, _db_path_path, db_path) = setup_repo();
         let repo_root = dir.path().to_string_lossy().into_owned();
         crate::tools::call(
-            "build_or_update_graph",
-            Some(&json!({"operation": {"kind": "build"}, "output_format": "json"})),
+            "build_graph",
+            Some(&json!({"output_format": "json"})),
             &repo_root,
             &db_path,
         )

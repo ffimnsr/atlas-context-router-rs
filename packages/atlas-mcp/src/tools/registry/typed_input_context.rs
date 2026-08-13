@@ -106,31 +106,25 @@ pub(super) fn typed_input_schema_for(name: &str) -> Option<Value> {
                 ("properties/output_format", DEFAULT_OUTPUT_DESCRIPTION),
             ],
         )),
-        "build_or_update_graph" => Some(typed_schema_with_descriptions::<
-            BuildOrUpdateGraphArgsSchema,
-        >(&[
+        "build_graph" => Some(typed_schema_with_descriptions::<BuildGraphArgsSchema>(&[(
+            "properties/output_format",
+            DEFAULT_OUTPUT_DESCRIPTION,
+        )])),
+        "update_graph" => Some(typed_schema_with_descriptions::<UpdateGraphArgsSchema>(&[
             (
-                "properties/operation",
-                "Operation object. Use { kind: 'build' } or { kind: 'update', change_source: { kind: 'working_tree'|'staged'|'base'|'files', ... } }.",
+                "properties/change_source",
+                "Required change source. Use { kind: 'working_tree' }, { kind: 'staged' }, { kind: 'base', base: 'origin/main' }, or { kind: 'files', files: ['src/lib.rs'] }.",
             ),
             (
-                "properties/operation/properties/kind",
-                "Operation kind: build or update.",
-            ),
-            (
-                "properties/operation/properties/change_source",
-                "Required when kind='update'. Use { kind: 'working_tree' }, { kind: 'staged' }, { kind: 'base', base: 'origin/main' }, or { kind: 'files', files: ['src/lib.rs'] }.",
-            ),
-            (
-                "properties/operation/properties/change_source/properties/kind",
+                "properties/change_source/properties/kind",
                 "Change-source kind: working_tree, staged, base, or files.",
             ),
             (
-                "properties/operation/properties/change_source/properties/base",
+                "properties/change_source/properties/base",
                 "Required when kind='base'. Base git ref such as 'origin/main'.",
             ),
             (
-                "properties/operation/properties/change_source/properties/files",
+                "properties/change_source/properties/files",
                 "Required when kind='files'. Non-empty repo-relative file path list.",
             ),
             ("properties/output_format", DEFAULT_OUTPUT_DESCRIPTION),

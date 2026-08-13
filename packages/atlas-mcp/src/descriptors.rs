@@ -180,7 +180,7 @@ mod tests {
 
     #[test]
     fn descriptor_name_validation_accepts_current_tool_style() {
-        validate_descriptor_name("build_or_update_graph").expect("valid name");
+        validate_descriptor_name("build_graph").expect("valid name");
         validate_descriptor_name("query.graph").expect("valid name");
     }
 
@@ -192,10 +192,7 @@ mod tests {
 
     #[test]
     fn human_title_is_stable() {
-        assert_eq!(
-            human_title("build_or_update_graph"),
-            "Build Or Update Graph"
-        );
+        assert_eq!(human_title("build_graph"), "Build Graph");
         assert_eq!(human_title("mcp.query_sql"), "MCP Query SQL");
     }
 

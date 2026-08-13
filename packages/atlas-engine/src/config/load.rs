@@ -40,6 +40,7 @@ impl Config {
         config.insights.validate_layer_rules_file(atlas_dir)?;
         config.sanitization.validate(atlas_dir)?;
         config.context.tokenizer.validate()?;
+        config.memory.validate()?;
         Ok(config)
     }
 

@@ -79,6 +79,17 @@ fn instructions_section_mentions_tool_discovery_helpers() {
 }
 
 #[test]
+fn instructions_section_documents_split_graph_build_tools() {
+    assert!(INSTRUCTIONS_SECTION.contains("`build_graph` with `{}`"));
+    assert!(INSTRUCTIONS_SECTION.contains("`update_graph` with direct `change_source`"));
+    assert!(
+        INSTRUCTIONS_SECTION
+            .contains("`update_graph` with `{ \"change_source\": { \"kind\": \"working_tree\" } }")
+    );
+    assert!(!INSTRUCTIONS_SECTION.contains("build_or_update_graph"));
+}
+
+#[test]
 fn instructions_section_documents_session_memory_fallback() {
     assert!(INSTRUCTIONS_SECTION.contains("Session memory fallback for hosts without hooks"));
     assert!(INSTRUCTIONS_SECTION.contains("`record_session_event`"));

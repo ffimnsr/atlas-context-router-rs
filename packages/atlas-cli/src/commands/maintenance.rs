@@ -118,6 +118,9 @@ fn config_runtime_json(config: &atlas_engine::Config) -> serde_json::Value {
             "dynamic_usage_allowlist": config.analysis.dynamic_usage_allowlist,
             "entrypoint_allowlist": config.analysis.entrypoint_allowlist,
             "framework_conventions_file": config.analysis.framework_conventions_file,
+            "feedback_adjustment": {
+                "enabled": config.analysis.feedback_adjustment.enabled,
+            },
         },
         "context": {
             "max_context_nodes": config.context.max_context_nodes,
@@ -157,6 +160,18 @@ fn config_runtime_json(config: &atlas_engine::Config) -> serde_json::Value {
         },
         "memory": {
             "allow_custom_frontends": config.memory.allow_custom_frontends,
+            "decay": {
+                "enabled": config.memory.decay.enabled,
+                "low_days": config.memory.decay.low_days,
+                "normal_days": config.memory.decay.normal_days,
+                "high_days": config.memory.decay.high_days,
+                "critical_never_prune": config.memory.decay.critical_never_prune,
+            },
+            "wake_up": {
+                "max_items": config.memory.wake_up.max_items,
+                "max_feedback_items": config.memory.wake_up.max_feedback_items,
+                "max_pending_changes": config.memory.wake_up.max_pending_changes,
+            },
         },
     })
 }
@@ -1175,35 +1190,51 @@ pub fn run_db_check(cli: &Cli) -> Result<()> {
     let orphans = structural_orphans(&store, ORPHAN_LIMIT);
     let dangling = structural_dangling_edges(&store, ORPHAN_LIMIT);
 
-    // ICM-A1: validate the continuity-side memory schema through db check.
-    // A missing session DB is not a schema violation (created on demand), but
-    // a present one must carry the full `memories` schema.
+    // ICM-A1 + ICM-C1: validate the continuity-side memory and feedback
+    // schemas through db check. A missing session DB is not a schema violation
+    // (created on demand), but a present one must carry the full schemas.
     let session_db_path = atlas_engine::paths::session_db_path(&db_path);
     let session_db_exists = Path::new(&session_db_path).exists();
-    let (session_db_ok, memory_schema_ok, memory_schema_issues) = if session_db_exists {
+    let (
+        session_db_ok,
+        memory_schema_ok,
+        memory_schema_issues,
+        feedback_schema_ok,
+        feedback_schema_issues,
+    ) = if session_db_exists {
         match SessionStore::open(&session_db_path) {
             Ok(session_store) => {
-                let schema_issues = session_store.memory_schema_issues();
-                (true, schema_issues.is_empty(), schema_issues)
+                let memory_issues = session_store.memory_schema_issues();
+                let feedback_issues = session_store.feedback_schema_issues();
+                (
+                    true,
+                    memory_issues.is_empty(),
+                    memory_issues,
+                    feedback_issues.is_empty(),
+                    feedback_issues,
+                )
             }
             Err(e) => (
                 false,
                 false,
                 vec![format!("cannot open session store: {e}")],
+                false,
+                vec![format!("cannot open session store: {e}")],
             ),
         }
     } else {
-        (true, true, Vec::new())
+        (true, true, Vec::new(), true, Vec::new())
     };
 
     let ok = issues.is_empty()
         && orphans.is_empty()
         && dangling.is_empty()
         && session_db_ok
-        && memory_schema_ok;
+        && memory_schema_ok
+        && feedback_schema_ok;
     let error_code = if !issues.is_empty() || !orphans.is_empty() || !dangling.is_empty() {
         integrity_issue_code(&issues, !orphans.is_empty() || !dangling.is_empty())
-    } else if !memory_schema_ok {
+    } else if !memory_schema_ok || !feedback_schema_ok {
         "schema_mismatch"
     } else {
         "none"
@@ -1239,6 +1270,10 @@ pub fn run_db_check(cli: &Cli) -> Result<()> {
                 "memory_schema": {
                     "ok": memory_schema_ok,
                     "issues": memory_schema_issues,
+                },
+                "feedback_schema": {
+                    "ok": feedback_schema_ok,
+                    "issues": feedback_schema_issues,
                 },
             },
         });
@@ -1283,6 +1318,12 @@ pub fn run_db_check(cli: &Cli) -> Result<()> {
         if !memory_schema_ok {
             eprintln!("Memory schema FAILED: {session_db_path}");
             for issue in &memory_schema_issues {
+                eprintln!("  {issue}");
+            }
+        }
+        if !feedback_schema_ok {
+            eprintln!("Feedback schema FAILED: {session_db_path}");
+            for issue in &feedback_schema_issues {
                 eprintln!("  {issue}");
             }
         }

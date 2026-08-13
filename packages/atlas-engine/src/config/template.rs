@@ -179,6 +179,10 @@ impl Config {
                     "framework_conventions_file",
                     render_optional_string(active.analysis.framework_conventions_file.as_deref()),
                 ),
+                (
+                    "feedback_adjustment.enabled",
+                    active.analysis.feedback_adjustment.enabled.to_string(),
+                ),
             ],
             profile == ConfigTemplateProfile::Full,
         ));
@@ -501,6 +505,54 @@ impl Config {
             profile == ConfigTemplateProfile::Full,
         ));
 
+        lines.extend(render_section(
+            "memory",
+            &[(
+                "allow_custom_frontends",
+                active.memory.allow_custom_frontends.to_string(),
+            )],
+            profile == ConfigTemplateProfile::Full,
+        ));
+
+        lines.extend(render_section(
+            "memory.decay",
+            &[
+                ("enabled", active.memory.decay.enabled.to_string()),
+                ("low_days", active.memory.decay.low_days.to_string()),
+                ("normal_days", active.memory.decay.normal_days.to_string()),
+                ("high_days", active.memory.decay.high_days.to_string()),
+                (
+                    "critical_never_prune",
+                    active.memory.decay.critical_never_prune.to_string(),
+                ),
+            ],
+            profile == ConfigTemplateProfile::Full,
+        ));
+        lines.push(
+            "# critical memories are never auto-pruned while critical_never_prune = true"
+                .to_owned(),
+        );
+
+        lines.extend(render_section(
+            "memory.wake_up",
+            &[
+                ("max_items", active.memory.wake_up.max_items.to_string()),
+                (
+                    "max_feedback_items",
+                    active.memory.wake_up.max_feedback_items.to_string(),
+                ),
+                (
+                    "max_pending_changes",
+                    active.memory.wake_up.max_pending_changes.to_string(),
+                ),
+            ],
+            profile == ConfigTemplateProfile::Full,
+        ));
+        lines.push(
+            "# wake-up pack lists are capped by max_items; feedback is always the smallest list"
+                .to_owned(),
+        );
+
         Ok(lines.join("\n"))
     }
 
@@ -546,7 +598,11 @@ impl Config {
                 config
                     .mcp
                     .tool_timeout_ms_by_tool
-                    .insert("build_or_update_graph".to_owned(), 900_000);
+                    .insert("build_graph".to_owned(), 900_000);
+                config
+                    .mcp
+                    .tool_timeout_ms_by_tool
+                    .insert("update_graph".to_owned(), 900_000);
                 config
                     .mcp
                     .tool_timeout_ms_by_tool

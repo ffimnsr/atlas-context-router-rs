@@ -95,33 +95,35 @@ pub(super) fn tools() -> Vec<Value> {
                 }
         }),
         json!({
-                "name": "build_or_update_graph",
-                "description": "Scan, parse, and persist the code graph. Canonical input is `operation={ kind: 'build' }` for full scan or `operation={ kind: 'update', change_source: ... }` for incremental update.",
+                "name": "build_graph",
+                "description": "Scan, parse, and persist a complete code graph. Call with an empty object.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "operation": {
-                            "type": "object",
-                            "description": "Operation object. Use { kind: 'build' } or { kind: 'update', change_source: { kind: 'working_tree'|'staged'|'base'|'files', ... } }.",
-                            "properties": {
-                                "kind": { "type": "string", "description": "Operation kind: build or update." },
-                                "change_source": {
-                                    "type": "object",
-                                    "description": "Required when kind='update'. Use { kind: 'working_tree' }, { kind: 'staged' }, { kind: 'base', base: 'origin/main' }, or { kind: 'files', files: ['src/lib.rs'] }.",
-                                    "properties": {
-                                        "kind": { "type": "string", "description": "Change-source kind: working_tree, staged, base, or files." },
-                                        "base": { "type": "string", "description": "Required when kind='base'. Base git ref such as 'origin/main'." },
-                                        "files": { "type": "array", "items": { "type": "string" }, "description": "Required when kind='files'. Non-empty repo-relative file path list." }
-                                    },
-                                    "required": ["kind"]
-                                }
-                            },
-                            "required": ["kind"]
-                        },
-
                         "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
                     },
                     "required": []
+                }
+        }),
+        json!({
+                "name": "update_graph",
+                "description": "Incrementally update graph from one explicit change source.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "change_source": {
+                            "type": "object",
+                            "description": "Required change source. Use { kind: 'working_tree' }, { kind: 'staged' }, { kind: 'base', base: 'origin/main' }, or { kind: 'files', files: ['src/lib.rs'] }.",
+                            "properties": {
+                                "kind": { "type": "string", "description": "Change-source kind: working_tree, staged, base, or files." },
+                                "base": { "type": "string", "description": "Required when kind='base'. Base git ref such as 'origin/main'." },
+                                "files": { "type": "array", "items": { "type": "string" }, "description": "Required when kind='files'. Non-empty repo-relative file path list." }
+                            },
+                            "required": ["kind"]
+                        },
+                        "output_format": { "type": "string", "description": DEFAULT_OUTPUT_DESCRIPTION }
+                    },
+                    "required": ["change_source"]
                 }
         }),
         json!({

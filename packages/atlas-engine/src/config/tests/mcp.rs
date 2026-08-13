@@ -58,10 +58,10 @@ fn mcp_config_values_are_clamped() {
     config
         .mcp
         .tool_timeout_ms_by_tool
-        .insert("build_or_update_graph".to_owned(), 9_999_999);
+        .insert("build_graph".to_owned(), 9_999_999);
     let overrides = config.mcp_tool_timeout_ms_by_tool();
     assert_eq!(overrides.get("query_graph"), Some(&1_000));
-    assert_eq!(overrides.get("build_or_update_graph"), Some(&3_600_000));
+    assert_eq!(overrides.get("build_graph"), Some(&3_600_000));
 }
 
 #[test]
@@ -74,10 +74,7 @@ fn mcp_tool_timeout_prefers_per_tool_override() {
         .insert("query_graph".to_owned(), 5_000);
 
     assert_eq!(config.mcp_tool_timeout_ms_for("query_graph"), 5_000);
-    assert_eq!(
-        config.mcp_tool_timeout_ms_for("build_or_update_graph"),
-        30_000
-    );
+    assert_eq!(config.mcp_tool_timeout_ms_for("build_graph"), 30_000);
 }
 
 #[test]

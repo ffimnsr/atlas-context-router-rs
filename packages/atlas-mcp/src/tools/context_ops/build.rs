@@ -1,14 +1,115 @@
 use super::*;
 
-pub(crate) fn tool_build_or_update_graph(
+pub(crate) fn tool_build_graph(
     args: Option<&serde_json::Value>,
     repo_root: &str,
     db_path: &str,
     output_format: crate::output::OutputFormat,
 ) -> Result<serde_json::Value> {
-    let operation = match validate_build_operation_request(args) {
-        Ok(operation) => operation,
+    if args.is_some_and(|value| {
+        value.get("change_source").is_some() || value.get("operation").is_some()
+    }) {
+        let payload = input_shape_error_payload(
+            "build_graph",
+            "build_graph does not accept operation or change_source",
+            "build_graph always performs a full graph build",
+            InputShapeErrorSpec {
+                offending_fields: vec!["operation/change_source".to_owned()],
+                normalization_performed: Vec::new(),
+                accepted_argument_families: vec!["empty object".to_owned()],
+                retry_example: Some(json!({})),
+                fail_closed_reason: None,
+                retry_guidance: Some("Call build_graph with an empty object.".to_owned()),
+                extra_details: None,
+            },
+        );
+        return tool_execution_error_value(output_format, &payload);
+    }
+    execute_graph_operation(
+        BuildOperationRequest {
+            kind: BuildOperationKind::Build,
+            change_source: None,
+            deprecated_input_fields: Vec::new(),
+        },
+        repo_root,
+        db_path,
+        output_format,
+    )
+}
+
+pub(crate) fn tool_update_graph(
+    args: Option<&serde_json::Value>,
+    repo_root: &str,
+    db_path: &str,
+    output_format: crate::output::OutputFormat,
+) -> Result<serde_json::Value> {
+    if args.is_some_and(|value| value.get("operation").is_some()) {
+        let payload = input_shape_error_payload(
+            "update_graph",
+            "update_graph does not accept operation",
+            "Provide change_source directly.",
+            InputShapeErrorSpec {
+                offending_fields: vec!["operation".to_owned()],
+                normalization_performed: Vec::new(),
+                accepted_argument_families: vec!["change_source".to_owned()],
+                retry_example: Some(json!({ "change_source": { "kind": "working_tree" } })),
+                fail_closed_reason: None,
+                retry_guidance: Some(
+                    "Call update_graph with a direct change_source object.".to_owned(),
+                ),
+                extra_details: None,
+            },
+        );
+        return tool_execution_error_value(output_format, &payload);
+    }
+    if args
+        .and_then(|value| value.get("change_source"))
+        .and_then(serde_json::Value::as_object)
+        .is_none()
+    {
+        let payload = input_shape_error_payload(
+            "update_graph",
+            "update_graph requires change_source",
+            "Provide a non-null change_source object with kind=working_tree, staged, base, or files.",
+            InputShapeErrorSpec {
+                offending_fields: vec!["change_source".to_owned()],
+                normalization_performed: Vec::new(),
+                accepted_argument_families: vec!["change_source".to_owned()],
+                retry_example: Some(json!({ "change_source": { "kind": "working_tree" } })),
+                fail_closed_reason: None,
+                retry_guidance: Some(
+                    "Call update_graph with a direct change_source object.".to_owned(),
+                ),
+                extra_details: None,
+            },
+        );
+        return tool_execution_error_value(output_format, &payload);
+    }
+    let change_source = match validate_change_source_request("update_graph", args, true) {
+        Ok(change_source) => change_source,
         Err(payload) => return tool_execution_error_value(output_format, &payload),
+    };
+    execute_graph_operation(
+        BuildOperationRequest {
+            kind: BuildOperationKind::Update,
+            change_source: Some(change_source),
+            deprecated_input_fields: Vec::new(),
+        },
+        repo_root,
+        db_path,
+        output_format,
+    )
+}
+
+fn execute_graph_operation(
+    operation: BuildOperationRequest,
+    repo_root: &str,
+    db_path: &str,
+    output_format: crate::output::OutputFormat,
+) -> Result<serde_json::Value> {
+    let tool_name = match operation.kind {
+        BuildOperationKind::Build => "build_graph",
+        BuildOperationKind::Update => "update_graph",
     };
     let deprecated_operation_fields = operation.deprecated_input_fields.clone();
     let repo_root_path =
@@ -166,7 +267,7 @@ pub(crate) fn tool_build_or_update_graph(
                     "rebuild_strategy": "full_rebuild_from_source",
                     "build_status": build_status_json(db_path, repo_root_str),
                 });
-                let envelope = ToolSuccessEnvelope::new("build_or_update_graph", payload);
+                let envelope = ToolSuccessEnvelope::new(tool_name, payload);
                 let mut response = normalized_tool_result_value(&envelope, output_format)?;
                 inject_deprecated_input_fields(&mut response, &deprecated_operation_fields);
                 return Ok(response);
@@ -294,7 +395,7 @@ pub(crate) fn tool_build_or_update_graph(
                     "rebuild_strategy": rebuild_strategy_label(full_rebuild),
                     "build_status": build_status_json(db_path, repo_root_str),
                 });
-                let envelope = ToolSuccessEnvelope::new("build_or_update_graph", payload);
+                let envelope = ToolSuccessEnvelope::new(tool_name, payload);
                 let mut response = normalized_tool_result_value(&envelope, output_format)?;
                 inject_deprecated_input_fields(&mut response, &deprecated_operation_fields);
                 return Ok(response);
@@ -384,7 +485,7 @@ pub(crate) fn tool_build_or_update_graph(
             },
             "build_status": build_status_json(db_path, repo_root_str),
         });
-        let envelope = ToolSuccessEnvelope::new("build_or_update_graph", payload);
+        let envelope = ToolSuccessEnvelope::new(tool_name, payload);
         let mut response = normalized_tool_result_value(&envelope, output_format)?;
         inject_budget_metadata(&mut response, &summary.budget);
         inject_deprecated_input_fields(&mut response, &deprecated_operation_fields);
@@ -415,7 +516,7 @@ pub(crate) fn tool_build_or_update_graph(
                     "rebuild_strategy": "full_rebuild_from_source",
                     "build_status": build_status_json(db_path, repo_root_str),
                 });
-                let envelope = ToolSuccessEnvelope::new("build_or_update_graph", payload);
+                let envelope = ToolSuccessEnvelope::new(tool_name, payload);
                 let mut response = normalized_tool_result_value(&envelope, output_format)?;
                 inject_deprecated_input_fields(&mut response, &deprecated_operation_fields);
                 return Ok(response);
@@ -511,7 +612,7 @@ pub(crate) fn tool_build_or_update_graph(
                     "rebuild_strategy": "full_rebuild_from_source",
                     "build_status": build_status_json(db_path, repo_root_str),
                 });
-                let envelope = ToolSuccessEnvelope::new("build_or_update_graph", payload);
+                let envelope = ToolSuccessEnvelope::new(tool_name, payload);
                 let mut response = normalized_tool_result_value(&envelope, output_format)?;
                 inject_deprecated_input_fields(&mut response, &deprecated_operation_fields);
                 return Ok(response);
@@ -602,7 +703,7 @@ pub(crate) fn tool_build_or_update_graph(
             },
             "build_status": build_status_json(db_path, repo_root_str),
         });
-        let envelope = ToolSuccessEnvelope::new("build_or_update_graph", payload);
+        let envelope = ToolSuccessEnvelope::new(tool_name, payload);
         let mut response = normalized_tool_result_value(&envelope, output_format)?;
         inject_budget_metadata(&mut response, &summary.budget);
         inject_deprecated_input_fields(&mut response, &deprecated_operation_fields);

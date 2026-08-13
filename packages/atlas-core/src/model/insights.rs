@@ -186,7 +186,7 @@ mod tests {
                 changed_files: vec!["src/lib.rs".to_owned()],
                 stale_result_files: vec!["src/lib.rs".to_owned()],
                 warning: "Graph-backed answer may be stale.".to_owned(),
-                suggested_recovery: vec!["run build_or_update_graph".to_owned()],
+                suggested_recovery: vec!["run build_graph".to_owned()],
             }),
         };
 
@@ -228,7 +228,7 @@ mod tests {
                     "changed_files": ["src/lib.rs"],
                     "stale_result_files": ["src/lib.rs"],
                     "warning": "Graph-backed answer may be stale.",
-                    "suggested_recovery": ["run build_or_update_graph"]
+                    "suggested_recovery": ["run build_graph"]
                 }
             })
         );

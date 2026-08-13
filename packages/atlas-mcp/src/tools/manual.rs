@@ -817,10 +817,7 @@ fn tool_input_contract(tool_name: &str, input_schema: &Value) -> ToolManualInput
         "get_impact_radius" | "get_review_context" | "get_minimal_context" | "explain_change" => {
             vec![change_source_input_family(true)]
         }
-        "build_or_update_graph" => vec![
-            operation_input_family(),
-            operation_change_source_input_family(),
-        ],
+        "update_graph" => vec![change_source_input_family(true)],
         "batch_query_graph" => vec![batch_query_items_input_family()],
         _ => Vec::new(),
     };
@@ -1021,95 +1018,6 @@ fn change_source_input_family(include_files: bool) -> ToolManualInputFamily {
         family_name: "change_source".to_owned(),
         family_kind: "discriminated_object".to_owned(),
         discriminant_field: Some("change_source.kind".to_owned()),
-        accepted_values: variants
-            .iter()
-            .map(|variant| variant.value.clone())
-            .collect(),
-        mutually_exclusive_legacy_fields: Vec::new(),
-        variants,
-    }
-}
-
-fn operation_input_family() -> ToolManualInputFamily {
-    let variants = vec![
-        input_variant(
-            "build",
-            &[],
-            json!({
-                "operation": { "kind": "build" }
-            }),
-        ),
-        input_variant(
-            "update",
-            &["operation.change_source"],
-            json!({
-                "operation": {
-                    "kind": "update",
-                    "change_source": { "kind": "working_tree" }
-                }
-            }),
-        ),
-    ];
-    ToolManualInputFamily {
-        family_name: "operation".to_owned(),
-        family_kind: "discriminated_object".to_owned(),
-        discriminant_field: Some("operation.kind".to_owned()),
-        accepted_values: variants
-            .iter()
-            .map(|variant| variant.value.clone())
-            .collect(),
-        mutually_exclusive_legacy_fields: Vec::new(),
-        variants,
-    }
-}
-
-fn operation_change_source_input_family() -> ToolManualInputFamily {
-    let variants = vec![
-        input_variant(
-            "working_tree",
-            &[],
-            json!({
-                "operation": {
-                    "kind": "update",
-                    "change_source": { "kind": "working_tree" }
-                }
-            }),
-        ),
-        input_variant(
-            "staged",
-            &[],
-            json!({
-                "operation": {
-                    "kind": "update",
-                    "change_source": { "kind": "staged" }
-                }
-            }),
-        ),
-        input_variant(
-            "base",
-            &["operation.change_source.base"],
-            json!({
-                "operation": {
-                    "kind": "update",
-                    "change_source": { "kind": "base", "base": "origin/main" }
-                }
-            }),
-        ),
-        input_variant(
-            "files",
-            &["operation.change_source.files"],
-            json!({
-                "operation": {
-                    "kind": "update",
-                    "change_source": { "kind": "files", "files": ["src/lib.rs"] }
-                }
-            }),
-        ),
-    ];
-    ToolManualInputFamily {
-        family_name: "operation.change_source".to_owned(),
-        family_kind: "discriminated_object".to_owned(),
-        discriminant_field: Some("operation.change_source.kind".to_owned()),
         accepted_values: variants
             .iter()
             .map(|variant| variant.value.clone())
@@ -1346,7 +1254,8 @@ fn tool_usage_guidance(tool_name: &str) -> Vec<String> {
 
     if matches!(
         tool_name,
-        "build_or_update_graph"
+        "build_graph"
+            | "update_graph"
             | "postprocess_graph"
             | "compact_session"
             | "record_session_event"
@@ -1374,6 +1283,14 @@ fn few_shot_prompts(tool_name: &str, description: &str) -> Vec<String> {
         "detect_changes" => vec![
             "User asks: 'What changed in my working tree?' Call `detect_changes` with `{ \"change_source\": { \"kind\": \"working_tree\" } }`.".to_owned(),
             "User asks: 'Compare against origin/main.' Call `detect_changes` with `{ \"change_source\": { \"kind\": \"base\", \"base\": \"origin/main\" } }`.".to_owned(),
+        ],
+        "build_graph" => vec![
+            "User asks: 'Build graph for this repository.' Call `build_graph` with `{}`. Use this when graph has not been built or needs a full rebuild.".to_owned(),
+            "After `status` reports missing graph DB, call `build_graph` with `{}` before graph-backed tools.".to_owned(),
+        ],
+        "update_graph" => vec![
+            "User asks: 'Refresh graph from my edits.' Call `update_graph` with `{ \"change_source\": { \"kind\": \"working_tree\" } }`.".to_owned(),
+            "User asks: 'Update graph for staged changes.' Call `update_graph` with `{ \"change_source\": { \"kind\": \"staged\" } }`.".to_owned(),
         ],
         "tool_search" => vec![
             "User asks: 'Which tool finds docs?' Call `tool_search` with `{ \"query\": \"docs\" }`, then call `tool_help` for selected exact tool.".to_owned(),
@@ -1410,6 +1327,13 @@ fn target_tool_examples(tool_name: &str, input_schema: &Value) -> Vec<String> {
         "resolve_symbol" => Some(vec![
             json!({ "name": "resolve_symbol", "arguments": { "name": "compute" } }),
             json!({ "name": "resolve_symbol", "arguments": { "name": "src/service.rs::fn::compute" } }),
+        ]),
+        "build_graph" => Some(vec![json!({ "name": "build_graph", "arguments": {} })]),
+        "update_graph" => Some(vec![
+            json!({ "name": "update_graph", "arguments": { "change_source": { "kind": "working_tree" } } }),
+            json!({ "name": "update_graph", "arguments": { "change_source": { "kind": "staged" } } }),
+            json!({ "name": "update_graph", "arguments": { "change_source": { "kind": "base", "base": "origin/main" } } }),
+            json!({ "name": "update_graph", "arguments": { "change_source": { "kind": "files", "files": ["src/lib.rs"] } } }),
         ]),
         _ => None,
     };
@@ -1647,6 +1571,40 @@ mod tests {
     }
 
     #[test]
+    fn graph_tool_manual_examples_use_direct_agent_shapes() {
+        let build = tool_manual("mcp", "build_graph").expect("build graph manual");
+        assert_eq!(
+            build.usage.target_tool_call_examples,
+            vec![r#"{"arguments":{},"name":"build_graph"}"#.to_owned()]
+        );
+        assert!(
+            build
+                .usage
+                .few_shot_prompts
+                .iter()
+                .any(|prompt| prompt.contains("`build_graph` with `{}`"))
+        );
+
+        let update = tool_manual("mcp", "update_graph").expect("update graph manual");
+        assert!(
+            update
+                .usage
+                .target_tool_call_examples
+                .iter()
+                .any(|example| example.contains(r#""change_source":{"kind":"working_tree"}"#))
+        );
+        assert!(
+            update
+                .usage
+                .few_shot_prompts
+                .iter()
+                .any(|prompt| prompt.contains(
+                    "`update_graph` with `{ \"change_source\": { \"kind\": \"working_tree\" } }`"
+                ))
+        );
+    }
+
+    #[test]
     fn every_visible_tool_manual_includes_usage_examples_and_few_shots() {
         for tool in tool_descriptors() {
             let doc = tool_manual("mcp", &tool.name).expect("manual doc");
@@ -1683,20 +1641,13 @@ mod tests {
     }
 
     #[test]
-    fn manual_lookup_exposes_nested_operation_contract_for_build_or_update_graph() {
-        let doc = tool_manual("mcp", "build_or_update_graph").expect("manual doc");
+    fn manual_lookup_exposes_change_source_contract_for_update_graph() {
+        let doc = tool_manual("mcp", "update_graph").expect("manual doc");
         assert!(
             doc.input_contract
                 .families
                 .iter()
-                .any(|family| family.discriminant_field.as_deref() == Some("operation.kind"))
-        );
-        assert!(
-            doc.input_contract
-                .families
-                .iter()
-                .any(|family| family.discriminant_field.as_deref()
-                    == Some("operation.change_source.kind"))
+                .any(|family| family.discriminant_field.as_deref() == Some("change_source.kind"))
         );
     }
 }

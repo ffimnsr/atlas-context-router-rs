@@ -6,7 +6,8 @@ pub(crate) fn tool_annotations(name: &str) -> ToolDescriptorAnnotations {
     let destructive = matches!(name, "purge_saved_context");
     let state_changing = matches!(
         name,
-        "build_or_update_graph"
+        "build_graph"
+            | "update_graph"
             | "postprocess_graph"
             | "compact_session"
             | "record_session_event"
@@ -20,7 +21,7 @@ pub(crate) fn tool_annotations(name: &str) -> ToolDescriptorAnnotations {
 
 pub(crate) fn tool_category(name: &str) -> &'static str {
     match name {
-        "build_or_update_graph" | "postprocess_graph" => "maintenance",
+        "build_graph" | "update_graph" | "postprocess_graph" => "maintenance",
         "compact_session"
         | "purge_saved_context"
         | "resume_session"
@@ -35,7 +36,8 @@ pub(crate) fn tool_category(name: &str) -> &'static str {
         | "cross_session_search"
         | "get_global_memory"
         | "memory_store"
-        | "memory_recall" => "memory",
+        | "memory_recall"
+        | "feedback_record" => "memory",
         "tool_list" | "tool_search" | "tool_help" | "man" | "repo_registry" => "introspection",
         "status" | "doctor" | "db_check" | "debug_graph" | "broker_status" => "health",
         name if name.starts_with("analyze_")
@@ -94,7 +96,8 @@ pub(crate) const TYPED_CONTEXT_REVIEW_SCHEMA_TOOLS: &[&str] = &[
     "get_minimal_context",
     "get_impact_radius",
     "explain_change",
-    "build_or_update_graph",
+    "build_graph",
+    "update_graph",
     "postprocess_graph",
 ];
 
@@ -126,6 +129,7 @@ pub(crate) const TYPED_SESSION_MEMORY_SCHEMA_TOOLS: &[&str] = &[
     "get_global_memory",
     "memory_store",
     "memory_recall",
+    "feedback_record",
     "record_session_event",
     "wake_up",
 ];

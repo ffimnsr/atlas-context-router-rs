@@ -375,6 +375,146 @@ pub enum MemoryCommand {
         #[arg(long)]
         dry_run: bool,
     },
+
+    /// Compute updated decay scores for stored memories without deleting rows.
+    Decay {
+        /// Restrict to one topic (case-insensitive exact match).
+        #[arg(long)]
+        topic: Option<String>,
+
+        /// Report updated scores without writing them back.
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// List memories past their retention window; critical rows are never candidates.
+    Stale {
+        /// Restrict to one topic (case-insensitive exact match).
+        #[arg(long)]
+        topic: Option<String>,
+
+        /// Restrict to one scope.
+        #[arg(long)]
+        scope: Option<String>,
+    },
+
+    /// Delete memories marked pruneable by the decay policy.
+    Prune {
+        /// Show what would be pruned without deleting.
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Restrict to one topic (case-insensitive exact match).
+        #[arg(long)]
+        topic: Option<String>,
+
+        /// Restrict to one importance level.
+        #[arg(long)]
+        importance: Option<String>,
+
+        /// Only memories updated before this date (YYYY-MM-DD or RFC 3339).
+        #[arg(long)]
+        older_than: Option<String>,
+
+        /// Explicit override required before any critical memory can be pruned.
+        #[arg(long)]
+        allow_critical: bool,
+    },
+
+    /// Deterministic memory health report with actionable follow-up commands.
+    Health {
+        /// Restrict to one topic (case-insensitive exact match).
+        #[arg(long)]
+        topic: Option<String>,
+
+        /// Restrict to one scope.
+        #[arg(long)]
+        scope: Option<String>,
+    },
+
+    /// Deterministically consolidate duplicate memories per topic.
+    Consolidate {
+        /// Restrict to one topic (case-insensitive exact match).
+        #[arg(long)]
+        topic: Option<String>,
+
+        /// Restrict to one scope.
+        #[arg(long)]
+        scope: Option<String>,
+
+        /// Report the consolidation plan without mutating storage.
+        #[arg(long)]
+        dry_run: bool,
+    },
+}
+
+/// Sub-commands for `atlas feedback` (ICM-C).
+#[derive(Debug, Subcommand)]
+pub enum FeedbackCommand {
+    /// Record a correction when an analysis prediction was wrong.
+    Record {
+        /// What the analysis predicted; required.
+        #[arg(long)]
+        predicted: String,
+
+        /// What actually happened; required. Differs from --predicted to mark
+        /// this record as false-positive evidence for confidence adjustment.
+        #[arg(long)]
+        actual: String,
+
+        /// Optional correction text explaining the right answer.
+        #[arg(long)]
+        correction: Option<String>,
+
+        /// Tool that produced the prediction (e.g. cli, mcp).
+        #[arg(long)]
+        tool: Option<String>,
+
+        /// Analysis kind: dead_code, remove, safety, or remove_dead.
+        #[arg(long)]
+        analysis_kind: Option<String>,
+
+        /// Exact qualified name of the symbol the prediction was about.
+        #[arg(long)]
+        symbol: Option<String>,
+
+        /// Repo-relative path of the file the prediction was about.
+        #[arg(long)]
+        file: Option<String>,
+
+        /// Source id linking this record to a saved-context artifact.
+        #[arg(long)]
+        source_id: Option<String>,
+    },
+
+    /// Search past corrections to inform future predictions.
+    Search {
+        /// Text matched against predicted, actual, correction, symbol, and file.
+        query: String,
+
+        /// Restrict to one tool.
+        #[arg(long)]
+        tool: Option<String>,
+
+        /// Restrict to one analysis kind.
+        #[arg(long)]
+        analysis_kind: Option<String>,
+
+        /// Restrict to one exact related symbol.
+        #[arg(long)]
+        symbol: Option<String>,
+
+        /// Restrict to one exact related file.
+        #[arg(long)]
+        file: Option<String>,
+
+        /// Maximum records to return.
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+    },
+
+    /// Deterministic feedback statistics.
+    Stats,
 }
 
 /// Sub-commands for `atlas flows`.

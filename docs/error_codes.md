@@ -180,7 +180,7 @@ These codes appear in MCP tool `structuredContent.code` and CLI JSON `error_code
 | `invalid_input` | business-valid request shape reached tool, but handler-specific validation failed | retry after fixing input | `detail`, sometimes `path` |
 | `file_not_found` | requested repo-relative file does not exist | retry after fixing path or creating file | `detail`, `path` |
 | `symbol_not_found` | requested symbol or qualified name could not be resolved by tool | retry after fixing symbol or refreshing graph | `detail`, `qualified_name` when available |
-| `graph_stale` | graph readiness blocked execution or handler detected stale graph state | retry after `build_or_update_graph` or with allowed stale mode when supported | `detail`, `execution_state`, `reason`, `suggestions`, `pending_change_count` when available |
+| `graph_stale` | graph readiness blocked execution or handler detected stale graph state | retry after `update_graph` or with allowed stale mode when supported | `detail`, `execution_state`, `reason`, `suggestions`, `pending_change_count` when available |
 | `timeout` | tool timed out after dispatch started | retry with narrower scope, higher timeout, or healthier dependency | `detail`, `timeout_ms`, `request_id`, `method` |
 | `dependency_failed` | downstream dependency or service failed | retry after dependency recovers | `detail`, `service`, `status` when available |
 | `internal_tool_error` | unexpected internal failure happened inside tool execution boundary | retry only after server state or code issue is fixed | `detail` |

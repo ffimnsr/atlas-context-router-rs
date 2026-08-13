@@ -2,6 +2,22 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Feedback-driven confidence adjustment (ICM-C3).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FeedbackAdjustmentConfig {
+    /// Lower analysis confidence when prior feedback records match the same
+    /// symbol, file, or analysis kind. Defaults to `true`; with no feedback
+    /// records stored nothing ever changes.
+    pub enabled: bool,
+}
+
+impl Default for FeedbackAdjustmentConfig {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
+}
+
 /// Analysis-phase configuration (dead-code, refactor safety, impact traversal).
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(default)]
@@ -25,6 +41,8 @@ pub struct AnalysisConfig {
     /// Optional path to a TOML file mapping framework names to convention rules.
     /// Relative paths are resolved from the repo root.
     pub framework_conventions_file: Option<String>,
+    /// Feedback-driven confidence adjustment (ICM-C3).
+    pub feedback_adjustment: FeedbackAdjustmentConfig,
 }
 
 impl Default for AnalysisConfig {
@@ -37,6 +55,7 @@ impl Default for AnalysisConfig {
             dynamic_usage_allowlist: Vec::new(),
             entrypoint_allowlist: Vec::new(),
             framework_conventions_file: None,
+            feedback_adjustment: FeedbackAdjustmentConfig::default(),
         }
     }
 }

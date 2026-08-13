@@ -37,7 +37,3 @@ pub(super) struct BuildOperationRequest {
     pub(super) change_source: Option<ChangeSourceRequest>,
     pub(super) deprecated_input_fields: Vec<String>,
 }
-
-pub(super) struct LegacyBuildUpdateFields {
-    pub(super) present_fields: Vec<String>,
-}

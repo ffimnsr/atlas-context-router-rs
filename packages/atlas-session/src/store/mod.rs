@@ -9,7 +9,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use tracing::info;
 
-use atlas_core::{AtlasError, Result};
+use atlas_core::{AtlasError, Clock, Result, SystemClock};
 use atlas_db_utils::{
     application_id, apply_atlas_pragmas, migrate_database_to, set_application_id,
 };
@@ -20,6 +20,7 @@ use crate::migrations::{LATEST_VERSION, MIGRATION_SET};
 mod agent_memory;
 mod curation;
 mod decision_memory;
+mod feedback;
 mod global_memory;
 mod memory;
 mod resume;
@@ -28,22 +29,32 @@ mod tests;
 mod types;
 mod util;
 
+use feedback::recent_feedback;
+
 pub use self::types::{
     AgentMemorySummary, AgentPartitionSummary, AgentResponsibilitySummary, CurationResult,
     DEFAULT_DEDUP_WINDOW_SECS, DEFAULT_MAX_SNAPSHOT_BYTES, DEFAULT_SESSION_DB,
     DEFAULT_SESSION_MAX_EVENTS, DecisionRecord, DecisionSearchHit, DelegatedTaskSummary,
     DurableTaskListPage, DurableTaskRecord, DurableTaskStatus, DurableTaskUpdate, EventCategory,
-    GlobalAccessEntry, GlobalWorkflowPattern, MAX_INLINE_EVENT_PAYLOAD_BYTES, MemoryDeleteResult,
-    MemoryImportance, MemoryListFilter, MemoryRecord, MemoryScope, MemorySearchHit, MemoryViewer,
-    NewDurableTask, NewMemory, NewSessionEvent, ResumeSnapshot, SessionEventRow, SessionEventType,
-    SessionMeta, SessionStats, SessionStoreConfig,
+    FeedbackRecord, FeedbackSearchFilter, FeedbackSearchHit, FeedbackStats, GlobalAccessEntry,
+    GlobalWorkflowPattern, MAX_INLINE_EVENT_PAYLOAD_BYTES, MemoryConsolidationGroup,
+    MemoryConsolidationPlan, MemoryDecayPolicy, MemoryDecayReport, MemoryDeleteResult,
+    MemoryHealthCategory, MemoryHealthFinding, MemoryHealthReport, MemoryImportance,
+    MemoryListFilter, MemoryPruneResult, MemoryRecord, MemoryScope, MemorySearchHit,
+    MemorySupersessionLink, MemoryViewer, NOISY_TOPIC_ENTRIES, NewDurableTask, NewFeedback,
+    NewMemory, NewSessionEvent, OVERSIZED_BODY_CHARS, ResumeSnapshot, SessionEventRow,
+    SessionEventType, SessionMeta, SessionStats, SessionStoreConfig,
 };
 
 use self::agent_memory::{summarize_agent_memory, summarize_agent_memory_from_events};
 use self::curation::compact_session_events;
 use self::decision_memory::{search_decisions, upsert_decision_from_event};
+use self::feedback::{
+    feedback_matching, feedback_schema_issues, feedback_stats, search_feedback, store_feedback,
+};
 use self::memory::{
-    delete_memory, list_memories, memory_schema_issues, recall_memories, store_memory,
+    consolidation_plan, decay_reports, delete_memory, health_report, list_memories,
+    memory_schema_issues, prune_memories, recall_memories, stale_memories, store_memory,
 };
 use self::resume::build_resume_snapshot;
 use self::util::{
@@ -165,6 +176,52 @@ impl SessionStore {
         memory_schema_issues(&self.conn)
     }
 
+    /// Validates the feedback schema (`feedback_records` table, columns,
+    /// indexes, and FTS table). Returns an empty list when healthy; used by
+    /// `atlas db check`.
+    pub fn feedback_schema_issues(&self) -> Vec<String> {
+        feedback_schema_issues(&self.conn)
+    }
+
+    /// Validate and persist a new feedback record, returning the stored record.
+    pub fn store_feedback(&mut self, input: &NewFeedback) -> Result<FeedbackRecord> {
+        store_feedback(&self.conn, input)
+    }
+
+    /// Lexical feedback search with exact-match filters; falls back to a
+    /// deterministic LIKE scan when FTS is unavailable.
+    pub fn search_feedback(
+        &self,
+        repo_root: &str,
+        query: &str,
+        filter: &FeedbackSearchFilter,
+        limit: usize,
+    ) -> Result<Vec<FeedbackSearchHit>> {
+        search_feedback(&self.conn, repo_root, query, filter, limit)
+    }
+
+    /// Deterministic feedback statistics; stable zero-counts on an empty table.
+    pub fn feedback_stats(&self, repo_root: &str) -> Result<FeedbackStats> {
+        feedback_stats(&self.conn, repo_root)
+    }
+
+    /// Most recent feedback records for a repo, newest first (ICM-D wake-up).
+    pub fn recent_feedback(&self, repo_root: &str, limit: usize) -> Result<Vec<FeedbackRecord>> {
+        recent_feedback(&self.conn, repo_root, limit)
+    }
+
+    /// Records that can serve as false-positive evidence for a symbol/file/
+    /// kind; used by the CLI confidence adjuster (ICM-C3).
+    pub fn feedback_matching(
+        &self,
+        repo_root: &str,
+        analysis_kind: &str,
+        symbol: Option<&str>,
+        file: Option<&str>,
+    ) -> Result<Vec<FeedbackRecord>> {
+        feedback_matching(&self.conn, repo_root, analysis_kind, symbol, file)
+    }
+
     /// Validate and persist a new memory, returning the stored record.
     pub fn store_memory(&mut self, input: &NewMemory) -> Result<MemoryRecord> {
         store_memory(&self.conn, input)
@@ -210,6 +267,86 @@ impl SessionStore {
         dry_run: bool,
     ) -> Result<MemoryDeleteResult> {
         delete_memory(&self.conn, repo_root, memory_id, dry_run)
+    }
+
+    /// Compute (and, when not dry-running, persist) updated decay scores for
+    /// every memory matching `filter`. Never deletes rows.
+    pub fn decay_reports(
+        &self,
+        repo_root: &str,
+        filter: &MemoryListFilter,
+        policy: &MemoryDecayPolicy,
+        dry_run: bool,
+    ) -> Result<Vec<MemoryDecayReport>> {
+        decay_reports(
+            &self.conn,
+            repo_root,
+            filter,
+            policy,
+            SystemClock.now_utc(),
+            dry_run,
+        )
+    }
+
+    /// Rows past their retention window per policy; protected critical
+    /// memories are never reported as stale candidates.
+    pub fn stale_memories(
+        &self,
+        repo_root: &str,
+        filter: &MemoryListFilter,
+        policy: &MemoryDecayPolicy,
+    ) -> Result<Vec<MemoryDecayReport>> {
+        stale_memories(&self.conn, repo_root, filter, policy, SystemClock.now_utc())
+    }
+
+    /// Delete (or, in dry-run, only report) memories past their retention
+    /// window; critical rows need `allow_critical`.
+    pub fn prune_memories(
+        &self,
+        repo_root: &str,
+        filter: &MemoryListFilter,
+        policy: &MemoryDecayPolicy,
+        dry_run: bool,
+        allow_critical: bool,
+    ) -> Result<MemoryPruneResult> {
+        prune_memories(
+            &self.conn,
+            repo_root,
+            filter,
+            policy,
+            SystemClock.now_utc(),
+            dry_run,
+            allow_critical,
+        )
+    }
+
+    /// Deterministic health report with actionable findings.
+    pub fn memory_health(
+        &self,
+        repo_root: &str,
+        filter: &MemoryListFilter,
+        policy: &MemoryDecayPolicy,
+        source_exists: &dyn Fn(&str) -> bool,
+    ) -> Result<MemoryHealthReport> {
+        health_report(
+            &self.conn,
+            repo_root,
+            filter,
+            policy,
+            SystemClock.now_utc(),
+            source_exists,
+        )
+    }
+
+    /// Deterministic consolidation plan; when `dry_run` is false the plan is
+    /// also applied (consolidated memory created, merged rows superseded).
+    pub fn consolidate_memories(
+        &self,
+        repo_root: &str,
+        filter: &MemoryListFilter,
+        dry_run: bool,
+    ) -> Result<MemoryConsolidationPlan> {
+        consolidation_plan(&self.conn, repo_root, filter, dry_run)
     }
 
     pub fn upsert_session_meta(

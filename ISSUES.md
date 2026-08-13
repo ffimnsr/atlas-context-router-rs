@@ -116,40 +116,40 @@ Implementation structure:
 
 ##### ICM-B1 — Decay policy config and scoring
 
-- [ ] add memory decay config to `.atlas/config.toml`
-- [ ] add default retention policy with `critical` never auto-pruned, `high` long retention, `normal` normal retention, and `low` short retention
-- [ ] add config fields `memory.decay.enabled`, `memory.decay.low_days`, `memory.decay.normal_days`, `memory.decay.high_days`, and `memory.decay.critical_never_prune`
-- [ ] validate retention days as positive integers and fail `atlas doctor` clearly on invalid config
-- [ ] add `atlas memory decay` with `--dry-run`, `--topic`, and `--json`
-- [ ] calculate updated `decay_score` without deleting rows
+- [x] add memory decay config to `.atlas/config.toml`
+- [x] add default retention policy with `critical` never auto-pruned, `high` long retention, `normal` normal retention, and `low` short retention
+- [x] add config fields `memory.decay.enabled`, `memory.decay.low_days`, `memory.decay.normal_days`, `memory.decay.high_days`, and `memory.decay.critical_never_prune`
+- [x] validate retention days as positive integers and fail `atlas doctor` clearly on invalid config
+- [x] add `atlas memory decay` with `--dry-run`, `--topic`, and `--json`
+- [x] calculate updated `decay_score` without deleting rows
 
 ##### ICM-B2 — Stale, prune, and health commands
 
-- [ ] add `atlas memory stale` with `--topic`, `--scope`, and `--json`
-- [ ] list only stale memories and never report critical memories as auto-prune candidates
-- [ ] add `atlas memory prune` with `--dry-run`, `--topic`, `--importance`, `--older-than`, and `--json`
-- [ ] delete only memories marked pruneable by policy and require explicit override before any critical-memory prune path exists
-- [ ] add memory health categories `healthy`, `stale`, `noisy`, `duplicated`, `orphaned`, and `oversized`
-- [ ] detect low-importance old memories, repeated memories, missing `source_id` references, noisy topics, and topics with no critical decisions
-- [ ] add `atlas memory health` with `--topic`, `--scope`, and `--json`
-- [ ] emit actionable suggestions and exact follow-up commands in human output
+- [x] add `atlas memory stale` with `--topic`, `--scope`, and `--json`
+- [x] list only stale memories and never report critical memories as auto-prune candidates
+- [x] add `atlas memory prune` with `--dry-run`, `--topic`, `--importance`, `--older-than`, and `--json`
+- [x] delete only memories marked pruneable by policy and require explicit override before any critical-memory prune path exists
+- [x] add memory health categories `healthy`, `stale`, `noisy`, `duplicated`, `orphaned`, and `oversized`
+- [x] detect low-importance old memories, repeated memories, missing `source_id` references, noisy topics, and topics with no critical decisions
+- [x] add `atlas memory health` with `--topic`, `--scope`, and `--json`
+- [x] emit actionable suggestions and exact follow-up commands in human output
 
 ##### ICM-B3 — Deterministic consolidation
 
-- [ ] add deterministic consolidation planner grouping by topic, similar title, similar body, same source id, and same feedback or decision category
-- [ ] preserve all `source_id` references in consolidation plan output
-- [ ] add `atlas memory consolidate` with `--topic`, `--scope`, `--dry-run`, and `--json`
-- [ ] in dry-run mode, report kept ids, merged ids, and source preservation without mutating storage
-- [ ] add apply mode that creates consolidated memory, marks merged rows as superseded, and stores supersession links `old_memory_id`, `new_memory_id`, and `reason`
-- [ ] make recall prefer consolidated rows while allowing explicit inspection of superseded rows later
+- [x] add deterministic consolidation planner grouping by topic, similar title, similar body, same source id, and same feedback or decision category
+- [x] preserve all `source_id` references in consolidation plan output
+- [x] add `atlas memory consolidate` with `--topic`, `--scope`, `--dry-run`, and `--json`
+- [x] in dry-run mode, report kept ids, merged ids, and source preservation without mutating storage
+- [x] add apply mode that creates consolidated memory, marks merged rows as superseded, and stores supersession links `old_memory_id`, `new_memory_id`, and `reason`
+- [x] make recall prefer consolidated rows while allowing explicit inspection of superseded rows later
 
 ##### ICM-B completion criteria
 
-- [ ] default decay config loads without a memory section present
-- [ ] `atlas memory decay --dry-run` reports protected critical memories and updated scores
-- [ ] `atlas memory prune --importance low --dry-run` reports only pruneable low-priority rows
-- [ ] `atlas memory health --topic hooks` returns deterministic findings and suggestions
-- [ ] consolidation preserves source references and leaves dry-run fully read-only
+- [x] default decay config loads without a memory section present
+- [x] `atlas memory decay --dry-run` reports protected critical memories and updated scores
+- [x] `atlas memory prune --importance low --dry-run` reports only pruneable low-priority rows
+- [x] `atlas memory health --topic hooks` returns deterministic findings and suggestions
+- [x] consolidation preserves source references and leaves dry-run fully read-only
 
 #### ICM-C — Feedback Memory and Analysis Confidence Adjustment
 
@@ -167,31 +167,31 @@ Implementation structure:
 
 ##### ICM-C1 — Feedback storage and search model
 
-- [ ] create `feedback_records` table with `id`, `repo_root`, `session_id`, `tool_name`, `analysis_kind`, `predicted`, `actual`, `correction`, `related_symbol`, `related_file`, `source_id`, `created_at`, and `metadata_json`
-- [ ] add FTS index for `predicted`, `actual`, `correction`, `related_symbol`, and `related_file`
-- [ ] keep feedback searchable by symbol, file, correction text, and analysis kind
+- [x] create `feedback_records` table with `id`, `repo_root`, `session_id`, `tool_name`, `analysis_kind`, `predicted`, `actual`, `correction`, `related_symbol`, `related_file`, `source_id`, `created_at`, and `metadata_json`
+- [x] add FTS index for `predicted`, `actual`, `correction`, `related_symbol`, and `related_file`
+- [x] keep feedback searchable by symbol, file, correction text, and analysis kind
 
 ##### ICM-C2 — CLI and MCP feedback commands
 
-- [ ] add `atlas feedback record` with required `--predicted` and `--actual`
-- [ ] add optional `--correction`, `--tool`, `--analysis-kind`, `--symbol`, `--file`, `--source-id`, and `--json`
-- [ ] add `atlas feedback search <query>` with filters `--tool`, `--analysis-kind`, `--symbol`, `--file`, `--limit`, and `--json`
-- [ ] add `atlas feedback stats` with deterministic summary and `--json`
-- [ ] add MCP `feedback_record` using same service layer and validation contract
+- [x] add `atlas feedback record` with required `--predicted` and `--actual`
+- [x] add optional `--correction`, `--tool`, `--analysis-kind`, `--symbol`, `--file`, `--source-id`, and `--json`
+- [x] add `atlas feedback search <query>` with filters `--tool`, `--analysis-kind`, `--symbol`, `--file`, `--limit`, and `--json`
+- [x] add `atlas feedback stats` with deterministic summary and `--json`
+- [x] add MCP `feedback_record` using same service layer and validation contract
 
 ##### ICM-C3 — Confidence adjustment integration
 
-- [ ] query feedback before returning results from `atlas analyze dead-code`, `atlas analyze remove`, `atlas analyze safety`, and `atlas refactor remove-dead --dry-run`
-- [ ] lower confidence only when prior feedback indicates false positives for same symbol, file, pattern, or analysis kind
-- [ ] expose `feedback_evidence` in analysis JSON whenever scoring changes
-- [ ] add config flag `analysis.feedback_adjustment.enabled`
+- [x] query feedback before returning results from `atlas analyze dead-code`, `atlas analyze remove`, `atlas analyze safety`, and `atlas refactor remove-dead --dry-run`
+- [x] lower confidence only when prior feedback indicates false positives for same symbol, file, pattern, or analysis kind
+- [x] expose `feedback_evidence` in analysis JSON whenever scoring changes
+- [x] add config flag `analysis.feedback_adjustment.enabled`
 
 ##### ICM-C completion criteria
 
-- [ ] missing `--predicted` or `--actual` fails validation
-- [ ] feedback search returns predicted, actual, correction, related symbol/file, score, and created time
-- [ ] empty feedback DB returns stable zero-count stats
-- [ ] stored false-positive feedback can lower confidence only when evidence actually matches
+- [x] missing `--predicted` or `--actual` fails validation
+- [x] feedback search returns predicted, actual, correction, related symbol/file, score, and created time
+- [x] empty feedback DB returns stable zero-count stats
+- [x] stored false-positive feedback can lower confidence only when evidence actually matches
 
 #### ICM-D — Wake-Up Packs and Session Start Recall
 
@@ -209,29 +209,29 @@ Implementation structure:
 
 ##### ICM-D1 — Wake-up pack model
 
-- [ ] define `WakePack` model with `repo_root`, `session_id`, `frontend`, `current_focus`, `recent_decisions`, `critical_memories`, `recent_feedback`, `active_memoir_concepts`, `changed_files`, `graph_readiness`, `retrieval_hints`, and `generated_at`
-- [ ] bound wake-up pack size through config and central budget policy
-- [ ] serialize wake-up packs to stable JSON
+- [x] define `WakePack` model with `repo_root`, `session_id`, `frontend`, `current_focus`, `recent_decisions`, `critical_memories`, `recent_feedback`, `active_memoir_concepts`, `changed_files`, `graph_readiness`, `retrieval_hints`, and `generated_at`
+- [x] bound wake-up pack size through config and central budget policy
+- [x] serialize wake-up packs to stable JSON
 
 ##### ICM-D2 — CLI and MCP wake-up
 
-- [ ] add `atlas wake-up` with flags `--topic`, `--session`, `--frontend`, `--max-items`, and `--json`
-- [ ] pull wake-up content from memory, feedback, session resume, and graph readiness services
+- [x] add `atlas wake-up` with flags `--topic`, `--session`, `--frontend`, `--max-items`, and `--json`
+- [x] pull wake-up content from memory, feedback, session resume, and graph readiness services
 - [x] add MCP `wake_up` with compact default output, retrieval hints, and source ids instead of raw artifact bodies (shipped early by ICM-0E)
 
 ##### ICM-D3 — Hook integration
 
-- [ ] call wake-up generation from `SessionStart` hook paths where host supports it
-- [ ] attach wake-up packs to session resume only through bounded injection paths
-- [ ] store wake-up generation success or failure metadata in session events
-- [ ] keep hook failures non-blocking and best-effort
+- [x] call wake-up generation from `SessionStart` hook paths where host supports it
+- [x] attach wake-up packs to session resume only through bounded injection paths
+- [x] store wake-up generation success or failure metadata in session events
+- [x] keep hook failures non-blocking and best-effort
 
 ##### ICM-D completion criteria
 
-- [ ] `atlas wake-up --topic hooks` prioritizes topic-relevant memories and feedback
-- [ ] wake-up output references large artifacts by `source_id` only
-- [ ] hook failures do not stop host command flow
-- [ ] snapshot tests cover empty, normal, and large sessions
+- [x] `atlas wake-up --topic hooks` prioritizes topic-relevant memories and feedback
+- [x] wake-up output references large artifacts by `source_id` only
+- [x] hook failures do not stop host command flow
+- [x] snapshot tests cover empty, normal, and large sessions
 
 #### ICM-E — Cross-Session Recall Quality and Optional Semantic Recall
 

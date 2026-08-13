@@ -713,7 +713,8 @@ The MCP server (`atlas serve`) exposes these tools to agents:
 | `get_review_context` | Review bundle: symbols, neighbors, risk summary |
 | `get_context` | General context engine: symbol, file, review, impact |
 | `detect_changes` | Git diff → changed-file list with node counts |
-| `build_or_update_graph` | Full scan or incremental graph update |
+| `build_graph` | Full repository graph scan |
+| `update_graph` | Incremental graph update from explicit change source |
 | `postprocess_graph` | Refresh derived graph analytics after build/update without reparsing |
 | `traverse_graph` | Bi-directional graph traversal from a qualified name |
 | `get_minimal_context` | Auto-detect changes and return compact impact bundle |
@@ -734,6 +735,7 @@ The MCP server (`atlas serve`) exposes these tools to agents:
 | `get_global_memory` | CM11: frequent symbols/files/workflows and related past sessions |
 | `memory_store` | ICM-A: store a memory record through the shared memory service |
 | `memory_recall` | ICM-A: recall memories with visibility rules and retrieval hints |
+| `feedback_record` | ICM-C: record a correction when an analysis prediction was wrong |
 | `symbol_neighbors` | Immediate callers, callees, tests, and nearby graph nodes |
 | `cross_file_links` | Files semantically linked to a file by shared symbol references |
 | `concept_clusters` | Related file groups around seed files by coupling density |

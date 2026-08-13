@@ -91,6 +91,8 @@ fn seed_memory(
 mod compaction;
 mod concurrency;
 mod durable;
+mod feedback;
+mod memory_curation;
 mod memory_query;
 mod memory_recall;
 mod memory_schema;

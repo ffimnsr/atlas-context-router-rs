@@ -163,7 +163,7 @@ Use execution results to tell the agent what to do next.
   - [ ] commands that likely modified/generated files
   - [ ] diffs showing changed code files
 - [ ] generate follow-up suggestions:
-  - [ ] rerun `build_or_update_graph`
+  - [ ] run `update_graph` for pending changes, or `build_graph` when graph state is missing or corrupt
   - [ ] inspect stored failure artifact
   - [ ] regenerate review-context
   - [ ] inspect impacted tests

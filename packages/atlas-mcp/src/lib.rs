@@ -18,7 +18,8 @@
 //! | `get_review_context`      | Review bundle: symbols, neighbors, risk summary          |
 //! | `get_context`             | General context engine: symbol, file, review, impact     |
 //! | `detect_changes`          | Git diff → changed-file list with per-file node counts   |
-//! | `build_or_update_graph`   | Full graph build or incremental graph update             |
+//! | `build_graph`             | Full graph build                                         |
+//! | `update_graph`            | Incremental graph update                                 |
 //! | `postprocess_graph`       | Explicit derived-analytics refresh after build/update    |
 //! | `traverse_graph`          | Reachability walk from qualified name                    |
 //! | `get_minimal_context`     | Compact auto-detected review context                     |
@@ -48,6 +49,7 @@
 //! | `get_global_memory`       | CM11: frequent symbols/files/workflows; related sessions |
 //! | `memory_store`            | ICM-A: store a memory record through the shared service  |
 //! | `memory_recall`           | ICM-A: recall memories with visibility rules and hints   |
+//! | `feedback_record`         | ICM-C: record a correction when a prediction was wrong    |
 //! | `symbol_neighbors`        | Immediate callers, callees, tests, and nearby nodes      |
 //! | `cross_file_links`        | Files coupled through shared symbol references           |
 //! | `concept_clusters`        | Related file groups around seed files                    |

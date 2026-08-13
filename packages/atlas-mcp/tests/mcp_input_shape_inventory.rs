@@ -47,10 +47,7 @@ fn mcp_input_shape_inventory_enforces_canonical_agent_shapes() {
             vec!["mode", "base", "staged", "working_tree"],
         ),
         ("batch_query_graph", vec!["queries", "text"]),
-        (
-            "build_or_update_graph",
-            vec!["mode", "base", "staged", "files"],
-        ),
+        ("build_graph", vec!["mode", "base", "staged", "files"]),
     ] {
         let tool = tools
             .iter()

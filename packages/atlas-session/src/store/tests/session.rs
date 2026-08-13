@@ -27,7 +27,7 @@ fn open_stamps_session_migration_history_and_provenance() {
         .conn
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 8);
+    assert_eq!(version, 10);
 
     let history_count: i64 = store
         .conn
@@ -35,7 +35,7 @@ fn open_stamps_session_migration_history_and_provenance() {
             row.get(0)
         })
         .unwrap();
-    assert_eq!(history_count, 8);
+    assert_eq!(history_count, 10);
 
     let (db_kind, created_by): (String, String) = store
         .conn
@@ -74,7 +74,7 @@ fn rollback_and_reupgrade_restore_session_schema() {
         .conn
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(restored_version, 8);
+    assert_eq!(restored_version, 10);
     let fts_exists: i64 = store
         .conn
         .query_row(

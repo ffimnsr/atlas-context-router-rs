@@ -14,6 +14,7 @@ use camino::Utf8Path;
 
 use crate::cli::{AnalyzeCommand, Cli, Command, RefactorCommand};
 
+use super::feedback_adjust::{FeedbackAdjuster, evidence_json};
 use super::{
     check_graph_readiness, db_path, derive_graph_readiness, derive_graph_readiness_open_failed,
     print_json, readiness_overrides, resolve_repo,
@@ -104,6 +105,8 @@ pub fn run_analyze(cli: &Cli) -> Result<()> {
         let engine = ReasoningEngine::new(&store);
         let ranking = AnalysisRankingPrimitives::default();
         let trimming = AnalysisTrimmingPrimitives::default();
+        // ICM-C3: feedback-driven confidence adjustment; best-effort.
+        let adjuster = FeedbackAdjuster::new(&repo);
 
         let sub = match &cli.command {
             Command::Analyze { subcommand, .. } => subcommand,
@@ -120,6 +123,7 @@ pub fn run_analyze(cli: &Cli) -> Result<()> {
                     .analyze_removal(&[symbol.as_str()], Some(*max_depth), Some(*max_nodes))
                     .with_context(|| format!("removal analysis for `{symbol}` failed"))?;
                 sort_removal_result(&mut result, &ranking);
+                let feedback_evidence = adjuster.adjust_removal(&mut result);
                 decision_event = Some(extract_decision_event_with_details(
                     &format!("removal impact for {symbol}"),
                     Some("reasoning analysis completed"),
@@ -130,9 +134,19 @@ pub fn run_analyze(cli: &Cli) -> Result<()> {
                 ));
 
                 if cli.json {
-                    print_json("analyze_remove", serde_json::to_value(&result)?)?;
+                    let mut payload = serde_json::to_value(&result)?;
+                    if !feedback_evidence.is_empty() {
+                        payload["feedback_evidence"] = evidence_json(&feedback_evidence);
+                    }
+                    print_json("analyze_remove", payload)?;
                 } else {
                     println!("Removal impact for: {symbol}");
+                    if !feedback_evidence.is_empty() {
+                        println!(
+                            "  ! Confidence lowered by {} matching feedback correction(s)",
+                            feedback_evidence.len()
+                        );
+                    }
                     println!("  Seed nodes      : {}", result.seed.len());
                     println!("  Impacted symbols: {}", result.impacted_symbols.len());
                     println!("  Impacted files  : {}", result.impacted_files.len());
@@ -217,6 +231,7 @@ pub fn run_analyze(cli: &Cli) -> Result<()> {
                     )
                     .context("dead-code detection failed")?;
                 sort_dead_code_candidates(&mut candidates, &ranking);
+                let feedback_evidence = adjuster.adjust_dead_code(&mut candidates);
                 decision_event = Some(extract_decision_event_with_details(
                     "dead-code scan",
                     Some("reasoning analysis completed"),
@@ -229,11 +244,25 @@ pub fn run_analyze(cli: &Cli) -> Result<()> {
                 if *summary {
                     println!("Dead-code candidates: {}", candidates.len());
                 } else if cli.json {
-                    print_json("analyze_dead_code", serde_json::to_value(&candidates)?)?;
+                    let payload = if feedback_evidence.is_empty() {
+                        serde_json::to_value(&candidates)?
+                    } else {
+                        serde_json::json!({
+                            "candidates": candidates,
+                            "feedback_evidence": feedback_evidence,
+                        })
+                    };
+                    print_json("analyze_dead_code", payload)?;
                 } else if candidates.is_empty() {
                     println!("No dead-code candidates found.");
                 } else {
                     println!("Dead-code candidates ({}):", candidates.len());
+                    if !feedback_evidence.is_empty() {
+                        println!(
+                            "  ! Confidence lowered by {} matching feedback correction(s)",
+                            feedback_evidence.len()
+                        );
+                    }
                     for c in &candidates {
                         println!(
                             "  [{:?}] {} {} ({}:{})",
@@ -258,6 +287,7 @@ pub fn run_analyze(cli: &Cli) -> Result<()> {
                     .score_refactor_safety(symbol)
                     .with_context(|| format!("safety scoring for `{symbol}` failed"))?;
                 sort_refactor_safety_result(&mut result);
+                let feedback_evidence = adjuster.adjust_safety(symbol, &mut result);
                 decision_event = Some(extract_decision_event_with_details(
                     &format!("refactor safety for {symbol}"),
                     Some("reasoning analysis completed"),
@@ -268,9 +298,19 @@ pub fn run_analyze(cli: &Cli) -> Result<()> {
                 ));
 
                 if cli.json {
-                    print_json("analyze_safety", serde_json::to_value(&result)?)?;
+                    let mut payload = serde_json::to_value(&result)?;
+                    if !feedback_evidence.is_empty() {
+                        payload["feedback_evidence"] = evidence_json(&feedback_evidence);
+                    }
+                    print_json("analyze_safety", payload)?;
                 } else {
                     println!("Refactor safety for: {symbol}");
+                    if !feedback_evidence.is_empty() {
+                        println!(
+                            "  ! Confidence lowered by {} matching feedback correction(s)",
+                            feedback_evidence.len()
+                        );
+                    }
                     println!("  Score    : {:.3}", result.safety.score);
                     println!("  Band     : {:?}", result.safety.band);
                     println!("  Fan-in   : {}", result.fan_in);
@@ -448,17 +488,35 @@ pub fn run_refactor(cli: &Cli) -> Result<()> {
             }
 
             RefactorCommand::RemoveDead { symbol, dry_run } => {
-                let plan = engine
+                let mut plan = engine
                     .plan_dead_code_removal(symbol)
                     .with_context(|| format!("remove-dead plan for `{symbol}` failed"))?;
+                // ICM-C3: lower the reported safety band in dry-run mode when
+                // matching feedback marks prior remove-dead predictions wrong.
+                // Apply mode stays deterministic and untouched.
+                let feedback_evidence = if *dry_run {
+                    FeedbackAdjuster::new(&repo).adjust_remove_dead_plan(symbol, &mut plan)
+                } else {
+                    Vec::new()
+                };
                 let result = engine
                     .apply_dead_code_removal(&plan, *dry_run)
                     .context("apply dead-code removal failed")?;
 
                 if cli.json {
-                    print_json("refactor_remove_dead", serde_json::to_value(&result)?)?;
+                    let mut payload = serde_json::to_value(&result)?;
+                    if !feedback_evidence.is_empty() {
+                        payload["feedback_evidence"] = evidence_json(&feedback_evidence);
+                    }
+                    print_json("refactor_remove_dead", payload)?;
                 } else {
                     print_refactor_result(&result, *dry_run);
+                    if !feedback_evidence.is_empty() {
+                        println!(
+                            "  ! Safety band lowered by {} matching feedback correction(s)",
+                            feedback_evidence.len()
+                        );
+                    }
                 }
             }
 

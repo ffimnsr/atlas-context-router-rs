@@ -2,12 +2,14 @@
 //!
 //! Mirror of the session-start portion of native hook capture: assembles a
 //! compact, bounded context pack from the resume snapshot, decision memory,
-//! saved-context hints, global memory, changed files, and graph readiness, then
+//! memories, feedback records, saved-context hints, changed files, and graph
+//! readiness via the shared [`atlas_agent_events::wake_pack`] builder, then
 //! records the wake-up through the shared agent event service so native hooks
 //! and the MCP fallback share one session-start pipeline.
 //!
 //! Contract guarantees:
-//! - every list is bounded by `max_items` (hard-clamped)
+//! - every list is bounded by `max_items` (hard-clamped) through the central
+//!   wake-up budget policy (config-backed `[memory.wake_up]`)
 //! - large saved artifacts are referenced by `source_id` only, never inlined
 //! - the recorded `session-start` event keeps LoadRestore parity with native
 //!   hooks (pending resume snapshots are consumed on wake-up)
@@ -15,224 +17,28 @@
 use anyhow::Result;
 use serde_json::{Value, json};
 
-use atlas_adapters::derive_session_db_path;
-use atlas_agent_events::payload::extract_prompt_text;
-use atlas_agent_events::{AgentEventRequest, AgentEventSource, record_agent_event};
-use atlas_contentstore::{ContentStore, SearchFilters};
-use atlas_session::{DecisionSearchHit, SessionEventType, SessionId, SessionStore};
+use atlas_agent_events::{
+    AgentEventRequest, AgentEventSource, WakeBudget, WakePackOptions, build_wake_pack,
+    record_agent_event,
+};
+use atlas_engine::Config;
 
 use crate::output::OutputFormat;
 use crate::session_tools::tool_result_value;
 use crate::tool_result::{ToolErrorCode, ToolErrorPayload, tool_execution_error_value};
-use crate::tools::shared::{
-    derive_graph_readiness, derive_graph_readiness_open_failed, inject_deprecated_input_fields,
-    open_store, resolve_repo_scope_selection,
-};
-
-/// Default cap for every list in the wake-up pack.
-const DEFAULT_MAX_ITEMS: usize = 10;
-/// Hard ceiling for `max_items`; protects the response from unbounded growth.
-const HARD_MAX_ITEMS: usize = 25;
-/// `pending_graph_changes` is capped separately from `max_items` so the
-/// readiness block stays small even when many files changed.
-const MAX_PENDING_CHANGES: usize = 20;
-/// Feedback (user-preference artifacts) is intentionally the smallest list.
-const MAX_FEEDBACK_ITEMS: usize = 3;
+use crate::tools::shared::{inject_deprecated_input_fields, resolve_repo_scope_selection};
 
 /// Derive the session id for wake-up: explicit `session_id` wins, otherwise the
 /// stable MCP session for the repo + frontend.
-fn wake_session_id(repo_root: &str, frontend: &str, args: Option<&Value>) -> SessionId {
-    if let Some(sid) = args
-        .and_then(|a| a.get("session_id"))
+fn wake_session_id(repo_root: &str, frontend: &str, args: Option<&Value>) -> Option<String> {
+    args.and_then(|a| a.get("session_id"))
         .and_then(|v| v.as_str())
         .filter(|sid| !sid.trim().is_empty())
-    {
-        SessionId(sid.trim().to_owned())
-    } else {
-        SessionId::derive(repo_root, "", frontend)
-    }
-}
-
-/// Normalize a resume-snapshot `recent_decisions` entry (or a topic-matched
-/// decision hit) into one compact decision shape.
-fn normalize_decision(
-    summary: Option<&Value>,
-    rationale: Option<&Value>,
-    at: Option<&Value>,
-    decision_id: Option<&str>,
-    source_ids: &[String],
-) -> Value {
-    json!({
-        "summary": summary.cloned().unwrap_or(Value::Null),
-        "rationale": rationale.cloned().unwrap_or(Value::Null),
-        "at": at.cloned().unwrap_or(Value::Null),
-        "decision_id": decision_id.map(str::to_owned),
-        "source_ids": source_ids,
-    })
-}
-
-fn normalize_decision_hits(hits: &[DecisionSearchHit]) -> Vec<Value> {
-    hits.iter()
-        .map(|hit| {
-            normalize_decision(
-                Some(&Value::String(hit.decision.summary.clone())),
-                hit.decision
-                    .rationale
-                    .as_deref()
-                    .map(|r| Value::String(r.to_owned()))
-                    .as_ref(),
-                None,
-                Some(&hit.decision.decision_id),
-                &hit.decision.source_ids,
-            )
+        .map(|sid| sid.trim().to_owned())
+        .or_else(|| {
+            let derived = atlas_session::SessionId::derive(repo_root, "", frontend);
+            Some(derived.as_str().to_owned())
         })
-        .collect()
-}
-
-/// Merge snapshot decisions with topic-matched decision-memory hits,
-/// deduplicated by summary and bounded by `max_items`.
-fn merge_decisions(
-    snapshot_entries: &[Value],
-    topic_hits: Vec<Value>,
-    max_items: usize,
-) -> Vec<Value> {
-    let mut merged: Vec<Value> = snapshot_entries.to_vec();
-    for hit in topic_hits {
-        let summary = hit.get("summary").and_then(|v| v.as_str());
-        let already_present = summary.is_some_and(|s| {
-            merged
-                .iter()
-                .any(|entry| entry.get("summary").and_then(|v| v.as_str()) == Some(s))
-        });
-        if !already_present {
-            merged.push(hit);
-        }
-        if merged.len() >= max_items {
-            break;
-        }
-    }
-    merged.truncate(max_items);
-    merged
-}
-
-/// Collect distinct concept strings (symbols, rules, workflows) for
-/// `active_memoir_concepts`. There is no dedicated memoir store yet; this is
-/// the closest bounded proxy until the ICM-D memoir surface ships.
-fn collect_concepts(
-    snapshot_view: Option<&Value>,
-    store: Option<&SessionStore>,
-    repo_root: &str,
-    max_items: usize,
-) -> Vec<String> {
-    let mut concepts: Vec<String> = Vec::new();
-    let push_unique = |concepts: &mut Vec<String>, value: String| {
-        if !value.trim().is_empty() && !concepts.contains(&value) {
-            concepts.push(value);
-        }
-    };
-
-    if let Some(view) = snapshot_view {
-        if let Some(symbols) = view.get("impacted_symbols").and_then(|v| v.as_array()) {
-            for symbol in symbols {
-                if let Some(s) = symbol.as_str() {
-                    push_unique(&mut concepts, s.to_owned());
-                }
-                if concepts.len() >= max_items {
-                    break;
-                }
-            }
-        }
-        if concepts.len() < max_items
-            && let Some(rules) = view.get("active_rules").and_then(|v| v.as_array())
-        {
-            for rule in rules {
-                if let Some(label) = rule.get("label").and_then(|v| v.as_str()) {
-                    push_unique(&mut concepts, label.to_owned());
-                }
-                if concepts.len() >= max_items {
-                    break;
-                }
-            }
-        }
-    }
-
-    if let Some(store) = store {
-        if concepts.len() < max_items
-            && let Ok(symbols) = store.get_frequent_symbols(repo_root, max_items as u32)
-        {
-            for entry in symbols {
-                push_unique(&mut concepts, entry.value);
-                if concepts.len() >= max_items {
-                    break;
-                }
-            }
-        }
-        if concepts.len() < max_items
-            && let Ok(workflows) = store.get_recurring_workflows(repo_root, 3)
-        {
-            for workflow in workflows {
-                push_unique(&mut concepts, workflow.pattern.join(" → "));
-                if concepts.len() >= max_items {
-                    break;
-                }
-            }
-        }
-    }
-
-    concepts.truncate(max_items);
-    concepts
-}
-
-/// Compact graph-readiness block for the wake-up pack.
-fn graph_readiness_value(readiness: &atlas_core::GraphReadiness) -> Value {
-    let pending: Vec<String> = readiness
-        .pending_graph_changes
-        .iter()
-        .take(MAX_PENDING_CHANGES)
-        .cloned()
-        .collect();
-    json!({
-        "graph_built": readiness.graph_built,
-        "graph_queryable": readiness.graph_queryable,
-        "graph_current": readiness.graph_current,
-        "stale_index": readiness.stale_index,
-        "execution_state": readiness.execution_state.as_str(),
-        "pending_graph_change_count": readiness.pending_graph_changes.len(),
-        "pending_graph_changes": pending,
-        "indexed_file_count": readiness.indexed_file_count,
-        "last_indexed_at": readiness.last_indexed_at,
-        "message": readiness.message,
-    })
-}
-
-/// ISO-8601 UTC timestamp without an external time crate dependency.
-fn format_now_rfc3339() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let d = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default();
-    let secs = d.as_secs();
-    let s = secs % 60;
-    let m = (secs / 60) % 60;
-    let h = (secs / 3600) % 24;
-    let days = secs / 86_400;
-    // Approximate Gregorian date from epoch days.
-    let (y, mo, da) = epoch_days_to_ymd(days);
-    format!("{y:04}-{mo:02}-{da:02}T{h:02}:{m:02}:{s:02}Z")
-}
-
-fn epoch_days_to_ymd(mut days: u64) -> (u64, u64, u64) {
-    days += 719_468;
-    let era = days / 146_097;
-    let doe = days % 146_097;
-    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let da = doy - (153 * mp + 2) / 5 + 1;
-    let mo = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = if mo <= 2 { y + 1 } else { y };
-    (y, mo, da)
 }
 
 /// Assemble the bounded session-start context pack and record it through the
@@ -290,246 +96,32 @@ pub fn tool_wake_up(
         .filter(|agent_id| !agent_id.trim().is_empty())
         .map(str::to_owned);
     let session_id = wake_session_id(&repo, &frontend, args);
-    let max_items = args
+    let budget = WakeBudget::from_config(
+        &Config::load(&atlas_engine::paths::atlas_dir(&repo)).unwrap_or_default(),
+    );
+    let budget = match args
         .and_then(|a| a.get("max_items"))
         .and_then(|v| v.as_u64())
         .map(|v| v as usize)
-        .unwrap_or(DEFAULT_MAX_ITEMS)
-        .clamp(1, HARD_MAX_ITEMS);
-
-    let mut warnings: Vec<String> = Vec::new();
-
-    // ── graph readiness (independent of the session store) ──────────────────
-    // SessionStore creates its parent dirs on open; Store does not, so create
-    // the storage directory first so first-run wake-ups report `missing`
-    // readiness instead of an open error.
-    if let Some(parent) = std::path::Path::new(db_path).parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    let readiness = match open_store(db_path) {
-        Ok(store) => derive_graph_readiness(&store, &repo, db_path),
-        Err(e) => derive_graph_readiness_open_failed(&repo, db_path, &e.to_string()),
-    };
-    if !readiness.graph_built {
-        warnings.push(
-            "graph has not been built yet; run build_or_update_graph before graph-backed queries"
-                .to_owned(),
-        );
-    } else if readiness.stale_index {
-        warnings.push(format!(
-            "graph index is stale; {} graph-relevant file(s) changed since the last index",
-            readiness.pending_graph_changes.len()
-        ));
-    }
-
-    // ── session store: resume snapshot view, pending resume, global memory ───
-    let session_db = derive_session_db_path(db_path);
-    let store = match SessionStore::open(&session_db) {
-        Ok(store) => Some(store),
-        Err(e) => {
-            warnings.push(format!("session store unavailable: {e}"));
-            None
-        }
+    {
+        Some(max_items) => budget.with_max_items(max_items),
+        None => budget,
     };
 
-    let (snapshot_view, pending_resume, event_count, session_status) = match store.as_ref() {
-        Some(store) => match store.get_session_meta(&session_id) {
-            Ok(Some(_)) => {
-                let pending_resume = store
-                    .get_resume_snapshot(&session_id)
-                    .ok()
-                    .flatten()
-                    .is_some_and(|snapshot| !snapshot.consumed);
-                match store.build_resume_view(&session_id, agent_id.as_deref(), agent_id.is_none())
-                {
-                    Ok(view) => {
-                        let event_count = view
-                            .get("event_count")
-                            .and_then(|v| v.as_i64())
-                            .unwrap_or(0);
-                        (Some(view), pending_resume, event_count, "active")
-                    }
-                    Err(e) => {
-                        warnings.push(format!("resume snapshot unavailable: {e}"));
-                        (None, pending_resume, 0, "unavailable")
-                    }
-                }
-            }
-            Ok(None) => (None, false, 0, "no_session"),
-            Err(e) => {
-                warnings.push(format!("session metadata unavailable: {e}"));
-                (None, false, 0, "unavailable")
-            }
-        },
-        None => (None, false, 0, "unavailable"),
-    };
-
-    // ── current focus: last user intent + bounded recent reasoning ───────────
-    let last_intent = snapshot_view
-        .as_ref()
-        .and_then(|view| view.get("last_user_intent"))
-        .and_then(|v| v.as_str())
-        .map(str::to_owned)
-        .or_else(|| {
-            // Events recorded through the shared service store prompt text under
-            // `payload.prompt`, so `last_user_intent` stays empty; scan the most
-            // recent UserIntent event for the prompt as a fallback.
-            let events = store
-                .as_ref()
-                .and_then(|store| store.list_events(&session_id).ok())?;
-            events.iter().rev().find_map(|event| {
-                if event.event_type != SessionEventType::UserIntent {
-                    return None;
-                }
-                let payload: Value = serde_json::from_str(&event.payload_json).ok()?;
-                // The wrapper stores frontend/hook_event/metadata beside the
-                // routed inner payload; only the inner payload carries the
-                // prompt, so never scan the wrapper (it would match `frontend`).
-                payload.get("payload").and_then(extract_prompt_text)
-            })
-        })
-        .or_else(|| topic.clone());
-    let reasoning: Vec<Value> = snapshot_view
-        .as_ref()
-        .and_then(|view| view.get("recent_reasoning"))
-        .and_then(|v| v.as_array())
-        .map(|entries| {
-            entries
-                .iter()
-                .take(max_items)
-                .map(|entry| {
-                    json!({
-                        "summary": entry.get("summary").cloned().unwrap_or(Value::Null),
-                        "source_id": entry.get("source_id").cloned().unwrap_or(Value::Null),
-                        "at": entry.get("at").cloned().unwrap_or(Value::Null),
-                    })
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    let current_focus = json!({
-        "intent": last_intent,
-        "reasoning": reasoning,
+    let build = build_wake_pack(&WakePackOptions {
+        repo_root: &repo,
+        graph_db_path: db_path,
+        frontend: &frontend,
+        session_id: session_id.clone(),
+        agent_id: agent_id.as_deref(),
+        topic: topic.as_deref(),
+        budget,
     });
-
-    // ── recent decisions: snapshot entries + topic-matched decision memory ───
-    let snapshot_decisions: Vec<Value> = snapshot_view
-        .as_ref()
-        .and_then(|view| view.get("recent_decisions"))
-        .and_then(|v| v.as_array())
-        .map(|entries| {
-            entries
-                .iter()
-                .map(|entry| {
-                    normalize_decision(
-                        entry.get("summary"),
-                        entry.get("rationale"),
-                        entry.get("at"),
-                        None,
-                        &[],
-                    )
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    let topic_hits: Vec<Value> = if let Some(topic) = topic.as_deref() {
-        if let Some(store) = store.as_ref() {
-            store
-                .search_decisions(&repo, topic, None, max_items)
-                .map(|hits| normalize_decision_hits(&hits))
-                .unwrap_or_default()
-        } else {
-            Vec::new()
-        }
-    } else {
-        Vec::new()
-    };
-    let recent_decisions = merge_decisions(&snapshot_decisions, topic_hits, max_items);
-
-    // ── critical memories + recent feedback from the content store ───────────
-    let content_db = atlas_adapters::derive_content_db_path(db_path);
-    let content_store = ContentStore::open(&content_db).ok();
-    let repo_filters = |source_type: Option<String>| SearchFilters {
-        session_id: None,
-        agent_id: None,
-        source_type,
-        repo_root: None,
-        repo_roots: vec![repo.clone()],
-    };
-
-    let memory_entry = |source_id: &str| -> Option<Value> {
-        let cs = content_store.as_ref()?;
-        let source = cs.get_source(source_id).ok().flatten()?;
-        if source.source_type == "hook_event" {
-            return None;
-        }
-        let chunk_count = cs
-            .get_chunks(source_id)
-            .map(|chunks| chunks.len())
-            .unwrap_or(0);
-        Some(json!({
-            "source_id": source.id,
-            "label": source.label,
-            "source_type": source.source_type,
-            "agent_id": source.agent_id,
-            "created_at": source.created_at,
-            "chunk_count": chunk_count,
-        }))
-    };
-
-    let mut critical_memories: Vec<Value> = Vec::new();
-    let mut recent_feedback: Vec<Value> = Vec::new();
-    if let Some(cs) = content_store.as_ref() {
-        if let Ok(ids) = cs.recent_source_ids_by_prefix("", &repo_filters(None), max_items) {
-            for id in ids {
-                if let Some(entry) = memory_entry(&id) {
-                    critical_memories.push(entry);
-                }
-                if critical_memories.len() >= max_items {
-                    break;
-                }
-            }
-        }
-        if let Ok(ids) = cs.recent_source_ids_by_prefix(
-            "",
-            &repo_filters(Some("preference".to_owned())),
-            MAX_FEEDBACK_ITEMS,
-        ) {
-            for id in ids {
-                if let Some(entry) = memory_entry(&id) {
-                    recent_feedback.push(entry);
-                }
-                if recent_feedback.len() >= MAX_FEEDBACK_ITEMS {
-                    break;
-                }
-            }
-        }
-    }
-
-    // ── active concepts, changed files, retrieval hints ─────────────────────
-    let active_memoir_concepts =
-        collect_concepts(snapshot_view.as_ref(), store.as_ref(), &repo, max_items);
-    let changed_files: Vec<String> = snapshot_view
-        .as_ref()
-        .and_then(|view| view.get("changed_files"))
-        .and_then(|v| v.as_array())
-        .map(|entries| {
-            entries
-                .iter()
-                .filter_map(|v| v.as_str().map(str::to_owned))
-                .take(max_items)
-                .collect()
-        })
-        .unwrap_or_default();
-    let retrieval_hints: Vec<Value> = snapshot_view
-        .as_ref()
-        .and_then(|view| view.get("retrieval_hints"))
-        .and_then(|v| v.as_array())
-        .map(|entries| entries.iter().take(max_items).cloned().collect())
-        .unwrap_or_default();
+    let pack = build.pack.to_json();
+    let mut warnings = build.warnings;
 
     // ── record wake-up through the shared event service ─────────────────────
-    let wake_status = if session_status == "unavailable" {
+    let wake_status = if build.session_status == "unavailable" {
         "degraded"
     } else {
         "ok"
@@ -539,12 +131,12 @@ pub fn tool_wake_up(
         graph_db_path: db_path.to_owned(),
         frontend: frontend.clone(),
         event: "session-start".to_owned(),
-        session_id: Some(session_id.as_str().to_owned()),
+        session_id: Some(pack["session_id"].as_str().unwrap_or_default().to_owned()),
         agent_id: agent_id.clone(),
         payload: json!({
             "tool": "wake_up",
             "topic": topic,
-            "wake_up": { "status": wake_status, "max_items": max_items },
+            "wake_up": { "status": wake_status, "max_items": budget.max_items },
         }),
         source: AgentEventSource::McpFallback,
     }) {
@@ -578,29 +170,47 @@ pub fn tool_wake_up(
     let result = json!({
         "tool": "wake_up",
         "repo_root": repo,
-        "session_id": session_id.as_str(),
+        "session_id": pack["session_id"],
         "frontend": frontend,
         "agent_id": agent_id,
-        "current_focus": current_focus,
-        "recent_decisions": recent_decisions,
-        "critical_memories": critical_memories,
-        "recent_feedback": recent_feedback,
-        "active_memoir_concepts": active_memoir_concepts,
-        "changed_files": changed_files,
-        "graph_readiness": graph_readiness_value(&readiness),
-        "retrieval_hints": retrieval_hints,
-        "generated_at": format_now_rfc3339(),
+        "current_focus": pack["current_focus"],
+        "recent_decisions": pack["recent_decisions"],
+        "critical_memories": pack["critical_memories"],
+        "recent_feedback": pack["recent_feedback"],
+        "active_memoir_concepts": pack["active_memoir_concepts"],
+        "changed_files": pack["changed_files"],
+        "graph_readiness": pack["graph_readiness"],
+        "retrieval_hints": pack["retrieval_hints"],
+        "generated_at": pack["generated_at"],
         "event_recorded": event_recorded,
         "summary": {
-            "status": session_status,
-            "pending_resume": pending_resume,
-            "event_count": event_count,
-            "decision_count": recent_decisions.len(),
-            "critical_memory_count": critical_memories.len(),
-            "feedback_count": recent_feedback.len(),
-            "concept_count": active_memoir_concepts.len(),
-            "changed_file_count": changed_files.len(),
-            "retrieval_hint_count": retrieval_hints.len(),
+            "status": build.session_status,
+            "pending_resume": build.pending_resume,
+            "event_count": build.event_count,
+            "decision_count": pack["recent_decisions"]
+                .as_array()
+                .map(|items| items.len())
+                .unwrap_or(0),
+            "critical_memory_count": pack["critical_memories"]
+                .as_array()
+                .map(|items| items.len())
+                .unwrap_or(0),
+            "feedback_count": pack["recent_feedback"]
+                .as_array()
+                .map(|items| items.len())
+                .unwrap_or(0),
+            "concept_count": pack["active_memoir_concepts"]
+                .as_array()
+                .map(|items| items.len())
+                .unwrap_or(0),
+            "changed_file_count": pack["changed_files"]
+                .as_array()
+                .map(|items| items.len())
+                .unwrap_or(0),
+            "retrieval_hint_count": pack["retrieval_hints"]
+                .as_array()
+                .map(|items| items.len())
+                .unwrap_or(0),
             "recorded": wake_status,
         },
         "warnings": warnings,
@@ -736,6 +346,29 @@ mod tests {
         body["source_id"].as_str().unwrap_or("").to_string()
     }
 
+    /// Seed a real feedback record (ICM-C) so wake-up surfaces it in
+    /// `recent_feedback`.
+    fn seed_feedback(repo: &str, db_path: &str, predicted: &str, actual: &str) -> String {
+        let session_db = derive_session_db_path(db_path);
+        let mut store = SessionStore::open(&session_db).unwrap();
+        let record = store
+            .store_feedback(&atlas_session::NewFeedback {
+                repo_root: repo.to_owned(),
+                session_id: None,
+                tool_name: "cli".to_owned(),
+                analysis_kind: "dead_code".to_owned(),
+                predicted: predicted.to_owned(),
+                actual: actual.to_owned(),
+                correction: "".to_owned(),
+                related_symbol: None,
+                related_file: None,
+                source_id: None,
+                metadata: json!({}),
+            })
+            .unwrap();
+        record.id
+    }
+
     #[test]
     fn wake_up_empty_repo_memory_returns_normalized_shape() {
         let dir = TempDir::new().unwrap();
@@ -828,7 +461,9 @@ mod tests {
             &medium_content("design"),
             "decision",
         );
+        let feedback_id = seed_feedback(&repo, &db_path, "dead code", "still referenced");
         assert!(!pref_id.is_empty() && !design_id.is_empty());
+        assert!(!feedback_id.is_empty());
         // Stop builds a resume snapshot; wake-up then loads and consumes it.
         tool_record_session_event(
             Some(&json!({ "event": "stop" })),
@@ -857,8 +492,20 @@ mod tests {
                 .any(|m| m["source_id"] == pref_id && m["source_type"] == "preference")
         );
         assert!(memories.iter().any(|m| m["source_id"] == design_id));
+        // recent_feedback surfaces real feedback records (ICM-C), not
+        // preference artifacts.
         let feedback = body["recent_feedback"].as_array().unwrap();
-        assert!(feedback.iter().any(|m| m["source_id"] == pref_id));
+        assert!(
+            feedback
+                .iter()
+                .any(|f| f["record_id"] == feedback_id && f["predicted"] == "dead code"),
+            "recent_feedback must carry real feedback records, got {:?}",
+            feedback
+        );
+        assert!(
+            !feedback.iter().any(|f| f["source_id"] == pref_id),
+            "preference artifacts must not appear as feedback"
+        );
         assert_eq!(body["event_recorded"]["resume_loaded"], true);
         assert_eq!(body["event_recorded"]["lifecycle_status"], "loaded");
         assert_eq!(body["summary"]["recorded"], "ok");
@@ -1082,5 +729,71 @@ mod tests {
         let body = tool_body(&result);
         assert_eq!(body["critical_memories"].as_array().unwrap().len(), 3);
         assert_eq!(body["summary"]["critical_memory_count"], 3);
+    }
+
+    #[test]
+    fn wake_up_topic_prioritizes_memories_and_feedback() {
+        let dir = TempDir::new().unwrap();
+        let repo = dir.path().to_string_lossy().into_owned();
+        let db_path = setup_db_path(&dir);
+
+        let session_db = derive_session_db_path(&db_path);
+        let mut store = SessionStore::open(&session_db).unwrap();
+        // Critical memory on the topic.
+        store
+            .store_memory(&atlas_session::NewMemory {
+                repo_root: repo.clone(),
+                session_id: None,
+                frontend: Some("cli".to_owned()),
+                scope: atlas_session::MemoryScope::Project,
+                topic: "hooks".to_owned(),
+                title: "hook lifecycle".to_owned(),
+                body: "session-start wakes the agent with a bounded pack".to_owned(),
+                importance: atlas_session::MemoryImportance::Critical,
+                source_id: None,
+                metadata: json!({}),
+            })
+            .unwrap();
+        // Feedback on the topic.
+        let feedback_id = store
+            .store_feedback(&atlas_session::NewFeedback {
+                repo_root: repo.clone(),
+                session_id: None,
+                tool_name: "cli".to_owned(),
+                analysis_kind: "dead_code".to_owned(),
+                predicted: "hooks are dead".to_owned(),
+                actual: "hooks still fire".to_owned(),
+                correction: "session-start hooks are active".to_owned(),
+                related_symbol: None,
+                related_file: None,
+                source_id: None,
+                metadata: json!({}),
+            })
+            .unwrap()
+            .id;
+        drop(store);
+
+        let result = tool_wake_up(
+            Some(&json!({ "topic": "hooks" })),
+            &repo,
+            &db_path,
+            OutputFormat::Json,
+        )
+        .unwrap();
+        let body = tool_body(&result);
+        let memories = body["critical_memories"].as_array().unwrap();
+        assert!(
+            memories
+                .iter()
+                .any(|m| m["kind"] == "memory" && m["topic"] == "hooks"),
+            "topic must surface topic-relevant memories, got {:?}",
+            memories
+        );
+        let feedback = body["recent_feedback"].as_array().unwrap();
+        assert!(
+            feedback.iter().any(|f| f["record_id"] == feedback_id),
+            "topic must surface topic-relevant feedback, got {:?}",
+            feedback
+        );
     }
 }

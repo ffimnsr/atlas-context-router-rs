@@ -16,7 +16,8 @@ MCP server exposing Atlas graph, impact, and review tools over stdio. Implements
 - `get_review_context` — review bundle with symbols, neighbors, risk summary
 - `get_impact_radius` — traversal from changed files
 - `detect_changes` — git diff to changed-file list
-- `build_or_update_graph` — full or incremental graph build; in update mode, omitting `base` or passing an empty string uses working-tree changes unless `staged` or explicit `files` are provided
+- `build_graph` — full graph build
+- `update_graph` — incremental graph update from explicit `change_source`
 - `explain_change` — advanced risk analysis and test gaps
 - `status` — health check and graph stats
 - `doctor` — deep repo and DB diagnostics

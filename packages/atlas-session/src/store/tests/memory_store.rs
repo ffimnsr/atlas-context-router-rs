@@ -55,7 +55,7 @@ fn store_memory_preserves_exact_text_and_metadata() {
         .query_row(
             "SELECT id, repo_root, session_id, frontend, scope, topic, title, body, importance,
                     created_at, updated_at, last_accessed_at, decay_score, source_id,
-                    metadata_json
+                    metadata_json, superseded_by
              FROM memories WHERE id = ?1",
             [&stored.id],
             super::memory::row_to_memory,

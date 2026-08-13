@@ -63,12 +63,13 @@ pub(crate) fn memory_record_schema() -> Value {
             "last_accessed_at": { "type": "string" },
             "decay_score": { "type": "number" },
             "source_id": { "type": ["string", "null"] },
-            "metadata": { "type": "object" }
+            "metadata": { "type": "object" },
+            "superseded_by": { "type": ["string", "null"] }
         },
         "required": [
             "id", "repo_root", "session_id", "frontend", "scope", "topic", "title",
             "body", "importance", "created_at", "updated_at", "last_accessed_at",
-            "decay_score", "source_id", "metadata"
+            "decay_score", "source_id", "metadata", "superseded_by"
         ]
     })
 }
@@ -174,6 +175,66 @@ pub(crate) fn memory_recall_output_schema() -> Value {
         ],
         Some(serde_json::json!({
             "memory_record": memory_record_schema(),
+        })),
+    )
+}
+
+/// Feedback record schema (ICM-C2) used by `feedback_record` output.
+pub(crate) fn feedback_record_schema() -> Value {
+    serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "id": { "type": "string" },
+            "repo_root": { "type": "string" },
+            "session_id": { "type": ["string", "null"] },
+            "tool_name": { "type": "string" },
+            "analysis_kind": { "type": "string" },
+            "predicted": { "type": "string" },
+            "actual": { "type": "string" },
+            "correction": { "type": "string" },
+            "related_symbol": { "type": ["string", "null"] },
+            "related_file": { "type": ["string", "null"] },
+            "source_id": { "type": ["string", "null"] },
+            "created_at": { "type": "string" },
+            "metadata": { "type": "object" }
+        },
+        "required": [
+            "id", "repo_root", "session_id", "tool_name", "analysis_kind",
+            "predicted", "actual", "correction", "related_symbol", "related_file",
+            "source_id", "created_at", "metadata"
+        ]
+    })
+}
+
+pub(crate) fn feedback_record_output_schema() -> Value {
+    normalized_tool_output_schema(
+        serde_json::json!({
+            "repo_root": { "type": "string" },
+            "record": { "$ref": "#/$defs/feedback_record" },
+            "summary": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "record_id": { "type": "string" },
+                    "analysis_kind": { "type": "string" },
+                    "is_false_positive_evidence": { "type": "boolean" }
+                },
+                "required": ["record_id", "analysis_kind", "is_false_positive_evidence"]
+            },
+            "warnings": { "type": "array", "items": { "type": "string" } },
+            "atlas_provenance": { "type": "object" }
+        }),
+        &[
+            "tool",
+            "repo_root",
+            "record",
+            "summary",
+            "warnings",
+            "atlas_provenance",
+        ],
+        Some(serde_json::json!({
+            "feedback_record": feedback_record_schema(),
         })),
     )
 }

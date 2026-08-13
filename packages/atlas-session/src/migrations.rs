@@ -43,9 +43,19 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "008_durable_task_input_requests",
         up_sql: include_str!("migrations/008_durable_task_input_requests.sql"),
     },
+    Migration {
+        version: 9,
+        name: "009_memory_decay_consolidation",
+        up_sql: include_str!("migrations/009_memory_decay_consolidation.sql"),
+    },
+    Migration {
+        version: 10,
+        name: "010_feedback_records",
+        up_sql: include_str!("migrations/010_feedback_records.sql"),
+    },
 ];
 
-pub const LATEST_VERSION: i32 = 8;
+pub const LATEST_VERSION: i32 = 10;
 
 pub const MIGRATION_SET: MigrationSet = MigrationSet {
     db_kind: "session",

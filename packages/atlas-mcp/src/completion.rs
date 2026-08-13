@@ -578,13 +578,8 @@ mod tests {
                 .join("worldtree.db")
                 .to_string_lossy()
                 .into_owned();
-            crate::tools::call(
-                "build_or_update_graph",
-                Some(&json!({"operation": {"kind": "build"}})),
-                &repo_root,
-                &db_path,
-            )
-            .expect("build graph");
+            crate::tools::call("build_graph", Some(&json!({})), &repo_root, &db_path)
+                .expect("build graph");
 
             let content_db = derive_content_db_path(&db_path);
             let mut store = ContentStore::open(&content_db).expect("open content store");

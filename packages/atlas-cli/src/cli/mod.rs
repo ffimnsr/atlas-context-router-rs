@@ -7,8 +7,9 @@ mod subcommands;
 mod tests;
 
 pub use subcommands::{
-    AnalyzeCommand, CommunitiesCommand, ConfigCommand, DocsCommand, FlowsCommand, HistoryCommand,
-    InsightsCommand, InstallMode, MemoryCommand, RefactorCommand, RepoCommand, SessionCommand,
+    AnalyzeCommand, CommunitiesCommand, ConfigCommand, DocsCommand, FeedbackCommand, FlowsCommand,
+    HistoryCommand, InsightsCommand, InstallMode, MemoryCommand, RefactorCommand, RepoCommand,
+    SessionCommand,
 };
 
 use crate::install::InstructionsMode;
@@ -693,6 +694,31 @@ pub enum Command {
     Memory {
         #[command(subcommand)]
         subcommand: MemoryCommand,
+    },
+
+    /// Record corrections on wrong analysis predictions and search past mistakes.
+    Feedback {
+        #[command(subcommand)]
+        subcommand: FeedbackCommand,
+    },
+
+    /// Build a bounded session-start recall pack (focus, memories, decisions, feedback, graph readiness).
+    WakeUp {
+        /// Focus topic; topic-relevant memories, decisions, and feedback rank first.
+        #[arg(long)]
+        topic: Option<String>,
+
+        /// Explicit session id; defaults to the derived cli session for the repo.
+        #[arg(long)]
+        session: Option<String>,
+
+        /// Frontend identity recorded in the pack.
+        #[arg(long)]
+        frontend: Option<String>,
+
+        /// Max items per pack list; clamped to the hard ceiling (config: memory.wake_up.max_items).
+        #[arg(long)]
+        max_items: Option<usize>,
     },
 
     /// Internal hook entrypoint for generated agent hook runners.

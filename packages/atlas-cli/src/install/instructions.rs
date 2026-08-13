@@ -92,6 +92,7 @@ Runtime docs are canonical for current arguments and output contracts. Do not tr
 - relationships: `symbol_neighbors`, `traverse_graph`, `get_context`
 - review/change context: `detect_changes`, `get_minimal_context`, `get_review_context`
 - impact/risk: `get_impact_radius`, `explain_change`, `assess_risk`, `analyze_safety`
+- graph build: `build_graph` with `{}` for missing/corrupt graph DB or full reindex; `update_graph` with direct `change_source` for incremental refresh
 - repo health: `status`, `doctor`, `db_check`, `debug_graph`, `list_graph_stats`
 - companion non-code lookup: `search_files`, `search_content`, `read_file_excerpt`, `get_docs_section`, `read_file_around_match`, `search_templates`, `search_text_assets`
 - continuity: `wake_up`, `get_session_status`, `resume_session`, `search_saved_context`, `search_decisions`, `save_context_artifact`
@@ -103,7 +104,8 @@ Runtime docs are canonical for current arguments and output contracts. Do not tr
 - Some graph-backed tools also include `atlas_freshness` when working-tree edits may make graph results stale.
 - If `atlas_provenance.repo_root` does not match current workspace, stop and verify session wiring.
 - If `atlas_provenance.db_path` points at unexpected database, stop and call `status` or `doctor` before trusting results.
-- If `atlas_freshness.stale` is true, prefer `build_or_update_graph` before making claims about current code.
+- If graph DB is missing, corrupt, or requires a full reindex, call `build_graph` with `{}`.
+- If `atlas_freshness.stale` is true after edits, call `update_graph` with `{ "change_source": { "kind": "working_tree" } }` before making claims about current code.
 - Treat missing optional `atlas_*` fields as "not applicable", not as tool failure.
 
 ### Path Identity Invariant

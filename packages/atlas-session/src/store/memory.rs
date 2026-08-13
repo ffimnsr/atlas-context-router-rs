@@ -5,6 +5,8 @@
 //! checks, and CRUD used by CLI and MCP memory surfaces so the two cannot
 //! drift on record shape, defaults, or validation.
 
+use std::collections::{BTreeMap, BTreeSet};
+
 use rusqlite::{Connection, OptionalExtension, params};
 use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
@@ -12,13 +14,16 @@ use time::OffsetDateTime;
 use atlas_core::{AtlasError, Clock, Result, SystemClock, format_rfc3339};
 
 use super::types::{
-    MemoryDeleteResult, MemoryListFilter, MemoryRecord, MemorySearchHit, MemoryViewer, NewMemory,
+    MemoryConsolidationGroup, MemoryConsolidationPlan, MemoryDecayPolicy, MemoryDecayReport,
+    MemoryDeleteResult, MemoryHealthCategory, MemoryHealthFinding, MemoryHealthReport,
+    MemoryImportance, MemoryListFilter, MemoryPruneResult, MemoryRecord, MemorySearchHit,
+    MemoryViewer, NOISY_TOPIC_ENTRIES, NewMemory, OVERSIZED_BODY_CHARS,
 };
 use super::util::{hex_encode, to_from_sql_error};
 
 pub(super) const MEMORIES_TABLE: &str = "memories";
 
-/// Exact column set of the `memories` table (migration 007).
+/// Exact column set of the `memories` table (migrations 007 + 009).
 pub(super) const MEMORY_COLUMNS: &[&str] = &[
     "id",
     "repo_root",
@@ -35,16 +40,25 @@ pub(super) const MEMORY_COLUMNS: &[&str] = &[
     "decay_score",
     "source_id",
     "metadata_json",
+    "superseded_by",
 ];
 
-/// Exact index set of the `memories` table (migration 007).
+/// Exact index set of the `memories` table (migrations 007 + 009).
 pub(super) const MEMORY_INDEXES: &[&str] = &[
     "idx_memories_repo_topic",
     "idx_memories_repo_importance",
     "idx_memories_repo_scope",
     "idx_memories_repo_session",
     "idx_memories_repo_accessed",
+    "idx_memories_superseded",
 ];
+
+/// Exact column set of the `memory_supersessions` table (migration 009).
+pub(super) const SUPERSESSION_COLUMNS: &[&str] =
+    &["old_memory_id", "new_memory_id", "reason", "created_at"];
+
+/// Exact index set of the `memory_supersessions` table (migration 009).
+pub(super) const SUPERSESSION_INDEXES: &[&str] = &["idx_memory_supersessions_new"];
 
 // ── IDs and timestamps ────────────────────────────────────────────────────────
 
@@ -126,6 +140,47 @@ pub(super) fn memory_schema_issues(conn: &Connection) -> Vec<String> {
         }
     }
 
+    let supersessions_exists: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'memory_supersessions'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+    if supersessions_exists == 0 {
+        issues.push("missing table: memory_supersessions".to_owned());
+    } else {
+        let present_columns = conn
+            .prepare("PRAGMA table_info('memory_supersessions')")
+            .ok()
+            .and_then(|mut stmt| {
+                stmt.query_map([], |row| row.get::<_, String>(1))
+                    .ok()
+                    .map(|rows| {
+                        rows.filter_map(std::result::Result::ok)
+                            .collect::<Vec<String>>()
+                    })
+            })
+            .unwrap_or_default();
+        for column in SUPERSESSION_COLUMNS {
+            if !present_columns.iter().any(|present| present == column) {
+                issues.push(format!("missing column: memory_supersessions.{column}"));
+            }
+        }
+        for index in SUPERSESSION_INDEXES {
+            let exists: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = ?1",
+                    [index],
+                    |row| row.get(0),
+                )
+                .unwrap_or(0);
+            if exists == 0 {
+                issues.push(format!("missing index: {index}"));
+            }
+        }
+    }
+
     issues
 }
 
@@ -154,8 +209,9 @@ pub(super) fn store_memory_at(
     conn.execute(
         "INSERT INTO memories
             (id, repo_root, session_id, frontend, scope, topic, title, body, importance,
-             created_at, updated_at, last_accessed_at, decay_score, source_id, metadata_json)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10, ?10, 0, ?11, ?12)",
+             created_at, updated_at, last_accessed_at, decay_score, source_id, metadata_json,
+             superseded_by)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10, ?10, 0, ?11, ?12, NULL)",
         params![
             id,
             input.repo_root,
@@ -188,6 +244,7 @@ pub(super) fn store_memory_at(
         decay_score: 0.0,
         source_id: input.source_id.clone(),
         metadata: input.metadata.clone(),
+        superseded_by: None,
     })
 }
 
@@ -257,11 +314,13 @@ pub(super) fn recall_memories(
     let mut sql = String::from(
         "SELECT id, repo_root, session_id, frontend, scope, topic, title, body, importance,
                 created_at, updated_at, last_accessed_at, decay_score, source_id, metadata_json,
+                superseded_by,
                 CASE WHEN topic = ?2 THEN 0
                      WHEN topic LIKE ?3 ESCAPE '\\' OR title LIKE ?3 ESCAPE '\\' THEN 1
                      ELSE 2 END AS match_tier,
                 CASE importance WHEN 'critical' THEN 0 WHEN 'high' THEN 1
-                                WHEN 'normal' THEN 2 ELSE 3 END AS importance_rank
+                                WHEN 'normal' THEN 2 ELSE 3 END AS importance_rank,
+                CASE WHEN superseded_by IS NULL THEN 0 ELSE 1 END AS superseded_rank
          FROM memories
          WHERE repo_root = ?1
            AND (topic LIKE ?3 ESCAPE '\\' OR title LIKE ?3 ESCAPE '\\'
@@ -281,7 +340,8 @@ pub(super) fn recall_memories(
         params.push(viewer.frontend.clone());
     }
     sql.push_str(
-        " ORDER BY match_tier ASC, importance_rank ASC, updated_at DESC, created_at DESC
+        " ORDER BY match_tier ASC, importance_rank ASC, superseded_rank ASC,
+                  updated_at DESC, created_at DESC
          LIMIT ?",
     );
     params.push(limit.to_string());
@@ -291,7 +351,7 @@ pub(super) fn recall_memories(
         .map_err(|e| AtlasError::Db(e.to_string()))?;
     let param_refs = params.iter().map(String::as_str).collect::<Vec<_>>();
     stmt.query_map(rusqlite::params_from_iter(param_refs), |row| {
-        let relevance_score: i32 = row.get(15)?;
+        let relevance_score: i32 = row.get(16)?;
         Ok(MemorySearchHit {
             memory: row_to_memory(row)?,
             relevance_score,
@@ -310,12 +370,16 @@ pub(super) fn list_memories(
 ) -> Result<Vec<MemoryRecord>> {
     let mut sql = String::from(
         "SELECT id, repo_root, session_id, frontend, scope, topic, title, body, importance,
-                created_at, updated_at, last_accessed_at, decay_score, source_id, metadata_json
+                created_at, updated_at, last_accessed_at, decay_score, source_id, metadata_json,
+                superseded_by
          FROM memories
          WHERE repo_root = ?1",
     );
     let mut params = vec![repo_root.to_owned()];
     append_filter_clauses(&mut sql, &mut params, filter);
+    if !filter.include_superseded {
+        sql.push_str(" AND superseded_by IS NULL");
+    }
     sql.push_str(" ORDER BY updated_at DESC, created_at DESC, id");
     query_memories(conn, &sql, &params)
 }
@@ -360,9 +424,549 @@ pub(super) fn delete_memory(
     })
 }
 
+// ── ICM-B — decay, stale, prune, health, consolidation ────────────────────────
+
+/// Parse a second-precision RFC 3339 timestamp stored on memory rows.
+fn parse_memory_timestamp(value: &str) -> Option<OffsetDateTime> {
+    OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339).ok()
+}
+
+/// Whole-day age of a memory row relative to `now`, anchored on `updated_at`.
+fn age_days(updated_at: &str, now: OffsetDateTime) -> f64 {
+    let Some(ts) = parse_memory_timestamp(updated_at) else {
+        return 0.0;
+    };
+    let seconds = now.unix_timestamp() - ts.unix_timestamp();
+    if seconds <= 0 {
+        0.0
+    } else {
+        seconds as f64 / 86_400.0
+    }
+}
+
+/// Compute (and, when not dry-running, persist) the updated `decay_score` for
+/// every memory matching `filter`. Never deletes rows; protected critical
+/// memories report `score = 0.0` and are never written as stale.
+pub(super) fn decay_reports(
+    conn: &Connection,
+    repo_root: &str,
+    filter: &MemoryListFilter,
+    policy: &MemoryDecayPolicy,
+    now: OffsetDateTime,
+    dry_run: bool,
+) -> Result<Vec<MemoryDecayReport>> {
+    if !policy.enabled {
+        return Ok(Vec::new());
+    }
+    let mut full_filter = filter.clone();
+    full_filter.include_superseded = true;
+    let rows = list_memories(conn, repo_root, &full_filter)?;
+    let mut reports = Vec::with_capacity(rows.len());
+    for row in rows {
+        let age = age_days(&row.updated_at, now);
+        let score = policy.score(row.importance, age);
+        let report_importance = row.importance;
+        let protected = policy.is_protected(row.importance);
+        let stale = !protected && score >= 1.0;
+        if !dry_run {
+            conn.execute(
+                "UPDATE memories SET decay_score = ?1 WHERE id = ?2 AND repo_root = ?3",
+                params![score, row.id, repo_root],
+            )
+            .map_err(|e| AtlasError::Db(e.to_string()))?;
+        }
+        reports.push(MemoryDecayReport {
+            memory: row,
+            age_days: age,
+            retention_days: policy.retention_days(report_importance),
+            updated_decay_score: score,
+            protected,
+            stale,
+        });
+    }
+    Ok(reports)
+}
+
+/// Rows past their retention window per policy; protected critical memories
+/// are never reported as stale candidates.
+pub(super) fn stale_memories(
+    conn: &Connection,
+    repo_root: &str,
+    filter: &MemoryListFilter,
+    policy: &MemoryDecayPolicy,
+    now: OffsetDateTime,
+) -> Result<Vec<MemoryDecayReport>> {
+    let reports = decay_reports(conn, repo_root, filter, policy, now, true)?;
+    Ok(reports.into_iter().filter(|report| report.stale).collect())
+}
+
+/// Delete (or, in dry-run, only report) memories past their retention window.
+///
+/// Critical rows are excluded unless `allow_critical` is set; passing
+/// `--importance critical` without the override fails validation so a
+/// critical-memory prune path only exists behind an explicit override.
+pub(super) fn prune_memories(
+    conn: &Connection,
+    repo_root: &str,
+    filter: &MemoryListFilter,
+    policy: &MemoryDecayPolicy,
+    now: OffsetDateTime,
+    dry_run: bool,
+    allow_critical: bool,
+) -> Result<MemoryPruneResult> {
+    if !policy.enabled {
+        return Ok(MemoryPruneResult {
+            dry_run,
+            candidate_count: 0,
+            deleted_count: 0,
+            protected_count: 0,
+            candidates: Vec::new(),
+        });
+    }
+    if !allow_critical && filter.importance == Some(MemoryImportance::Critical) {
+        return Err(AtlasError::Other(
+            "critical memories are protected by memory.decay.critical_never_prune; \
+             pass --allow-critical to include them in prune candidates"
+                .to_owned(),
+        ));
+    }
+    let reports = decay_reports(conn, repo_root, filter, policy, now, true)?;
+    let mut protected_count = 0usize;
+    let mut candidates = Vec::new();
+    for report in reports {
+        if report.protected && !allow_critical {
+            protected_count += 1;
+            continue;
+        }
+        if report.stale {
+            candidates.push(report.memory);
+        }
+    }
+
+    let deleted_count = if dry_run {
+        0
+    } else {
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(|e| AtlasError::Db(e.to_string()))?;
+        let mut deleted = 0usize;
+        for memory in &candidates {
+            deleted += tx
+                .execute(
+                    "DELETE FROM memories WHERE id = ?1 AND repo_root = ?2",
+                    params![memory.id, repo_root],
+                )
+                .map_err(|e| AtlasError::Db(e.to_string()))?;
+        }
+        tx.commit().map_err(|e| AtlasError::Db(e.to_string()))?;
+        deleted
+    };
+
+    Ok(MemoryPruneResult {
+        dry_run,
+        candidate_count: candidates.len(),
+        deleted_count,
+        protected_count,
+        candidates,
+    })
+}
+
+/// Deterministic health report: stale, duplicated, orphaned, and oversized
+/// findings per memory, plus noisy topics and topics without a critical
+/// decision. Never depends on opaque LLM behavior.
+pub(super) fn health_report(
+    conn: &Connection,
+    repo_root: &str,
+    filter: &MemoryListFilter,
+    policy: &MemoryDecayPolicy,
+    now: OffsetDateTime,
+    source_exists: &dyn Fn(&str) -> bool,
+) -> Result<MemoryHealthReport> {
+    let rows = list_memories(conn, repo_root, filter)?;
+    let mut findings = Vec::new();
+    let mut by_category: BTreeMap<String, usize> = BTreeMap::new();
+    let mut count = |category: MemoryHealthCategory| {
+        *by_category.entry(category.as_str().to_owned()).or_insert(0) += 1;
+    };
+
+    for (index, row) in rows.iter().enumerate() {
+        let age = age_days(&row.updated_at, now);
+        let protected = policy.is_protected(row.importance);
+        let stale = !protected && policy.score(row.importance, age) >= 1.0;
+        if stale {
+            count(MemoryHealthCategory::Stale);
+            findings.push(MemoryHealthFinding {
+                category: MemoryHealthCategory::Stale,
+                kind: "stale_memory".to_owned(),
+                memory_id: Some(row.id.clone()),
+                topic: (!row.topic.is_empty()).then(|| row.topic.clone()),
+                detail: format!(
+                    "memory {} in topic '{}' is past its retention window",
+                    row.id, row.topic
+                ),
+                suggestion: "refresh the fact or prune the row".to_owned(),
+                command: prune_command(&row.topic),
+            });
+            continue;
+        }
+
+        let duplicated = rows[..index].iter().any(|other| {
+            other.topic == row.topic
+                && ((!other.title.trim().is_empty()
+                    && normalize_text(&other.title) == normalize_text(&row.title))
+                    || normalize_text(&other.body) == normalize_text(&row.body))
+        });
+        if duplicated {
+            count(MemoryHealthCategory::Duplicated);
+            findings.push(MemoryHealthFinding {
+                category: MemoryHealthCategory::Duplicated,
+                kind: "duplicated_memory".to_owned(),
+                memory_id: Some(row.id.clone()),
+                topic: (!row.topic.is_empty()).then(|| row.topic.clone()),
+                detail: format!(
+                    "memory {} repeats an earlier memory in topic '{}'",
+                    row.id, row.topic
+                ),
+                suggestion: "merge the duplicates into one fact".to_owned(),
+                command: consolidate_command(&row.topic),
+            });
+            continue;
+        }
+
+        let orphaned = row
+            .source_id
+            .as_deref()
+            .is_some_and(|source_id| !source_exists(source_id));
+        if orphaned {
+            count(MemoryHealthCategory::Orphaned);
+            findings.push(MemoryHealthFinding {
+                category: MemoryHealthCategory::Orphaned,
+                kind: "orphaned_source".to_owned(),
+                memory_id: Some(row.id.clone()),
+                topic: (!row.topic.is_empty()).then(|| row.topic.clone()),
+                detail: format!(
+                    "memory {} references a missing saved-context artifact",
+                    row.id
+                ),
+                suggestion: "re-link the source artifact or delete the memory".to_owned(),
+                command: format!("atlas memory delete {} --dry-run", row.id),
+            });
+            continue;
+        }
+
+        if row.body.chars().count() > OVERSIZED_BODY_CHARS {
+            count(MemoryHealthCategory::Oversized);
+            findings.push(MemoryHealthFinding {
+                category: MemoryHealthCategory::Oversized,
+                kind: "oversized_memory".to_owned(),
+                memory_id: Some(row.id.clone()),
+                topic: (!row.topic.is_empty()).then(|| row.topic.clone()),
+                detail: format!(
+                    "memory {} exceeds {} characters",
+                    row.id, OVERSIZED_BODY_CHARS
+                ),
+                suggestion: "split the body into one-fact memories".to_owned(),
+                command: format!("atlas memory store \"<fact>\" --topic {}", row.topic),
+            });
+        }
+    }
+
+    // Topic-level findings, deterministic alphabetical topic order.
+    let mut topic_stats: BTreeMap<&str, (usize, bool)> = BTreeMap::new();
+    for row in &rows {
+        if row.topic.is_empty() {
+            continue;
+        }
+        let entry = topic_stats.entry(row.topic.as_str()).or_insert((0, false));
+        entry.0 += 1;
+        entry.1 |= row.importance == MemoryImportance::Critical;
+    }
+    for (topic, (entries, has_critical)) in topic_stats {
+        if entries > NOISY_TOPIC_ENTRIES {
+            count(MemoryHealthCategory::Noisy);
+            findings.push(MemoryHealthFinding {
+                category: MemoryHealthCategory::Noisy,
+                kind: "noisy_topic".to_owned(),
+                memory_id: None,
+                topic: Some(topic.to_owned()),
+                detail: format!(
+                    "topic '{topic}' has {entries} memories (noisy above {NOISY_TOPIC_ENTRIES})"
+                ),
+                suggestion: "consolidate the topic into fewer facts".to_owned(),
+                command: consolidate_command(topic),
+            });
+        }
+        if !has_critical {
+            count(MemoryHealthCategory::Noisy);
+            findings.push(MemoryHealthFinding {
+                category: MemoryHealthCategory::Noisy,
+                kind: "topic_without_critical".to_owned(),
+                memory_id: None,
+                topic: Some(topic.to_owned()),
+                detail: format!(
+                    "topic '{topic}' has {entries} memories but no critical decision memory"
+                ),
+                suggestion: "record the key decision with critical importance".to_owned(),
+                command: format!(
+                    "atlas memory store \"<decision>\" --topic {topic} --importance critical"
+                ),
+            });
+        }
+    }
+
+    Ok(MemoryHealthReport {
+        total_memories: rows.len(),
+        findings,
+        by_category,
+    })
+}
+
+/// Deterministic consolidation planner (and, when not dry-running, applier).
+///
+/// Groups memories by topic plus one of: normalized title, normalized body,
+/// same `source_id`, or same metadata category. Dry-run reports kept ids,
+/// merged ids, and preserved source ids without mutating storage. Apply mode
+/// creates a consolidated memory, marks merged rows as superseded, and stores
+/// supersession links.
+pub(super) fn consolidation_plan(
+    conn: &Connection,
+    repo_root: &str,
+    filter: &MemoryListFilter,
+    dry_run: bool,
+) -> Result<MemoryConsolidationPlan> {
+    let rows = list_memories(conn, repo_root, filter)?;
+
+    #[derive(Clone)]
+    struct MemberKeys {
+        title: Option<String>,
+        body: String,
+        source: Option<String>,
+        category: Option<String>,
+    }
+
+    struct Group {
+        members: Vec<MemoryRecord>,
+        keys: Vec<MemberKeys>,
+    }
+
+    let mut groups: Vec<Group> = Vec::new();
+    for row in rows {
+        let keys = MemberKeys {
+            title: (!row.title.trim().is_empty()).then(|| normalize_text(&row.title)),
+            body: normalize_text(&row.body),
+            source: row.source_id.clone(),
+            category: memory_category(&row.metadata),
+        };
+        let matches = |other: &MemberKeys| -> bool {
+            (keys.title.is_some() && other.title.is_some() && keys.title == other.title)
+                || keys.body == other.body
+                || (keys.source.is_some() && keys.source == other.source)
+                || (keys.category.is_some() && keys.category == other.category)
+        };
+        let mut matched: Vec<usize> = groups
+            .iter()
+            .enumerate()
+            .filter(|(_, group)| {
+                group.members[0].topic == row.topic && group.keys.iter().any(&matches)
+            })
+            .map(|(index, _)| index)
+            .collect();
+        if matched.is_empty() {
+            groups.push(Group {
+                members: vec![row],
+                keys: vec![keys],
+            });
+        } else {
+            matched.sort_unstable();
+            let first = matched.remove(0);
+            // A row may match several groups (e.g. same body + same source):
+            // merge them into the earliest group so grouping stays deterministic.
+            for extra in matched.into_iter().rev() {
+                let merged = groups.remove(extra);
+                groups[first].members.extend(merged.members);
+                groups[first].keys.extend(merged.keys);
+            }
+            groups[first].members.push(row);
+            groups[first].keys.push(keys);
+        }
+    }
+
+    let now = format_memory_now();
+    let mut plan_groups = Vec::new();
+    let mut kept_ids = Vec::new();
+    let mut merged_ids = Vec::new();
+
+    for group in groups.into_iter().filter(|group| group.members.len() >= 2) {
+        let members = group.members;
+        let kept = &members[0];
+        let group_key = consolidation_group_key(&members);
+        let source_ids = members
+            .iter()
+            .filter_map(|member| member.source_id.clone())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let merged = members[1..]
+            .iter()
+            .map(|member| member.id.clone())
+            .collect::<Vec<_>>();
+
+        let consolidated_id = if dry_run {
+            None
+        } else {
+            let importance = members
+                .iter()
+                .map(|member| importance_rank(member.importance))
+                .min()
+                .map(importance_from_rank)
+                .unwrap_or(kept.importance);
+            let mut metadata = kept.metadata.clone();
+            metadata["consolidated"] = serde_json::json!(true);
+            metadata["merged_ids"] = serde_json::to_value(&merged).unwrap_or_default();
+            metadata["merged_source_ids"] = serde_json::to_value(&source_ids).unwrap_or_default();
+            let input = NewMemory {
+                repo_root: repo_root.to_owned(),
+                session_id: kept.session_id.clone(),
+                frontend: kept.frontend.clone(),
+                scope: kept.scope,
+                topic: kept.topic.clone(),
+                title: kept.title.clone(),
+                body: kept.body.clone(),
+                importance,
+                source_id: kept.source_id.clone(),
+                metadata,
+            };
+            let record = store_memory(conn, &input)?;
+            for member in &members[1..] {
+                conn.execute(
+                    "UPDATE memories SET superseded_by = ?1, updated_at = ?2
+                     WHERE id = ?3 AND repo_root = ?4",
+                    params![record.id, now, member.id, repo_root],
+                )
+                .map_err(|e| AtlasError::Db(e.to_string()))?;
+                conn.execute(
+                    "INSERT INTO memory_supersessions
+                        (old_memory_id, new_memory_id, reason, created_at)
+                     VALUES (?1, ?2, ?3, ?4)",
+                    params![member.id, record.id, group_key, now],
+                )
+                .map_err(|e| AtlasError::Db(e.to_string()))?;
+            }
+            Some(record.id)
+        };
+
+        kept_ids.push(kept.id.clone());
+        merged_ids.extend(merged.iter().cloned());
+        plan_groups.push(MemoryConsolidationGroup {
+            topic: kept.topic.clone(),
+            group_key,
+            kept_memory_id: kept.id.clone(),
+            merged_memory_ids: merged,
+            source_ids,
+            consolidated_id,
+        });
+    }
+
+    Ok(MemoryConsolidationPlan {
+        dry_run,
+        groups: plan_groups,
+        kept_ids,
+        merged_ids,
+    })
+}
+
+/// Deterministic grouping reason for a consolidated group, in fixed priority
+/// order: title, body, source id, category.
+fn consolidation_group_key(members: &[MemoryRecord]) -> String {
+    for (a, b) in pairs(members) {
+        if !a.title.trim().is_empty()
+            && !b.title.trim().is_empty()
+            && normalize_text(&a.title) == normalize_text(&b.title)
+        {
+            return "same_title".to_owned();
+        }
+    }
+    for (a, b) in pairs(members) {
+        if normalize_text(&a.body) == normalize_text(&b.body) {
+            return "same_body".to_owned();
+        }
+    }
+    for (a, b) in pairs(members) {
+        if a.source_id.is_some() && a.source_id == b.source_id {
+            return "same_source".to_owned();
+        }
+    }
+    for (a, b) in pairs(members) {
+        if memory_category(&a.metadata).is_some()
+            && memory_category(&a.metadata) == memory_category(&b.metadata)
+        {
+            return "same_category".to_owned();
+        }
+    }
+    "same_body".to_owned()
+}
+
+fn pairs<T>(items: &[T]) -> impl Iterator<Item = (&T, &T)> {
+    (0..items.len()).flat_map(move |i| (i + 1..items.len()).map(move |j| (&items[i], &items[j])))
+}
+
+/// Collapse whitespace and lowercase for deterministic similarity comparison.
+fn normalize_text(value: &str) -> String {
+    value
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
+/// Extract the optional `metadata.category` string (feedback/decision kind).
+fn memory_category(metadata: &serde_json::Value) -> Option<String> {
+    metadata
+        .get("category")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+}
+
+fn importance_rank(importance: MemoryImportance) -> u8 {
+    match importance {
+        MemoryImportance::Critical => 0,
+        MemoryImportance::High => 1,
+        MemoryImportance::Normal => 2,
+        MemoryImportance::Low => 3,
+    }
+}
+
+fn importance_from_rank(rank: u8) -> MemoryImportance {
+    match rank {
+        0 => MemoryImportance::Critical,
+        1 => MemoryImportance::High,
+        2 => MemoryImportance::Normal,
+        _ => MemoryImportance::Low,
+    }
+}
+
+fn prune_command(topic: &str) -> String {
+    if topic.is_empty() {
+        "atlas memory prune --dry-run".to_owned()
+    } else {
+        format!("atlas memory prune --topic {topic} --dry-run")
+    }
+}
+
+fn consolidate_command(topic: &str) -> String {
+    if topic.is_empty() {
+        "atlas memory consolidate --dry-run".to_owned()
+    } else {
+        format!("atlas memory consolidate --topic {topic} --dry-run")
+    }
+}
+
 // ── Row mapping ───────────────────────────────────────────────────────────────
 
-/// Maps a `memories` row (column order from migration 007) to [`MemoryRecord`].
+/// Maps a `memories` row (column order from migrations 007 + 009) to
+/// [`MemoryRecord`].
 pub(super) fn row_to_memory(row: &rusqlite::Row<'_>) -> rusqlite::Result<MemoryRecord> {
     let scope: String = row.get(4)?;
     let importance: String = row.get(8)?;
@@ -388,6 +992,7 @@ pub(super) fn row_to_memory(row: &rusqlite::Row<'_>) -> rusqlite::Result<MemoryR
                 Box::new(error),
             )
         })?,
+        superseded_by: row.get(15)?,
     })
 }
 

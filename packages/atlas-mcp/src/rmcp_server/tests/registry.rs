@@ -252,7 +252,13 @@ fn read_resource_saved_context_matches_current_resource_renderer() {
 #[test]
 fn read_resource_tool_docs_matches_current_resource_renderer() {
     let fixture = ToolFixture::new();
-    assert_read_resource_matches_handrolled(&fixture, "atlas://tool-docs/query_graph");
+    for uri in [
+        "atlas://tool-docs/query_graph",
+        "atlas://tool-docs/build_graph",
+        "atlas://tool-docs/update_graph",
+    ] {
+        assert_read_resource_matches_handrolled(&fixture, uri);
+    }
 }
 
 #[test]

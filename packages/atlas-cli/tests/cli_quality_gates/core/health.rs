@@ -103,6 +103,42 @@ fn doctor_reports_retrieval_index_unavailable_issue_code() {
 }
 
 #[test]
+fn doctor_fails_clearly_on_invalid_memory_decay_config() {
+    let repo = setup_fixture_repo();
+
+    run_atlas(repo.path(), &["init"]);
+    fs::write(
+        repo.path().join(".atlas").join("config.toml"),
+        "[memory.decay]\nlow_days = 0\n",
+    )
+    .expect("write invalid config");
+
+    let output = sanitized_command(env!("CARGO_BIN_EXE_atlas"))
+        .args(["--json", "doctor"])
+        .current_dir(repo.path())
+        .output()
+        .expect("run atlas doctor");
+    assert!(
+        !output.status.success(),
+        "doctor must fail on invalid memory.decay retention days"
+    );
+
+    let doctor = read_json_data_output("doctor", output);
+    let config_check = doctor["checks"]
+        .as_array()
+        .expect("doctor checks array")
+        .iter()
+        .find(|item| item["check"] == json!("mcp_serve_config"))
+        .expect("config check present");
+    assert_eq!(config_check["ok"], json!(false));
+    let detail = config_check["detail"].as_str().expect("detail");
+    assert!(
+        detail.contains("memory.decay.low_days"),
+        "doctor must name the offending field: {detail}"
+    );
+}
+
+#[test]
 fn doctor_reports_noncanonical_content_path_identity() {
     let repo = setup_fixture_repo();
 
@@ -584,7 +620,7 @@ fn init_full_profile_writes_active_config_template() {
     assert!(config_text.contains("[search.embedding]"));
     assert!(config_text.contains("url = \"http://localhost:11434\""));
     assert!(config_text.contains(
-        "tool_timeout_ms_by_tool = { build_or_update_graph = 900000, get_review_context = 120000 }"
+        "tool_timeout_ms_by_tool = { build_graph = 900000, get_review_context = 120000 }"
     ));
 }
 

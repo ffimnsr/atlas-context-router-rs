@@ -293,5 +293,24 @@ pub(super) fn tools() -> Vec<Value> {
                     "required": ["query"]
                 }
         }),
+        json!({
+                "name": "feedback_record",
+                "description": "Record a correction when an analysis prediction was wrong (same fields, defaults, and validation as `atlas feedback record`). Stored as first-class deterministic correction memory; records where actual differs from predicted can lower matching analysis confidence (ICM-C3).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "predicted":    { "type": "string",  "description": "What the analysis predicted; required." },
+                        "actual":       { "type": "string",  "description": "What actually happened; required. Differs from predicted to mark the record as false-positive evidence." },
+                        "correction":   { "type": "string",  "description": "Correction text explaining the right answer." },
+                        "tool":         { "type": "string",  "description": "Tool that produced the prediction (default mcp)." },
+                        "analysis_kind":{ "type": "string",  "description": "Analysis kind: dead_code, remove, safety, or remove_dead." },
+                        "symbol":       { "type": "string",  "description": "Exact qualified name of the symbol the prediction was about." },
+                        "file":         { "type": "string",  "description": "Repo-relative path of the file the prediction was about." },
+                        "source_id":    { "type": "string",  "description": "Source id linking this record to a saved-context artifact." },
+                        "output_format":{ "type": "string",  "description": DEFAULT_OUTPUT_DESCRIPTION }
+                    },
+                    "required": ["predicted", "actual"]
+                }
+        }),
     ]
 }

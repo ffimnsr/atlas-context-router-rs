@@ -23,7 +23,7 @@ mod tests;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-pub use analysis::AnalysisConfig;
+pub use analysis::{AnalysisConfig, FeedbackAdjustmentConfig};
 pub use build::{BuildConfig, BuildRunBudget, DEFAULT_PARSE_BATCH_SIZE};
 pub use context::{
     ContextConfig, ContextTokenizerConfig, TokenizerFallbackMode, TokenizerProvider,
@@ -62,7 +62,7 @@ pub struct Config {
     pub memory: MemoryConfig,
 }
 
-/// Memory surface configuration (ICM-A).
+/// Memory surface configuration (ICM-A + ICM-B + ICM-D).
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct MemoryConfig {
     /// Allow arbitrary frontend identities beyond the known set
@@ -70,6 +70,160 @@ pub struct MemoryConfig {
     /// visibility. Defaults to false: unknown frontends are rejected.
     #[serde(default)]
     pub allow_custom_frontends: bool,
+    /// Memory decay and retention policy (ICM-B1). Safe defaults apply when
+    /// the section is absent.
+    #[serde(default)]
+    pub decay: MemoryDecayConfig,
+    /// Wake-up pack size budget (ICM-D1). Safe defaults apply when the
+    /// section is absent.
+    #[serde(default)]
+    pub wake_up: WakeUpConfig,
+}
+
+/// `[memory.decay]` retention policy for `atlas memory decay|stale|prune`.
+///
+/// `decay_score` grows toward `1.0` as a memory ages past its importance
+/// retention window. `critical` memories never decay and are never
+/// auto-prune candidates while `critical_never_prune` is true.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryDecayConfig {
+    /// Master switch; `false` disables decay scoring and pruning entirely.
+    #[serde(default = "default_decay_enabled")]
+    pub enabled: bool,
+    /// Retention days for `low`-importance memories.
+    #[serde(default = "default_decay_low_days")]
+    pub low_days: u32,
+    /// Retention days for `normal`-importance memories.
+    #[serde(default = "default_decay_normal_days")]
+    pub normal_days: u32,
+    /// Retention days for `high`-importance (and unprotected `critical`) memories.
+    #[serde(default = "default_decay_high_days")]
+    pub high_days: u32,
+    /// Never auto-prune `critical` memories; also keeps their decay score at 0.
+    #[serde(default = "default_decay_critical_never_prune")]
+    pub critical_never_prune: bool,
+}
+
+impl Default for MemoryDecayConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_decay_enabled(),
+            low_days: default_decay_low_days(),
+            normal_days: default_decay_normal_days(),
+            high_days: default_decay_high_days(),
+            critical_never_prune: default_decay_critical_never_prune(),
+        }
+    }
+}
+
+fn default_decay_enabled() -> bool {
+    true
+}
+
+fn default_decay_low_days() -> u32 {
+    30
+}
+
+fn default_decay_normal_days() -> u32 {
+    90
+}
+
+fn default_decay_high_days() -> u32 {
+    365
+}
+
+fn default_decay_critical_never_prune() -> bool {
+    true
+}
+
+impl MemoryDecayConfig {
+    /// Validates retention days as positive integers; fails `atlas doctor`
+    /// clearly through `Config::load` on invalid config.
+    pub fn validate(&self) -> Result<()> {
+        if self.enabled {
+            validate_positive_u32("memory.decay.low_days", self.low_days)?;
+            validate_positive_u32("memory.decay.normal_days", self.normal_days)?;
+            validate_positive_u32("memory.decay.high_days", self.high_days)?;
+        }
+        Ok(())
+    }
+}
+
+/// Hard ceiling shared with the wake-up budget policy in `atlas-agent-events`
+/// (`WakeBudget::HARD_MAX_ITEMS`). Engine cannot depend on that crate, so the
+/// ceiling is mirrored here; both must stay in sync.
+pub const WAKE_UP_MAX_ITEMS_HARD_CAP: usize = 25;
+/// Hard ceiling for feedback entries per wake-up pack.
+pub const WAKE_UP_MAX_FEEDBACK_ITEMS_HARD_CAP: usize = 10;
+/// Hard ceiling for pending-change listings per wake-up pack.
+pub const WAKE_UP_MAX_PENDING_CHANGES_HARD_CAP: usize = 100;
+
+/// `[memory.wake_up]` size budget for `atlas wake-up` and the MCP `wake_up`
+/// tool (ICM-D1). Every list in the pack is bounded by these values.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WakeUpConfig {
+    /// Items per pack list (decisions, memories, concepts, changes, hints).
+    #[serde(default = "default_wake_up_max_items")]
+    pub max_items: usize,
+    /// Feedback records surfaced per wake-up pack (smallest list by design).
+    #[serde(default = "default_wake_up_max_feedback_items")]
+    pub max_feedback_items: usize,
+    /// Pending graph-relevant changes listed in the readiness block.
+    #[serde(default = "default_wake_up_max_pending_changes")]
+    pub max_pending_changes: usize,
+}
+
+impl Default for WakeUpConfig {
+    fn default() -> Self {
+        Self {
+            max_items: default_wake_up_max_items(),
+            max_feedback_items: default_wake_up_max_feedback_items(),
+            max_pending_changes: default_wake_up_max_pending_changes(),
+        }
+    }
+}
+
+fn default_wake_up_max_items() -> usize {
+    10
+}
+
+fn default_wake_up_max_feedback_items() -> usize {
+    3
+}
+
+fn default_wake_up_max_pending_changes() -> usize {
+    20
+}
+
+impl WakeUpConfig {
+    /// Validates the wake-up size budget against hard caps; fails
+    /// `atlas doctor` clearly through `Config::load` on invalid config.
+    pub fn validate(&self) -> Result<()> {
+        validate_usize_limit(
+            "memory.wake_up.max_items",
+            self.max_items,
+            WAKE_UP_MAX_ITEMS_HARD_CAP,
+        )?;
+        validate_usize_limit(
+            "memory.wake_up.max_feedback_items",
+            self.max_feedback_items,
+            WAKE_UP_MAX_FEEDBACK_ITEMS_HARD_CAP,
+        )?;
+        validate_usize_limit(
+            "memory.wake_up.max_pending_changes",
+            self.max_pending_changes,
+            WAKE_UP_MAX_PENDING_CHANGES_HARD_CAP,
+        )?;
+        Ok(())
+    }
+}
+
+impl MemoryConfig {
+    /// Validates the memory surface config; used by `Config::load`.
+    pub fn validate(&self) -> Result<()> {
+        self.decay.validate()?;
+        self.wake_up.validate()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

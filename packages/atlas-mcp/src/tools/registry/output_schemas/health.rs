@@ -191,7 +191,7 @@ pub(crate) fn debug_top_file_schema() -> Value {
     })
 }
 
-pub(crate) fn build_or_update_graph_output_schema() -> Value {
+pub(crate) fn graph_build_output_schema() -> Value {
     normalized_tool_output_schema(
         serde_json::json!({
             "mode": { "type": "string" },
@@ -500,9 +500,18 @@ pub(crate) fn db_check_output_schema() -> Value {
                             "issues": { "type": "array", "items": { "type": "string" } }
                         },
                         "required": ["ok", "issues"]
+                    },
+                    "feedback_schema": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                            "ok": { "type": "boolean" },
+                            "issues": { "type": "array", "items": { "type": "string" } }
+                        },
+                        "required": ["ok", "issues"]
                     }
                 },
-                "required": ["path", "exists", "ok", "memory_schema"]
+                "required": ["path", "exists", "ok", "memory_schema", "feedback_schema"]
             },
             "summary": {
                 "type": "object",

@@ -376,6 +376,43 @@ pub(super) fn typed_input_schema_for(name: &str) -> Option<Value> {
             ),
             ("properties/output_format", DEFAULT_OUTPUT_DESCRIPTION),
         ])),
+        "feedback_record" => Some(typed_schema_with_descriptions::<FeedbackRecordArgsSchema>(
+            &[
+                (
+                    "properties/predicted",
+                    "What the analysis predicted; required.",
+                ),
+                (
+                    "properties/actual",
+                    "What actually happened; required. Differs from predicted to mark the record as false-positive evidence.",
+                ),
+                (
+                    "properties/correction",
+                    "Correction text explaining the right answer.",
+                ),
+                (
+                    "properties/tool",
+                    "Tool that produced the prediction (default mcp).",
+                ),
+                (
+                    "properties/analysis_kind",
+                    "Analysis kind: dead_code, remove, safety, or remove_dead.",
+                ),
+                (
+                    "properties/symbol",
+                    "Exact qualified name of the symbol the prediction was about.",
+                ),
+                (
+                    "properties/file",
+                    "Repo-relative path of the file the prediction was about.",
+                ),
+                (
+                    "properties/source_id",
+                    "Source id linking this record to a saved-context artifact.",
+                ),
+                ("properties/output_format", DEFAULT_OUTPUT_DESCRIPTION),
+            ],
+        )),
         _ => None,
     }
 }

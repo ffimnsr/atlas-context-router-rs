@@ -190,7 +190,7 @@ fn build_fixture_graph(repo_root: &str, db_path: &str) {
             "id": 3,
             "method": "tools/call",
             "params": {
-                "name": "build_or_update_graph",
+                "name": "build_graph",
                 "arguments": { "operation": { "kind": "build" } }
             }
         }),

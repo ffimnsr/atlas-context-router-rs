@@ -99,15 +99,15 @@ fn serve_http_streamable_headers_match_protocol_surface() {
                 ("Accept", "application/json, text/event-stream"),
                 ("MCP-Protocol-Version", atlas_mcp::MCP_PROTOCOL_VERSION),
                 ("Mcp-Method", "tools/call"),
-                ("Mcp-Name", "build_or_update_graph"),
+                ("Mcp-Name", "build_graph"),
             ],
             &json!({
                 "jsonrpc":"2.0",
                 "id":2,
                 "method":"tools/call",
                 "params": {
-                    "name": "build_or_update_graph",
-                    "arguments": { "mode": "build" },
+                    "name": "build_graph",
+                    "arguments": {},
                     "_meta": {
                         atlas_mcp::spec::META_PROTOCOL_VERSION: atlas_mcp::MCP_PROTOCOL_VERSION,
                         atlas_mcp::spec::META_CLIENT_CAPABILITIES: {},

@@ -1,0 +1,8 @@
+{
+  "resolved_tool_name": "build_graph",
+  "input_contract": {
+    "canonical_form": "single object input; populate documented fields directly and avoid undocumented extras",
+    "families": [],
+    "notes": []
+  }
+}

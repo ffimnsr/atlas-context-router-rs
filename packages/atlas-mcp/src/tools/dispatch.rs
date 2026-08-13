@@ -10,7 +10,7 @@ use crate::discovery::{
 use crate::output::OutputFormat;
 use crate::session_events::tool_record_session_event;
 use crate::session_tools::{
-    tool_compact_session, tool_cross_session_search, tool_get_context_stats,
+    tool_compact_session, tool_cross_session_search, tool_feedback_record, tool_get_context_stats,
     tool_get_global_memory, tool_get_session_status, tool_memory_recall, tool_memory_store,
     tool_purge_saved_context, tool_read_saved_context, tool_resume_session,
     tool_save_context_artifact, tool_search_decisions, tool_search_saved_context,
@@ -27,8 +27,8 @@ use super::analysis::{
     tool_find_similar_functions, tool_infer_modules, tool_label_components,
 };
 use super::context_ops::{
-    tool_build_or_update_graph, tool_detect_changes, tool_explain_change, tool_get_context,
-    tool_get_impact_radius, tool_get_minimal_context, tool_get_review_context,
+    tool_build_graph, tool_detect_changes, tool_explain_change, tool_get_context,
+    tool_get_impact_radius, tool_get_minimal_context, tool_get_review_context, tool_update_graph,
 };
 use super::graph::{
     tool_batch_query_graph, tool_concept_clusters, tool_cross_file_links, tool_explain_query,
@@ -135,7 +135,8 @@ fn normalized_contract_tool(name: &str) -> bool {
             | "explain_change"
             | "traverse_graph"
             | "get_context"
-            | "build_or_update_graph"
+            | "build_graph"
+            | "update_graph"
             | "postprocess_graph"
             | "status"
             | "doctor"
@@ -156,6 +157,7 @@ fn normalized_contract_tool(name: &str) -> bool {
             | "get_global_memory"
             | "memory_store"
             | "memory_recall"
+            | "feedback_record"
             | "symbol_neighbors"
             | "cross_file_links"
             | "concept_clusters"
@@ -366,7 +368,8 @@ pub(crate) fn is_known_tool_name(name: &str) -> bool {
         | "get_impact_radius"
         | "get_review_context"
         | "detect_changes"
-        | "build_or_update_graph"
+        | "build_graph"
+        | "update_graph"
         | "postprocess_graph"
         | "traverse_graph"
         | "get_minimal_context"
@@ -397,6 +400,7 @@ pub(crate) fn is_known_tool_name(name: &str) -> bool {
         | "get_global_memory"
         | "memory_store"
         | "memory_recall"
+        | "feedback_record"
         | "symbol_neighbors"
         | "cross_file_links"
         | "concept_clusters"
@@ -542,9 +546,8 @@ fn call_inner(
         "get_impact_radius" => tool_get_impact_radius(args, repo_root, db_path, output_format),
         "get_review_context" => tool_get_review_context(args, repo_root, db_path, output_format),
         "detect_changes" => tool_detect_changes(args, repo_root, db_path, output_format),
-        "build_or_update_graph" => {
-            tool_build_or_update_graph(args, repo_root, db_path, output_format)
-        }
+        "build_graph" => tool_build_graph(args, repo_root, db_path, output_format),
+        "update_graph" => tool_update_graph(args, repo_root, db_path, output_format),
         "postprocess_graph" => tool_postprocess_graph(args, repo_root, db_path, output_format),
         "traverse_graph" => tool_traverse_graph(args, repo_root, db_path, output_format),
         "get_minimal_context" => tool_get_minimal_context(args, repo_root, db_path, output_format),
@@ -591,6 +594,7 @@ fn call_inner(
         "get_global_memory" => tool_get_global_memory(args, repo_root, db_path, output_format),
         "memory_store" => tool_memory_store(args, repo_root, db_path, output_format),
         "memory_recall" => tool_memory_recall(args, repo_root, db_path, output_format),
+        "feedback_record" => tool_feedback_record(args, repo_root, db_path, output_format),
         "symbol_neighbors" => tool_symbol_neighbors(args, repo_root, db_path, output_format),
         "cross_file_links" => tool_cross_file_links(args, repo_root, db_path, output_format),
         "concept_clusters" => tool_concept_clusters(args, repo_root, db_path, output_format),
@@ -1006,8 +1010,9 @@ mod tests {
             "detect_changes" => {
                 json!({"change_source": {"kind": "working_tree"}, "output_format": "json"})
             }
-            "build_or_update_graph" => {
-                json!({"operation": {"kind": "build"}, "output_format": "json"})
+            "build_graph" => json!({"output_format": "json"}),
+            "update_graph" => {
+                json!({"change_source": {"kind": "files", "files": ["src/lib.rs"]}, "output_format": "json"})
             }
             "postprocess_graph" => json!({"dry_run": true, "output_format": "json"}),
             "traverse_graph" => {
@@ -1059,6 +1064,11 @@ mod tests {
             "get_global_memory" => json!({"output_format": "json"}),
             "memory_store" => json!({"text": "schema-test memory", "output_format": "json"}),
             "memory_recall" => json!({"query": "schema-test", "output_format": "json"}),
+            "feedback_record" => json!({
+                "predicted": "schema-test dead",
+                "actual": "schema-test alive",
+                "output_format": "json"
+            }),
             "symbol_neighbors" => {
                 json!({"qname": "src/lib.rs::fn::greet", "output_format": "json"})
             }
@@ -1085,13 +1095,15 @@ mod tests {
             "debug_graph" => json!({"output_format": "json"}),
             "explain_query" => json!({"text": "greet", "output_format": "json"}),
             "resolve_symbol" => json!({"name": "greet", "output_format": "json"}),
-            "analyze_safety" => json!({"symbol": "src/lib.rs::fn::greet", "output_format": "json"}),
+            "analyze_safety" => {
+                json!({"symbol": "src/service.rs::fn::compute", "output_format": "json"})
+            }
             "analyze_remove" => {
-                json!({"symbols": ["src/lib.rs::fn::greet"], "output_format": "json"})
+                json!({"symbols": ["src/service.rs::fn::compute"], "output_format": "json"})
             }
             "analyze_dead_code" => json!({"output_format": "json"}),
             "analyze_dependency" => {
-                json!({"symbol": "src/lib.rs::fn::greet", "output_format": "json"})
+                json!({"symbol": "src/service.rs::fn::compute", "output_format": "json"})
             }
             other => panic!("missing schema test args for {other}"),
         }
@@ -1103,8 +1115,8 @@ mod tests {
         let repo_root = repo_dir.path().to_string_lossy().into_owned();
 
         let _build = call(
-            "build_or_update_graph",
-            Some(&json!({"operation": {"kind": "build"}, "output_format": "json"})),
+            "build_graph",
+            Some(&json!({"output_format": "json"})),
             &repo_root,
             &db_path,
         )
@@ -1152,8 +1164,8 @@ mod tests {
         let repo_root = repo_dir.path().to_string_lossy().into_owned();
 
         let build = call(
-            "build_or_update_graph",
-            Some(&json!({"operation": {"kind": "build"}, "output_format": "json"})),
+            "build_graph",
+            Some(&json!({"output_format": "json"})),
             &repo_root,
             &db_path,
         )

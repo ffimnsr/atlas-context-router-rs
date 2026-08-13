@@ -62,7 +62,7 @@ mod review;
 mod target;
 mod types;
 
-pub(super) use build::tool_build_or_update_graph;
+pub(super) use build::{tool_build_graph, tool_update_graph};
 pub(super) use changes::tool_detect_changes;
 pub(super) use explain::tool_explain_change;
 pub(super) use get_context::tool_get_context;

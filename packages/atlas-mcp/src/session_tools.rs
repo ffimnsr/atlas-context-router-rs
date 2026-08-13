@@ -17,6 +17,7 @@
 //! stable.
 
 mod artifact_io;
+mod feedback;
 mod memory;
 mod saved_context;
 mod session;
@@ -46,6 +47,7 @@ use crate::tools::shared::resolve_repo_scope_selection;
 pub use artifact_io::{
     tool_cross_session_search, tool_purge_saved_context, tool_read_saved_context,
 };
+pub use feedback::tool_feedback_record;
 pub use memory::{tool_get_global_memory, tool_memory_recall, tool_memory_store};
 pub(crate) use saved_context::{
     decision_hits_json, record_mcp_decision_best_effort, search_decisions_best_effort,

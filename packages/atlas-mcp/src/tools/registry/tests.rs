@@ -482,7 +482,11 @@ fn typed_context_review_schemas_preserve_required_fields_and_descriptions() {
                 .map(ToOwned::to_owned)
                 .collect(),
             "get_context" => ["target"].into_iter().map(ToOwned::to_owned).collect(),
-            "build_or_update_graph" | "postprocess_graph" => BTreeSet::new(),
+            "update_graph" => ["change_source"]
+                .into_iter()
+                .map(ToOwned::to_owned)
+                .collect(),
+            "build_graph" | "postprocess_graph" => BTreeSet::new(),
             _ => unreachable!("unexpected context/review schema tool"),
         };
         assert_eq!(
@@ -521,15 +525,10 @@ fn typed_context_review_schemas_keep_enum_values_stable() {
         );
     }
 
-    let build = raw_tool_input_schema_by_name("build_or_update_graph").expect("build schema");
+    let update = raw_tool_input_schema_by_name("update_graph").expect("update schema");
     assert_schema_enum_values(
-        &build,
-        "/properties/operation/properties/kind",
-        &["build", "update"],
-    );
-    assert_schema_enum_values(
-        &build,
-        "/properties/operation/properties/change_source/properties/kind",
+        &update,
+        "/properties/change_source/properties/kind",
         &["files", "base", "staged", "working_tree"],
     );
 
@@ -648,6 +647,10 @@ fn typed_session_memory_schemas_preserve_required_fields_and_descriptions() {
                 .map(ToOwned::to_owned)
                 .collect(),
             "memory_store" => ["text"].into_iter().map(ToOwned::to_owned).collect(),
+            "feedback_record" => ["predicted", "actual"]
+                .into_iter()
+                .map(ToOwned::to_owned)
+                .collect(),
             "record_session_event" => ["event"].into_iter().map(ToOwned::to_owned).collect(),
             "get_session_status"
             | "compact_session"

@@ -416,9 +416,10 @@ pub(super) fn tool_doctor(
 
     fn fix_hint_for(issue_code: Option<&str>, name: &str) -> Option<String> {
         match (issue_code, name) {
-            (Some("stale_index"), _) => {
-                Some("run build_or_update_graph to refresh graph state".to_owned())
-            }
+            (Some("stale_index"), _) => Some(
+                "run update_graph with change_source=working_tree to refresh graph state"
+                    .to_owned(),
+            ),
             (Some("retrieval_index_unavailable"), _) => {
                 Some("rebuild retrieval index after graph build completes".to_owned())
             }
@@ -428,10 +429,10 @@ pub(super) fn tool_doctor(
             (Some("failed_build"), _)
             | (Some("degraded_build"), _)
             | (Some("interrupted_build"), _) => {
-                Some("rerun build_or_update_graph and inspect build warnings".to_owned())
+                Some("rerun build_graph and inspect build warnings".to_owned())
             }
             (None, "config_file") => Some("run atlas init to create .atlas/config.toml".to_owned()),
-            (None, "db_file") => Some("run atlas init then build_or_update_graph".to_owned()),
+            (None, "db_file") => Some("run atlas init then build_graph".to_owned()),
             _ => None,
         }
     }
@@ -817,25 +818,40 @@ pub(super) fn tool_db_check(
     let orphans = structural_orphans(&store, limit);
     let dangling = structural_dangling_edges(&store, limit);
 
-    // ICM-A1: validate the continuity-side memory schema through db check.
-    // A missing session DB is not a schema violation (created on demand), but
-    // a present one must carry the full `memories` schema.
+    // ICM-A1 + ICM-C1: validate the continuity-side memory and feedback
+    // schemas through db check. A missing session DB is not a schema violation
+    // (created on demand), but a present one must carry the full schemas.
     let session_db_path = atlas_engine::paths::session_db_path(db_path);
     let session_db_exists = std::path::Path::new(&session_db_path).exists();
-    let (session_db_ok, memory_schema_ok, memory_schema_issues) = if session_db_exists {
+    let (
+        session_db_ok,
+        memory_schema_ok,
+        memory_schema_issues,
+        feedback_schema_ok,
+        feedback_schema_issues,
+    ) = if session_db_exists {
         match atlas_session::SessionStore::open(&session_db_path) {
             Ok(session_store) => {
-                let schema_issues = session_store.memory_schema_issues();
-                (true, schema_issues.is_empty(), schema_issues)
+                let memory_issues = session_store.memory_schema_issues();
+                let feedback_issues = session_store.feedback_schema_issues();
+                (
+                    true,
+                    memory_issues.is_empty(),
+                    memory_issues,
+                    feedback_issues.is_empty(),
+                    feedback_issues,
+                )
             }
             Err(e) => (
                 false,
                 false,
                 vec![format!("cannot open session store: {e}")],
+                false,
+                vec![format!("cannot open session store: {e}")],
             ),
         }
     } else {
-        (true, true, Vec::new())
+        (true, true, Vec::new(), true, Vec::new())
     };
 
     let noncanonical_path_rows = issues
@@ -879,10 +895,11 @@ pub(super) fn tool_db_check(
         && orphan_nodes.is_empty()
         && dangling_edges.is_empty()
         && session_db_ok
-        && memory_schema_ok;
+        && memory_schema_ok
+        && feedback_schema_ok;
     let failure_category = if !issues.is_empty() || !orphans.is_empty() || !dangling.is_empty() {
         integrity_issue_code(&issues, !orphans.is_empty() || !dangling.is_empty())
-    } else if !memory_schema_ok {
+    } else if !memory_schema_ok || !feedback_schema_ok {
         "schema_mismatch"
     } else {
         "none"
@@ -905,6 +922,12 @@ pub(super) fn tool_db_check(
     if !memory_schema_ok {
         warnings.push(
             "memory schema mismatch; run `atlas migrate` to refresh the session database schema"
+                .to_owned(),
+        );
+    }
+    if !feedback_schema_ok {
+        warnings.push(
+            "feedback schema mismatch; run `atlas migrate` to refresh the session database schema"
                 .to_owned(),
         );
     }
@@ -931,6 +954,10 @@ pub(super) fn tool_db_check(
             "memory_schema": {
                 "ok": memory_schema_ok,
                 "issues": memory_schema_issues,
+            },
+            "feedback_schema": {
+                "ok": feedback_schema_ok,
+                "issues": feedback_schema_issues,
             },
         },
         "summary": {

@@ -460,7 +460,7 @@ This fits Atlas’s continuity roadmap cleanly, where saved artifacts and sessio
 
 - [ ] after write/edit/build/test flows, optionally:
   - [ ] mark graph stale
-  - [ ] suggest `build_or_update_graph`
+  - [ ] suggest `update_graph` for incremental refresh or `build_graph` for missing/corrupt graph state
   - [ ] trigger bounded refresh in host hooks/MCP flows later
 
 This is where Atlas can become stronger than a plain RTK-like layer: execution results can be linked back into graph context. fileciteturn0file3

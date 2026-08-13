@@ -18,7 +18,7 @@ const TOOL_REGISTRY_SNAPSHOT: &[&str] = &[
     "assess_risk",
     "batch_query_graph",
     "broker_status",
-    "build_or_update_graph",
+    "build_graph",
     "compact_session",
     "concept_clusters",
     "cross_file_links",
@@ -29,6 +29,7 @@ const TOOL_REGISTRY_SNAPSHOT: &[&str] = &[
     "doctor",
     "explain_change",
     "explain_query",
+    "feedback_record",
     "find_complex_functions",
     "find_duplicates",
     "find_large_functions",
@@ -70,6 +71,7 @@ const TOOL_REGISTRY_SNAPSHOT: &[&str] = &[
     "tool_list",
     "tool_search",
     "traverse_graph",
+    "update_graph",
     "wake_up",
 ];
 
@@ -145,8 +147,9 @@ fn parity_args(tool_name: &str, source_id: &str) -> Value {
         "detect_changes" => {
             json!({ "change_source": { "kind": "working_tree" }, "output_format": "json" })
         }
-        "build_or_update_graph" => {
-            json!({ "operation": { "kind": "update", "change_source": { "kind": "files", "files": ["src/service.rs"] } }, "output_format": "json" })
+        "build_graph" => json!({ "output_format": "json" }),
+        "update_graph" => {
+            json!({ "change_source": { "kind": "files", "files": ["src/service.rs"] }, "output_format": "json" })
         }
         "postprocess_graph" => {
             json!({ "changed_only": true, "stage": "flows", "dry_run": true, "output_format": "json" })
@@ -203,6 +206,12 @@ fn parity_args(tool_name: &str, source_id: &str) -> Value {
         "get_global_memory" => json!({ "limit": 5, "output_format": "json" }),
         "memory_store" => json!({ "text": "parity memory body", "output_format": "json" }),
         "memory_recall" => json!({ "query": "parity", "output_format": "json" }),
+        "feedback_record" => json!({
+            "predicted": "parity dead",
+            "actual": "parity alive",
+            "analysis_kind": "dead_code",
+            "output_format": "json"
+        }),
         "symbol_neighbors" => {
             json!({ "qname": "src/service.rs::fn::compute", "output_format": "json" })
         }
@@ -447,7 +456,8 @@ fn tool_help_manual_contract_snapshots_match_for_high_frequency_tools() {
         "read_file_excerpt",
         "get_docs_section",
         "detect_changes",
-        "build_or_update_graph",
+        "build_graph",
+        "update_graph",
         "batch_query_graph",
     ] {
         assert_manual_contract_snapshot(tool_name, &fixture.repo_root, &fixture.db_path);

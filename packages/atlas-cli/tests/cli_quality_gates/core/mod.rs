@@ -10,7 +10,9 @@ use std::process::{Output, Stdio};
 mod analysis;
 mod contracts;
 mod determinism;
+mod determinism_support;
 mod docs_section;
+mod feedback;
 mod health;
 mod history;
 mod hooks;
@@ -25,6 +27,7 @@ mod serve;
 mod session;
 mod snapshots;
 mod version;
+mod wake_up;
 mod worktree;
 
 fn run_installed_hook(repo_root: &Path, frontend: &str, event: &str, payload: &str) {

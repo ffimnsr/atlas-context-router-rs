@@ -182,7 +182,7 @@ pub fn graph_health_error_suggestions(error_code: &str) -> &'static [&'static st
             "run `atlas build` to retry",
         ],
         "stale_index" => &[
-            "run `atlas update` or `build_or_update_graph` to refresh graph facts",
+            "run `atlas update` or `update_graph` to refresh graph facts",
             "run `atlas detect-changes` to inspect pending graph-relevant files",
         ],
         "retrieval_index_unavailable" => &[
@@ -192,7 +192,7 @@ pub fn graph_health_error_suggestions(error_code: &str) -> &'static [&'static st
         "node_not_found" => &[
             "verify the symbol name with query_graph or resolve_symbol",
             "run status to confirm the graph is built",
-            "run build_or_update_graph to index the repo first",
+            "run update_graph to index the repo first",
         ],
         "checks_failed" => &["inspect the checks array for details"],
         _ => &[],
