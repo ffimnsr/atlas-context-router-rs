@@ -77,8 +77,9 @@ tasks:
   install-local:
     commands:
       - |
-        cargo build -p release
-    description: Install the atlas-cli binary to the user local dir
+        mkdir -p "${HOME}/.local/bin"
+        cargo install --force --path packages/atlas-cli --root "${HOME}/.local"
+    description: Install the atlas-cli binary to ~/.local/bin.
   install-githooks:
     commands:
       - bash -lc 'mkdir -p .githooks && rm -rf .git/hooks && ln -s ../.githooks .git/hooks'
