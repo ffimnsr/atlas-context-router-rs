@@ -807,7 +807,7 @@ mod tests {
         }
     }
 
-    fn open_session(repo: &str, db_path: &str) -> SessionStore {
+    fn open_session(db_path: &str) -> SessionStore {
         let session_db = derive_session_db_path(db_path);
         if let Some(parent) = std::path::Path::new(&session_db).parent() {
             fs::create_dir_all(parent).unwrap();
@@ -889,7 +889,7 @@ mod tests {
         let repo = dir.path().to_string_lossy().into_owned();
         let db_path = setup_db_path(&dir);
 
-        let mut store = open_session(&repo, &db_path);
+        let mut store = open_session(&db_path);
         store
             .store_memory(&NewMemory {
                 repo_root: repo.clone(),
@@ -954,7 +954,7 @@ mod tests {
         let repo = dir.path().to_string_lossy().into_owned();
         let db_path = setup_db_path(&dir);
 
-        let mut store = open_session(&repo, &db_path);
+        let mut store = open_session(&db_path);
         store
             .store_memory(&NewMemory {
                 repo_root: repo.clone(),
@@ -1037,7 +1037,7 @@ mod tests {
         for i in 0..5 {
             save_artifact(&repo, &db_path, &format!("artifact-{i}"), "mcp_artifact");
         }
-        let mut store = open_session(&repo, &db_path);
+        let mut store = open_session(&db_path);
         for i in 0..5 {
             store
                 .store_feedback(&NewFeedback {

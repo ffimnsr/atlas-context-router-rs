@@ -483,7 +483,6 @@ Implementation structure:
 - [ ] `atlas context --include-overviews` includes fresh overview records with selection reasons and source ids
 - [ ] MCP overview tools match CLI JSON defaults and validation behavior
 - [ ] `atlas db check` reports invalid overview schema, invalid enum values, orphan source ids, and noncanonical overview paths
-- [ ] `./scripts/test-workspace-summary.sh` passes after overview memory implementation
 
 #### ICM-H — Shell-First Install Modes, TUI, Docs, and Release Gates
 

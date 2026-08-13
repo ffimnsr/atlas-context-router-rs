@@ -619,9 +619,9 @@ fn init_full_profile_writes_active_config_template() {
     assert!(config_text.contains("hybrid_enabled = true"));
     assert!(config_text.contains("[search.embedding]"));
     assert!(config_text.contains("url = \"http://localhost:11434\""));
-    assert!(config_text.contains(
-        "tool_timeout_ms_by_tool = { build_graph = 900000, get_review_context = 120000 }"
-    ));
+    assert!(config_text.contains("build_graph = 900000"));
+    assert!(config_text.contains("update_graph = 900000"));
+    assert!(config_text.contains("get_review_context = 120000"));
 }
 
 #[test]

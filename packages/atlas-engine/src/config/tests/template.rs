@@ -38,9 +38,9 @@ fn render_template_full_activates_keys() {
     let template = Config::render_template(ConfigTemplateProfile::Full).expect("template");
 
     assert!(template.contains("[build]\nparse_batch_size = 64"));
-    assert!(template.contains(
-        "tool_timeout_ms_by_tool = { build_graph = 900000, get_review_context = 120000 }"
-    ));
+    assert!(template.contains("build_graph = 900000"));
+    assert!(template.contains("update_graph = 900000"));
+    assert!(template.contains("get_review_context = 120000"));
     assert!(template.contains("hybrid_enabled = true"));
     assert!(template.contains("[search.embedding]\nurl = \"http://localhost:11434\""));
     assert!(template.contains("[insights]\nlarge_function_loc = 60"));

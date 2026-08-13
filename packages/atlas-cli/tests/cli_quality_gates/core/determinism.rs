@@ -1,7 +1,5 @@
+use super::determinism_support;
 use super::*;
-
-#[path = "determinism_support.rs"]
-mod determinism_support;
 
 fn assert_json_stdout_deterministic(repo_root: &Path, args: &[&str]) {
     determinism_support::assert_text_deterministic(&format!("CLI {:?}", args), || {

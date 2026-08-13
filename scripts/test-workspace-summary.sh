@@ -75,10 +75,12 @@ function add_failed_crate(name) {
     failed_crate_order[++failed_crate_count] = name
 }
 
-function extract_count(line, label, matches, pattern) {
-    pattern = "([0-9]+) " label
-    if (match(line, pattern, matches)) {
-        return matches[1] + 0
+function extract_count(line, label, pattern, matched) {
+    pattern = "[0-9]+ " label
+    if (match(line, pattern)) {
+        matched = substr(line, RSTART, RLENGTH)
+        sub(" " label "$", "", matched)
+        return matched + 0
     }
     return 0
 }
