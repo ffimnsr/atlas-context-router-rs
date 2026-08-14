@@ -75,12 +75,30 @@ struct LiveTaskHandle {
     cancel_flag: Arc<std::sync::atomic::AtomicBool>,
 }
 
+struct TaskExecutionTarget {
+    repo_root: String,
+    db_path: String,
+    worker_threads: usize,
+}
+
+#[cfg(test)]
 pub(crate) fn execute_tool_call(
     name: &str,
     args: Option<Value>,
     repo_root: &str,
     db_path: &str,
 ) -> Result<Value> {
+    execute_tool_call_with_worker_threads(name, args, repo_root, db_path, 2)
+}
+
+pub(crate) fn execute_tool_call_with_worker_threads(
+    name: &str,
+    args: Option<Value>,
+    repo_root: &str,
+    db_path: &str,
+    worker_threads: usize,
+) -> Result<Value> {
+    let worker_threads = worker_threads.max(1);
     let defer_threshold = Duration::from_millis(resolve_defer_threshold_ms());
     let request_context = runtime_context::current().ok();
     let explicit_task = task_ttl_from_context_args();
@@ -92,7 +110,13 @@ pub(crate) fn execute_tool_call(
         return normalize_tool_call_result(
             name,
             args.as_ref(),
-            crate::tools::call(name, args.as_ref(), repo_root, db_path),
+            crate::tools::call_with_worker_threads(
+                name,
+                args.as_ref(),
+                repo_root,
+                db_path,
+                worker_threads,
+            ),
         );
     }
 
@@ -134,8 +158,11 @@ pub(crate) fn execute_tool_call(
     let (completion_tx, completion_rx) = mpsc::channel();
     let tool_name = name.to_owned();
     let spawn_name = tool_name.clone();
-    let repo_root_owned = repo_root.to_owned();
-    let db_path_owned = db_path.to_owned();
+    let execution_target = TaskExecutionTarget {
+        repo_root: repo_root.to_owned(),
+        db_path: db_path.to_owned(),
+        worker_threads,
+    };
     let request_context_for_thread = request_context.clone();
     let task_id_for_thread = task_id.clone();
     let worker_tool_name = tool_name.clone();
@@ -146,8 +173,7 @@ pub(crate) fn execute_tool_call(
                 &task_id_for_thread,
                 &worker_tool_name,
                 args,
-                &repo_root_owned,
-                &db_path_owned,
+                &execution_target,
                 cancel_flag,
                 request_context_for_thread,
             );
@@ -187,15 +213,14 @@ fn run_task_worker(
     task_id: &str,
     tool_name: &str,
     args: Option<Value>,
-    repo_root: &str,
-    db_path: &str,
+    target: &TaskExecutionTarget,
     cancel_flag: Arc<std::sync::atomic::AtomicBool>,
     request_context: Option<RequestContext>,
 ) -> Result<Value> {
     if let Some(client) = request_context.clone() {
         runtime_context::install(client);
     }
-    let repo_root_for_progress = repo_root.to_owned();
+    let repo_root_for_progress = target.repo_root.clone();
     let task_id_for_progress = task_id.to_owned();
     let request_context_for_progress = request_context.clone();
     progress::install(
@@ -227,12 +252,18 @@ fn run_task_worker(
     let result = normalize_tool_call_result(
         tool_name,
         args.as_ref(),
-        crate::tools::call(tool_name, args.as_ref(), repo_root, db_path),
+        crate::tools::call_with_worker_threads(
+            tool_name,
+            args.as_ref(),
+            &target.repo_root,
+            &target.db_path,
+            target.worker_threads,
+        ),
     );
     progress::uninstall();
     runtime_context::uninstall();
 
-    let current = open_task_record(repo_root, task_id)?;
+    let current = open_task_record(&target.repo_root, task_id)?;
     let already_cancelled = current
         .as_ref()
         .is_some_and(|task| task.status == DurableTaskStatus::Cancelled);
@@ -252,9 +283,9 @@ fn run_task_worker(
                     .map(str::to_owned),
                 ..Default::default()
             };
-            update_task_store(repo_root, task_id, update)?;
+            update_task_store(&target.repo_root, task_id, update)?;
             if let Some(client) = request_context.as_ref()
-                && let Some(task) = open_task_record(repo_root, task_id)?
+                && let Some(task) = open_task_record(&target.repo_root, task_id)?
             {
                 client.notify_task_status(task_status_notification_json(&task))?;
             }
@@ -267,9 +298,9 @@ fn run_task_worker(
                 result: Some(value.clone()),
                 ..Default::default()
             };
-            update_task_store(repo_root, task_id, update)?;
+            update_task_store(&target.repo_root, task_id, update)?;
             if let Some(client) = request_context.as_ref()
-                && let Some(task) = open_task_record(repo_root, task_id)?
+                && let Some(task) = open_task_record(&target.repo_root, task_id)?
             {
                 client.notify_task_status(task_status_notification_json(&task))?;
             }
@@ -285,9 +316,9 @@ fn run_task_worker(
                 error: Some(error_json),
                 ..Default::default()
             };
-            update_task_store(repo_root, task_id, update)?;
+            update_task_store(&target.repo_root, task_id, update)?;
             if let Some(client) = request_context.as_ref()
-                && let Some(task) = open_task_record(repo_root, task_id)?
+                && let Some(task) = open_task_record(&target.repo_root, task_id)?
             {
                 client.notify_task_status(task_status_notification_json(&task))?;
             }

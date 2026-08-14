@@ -24,7 +24,7 @@ fn fixed_repo_mode_never_emits_roots_list_or_invalidates_on_roots_notifications(
             }
         }))
         .unwrap();
-    let _ = session.recv_json(Duration::from_secs(1)).unwrap();
+    let _ = session.recv_json(RESPONSE_TIMEOUT).unwrap();
     session
         .send_json(&serde_json::json!({
             "jsonrpc": "2.0",
@@ -46,7 +46,7 @@ fn fixed_repo_mode_never_emits_roots_list_or_invalidates_on_roots_notifications(
         .unwrap();
 
     let response = session
-        .recv_json(Duration::from_secs(1))
+        .recv_json(RESPONSE_TIMEOUT)
         .unwrap()
         .expect("fixed-mode query response");
     assert_eq!(response["id"], serde_json::json!(2));
@@ -82,7 +82,7 @@ fn fixed_repo_mode_never_emits_roots_list_or_invalidates_on_roots_notifications(
         }))
         .unwrap();
     let second = session
-        .recv_json(Duration::from_secs(1))
+        .recv_json(RESPONSE_TIMEOUT)
         .unwrap()
         .expect("post-roots-changed response");
     assert_eq!(second["id"], serde_json::json!(3));

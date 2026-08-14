@@ -83,20 +83,24 @@ pub fn run_http_server_with_options(
 
     eprintln!("atlas-mcp[http]: listening on http://{bind_addr} (repo={repo_root}, db={db_path})");
 
+    build_http_runtime(&options)?.block_on(async move {
+        let app = build_router(app_state(repo_root, db_path, options).await?);
+        let listener = tokio::net::TcpListener::bind(bind_addr)
+            .await
+            .with_context(|| format!("cannot bind HTTP server to {bind_addr}"))?;
+        axum::serve(listener, app)
+            .await
+            .context("HTTP server error")
+    })
+}
+
+fn build_http_runtime(options: &ServerOptions) -> Result<tokio::runtime::Runtime> {
     tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(options.effective_worker_threads())
         .enable_all()
         .thread_name("atlas-mcp:http-rt")
         .build()
-        .context("cannot build tokio runtime for HTTP transport")?
-        .block_on(async move {
-            let app = build_router(app_state(repo_root, db_path, options).await?);
-            let listener = tokio::net::TcpListener::bind(bind_addr)
-                .await
-                .with_context(|| format!("cannot bind HTTP server to {bind_addr}"))?;
-            axum::serve(listener, app)
-                .await
-                .context("HTTP server error")
-        })
+        .context("cannot build tokio runtime for HTTP transport")
 }
 
 impl HttpTestHarness {
@@ -619,6 +623,16 @@ mod tests {
             auth_policy: None,
             allowed_origins: Arc::new(HashSet::new()),
         }
+    }
+
+    #[test]
+    fn http_runtime_uses_server_option_worker_count() {
+        let options = ServerOptions {
+            worker_threads: 3,
+            ..ServerOptions::default()
+        };
+        let runtime = build_http_runtime(&options).expect("build HTTP runtime");
+        assert_eq!(runtime.metrics().num_workers(), 3);
     }
 
     #[test]

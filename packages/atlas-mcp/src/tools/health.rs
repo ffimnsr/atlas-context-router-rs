@@ -164,14 +164,10 @@ pub fn mark_server_started() {
 pub(super) fn tool_broker_status(
     repo_root: &str,
     db_path: &str,
+    worker_threads: usize,
     output_format: crate::output::OutputFormat,
 ) -> Result<serde_json::Value> {
     let uptime_secs = STARTED_AT.get_or_init(Instant::now).elapsed().as_secs();
-
-    let worker_threads = std::env::var("ATLAS_MCP_WORKER_THREADS")
-        .ok()
-        .and_then(|v| v.trim().parse::<u64>().ok())
-        .unwrap_or(2);
 
     let response = serde_json::json!({
         "ok": true,
@@ -1204,5 +1200,15 @@ mod tests {
         let dangling = structural_dangling_edges(&store, 100);
         assert_eq!(dangling.len(), 1);
         assert_eq!(dangling[0].3, "contains");
+    }
+
+    #[test]
+    fn broker_status_reports_supplied_worker_thread_count() {
+        let response = tool_broker_status("repo", "db", 7, crate::output::OutputFormat::Json)
+            .expect("broker status");
+        assert_eq!(
+            response["structuredContent"]["worker_threads_configured"],
+            7
+        );
     }
 }

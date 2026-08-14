@@ -339,11 +339,21 @@ pub fn call(
     repo_root: &str,
     db_path: &str,
 ) -> Result<serde_json::Value> {
+    call_with_worker_threads(name, args, repo_root, db_path, 2)
+}
+
+pub(crate) fn call_with_worker_threads(
+    name: &str,
+    args: Option<&serde_json::Value>,
+    repo_root: &str,
+    db_path: &str,
+    worker_threads: usize,
+) -> Result<serde_json::Value> {
     let mut adapter = McpAdapter::open(repo_root);
     if let Some(ref mut a) = adapter {
         a.before_command(name);
     }
-    let result = call_inner(name, args, repo_root, db_path);
+    let result = call_inner(name, args, repo_root, db_path, worker_threads.max(1));
     if let Some(ref mut a) = adapter {
         a.after_command(name, result.is_ok());
     }
@@ -431,6 +441,7 @@ fn call_inner(
     args: Option<&serde_json::Value>,
     repo_root: &str,
     db_path: &str,
+    worker_threads: usize,
 ) -> Result<serde_json::Value> {
     #[cfg(test)]
     if name == "__test_sleep" {
@@ -605,7 +616,7 @@ fn call_inner(
         "read_file_around_match" => tool_read_file_around_match(args, repo_root, output_format),
         "search_templates" => tool_search_templates(args, repo_root, output_format),
         "search_text_assets" => tool_search_text_assets(args, repo_root, output_format),
-        "broker_status" => tool_broker_status(repo_root, db_path, output_format),
+        "broker_status" => tool_broker_status(repo_root, db_path, worker_threads, output_format),
         "status" => tool_status(repo_root, db_path, output_format),
         "doctor" => tool_doctor(repo_root, db_path, output_format),
         "db_check" => tool_db_check(args, repo_root, db_path, output_format),

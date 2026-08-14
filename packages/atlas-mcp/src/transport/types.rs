@@ -39,6 +39,12 @@ pub struct ServerOptions {
     pub http_auth: Option<crate::auth::ProtectedResourceAuthConfig>,
 }
 
+impl ServerOptions {
+    pub fn effective_worker_threads(&self) -> usize {
+        self.worker_threads.max(1)
+    }
+}
+
 impl Default for ServerOptions {
     fn default() -> Self {
         Self {

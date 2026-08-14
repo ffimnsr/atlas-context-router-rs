@@ -10,7 +10,7 @@ mod registry;
 pub(crate) mod shared;
 
 pub use dispatch::call;
-pub(crate) use dispatch::is_known_tool_name;
+pub(crate) use dispatch::{call_with_worker_threads, is_known_tool_name};
 pub use manual::{ToolManualDocument, render_tool_manual_text, tool_manual};
 pub(crate) use registry::tool_descriptors;
 pub use registry::{tool_list, tool_list_markdown};

@@ -578,11 +578,12 @@ impl AtlasRmcpServer {
         }
         crate::runtime_context::install(runtime_context);
         crate::tasks::install_tool_call_request_params(Some(&request_params));
-        let result = crate::tasks::execute_tool_call(
+        let result = crate::tasks::execute_tool_call_with_worker_threads(
             &tool_name,
             args,
             &repo_context.repo_root,
             &repo_context.db_path,
+            self.options.effective_worker_threads(),
         );
         crate::tasks::uninstall_tool_call_request_params();
         crate::runtime_context::uninstall();
