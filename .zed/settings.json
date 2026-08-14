@@ -6,7 +6,7 @@
       "command": "atlas",
       "args": [
         "--repo",
-        "/User/pastel/Projects/atlas-context-router-rs",
+        "/Users/pastel/Projects/atlas-context-router-rs",
         "serve",
         "--direct-stdio",
       ],

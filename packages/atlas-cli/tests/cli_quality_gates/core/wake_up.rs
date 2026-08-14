@@ -200,7 +200,12 @@ fn session_start_hook_records_wake_up_metadata() {
     run_atlas(repo.path(), &["install", "--platform", "codex"]);
     run_installed_hook(repo.path(), "codex", "session-start", "{}");
 
-    let session_id = SessionId::derive(repo.path().to_str().unwrap(), "", "codex");
+    let repo_root = canonical_path(repo.path());
+    let session_id = SessionId::derive(
+        repo_root.to_str().expect("canonical repo path"),
+        "",
+        "codex",
+    );
     let payloads = session_event_payloads(repo.path(), session_id.as_str());
     let session_start = payloads
         .iter()
