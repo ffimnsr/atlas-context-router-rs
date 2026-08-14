@@ -954,7 +954,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         install_task_context(true);
         install_test_auto_defer_tool("__test_sleep");
-        install_test_defer_threshold_ms(100);
+        install_test_defer_threshold_ms(DEFAULT_TASK_DEFER_THRESHOLD_MS);
         let result = execute_tool_call(
             "__test_sleep",
             Some(json!({"sleep_ms": 5})),

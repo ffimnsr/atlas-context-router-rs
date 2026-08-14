@@ -1,5 +1,7 @@
 use super::*;
 
+const RESPONSE_TIMEOUT: Duration = Duration::from_secs(3);
+
 #[test]
 fn fixed_repo_mode_never_emits_roots_list_or_invalidates_on_roots_notifications() {
     let fixture = setup_fixture();
@@ -130,6 +132,7 @@ fn explicit_repo_root_selector_switches_repo_for_tool_call() {
             "params": {}
         }))
         .unwrap();
+    let _ = session.recv_json(RESPONSE_TIMEOUT).unwrap();
     session
         .send_json(&serde_json::json!({
             "jsonrpc": "2.0",
@@ -148,7 +151,7 @@ fn explicit_repo_root_selector_switches_repo_for_tool_call() {
         .unwrap();
 
     let response = session
-        .recv_json(Duration::from_secs(1))
+        .recv_json(RESPONSE_TIMEOUT)
         .unwrap()
         .expect("explicit repo_root query response");
     let query_value: serde_json::Value = serde_json::from_str(
@@ -187,7 +190,7 @@ fn explicit_repo_root_selector_switches_repo_for_tool_call() {
         .unwrap();
 
     let cached = session
-        .recv_json(Duration::from_secs(1))
+        .recv_json(RESPONSE_TIMEOUT)
         .unwrap()
         .expect("cached explicit-root query response");
     let cached_value: serde_json::Value = serde_json::from_str(

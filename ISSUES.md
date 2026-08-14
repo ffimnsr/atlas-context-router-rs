@@ -541,22 +541,51 @@ These are the high-value retrieval/indexing improvements still missing or only p
 
 They are meant to strengthen Atlas’s retrieval/content sidecar without changing the graph-first core.
 
-#### Patch R7 — Later experimental post-retrieval compaction
+#### Patch R7 — Experimental post-retrieval compaction
 
-This is not core and should stay late, but it is a useful optional experiment once retrieval and context engine behavior are stable.
+Optional, late-stage optimization. It may compact already-selected context, but must never choose, rank, or discard retrieval candidates. Graph-first selection and retrieval filtering remain source of truth.
 
-- [ ] add backlog item for post-retrieval compaction experiment
-- [ ] only evaluate after:
-  - [ ] hybrid retrieval is stable
-  - [ ] context engine output quality is stable
-  - [ ] token-efficiency metrics exist
-- [ ] keep initial experiment strictly optional
-- [ ] require evidence that compaction reduces tokens without harming answer quality
-- [ ] do not let this replace retrieval filtering or graph-based selection
+##### Entry gates
+
+Do not implement or enable experiment until all gates pass:
+
+- [x] hybrid retrieval has CI-enforced configured-backend acceptance coverage and no current correctness regression
+- [ ] context engine has stable golden-output or evaluator coverage for representative symbol, file, review, and change-set requests
+- [ ] baseline telemetry records selected chunk count, estimated input tokens, output tokens when available, latency, and request outcome
+- [ ] baseline corpus includes at least one oversized-context case and one provenance-sensitive case
+
+##### Initial design
+
+- [ ] add `PostRetrievalCompactionMode` with `Off`, `Shadow`, and `Enabled` values; default every CLI, MCP, and config path to `Off`
+- [ ] run compaction only after graph-based selection, retrieval filtering, truncation, and final context ordering complete
+- [ ] define compactor input as immutable selected context plus item metadata: source ID, file path, line span, qualified symbol, retrieval score, and provenance
+- [ ] define compactor output as compacted text plus mapping from every output segment to one or more original selected items
+- [ ] preserve selected-item IDs, file paths, line spans, symbol references, citations, and graph evidence in response metadata; compactor must not invent provenance
+- [ ] make `Shadow` compute compacted result and metrics without changing returned context
+- [ ] make `Enabled` use compacted result only when output validates; on timeout, provider failure, invalid provenance mapping, or token increase, return original selected context unchanged
+- [ ] apply explicit timeout, cancellation, payload-size limit, and per-request token budget; do not send secrets or excluded content to external providers
+- [ ] start with bounded extractive compaction. Add abstractive/provider-backed compaction only through separate design review and opt-in configuration
+
+##### Measurement and evaluation
+
+- [ ] record baseline and compacted token estimates, latency, selected-item count, retained-item count, compaction status, fallback reason, and mode
+- [ ] create versioned fixtures containing selected-context input, expected provenance mapping, and expected fallback behavior
+- [ ] run same request corpus in `Off` and `Shadow`; compare answer-quality evaluator result, required-evidence retention, and token estimate
+- [ ] define non-regression as no lost required evidence, no invalid provenance, and no answer-quality decline beyond evaluator noise threshold documented with benchmark
+- [ ] require token reduction against baseline on oversized-context cases before considering `Enabled`
+- [ ] publish experiment report with corpus version, configuration, provider/model when applicable, aggregate metrics, regressions, and recommendation
+
+##### Tests and acceptance criteria
+
+- [ ] unit tests cover mode parsing/defaults, input budget enforcement, provenance mapping validation, timeout/error fallback, and refusal of token-increasing output
+- [ ] integration tests prove `Off` output is byte-for-byte existing behavior and `Shadow` does not alter returned context
+- [ ] fixture tests prove compacted output retains required graph and retrieval evidence with valid source mapping
+- [ ] benchmark test or reproducible command emits baseline-versus-shadow token and quality report
+- [ ] `Enabled` remains hidden or documented as experimental until report meets non-regression and token-reduction gates
 
 Why:
-- useful possible optimization later
-- should not destabilize current graph-first + retrieval-assisted architecture
+- possible token-efficiency optimization after selection quality is already trustworthy
+- fail-open design prevents experiment from destabilizing graph-first + retrieval-assisted architecture
 
 #### Patch completion criteria
 

@@ -22,7 +22,7 @@ use atlas_core::{Result, SearchQuery};
 use atlas_store_sqlite::Store;
 use serde::Serialize;
 
-use crate::execute_query;
+use crate::execute_query_with_embedding;
 
 // ---------------------------------------------------------------------------
 // Retrieval mode
@@ -262,6 +262,22 @@ pub fn evaluate(
     recall_k: usize,
     budget: Option<BudgetClass>,
 ) -> Result<RetrievalMetrics> {
+    evaluate_with_embedding(store, cases, mode, limit, recall_k, budget, None)
+}
+
+/// Evaluate a single [`RetrievalMode`] using an optional embedding backend.
+///
+/// Pass an embedding configuration when evaluating real hybrid retrieval. Passing
+/// `None` preserves [`evaluate`]'s FTS-fallback behavior for offline checks.
+pub fn evaluate_with_embedding(
+    store: &Store,
+    cases: &[RetrievalCase],
+    mode: RetrievalMode,
+    limit: usize,
+    recall_k: usize,
+    budget: Option<BudgetClass>,
+    embed_cfg: Option<&crate::embed::EmbeddingConfig>,
+) -> Result<RetrievalMetrics> {
     // GraphOnly uses graph-expansion path; other modes use standard FTS path.
     let semantic = matches!(
         mode,
@@ -280,7 +296,8 @@ pub fn evaluate(
 
     for case in cases {
         let query = mode.build_query(&case.query, limit);
-        let results = execute_query(store, &query, semantic).unwrap_or_default();
+        let results =
+            execute_query_with_embedding(store, &query, semantic, embed_cfg).unwrap_or_default();
 
         let ranked_qns: Vec<String> = results
             .iter()
@@ -407,6 +424,17 @@ pub fn hybrid_passes_acceptance(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{
+        io::{Read, Write},
+        net::TcpListener,
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+        thread,
+    };
+
+    use atlas_core::{Node, NodeId, NodeKind};
 
     // recall_at_k ---------------------------------------------------------
 
@@ -508,6 +536,90 @@ mod tests {
         let hybrid = make_metrics(RetrievalMode::Hybrid, 0.80, 0.60, 0.90, 1200.0);
         let baseline = make_metrics(RetrievalMode::LexicalOnly, 0.60, 0.45, 0.70, 1000.0);
         assert!(!hybrid_passes_acceptance(&hybrid, &baseline));
+    }
+
+    #[test]
+    fn configured_hybrid_evaluation_passes_acceptance() {
+        let mut store = Store::open(":memory:").expect("open in-memory store");
+        store.migrate().expect("migrate store");
+
+        let qn = "src/search.rs::fn::lexical_anchor";
+        store
+            .replace_file_graph(
+                "src/search.rs",
+                "hash",
+                Some("rust"),
+                None,
+                &[Node {
+                    id: NodeId::UNSET,
+                    kind: NodeKind::Function,
+                    name: "lexical_anchor".to_owned(),
+                    qualified_name: qn.to_owned(),
+                    file_path: "src/search.rs".to_owned(),
+                    line_start: 1,
+                    line_end: 2,
+                    language: "rust".to_owned(),
+                    parent_name: None,
+                    params: Some("()".to_owned()),
+                    return_type: None,
+                    modifiers: None,
+                    is_test: false,
+                    file_hash: "hash".to_owned(),
+                    extra_json: serde_json::Value::Null,
+                    repo_provenance: None,
+                }],
+                &[],
+            )
+            .expect("seed graph");
+        store
+            .upsert_chunk(qn, 0, "lexical anchor")
+            .expect("insert chunk");
+        let chunks = store
+            .chunks_missing_embeddings(1)
+            .expect("load missing chunk");
+        store
+            .set_chunk_embedding(chunks[0].0, &[1.0, 0.0])
+            .expect("store embedding");
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock embedding server");
+        let address = listener.local_addr().expect("read server address");
+        let requests = Arc::new(AtomicUsize::new(0));
+        let requests_in_server = Arc::clone(&requests);
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept embedding request");
+            let mut request = [0_u8; 4096];
+            let _ = stream.read(&mut request).expect("read embedding request");
+            requests_in_server.fetch_add(1, Ordering::SeqCst);
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 26\r\nConnection: close\r\n\r\n{\"embeddings\":[[1.0,0.0]]}",
+                )
+                .expect("write embedding response");
+        });
+        let config =
+            crate::embed::EmbeddingConfig::new(format!("http://{address}"), "test-model", 1, 0, 0);
+        let cases = vec![RetrievalCase {
+            query: "lexical_anchor".to_owned(),
+            expected_targets: vec![qn.to_owned()],
+        }];
+
+        let baseline = evaluate(&store, &cases, RetrievalMode::LexicalOnly, 5, 5, None)
+            .expect("evaluate lexical baseline");
+        let hybrid = evaluate_with_embedding(
+            &store,
+            &cases,
+            RetrievalMode::Hybrid,
+            5,
+            5,
+            None,
+            Some(&config),
+        )
+        .expect("evaluate configured hybrid");
+        server.join().expect("join mock embedding server");
+
+        assert_eq!(requests.load(Ordering::SeqCst), 1);
+        assert_eq!(hybrid.mode, RetrievalMode::Hybrid);
+        assert!(hybrid_passes_acceptance(&hybrid, &baseline));
     }
 
     fn make_metrics(
