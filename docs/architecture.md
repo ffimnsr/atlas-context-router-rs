@@ -172,32 +172,24 @@ Use `worldtree.db` for code truth, `context.db` for large text, and `session.db`
 
 `atlas serve --direct-stdio` has two modes:
 
-- **fixed mode**: `--repo` or `--db` passed. Repo binding happens at startup and ignores client workspace-root changes.
-- **dynamic mode**: both `--repo` and `--db` absent. Repo binding is deferred until MCP request evidence or client root hints resolve active workspace root.
+- **fixed mode**: `--repo` or `--db` passed. Repo binding happens at startup and remains fixed for that server process.
+- **dynamic mode**: both `--repo` and `--db` absent. Repo binding is deferred until explicit request evidence or launch-cwd fallback resolves repository context.
 
-Dynamic stdio rule:
+Repository-selection rules:
 
-- do not trust inherited process cwd for repo identity when client workspace roots are available
-- prefer MCP `roots/list` workspace roots
-- fall back to repo root discovered from launch cwd only when client roots are unavailable
-- cache last successful dynamic root per connection
-- invalidate cached dynamic root after `notifications/roots/list_changed`
-- fail closed when multi-root evidence is ambiguous
+- prefer explicit fixed CLI `--repo` / `--db`
+- otherwise accept explicit request `repo_root` / registry-backed `repo_id` scope
+- use repo-scoped resource URIs where that resource contract provides identity
+- use deterministic file-evidence inference only when request paths identify one repository
+- fall back to Git root discovered from launch cwd only when request evidence is absent
+- fail closed when multi-repo evidence is ambiguous
+- never use deprecated MCP Roots or `roots/list`
 
-Current dynamic selection precedence:
+Fixed editor configurations may use `--repo "$HOME/Projects/repo"`. Atlas expands leading `~`, `$HOME`, and `${HOME}` before resolving relative paths against startup cwd and canonicalizing final repository identity.
 
-1. explicit fixed CLI `--repo` / `--db`
-2. request-scoped `_meta.atlas.activeRootUri`
-3. initialize/session-scoped `_meta.atlas.preferredRootUri`
-4. cached active dynamic root
-5. deterministic file-evidence inference from tool arguments
-6. single advertised root from `roots/list`
-7. launch-cwd repo fallback when client roots are unavailable
+Limitation:
 
-First-pass limitation:
-
-- query-only multi-root requests without file evidence require validated client hint or explicit fixed `--repo`
-- Atlas does not guess active repo from ambiguous relative paths shared by multiple roots; launch-cwd fallback applies only when client roots are unavailable
+- a global editor server launched from unrelated cwd cannot infer an arbitrary active project without explicit request or server-configuration evidence
 
 ---
 

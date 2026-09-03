@@ -205,7 +205,9 @@ GitHub triage defaults also live in `.github/`:
 
 Atlas can install MCP configuration for popular AI coding tools and add repo hooks so agents start with graph-aware context.
 
-`atlas serve` remains a stdio MCP entrypoint for editors and agents. Repo-scoped installs now pin only `--repo`, while user/global installs stay portable with `type = "stdio"`, `command = "atlas"`, `args = ["serve"]`. Atlas supports MCP `2026-07-28` and `2025-11-25`: use `server/discover` for negotiation, then send per-request `params._meta` with protocol version and client capabilities. When no repo is pinned, Atlas resolves repo context from explicit `arguments.repo_root` or launch `cwd`; it no longer depends on MCP Roots or protocol-level HTTP sessions.
+`atlas serve` remains a stdio MCP entrypoint for editors and agents. Repo-scoped installs now pin only `--repo`, while user/global installs stay portable with `type = "stdio"`, `command = "atlas"`, `args = ["serve"]`. Atlas supports MCP `2026-07-28` and `2025-11-25`: use `server/discover` for negotiation, then send per-request `params._meta` with protocol version and client capabilities. When no repo is pinned, Atlas resolves repo context from explicit `arguments.repo_root` or launch `cwd`; it no longer depends on deprecated MCP Roots or protocol-level HTTP sessions.
+
+If a global editor configuration does not launch Atlas from the active workspace, pin a fixed repository with `--repo "$HOME/Projects/repo"`. Atlas expands leading `~`, `$HOME`, and `${HOME}` itself, so JSON argument arrays do not depend on editor or shell expansion. Relative `--repo` paths resolve from Atlas' startup working directory.
 
 If an editor MCP client is incompatible with broker/daemon indirection, use `atlas serve --direct-stdio` to run MCP directly in launched process with no relay layer.
 

@@ -27,7 +27,8 @@ pub enum ReviewContextFormat {
     version = env!("ATLAS_LONG_VERSION")
 )]
 pub struct Cli {
-    /// Path to the repository root (default: auto-detect from cwd).
+    /// Repository root. Supports absolute paths, cwd-relative paths, ~, $HOME, and ${HOME}.
+    /// When omitted, Atlas auto-detects the Git root from the startup working directory.
     #[arg(long, global = true)]
     pub repo: Option<String>,
 

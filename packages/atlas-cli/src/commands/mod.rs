@@ -75,6 +75,7 @@ pub fn run_version(cli: &Cli) -> Result<()> {
 
 use std::io;
 use std::io::IsTerminal;
+use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result};
 use atlas_contentstore::{ContentStore, IndexState};
@@ -84,7 +85,9 @@ use atlas_core::{
     ReadinessOverride, ReadinessVerdict,
 };
 use atlas_parser::ParserRegistry;
-use atlas_repo::{DiffTarget, changed_files, find_repo_root, hash_file, stable_repo_id};
+use atlas_repo::{
+    DiffTarget, canonical_filesystem_path, changed_files, find_repo_root, hash_file, stable_repo_id,
+};
 use atlas_store_sqlite::{GraphBuildState, Store};
 use camino::Utf8Path;
 
@@ -273,38 +276,109 @@ pub(crate) fn query_display_path(node: &atlas_core::Node) -> String {
 
 pub(crate) fn resolve_repo(cli: &Cli) -> Result<String> {
     let cwd = std::env::current_dir().context("cannot determine cwd")?;
-    resolve_repo_with_cwd(cli, &cwd)
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    resolve_repo_with_context(cli, &cwd, home.as_deref())
 }
 
-fn resolve_repo_with_cwd(cli: &Cli, cwd: &std::path::Path) -> Result<String> {
-    if let Some(r) = &cli.repo {
-        // Expand leading `~/` or a bare `~` to the home directory.
-        let expanded = if r == "~" {
-            dirs_home()?
-        } else if let Some(rest) = r.strip_prefix("~/") {
-            format!("{}/{rest}", dirs_home()?)
+fn resolve_repo_with_context(cli: &Cli, cwd: &Path, home: Option<&Path>) -> Result<String> {
+    let (raw, candidate) = if let Some(raw) = cli.repo.as_deref() {
+        if raw.is_empty() {
+            anyhow::bail!("repository path supplied via --repo must not be empty");
+        }
+        let expanded = expand_repo_home_prefix(raw, home)?;
+        let candidate = if expanded.is_absolute() {
+            expanded
         } else {
-            r.clone()
+            cwd.join(expanded)
         };
-        return Ok(expanded);
+        (raw, candidate)
+    } else {
+        let cwd_utf8 = Utf8Path::from_path(cwd)
+            .ok_or_else(|| anyhow::anyhow!("cwd '{}' is not valid UTF-8", cwd.display()))?;
+        let candidate = find_repo_root(cwd_utf8)
+            .map(|root| root.into_std_path_buf())
+            .unwrap_or_else(|_| cwd.to_path_buf());
+        ("startup working directory", candidate)
+    };
+
+    canonicalize_repo_directory(raw, &candidate)
+}
+
+fn expand_repo_home_prefix(raw: &str, home: Option<&Path>) -> Result<PathBuf> {
+    let path = Path::new(raw);
+    let mut components = path.components();
+    let Some(Component::Normal(first)) = components.next() else {
+        return Ok(path.to_path_buf());
+    };
+    let Some(first) = first.to_str() else {
+        return Ok(path.to_path_buf());
+    };
+
+    if matches!(first, "~" | "$HOME" | "${HOME}") {
+        let home = home.ok_or_else(|| {
+            anyhow::anyhow!(
+                "HOME is not set; cannot expand repository path '{raw}' (supported prefixes: ~, $HOME, ${{HOME}})"
+            )
+        })?;
+        if !home.is_absolute() {
+            anyhow::bail!(
+                "HOME must be an absolute path to expand repository path '{raw}': {}",
+                home.display()
+            );
+        }
+        return Ok(home.join(components.as_path()));
     }
 
-    let cwd_utf8 =
-        Utf8Path::from_path(cwd).ok_or_else(|| anyhow::anyhow!("cwd is not valid UTF-8"))?;
-    Ok(find_repo_root(cwd_utf8)
-        .map(|root| root.into_string())
-        .unwrap_or_else(|_| cwd.to_string_lossy().into_owned()))
+    if first.starts_with('~') || first.starts_with('$') {
+        anyhow::bail!(
+            "unsupported home or environment-variable prefix '{first}' in repository path '{raw}'; supported prefixes: ~, $HOME, ${{HOME}}"
+        );
+    }
+
+    Ok(path.to_path_buf())
 }
 
-fn dirs_home() -> Result<String> {
-    std::env::var("HOME")
-        .or_else(|_| {
-            #[allow(deprecated)]
-            std::env::home_dir()
-                .ok_or_else(|| anyhow::anyhow!("cannot determine home directory"))
-                .map(|p| p.to_string_lossy().into_owned())
+fn canonicalize_repo_directory(raw: &str, path: &Path) -> Result<String> {
+    let metadata = match std::fs::metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Err(error).with_context(|| {
+                format!(
+                    "repository path does not exist: '{raw}' resolved as '{}'",
+                    path.display()
+                )
+            });
+        }
+        Err(error) => {
+            return Err(error).with_context(|| {
+                format!(
+                    "cannot inspect repository path '{raw}' resolved as '{}'",
+                    path.display()
+                )
+            });
+        }
+    };
+    if !metadata.is_dir() {
+        anyhow::bail!(
+            "repository path is not a directory: '{raw}' resolved as '{}'",
+            path.display()
+        );
+    }
+
+    let utf8 = Utf8Path::from_path(path).ok_or_else(|| {
+        anyhow::anyhow!(
+            "repository path '{raw}' resolved as '{}' is not valid UTF-8",
+            path.display()
+        )
+    })?;
+    canonical_filesystem_path(utf8)
+        .map(|path| path.into_string())
+        .with_context(|| {
+            format!(
+                "failed to canonicalize repository path '{raw}' resolved as '{}'",
+                path.display()
+            )
         })
-        .context("cannot expand ~: HOME not set and home directory not detectable")
 }
 
 pub(crate) fn db_path(cli: &Cli, repo: &str) -> String {
@@ -647,24 +721,143 @@ mod tests {
         assert!(status.success(), "git {args:?} failed");
     }
 
-    #[test]
-    fn resolve_repo_absolute_path_returned_as_is() {
-        let cli = cli_with_repo("/tmp/my-project");
-        assert_eq!(resolve_repo(&cli).unwrap(), "/tmp/my-project");
+    fn canonical(path: &Path) -> String {
+        canonical_filesystem_path(Utf8Path::from_path(path).unwrap())
+            .unwrap()
+            .into_string()
     }
 
     #[test]
-    fn resolve_repo_tilde_expands_to_home() {
-        let home = std::env::var("HOME").expect("HOME must be set for this test");
-        let cli = cli_with_repo("~");
-        assert_eq!(resolve_repo(&cli).unwrap(), home);
+    fn resolve_repo_canonicalizes_absolute_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        std::fs::create_dir_all(repo.join("nested")).unwrap();
+        let raw = repo.join("nested").join("..");
+        let cli = cli_with_repo(raw.to_str().unwrap());
+
+        assert_eq!(
+            resolve_repo_with_context(&cli, dir.path(), None).unwrap(),
+            canonical(&repo)
+        );
     }
 
     #[test]
-    fn resolve_repo_tilde_slash_expands_to_home_subpath() {
-        let home = std::env::var("HOME").expect("HOME must be set for this test");
-        let cli = cli_with_repo("~/projects/foo");
-        assert_eq!(resolve_repo(&cli).unwrap(), format!("{home}/projects/foo"));
+    fn resolve_repo_resolves_relative_path_against_startup_cwd() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let cli = cli_with_repo("../repo");
+        let cwd = dir.path().join("work");
+        std::fs::create_dir_all(&cwd).unwrap();
+
+        assert_eq!(
+            resolve_repo_with_context(&cli, &cwd, None).unwrap(),
+            canonical(&repo)
+        );
+    }
+
+    #[test]
+    fn resolve_repo_expands_supported_home_prefixes() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let repo = home.join("projects").join("foo");
+        std::fs::create_dir_all(&repo).unwrap();
+
+        for raw in [
+            "~/projects/foo",
+            "$HOME/projects/foo",
+            "${HOME}/projects/foo",
+        ] {
+            let cli = cli_with_repo(raw);
+            assert_eq!(
+                resolve_repo_with_context(&cli, dir.path(), Some(&home)).unwrap(),
+                canonical(&repo),
+                "failed to resolve {raw}"
+            );
+        }
+
+        for raw in ["~", "$HOME", "${HOME}"] {
+            let cli = cli_with_repo(raw);
+            assert_eq!(
+                resolve_repo_with_context(&cli, dir.path(), Some(&home)).unwrap(),
+                canonical(&home),
+                "failed to resolve {raw}"
+            );
+        }
+    }
+
+    #[test]
+    fn resolve_repo_requires_home_for_home_prefixes() {
+        for raw in ["~", "~/repo", "$HOME/repo", "${HOME}/repo"] {
+            let error = resolve_repo_with_context(
+                &cli_with_repo(raw),
+                Path::new("/unused-startup-cwd"),
+                None,
+            )
+            .unwrap_err()
+            .to_string();
+            assert!(
+                error.contains("HOME is not set"),
+                "unexpected error: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn resolve_repo_rejects_unsupported_leading_expansion_syntax() {
+        let dir = tempfile::tempdir().unwrap();
+        for raw in [
+            "$PROJECT_ROOT/repo",
+            "${PROJECT_ROOT}/repo",
+            "$HOMEfoo/repo",
+            "${HOME/repo",
+            "~other/repo",
+        ] {
+            let error =
+                resolve_repo_with_context(&cli_with_repo(raw), dir.path(), Some(dir.path()))
+                    .unwrap_err()
+                    .to_string();
+            assert!(
+                error.contains("unsupported home or environment-variable prefix"),
+                "unexpected error for {raw}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn resolve_repo_rejects_missing_path_and_regular_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = cli_with_repo("missing");
+        let missing_error = resolve_repo_with_context(&missing, dir.path(), None)
+            .unwrap_err()
+            .to_string();
+        assert!(missing_error.contains("repository path does not exist"));
+
+        let file = dir.path().join("file.txt");
+        std::fs::write(&file, "not a repository directory").unwrap();
+        let file_cli = cli_with_repo(file.to_str().unwrap());
+        let file_error = resolve_repo_with_context(&file_cli, dir.path(), None)
+            .unwrap_err()
+            .to_string();
+        assert!(file_error.contains("repository path is not a directory"));
+    }
+
+    #[test]
+    fn resolve_repo_rejects_empty_path_and_relative_home() {
+        let dir = tempfile::tempdir().unwrap();
+        let empty_error = resolve_repo_with_context(&cli_with_repo(""), dir.path(), None)
+            .unwrap_err()
+            .to_string();
+        assert!(empty_error.contains("must not be empty"));
+
+        let home_error = resolve_repo_with_context(
+            &cli_with_repo("$HOME/repo"),
+            dir.path(),
+            Some(Path::new("relative-home")),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(home_error.contains("HOME must be an absolute path"));
     }
 
     #[test]
@@ -676,27 +869,93 @@ mod tests {
         git(repo_root, &["init", "--quiet"]);
 
         let cli = cli_no_repo();
-        let expected = Utf8Path::from_path(&repo_root.canonicalize().unwrap())
-            .unwrap()
-            .to_string();
-        assert_eq!(resolve_repo_with_cwd(&cli, &nested).unwrap(), expected);
+        assert_eq!(
+            resolve_repo_with_context(&cli, &nested, None).unwrap(),
+            canonical(repo_root)
+        );
     }
 
     #[test]
-    fn resolve_repo_no_repo_falls_back_to_cwd_outside_git() {
+    fn resolve_repo_no_repo_falls_back_to_canonical_cwd_outside_git() {
         let dir = tempfile::tempdir().unwrap();
         let nested = dir.path().join("scratch");
         std::fs::create_dir_all(&nested).unwrap();
 
         let cli = cli_no_repo();
-        let expected = nested.to_string_lossy().into_owned();
-        assert_eq!(resolve_repo_with_cwd(&cli, &nested).unwrap(), expected);
+        assert_eq!(
+            resolve_repo_with_context(&cli, &nested, None).unwrap(),
+            canonical(&nested)
+        );
     }
 
     #[test]
-    fn resolve_repo_does_not_expand_tilde_in_middle_of_path() {
-        // A path like "/home/user/~foo" must not be touched.
-        let cli = cli_with_repo("/home/user/~foo");
-        assert_eq!(resolve_repo(&cli).unwrap(), "/home/user/~foo");
+    fn resolve_repo_does_not_expand_home_syntax_in_middle_of_path() {
+        let dir = tempfile::tempdir().unwrap();
+        for raw in ["literal/$HOME", "literal/~repo"] {
+            let path = dir.path().join(raw);
+            std::fs::create_dir_all(&path).unwrap();
+            let cli = cli_with_repo(raw);
+            assert_eq!(
+                resolve_repo_with_context(&cli, dir.path(), Some(dir.path())).unwrap(),
+                canonical(&path)
+            );
+        }
+    }
+
+    #[test]
+    fn equivalent_repo_forms_produce_same_mcp_instance_identity() {
+        use crate::mcp_instance::McpInstance;
+
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let repo = home.join("projects").join("foo");
+        std::fs::create_dir_all(&repo).unwrap();
+
+        let absolute = resolve_repo_with_context(
+            &cli_with_repo(repo.to_str().unwrap()),
+            dir.path(),
+            Some(&home),
+        )
+        .unwrap();
+        let from_home = resolve_repo_with_context(
+            &cli_with_repo("$HOME/projects/foo"),
+            dir.path(),
+            Some(&home),
+        )
+        .unwrap();
+        let absolute_instance = McpInstance::for_repo_and_db(
+            &absolute,
+            &atlas_engine::paths::default_db_path(&absolute),
+        )
+        .unwrap();
+        let home_instance = McpInstance::for_repo_and_db(
+            &from_home,
+            &atlas_engine::paths::default_db_path(&from_home),
+        )
+        .unwrap();
+
+        assert_eq!(absolute, from_home);
+        assert_eq!(absolute_instance.instance_id, home_instance.instance_id);
+        assert_eq!(absolute_instance.db_path, home_instance.db_path);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolve_repo_canonicalizes_symlinked_repo_path() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        let link = dir.path().join("repo-link");
+        std::fs::create_dir_all(&repo).unwrap();
+        symlink(&repo, &link).unwrap();
+
+        let resolved_repo =
+            resolve_repo_with_context(&cli_with_repo(repo.to_str().unwrap()), dir.path(), None)
+                .unwrap();
+        let resolved_link =
+            resolve_repo_with_context(&cli_with_repo(link.to_str().unwrap()), dir.path(), None)
+                .unwrap();
+        assert_eq!(resolved_repo, resolved_link);
     }
 }

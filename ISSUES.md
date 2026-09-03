@@ -535,6 +535,14 @@ Implementation structure:
 
 Use these patch sections for focused improvements that cut across existing roadmap phases without rewriting phase scope.
 
+### Portable CLI Repository Paths Patch
+
+- [x] expand leading `~`, `$HOME`, and `${HOME}` in explicit `--repo` values without shell evaluation
+- [x] resolve relative explicit `--repo` values against startup cwd and reject missing or non-directory paths
+- [x] canonicalize explicit and inferred repository roots through `atlas_repo` path APIs before identity use
+- [x] document portable fixed-repository editor configuration without deprecated MCP Roots
+- [x] test home expansion, relative paths, validation failures, symlink identity, and MCP instance identity equivalence
+
 ### Retrieval Follow-Up Patch
 
 These are the high-value retrieval/indexing improvements still missing or only partially specified after the current v3 plan.

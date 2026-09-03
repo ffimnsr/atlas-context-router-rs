@@ -4,6 +4,12 @@ All notable changes to this project should be recorded in this file.
 
 Versioning policy may evolve while Atlas is still moving quickly, but release notes should still group changes by user-visible impact.
 
+## Unreleased
+
+### Features
+
+- support canonical relative, `~`, `$HOME`, and `${HOME}` repository paths for portable editor configuration
+
 ## 1.7.4 - 2026-08-14
 
 ### Features
