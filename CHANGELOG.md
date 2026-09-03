@@ -10,6 +10,31 @@ Versioning policy may evolve while Atlas is still moving quickly, but release no
 
 - support canonical relative, `~`, `$HOME`, and `${HOME}` repository paths for portable editor configuration
 
+## 1.7.5 - 2026-09-03
+
+### Features
+
+- update repo flag to accept env and relative path (`8d5024c`)
+- update the insights tool as it doesn't update (`c6d0878`)
+
+
+### Fixes
+
+- update worker threads to have unified config (`549af74`)
+- lint errors on atlas retrieval (`aafd5f0`)
+
+
+### Tests
+
+- update wake up tests as its flaky in macos (`cd09498`)
+- update all test that fails (`971ed8a`)
+
+
+### Maintenance
+
+- update task runner (`dc52d2b`)
+
+
 ## 1.7.4 - 2026-08-14
 
 ### Features
